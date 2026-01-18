@@ -40,6 +40,7 @@ class GenreWeights:
         "tps": {"blur_score": 0.20, "contrast": 0.15, "color_richness": 0.15, "visual_balance": 0.15, "edge_density": 0.10, "action_intensity": 0.15, "ui_density": 0.00, "dramatic_score": 0.10},
         "2d_action": {"blur_score": 0.15, "contrast": 0.15, "color_richness": 0.20, "visual_balance": 0.10, "edge_density": 0.05, "action_intensity": 0.15, "ui_density": 0.00, "dramatic_score": 0.20},
         "2d_shooting": {"blur_score": 0.20, "contrast": 0.20, "color_richness": 0.15, "visual_balance": 0.10, "edge_density": 0.05, "action_intensity": 0.10, "ui_density": 0.00, "dramatic_score": 0.20},
+        "3d_action": {"blur_score": 0.18, "contrast": 0.18, "color_richness": 0.18, "visual_balance": 0.12, "edge_density": 0.08, "action_intensity": 0.18, "ui_density": 0.00, "dramatic_score": 0.08},
         "puzzle": {"blur_score": 0.25, "contrast": 0.20, "color_richness": 0.15, "visual_balance": 0.25, "edge_density": 0.10, "action_intensity": 0.00, "ui_density": 0.05, "dramatic_score": 0.00},
         "racing": {"blur_score": 0.15, "contrast": 0.15, "color_richness": 0.15, "visual_balance": 0.15, "edge_density": 0.10, "action_intensity": 0.20, "ui_density": 0.00, "dramatic_score": 0.10},
         "strategy": {"blur_score": 0.20, "contrast": 0.15, "color_richness": 0.15, "visual_balance": 0.20, "edge_density": 0.15, "action_intensity": 0.05, "ui_density": 0.10, "dramatic_score": 0.00},
@@ -167,7 +168,7 @@ def main():
     parser.add_argument('input', help='入力フォルダ')
     parser.add_argument('-c', '--copy-to', help='出力フォルダ')
     parser.add_argument('-n', '--num', type=int, default=10, help='選択枚数')
-    parser.add_argument('-g', '--genre', default='mixed', choices=['rpg', 'fps', 'tps', '2d_action', '2d_shooting', 'puzzle', 'racing', 'strategy', 'adventure', 'mixed'])
+    parser.add_argument('-g', '--genre', default='mixed', choices=['rpg', 'fps', 'tps', '2d_action', '2d_shooting', '3d_action', 'puzzle', 'racing', 'strategy', 'adventure', 'mixed'])
     parser.add_argument('-s', '--similarity', type=float, default=0.82, help='類似度しきい値(0.7~0.85推奨)')
     parser.add_argument('-r', '--recursive', action='store_true', help='サブフォルダも検索')
     parser.add_argument('--clip', action='store_true', help='CLIP分析を有効化')
