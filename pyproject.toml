@@ -1,0 +1,15 @@
+[project]
+name = "game-screen-pick"
+version = "0.1.0"
+description = "ゲームスクリーンショットから品質・ジャンル・多様性を考慮して最適な画像を自動選択するAIツール"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.3.1",
+    "opencv-python>=4.11.0.86",
+    "pandas>=2.3.0",
+    "pillow>=12.1.0",
+    "scikit-learn>=1.7.0",
+    "torch>=2.9.1",
+    "transformers>=4.57.6",
+]
