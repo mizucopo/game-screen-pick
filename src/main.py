@@ -15,13 +15,9 @@ from dataclasses import dataclass
 import shutil
 
 # CLIP (AI分析) 関連
-try:
-    import torch
-    from transformers import CLIPProcessor, CLIPModel
-    from PIL import Image
-    HAS_CLIP = True
-except ImportError:
-    HAS_CLIP = False
+import torch
+from transformers import CLIPProcessor, CLIPModel
+from PIL import Image
 
 @dataclass
 class ImageMetrics:
@@ -72,14 +68,12 @@ class MetricNormalizer:
         }
 
 class ImageQualityAnalyzer:
-    def __init__(self, genre: str = "mixed", use_clip: bool = False):
+    def __init__(self, genre: str = "mixed"):
         self.weights = GenreWeights.get_weights(genre)
-        self.model = None
-        if use_clip and HAS_CLIP:
-            self.model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-            self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.model.to(self.device)
+        self.model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model.to(self.device)
 
     def _extract_diversity_features(self, img: np.ndarray) -> np.ndarray:
         """見た目の特徴を抽出（色と構造）"""
@@ -108,11 +102,9 @@ class ImageQualityAnalyzer:
                 "dramatic_score": (np.sum((hsv[:,:,1]>180) & (hsv[:,:,2]>180)) / img.size) * 1000
             }
             norm = MetricNormalizer.normalize_all(raw)
-            semantic = 0.0
-            if self.model:
-                with torch.no_grad():
-                    inputs = self.processor(text=["epic game scenery"], images=Image.open(path), return_tensors="pt", padding=True).to(self.device)
-                    semantic = float(self.model(**inputs).logits_per_image[0][0]) / 100.0
+            with torch.no_grad():
+                inputs = self.processor(text=["epic game scenery"], images=Image.open(path), return_tensors="pt", padding=True).to(self.device)
+                semantic = float(self.model(**inputs).logits_per_image[0][0]) / 100.0
 
             weighted_sum = sum(norm[k] * self.weights.get(k, 0.0) for k in norm if k in self.weights)
             # ペナルティ（暗すぎる画像）
@@ -122,8 +114,8 @@ class ImageQualityAnalyzer:
         except: return None
 
 class GameScreenPicker:
-    def __init__(self, genre: str, use_clip: bool):
-        self.analyzer = ImageQualityAnalyzer(genre, use_clip)
+    def __init__(self, genre: str):
+        self.analyzer = ImageQualityAnalyzer(genre)
 
     def select(self, folder: str, num: int, similarity_threshold: float, recursive: bool):
         path_obj = Path(folder)
@@ -171,10 +163,9 @@ def main():
     parser.add_argument('-g', '--genre', default='mixed', choices=['rpg', 'fps', 'tps', '2d_action', '2d_shooting', '3d_action', 'puzzle', 'racing', 'strategy', 'adventure', 'mixed'])
     parser.add_argument('-s', '--similarity', type=float, default=0.82, help='類似度しきい値(0.7~0.85推奨)')
     parser.add_argument('-r', '--recursive', action='store_true', help='サブフォルダも検索')
-    parser.add_argument('--clip', action='store_true', help='CLIP分析を有効化')
     args = parser.parse_args()
 
-    picker = GameScreenPicker(args.genre, args.clip)
+    picker = GameScreenPicker(args.genre)
     # 多様性重視で選択
     best = picker.select(args.input, args.num, args.similarity, args.recursive)
 

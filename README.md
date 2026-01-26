@@ -28,7 +28,6 @@ uv run python src/main.py <入力フォルダ> [オプション]
 - `-g <ジャンル>`, `--genre <ジャンル>`: ゲームジャンル (rpg, fps, tps, 2d_action, 2d_shooting, 3d_action, puzzle, racing, strategy, adventure, mixed)
 - `-s <数値>`, `--similarity <数値>`: 類似度しきい値 (デフォルト: 0.82)
 - `-r`, `--recursive`: サブフォルダも検索
-- `--clip`: CLIP分析を有効化
 
 ### 使用例
 
