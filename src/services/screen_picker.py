@@ -15,20 +15,15 @@ class GameScreenPicker:
         self.analyzer = ImageQualityAnalyzer(genre)
 
     def select(
-        self,
-        folder: str,
-        num: int,
-        similarity_threshold: float,
-        recursive: bool
+        self, folder: str, num: int, similarity_threshold: float, recursive: bool
     ):
         """フォルダから画像を選択."""
         path_obj = Path(folder)
-        exts = {'.jpg', '.jpeg', '.png', '.bmp'}
+        exts = {".jpg", ".jpeg", ".png", ".bmp"}
         # 全フォルダからファイルを一括取得
         files = [
-            p for p in (
-                path_obj.rglob('*') if recursive else path_obj.glob('*')
-            )
+            p
+            for p in (path_obj.rglob("*") if recursive else path_obj.glob("*"))
             if p.suffix.lower() in exts
         ]
 
@@ -58,8 +53,7 @@ class GameScreenPicker:
             for s in selected:
                 # コサイン類似度で「似すぎていないか」チェック
                 sim = cosine_similarity(
-                    candidate.features.reshape(1, -1),
-                    s.features.reshape(1, -1)
+                    candidate.features.reshape(1, -1), s.features.reshape(1, -1)
                 )[0][0]
                 if sim > similarity_threshold:
                     is_similar = True
