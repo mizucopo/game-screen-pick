@@ -78,5 +78,5 @@ class ImageQualityAnalyzer:
             penalty = 0.6 if raw['brightness'] < 40 else 0.0
             total = max(0.0, (weighted_sum + (semantic * 0.2) - penalty) * 100.0)
             return ImageMetrics(path, raw, norm, semantic, total, features)
-        except:
+        except Exception:
             return None

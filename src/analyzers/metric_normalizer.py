@@ -12,7 +12,7 @@ class MetricNormalizer:
         """シグモイド関数による正規化."""
         try:
             return 1 / (1 + math.exp(-steepness * (x - center)))
-        except:
+        except Exception:
             return 1.0 if x > center else 0.0
 
     @classmethod
