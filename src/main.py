@@ -8,6 +8,7 @@ from .services import GameScreenPicker
 
 
 def main():
+    """メイン関数."""
     parser = argparse.ArgumentParser(description='Diverse Game Screen Picker')
     parser.add_argument('input', help='入力フォルダ')
     parser.add_argument('-c', '--copy-to', help='出力フォルダ')
