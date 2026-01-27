@@ -1,5 +1,4 @@
-"""Game screen picker for diverse image selection.
-"""
+"""Game screen picker for diverse image selection."""
 
 from pathlib import Path
 import random

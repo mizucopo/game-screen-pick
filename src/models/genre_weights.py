@@ -1,5 +1,4 @@
-"""Genre weights for different game types.
-"""
+"""Genre weights for different game types."""
 
 from typing import Dict
 

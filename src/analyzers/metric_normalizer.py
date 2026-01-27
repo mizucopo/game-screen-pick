@@ -1,5 +1,4 @@
-"""Metric normalizer for image quality metrics.
-"""
+"""Metric normalizer for image quality metrics."""
 
 import math
 from typing import Dict
