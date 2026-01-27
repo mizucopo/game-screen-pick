@@ -16,6 +16,7 @@ class ImageQualityAnalyzer:
     """画像品質アナライザー."""
 
     def __init__(self, genre: str = "mixed"):
+        """アナライザーを初期化する."""
         self.weights = GenreWeights.get_weights(genre)
         self.model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")

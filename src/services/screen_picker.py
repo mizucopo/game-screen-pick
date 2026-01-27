@@ -11,6 +11,7 @@ class GameScreenPicker:
     """ゲーム画面選択クラス."""
 
     def __init__(self, genre: str):
+        """ピッカーを初期化する."""
         self.analyzer = ImageQualityAnalyzer(genre)
 
     def select(
