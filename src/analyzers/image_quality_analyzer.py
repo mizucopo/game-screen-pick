@@ -45,17 +45,34 @@ class ImageQualityAnalyzer:
                 "contrast": np.std(gray),
                 "edge_density": np.sum(cv2.Canny(gray, 50, 150) > 0) / gray.size,
                 "color_richness": np.std(hsv[:, :, 1]),
-                "ui_density": (np.sum(np.abs(cv2.Sobel(gray, cv2.CV_64F, 1, 0))) / gray.size),
-                "action_intensity": np.std(cv2.filter2D(gray, -1, np.array([[-1,0,1],[-2,0,2],[-1,0,1]]))),
+                "ui_density": (
+                    np.sum(np.abs(cv2.Sobel(gray, cv2.CV_64F, 1, 0))) /
+                    gray.size
+                ),
+                "action_intensity": np.std(cv2.filter2D(
+                    gray, -1, np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
+                )),
                 "visual_balance": max(0, 100 - abs(np.mean(gray) - 128) * 0.5),
-                "dramatic_score": (np.sum((hsv[:,:,1]>180) & (hsv[:,:,2]>180)) / img.size) * 1000
+                "dramatic_score": (
+                    np.sum((hsv[:, :, 1] > 180) & (hsv[:, :, 2] > 180)) /
+                    img.size
+                ) * 1000
             }
             norm = MetricNormalizer.normalize_all(raw)
             with torch.no_grad():
-                inputs = self.processor(text=["epic game scenery"], images=Image.open(path), return_tensors="pt", padding=True).to(self.device)
+                inputs = self.processor(
+                    text=["epic game scenery"],
+                    images=Image.open(path),
+                    return_tensors="pt",
+                    padding=True
+                ).to(self.device)
                 semantic = float(self.model(**inputs).logits_per_image[0][0]) / 100.0
 
-            weighted_sum = sum(norm[k] * self.weights.get(k, 0.0) for k in norm if k in self.weights)
+            weighted_sum = sum(
+                norm[k] * self.weights.get(k, 0.0)
+                for k in norm
+                if k in self.weights
+            )
             # ペナルティ（暗すぎる画像）
             penalty = 0.6 if raw['brightness'] < 40 else 0.0
             total = max(0.0, (weighted_sum + (semantic * 0.2) - penalty) * 100.0)

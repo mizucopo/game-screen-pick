@@ -14,11 +14,22 @@ class GameScreenPicker:
     def __init__(self, genre: str):
         self.analyzer = ImageQualityAnalyzer(genre)
 
-    def select(self, folder: str, num: int, similarity_threshold: float, recursive: bool):
+    def select(
+        self,
+        folder: str,
+        num: int,
+        similarity_threshold: float,
+        recursive: bool
+    ):
         path_obj = Path(folder)
         exts = {'.jpg', '.jpeg', '.png', '.bmp'}
         # 全フォルダからファイルを一括取得
-        files = [p for p in (path_obj.rglob('*') if recursive else path_obj.glob('*')) if p.suffix.lower() in exts]
+        files = [
+            p for p in (
+                path_obj.rglob('*') if recursive else path_obj.glob('*')
+            )
+            if p.suffix.lower() in exts
+        ]
 
         # 1. 完全にランダムにシャッフル（フォルダやファイル名のバイアスを破壊）
         random.shuffle(files)
@@ -45,7 +56,10 @@ class GameScreenPicker:
             is_similar = False
             for s in selected:
                 # コサイン類似度で「似すぎていないか」チェック
-                sim = cosine_similarity(candidate.features.reshape(1, -1), s.features.reshape(1, -1))[0][0]
+                sim = cosine_similarity(
+                    candidate.features.reshape(1, -1),
+                    s.features.reshape(1, -1)
+                )[0][0]
                 if sim > similarity_threshold:
                     is_similar = True
                     break
