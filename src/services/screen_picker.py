@@ -20,6 +20,7 @@ class GameScreenPicker:
         similarity_threshold: float,
         recursive: bool
     ):
+        """フォルダから画像を選択."""
         path_obj = Path(folder)
         exts = {'.jpg', '.jpeg', '.png', '.bmp'}
         # 全フォルダからファイルを一括取得

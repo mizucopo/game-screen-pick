@@ -9,6 +9,7 @@ class MetricNormalizer:
 
     @staticmethod
     def sigmoid(x: float, center: float, steepness: float = 0.1) -> float:
+        """シグモイド関数による正規化."""
         try:
             return 1 / (1 + math.exp(-steepness * (x - center)))
         except:
@@ -16,6 +17,7 @@ class MetricNormalizer:
 
     @classmethod
     def normalize_all(cls, raw: Dict[str, float]) -> Dict[str, float]:
+        """すべてのメトリクスを正規化."""
         return {
             "blur_score": cls.sigmoid(
                 raw['blur_score'], center=500, steepness=0.005

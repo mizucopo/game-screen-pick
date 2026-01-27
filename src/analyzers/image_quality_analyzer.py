@@ -30,6 +30,7 @@ class ImageQualityAnalyzer:
         return cv2.normalize(hist, hist).flatten()
 
     def analyze(self, path: str) -> Optional[ImageMetrics]:
+        """画像を解析して品質スコアを計算する."""
         try:
             img = cv2.imread(path)
             if img is None:

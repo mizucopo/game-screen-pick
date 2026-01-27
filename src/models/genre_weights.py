@@ -65,4 +65,5 @@ class GenreWeights:
 
     @classmethod
     def get_weights(cls, genre: str) -> Dict[str, float]:
+        """ジャンルに対応する重みを取得."""
         return cls.DEFAULT_WEIGHTS.get(genre.lower(), cls.DEFAULT_WEIGHTS["mixed"])
