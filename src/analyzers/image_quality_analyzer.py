@@ -13,7 +13,7 @@ from .metric_normalizer import MetricNormalizer
 
 
 class ImageQualityAnalyzer:
-    """画像品質アナライザー"""
+    """画像品質アナライザー."""
 
     def __init__(self, genre: str = "mixed"):
         self.weights = GenreWeights.get_weights(genre)
@@ -23,7 +23,7 @@ class ImageQualityAnalyzer:
         self.model.to(self.device)
 
     def _extract_diversity_features(self, img: np.ndarray) -> np.ndarray:
-        """見た目の特徴を抽出（色と構造）"""
+        """見た目の特徴を抽出（色と構造）."""
         small = cv2.resize(img, (128, 128))
         hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
         hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256])

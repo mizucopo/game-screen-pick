@@ -5,7 +5,7 @@ from typing import Dict
 
 
 class MetricNormalizer:
-    """メトリクス正規化クラス"""
+    """メトリクス正規化クラス."""
 
     @staticmethod
     def sigmoid(x: float, center: float, steepness: float = 0.1) -> float:

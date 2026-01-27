@@ -8,7 +8,7 @@ from ..analyzers.image_quality_analyzer import ImageQualityAnalyzer
 
 
 class GameScreenPicker:
-    """ゲーム画面選択クラス"""
+    """ゲーム画面選択クラス."""
 
     def __init__(self, genre: str):
         self.analyzer = ImageQualityAnalyzer(genre)

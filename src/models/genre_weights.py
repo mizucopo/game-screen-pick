@@ -4,7 +4,7 @@ from typing import Dict
 
 
 class GenreWeights:
-    """全10ジャンルの重み定義"""
+    """全10ジャンルの重み定義."""
     DEFAULT_WEIGHTS = {
         "rpg": {
             "blur_score": 0.15, "contrast": 0.10, "color_richness": 0.20,
