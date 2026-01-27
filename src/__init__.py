@@ -1,5 +1,4 @@
-"""
-game_screen_pick - 高精度・コンテンツ多様性重視選択ツール
+"""game_screen_pick - 高精度・コンテンツ多様性重視選択ツール
 """
 
 from .models import ImageMetrics, GenreWeights

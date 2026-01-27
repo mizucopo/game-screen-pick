@@ -1,5 +1,4 @@
-"""
-Image metrics dataclass for storing analysis results.
+"""Image metrics dataclass for storing analysis results.
 """
 
 from dataclasses import dataclass

@@ -1,5 +1,4 @@
-"""
-Image quality analyzer using CLIP and computer vision metrics.
+"""Image quality analyzer using CLIP and computer vision metrics.
 """
 
 from typing import Optional

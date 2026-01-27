@@ -1,10 +1,7 @@
-"""
-Game screen picker for diverse image selection.
+"""Game screen picker for diverse image selection.
 """
 
 from pathlib import Path
-from typing import List
-import cv2
 import random
 from sklearn.metrics.pairwise import cosine_similarity
 
