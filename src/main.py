@@ -4,6 +4,7 @@ import argparse
 import shutil
 from pathlib import Path
 
+from .analyzers import ImageQualityAnalyzer
 from .services import GameScreenPicker
 
 
@@ -43,7 +44,8 @@ def main():
     )
     args = parser.parse_args()
 
-    picker = GameScreenPicker(args.genre)
+    analyzer = ImageQualityAnalyzer(args.genre)
+    picker = GameScreenPicker(analyzer)
     # 多様性重視で選択
     best = picker.select(args.input, args.num, args.similarity, args.recursive)
 
