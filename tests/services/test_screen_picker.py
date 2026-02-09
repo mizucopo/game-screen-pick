@@ -11,6 +11,7 @@ This test module follows these best practices:
 
 import tempfile
 from pathlib import Path
+from typing import List
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -22,7 +23,7 @@ from src.services.screen_picker import GameScreenPicker
 
 
 @pytest.fixture
-def mock_analyzer():
+def mock_analyzer() -> MagicMock:
     """Create a mock ImageQualityAnalyzer.
 
     This fixture avoids loading heavy ML models during tests,
@@ -33,7 +34,7 @@ def mock_analyzer():
 
 
 @pytest.fixture
-def sample_image_metrics():
+def sample_image_metrics() -> List[ImageMetrics]:
     """Create sample ImageMetrics for testing.
 
     Returns a list of 5 images with different scores and features.
@@ -108,8 +109,8 @@ def sample_image_metrics():
 
 
 def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
-    sample_image_metrics,
-):
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
     """High-quality images are prioritized while avoiding similar ones.
 
     Given:
@@ -143,8 +144,8 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
 
 
 def test_requesting_more_images_than_available_returns_all_unique_images(
-    sample_image_metrics,
-):
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
     """When requesting more images than available, returns all unique images.
 
     Given:
@@ -171,8 +172,8 @@ def test_requesting_more_images_than_available_returns_all_unique_images(
 
 
 def test_different_similarity_thresholds_produce_different_selection_results(
-    sample_image_metrics,
-):
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
     """Different similarity thresholds produce different selection results.
 
     Given:
@@ -206,8 +207,8 @@ def test_different_similarity_thresholds_produce_different_selection_results(
 
 
 def test_higher_similarity_threshold_filters_out_more_similar_images(
-    sample_image_metrics,
-):
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
     """Higher similarity threshold filters out more similar images.
 
     Given:
@@ -235,7 +236,7 @@ def test_higher_similarity_threshold_filters_out_more_similar_images(
     assert not (has_image1 and has_image2)
 
 
-def test_empty_input_list_returns_empty_result():
+def test_empty_input_list_returns_empty_result() -> None:
     """Empty input list returns empty result.
 
     Given:
@@ -246,7 +247,7 @@ def test_empty_input_list_returns_empty_result():
         - Returns empty list
     """
     # Arrange
-    empty_list = []
+    empty_list: List[ImageMetrics] = []
 
     # Act
     result = GameScreenPicker.select_from_analyzed(empty_list, 5, 0.8)
@@ -255,7 +256,9 @@ def test_empty_input_list_returns_empty_result():
     assert result == []
 
 
-def test_requesting_zero_images_returns_empty_list(sample_image_metrics):
+def test_requesting_zero_images_returns_empty_list(
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
     """Requesting zero images returns empty list.
 
     Given:
@@ -278,8 +281,8 @@ def test_requesting_zero_images_returns_empty_list(sample_image_metrics):
 
 
 def test_original_input_list_remains_unchanged_after_selection(
-    sample_image_metrics,
-):
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
     """Original input list remains unchanged after selection.
 
     Given:
@@ -307,7 +310,7 @@ def test_original_input_list_remains_unchanged_after_selection(
 # ============================================================================
 
 
-def test_picker_stores_the_provided_analyzer_instance(mock_analyzer):
+def test_picker_stores_the_provided_analyzer_instance(mock_analyzer: MagicMock) -> None:
     """Picker stores the provided analyzer instance.
 
     Given:
@@ -329,7 +332,7 @@ def test_picker_stores_the_provided_analyzer_instance(mock_analyzer):
 # ============================================================================
 
 
-def test_loading_image_files_finds_all_supported_formats_in_folder():
+def test_loading_image_files_finds_all_supported_formats_in_folder() -> None:
     """Finds all supported image files in the specified folder.
 
     Given:
@@ -361,7 +364,7 @@ def test_loading_image_files_finds_all_supported_formats_in_folder():
         assert extensions == {".jpg", ".png", ".bmp", ".jpeg"}
 
 
-def test_recursive_search_finds_images_in_subdirectories():
+def test_recursive_search_finds_images_in_subdirectories() -> None:
     """When recursive=True, searches subdirectories.
 
     Given:
@@ -390,7 +393,7 @@ def test_recursive_search_finds_images_in_subdirectories():
         assert paths == {"root.jpg", "nested.png"}
 
 
-def test_non_recursive_search_only_checks_top_level_folder():
+def test_non_recursive_search_only_checks_top_level_folder() -> None:
     """When recursive=False, only checks top-level folder.
 
     Given:
@@ -418,7 +421,7 @@ def test_non_recursive_search_only_checks_top_level_folder():
         assert result[0].name == "root.jpg"
 
 
-def test_loading_handles_uppercase_and_mixed_case_extensions():
+def test_loading_handles_uppercase_and_mixed_case_extensions() -> None:
     """Handles uppercase and mixed case extensions.
 
     Given:
@@ -443,7 +446,7 @@ def test_loading_handles_uppercase_and_mixed_case_extensions():
         assert len(result) == 3
 
 
-def test_loading_from_empty_folder_returns_empty_list():
+def test_loading_from_empty_folder_returns_empty_list() -> None:
     """Empty folder returns empty file list.
 
     Given:
@@ -464,7 +467,7 @@ def test_loading_from_empty_folder_returns_empty_list():
         assert result == []
 
 
-def test_loading_only_includes_supported_image_formats():
+def test_loading_only_includes_supported_image_formats() -> None:
     """Only includes supported image formats.
 
     Given:
@@ -497,8 +500,8 @@ def test_loading_only_includes_supported_image_formats():
 
 
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
-    mock_analyzer,
-):
+    mock_analyzer: MagicMock,
+) -> None:
     """Full integration: loads, analyzes, and selects diverse images.
 
     Given:
@@ -516,7 +519,7 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
             Path(temp_dir, f"image{i}.jpg").touch()
 
         # Mock analyzer to return predictable results
-        def mock_analyze(path):
+        def mock_analyze(path: str) -> ImageMetrics:
             # Create features where image0 and image1 are similar
             idx = int(path.split("image")[-1].split(".")[0])
             base_features = np.random.rand(128)
@@ -552,7 +555,9 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
             assert result[i].total_score >= result[i + 1].total_score
 
 
-def test_selecting_gracefully_handles_files_that_fail_to_analyze(mock_analyzer):
+def test_selecting_gracefully_handles_files_that_fail_to_analyze(
+    mock_analyzer: MagicMock,
+) -> None:
     """Gracefully handles files that fail to analyze.
 
     Given:
@@ -570,7 +575,7 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(mock_analyzer):
 
         call_count = [0]
 
-        def mock_analyze(path):
+        def mock_analyze(path: str) -> ImageMetrics | None:
             call_count[0] += 1
             # Return None for even-indexed images
             idx = int(path.split("image")[-1].split(".")[0])
@@ -604,7 +609,9 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(mock_analyzer):
         assert len(result) <= 3  # At most 3 valid images (odd indices)
 
 
-def test_selecting_from_nonexistent_folder_returns_empty_list(mock_analyzer):
+def test_selecting_from_nonexistent_folder_returns_empty_list(
+    mock_analyzer: MagicMock,
+) -> None:
     """Non-existent folder returns empty list gracefully.
 
     Given:

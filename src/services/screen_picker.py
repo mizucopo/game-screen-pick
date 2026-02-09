@@ -75,7 +75,7 @@ class GameScreenPicker:
         Returns:
             選択された画像メトリクスのリスト
         """
-        selected = []
+        selected: List[ImageMetrics] = []
         for candidate in all_results:
             if len(selected) >= num:
                 break

@@ -8,7 +8,7 @@ from .analyzers import ImageQualityAnalyzer
 from .services import GameScreenPicker
 
 
-def main():
+def main() -> None:
     """メイン関数."""
     parser = argparse.ArgumentParser(description="Diverse Game Screen Picker")
     parser.add_argument("input", help="入力フォルダ")
