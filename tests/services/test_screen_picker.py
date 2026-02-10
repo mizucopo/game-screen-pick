@@ -1,12 +1,12 @@
-"""Unit tests for GameScreenPicker.
+"""GameScreenPickerの単体テスト.
 
-This test module follows these best practices:
-1. Tests "what" (observable behavior), not "how" (implementation details)
-2. Minimizes mock usage - only uses mocks for external dependencies
-   (filesystem, heavy ML models)
-3. Separates domain logic from IO operations for better testability
-4. Uses AAA pattern (Arrange, Act, Assert) with clear comments
-5. Tests private methods indirectly through public methods
+このテストモジュールは以下のベストプラクティスに従っています：
+1.「How」（実装詳細）ではなく「What」（観察可能な挙動）をテスト
+2. モック使用を最小限に抑える - 外部依存関係のみモックを使用
+   （ファイルシステム、重いMLモデル）
+3. テスト可能性を高めるためにドメインロジックをIO操作から分離
+4. 明確なコメント付きのAAAパターン（Arrange, Act, Assert）を使用
+5. パブリックメソッドを通じてプライベートメソッドを間接的にテスト
 """
 
 import tempfile
@@ -24,10 +24,10 @@ from src.services.screen_picker import GameScreenPicker
 
 @pytest.fixture
 def mock_analyzer() -> MagicMock:
-    """Create a mock ImageQualityAnalyzer.
+    """モックImageQualityAnalyzerを作成する.
 
-    This fixture avoids loading heavy ML models during tests,
-    focusing on the selection logic instead.
+    このfixtureはテスト中に重いMLモデルのロードを回避し、
+    代わりに選択ロジックに焦点を当てます。
     """
     analyzer = MagicMock(spec=ImageQualityAnalyzer)
     return analyzer
@@ -35,14 +35,14 @@ def mock_analyzer() -> MagicMock:
 
 @pytest.fixture
 def sample_image_metrics() -> List[ImageMetrics]:
-    """Create sample ImageMetrics for testing.
+    """テスト用のサンプルImageMetricsを作成する.
 
-    Returns a list of 5 images with different scores and features.
-    - High quality, diverse features
-    - Medium quality, similar to first
-    - High quality, very different features
-    - Low quality
-    - Medium quality, similar to third
+    異なるスコアと特徴を持つ5つの画像のリストを返します。
+    - 高品質、多様な特徴
+    - 中品質、最初の画像に類似
+    - 高品質、非常に異なる特徴
+    - 低品質
+    - 中品質、3番目の画像に類似
     """
     # Create distinct feature vectors for diversity testing
     features_list = [
@@ -111,18 +111,18 @@ def sample_image_metrics() -> List[ImageMetrics]:
 def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """High-quality images are prioritized while avoiding similar ones.
+    """高品質な画像が優先され、類似した画像は回避される.
 
     Given:
-        - 5 analyzed images with varying scores
-        - image1 (score 95) and image2 (score 85) have similar features
-        - image3 (score 90) has different features
+        - 様々なスコアを持つ5つの分析済み画像
+        - image1（スコア95）とimage2（スコア85）は類似した特徴を持つ
+        - image3（スコア90）は異なる特徴を持つ
     When:
-        - Selecting 3 images with similarity threshold 0.9
+        - 類似度閾値0.9で3つの画像を選択
     Then:
-        - Returns 3 images
-        - Highest scoring images are prioritized
-        - Similar images are filtered out
+        - 3つの画像を返す
+        - 最高スコアの画像が優先される
+        - 類似した画像は除外される
     """
     # Arrange
     num_to_select = 3
@@ -146,14 +146,14 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
 def test_requesting_more_images_than_available_returns_all_unique_images(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """When requesting more images than available, returns all unique images.
+    """利用可能な数より多くの画像を要求した場合、すべての一意な画像を返す.
 
     Given:
-        - 5 analyzed images (some similar)
+        - 5つの分析済み画像（一部類似）
     When:
-        - Selecting 10 images with moderate similarity threshold
+        - 中程度の類似度閾値で10個の画像を選択
     Then:
-        - Returns at most the number of diverse images available
+        - 利用可能な多様な画像の数まで返す
     """
     # Arrange
     num_to_select = 10
@@ -174,14 +174,14 @@ def test_requesting_more_images_than_available_returns_all_unique_images(
 def test_different_similarity_thresholds_produce_different_selection_results(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """Different similarity thresholds produce different selection results.
+    """異なる類似度閾値は異なる選択結果を生成する.
 
     Given:
-        - 5 analyzed images with some similarities
+        - 類似性を持つ5つの分析済み画像
     When:
-        - Selecting with two different thresholds
+        - 2つの異なる閾値で選択
     Then:
-        - Results may differ based on threshold value
+        - 結果は閾値に基づいて異なる場合がある
     """
     # Arrange
     num_to_select = 5
@@ -209,14 +209,14 @@ def test_different_similarity_thresholds_produce_different_selection_results(
 def test_higher_similarity_threshold_filters_out_more_similar_images(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """Higher similarity threshold filters out more similar images.
+    """より高い類似度閾値はより多くの類似画像を除外する.
 
     Given:
-        - 5 analyzed images where image2 is similar to image1
+        - image2がimage1に類似している5つの分析済み画像
     When:
-        - Selecting with strict threshold (0.95)
+        - 厳しい閾値（0.95）で選択
     Then:
-        - Similar images are not both selected
+        - 類似した画像は両方とも選択されない
     """
     # Arrange
     num_to_select = 5
@@ -237,14 +237,14 @@ def test_higher_similarity_threshold_filters_out_more_similar_images(
 
 
 def test_empty_input_list_returns_empty_result() -> None:
-    """Empty input list returns empty result.
+    """空の入力リストは空の結果を返す.
 
     Given:
-        - No analyzed images
+        - 分析済み画像がない
     When:
-        - Selecting from empty list
+        - 空のリストから選択
     Then:
-        - Returns empty list
+        - 空のリストを返す
     """
     # Arrange
     empty_list: List[ImageMetrics] = []
@@ -259,14 +259,14 @@ def test_empty_input_list_returns_empty_result() -> None:
 def test_requesting_zero_images_returns_empty_list(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """Requesting zero images returns empty list.
+    """0個の画像を要求すると空のリストを返す.
 
     Given:
-        - 5 analyzed images
+        - 5つの分析済み画像
     When:
-        - Selecting 0 images
+        - 0個の画像を選択
     Then:
-        - Returns empty list without processing
+        - 処理せずに空のリストを返す
     """
     # Arrange
     num_to_select = 0
@@ -283,14 +283,14 @@ def test_requesting_zero_images_returns_empty_list(
 def test_original_input_list_remains_unchanged_after_selection(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """Original input list remains unchanged after selection.
+    """元の入力リストは選択後も変更されない.
 
     Given:
-        - A list of analyzed images in specific order
+        - 特定の順序の分析済み画像リスト
     When:
-        - Selecting from that list
+        - そのリストから選択
     Then:
-        - Original list order and content is preserved
+        - 元のリストの順序と内容が保持される
     """
     # Arrange
     original_paths = [m.path for m in sample_image_metrics]
@@ -311,14 +311,14 @@ def test_original_input_list_remains_unchanged_after_selection(
 
 
 def test_picker_stores_the_provided_analyzer_instance(mock_analyzer: MagicMock) -> None:
-    """Picker stores the provided analyzer instance.
+    """ピッカーは提供されたアナライザインスタンスを格納する.
 
     Given:
-        - A mock analyzer
+        - モックアナライザ
     When:
-        - Creating a GameScreenPicker instance
+        - GameScreenPickerインスタンスを作成
     Then:
-        - The analyzer is stored and accessible
+        - アナライザが格納され、アクセス可能
     """
     # Arrange & Act
     picker = GameScreenPicker(mock_analyzer)
@@ -333,16 +333,16 @@ def test_picker_stores_the_provided_analyzer_instance(mock_analyzer: MagicMock) 
 
 
 def test_loading_image_files_finds_all_supported_formats_in_folder() -> None:
-    """Finds all supported image files in the specified folder.
+    """指定されたフォルダ内のすべてのサポートされる画像ファイルを見つける.
 
     Given:
-        - A folder with jpg, png, bmp files
-        - A non-image file (txt)
+        - jpg、png、bmpファイルを持つフォルダ
+        - 画像以外のファイル（txt）
     When:
-        - Loading image files non-recursively
+        - 非再帰的に画像ファイルをロード
     Then:
-        - Returns only image files
-        - Ignores non-image files
+        - 画像ファイルのみを返す
+        - 画像以外のファイルを無視する
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -365,14 +365,14 @@ def test_loading_image_files_finds_all_supported_formats_in_folder() -> None:
 
 
 def test_recursive_search_finds_images_in_subdirectories() -> None:
-    """When recursive=True, searches subdirectories.
+    """recursive=Trueの場合、サブディレクトリを検索する.
 
     Given:
-        - A folder with images in nested subdirectories
+        - ネストされたサブディレクトリに画像を持つフォルダ
     When:
-        - Loading image files recursively
+        - 再帰的に画像ファイルをロード
     Then:
-        - Returns images from all levels
+        - すべてのレベルの画像を返す
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -394,14 +394,14 @@ def test_recursive_search_finds_images_in_subdirectories() -> None:
 
 
 def test_non_recursive_search_only_checks_top_level_folder() -> None:
-    """When recursive=False, only checks top-level folder.
+    """recursive=Falseの場合、トップレベルフォルダのみをチェックする.
 
     Given:
-        - A folder with images in nested subdirectories
+        - ネストされたサブディレクトリに画像を持つフォルダ
     When:
-        - Loading image files non-recursively
+        - 非再帰的に画像ファイルをロード
     Then:
-        - Returns only top-level images
+        - トップレベルの画像のみを返す
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -422,14 +422,14 @@ def test_non_recursive_search_only_checks_top_level_folder() -> None:
 
 
 def test_loading_handles_uppercase_and_mixed_case_extensions() -> None:
-    """Handles uppercase and mixed case extensions.
+    """大文字と小文字混在の拡張子を処理する.
 
     Given:
-        - Files with .JPG, .Png, .BMP extensions
+        - .JPG、.Png、.BMP拡張子を持つファイル
     When:
-        - Loading image files
+        - 画像ファイルをロード
     Then:
-        - Recognizes all supported formats regardless of case
+        - 大文字小文字に関係なくすべてのサポートされる形式を認識
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -447,14 +447,14 @@ def test_loading_handles_uppercase_and_mixed_case_extensions() -> None:
 
 
 def test_loading_from_empty_folder_returns_empty_list() -> None:
-    """Empty folder returns empty file list.
+    """空のフォルダは空のファイルリストを返す.
 
     Given:
-        - An empty folder
+        - 空のフォルダ
     When:
-        - Loading image files
+        - 画像ファイルをロード
     Then:
-        - Returns empty list
+        - 空のリストを返す
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -468,14 +468,14 @@ def test_loading_from_empty_folder_returns_empty_list() -> None:
 
 
 def test_loading_only_includes_supported_image_formats() -> None:
-    """Only includes supported image formats.
+    """サポートされる画像形式のみを含める.
 
     Given:
-        - Folder with various file types (.gif, .webp, .tiff, .txt)
+        - 様々なファイルタイプ（.gif、.webp、.tiff、.txt）を持つフォルダ
     When:
-        - Loading image files
+        - 画像ファイルをロード
     Then:
-        - Returns only supported formats (.jpg, .png, .bmp)
+        - サポートされる形式のみ（.jpg、.png、.bmp）を返す
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -502,15 +502,15 @@ def test_loading_only_includes_supported_image_formats() -> None:
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     mock_analyzer: MagicMock,
 ) -> None:
-    """Full integration: loads, analyzes, and selects diverse images.
+    """完全な統合：ロード、分析、多様な画像の選択.
 
     Given:
-        - A folder with 5 image files
-        - Mock analyzer returns consistent results
+        - 5つの画像ファイルを持つフォルダ
+        - モックアナライザは一貫した結果を返す
     When:
-        - Selecting 3 images with similarity threshold
+        - 類似度閾値で3つの画像を選択
     Then:
-        - Returns diverse, high-quality images
+        - 多様で高品質な画像を返す
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -558,15 +558,15 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
 def test_selecting_gracefully_handles_files_that_fail_to_analyze(
     mock_analyzer: MagicMock,
 ) -> None:
-    """Gracefully handles files that fail to analyze.
+    """分析に失敗したファイルを適切に処理する.
 
     Given:
-        - A folder with 5 image files
-        - Analyzer returns None for some files (corrupted/unreadable)
+        - 5つの画像ファイルを持つフォルダ
+        - アナライザは一部のファイルに対してNoneを返す（破損/読み取り不可）
     When:
-        - Selecting images
+        - 画像を選択
     Then:
-        - Continues processing and returns valid images only
+        - 処理を継続し、有効な画像のみを返す
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -612,14 +612,14 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
 def test_selecting_from_nonexistent_folder_returns_empty_list(
     mock_analyzer: MagicMock,
 ) -> None:
-    """Non-existent folder returns empty list gracefully.
+    """存在しないフォルダは適切に空のリストを返す.
 
     Given:
-        - A folder path that doesn't exist
+        - 存在しないフォルダパス
     When:
-        - Selecting images
+        - 画像を選択
     Then:
-        - Returns empty list (graceful degradation)
+        - 空のリストを返す（正常なデグラデーション）
     """
     # Arrange
     picker = GameScreenPicker(mock_analyzer)

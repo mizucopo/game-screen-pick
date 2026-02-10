@@ -1,11 +1,11 @@
-"""Unit tests for main.py CLI.
+"""main.py CLIの単体テスト.
 
-This test module follows these best practices:
-1. Tests CLI behavior from user perspective (argparse, I/O, error handling)
-2. Minimizes mock usage - only mocks heavy ML models and file operations
-3. Uses real filesystem with pytest's tmp_path for realistic testing
-4. Uses AAA pattern (Arrange, Act, Assert) with clear comments
-5. Captures stdout with capsys to verify user-facing output
+このテストモジュールは以下のベストプラクティスに従っています：
+1. ユーザー視点でのCLI挙動をテスト（argparse、I/O、エラーハンドリング）
+2. モック使用を最小化 - 重いMLモデルとファイル操作のみモック化
+3. pytestのtmp_pathを使用したリアルなファイルシステムテスト
+4. 明確なコメント付きのAAAパターン（Arrange, Act, Assert）を使用
+5. capsysでstdoutをキャプチャしてユーザー向け出力を検証
 """
 
 from pathlib import Path
