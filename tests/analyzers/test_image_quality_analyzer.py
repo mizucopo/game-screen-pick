@@ -148,16 +148,16 @@ def test_analyze_returns_valid_metrics_with_genre_specific_weights(
     sample_image_path: str,
     genre: str,
 ) -> None:
-    """ジャンル特有の重みで有効なメトリックを返す.
+    """ジャンル特有の重みで有効なメトリックが返されること.
 
     Given:
-        - 特定ジャンルのアナライザインスタンス
-        - 有効なテスト画像
+        - 特定ジャンルのアナライザインスタンスがある
+        - 有効なテスト画像がある
     When:
-        - 画像を分析
+        - 画像が分析される
     Then:
-        - 有効なImageMetricsが返される
-        - スコアが有効範囲内にある
+        - 有効なImageMetricsが返されること
+        - スコアが有効範囲内にあること
     """
     # Arrange
     analyzer = ImageQualityAnalyzer(genre=genre)
@@ -181,16 +181,16 @@ def test_analyze_applies_penalty_for_dark_images(
     mock_clip_processor: MagicMock,  # noqa: ARG001
     dark_image_path: str,
 ) -> None:
-    """輝度が40未満の画像に0.6のペナルティを適用する.
+    """輝度が40未満の画像に0.6のペナルティが適用されること.
 
     Given:
-        - アナライザインスタンス
-        - 暗いテスト画像（輝度 < 40）
+        - アナライザインスタンスがある
+        - 暗いテスト画像（輝度 < 40）がある
     When:
-        - 画像を分析
+        - 画像が分析される
     Then:
-        - 総スコアに0.6のペナルティが適用される
-        - ペナルティなしの場合に比べて総スコアが低くなる
+        - 総スコアに0.6のペナルティが適用されること
+        - ペナルティなしの場合に比べて総スコアが低くなること
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
@@ -216,16 +216,16 @@ def test_analyze_returns_none_for_nonexistent_file(
     mock_clip_model: MagicMock,  # noqa: ARG001
     mock_clip_processor: MagicMock,  # noqa: ARG001
 ) -> None:
-    """存在しないファイルパスに対してNoneを返す.
+    """存在しないファイルパスに対してNoneが返されること.
 
     Given:
-        - アナライザインスタンス
-        - 存在しないファイルパス
+        - アナライザインスタンスがある
+        - 存在しないファイルパスがある
     When:
-        - 存在しないファイルを分析
+        - 存在しないファイルが分析される
     Then:
-        - Noneを返す（正常な失敗）
-        - 例外は発生しない
+        - Noneが返されること（正常な失敗）
+        - 例外が発生しないこと
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
@@ -243,16 +243,16 @@ def test_analyze_returns_none_for_corrupted_image_file(
     mock_clip_processor: MagicMock,  # noqa: ARG001
     tmp_path: Path,
 ) -> None:
-    """破損した画像ファイルに対してNoneを返す.
+    """破損した画像ファイルに対してNoneが返されること.
 
     Given:
-        - アナライザインスタンス
-        - 無効な画像データを持つファイル
+        - アナライザインスタンスがある
+        - 無効な画像データを持つファイルがある
     When:
-        - 破損したファイルを分析
+        - 破損したファイルが分析される
     Then:
-        - Noneを返す（正常な失敗）
-        - 例外は発生しない
+        - Noneが返されること（正常な失敗）
+        - 例外が発生しないこと
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
@@ -283,17 +283,17 @@ def test_analyzes_images_with_various_formats_and_properties(
     request: pytest.FixtureRequest,
     image_path_fixture: str,
 ) -> None:
-    """様々な形式と特性の画像を正しく処理する.
+    """様々な形式と特性の画像が正しく処理されること.
 
     Given:
-        - アナライザインスタンス
-        - 異なる形式（JPG、PNG、BMP）とサイズ、特性のテスト画像
+        - アナライザインスタンスがある
+        - 異なる形式（JPG、PNG、BMP）とサイズ、特性のテスト画像がある
     When:
-        - 各画像を分析
+        - 各画像が分析される
     Then:
-        - すべての形式とサイズが正常に分析される
-        - 有効なImageMetricsを返す
-        - 特徴ベクトルは一貫したサイズを持つ
+        - すべての形式とサイズが正常に分析されること
+        - 有効なImageMetricsが返されること
+        - 特徴ベクトルが一貫したサイズを持つこと
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
@@ -318,16 +318,16 @@ def test_analyze_produces_consistent_results_for_same_image(
     mock_clip_processor: MagicMock,  # noqa: ARG001
     sample_image_path: str,
 ) -> None:
-    """同じ画像を複数回分析する際に一貫した結果を生成する.
+    """同じ画像を複数回分析する際に一貫した結果が生成されること.
 
     Given:
-        - アナライザインスタンス
-        - 有効なテスト画像
+        - アナライザインスタンスがある
+        - 有効なテスト画像がある
     When:
-        - 同じ画像を2回分析
+        - 同じ画像が2回分析される
     Then:
-        - 両方の分析で同一の結果が生成される
-        - 総スコアと特徴ベクトルが同じ
+        - 両方の分析で同一の結果が生成されること
+        - 総スコアと特徴ベクトルが同じであること
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
@@ -356,18 +356,18 @@ def test_analyze_logs_warning_for_corrupted_image(
     sample_image_path: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """PILで画像を開く際のエラー時にWARNINGログを出力する.
+    """PILで画像を開く際のエラー時にWARNINGログが出力されること.
 
     Given:
-        - アナライザインスタンス
-        - 有効なテスト画像（cv2.imreadは成功する）
-        - ログキャプチャ設定（WARNINGレベル以上）
+        - アナライザインスタンスがある
+        - 有効なテスト画像（cv2.imreadは成功する）がある
+        - ログキャプチャ設定（WARNINGレベル以上）がある
     When:
-        - PIL.Image.openでUnidentifiedImageErrorが発生するようにモック化
+        - PIL.Image.openでUnidentifiedImageErrorが発生するようにモック化される
     Then:
-        - WARNINGレベルのログが出力される
-        - ログメッセージにパスと例外内容が含まれる
-        - Noneを返す（正常な失敗）
+        - WARNINGレベルのログが出力されること
+        - ログメッセージにパスと例外内容が含まれること
+        - Noneが返されること（正常な失敗）
     """
     # Arrange
     caplog.set_level(logging.WARNING)
@@ -411,17 +411,17 @@ def test_analyze_re_raises_unexpected_exceptions(
     exception_class: type[Exception],
     exception_msg: str,
 ) -> None:
-    """実装バグ（予期しない例外）時に例外を再スローする.
+    """実装バグ（予期しない例外）時に例外が再スローされること.
 
     Given:
-        - アナライザインスタンス
-        - 有効なテスト画像
-        - ログキャプチャ設定（ERRORレベル以上）
+        - アナライザインスタンスがある
+        - 有効なテスト画像がある
+        - ログキャプチャ設定（ERRORレベル以上）がある
     When:
-        - analyzeメソッド内で予期しない例外が発生するようにモック化
+        - analyzeメソッド内で予期しない例外が発生するようにモック化される
     Then:
-        - ERRORレベルのログが出力される
-        - 例外が再スローされる
+        - ERRORレベルのログが出力されること
+        - 例外が再スローされること
     """
     # Arrange
     caplog.set_level(logging.ERROR)

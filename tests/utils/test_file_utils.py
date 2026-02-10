@@ -32,14 +32,14 @@ def test_get_unique_destination_returns_correct_filename(
     existing_files: list[str],
     expected_suffix: str,
 ) -> None:
-    """既存ファイルに基づいて一意なファイル名を生成することを検証.
+    """既存ファイルに基づいて一意なファイル名が生成されること.
 
     Given:
-        - 出力ディレクトリに既存ファイルが存在（または空）
+        - 出力ディレクトリに既存ファイルが存在する（または空である）
     When:
-        - get_unique_destinationを実行
+        - get_unique_destinationが実行される
     Then:
-        - 適切なサフィックス付きのファイル名が返される
+        - 適切なサフィックス付きのファイル名が返されること
     """
     # Arrange
     for f in existing_files:
@@ -67,14 +67,14 @@ def test_preserves_common_image_extensions(
     tmp_path: Path,
     extension: str,
 ) -> None:
-    """一般的な画像形式の拡張子を維持することを検証.
+    """一般的な画像形式の拡張子が維持されること.
 
     Given:
-        - 重複ファイルが存在する特定の拡張子
+        - 重複ファイルが存在する特定の拡張子がある
     When:
-        - get_unique_destinationを実行
+        - get_unique_destinationが実行される
     Then:
-        - 拡張子が正しく維持される
+        - 拡張子が正しく維持されること
     """
     # Arrange
     filename = f"image{extension}"
@@ -91,14 +91,14 @@ def test_preserves_common_image_extensions(
 def test_handles_double_extensions(
     tmp_path: Path,
 ) -> None:
-    """複数拡張子を持つファイル名を正しく処理することを検証.
+    """複数拡張子を持つファイル名が正しく処理されること.
 
     Given:
-        - .tar.gz のような複数拡張子のファイルが存在
+        - .tar.gz のような複数拡張子のファイルが存在する
     When:
-        - get_unique_destinationを実行
+        - get_unique_destinationが実行される
     Then:
-        - 拡張子が正しく維持される（stemはarchive.tar、suffixは.gzとして処理）
+        - 拡張子が正しく維持されること（stemはarchive.tar、suffixは.gzとして処理）
     """
     # Arrange
     filename = "archive.tar.gz"
@@ -131,14 +131,14 @@ def test_handles_filenames_with_patterns(
     filename: str,
     expected: str,
 ) -> None:
-    """アンダースコア、末尾数字、ハイフンを含むファイル名を正しく処理することを検証.
+    """アンダースコア、末尾数字、ハイフンを含むファイル名が正しく処理されること.
 
     Given:
-        - 特殊パターンを含むファイル名が存在
+        - 特殊パターンを含むファイル名が存在する
     When:
-        - get_unique_destinationを実行
+        - get_unique_destinationが実行される
     Then:
-        - 正しくサフィックスが付与される
+        - 正しくサフィックスが付与されること
     """
     # Arrange
     (tmp_path / filename).touch()
@@ -162,14 +162,14 @@ def test_handles_gaps_in_numbered_files(
     existing_files: list[str],
     expected_suffix: str,
 ) -> None:
-    """既存の連番にギャップがある場合、次の有効な番号を使用することを検証.
+    """既存の連番にギャップがある場合、次の有効な番号が使用されること.
 
     Given:
-        - 連番にギャップがある既存ファイル
+        - 連番にギャップがある既存ファイルがある
     When:
-        - get_unique_destinationを実行
+        - get_unique_destinationが実行される
     Then:
-        - 次の有効な連番が使用される
+        - 次の有効な連番が使用されること
     """
     # Arrange
     for f in existing_files:
@@ -186,15 +186,15 @@ def test_handles_gaps_in_numbered_files(
 def test_handles_very_long_filename(
     tmp_path: Path,
 ) -> None:
-    """非常に長いファイル名を正しく処理することを検証.
+    """非常に長いファイル名が正しく処理されること.
 
     Given:
-        - 長いファイル名の重複が存在
+        - 長いファイル名の重複が存在する
     When:
-        - get_unique_destinationを実行
+        - get_unique_destinationが実行される
     Then:
-        - サフィックスが正しく付与される
-        - 拡張子が維持される
+        - サフィックスが正しく付与されること
+        - 拡張子が維持されること
     """
     # Arrange
     filename = "a" * 200 + ".jpg"
@@ -213,14 +213,14 @@ def test_handles_very_long_filename(
 def test_handles_only_stem_no_suffix(
     tmp_path: Path,
 ) -> None:
-    """ステムのみで拡張子がないファイルを正しく処理することを検証.
+    """ステムのみで拡張子がないファイルが正しく処理されること.
 
     Given:
-        - 拡張子なしのファイルが存在
+        - 拡張子なしのファイルが存在する
     When:
-        - get_unique_destinationを実行
+        - get_unique_destinationが実行される
     Then:
-        - _1サフィックスがステムに直接付与される
+        - _1サフィックスがステムに直接付与されること
     """
     # Arrange
     filename = "myfile"
@@ -236,14 +236,14 @@ def test_handles_only_stem_no_suffix(
 def test_handles_dotfiles_without_extension(
     tmp_path: Path,
 ) -> None:
-    """ドットで始まる拡張子なしのファイルを正しく処理することを検証.
+    """ドットで始まる拡張子なしのファイルが正しく処理されること.
 
     Given:
-        - .gitignore のようなドットで始まるファイルが存在
+        - .gitignore のようなドットで始まるファイルが存在する
     When:
-        - get_unique_destinationを実行
+        - get_unique_destinationが実行される
     Then:
-        - 正しくサフィックスが付与される
+        - 正しくサフィックスが付与されること
     """
     # Arrange
     filename = ".hidden"
@@ -274,14 +274,14 @@ def test_handles_special_characters_in_filename(
     filename: str,
     expected: str,
 ) -> None:
-    """特殊文字・日本語・スペースを含むファイル名を正しく処理することを検証.
+    """特殊文字・日本語・スペースを含むファイル名が正しく処理されること.
 
     Given:
-        - 特殊文字、日本語、またはスペースを含むファイル名が存在
+        - 特殊文字、日本語、またはスペースを含むファイル名が存在する
     When:
-        - get_unique_destinationを実行
+        - get_unique_destinationが実行される
     Then:
-        - 正しくサフィックスが付与される
+        - 正しくサフィックスが付与されること
     """
     # Arrange
     (tmp_path / filename).touch()
@@ -301,14 +301,14 @@ def test_handles_special_characters_in_filename(
 def test_handles_many_duplicate_files(
     tmp_path: Path,
 ) -> None:
-    """多数の重複ファイルが存在する場合、適切な番号を選択することを検証.
+    """多数の重複ファイルが存在する場合、適切な番号が選択されること.
 
     Given:
-        - image.jpg から image_99.jpg までが存在
+        - image.jpg から image_99.jpg までが存在する
     When:
-        - get_unique_destinationを実行
+        - get_unique_destinationが実行される
     Then:
-        - image_100.jpg が返される
+        - image_100.jpg が返されること
     """
     # Arrange
     filename = "image.jpg"

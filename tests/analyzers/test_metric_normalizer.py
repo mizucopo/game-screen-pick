@@ -30,16 +30,16 @@ def test_sigmoid_returns_values_relative_to_center(
     expected_min: float,
     expected_max: float,
 ) -> None:
-    """xとcenterの相対関係に基づいてsigmoidが適切な値を返す.
+    """xとcenterの相対関係に基づいてsigmoidが適切な値を返すこと.
 
     Given:
-        - center値が500.0
-        - xがcenterより大きいまたは小さい値
+        - center値が500.0である
+        - xがcenterより大きいまたは小さい値である
     When:
-        - デフォルトの急峻さでsigmoid(x, center)を計算
+        - デフォルトの急峻さでsigmoid(x, center)が計算される
     Then:
-        - xがcenterより大きい場合は0.5より大きい値を返す
-        - xがcenterより小さい場合は0.5より小さい値を返す
+        - xがcenterより大きい場合は0.5より大きい値が返されること
+        - xがcenterより小さい場合は0.5より小さい値が返されること
     """
     # Arrange & Act
     result = MetricNormalizer.sigmoid(x, center)
@@ -49,18 +49,18 @@ def test_sigmoid_returns_values_relative_to_center(
 
 
 def test_sigmoid_with_default_steepness_produces_expected_curve() -> None:
-    """デフォルトの急峻さで期待されるsigmoid曲線を生成する.
+    """デフォルトの急峻さで期待されるsigmoid曲線が生成されること.
 
     Given:
-        - center値が50.0（コントラストメトリックの典型的な値）
-        - デフォルトの急峻さが0.1
-        - 3つのテストポイント：centerの下、center、centerの上
+        - center値が50.0（コントラストメトリックの典型的な値）である
+        - デフォルトの急峻さが0.1である
+        - 3つのテストポイント：centerの下、center、centerの上がある
     When:
-        - 各ポイントのsigmoidを計算
+        - 各ポイントのsigmoidが計算される
     Then:
-        - 期待される値を持つ滑らかな曲線を生成
-        - より小さい値はより小さい出力を生成
-        - より大きい値はより大きい出力を生成
+        - 期待される値を持つ滑らかな曲線が生成されること
+        - より小さい値はより小さい出力を生成すること
+        - より大きい値はより大きい出力を生成すること
     """
     # Arrange
     center = 50.0
@@ -83,18 +83,18 @@ def test_sigmoid_with_default_steepness_produces_expected_curve() -> None:
 
 
 def test_sigmoid_handles_overflow_without_crashing() -> None:
-    """例外を発生させずにオーバーフロー/アンダーフローを適切に処理する.
+    """例外を発生させずにオーバーフロー/アンダーフローが適切に処理されること.
 
     Given:
-        - math.expのオーバーフローを引き起こす可能性のある極端な入力値
-        - 非常に大きい正の値（1e10）
-        - 非常に大きい負の値（-1e10）
+        - math.expのオーバーフローを引き起こす可能性のある極端な入力値がある
+        - 非常に大きい正の値（1e10）がある
+        - 非常に大きい負の値（-1e10）がある
     When:
-        - 極端な値でsigmoidを計算
+        - 極端な値でsigmoidが計算される
     Then:
-        - 極端な正の値に対して1.0を返す（例外なし）
-        - 極端な負の値に対して0.0を返す（例外なし）
-        - OverflowErrorまたはアンダーフロー例外は発生しない
+        - 極端な正の値に対して1.0が返されること（例外なし）
+        - 極端な負の値に対して0.0が返されること（例外なし）
+        - OverflowErrorまたはアンダーフロー例外が発生しないこと
     """
     # Arrange
     center = 500.0
@@ -117,14 +117,14 @@ def test_sigmoid_handles_overflow_without_crashing() -> None:
 
 
 def test_normalize_all_returns_all_expected_metrics() -> None:
-    """すべての8つの期待される正規化メトリックを含む辞書を返す.
+    """すべての8つの期待される正規化メトリックを含む辞書が返されること.
 
     Given:
-        - すべての必須フィールドを含む生メトリック辞書
+        - すべての必須フィールドを含む生メトリック辞書がある
     When:
-        - normalize_allを呼び出し
+        - normalize_allが呼び出される
     Then:
-        - すべての8つの期待されるメトリックを返す：
+        - すべての8つの期待されるメトリックが返されること：
           - blur_score
           - contrast
           - color_richness
@@ -165,17 +165,17 @@ def test_normalize_all_returns_all_expected_metrics() -> None:
 
 
 def test_normalize_all_produces_valid_and_unique_results() -> None:
-    """正規化値が有効範囲内にあり、異なる入力値は異なる結果を生成する.
+    """正規化値が有効範囲内にあり、異なる入力値は異なる結果を生成すること.
 
     Given:
-        - 2セットの異なる生メトリック
-        - 低い値セットと高い値セット
+        - 2セットの異なる生メトリックがある
+        - 低い値セットと高い値セットがある
     When:
-        - 各セットでnormalize_allを呼び出し
+        - 各セットでnormalize_allが呼び出される
     Then:
-        - すべての正規化値が[0, 1]範囲内にある
-        - より高い生値はより高い正規化値を生成する
-        - 結果は一意である
+        - すべての正規化値が[0, 1]範囲内にあること
+        - より高い生値はより高い正規化値を生成すること
+        - 結果が一意であること
     """
     # Arrange
     raw_low = {

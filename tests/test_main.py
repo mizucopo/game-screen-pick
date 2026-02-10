@@ -93,18 +93,18 @@ def test_cli_accepts_all_arguments(
     tmp_path: Path,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
-    """全ての引数を正しくパースすることを検証.
+    """全ての引数が正しくパースされること.
 
     Given:
-        - 有効な入力ディレクトリ
-        - 全てのオプション引数を指定
-        - モックされた analyzer と picker
+        - 有効な入力ディレクトリが存在する
+        - 全てのオプション引数が指定されている
+        - モックされた analyzer と picker がある
     When:
-        - CLIを全引数指定で実行
+        - CLIが全引数指定で実行される
     Then:
-        - ImageQualityAnalyzerが指定ジャンルで初期化される
-        - picker.selectが正しいパラメータで呼ばれる
-        - 出力ディレクトリが作成される
+        - ImageQualityAnalyzerが指定ジャンルで初期化されること
+        - picker.selectが正しいパラメータで呼ばれること
+        - 出力ディレクトリが作成されること
     """
     # Arrange
     output_dir = str(tmp_path / "output")
@@ -154,15 +154,15 @@ def test_cli_shows_error_for_missing_required_argument(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """必須引数（input）が missing の時にエラーを表示することを検証.
+    """必須引数（input）が missing の時にエラーが表示されること.
 
     Given:
-        - 必須引数（input）を指定しない
+        - 必須引数（input）が指定されていない
     When:
-        - CLIを実行
+        - CLIが実行される
     Then:
-        - 適切なエラーメッセージが出力される
-        - プログラムが終了する
+        - 適切なエラーメッセージが出力されること
+        - プログラムが終了すること
     """
     # Arrange
     monkeypatch.setattr("sys.argv", ["main.py"])
@@ -199,16 +199,16 @@ def test_cli_selects_and_displays_images(
     num_expected: int,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
-    """画像を選択して表示することを検証.
+    """画像が選択されて表示されること.
 
     Given:
-        - 有効な入力ディレクトリ
-        - モックされた analyzer と picker
-        - デフォルトまたはカスタムパラメータ
+        - 有効な入力ディレクトリが存在する
+        - モックされた analyzer と picker がある
+        - デフォルトまたはカスタムパラメータが指定されている
     When:
-        - CLIを実行
+        - CLIが実行される
     Then:
-        - 指定された枚数分の結果が表示される
+        - 指定された枚数分の結果が表示されること
     """
     # Arrange
     results = [
@@ -245,18 +245,18 @@ def test_cli_copies_selected_images_to_output_directory(
     tmp_path: Path,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
-    """選択された画像が出力ディレクトリにコピーされることを検証.
+    """選択された画像が出力ディレクトリにコピーされること.
 
     Given:
-        - 有効な入力ディレクトリ
-        - 存在しないネストされた出力ディレクトリを指定
-        - 3つの選択結果
+        - 有効な入力ディレクトリが存在する
+        - 存在しないネストされた出力ディレクトリが指定されている
+        - 3つの選択結果がある
     When:
-        - CLIを `-c` オプションで実行
+        - CLIが `-c` オプションで実行される
     Then:
-        - 出力ディレクトリが作成される
-        - 画像が出力ディレクトリにコピーされる
-        - 成功メッセージにコピー数とパスが含まれる
+        - 出力ディレクトリが作成されること
+        - 画像が出力ディレクトリにコピーされること
+        - 成功メッセージにコピー数とパスが含まれること
     """
     # Arrange
     output_dir = tmp_path / "parent" / "output"
@@ -311,14 +311,14 @@ def test_cli_handles_empty_and_nonexistent_input_directories(
     tmp_path: Path,
     input_dir_func: Callable[[Path], str],
 ) -> None:
-    """空のディレクトリと存在しないディレクトリを正しく処理することを検証.
+    """空のディレクトリと存在しないディレクトリが正しく処理されること.
 
     Given:
-        - 空の入力ディレクトリ または 存在しない入力ディレクトリパス
+        - 空の入力ディレクトリ、または存在しない入力ディレクトリパスがある
     When:
-        - CLIを実行
+        - CLIが実行される
     Then:
-        - プログラムがクラッシュせず、0件の結果が適切に表示される
+        - プログラムがクラッシュせず、0件の結果が適切に表示されること
     """
     # Arrange
     input_dir = input_dir_func(tmp_path)
@@ -361,17 +361,17 @@ def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
     extension: str,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
-    """同名ファイルが複数存在する場合に連番でサフィックスを付与して上書きを回避することを検証.
+    """同名ファイルが複数存在する場合に連番でサフィックスが付与されて上書きが回避されること.
 
     Given:
-        - 別々のフォルダに同名ファイルが存在
-        - 出力ディレクトリを指定
-        - 複数の画像が選択される
+        - 別々のフォルダに同名ファイルが存在する
+        - 出力ディレクトリが指定されている
+        - 複数の画像が選択されている
     When:
-        - CLIを `-c` オプションで実行
+        - CLIが `-c` オプションで実行される
     Then:
-        - 1つ目は元の名前、2つ目以降は _1, _2,... のサフィックスで保存される
-        - すべてのファイルが出力ディレクトリに存在する
+        - 1つ目は元の名前、2つ目以降は _1, _2,... のサフィックスで保存されること
+        - すべてのファイルが出力ディレクトリに存在すること
     """
     # Arrange
     input_dir = tmp_path / "input"

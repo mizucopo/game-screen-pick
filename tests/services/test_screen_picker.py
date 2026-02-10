@@ -111,7 +111,7 @@ def sample_image_metrics() -> List[ImageMetrics]:
 def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """高品質な画像が優先され、類似した画像は回避される.
+    """高品質な画像が優先され、類似した画像は回避されること.
 
     Given:
         - 様々なスコアを持つ5つの分析済み画像
@@ -120,9 +120,9 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     When:
         - 類似度閾値0.9で3つの画像を選択
     Then:
-        - 3つの画像を返す
-        - 最高スコアの画像が優先される
-        - 類似した画像は除外される
+        - 3つの画像が返されること
+        - 最高スコアの画像が優先されること
+        - 類似した画像が除外されること
     """
     # Arrange
     num_to_select = 3
@@ -146,14 +146,14 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
 def test_requesting_more_images_than_available_returns_all_unique_images(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """利用可能な数より多くの画像を要求した場合、すべての一意な画像を返す.
+    """利用可能な数より多くの画像を要求した場合、すべての一意な画像が返されること.
 
     Given:
         - 5つの分析済み画像（一部類似）
     When:
         - 中程度の類似度閾値で10個の画像を選択
     Then:
-        - 利用可能な多様な画像の数まで返す
+        - 利用可能な多様な画像の数まで返されること
     """
     # Arrange
     num_to_select = 10
@@ -174,14 +174,14 @@ def test_requesting_more_images_than_available_returns_all_unique_images(
 def test_higher_similarity_threshold_filters_out_more_similar_images(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """より高い類似度閾値はより多くの類似画像を除外する.
+    """より高い類似度閾値はより多くの類似画像を除外すること.
 
     Given:
         - image2がimage1に類似している5つの分析済み画像
     When:
         - 厳しい閾値（0.95）で選択
     Then:
-        - 類似した画像は両方とも選択されない
+        - 類似した画像は両方とも選択されないこと
     """
     # Arrange
     num_to_select = 5
@@ -237,14 +237,14 @@ def test_edge_cases_return_empty_list(
 def test_original_input_list_remains_unchanged_after_selection(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """元の入力リストは選択後も変更されない.
+    """元の入力リストは選択後も変更されないこと.
 
     Given:
         - 特定の順序の分析済み画像リスト
     When:
         - そのリストから選択
     Then:
-        - 元のリストの順序と内容が保持される
+        - 元のリストの順序と内容が保持されること
     """
     # Arrange
     original_paths = [m.path for m in sample_image_metrics]
@@ -299,7 +299,7 @@ def _create_mock_analyze_for_integration(
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     mock_analyzer: MagicMock,
 ) -> None:
-    """完全な統合：ロード、分析、多様な画像の選択.
+    """完全な統合：ロード、分析、多様な画像の選択が行われること.
 
     Given:
         - 5つの画像ファイルを持つフォルダ
@@ -307,7 +307,7 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     When:
         - 類似度閾値で3つの画像を選択
     Then:
-        - 多様で高品質な画像を返す
+        - 多様で高品質な画像が返されること
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -336,7 +336,7 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
 def test_selecting_gracefully_handles_files_that_fail_to_analyze(
     mock_analyzer: MagicMock,
 ) -> None:
-    """分析に失敗したファイルを適切に処理する.
+    """分析に失敗したファイルが適切に処理されること.
 
     Given:
         - 5つの画像ファイルを持つフォルダ
@@ -344,7 +344,7 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
     When:
         - 画像を選択
     Then:
-        - 処理を継続し、有効な画像のみを返す
+        - 処理が継続され、有効な画像のみが返されること
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -380,14 +380,14 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
 def test_selecting_from_nonexistent_folder_returns_empty_list(
     mock_analyzer: MagicMock,
 ) -> None:
-    """存在しないフォルダは適切に空のリストを返す.
+    """存在しないフォルダは適切に空のリストを返すこと.
 
     Given:
         - 存在しないフォルダパス
     When:
         - 画像を選択
     Then:
-        - 空のリストを返す（正常なデグラデーション）
+        - 空のリストが返されること（正常なデグラデーション）
     """
     # Arrange
     picker = GameScreenPicker(mock_analyzer)
