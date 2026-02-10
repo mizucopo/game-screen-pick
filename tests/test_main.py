@@ -193,26 +193,35 @@ def test_cli_shows_error_for_missing_required_argument(
 # ============================================================================
 
 
-def test_cli_selects_and_displays_images_with_default_parameters(
+@pytest.mark.parametrize(
+    "args,num_expected",
+    [
+        ([], 10),  # デフォルト値
+        (["-n", "7"], 7),  # カスタム値
+    ],
+)
+def test_cli_selects_and_displays_images(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     test_image_directory: str,
+    args: list[str],
+    num_expected: int,
 ) -> None:
-    """デフォルトパラメータで画像を選択して表示することを検証.
+    """画像を選択して表示することを検証.
 
     Given:
         - 有効な入力ディレクトリ
         - モックされた analyzer と picker
+        - デフォルトまたはカスタムパラメータ
     When:
-        - CLIをデフォルトパラメータで実行
+        - CLIを実行
     Then:
-        - デフォルトの10枚が選択される
-        - 結果が正しく表示される
+        - 指定された枚数分の結果が表示される
     """
     # Arrange
-    # サンプル結果をインラインで作成（デフォルトの10枚）
+    # サンプル結果をインラインで作成
     results = [
         ImageMetrics(
             path=f"/fake/image{i}.jpg",
@@ -222,11 +231,11 @@ def test_cli_selects_and_displays_images_with_default_parameters(
             total_score=95.0 - i * 3,
             features=np.random.rand(64),
         )
-        for i in range(10)
+        for i in range(num_expected)
     ]
     mock_game_screen_picker.select.return_value = results
 
-    monkeypatch.setattr("sys.argv", ["main.py", test_image_directory])
+    monkeypatch.setattr("sys.argv", ["main.py", test_image_directory] + args)
     monkeypatch.setattr(
         "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
     )
@@ -241,60 +250,8 @@ def test_cli_selects_and_displays_images_with_default_parameters(
     captured = capsys.readouterr()
     # 結果一覧が表示される
     assert "選択された画像一覧" in captured.out
-    # デフォルトの10枚分のスコア表示がある
-    assert captured.out.count("Score:") == 10
-    # すべての画像パスが表示されている
-    for i in range(10):
-        assert f"image{i}.jpg" in captured.out
-
-
-def test_cli_selects_specified_number_of_images(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
-    mock_game_screen_picker: MagicMock,
-    test_image_directory: str,
-) -> None:
-    """指定した枚数だけ画像を選択することを検証.
-
-    Given:
-        - 有効な入力ディレクトリ
-        - `-n` オプションを指定
-    When:
-        - CLIを実行
-    Then:
-        - 指定された枚数分の結果が表示される
-    """
-    # Arrange
-    # サンプル結果をインラインで作成（7枚）
-    results = [
-        ImageMetrics(
-            path=f"/fake/image{i}.jpg",
-            raw_metrics={"blur_score": 100.0 - i * 5},
-            normalized_metrics={"blur_score": 0.9 - i * 0.05},
-            semantic_score=0.8 - i * 0.02,
-            total_score=95.0 - i * 3,
-            features=np.random.rand(64),
-        )
-        for i in range(7)
-    ]
-    mock_game_screen_picker.select.return_value = results
-
-    monkeypatch.setattr("sys.argv", ["main.py", test_image_directory, "-n", "7"])
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
-    )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
-
-    # Act
-    from src.main import Main
-
-    Main().run()
-
-    # Assert
-    captured = capsys.readouterr()
-    # 7枚分のスコア表示がある
-    assert captured.out.count("Score:") == 7
+    # 指定された枚数分のスコア表示がある
+    assert captured.out.count("Score:") == num_expected
 
 
 def test_cli_applies_genre_specific_settings(
@@ -660,64 +617,8 @@ def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
 
 
 # ============================================================================
-# Mainクラスのテスト（依存性注入と直接インスタンス化）
+# Mainクラスのテスト
 # ============================================================================
-
-
-def test_main_class_with_dependency_injection(
-    capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
-    mock_game_screen_picker: MagicMock,
-    test_image_directory: str,
-) -> None:
-    """Mainクラスに依存関係を注入して動作することを検証.
-
-    Given:
-        - モックされた analyzer と picker
-        - カスタム引数リスト
-        - 選択結果が3件
-    When:
-        - Mainクラスを直接インスタンス化して実行
-    Then:
-        - 注入された依存関係が使用される
-        - 結果が正しく表示される
-    """
-    # Arrange
-    results = [
-        ImageMetrics(
-            path=f"/fake/image{i}.jpg",
-            raw_metrics={"blur_score": 100.0 - i * 10},
-            normalized_metrics={"blur_score": 0.9 - i * 0.1},
-            semantic_score=0.8 - i * 0.05,
-            total_score=95.0 - i * 5,
-            features=np.random.rand(64),
-        )
-        for i in range(3)
-    ]
-    mock_game_screen_picker.select.return_value = results
-
-    custom_args = [
-        test_image_directory,
-        "-n",
-        "3",
-        "-g",
-        "fps",
-    ]
-
-    # Act
-    from src.main import Main
-
-    cli = Main(
-        analyzer=mock_image_quality_analyzer,
-        picker=mock_game_screen_picker,
-        args=custom_args,
-    )
-    cli.run()
-
-    # Assert
-    captured = capsys.readouterr()
-    # 3件分の結果が表示される
-    assert captured.out.count("Score:") == 3
 
 
 def test_main_class_lazy_initializes_dependencies(

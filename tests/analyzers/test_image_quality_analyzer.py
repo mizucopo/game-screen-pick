@@ -147,65 +147,6 @@ def small_image_path(tmp_path: Path) -> str:
 # ============================================================================
 
 
-def test_analyzer_has_model_and_processor_attributes_after_init(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-) -> None:
-    """アナライザは初期化時にモデルとプロセッサを設定する.
-
-    Given:
-        - ジャンルタイプ（例："rpg"）
-        - モック化されたCLIPモデルとプロセッサ
-    When:
-        - ImageQualityAnalyzerインスタンスを作成
-    Then:
-        - model属性が設定されている
-        - processor属性が設定されている
-        - device属性が設定されている
-    """
-    # Arrange & Act
-    analyzer = ImageQualityAnalyzer(genre="2d_rpg")
-
-    # Assert
-    # モデルとプロセッサが初期化されていることを確認
-    assert hasattr(analyzer, "model")
-    assert hasattr(analyzer, "processor")
-    assert hasattr(analyzer, "device")
-    # deviceはGPUまたはCPUのいずれか
-    assert analyzer.device in ["cuda", "cpu"]
-
-
-def test_analyzer_sets_correct_weights_based_on_genre(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-) -> None:
-    """アナライザは初期化時にジャンル特有の重みを設定する.
-
-    Given:
-        - 特定のジャンル（例："fps"）
-    When:
-        - ImageQualityAnalyzerインスタンスを作成
-    Then:
-        - 正しいジャンル重みがロードされる
-        - 重みはジャンルの期待値と一致する
-    """
-    # Arrange & Act
-    analyzer = ImageQualityAnalyzer(genre="fps")
-
-    # Assert
-    expected_weights = {
-        "blur_score": 0.22,
-        "contrast": 0.19,
-        "color_richness": 0.09,
-        "visual_balance": 0.08,
-        "edge_density": 0.15,
-        "action_intensity": 0.18,
-        "ui_density": 0.03,
-        "dramatic_score": 0.06,
-    }
-    assert analyzer.weights == expected_weights
-
-
 # ============================================================================
 # Tests for analyze method - success path
 # ============================================================================

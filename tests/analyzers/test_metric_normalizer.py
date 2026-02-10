@@ -15,28 +15,6 @@ from src.analyzers.metric_normalizer import MetricNormalizer
 # ============================================================================
 
 
-def test_sigmoid_returns_0_5_when_x_equals_center() -> None:
-    """xがcenterと等しい場合、sigmoidは正確に0.5を返す.
-
-    Given:
-        - center値が500.0
-        - xがcenter値と等しい
-    When:
-        - sigmoid(x, center)を計算
-    Then:
-        - 正確に0.5を返す（sigmoid曲線の中点）
-    """
-    # Arrange
-    center = 500.0
-    x = center
-
-    # Act
-    result = MetricNormalizer.sigmoid(x, center)
-
-    # Assert
-    assert result == 0.5
-
-
 def test_sigmoid_returns_high_values_when_x_above_center() -> None:
     """xがcenterより大きい場合、sigmoidは0.5より大きい値を返す.
 

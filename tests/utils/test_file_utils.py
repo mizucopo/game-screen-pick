@@ -19,54 +19,39 @@ from src.utils.file_utils import FileUtils
 # ============================================================================
 
 
-def test_adds_suffix_when_duplicate_exists(
+@pytest.mark.parametrize(
+    "existing_files,expected_suffix",
+    [
+        (["image.jpg"], "_1"),
+        (["image.jpg", "image_1.jpg", "image_2.jpg"], "_3"),
+        ([], ""),  # ファイルが存在しない場合はサフィックスなし
+    ],
+)
+def test_get_unique_destination_returns_correct_filename(
     tmp_path: Path,
+    existing_files: list[str],
+    expected_suffix: str,
 ) -> None:
-    """同名ファイルが存在する場合、連番サフィックスを付与することを検証.
+    """既存ファイルに基づいて一意なファイル名を生成することを検証.
 
     Given:
-        - 出力ディレクトリに同名ファイルが存在
+        - 出力ディレクトリに既存ファイルが存在（または空）
     When:
         - get_unique_destinationを実行
     Then:
-        - _1サフィックス付きのファイル名が返される
+        - 適切なサフィックス付きのファイル名が返される
     """
     # Arrange
-    filename = "image.jpg"
-    (tmp_path / filename).touch()
+    for f in existing_files:
+        (tmp_path / f).touch()
 
     # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
+    result = FileUtils.get_unique_destination(tmp_path, "image.jpg")
 
     # Assert
-    assert result == tmp_path / "image_1.jpg"
-    assert result.name == "image_1.jpg"
-
-
-def test_increments_suffix_for_multiple_duplicates(
-    tmp_path: Path,
-) -> None:
-    """複数の重複ファイルが存在する場合、連番をインクリメントすることを検証.
-
-    Given:
-        - image.jpg, image_1.jpg, image_2.jpg が存在
-    When:
-        - get_unique_destinationを実行
-    Then:
-        - image_3.jpg が返される
-    """
-    # Arrange
-    filename = "image.jpg"
-    (tmp_path / filename).touch()
-    (tmp_path / "image_1.jpg").touch()
-    (tmp_path / "image_2.jpg").touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / "image_3.jpg"
-    assert result.name == "image_3.jpg"
+    expected_name = f"image{expected_suffix}.jpg"
+    assert result == tmp_path / expected_name
+    assert result.name == expected_name
 
 
 # ============================================================================
@@ -128,92 +113,69 @@ def test_handles_double_extensions(
 # ============================================================================
 
 
-def test_handles_filename_with_existing_underscore(
+@pytest.mark.parametrize(
+    "filename,expected",
+    [
+        ("image_test.jpg", "image_test_1.jpg"),
+        ("image2.jpg", "image2_1.jpg"),
+        ("image-test.jpg", "image-test_1.jpg"),
+    ],
+)
+def test_handles_filenames_with_patterns(
     tmp_path: Path,
+    filename: str,
+    expected: str,
 ) -> None:
-    """既にアンダースコアを含むファイル名を正しく処理することを検証.
+    """アンダースコア、末尾数字、ハイフンを含むファイル名を正しく処理することを検証.
 
     Given:
-        - image_test.jpg のようなファイルが存在
+        - 特殊パターンを含むファイル名が存在
     When:
         - get_unique_destinationを実行
     Then:
-        - image_test_1.jpg が返される（stemはimage_test_1）
+        - 正しくサフィックスが付与される
     """
     # Arrange
-    filename = "image_test.jpg"
     (tmp_path / filename).touch()
 
     # Act
     result = FileUtils.get_unique_destination(tmp_path, filename)
 
     # Assert
-    assert result == tmp_path / "image_test_1.jpg"
-    # サフィックスが付与された後のstemは image_test_1 になる
-    assert result.stem == "image_test_1"
+    assert result.name == expected
 
 
-def test_handles_filename_with_trailing_numbers(
+@pytest.mark.parametrize(
+    "existing_files,expected_suffix",
+    [
+        (["image.jpg", "image_1.jpg", "image_3.jpg"], "_2"),  # ギャップあり
+        (["image.jpg", "image_5.jpg"], "_1"),  # 大きなギャップ
+    ],
+)
+def test_handles_gaps_in_numbered_files(
     tmp_path: Path,
-) -> None:
-    """末尾に数字を含むファイル名を正しく処理することを検証.
-
-    Given:
-        - image2.jpg のような末尾数字のファイルが存在
-    When:
-        - get_unique_destinationを実行
-    Then:
-        - image2_1.jpg が返される
-    """
-    # Arrange
-    filename = "image2.jpg"
-    (tmp_path / filename).touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / "image2_1.jpg"
-
-
-def test_handles_gaps_and_non_consecutive_numbered_files(
-    tmp_path: Path,
+    existing_files: list[str],
+    expected_suffix: str,
 ) -> None:
     """既存の連番にギャップがある場合、次の有効な番号を使用することを検証.
 
     Given:
-        - image.jpg, image_1.jpg, image_3.jpg が存在（ギャップあり）
-        - image.jpg と image_5.jpg のみが存在（別のケース）
+        - 連番にギャップがある既存ファイル
     When:
-        - 各ケースでget_unique_destinationを実行
+        - get_unique_destinationを実行
     Then:
-        - image_2.jpg が返される（次の有効な連番）
-        - image_1.jpg が返される（連続的にインクリメント）
+        - 次の有効な連番が使用される
     """
-    # Arrange & Assert - ケース1: ギャップあり
-    filename = "image.jpg"
-    (tmp_path / filename).touch()
-    (tmp_path / "image_1.jpg").touch()
-    (tmp_path / "image_3.jpg").touch()
+    # Arrange
+    for f in existing_files:
+        (tmp_path / f).touch()
 
     # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
+    result = FileUtils.get_unique_destination(tmp_path, "image.jpg")
 
     # Assert
-    assert result == tmp_path / "image_2.jpg"
-
-    # Arrange & Assert - ケース2: 大きなギャップ
-    # テンポラリディレクトリをクリア
-    for f in tmp_path.glob("*"):
-        f.unlink()
-    (tmp_path / filename).touch()
-    (tmp_path / "image_5.jpg").touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / "image_1.jpg"
+    expected = f"image{expected_suffix}.jpg"
+    assert result.name == expected
 
 
 def test_handles_very_long_filename(
