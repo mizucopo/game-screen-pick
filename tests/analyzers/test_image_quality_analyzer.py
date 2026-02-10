@@ -77,67 +77,51 @@ def mock_clip_processor() -> Generator[MagicMock, None, None]:
 
 @pytest.fixture
 def sample_image_path(tmp_path: Path) -> str:
-    """ランダムなピクセル値でテスト画像を作成する.
-
-    決定論的テスト結果のために固定シードを使用する。
-    画像サイズ：640x480（標準的な4:3アスペクト比）。
-    """
-    np.random.seed(42)  # Fixed seed for reproducibility
-    img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    img_path = tmp_path / "test_image.jpg"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
+    """標準的なテスト画像（640x480 JPG）を作成する."""
+    return _create_test_image(tmp_path, "test_image.jpg", (480, 640), (0, 255))
 
 
 @pytest.fixture
 def dark_image_path(tmp_path: Path) -> str:
-    """輝度ペナルティのテスト用に暗いテスト画像を作成する.
-
-    輝度が40未満の画像が0.6のペナルティを受けることを検証するために使用する。
-    画像サイズ：640x480、低いピクセル値（0-50）。
-    """
-    np.random.seed(42)
-    img_array = np.random.randint(0, 50, (480, 640, 3), dtype=np.uint8)
-    img_path = tmp_path / "dark_image.jpg"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
+    """輝度ペナルティのテスト用に暗いテスト画像（640x480 JPG）を作成する."""
+    return _create_test_image(tmp_path, "dark_image.jpg", (480, 640), (0, 50))
 
 
 @pytest.fixture
 def png_image_path(tmp_path: Path) -> str:
-    """PNG形式のテスト画像を作成する.
-
-    アナライザが異なる画像形式を処理することをテストするために使用する。
-    """
-    np.random.seed(42)
-    img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    img_path = tmp_path / "test_image.png"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
+    """PNG形式のテスト画像（640x480）を作成する."""
+    return _create_test_image(tmp_path, "test_image.png", (480, 640), (0, 255))
 
 
 @pytest.fixture
 def bmp_image_path(tmp_path: Path) -> str:
-    """BMP形式のテスト画像を作成する.
-
-    アナライザが異なる画像形式を処理することをテストするために使用する。
-    """
-    np.random.seed(42)
-    img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    img_path = tmp_path / "test_image.bmp"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
+    """BMP形式のテスト画像（640x480）を作成する."""
+    return _create_test_image(tmp_path, "test_image.bmp", (480, 640), (0, 255))
 
 
 @pytest.fixture
 def small_image_path(tmp_path: Path) -> str:
-    """小さいテスト画像（320x240）を作成する.
+    """小さいテスト画像（320x240 JPG）を作成する."""
+    return _create_test_image(tmp_path, "small_image.jpg", (240, 320), (0, 255))
 
-    アナライザが異なる画像サイズを処理することをテストするために使用する。
+
+def _create_test_image(
+    tmp_path: Path, filename: str, size: tuple[int, int], pixel_range: tuple[int, int]
+) -> str:
+    """テスト画像を作成するヘルパー関数.
+
+    Args:
+        tmp_path: 一時ディレクトリパス
+        filename: 画像ファイル名
+        size: 画像サイズ（高さ、幅）
+        pixel_range: ピクセル値の範囲（最小、最大）
+
+    Returns:
+        作成された画像の絶対パス
     """
     np.random.seed(42)
-    img_array = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
-    img_path = tmp_path / "small_image.jpg"
+    img_array = np.random.randint(pixel_range[0], pixel_range[1], (*size, 3), dtype=np.uint8)
+    img_path = tmp_path / filename
     cv2.imwrite(str(img_path), img_array)
     return str(img_path)
 
@@ -152,30 +136,29 @@ def small_image_path(tmp_path: Path) -> str:
 # ============================================================================
 
 
-def test_analyze_returns_image_metrics_with_all_required_fields(
+@pytest.mark.parametrize(
+    "genre",
+    ["fps", "2d_rpg", "3d_rpg", "action", "adventure", "default"],
+)
+def test_analyze_returns_valid_metrics_with_genre_specific_weights(
     mock_clip_model: MagicMock,  # noqa: ARG001
     mock_clip_processor: MagicMock,  # noqa: ARG001
     sample_image_path: str,
+    genre: str,
 ) -> None:
-    """分析はすべての必須フィールドが設定されたImageMetricsを返す.
+    """ジャンル特有の重みで有効なメトリックを返す.
 
     Given:
-        - アナライザインスタンス
-        - 有効なテスト画像パス
+        - 特定ジャンルのアナライザインスタンス
+        - 有効なテスト画像
     When:
         - 画像を分析
     Then:
-        - ImageMetricsインスタンスを返す
-        - すべてのフィールドが設定されている：
-          - path (str)
-          - raw_metrics (9フィールドの辞書)
-          - normalized_metrics (8フィールドの辞書)
-          - semantic_score (float)
-          - total_score (float)
-          - features (numpy配列)
+        - 有効なImageMetricsが返される
+        - スコアが有効範囲内にある
     """
     # Arrange
-    analyzer = ImageQualityAnalyzer()
+    analyzer = ImageQualityAnalyzer(genre=genre)
 
     # Act
     result = analyzer.analyze(sample_image_path)
@@ -184,11 +167,11 @@ def test_analyze_returns_image_metrics_with_all_required_fields(
     assert result is not None
     assert isinstance(result, ImageMetrics)
     assert result.path == sample_image_path
-    assert isinstance(result.raw_metrics, dict)
-    assert isinstance(result.normalized_metrics, dict)
-    assert isinstance(result.semantic_score, float)
-    assert isinstance(result.total_score, float)
-    assert isinstance(result.features, np.ndarray)
+    # スコア値が有効範囲内であることを検証
+    assert 0 <= result.total_score <= 100
+    assert 0 <= result.semantic_score <= 1
+    # 正規化されたメトリックが存在することを検証
+    assert len(result.normalized_metrics) > 0
 
 
 def test_analyze_applies_penalty_for_dark_images(
@@ -221,40 +204,6 @@ def test_analyze_applies_penalty_for_dark_images(
     # スコアが妥当であることは検証できる
     assert result.total_score >= 0
 
-
-@pytest.mark.parametrize(
-    "genre",
-    ["fps", "2d_rpg", "3d_rpg", "action", "adventure", "default"],
-)
-def test_analyze_combines_metrics_with_genre_specific_weights(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-    genre: str,
-) -> None:
-    """ジャンル特有の重みを使用してメトリックを組み合わせる.
-
-    Given:
-        - 特定ジャンルのアナライザインスタンス
-        - 有効なテスト画像
-    When:
-        - 画像を分析
-    Then:
-        - すべてのジャンルで有効なImageMetricsが返される
-        - 総スコアが計算される
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer(genre=genre)
-
-    # Act
-    result = analyzer.analyze(sample_image_path)
-
-    # Assert
-    assert result is not None
-    # 総スコアが正しく計算されることを検証
-    assert 0 <= result.total_score <= 100
-    # 正規化されたメトリックが存在することを検証
-    assert len(result.normalized_metrics) > 0
 
 
 # ============================================================================
@@ -318,13 +267,13 @@ def test_analyze_returns_none_for_corrupted_image_file(
 
 
 @pytest.mark.parametrize(
-    "image_path_fixture,check_features_shape",
+    "image_path_fixture",
     [
-        ("sample_image_path", True),
-        ("png_image_path", True),
-        ("bmp_image_path", True),
-        ("small_image_path", True),
-        ("dark_image_path", False),
+        "sample_image_path",
+        "png_image_path",
+        "bmp_image_path",
+        "small_image_path",
+        "dark_image_path",
     ],
 )
 def test_analyzes_images_with_various_formats_and_properties(
@@ -332,7 +281,6 @@ def test_analyzes_images_with_various_formats_and_properties(
     mock_clip_processor: MagicMock,  # noqa: ARG001
     request: pytest.FixtureRequest,
     image_path_fixture: str,
-    check_features_shape: bool,
 ) -> None:
     """様々な形式と特性の画像を正しく処理する.
 
@@ -355,9 +303,8 @@ def test_analyzes_images_with_various_formats_and_properties(
 
     # Assert
     assert result is not None
-    if check_features_shape:
-        # すべての画像はリサイズされるため、特徴ベクトルサイズは一貫している
-        assert result.features.shape == (64,)
+    # すべての画像はリサイズされるため、特徴ベクトルサイズは一貫している
+    assert result.features.shape == (64,)
 
 
 # ============================================================================

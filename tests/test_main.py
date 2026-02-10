@@ -36,18 +36,25 @@ def mock_image_quality_analyzer() -> MagicMock:
 def mock_game_screen_picker() -> MagicMock:
     """GameScreenPickerをモック（選択ロジック制御）."""
     picker = MagicMock(spec=GameScreenPicker)
-    # サンプル選択結果を設定
-    picker.select.return_value = [
-        ImageMetrics(
-            path="/fake/image1.jpg",
-            raw_metrics={"blur_score": 100.0},
-            normalized_metrics={"blur_score": 0.9},
-            semantic_score=0.8,
-            total_score=95.0,
-            features=np.random.rand(64),
-        ),
-    ]
+    picker.select.return_value = []
     return picker
+
+
+@pytest.fixture
+def sample_image_metrics_factory() -> Callable[[str, float], ImageMetrics]:
+    """テスト用ImageMetricsを作成するファクトリ関数."""
+
+    def _create(path: str, score: float) -> ImageMetrics:
+        return ImageMetrics(
+            path=path,
+            raw_metrics={"blur_score": score},
+            normalized_metrics={"blur_score": score / 100.0},
+            semantic_score=0.8,
+            total_score=score,
+            features=np.random.rand(64),
+        )
+
+    return _create
 
 
 @pytest.fixture
@@ -60,6 +67,19 @@ def test_image_directory(tmp_path: Path) -> str:
     return str(images_dir)
 
 
+@pytest.fixture(autouse=True)
+def setup_main_mocks(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_image_quality_analyzer: MagicMock,
+    mock_game_screen_picker: MagicMock,
+) -> None:
+    """すべてのテストで必要なモック設定を自動的に適用する."""
+    monkeypatch.setattr(
+        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
+    )
+    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
+
+
 # ============================================================================
 # 引数解析のテスト
 # ============================================================================
@@ -68,10 +88,10 @@ def test_image_directory(tmp_path: Path) -> str:
 def test_cli_accepts_all_arguments(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     test_image_directory: str,
     tmp_path: Path,
+    sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
     """全ての引数を正しくパースすることを検証.
 
@@ -88,19 +108,9 @@ def test_cli_accepts_all_arguments(
     """
     # Arrange
     output_dir = str(tmp_path / "output")
-    # 実際のファイルを作成してコピーをテスト
     img_path = Path(test_image_directory) / "image0.jpg"
     img_path.touch()
-    results = [
-        ImageMetrics(
-            path=str(img_path),
-            raw_metrics={"blur_score": 100.0},
-            normalized_metrics={"blur_score": 0.9},
-            semantic_score=0.8,
-            total_score=95.0,
-            features=np.random.rand(64),
-        )
-    ]
+    results = [sample_image_metrics_factory(str(img_path), 95.0)]
     mock_game_screen_picker.select.return_value = results
 
     monkeypatch.setattr(
@@ -119,10 +129,6 @@ def test_cli_accepts_all_arguments(
             "-r",
         ],
     )
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
-    )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
     from src.main import Main
@@ -187,11 +193,11 @@ def test_cli_shows_error_for_missing_required_argument(
 def test_cli_selects_and_displays_images(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     test_image_directory: str,
     args: list[str],
     num_expected: int,
+    sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
     """画像を選択して表示することを検証.
 
@@ -205,25 +211,13 @@ def test_cli_selects_and_displays_images(
         - 指定された枚数分の結果が表示される
     """
     # Arrange
-    # サンプル結果をインラインで作成
     results = [
-        ImageMetrics(
-            path=f"/fake/image{i}.jpg",
-            raw_metrics={"blur_score": 100.0 - i * 5},
-            normalized_metrics={"blur_score": 0.9 - i * 0.05},
-            semantic_score=0.8 - i * 0.02,
-            total_score=95.0 - i * 3,
-            features=np.random.rand(64),
-        )
+        sample_image_metrics_factory(f"/fake/image{i}.jpg", 95.0 - i * 3)
         for i in range(num_expected)
     ]
     mock_game_screen_picker.select.return_value = results
 
     monkeypatch.setattr("sys.argv", ["main.py", test_image_directory] + args)
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
-    )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
     from src.main import Main
@@ -246,10 +240,10 @@ def test_cli_selects_and_displays_images(
 def test_cli_copies_selected_images_to_output_directory(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     test_image_directory: str,
     tmp_path: Path,
+    sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
     """選択された画像が出力ディレクトリにコピーされることを検証.
 
@@ -265,32 +259,18 @@ def test_cli_copies_selected_images_to_output_directory(
         - 成功メッセージにコピー数とパスが含まれる
     """
     # Arrange
-    output_dir = tmp_path / "parent" / "output"  # ネストされたパス
-    # 実際のファイルを作成
+    output_dir = tmp_path / "parent" / "output"
     results = []
     for i in range(3):
         img_path = Path(test_image_directory) / f"image{i}.jpg"
         img_path.touch()
-        results.append(
-            ImageMetrics(
-                path=str(img_path),
-                raw_metrics={"blur_score": 100.0 - i * 10},
-                normalized_metrics={"blur_score": 0.9 - i * 0.1},
-                semantic_score=0.8,
-                total_score=95.0 - i * 5,
-                features=np.random.rand(64),
-            )
-        )
+        results.append(sample_image_metrics_factory(str(img_path), 95.0 - i * 5))
 
     mock_game_screen_picker.select.return_value = results
 
     monkeypatch.setattr(
         "sys.argv", ["main.py", test_image_directory, "-c", str(output_dir)]
     )
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
-    )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
     from src.main import Main
@@ -327,7 +307,6 @@ def test_cli_copies_selected_images_to_output_directory(
 def test_cli_handles_empty_and_nonexistent_input_directories(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
     input_dir_func: Callable[[Path], str],
@@ -348,10 +327,6 @@ def test_cli_handles_empty_and_nonexistent_input_directories(
     mock_game_screen_picker.select.return_value = []
 
     monkeypatch.setattr("sys.argv", ["main.py", input_dir])
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
-    )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
     from src.main import Main
@@ -379,12 +354,12 @@ def test_cli_handles_empty_and_nonexistent_input_directories(
 def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
     num_files: int,
     base_name: str,
     extension: str,
+    sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
     """同名ファイルが複数存在する場合に連番でサフィックスを付与して上書きを回避することを検証.
 
@@ -408,29 +383,15 @@ def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
 
     output_dir = tmp_path / "output"
 
-    # 選択結果を設定（同名ファイルを含む）
     results = []
     for i in range(num_files):
         img_path = input_dir / f"folder{i}" / f"{base_name}{extension}"
-        results.append(
-            ImageMetrics(
-                path=str(img_path),
-                raw_metrics={"blur_score": 100.0 - i * 10},
-                normalized_metrics={"blur_score": 0.9 - i * 0.1},
-                semantic_score=0.8 - i * 0.05,
-                total_score=95.0 - i * 5,
-                features=np.random.rand(64),
-            )
-        )
+        results.append(sample_image_metrics_factory(str(img_path), 95.0 - i * 5))
     mock_game_screen_picker.select.return_value = results
 
     monkeypatch.setattr(
         "sys.argv", ["main.py", str(input_dir), "-c", str(output_dir), "-r"]
     )
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
-    )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
     from src.main import Main

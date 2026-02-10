@@ -264,6 +264,36 @@ def test_original_input_list_remains_unchanged_after_selection(
 # ============================================================================
 
 
+def _create_mock_analyze_for_integration(
+    make_similar: bool = False, return_none_for_even: bool = False
+) -> callable:
+    """統合テスト用のモックanalyze関数を作成するヘルパー.
+
+    Args:
+        make_similar: image0とimage1を類似させるかどうか
+        return_none_for_even: 偶数インデックスの画像でNoneを返すかどうか
+
+    Returns:
+        モックanalyze関数
+    """
+    def mock_analyze(path: str) -> ImageMetrics | None:
+        idx = int(path.split("image")[-1].split(".")[0])
+        if return_none_for_even and idx % 2 == 0:
+            return None
+        base_features = np.random.rand(128)
+        if make_similar and idx == 1:
+            base_features = base_features * 0.99
+        return ImageMetrics(
+            path=path,
+            raw_metrics={"blur_score": 100 - idx * 10},
+            normalized_metrics={"blur_score": 1.0 - idx * 0.1},
+            semantic_score=0.8,
+            total_score=100 - idx * 10,
+            features=base_features,
+        )
+    return mock_analyze
+
+
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     mock_analyzer: MagicMock,
 ) -> None:
@@ -279,27 +309,10 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Create test images
         for i in range(5):
             Path(temp_dir, f"image{i}.jpg").touch()
 
-        # Mock analyzer to return predictable results
-        def mock_analyze(path: str) -> ImageMetrics:
-            # Create features where image0 and image1 are similar
-            idx = int(path.split("image")[-1].split(".")[0])
-            base_features = np.random.rand(128)
-            if idx == 1:
-                base_features = base_features * 0.99  # Very similar to image0
-            return ImageMetrics(
-                path=path,
-                raw_metrics={"blur_score": 100 - idx * 10},
-                normalized_metrics={"blur_score": 1.0 - idx * 0.1},
-                semantic_score=0.8,
-                total_score=100 - idx * 10,
-                features=base_features,
-            )
-
-        mock_analyzer.analyze = mock_analyze
+        mock_analyzer.analyze = _create_mock_analyze_for_integration(make_similar=True)
         picker = GameScreenPicker(mock_analyzer)
 
         # Act
@@ -312,10 +325,8 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
         )
 
         # Assert
-        # Should get diverse results (not too similar)
         assert len(result) >= 1
         assert len(result) <= 3
-        # Results should be in score order
         for i in range(len(result) - 1):
             assert result[i].total_score >= result[i + 1].total_score
 
@@ -339,23 +350,13 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
             Path(temp_dir, f"image{i}.jpg").touch()
 
         call_count = [0]
+        original_analyze = _create_mock_analyze_for_integration(return_none_for_even=True)
 
-        def mock_analyze(path: str) -> ImageMetrics | None:
+        def counting_analyze(path: str) -> ImageMetrics | None:
             call_count[0] += 1
-            # Return None for even-indexed images
-            idx = int(path.split("image")[-1].split(".")[0])
-            if idx % 2 == 0:
-                return None
-            return ImageMetrics(
-                path=path,
-                raw_metrics={},
-                normalized_metrics={},
-                semantic_score=0.5,
-                total_score=50.0,
-                features=np.random.rand(128),
-            )
+            return original_analyze(path)
 
-        mock_analyzer.analyze = mock_analyze
+        mock_analyzer.analyze = counting_analyze
         picker = GameScreenPicker(mock_analyzer)
 
         # Act
@@ -368,9 +369,7 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         )
 
         # Assert
-        # Should have analyzed all 5 files
         assert call_count[0] == 5
-        # But only returned results for non-None analyses
         assert len(result) <= 3  # At most 3 valid images (odd indices)
 
 
