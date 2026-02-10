@@ -1,49 +1,81 @@
 """Game screen picker for diverse image selection."""
 
 from pathlib import Path
+from typing import List
 import random
 from sklearn.metrics.pairwise import cosine_similarity
 
 from ..analyzers.image_quality_analyzer import ImageQualityAnalyzer
+from ..models.image_metrics import ImageMetrics
 
 
 class GameScreenPicker:
     """ゲーム画面選択クラス."""
 
-    def __init__(self, genre: str):
-        """ピッカーを初期化する."""
-        self.analyzer = ImageQualityAnalyzer(genre)
+    def __init__(self, analyzer: ImageQualityAnalyzer):
+        """ピッカーを初期化する.
 
-    def select(
-        self, folder: str, num: int, similarity_threshold: float, recursive: bool
-    ):
-        """フォルダから画像を選択."""
+        Args:
+            analyzer: 画像品質アナライザー
+        """
+        self.analyzer = analyzer
+
+    def _load_image_files(self, folder: str, recursive: bool) -> List[Path]:
+        """フォルダから画像ファイルのパスを取得する.
+
+        Args:
+            folder: 画像フォルダのパス
+            recursive: サブフォルダも再帰的に探索するかどうか
+
+        Returns:
+            画像ファイルのパスリスト
+        """
         path_obj = Path(folder)
         exts = {".jpg", ".jpeg", ".png", ".bmp"}
-        # 全フォルダからファイルを一括取得
-        files = [
+        return [
             p
             for p in (path_obj.rglob("*") if recursive else path_obj.glob("*"))
             if p.suffix.lower() in exts
         ]
 
-        # 1. 完全にランダムにシャッフル（フォルダやファイル名のバイアスを破壊）
-        random.shuffle(files)
+    def _analyze_images(
+        self, files: List[Path], show_progress: bool = False
+    ) -> List[ImageMetrics]:
+        """画像ファイルを解析して品質スコアを計算する.
 
-        print(f"合計 {len(files)} 枚を解析中...")
+        Args:
+            files: 画像ファイルのパスリスト
+            show_progress: 進捗表示をするかどうか
+
+        Returns:
+            解析結果のリスト
+        """
         all_results = []
         for i, f in enumerate(files):
-            if i % 50 == 0:
+            if show_progress and i % 50 == 0:
                 print(f"解析済み: {i}/{len(files)}")
             res = self.analyzer.analyze(str(f))
             if res:
                 all_results.append(res)
+        return all_results
 
-        # 2. スコア順にソート（この時点では最高画質が上にくる）
-        all_results.sort(key=lambda x: x.total_score, reverse=True)
+    @staticmethod
+    def _select_diverse_images(
+        all_results: List[ImageMetrics],
+        num: int,
+        similarity_threshold: float,
+    ) -> List[ImageMetrics]:
+        """多様性を考慮して画像を選択する.
 
-        # 3. コンテンツの多様性に基づいたフィルタリング
-        selected = []
+        Args:
+            all_results: 解析済みの画像メトリクスリスト（スコア降順ソート済み）
+            num: 選択する画像数
+            similarity_threshold: 類似度の閾値（これ以上は類似とみなす）
+
+        Returns:
+            選択された画像メトリクスのリスト
+        """
+        selected: List[ImageMetrics] = []
         for candidate in all_results:
             if len(selected) >= num:
                 break
@@ -63,3 +95,68 @@ class GameScreenPicker:
                 selected.append(candidate)
 
         return selected
+
+    def select(
+        self,
+        folder: str,
+        num: int,
+        similarity_threshold: float,
+        recursive: bool,
+        show_progress: bool = True,
+    ) -> List[ImageMetrics]:
+        """フォルダから画像を選択する.
+
+        Args:
+            folder: 画像フォルダのパス
+            num: 選択する画像数
+            similarity_threshold: 類似度の閾値
+            recursive: サブフォルダも探索するかどうか
+            show_progress: 進捗表示をするかどうか
+
+        Returns:
+            選択された画像メトリクスのリスト
+        """
+        # ファイルを取得
+        files = self._load_image_files(folder, recursive)
+
+        # ランダムにシャッフル（フォルダやファイル名のバイアスを破壊）
+        random.shuffle(files)
+
+        if show_progress:
+            print(f"合計 {len(files)} 枚を解析中...")
+
+        # 画像を解析
+        all_results = self._analyze_images(files, show_progress)
+
+        # スコア順にソート（最高画質が上にくる）
+        all_results.sort(key=lambda x: x.total_score, reverse=True)
+
+        # 多様性に基づいて選択
+        return self._select_diverse_images(all_results, num, similarity_threshold)
+
+    @staticmethod
+    def select_from_analyzed(
+        analyzed_images: List[ImageMetrics],
+        num: int,
+        similarity_threshold: float,
+    ) -> List[ImageMetrics]:
+        """解析済みの画像リストから多様性を考慮して選択する.
+
+        このメソッドはIO操作を行わず、純粋なドメインロジックのみを提供する。
+        テストや既に解析済みの画像がある場合に使用する。
+
+        Args:
+            analyzed_images: 解析済みの画像メトリクスリスト
+            num: 選択する画像数
+            similarity_threshold: 類似度の閾値
+
+        Returns:
+            選択された画像メトリクスのリスト
+        """
+        # スコア順にソート（コピーを作成して元のリストを変更しない）
+        sorted_results = sorted(
+            analyzed_images, key=lambda x: x.total_score, reverse=True
+        )
+        return GameScreenPicker._select_diverse_images(
+            sorted_results, num, similarity_threshold
+        )
