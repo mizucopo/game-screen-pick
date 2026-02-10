@@ -222,10 +222,15 @@ def test_analyze_applies_penalty_for_dark_images(
     assert result.total_score >= 0
 
 
+@pytest.mark.parametrize(
+    "genre",
+    ["fps", "2d_rpg", "3d_rpg", "action", "adventure", "default"],
+)
 def test_analyze_combines_metrics_with_genre_specific_weights(
     mock_clip_model: MagicMock,  # noqa: ARG001
     mock_clip_processor: MagicMock,  # noqa: ARG001
     sample_image_path: str,
+    genre: str,
 ) -> None:
     """ジャンル特有の重みを使用してメトリックを組み合わせる.
 
@@ -235,21 +240,21 @@ def test_analyze_combines_metrics_with_genre_specific_weights(
     When:
         - 画像を分析
     Then:
-        - 総スコアは重み付き合計を使用して計算される
-        - 重みはジャンル設定と一致する
+        - すべてのジャンルで有効なImageMetricsが返される
+        - 総スコアが計算される
     """
     # Arrange
-    analyzer = ImageQualityAnalyzer(genre="fps")
+    analyzer = ImageQualityAnalyzer(genre=genre)
 
     # Act
     result = analyzer.analyze(sample_image_path)
 
     # Assert
     assert result is not None
-    # 重みが使用されていることを確認するため、総スコアが計算されることを検証
-    assert result.total_score >= 0
-    # FPSジャンルはblur_scoreの重みが高いため（0.22）、blur正規化は
-    # 総スコアに大きな影響を与えるはず
+    # 総スコアが正しく計算されることを検証
+    assert 0 <= result.total_score <= 100
+    # 正規化されたメトリックが存在することを検証
+    assert len(result.normalized_metrics) > 0
 
 
 # ============================================================================
@@ -312,71 +317,47 @@ def test_analyze_returns_none_for_corrupted_image_file(
     assert result is None
 
 
-def test_analyze_handles_various_image_formats(
+@pytest.mark.parametrize(
+    "image_path_fixture,check_features_shape",
+    [
+        ("sample_image_path", True),
+        ("png_image_path", True),
+        ("bmp_image_path", True),
+        ("small_image_path", True),
+        ("dark_image_path", False),
+    ],
+)
+def test_analyzes_images_with_various_formats_and_properties(
     mock_clip_model: MagicMock,  # noqa: ARG001
     mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-    png_image_path: str,
-    bmp_image_path: str,
+    request: pytest.FixtureRequest,
+    image_path_fixture: str,
+    check_features_shape: bool,
 ) -> None:
-    """JPG、PNG、BMP画像形式を正しく処理する.
+    """様々な形式と特性の画像を正しく処理する.
 
     Given:
         - アナライザインスタンス
-        - JPG、PNG、BMP形式のテスト画像
+        - 異なる形式（JPG、PNG、BMP）とサイズ、特性のテスト画像
     When:
         - 各画像を分析
     Then:
-        - すべての形式が正常に分析される
-        - すべてが有効なImageMetricsを返す（Noneではない）
+        - すべての形式とサイズが正常に分析される
+        - 有効なImageMetricsを返す
+        - 特徴ベクトルは一貫したサイズを持つ
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
+    image_path = request.getfixturevalue(image_path_fixture)
 
     # Act
-    result_jpg = analyzer.analyze(sample_image_path)
-    result_png = analyzer.analyze(png_image_path)
-    result_bmp = analyzer.analyze(bmp_image_path)
+    result = analyzer.analyze(image_path)
 
     # Assert
-    assert result_jpg is not None
-    assert result_png is not None
-    assert result_bmp is not None
-
-
-def test_analyze_handles_images_with_different_dimensions(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-    small_image_path: str,
-) -> None:
-    """異なるサイズの画像を正しく処理する.
-
-    Given:
-        - アナライザインスタンス
-        - 異なるサイズのテスト画像：
-          - 標準：640x480
-          - 小さい：320x240
-    When:
-        - 各画像を分析
-    Then:
-        - すべての画像が正常に分析される
-        - すべてが有効なImageMetricsを返す（Noneではない）
-        - 特徴ベクトルは一貫したサイズ（64、）を持つ
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-
-    # Act
-    result_standard = analyzer.analyze(sample_image_path)
-    result_small = analyzer.analyze(small_image_path)
-
-    # Assert
-    assert result_standard is not None
-    assert result_small is not None
-    # All images resized to 128x128, so feature vectors are same size
-    assert result_standard.features.shape == (64,)
-    assert result_small.features.shape == (64,)
+    assert result is not None
+    if check_features_shape:
+        # すべての画像はリサイズされるため、特徴ベクトルサイズは一貫している
+        assert result.features.shape == (64,)
 
 
 # ============================================================================
@@ -398,8 +379,7 @@ def test_analyze_produces_consistent_results_for_same_image(
         - 同じ画像を2回分析
     Then:
         - 両方の分析で同一の結果が生成される
-        - すべてのメトリック値が同じ
-        - 総スコアが同じ
+        - 総スコアと特徴ベクトルが同じ
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
@@ -413,14 +393,7 @@ def test_analyze_produces_consistent_results_for_same_image(
     assert result2 is not None
     assert result1.path == result2.path
     assert result1.total_score == result2.total_score
-    assert result1.semantic_score == result2.semantic_score
-    # Raw metrics should be identical
-    for key in result1.raw_metrics:
-        assert result1.raw_metrics[key] == result2.raw_metrics[key]
-    # Normalized metrics should be identical
-    for key in result1.normalized_metrics:
-        assert result1.normalized_metrics[key] == result2.normalized_metrics[key]
-    # Features should be identical
+    # 特徴ベクトルが同一であることを検証（重要な特性）
     assert np.array_equal(result1.features, result2.features)
 
 

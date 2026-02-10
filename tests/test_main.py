@@ -9,6 +9,7 @@
 """
 
 from pathlib import Path
+from typing import Callable
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -237,8 +238,6 @@ def test_cli_selects_and_displays_images(
     assert captured.out.count("Score:") == num_expected
 
 
-
-
 # ============================================================================
 # Tests for Copy/Output Functionality
 # ============================================================================
@@ -256,16 +255,17 @@ def test_cli_copies_selected_images_to_output_directory(
 
     Given:
         - 有効な入力ディレクトリ
-        - 出力ディレクトリを指定
+        - 存在しないネストされた出力ディレクトリを指定
         - 3つの選択結果
     When:
         - CLIを `-c` オプションで実行
     Then:
-        - shutil.copy2が各画像に対して呼ばれる
+        - 出力ディレクトリが作成される
+        - 画像が出力ディレクトリにコピーされる
         - 成功メッセージにコピー数とパスが含まれる
     """
     # Arrange
-    output_dir = tmp_path / "output"
+    output_dir = tmp_path / "parent" / "output"  # ネストされたパス
     # 実際のファイルを作成
     results = []
     for i in range(3):
@@ -303,54 +303,51 @@ def test_cli_copies_selected_images_to_output_directory(
     assert "3 枚を" in captured.out
     assert str(output_dir) in captured.out
     assert "保存しました" in captured.out
+    # 出力ディレクトリが作成されている
+    assert output_dir.exists()
+    assert output_dir.is_dir()
     # 画像が出力ディレクトリにコピーされている
     assert (output_dir / "image0.jpg").exists()
     assert (output_dir / "image1.jpg").exists()
     assert (output_dir / "image2.jpg").exists()
 
 
-def test_cli_creates_output_directory_if_it_doesnt_exist(
+# ============================================================================
+# Tests for Error Handling
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "input_dir_func",
+    [
+        lambda tmp_path: str(tmp_path / "empty"),
+        lambda _: "/nonexistent/directory/that/does/not/exist",
+    ],
+)
+def test_cli_handles_empty_and_nonexistent_input_directories(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
-    test_image_directory: str,
     tmp_path: Path,
+    input_dir_func: Callable[[Path], str],
 ) -> None:
-    """出力ディレクトリが存在しない場合に作成されることを検証.
+    """空のディレクトリと存在しないディレクトリを正しく処理することを検証.
 
     Given:
-        - 有効な入力ディレクトリ
-        - 存在しない出力ディレクトリパス
-        - 選択される画像が少なくとも1つある
+        - 空の入力ディレクトリ または 存在しない入力ディレクトリパス
     When:
         - CLIを実行
     Then:
-        - 出力ディレクトリが作成される
-        - ディレクトリが存在することを確認
+        - プログラムがクラッシュせず、0件の結果が適切に表示される
     """
     # Arrange
-    nested_output = tmp_path / "parent" / "child" / "output"
-    # 出力ディレクトリはまだ存在しない
-    assert not nested_output.exists()
+    input_dir = input_dir_func(tmp_path)
+    if "empty" in input_dir:
+        Path(input_dir).mkdir()
+    mock_game_screen_picker.select.return_value = []
 
-    # 実際のファイルを作成してコピーをテスト
-    img_path = Path(test_image_directory) / "image0.jpg"
-    img_path.touch()
-    results = [
-        ImageMetrics(
-            path=str(img_path),
-            raw_metrics={"blur_score": 100.0},
-            normalized_metrics={"blur_score": 0.9},
-            semantic_score=0.8,
-            total_score=95.0,
-            features=np.random.rand(64),
-        )
-    ]
-    mock_game_screen_picker.select.return_value = results
-
-    monkeypatch.setattr(
-        "sys.argv", ["main.py", test_image_directory, "-c", str(nested_output)]
-    )
+    monkeypatch.setattr("sys.argv", ["main.py", input_dir])
     monkeypatch.setattr(
         "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
     )
@@ -362,60 +359,6 @@ def test_cli_creates_output_directory_if_it_doesnt_exist(
     Main().run()
 
     # Assert
-    # ディレクトリが作成されている
-    assert nested_output.exists()
-    assert nested_output.is_dir()
-
-
-# ============================================================================
-# Tests for Error Handling
-# ============================================================================
-
-
-def test_cli_handles_empty_and_nonexistent_input_directories(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
-    mock_game_screen_picker: MagicMock,
-    tmp_path: Path,
-) -> None:
-    """空のディレクトリと存在しないディレクトリを正しく処理することを検証.
-
-    Given:
-        - 空の入力ディレクトリ
-        - 存在しない入力ディレクトリパス
-    When:
-        - CLIを各ディレクトリで実行
-    Then:
-        - プログラムがクラッシュせず、0件の結果が適切に表示される
-    """
-    # Arrange
-    empty_dir = tmp_path / "empty"
-    empty_dir.mkdir()
-    nonexistent_dir = "/nonexistent/directory/that/does/not/exist"
-    mock_game_screen_picker.select.return_value = []
-
-    # Act & Assert - 空ディレクトリ
-    monkeypatch.setattr("sys.argv", ["main.py", str(empty_dir)])
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
-    )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
-
-    from src.main import Main
-
-    Main().run()
-
-    captured = capsys.readouterr()
-    assert "選択された画像一覧" in captured.out
-    assert "Score:" not in captured.out  # 0件
-
-    # Act & Assert - 存在しないディレクトリ
-    capsys.readouterr()  # Clear previous output
-    monkeypatch.setattr("sys.argv", ["main.py", nonexistent_dir])
-
-    Main().run()
-
     captured = capsys.readouterr()
     assert "選択された画像一覧" in captured.out
     assert "Score:" not in captured.out  # 0件

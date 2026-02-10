@@ -202,17 +202,16 @@ def test_higher_similarity_threshold_filters_out_more_similar_images(
 
 
 @pytest.mark.parametrize(
-    "input_list,num_to_select,description",
+    "input_list,num_to_select",
     [
-        ([], 5, "empty input list"),
-        ([], 0, "empty input list with zero request"),
-        (None, 0, "zero images requested"),
+        ([], 5),
+        ([], 0),
+        (None, 0),
     ],
 )
 def test_edge_cases_return_empty_list(
     input_list: List[ImageMetrics] | None,
     num_to_select: int,
-    description: str,  # noqa: ARG001
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
     """エッジケースで空のリストを返すことを検証.

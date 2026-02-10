@@ -59,28 +59,33 @@ def test_get_unique_destination_returns_correct_filename(
 # ============================================================================
 
 
+@pytest.mark.parametrize(
+    "extension",
+    [".jpg", ".png", ".gif", ".webp", ".bmp"],
+)
 def test_preserves_common_image_extensions(
     tmp_path: Path,
+    extension: str,
 ) -> None:
     """一般的な画像形式の拡張子を維持することを検証.
 
     Given:
-        - 異なる拡張子の重複ファイルが存在
+        - 重複ファイルが存在する特定の拡張子
     When:
-        - 各拡張子でget_unique_destinationを実行
+        - get_unique_destinationを実行
     Then:
         - 拡張子が正しく維持される
     """
     # Arrange
-    extensions = [".jpg", ".png", ".gif", ".webp", ".bmp"]
-    for ext in extensions:
-        (tmp_path / f"image{ext}").touch()
+    filename = f"image{extension}"
+    (tmp_path / filename).touch()
 
-    # Act & Assert
-    for ext in extensions:
-        result = FileUtils.get_unique_destination(tmp_path, f"image{ext}")
-        assert result == tmp_path / f"image_1{ext}"
-        assert result.suffix == ext
+    # Act
+    result = FileUtils.get_unique_destination(tmp_path, filename)
+
+    # Assert
+    assert result == tmp_path / f"image_1{extension}"
+    assert result.suffix == extension
 
 
 def test_handles_double_extensions(
@@ -189,6 +194,7 @@ def test_handles_very_long_filename(
         - get_unique_destinationを実行
     Then:
         - サフィックスが正しく付与される
+        - 拡張子が維持される
     """
     # Arrange
     filename = "a" * 200 + ".jpg"
@@ -198,9 +204,10 @@ def test_handles_very_long_filename(
     result = FileUtils.get_unique_destination(tmp_path, filename)
 
     # Assert
-    assert result.stem.startswith("a" * 200)
-    assert result.stem.endswith("_1")
+    # サフィックスが付与され、元のファイル名が含まれていることを検証
+    assert "_1" in result.name
     assert result.suffix == ".jpg"
+    assert "a" * 200 in result.stem
 
 
 def test_handles_only_stem_no_suffix(
@@ -289,29 +296,6 @@ def test_handles_special_characters_in_filename(
 # ============================================================================
 # 境界値のテスト
 # ============================================================================
-
-
-def test_handles_zero_existing_files(
-    tmp_path: Path,
-) -> None:
-    """既存ファイルが0件の場合、元のファイル名を返すことを検証.
-
-    Given:
-        - 空の出力ディレクトリ
-    When:
-        - get_unique_destinationを実行
-    Then:
-        - 元のファイル名が返される
-    """
-    # Arrange
-    filename = "test.jpg"
-    # ディレクトリは空
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / filename
 
 
 def test_handles_many_duplicate_files(

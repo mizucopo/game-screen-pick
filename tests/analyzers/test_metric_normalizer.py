@@ -7,6 +7,8 @@
 4. 高速実行（約0.1秒） - 外部依存関係なし
 """
 
+import pytest
+
 from src.analyzers.metric_normalizer import MetricNormalizer
 
 
@@ -15,52 +17,35 @@ from src.analyzers.metric_normalizer import MetricNormalizer
 # ============================================================================
 
 
-def test_sigmoid_returns_high_values_when_x_above_center() -> None:
-    """xがcenterより大きい場合、sigmoidは0.5より大きい値を返す.
+@pytest.mark.parametrize(
+    "x,center,expected_min,expected_max",
+    [
+        (600.0, 500.0, 0.5, 1.0),
+        (100.0, 500.0, 0.0, 0.5),
+    ],
+)
+def test_sigmoid_returns_values_relative_to_center(
+    x: float,
+    center: float,
+    expected_min: float,
+    expected_max: float,
+) -> None:
+    """xとcenterの相対関係に基づいてsigmoidが適切な値を返す.
 
     Given:
         - center値が500.0
-        - xがcenterより中程度上（600.0）
+        - xがcenterより大きいまたは小さい値
     When:
         - デフォルトの急峻さでsigmoid(x, center)を計算
     Then:
-        - 0.5より大きい値を返す
-        - 非常に大きいxでは1.0に近づく（極端な値では1.0になる可能性あり）
+        - xがcenterより大きい場合は0.5より大きい値を返す
+        - xがcenterより小さい場合は0.5より小さい値を返す
     """
-    # Arrange
-    center = 500.0
-    x = 600.0  # センター値よりやや高いが、極端ではない値
-
-    # Act
+    # Arrange & Act
     result = MetricNormalizer.sigmoid(x, center)
 
     # Assert
-    assert result > 0.5
-    assert result <= 1.0  # 極端な値では正確に1.0になる可能性がある
-
-
-def test_sigmoid_returns_low_values_when_x_below_center() -> None:
-    """xがcenterより小さい場合、sigmoidは0.5より小さい値を返す.
-
-    Given:
-        - center値が500.0
-        - xがcenterより大幅に下（100.0）
-    When:
-        - sigmoid(x, center)を計算
-    Then:
-        - 0.5より小さい値を返す
-        - 非常に小さいxでは0.0に近づく
-    """
-    # Arrange
-    center = 500.0
-    x = 100.0
-
-    # Act
-    result = MetricNormalizer.sigmoid(x, center)
-
-    # Assert
-    assert result < 0.5
-    assert result > 0.0
+    assert expected_min < result <= expected_max
 
 
 def test_sigmoid_with_default_steepness_produces_expected_curve() -> None:
