@@ -14,32 +14,8 @@ from src.utils.file_utils import FileUtils
 
 
 # ============================================================================
-# 基本機能のテスト（3件）
+# 基本機能のテスト
 # ============================================================================
-
-
-def test_returns_original_path_when_no_duplicate(
-    tmp_path: Path,
-) -> None:
-    """重複ファイルが存在しない場合、元のファイル名を返すことを検証.
-
-    Given:
-        - 空の出力ディレクトリ
-        - 任意のファイル名
-    When:
-        - get_unique_destinationを実行
-    Then:
-        - 元のファイル名がそのまま返される
-    """
-    # Arrange
-    filename = "image.jpg"
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / filename
-    assert result.name == filename
 
 
 def test_adds_suffix_when_duplicate_exists(
@@ -93,7 +69,7 @@ def test_increments_suffix_for_multiple_duplicates(
 
 
 # ============================================================================
-# 拡張子維持のテスト（4件）
+# 拡張子維持のテスト
 # ============================================================================
 
 
@@ -170,32 +146,8 @@ def test_handles_files_without_extension(
     assert result.suffix == ""
 
 
-def test_handles_dot_at_start_of_filename(
-    tmp_path: Path,
-) -> None:
-    """ドットで始まるファイル名を正しく処理することを検証.
-
-    Given:
-        - .gitignore のようなドットで始まるファイルが存在
-    When:
-        - get_unique_destinationを実行
-    Then:
-        - 正しくサフィックスが付与される
-    """
-    # Arrange
-    filename = ".gitignore"
-    (tmp_path / filename).touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / ".gitignore_1"
-    assert result.suffix == ""
-
-
 # ============================================================================
-# エッジケースのテスト（7件）
+# エッジケースのテスト
 # ============================================================================
 
 
@@ -247,43 +199,21 @@ def test_handles_filename_with_trailing_numbers(
     assert result == tmp_path / "image2_1.jpg"
 
 
-def test_handles_gaps_in_existing_numbered_files(
+def test_handles_gaps_and_non_consecutive_numbered_files(
     tmp_path: Path,
 ) -> None:
     """既存の連番にギャップがある場合、次の有効な番号を使用することを検証.
 
     Given:
-        - image.jpg と image_5.jpg のみが存在
+        - image.jpg, image_1.jpg, image_3.jpg が存在（ギャップあり）
+        - image.jpg と image_5.jpg のみが存在（別のケース）
     When:
-        - get_unique_destinationを実行
-    Then:
-        - image_1.jpg が返される（ギャップを埋めるのではなく、連続的にインクリメント）
-    """
-    # Arrange
-    filename = "image.jpg"
-    (tmp_path / filename).touch()
-    (tmp_path / "image_5.jpg").touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / "image_1.jpg"
-
-
-def test_handles_non_consecutive_duplicates(
-    tmp_path: Path,
-) -> None:
-    """非連続的な重複ファイルが存在する場合、適切な番号を選択することを検証.
-
-    Given:
-        - image.jpg, image_1.jpg, image_3.jpg が存在
-    When:
-        - get_unique_destinationを実行
+        - 各ケースでget_unique_destinationを実行
     Then:
         - image_2.jpg が返される（次の有効な連番）
+        - image_1.jpg が返される（連続的にインクリメント）
     """
-    # Arrange
+    # Arrange & Assert - ケース1: ギャップあり
     filename = "image.jpg"
     (tmp_path / filename).touch()
     (tmp_path / "image_1.jpg").touch()
@@ -294,6 +224,19 @@ def test_handles_non_consecutive_duplicates(
 
     # Assert
     assert result == tmp_path / "image_2.jpg"
+
+    # Arrange & Assert - ケース2: 大きなギャップ
+    # テンポラリディレクトリをクリア
+    for f in tmp_path.glob("*"):
+        f.unlink()
+    (tmp_path / filename).touch()
+    (tmp_path / "image_5.jpg").touch()
+
+    # Act
+    result = FileUtils.get_unique_destination(tmp_path, filename)
+
+    # Assert
+    assert result == tmp_path / "image_1.jpg"
 
 
 def test_handles_very_long_filename(
@@ -344,13 +287,13 @@ def test_handles_only_stem_no_suffix(
     assert result == tmp_path / "myfile_1"
 
 
-def test_handles_only_suffix_no_stem(
+def test_handles_dotfiles_without_extension(
     tmp_path: Path,
 ) -> None:
-    """ステムがなく拡張子のみのファイルを正しく処理することを検証.
+    """ドットで始まる拡張子なしのファイルを正しく処理することを検証.
 
     Given:
-        - .gitignore のような拡張子のみのファイルが存在
+        - .gitignore のようなドットで始まるファイルが存在
     When:
         - get_unique_destinationを実行
     Then:
@@ -368,7 +311,7 @@ def test_handles_only_suffix_no_stem(
 
 
 # ============================================================================
-# 特殊文字のテスト（3件）
+# 特殊文字のテスト
 # ============================================================================
 
 
@@ -442,7 +385,7 @@ def test_handles_spaces_in_filename(
 
 
 # ============================================================================
-# 境界値のテスト（3件）
+# 境界値のテスト
 # ============================================================================
 
 

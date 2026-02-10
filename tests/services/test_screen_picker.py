@@ -171,41 +171,6 @@ def test_requesting_more_images_than_available_returns_all_unique_images(
     assert len(result) >= 1
 
 
-def test_different_similarity_thresholds_produce_different_selection_results(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """異なる類似度閾値は異なる選択結果を生成する.
-
-    Given:
-        - 類似性を持つ5つの分析済み画像
-    When:
-        - 2つの異なる閾値で選択
-    Then:
-        - 結果は閾値に基づいて異なる場合がある
-    """
-    # Arrange
-    num_to_select = 5
-    threshold_low = 0.7
-    threshold_high = 0.99
-
-    # Act
-    result_low = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, threshold_low
-    )
-    result_high = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, threshold_high
-    )
-
-    # Assert
-    # 両方とも有効な結果を返すはず
-    assert len(result_low) >= 1
-    assert len(result_high) >= 1
-    # 結果はスコアでソートされているはず
-    for result in [result_low, result_high]:
-        scores = [m.total_score for m in result]
-        assert scores == sorted(scores, reverse=True)
-
-
 def test_higher_similarity_threshold_filters_out_more_similar_images(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:

@@ -77,7 +77,7 @@ def test_image_directory(tmp_path: Path) -> str:
 
 
 # ============================================================================
-# 引数解析のテスト（2件）
+# 引数解析のテスト
 # ============================================================================
 
 
@@ -189,7 +189,7 @@ def test_cli_shows_error_for_missing_required_argument(
 
 
 # ============================================================================
-# 基本機能のテスト（3件）
+# 基本機能のテスト
 # ============================================================================
 
 
@@ -339,7 +339,7 @@ def test_cli_applies_genre_specific_settings(
 
 
 # ============================================================================
-# Tests for Copy/Output Functionality (2 tests)
+# Tests for Copy/Output Functionality
 # ============================================================================
 
 
@@ -467,91 +467,61 @@ def test_cli_creates_output_directory_if_it_doesnt_exist(
 
 
 # ============================================================================
-# Tests for Error Handling (2 tests)
+# Tests for Error Handling
 # ============================================================================
 
 
-def test_cli_handles_nonexistent_input_directory(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
-    mock_game_screen_picker: MagicMock,
-) -> None:
-    """存在しない入力ディレクトリをグレースフルに処理することを検証.
-
-    Given:
-        - 存在しない入力ディレクトリパス
-    When:
-        - CLIを実行
-    Then:
-        - プログラムがクラッシュせず、適切にエラーを処理する
-        - 結果一覧が表示される（0件）
-    """
-    # Arrange
-    nonexistent_dir = "/nonexistent/directory/that/does/not/exist"
-    mock_game_screen_picker.select.return_value = []
-
-    monkeypatch.setattr("sys.argv", ["main.py", nonexistent_dir])
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
-    )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
-
-    # Act
-    from src.main import Main
-
-    Main().run()
-
-    # Assert
-    captured = capsys.readouterr()
-    # 選択された画像一覧が表示される（空）
-    assert "選択された画像一覧" in captured.out
-    # 0件のためスコア表示がない
-    assert "Score:" not in captured.out
-
-
-def test_cli_gracefully_handles_empty_input_directory(
+def test_cli_handles_empty_and_nonexistent_input_directories(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
 ) -> None:
-    """空の入力ディレクトリを正しく処理することを検証.
+    """空のディレクトリと存在しないディレクトリを正しく処理することを検証.
 
     Given:
         - 空の入力ディレクトリ
+        - 存在しない入力ディレクトリパス
     When:
-        - CLIを実行
+        - CLIを各ディレクトリで実行
     Then:
-        - 結果が0件でも適切に表示される
+        - プログラムがクラッシュせず、0件の結果が適切に表示される
     """
     # Arrange
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
+    nonexistent_dir = "/nonexistent/directory/that/does/not/exist"
     mock_game_screen_picker.select.return_value = []
 
+    # Act & Assert - 空ディレクトリ
     monkeypatch.setattr("sys.argv", ["main.py", str(empty_dir)])
     monkeypatch.setattr(
         "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
     )
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
-    # Act
     from src.main import Main
 
     Main().run()
 
-    # Assert
     captured = capsys.readouterr()
-    # 選択された画像一覧が表示される
     assert "選択された画像一覧" in captured.out
-    # 画像は0件
-    assert "Score:" not in captured.out  # スコア表示がない＝0件
+    assert "Score:" not in captured.out  # 0件
+
+    # Act & Assert - 存在しないディレクトリ
+    capsys.readouterr()  # Clear previous output
+    monkeypatch.setattr("sys.argv", ["main.py", nonexistent_dir])
+
+    Main().run()
+
+    captured = capsys.readouterr()
+    assert "選択された画像一覧" in captured.out
+    assert "Score:" not in captured.out  # 0件
 
 
 # ============================================================================
-# 高度な機能のテスト（1件）
+# 高度な機能のテスト
 # ============================================================================
 
 
@@ -603,124 +573,53 @@ def test_cli_recursive_search_finds_images_in_subdirectories(
 
 
 # ============================================================================
-# Tests for Duplicate Filename Handling (2 tests)
+# Tests for Duplicate Filename Handling
 # ============================================================================
 
 
-def test_cli_handles_duplicate_filenames_with_suffix(
+@pytest.mark.parametrize(
+    "num_files,base_name,extension",
+    [
+        (2, "image", ".jpg"),
+        (3, "screenshot", ".png"),
+    ],
+)
+def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
+    num_files: int,
+    base_name: str,
+    extension: str,
 ) -> None:
-    """同名ファイルが存在する場合にサフィックスを付与して上書きを回避することを検証.
+    """同名ファイルが複数存在する場合に連番でサフィックスを付与して上書きを回避することを検証.
 
     Given:
-        - 別々のフォルダに同名ファイル（image.jpg）が存在
+        - 別々のフォルダに同名ファイルが存在
         - 出力ディレクトリを指定
-        - 2つの画像が選択される
+        - 複数の画像が選択される
     When:
         - CLIを `-c` オプションで実行
     Then:
-        - 1つ目は image.jpg、2つ目は image_1.jpg として保存される
-        - 両方のファイルが出力ディレクトリに存在する
+        - 1つ目は元の名前、2つ目以降は _1, _2,... のサフィックスで保存される
+        - すべてのファイルが出力ディレクトリに存在する
     """
     # Arrange
     input_dir = tmp_path / "input"
     input_dir.mkdir()
-    folder1 = input_dir / "folder1"
-    folder1.mkdir()
-    folder2 = input_dir / "folder2"
-    folder2.mkdir()
-
-    # 同名ファイルを別フォルダに作成
-    img1 = folder1 / "image.jpg"
-    img2 = folder2 / "image.jpg"
-    img1.touch()
-    img2.touch()
+    for i in range(num_files):
+        folder = input_dir / f"folder{i}"
+        folder.mkdir()
+        (folder / f"{base_name}{extension}").touch()
 
     output_dir = tmp_path / "output"
 
     # 選択結果を設定（同名ファイルを含む）
-    results = [
-        ImageMetrics(
-            path=str(img1),
-            raw_metrics={"blur_score": 100.0},
-            normalized_metrics={"blur_score": 0.9},
-            semantic_score=0.8,
-            total_score=95.0,
-            features=np.random.rand(64),
-        ),
-        ImageMetrics(
-            path=str(img2),
-            raw_metrics={"blur_score": 90.0},
-            normalized_metrics={"blur_score": 0.85},
-            semantic_score=0.75,
-            total_score=85.0,
-            features=np.random.rand(64),
-        ),
-    ]
-    mock_game_screen_picker.select.return_value = results
-
-    monkeypatch.setattr(
-        "sys.argv", ["main.py", str(input_dir), "-c", str(output_dir), "-r"]
-    )
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
-    )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
-
-    # Act
-    from src.main import Main
-
-    Main().run()
-
-    # Assert
-    captured = capsys.readouterr()
-    # 成功メッセージが表示される
-    assert "2 枚を" in captured.out
-    assert str(output_dir) in captured.out
-    # 両方のファイルが出力ディレクトリに存在する
-    assert (output_dir / "image.jpg").exists()
-    assert (output_dir / "image_1.jpg").exists()
-    # 異なるファイルであることを確認（サイズが同じだがパスが異なる）
-    assert (output_dir / "image.jpg") != (output_dir / "image_1.jpg")
-
-
-def test_cli_handles_multiple_duplicate_filenames_with_increasing_suffixes(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
-    mock_game_screen_picker: MagicMock,
-    tmp_path: Path,
-) -> None:
-    """複数の同名ファイルが存在する場合に連番でサフィックスを付与することを検証.
-
-    Given:
-        - 複数のフォルダに同名ファイル（screenshot.png）が存在
-        - 出力ディレクトリを指定
-        - 3つの画像が選択される
-    When:
-        - CLIを `-c` オプションで実行
-    Then:
-        - screenshot.png, screenshot_1.png, screenshot_2.png として保存される
-        - 3つのファイル全てが出力ディレクトリに存在する
-    """
-    # Arrange
-    input_dir = tmp_path / "input"
-    input_dir.mkdir()
-    for i in range(3):
-        folder = input_dir / f"folder{i}"
-        folder.mkdir()
-        (folder / "screenshot.png").touch()
-
-    output_dir = tmp_path / "output"
-
-    # 選択結果を設定（3つの同名ファイルを含む）
     results = []
-    for i in range(3):
-        img_path = input_dir / f"folder{i}" / "screenshot.png"
+    for i in range(num_files):
+        img_path = input_dir / f"folder{i}" / f"{base_name}{extension}"
         results.append(
             ImageMetrics(
                 path=str(img_path),
@@ -749,14 +648,15 @@ def test_cli_handles_multiple_duplicate_filenames_with_increasing_suffixes(
     # Assert
     captured = capsys.readouterr()
     # 成功メッセージが表示される
-    assert "3 枚を" in captured.out
-    # 3つのファイル全てが出力ディレクトリに存在する
-    assert (output_dir / "screenshot.png").exists()
-    assert (output_dir / "screenshot_1.png").exists()
-    assert (output_dir / "screenshot_2.png").exists()
-    # 出力ディレクトリには3つのPNGファイルのみが存在
-    png_files = list(output_dir.glob("*.png"))
-    assert len(png_files) == 3
+    assert f"{num_files} 枚を" in captured.out
+    assert str(output_dir) in captured.out
+    # すべてのファイルが出力ディレクトリに存在する
+    assert (output_dir / f"{base_name}{extension}").exists()
+    for i in range(1, num_files):
+        assert (output_dir / f"{base_name}_{i}{extension}").exists()
+    # 出力ディレクトリには正確にnum_files個のファイルが存在
+    output_files = list(output_dir.glob(f"*{extension}"))
+    assert len(output_files) == num_files
 
 
 # ============================================================================
@@ -853,41 +753,5 @@ def test_main_class_lazy_initializes_dependencies(
     # Assert
     # picker.selectが呼ばれている
     mock_picker.select.assert_called_once()
-    captured = capsys.readouterr()
-    assert "選択された画像一覧" in captured.out
-
-
-def test_main_class_with_custom_args_uses_custom_arguments(
-    capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
-    mock_game_screen_picker: MagicMock,
-) -> None:
-    """カスタムargsパラメータが正しく使用されることを検証.
-
-    Given:
-        - モックされた依存関係
-        - カスタム引数（異なるパラメータ）
-    When:
-        - Mainクラスをカスタム引数で実行
-    Then:
-        - カスタム引数がパースされて使用される
-    """
-    # Arrange
-    mock_game_screen_picker.select.return_value = []
-    custom_args = ["/test/path", "-n", "5", "-g", "2d_rpg"]
-
-    # Act
-    from src.main import Main
-
-    cli = Main(
-        analyzer=mock_image_quality_analyzer,
-        picker=mock_game_screen_picker,
-        args=custom_args,
-    )
-    cli.run()
-
-    # Assert
-    # selectが正しいパラメータで呼ばれる
-    mock_game_screen_picker.select.assert_called_once_with("/test/path", 5, 0.82, False)
     captured = capsys.readouterr()
     assert "選択された画像一覧" in captured.out

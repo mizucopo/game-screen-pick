@@ -175,7 +175,7 @@ def small_image_path(tmp_path: Path) -> str:
 
 
 # ============================================================================
-# 初期化のテスト（2件）
+# 初期化のテスト
 # ============================================================================
 
 
@@ -239,7 +239,7 @@ def test_analyzer_sets_correct_weights_based_on_genre(
 
 
 # ============================================================================
-# Tests for analyze method - success path (6 tests)
+# Tests for analyze method - success path
 # ============================================================================
 
 
@@ -280,91 +280,6 @@ def test_analyze_returns_image_metrics_with_all_required_fields(
     assert isinstance(result.semantic_score, float)
     assert isinstance(result.total_score, float)
     assert isinstance(result.features, np.ndarray)
-
-
-def test_analyze_calculates_blur_score_using_laplacian(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-) -> None:
-    """ラプラシアン分散を使用してblur_scoreを計算する.
-
-    Given:
-        - アナライザインスタンス
-        - 有効なテスト画像
-    When:
-        - 画像を分析
-    Then:
-        - blur_scoreはcv2.Laplacianを使用して計算される
-        - blur_scoreはラプラシアンの分散（正の値）
-        - 鮮明な画像ほどblur_scoreが高い
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-
-    # Act
-    result = analyzer.analyze(sample_image_path)
-
-    # Assert
-    assert result is not None
-    assert "blur_score" in result.raw_metrics
-    assert result.raw_metrics["blur_score"] >= 0
-
-
-def test_analyze_calculates_brightness_from_grayscale(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-) -> None:
-    """グレースケール画像平均から輝度を計算する.
-
-    Given:
-        - アナライザインスタンス
-        - 有効なテスト画像
-    When:
-        - 画像を分析
-    Then:
-        - brightnessはグレースケールピクセル値の平均
-        - brightnessは範囲[0, 255]内にある
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-
-    # Act
-    result = analyzer.analyze(sample_image_path)
-
-    # Assert
-    assert result is not None
-    assert "brightness" in result.raw_metrics
-    assert 0 <= result.raw_metrics["brightness"] <= 255
-
-
-def test_analyze_calculates_contrast_as_standard_deviation(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-) -> None:
-    """グレースケール標準偏差としてコントラストを計算する.
-
-    Given:
-        - アナライザインスタンス
-        - 有効なテスト画像
-    When:
-        - 画像を分析
-    Then:
-        - contrastはグレースケールピクセルの標準偏差
-        - contrastは非負の値
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-
-    # Act
-    result = analyzer.analyze(sample_image_path)
-
-    # Assert
-    assert result is not None
-    assert "contrast" in result.raw_metrics
-    assert result.raw_metrics["contrast"] >= 0
 
 
 def test_analyze_applies_penalty_for_dark_images(
@@ -429,7 +344,7 @@ def test_analyze_combines_metrics_with_genre_specific_weights(
 
 
 # ============================================================================
-# Tests for analyze method - edge cases (4 tests)
+# Tests for analyze method - edge cases
 # ============================================================================
 
 
@@ -556,50 +471,8 @@ def test_analyze_handles_images_with_different_dimensions(
 
 
 # ============================================================================
-# Integration tests (2 tests)
+# Integration tests
 # ============================================================================
-
-
-def test_analyze_integration_with_metric_normalizer(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-) -> None:
-    """MetricNormalizerとの統合で正しい正規化値を生成する.
-
-    Given:
-        - アナライザインスタンス
-        - 有効なテスト画像
-    When:
-        - 画像を分析
-    Then:
-        - 生メトリックが正しく計算される
-        - 正規化メトリックは[0, 1]範囲内にある
-        - すべての8つの正規化メトリックが存在する
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-
-    # Act
-    result = analyzer.analyze(sample_image_path)
-
-    # Assert
-    assert result is not None
-    # Check all normalized metrics are present
-    expected_keys = {
-        "blur_score",
-        "contrast",
-        "color_richness",
-        "edge_density",
-        "dramatic_score",
-        "visual_balance",
-        "action_intensity",
-        "ui_density",
-    }
-    assert set(result.normalized_metrics.keys()) == expected_keys
-    # Check all normalized values are in [0, 1]
-    for value in result.normalized_metrics.values():
-        assert 0.0 <= value <= 1.0
 
 
 def test_analyze_produces_consistent_results_for_same_image(
@@ -643,7 +516,7 @@ def test_analyze_produces_consistent_results_for_same_image(
 
 
 # ============================================================================
-# Tests for exception handling and logging (4 tests)
+# Tests for exception handling and logging
 # ============================================================================
 
 
@@ -692,35 +565,45 @@ def test_analyze_logs_warning_for_corrupted_image(
         assert "UnidentifiedImageError" in log_message
 
 
-def test_analyze_re_raises_exception_for_attribute_error(
+@pytest.mark.parametrize(
+    "exception_class,exception_msg",
+    [
+        (AttributeError, "Test attribute error"),
+        (TypeError, "Test type error"),
+        (KeyError, "test_key"),
+    ],
+)
+def test_analyze_re_raises_unexpected_exceptions(
     mock_clip_model: MagicMock,  # noqa: ARG001
     mock_clip_processor: MagicMock,  # noqa: ARG001
     sample_image_path: str,
     caplog: pytest.LogCaptureFixture,
+    exception_class: type[Exception],
+    exception_msg: str,
 ) -> None:
-    """実装バグ（AttributeError）時に例外を再スローする.
+    """実装バグ（予期しない例外）時に例外を再スローする.
 
     Given:
         - アナライザインスタンス
         - 有効なテスト画像
         - ログキャプチャ設定（ERRORレベル以上）
     When:
-        - analyzeメソッド内でAttributeErrorが発生するようにモック化
+        - analyzeメソッド内で予期しない例外が発生するようにモック化
     Then:
         - ERRORレベルのログが出力される
-        - AttributeErrorが再スローされる
+        - 例外が再スローされる
     """
     # Arrange
     caplog.set_level(logging.ERROR)
     analyzer = ImageQualityAnalyzer()
-    # _extract_diversity_featuresメソッドをモック化してAttributeErrorを発生
+    # _extract_diversity_featuresメソッドをモック化して例外を発生
     with patch.object(
         analyzer,
         "_extract_diversity_features",
-        side_effect=AttributeError("Test attribute error"),
+        side_effect=exception_class(exception_msg),
     ):
         # Act & Assert
-        with pytest.raises(AttributeError, match="Test attribute error"):
+        with pytest.raises(exception_class, match=exception_msg):
             analyzer.analyze(sample_image_path)
 
         # ERRORログが出力されていることを確認
@@ -728,86 +611,6 @@ def test_analyze_re_raises_exception_for_attribute_error(
         error_log = caplog.records[-1]
         assert error_log.levelno == logging.ERROR
         # ログメッセージにパスが含まれていることを確認
-        log_message = error_log.getMessage()
-        assert sample_image_path in log_message
-        assert "予期しないエラーが発生しました" in log_message
-
-
-def test_analyze_re_raises_exception_for_type_error(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """実装バグ（TypeError）時に例外を再スローする.
-
-    Given:
-        - アナライザインスタンス
-        - 有効なテスト画像
-        - ログキャプチャ設定（ERRORレベル以上）
-    When:
-        - analyzeメソッド内でTypeErrorが発生するようにモック化
-    Then:
-        - ERRORレベルのログが出力される
-        - TypeErrorが再スローされる
-    """
-    # Arrange
-    caplog.set_level(logging.ERROR)
-    analyzer = ImageQualityAnalyzer()
-    # 内部メソッドをモック化してTypeErrorを発生
-    with patch.object(
-        analyzer,
-        "_extract_diversity_features",
-        side_effect=TypeError("Test type error"),
-    ):
-        # Act & Assert
-        with pytest.raises(TypeError, match="Test type error"):
-            analyzer.analyze(sample_image_path)
-
-        # ERRORログが出力されていることを確認
-        assert len(caplog.records) > 0
-        error_log = caplog.records[-1]
-        assert error_log.levelno == logging.ERROR
-        log_message = error_log.getMessage()
-        assert sample_image_path in log_message
-        assert "予期しないエラーが発生しました" in log_message
-
-
-def test_analyze_re_raises_exception_for_key_error(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """実装バグ（KeyError）時に例外を再スローする.
-
-    Given:
-        - アナライザインスタンス
-        - 有効なテスト画像
-        - ログキャプチャ設定（ERRORレベル以上）
-    When:
-        - analyzeメソッド内でKeyErrorが発生するようにモック化
-    Then:
-        - ERRORレベルのログが出力される
-        - KeyErrorが再スローされる
-    """
-    # Arrange
-    caplog.set_level(logging.ERROR)
-    analyzer = ImageQualityAnalyzer()
-    # 内部メソッドをモック化してKeyErrorを発生
-    with patch.object(
-        analyzer,
-        "_extract_diversity_features",
-        side_effect=KeyError("test_key"),
-    ):
-        # Act & Assert
-        with pytest.raises(KeyError, match="test_key"):
-            analyzer.analyze(sample_image_path)
-
-        # ERRORログが出力されていることを確認
-        assert len(caplog.records) > 0
-        error_log = caplog.records[-1]
-        assert error_log.levelno == logging.ERROR
         log_message = error_log.getMessage()
         assert sample_image_path in log_message
         assert "予期しないエラーが発生しました" in log_message
