@@ -5,11 +5,14 @@ import shutil
 from pathlib import Path
 
 from .analyzers import ImageQualityAnalyzer
+from .models.genre_weights import GenreWeights
 from .services import GameScreenPicker
 
 
 def main() -> None:
     """メイン関数."""
+    genre_choices = sorted(GenreWeights.DEFAULT_WEIGHTS.keys())
+
     parser = argparse.ArgumentParser(description="Diverse Game Screen Picker")
     parser.add_argument("input", help="入力フォルダ")
     parser.add_argument("-c", "--copy-to", help="出力フォルダ")
@@ -18,19 +21,8 @@ def main() -> None:
         "-g",
         "--genre",
         default="mixed",
-        choices=[
-            "rpg",
-            "fps",
-            "tps",
-            "2d_action",
-            "2d_shooting",
-            "3d_action",
-            "puzzle",
-            "racing",
-            "strategy",
-            "adventure",
-            "mixed",
-        ],
+        choices=genre_choices,
+        help="ジャンル (デフォルト: mixed)",
     )
     parser.add_argument(
         "-s",
