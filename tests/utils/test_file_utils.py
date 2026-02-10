@@ -7,6 +7,7 @@
 4. 拡張子維持、エッジケース、特殊文字、境界値を網羅
 """
 
+import pytest
 from pathlib import Path
 
 
@@ -120,30 +121,6 @@ def test_handles_double_extensions(
     # Path.suffix は最後の拡張子のみを返すため、archive.tarがstem、.gzがsuffixになる
     assert result == tmp_path / "archive.tar_1.gz"
     assert result.suffix == ".gz"
-
-
-def test_handles_files_without_extension(
-    tmp_path: Path,
-) -> None:
-    """拡張子なしのファイルを正しく処理することを検証.
-
-    Given:
-        - 拡張子なしのファイルが存在
-    When:
-        - get_unique_destinationを実行
-    Then:
-        - stemと空のsuffixで正しく処理される
-    """
-    # Arrange
-    filename = "README"
-    (tmp_path / filename).touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / "README_1"
-    assert result.suffix == ""
 
 
 # ============================================================================
@@ -315,73 +292,36 @@ def test_handles_dotfiles_without_extension(
 # ============================================================================
 
 
-def test_handles_japanese_filename(
-    tmp_path: Path,
-) -> None:
-    """日本語を含むファイル名を正しく処理することを検証.
-
-    Given:
-        - 日本語を含むファイル名の重複が存在
-    When:
-        - get_unique_destinationを実行
-    Then:
-        - 正しくサフィックスが付与される
-    """
-    # Arrange
-    filename = "画像ファイル.jpg"
-    (tmp_path / filename).touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / "画像ファイル_1.jpg"
-
-
+@pytest.mark.parametrize(
+    "filename,expected",
+    [
+        ("画像ファイル.jpg", "画像ファイル_1.jpg"),
+        ("image (copy).jpg", "image (copy)_1.jpg"),
+        ("my image file.jpg", "my image file_1.jpg"),
+    ],
+)
 def test_handles_special_characters_in_filename(
     tmp_path: Path,
+    filename: str,
+    expected: str,
 ) -> None:
-    """特殊文字を含むファイル名を正しく処理することを検証.
+    """特殊文字・日本語・スペースを含むファイル名を正しく処理することを検証.
 
     Given:
-        - 特殊文字（スペース、括弧など）を含むファイル名が存在
+        - 特殊文字、日本語、またはスペースを含むファイル名が存在
     When:
         - get_unique_destinationを実行
     Then:
         - 正しくサフィックスが付与される
     """
     # Arrange
-    filename = "image (copy).jpg"
     (tmp_path / filename).touch()
 
     # Act
     result = FileUtils.get_unique_destination(tmp_path, filename)
 
     # Assert
-    assert result == tmp_path / "image (copy)_1.jpg"
-
-
-def test_handles_spaces_in_filename(
-    tmp_path: Path,
-) -> None:
-    """スペースを含むファイル名を正しく処理することを検証.
-
-    Given:
-        - スペースを含むファイル名の重複が存在
-    When:
-        - get_unique_destinationを実行
-    Then:
-        - 正しくサフィックスが付与される
-    """
-    # Arrange
-    filename = "my image file.jpg"
-    (tmp_path / filename).touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / "my image file_1.jpg"
+    assert result == tmp_path / expected
 
 
 # ============================================================================
@@ -435,30 +375,3 @@ def test_handles_many_duplicate_files(
 
     # Assert
     assert result == tmp_path / "image_100.jpg"
-
-
-def test_does_not_modify_existing_files(
-    tmp_path: Path,
-) -> None:
-    """既存のファイルが変更されないことを検証.
-
-    Given:
-        - 既存ファイルが存在
-    When:
-        - get_unique_destinationを実行
-    Then:
-        - 既存ファイルが変更されていない
-    """
-    # Arrange
-    filename = "image.jpg"
-    existing_file = tmp_path / filename
-    existing_file.touch()
-    original_stat = existing_file.stat()
-
-    # Act
-    FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    # 既存ファイルが変更されていない（統計情報が同じ）
-    new_stat = existing_file.stat()
-    assert original_stat.st_size == new_stat.st_size

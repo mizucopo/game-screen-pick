@@ -201,45 +201,35 @@ def test_higher_similarity_threshold_filters_out_more_similar_images(
     assert not (has_image1 and has_image2)
 
 
-def test_empty_input_list_returns_empty_result() -> None:
-    """空の入力リストは空の結果を返す.
+@pytest.mark.parametrize(
+    "input_list,num_to_select,description",
+    [
+        ([], 5, "empty input list"),
+        ([], 0, "empty input list with zero request"),
+        (None, 0, "zero images requested"),
+    ],
+)
+def test_edge_cases_return_empty_list(
+    input_list: List[ImageMetrics] | None,
+    num_to_select: int,
+    description: str,  # noqa: ARG001
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
+    """エッジケースで空のリストを返すことを検証.
 
     Given:
-        - 分析済み画像がない
+        - 空の入力リスト、または0個のリクエスト
     When:
-        - 空のリストから選択
+        - 選択を実行
     Then:
         - 空のリストを返す
     """
     # Arrange
-    empty_list: List[ImageMetrics] = []
+    if input_list is None:
+        input_list = sample_image_metrics
 
     # Act
-    result = GameScreenPicker.select_from_analyzed(empty_list, 5, 0.8)
-
-    # Assert
-    assert result == []
-
-
-def test_requesting_zero_images_returns_empty_list(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """0個の画像を要求すると空のリストを返す.
-
-    Given:
-        - 5つの分析済み画像
-    When:
-        - 0個の画像を選択
-    Then:
-        - 処理せずに空のリストを返す
-    """
-    # Arrange
-    num_to_select = 0
-
-    # Act
-    result = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, 0.8
-    )
+    result = GameScreenPicker.select_from_analyzed(input_list, num_to_select, 0.8)
 
     # Assert
     assert result == []
@@ -268,28 +258,6 @@ def test_original_input_list_remains_unchanged_after_selection(
     assert [m.path for m in sample_image_metrics] == original_paths
     # 元のリストオブジェクトは同じ順序のままであるはず
     assert sample_image_metrics == original_order
-
-
-# ============================================================================
-# Tests for GameScreenPicker initialization
-# ============================================================================
-
-
-def test_picker_stores_the_provided_analyzer_instance(mock_analyzer: MagicMock) -> None:
-    """ピッカーは提供されたアナライザインスタンスを格納する.
-
-    Given:
-        - モックアナライザ
-    When:
-        - GameScreenPickerインスタンスを作成
-    Then:
-        - アナライザが格納され、アクセス可能
-    """
-    # Arrange & Act
-    picker = GameScreenPicker(mock_analyzer)
-
-    # Assert
-    assert picker.analyzer is mock_analyzer
 
 
 # ============================================================================

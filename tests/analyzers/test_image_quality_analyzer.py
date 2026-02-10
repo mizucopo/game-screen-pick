@@ -90,21 +90,6 @@ def sample_image_path(tmp_path: Path) -> str:
 
 
 @pytest.fixture
-def blurry_image_path(tmp_path: Path) -> str:
-    """ガウシアンぼかしを使用してぼやけたテスト画像を作成する.
-
-    blur_score検出のテストに使用する。
-    画像サイズ：640x480、強いガウシアンぼかし適用（カーネルサイズ31x31）。
-    """
-    np.random.seed(42)
-    img_array = np.random.randint(100, 150, (480, 640, 3), dtype=np.uint8)
-    blurred = cv2.GaussianBlur(img_array, (31, 31), 0)
-    img_path = tmp_path / "blurry_image.jpg"
-    cv2.imwrite(str(img_path), blurred)
-    return str(img_path)
-
-
-@pytest.fixture
 def dark_image_path(tmp_path: Path) -> str:
     """輝度ペナルティのテスト用に暗いテスト画像を作成する.
 
@@ -114,23 +99,6 @@ def dark_image_path(tmp_path: Path) -> str:
     np.random.seed(42)
     img_array = np.random.randint(0, 50, (480, 640, 3), dtype=np.uint8)
     img_path = tmp_path / "dark_image.jpg"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
-
-
-@pytest.fixture
-def high_quality_image_path(tmp_path: Path) -> str:
-    """良好なコントラストとエッジを持つ高品質テスト画像を作成する.
-
-    良好な画像が高スコアを受けることをテストするために使用する。
-    画像サイズ：640x480、良好なコントラストとエッジ密度。
-    """
-    np.random.seed(42)
-    # 良好なコントラストを持つ画像を作成
-    img_array = np.random.randint(50, 200, (480, 640, 3), dtype=np.uint8)
-    # Sobel風パターンを使用してエッジを追加
-    img_array[200:280, 300:340] = 255  # 明るい長方形を追加
-    img_path = tmp_path / "high_quality_image.jpg"
     cv2.imwrite(str(img_path), img_array)
     return str(img_path)
 
