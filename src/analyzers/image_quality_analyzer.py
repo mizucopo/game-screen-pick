@@ -1,15 +1,19 @@
 """Image quality analyzer using CLIP and computer vision metrics."""
 
+import logging
 from typing import Optional
 import numpy as np
 import cv2
 import torch
 from transformers import CLIPProcessor, CLIPModel
 from PIL import Image
+from PIL import UnidentifiedImageError
 
 from ..models.image_metrics import ImageMetrics
 from ..models.genre_weights import GenreWeights
 from .metric_normalizer import MetricNormalizer
+
+logger = logging.getLogger(__name__)
 
 
 class ImageQualityAnalyzer:
@@ -77,5 +81,38 @@ class ImageQualityAnalyzer:
             penalty = 0.6 if raw["brightness"] < 40 else 0.0
             total = max(0.0, (weighted_sum + (semantic * 0.2) - penalty) * 100.0)
             return ImageMetrics(path, raw, norm, semantic, total, features)
-        except Exception:
+        # 正常な失敗（画像ファイルの問題）
+        except (
+            FileNotFoundError,
+            UnidentifiedImageError,
+            OSError,
+        ) as e:
+            logger.warning(
+                f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
+            )
             return None
+        except cv2.error as e:
+            # OpenCV処理で破損画像を検出（文字列表記）
+            logger.warning(f"画像分析をスキップしました: {path}, 理由: cv2.error: {e}")
+            return None
+        except ValueError as e:
+            # 画像サイズが異常、配列操作不可
+            logger.warning(
+                f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
+            )
+            return None
+        # 異常な失敗（実装バグ）
+        except (
+            AttributeError,
+            TypeError,
+            KeyError,
+            IndexError,
+            RuntimeError,
+            torch.cuda.OutOfMemoryError,
+            MemoryError,
+        ):
+            logger.error(
+                f"予期しないエラーが発生しました: {path}",
+                exc_info=True,
+            )
+            raise
