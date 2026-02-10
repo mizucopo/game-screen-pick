@@ -141,9 +141,9 @@ def test_cli_accepts_all_arguments(
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
-    from src.main import main
+    from src.main import Main
 
-    main()
+    Main().run()
 
     # Assert
     captured = capsys.readouterr()
@@ -178,10 +178,10 @@ def test_cli_shows_error_for_missing_required_argument(
     monkeypatch.setattr("sys.argv", ["main.py"])
 
     # Act & Assert
-    from src.main import main
+    from src.main import Main
 
     with pytest.raises(SystemExit):
-        main()
+        Main().run()
 
     captured = capsys.readouterr()
     # argparseのエラーメッセージが含まれている
@@ -233,9 +233,9 @@ def test_cli_selects_and_displays_images_with_default_parameters(
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
-    from src.main import main
+    from src.main import Main
 
-    main()
+    Main().run()
 
     # Assert
     captured = capsys.readouterr()
@@ -287,9 +287,9 @@ def test_cli_selects_specified_number_of_images(
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
-    from src.main import main
+    from src.main import Main
 
-    main()
+    Main().run()
 
     # Assert
     captured = capsys.readouterr()
@@ -329,9 +329,9 @@ def test_cli_applies_genre_specific_settings(
     for genre in genres:
         analyzer_init_calls.clear()
         monkeypatch.setattr("sys.argv", ["main.py", test_image_directory, "-g", genre])
-        from src.main import main
+        from src.main import Main
 
-        main()
+        Main().run()
 
         # Assert
         assert len(analyzer_init_calls) == 1
@@ -392,9 +392,9 @@ def test_cli_copies_selected_images_to_output_directory(
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
-    from src.main import main
+    from src.main import Main
 
-    main()
+    Main().run()
 
     # Assert
     captured = capsys.readouterr()
@@ -456,9 +456,9 @@ def test_cli_creates_output_directory_if_it_doesnt_exist(
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
-    from src.main import main
+    from src.main import Main
 
-    main()
+    Main().run()
 
     # Assert
     # ディレクトリが作成されている
@@ -498,9 +498,9 @@ def test_cli_handles_nonexistent_input_directory(
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
-    from src.main import main
+    from src.main import Main
 
-    main()
+    Main().run()
 
     # Assert
     captured = capsys.readouterr()
@@ -538,9 +538,9 @@ def test_cli_gracefully_handles_empty_input_directory(
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
-    from src.main import main
+    from src.main import Main
 
-    main()
+    Main().run()
 
     # Assert
     captured = capsys.readouterr()
@@ -589,9 +589,9 @@ def test_cli_recursive_search_finds_images_in_subdirectories(
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
-    from src.main import main
+    from src.main import Main
 
-    main()
+    Main().run()
 
     # Assert
     # -rフラグを指定したときの観測可能な挙動を検証
@@ -672,9 +672,9 @@ def test_cli_handles_duplicate_filenames_with_suffix(
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
-    from src.main import main
+    from src.main import Main
 
-    main()
+    Main().run()
 
     # Assert
     captured = capsys.readouterr()
@@ -742,9 +742,9 @@ def test_cli_handles_multiple_duplicate_filenames_with_increasing_suffixes(
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
 
     # Act
-    from src.main import main
+    from src.main import Main
 
-    main()
+    Main().run()
 
     # Assert
     captured = capsys.readouterr()
@@ -757,3 +757,137 @@ def test_cli_handles_multiple_duplicate_filenames_with_increasing_suffixes(
     # 出力ディレクトリには3つのPNGファイルのみが存在
     png_files = list(output_dir.glob("*.png"))
     assert len(png_files) == 3
+
+
+# ============================================================================
+# Mainクラスのテスト（依存性注入と直接インスタンス化）
+# ============================================================================
+
+
+def test_main_class_with_dependency_injection(
+    capsys: pytest.CaptureFixture[str],
+    mock_image_quality_analyzer: MagicMock,
+    mock_game_screen_picker: MagicMock,
+    test_image_directory: str,
+) -> None:
+    """Mainクラスに依存関係を注入して動作することを検証.
+
+    Given:
+        - モックされた analyzer と picker
+        - カスタム引数リスト
+        - 選択結果が3件
+    When:
+        - Mainクラスを直接インスタンス化して実行
+    Then:
+        - 注入された依存関係が使用される
+        - 結果が正しく表示される
+    """
+    # Arrange
+    results = [
+        ImageMetrics(
+            path=f"/fake/image{i}.jpg",
+            raw_metrics={"blur_score": 100.0 - i * 10},
+            normalized_metrics={"blur_score": 0.9 - i * 0.1},
+            semantic_score=0.8 - i * 0.05,
+            total_score=95.0 - i * 5,
+            features=np.random.rand(64),
+        )
+        for i in range(3)
+    ]
+    mock_game_screen_picker.select.return_value = results
+
+    custom_args = [
+        test_image_directory,
+        "-n",
+        "3",
+        "-g",
+        "fps",
+    ]
+
+    # Act
+    from src.main import Main
+
+    cli = Main(
+        analyzer=mock_image_quality_analyzer,
+        picker=mock_game_screen_picker,
+        args=custom_args,
+    )
+    cli.run()
+
+    # Assert
+    captured = capsys.readouterr()
+    # 3件分の結果が表示される
+    assert captured.out.count("Score:") == 3
+
+
+def test_main_class_lazy_initializes_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    test_image_directory: str,
+) -> None:
+    """依存関係が指定されない場合に遅延初期化されることを検証.
+
+    Given:
+        - analyzer, pickerを指定せずにMainをインスタンス化
+        - 実際のImageQualityAnalyzerとGameScreenPickerをモック
+    When:
+        - run()メソッドを実行
+    Then:
+        - 引数パース後に依存関係が生成される
+        - 正しく動作する
+    """
+    # Arrange
+    mock_analyzer = MagicMock(spec=ImageQualityAnalyzer)
+    mock_picker = MagicMock(spec=GameScreenPicker)
+    mock_picker.select.return_value = []
+
+    monkeypatch.setattr("src.main.ImageQualityAnalyzer", lambda _: mock_analyzer)
+    monkeypatch.setattr("src.main.GameScreenPicker", lambda _: mock_picker)
+
+    # Act
+    from src.main import Main
+
+    cli = Main(args=[test_image_directory])
+    cli.run()
+
+    # Assert
+    # picker.selectが呼ばれている
+    mock_picker.select.assert_called_once()
+    captured = capsys.readouterr()
+    assert "選択された画像一覧" in captured.out
+
+
+def test_main_class_with_custom_args_uses_custom_arguments(
+    capsys: pytest.CaptureFixture[str],
+    mock_image_quality_analyzer: MagicMock,
+    mock_game_screen_picker: MagicMock,
+) -> None:
+    """カスタムargsパラメータが正しく使用されることを検証.
+
+    Given:
+        - モックされた依存関係
+        - カスタム引数（異なるパラメータ）
+    When:
+        - Mainクラスをカスタム引数で実行
+    Then:
+        - カスタム引数がパースされて使用される
+    """
+    # Arrange
+    mock_game_screen_picker.select.return_value = []
+    custom_args = ["/test/path", "-n", "5", "-g", "2d_rpg"]
+
+    # Act
+    from src.main import Main
+
+    cli = Main(
+        analyzer=mock_image_quality_analyzer,
+        picker=mock_game_screen_picker,
+        args=custom_args,
+    )
+    cli.run()
+
+    # Assert
+    # selectが正しいパラメータで呼ばれる
+    mock_game_screen_picker.select.assert_called_once_with("/test/path", 5, 0.82, False)
+    captured = capsys.readouterr()
+    assert "選択された画像一覧" in captured.out
