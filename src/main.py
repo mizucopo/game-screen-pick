@@ -7,6 +7,7 @@ from pathlib import Path
 from .analyzers import ImageQualityAnalyzer
 from .models.genre_weights import GenreWeights
 from .services import GameScreenPicker
+from .utils.file_utils import FileUtils
 
 
 def main() -> None:
@@ -45,7 +46,9 @@ def main() -> None:
         out = Path(args.copy_to)
         out.mkdir(parents=True, exist_ok=True)
         for res in best:
-            shutil.copy2(res.path, out / Path(res.path).name)
+            original_filename = Path(res.path).name
+            unique_dest = FileUtils.get_unique_destination(out, original_filename)
+            shutil.copy2(res.path, unique_dest)
         print(f"\n{len(best)} 枚を {args.copy_to} に保存しました（多様性確保済み）。")
 
     print("\n--- 選択された画像一覧 ---")
