@@ -9,16 +9,10 @@ uv sync
 
 ## 使用方法
 
-### CLIコマンド (推奨)
+### 実行方法
 
 ```bash
 uv run game-screen-pick <入力フォルダ> [オプション]
-```
-
-### 直接実行
-
-```bash
-uv run python src/main.py <入力フォルダ> [オプション]
 ```
 
 ### オプション
