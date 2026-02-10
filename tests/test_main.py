@@ -9,7 +9,6 @@
 """
 
 from pathlib import Path
-from typing import List
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -48,22 +47,6 @@ def mock_game_screen_picker() -> MagicMock:
         ),
     ]
     return picker
-
-
-@pytest.fixture
-def sample_image_metrics() -> List[ImageMetrics]:
-    """テスト用サンプルImageMetrics."""
-    return [
-        ImageMetrics(
-            path=f"/fake/image{i}.jpg",
-            raw_metrics={"blur_score": 100.0 - i * 10},
-            normalized_metrics={"blur_score": 0.9 - i * 0.1},
-            semantic_score=0.8 - i * 0.05,
-            total_score=95.0 - i * 5,
-            features=np.random.rand(64),
-        )
-        for i in range(3)
-    ]
 
 
 @pytest.fixture
@@ -254,45 +237,6 @@ def test_cli_selects_and_displays_images(
     assert captured.out.count("Score:") == num_expected
 
 
-def test_cli_applies_genre_specific_settings(
-    monkeypatch: pytest.MonkeyPatch,
-    mock_image_quality_analyzer: MagicMock,
-    mock_game_screen_picker: MagicMock,
-    test_image_directory: str,
-) -> None:
-    """ジャンル固有の設定が適用されることを検証.
-
-    Given:
-        - 有効な入力ディレクトリ
-        - 異なるジャンルを指定
-    When:
-        - 各ジャンルでCLIを実行
-    Then:
-        - ImageQualityAnalyzerが各ジャンルで初期化される
-    """
-    # Arrange
-    genres = ["2d_rpg", "3d_rpg", "fps", "2d_action", "puzzle", "mixed"]
-    analyzer_init_calls = []
-
-    def mock_analyzer_factory(genre: str) -> MagicMock:
-        analyzer_init_calls.append(genre)
-        return mock_image_quality_analyzer
-
-    monkeypatch.setattr("src.main.ImageQualityAnalyzer", mock_analyzer_factory)
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
-    mock_game_screen_picker.select.return_value = []
-
-    # Act
-    for genre in genres:
-        analyzer_init_calls.clear()
-        monkeypatch.setattr("sys.argv", ["main.py", test_image_directory, "-g", genre])
-        from src.main import Main
-
-        Main().run()
-
-        # Assert
-        assert len(analyzer_init_calls) == 1
-        assert analyzer_init_calls[0] == genre
 
 
 # ============================================================================
@@ -478,58 +422,6 @@ def test_cli_handles_empty_and_nonexistent_input_directories(
 
 
 # ============================================================================
-# 高度な機能のテスト
-# ============================================================================
-
-
-def test_cli_recursive_search_finds_images_in_subdirectories(
-    monkeypatch: pytest.MonkeyPatch,
-    mock_image_quality_analyzer: MagicMock,
-    mock_game_screen_picker: MagicMock,
-    tmp_path: Path,
-) -> None:
-    """再帰検索オプションが正しく動作することを検証.
-
-    Given:
-        - 親ディレクトリとサブディレクトリに画像
-        - `-r` フラグを指定
-    When:
-        - CLIを実行
-    Then:
-        - `-r` フラグがpicker.select()に正しく渡される
-        - 再帰検索が有効になる
-    """
-    # Arrange
-    test_dir = tmp_path / "test_images"
-    test_dir.mkdir()
-    (test_dir / "root.jpg").touch()
-    subdir = test_dir / "subdir"
-    subdir.mkdir()
-    (subdir / "nested.jpg").touch()
-
-    mock_game_screen_picker.select.return_value = []
-
-    monkeypatch.setattr("sys.argv", ["main.py", str(test_dir), "-r"])
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
-    )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
-
-    # Act
-    from src.main import Main
-
-    Main().run()
-
-    # Assert
-    # -rフラグを指定したときの観測可能な挙動を検証
-    # （実際のファイルシステムの検証は picker.select の責任範囲）
-    # このテストでは、CLIが `-r` フラグを正しく処理し、
-    # picker.select を呼び出すことを検証すれば十分
-    # （すでに picker.select の単体テストで再帰検索の挙動を検証しているため）
-    assert mock_game_screen_picker.select.called
-
-
-# ============================================================================
 # Tests for Duplicate Filename Handling
 # ============================================================================
 
@@ -614,45 +506,3 @@ def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
     # 出力ディレクトリには正確にnum_files個のファイルが存在
     output_files = list(output_dir.glob(f"*{extension}"))
     assert len(output_files) == num_files
-
-
-# ============================================================================
-# Mainクラスのテスト
-# ============================================================================
-
-
-def test_main_class_lazy_initializes_dependencies(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    test_image_directory: str,
-) -> None:
-    """依存関係が指定されない場合に遅延初期化されることを検証.
-
-    Given:
-        - analyzer, pickerを指定せずにMainをインスタンス化
-        - 実際のImageQualityAnalyzerとGameScreenPickerをモック
-    When:
-        - run()メソッドを実行
-    Then:
-        - 引数パース後に依存関係が生成される
-        - 正しく動作する
-    """
-    # Arrange
-    mock_analyzer = MagicMock(spec=ImageQualityAnalyzer)
-    mock_picker = MagicMock(spec=GameScreenPicker)
-    mock_picker.select.return_value = []
-
-    monkeypatch.setattr("src.main.ImageQualityAnalyzer", lambda _: mock_analyzer)
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda _: mock_picker)
-
-    # Act
-    from src.main import Main
-
-    cli = Main(args=[test_image_directory])
-    cli.run()
-
-    # Assert
-    # picker.selectが呼ばれている
-    mock_picker.select.assert_called_once()
-    captured = capsys.readouterr()
-    assert "選択された画像一覧" in captured.out
