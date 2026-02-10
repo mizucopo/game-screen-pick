@@ -11,7 +11,7 @@
 
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import Callable, List
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -266,7 +266,7 @@ def test_original_input_list_remains_unchanged_after_selection(
 
 def _create_mock_analyze_for_integration(
     make_similar: bool = False, return_none_for_even: bool = False
-) -> callable:
+) -> Callable[[str], ImageMetrics | None]:
     """統合テスト用のモックanalyze関数を作成するヘルパー.
 
     Args:
@@ -276,6 +276,7 @@ def _create_mock_analyze_for_integration(
     Returns:
         モックanalyze関数
     """
+
     def mock_analyze(path: str) -> ImageMetrics | None:
         idx = int(path.split("image")[-1].split(".")[0])
         if return_none_for_even and idx % 2 == 0:
@@ -291,6 +292,7 @@ def _create_mock_analyze_for_integration(
             total_score=100 - idx * 10,
             features=base_features,
         )
+
     return mock_analyze
 
 
@@ -350,7 +352,9 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
             Path(temp_dir, f"image{i}.jpg").touch()
 
         call_count = [0]
-        original_analyze = _create_mock_analyze_for_integration(return_none_for_even=True)
+        original_analyze: Callable[[str], ImageMetrics | None] = (
+            _create_mock_analyze_for_integration(return_none_for_even=True)
+        )
 
         def counting_analyze(path: str) -> ImageMetrics | None:
             call_count[0] += 1

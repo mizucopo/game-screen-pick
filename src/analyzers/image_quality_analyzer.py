@@ -57,7 +57,7 @@ class ImageQualityAnalyzer:
             logger.error(f"予期しないエラーが発生しました: {path}", exc_info=True)
             raise
 
-    def _calculate_raw_metrics(self, img: np.ndarray) -> dict:
+    def _calculate_raw_metrics(self, img: np.ndarray) -> dict[str, float]:
         """生の画像メトリクスを計算する."""
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -96,7 +96,7 @@ class ImageQualityAnalyzer:
                 return float(self.model(**inputs).logits_per_image[0][0]) / 100.0
 
     def _calculate_total_score(
-        self, raw: dict, norm: dict, semantic: float
+        self, raw: dict[str, float], norm: dict[str, float], semantic: float
     ) -> float:
         """総合スコアを計算する."""
         weighted_sum = sum(
@@ -106,7 +106,7 @@ class ImageQualityAnalyzer:
         return max(0.0, (weighted_sum + (semantic * 0.2) - penalty) * 100.0)
 
     @staticmethod
-    def _get_expected_errors() -> tuple:
+    def _get_expected_errors() -> tuple[type[Exception], ...]:
         """正常な失敗として扱うエラー型."""
         return (
             FileNotFoundError,
@@ -117,7 +117,7 @@ class ImageQualityAnalyzer:
         )
 
     @staticmethod
-    def _get_unexpected_errors() -> tuple:
+    def _get_unexpected_errors() -> tuple[type[Exception], ...]:
         """異常な失敗として扱うエラー型（実装バグ）."""
         return (
             AttributeError,

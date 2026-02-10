@@ -120,7 +120,9 @@ def _create_test_image(
         作成された画像の絶対パス
     """
     np.random.seed(42)
-    img_array = np.random.randint(pixel_range[0], pixel_range[1], (*size, 3), dtype=np.uint8)
+    img_array = np.random.randint(
+        pixel_range[0], pixel_range[1], (*size, 3), dtype=np.uint8
+    )
     img_path = tmp_path / filename
     cv2.imwrite(str(img_path), img_array)
     return str(img_path)
@@ -203,7 +205,6 @@ def test_analyze_applies_penalty_for_dark_images(
     # ペナルティの正確な量は複雑な計算が必要だが、
     # スコアが妥当であることは検証できる
     assert result.total_score >= 0
-
 
 
 # ============================================================================
