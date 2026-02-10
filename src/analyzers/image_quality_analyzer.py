@@ -62,13 +62,16 @@ class ImageQualityAnalyzer:
             }
             norm = MetricNormalizer.normalize_all(raw)
             with torch.no_grad():
-                inputs = self.processor(
-                    text=["epic game scenery"],
-                    images=Image.open(path),
-                    return_tensors="pt",
-                    padding=True,
-                ).to(self.device)
-                semantic = float(self.model(**inputs).logits_per_image[0][0]) / 100.0
+                with Image.open(path) as pil_img:
+                    inputs = self.processor(
+                        text=["epic game scenery"],
+                        images=pil_img,
+                        return_tensors="pt",
+                        padding=True,
+                    ).to(self.device)
+                    semantic = (
+                        float(self.model(**inputs).logits_per_image[0][0]) / 100.0
+                    )
 
             weighted_sum = sum(
                 norm[k] * self.weights.get(k, 0.0) for k in norm if k in self.weights
