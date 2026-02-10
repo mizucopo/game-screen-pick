@@ -58,7 +58,7 @@ convention = "google"
 [tool.mypy]
 strict = true
 python_version = "3.13"
-files = ["src", "tests", "stubs"]
+files = ["src", "tests"]
 mypy_path = "src:stubs"
 
 [tool.taskipy.tasks]
