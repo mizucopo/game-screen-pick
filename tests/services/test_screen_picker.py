@@ -44,19 +44,19 @@ def sample_image_metrics() -> List[ImageMetrics]:
     - 低品質
     - 中品質、3番目の画像に類似
     """
-    # Create distinct feature vectors for diversity testing
+    # 多様性テスト用の異なる特徴ベクトルを作成
     features_list = [
-        np.random.rand(128),  # Image 1: random features
-        np.random.rand(128),  # Image 2: random features
-        np.random.rand(128),  # Image 3: random features
-        np.random.rand(128),  # Image 4: random features
-        np.random.rand(128),  # Image 5: random features
+        np.random.rand(128),  # 画像1: ランダムな特徴
+        np.random.rand(128),  # 画像2: ランダムな特徴
+        np.random.rand(128),  # 画像3: ランダムな特徴
+        np.random.rand(128),  # 画像4: ランダムな特徴
+        np.random.rand(128),  # 画像5: ランダムな特徴
     ]
 
-    # Make image 2 similar to image 1 (high cosine similarity)
+    # image2をimage1に類似させる（高いコサイン類似度）
     features_list[1] = features_list[0] + np.random.rand(128) * 0.1
 
-    # Make image 5 similar to image 3
+    # image5をimage3に類似させる
     features_list[4] = features_list[2] + np.random.rand(128) * 0.1
 
     return [
@@ -74,7 +74,7 @@ def sample_image_metrics() -> List[ImageMetrics]:
             normalized_metrics={"blur_score": 0.7},
             semantic_score=0.7,
             total_score=85.0,
-            features=features_list[1],  # Similar to image1
+            features=features_list[1],  # image1に類似
         ),
         ImageMetrics(
             path="/fake/path/image3.jpg",
@@ -104,7 +104,7 @@ def sample_image_metrics() -> List[ImageMetrics]:
 
 
 # ============================================================================
-# Tests for select_from_analyzed (pure domain logic)
+# select_from_analyzedメソッドのテスト（純粋なドメインロジック）
 # ============================================================================
 
 
@@ -135,7 +135,7 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
 
     # Assert
     assert len(result) == 3
-    # Images should be in score order (highest first)
+    # 画像はスコア順になっているはず（高い順）
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
     # Image 2 (similar to image 1) should be filtered out
@@ -165,7 +165,7 @@ def test_requesting_more_images_than_available_returns_all_unique_images(
     )
 
     # Assert
-    # Should return fewer than 10 due to similarity filtering
+    # 類似性フィルタリングにより10件未満になるはず
     # (image2 ~ image1, image5 ~ image3)
     assert len(result) <= 5
     assert len(result) >= 1
@@ -197,10 +197,10 @@ def test_different_similarity_thresholds_produce_different_selection_results(
     )
 
     # Assert
-    # Both should return valid results
+    # 両方とも有効な結果を返すはず
     assert len(result_low) >= 1
     assert len(result_high) >= 1
-    # Results should be sorted by score
+    # 結果はスコアでソートされているはず
     for result in [result_low, result_high]:
         scores = [m.total_score for m in result]
         assert scores == sorted(scores, reverse=True)
@@ -228,11 +228,11 @@ def test_higher_similarity_threshold_filters_out_more_similar_images(
     )
 
     # Assert
-    # Image1 and Image2 should not both be in result (they're similar)
+    # image1とimage2は両方とも結果に含まれない（類似しているため）
     result_paths = [m.path for m in result]
     has_image1 = "/fake/path/image1.jpg" in result_paths
     has_image2 = "/fake/path/image2.jpg" in result_paths
-    # At most one of them should be selected
+    # 両方とも選択されることはない
     assert not (has_image1 and has_image2)
 
 
@@ -301,7 +301,7 @@ def test_original_input_list_remains_unchanged_after_selection(
 
     # Assert
     assert [m.path for m in sample_image_metrics] == original_paths
-    # The original list objects should still be in same order
+    # 元のリストオブジェクトは同じ順序のままであるはず
     assert sample_image_metrics == original_order
 
 

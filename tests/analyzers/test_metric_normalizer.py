@@ -11,7 +11,7 @@ from src.analyzers.metric_normalizer import MetricNormalizer
 
 
 # ============================================================================
-# Tests for sigmoid function (5 tests)
+# sigmoid関数のテスト（5件）
 # ============================================================================
 
 
@@ -51,14 +51,14 @@ def test_sigmoid_returns_high_values_when_x_above_center() -> None:
     """
     # Arrange
     center = 500.0
-    x = 600.0  # Moderately above center, not too extreme
+    x = 600.0  # センター値よりやや高いが、極端ではない値
 
     # Act
     result = MetricNormalizer.sigmoid(x, center)
 
     # Assert
     assert result > 0.5
-    assert result <= 1.0  # Can be exactly 1.0 for extreme values
+    assert result <= 1.0  # 極端な値では正確に1.0になる可能性がある
 
 
 def test_sigmoid_returns_low_values_when_x_below_center() -> None:
@@ -115,7 +115,7 @@ def test_sigmoid_with_default_steepness_produces_expected_curve() -> None:
     assert result_below < 0.5
     assert result_at == 0.5
     assert result_above > 0.5
-    # Monotonic increasing property
+    # 単調増加特性の確認
     assert result_below < result_at < result_above
 
 
@@ -149,7 +149,7 @@ def test_sigmoid_handles_overflow_without_crashing() -> None:
 
 
 # ============================================================================
-# Tests for normalize_all method (7 tests)
+# normalize_allメソッドのテスト（7件）
 # ============================================================================
 
 
@@ -277,7 +277,7 @@ def test_normalize_all_clips_edge_density_to_max_1() -> None:
         "blur_score": 500.0,
         "contrast": 50.0,
         "color_richness": 40.0,
-        "edge_density": 0.3,  # Will become 1.5, clipped to 1.0
+        "edge_density": 0.3,  # 1.5になり、1.0にクリップされる
         "dramatic_score": 50.0,
         "visual_balance": 80.0,
         "action_intensity": 30.0,
