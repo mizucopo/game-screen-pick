@@ -224,14 +224,14 @@ def test_analyzer_sets_correct_weights_based_on_genre(
 
     # Assert
     expected_weights = {
-        "blur_score": 0.25,
-        "contrast": 0.20,
-        "color_richness": 0.10,
-        "visual_balance": 0.10,
-        "edge_density": 0.10,
-        "action_intensity": 0.15,
-        "ui_density": 0.00,
-        "dramatic_score": 0.10,
+        "blur_score": 0.22,
+        "contrast": 0.19,
+        "color_richness": 0.09,
+        "visual_balance": 0.08,
+        "edge_density": 0.15,
+        "action_intensity": 0.18,
+        "ui_density": 0.03,
+        "dramatic_score": 0.06,
     }
     assert analyzer.weights == expected_weights
 
@@ -422,7 +422,7 @@ def test_analyze_combines_metrics_with_genre_specific_weights(
     assert result is not None
     # 重みが使用されていることを確認するため、総スコアが計算されることを検証
     assert result.total_score >= 0
-    # FPSジャンルはblur_scoreの重みが高いため（0.25）、blur正規化は
+    # FPSジャンルはblur_scoreの重みが高いため（0.22）、blur正規化は
     # 総スコアに大きな影響を与えるはず
 
 
