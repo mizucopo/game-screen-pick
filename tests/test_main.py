@@ -129,7 +129,7 @@ def test_cli_accepts_all_arguments(
             "-n",
             "5",
             "-g",
-            "rpg",
+            "2d_rpg",
             "-s",
             "0.85",
             "-r",
@@ -314,7 +314,7 @@ def test_cli_applies_genre_specific_settings(
         - ImageQualityAnalyzerが各ジャンルで初期化される
     """
     # Arrange
-    genres = ["rpg", "fps", "2d_action", "puzzle", "mixed"]
+    genres = ["2d_rpg", "3d_rpg", "fps", "2d_action", "puzzle", "mixed"]
     analyzer_init_calls = []
 
     def mock_analyzer_factory(genre: str) -> MagicMock:

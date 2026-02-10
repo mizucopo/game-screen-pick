@@ -25,7 +25,7 @@ uv run python src/main.py <入力フォルダ> [オプション]
 
 - `-c <フォルダ>`, `--copy-to <フォルダ>`: 選択した画像をコピーする出力フォルダ
 - `-n <数値>`, `--num <数値>`: 選択枚数 (デフォルト: 10)
-- `-g <ジャンル>`, `--genre <ジャンル>`: ゲームジャンル (rpg, fps, tps, 2d_action, 2d_shooting, 3d_action, puzzle, racing, strategy, adventure, mixed)
+- `-g <ジャンル>`, `--genre <ジャンル>`: ゲームジャンル (2d_rpg, 3d_rpg, fps, tps, 2d_action, 2d_shooting, 3d_action, puzzle, racing, strategy, adventure, mixed)
 - `-s <数値>`, `--similarity <数値>`: 類似度しきい値 (デフォルト: 0.82)
 - `-r`, `--recursive`: サブフォルダも検索
 
@@ -35,8 +35,8 @@ uv run python src/main.py <入力フォルダ> [オプション]
 # FPSゲームのスクリーンショットから15枚選択
 uv run game-screen-pick ./screenshots -g fps -n 15
 
-# RPGゲームのスクリーンショットを選択してコピー
-uv run game-screen-pick ./screenshots -c ./output -g rpg -n 20
+# 2D RPGゲームのスクリーンショットを選択してコピー
+uv run game-screen-pick ./screenshots -c ./output -g 2d_rpg -n 20
 
 # サブフォルダを含めて検索
 uv run game-screen-pick ./screenshots -r -n 10

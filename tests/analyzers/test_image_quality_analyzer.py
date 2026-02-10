@@ -194,7 +194,7 @@ def test_analyzer_has_model_and_processor_attributes_after_init(
         - device属性が設定されている
     """
     # Arrange & Act
-    analyzer = ImageQualityAnalyzer(genre="rpg")
+    analyzer = ImageQualityAnalyzer(genre="2d_rpg")
 
     # Assert
     # モデルとプロセッサが初期化されていることを確認
