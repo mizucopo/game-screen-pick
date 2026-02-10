@@ -3,58 +3,118 @@
 import argparse
 import shutil
 from pathlib import Path
+from typing import List
 
 from .analyzers import ImageQualityAnalyzer
 from .models.genre_weights import GenreWeights
+from .models.image_metrics import ImageMetrics
 from .services import GameScreenPicker
 from .utils.file_utils import FileUtils
 
 
-def main() -> None:
-    """メイン関数."""
-    genre_choices = sorted(GenreWeights.DEFAULT_WEIGHTS.keys())
+class Main:
+    """CLIメインクラス.
 
-    parser = argparse.ArgumentParser(description="Diverse Game Screen Picker")
-    parser.add_argument("input", help="入力フォルダ")
-    parser.add_argument("-c", "--copy-to", help="出力フォルダ")
-    parser.add_argument("-n", "--num", type=int, default=10, help="選択枚数")
-    parser.add_argument(
-        "-g",
-        "--genre",
-        default="mixed",
-        choices=genre_choices,
-        help="ジャンル (デフォルト: mixed)",
-    )
-    parser.add_argument(
-        "-s",
-        "--similarity",
-        type=float,
-        default=0.82,
-        help="類似度しきい値(0.7~0.85推奨)",
-    )
-    parser.add_argument(
-        "-r", "--recursive", action="store_true", help="サブフォルダも検索"
-    )
-    args = parser.parse_args()
+    画像選択ツールのコマンドラインインターフェースを提供する。
+    """
 
-    analyzer = ImageQualityAnalyzer(args.genre)
-    picker = GameScreenPicker(analyzer)
-    # 多様性重視で選択
-    best = picker.select(args.input, args.num, args.similarity, args.recursive)
+    def __init__(
+        self,
+        analyzer: ImageQualityAnalyzer | None = None,
+        picker: GameScreenPicker | None = None,
+        args: list[str] | None = None,
+    ):
+        """Mainクラスを初期化する.
 
-    if args.copy_to and best:
-        out = Path(args.copy_to)
+        Args:
+            analyzer: 画像品質アナライザー（Noneの場合はデフォルト生成）
+            picker: 画面選択ピッカー（Noneの場合はデフォルト生成）
+            args: コマンドライン引数リスト（Noneの場合はsys.argvを使用）
+        """
+        self.args = args
+        self._analyzer = analyzer
+        self._picker = picker
+
+    def run(self) -> None:
+        """CLIを実行する."""
+        parsed_args = self._parse_arguments()
+
+        # 依存関係の遅延初期化（引数パース後にジャンルが決まるため）
+        if self._analyzer is None:
+            self._analyzer = ImageQualityAnalyzer(parsed_args.genre)
+        if self._picker is None:
+            self._picker = GameScreenPicker(self._analyzer)
+
+        best = self._picker.select(
+            parsed_args.input,
+            parsed_args.num,
+            parsed_args.similarity,
+            parsed_args.recursive,
+        )
+
+        if parsed_args.copy_to and best:
+            self._copy_selected_images(best, parsed_args.copy_to)
+
+        self._display_results(best)
+
+    def _parse_arguments(self) -> argparse.Namespace:
+        """コマンドライン引数をパースする.
+
+        Returns:
+            パースされた引数のNamespace
+        """
+        genre_choices = sorted(GenreWeights.DEFAULT_WEIGHTS.keys())
+
+        parser = argparse.ArgumentParser(description="Diverse Game Screen Picker")
+        parser.add_argument("input", help="入力フォルダ")
+        parser.add_argument("-c", "--copy-to", help="出力フォルダ")
+        parser.add_argument("-n", "--num", type=int, default=10, help="選択枚数")
+        parser.add_argument(
+            "-g",
+            "--genre",
+            default="mixed",
+            choices=genre_choices,
+            help="ジャンル (デフォルト: mixed)",
+        )
+        parser.add_argument(
+            "-s",
+            "--similarity",
+            type=float,
+            default=0.82,
+            help="類似度しきい値(0.7~0.85推奨)",
+        )
+        parser.add_argument(
+            "-r", "--recursive", action="store_true", help="サブフォルダも検索"
+        )
+        return parser.parse_args(self.args)
+
+    def _copy_selected_images(
+        self, selected: List[ImageMetrics], dest_dir: str
+    ) -> None:
+        """選択された画像を出力ディレクトリにコピーする.
+
+        Args:
+            selected: 選択された画像メトリクスのリスト
+            dest_dir: 出力先ディレクトリのパス
+        """
+        out = Path(dest_dir)
         out.mkdir(parents=True, exist_ok=True)
-        for res in best:
+        for res in selected:
             original_filename = Path(res.path).name
             unique_dest = FileUtils.get_unique_destination(out, original_filename)
             shutil.copy2(res.path, unique_dest)
-        print(f"\n{len(best)} 枚を {args.copy_to} に保存しました（多様性確保済み）。")
+        print(f"\n{len(selected)} 枚を {dest_dir} に保存しました（多様性確保済み）。")
 
-    print("\n--- 選択された画像一覧 ---")
-    for i, res in enumerate(best):
-        print(f"[{i + 1}] {Path(res.path).name} (Score: {res.total_score:.2f})")
+    def _display_results(self, selected: List[ImageMetrics]) -> None:
+        """選択結果を表示する.
+
+        Args:
+            selected: 選択された画像メトリクスのリスト
+        """
+        print("\n--- 選択された画像一覧 ---")
+        for i, res in enumerate(selected):
+            print(f"[{i + 1}] {Path(res.path).name} (Score: {res.total_score:.2f})")
 
 
 if __name__ == "__main__":
-    main()
+    Main().run()

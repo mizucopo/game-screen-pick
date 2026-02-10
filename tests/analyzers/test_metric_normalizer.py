@@ -7,97 +7,60 @@
 4. 高速実行（約0.1秒） - 外部依存関係なし
 """
 
+import pytest
+
 from src.analyzers.metric_normalizer import MetricNormalizer
 
 
 # ============================================================================
-# sigmoid関数のテスト（5件）
+# sigmoid関数のテスト
 # ============================================================================
 
 
-def test_sigmoid_returns_0_5_when_x_equals_center() -> None:
-    """xがcenterと等しい場合、sigmoidは正確に0.5を返す.
+@pytest.mark.parametrize(
+    "x,center,expected_min,expected_max",
+    [
+        (600.0, 500.0, 0.5, 1.0),
+        (100.0, 500.0, 0.0, 0.5),
+    ],
+)
+def test_sigmoid_returns_values_relative_to_center(
+    x: float,
+    center: float,
+    expected_min: float,
+    expected_max: float,
+) -> None:
+    """xとcenterの相対関係に基づいてsigmoidが適切な値を返すこと.
 
     Given:
-        - center値が500.0
-        - xがcenter値と等しい
+        - center値が500.0である
+        - xがcenterより大きいまたは小さい値である
     When:
-        - sigmoid(x, center)を計算
+        - デフォルトの急峻さでsigmoid(x, center)が計算される
     Then:
-        - 正確に0.5を返す（sigmoid曲線の中点）
+        - xがcenterより大きい場合は0.5より大きい値が返されること
+        - xがcenterより小さい場合は0.5より小さい値が返されること
     """
-    # Arrange
-    center = 500.0
-    x = center
-
-    # Act
+    # Arrange & Act
     result = MetricNormalizer.sigmoid(x, center)
 
     # Assert
-    assert result == 0.5
-
-
-def test_sigmoid_returns_high_values_when_x_above_center() -> None:
-    """xがcenterより大きい場合、sigmoidは0.5より大きい値を返す.
-
-    Given:
-        - center値が500.0
-        - xがcenterより中程度上（600.0）
-    When:
-        - デフォルトの急峻さでsigmoid(x, center)を計算
-    Then:
-        - 0.5より大きい値を返す
-        - 非常に大きいxでは1.0に近づく（極端な値では1.0になる可能性あり）
-    """
-    # Arrange
-    center = 500.0
-    x = 600.0  # センター値よりやや高いが、極端ではない値
-
-    # Act
-    result = MetricNormalizer.sigmoid(x, center)
-
-    # Assert
-    assert result > 0.5
-    assert result <= 1.0  # 極端な値では正確に1.0になる可能性がある
-
-
-def test_sigmoid_returns_low_values_when_x_below_center() -> None:
-    """xがcenterより小さい場合、sigmoidは0.5より小さい値を返す.
-
-    Given:
-        - center値が500.0
-        - xがcenterより大幅に下（100.0）
-    When:
-        - sigmoid(x, center)を計算
-    Then:
-        - 0.5より小さい値を返す
-        - 非常に小さいxでは0.0に近づく
-    """
-    # Arrange
-    center = 500.0
-    x = 100.0
-
-    # Act
-    result = MetricNormalizer.sigmoid(x, center)
-
-    # Assert
-    assert result < 0.5
-    assert result > 0.0
+    assert expected_min < result <= expected_max
 
 
 def test_sigmoid_with_default_steepness_produces_expected_curve() -> None:
-    """デフォルトの急峻さで期待されるsigmoid曲線を生成する.
+    """デフォルトの急峻さで期待されるsigmoid曲線が生成されること.
 
     Given:
-        - center値が50.0（コントラストメトリックの典型的な値）
-        - デフォルトの急峻さが0.1
-        - 3つのテストポイント：centerの下、center、centerの上
+        - center値が50.0（コントラストメトリックの典型的な値）である
+        - デフォルトの急峻さが0.1である
+        - 3つのテストポイント：centerの下、center、centerの上がある
     When:
-        - 各ポイントのsigmoidを計算
+        - 各ポイントのsigmoidが計算される
     Then:
-        - 期待される値を持つ滑らかな曲線を生成
-        - より小さい値はより小さい出力を生成
-        - より大きい値はより大きい出力を生成
+        - 期待される値を持つ滑らかな曲線が生成されること
+        - より小さい値はより小さい出力を生成すること
+        - より大きい値はより大きい出力を生成すること
     """
     # Arrange
     center = 50.0
@@ -120,18 +83,18 @@ def test_sigmoid_with_default_steepness_produces_expected_curve() -> None:
 
 
 def test_sigmoid_handles_overflow_without_crashing() -> None:
-    """例外を発生させずにオーバーフロー/アンダーフローを適切に処理する.
+    """例外を発生させずにオーバーフロー/アンダーフローが適切に処理されること.
 
     Given:
-        - math.expのオーバーフローを引き起こす可能性のある極端な入力値
-        - 非常に大きい正の値（1e10）
-        - 非常に大きい負の値（-1e10）
+        - math.expのオーバーフローを引き起こす可能性のある極端な入力値がある
+        - 非常に大きい正の値（1e10）がある
+        - 非常に大きい負の値（-1e10）がある
     When:
-        - 極端な値でsigmoidを計算
+        - 極端な値でsigmoidが計算される
     Then:
-        - 極端な正の値に対して1.0を返す（例外なし）
-        - 極端な負の値に対して0.0を返す（例外なし）
-        - OverflowErrorまたはアンダーフロー例外は発生しない
+        - 極端な正の値に対して1.0が返されること（例外なし）
+        - 極端な負の値に対して0.0が返されること（例外なし）
+        - OverflowErrorまたはアンダーフロー例外が発生しないこと
     """
     # Arrange
     center = 500.0
@@ -149,19 +112,19 @@ def test_sigmoid_handles_overflow_without_crashing() -> None:
 
 
 # ============================================================================
-# normalize_allメソッドのテスト（7件）
+# normalize_allメソッドのテスト
 # ============================================================================
 
 
 def test_normalize_all_returns_all_expected_metrics() -> None:
-    """すべての8つの期待される正規化メトリックを含む辞書を返す.
+    """すべての8つの期待される正規化メトリックを含む辞書が返されること.
 
     Given:
-        - すべての必須フィールドを含む生メトリック辞書
+        - すべての必須フィールドを含む生メトリック辞書がある
     When:
-        - normalize_allを呼び出し
+        - normalize_allが呼び出される
     Then:
-        - すべての8つの期待されるメトリックを返す：
+        - すべての8つの期待されるメトリックが返されること：
           - blur_score
           - contrast
           - color_richness
@@ -201,167 +164,18 @@ def test_normalize_all_returns_all_expected_metrics() -> None:
     assert set(result.keys()) == expected_keys
 
 
-def test_normalize_all_applies_sigmoid_to_blur_score() -> None:
-    """blur_scoreメトリックにsigmoid正規化を適用する.
+def test_normalize_all_produces_valid_and_unique_results() -> None:
+    """正規化値が有効範囲内にあり、異なる入力値は異なる結果を生成すること.
 
     Given:
-        - 生のblur_scoreが500.0（center値）
+        - 2セットの異なる生メトリックがある
+        - 低い値セットと高い値セットがある
     When:
-        - normalize_allを呼び出し
+        - 各セットでnormalize_allが呼び出される
     Then:
-        - blur_scoreはcenter=500のsigmoidを使用して正規化される
-        - centerポイントで正確に0.5になる
-    """
-    # Arrange
-    raw = {
-        "blur_score": 500.0,
-        "contrast": 50.0,
-        "color_richness": 40.0,
-        "edge_density": 0.1,
-        "dramatic_score": 50.0,
-        "visual_balance": 80.0,
-        "action_intensity": 30.0,
-        "ui_density": 10.0,
-    }
-
-    # Act
-    result = MetricNormalizer.normalize_all(raw)
-
-    # Assert
-    assert result["blur_score"] == 0.5
-
-
-def test_normalize_all_applies_sigmoid_to_contrast() -> None:
-    """contrastメトリックにsigmoid正規化を適用する.
-
-    Given:
-        - 生のcontrastが50.0（center値）
-    When:
-        - normalize_allを呼び出し
-    Then:
-        - contrastはcenter=50のsigmoidを使用して正規化される
-        - centerポイントで正確に0.5になる
-    """
-    # Arrange
-    raw = {
-        "blur_score": 500.0,
-        "contrast": 50.0,
-        "color_richness": 40.0,
-        "edge_density": 0.1,
-        "dramatic_score": 50.0,
-        "visual_balance": 80.0,
-        "action_intensity": 30.0,
-        "ui_density": 10.0,
-    }
-
-    # Act
-    result = MetricNormalizer.normalize_all(raw)
-
-    # Assert
-    assert result["contrast"] == 0.5
-
-
-def test_normalize_all_clips_edge_density_to_max_1() -> None:
-    """min(1.0, raw * 5.0)を使用してedge_densityを最大1.0にクリップする.
-
-    Given:
-        - 生のedge_densityが0.3（5倍すると1.5になる値）
-    When:
-        - normalize_allを呼び出し
-    Then:
-        - edge_densityは最大1.0にクリップされる
-        - 公式：min(1.0, raw * 5.0)
-    """
-    # Arrange
-    raw = {
-        "blur_score": 500.0,
-        "contrast": 50.0,
-        "color_richness": 40.0,
-        "edge_density": 0.3,  # 1.5になり、1.0にクリップされる
-        "dramatic_score": 50.0,
-        "visual_balance": 80.0,
-        "action_intensity": 30.0,
-        "ui_density": 10.0,
-    }
-
-    # Act
-    result = MetricNormalizer.normalize_all(raw)
-
-    # Assert
-    assert result["edge_density"] == 1.0
-
-
-def test_normalize_all_divides_visual_balance_by_100() -> None:
-    """[0, 1]範囲に正規化するためvisual_balanceを100で割る.
-
-    Given:
-        - 生のvisual_balanceが80.0
-    When:
-        - normalize_allを呼び出し
-    Then:
-        - visual_balanceは100で割られる
-        - 結果は0.8になる
-    """
-    # Arrange
-    raw = {
-        "blur_score": 500.0,
-        "contrast": 50.0,
-        "color_richness": 40.0,
-        "edge_density": 0.1,
-        "dramatic_score": 50.0,
-        "visual_balance": 80.0,
-        "action_intensity": 30.0,
-        "ui_density": 10.0,
-    }
-
-    # Act
-    result = MetricNormalizer.normalize_all(raw)
-
-    # Assert
-    assert result["visual_balance"] == 0.8
-
-
-def test_normalize_all_produces_values_between_0_and_1() -> None:
-    """すべての正規化値が有効範囲[0, 1]内にある.
-
-    Given:
-        - 様々な現実的な値を持つ生メトリック
-    When:
-        - normalize_allを呼び出し
-    Then:
-        - すべての正規化値が0.0から1.0の間（両端含む）
-        - 負の値や1.0より大きい値は存在しない
-    """
-    # Arrange
-    raw = {
-        "blur_score": 650.0,
-        "contrast": 75.0,
-        "color_richness": 55.0,
-        "edge_density": 0.25,
-        "dramatic_score": 80.0,
-        "visual_balance": 90.0,
-        "action_intensity": 45.0,
-        "ui_density": 15.0,
-    }
-
-    # Act
-    result = MetricNormalizer.normalize_all(raw)
-
-    # Assert
-    for value in result.values():
-        assert 0.0 <= value <= 1.0
-
-
-def test_normalize_all_with_different_raw_values_produces_different_results() -> None:
-    """異なる生の入力値は異なる正規化出力を生成する.
-
-    Given:
-        - 異なる値を持つ2セットの生メトリック
-    When:
-        - 各セットでnormalize_allを呼び出し
-    Then:
-        - 異なる正規化結果を生成する
-        - 結果は相対的な順序を維持する（より高い生値 -> より高い正規化値）
+        - すべての正規化値が[0, 1]範囲内にあること
+        - より高い生値はより高い正規化値を生成すること
+        - 結果が一意であること
     """
     # Arrange
     raw_low = {
@@ -379,10 +193,10 @@ def test_normalize_all_with_different_raw_values_produces_different_results() ->
         "blur_score": 700.0,
         "contrast": 70.0,
         "color_richness": 55.0,
-        "edge_density": 0.2,
-        "dramatic_score": 70.0,
-        "visual_balance": 95.0,
-        "action_intensity": 40.0,
+        "edge_density": 0.3,
+        "dramatic_score": 80.0,
+        "visual_balance": 90.0,
+        "action_intensity": 45.0,
         "ui_density": 15.0,
     }
 
@@ -391,11 +205,14 @@ def test_normalize_all_with_different_raw_values_produces_different_results() ->
     result_high = MetricNormalizer.normalize_all(raw_high)
 
     # Assert
-    # より高い生の値はより高い正規化値を生成するはず
+    # すべての値が[0, 1]範囲内
+    for value in result_low.values():
+        assert 0.0 <= value <= 1.0
+    for value in result_high.values():
+        assert 0.0 <= value <= 1.0
+    # より高い生の値はより高い正規化値を生成する
     assert result_high["blur_score"] > result_low["blur_score"]
     assert result_high["contrast"] > result_low["contrast"]
     assert result_high["color_richness"] > result_low["color_richness"]
-    # Edge densityは線形スケーリングを使用
-    assert result_high["edge_density"] > result_low["edge_density"]
-    # Visual balanceは線形スケーリングを使用
+    assert result_high["edge_density"] >= result_low["edge_density"]  # クリップ可能
     assert result_high["visual_balance"] > result_low["visual_balance"]

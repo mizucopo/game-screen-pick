@@ -76,6 +76,7 @@ class GameScreenPicker:
             選択された画像メトリクスのリスト
         """
         selected: List[ImageMetrics] = []
+
         for candidate in all_results:
             if len(selected) >= num:
                 break
@@ -83,7 +84,6 @@ class GameScreenPicker:
             # 既に選ばれた画像たちと「見た目」を比較
             is_similar = False
             for s in selected:
-                # コサイン類似度で「似すぎていないか」チェック
                 sim = cosine_similarity(
                     candidate.features.reshape(1, -1), s.features.reshape(1, -1)
                 )[0][0]

@@ -12,7 +12,8 @@ class MetricNormalizer:
         """シグモイド関数による正規化."""
         try:
             return 1 / (1 + math.exp(-steepness * (x - center)))
-        except Exception:
+        except (OverflowError, ValueError):
+            # exp() のオーバーフロー時は、入力値に基づいて境界値を返す
             return 1.0 if x > center else 0.0
 
     @classmethod

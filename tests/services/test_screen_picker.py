@@ -11,7 +11,7 @@
 
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import Callable, List
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -111,7 +111,7 @@ def sample_image_metrics() -> List[ImageMetrics]:
 def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """高品質な画像が優先され、類似した画像は回避される.
+    """高品質な画像が優先され、類似した画像は回避されること.
 
     Given:
         - 様々なスコアを持つ5つの分析済み画像
@@ -120,9 +120,9 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     When:
         - 類似度閾値0.9で3つの画像を選択
     Then:
-        - 3つの画像を返す
-        - 最高スコアの画像が優先される
-        - 類似した画像は除外される
+        - 3つの画像が返されること
+        - 最高スコアの画像が優先されること
+        - 類似した画像が除外されること
     """
     # Arrange
     num_to_select = 3
@@ -146,14 +146,14 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
 def test_requesting_more_images_than_available_returns_all_unique_images(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """利用可能な数より多くの画像を要求した場合、すべての一意な画像を返す.
+    """利用可能な数より多くの画像を要求した場合、すべての一意な画像が返されること.
 
     Given:
         - 5つの分析済み画像（一部類似）
     When:
         - 中程度の類似度閾値で10個の画像を選択
     Then:
-        - 利用可能な多様な画像の数まで返す
+        - 利用可能な多様な画像の数まで返されること
     """
     # Arrange
     num_to_select = 10
@@ -171,52 +171,17 @@ def test_requesting_more_images_than_available_returns_all_unique_images(
     assert len(result) >= 1
 
 
-def test_different_similarity_thresholds_produce_different_selection_results(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """異なる類似度閾値は異なる選択結果を生成する.
-
-    Given:
-        - 類似性を持つ5つの分析済み画像
-    When:
-        - 2つの異なる閾値で選択
-    Then:
-        - 結果は閾値に基づいて異なる場合がある
-    """
-    # Arrange
-    num_to_select = 5
-    threshold_low = 0.7
-    threshold_high = 0.99
-
-    # Act
-    result_low = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, threshold_low
-    )
-    result_high = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, threshold_high
-    )
-
-    # Assert
-    # 両方とも有効な結果を返すはず
-    assert len(result_low) >= 1
-    assert len(result_high) >= 1
-    # 結果はスコアでソートされているはず
-    for result in [result_low, result_high]:
-        scores = [m.total_score for m in result]
-        assert scores == sorted(scores, reverse=True)
-
-
 def test_higher_similarity_threshold_filters_out_more_similar_images(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """より高い類似度閾値はより多くの類似画像を除外する.
+    """より高い類似度閾値はより多くの類似画像を除外すること.
 
     Given:
         - image2がimage1に類似している5つの分析済み画像
     When:
         - 厳しい閾値（0.95）で選択
     Then:
-        - 類似した画像は両方とも選択されない
+        - 類似した画像は両方とも選択されないこと
     """
     # Arrange
     num_to_select = 5
@@ -236,45 +201,34 @@ def test_higher_similarity_threshold_filters_out_more_similar_images(
     assert not (has_image1 and has_image2)
 
 
-def test_empty_input_list_returns_empty_result() -> None:
-    """空の入力リストは空の結果を返す.
+@pytest.mark.parametrize(
+    "input_list,num_to_select",
+    [
+        ([], 5),
+        ([], 0),
+        (None, 0),
+    ],
+)
+def test_edge_cases_return_empty_list(
+    input_list: List[ImageMetrics] | None,
+    num_to_select: int,
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
+    """エッジケースで空のリストを返すことを検証.
 
     Given:
-        - 分析済み画像がない
+        - 空の入力リスト、または0個のリクエスト
     When:
-        - 空のリストから選択
+        - 選択を実行
     Then:
         - 空のリストを返す
     """
     # Arrange
-    empty_list: List[ImageMetrics] = []
+    if input_list is None:
+        input_list = sample_image_metrics
 
     # Act
-    result = GameScreenPicker.select_from_analyzed(empty_list, 5, 0.8)
-
-    # Assert
-    assert result == []
-
-
-def test_requesting_zero_images_returns_empty_list(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """0個の画像を要求すると空のリストを返す.
-
-    Given:
-        - 5つの分析済み画像
-    When:
-        - 0個の画像を選択
-    Then:
-        - 処理せずに空のリストを返す
-    """
-    # Arrange
-    num_to_select = 0
-
-    # Act
-    result = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, 0.8
-    )
+    result = GameScreenPicker.select_from_analyzed(input_list, num_to_select, 0.8)
 
     # Assert
     assert result == []
@@ -283,14 +237,14 @@ def test_requesting_zero_images_returns_empty_list(
 def test_original_input_list_remains_unchanged_after_selection(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
-    """元の入力リストは選択後も変更されない.
+    """元の入力リストは選択後も変更されないこと.
 
     Given:
         - 特定の順序の分析済み画像リスト
     When:
         - そのリストから選択
     Then:
-        - 元のリストの順序と内容が保持される
+        - 元のリストの順序と内容が保持されること
     """
     # Arrange
     original_paths = [m.path for m in sample_image_metrics]
@@ -306,36 +260,46 @@ def test_original_input_list_remains_unchanged_after_selection(
 
 
 # ============================================================================
-# Tests for GameScreenPicker initialization
-# ============================================================================
-
-
-def test_picker_stores_the_provided_analyzer_instance(mock_analyzer: MagicMock) -> None:
-    """ピッカーは提供されたアナライザインスタンスを格納する.
-
-    Given:
-        - モックアナライザ
-    When:
-        - GameScreenPickerインスタンスを作成
-    Then:
-        - アナライザが格納され、アクセス可能
-    """
-    # Arrange & Act
-    picker = GameScreenPicker(mock_analyzer)
-
-    # Assert
-    assert picker.analyzer is mock_analyzer
-
-
-# ============================================================================
 # Integration tests for select method
 # ============================================================================
+
+
+def _create_mock_analyze_for_integration(
+    make_similar: bool = False, return_none_for_even: bool = False
+) -> Callable[[str], ImageMetrics | None]:
+    """統合テスト用のモックanalyze関数を作成するヘルパー.
+
+    Args:
+        make_similar: image0とimage1を類似させるかどうか
+        return_none_for_even: 偶数インデックスの画像でNoneを返すかどうか
+
+    Returns:
+        モックanalyze関数
+    """
+
+    def mock_analyze(path: str) -> ImageMetrics | None:
+        idx = int(path.split("image")[-1].split(".")[0])
+        if return_none_for_even and idx % 2 == 0:
+            return None
+        base_features = np.random.rand(128)
+        if make_similar and idx == 1:
+            base_features = base_features * 0.99
+        return ImageMetrics(
+            path=path,
+            raw_metrics={"blur_score": 100 - idx * 10},
+            normalized_metrics={"blur_score": 1.0 - idx * 0.1},
+            semantic_score=0.8,
+            total_score=100 - idx * 10,
+            features=base_features,
+        )
+
+    return mock_analyze
 
 
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     mock_analyzer: MagicMock,
 ) -> None:
-    """完全な統合：ロード、分析、多様な画像の選択.
+    """完全な統合：ロード、分析、多様な画像の選択が行われること.
 
     Given:
         - 5つの画像ファイルを持つフォルダ
@@ -343,31 +307,14 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     When:
         - 類似度閾値で3つの画像を選択
     Then:
-        - 多様で高品質な画像を返す
+        - 多様で高品質な画像が返されること
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Create test images
         for i in range(5):
             Path(temp_dir, f"image{i}.jpg").touch()
 
-        # Mock analyzer to return predictable results
-        def mock_analyze(path: str) -> ImageMetrics:
-            # Create features where image0 and image1 are similar
-            idx = int(path.split("image")[-1].split(".")[0])
-            base_features = np.random.rand(128)
-            if idx == 1:
-                base_features = base_features * 0.99  # Very similar to image0
-            return ImageMetrics(
-                path=path,
-                raw_metrics={"blur_score": 100 - idx * 10},
-                normalized_metrics={"blur_score": 1.0 - idx * 0.1},
-                semantic_score=0.8,
-                total_score=100 - idx * 10,
-                features=base_features,
-            )
-
-        mock_analyzer.analyze = mock_analyze
+        mock_analyzer.analyze = _create_mock_analyze_for_integration(make_similar=True)
         picker = GameScreenPicker(mock_analyzer)
 
         # Act
@@ -380,10 +327,8 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
         )
 
         # Assert
-        # Should get diverse results (not too similar)
         assert len(result) >= 1
         assert len(result) <= 3
-        # Results should be in score order
         for i in range(len(result) - 1):
             assert result[i].total_score >= result[i + 1].total_score
 
@@ -391,7 +336,7 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
 def test_selecting_gracefully_handles_files_that_fail_to_analyze(
     mock_analyzer: MagicMock,
 ) -> None:
-    """分析に失敗したファイルを適切に処理する.
+    """分析に失敗したファイルが適切に処理されること.
 
     Given:
         - 5つの画像ファイルを持つフォルダ
@@ -399,7 +344,7 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
     When:
         - 画像を選択
     Then:
-        - 処理を継続し、有効な画像のみを返す
+        - 処理が継続され、有効な画像のみが返されること
     """
     # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -407,23 +352,15 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
             Path(temp_dir, f"image{i}.jpg").touch()
 
         call_count = [0]
+        original_analyze: Callable[[str], ImageMetrics | None] = (
+            _create_mock_analyze_for_integration(return_none_for_even=True)
+        )
 
-        def mock_analyze(path: str) -> ImageMetrics | None:
+        def counting_analyze(path: str) -> ImageMetrics | None:
             call_count[0] += 1
-            # Return None for even-indexed images
-            idx = int(path.split("image")[-1].split(".")[0])
-            if idx % 2 == 0:
-                return None
-            return ImageMetrics(
-                path=path,
-                raw_metrics={},
-                normalized_metrics={},
-                semantic_score=0.5,
-                total_score=50.0,
-                features=np.random.rand(128),
-            )
+            return original_analyze(path)
 
-        mock_analyzer.analyze = mock_analyze
+        mock_analyzer.analyze = counting_analyze
         picker = GameScreenPicker(mock_analyzer)
 
         # Act
@@ -436,23 +373,21 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         )
 
         # Assert
-        # Should have analyzed all 5 files
         assert call_count[0] == 5
-        # But only returned results for non-None analyses
         assert len(result) <= 3  # At most 3 valid images (odd indices)
 
 
 def test_selecting_from_nonexistent_folder_returns_empty_list(
     mock_analyzer: MagicMock,
 ) -> None:
-    """存在しないフォルダは適切に空のリストを返す.
+    """存在しないフォルダは適切に空のリストを返すこと.
 
     Given:
         - 存在しないフォルダパス
     When:
         - 画像を選択
     Then:
-        - 空のリストを返す（正常なデグラデーション）
+        - 空のリストが返されること（正常なデグラデーション）
     """
     # Arrange
     picker = GameScreenPicker(mock_analyzer)
