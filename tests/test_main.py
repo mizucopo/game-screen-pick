@@ -600,3 +600,160 @@ def test_cli_recursive_search_finds_images_in_subdirectories(
     # picker.select を呼び出すことを検証すれば十分
     # （すでに picker.select の単体テストで再帰検索の挙動を検証しているため）
     assert mock_game_screen_picker.select.called
+
+
+# ============================================================================
+# Tests for Duplicate Filename Handling (2 tests)
+# ============================================================================
+
+
+def test_cli_handles_duplicate_filenames_with_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mock_image_quality_analyzer: MagicMock,
+    mock_game_screen_picker: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """同名ファイルが存在する場合にサフィックスを付与して上書きを回避することを検証.
+
+    Given:
+        - 別々のフォルダに同名ファイル（image.jpg）が存在
+        - 出力ディレクトリを指定
+        - 2つの画像が選択される
+    When:
+        - CLIを `-c` オプションで実行
+    Then:
+        - 1つ目は image.jpg、2つ目は image_1.jpg として保存される
+        - 両方のファイルが出力ディレクトリに存在する
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    folder1 = input_dir / "folder1"
+    folder1.mkdir()
+    folder2 = input_dir / "folder2"
+    folder2.mkdir()
+
+    # 同名ファイルを別フォルダに作成
+    img1 = folder1 / "image.jpg"
+    img2 = folder2 / "image.jpg"
+    img1.touch()
+    img2.touch()
+
+    output_dir = tmp_path / "output"
+
+    # 選択結果を設定（同名ファイルを含む）
+    results = [
+        ImageMetrics(
+            path=str(img1),
+            raw_metrics={"blur_score": 100.0},
+            normalized_metrics={"blur_score": 0.9},
+            semantic_score=0.8,
+            total_score=95.0,
+            features=np.random.rand(64),
+        ),
+        ImageMetrics(
+            path=str(img2),
+            raw_metrics={"blur_score": 90.0},
+            normalized_metrics={"blur_score": 0.85},
+            semantic_score=0.75,
+            total_score=85.0,
+            features=np.random.rand(64),
+        ),
+    ]
+    mock_game_screen_picker.select.return_value = results
+
+    monkeypatch.setattr(
+        "sys.argv", ["main.py", str(input_dir), "-c", str(output_dir), "-r"]
+    )
+    monkeypatch.setattr(
+        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
+    )
+    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
+
+    # Act
+    from src.main import main
+
+    main()
+
+    # Assert
+    captured = capsys.readouterr()
+    # 成功メッセージが表示される
+    assert "2 枚を" in captured.out
+    assert str(output_dir) in captured.out
+    # 両方のファイルが出力ディレクトリに存在する
+    assert (output_dir / "image.jpg").exists()
+    assert (output_dir / "image_1.jpg").exists()
+    # 異なるファイルであることを確認（サイズが同じだがパスが異なる）
+    assert (output_dir / "image.jpg") != (output_dir / "image_1.jpg")
+
+
+def test_cli_handles_multiple_duplicate_filenames_with_increasing_suffixes(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mock_image_quality_analyzer: MagicMock,
+    mock_game_screen_picker: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """複数の同名ファイルが存在する場合に連番でサフィックスを付与することを検証.
+
+    Given:
+        - 複数のフォルダに同名ファイル（screenshot.png）が存在
+        - 出力ディレクトリを指定
+        - 3つの画像が選択される
+    When:
+        - CLIを `-c` オプションで実行
+    Then:
+        - screenshot.png, screenshot_1.png, screenshot_2.png として保存される
+        - 3つのファイル全てが出力ディレクトリに存在する
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        folder = input_dir / f"folder{i}"
+        folder.mkdir()
+        (folder / "screenshot.png").touch()
+
+    output_dir = tmp_path / "output"
+
+    # 選択結果を設定（3つの同名ファイルを含む）
+    results = []
+    for i in range(3):
+        img_path = input_dir / f"folder{i}" / "screenshot.png"
+        results.append(
+            ImageMetrics(
+                path=str(img_path),
+                raw_metrics={"blur_score": 100.0 - i * 10},
+                normalized_metrics={"blur_score": 0.9 - i * 0.1},
+                semantic_score=0.8 - i * 0.05,
+                total_score=95.0 - i * 5,
+                features=np.random.rand(64),
+            )
+        )
+    mock_game_screen_picker.select.return_value = results
+
+    monkeypatch.setattr(
+        "sys.argv", ["main.py", str(input_dir), "-c", str(output_dir), "-r"]
+    )
+    monkeypatch.setattr(
+        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
+    )
+    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
+
+    # Act
+    from src.main import main
+
+    main()
+
+    # Assert
+    captured = capsys.readouterr()
+    # 成功メッセージが表示される
+    assert "3 枚を" in captured.out
+    # 3つのファイル全てが出力ディレクトリに存在する
+    assert (output_dir / "screenshot.png").exists()
+    assert (output_dir / "screenshot_1.png").exists()
+    assert (output_dir / "screenshot_2.png").exists()
+    # 出力ディレクトリには3つのPNGファイルのみが存在
+    png_files = list(output_dir.glob("*.png"))
+    assert len(png_files) == 3
