@@ -12,6 +12,7 @@ from transformers import CLIPProcessor, CLIPModel
 from PIL import Image
 from PIL import UnidentifiedImageError
 
+from ..models.analyzer_config import AnalyzerConfig
 from ..models.image_metrics import ImageMetrics
 from ..models.genre_weights import GenreWeights
 from .metric_normalizer import MetricNormalizer
@@ -41,8 +42,14 @@ def _safe_l2_normalize(vec: np.ndarray, eps: float = 1e-8) -> np.ndarray:
 class ImageQualityAnalyzer:
     """画像品質アナライザー."""
 
-    def __init__(self, genre: str = "mixed"):
-        """アナライザーを初期化する."""
+    def __init__(self, genre: str = "mixed", config: AnalyzerConfig | None = None):
+        """アナライザーを初期化する.
+
+        Args:
+            genre: ジャンル（重み付け用）
+            config: アナライザー設定（Noneの場合はデフォルト値を使用）
+        """
+        self.config = config or AnalyzerConfig()
         self.weights = GenreWeights.get_weights(genre)
         self.model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
@@ -156,14 +163,13 @@ class ImageQualityAnalyzer:
     def _calculate_raw_metrics(self, img: np.ndarray) -> dict[str, float]:
         """生の画像メトリクスを計算する.
 
-        メトリクス計算用に画像を長辺720pxに縮小して処理することで、
+        メトリクス計算用に画像を長辺max_dim pxに縮小して処理することで、
         計算コストを削減する。アスペクト比は保持する。
         """
-        # メトリクス計算用に画像を縮小（長辺720px、アスペクト比保持）
+        # メトリクス計算用に画像を縮小（長辺max_dim px、アスペクト比保持）
         h, w = img.shape[:2]
-        max_dim = 720
-        if max(h, w) > max_dim:
-            scale = max_dim / max(h, w)
+        if max(h, w) > self.config.max_dim:
+            scale = self.config.max_dim / max(h, w)
             new_h, new_w = int(h * scale), int(w * scale)
             img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
@@ -231,8 +237,16 @@ class ImageQualityAnalyzer:
         weighted_sum = sum(
             norm[k] * self.weights.get(k, 0.0) for k in norm if k in self.weights
         )
-        penalty = 0.6 if raw["brightness"] < 40 else 0.0
-        return max(0.0, (weighted_sum + (semantic * 0.2) - penalty) * 100.0)
+        penalty = (
+            self.config.brightness_penalty_value
+            if raw["brightness"] < self.config.brightness_penalty_threshold
+            else 0.0
+        )
+        return max(
+            0.0,
+            (weighted_sum + (semantic * self.config.semantic_weight) - penalty)
+            * self.config.score_multiplier,
+        )
 
     def analyze_batch(
         self,
@@ -258,11 +272,10 @@ class ImageQualityAnalyzer:
         Returns:
             解析結果のリスト（失敗した画像はNone）
         """
-        chunk_size = 128  # チャンクサイズ（前処理〜CLIPまでのメモリ使用量を抑える）
         results: List[Optional[ImageMetrics]] = []
 
-        for chunk_start in range(0, len(paths), chunk_size):
-            chunk_end = min(chunk_start + chunk_size, len(paths))
+        for chunk_start in range(0, len(paths), self.config.chunk_size):
+            chunk_end = min(chunk_start + self.config.chunk_size, len(paths))
             chunk_paths = paths[chunk_start:chunk_end]
 
             # ステージ1: チャンク単位でI/O + 前処理を並列実行
