@@ -4,7 +4,7 @@ from typing import Dict
 
 
 class GenreWeights:
-    """全12ジャンルの重み定義."""
+    """ジャンル別の重み定義."""
 
     DEFAULT_WEIGHTS = {
         "fps": {
