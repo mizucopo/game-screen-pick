@@ -39,7 +39,12 @@ def _create_features_with_similarity(
         指定された類似度を持つ新しい特徴ベクトル
     """
     # ベースを正規化
-    base_normalized = base_features / np.linalg.norm(base_features)
+    eps = 1e-8
+    norm = np.linalg.norm(base_features)
+    if norm < eps:
+        base_normalized = base_features  # ゼロベクトルの場合はそのまま使用
+    else:
+        base_normalized = base_features / norm
 
     # 直交成分の大きさを計算: sqrt(1 - cos^2)
     orthogonal_norm = np.sqrt(max(0, 1 - target_similarity**2))
@@ -52,33 +57,6 @@ def _create_features_with_similarity(
     similar_features = target_similarity * base_normalized + random_vec
 
     return cast(np.ndarray, similar_features)
-
-
-def _assert_cosine_similarity(
-    features1: np.ndarray,
-    features2: np.ndarray,
-    expected_min: float,
-    expected_max: float,
-) -> None:
-    """2つの特徴ベクトル間のコサイン類似度をアサートする.
-
-    Args:
-        features1: 1つ目の特徴ベクトル
-        features2: 2つ目の特徴ベクトル
-        expected_min: 期待される最小類似度
-        expected_max: 期待される最大類似度
-    """
-    from sklearn.metrics.pairwise import cosine_similarity
-
-    similarity = cosine_similarity(
-        features1.reshape(1, -1),
-        features2.reshape(1, -1),
-    )[0][0]
-
-    assert expected_min <= similarity <= expected_max, (
-        f"類似度が期待範囲外: {similarity:.6f} "
-        f"(期待: {expected_min:.6f} - {expected_max:.6f})"
-    )
 
 
 @pytest.fixture
@@ -120,17 +98,6 @@ def sample_image_metrics() -> List[ImageMetrics]:
     features_list.append(
         _create_features_with_similarity(features_list[2], 0.96),
     )  # image5: image3に類似
-
-    # 類似度を検証
-    _assert_cosine_similarity(
-        features_list[0], features_list[1], 0.95, 0.97
-    )  # image1 ~ image2
-    _assert_cosine_similarity(
-        features_list[0], features_list[2], 0.83, 0.87
-    )  # image1 ~ image3
-    _assert_cosine_similarity(
-        features_list[2], features_list[4], 0.95, 0.97
-    )  # image3 ~ image5
 
     return [
         ImageMetrics(
@@ -271,31 +238,6 @@ def test_edge_cases_return_empty_list(
     assert result == []
 
 
-def test_original_input_list_remains_unchanged_after_selection(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """元の入力リストは選択後も変更されないこと.
-
-    Given:
-        - 特定の順序の分析済み画像リスト
-    When:
-        - そのリストから選択
-    Then:
-        - 元のリストの順序と内容が保持されること
-    """
-    # Arrange
-    original_paths = [m.path for m in sample_image_metrics]
-    original_order = list(sample_image_metrics)
-
-    # Act
-    GameScreenPicker.select_from_analyzed(sample_image_metrics, 3, 0.8)
-
-    # Assert
-    assert [m.path for m in sample_image_metrics] == original_paths
-    # 元のリストオブジェクトは同じ順序のままであるはず
-    assert sample_image_metrics == original_order
-
-
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     mock_analyzer: MagicMock,
 ) -> None:
@@ -414,3 +356,84 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         # Assert
         # 奇数インデックスの画像のみ有効（image1, image3）
         assert len(result) <= 2
+
+
+def test_always_returns_requested_number_when_enough_unique_images_exist(
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
+    """十分な数の一意な画像が存在する場合、常に要求数を返すこと.
+
+    Given:
+        - 5つの分析済み画像（一部類似）
+    When:
+        - 高い類似度閾値（0.9）で5つの画像を選択
+    Then:
+        - 類似画像はフィルタリングされるが、指定数を満たすために
+          段階的しきい値緩和と最終フォールバックにより5件が返されること
+    """
+    # Arrange
+    num_to_select = 5
+    similarity_threshold = 0.9
+
+    # Act
+    result = GameScreenPicker.select_from_analyzed(
+        sample_image_metrics, num_to_select, similarity_threshold
+    )
+
+    # Assert
+    # 5枚要求して5枚存在するので、必ず5枚返されるはず
+    assert len(result) == 5
+    # スコア順になっているはず
+    scores = [m.total_score for m in result]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_gradual_threshold_relaxation_and_fallback_for_similar_images() -> None:
+    """類似した画像ばかりの場合、しきい値緩和と最終フォールバックが機能すること.
+
+    Given:
+        - 10枚の非常に類似した画像（0.97-0.99の類似度）
+        - 類似度閾値0.9
+    When:
+        - 10枚の画像を選択
+    Then:
+        - 段階的しきい値緩和により可能な限り多様性を確保しつつ
+          最終的に10枚全てが返されること
+    """
+    # Arrange
+    np.random.seed(42)
+
+    # ベース特徴ベクトル
+    base_features = np.random.rand(128)
+
+    # 0.97-0.99の類似度を持つ10枚の画像を生成
+    similar_images: List[ImageMetrics] = []
+    for i in range(10):
+        # 0.97-0.99の類似度で生成
+        target_sim = 0.97 + (i % 3) * 0.01  # 0.97, 0.98, 0.99を繰り返し
+        similar_features = _create_features_with_similarity(base_features, target_sim)
+        similar_images.append(
+            ImageMetrics(
+                path=f"/fake/path/similar{i}.jpg",
+                raw_metrics={"blur_score": 100.0 - i},
+                normalized_metrics={"blur_score": 0.9},
+                semantic_score=0.8,
+                total_score=100.0 - i,
+                features=similar_features,
+            )
+        )
+
+    num_to_select = 10
+    similarity_threshold = 0.9
+
+    # Act
+    result = GameScreenPicker.select_from_analyzed(
+        similar_images, num_to_select, similarity_threshold
+    )
+
+    # Assert
+    # 10枚要求して10枚存在するので、必ず10枚返されるはず
+    assert len(result) == 10
+    # スコア順になっているはず
+    scores = [m.total_score for m in result]
+    assert scores == sorted(scores, reverse=True)

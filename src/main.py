@@ -136,7 +136,7 @@ class Main:
             "-s",
             "--similarity",
             type=self._validate_similarity_range,
-            default=0.82,
+            default=0.72,
             help="類似度しきい値(0.7~0.85推奨)",
         )
         parser.add_argument(

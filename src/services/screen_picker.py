@@ -65,9 +65,10 @@ class GameScreenPicker:
     ) -> List[ImageMetrics]:
         """多様性を考慮して画像を選択する.
 
-        2段階選抜方式で性能を最適化：
-        1. まず品質スコア上位M件に絞る（M = max(num*5, 200)）
-        2. その上位M件の中で類似度判定を行う
+        段階的しきい値緩和で指定数を確実に満たす：
+        1. 全候補を対象に類似度判定を行う
+        2. 指定数に満たない場合、しきい値を段階的に緩和
+        3. 最終フォールバックとして類似度制約を外して高スコア順で埋める
 
         Args:
             all_results: 解析済みの画像メトリクスリスト（スコア降順ソート済み）
@@ -75,40 +76,77 @@ class GameScreenPicker:
             similarity_threshold: 類似度の閾値（これ以上は類似とみなす）
 
         Returns:
-            選択された画像メトリクスのリスト
+            選択された画像メトリクスのリスト（最大num件、有効画像数以下なら必ずnum件）
         """
-        # 2段階選抜：まず上位M件に絞る
-        # Mの値は取得数の5倍か200の大きい方（多様性確保のため）
-        m = max(num * 5, 200)
-        candidates = all_results[:m]
+        if not all_results:
+            return []
+
+        # 全候補を対象にする（固定上位M件の制限を廃止）
+        candidates = all_results
 
         # 特徴量を事前にL2正規化（コサイン類似度 = 内積になる）
         # 正規化されたベクトル同士の内積はコサイン類似度と等価
-        normalized_features = [
-            c.features / np.linalg.norm(c.features) for c in candidates
+        eps = 1e-8
+        normalized_features = []
+        for c in candidates:
+            norm = np.linalg.norm(c.features)
+            if norm < eps:
+                # ゼロノルムの場合はゼロベクトルとして扱う
+                normalized_features.append(np.zeros_like(c.features))
+            else:
+                normalized_features.append(c.features / norm)
+
+        # 段階的しきい値緩和のステップ（上限0.98）
+        threshold_steps = [
+            similarity_threshold,
+            min(similarity_threshold + 0.03, 0.98),
+            min(similarity_threshold + 0.06, 0.98),
+            min(similarity_threshold + 0.10, 0.98),
+            min(similarity_threshold + 0.15, 0.98),
         ]
 
         selected: List[ImageMetrics] = []
-        selected_features: List[np.ndarray] = []
+        selected_indices: set[int] = set()
 
-        for idx, candidate in enumerate(candidates):
+        # 各しきい値で選択を試行
+        for threshold in threshold_steps:
             if len(selected) >= num:
                 break
 
-            candidate_feat = normalized_features[idx]
-
-            # 既に選ばれた画像たちと「見た目」を比較
-            # 事前正規化済みなので np.dot だけでコサイン類似度を計算可能
-            is_similar = False
-            for s_feat in selected_features:
-                sim = np.dot(candidate_feat, s_feat)
-                if sim > similarity_threshold:
-                    is_similar = True
+            for idx, candidate in enumerate(candidates):
+                if len(selected) >= num:
                     break
 
-            if not is_similar:
-                selected.append(candidate)
-                selected_features.append(candidate_feat)
+                if idx in selected_indices:
+                    continue
+
+                candidate_feat = normalized_features[idx]
+
+                # 既に選ばれた画像たちと「見た目」を比較
+                is_similar = False
+                for sel_idx in selected_indices:
+                    sel_feat = normalized_features[sel_idx]
+                    sim = np.dot(candidate_feat, sel_feat)
+                    if sim > threshold:
+                        is_similar = True
+                        break
+
+                if not is_similar:
+                    selected.append(candidate)
+                    selected_indices.add(idx)
+
+        # 最終フォールバック：まだ不足する場合は未選択の高スコア順で埋める
+        # （類似度制約を外す）
+        if len(selected) < num:
+            for idx, candidate in enumerate(candidates):
+                if len(selected) >= num:
+                    break
+                if idx not in selected_indices:
+                    selected.append(candidate)
+                    selected_indices.add(idx)
+
+        # スコア順でソートして返す
+        selected.sort(key=lambda x: x.total_score, reverse=True)
 
         return selected
 

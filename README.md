@@ -20,7 +20,7 @@ uv run game-screen-pick <入力フォルダ> [オプション]
 - `-c <フォルダ>`, `--copy-to <フォルダ>`: 選択した画像をコピーする出力フォルダ
 - `-n <数値>`, `--num <数値>`: 選択枚数 (デフォルト: 10)
 - `-g <ジャンル>`, `--genre <ジャンル>`: ゲームジャンル (2d_rpg, 3d_rpg, fps, tps, 2d_action, 2d_shooting, 3d_action, puzzle, racing, strategy, adventure, mixed)
-- `-s <数値>`, `--similarity <数値>`: 類似度しきい値 (デフォルト: 0.82)
+- `-s <数値>`, `--similarity <数値>`: 類似度しきい値 (デフォルト: 0.72)
 - `-r`, `--recursive`: サブフォルダも検索
 
 ### 使用例
