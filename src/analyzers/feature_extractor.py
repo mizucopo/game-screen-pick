@@ -6,25 +6,15 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from ..utils import VectorUtils
 from .clip_model_manager import CLIPModelManager
+from .clip_types import (
+    BatchImageInput,
+    CLIPFeaturesOutput,
+    OptionalBatchImageInput,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_l2_normalize(vec: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    """ゼロ割れ安全なL2正規化を行う.
-
-    Args:
-        vec: 正規化するベクトル
-        eps: ゼロ割れ防止用の微小値
-
-    Returns:
-        L2正規化されたベクトル（元のノルムが0の場合はゼロベクトル）
-    """
-    norm = float(np.linalg.norm(vec))
-    if norm < eps:
-        return np.zeros_like(vec)
-    return vec / norm
 
 
 class FeatureExtractor:
@@ -76,7 +66,7 @@ class FeatureExtractor:
             image_features = self.model_manager.model.get_image_features(**inputs)
             # L2正規化して返す
             features = image_features[0].cpu().numpy()
-            return _safe_l2_normalize(features)
+            return VectorUtils.safe_l2_normalize(features)
 
     def extract_combined_features(
         self, img: np.ndarray, clip_features: np.ndarray
@@ -92,15 +82,15 @@ class FeatureExtractor:
         """
         hsv_features = self.extract_hsv_features(img)
         # L2正規化（既に正規化されているが、安全のため再正規化）
-        hsv_normalized = _safe_l2_normalize(hsv_features)
+        hsv_normalized = VectorUtils.safe_l2_normalize(hsv_features)
         # 結合
         return np.concatenate([hsv_normalized, clip_features])
 
     def extract_clip_features_batch(
         self,
-        pil_images: "list[object] | list[Image.Image] | list[Image.Image | None]",
+        pil_images: OptionalBatchImageInput,
         initial_batch_size: int = 32,
-    ) -> "list[object] | list[np.ndarray | None]":
+    ) -> CLIPFeaturesOutput:
         """複数のPIL画像に対してCLIP推論をバッチ実行して特徴を抽出.
 
         OOM対策（失敗したバッチのみ再試行）:
@@ -122,10 +112,10 @@ class FeatureExtractor:
 
         # 有効な画像のインデックスと画像を収集
         valid_indices = [i for i, img in enumerate(pil_images) if img is not None]
-        valid_images = [img for img in pil_images if img is not None]
+        valid_images: BatchImageInput = [img for img in pil_images if img is not None]
 
         if not valid_images:
-            return [None] * len(pil_images)  # type: ignore[return-value]
+            return [None] * len(pil_images)
 
         # 結果を格納する配列（初期値はNone）
         results: list[np.ndarray | None] = [None] * len(pil_images)
@@ -150,7 +140,7 @@ class FeatureExtractor:
                 )
                 with autocast_context, torch.inference_mode():
                     inputs = self.model_manager.processor(
-                        images=batch,  # type: ignore[arg-type]
+                        images=list(batch),  # Sequence -> list 変換
                         return_tensors="pt",
                         padding=True,
                     ).to(self.model_manager.device)
@@ -162,7 +152,7 @@ class FeatureExtractor:
                     batch_features = []
                     for j in range(image_features.shape[0]):
                         features = image_features[j].cpu().numpy()
-                        normalized = _safe_l2_normalize(features)
+                        normalized = VectorUtils.safe_l2_normalize(features)
                         batch_features.append(normalized)
 
                 # 結果を元のインデックスにマッピング

@@ -96,26 +96,18 @@ class BatchPipeline:
                     # OpenCV形式（BGR）に変換
                     img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
-                    # 生メトリクスを計算
-                    raw = self.metric_calculator.calculate_raw_metrics(img)
+                    # すべてのメトリクスを一括計算
+                    raw, norm, semantic, total = (
+                        self.metric_calculator.calculate_all_metrics(
+                            img,
+                            clip_features,
+                        )
+                    )
 
                     # HSV特徴とCLIP特徴を結合
                     features = self.feature_extractor.extract_combined_features(
                         img,
-                        clip_features,  # type: ignore[arg-type]
-                    )
-
-                    # 正規化メトリクスとセマンティックスコアを計算
-                    from .metric_normalizer import MetricNormalizer
-
-                    norm = MetricNormalizer.normalize_all(raw)
-                    semantic = (
-                        self.metric_calculator.calculate_semantic_score_from_features(
-                            clip_features  # type: ignore[arg-type]
-                        )
-                    )
-                    total = self.metric_calculator.calculate_total_score(
-                        raw, norm, semantic
+                        clip_features,
                     )
 
                     results.append(

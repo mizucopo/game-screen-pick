@@ -18,40 +18,32 @@ from .metric_calculator import MetricCalculator
 logger = logging.getLogger(__name__)
 
 
-def _safe_l2_normalize(vec: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    """ゼロ割れ安全なL2正規化を行う.
-
-    Args:
-        vec: 正規化するベクトル
-        eps: ゼロ割れ防止用の微小値
-
-    Returns:
-        L2正規化されたベクトル（元のノルムが0の場合はゼロベクトル）
-    """
-    norm = float(np.linalg.norm(vec))
-    if norm < eps:
-        return np.zeros_like(vec)
-    return vec / norm
-
-
 class ImageQualityAnalyzer:
     """画像品質アナライザー（Facadeパターン）.
 
     複数のコンポーネントを統合し、公開APIを提供する。
     """
 
-    def __init__(self, genre: str = "mixed", config: AnalyzerConfig | None = None):
+    def __init__(
+        self,
+        genre: str = "mixed",
+        config: AnalyzerConfig | None = None,
+        device: str | None = None,
+    ):
         """アナライザーを初期化する.
 
         Args:
             genre: ジャンル（重み付け用）
             config: アナライザー設定（Noneの場合はデフォルト値を使用）
+            device: 使用するデバイス（Noneの場合は自動検出）
         """
         self.config = config or AnalyzerConfig()
         self.weights = GenreWeights.get_weights(genre)
 
         # レイヤー1: モデル管理（プライベート）
-        self._model_manager = CLIPModelManager(target_text="epic game scenery")
+        self._model_manager = CLIPModelManager(
+            target_text="epic game scenery", device=device
+        )
 
         # レイヤー2: 特徴抽出（モデルに依存）
         self.feature_extractor = FeatureExtractor(self._model_manager)
