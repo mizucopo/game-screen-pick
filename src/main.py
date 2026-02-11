@@ -8,6 +8,7 @@ from typing import List
 from .analyzers import ImageQualityAnalyzer
 from .models.genre_weights import GenreWeights
 from .models.image_metrics import ImageMetrics
+from .models.picker_statistics import PickerStatistics
 from .services import GameScreenPicker
 from .utils.file_utils import FileUtils
 
@@ -54,7 +55,7 @@ class Main:
         if self._picker is None:
             self._picker = GameScreenPicker(self._analyzer)
 
-        best = self._picker.select(
+        best, stats = self._picker.select(
             parsed_args.input,
             parsed_args.num,
             parsed_args.similarity,
@@ -64,7 +65,7 @@ class Main:
         if parsed_args.copy_to and best:
             self._copy_selected_images(best, parsed_args.copy_to)
 
-        self._display_results(best)
+        self._display_results(best, stats)
 
     def _validate_positive_int(self, value: str) -> int:
         """正の整数をバリデーションする.
@@ -161,12 +162,22 @@ class Main:
             shutil.copy2(res.path, unique_dest)
         print(f"\n{len(selected)} 枚を {dest_dir} に保存しました（多様性確保済み）。")
 
-    def _display_results(self, selected: List[ImageMetrics]) -> None:
+    def _display_results(
+        self, selected: List[ImageMetrics], stats: PickerStatistics
+    ) -> None:
         """選択結果を表示する.
 
         Args:
             selected: 選択された画像メトリクスのリスト
+            stats: 統計情報
         """
+        print("\n--- 統計情報 ---")
+        print(f"総ファイル数: {stats.total_files}")
+        print(f"解析成功: {stats.analyzed_ok}")
+        print(f"解析失敗: {stats.analyzed_fail}")
+        print(f"類似度で除外: {stats.rejected_by_similarity}")
+        print(f"選択数: {stats.selected_count}")
+
         print("\n--- 選択された画像一覧 ---")
         for i, res in enumerate(selected):
             print(f"[{i + 1}] {Path(res.path).name} (Score: {res.total_score:.2f})")

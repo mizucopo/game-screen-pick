@@ -17,6 +17,7 @@ import pytest
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
+from src.models.picker_statistics import PickerStatistics
 from src.services.screen_picker import GameScreenPicker
 
 
@@ -31,7 +32,15 @@ def mock_image_quality_analyzer() -> MagicMock:
 def mock_game_screen_picker() -> MagicMock:
     """GameScreenPickerをモック（選択ロジック制御）."""
     picker = MagicMock(spec=GameScreenPicker)
-    picker.select.return_value = []
+    # 戻り値を(結果リスト, 統計情報)のタプルにする
+    empty_stats = PickerStatistics(
+        total_files=0,
+        analyzed_ok=0,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        selected_count=0,
+    )
+    picker.select.return_value = ([], empty_stats)
     return picker
 
 
@@ -100,7 +109,14 @@ def test_cli_accepts_all_arguments(
     img_path = Path(test_image_directory) / "image0.jpg"
     img_path.touch()
     results = [sample_image_metrics_factory(str(img_path), 95.0)]
-    mock_game_screen_picker.select.return_value = results
+    stats = PickerStatistics(
+        total_files=5,
+        analyzed_ok=5,
+        analyzed_fail=0,
+        rejected_by_similarity=4,
+        selected_count=1,
+    )
+    mock_game_screen_picker.select.return_value = (results, stats)
 
     monkeypatch.setattr(
         "sys.argv",
@@ -186,7 +202,14 @@ def test_cli_selects_and_displays_images(
         sample_image_metrics_factory(f"/fake/image{i}.jpg", 95.0 - i * 3)
         for i in range(num_expected)
     ]
-    mock_game_screen_picker.select.return_value = results
+    stats = PickerStatistics(
+        total_files=10,
+        analyzed_ok=10,
+        analyzed_fail=0,
+        rejected_by_similarity=3,
+        selected_count=7,
+    )
+    mock_game_screen_picker.select.return_value = (results, stats)
 
     monkeypatch.setattr("sys.argv", ["main.py", test_image_directory, "-n", "7"])
 
@@ -199,6 +222,8 @@ def test_cli_selects_and_displays_images(
     captured = capsys.readouterr()
     # 結果一覧が表示される
     assert "選択された画像一覧" in captured.out
+    # 統計情報が表示される
+    assert "統計情報" in captured.out
     # 指定された枚数分のスコア表示がある
     assert captured.out.count("Score:") == num_expected
 
@@ -232,7 +257,14 @@ def test_cli_copies_selected_images_to_output_directory(
         img_path.touch()
         results.append(sample_image_metrics_factory(str(img_path), 95.0 - i * 5))
 
-    mock_game_screen_picker.select.return_value = results
+    stats = PickerStatistics(
+        total_files=5,
+        analyzed_ok=5,
+        analyzed_fail=0,
+        rejected_by_similarity=2,
+        selected_count=3,
+    )
+    mock_game_screen_picker.select.return_value = (results, stats)
 
     monkeypatch.setattr(
         "sys.argv", ["main.py", test_image_directory, "-c", str(output_dir)]
@@ -276,7 +308,14 @@ def test_cli_handles_empty_input_directory(
     # Arrange
     input_dir = str(tmp_path / "empty")
     Path(input_dir).mkdir()
-    mock_game_screen_picker.select.return_value = []
+    empty_stats = PickerStatistics(
+        total_files=0,
+        analyzed_ok=0,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        selected_count=0,
+    )
+    mock_game_screen_picker.select.return_value = ([], empty_stats)
 
     monkeypatch.setattr("sys.argv", ["main.py", input_dir])
 
@@ -374,7 +413,14 @@ def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
     for i in range(num_files):
         img_path = input_dir / f"folder{i}" / f"{base_name}{extension}"
         results.append(sample_image_metrics_factory(str(img_path), 95.0 - i * 5))
-    mock_game_screen_picker.select.return_value = results
+    stats = PickerStatistics(
+        total_files=num_files,
+        analyzed_ok=num_files,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        selected_count=num_files,
+    )
+    mock_game_screen_picker.select.return_value = (results, stats)
 
     monkeypatch.setattr(
         "sys.argv", ["main.py", str(input_dir), "-c", str(output_dir), "-r"]
