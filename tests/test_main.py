@@ -20,11 +20,6 @@ from src.models.image_metrics import ImageMetrics
 from src.services.screen_picker import GameScreenPicker
 
 
-# ============================================================================
-# Fixtures
-# ============================================================================
-
-
 @pytest.fixture
 def mock_image_quality_analyzer() -> MagicMock:
     """ImageQualityAnalyzerをモック（CLIPモデル読み込み回避）."""
@@ -78,11 +73,6 @@ def setup_main_mocks(
         "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
     )
     monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
-
-
-# ============================================================================
-# 引数解析のテスト
-# ============================================================================
 
 
 def test_cli_accepts_all_arguments(
@@ -178,11 +168,6 @@ def test_cli_shows_error_for_missing_required_argument(
     assert "error" in captured.err.lower() or "required" in captured.err.lower()
 
 
-# ============================================================================
-# 基本機能のテスト
-# ============================================================================
-
-
 @pytest.mark.parametrize(
     "args,num_expected",
     [
@@ -230,11 +215,6 @@ def test_cli_selects_and_displays_images(
     assert "選択された画像一覧" in captured.out
     # 指定された枚数分のスコア表示がある
     assert captured.out.count("Score:") == num_expected
-
-
-# ============================================================================
-# Tests for Copy/Output Functionality
-# ============================================================================
 
 
 def test_cli_copies_selected_images_to_output_directory(
@@ -290,11 +270,6 @@ def test_cli_copies_selected_images_to_output_directory(
     assert (output_dir / "image0.jpg").exists()
     assert (output_dir / "image1.jpg").exists()
     assert (output_dir / "image2.jpg").exists()
-
-
-# ============================================================================
-# Tests for Error Handling
-# ============================================================================
 
 
 def test_cli_handles_empty_input_directory(
@@ -385,11 +360,6 @@ def test_cli_exits_with_error_when_file_instead_of_directory(
     assert "フォルダではありません" in str(exc_info.value)
 
 
-# ============================================================================
-# Tests for Duplicate Filename Handling
-# ============================================================================
-
-
 @pytest.mark.parametrize(
     "num_files,base_name,extension",
     [
@@ -456,11 +426,6 @@ def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
     # 出力ディレクトリには正確にnum_files個のファイルが存在
     output_files = list(output_dir.glob(f"*{extension}"))
     assert len(output_files) == num_files
-
-
-# ============================================================================
-# Tests for Input Validation
-# ============================================================================
 
 
 @pytest.mark.parametrize(

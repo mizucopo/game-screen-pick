@@ -103,11 +103,6 @@ def sample_image_metrics() -> List[ImageMetrics]:
     ]
 
 
-# ============================================================================
-# select_from_analyzedメソッドのテスト（純粋なドメインロジック）
-# ============================================================================
-
-
 def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
@@ -257,11 +252,6 @@ def test_original_input_list_remains_unchanged_after_selection(
     assert [m.path for m in sample_image_metrics] == original_paths
     # 元のリストオブジェクトは同じ順序のままであるはず
     assert sample_image_metrics == original_order
-
-
-# ============================================================================
-# Integration tests for select method
-# ============================================================================
 
 
 def _create_mock_analyze_for_integration(

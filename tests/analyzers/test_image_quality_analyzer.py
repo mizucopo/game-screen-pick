@@ -23,11 +23,6 @@ from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
 
 
-# ============================================================================
-# CLIPモデルのモックフィクスチャ（700MBダウンロードと10-30秒ロード時間を回避）
-# ============================================================================
-
-
 @pytest.fixture
 def mock_clip_model() -> Generator[MagicMock, None, None]:
     """700MBの重みロードを回避するためのCLIPモデルのモック.
@@ -68,11 +63,6 @@ def mock_clip_processor() -> Generator[MagicMock, None, None]:
         processor_instance.return_value.to = MagicMock(return_value=processor_instance)
         mock.return_value = processor_instance
         yield mock
-
-
-# ============================================================================
-# テスト画像をプログラム的に作成するフィクスチャ
-# ============================================================================
 
 
 @pytest.fixture
@@ -126,16 +116,6 @@ def _create_test_image(
     img_path = tmp_path / filename
     cv2.imwrite(str(img_path), img_array)
     return str(img_path)
-
-
-# ============================================================================
-# 初期化のテスト
-# ============================================================================
-
-
-# ============================================================================
-# Tests for analyze method - success path
-# ============================================================================
 
 
 @pytest.mark.parametrize(
@@ -205,11 +185,6 @@ def test_analyze_applies_penalty_for_dark_images(
     # ペナルティの正確な量は複雑な計算が必要だが、
     # スコアが妥当であることは検証できる
     assert result.total_score >= 0
-
-
-# ============================================================================
-# Tests for analyze method - edge cases
-# ============================================================================
 
 
 def test_analyze_returns_none_for_nonexistent_file(
@@ -308,11 +283,6 @@ def test_analyzes_images_with_various_formats_and_properties(
     assert result.features.shape == (64,)
 
 
-# ============================================================================
-# Integration tests
-# ============================================================================
-
-
 def test_analyze_produces_consistent_results_for_same_image(
     mock_clip_model: MagicMock,  # noqa: ARG001
     mock_clip_processor: MagicMock,  # noqa: ARG001
@@ -343,11 +313,6 @@ def test_analyze_produces_consistent_results_for_same_image(
     assert result1.total_score == result2.total_score
     # 特徴ベクトルが同一であることを検証（重要な特性）
     assert np.array_equal(result1.features, result2.features)
-
-
-# ============================================================================
-# Tests for exception handling and logging
-# ============================================================================
 
 
 def test_analyze_logs_warning_for_corrupted_image(

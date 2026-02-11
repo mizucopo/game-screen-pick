@@ -12,11 +12,6 @@ import pytest
 from src.analyzers.metric_normalizer import MetricNormalizer
 
 
-# ============================================================================
-# sigmoid関数のテスト
-# ============================================================================
-
-
 @pytest.mark.parametrize(
     "x,center,expected_min,expected_max",
     [
@@ -109,11 +104,6 @@ def test_sigmoid_handles_overflow_without_crashing() -> None:
     # 境界値を返すことで適切に処理するはず
     assert result_positive == 1.0
     assert result_negative == 0.0
-
-
-# ============================================================================
-# normalize_allメソッドのテスト
-# ============================================================================
 
 
 def test_normalize_all_returns_all_expected_metrics() -> None:

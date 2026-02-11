@@ -14,11 +14,6 @@ from pathlib import Path
 from src.utils.file_utils import FileUtils
 
 
-# ============================================================================
-# 基本機能のテスト
-# ============================================================================
-
-
 @pytest.mark.parametrize(
     "existing_files,expected_suffix",
     [
@@ -52,11 +47,6 @@ def test_get_unique_destination_returns_correct_filename(
     expected_name = f"image{expected_suffix}.jpg"
     assert result == tmp_path / expected_name
     assert result.name == expected_name
-
-
-# ============================================================================
-# 拡張子維持のテスト
-# ============================================================================
 
 
 @pytest.mark.parametrize(
@@ -111,11 +101,6 @@ def test_handles_double_extensions(
     # Path.suffix は最後の拡張子のみを返すため、archive.tarがstem、.gzがsuffixになる
     assert result == tmp_path / "archive.tar_1.gz"
     assert result.suffix == ".gz"
-
-
-# ============================================================================
-# エッジケースのテスト
-# ============================================================================
 
 
 @pytest.mark.parametrize(
@@ -256,11 +241,6 @@ def test_handles_dotfiles_without_extension(
     assert result == tmp_path / ".hidden_1"
 
 
-# ============================================================================
-# 特殊文字のテスト
-# ============================================================================
-
-
 @pytest.mark.parametrize(
     "filename,expected",
     [
@@ -291,11 +271,6 @@ def test_handles_special_characters_in_filename(
 
     # Assert
     assert result == tmp_path / expected
-
-
-# ============================================================================
-# 境界値のテスト
-# ============================================================================
 
 
 def test_handles_many_duplicate_files(
