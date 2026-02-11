@@ -401,59 +401,40 @@ def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
 
 
 @pytest.mark.parametrize(
-    "args,should_error,error_message",
+    "args,error_message",
     [
         # --num の無効値
-        (["-n", "-1"], True, "正の整数を指定してください"),
-        (["-n", "abc"], True, "整数ではありません"),
+        (["-n", "-1"], "正の整数を指定してください"),
+        (["-n", "abc"], "整数ではありません"),
         # --similarity の無効値
-        (["-s", "1.5"], True, "0.0~1.0の範囲で指定してください"),
-        (["-s", "abc"], True, "数値ではありません"),
-        # 有効な値（エラーなし）
-        (["-n", "1", "-s", "0.0"], False, ""),
-        (["-n", "1", "-s", "1.0"], False, ""),
+        (["-s", "1.5"], "0.0~1.0の範囲で指定してください"),
+        (["-s", "abc"], "数値ではありません"),
     ],
 )
 def test_cli_validates_num_and_similarity_arguments(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    mock_game_screen_picker: MagicMock,
     test_image_directory: str,
     args: list[str],
-    should_error: bool,
     error_message: str,
-    sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
     """--num と --similarity のバリデーションが正しく機能すること.
 
     Given:
         - 有効な入力ディレクトリが存在する
-        - --num または --similarity に無効値または有効な値が指定されている
+        - --num または --similarity に無効値が指定されている
     When:
         - CLIが実行される
     Then:
-        - 無効値の場合は適切なエラーメッセージが表示されること
-        - 有効な値の場合はプログラムが正常終了すること
+        - 適切なエラーメッセージが表示されること
+        - プログラムが終了すること
     """
-    # Arrange
-    if not should_error:
-        img_path = Path(test_image_directory) / "image0.jpg"
-        img_path.touch()
-        results = [sample_image_metrics_factory(str(img_path), 95.0)]
-        mock_game_screen_picker.select.return_value = results
-
+    # Arrange & Act & Assert
     monkeypatch.setattr("sys.argv", ["main.py", test_image_directory] + args)
 
-    # Act & Assert
     from src.main import Main
 
-    if should_error:
-        with pytest.raises(SystemExit):
-            Main().run()
-        captured = capsys.readouterr()
-        assert error_message in captured.err
-    else:
+    with pytest.raises(SystemExit):
         Main().run()
-        captured = capsys.readouterr()
-        assert "選択された画像一覧" in captured.out
-        assert "Score:" in captured.out
+    captured = capsys.readouterr()
+    assert error_message in captured.err

@@ -49,30 +49,6 @@ def test_get_unique_destination_returns_correct_filename(
     assert result.name == expected_name
 
 
-def test_preserves_common_image_extensions(
-    tmp_path: Path,
-) -> None:
-    """一般的な画像形式の拡張子が維持されること.
-
-    Given:
-        - 重複ファイルが存在する特定の拡張子がある
-    When:
-        - get_unique_destinationが実行される
-    Then:
-        - 拡張子が正しく維持されること
-    """
-    # Arrange
-    filename = "image.jpg"
-    (tmp_path / filename).touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / "image_1.jpg"
-    assert result.suffix == ".jpg"
-
-
 def test_handles_double_extensions(
     tmp_path: Path,
 ) -> None:

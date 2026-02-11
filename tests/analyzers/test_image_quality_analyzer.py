@@ -163,35 +163,6 @@ def test_analyze_returns_valid_metrics_with_genre_specific_weights(
     assert len(result.normalized_metrics) > 0
 
 
-def test_analyze_applies_penalty_for_dark_images(
-    dark_image_path: str,
-) -> None:
-    """輝度が40未満の画像に0.6のペナルティが適用されること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 暗いテスト画像（輝度 < 40）がある
-    When:
-        - 画像が分析される
-    Then:
-        - 総スコアに0.6のペナルティが適用されること
-        - ペナルティなしの場合に比べて総スコアが低くなること
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-
-    # Act
-    result = analyzer.analyze(dark_image_path)
-
-    # Assert
-    assert result is not None
-    assert result.raw_metrics["brightness"] < 40
-    # ペナルティが適用されるため、総スコアは低くなる
-    # ペナルティの正確な量は複雑な計算が必要だが、
-    # スコアが妥当であることは検証できる
-    assert result.total_score >= 0
-
-
 def test_analyze_returns_none_for_invalid_inputs(
     tmp_path: Path,
 ) -> None:
@@ -223,18 +194,19 @@ def test_analyze_returns_none_for_invalid_inputs(
 
 
 @pytest.mark.parametrize(
-    "image_path_fixture",
+    "image_path_fixture,check_dark_penalty",
     [
-        "sample_image_path",
-        "png_image_path",
-        "bmp_image_path",
-        "small_image_path",
-        "dark_image_path",
+        ("sample_image_path", False),
+        ("png_image_path", False),
+        ("bmp_image_path", False),
+        ("small_image_path", False),
+        ("dark_image_path", True),  # 暗い画像は輝度ペナルティを確認
     ],
 )
 def test_analyzes_images_with_various_formats_and_properties(
     request: pytest.FixtureRequest,
     image_path_fixture: str,
+    check_dark_penalty: bool,
 ) -> None:
     """様々な形式と特性の画像が正しく処理されること.
 
@@ -247,6 +219,7 @@ def test_analyzes_images_with_various_formats_and_properties(
         - すべての形式とサイズが正常に分析されること
         - 有効なImageMetricsが返されること
         - 特徴ベクトルが一貫したサイズを持つこと
+        - 暗い画像には輝度ペナルティが適用されること
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
@@ -259,6 +232,10 @@ def test_analyzes_images_with_various_formats_and_properties(
     assert result is not None
     # すべての画像はリサイズされるため、特徴ベクトルサイズは一貫している
     assert result.features.shape == (64,)
+    # 暗い画像の場合は輝度ペナルティが適用される
+    if check_dark_penalty:
+        assert result.raw_metrics["brightness"] < 40
+        assert result.total_score >= 0  # ペナルティ適用後も有効なスコア
 
 
 def test_analyze_produces_consistent_results_for_same_image(
