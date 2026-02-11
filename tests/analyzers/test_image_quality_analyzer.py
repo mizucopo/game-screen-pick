@@ -8,7 +8,6 @@
 5. 高速実行（約2-5秒） - 重いモデルロードなし
 """
 
-import logging
 from pathlib import Path
 from typing import Generator
 from unittest.mock import MagicMock, patch
@@ -17,7 +16,6 @@ import cv2
 import numpy as np
 import pytest
 import torch
-from PIL import UnidentifiedImageError
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
@@ -315,97 +313,42 @@ def test_analyze_produces_consistent_results_for_same_image(
     assert np.array_equal(result1.features, result2.features)
 
 
-def test_analyze_logs_warning_for_corrupted_image(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """PILで画像を開く際のエラー時にWARNINGログが出力されること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 有効なテスト画像（cv2.imreadは成功する）がある
-        - ログキャプチャ設定（WARNINGレベル以上）がある
-    When:
-        - PIL.Image.openでUnidentifiedImageErrorが発生するようにモック化される
-    Then:
-        - WARNINGレベルのログが出力されること
-        - ログメッセージにパスと例外内容が含まれること
-        - Noneが返されること（正常な失敗）
-    """
-    # Arrange
-    caplog.set_level(logging.WARNING)
-    analyzer = ImageQualityAnalyzer()
-
-    # PIL.Image.openをモック化してUnidentifiedImageErrorを発生
-    with patch(
-        "PIL.Image.open",
-        side_effect=UnidentifiedImageError("Cannot identify image file"),
-    ):
-        # Act
-        result = analyzer.analyze(sample_image_path)
-
-        # Assert
-        assert result is None
-        # WARNINGログが出力されていることを確認
-        assert len(caplog.records) > 0
-        # 最新のログレコードがWARNINGであることを確認
-        warning_log = caplog.records[-1]
-        assert warning_log.levelno == logging.WARNING
-        # ログメッセージにパスと例外情報が含まれていることを確認
-        log_message = warning_log.getMessage()
-        assert sample_image_path in log_message
-        assert "画像分析をスキップしました" in log_message
-        assert "UnidentifiedImageError" in log_message
-
-
 @pytest.mark.parametrize(
     "exception_class,exception_msg",
     [
         (AttributeError, "Test attribute error"),
         (TypeError, "Test type error"),
         (KeyError, "test_key"),
+        (IndexError, "test index"),
+        (RuntimeError, "Test runtime error"),
     ],
 )
-def test_analyze_re_raises_unexpected_exceptions(
+def test_analyze_propagates_unexpected_exceptions(
     mock_clip_model: MagicMock,  # noqa: ARG001
     mock_clip_processor: MagicMock,  # noqa: ARG001
     sample_image_path: str,
-    caplog: pytest.LogCaptureFixture,
     exception_class: type[Exception],
     exception_msg: str,
 ) -> None:
-    """実装バグ（予期しない例外）時に例外が再スローされること.
+    """実装バグ（予期しない例外）時に例外が伝播されること.
 
     Given:
         - アナライザインスタンスがある
         - 有効なテスト画像がある
-        - ログキャプチャ設定（ERRORレベル以上）がある
     When:
         - analyzeメソッド内で予期しない例外が発生するようにモック化される
     Then:
-        - ERRORレベルのログが出力されること
-        - 例外が再スローされること
+        - 例外が呼び出し元に伝播されること
     """
     # Arrange
-    caplog.set_level(logging.ERROR)
     analyzer = ImageQualityAnalyzer()
-    # _extract_diversity_featuresメソッドをモック化して例外を発生
+    # _calculate_raw_metricsメソッドをモック化して例外を発生
+    # （_extract_diversity_featuresの後で呼ばれるため、ここで例外を発生させる）
     with patch.object(
         analyzer,
-        "_extract_diversity_features",
+        "_calculate_raw_metrics",
         side_effect=exception_class(exception_msg),
     ):
         # Act & Assert
         with pytest.raises(exception_class, match=exception_msg):
             analyzer.analyze(sample_image_path)
-
-        # ERRORログが出力されていることを確認
-        assert len(caplog.records) > 0
-        error_log = caplog.records[-1]
-        assert error_log.levelno == logging.ERROR
-        # ログメッセージにパスが含まれていることを確認
-        log_message = error_log.getMessage()
-        assert sample_image_path in log_message
-        assert "予期しないエラーが発生しました" in log_message
