@@ -5,8 +5,8 @@
 
 import logging
 import os
-from multiprocessing import Pool
-from typing import List, Optional
+from multiprocessing.pool import Pool
+from typing import Any, List, Literal, Optional
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
@@ -76,13 +76,19 @@ class ImageQualityAnalyzerPool:
         self._pool: Optional[Pool] = None
         self._num_workers = num_workers
         self._force_cpu = force_cpu
+        self._actual_workers: int = 0  # 実際のワーカー数をキャッシュ
 
-    def __enter__(self):
+    def __enter__(self) -> "ImageQualityAnalyzerPool":
         """コンテキストマネージャーとして使用する場合のエントリー."""
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):  # type: ignore[no-untyped-def]
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[Any],
+    ) -> Literal[False]:
         """コンテキストマネージャーとして使用する場合のイグジット."""
         self.close()
         return False
@@ -98,7 +104,8 @@ class ImageQualityAnalyzerPool:
             initializer=_init_worker,
             initargs=(self.genre, self._force_cpu),
         )
-        logger.info(f"AnalyzerPool started with {self._pool._processes} workers")
+        self._actual_workers = self._num_workers or os.cpu_count() or 1
+        logger.info(f"AnalyzerPool started with {self._actual_workers} workers")
 
     def close(self) -> None:
         """プールを閉じる."""
@@ -108,9 +115,7 @@ class ImageQualityAnalyzerPool:
             self._pool = None
             logger.info("AnalyzerPool closed")
 
-    def analyze_batch(
-        self, paths: List[str]
-    ) -> List[Optional[ImageMetrics]]:
+    def analyze_batch(self, paths: List[str]) -> List[Optional[ImageMetrics]]:
         """複数の画像を並列分析する.
 
         Args:
@@ -120,9 +125,13 @@ class ImageQualityAnalyzerPool:
             分析結果のリスト（失敗した画像はNone）
         """
         if self._pool is None:
-            raise RuntimeError("Pool is not started. Call start() or use context manager")
+            raise RuntimeError(
+                "Pool is not started. Call start() or use context manager"
+            )
 
-        logger.info(f"Analyzing {len(paths)} images with {self._pool._processes} workers")
+        logger.info(
+            f"Analyzing {len(paths)} images with {self._actual_workers} workers"
+        )
         results = self._pool.map(_analyze_single, paths)
         return results
 
@@ -131,4 +140,4 @@ class ImageQualityAnalyzerPool:
         """ワーカー数を取得する."""
         if self._pool is None:
             raise RuntimeError("Pool is not started")
-        return self._pool._processes  # type: ignore[attr-defined]
+        return self._actual_workers

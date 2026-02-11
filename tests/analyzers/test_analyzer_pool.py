@@ -165,11 +165,11 @@ def test_pool_context_manager_starts_and_closes_pool() -> None:
     # Act & Assert
     with pool:
         # コンテキスト内ではプールが開始されている
-        assert pool._pool is not None
         assert pool.num_workers == 2
 
     # コンテキスト終了後はプールが閉じられている
-    assert pool._pool is None
+    with pytest.raises(RuntimeError, match="Pool is not started"):
+        _ = pool.num_workers
 
 
 def test_pool_analyze_batch_processes_multiple_images(
@@ -188,9 +188,7 @@ def test_pool_analyze_batch_processes_multiple_images(
         - 結果の数が入力数と一致すること
     """
     # Arrange
-    with ImageQualityAnalyzerPool(
-        genre="mixed", num_workers=2, force_cpu=True
-    ) as pool:
+    with ImageQualityAnalyzerPool(genre="mixed", num_workers=2, force_cpu=True) as pool:
         # Act
         results = pool.analyze_batch(multiple_image_paths)
 
@@ -223,9 +221,7 @@ def test_pool_analyze_batch_handles_mixed_valid_and_invalid_images(
     nonexistent_path = "/path/that/does/not/exist.jpg"
     paths = [sample_image_path, nonexistent_path, sample_image_path]
 
-    with ImageQualityAnalyzerPool(
-        genre="mixed", num_workers=2, force_cpu=True
-    ) as pool:
+    with ImageQualityAnalyzerPool(genre="mixed", num_workers=2, force_cpu=True) as pool:
         # Act
         results = pool.analyze_batch(paths)
 
@@ -267,9 +263,6 @@ def test_pool_force_cpu_parameter_works() -> None:
     """
     # Arrange & Act & Assert
     # force_cpu=Trueでプールを作成・開始
-    with ImageQualityAnalyzerPool(
-        genre="mixed", num_workers=1, force_cpu=True
-    ) as pool:
+    with ImageQualityAnalyzerPool(genre="mixed", num_workers=1, force_cpu=True) as pool:
         # プールが正常に開始されることを確認
         assert pool.num_workers == 1
-        assert pool._pool is not None
