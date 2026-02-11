@@ -7,9 +7,9 @@ import numpy as np
 import torch
 
 from ..models.analyzer_config import AnalyzerConfig
-from .metric_normalizer import MetricNormalizer
-
 from .clip_model_manager import CLIPModelManager
+from .clip_types import SingleImageInput
+from .metric_normalizer import MetricNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class MetricCalculator:
             * 1000,
         }
 
-    def calculate_semantic_score(self, pil_img: object) -> float:
+    def calculate_semantic_score(self, pil_img: SingleImageInput) -> float:
         """CLIPモデルを使用してセマンティックスコアを計算する.
 
         Args:
@@ -90,7 +90,7 @@ class MetricCalculator:
         """
         with torch.inference_mode():
             inputs = self.model_manager.processor(
-                images=pil_img,  # type: ignore[arg-type]
+                images=pil_img,
                 return_tensors="pt",
                 padding=True,
             ).to(self.model_manager.device)

@@ -100,14 +100,14 @@ class BatchPipeline:
                     raw, norm, semantic, total = (
                         self.metric_calculator.calculate_all_metrics(
                             img,
-                            clip_features,  # type: ignore[arg-type]
+                            clip_features,
                         )
                     )
 
                     # HSV特徴とCLIP特徴を結合
                     features = self.feature_extractor.extract_combined_features(
                         img,
-                        clip_features,  # type: ignore[arg-type]
+                        clip_features,
                     )
 
                     results.append(

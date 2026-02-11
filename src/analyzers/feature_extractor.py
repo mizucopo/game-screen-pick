@@ -8,6 +8,11 @@ from PIL import Image
 
 from ..utils import VectorUtils
 from .clip_model_manager import CLIPModelManager
+from .clip_types import (
+    BatchImageInput,
+    CLIPFeaturesOutput,
+    OptionalBatchImageInput,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +88,9 @@ class FeatureExtractor:
 
     def extract_clip_features_batch(
         self,
-        pil_images: "list[object] | list[Image.Image] | list[Image.Image | None]",
+        pil_images: OptionalBatchImageInput,
         initial_batch_size: int = 32,
-    ) -> "list[object] | list[np.ndarray | None]":
+    ) -> CLIPFeaturesOutput:
         """複数のPIL画像に対してCLIP推論をバッチ実行して特徴を抽出.
 
         OOM対策（失敗したバッチのみ再試行）:
@@ -107,10 +112,10 @@ class FeatureExtractor:
 
         # 有効な画像のインデックスと画像を収集
         valid_indices = [i for i, img in enumerate(pil_images) if img is not None]
-        valid_images = [img for img in pil_images if img is not None]
+        valid_images: BatchImageInput = [img for img in pil_images if img is not None]
 
         if not valid_images:
-            return [None] * len(pil_images)  # type: ignore[return-value]
+            return [None] * len(pil_images)
 
         # 結果を格納する配列（初期値はNone）
         results: list[np.ndarray | None] = [None] * len(pil_images)
@@ -135,7 +140,7 @@ class FeatureExtractor:
                 )
                 with autocast_context, torch.inference_mode():
                     inputs = self.model_manager.processor(
-                        images=batch,  # type: ignore[arg-type]
+                        images=list(batch),  # Sequence -> list 変換
                         return_tensors="pt",
                         padding=True,
                     ).to(self.model_manager.device)
