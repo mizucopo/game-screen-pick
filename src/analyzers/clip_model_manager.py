@@ -1,14 +1,13 @@
 """CLIPモデルのライフサイクルを管理するマネージャー."""
 
 import logging
+from collections.abc import Sequence
 from typing import Optional
 
 import torch
 import torch.nn.functional as F
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
-
-from .clip_types import BatchImageInput, SingleImageInput
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +68,7 @@ class CLIPModelManager:
             return text_features_normalized
 
     def get_image_features(
-        self, pil_image: SingleImageInput | BatchImageInput, batch_mode: bool = False
+        self, pil_image: Image.Image | Sequence[Image.Image], batch_mode: bool = False
     ) -> torch.Tensor:
         """PIL画像からCLIP画像特徴を抽出する.
 

@@ -1,10 +1,6 @@
 """CLIPモデル関連の型定義."""
 
-from collections.abc import Sequence
 from typing import Any, Protocol
-
-import numpy as np
-from PIL import Image
 
 
 class CLIPProcessorProtocol(Protocol):
@@ -45,11 +41,3 @@ class BatchFeatureProtocol(Protocol):
             転送後のバッチ特徴量
         """
         ...
-
-
-# 型エイリアス
-# Sequence は共変なため、list[Image] も list[Image | None] も受け取れる
-SingleImageInput = Image.Image
-BatchImageInput = Sequence[Image.Image]
-OptionalBatchImageInput = Sequence[Image.Image | None]
-CLIPFeaturesOutput = list[np.ndarray | None]
