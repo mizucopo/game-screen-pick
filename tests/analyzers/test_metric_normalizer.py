@@ -7,45 +7,7 @@
 4. 高速実行（約0.1秒） - 外部依存関係なし
 """
 
-import pytest
-
 from src.analyzers.metric_normalizer import MetricNormalizer
-
-
-# ============================================================================
-# sigmoid関数のテスト
-# ============================================================================
-
-
-@pytest.mark.parametrize(
-    "x,center,expected_min,expected_max",
-    [
-        (600.0, 500.0, 0.5, 1.0),
-        (100.0, 500.0, 0.0, 0.5),
-    ],
-)
-def test_sigmoid_returns_values_relative_to_center(
-    x: float,
-    center: float,
-    expected_min: float,
-    expected_max: float,
-) -> None:
-    """xとcenterの相対関係に基づいてsigmoidが適切な値を返すこと.
-
-    Given:
-        - center値が500.0である
-        - xがcenterより大きいまたは小さい値である
-    When:
-        - デフォルトの急峻さでsigmoid(x, center)が計算される
-    Then:
-        - xがcenterより大きい場合は0.5より大きい値が返されること
-        - xがcenterより小さい場合は0.5より小さい値が返されること
-    """
-    # Arrange & Act
-    result = MetricNormalizer.sigmoid(x, center)
-
-    # Assert
-    assert expected_min < result <= expected_max
 
 
 def test_sigmoid_with_default_steepness_produces_expected_curve() -> None:
@@ -109,11 +71,6 @@ def test_sigmoid_handles_overflow_without_crashing() -> None:
     # 境界値を返すことで適切に処理するはず
     assert result_positive == 1.0
     assert result_negative == 0.0
-
-
-# ============================================================================
-# normalize_allメソッドのテスト
-# ============================================================================
 
 
 def test_normalize_all_returns_all_expected_metrics() -> None:

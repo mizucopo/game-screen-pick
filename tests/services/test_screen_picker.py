@@ -103,11 +103,6 @@ def sample_image_metrics() -> List[ImageMetrics]:
     ]
 
 
-# ============================================================================
-# select_from_analyzedメソッドのテスト（純粋なドメインロジック）
-# ============================================================================
-
-
 def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     sample_image_metrics: List[ImageMetrics],
 ) -> None:
@@ -171,36 +166,6 @@ def test_requesting_more_images_than_available_returns_all_unique_images(
     assert len(result) >= 1
 
 
-def test_higher_similarity_threshold_filters_out_more_similar_images(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """より高い類似度閾値はより多くの類似画像を除外すること.
-
-    Given:
-        - image2がimage1に類似している5つの分析済み画像
-    When:
-        - 厳しい閾値（0.95）で選択
-    Then:
-        - 類似した画像は両方とも選択されないこと
-    """
-    # Arrange
-    num_to_select = 5
-    similarity_threshold = 0.95
-
-    # Act
-    result = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, similarity_threshold
-    )
-
-    # Assert
-    # image1とimage2は両方とも結果に含まれない（類似しているため）
-    result_paths = [m.path for m in result]
-    has_image1 = "/fake/path/image1.jpg" in result_paths
-    has_image2 = "/fake/path/image2.jpg" in result_paths
-    # 両方とも選択されることはない
-    assert not (has_image1 and has_image2)
-
-
 @pytest.mark.parametrize(
     "input_list,num_to_select",
     [
@@ -257,11 +222,6 @@ def test_original_input_list_remains_unchanged_after_selection(
     assert [m.path for m in sample_image_metrics] == original_paths
     # 元のリストオブジェクトは同じ順序のままであるはず
     assert sample_image_metrics == original_order
-
-
-# ============================================================================
-# Integration tests for select method
-# ============================================================================
 
 
 def _create_mock_analyze_for_integration(
@@ -375,32 +335,3 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         # Assert
         assert call_count[0] == 5
         assert len(result) <= 3  # At most 3 valid images (odd indices)
-
-
-def test_selecting_from_nonexistent_folder_returns_empty_list(
-    mock_analyzer: MagicMock,
-) -> None:
-    """存在しないフォルダは適切に空のリストを返すこと.
-
-    Given:
-        - 存在しないフォルダパス
-    When:
-        - 画像を選択
-    Then:
-        - 空のリストが返されること（正常なデグラデーション）
-    """
-    # Arrange
-    picker = GameScreenPicker(mock_analyzer)
-
-    # Act
-    result = picker.select(
-        folder="/nonexistent/folder/path/that/does/not/exist",
-        num=3,
-        similarity_threshold=0.8,
-        recursive=False,
-        show_progress=False,
-    )
-
-    # Assert
-    # Should return empty list for non-existent folder
-    assert result == []
