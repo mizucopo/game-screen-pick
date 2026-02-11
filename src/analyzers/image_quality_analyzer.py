@@ -234,8 +234,17 @@ class ImageQualityAnalyzer:
                 features_list,
                 semantic_scores,
             )
+                raw_metrics_list,
+                features_list,
+                semantic_scores,
+                preprocessed,
+            )
 
-        return results
+            if show_progress:
+                processed = min(chunk_end, total_images)
+                print(f"解析済み: {processed}/{total_images}")
+
+        return all_results
 
     def _load_and_preprocess_images(
         self, paths: List[str], max_workers: Optional[int] = None
