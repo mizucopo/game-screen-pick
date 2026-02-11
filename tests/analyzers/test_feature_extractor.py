@@ -21,7 +21,7 @@ from PIL import Image
 
 from src.analyzers.clip_model_manager import CLIPModelManager
 from src.analyzers.feature_extractor import FeatureExtractor
-from src.utils import VectorUtils
+from src.utils.vector_utils import VectorUtils
 
 
 @pytest.fixture(autouse=True)

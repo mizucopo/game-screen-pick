@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from ..utils import VectorUtils
+from ..utils.vector_utils import VectorUtils
 from .clip_model_manager import CLIPModelManager
 from .clip_types import (
     BatchImageInput,

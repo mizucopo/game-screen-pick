@@ -19,7 +19,7 @@ import torch
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
-from src.utils import VectorUtils
+from src.utils.vector_utils import VectorUtils
 
 
 @pytest.fixture(autouse=True)

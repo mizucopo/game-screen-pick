@@ -6,11 +6,11 @@ import shutil
 from pathlib import Path
 from typing import List
 
-from .analyzers import ImageQualityAnalyzer
+from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from .models.genre_weights import GenreWeights
 from .models.image_metrics import ImageMetrics
 from .models.picker_statistics import PickerStatistics
-from .services import GameScreenPicker
+from .services.screen_picker import GameScreenPicker
 from .utils.file_utils import FileUtils
 
 

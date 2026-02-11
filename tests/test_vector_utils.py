@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from src.utils import VectorUtils
+from src.utils.vector_utils import VectorUtils
 
 
 def test_safe_l2_normalize_returns_zeros_for_zero_vector() -> None:
