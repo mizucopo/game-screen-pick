@@ -335,5 +335,3 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         # Assert
         assert call_count[0] == 5
         assert len(result) <= 3  # At most 3 valid images (odd indices)
-
-

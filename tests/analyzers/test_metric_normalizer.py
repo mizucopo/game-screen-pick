@@ -7,8 +7,6 @@
 4. 高速実行（約0.1秒） - 外部依存関係なし
 """
 
-import pytest
-
 from src.analyzers.metric_normalizer import MetricNormalizer
 
 
