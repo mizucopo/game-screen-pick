@@ -20,10 +20,8 @@ import torch
 from PIL import Image
 
 from src.analyzers.clip_model_manager import CLIPModelManager
-from src.analyzers.feature_extractor import (
-    FeatureExtractor,
-    _safe_l2_normalize,
-)
+from src.analyzers.feature_extractor import FeatureExtractor
+from src.utils import VectorUtils
 
 
 @pytest.fixture(autouse=True)
@@ -119,50 +117,6 @@ def feature_extractor() -> FeatureExtractor:
     """特徴抽出器のフィクスチャ."""
     model_manager = CLIPModelManager()
     return FeatureExtractor(model_manager)
-
-
-def test_safe_l2_normalize_returns_zeros_for_zero_vector() -> None:
-    """ゼロベクトルが正規化されること.
-
-    Given:
-        - ゼロベクトルがある
-    When:
-        - _safe_l2_normalizeで正規化される
-    Then:
-        - ゼロベクトルが返されること（NaNではない）
-    """
-    # Arrange
-    zero_vec = np.array([0.0, 0.0, 0.0])
-
-    # Act
-    result = _safe_l2_normalize(zero_vec)
-
-    # Assert
-    assert result.shape == zero_vec.shape
-    assert np.all(result == 0.0)
-    assert not np.any(np.isnan(result))
-
-
-def test_safe_l2_normalize_normalizes_nonzero_vector() -> None:
-    """非ゼロベクトルが正しく正規化されること.
-
-    Given:
-        - 非ゼロベクトルがある
-    When:
-        - _safe_l2_normalizeで正規化される
-    Then:
-        - L2ノルムが1になること
-    """
-    # Arrange
-    vec = np.array([3.0, 4.0])  # ノルム = 5
-
-    # Act
-    result = _safe_l2_normalize(vec)
-
-    # Assert
-    expected_norm = 1.0
-    actual_norm = np.linalg.norm(result)
-    assert actual_norm == pytest.approx(expected_norm)
 
 
 def test_extract_hsv_features_returns_correct_shape(
@@ -272,7 +226,7 @@ def test_extract_combined_features_contains_hsv_and_clip(
 
     # Assert
     # HSV特徴は正規化されているはず
-    hsv_normalized = _safe_l2_normalize(hsv_features)
+    hsv_normalized = VectorUtils.safe_l2_normalize(hsv_features)
     actual_hsv = combined_features[:64]
     assert np.allclose(actual_hsv, hsv_normalized, atol=1e-5)
 
