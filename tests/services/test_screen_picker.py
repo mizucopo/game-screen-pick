@@ -414,3 +414,84 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         # Assert
         # 奇数インデックスの画像のみ有効（image1, image3）
         assert len(result) <= 2
+
+
+def test_always_returns_requested_number_when_enough_unique_images_exist(
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
+    """十分な数の一意な画像が存在する場合、常に要求数を返すこと.
+
+    Given:
+        - 5つの分析済み画像（一部類似）
+    When:
+        - 高い類似度閾値（0.9）で5つの画像を選択
+    Then:
+        - 類似画像はフィルタリングされるが、指定数を満たすために
+          段階的しきい値緩和と最終フォールバックにより5件が返されること
+    """
+    # Arrange
+    num_to_select = 5
+    similarity_threshold = 0.9
+
+    # Act
+    result = GameScreenPicker.select_from_analyzed(
+        sample_image_metrics, num_to_select, similarity_threshold
+    )
+
+    # Assert
+    # 5枚要求して5枚存在するので、必ず5枚返されるはず
+    assert len(result) == 5
+    # スコア順になっているはず
+    scores = [m.total_score for m in result]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_gradual_threshold_relaxation_and_fallback_for_similar_images() -> None:
+    """類似した画像ばかりの場合、しきい値緩和と最終フォールバックが機能すること.
+
+    Given:
+        - 10枚の非常に類似した画像（0.97-0.99の類似度）
+        - 類似度閾値0.9
+    When:
+        - 10枚の画像を選択
+    Then:
+        - 段階的しきい値緩和により可能な限り多様性を確保しつつ
+          最終的に10枚全てが返されること
+    """
+    # Arrange
+    np.random.seed(42)
+
+    # ベース特徴ベクトル
+    base_features = np.random.rand(128)
+
+    # 0.97-0.99の類似度を持つ10枚の画像を生成
+    similar_images: List[ImageMetrics] = []
+    for i in range(10):
+        # 0.97-0.99の類似度で生成
+        target_sim = 0.97 + (i % 3) * 0.01  # 0.97, 0.98, 0.99を繰り返し
+        similar_features = _create_features_with_similarity(base_features, target_sim)
+        similar_images.append(
+            ImageMetrics(
+                path=f"/fake/path/similar{i}.jpg",
+                raw_metrics={"blur_score": 100.0 - i},
+                normalized_metrics={"blur_score": 0.9},
+                semantic_score=0.8,
+                total_score=100.0 - i,
+                features=similar_features,
+            )
+        )
+
+    num_to_select = 10
+    similarity_threshold = 0.9
+
+    # Act
+    result = GameScreenPicker.select_from_analyzed(
+        similar_images, num_to_select, similarity_threshold
+    )
+
+    # Assert
+    # 10枚要求して10枚存在するので、必ず10枚返されるはず
+    assert len(result) == 10
+    # スコア順になっているはず
+    scores = [m.total_score for m in result]
+    assert scores == sorted(scores, reverse=True)
