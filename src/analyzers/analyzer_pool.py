@@ -27,13 +27,13 @@ def _init_worker(genre: str = "mixed", force_cpu: bool = False) -> None:
         force_cpu: GPUを無効化してCPUを強制する（複数ワーカーでの競合回避）
     """
     global _analyzer  # noqa: PLW0603
-    # 環境変数でCUDAを無効化（force_cpu=Trueの場合）
-    if force_cpu:
-        os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    _analyzer = ImageQualityAnalyzer(genre=genre)
+    # device引数でCPUを強制（force_cpu=Trueの場合）
+    device = "cpu" if force_cpu else None
+    _analyzer = ImageQualityAnalyzer(genre=genre, device=device)
     pid = os.getpid()
-    device = _analyzer.device
-    logger.info(f"Worker {pid}: ImageQualityAnalyzer initialized (device={device})")
+    logger.info(
+        f"Worker {pid}: ImageQualityAnalyzer initialized (device={_analyzer.device})"
+    )
 
 
 def _analyze_single(path: str) -> Optional[ImageMetrics]:
