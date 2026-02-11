@@ -31,7 +31,7 @@ class AnalyzerWorker:
         pid = os.getpid()
         logger.info(
             f"Worker {pid}: ImageQualityAnalyzer initialized "
-            f"(device={self.analyzer.device})"
+            f"(device={self.analyzer._model_manager.device})"
         )
 
     def analyze(self, path: str) -> Optional[ImageMetrics]:

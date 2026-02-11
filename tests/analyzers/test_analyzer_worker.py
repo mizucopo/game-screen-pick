@@ -135,7 +135,7 @@ def test_init_worker_initializes_class_variable() -> None:
     # Assert
     assert AnalyzerWorker._worker is not None
     assert AnalyzerWorker._worker.analyzer is not None
-    assert AnalyzerWorker._worker.analyzer.device == "cpu"
+    assert AnalyzerWorker._worker.analyzer._model_manager.device == "cpu"
 
 
 def test_analyze_single_returns_metrics_for_valid_image(
