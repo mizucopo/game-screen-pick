@@ -273,7 +273,7 @@ def test_process_batch_processes_various_image_formats(
     # Assert
     assert len(results) == 2
     # 少なくとも1つの画像が処理されている
-    assert any(r is not None for r in paths)
+    assert any(r is not None for r in results)
     for result in results:
         if result is None:
             continue
