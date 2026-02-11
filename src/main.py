@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List
 
 from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
-from .models.genre_weights import GenreWeights
+from .constants.genre_weights import GenreWeights
 from .models.image_metrics import ImageMetrics
 from .models.picker_statistics import PickerStatistics
 from .services.screen_picker import GameScreenPicker

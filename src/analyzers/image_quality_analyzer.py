@@ -7,9 +7,9 @@ import cv2
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
+from ..constants.genre_weights import GenreWeights
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.image_metrics import ImageMetrics
-from ..models.genre_weights import GenreWeights
 from .batch_pipeline import BatchPipeline
 from .clip_model_manager import CLIPModelManager
 from .feature_extractor import FeatureExtractor

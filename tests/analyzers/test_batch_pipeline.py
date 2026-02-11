@@ -23,8 +23,8 @@ from src.analyzers.batch_pipeline import BatchPipeline
 from src.analyzers.clip_model_manager import CLIPModelManager
 from src.analyzers.feature_extractor import FeatureExtractor
 from src.analyzers.metric_calculator import MetricCalculator
+from src.constants.genre_weights import GenreWeights
 from src.models.analyzer_config import AnalyzerConfig
-from src.models.genre_weights import GenreWeights
 from src.models.image_metrics import ImageMetrics
 
 
