@@ -374,6 +374,16 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
         mock_analyzer.analyze = _create_mock_analyze_for_integration(
             make_similar=True, target_similarity=0.96
         )
+
+        # analyze_batchもモック化（内部でanalyzeを呼び出す）
+        def mock_analyze_batch(
+            paths: List[str],
+            batch_size: int = 32,  # noqa: ARG001
+            show_progress: bool = False,  # noqa: ARG001
+        ) -> List[ImageMetrics | None]:
+            return [mock_analyzer.analyze(p) for p in paths]
+
+        mock_analyzer.analyze_batch = mock_analyze_batch
         picker = GameScreenPicker(mock_analyzer)
 
         # Act
@@ -433,6 +443,16 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
             return original_analyze(path)
 
         mock_analyzer.analyze = counting_analyze
+
+        # analyze_batchもモック化（内部でanalyzeを呼び出す）
+        def mock_analyze_batch(
+            paths: List[str],
+            batch_size: int = 32,  # noqa: ARG001
+            show_progress: bool = False,  # noqa: ARG001
+        ) -> List[ImageMetrics | None]:
+            return [mock_analyzer.analyze(p) for p in paths]
+
+        mock_analyzer.analyze_batch = mock_analyze_batch
         picker = GameScreenPicker(mock_analyzer)
 
         # Act

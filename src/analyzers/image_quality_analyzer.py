@@ -1,7 +1,7 @@
 """Image quality analyzer using CLIP and computer vision metrics."""
 
 import logging
-from typing import Optional
+from typing import Optional, List
 import numpy as np
 import cv2
 import torch
@@ -120,6 +120,171 @@ class ImageQualityAnalyzer:
         penalty = 0.6 if raw["brightness"] < 40 else 0.0
         return max(0.0, (weighted_sum + (semantic * 0.2) - penalty) * 100.0)
 
+    def analyze_batch(
+        self,
+        paths: List[str],
+        batch_size: int = 32,
+        show_progress: bool = False,
+    ) -> List[Optional[ImageMetrics]]:
+        """複数の画像をバッチ処理で解析する.
+
+        Args:
+            paths: 画像ファイルパスのリスト
+            batch_size: CLIP推論のバッチサイズ（デフォルト32）
+            show_progress: 進捗表示をするかどうか
+
+        Returns:
+            解析結果のリスト（失敗した画像はNone）
+        """
+        # すべてのパスに対してPIL画像を読み込み
+        pil_images = self._load_pil_images(paths)
+
+        # バッチCLIP推論を実行
+        semantic_scores = self._calculate_semantic_scores_batch(
+            pil_images, initial_batch_size=batch_size
+        )
+
+        # 各画像に対してOpenCVメトリクスを計算してImageMetricsを構築
+        results: List[Optional[ImageMetrics]] = []
+        for i, (path, pil_img) in enumerate(zip(paths, pil_images)):
+            if pil_img is None:
+                results.append(None)
+                continue
+
+            # semantic_scoresがNoneの場合もスキップ
+            semantic_score = semantic_scores[i]
+            if semantic_score is None:
+                results.append(None)
+                continue
+
+            if show_progress and i % 50 == 0:
+                print(f"解析済み: {i}/{len(paths)}")
+
+            try:
+                # OpenCV形式（BGR）に変換
+                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+                features = self._extract_diversity_features(img)
+                raw = self._calculate_raw_metrics(img)
+                norm = MetricNormalizer.normalize_all(raw)
+                total = self._calculate_total_score(raw, norm, semantic_score)
+
+                results.append(
+                    ImageMetrics(path, raw, norm, semantic_score, total, features)
+                )
+            except self._get_expected_errors() as e:
+                logger.warning(
+                    f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
+                )
+                results.append(None)
+
+        return results
+
+    @staticmethod
+    def _load_pil_images(paths: List[str]) -> List[Optional[Image.Image]]:
+        """複数のパスからPIL画像を読み込む.
+
+        失敗した画像に対してはNoneを返し、後続処理でスキップできるようにする.
+
+        Args:
+            paths: 画像ファイルパスのリスト
+
+        Returns:
+            PIL画像のリスト（失敗したパスはNone）
+        """
+        images: List[Optional[Image.Image]] = []
+        for path in paths:
+            try:
+                with Image.open(path) as img_file:
+                    # RGBモードに変換（必要な場合）
+                    if img_file.mode != "RGB":
+                        rgb_img: Image.Image = img_file.convert("RGB")
+                        # コピーを作成してwithブロック外でも使用可能にする
+                        images.append(rgb_img.copy())
+                    else:
+                        images.append(img_file.copy())
+            except (FileNotFoundError, UnidentifiedImageError, OSError, ValueError):
+                images.append(None)
+        return images
+
+    def _calculate_semantic_scores_batch(
+        self,
+        pil_images: List[Optional[Image.Image]],
+        initial_batch_size: int = 32,
+    ) -> List[Optional[float]]:
+        """複数のPIL画像に対してCLIP推論をバッチ実行する.
+
+        OOM対策:
+        - initial_batch_sizeから開始（デフォルト32）
+        - torch.cuda.OutOfMemoryError発生時にバッチサイズを半分にしてリトライ
+        - 最小バッチサイズ1まで試行（32→16→8→4→2→1）
+        - それでも失敗した画像はNoneとして返す
+
+        Args:
+            pil_images: PIL画像のリスト（失敗した画像はNone）
+            initial_batch_size: 初期バッチサイズ
+
+        Returns:
+            セマンティックスコアのリスト（失敗した画像はNone）
+        """
+        # 有効な画像のインデックスと画像を収集
+        valid_indices = [i for i, img in enumerate(pil_images) if img is not None]
+        # Type narrowing: valid_imagesはNoneを含まないことを保証
+        valid_images: List[Image.Image] = [img for img in pil_images if img is not None]
+
+        if not valid_images:
+            return [None] * len(pil_images)
+
+        # 結果を格納する配列（初期値はNone）
+        results: List[Optional[float]] = [None] * len(pil_images)
+
+        # バッチサイズをinitial_batch_sizeから開始
+        current_batch_size = initial_batch_size
+
+        # バッチ処理
+        while current_batch_size >= 1:
+            try:
+                for i in range(0, len(valid_images), current_batch_size):
+                    batch: List[Image.Image] = valid_images[i : i + current_batch_size]
+
+                    with torch.no_grad():
+                        inputs = self.processor(
+                            images=batch,
+                            return_tensors="pt",
+                            padding=True,
+                        ).to(self.device)
+                        image_features = self.model.get_image_features(**inputs)
+
+                        # キャッシュされたテキスト埋め込みを使用
+                        logits = torch.matmul(image_features, self._text_embeddings.T)
+                        batch_scores = (logits[:, 0] / 100.0).cpu().tolist()
+
+                    # 結果を元のインデックスにマッピング
+                    for j, score in enumerate(batch_scores):
+                        results[valid_indices[i + j]] = score
+
+                # 成功したらループを抜ける
+                break
+
+            except torch.cuda.OutOfMemoryError:
+                # バッチサイズを半分にしてリトライ
+                current_batch_size = current_batch_size // 2
+                # まだリトライ余地があれば警告
+                if current_batch_size >= 1:
+                    logger.warning(
+                        f"CUDA OOM発生。バッチサイズを{current_batch_size}"
+                        "に縮小してリトライします。"
+                    )
+                else:
+                    logger.error(
+                        "バッチサイズ1でもOOMが発生しました。"
+                        "一部画像の処理をスキップします。"
+                    )
+                    # 処理済みの結果は残すが、未処理の画像はNoneのまま
+                    break
+
+        return results
+
     @staticmethod
     def _get_expected_errors() -> tuple[type[Exception], ...]:
         """正常な失敗として扱うエラー型."""
@@ -140,6 +305,5 @@ class ImageQualityAnalyzer:
             KeyError,
             IndexError,
             RuntimeError,
-            torch.cuda.OutOfMemoryError,
             MemoryError,
         )
