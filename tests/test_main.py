@@ -325,11 +325,11 @@ def test_cli_validates_input_directory(
     test_file.touch()
     monkeypatch.setattr("sys.argv", ["main.py", str(test_file)])
 
-    with pytest.raises(NotADirectoryError) as exc_info:
+    with pytest.raises(NotADirectoryError) as exc_info2:
         Main().run()
 
-    assert str(test_file) in str(exc_info.value)
-    assert "フォルダではありません" in str(exc_info.value)
+    assert str(test_file) in str(exc_info2.value)
+    assert "フォルダではありません" in str(exc_info2.value)
 
 
 @pytest.mark.parametrize(
