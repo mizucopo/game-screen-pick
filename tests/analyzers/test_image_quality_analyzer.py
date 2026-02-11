@@ -31,11 +31,27 @@ def mock_clip_model() -> Generator[MagicMock, None, None]:
     """
     with patch("transformers.CLIPModel.from_pretrained") as mock:
         model = MagicMock()
-        # 一貫したテストのために固定されたlogit値を返す
+
+        # get_text_features用のモック（テキスト埋め込み）
+        # 実際のテンソルを返すように修正
+        text_features = torch.tensor([[1.0]])
+
+        # get_image_features用のモック（画像埋め込み）
+        # matmulで使用できるように実際のテンソルを返す
+        image_features = torch.tensor([[25.0]])  # logits計算用のダミー値
+
+        # メソッドをモック
+        model.get_text_features = MagicMock(return_value=text_features)
+        model.get_image_features = MagicMock(return_value=image_features)
+
+        # .to()メソッドと既存の__call__もモック
+        model.to = MagicMock(return_value=model)
+
+        # 既存の呼び出し形式のモック（後方互換性）
         mock_output = MagicMock()
         mock_output.logits_per_image = torch.tensor([[25.0]])
         model.return_value = mock_output
-        model.to = MagicMock(return_value=model)
+
         mock.return_value = model
         yield mock
 
