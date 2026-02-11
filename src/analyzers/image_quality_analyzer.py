@@ -1,7 +1,9 @@
 """Image quality analyzer using CLIP and computer vision metrics."""
 
 import logging
-from typing import Optional, List
+from typing import Optional, List, Tuple
+
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import cv2
 import torch
@@ -14,6 +16,11 @@ from ..models.genre_weights import GenreWeights
 from .metric_normalizer import MetricNormalizer
 
 logger = logging.getLogger(__name__)
+
+# 型エイリアス（行長制限対応）
+_PreprocessResult = Tuple[
+    Optional[Image.Image], Optional[dict[str, float]], Optional[np.ndarray]
+]
 
 
 class ImageQualityAnalyzer:
@@ -128,6 +135,10 @@ class ImageQualityAnalyzer:
     ) -> List[Optional[ImageMetrics]]:
         """複数の画像をバッチ処理で解析する.
 
+        2段パイプライン構成:
+        1. I/O+CV前処理ステージを並列（ThreadPoolExecutor）
+        2. CLIPステージはバッチで直列
+
         Args:
             paths: 画像ファイルパスのリスト
             batch_size: CLIP推論のバッチサイズ（デフォルト32）
@@ -136,18 +147,30 @@ class ImageQualityAnalyzer:
         Returns:
             解析結果のリスト（失敗した画像はNone）
         """
-        # すべてのパスに対してPIL画像を読み込み
-        pil_images = self._load_pil_images(paths)
+        # ステージ1: I/O + CV前処理を並列実行
+        preprocessed = self._load_and_preprocess_images(paths)
 
-        # バッチCLIP推論を実行
+        # PIL画像とメトリクスを分離
+        pil_images: List[Optional[Image.Image]] = []
+        raw_metrics_list: List[Optional[dict[str, float]]] = []
+        features_list: List[Optional[np.ndarray]] = []
+
+        for pil_img, raw, features in preprocessed:
+            pil_images.append(pil_img)
+            raw_metrics_list.append(raw)
+            features_list.append(features)
+
+        # ステージ2: バッチCLIP推論を実行
         semantic_scores = self._calculate_semantic_scores_batch(
             pil_images, initial_batch_size=batch_size
         )
 
-        # 各画像に対してOpenCVメトリクスを計算してImageMetricsを構築
+        # 結果を構築
         results: List[Optional[ImageMetrics]] = []
-        for i, (path, pil_img) in enumerate(zip(paths, pil_images)):
-            if pil_img is None:
+        for i, (path, pil_img, raw, features) in enumerate(
+            zip(paths, pil_images, raw_metrics_list, features_list)
+        ):
+            if pil_img is None or raw is None or features is None:
                 results.append(None)
                 continue
 
@@ -161,11 +184,6 @@ class ImageQualityAnalyzer:
                 print(f"解析済み: {i}/{len(paths)}")
 
             try:
-                # OpenCV形式（BGR）に変換
-                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-                features = self._extract_diversity_features(img)
-                raw = self._calculate_raw_metrics(img)
                 norm = MetricNormalizer.normalize_all(raw)
                 total = self._calculate_total_score(raw, norm, semantic_score)
 
@@ -177,6 +195,54 @@ class ImageQualityAnalyzer:
                     f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
                 )
                 results.append(None)
+
+        return results
+
+    def _load_and_preprocess_images(
+        self, paths: List[str], max_workers: Optional[int] = None
+    ) -> List[_PreprocessResult]:
+        """複数のパスからPIL画像を読み込み、OpenCV前処理まで並列実行する.
+
+        I/O（画像読み込み）とCPU-bound処理（OpenCV前処理）をThreadPoolExecutorで並列化.
+
+        Args:
+            paths: 画像ファイルパスのリスト
+            max_workers: スレッドプールの最大ワーカー数（Noneで自動設定）
+
+        Returns:
+            タプルのリスト: (PIL画像, 生メトリクス, 多様性特徴)
+            失敗したパスは (None, None, None)
+        """
+
+        def process_single(path: str) -> _PreprocessResult:
+            """単一の画像を読み込み、前処理する."""
+            try:
+                # PILで画像を読み込み
+                with Image.open(path) as img_file:
+                    # RGBモードに変換（必要な場合）
+                    if img_file.mode != "RGB":
+                        pil_img: Image.Image = img_file.convert("RGB")
+                        rgb_img = pil_img.copy()
+                    else:
+                        rgb_img = img_file.copy()
+
+                # OpenCV形式（BGR）に変換
+                img = cv2.cvtColor(np.array(rgb_img), cv2.COLOR_RGB2BGR)
+
+                # 多様性特徴を抽出
+                features = self._extract_diversity_features(img)
+
+                # 生メトリクスを計算
+                raw = self._calculate_raw_metrics(img)
+
+                return rgb_img, raw, features
+
+            except (FileNotFoundError, UnidentifiedImageError, OSError, ValueError):
+                return None, None, None
+
+        # ThreadPoolExecutorで並列処理
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(process_single, paths))
 
         return results
 
