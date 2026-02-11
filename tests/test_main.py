@@ -297,33 +297,24 @@ def test_cli_copies_selected_images_to_output_directory(
 # ============================================================================
 
 
-@pytest.mark.parametrize(
-    "input_dir_func",
-    [
-        lambda tmp_path: str(tmp_path / "empty"),
-        lambda _: "/nonexistent/directory/that/does/not/exist",
-    ],
-)
-def test_cli_handles_empty_and_nonexistent_input_directories(
+def test_cli_handles_empty_input_directory(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
-    input_dir_func: Callable[[Path], str],
 ) -> None:
-    """空のディレクトリと存在しないディレクトリが正しく処理されること.
+    """空のディレクトリが正しく処理されること.
 
     Given:
-        - 空の入力ディレクトリ、または存在しない入力ディレクトリパスがある
+        - 空の入力ディレクトリがある
     When:
         - CLIが実行される
     Then:
         - プログラムがクラッシュせず、0件の結果が適切に表示されること
     """
     # Arrange
-    input_dir = input_dir_func(tmp_path)
-    if "empty" in input_dir:
-        Path(input_dir).mkdir()
+    input_dir = str(tmp_path / "empty")
+    Path(input_dir).mkdir()
     mock_game_screen_picker.select.return_value = []
 
     monkeypatch.setattr("sys.argv", ["main.py", input_dir])
@@ -337,6 +328,61 @@ def test_cli_handles_empty_and_nonexistent_input_directories(
     captured = capsys.readouterr()
     assert "選択された画像一覧" in captured.out
     assert "Score:" not in captured.out  # 0件
+
+
+def test_cli_exits_with_error_for_nonexistent_input_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """存在しないディレクトリを指定した場合にエラーが発生すること.
+
+    Given:
+        - 存在しない入力ディレクトリパスがある
+    When:
+        - CLIが実行される
+    Then:
+        - FileNotFoundErrorが発生すること
+        - エラーメッセージにパスが含まれること
+    """
+    # Arrange
+    input_dir = "/nonexistent/directory/that/does/not/exist"
+    monkeypatch.setattr("sys.argv", ["main.py", input_dir])
+
+    # Act & Assert
+    from src.main import Main
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        Main().run()
+
+    assert input_dir in str(exc_info.value)
+    assert "入力フォルダが存在しません" in str(exc_info.value)
+
+
+def test_cli_exits_with_error_when_file_instead_of_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """ファイルパスを指定した場合にエラーが発生すること.
+
+    Given:
+        - ファイルパスがある
+    When:
+        - CLIが実行される
+    Then:
+        - NotADirectoryErrorが発生すること
+    """
+    # Arrange
+    test_file = tmp_path / "image.jpg"
+    test_file.touch()
+    monkeypatch.setattr("sys.argv", ["main.py", str(test_file)])
+
+    # Act & Assert
+    from src.main import Main
+
+    with pytest.raises(NotADirectoryError) as exc_info:
+        Main().run()
+
+    assert str(test_file) in str(exc_info.value)
+    assert "フォルダではありません" in str(exc_info.value)
 
 
 # ============================================================================
