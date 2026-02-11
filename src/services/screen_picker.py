@@ -77,7 +77,8 @@ class GameScreenPicker:
             similarity_threshold: 類似度の閾値（これ以上は類似とみなす）
 
         Returns:
-            (選択された画像メトリクスのリスト（最大num件、有効画像数以下なら必ずnum件）, 類似度で除外された数)
+            選択された画像メトリクスのリスト（最大num件、
+            有効画像数以下なら必ずnum件）と類似度で除外された数のタプル
         """
         if not all_results:
             return [], 0
