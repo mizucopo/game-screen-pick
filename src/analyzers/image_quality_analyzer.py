@@ -12,6 +12,7 @@ from transformers import CLIPProcessor, CLIPModel
 from PIL import Image
 from PIL import UnidentifiedImageError
 
+from ..models.analyzer_config import AnalyzerConfig
 from ..models.image_metrics import ImageMetrics
 from ..models.genre_weights import GenreWeights
 from .metric_normalizer import MetricNormalizer
@@ -22,11 +23,33 @@ logger = logging.getLogger(__name__)
 _PreprocessResult = Optional[Image.Image]
 
 
+def _safe_l2_normalize(vec: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """ゼロ割れ安全なL2正規化を行う.
+
+    Args:
+        vec: 正規化するベクトル
+        eps: ゼロ割れ防止用の微小値
+
+    Returns:
+        L2正規化されたベクトル（元のノルムが0の場合はゼロベクトル）
+    """
+    norm = float(np.linalg.norm(vec))
+    if norm < eps:
+        return np.zeros_like(vec)
+    return vec / norm
+
+
 class ImageQualityAnalyzer:
     """画像品質アナライザー."""
 
-    def __init__(self, genre: str = "mixed"):
-        """アナライザーを初期化する."""
+    def __init__(self, genre: str = "mixed", config: AnalyzerConfig | None = None):
+        """アナライザーを初期化する.
+
+        Args:
+            genre: ジャンル（重み付け用）
+            config: アナライザー設定（Noneの場合はデフォルト値を使用）
+        """
+        self.config = config or AnalyzerConfig()
         self.weights = GenreWeights.get_weights(genre)
         self.model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
@@ -81,7 +104,7 @@ class ImageQualityAnalyzer:
             image_features = self.model.get_image_features(**inputs)
             # L2正規化して返す
             features = image_features[0].cpu().numpy()
-            return features / np.linalg.norm(features)  # type: ignore[no-any-return]
+            return _safe_l2_normalize(features)
 
     def _extract_combined_features(
         self, img: np.ndarray, clip_features: np.ndarray
@@ -97,7 +120,7 @@ class ImageQualityAnalyzer:
         """
         hsv_features = self._extract_hsv_features(img)
         # L2正規化（既に正規化されているが、安全のため再正規化）
-        hsv_normalized = hsv_features / np.linalg.norm(hsv_features)
+        hsv_normalized = _safe_l2_normalize(hsv_features)
         # 結合
         return np.concatenate([hsv_normalized, clip_features])
 
@@ -124,7 +147,7 @@ class ImageQualityAnalyzer:
 
                 raw = self._calculate_raw_metrics(img)
                 norm = MetricNormalizer.normalize_all(raw)
-                semantic = self._calculate_semantic_score(pil_img_copy)
+                semantic = self._calculate_semantic_score_from_features(clip_features)
                 total = self._calculate_total_score(raw, norm, semantic)
 
                 return ImageMetrics(path, raw, norm, semantic, total, features)
@@ -140,14 +163,13 @@ class ImageQualityAnalyzer:
     def _calculate_raw_metrics(self, img: np.ndarray) -> dict[str, float]:
         """生の画像メトリクスを計算する.
 
-        メトリクス計算用に画像を長辺720pxに縮小して処理することで、
+        メトリクス計算用に画像を長辺max_dim pxに縮小して処理することで、
         計算コストを削減する。アスペクト比は保持する。
         """
-        # メトリクス計算用に画像を縮小（長辺720px、アスペクト比保持）
+        # メトリクス計算用に画像を縮小（長辺max_dim px、アスペクト比保持）
         h, w = img.shape[:2]
-        max_dim = 720
-        if max(h, w) > max_dim:
-            scale = max_dim / max(h, w)
+        if max(h, w) > self.config.max_dim:
+            scale = self.config.max_dim / max(h, w)
             new_h, new_w = int(h * scale), int(w * scale)
             img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
@@ -188,6 +210,26 @@ class ImageQualityAnalyzer:
             logits = torch.matmul(image_features, self._text_embeddings.T)
             return float(logits[0][0]) / 100.0
 
+    def _calculate_semantic_score_from_features(
+        self, clip_features: np.ndarray
+    ) -> float:
+        """既に計算済みのCLIP特徴からセマンティックスコアを計算する.
+
+        Args:
+            clip_features: 正規化済みのCLIP画像特徴（512次元）
+
+        Returns:
+            セマンティックスコア
+        """
+        # NumPy配列をtorch.Tensorに変換
+        with torch.inference_mode():
+            image_features = (
+                torch.from_numpy(clip_features).unsqueeze(0).to(self.device)
+            )
+            # キャッシュされたテキスト埋め込みとの類似度を計算
+            logits = torch.matmul(image_features, self._text_embeddings.T)
+            return float(logits[0][0]) / 100.0
+
     def _calculate_total_score(
         self, raw: dict[str, float], norm: dict[str, float], semantic: float
     ) -> float:
@@ -195,8 +237,16 @@ class ImageQualityAnalyzer:
         weighted_sum = sum(
             norm[k] * self.weights.get(k, 0.0) for k in norm if k in self.weights
         )
-        penalty = 0.6 if raw["brightness"] < 40 else 0.0
-        return max(0.0, (weighted_sum + (semantic * 0.2) - penalty) * 100.0)
+        penalty = (
+            self.config.brightness_penalty_value
+            if raw["brightness"] < self.config.brightness_penalty_threshold
+            else 0.0
+        )
+        return max(
+            0.0,
+            (weighted_sum + (semantic * self.config.semantic_weight) - penalty)
+            * self.config.score_multiplier,
+        )
 
     def analyze_batch(
         self,
@@ -222,11 +272,10 @@ class ImageQualityAnalyzer:
         Returns:
             解析結果のリスト（失敗した画像はNone）
         """
-        chunk_size = 128  # チャンクサイズ（前処理〜CLIPまでのメモリ使用量を抑える）
         results: List[Optional[ImageMetrics]] = []
 
-        for chunk_start in range(0, len(paths), chunk_size):
-            chunk_end = min(chunk_start + chunk_size, len(paths))
+        for chunk_start in range(0, len(paths), self.config.chunk_size):
+            chunk_end = min(chunk_start + self.config.chunk_size, len(paths))
             chunk_paths = paths[chunk_start:chunk_end]
 
             # ステージ1: チャンク単位でI/O + 前処理を並列実行
@@ -260,7 +309,9 @@ class ImageQualityAnalyzer:
 
                     # 正規化メトリクスとセマンティックスコアを計算
                     norm = MetricNormalizer.normalize_all(raw)
-                    semantic = self._calculate_semantic_score(pil_img)
+                    semantic = self._calculate_semantic_score_from_features(
+                        clip_features
+                    )
                     total = self._calculate_total_score(raw, norm, semantic)
 
                     results.append(
@@ -376,7 +427,7 @@ class ImageQualityAnalyzer:
                     batch_features = []
                     for j in range(image_features.shape[0]):
                         features = image_features[j].cpu().numpy()
-                        normalized = features / np.linalg.norm(features)
+                        normalized = _safe_l2_normalize(features)
                         batch_features.append(normalized)
 
                 # 結果を元のインデックスにマッピング

@@ -9,21 +9,27 @@ import numpy as np
 from ..analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from ..models.image_metrics import ImageMetrics
 from ..models.picker_statistics import PickerStatistics
+from ..models.selection_config import SelectionConfig
 
 
 class GameScreenPicker:
     """ゲーム画面選択クラス."""
 
     def __init__(
-        self, analyzer: ImageQualityAnalyzer, rng: Optional[random.Random] = None
+        self,
+        analyzer: ImageQualityAnalyzer,
+        config: SelectionConfig | None = None,
+        rng: Optional[random.Random] = None,
     ):
         """ピッカーを初期化する.
 
         Args:
             analyzer: 画像品質アナライザー
+            config: 選択設定（Noneの場合はデフォルト値を使用）
             rng: 乱数生成器（Noneの場合はデフォルトのRandomを使用）
         """
         self.analyzer = analyzer
+        self.config = config or SelectionConfig()
         self._rng = rng or random.Random()
 
     def _load_image_files(self, folder: str, recursive: bool) -> List[Path]:
@@ -58,7 +64,7 @@ class GameScreenPicker:
         """
         paths = [str(f) for f in files]
         results = self.analyzer.analyze_batch(
-            paths, batch_size=32, show_progress=show_progress
+            paths, batch_size=self.config.batch_size, show_progress=show_progress
         )
         return [r for r in results if r is not None]
 
@@ -67,23 +73,22 @@ class GameScreenPicker:
         all_results: List[ImageMetrics],
         num: int,
         similarity_threshold: float,
+        config: SelectionConfig | None = None,
     ) -> tuple[List[ImageMetrics], int]:
         """多様性を考慮して画像を選択する.
-
-        段階的しきい値緩和で指定数を確実に満たす：
-        1. 全候補を対象に類似度判定を行う
-        2. 指定数に満たない場合、しきい値を段階的に緩和
-        3. 最終フォールバックとして類似度制約を外して高スコア順で埋める
 
         Args:
             all_results: 解析済みの画像メトリクスリスト（スコア降順ソート済み）
             num: 選択する画像数
             similarity_threshold: 類似度の閾値（これ以上は類似とみなす）
+            config: 選択設定（Noneの場合はデフォルト値を使用）
 
         Returns:
             選択された画像メトリクスのリスト（最大num件、
             有効画像数以下なら必ずnum件）と類似度で除外された数のタプル
         """
+        selection_config = config or SelectionConfig()
+
         if not all_results:
             return [], 0
 
@@ -102,14 +107,8 @@ class GameScreenPicker:
             else:
                 normalized_features.append(c.features / norm)
 
-        # 段階的しきい値緩和のステップ（上限0.98）
-        threshold_steps = [
-            similarity_threshold,
-            min(similarity_threshold + 0.03, 0.98),
-            min(similarity_threshold + 0.06, 0.98),
-            min(similarity_threshold + 0.10, 0.98),
-            min(similarity_threshold + 0.15, 0.98),
-        ]
+        # 段階的しきい値緩和のステップ
+        threshold_steps = selection_config.compute_threshold_steps(similarity_threshold)
 
         selected: List[ImageMetrics] = []
         selected_indices: set[int] = set()
@@ -142,7 +141,7 @@ class GameScreenPicker:
                     processed_indices.add(idx)
                 else:
                     rejected_count += 1
-                    processed_indices.add(idx)
+                    # rejected は次のしきい値で再評価させるため追加しない
 
             if len(selected) >= num:
                 break
@@ -201,7 +200,7 @@ class GameScreenPicker:
 
         # 多様性に基づいて選択
         selected, rejected_by_similarity = self._select_diverse_images(
-            all_results, num, similarity_threshold
+            all_results, num, similarity_threshold, self.config
         )
 
         stats = PickerStatistics(
@@ -219,6 +218,7 @@ class GameScreenPicker:
         analyzed_images: List[ImageMetrics],
         num: int,
         similarity_threshold: float,
+        config: SelectionConfig | None = None,
     ) -> tuple[List[ImageMetrics], PickerStatistics]:
         """解析済みの画像リストから多様性を考慮して選択する.
 
@@ -229,6 +229,7 @@ class GameScreenPicker:
             analyzed_images: 解析済みの画像メトリクスリスト
             num: 選択する画像数
             similarity_threshold: 類似度の閾値
+            config: 選択設定（Noneの場合はデフォルト値を使用）
 
         Returns:
             (選択された画像メトリクスのリスト, 統計情報)
@@ -238,7 +239,7 @@ class GameScreenPicker:
             analyzed_images, key=lambda x: x.total_score, reverse=True
         )
         selected, rejected_by_similarity = GameScreenPicker._select_diverse_images(
-            sorted_results, num, similarity_threshold
+            sorted_results, num, similarity_threshold, config
         )
 
         stats = PickerStatistics(
