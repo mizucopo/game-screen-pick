@@ -1,6 +1,7 @@
 """game_screen_pick - 高精度・コンテンツ多様性重視選択ツール."""
 
 import argparse
+import random
 import shutil
 from pathlib import Path
 from typing import List
@@ -53,7 +54,9 @@ class Main:
         if self._analyzer is None:
             self._analyzer = ImageQualityAnalyzer(parsed_args.genre)
         if self._picker is None:
-            self._picker = GameScreenPicker(self._analyzer)
+            seed = parsed_args.seed
+            rng = random.Random(seed) if seed is not None else None
+            self._picker = GameScreenPicker(self._analyzer, rng=rng)
 
         best, stats = self._picker.select(
             parsed_args.input,
@@ -142,6 +145,12 @@ class Main:
         )
         parser.add_argument(
             "-r", "--recursive", action="store_true", help="サブフォルダも検索"
+        )
+        parser.add_argument(
+            "--seed",
+            type=int,
+            default=None,
+            help="乱数シード（再現可能な結果を得るために指定）",
         )
         return parser.parse_args(self.args)
 
