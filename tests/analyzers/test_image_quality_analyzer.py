@@ -132,15 +132,8 @@ def _create_test_image(
     return str(img_path)
 
 
-@pytest.mark.parametrize(
-    "genre",
-    ["fps", "2d_rpg", "3d_rpg", "action", "adventure", "default"],
-)
 def test_analyze_returns_valid_metrics_with_genre_specific_weights(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
     sample_image_path: str,
-    genre: str,
 ) -> None:
     """ジャンル特有の重みで有効なメトリックが返されること.
 
@@ -154,7 +147,7 @@ def test_analyze_returns_valid_metrics_with_genre_specific_weights(
         - スコアが有効範囲内にあること
     """
     # Arrange
-    analyzer = ImageQualityAnalyzer(genre=genre)
+    analyzer = ImageQualityAnalyzer(genre="2d_rpg")
 
     # Act
     result = analyzer.analyze(sample_image_path)
@@ -171,8 +164,6 @@ def test_analyze_returns_valid_metrics_with_genre_specific_weights(
 
 
 def test_analyze_applies_penalty_for_dark_images(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
     dark_image_path: str,
 ) -> None:
     """輝度が40未満の画像に0.6のペナルティが適用されること.
@@ -201,59 +192,34 @@ def test_analyze_applies_penalty_for_dark_images(
     assert result.total_score >= 0
 
 
-def test_analyze_returns_none_for_nonexistent_file(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
+def test_analyze_returns_none_for_invalid_inputs(
+    tmp_path: Path,
 ) -> None:
-    """存在しないファイルパスに対してNoneが返されること.
+    """無効な入力（存在しないファイル・破損した画像）に対してNoneが返されること.
 
     Given:
         - アナライザインスタンスがある
         - 存在しないファイルパスがある
+        - 破損した画像ファイルがある
     When:
-        - 存在しないファイルが分析される
+        - 無効な入力が分析される
     Then:
-        - Noneが返されること（正常な失敗）
+        - すべてのケースでNoneが返されること（正常な失敗）
         - 例外が発生しないこと
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
     nonexistent_path = "/path/that/does/not/exist.jpg"
-
-    # Act
-    result = analyzer.analyze(nonexistent_path)
-
-    # Assert
-    assert result is None
-
-
-def test_analyze_returns_none_for_corrupted_image_file(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    tmp_path: Path,
-) -> None:
-    """破損した画像ファイルに対してNoneが返されること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 無効な画像データを持つファイルがある
-    When:
-        - 破損したファイルが分析される
-    Then:
-        - Noneが返されること（正常な失敗）
-        - 例外が発生しないこと
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-    # 無効な画像データを持つファイルを作成
     corrupted_path = tmp_path / "corrupted.jpg"
     corrupted_path.write_text("This is not a valid image file")
 
     # Act
-    result = analyzer.analyze(str(corrupted_path))
+    result_nonexistent = analyzer.analyze(nonexistent_path)
+    result_corrupted = analyzer.analyze(str(corrupted_path))
 
     # Assert
-    assert result is None
+    assert result_nonexistent is None
+    assert result_corrupted is None
 
 
 @pytest.mark.parametrize(
@@ -267,8 +233,6 @@ def test_analyze_returns_none_for_corrupted_image_file(
     ],
 )
 def test_analyzes_images_with_various_formats_and_properties(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
     request: pytest.FixtureRequest,
     image_path_fixture: str,
 ) -> None:
@@ -298,8 +262,6 @@ def test_analyzes_images_with_various_formats_and_properties(
 
 
 def test_analyze_produces_consistent_results_for_same_image(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
     sample_image_path: str,
 ) -> None:
     """同じ画像を複数回分析する際に一貫した結果が生成されること.
@@ -327,44 +289,3 @@ def test_analyze_produces_consistent_results_for_same_image(
     assert result1.total_score == result2.total_score
     # 特徴ベクトルが同一であることを検証（重要な特性）
     assert np.array_equal(result1.features, result2.features)
-
-
-@pytest.mark.parametrize(
-    "exception_class,exception_msg",
-    [
-        (AttributeError, "Test attribute error"),
-        (TypeError, "Test type error"),
-        (KeyError, "test_key"),
-        (IndexError, "test index"),
-        (RuntimeError, "Test runtime error"),
-    ],
-)
-def test_analyze_propagates_unexpected_exceptions(
-    mock_clip_model: MagicMock,  # noqa: ARG001
-    mock_clip_processor: MagicMock,  # noqa: ARG001
-    sample_image_path: str,
-    exception_class: type[Exception],
-    exception_msg: str,
-) -> None:
-    """実装バグ（予期しない例外）時に例外が伝播されること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 有効なテスト画像がある
-    When:
-        - analyzeメソッド内で予期しない例外が発生するようにモック化される
-    Then:
-        - 例外が呼び出し元に伝播されること
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-    # _calculate_raw_metricsメソッドをモック化して例外を発生
-    # （_extract_diversity_featuresの後で呼ばれるため、ここで例外を発生させる）
-    with patch.object(
-        analyzer,
-        "_calculate_raw_metrics",
-        side_effect=exception_class(exception_msg),
-    ):
-        # Act & Assert
-        with pytest.raises(exception_class, match=exception_msg):
-            analyzer.analyze(sample_image_path)

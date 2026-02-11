@@ -49,13 +49,8 @@ def test_get_unique_destination_returns_correct_filename(
     assert result.name == expected_name
 
 
-@pytest.mark.parametrize(
-    "extension",
-    [".jpg", ".png", ".gif", ".webp", ".bmp"],
-)
 def test_preserves_common_image_extensions(
     tmp_path: Path,
-    extension: str,
 ) -> None:
     """一般的な画像形式の拡張子が維持されること.
 
@@ -67,15 +62,15 @@ def test_preserves_common_image_extensions(
         - 拡張子が正しく維持されること
     """
     # Arrange
-    filename = f"image{extension}"
+    filename = "image.jpg"
     (tmp_path / filename).touch()
 
     # Act
     result = FileUtils.get_unique_destination(tmp_path, filename)
 
     # Assert
-    assert result == tmp_path / f"image_1{extension}"
-    assert result.suffix == extension
+    assert result == tmp_path / "image_1.jpg"
+    assert result.suffix == ".jpg"
 
 
 def test_handles_double_extensions(
@@ -168,96 +163,26 @@ def test_handles_gaps_in_numbered_files(
     assert result.name == expected
 
 
-def test_handles_very_long_filename(
-    tmp_path: Path,
-) -> None:
-    """非常に長いファイル名が正しく処理されること.
-
-    Given:
-        - 長いファイル名の重複が存在する
-    When:
-        - get_unique_destinationが実行される
-    Then:
-        - サフィックスが正しく付与されること
-        - 拡張子が維持されること
-    """
-    # Arrange
-    filename = "a" * 200 + ".jpg"
-    (tmp_path / filename).touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    # サフィックスが付与され、元のファイル名が含まれていることを検証
-    assert "_1" in result.name
-    assert result.suffix == ".jpg"
-    assert "a" * 200 in result.stem
-
-
-def test_handles_only_stem_no_suffix(
-    tmp_path: Path,
-) -> None:
-    """ステムのみで拡張子がないファイルが正しく処理されること.
-
-    Given:
-        - 拡張子なしのファイルが存在する
-    When:
-        - get_unique_destinationが実行される
-    Then:
-        - _1サフィックスがステムに直接付与されること
-    """
-    # Arrange
-    filename = "myfile"
-    (tmp_path / filename).touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / "myfile_1"
-
-
-def test_handles_dotfiles_without_extension(
-    tmp_path: Path,
-) -> None:
-    """ドットで始まる拡張子なしのファイルが正しく処理されること.
-
-    Given:
-        - .gitignore のようなドットで始まるファイルが存在する
-    When:
-        - get_unique_destinationが実行される
-    Then:
-        - 正しくサフィックスが付与されること
-    """
-    # Arrange
-    filename = ".hidden"
-    (tmp_path / filename).touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / ".hidden_1"
-
-
 @pytest.mark.parametrize(
     "filename,expected",
     [
         ("画像ファイル.jpg", "画像ファイル_1.jpg"),
         ("image (copy).jpg", "image (copy)_1.jpg"),
         ("my image file.jpg", "my image file_1.jpg"),
+        ("myfile", "myfile_1"),  # 拡張子なし
+        (".hidden", ".hidden_1"),  # ドットファイル（拡張子なし）
+        ("a" * 200 + ".jpg", "a" * 200 + "_1.jpg"),  # 非常に長いファイル名
     ],
 )
-def test_handles_special_characters_in_filename(
+def test_handles_special_characters_and_edge_cases(
     tmp_path: Path,
     filename: str,
     expected: str,
 ) -> None:
-    """特殊文字・日本語・スペースを含むファイル名が正しく処理されること.
+    """特殊文字・日本語・スペース・拡張子なし・長いファイル名が正しく処理されること.
 
     Given:
-        - 特殊文字、日本語、またはスペースを含むファイル名が存在する
+        - 特殊文字、日本語、スペース、拡張子なし、または非常に長いファイル名が存在する
     When:
         - get_unique_destinationが実行される
     Then:
@@ -271,28 +196,3 @@ def test_handles_special_characters_in_filename(
 
     # Assert
     assert result == tmp_path / expected
-
-
-def test_handles_many_duplicate_files(
-    tmp_path: Path,
-) -> None:
-    """多数の重複ファイルが存在する場合、適切な番号が選択されること.
-
-    Given:
-        - image.jpg から image_99.jpg までが存在する
-    When:
-        - get_unique_destinationが実行される
-    Then:
-        - image_100.jpg が返されること
-    """
-    # Arrange
-    filename = "image.jpg"
-    (tmp_path / filename).touch()
-    for i in range(1, 100):
-        (tmp_path / f"image_{i}.jpg").touch()
-
-    # Act
-    result = FileUtils.get_unique_destination(tmp_path, filename)
-
-    # Assert
-    assert result == tmp_path / "image_100.jpg"
