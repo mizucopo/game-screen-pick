@@ -17,11 +17,9 @@ import numpy as np
 import pytest
 import torch
 
-from src.analyzers.image_quality_analyzer import (
-    ImageQualityAnalyzer,
-    _safe_l2_normalize,
-)
+from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
+from src.utils import VectorUtils
 
 
 @pytest.fixture(autouse=True)
@@ -584,7 +582,7 @@ def test_analyze_uses_combined_features_for_similarity(
 
     # 個別の特徴を抽出して比較
     expected_hsv = analyzer._extract_hsv_features(img)
-    expected_hsv_normalized = _safe_l2_normalize(expected_hsv)
+    expected_hsv_normalized = VectorUtils.safe_l2_normalize(expected_hsv)
     expected_clip = analyzer._extract_clip_features(pil_img_rgb)
 
     # 結合特徴の前半64次元はHSV特徴（正規化済み）
@@ -594,47 +592,3 @@ def test_analyze_uses_combined_features_for_similarity(
     # 結合特徴の後半512次元はCLIP特徴
     actual_clip = result.features[64:]
     assert np.allclose(actual_clip, expected_clip, atol=1e-5)
-
-
-def test_safe_l2_normalize_returns_zeros_for_zero_vector() -> None:
-    """ゼロベクトルが正規化されること.
-
-    Given:
-        - ゼロベクトルがある
-    When:
-        - _safe_l2_normalizeで正規化される
-    Then:
-        - ゼロベクトルが返されること（NaNではない）
-    """
-    # Arrange
-    zero_vec = np.array([0.0, 0.0, 0.0])
-
-    # Act
-    result = _safe_l2_normalize(zero_vec)
-
-    # Assert
-    assert result.shape == zero_vec.shape
-    assert np.all(result == 0.0)
-    assert not np.any(np.isnan(result))
-
-
-def test_safe_l2_normalize_normalizes_nonzero_vector() -> None:
-    """非ゼロベクトルが正しく正規化されること.
-
-    Given:
-        - 非ゼロベクトルがある
-    When:
-        - _safe_l2_normalizeで正規化される
-    Then:
-        - L2ノルムが1になること
-    """
-    # Arrange
-    vec = np.array([3.0, 4.0])  # ノルム = 5
-
-    # Act
-    result = _safe_l2_normalize(vec)
-
-    # Assert
-    expected_norm = 1.0
-    actual_norm = np.linalg.norm(result)
-    assert actual_norm == pytest.approx(expected_norm)
