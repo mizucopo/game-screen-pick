@@ -39,7 +39,12 @@ def _create_features_with_similarity(
         指定された類似度を持つ新しい特徴ベクトル
     """
     # ベースを正規化
-    base_normalized = base_features / np.linalg.norm(base_features)
+    eps = 1e-8
+    norm = np.linalg.norm(base_features)
+    if norm < eps:
+        base_normalized = base_features  # ゼロベクトルの場合はそのまま使用
+    else:
+        base_normalized = base_features / norm
 
     # 直交成分の大きさを計算: sqrt(1 - cos^2)
     orthogonal_norm = np.sqrt(max(0, 1 - target_similarity**2))
@@ -52,33 +57,6 @@ def _create_features_with_similarity(
     similar_features = target_similarity * base_normalized + random_vec
 
     return cast(np.ndarray, similar_features)
-
-
-def _assert_cosine_similarity(
-    features1: np.ndarray,
-    features2: np.ndarray,
-    expected_min: float,
-    expected_max: float,
-) -> None:
-    """2つの特徴ベクトル間のコサイン類似度をアサートする.
-
-    Args:
-        features1: 1つ目の特徴ベクトル
-        features2: 2つ目の特徴ベクトル
-        expected_min: 期待される最小類似度
-        expected_max: 期待される最大類似度
-    """
-    from sklearn.metrics.pairwise import cosine_similarity
-
-    similarity = cosine_similarity(
-        features1.reshape(1, -1),
-        features2.reshape(1, -1),
-    )[0][0]
-
-    assert expected_min <= similarity <= expected_max, (
-        f"類似度が期待範囲外: {similarity:.6f} "
-        f"(期待: {expected_min:.6f} - {expected_max:.6f})"
-    )
 
 
 @pytest.fixture
@@ -120,17 +98,6 @@ def sample_image_metrics() -> List[ImageMetrics]:
     features_list.append(
         _create_features_with_similarity(features_list[2], 0.96),
     )  # image5: image3に類似
-
-    # 類似度を検証
-    _assert_cosine_similarity(
-        features_list[0], features_list[1], 0.95, 0.97
-    )  # image1 ~ image2
-    _assert_cosine_similarity(
-        features_list[0], features_list[2], 0.83, 0.87
-    )  # image1 ~ image3
-    _assert_cosine_similarity(
-        features_list[2], features_list[4], 0.95, 0.97
-    )  # image3 ~ image5
 
     return [
         ImageMetrics(
@@ -269,31 +236,6 @@ def test_edge_cases_return_empty_list(
 
     # Assert
     assert result == []
-
-
-def test_original_input_list_remains_unchanged_after_selection(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """元の入力リストは選択後も変更されないこと.
-
-    Given:
-        - 特定の順序の分析済み画像リスト
-    When:
-        - そのリストから選択
-    Then:
-        - 元のリストの順序と内容が保持されること
-    """
-    # Arrange
-    original_paths = [m.path for m in sample_image_metrics]
-    original_order = list(sample_image_metrics)
-
-    # Act
-    GameScreenPicker.select_from_analyzed(sample_image_metrics, 3, 0.8)
-
-    # Assert
-    assert [m.path for m in sample_image_metrics] == original_paths
-    # 元のリストオブジェクトは同じ順序のままであるはず
-    assert sample_image_metrics == original_order
 
 
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(

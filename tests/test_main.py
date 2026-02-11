@@ -83,7 +83,7 @@ def test_cli_accepts_all_arguments(
     tmp_path: Path,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
-    """全ての引数が正しくパースされること.
+    """全ての引数が正しくパースされて処理が完了すること.
 
     Given:
         - 有効な入力ディレクトリが存在する
@@ -92,9 +92,8 @@ def test_cli_accepts_all_arguments(
     When:
         - CLIが全引数指定で実行される
     Then:
-        - ImageQualityAnalyzerが指定ジャンルで初期化されること
-        - picker.selectが正しいパラメータで呼ばれること
-        - 出力ディレクトリが作成されること
+        - プログラムが正常に完了すること
+        - 結果が正しく表示されること
     """
     # Arrange
     output_dir = str(tmp_path / "output")
@@ -125,11 +124,11 @@ def test_cli_accepts_all_arguments(
 
     Main().run()
 
-    # Assert
+    # Assert - 結果が正しく表示されること
     captured = capsys.readouterr()
-    # 指定された枚数の画像が選択される
+    assert "選択された画像一覧" in captured.out
     assert captured.out.count("Score:") == 1
-    # 成功メッセージが表示される
+    # 出力ディレクトリが作成され、コピーが実行されること
     assert "1 枚を" in captured.out
     assert output_dir in captured.out
     assert "保存しました" in captured.out
