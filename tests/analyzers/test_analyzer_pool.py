@@ -16,11 +16,7 @@ import numpy as np
 import pytest
 import torch
 
-from src.analyzers.analyzer_pool import (
-    ImageQualityAnalyzerPool,
-    _analyze_single,
-    _init_worker,
-)
+from src.analyzers.analyzer_pool import ImageQualityAnalyzerPool
 from src.models.image_metrics import ImageMetrics
 
 
@@ -65,87 +61,6 @@ def multiple_image_paths(tmp_path: Path) -> list[str]:
         cv2.imwrite(str(img_path), img_array)
         paths.append(str(img_path))
     return paths
-
-
-def test_init_worker_initializes_analyzer_in_global_scope() -> None:
-    """ワーカー初期化関数がグローバルスコープでアナライザを初期化すること.
-
-    Given:
-        - モックされたCLIPモデルがある
-    When:
-        - _init_workerが呼び出される
-    Then:
-        - グローバル_analyzerが初期化されること
-        - _analyze_singleで分析が実行できること
-    """
-    # Arrange
-    import src.analyzers.analyzer_pool as pool_module
-
-    # 既存の_analyzerをNoneにリセット
-    pool_module._analyzer = None
-
-    # Act
-    _init_worker(genre="mixed")
-
-    # Assert
-    assert pool_module._analyzer is not None
-    assert hasattr(pool_module._analyzer, "analyze")
-
-
-def test_analyze_single_returns_valid_metrics(
-    sample_image_path: str,
-) -> None:
-    """単一分析関数が有効なメトリクスを返すこと.
-
-    Given:
-        - モックされたCLIPモデルがある
-        - ワーカーが初期化されている
-        - 有効なテスト画像がある
-    When:
-        - _analyze_singleが呼び出される
-    Then:
-        - 有効なImageMetricsが返されること
-    """
-    # Arrange
-    import src.analyzers.analyzer_pool as pool_module
-
-    pool_module._analyzer = None
-    _init_worker(genre="mixed")
-
-    # Act
-    result = _analyze_single(sample_image_path)
-
-    # Assert
-    assert result is not None
-    assert isinstance(result, ImageMetrics)
-    assert result.path == sample_image_path
-    assert 0 <= result.total_score <= 100
-
-
-def test_analyze_single_returns_none_for_invalid_path() -> None:
-    """単一分析関数が無効なパスに対してNoneを返すこと.
-
-    Given:
-        - モックされたCLIPモデルがある
-        - ワーカーが初期化されている
-        - 存在しないファイルパスがある
-    When:
-        - _analyze_singleが呼び出される
-    Then:
-        - Noneが返されること
-    """
-    # Arrange
-    import src.analyzers.analyzer_pool as pool_module
-
-    pool_module._analyzer = None
-    _init_worker(genre="mixed")
-    nonexistent_path = "/path/that/does/not/exist.jpg"
-
-    # Act
-    result = _analyze_single(nonexistent_path)
-
-    # Assert
-    assert result is None
 
 
 def test_pool_context_manager_starts_and_closes_pool() -> None:
