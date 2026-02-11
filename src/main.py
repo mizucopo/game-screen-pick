@@ -57,6 +57,51 @@ class Main:
 
         self._display_results(best)
 
+    def _validate_positive_int(self, value: str) -> int:
+        """正の整数をバリデーションする.
+
+        Args:
+            value: コマンドラインから渡された文字列値
+
+        Returns:
+            バリデーション済みの整数値
+
+        Raises:
+            argparse.ArgumentTypeError: 値が正の整数でない場合
+        """
+        try:
+            ivalue = int(value)
+            if ivalue <= 0:
+                raise argparse.ArgumentTypeError(
+                    f"--num: 正の整数を指定してください（実際の値: {ivalue}）"
+                )
+            return ivalue
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(f"'{value}' は整数ではありません") from e
+
+    def _validate_similarity_range(self, value: str) -> float:
+        """類似度しきい値をバリデーションする（0.0 ~ 1.0）.
+
+        Args:
+            value: コマンドラインから渡された文字列値
+
+        Returns:
+            バリデーション済みの浮動小数点値
+
+        Raises:
+            argparse.ArgumentTypeError: 値が0.0~1.0の範囲外の場合
+        """
+        try:
+            fvalue = float(value)
+            if not 0.0 <= fvalue <= 1.0:
+                raise argparse.ArgumentTypeError(
+                    f"--similarity: 0.0~1.0の範囲で指定してください"
+                    f"（実際の値: {fvalue}）"
+                )
+            return fvalue
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(f"'{value}' は数値ではありません") from e
+
     def _parse_arguments(self) -> argparse.Namespace:
         """コマンドライン引数をパースする.
 
@@ -68,7 +113,9 @@ class Main:
         parser = argparse.ArgumentParser(description="Diverse Game Screen Picker")
         parser.add_argument("input", help="入力フォルダ")
         parser.add_argument("-c", "--copy-to", help="出力フォルダ")
-        parser.add_argument("-n", "--num", type=int, default=10, help="選択枚数")
+        parser.add_argument(
+            "-n", "--num", type=self._validate_positive_int, default=10, help="選択枚数"
+        )
         parser.add_argument(
             "-g",
             "--genre",
@@ -79,7 +126,7 @@ class Main:
         parser.add_argument(
             "-s",
             "--similarity",
-            type=float,
+            type=self._validate_similarity_range,
             default=0.82,
             help="類似度しきい値(0.7~0.85推奨)",
         )
