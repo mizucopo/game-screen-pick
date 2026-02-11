@@ -1,5 +1,7 @@
 """SelectionConfigの単体テスト."""
 
+import pytest
+
 from src.models.selection_config import SelectionConfig
 
 
@@ -152,3 +154,48 @@ def test_default_list_is_not_shared_between_instances() -> None:
     # Assert
     assert config1.threshold_relaxation_steps == [0.03, 0.06, 0.10, 0.15, 0.99]
     assert config2.threshold_relaxation_steps == [0.03, 0.06, 0.10, 0.15]
+
+
+@pytest.mark.parametrize(
+    "field_name,invalid_value",
+    [
+        ("batch_size", 0),
+        ("batch_size", -10),
+        ("max_threshold", -0.1),
+        ("max_threshold", 1.1),
+        ("max_threshold", 2.0),
+    ],
+)
+def test_selection_config_rejects_invalid_values(
+    field_name: str, invalid_value: int | float
+) -> None:
+    """無効な値が設定された場合に例外が発生すること.
+
+    Given:
+        - 無効な値
+    When:
+        - SelectionConfigを作成
+    Then:
+        - ValueErrorがスローされること
+    """
+    # Arrange
+    kwargs = {field_name: invalid_value}
+
+    # Act & Assert
+    with pytest.raises(ValueError):
+        SelectionConfig(**kwargs)  # type: ignore[arg-type]
+
+
+def test_selection_config_rejects_negative_relaxation_steps() -> None:
+    """threshold_relaxation_stepsに負の値が含まれる場合に例外が発生すること.
+
+    Given:
+        - 負の値を含むthreshold_relaxation_steps
+    When:
+        - SelectionConfigを作成
+    Then:
+        - ValueErrorがスローされること
+    """
+    # Arrange & Act & Assert
+    with pytest.raises(ValueError, match="threshold_relaxation_steps"):
+        SelectionConfig(threshold_relaxation_steps=[0.1, -0.05, 0.2])

@@ -80,22 +80,18 @@ def test_analyzer_config_can_be_customized() -> None:
 def test_analyzer_config_rejects_invalid_values(
     field_name: str, invalid_value: int | float
 ) -> None:
-    """無効な値が設定された場合に妥当性チェックが行われること.
+    """無効な値が設定された場合に例外が発生すること.
 
     Given:
         - 無効な値
     When:
         - AnalyzerConfigを作成
     Then:
-        - 負の値やゼロが許容されないこと（データ型としての検証）
+        - ValueErrorがスローされること
     """
-    # Arrange & Act
-    # dataclass自体はバリデーションを行わないため、
-    # 負の値を設定してもインスタンスは作成される
+    # Arrange
     kwargs = {field_name: invalid_value}
-    config = AnalyzerConfig(**kwargs)  # type: ignore[arg-type]
 
-    # Assert - 設定値がそのまま保持されることを確認
-    assert getattr(config, field_name) == invalid_value
-    # 実際の使用時には、これらの値がロジック内で適切に処理されるか
-    # 呼び出し側の責任で検証する必要がある
+    # Act & Assert
+    with pytest.raises(ValueError):
+        AnalyzerConfig(**kwargs)  # type: ignore[arg-type]
