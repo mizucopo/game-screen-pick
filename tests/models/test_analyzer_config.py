@@ -23,7 +23,7 @@ def test_analyzer_config_has_default_values() -> None:
     assert config.chunk_size == 128
     assert config.brightness_penalty_threshold == 40.0
     assert config.brightness_penalty_value == 0.6
-    assert config.semantic_weight == 0.2
+    assert config.semantic_weight == 0.002  # コサイン類似度用に調整
     assert config.score_multiplier == 100.0
 
 
