@@ -151,6 +151,10 @@ class ImageQualityAnalyzer:
         1. I/O+CV前処理ステージを並列（ThreadPoolExecutor）
         2. CLIPステージはバッチで直列
 
+        メモリ効率化のためチャンク単位でストリーミング処理:
+        - チャンク単位で「前処理→CLIP→結果確定→解放」を実行
+        - 大規模画像時のスワップ回避で速度安定化
+
         Args:
             paths: 画像ファイルパスのリスト
             batch_size: CLIP推論のバッチサイズ（デフォルト32）
@@ -159,54 +163,70 @@ class ImageQualityAnalyzer:
         Returns:
             解析結果のリスト（失敗した画像はNone）
         """
-        # ステージ1: I/O + CV前処理を並列実行
-        preprocessed = self._load_and_preprocess_images(paths)
-
-        # PIL画像とメトリクスを分離
-        pil_images: List[Optional[Image.Image]] = []
-        raw_metrics_list: List[Optional[dict[str, float]]] = []
-        features_list: List[Optional[np.ndarray]] = []
-
-        for pil_img, raw, features in preprocessed:
-            pil_images.append(pil_img)
-            raw_metrics_list.append(raw)
-            features_list.append(features)
-
-        # ステージ2: バッチCLIP推論を実行
-        semantic_scores = self._calculate_semantic_scores_batch(
-            pil_images, initial_batch_size=batch_size
-        )
-
-        # 結果を構築
+        chunk_size = 128  # チャンクサイズ（前処理〜CLIPまでのメモリ使用量を抑える）
         results: List[Optional[ImageMetrics]] = []
-        for i, (path, pil_img, raw, features) in enumerate(
-            zip(paths, pil_images, raw_metrics_list, features_list)
-        ):
-            if pil_img is None or raw is None or features is None:
-                results.append(None)
-                continue
 
-            # semantic_scoresがNoneの場合もスキップ
-            semantic_score = semantic_scores[i]
-            if semantic_score is None:
-                results.append(None)
-                continue
+        for chunk_start in range(0, len(paths), chunk_size):
+            chunk_end = min(chunk_start + chunk_size, len(paths))
+            chunk_paths = paths[chunk_start:chunk_end]
 
-            if show_progress and i % 50 == 0:
-                print(f"解析済み: {i}/{len(paths)}")
+            # ステージ1: チャンク単位でI/O + CV前処理を並列実行
+            preprocessed = self._load_and_preprocess_images(chunk_paths)
 
-            try:
-                norm = MetricNormalizer.normalize_all(raw)
-                total = self._calculate_total_score(raw, norm, semantic_score)
+            # PIL画像とメトリクスを分離
+            pil_images: List[Optional[Image.Image]] = []
+            raw_metrics_list: List[Optional[dict[str, float]]] = []
+            features_list: List[Optional[np.ndarray]] = []
 
-                results.append(
-                    ImageMetrics(path, raw, norm, semantic_score, total, features)
-                )
-            except self._get_expected_errors() as e:
-                logger.warning(
-                    f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
-                )
-                results.append(None)
+            for pil_img, raw, features in preprocessed:
+                pil_images.append(pil_img)
+                raw_metrics_list.append(raw)
+                features_list.append(features)
+
+            # ステージ2: チャンク単位でバッチCLIP推論を実行
+            semantic_scores = self._calculate_semantic_scores_batch(
+                pil_images, initial_batch_size=batch_size
+            )
+
+            # ステージ3: チャンク単位で結果を構築
+            for i, (path, pil_img, raw, features) in enumerate(
+                zip(chunk_paths, pil_images, raw_metrics_list, features_list)
+            ):
+                if pil_img is None or raw is None or features is None:
+                    results.append(None)
+                    continue
+
+                # semantic_scoresがNoneの場合もスキップ
+                semantic_score = semantic_scores[i]
+                if semantic_score is None:
+                    results.append(None)
+                    continue
+
+                if show_progress and (chunk_start + i) % 50 == 0:
+                    print(f"解析済み: {chunk_start + i}/{len(paths)}")
+
+                try:
+                    norm = MetricNormalizer.normalize_all(raw)
+                    total = self._calculate_total_score(raw, norm, semantic_score)
+
+                    results.append(
+                        ImageMetrics(path, raw, norm, semantic_score, total, features)
+                    )
+                except self._get_expected_errors() as e:
+                    logger.warning(
+                        f"画像分析をスキップしました: {path}, "
+                        f"理由: {type(e).__name__}: {e}"
+                    )
+                    results.append(None)
+
+            # チャンク処理完了後にメモリを解放
+            del (
+                preprocessed,
+                pil_images,
+                raw_metrics_list,
+                features_list,
+                semantic_scores,
+            )
 
         return results
 
