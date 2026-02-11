@@ -62,7 +62,6 @@ class ImageQualityAnalyzer:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         gray_size = gray.size
-        img_size = img.size
         gray_mean = np.mean(gray)
         kernel = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
 
@@ -78,7 +77,7 @@ class ImageQualityAnalyzer:
             "action_intensity": np.std(cv2.filter2D(gray, -1, kernel)),
             "visual_balance": max(0, 100 - abs(gray_mean - 128) * 0.5),
             "dramatic_score": (
-                np.sum((hsv[:, :, 1] > 180) & (hsv[:, :, 2] > 180)) / img_size
+                np.sum((hsv[:, :, 1] > 180) & (hsv[:, :, 2] > 180)) / gray_size
             )
             * 1000,
         }
