@@ -26,6 +26,19 @@ class ImageQualityAnalyzer:
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model.to(self.device)
+        # テキスト埋め込みの事前計算とキャッシュ
+        self._target_text = "epic game scenery"
+        self._text_embeddings = self._precompute_text_embeddings()
+
+    def _precompute_text_embeddings(self) -> torch.Tensor:
+        """テキスト埋め込みを事前計算してキャッシュする."""
+        with torch.no_grad():
+            inputs = self.processor(
+                text=[self._target_text],
+                return_tensors="pt",
+                padding=True,
+            ).to(self.device)
+            return self.model.get_text_features(**inputs)  # type: ignore[no-any-return]
 
     def _extract_diversity_features(self, img: np.ndarray) -> np.ndarray:
         """見た目の特徴を抽出（色と構造）."""
@@ -87,12 +100,15 @@ class ImageQualityAnalyzer:
         """CLIPモデルを使用してセマンティックスコアを計算する."""
         with torch.no_grad():
             inputs = self.processor(
-                text=["epic game scenery"],
                 images=pil_img,
                 return_tensors="pt",
                 padding=True,
             ).to(self.device)
-            return float(self.model(**inputs).logits_per_image[0][0]) / 100.0
+            image_features = self.model.get_image_features(**inputs)
+
+            # キャッシュされたテキスト埋め込みを使用
+            logits = torch.matmul(image_features, self._text_embeddings.T)
+            return float(logits[0][0]) / 100.0
 
     def _calculate_total_score(
         self, raw: dict[str, float], norm: dict[str, float], semantic: float
