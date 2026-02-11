@@ -405,3 +405,80 @@ def test_analyze_batch_falls_back_on_oom(
     assert isinstance(results[0], ImageMetrics)
     # バッチサイズ縮小のために少なくとも2回呼び出されている
     assert call_count[0] >= 2
+
+
+def test_analyze_batch_retries_only_failed_batches_on_oom(
+    sample_image_path: str,
+    png_image_path: str,
+    small_image_path: str,
+    dark_image_path: str,
+) -> None:
+    """OOM発生時に失敗したバッチのみが再試行されること.
+
+    Given:
+        - アナライザインスタンスがある
+        - 複数の有効なテスト画像がある
+        - 2番目のバッチでCUDA OOMが発生する状況
+    When:
+        - バッチ処理で分析される（バッチサイズ2）
+    Then:
+        - 最初のバッチの結果が保持されること
+        - 失敗したバッチのみが縮小されて再試行されること
+        - すべての有効な画像の結果が返されること
+    """
+    # Arrange
+    analyzer = ImageQualityAnalyzer()
+    paths = [sample_image_path, png_image_path, small_image_path, dark_image_path]
+    batch_size = 2  # 2画像ずつ処理
+
+    # Act & Assert
+    # 2番目の呼び出しでOOMを発生させる
+    original_model = analyzer.model
+    call_count = [0]
+    batch_sizes_seen: list[int] = []
+
+    def mock_get_image_features_with_oom(**kwargs: object) -> torch.Tensor:
+        call_count[0] += 1
+
+        # pixel_values から実際のバッチサイズを取得
+        inputs = kwargs.get("pixel_values")
+        if inputs is not None and isinstance(inputs, torch.Tensor):
+            actual_batch_size = inputs.shape[0]
+        else:
+            actual_batch_size = 1  # フォールバック
+
+        batch_sizes_seen.append(actual_batch_size)
+
+        # 2番目の呼び出し（バッチ2）でOOMを発生
+        if call_count[0] == 2:
+            raise torch.cuda.OutOfMemoryError()
+
+        # 該当するバッチサイズのテンソルを返す
+        return torch.randn(actual_batch_size, 512)
+
+    with patch.object(
+        original_model,
+        "get_image_features",
+        side_effect=mock_get_image_features_with_oom,
+    ):
+        results = analyzer.analyze_batch(paths, batch_size=batch_size)
+
+    # Assert - すべての画像が処理されている
+    assert len(results) == 4
+    for result in results:
+        assert result is not None
+        assert isinstance(result, ImageMetrics)
+
+    # 呼び出しパターンを検証:
+    # 1. 最初のバッチ(サイズ2)が正常処理
+    # 2. 2番目のバッチ(サイズ2)でOOM発生
+    # 3. バッチサイズ1でリトライ
+    # 4. バッチサイズ1で残りを処理
+    assert len(batch_sizes_seen) >= 3
+
+    # 最初の呼び出しはバッチサイズ2
+    assert batch_sizes_seen[0] == 2
+    # 2番目の呼び出しもバッチサイズ2（ここでOOM）
+    assert batch_sizes_seen[1] == 2
+    # 3番目の呼び出しはバッチサイズ1（OOM後のリトライ）
+    assert batch_sizes_seen[2] == 1

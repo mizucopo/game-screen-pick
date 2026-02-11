@@ -292,9 +292,10 @@ class ImageQualityAnalyzer:
     ) -> List[Optional[float]]:
         """複数のPIL画像に対してCLIP推論をバッチ実行する.
 
-        OOM対策:
+        OOM対策（失敗したバッチのみ再試行）:
         - initial_batch_sizeから開始（デフォルト32）
-        - torch.cuda.OutOfMemoryError発生時にバッチサイズを半分にしてリトライ
+        - torch.cuda.OutOfMemoryError発生時に失敗したバッチのみを分割してリトライ
+        - 未処理のバッチは縮小されたバッチサイズで処理
         - 最小バッチサイズ1まで試行（32→16→8→4→2→1）
         - それでも失敗した画像はNoneとして返す
 
@@ -316,53 +317,58 @@ class ImageQualityAnalyzer:
         # 結果を格納する配列（初期値はNone）
         results: List[Optional[float]] = [None] * len(pil_images)
 
-        # バッチサイズをinitial_batch_sizeから開始
+        # 現在のバッチサイズ
         current_batch_size = initial_batch_size
 
-        # バッチ処理
-        while current_batch_size >= 1:
+        # 処理位置を追跡
+        i = 0
+        while i < len(valid_images):
+            # 現在のバッチを取得
+            batch_start = i
+            batch_end = min(i + current_batch_size, len(valid_images))
+            batch: List[Image.Image] = valid_images[batch_start:batch_end]
+
             try:
-                for i in range(0, len(valid_images), current_batch_size):
-                    batch: List[Image.Image] = valid_images[i : i + current_batch_size]
+                # GPUの場合はautocastでfp16推論を使用（高速化）
+                autocast_context = (
+                    torch.autocast(device_type="cuda", dtype=torch.float16)
+                    if self.device == "cuda"
+                    else contextlib.nullcontext()
+                )
+                with autocast_context, torch.inference_mode():
+                    inputs = self.processor(
+                        images=batch,
+                        return_tensors="pt",
+                        padding=True,
+                    ).to(self.device)
+                    image_features = self.model.get_image_features(**inputs)
 
-                    # GPUの場合はautocastでfp16推論を使用（高速化）
-                    autocast_context = (
-                        torch.autocast(device_type="cuda", dtype=torch.float16)
-                        if self.device == "cuda"
-                        else contextlib.nullcontext()
-                    )
-                    with autocast_context, torch.inference_mode():
-                        inputs = self.processor(
-                            images=batch,
-                            return_tensors="pt",
-                            padding=True,
-                        ).to(self.device)
-                        image_features = self.model.get_image_features(**inputs)
+                    # キャッシュされたテキスト埋め込みを使用
+                    logits = torch.matmul(image_features, self._text_embeddings.T)
+                    batch_scores = (logits[:, 0] / 100.0).cpu().tolist()
 
-                        # キャッシュされたテキスト埋め込みを使用
-                        logits = torch.matmul(image_features, self._text_embeddings.T)
-                        batch_scores = (logits[:, 0] / 100.0).cpu().tolist()
+                # 結果を元のインデックスにマッピング
+                for j, score in enumerate(batch_scores):
+                    original_idx = valid_indices[batch_start + j]
+                    results[original_idx] = score
 
-                    # 結果を元のインデックスにマッピング
-                    for j, score in enumerate(batch_scores):
-                        results[valid_indices[i + j]] = score
-
-                # 成功したらループを抜ける
-                break
+                # バッチ処理成功、次へ進む
+                i = batch_end
 
             except torch.cuda.OutOfMemoryError:
                 # バッチサイズを半分にしてリトライ
-                current_batch_size = current_batch_size // 2
-                # まだリトライ余地があれば警告
-                if current_batch_size >= 1:
+                new_batch_size = current_batch_size // 2
+                if new_batch_size >= 1:
                     logger.warning(
-                        f"CUDA OOM発生。バッチサイズを{current_batch_size}"
-                        "に縮小してリトライします。"
+                        f"CUDA OOM発生（位置{batch_start}/{len(valid_images)}）。"
+                        f"バッチサイズを{new_batch_size}に縮小してリトライします。"
                     )
+                    current_batch_size = new_batch_size
+                    # i は変更せず、同じ位置から小さいバッチサイズでリトライ
                 else:
                     logger.error(
-                        "バッチサイズ1でもOOMが発生しました。"
-                        "一部画像の処理をスキップします。"
+                        f"バッチサイズ1でもOOMが発生しました（位置{batch_start}）。"
+                        "残りの画像の処理をスキップします。"
                     )
                     # 処理済みの結果は残すが、未処理の画像はNoneのまま
                     break
