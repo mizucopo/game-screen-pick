@@ -410,3 +410,144 @@ def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
     # 出力ディレクトリには正確にnum_files個のファイルが存在
     output_files = list(output_dir.glob(f"*{extension}"))
     assert len(output_files) == num_files
+
+
+# ============================================================================
+# Tests for Input Validation
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "num_arg,error_message",
+    [
+        ("-1", "正の整数を指定してください"),
+        ("0", "正の整数を指定してください"),
+        ("-100", "正の整数を指定してください"),
+        ("abc", "整数ではありません"),
+    ],
+)
+def test_cli_rejects_invalid_num_values(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    test_image_directory: str,
+    num_arg: str,
+    error_message: str,
+) -> None:
+    """--num に不正な値が指定された場合にエラーが表示されること.
+
+    Given:
+        - 有効な入力ディレクトリが存在する
+        - --num に不正な値が指定されている
+    When:
+        - CLIが実行される
+    Then:
+        - 適切なエラーメッセージが表示されること
+        - プログラムが終了すること
+    """
+    # Arrange
+    monkeypatch.setattr("sys.argv", ["main.py", test_image_directory, "-n", num_arg])
+
+    # Act & Assert
+    from src.main import Main
+
+    with pytest.raises(SystemExit):
+        Main().run()
+
+    captured = capsys.readouterr()
+    # エラーメッセージが含まれている
+    assert error_message in captured.err
+
+
+@pytest.mark.parametrize(
+    "similarity_arg,error_message",
+    [
+        ("1.5", "0.0~1.0の範囲で指定してください"),
+        ("2.0", "0.0~1.0の範囲で指定してください"),
+        ("-0.1", "0.0~1.0の範囲で指定してください"),
+        ("-1.0", "0.0~1.0の範囲で指定してください"),
+        ("abc", "数値ではありません"),
+    ],
+)
+def test_cli_rejects_invalid_similarity_values(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    test_image_directory: str,
+    similarity_arg: str,
+    error_message: str,
+) -> None:
+    """--similarity に不正な値が指定された場合にエラーが表示されること.
+
+    Given:
+        - 有効な入力ディレクトリが存在する
+        - --similarity に不正な値が指定されている
+    When:
+        - CLIが実行される
+    Then:
+        - 適切なエラーメッセージが表示されること
+        - プログラムが終了すること
+    """
+    # Arrange
+    monkeypatch.setattr(
+        "sys.argv", ["main.py", test_image_directory, "-s", similarity_arg]
+    )
+
+    # Act & Assert
+    from src.main import Main
+
+    with pytest.raises(SystemExit):
+        Main().run()
+
+    captured = capsys.readouterr()
+    # エラーメッセージが含まれている
+    assert error_message in captured.err
+
+
+@pytest.mark.parametrize(
+    "num_arg,similarity_arg",
+    [
+        ("1", "0.0"),  # 境界値（最小）
+        ("1", "1.0"),  # 境界値（最大）
+        ("100", "0.5"),  # 有効な値
+    ],
+)
+def test_cli_accepts_valid_boundary_values(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mock_game_screen_picker: MagicMock,
+    test_image_directory: str,
+    num_arg: str,
+    similarity_arg: str,
+    sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
+) -> None:
+    """--num と --similarity の境界値が正しく受け付けられること.
+
+    Given:
+        - 有効な入力ディレクトリが存在する
+        -- --num と --similarity に境界値または有効な値が指定されている
+    When:
+        - CLIが実行される
+    Then:
+        - プログラムが正常終了すること
+        - 結果が表示されること
+    """
+    # Arrange
+    img_path = Path(test_image_directory) / "image0.jpg"
+    img_path.touch()
+    results = [sample_image_metrics_factory(str(img_path), 95.0)]
+    mock_game_screen_picker.select.return_value = results
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["main.py", test_image_directory, "-n", num_arg, "-s", similarity_arg],
+    )
+
+    # Act
+    from src.main import Main
+
+    Main().run()
+
+    # Assert
+    captured = capsys.readouterr()
+    # 正常に終了し、結果が表示される
+    assert "選択された画像一覧" in captured.out
+    assert "Score:" in captured.out
