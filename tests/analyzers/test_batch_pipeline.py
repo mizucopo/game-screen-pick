@@ -394,7 +394,7 @@ def test_process_batch_applies_brightness_penalty_correctly(
 
 
 def test_load_and_preprocess_images_handles_invalid_files(
-    batch_pipeline: BatchPipeline, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """無効なファイルが正しく処理されること.
 
@@ -418,7 +418,7 @@ def test_load_and_preprocess_images_handles_invalid_files(
 
     # Act
     paths = [str(valid_path), str(invalid_path)]
-    results = batch_pipeline._load_and_preprocess_images(paths)
+    results = BatchPipeline.load_and_preprocess_images(paths)
 
     # Assert
     assert len(results) == 2

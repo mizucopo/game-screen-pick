@@ -32,7 +32,8 @@ class FeatureExtractor:
         """
         self.model_manager = model_manager
 
-    def extract_hsv_features(self, img: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def extract_hsv_features(img: np.ndarray) -> np.ndarray:
         """HSV色空間のヒストグラム特徴を抽出する.
 
         Args:
@@ -80,7 +81,7 @@ class FeatureExtractor:
         Returns:
             結合された特徴ベクトル（576次元）
         """
-        hsv_features = self.extract_hsv_features(img)
+        hsv_features = FeatureExtractor.extract_hsv_features(img)
         # L2正規化（既に正規化されているが、安全のため再正規化）
         hsv_normalized = VectorUtils.safe_l2_normalize(hsv_features)
         # 結合
