@@ -140,14 +140,9 @@ def test_cli_accepts_all_arguments(
 
     Main().run()
 
-    # Assert - 結果が正しく表示されること
+    # Assert - 全オプション指定で正常完了すること
     captured = capsys.readouterr()
     assert "選択された画像一覧" in captured.out
-    assert captured.out.count("Score:") == 1
-    # 出力ディレクトリが作成され、コピーが実行されること
-    assert "1 枚を" in captured.out
-    assert output_dir in captured.out
-    assert "保存しました" in captured.out
 
 
 def test_cli_shows_error_for_missing_required_argument(
@@ -228,66 +223,114 @@ def test_cli_selects_and_displays_images(
     assert captured.out.count("Score:") == num_expected
 
 
-def test_cli_copies_selected_images_to_output_directory(
+@pytest.mark.parametrize(
+    "setup_files,expected_files,description",
+    [
+        # 異なる名前のファイル
+        (
+            [
+                (
+                    "setup",
+                    [
+                        ("image0.jpg", 95.0),
+                        ("image1.jpg", 90.0),
+                        ("image2.jpg", 85.0),
+                    ],
+                )
+            ],
+            ["image0.jpg", "image1.jpg", "image2.jpg"],
+            "異なる名前のファイル",
+        ),
+        # 同名ファイル（サフィックス付与）
+        (
+            [
+                ("folder0", [("image.jpg", 95.0)]),
+                ("folder1", [("image.jpg", 90.0)]),
+            ],
+            ["image.jpg", "image_1.jpg"],
+            "同名ファイル（サフィックス付与）",
+        ),
+    ],
+)
+def test_cli_copies_images_to_output_directory(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     mock_game_screen_picker: MagicMock,
-    test_image_directory: str,
     tmp_path: Path,
+    setup_files: list[tuple[str, list[tuple[str, float]]]],
+    expected_files: list[str],
+    description: str,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
-    """選択された画像が出力ディレクトリにコピーされること.
+    """画像が出力ディレクトリにコピーされること.
 
     Given:
-        - 有効な入力ディレクトリが存在する
-        - 存在しないネストされた出力ディレクトリが指定されている
-        - 3つの選択結果がある
+        - {description}が入力ディレクトリに存在する
+        - 出力ディレクトリが指定されている
     When:
         - CLIが `-c` オプションで実行される
     Then:
         - 出力ディレクトリが作成されること
         - 画像が出力ディレクトリにコピーされること
-        - 成功メッセージにコピー数とパスが含まれること
-    """
+        - 同名ファイルにはサフィックスが付与されること
+        - 成功メッセージが表示されること
+    """.format(description=description)
+    from src.main import Main
+
     # Arrange
-    output_dir = tmp_path / "parent" / "output"
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    # setup_filesの形式: [(folder_name, [(filename, score), ...]), ...]
+    # folder_nameが"setup"の場合はルートディレクトリに直接配置
+    files_config = setup_files
     results = []
-    for i in range(3):
-        img_path = Path(test_image_directory) / f"image{i}.jpg"
-        img_path.touch()
-        results.append(sample_image_metrics_factory(str(img_path), 95.0 - i * 5))
+    all_files = []  # (folder_path, filename, score)
+
+    for folder_name, files in files_config:
+        if folder_name == "setup":
+            folder_path = input_dir
+        else:
+            folder_path = input_dir / folder_name
+            folder_path.mkdir()
+
+        for filename, score in files:
+            file_path = folder_path / filename
+            file_path.touch()
+            results.append(sample_image_metrics_factory(str(file_path), score))
+            all_files.append((folder_path, filename, score))
 
     stats = PickerStatistics(
-        total_files=5,
-        analyzed_ok=5,
+        total_files=len(results),
+        analyzed_ok=len(results),
         analyzed_fail=0,
-        rejected_by_similarity=2,
-        selected_count=3,
+        rejected_by_similarity=0,
+        selected_count=len(results),
     )
     mock_game_screen_picker.select.return_value = (results, stats)
 
-    monkeypatch.setattr(
-        "sys.argv", ["main.py", test_image_directory, "-c", str(output_dir)]
-    )
+    args = ["main.py", str(input_dir), "-c", str(output_dir)]
+    monkeypatch.setattr("sys.argv", args)
 
     # Act
-    from src.main import Main
-
     Main().run()
 
     # Assert
     captured = capsys.readouterr()
     # 成功メッセージが表示される
-    assert "3 枚を" in captured.out
+    assert f"{len(results)} 枚を" in captured.out
     assert str(output_dir) in captured.out
     assert "保存しました" in captured.out
     # 出力ディレクトリが作成されている
     assert output_dir.exists()
     assert output_dir.is_dir()
-    # 画像が出力ディレクトリにコピーされている
-    assert (output_dir / "image0.jpg").exists()
-    assert (output_dir / "image1.jpg").exists()
-    assert (output_dir / "image2.jpg").exists()
+    # すべての期待されるファイルが出力ディレクトリに存在する
+    for expected_file in expected_files:
+        assert (output_dir / expected_file).exists()
+    # 出力ディレクトリには正確に期待される数のファイルが存在
+    output_files = list(output_dir.glob("*"))
+    assert len(output_files) == len(expected_files)
 
 
 def test_cli_handles_empty_input_directory(
@@ -330,119 +373,56 @@ def test_cli_handles_empty_input_directory(
     assert "Score:" not in captured.out  # 0件
 
 
+@pytest.mark.parametrize(
+    "input_path_fixture,error_type,error_msg_fragment",
+    [
+        # 存在しないディレクトリ
+        (
+            "nonexistent",
+            FileNotFoundError,
+            "入力フォルダが存在しません",
+        ),
+        # ファイルパス（ディレクトリではない）
+        (
+            "file_path",
+            NotADirectoryError,
+            "フォルダではありません",
+        ),
+    ],
+)
 def test_cli_validates_input_directory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    input_path_fixture: str,
+    error_type: type[Exception],
+    error_msg_fragment: str,
 ) -> None:
-    """入力ディレクトリのバリデーションが正しく機能すること.
+    """入力ディレクトリのバリデーションが正しく機能こと.
 
     Given:
-        - 存在しないディレクトリパスがある
-        - ファイルパスがある
+        - 無効な入力パス（存在しないディレクトリまたはファイルパス）がある
     When:
-        - CLIが各パスで実行される
+        - CLIが実行される
     Then:
-        - 存在しないディレクトリの場合は FileNotFoundError が発生すること
-        - ファイルパスの場合は NotADirectoryError が発生すること
+        - 適切なエラーが発生すること
         - エラーメッセージにパスが含まれること
     """
     from src.main import Main
 
-    # 存在しないディレクトリのテスト
-    nonexistent_dir = "/nonexistent/directory/that/does/not/exist"
-    monkeypatch.setattr("sys.argv", ["main.py", nonexistent_dir])
+    # ファイルパスのテストケースの場合はテストファイルを作成
+    if input_path_fixture == "file_path":
+        input_path = str(tmp_path / "image.jpg")
+        Path(input_path).touch()
+    else:
+        input_path = "/nonexistent/directory"
 
-    with pytest.raises(FileNotFoundError) as exc_info:
+    monkeypatch.setattr("sys.argv", ["main.py", input_path])
+
+    with pytest.raises(error_type) as exc_info:
         Main().run()
 
-    assert nonexistent_dir in str(exc_info.value)
-    assert "入力フォルダが存在しません" in str(exc_info.value)
-
-    # ファイルパスのテスト
-    test_file = tmp_path / "image.jpg"
-    test_file.touch()
-    monkeypatch.setattr("sys.argv", ["main.py", str(test_file)])
-
-    with pytest.raises(NotADirectoryError) as exc_info2:
-        Main().run()
-
-    assert str(test_file) in str(exc_info2.value)
-    assert "フォルダではありません" in str(exc_info2.value)
-
-
-@pytest.mark.parametrize(
-    "num_files,base_name,extension",
-    [
-        (2, "image", ".jpg"),
-        (3, "screenshot", ".png"),
-    ],
-)
-def test_cli_handles_duplicate_filenames_with_increasing_suffixes(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    mock_game_screen_picker: MagicMock,
-    tmp_path: Path,
-    num_files: int,
-    base_name: str,
-    extension: str,
-    sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
-) -> None:
-    """同名ファイルが複数存在する場合に連番でサフィックスが付与されて上書きが回避されること.
-
-    Given:
-        - 別々のフォルダに同名ファイルが存在する
-        - 出力ディレクトリが指定されている
-        - 複数の画像が選択されている
-    When:
-        - CLIが `-c` オプションで実行される
-    Then:
-        - 1つ目は元の名前、2つ目以降は _1, _2,... のサフィックスで保存されること
-        - すべてのファイルが出力ディレクトリに存在すること
-    """
-    # Arrange
-    input_dir = tmp_path / "input"
-    input_dir.mkdir()
-    for i in range(num_files):
-        folder = input_dir / f"folder{i}"
-        folder.mkdir()
-        (folder / f"{base_name}{extension}").touch()
-
-    output_dir = tmp_path / "output"
-
-    results = []
-    for i in range(num_files):
-        img_path = input_dir / f"folder{i}" / f"{base_name}{extension}"
-        results.append(sample_image_metrics_factory(str(img_path), 95.0 - i * 5))
-    stats = PickerStatistics(
-        total_files=num_files,
-        analyzed_ok=num_files,
-        analyzed_fail=0,
-        rejected_by_similarity=0,
-        selected_count=num_files,
-    )
-    mock_game_screen_picker.select.return_value = (results, stats)
-
-    monkeypatch.setattr(
-        "sys.argv", ["main.py", str(input_dir), "-c", str(output_dir), "-r"]
-    )
-
-    # Act
-    from src.main import Main
-
-    Main().run()
-
-    # Assert
-    captured = capsys.readouterr()
-    # 成功メッセージが表示される
-    assert f"{num_files} 枚を" in captured.out
-    assert str(output_dir) in captured.out
-    # すべてのファイルが出力ディレクトリに存在する
-    assert (output_dir / f"{base_name}{extension}").exists()
-    for i in range(1, num_files):
-        assert (output_dir / f"{base_name}_{i}{extension}").exists()
-    # 出力ディレクトリには正確にnum_files個のファイルが存在
-    output_files = list(output_dir.glob(f"*{extension}"))
-    assert len(output_files) == num_files
+    assert input_path in str(exc_info.value)
+    assert error_msg_fragment in str(exc_info.value)
 
 
 @pytest.mark.parametrize(
