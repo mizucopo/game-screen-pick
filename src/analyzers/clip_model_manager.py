@@ -4,7 +4,10 @@ import logging
 from typing import Optional
 
 import torch
+from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
+
+from .clip_types import BatchImageInput, SingleImageInput
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +66,7 @@ class CLIPModelManager:
             return text_features
 
     def get_image_features(
-        self, pil_image: object, batch_mode: bool = False
+        self, pil_image: SingleImageInput | BatchImageInput, batch_mode: bool = False
     ) -> torch.Tensor:
         """PIL画像からCLIP画像特徴を抽出する.
 
@@ -77,23 +80,33 @@ class CLIPModelManager:
         with torch.inference_mode():
             if batch_mode:
                 # バッチ処理用の入力を作成
+                # Sequence -> list 変換（transformers は list を期待）
+                images_arg = (
+                    list(pil_image)
+                    if not isinstance(pil_image, Image.Image)
+                    else [pil_image]
+                )
                 inputs = self.processor(
-                    images=pil_image,  # type: ignore[arg-type]
+                    images=images_arg,
                     return_tensors="pt",
                     padding=True,
                 ).to(self.device)
                 image_features: torch.Tensor = self.model.get_image_features(**inputs)
                 return image_features
             else:
-                # 単一画像処理
-                inputs = self.processor(
-                    images=pil_image,  # type: ignore[arg-type]
-                    return_tensors="pt",
-                    padding=True,
-                ).to(self.device)
-                single_image_features = self.model.get_image_features(**inputs)
-                assert isinstance(single_image_features, torch.Tensor)
-                return single_image_features
+                # 単一画像処理（型を明示的に単一画像に制限）
+                if isinstance(pil_image, Image.Image):
+                    inputs = self.processor(
+                        images=pil_image,
+                        return_tensors="pt",
+                        padding=True,
+                    ).to(self.device)
+                    single_image_features = self.model.get_image_features(**inputs)
+                    assert isinstance(single_image_features, torch.Tensor)
+                    return single_image_features
+                else:
+                    # 非バッチモードでシーケンスが渡された場合のフォールバック
+                    raise ValueError("非バッチモードでは単一のPIL画像を渡してください")
 
     def get_text_embeddings(self) -> torch.Tensor:
         """キャッシュされたテキスト埋め込みを返す.

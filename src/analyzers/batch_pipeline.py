@@ -102,7 +102,7 @@ class BatchPipeline:
                     # HSV特徴とCLIP特徴を結合
                     features = self.feature_extractor.extract_combined_features(
                         img,
-                        clip_features,  # type: ignore[arg-type]
+                        clip_features,
                     )
 
                     # 正規化メトリクスとセマンティックスコアを計算
@@ -111,7 +111,7 @@ class BatchPipeline:
                     norm = MetricNormalizer.normalize_all(raw)
                     semantic = (
                         self.metric_calculator.calculate_semantic_score_from_features(
-                            clip_features  # type: ignore[arg-type]
+                            clip_features
                         )
                     )
                     total = self.metric_calculator.calculate_total_score(
