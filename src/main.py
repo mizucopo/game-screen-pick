@@ -44,7 +44,9 @@ class Main:
         if not input_path.exists():
             raise FileNotFoundError(f"入力フォルダが存在しません: {parsed_args.input}")
         if not input_path.is_dir():
-            raise NotADirectoryError(f"指定パスはフォルダではありません: {parsed_args.input}")
+            raise NotADirectoryError(
+                f"指定パスはフォルダではありません: {parsed_args.input}"
+            )
 
         # 依存関係の遅延初期化（引数パース後にジャンルが決まるため）
         if self._analyzer is None:
