@@ -72,7 +72,9 @@ class Main:
         try:
             ivalue = int(value)
             if ivalue <= 0:
-                raise argparse.ArgumentTypeError(f"--num: 正の整数を指定してください（実際の値: {ivalue}）")
+                raise argparse.ArgumentTypeError(
+                    f"--num: 正の整数を指定してください（実際の値: {ivalue}）"
+                )
             return ivalue
         except ValueError as e:
             raise argparse.ArgumentTypeError(f"'{value}' は整数ではありません") from e
@@ -93,7 +95,8 @@ class Main:
             fvalue = float(value)
             if not 0.0 <= fvalue <= 1.0:
                 raise argparse.ArgumentTypeError(
-                    f"--similarity: 0.0~1.0の範囲で指定してください（実際の値: {fvalue}）"
+                    f"--similarity: 0.0~1.0の範囲で指定してください"
+                    f"（実際の値: {fvalue}）"
                 )
             return fvalue
         except ValueError as e:
