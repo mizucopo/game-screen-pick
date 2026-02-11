@@ -19,6 +19,7 @@ import pytest
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
+from src.models.picker_statistics import PickerStatistics  # noqa: F401
 from src.services.screen_picker import GameScreenPicker
 
 
@@ -164,12 +165,19 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     similarity_threshold = 0.9
 
     # Act
-    result = GameScreenPicker.select_from_analyzed(
+    result, stats = GameScreenPicker.select_from_analyzed(
         sample_image_metrics, num_to_select, similarity_threshold
     )
 
     # Assert
+    # 型チェック（インポート使用を明示）
+    assert isinstance(stats, PickerStatistics)
     assert len(result) == 3
+    # 統計情報の検証
+    assert stats.total_files == 5
+    assert stats.analyzed_ok == 5
+    assert stats.analyzed_fail == 0
+    assert stats.selected_count == 3
     # 画像はスコア順になっているはず（高い順）
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
@@ -195,15 +203,18 @@ def test_requesting_more_images_than_available_returns_all_unique_images(
     similarity_threshold = 0.8
 
     # Act
-    result = GameScreenPicker.select_from_analyzed(
+    result, stats = GameScreenPicker.select_from_analyzed(
         sample_image_metrics, num_to_select, similarity_threshold
     )
 
     # Assert
+    # 型チェック（インポート使用を明示）
+    assert isinstance(stats, PickerStatistics)
     # 類似性フィルタリングにより10件未満になるはず
     # (image2 ~ image1, image5 ~ image3)
     assert len(result) <= 5
     assert len(result) >= 1
+    assert stats.selected_count == len(result)
 
 
 @pytest.mark.parametrize(
@@ -232,10 +243,40 @@ def test_edge_cases_return_empty_list(
         input_list = sample_image_metrics
 
     # Act
-    result = GameScreenPicker.select_from_analyzed(input_list, num_to_select, 0.8)
+    result, stats = GameScreenPicker.select_from_analyzed(
+        input_list, num_to_select, 0.8
+    )
 
     # Assert
+    # 型チェック（インポート使用を明示）
+    assert isinstance(stats, PickerStatistics)
     assert result == []
+    assert stats.selected_count == 0
+
+
+def test_original_input_list_remains_unchanged_after_selection(
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
+    """元の入力リストは選択後も変更されないこと.
+
+    Given:
+        - 特定の順序の分析済み画像リスト
+    When:
+        - そのリストから選択
+    Then:
+        - 元のリストの順序と内容が保持されること
+    """
+    # Arrange
+    original_paths = [m.path for m in sample_image_metrics]
+    original_order = list(sample_image_metrics)
+
+    # Act
+    GameScreenPicker.select_from_analyzed(sample_image_metrics, 3, 0.8)
+
+    # Assert
+    assert [m.path for m in sample_image_metrics] == original_paths
+    # 元のリストオブジェクトは同じ順序のままであるはず
+    assert sample_image_metrics == original_order
 
 
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
@@ -282,7 +323,7 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
         picker = GameScreenPicker(mock_analyzer)
 
         # Act
-        result = picker.select(
+        result, stats = picker.select(
             folder=temp_dir,
             num=3,
             similarity_threshold=0.8,
@@ -291,8 +332,14 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
         )
 
         # Assert
+        # 型チェック（インポート使用を明示）
+        assert isinstance(stats, PickerStatistics)
         # 結果の基本検証
         assert len(result) <= 3
+        # 統計情報の検証
+        assert stats.total_files == 5
+        assert stats.analyzed_ok == 5
+        assert stats.analyzed_fail == 0
         # スコア順の検証
         for i in range(len(result) - 1):
             assert result[i].total_score >= result[i + 1].total_score
@@ -345,7 +392,7 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         picker = GameScreenPicker(mock_analyzer)
 
         # Act
-        result = picker.select(
+        result, stats = picker.select(
             folder=temp_dir,
             num=5,
             similarity_threshold=0.8,
@@ -354,8 +401,14 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         )
 
         # Assert
+        # 型チェック（インポート使用を明示）
+        assert isinstance(stats, PickerStatistics)
         # 奇数インデックスの画像のみ有効（image1, image3）
         assert len(result) <= 2
+        # 統計情報の検証
+        assert stats.total_files == 5
+        assert stats.analyzed_ok == 2
+        assert stats.analyzed_fail == 3
 
 
 def test_always_returns_requested_number_when_enough_unique_images_exist(
@@ -376,13 +429,14 @@ def test_always_returns_requested_number_when_enough_unique_images_exist(
     similarity_threshold = 0.9
 
     # Act
-    result = GameScreenPicker.select_from_analyzed(
+    result, stats = GameScreenPicker.select_from_analyzed(
         sample_image_metrics, num_to_select, similarity_threshold
     )
 
     # Assert
     # 5枚要求して5枚存在するので、必ず5枚返されるはず
     assert len(result) == 5
+    assert stats.selected_count == 5
     # スコア順になっているはず
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
@@ -427,13 +481,14 @@ def test_gradual_threshold_relaxation_and_fallback_for_similar_images() -> None:
     similarity_threshold = 0.9
 
     # Act
-    result = GameScreenPicker.select_from_analyzed(
+    result, stats = GameScreenPicker.select_from_analyzed(
         similar_images, num_to_select, similarity_threshold
     )
 
     # Assert
     # 10枚要求して10枚存在するので、必ず10枚返されるはず
     assert len(result) == 10
+    assert stats.selected_count == 10
     # スコア順になっているはず
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
