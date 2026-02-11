@@ -21,7 +21,7 @@ import random
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
 from src.models.picker_statistics import PickerStatistics
-from src.services.screen_picker import GameScreenPicker
+from src.services.game_screen_picker import GameScreenPicker
 
 
 def _create_features_with_similarity(
