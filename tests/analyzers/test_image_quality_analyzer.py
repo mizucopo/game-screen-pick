@@ -9,7 +9,7 @@
 """
 
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 from unittest.mock import MagicMock, patch
 
 import cv2
@@ -25,7 +25,7 @@ from src.models.image_metrics import ImageMetrics
 
 
 @pytest.fixture(autouse=True)
-def mock_clip_model() -> Generator[MagicMock, None, None]:
+def mock_clip_model() -> Generator[Any, Any, Any]:
     """700MBの重みロードを回避するためのCLIPモデルのモック.
 
     このfixtureは本物のCLIPモデルを以下のモックに置き換えます：
@@ -70,7 +70,7 @@ def mock_clip_model() -> Generator[MagicMock, None, None]:
 
 
 @pytest.fixture(autouse=True)
-def mock_clip_processor() -> Generator[MagicMock, None, None]:
+def mock_clip_processor() -> Generator[Any, Any, Any]:
     """トークナイザと特徴抽出器のロードを回避するためのCLIPプロセッサのモック.
 
     このfixtureは本物のCLIPプロセッサを以下のモックに置き換えます：
