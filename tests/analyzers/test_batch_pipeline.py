@@ -187,7 +187,8 @@ def test_process_batch_returns_correct_metrics_for_multiple_images(
         assert isinstance(result, ImageMetrics)
         assert result.path == path
         assert 0 <= result.total_score <= 100
-        assert 0 <= result.semantic_score <= 1
+        # コサイン類似度の範囲（浮動小数点の丸め誤差を許容）
+        assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
 
 
 def test_process_batch_handles_mixed_valid_and_invalid_images(

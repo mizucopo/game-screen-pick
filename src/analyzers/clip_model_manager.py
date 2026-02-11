@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 from transformers import CLIPModel, CLIPProcessor
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ class CLIPModelManager:
         """テキスト埋め込みを事前計算してキャッシュする.
 
         Returns:
-            テキスト埋め込みテンソル（1次元の512要素）
+            L2正規化済みのテキスト埋め込みテンソル（1次元の512要素）
         """
         with torch.inference_mode():
             inputs = self.processor(
@@ -60,7 +61,9 @@ class CLIPModelManager:
                 padding=True,
             ).to(self.device)
             text_features: torch.Tensor = self.model.get_text_features(**inputs)
-            return text_features
+            # L2正規化を適用してコサイン類似度計算を可能にする
+            text_features_normalized = F.normalize(text_features, p=2, dim=-1)
+            return text_features_normalized
 
     def get_image_features(
         self, pil_image: object, batch_mode: bool = False

@@ -5,6 +5,7 @@ import logging
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from ..models.analyzer_config import AnalyzerConfig
 from .metric_normalizer import MetricNormalizer
@@ -86,7 +87,7 @@ class MetricCalculator:
             pil_img: PIL画像（RGB形式）
 
         Returns:
-            セマンティックスコア
+            コサイン類似度ベースのセマンティックスコア（範囲: [-1, 1]）
         """
         with torch.inference_mode():
             inputs = self.model_manager.processor(
@@ -96,10 +97,14 @@ class MetricCalculator:
             ).to(self.model_manager.device)
             image_features = self.model_manager.model.get_image_features(**inputs)
 
-            # キャッシュされたテキスト埋め込みを使用
+            # 画像特徴をL2正規化
+            image_features_normalized = F.normalize(image_features, p=2, dim=-1)
+
+            # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
+            # コサイン類似度を計算
             text_embeddings = self.model_manager.get_text_embeddings()
-            logits = torch.matmul(image_features, text_embeddings.T)
-            return float(logits[0][0]) / 100.0
+            cosine_sim = torch.matmul(image_features_normalized, text_embeddings.T)
+            return float(cosine_sim[0][0])
 
     def calculate_semantic_score_from_features(
         self, clip_features: np.ndarray
@@ -110,7 +115,7 @@ class MetricCalculator:
             clip_features: 正規化済みのCLIP画像特徴（512次元）
 
         Returns:
-            セマンティックスコア
+            コサイン類似度ベースのセマンティックスコア（範囲: [-1, 1]）
         """
         # NumPy配列をtorch.Tensorに変換（float32指定）
         with torch.inference_mode():
@@ -119,10 +124,11 @@ class MetricCalculator:
                 .unsqueeze(0)
                 .to(self.model_manager.device)
             )
-            # キャッシュされたテキスト埋め込みとの類似度を計算
+            # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
+            # コサイン類似度を計算
             text_embeddings = self.model_manager.get_text_embeddings()
-            logits = torch.matmul(image_features, text_embeddings.T)
-            return float(logits[0][0]) / 100.0
+            cosine_sim = torch.matmul(image_features, text_embeddings.T)
+            return float(cosine_sim[0][0])
 
     def calculate_total_score(
         self, raw: dict[str, float], norm: dict[str, float], semantic: float

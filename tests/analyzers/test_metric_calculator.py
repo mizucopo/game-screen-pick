@@ -206,7 +206,7 @@ def test_calculate_semantic_score_returns_value_in_expected_range(
     When:
         - セマンティックスコアが計算される
     Then:
-        - スコアが有効な範囲（0.0-1.0付近）にあること
+        - スコアがコサイン類似度の範囲（[-1, 1]）にあること
     """
     # Arrange
     with Image.open(sample_image_path) as img:
@@ -218,6 +218,9 @@ def test_calculate_semantic_score_returns_value_in_expected_range(
     # Assert
     assert isinstance(semantic_score, float)
     assert not np.isnan(semantic_score)
+    # 浮動小数点の丸め誤差を許容して境界チェック
+    assert -1.0 <= semantic_score
+    assert semantic_score <= 1.0 + 1e-5  # 丸め誤差を許容
 
 
 def test_calculate_semantic_score_from_features_returns_value_in_expected_range(
@@ -231,7 +234,7 @@ def test_calculate_semantic_score_from_features_returns_value_in_expected_range(
     When:
         - セマンティックスコアが特徴から計算される
     Then:
-        - スコアが有効な範囲にあること
+        - スコアがコサイン類似度の範囲（[-1, 1]）にあること
     """
     # Arrange
     clip_features = np.ones(512) / np.sqrt(512.0)
@@ -244,6 +247,9 @@ def test_calculate_semantic_score_from_features_returns_value_in_expected_range(
     # Assert
     assert isinstance(semantic_score, float)
     assert not np.isnan(semantic_score)
+    # 浮動小数点の丸め誤差を許容して境界チェック
+    assert -1.0 <= semantic_score
+    assert semantic_score <= 1.0 + 1e-5  # 丸め誤差を許容
 
 
 def test_calculate_semantic_score_from_features_returns_similar_result_as_direct(

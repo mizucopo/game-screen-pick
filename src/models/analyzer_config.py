@@ -20,7 +20,7 @@ class AnalyzerConfig:
     chunk_size: int = 128
     brightness_penalty_threshold: float = 40.0
     brightness_penalty_value: float = 0.6
-    semantic_weight: float = 0.2
+    semantic_weight: float = 0.002  # コサイン類似度[-1,1]用に調整（元の0.2から100倍）
     score_multiplier: float = 100.0
 
     def __post_init__(self) -> None:
