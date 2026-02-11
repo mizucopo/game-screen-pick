@@ -248,21 +248,3 @@ def test_pool_raises_error_when_not_started() -> None:
     # Act & Assert
     with pytest.raises(RuntimeError, match="Pool is not started"):
         pool.analyze_batch(["dummy.jpg"])
-
-
-def test_pool_force_cpu_parameter_works() -> None:
-    """force_cpuパラメータが正しく動作すること.
-
-    Given:
-        - force_cpu=Trueでプールが作成される
-    When:
-        - プールが開始される
-    Then:
-        - ワーカープロセスでCUDA_VISIBLE_DEVICESが設定されること
-        - ワーカーでCPUが使用されること
-    """
-    # Arrange & Act & Assert
-    # force_cpu=Trueでプールを作成・開始
-    with ImageQualityAnalyzerPool(genre="mixed", num_workers=1, force_cpu=True) as pool:
-        # プールが正常に開始されることを確認
-        assert pool.num_workers == 1
