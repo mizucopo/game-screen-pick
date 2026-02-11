@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+import random
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
@@ -492,3 +493,202 @@ def test_gradual_threshold_relaxation_and_fallback_for_similar_images() -> None:
     # スコア順になっているはず
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_same_seed_produces_same_results(
+    mock_analyzer: MagicMock,
+) -> None:
+    """同じシードを指定した場合、同じ選択結果が得られること.
+
+    Given:
+        - 10個の画像ファイルを持つフォルダ
+        - 同じシード値で初期化された2つのピッカー
+    When:
+        - 両方のピッカーで5つの画像を選択
+    Then:
+        - 同じファイルが同じ順序で選択されること
+    """
+    # Arrange
+    with tempfile.TemporaryDirectory() as temp_dir:
+        for i in range(10):
+            Path(temp_dir, f"image{i}.jpg").touch()
+
+        # モックアナライザを設定
+        def mock_analyze_batch(
+            paths: List[str],
+            batch_size: int = 32,  # noqa: ARG001
+            show_progress: bool = False,  # noqa: ARG001
+        ) -> List[ImageMetrics | None]:
+            results: List[ImageMetrics | None] = []
+            for path in paths:
+                idx = int(path.split("image")[-1].split(".")[0])
+                np.random.seed(idx)
+                results.append(
+                    ImageMetrics(
+                        path=path,
+                        raw_metrics={"blur_score": 100 - idx * 5},
+                        normalized_metrics={"blur_score": 1.0 - idx * 0.05},
+                        semantic_score=0.8,
+                        total_score=100 - idx * 5,
+                        features=np.random.rand(128),
+                    )
+                )
+            return results
+
+        mock_analyzer.analyze_batch = mock_analyze_batch
+
+        # 同じシードで2つのピッカーを作成
+        seed = 42
+        picker1 = GameScreenPicker(mock_analyzer, random.Random(seed))
+        picker2 = GameScreenPicker(mock_analyzer, random.Random(seed))
+
+        # Act
+        result1, _ = picker1.select(
+            folder=temp_dir,
+            num=5,
+            similarity_threshold=0.8,
+            recursive=False,
+            show_progress=False,
+        )
+        result2, _ = picker2.select(
+            folder=temp_dir,
+            num=5,
+            similarity_threshold=0.8,
+            recursive=False,
+            show_progress=False,
+        )
+
+        # Assert
+        # 同じパスが同じ順序で選択されているはず
+        paths1 = [m.path for m in result1]
+        paths2 = [m.path for m in result2]
+        assert paths1 == paths2
+
+
+def test_different_seeds_produce_different_results(
+    mock_analyzer: MagicMock,
+) -> None:
+    """異なるシードを指定した場合、異なる選択結果が得られること.
+
+    Given:
+        - 20個の同スコアの画像ファイルを持つフォルダ
+        - 異なるシード値で初期化された2つのピッカー
+    When:
+        - 両方のピッカーで10つの画像を選択
+    Then:
+        - 異なるファイルが選択されること（同スコアで順序がランダムなため）
+    """
+    # Arrange
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # 20個の画像を作成（十分な数を用意することでランダム性の影響を大きくする）
+        for i in range(20):
+            Path(temp_dir, f"image{i}.jpg").touch()
+
+        # モックアナライザを設定 - 全て同じスコアにする
+        def mock_analyze_batch(
+            paths: List[str],
+            batch_size: int = 32,  # noqa: ARG001
+            show_progress: bool = False,  # noqa: ARG001
+        ) -> List[ImageMetrics | None]:
+            results: List[ImageMetrics | None] = []
+            for path in paths:
+                idx = int(path.split("image")[-1].split(".")[0])
+                # それぞれの画像に異なる特徴ベクトルを割り当てる
+                np.random.seed(idx + 1000)  # 異なるシードで特徴を生成
+                results.append(
+                    ImageMetrics(
+                        path=path,
+                        raw_metrics={"blur_score": 100.0},
+                        normalized_metrics={"blur_score": 1.0},
+                        semantic_score=0.8,
+                        total_score=100.0,  # 全て同じスコア
+                        features=np.random.rand(128),  # 異なる特徴
+                    )
+                )
+            return results
+
+        mock_analyzer.analyze_batch = mock_analyze_batch
+
+        # 異なるシードで2つのピッカーを作成
+        picker1 = GameScreenPicker(mock_analyzer, random.Random(42))
+        picker2 = GameScreenPicker(mock_analyzer, random.Random(123))
+
+        # Act
+        result1, _ = picker1.select(
+            folder=temp_dir,
+            num=10,
+            similarity_threshold=0.8,
+            recursive=False,
+            show_progress=False,
+        )
+        result2, _ = picker2.select(
+            folder=temp_dir,
+            num=10,
+            similarity_threshold=0.8,
+            recursive=False,
+            show_progress=False,
+        )
+
+        # Assert
+        # 異なるパスが選択されているはず（全て同じスコアなのでシャッフル順序に依存）
+        paths1 = [m.path for m in result1]
+        paths2 = [m.path for m in result2]
+        assert paths1 != paths2
+
+
+def test_picker_without_rng_still_works(
+    mock_analyzer: MagicMock,
+) -> None:
+    """RNGを指定しない場合、デフォルトの乱数生成器が使用されること.
+
+    Given:
+        - モックアナライザ
+        - RNGを指定せずに作成されたピッカー
+    When:
+        - 画像を選択
+    Then:
+        - 正常に選択が完了すること
+    """
+    # Arrange
+    with tempfile.TemporaryDirectory() as temp_dir:
+        for i in range(5):
+            Path(temp_dir, f"image{i}.jpg").touch()
+
+        def mock_analyze_batch(
+            paths: List[str],
+            batch_size: int = 32,  # noqa: ARG001
+            show_progress: bool = False,  # noqa: ARG001
+        ) -> List[ImageMetrics | None]:
+            results: List[ImageMetrics | None] = []
+            for path in paths:
+                idx = int(path.split("image")[-1].split(".")[0])
+                np.random.seed(idx)
+                results.append(
+                    ImageMetrics(
+                        path=path,
+                        raw_metrics={"blur_score": 100 - idx * 10},
+                        normalized_metrics={"blur_score": 1.0 - idx * 0.1},
+                        semantic_score=0.8,
+                        total_score=100 - idx * 10,
+                        features=np.random.rand(128),
+                    )
+                )
+            return results
+
+        mock_analyzer.analyze_batch = mock_analyze_batch
+        picker = GameScreenPicker(mock_analyzer)  # RNGなし
+
+        # Act
+        result, stats = picker.select(
+            folder=temp_dir,
+            num=3,
+            similarity_threshold=0.8,
+            recursive=False,
+            show_progress=False,
+        )
+
+        # Assert
+        assert isinstance(stats, PickerStatistics)
+        assert len(result) <= 3
+        assert stats.total_files == 5
+        assert stats.analyzed_ok == 5

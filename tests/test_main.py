@@ -483,3 +483,51 @@ def test_cli_validates_num_and_similarity_arguments(
         Main().run()
     captured = capsys.readouterr()
     assert error_message in captured.err
+
+
+def test_cli_accepts_seed_argument(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mock_game_screen_picker: MagicMock,
+    test_image_directory: str,
+    sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
+) -> None:
+    """--seed 引数が正しく処理されること.
+
+    Given:
+        - 有効な入力ディレクトリが存在する
+        - --seed 引数が指定されている
+    When:
+        - CLIが --seed オプションで実行される
+    Then:
+        - プログラムが正常に完了すること
+        - 結果が正しく表示されること
+    """
+    # Arrange
+    seed_value = 42
+    img_path = Path(test_image_directory) / "image0.jpg"
+    img_path.touch()
+    results = [sample_image_metrics_factory(str(img_path), 95.0)]
+    stats = PickerStatistics(
+        total_files=5,
+        analyzed_ok=5,
+        analyzed_fail=0,
+        rejected_by_similarity=4,
+        selected_count=1,
+    )
+    mock_game_screen_picker.select.return_value = (results, stats)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["main.py", test_image_directory, "-n", "5", "--seed", str(seed_value)],
+    )
+
+    # Act
+    from src.main import Main
+
+    Main().run()
+
+    # Assert
+    captured = capsys.readouterr()
+    assert "選択された画像一覧" in captured.out
+    assert captured.out.count("Score:") == 1

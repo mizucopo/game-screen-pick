@@ -1,7 +1,7 @@
 """Game screen picker for diverse image selection."""
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import random
 
 import numpy as np
@@ -14,13 +14,17 @@ from ..models.picker_statistics import PickerStatistics
 class GameScreenPicker:
     """ゲーム画面選択クラス."""
 
-    def __init__(self, analyzer: ImageQualityAnalyzer):
+    def __init__(
+        self, analyzer: ImageQualityAnalyzer, rng: Optional[random.Random] = None
+    ):
         """ピッカーを初期化する.
 
         Args:
             analyzer: 画像品質アナライザー
+            rng: 乱数生成器（Noneの場合はデフォルトのRandomを使用）
         """
         self.analyzer = analyzer
+        self._rng = rng or random.Random()
 
     def _load_image_files(self, folder: str, recursive: bool) -> List[Path]:
         """フォルダから画像ファイルのパスを取得する.
@@ -182,7 +186,7 @@ class GameScreenPicker:
         total_files = len(files)
 
         # ランダムにシャッフル（フォルダやファイル名のバイアスを破壊）
-        random.shuffle(files)
+        self._rng.shuffle(files)
 
         if show_progress:
             print(f"合計 {total_files} 枚を解析中...")
