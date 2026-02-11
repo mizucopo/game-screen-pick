@@ -84,9 +84,15 @@ class GameScreenPicker:
 
         # 特徴量を事前にL2正規化（コサイン類似度 = 内積になる）
         # 正規化されたベクトル同士の内積はコサイン類似度と等価
-        normalized_features = [
-            c.features / np.linalg.norm(c.features) for c in candidates
-        ]
+        eps = 1e-8
+        normalized_features = []
+        for c in candidates:
+            norm = np.linalg.norm(c.features)
+            if norm < eps:
+                # ゼロノルムの場合はゼロベクトルとして扱う
+                normalized_features.append(np.zeros_like(c.features))
+            else:
+                normalized_features.append(c.features / norm)
 
         selected: List[ImageMetrics] = []
         selected_features: List[np.ndarray] = []

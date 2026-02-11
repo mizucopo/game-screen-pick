@@ -39,7 +39,12 @@ def _create_features_with_similarity(
         指定された類似度を持つ新しい特徴ベクトル
     """
     # ベースを正規化
-    base_normalized = base_features / np.linalg.norm(base_features)
+    eps = 1e-8
+    norm = np.linalg.norm(base_features)
+    if norm < eps:
+        base_normalized = base_features  # ゼロベクトルの場合はそのまま使用
+    else:
+        base_normalized = base_features / norm
 
     # 直交成分の大きさを計算: sqrt(1 - cos^2)
     orthogonal_norm = np.sqrt(max(0, 1 - target_similarity**2))
