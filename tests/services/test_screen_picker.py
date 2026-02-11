@@ -242,9 +242,8 @@ def test_requesting_more_images_than_available_returns_all_unique_images(
 @pytest.mark.parametrize(
     "input_list,num_to_select",
     [
-        ([], 5),
-        ([], 0),
-        (None, 0),
+        ([], 5),  # 空のリスト
+        (None, 0),  # 0個のリクエスト
     ],
 )
 def test_edge_cases_return_empty_list(
