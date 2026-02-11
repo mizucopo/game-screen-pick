@@ -41,7 +41,7 @@ class GameScreenPicker:
     def _analyze_images(
         self, files: List[Path], show_progress: bool = False
     ) -> List[ImageMetrics]:
-        """画像ファイルを解析して品質スコアを計算する.
+        """画像ファイルを解析して品質スコアを計算する（バッチ対応版）.
 
         Args:
             files: 画像ファイルのパスリスト
@@ -50,14 +50,11 @@ class GameScreenPicker:
         Returns:
             解析結果のリスト
         """
-        all_results = []
-        for i, f in enumerate(files):
-            if show_progress and i % 50 == 0:
-                print(f"解析済み: {i}/{len(files)}")
-            res = self.analyzer.analyze(str(f))
-            if res:
-                all_results.append(res)
-        return all_results
+        paths = [str(f) for f in files]
+        results = self.analyzer.analyze_batch(
+            paths, batch_size=32, show_progress=show_progress
+        )
+        return [r for r in results if r is not None]
 
     @staticmethod
     def _select_diverse_images(

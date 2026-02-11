@@ -289,3 +289,142 @@ def test_analyze_produces_consistent_results_for_same_image(
     assert result1.total_score == result2.total_score
     # 特徴ベクトルが同一であることを検証（重要な特性）
     assert np.array_equal(result1.features, result2.features)
+
+
+def test_analyze_batch_returns_correct_metrics_for_multiple_images(
+    sample_image_path: str,
+    png_image_path: str,
+    small_image_path: str,
+) -> None:
+    """複数の画像が正しくバッチ処理されること.
+
+    Given:
+        - アナライザインスタンスがある
+        - 複数の有効なテスト画像がある
+    When:
+        - 複数の画像がバッチ処理で分析される
+    Then:
+        - すべての画像に対して有効なImageMetricsが返されること
+        - 結果の数が入力数と一致すること
+        - 各結果のパスが正しいこと
+    """
+    # Arrange
+    analyzer = ImageQualityAnalyzer()
+    paths = [sample_image_path, png_image_path, small_image_path]
+
+    # Act
+    results = analyzer.analyze_batch(paths)
+
+    # Assert
+    assert len(results) == 3
+    for result, path in zip(results, paths):
+        assert result is not None
+        assert isinstance(result, ImageMetrics)
+        assert result.path == path
+        assert 0 <= result.total_score <= 100
+        assert 0 <= result.semantic_score <= 1
+
+
+def test_analyze_batch_handles_mixed_valid_and_invalid_images(
+    sample_image_path: str,
+) -> None:
+    """有効な画像と無効な画像が混在する場合に正しく処理されること.
+
+    Given:
+        - アナライザインスタンスがある
+        - 有効な画像パスと存在しないパスが混在している
+    When:
+        - バッチ処理で分析される
+    Then:
+        - 有効な画像にはImageMetricsが返されること
+        - 無効なパスにはNoneが返されること
+        - 結果の数が入力数と一致すること
+    """
+    # Arrange
+    analyzer = ImageQualityAnalyzer()
+    nonexistent_path = "/path/that/does/not/exist.jpg"
+    paths = [sample_image_path, nonexistent_path, sample_image_path]
+
+    # Act
+    results = analyzer.analyze_batch(paths)
+
+    # Assert
+    assert len(results) == 3
+    assert results[0] is not None
+    assert results[1] is None  # 存在しないパス
+    assert results[2] is not None
+
+
+def test_analyze_batch_produces_same_results_as_analyze(
+    sample_image_path: str,
+) -> None:
+    """バッチ処理と単一処理で同じ結果が得られること.
+
+    Given:
+        - アナライザインスタンスがある
+        - 有効なテスト画像がある
+    When:
+        - 同じ画像を単一処理とバッチ処理で分析する
+    Then:
+        - 両方の結果で総スコアが一致すること
+        - 両方の結果で特徴ベクトルが一致すること
+    """
+    # Arrange
+    analyzer = ImageQualityAnalyzer()
+
+    # Act
+    single_result = analyzer.analyze(sample_image_path)
+    batch_results = analyzer.analyze_batch([sample_image_path])
+
+    # Assert
+    assert single_result is not None
+    assert batch_results[0] is not None
+    # 浮動小数点の精度誤差を許容して比較
+    assert single_result.total_score == pytest.approx(batch_results[0].total_score)
+    assert np.array_equal(single_result.features, batch_results[0].features)
+
+
+def test_analyze_batch_falls_back_on_oom(
+    sample_image_path: str,
+) -> None:
+    """CUDA OOM発生時にバッチサイズが縮小されてリトライされること.
+
+    Given:
+        - アナライザインスタンスがある
+        - 有効なテスト画像がある
+        - CLIP推論時にCUDA OOMが発生する状況
+    When:
+        - バッチ処理で分析される
+    Then:
+        - バッチサイズが縮小されてリトライされること
+        - 最終的に有効な結果が返されること
+    """
+    # Arrange
+    analyzer = ImageQualityAnalyzer()
+    paths = [sample_image_path]
+
+    # Act & Assert
+    # CUDA OOMをモックして、2回目の呼び出しで成功するように設定
+    original_model = analyzer.model
+    call_count = [0]
+
+    def mock_get_image_features_with_oom(**_kwargs: object) -> torch.Tensor:  # noqa: ARG001
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # 最初の呼び出しでOOMを発生
+            raise torch.cuda.OutOfMemoryError()
+        # 2回目以降は正常に返す（CLIP base-patch32の出力形状: batch_size x 512）
+        return torch.randn(1, 512)
+
+    with patch.object(
+        original_model,
+        "get_image_features",
+        side_effect=mock_get_image_features_with_oom,
+    ):
+        results = analyzer.analyze_batch(paths, batch_size=32)
+
+    # Assert - 最終的に成功しているはず
+    assert results[0] is not None
+    assert isinstance(results[0], ImageMetrics)
+    # バッチサイズ縮小のために少なくとも2回呼び出されている
+    assert call_count[0] >= 2
