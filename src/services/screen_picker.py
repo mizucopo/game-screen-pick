@@ -67,6 +67,10 @@ class GameScreenPicker:
     ) -> List[ImageMetrics]:
         """多様性を考慮して画像を選択する.
 
+        2段階選抜方式で性能を最適化：
+        1. まず品質スコア上位M件に絞る（M = max(num*5, 200)）
+        2. その上位M件の中で類似度判定を行う
+
         Args:
             all_results: 解析済みの画像メトリクスリスト（スコア降順ソート済み）
             num: 選択する画像数
@@ -75,9 +79,14 @@ class GameScreenPicker:
         Returns:
             選択された画像メトリクスのリスト
         """
+        # 2段階選抜：まず上位M件に絞る
+        # Mの値は取得数の5倍か200の大きい方（多様性確保のため）
+        m = max(num * 5, 200)
+        candidates = all_results[:m]
+
         selected: List[ImageMetrics] = []
 
-        for candidate in all_results:
+        for candidate in candidates:
             if len(selected) >= num:
                 break
 
