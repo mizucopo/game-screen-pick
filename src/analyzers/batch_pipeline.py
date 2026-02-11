@@ -109,7 +109,6 @@ class BatchPipeline:
                         img,
                         clip_features,
                     )
-
                     results.append(
                         ImageMetrics(path, raw, norm, semantic, total, features)
                     )
