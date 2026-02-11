@@ -2,7 +2,7 @@
 
 import contextlib
 import logging
-from typing import Optional, List, Tuple
+from typing import Optional, List
 
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
@@ -19,9 +19,7 @@ from .metric_normalizer import MetricNormalizer
 logger = logging.getLogger(__name__)
 
 # 型エイリアス（行長制限対応）
-_PreprocessResult = Tuple[
-    Optional[Image.Image], Optional[dict[str, float]], Optional[np.ndarray]
-]
+_PreprocessResult = Optional[Image.Image]
 
 
 class ImageQualityAnalyzer:
@@ -54,25 +52,79 @@ class ImageQualityAnalyzer:
             ).to(self.device)
             return self.model.get_text_features(**inputs)  # type: ignore[no-any-return]
 
-    def _extract_diversity_features(self, img: np.ndarray) -> np.ndarray:
-        """見た目の特徴を抽出（色と構造）."""
+    def _extract_hsv_features(self, img: np.ndarray) -> np.ndarray:
+        """HSV色空間のヒストグラム特徴を抽出する.
+
+        Returns:
+            正規化されたHSVヒストグラム特徴（64次元）
+        """
         small = cv2.resize(img, (128, 128))
         hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
         hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256])
         return cv2.normalize(hist, hist).flatten()
+
+    def _extract_clip_features(self, pil_img: Image.Image) -> np.ndarray:
+        """CLIP画像埋め込みを抽出する.
+
+        Args:
+            pil_img: PIL画像（RGB形式）
+
+        Returns:
+            正規化されたCLIP画像埋め込み（512次元）
+        """
+        with torch.inference_mode():
+            inputs = self.processor(
+                images=pil_img,
+                return_tensors="pt",
+                padding=True,
+            ).to(self.device)
+            image_features = self.model.get_image_features(**inputs)
+            # L2正規化して返す
+            features = image_features[0].cpu().numpy()
+            return features / np.linalg.norm(features)  # type: ignore[no-any-return]
+
+    def _extract_combined_features(
+        self, img: np.ndarray, clip_features: np.ndarray
+    ) -> np.ndarray:
+        """HSV特徴とCLIP特徴を結合する.
+
+        Args:
+            img: OpenCV画像（BGR形式）
+            clip_features: CLIP画像埋め込み（512次元、正規化済み）
+
+        Returns:
+            結合された特徴ベクトル（576次元）
+        """
+        hsv_features = self._extract_hsv_features(img)
+        # L2正規化（既に正規化されているが、安全のため再正規化）
+        hsv_normalized = hsv_features / np.linalg.norm(hsv_features)
+        # 結合
+        return np.concatenate([hsv_normalized, clip_features])
 
     def analyze(self, path: str) -> Optional[ImageMetrics]:
         """画像を解析して品質スコアを計算する."""
         try:
             # PILで1回だけ読み込み、ファイル記述子のリークを防止
             with Image.open(path) as pil_img:
-                # OpenCV形式（BGR）に変換
-                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+                # RGBモードに変換（必要な場合）
+                if pil_img.mode != "RGB":
+                    pil_img_rgb: Image.Image = pil_img.convert("RGB")
+                    pil_img_copy = pil_img_rgb.copy()
+                else:
+                    pil_img_copy = pil_img.copy()
 
-                features = self._extract_diversity_features(img)
+                # OpenCV形式（BGR）に変換
+                img = cv2.cvtColor(np.array(pil_img_copy), cv2.COLOR_RGB2BGR)
+
+                # CLIP特徴を抽出
+                clip_features = self._extract_clip_features(pil_img_copy)
+
+                # HSV特徴とCLIP特徴を結合
+                features = self._extract_combined_features(img, clip_features)
+
                 raw = self._calculate_raw_metrics(img)
                 norm = MetricNormalizer.normalize_all(raw)
-                semantic = self._calculate_semantic_score(pil_img)
+                semantic = self._calculate_semantic_score(pil_img_copy)
                 total = self._calculate_total_score(raw, norm, semantic)
 
                 return ImageMetrics(path, raw, norm, semantic, total, features)
@@ -177,35 +229,19 @@ class ImageQualityAnalyzer:
             chunk_end = min(chunk_start + chunk_size, len(paths))
             chunk_paths = paths[chunk_start:chunk_end]
 
-            # ステージ1: チャンク単位でI/O + CV前処理を並列実行
-            preprocessed = self._load_and_preprocess_images(chunk_paths)
-
-            # PIL画像とメトリクスを分離
-            pil_images: List[Optional[Image.Image]] = []
-            raw_metrics_list: List[Optional[dict[str, float]]] = []
-            features_list: List[Optional[np.ndarray]] = []
-
-            for pil_img, raw, features in preprocessed:
-                pil_images.append(pil_img)
-                raw_metrics_list.append(raw)
-                features_list.append(features)
+            # ステージ1: チャンク単位でI/O + 前処理を並列実行
+            pil_images = self._load_and_preprocess_images(chunk_paths)
 
             # ステージ2: チャンク単位でバッチCLIP推論を実行
-            semantic_scores = self._calculate_semantic_scores_batch(
+            clip_features_list = self._calculate_clip_features_batch(
                 pil_images, initial_batch_size=batch_size
             )
 
             # ステージ3: チャンク単位で結果を構築
-            for i, (path, pil_img, raw, features) in enumerate(
-                zip(chunk_paths, pil_images, raw_metrics_list, features_list)
+            for i, (path, pil_img, clip_features) in enumerate(
+                zip(chunk_paths, pil_images, clip_features_list)
             ):
-                if pil_img is None or raw is None or features is None:
-                    results.append(None)
-                    continue
-
-                # semantic_scoresがNoneの場合もスキップ
-                semantic_score = semantic_scores[i]
-                if semantic_score is None:
+                if pil_img is None or clip_features is None:
                     results.append(None)
                     continue
 
@@ -213,11 +249,22 @@ class ImageQualityAnalyzer:
                     print(f"解析済み: {chunk_start + i}/{len(paths)}")
 
                 try:
+                    # OpenCV形式（BGR）に変換
+                    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+                    # 生メトリクスを計算
+                    raw = self._calculate_raw_metrics(img)
+
+                    # HSV特徴とCLIP特徴を結合
+                    features = self._extract_combined_features(img, clip_features)
+
+                    # 正規化メトリクスとセマンティックスコアを計算
                     norm = MetricNormalizer.normalize_all(raw)
-                    total = self._calculate_total_score(raw, norm, semantic_score)
+                    semantic = self._calculate_semantic_score(pil_img)
+                    total = self._calculate_total_score(raw, norm, semantic)
 
                     results.append(
-                        ImageMetrics(path, raw, norm, semantic_score, total, features)
+                        ImageMetrics(path, raw, norm, semantic, total, features)
                     )
                 except self._get_expected_errors() as e:
                     logger.warning(
@@ -227,30 +274,23 @@ class ImageQualityAnalyzer:
                     results.append(None)
 
             # チャンク処理完了後にメモリを解放
-            del (
-                preprocessed,
-                pil_images,
-                raw_metrics_list,
-                features_list,
-                semantic_scores,
-            )
+            del pil_images, clip_features_list
 
         return results
 
     def _load_and_preprocess_images(
         self, paths: List[str], max_workers: Optional[int] = None
     ) -> List[_PreprocessResult]:
-        """複数のパスからPIL画像を読み込み、OpenCV前処理まで並列実行する.
+        """複数のパスからPIL画像を読み込み、前処理まで並列実行する.
 
-        I/O（画像読み込み）とCPU-bound処理（OpenCV前処理）をThreadPoolExecutorで並列化.
+        I/O（画像読み込み）とCPU-bound処理（RGB変換）をThreadPoolExecutorで並列化.
 
         Args:
             paths: 画像ファイルパスのリスト
             max_workers: スレッドプールの最大ワーカー数（Noneで自動設定）
 
         Returns:
-            タプルのリスト: (PIL画像, 生メトリクス, 多様性特徴)
-            失敗したパスは (None, None, None)
+            PIL画像のリスト（失敗したパスはNone）
         """
 
         def process_single(path: str) -> _PreprocessResult:
@@ -261,23 +301,12 @@ class ImageQualityAnalyzer:
                     # RGBモードに変換（必要な場合）
                     if img_file.mode != "RGB":
                         pil_img: Image.Image = img_file.convert("RGB")
-                        rgb_img = pil_img.copy()
+                        return pil_img.copy()
                     else:
-                        rgb_img = img_file.copy()
-
-                # OpenCV形式（BGR）に変換
-                img = cv2.cvtColor(np.array(rgb_img), cv2.COLOR_RGB2BGR)
-
-                # 多様性特徴を抽出
-                features = self._extract_diversity_features(img)
-
-                # 生メトリクスを計算
-                raw = self._calculate_raw_metrics(img)
-
-                return rgb_img, raw, features
+                        return img_file.copy()
 
             except (FileNotFoundError, UnidentifiedImageError, OSError, ValueError):
-                return None, None, None
+                return None
 
         # ThreadPoolExecutorで並列処理
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -285,12 +314,12 @@ class ImageQualityAnalyzer:
 
         return results
 
-    def _calculate_semantic_scores_batch(
+    def _calculate_clip_features_batch(
         self,
         pil_images: List[Optional[Image.Image]],
         initial_batch_size: int = 32,
-    ) -> List[Optional[float]]:
-        """複数のPIL画像に対してCLIP推論をバッチ実行する.
+    ) -> List[Optional[np.ndarray]]:
+        """複数のPIL画像に対してCLIP推論をバッチ実行して特徴を抽出.
 
         OOM対策（失敗したバッチのみ再試行）:
         - initial_batch_sizeから開始（デフォルト32）
@@ -304,7 +333,7 @@ class ImageQualityAnalyzer:
             initial_batch_size: 初期バッチサイズ
 
         Returns:
-            セマンティックスコアのリスト（失敗した画像はNone）
+            CLIP画像埋め込みのリスト（512次元、正規化済み、失敗した画像はNone）
         """
         # 有効な画像のインデックスと画像を収集
         valid_indices = [i for i, img in enumerate(pil_images) if img is not None]
@@ -315,7 +344,7 @@ class ImageQualityAnalyzer:
             return [None] * len(pil_images)
 
         # 結果を格納する配列（初期値はNone）
-        results: List[Optional[float]] = [None] * len(pil_images)
+        results: List[Optional[np.ndarray]] = [None] * len(pil_images)
 
         # 現在のバッチサイズ
         current_batch_size = initial_batch_size
@@ -343,14 +372,17 @@ class ImageQualityAnalyzer:
                     ).to(self.device)
                     image_features = self.model.get_image_features(**inputs)
 
-                    # キャッシュされたテキスト埋め込みを使用
-                    logits = torch.matmul(image_features, self._text_embeddings.T)
-                    batch_scores = (logits[:, 0] / 100.0).cpu().tolist()
+                    # L2正規化してNumPy配列に変換
+                    batch_features = []
+                    for j in range(image_features.shape[0]):
+                        features = image_features[j].cpu().numpy()
+                        normalized = features / np.linalg.norm(features)
+                        batch_features.append(normalized)
 
                 # 結果を元のインデックスにマッピング
-                for j, score in enumerate(batch_scores):
+                for j, features in enumerate(batch_features):
                     original_idx = valid_indices[batch_start + j]
-                    results[original_idx] = score
+                    results[original_idx] = features
 
                 # バッチ処理成功、次へ進む
                 i = batch_end

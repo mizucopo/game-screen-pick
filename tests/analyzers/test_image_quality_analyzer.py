@@ -231,7 +231,8 @@ def test_analyzes_images_with_various_formats_and_properties(
     # Assert
     assert result is not None
     # すべての画像はリサイズされるため、特徴ベクトルサイズは一貫している
-    assert result.features.shape == (64,)
+    # HSV特徴（64次元）+ CLIP特徴（512次元）= 576次元
+    assert result.features.shape == (576,)
     # 暗い画像の場合は輝度ペナルティが適用される
     if check_dark_penalty:
         assert result.raw_metrics["brightness"] < 40
@@ -465,3 +466,161 @@ def test_analyze_batch_retries_only_failed_batches_on_oom(
         assert isinstance(result, ImageMetrics)
         assert result.path == expected_path
         assert 0 <= result.total_score <= 100
+
+
+def test_extract_hsv_features_returns_correct_shape(
+    sample_image_path: str,
+) -> None:
+    """HSV特徴抽出が正しい形状の特徴ベクトルを返すこと.
+
+    Given:
+        - アナライザインスタンスがある
+        - 有効なテスト画像がある
+    When:
+        - HSV特徴が抽出される
+    Then:
+        - 64次元の特徴ベクトルが返されること
+        - 特徴が正規化されていること
+    """
+    # Arrange
+    import cv2
+    from PIL import Image
+
+    analyzer = ImageQualityAnalyzer()
+    with Image.open(sample_image_path) as pil_img:
+        img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    # Act
+    hsv_features = analyzer._extract_hsv_features(img)
+
+    # Assert
+    assert hsv_features.shape == (64,)
+    # 正規化されている（L2ノルムが1に近い）
+    assert np.abs(np.linalg.norm(hsv_features) - 1.0) < 0.01
+
+
+def test_extract_clip_features_returns_correct_shape(
+    sample_image_path: str,
+) -> None:
+    """CLIP特徴抽出が正しい形状の特徴ベクトルを返すこと.
+
+    Given:
+        - アナライザインスタンスがある
+        - 有効なテスト画像がある
+    When:
+        - CLIP特徴が抽出される
+    Then:
+        - 512次元の特徴ベクトルが返されること
+        - 特徴がL2正規化されていること
+    """
+    # Arrange
+    from PIL import Image
+
+    analyzer = ImageQualityAnalyzer()
+    with Image.open(sample_image_path) as pil_img:
+        if pil_img.mode != "RGB":
+            pil_img_rgb = pil_img.convert("RGB").copy()
+        else:
+            pil_img_rgb = pil_img.copy()
+
+    # Act
+    clip_features = analyzer._extract_clip_features(pil_img_rgb)
+
+    # Assert
+    assert clip_features.shape == (512,)
+    # L2正規化されている（ノルムが1に近い）
+    assert np.abs(np.linalg.norm(clip_features) - 1.0) < 0.01
+
+
+def test_extract_combined_features_concatenates_hsv_and_clip(
+    sample_image_path: str,
+) -> None:
+    """結合特徴抽出がHSV特徴とCLIP特徴を正しく結合すること.
+
+    Given:
+        - アナライザインスタンスがある
+        - 有効なテスト画像がある
+    When:
+        - 結合特徴が抽出される
+    Then:
+        - 576次元の特徴ベクトルが返されること（64 + 512）
+        - 前半64次元がHSV特徴であること
+        - 後半512次元がCLIP特徴であること
+    """
+    # Arrange
+    import cv2
+    from PIL import Image
+
+    analyzer = ImageQualityAnalyzer()
+    with Image.open(sample_image_path) as pil_img:
+        if pil_img.mode != "RGB":
+            pil_img_rgb = pil_img.convert("RGB").copy()
+        else:
+            pil_img_rgb = pil_img.copy()
+        img = cv2.cvtColor(np.array(pil_img_rgb), cv2.COLOR_RGB2BGR)
+
+    clip_features = analyzer._extract_clip_features(pil_img_rgb)
+
+    # Act
+    combined_features = analyzer._extract_combined_features(img, clip_features)
+
+    # Assert
+    assert combined_features.shape == (576,)
+    # 前半64次元がHSV特徴
+    hsv_part = combined_features[:64]
+    # 後半512次元がCLIP特徴
+    clip_part = combined_features[64:]
+
+    # それぞれが正規化されている
+    assert np.abs(np.linalg.norm(hsv_part) - 1.0) < 0.01
+    assert np.abs(np.linalg.norm(clip_part) - 1.0) < 0.01
+
+
+def test_analyze_uses_combined_features_for_similarity(
+    sample_image_path: str,
+) -> None:
+    """analyzeメソッドが結合特徴を使用していること.
+
+    Given:
+        - アナライザインスタンスがある
+        - 有効なテスト画像がある
+    When:
+        - 画像が分析される
+    Then:
+        - 結合特徴（576次元）が使用されていること
+        - 特徴ベクトルの前半がHSV特徴であること
+        - 特徴ベクトルの後半がCLIP特徴であること
+    """
+    # Arrange
+    import cv2
+    from PIL import Image
+
+    analyzer = ImageQualityAnalyzer()
+
+    # Act
+    result = analyzer.analyze(sample_image_path)
+
+    # Assert
+    assert result is not None
+    assert result.features.shape == (576,)
+
+    # HSV特徴とCLIP特徴が正しく結合されていることを検証
+    with Image.open(sample_image_path) as pil_img:
+        if pil_img.mode != "RGB":
+            pil_img_rgb = pil_img.convert("RGB").copy()
+        else:
+            pil_img_rgb = pil_img.copy()
+        img = cv2.cvtColor(np.array(pil_img_rgb), cv2.COLOR_RGB2BGR)
+
+    # 個別の特徴を抽出して比較
+    expected_hsv = analyzer._extract_hsv_features(img)
+    expected_hsv_normalized = expected_hsv / np.linalg.norm(expected_hsv)
+    expected_clip = analyzer._extract_clip_features(pil_img_rgb)
+
+    # 結合特徴の前半64次元はHSV特徴（正規化済み）
+    actual_hsv = result.features[:64]
+    assert np.allclose(actual_hsv, expected_hsv_normalized, atol=1e-5)
+
+    # 結合特徴の後半512次元はCLIP特徴
+    actual_clip = result.features[64:]
+    assert np.allclose(actual_clip, expected_clip, atol=1e-5)
