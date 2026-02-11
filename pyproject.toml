@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-game-screen-pick = "src.main:Main.run"
+game-screen-pick = "src.main:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -172,5 +172,13 @@ class Main:
             print(f"[{i + 1}] {Path(res.path).name} (Score: {res.total_score:.2f})")
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """CLIエントリポイント関数.
+
+    pyproject.tomlの[project.scripts]から呼び出される。
+    """
     Main().run()
+
+
+if __name__ == "__main__":
+    main()
