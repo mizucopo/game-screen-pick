@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 import torch
 
-from src.analyzers.analyzer_pool import ImageQualityAnalyzerPool
+from src.analyzers.image_quality_analyzer_pool import ImageQualityAnalyzerPool
 from src.models.image_metrics import ImageMetrics
 
 
