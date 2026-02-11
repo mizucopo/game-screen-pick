@@ -79,7 +79,19 @@ class ImageQualityAnalyzer:
             raise
 
     def _calculate_raw_metrics(self, img: np.ndarray) -> dict[str, float]:
-        """生の画像メトリクスを計算する."""
+        """生の画像メトリクスを計算する.
+
+        メトリクス計算用に画像を長辺720pxに縮小して処理することで、
+        計算コストを削減する。アスペクト比は保持する。
+        """
+        # メトリクス計算用に画像を縮小（長辺720px、アスペクト比保持）
+        h, w = img.shape[:2]
+        max_dim = 720
+        if max(h, w) > max_dim:
+            scale = max_dim / max(h, w)
+            new_h, new_w = int(h * scale), int(w * scale)
+            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         gray_size = gray.size
