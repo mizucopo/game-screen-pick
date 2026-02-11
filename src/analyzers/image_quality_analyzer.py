@@ -1,5 +1,6 @@
 """Image quality analyzer using CLIP and computer vision metrics."""
 
+import contextlib
 import logging
 from typing import Optional, List, Tuple
 
@@ -33,13 +34,19 @@ class ImageQualityAnalyzer:
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model.to(self.device)
+        # 推論モードに設定（ドロップアウト等を無効化）
+        self.model.eval()
+        # GPU最適化: TF32を許可（Ampere GPU以上で有効）
+        if self.device == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         # テキスト埋め込みの事前計算とキャッシュ
         self._target_text = "epic game scenery"
         self._text_embeddings = self._precompute_text_embeddings()
 
     def _precompute_text_embeddings(self) -> torch.Tensor:
         """テキスト埋め込みを事前計算してキャッシュする."""
-        with torch.no_grad():
+        with torch.inference_mode():
             inputs = self.processor(
                 text=[self._target_text],
                 return_tensors="pt",
@@ -105,7 +112,7 @@ class ImageQualityAnalyzer:
 
     def _calculate_semantic_score(self, pil_img: Image.Image) -> float:
         """CLIPモデルを使用してセマンティックスコアを計算する."""
-        with torch.no_grad():
+        with torch.inference_mode():
             inputs = self.processor(
                 images=pil_img,
                 return_tensors="pt",
@@ -313,7 +320,13 @@ class ImageQualityAnalyzer:
                 for i in range(0, len(valid_images), current_batch_size):
                     batch: List[Image.Image] = valid_images[i : i + current_batch_size]
 
-                    with torch.no_grad():
+                    # GPUの場合はautocastでfp16推論を使用（高速化）
+                    autocast_context = (
+                        torch.autocast(device_type="cuda", dtype=torch.float16)
+                        if self.device == "cuda"
+                        else contextlib.nullcontext()
+                    )
+                    with autocast_context, torch.inference_mode():
                         inputs = self.processor(
                             images=batch,
                             return_tensors="pt",
