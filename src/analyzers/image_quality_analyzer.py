@@ -22,6 +22,22 @@ logger = logging.getLogger(__name__)
 _PreprocessResult = Optional[Image.Image]
 
 
+def _safe_l2_normalize(vec: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """ゼロ割れ安全なL2正規化を行う.
+
+    Args:
+        vec: 正規化するベクトル
+        eps: ゼロ割れ防止用の微小値
+
+    Returns:
+        L2正規化されたベクトル（元のノルムが0の場合はゼロベクトル）
+    """
+    norm = float(np.linalg.norm(vec))
+    if norm < eps:
+        return np.zeros_like(vec)
+    return vec / norm
+
+
 class ImageQualityAnalyzer:
     """画像品質アナライザー."""
 
@@ -81,7 +97,7 @@ class ImageQualityAnalyzer:
             image_features = self.model.get_image_features(**inputs)
             # L2正規化して返す
             features = image_features[0].cpu().numpy()
-            return features / np.linalg.norm(features)  # type: ignore[no-any-return]
+            return _safe_l2_normalize(features)
 
     def _extract_combined_features(
         self, img: np.ndarray, clip_features: np.ndarray
@@ -97,7 +113,7 @@ class ImageQualityAnalyzer:
         """
         hsv_features = self._extract_hsv_features(img)
         # L2正規化（既に正規化されているが、安全のため再正規化）
-        hsv_normalized = hsv_features / np.linalg.norm(hsv_features)
+        hsv_normalized = _safe_l2_normalize(hsv_features)
         # 結合
         return np.concatenate([hsv_normalized, clip_features])
 
@@ -376,7 +392,7 @@ class ImageQualityAnalyzer:
                     batch_features = []
                     for j in range(image_features.shape[0]):
                         features = image_features[j].cpu().numpy()
-                        normalized = features / np.linalg.norm(features)
+                        normalized = _safe_l2_normalize(features)
                         batch_features.append(normalized)
 
                 # 結果を元のインデックスにマッピング
