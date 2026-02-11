@@ -37,17 +37,18 @@ class ImageQualityAnalyzer:
     def analyze(self, path: str) -> Optional[ImageMetrics]:
         """画像を解析して品質スコアを計算する."""
         try:
-            img = cv2.imread(path)
-            if img is None:
-                return None
+            # PILで1回だけ読み込み、ファイル記述子のリークを防止
+            with Image.open(path) as pil_img:
+                # OpenCV形式（BGR）に変換
+                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
-            features = self._extract_diversity_features(img)
-            raw = self._calculate_raw_metrics(img)
-            norm = MetricNormalizer.normalize_all(raw)
-            semantic = self._calculate_semantic_score(path)
-            total = self._calculate_total_score(raw, norm, semantic)
+                features = self._extract_diversity_features(img)
+                raw = self._calculate_raw_metrics(img)
+                norm = MetricNormalizer.normalize_all(raw)
+                semantic = self._calculate_semantic_score(pil_img)
+                total = self._calculate_total_score(raw, norm, semantic)
 
-            return ImageMetrics(path, raw, norm, semantic, total, features)
+                return ImageMetrics(path, raw, norm, semantic, total, features)
         except self._get_expected_errors() as e:
             logger.warning(
                 f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
@@ -82,17 +83,16 @@ class ImageQualityAnalyzer:
             * 1000,
         }
 
-    def _calculate_semantic_score(self, path: str) -> float:
+    def _calculate_semantic_score(self, pil_img: Image.Image) -> float:
         """CLIPモデルを使用してセマンティックスコアを計算する."""
         with torch.no_grad():
-            with Image.open(path) as pil_img:
-                inputs = self.processor(
-                    text=["epic game scenery"],
-                    images=pil_img,
-                    return_tensors="pt",
-                    padding=True,
-                ).to(self.device)
-                return float(self.model(**inputs).logits_per_image[0][0]) / 100.0
+            inputs = self.processor(
+                text=["epic game scenery"],
+                images=pil_img,
+                return_tensors="pt",
+                padding=True,
+            ).to(self.device)
+            return float(self.model(**inputs).logits_per_image[0][0]) / 100.0
 
     def _calculate_total_score(
         self, raw: dict[str, float], norm: dict[str, float], semantic: float
