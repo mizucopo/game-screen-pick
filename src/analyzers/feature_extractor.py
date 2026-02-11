@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from ..utils import VectorUtils
 from .clip_model_manager import CLIPModelManager
 from .clip_types import (
     BatchImageInput,
@@ -14,22 +15,6 @@ from .clip_types import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_l2_normalize(vec: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    """ゼロ割れ安全なL2正規化を行う.
-
-    Args:
-        vec: 正規化するベクトル
-        eps: ゼロ割れ防止用の微小値
-
-    Returns:
-        L2正規化されたベクトル（元のノルムが0の場合はゼロベクトル）
-    """
-    norm = float(np.linalg.norm(vec))
-    if norm < eps:
-        return np.zeros_like(vec)
-    return vec / norm
 
 
 class FeatureExtractor:
@@ -81,7 +66,7 @@ class FeatureExtractor:
             image_features = self.model_manager.model.get_image_features(**inputs)
             # L2正規化して返す
             features = image_features[0].cpu().numpy()
-            return _safe_l2_normalize(features)
+            return VectorUtils.safe_l2_normalize(features)
 
     def extract_combined_features(
         self, img: np.ndarray, clip_features: np.ndarray
@@ -97,7 +82,7 @@ class FeatureExtractor:
         """
         hsv_features = self.extract_hsv_features(img)
         # L2正規化（既に正規化されているが、安全のため再正規化）
-        hsv_normalized = _safe_l2_normalize(hsv_features)
+        hsv_normalized = VectorUtils.safe_l2_normalize(hsv_features)
         # 結合
         return np.concatenate([hsv_normalized, clip_features])
 
@@ -167,7 +152,7 @@ class FeatureExtractor:
                     batch_features = []
                     for j in range(image_features.shape[0]):
                         features = image_features[j].cpu().numpy()
-                        normalized = _safe_l2_normalize(features)
+                        normalized = VectorUtils.safe_l2_normalize(features)
                         batch_features.append(normalized)
 
                 # 結果を元のインデックスにマッピング
