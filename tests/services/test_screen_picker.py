@@ -20,6 +20,7 @@ import random
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
+from src.models.picker_statistics import PickerStatistics
 from src.services.screen_picker import GameScreenPicker
 
 
@@ -527,8 +528,8 @@ def test_same_seed_produces_same_results(
 
         # 同じシードで2つのピッカーを作成
         seed = 42
-        picker1 = GameScreenPicker(mock_analyzer, random.Random(seed))
-        picker2 = GameScreenPicker(mock_analyzer, random.Random(seed))
+        picker1 = GameScreenPicker(mock_analyzer, rng=random.Random(seed))
+        picker2 = GameScreenPicker(mock_analyzer, rng=random.Random(seed))
 
         # Act
         result1, _ = picker1.select(
@@ -598,8 +599,8 @@ def test_different_seeds_produce_different_results(
         mock_analyzer.analyze_batch = mock_analyze_batch
 
         # 異なるシードで2つのピッカーを作成
-        picker1 = GameScreenPicker(mock_analyzer, random.Random(42))
-        picker2 = GameScreenPicker(mock_analyzer, random.Random(123))
+        picker1 = GameScreenPicker(mock_analyzer, rng=random.Random(42))
+        picker2 = GameScreenPicker(mock_analyzer, rng=random.Random(123))
 
         # Act
         result1, _ = picker1.select(

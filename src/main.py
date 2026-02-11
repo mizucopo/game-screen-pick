@@ -56,7 +56,7 @@ class Main:
         if self._picker is None:
             seed = parsed_args.seed
             rng = random.Random(seed) if seed is not None else None
-            self._picker = GameScreenPicker(self._analyzer, rng)
+            self._picker = GameScreenPicker(self._analyzer, rng=rng)
 
         best, stats = self._picker.select(
             parsed_args.input,

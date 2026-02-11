@@ -79,9 +79,11 @@ def setup_main_mocks(
 ) -> None:
     """すべてのテストで必要なモック設定を自動的に適用する."""
     monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_: mock_image_quality_analyzer
+        "src.main.ImageQualityAnalyzer", lambda *_, **__: mock_image_quality_analyzer
     )
-    monkeypatch.setattr("src.main.GameScreenPicker", lambda *_: mock_game_screen_picker)
+    monkeypatch.setattr(
+        "src.main.GameScreenPicker", lambda *_, **__: mock_game_screen_picker
+    )
 
 
 def test_cli_accepts_all_arguments(
