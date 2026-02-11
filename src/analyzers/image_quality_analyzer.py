@@ -124,7 +124,7 @@ class ImageQualityAnalyzer:
 
                 raw = self._calculate_raw_metrics(img)
                 norm = MetricNormalizer.normalize_all(raw)
-                semantic = self._calculate_semantic_score(pil_img_copy)
+                semantic = self._calculate_semantic_score_from_features(clip_features)
                 total = self._calculate_total_score(raw, norm, semantic)
 
                 return ImageMetrics(path, raw, norm, semantic, total, features)
@@ -185,6 +185,26 @@ class ImageQualityAnalyzer:
             image_features = self.model.get_image_features(**inputs)
 
             # キャッシュされたテキスト埋め込みを使用
+            logits = torch.matmul(image_features, self._text_embeddings.T)
+            return float(logits[0][0]) / 100.0
+
+    def _calculate_semantic_score_from_features(
+        self, clip_features: np.ndarray
+    ) -> float:
+        """既に計算済みのCLIP特徴からセマンティックスコアを計算する.
+
+        Args:
+            clip_features: 正規化済みのCLIP画像特徴（512次元）
+
+        Returns:
+            セマンティックスコア
+        """
+        # NumPy配列をtorch.Tensorに変換
+        with torch.inference_mode():
+            image_features = (
+                torch.from_numpy(clip_features).unsqueeze(0).to(self.device)
+            )
+            # キャッシュされたテキスト埋め込みとの類似度を計算
             logits = torch.matmul(image_features, self._text_embeddings.T)
             return float(logits[0][0]) / 100.0
 
@@ -260,7 +280,9 @@ class ImageQualityAnalyzer:
 
                     # 正規化メトリクスとセマンティックスコアを計算
                     norm = MetricNormalizer.normalize_all(raw)
-                    semantic = self._calculate_semantic_score(pil_img)
+                    semantic = self._calculate_semantic_score_from_features(
+                        clip_features
+                    )
                     total = self._calculate_total_score(raw, norm, semantic)
 
                     results.append(
