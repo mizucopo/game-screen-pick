@@ -321,6 +321,7 @@ def test_cli_handles_empty_input_directory(
 
     # Act
     from src.main import Main
+
     Main().run()
 
     # Assert
@@ -348,6 +349,7 @@ def test_cli_exits_with_error_for_nonexistent_input_directory(
 
     # Act & Assert
     from src.main import Main
+
     with pytest.raises(FileNotFoundError) as exc_info:
         Main().run()
 
@@ -375,6 +377,7 @@ def test_cli_exits_with_error_when_file_instead_of_directory(
 
     # Act & Assert
     from src.main import Main
+
     with pytest.raises(NotADirectoryError) as exc_info:
         Main().run()
 
