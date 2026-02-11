@@ -138,7 +138,7 @@ class GameScreenPicker:
                     processed_indices.add(idx)
                 else:
                     rejected_count += 1
-                    processed_indices.add(idx)
+                    # rejected は次のしきい値で再評価させるため追加しない
 
             if len(selected) >= num:
                 break
