@@ -3,7 +3,8 @@
 from pathlib import Path
 from typing import List
 import random
-from sklearn.metrics.pairwise import cosine_similarity
+
+import numpy as np
 
 from ..analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from ..models.image_metrics import ImageMetrics
@@ -81,24 +82,33 @@ class GameScreenPicker:
         m = max(num * 5, 200)
         candidates = all_results[:m]
 
-        selected: List[ImageMetrics] = []
+        # 特徴量を事前にL2正規化（コサイン類似度 = 内積になる）
+        # 正規化されたベクトル同士の内積はコサイン類似度と等価
+        normalized_features = [
+            c.features / np.linalg.norm(c.features) for c in candidates
+        ]
 
-        for candidate in candidates:
+        selected: List[ImageMetrics] = []
+        selected_features: List[np.ndarray] = []
+
+        for idx, candidate in enumerate(candidates):
             if len(selected) >= num:
                 break
 
+            candidate_feat = normalized_features[idx]
+
             # 既に選ばれた画像たちと「見た目」を比較
+            # 事前正規化済みなので np.dot だけでコサイン類似度を計算可能
             is_similar = False
-            for s in selected:
-                sim = cosine_similarity(
-                    candidate.features.reshape(1, -1), s.features.reshape(1, -1)
-                )[0][0]
+            for s_feat in selected_features:
+                sim = np.dot(candidate_feat, s_feat)
                 if sim > similarity_threshold:
                     is_similar = True
                     break
 
             if not is_similar:
                 selected.append(candidate)
+                selected_features.append(candidate_feat)
 
         return selected
 
