@@ -20,6 +20,24 @@ class SelectionConfig:
     )
     max_threshold: float = 0.98
 
+    def __post_init__(self) -> None:
+        """設定値の妥当性を検証する."""
+        if self.batch_size <= 0:
+            msg = f"batch_sizeは正の整数である必要があります: {self.batch_size}"
+            raise ValueError(msg)
+
+        if not (0 <= self.max_threshold <= 1):
+            msg = f"max_thresholdは0以上1以下である必要があります: {self.max_threshold}"
+            raise ValueError(msg)
+
+        for i, step in enumerate(self.threshold_relaxation_steps):
+            if step < 0:
+                msg = (
+                    f"threshold_relaxation_steps[{i}]は非負の値である必要があります: "
+                    f"{step}"
+                )
+                raise ValueError(msg)
+
     def compute_threshold_steps(self, base_threshold: float) -> list[float]:
         """ベースのしきい値から段階的な緩和ステップを計算する.
 
