@@ -13,7 +13,6 @@ from ..models.image_metrics import ImageMetrics
 
 from .feature_extractor import FeatureExtractor
 from .metric_calculator import MetricCalculator
-from .metric_normalizer import MetricNormalizer
 
 logger = logging.getLogger(__name__)
 
