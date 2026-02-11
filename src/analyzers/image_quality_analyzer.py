@@ -246,33 +246,6 @@ class ImageQualityAnalyzer:
 
         return results
 
-    @staticmethod
-    def _load_pil_images(paths: List[str]) -> List[Optional[Image.Image]]:
-        """複数のパスからPIL画像を読み込む.
-
-        失敗した画像に対してはNoneを返し、後続処理でスキップできるようにする.
-
-        Args:
-            paths: 画像ファイルパスのリスト
-
-        Returns:
-            PIL画像のリスト（失敗したパスはNone）
-        """
-        images: List[Optional[Image.Image]] = []
-        for path in paths:
-            try:
-                with Image.open(path) as img_file:
-                    # RGBモードに変換（必要な場合）
-                    if img_file.mode != "RGB":
-                        rgb_img: Image.Image = img_file.convert("RGB")
-                        # コピーを作成してwithブロック外でも使用可能にする
-                        images.append(rgb_img.copy())
-                    else:
-                        images.append(img_file.copy())
-            except (FileNotFoundError, UnidentifiedImageError, OSError, ValueError):
-                images.append(None)
-        return images
-
     def _calculate_semantic_scores_batch(
         self,
         pil_images: List[Optional[Image.Image]],
