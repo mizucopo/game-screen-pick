@@ -112,13 +112,13 @@ class GameScreenPicker:
 
         selected: List[ImageMetrics] = []
         selected_indices: set[int] = set()
-        rejected_count = 0
-        processed_indices: set[int] = set()
+        rejected_indices: set[int] = set()  # ユニークな拒否数を追跡
 
         # 各しきい値で選択を試行
         for threshold in threshold_steps:
             for idx, candidate in enumerate(candidates):
-                if idx in processed_indices:
+                # 既に選択または永続拒否された候補はスキップ
+                if idx in selected_indices or idx in rejected_indices:
                     continue
 
                 if len(selected) >= num:
@@ -138,10 +138,10 @@ class GameScreenPicker:
                 if not is_similar:
                     selected.append(candidate)
                     selected_indices.add(idx)
-                    processed_indices.add(idx)
                 else:
-                    rejected_count += 1
-                    # rejected は次のしきい値で再評価させるため追加しない
+                    # 最終しきい値ラウンドで拒否された場合のみ記録
+                    if threshold == threshold_steps[-1]:
+                        rejected_indices.add(idx)
 
             if len(selected) >= num:
                 break
@@ -158,7 +158,7 @@ class GameScreenPicker:
 
         # スコア順でソートして返す
         selected.sort(key=lambda x: x.total_score, reverse=True)
-        return selected, rejected_count
+        return selected, len(rejected_indices)
 
     def select(
         self,
