@@ -10,6 +10,10 @@ __all__ = [
     "MetricNormalizer",
     "ImageQualityAnalyzer",
     "ImageQualityAnalyzerPool",
+    "CLIPModelManager",
+    "FeatureExtractor",
+    "MetricCalculator",
+    "BatchPipeline",
 ]
 
 
@@ -41,5 +45,21 @@ def __getattr__(name: str) -> Any:
         from .analyzer_pool import ImageQualityAnalyzerPool
 
         return ImageQualityAnalyzerPool
+    if name == "CLIPModelManager":
+        from .clip_model_manager import CLIPModelManager
+
+        return CLIPModelManager
+    if name == "FeatureExtractor":
+        from .feature_extractor import FeatureExtractor
+
+        return FeatureExtractor
+    if name == "MetricCalculator":
+        from .metric_calculator import MetricCalculator
+
+        return MetricCalculator
+    if name == "BatchPipeline":
+        from .batch_pipeline import BatchPipeline
+
+        return BatchPipeline
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1,0 +1,194 @@
+"""特徴抽出器 - HSV, CLIP, 統合特徴の抽出を行う."""
+
+import logging
+
+import cv2
+import numpy as np
+from PIL import Image
+
+from .clip_model_manager import CLIPModelManager
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_l2_normalize(vec: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """ゼロ割れ安全なL2正規化を行う.
+
+    Args:
+        vec: 正規化するベクトル
+        eps: ゼロ割れ防止用の微小値
+
+    Returns:
+        L2正規化されたベクトル（元のノルムが0の場合はゼロベクトル）
+    """
+    norm = float(np.linalg.norm(vec))
+    if norm < eps:
+        return np.zeros_like(vec)
+    return vec / norm
+
+
+class FeatureExtractor:
+    """画像特徴抽出器.
+
+    CLIPモデルマネージャーを使用して、HSV特徴、CLIP特徴、
+    および統合特徴を抽出する。
+    """
+
+    def __init__(self, model_manager: "CLIPModelManager"):
+        """特徴抽出器を初期化する.
+
+        Args:
+            model_manager: CLIPモデルマネージャー
+        """
+        self.model_manager = model_manager
+
+    def extract_hsv_features(self, img: np.ndarray) -> np.ndarray:
+        """HSV色空間のヒストグラム特徴を抽出する.
+
+        Args:
+            img: OpenCV画像（BGR形式）
+
+        Returns:
+            正規化されたHSVヒストグラム特徴（64次元）
+        """
+        small = cv2.resize(img, (128, 128))
+        hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256])
+        return cv2.normalize(hist, hist).flatten()
+
+    def extract_clip_features(self, pil_img: Image.Image) -> np.ndarray:
+        """CLIP画像埋め込みを抽出する.
+
+        Args:
+            pil_img: PIL画像（RGB形式）
+
+        Returns:
+            正規化されたCLIP画像埋め込み（512次元）
+        """
+        import torch
+
+        with torch.inference_mode():
+            inputs = self.model_manager.processor(
+                images=pil_img,
+                return_tensors="pt",
+                padding=True,
+            ).to(self.model_manager.device)
+            image_features = self.model_manager.model.get_image_features(**inputs)
+            # L2正規化して返す
+            features = image_features[0].cpu().numpy()
+            return _safe_l2_normalize(features)
+
+    def extract_combined_features(
+        self, img: np.ndarray, clip_features: np.ndarray
+    ) -> np.ndarray:
+        """HSV特徴とCLIP特徴を結合する.
+
+        Args:
+            img: OpenCV画像（BGR形式）
+            clip_features: CLIP画像埋め込み（512次元、正規化済み）
+
+        Returns:
+            結合された特徴ベクトル（576次元）
+        """
+        hsv_features = self.extract_hsv_features(img)
+        # L2正規化（既に正規化されているが、安全のため再正規化）
+        hsv_normalized = _safe_l2_normalize(hsv_features)
+        # 結合
+        return np.concatenate([hsv_normalized, clip_features])
+
+    def extract_clip_features_batch(
+        self,
+        pil_images: "list[object] | list[Image.Image] | list[Image.Image | None]",
+        initial_batch_size: int = 32,
+    ) -> "list[object] | list[np.ndarray | None]":
+        """複数のPIL画像に対してCLIP推論をバッチ実行して特徴を抽出.
+
+        OOM対策（失敗したバッチのみ再試行）:
+        - initial_batch_sizeから開始（デフォルト32）
+        - torch.cuda.OutOfMemoryError発生時に失敗したバッチのみを分割してリトライ
+        - 未処理のバッチは縮小されたバッチサイズで処理
+        - 最小バッチサイズ1まで試行（32→16→8→4→2→1）
+        - それでも失敗した画像はNoneとして返す
+
+        Args:
+            pil_images: PIL画像のリスト（失敗した画像はNone）
+            initial_batch_size: 初期バッチサイズ
+
+        Returns:
+            CLIP画像埋め込みのリスト（512次元、正規化済み、失敗した画像はNone）
+        """
+        import torch
+        import contextlib
+
+        # 有効な画像のインデックスと画像を収集
+        valid_indices = [i for i, img in enumerate(pil_images) if img is not None]
+        valid_images = [img for img in pil_images if img is not None]
+
+        if not valid_images:
+            return [None] * len(pil_images)  # type: ignore[return-value]
+
+        # 結果を格納する配列（初期値はNone）
+        results: list[np.ndarray | None] = [None] * len(pil_images)
+
+        # 現在のバッチサイズ
+        current_batch_size = initial_batch_size
+
+        # 処理位置を追跡
+        i = 0
+        while i < len(valid_images):
+            # 現在のバッチを取得
+            batch_start = i
+            batch_end = min(i + current_batch_size, len(valid_images))
+            batch = valid_images[batch_start:batch_end]
+
+            try:
+                # GPUの場合はautocastでfp16推論を使用（高速化）
+                autocast_context = (
+                    torch.autocast(device_type="cuda", dtype=torch.float16)
+                    if self.model_manager.device == "cuda"
+                    else contextlib.nullcontext()
+                )
+                with autocast_context, torch.inference_mode():
+                    inputs = self.model_manager.processor(
+                        images=batch,  # type: ignore[arg-type]
+                        return_tensors="pt",
+                        padding=True,
+                    ).to(self.model_manager.device)
+                    image_features = self.model_manager.model.get_image_features(
+                        **inputs
+                    )
+
+                    # L2正規化してNumPy配列に変換
+                    batch_features = []
+                    for j in range(image_features.shape[0]):
+                        features = image_features[j].cpu().numpy()
+                        normalized = _safe_l2_normalize(features)
+                        batch_features.append(normalized)
+
+                # 結果を元のインデックスにマッピング
+                for j, features in enumerate(batch_features):
+                    original_idx = valid_indices[batch_start + j]
+                    results[original_idx] = features
+
+                # バッチ処理成功、次へ進む
+                i = batch_end
+
+            except torch.cuda.OutOfMemoryError:
+                # バッチサイズを半分にしてリトライ
+                new_batch_size = current_batch_size // 2
+                if new_batch_size >= 1:
+                    logger.warning(
+                        f"CUDA OOM発生（位置{batch_start}/{len(valid_images)}）。"
+                        f"バッチサイズを{new_batch_size}に縮小してリトライします。"
+                    )
+                    current_batch_size = new_batch_size
+                    # i は変更せず、同じ位置から小さいバッチサイズでリトライ
+                else:
+                    logger.error(
+                        f"バッチサイズ1でもOOMが発生しました（位置{batch_start}）。"
+                        "残りの画像の処理をスキップします。"
+                    )
+                    # 処理済みの結果は残すが、未処理の画像はNoneのまま
+                    break
+
+        return results
