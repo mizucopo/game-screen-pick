@@ -30,7 +30,9 @@ def test_analyze_returns_valid_metrics_with_genre_specific_weights(
         - スコアが有効範囲内にあること
     """
     # Arrange
-    analyzer = ImageQualityAnalyzer(genre="2d_rpg")
+    # キャッシュを使用しないようにデバイスをCPUに指定
+    # （MPS環境でキャッシュ未使用時のテストを安定させるため）
+    analyzer = ImageQualityAnalyzer(genre="2d_rpg", device="cpu")
 
     # Act
     result = analyzer.analyze(sample_image_path)

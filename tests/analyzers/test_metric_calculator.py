@@ -23,7 +23,8 @@ def metric_calculator() -> MetricCalculator:
     """メトリクス計算器のフィクスチャ."""
     config = AnalyzerConfig()
     weights = GenreWeights.get_weights("mixed")
-    model_manager = CLIPModelManager()
+    # MPS環境でのテスト安定のためCPUデバイスを指定
+    model_manager = CLIPModelManager(device="cpu")
     return MetricCalculator(config, weights, model_manager)
 
 

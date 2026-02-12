@@ -3,6 +3,7 @@
 import contextlib
 import logging
 from collections.abc import Sequence
+from typing import Any
 
 import cv2
 import numpy as np
@@ -151,12 +152,14 @@ class FeatureExtractor:
             batch = valid_images[batch_start:batch_end]
 
             try:
-                # GPUの場合はautocastでfp16推論を使用（高速化）
-                autocast_context = (
-                    torch.autocast(device_type="cuda", dtype=torch.float16)
-                    if self.model_manager.device == "cuda"
-                    else contextlib.nullcontext()
-                )
+                # GPU/CUDA/MPSの場合はautocastでfp16推論を使用（高速化）
+                if self.model_manager.device in ("cuda", "mps"):
+                    autocast_context: Any = torch.autocast(
+                        device_type=self.model_manager.device,
+                        dtype=torch.float16,
+                    )
+                else:
+                    autocast_context = contextlib.nullcontext()
                 with autocast_context, torch.inference_mode():
                     inputs = self.model_manager.processor(
                         images=list(batch),  # Sequence -> list 変換
@@ -178,22 +181,35 @@ class FeatureExtractor:
                 # バッチ処理成功、次へ進む
                 i = batch_end
 
-            except torch.cuda.OutOfMemoryError:
-                # バッチサイズを半分にしてリトライ
-                new_batch_size = current_batch_size // 2
-                if new_batch_size >= 1:
-                    logger.warning(
-                        f"CUDA OOM発生（位置{batch_start}/{len(valid_images)}）。"
-                        f"バッチサイズを{new_batch_size}に縮小してリトライします。"
-                    )
-                    current_batch_size = new_batch_size
-                    # i は変更せず、同じ位置から小さいバッチサイズでリトライ
+            except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+                # MPSのOOMはRuntimeErrorとして報告される場合がある
+                error_msg = str(e).lower()
+                is_oom = isinstance(e, torch.cuda.OutOfMemoryError) or (
+                    isinstance(e, RuntimeError)
+                    and ("out of memory" in error_msg or "mps" in error_msg)
+                )
+
+                if is_oom:
+                    # バッチサイズを半分にしてリトライ
+                    new_batch_size = current_batch_size // 2
+                    device_name = self.model_manager.device.upper()
+                    if new_batch_size >= 1:
+                        logger.warning(
+                            f"{device_name} OOM発生（位置{batch_start}/"
+                            f"{len(valid_images)}）。バッチサイズを{new_batch_size}に"
+                            f"縮小してリトライします。"
+                        )
+                        current_batch_size = new_batch_size
+                        # i は変更せず、同じ位置から小さいバッチサイズでリトライ
+                    else:
+                        logger.error(
+                            f"バッチサイズ1でもOOMが発生しました（位置{batch_start}）。"
+                            "残りの画像の処理をスキップします。"
+                        )
+                        # 処理済みの結果は残すが、未処理の画像はNoneのまま
+                        break
                 else:
-                    logger.error(
-                        f"バッチサイズ1でもOOMが発生しました（位置{batch_start}）。"
-                        "残りの画像の処理をスキップします。"
-                    )
-                    # 処理済みの結果は残すが、未処理の画像はNoneのまま
-                    break
+                    # OOM以外のRuntimeErrorはそのまま再raise
+                    raise
 
         return results

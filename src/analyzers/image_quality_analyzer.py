@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
+from ..cache.feature_cache import FeatureCache
 from ..constants.genre_weights import GenreWeights
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.image_metrics import ImageMetrics
@@ -29,6 +30,7 @@ class ImageQualityAnalyzer:
         genre: str = "mixed",
         config: AnalyzerConfig | None = None,
         device: str | None = None,
+        cache: FeatureCache | None = None,
     ):
         """アナライザーを初期化する.
 
@@ -36,9 +38,11 @@ class ImageQualityAnalyzer:
             genre: ジャンル（重み付け用）
             config: アナライザー設定（Noneの場合はデフォルト値を使用）
             device: 使用するデバイス（Noneの場合は自動検出）
+            cache: 特徴量キャッシュ（Noneの場合はキャッシュ無効）
         """
         self.config = config or AnalyzerConfig()
         self.weights = GenreWeights.get_weights(genre)
+        self.cache = cache
 
         # レイヤー1: モデル管理（プライベート）
         self._model_manager = CLIPModelManager(
@@ -55,7 +59,12 @@ class ImageQualityAnalyzer:
 
         # レイヤー4: バッチ処理（上記全てに依存）
         self.batch_pipeline = BatchPipeline(
-            self.feature_extractor, self.metric_calculator, self.config
+            self.feature_extractor,
+            self.metric_calculator,
+            self.config,
+            cache=cache,
+            model_name=self._model_manager.model_name,
+            target_text=self._model_manager.target_text,
         )
 
     def analyze(self, path: str) -> Optional[ImageMetrics]:

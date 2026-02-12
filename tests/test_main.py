@@ -80,10 +80,12 @@ def setup_main_mocks(
 ) -> None:
     """すべてのテストで必要なモック設定を自動的に適用する."""
     monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer", lambda *_, **__: mock_image_quality_analyzer
+        "src.main.ImageQualityAnalyzer",
+        lambda *a, **k: mock_image_quality_analyzer,  # noqa: ARG005
     )
     monkeypatch.setattr(
-        "src.main.GameScreenPicker", lambda *_, **__: mock_game_screen_picker
+        "src.main.GameScreenPicker",
+        lambda *a, **k: mock_game_screen_picker,  # noqa: ARG005
     )
 
 
@@ -119,7 +121,9 @@ def test_cli_selects_and_displays_images(
     )
     mock_game_screen_picker.select.return_value = (results, stats)
 
-    monkeypatch.setattr("sys.argv", ["main.py", test_image_directory, "-n", "7"])
+    monkeypatch.setattr(
+        "sys.argv", ["main.py", test_image_directory, "-n", "7", "--no-cache"]
+    )
 
     # Act
     Main().run()
@@ -170,7 +174,7 @@ def test_cli_copies_images_to_output_directory(
     )
     mock_game_screen_picker.select.return_value = (results, stats)
 
-    args = ["main.py", str(input_dir), "-c", str(output_dir)]
+    args = ["main.py", str(input_dir), "-c", str(output_dir), "--no-cache"]
     monkeypatch.setattr("sys.argv", args)
 
     # Act

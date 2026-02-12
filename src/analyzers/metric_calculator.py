@@ -62,7 +62,7 @@ class MetricCalculator:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         gray_size = gray.size
-        gray_mean = np.mean(gray)
+        gray_mean = cv2.mean(gray)[0]
         kernel = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
 
         # OpenCVネイティブ関数で高速化（CV_32Fで精度は維持しつつ高速化）
@@ -77,9 +77,9 @@ class MetricCalculator:
         edges = cv2.Canny(gray, 50, 150)
         edge_density = cv2.countNonZero(edges) / gray_size
 
-        # UI密度：SobelをCV_32Fで計算し、二乗和の平方根でL1ノルム相当を高速計算
+        # UI密度：SobelをCV_32Fで計算し、cv2.normでL1ノルムを高速計算
         sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0)
-        ui_density = float(np.sum(np.abs(sobel_x))) / gray_size
+        ui_density = cv2.norm(sobel_x, cv2.NORM_L1) / gray_size
 
         # 彩度の標準偏差をmeanStdDevで高速化
         _, saturation_std = cv2.meanStdDev(hsv[:, :, 1])
