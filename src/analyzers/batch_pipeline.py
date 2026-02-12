@@ -1,6 +1,7 @@
 """バッチ処理パイプライン - 複数画像のバッチ処理をオーケストレーションする."""
 
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
@@ -53,6 +54,7 @@ class BatchPipeline:
         2. CLIPステージはバッチで直列
 
         メモリ効率化のためチャンク単位でストリーミング処理:
+        - メモリ予算に基づいて動的にチャンクサイズを決定
         - チャンク単位で「前処理→CLIP→結果確定→解放」を実行
         - 大規模画像時のスワップ回避で速度安定化
 
@@ -66,8 +68,14 @@ class BatchPipeline:
         """
         results: List[Optional[ImageMetrics]] = []
 
-        for chunk_start in range(0, len(paths), self.config.chunk_size):
-            chunk_end = min(chunk_start + self.config.chunk_size, len(paths))
+        # メモリ予算に基づいてチャンク境界を計算
+        chunk_boundaries = self._compute_chunk_boundaries(
+            paths,
+            self.config.max_memory_mb,
+            self.config.min_chunk_size,
+        )
+
+        for chunk_start, chunk_end in chunk_boundaries:
             chunk_paths = paths[chunk_start:chunk_end]
 
             # ステージ1: チャンク単位でI/O + 前処理を並列実行
@@ -120,6 +128,67 @@ class BatchPipeline:
             del pil_images, clip_features_list
 
         return results
+
+    @staticmethod
+    def _compute_chunk_boundaries(
+        paths: List[str], max_memory_mb: int, min_chunk_size: int
+    ) -> List[tuple[int, int]]:
+        """メモリ予算に基づいてチャンク境界を計算する.
+
+        各画像のファイルサイズを取得し、指定されたメモリ予算を超えない
+        ように動的にチャンクを分割する。
+
+        Args:
+            paths: 画像ファイルパスのリスト
+            max_memory_mb: チャンクあたりの最大メモリ予算（MB）
+            min_chunk_size: 最低限確保するチャンクサイズ
+
+        Returns:
+            (start_index, end_index) のタプルリスト
+        """
+        max_memory_bytes = max_memory_mb * 1024 * 1024
+        chunks = []
+        current_start = 0
+        current_memory = 0
+        current_count = 0
+
+        for i, path in enumerate(paths):
+            # ファイルサイズを取得（存在しない場合は0とする）
+            try:
+                file_size = os.path.getsize(path)
+                # 推定メモリ使用量はファイルサイズの約2倍（デコード後）とする
+                estimated_memory = file_size * 2
+            except OSError:
+                estimated_memory = 0
+
+            # チャンク追加でメモリ予算を超える場合は新規チャンクを検討
+            would_exceed = current_memory + estimated_memory > max_memory_bytes
+            has_min_images = current_count >= min_chunk_size
+            can_split = i > 0  # 最初の要素で分割しない
+
+            if would_exceed and has_min_images and can_split:
+                # 現在のチャンクを確定
+                chunks.append((current_start, i))
+                current_start = i
+                current_memory = estimated_memory
+                current_count = 1
+            else:
+                # 現在のチャンクに追加
+                current_memory += estimated_memory
+                current_count += 1
+
+        # 最後のチャンクを追加
+        if current_start < len(paths):
+            final_chunk = (current_start, len(paths))
+            # 最後のチャンクがmin_chunk_size未満で、前のチャンクがある場合はマージ
+            if chunks and final_chunk[1] - final_chunk[0] < min_chunk_size:
+                # 前のチャンクとマージ
+                prev_start, _ = chunks.pop()
+                chunks.append((prev_start, final_chunk[1]))
+            else:
+                chunks.append(final_chunk)
+
+        return chunks
 
     @staticmethod
     def load_and_preprocess_images(

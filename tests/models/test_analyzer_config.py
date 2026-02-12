@@ -20,7 +20,8 @@ def test_analyzer_config_has_default_values() -> None:
 
     # Assert
     assert config.max_dim == 720
-    assert config.chunk_size == 128
+    assert config.max_memory_mb == 512
+    assert config.min_chunk_size == 16
     assert config.brightness_penalty_threshold == 40.0
     assert config.brightness_penalty_value == 0.6
     assert config.semantic_weight == 0.002  # コサイン類似度用に調整
@@ -39,7 +40,8 @@ def test_analyzer_config_can_be_customized() -> None:
     """
     # Arrange
     custom_max_dim = 1080
-    custom_chunk_size = 256
+    custom_max_memory_mb = 256
+    custom_min_chunk_size = 8
     custom_brightness_threshold = 30.0
     custom_penalty_value = 0.8
     custom_semantic_weight = 0.3
@@ -48,7 +50,8 @@ def test_analyzer_config_can_be_customized() -> None:
     # Act
     config = AnalyzerConfig(
         max_dim=custom_max_dim,
-        chunk_size=custom_chunk_size,
+        max_memory_mb=custom_max_memory_mb,
+        min_chunk_size=custom_min_chunk_size,
         brightness_penalty_threshold=custom_brightness_threshold,
         brightness_penalty_value=custom_penalty_value,
         semantic_weight=custom_semantic_weight,
@@ -57,7 +60,8 @@ def test_analyzer_config_can_be_customized() -> None:
 
     # Assert
     assert config.max_dim == custom_max_dim
-    assert config.chunk_size == custom_chunk_size
+    assert config.max_memory_mb == custom_max_memory_mb
+    assert config.min_chunk_size == custom_min_chunk_size
     assert config.brightness_penalty_threshold == custom_brightness_threshold
     assert config.brightness_penalty_value == custom_penalty_value
     assert config.semantic_weight == custom_semantic_weight
@@ -69,8 +73,10 @@ def test_analyzer_config_can_be_customized() -> None:
     [
         ("max_dim", 0),
         ("max_dim", -100),
-        ("chunk_size", 0),
-        ("chunk_size", -50),
+        ("max_memory_mb", 0),
+        ("max_memory_mb", -100),
+        ("min_chunk_size", 0),
+        ("min_chunk_size", -10),
         ("brightness_penalty_threshold", -1.0),
         ("brightness_penalty_value", -0.1),
         ("semantic_weight", -0.1),
