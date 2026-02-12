@@ -10,7 +10,6 @@ from PIL import Image, UnidentifiedImageError
 
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.image_metrics import ImageMetrics
-
 from .feature_extractor import FeatureExtractor
 from .metric_calculator import MetricCalculator
 

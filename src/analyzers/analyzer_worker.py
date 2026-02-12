@@ -7,8 +7,8 @@ import logging
 import os
 from typing import Optional
 
-from .image_quality_analyzer import ImageQualityAnalyzer
 from ..models.image_metrics import ImageMetrics
+from .image_quality_analyzer import ImageQualityAnalyzer
 
 logger = logging.getLogger(__name__)
 
