@@ -90,6 +90,7 @@ def test_normalize_all_returns_all_expected_metrics() -> None:
           - visual_balance
           - action_intensity
           - ui_density
+        - すべての正規化値が[0, 1]範囲内にあること
     """
     # Arrange
     raw = {
@@ -119,33 +120,6 @@ def test_normalize_all_returns_all_expected_metrics() -> None:
         "ui_density",
     }
     assert set(result.keys()) == expected_keys
-
-
-def test_normalize_all_produces_values_in_valid_range() -> None:
-    """正規化値が有効範囲内にあること.
-
-    Given:
-        - 有効な生メトリクスがある
-    When:
-        - normalize_allが呼び出される
-    Then:
-        - すべての正規化値が[0, 1]範囲内にあること
-    """
-    # Arrange
-    raw = {
-        "blur_score": 500.0,
-        "contrast": 50.0,
-        "color_richness": 40.0,
-        "edge_density": 0.2,
-        "dramatic_score": 50.0,
-        "visual_balance": 80.0,
-        "action_intensity": 30.0,
-        "ui_density": 10.0,
-    }
-
-    # Act
-    result = MetricNormalizer.normalize_all(raw)
-
-    # Assert
+    # 有効範囲チェックを統合
     for value in result.values():
         assert 0.0 <= value <= 1.0

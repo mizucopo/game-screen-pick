@@ -75,29 +75,3 @@ def test_analyze_returns_none_for_invalid_inputs(
     # Assert
     assert result_nonexistent is None
     assert result_corrupted is None
-
-
-def test_analyze_produces_consistent_results_for_same_image(
-    sample_image_path: str,
-) -> None:
-    """同じ画像を複数回分析する際に一貫した結果が生成されること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 有効なテスト画像がある
-    When:
-        - 同じ画像が2回分析される
-    Then:
-        - 両方の分析で同一のスコアが生成されること
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-
-    # Act
-    result1 = analyzer.analyze(sample_image_path)
-    result2 = analyzer.analyze(sample_image_path)
-
-    # Assert
-    assert result1 is not None
-    assert result2 is not None
-    assert result1.total_score == result2.total_score

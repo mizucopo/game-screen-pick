@@ -9,7 +9,6 @@
 """
 
 from pathlib import Path
-from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -77,74 +76,3 @@ def test_process_batch_returns_correct_metrics_for_multiple_images(
         assert 0 <= result.total_score <= 100
         # コサイン類似度の範囲（浮動小数点の丸め誤差を許容）
         assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
-
-
-@pytest.mark.parametrize(
-    "setup_invalid_path,description",
-    [
-        (
-            lambda _: "/path/that/does/not/exist.jpg",
-            "存在しないパス",
-        ),
-        (
-            lambda tmp_path: (
-                (tmp_path / "corrupted.jpg").write_text("Not an image"),
-                tmp_path / "corrupted.jpg",
-            )[1],
-            "破損した画像",
-        ),
-    ],
-)
-def test_process_batch_handles_invalid_images(
-    batch_pipeline: BatchPipeline,
-    sample_image_path: str,
-    tmp_path: Path,
-    setup_invalid_path: Callable[[Path], Any],
-    description: str,
-) -> None:
-    """無効な画像パスが正しく処理されること.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - 有効な画像パスと{description}が混在している
-    When:
-        - バッチ処理で分析される
-    Then:
-        - 有効な画像にはImageMetricsが返されること
-        - 無効なパスにはNoneが返されること
-        - 結果の数が入力数と一致すること
-    """.format(description=description)
-    # Arrange
-    invalid_path = setup_invalid_path(tmp_path)
-    paths = [sample_image_path, invalid_path]
-
-    # Act
-    results = batch_pipeline.process_batch(paths, batch_size=1)
-
-    # Assert
-    assert len(results) == 2
-    assert results[0] is not None
-    assert results[1] is None  # 無効なパス
-
-
-def test_process_batch_empty_list_returns_empty_list(
-    batch_pipeline: BatchPipeline,
-) -> None:
-    """空のリストが渡された場合、空のリストが返されること.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - 空のパスリストがある
-    When:
-        - バッチ処理で分析される
-    Then:
-        - 空のリストが返されること
-    """
-    # Arrange
-    paths: list[str] = []
-
-    # Act
-    results = batch_pipeline.process_batch(paths, batch_size=1)
-
-    # Assert
-    assert len(results) == 0

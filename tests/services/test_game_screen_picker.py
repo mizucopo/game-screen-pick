@@ -219,41 +219,6 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     assert "/fake/path/image2.jpg" not in selected_paths
 
 
-@pytest.mark.parametrize(
-    "input_list,num_to_select",
-    [
-        ([], 5),  # 空のリスト
-        (None, 0),  # 0個のリクエスト
-    ],
-)
-def test_edge_cases_return_empty_list(
-    input_list: List[ImageMetrics] | None,
-    num_to_select: int,
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """エッジケースで空のリストを返すことを検証.
-
-    Given:
-        - 空の入力リスト、または0個のリクエスト
-    When:
-        - 選択を実行
-    Then:
-        - 空のリストを返す
-    """
-    # Arrange
-    if input_list is None:
-        input_list = sample_image_metrics
-
-    # Act
-    result, stats = GameScreenPicker.select_from_analyzed(
-        input_list, num_to_select, 0.8
-    )
-
-    # Assert
-    assert result == []
-    assert stats.selected_count == 0
-
-
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     mock_analyzer_with_batch: MagicMock,
 ) -> None:

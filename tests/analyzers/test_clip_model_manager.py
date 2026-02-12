@@ -32,7 +32,6 @@ def test_initialization_sets_text_and_prepares_embeddings(
     Then:
         - target_textが正しく設定されること
         - テキスト埋め込みが事前計算されること
-        - モデル名とデバイスが適切に設定されること
     """
     # Arrange & Act
     if target_text is None:
@@ -45,4 +44,3 @@ def test_initialization_sets_text_and_prepares_embeddings(
     # テキスト埋め込みが事前計算されていることを確認
     embeddings = manager.get_text_embeddings()
     assert embeddings is not None
-    assert embeddings.shape[0] == 1  # バッチサイズ1

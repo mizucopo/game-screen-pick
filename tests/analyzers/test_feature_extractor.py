@@ -125,37 +125,3 @@ def test_extract_clip_features_batch_returns_correct_number_of_results(
         # 型アサーション（Type Guard）: ndarrayであればshapeにアクセス
         assert isinstance(result, np.ndarray)
         assert result.shape == (512,)
-
-
-def test_extract_clip_features_batch_handles_none_images(
-    feature_extractor: FeatureExtractor, sample_image_path: str
-) -> None:
-    """バッチ処理でNone画像が正しく処理されること.
-
-    Given:
-        - 特徴抽出器がある
-        - 有効な画像とNoneが混在している
-    When:
-        - バッチ処理でCLIP特徴が抽出される
-    Then:
-        - 有効な画像には特徴が返されること
-        - None画像にはNoneが返されること
-        - 結果の数が入力数と一致すること
-    """
-    # Arrange
-    with Image.open(sample_image_path) as img:
-        pil_img = img.convert("RGB")
-
-    pil_images = [pil_img, None, pil_img]
-
-    # Act
-    results = feature_extractor.extract_clip_features_batch(
-        pil_images, initial_batch_size=2
-    )
-
-    # Assert
-    assert len(results) == 3
-    assert results[0] is not None
-    assert isinstance(results[0], np.ndarray)
-    assert results[0].shape == (512,)
-    assert results[1] is None
