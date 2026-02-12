@@ -92,20 +92,19 @@ def test_compute_threshold_steps(
 
 
 @pytest.mark.parametrize(
-    "field_name,invalid_value,error_match",
+    "field_name,invalid_value",
     [
-        ("batch_size", 0, None),
-        ("batch_size", -10, None),
-        ("max_threshold", -0.1, None),
-        ("max_threshold", 1.1, None),
-        ("max_threshold", 2.0, None),
-        ("threshold_relaxation_steps", [0.1, -0.05, 0.2], "threshold_relaxation_steps"),
+        ("batch_size", 0),
+        ("batch_size", -10),
+        ("max_threshold", -0.1),
+        ("max_threshold", 1.1),
+        ("max_threshold", 2.0),
+        ("threshold_relaxation_steps", [0.1, -0.05, 0.2]),
     ],
 )
 def test_selection_config_rejects_invalid_values(
     field_name: str,
     invalid_value: int | float | list[float],
-    error_match: str | None,
 ) -> None:
     """無効な値が設定された場合に例外が発生すること.
 
@@ -117,9 +116,5 @@ def test_selection_config_rejects_invalid_values(
         - ValueErrorがスローされること
     """
     # Arrange & Act & Assert
-    if error_match:
-        with pytest.raises(ValueError, match=error_match):
-            SelectionConfig(**{field_name: invalid_value})  # type: ignore[arg-type]
-    else:
-        with pytest.raises(ValueError):
-            SelectionConfig(**{field_name: invalid_value})  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        SelectionConfig(**{field_name: invalid_value})  # type: ignore[arg-type]

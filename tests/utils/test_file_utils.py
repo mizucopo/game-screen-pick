@@ -17,27 +17,20 @@ from src.utils.file_utils import FileUtils
 @pytest.mark.parametrize(
     "existing_files,filename,expected",
     [
-        # 基本的なケース
         ([], "image.jpg", "image.jpg"),
         (["image.jpg"], "image.jpg", "image_1.jpg"),
         (["image.jpg", "image_1.jpg", "image_2.jpg"], "image.jpg", "image_3.jpg"),
-        # ギャップがある場合
         (["image.jpg", "image_1.jpg", "image_3.jpg"], "image.jpg", "image_2.jpg"),
         (["image.jpg", "image_5.jpg"], "image.jpg", "image_1.jpg"),
-        # 特殊パターンを含むファイル名
         (["image_test.jpg"], "image_test.jpg", "image_test_1.jpg"),
         (["image2.jpg"], "image2.jpg", "image2_1.jpg"),
         (["image-test.jpg"], "image-test.jpg", "image-test_1.jpg"),
-        # 複数拡張子
         (["archive.tar.gz"], "archive.tar.gz", "archive.tar_1.gz"),
-        # 特殊文字・日本語・スペース
         (["画像ファイル.jpg"], "画像ファイル.jpg", "画像ファイル_1.jpg"),
         (["image (copy).jpg"], "image (copy).jpg", "image (copy)_1.jpg"),
         (["my image file.jpg"], "my image file.jpg", "my image file_1.jpg"),
-        # 拡張子なし・ドットファイル
         (["myfile"], "myfile", "myfile_1"),
         ([".hidden"], ".hidden", ".hidden_1"),
-        # 非常に長いファイル名
         (["a" * 200 + ".jpg"], "a" * 200 + ".jpg", "a" * 200 + "_1.jpg"),
     ],
 )

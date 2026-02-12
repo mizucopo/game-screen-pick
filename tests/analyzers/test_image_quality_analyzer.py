@@ -39,11 +39,9 @@ def test_analyze_returns_valid_metrics_with_genre_specific_weights(
     assert result is not None
     assert isinstance(result, ImageMetrics)
     assert result.path == sample_image_path
-    # スコア値が有効範囲内であることを検証
     assert 0 <= result.total_score <= 100
     # コサイン類似度の範囲（浮動小数点の丸め誤差を許容）
     assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
-    # 正規化されたメトリックが存在することを検証
     assert len(result.normalized_metrics) > 0
 
 

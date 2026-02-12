@@ -19,7 +19,22 @@ import pytest
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
+from src.models.picker_statistics import PickerStatistics
 from src.services.game_screen_picker import GameScreenPicker
+
+
+def _assert_stats_valid(
+    stats: PickerStatistics,
+    expected_total: int,
+    expected_ok: int,
+    expected_fail: int,
+    expected_selected: int,
+) -> None:
+    """統計情報が期待値と一致することを検証するヘルパー関数."""
+    assert stats.total_files == expected_total
+    assert stats.analyzed_ok == expected_ok
+    assert stats.analyzed_fail == expected_fail
+    assert stats.selected_count == expected_selected
 
 
 def _create_features_with_similarity(
@@ -206,11 +221,13 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
 
     # Assert
     assert len(result) == 3
-    # 統計情報の検証
-    assert stats.total_files == 5
-    assert stats.analyzed_ok == 5
-    assert stats.analyzed_fail == 0
-    assert stats.selected_count == 3
+    _assert_stats_valid(
+        stats,
+        expected_total=5,
+        expected_ok=5,
+        expected_fail=0,
+        expected_selected=3,
+    )
     # 画像はスコア順になっているはず（高い順）
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
@@ -251,10 +268,13 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
         # Assert
         # 結果の基本検証
         assert len(result) <= 3
-        # 統計情報の検証
-        assert stats.total_files == 5
-        assert stats.analyzed_ok == 5
-        assert stats.analyzed_fail == 0
+        _assert_stats_valid(
+            stats,
+            expected_total=5,
+            expected_ok=5,
+            expected_fail=0,
+            expected_selected=len(result),
+        )
         # スコア順の検証
         for i in range(len(result) - 1):
             assert result[i].total_score >= result[i + 1].total_score
@@ -318,10 +338,13 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         # Assert
         # 奇数インデックスの画像のみ有効（image1, image3）
         assert len(result) <= 2
-        # 統計情報の検証
-        assert stats.total_files == 5
-        assert stats.analyzed_ok == 2
-        assert stats.analyzed_fail == 3
+        _assert_stats_valid(
+            stats,
+            expected_total=5,
+            expected_ok=2,
+            expected_fail=3,
+            expected_selected=len(result),
+        )
 
 
 @pytest.fixture
@@ -371,6 +394,12 @@ def test_threshold_relaxation_with_highly_similar_images(
 
     # Assert
     assert len(result) == num_to_select
-    assert stats.selected_count == num_to_select
+    _assert_stats_valid(
+        stats,
+        expected_total=10,
+        expected_ok=10,
+        expected_fail=0,
+        expected_selected=num_to_select,
+    )
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)

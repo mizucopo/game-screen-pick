@@ -103,5 +103,5 @@ def test_pool_analyze_batch_handles_mixed_valid_and_invalid_images(
         # Assert
         assert len(results) == 3
         assert results[0] is not None
-        assert results[1] is None  # 存在しないパス
+        assert results[1] is None
         assert results[2] is not None

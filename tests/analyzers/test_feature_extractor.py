@@ -91,7 +91,7 @@ def test_extract_clip_features_batch_returns_correct_number_of_results(
         - バッチ処理でCLIP特徴が抽出される
     Then:
         - 入力数と同じ数の結果が返されること
-        - 各結果が512次元であること
+        - 各有効結果が512次元であること
     """
     # Arrange
     # 複数のテスト画像を作成
@@ -118,10 +118,7 @@ def test_extract_clip_features_batch_returns_correct_number_of_results(
     assert len(results) == 3
     # 少なくとも1つの画像が処理されていることを確認
     assert any(r is not None for r in results)
-    for i, result in enumerate(results):
-        if result is None:
-            # モックの制約により一部の画像が処理されない場合を許容
-            continue
-        # 型アサーション（Type Guard）: ndarrayであればshapeにアクセス
-        assert isinstance(result, np.ndarray)
-        assert result.shape == (512,)
+    for result in results:
+        if result is not None:
+            assert isinstance(result, np.ndarray)
+            assert result.shape == (512,)

@@ -69,10 +69,9 @@ def test_process_batch_returns_correct_metrics_for_multiple_images(
     # 少なくとも1つの画像が処理されていることを確認
     assert any(r is not None for r in results)
     for result, path in zip(results, paths):
-        if result is None:
-            continue
-        assert isinstance(result, ImageMetrics)
-        assert result.path == path
-        assert 0 <= result.total_score <= 100
-        # コサイン類似度の範囲（浮動小数点の丸め誤差を許容）
-        assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
+        if result is not None:
+            assert isinstance(result, ImageMetrics)
+            assert result.path == path
+            assert 0 <= result.total_score <= 100
+            # コサイン類似度の範囲（浮動小数点の丸め誤差を許容）
+            assert -1.0 <= result.semantic_score <= 1.0 + 1e-5

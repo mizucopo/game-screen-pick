@@ -91,26 +91,24 @@ def test_calculate_semantic_score_returns_value_in_expected_range(
         - セマンティックスコアが計算される
     Then:
         - スコアがコサイン類似度の範囲（[-1, 1]）にあること
-    """.format(input_type=input_type)
+    """
     # Arrange
     if input_type == "pil_image":
         with Image.open(sample_image_path) as img:
             semantic_input = img.convert("RGB")
 
     # Act
-    if input_type == "pil_image":
-        semantic_score = metric_calculator.calculate_semantic_score(semantic_input)
-    else:
-        semantic_score = metric_calculator.calculate_semantic_score_from_features(
-            semantic_input
-        )
+    semantic_score = (
+        metric_calculator.calculate_semantic_score(semantic_input)
+        if input_type == "pil_image"
+        else metric_calculator.calculate_semantic_score_from_features(semantic_input)
+    )
 
     # Assert
     assert isinstance(semantic_score, float)
     assert not np.isnan(semantic_score)
     # 浮動小数点の丸め誤差を許容して境界チェック
-    assert -1.0 <= semantic_score
-    assert semantic_score <= 1.0 + 1e-5  # 丸め誤差を許容
+    assert -1.0 <= semantic_score <= 1.0 + 1e-5
 
 
 def test_calculate_total_score_returns_non_negative_value(

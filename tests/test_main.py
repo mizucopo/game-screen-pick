@@ -138,7 +138,6 @@ def test_cli_selects_and_displays_images(
 @pytest.mark.parametrize(
     "setup_files,expected_files",
     [
-        # 異なる名前のファイル
         (
             [
                 (
@@ -152,7 +151,6 @@ def test_cli_selects_and_displays_images(
             ],
             ["image0.jpg", "image1.jpg", "image2.jpg"],
         ),
-        # 同名ファイル（サフィックス付与）
         (
             [
                 ("folder0", [("image.jpg", 95.0)]),
@@ -272,7 +270,6 @@ def test_cli_handles_empty_input_directory(
 @pytest.mark.parametrize(
     "args,input_path_setup,error_type,error_patterns",
     [
-        # 入力フォルダのバリデーション
         (
             [],
             "nonexistent",
@@ -285,7 +282,6 @@ def test_cli_handles_empty_input_directory(
             NotADirectoryError,
             ["フォルダではありません"],
         ),
-        # --num の無効値
         (
             ["-n", "-1"],
             None,
@@ -298,7 +294,6 @@ def test_cli_handles_empty_input_directory(
             SystemExit,
             ["整数ではありません"],
         ),
-        # --similarity の無効値
         (
             ["-s", "1.5"],
             None,

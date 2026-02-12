@@ -81,15 +81,7 @@ def test_normalize_all_returns_all_expected_metrics() -> None:
     When:
         - normalize_allが呼び出される
     Then:
-        - すべての8つの期待されるメトリックが返されること：
-          - blur_score
-          - contrast
-          - color_richness
-          - edge_density
-          - dramatic_score
-          - visual_balance
-          - action_intensity
-          - ui_density
+        - すべての8つの期待されるメトリックが返されること
         - すべての正規化値が[0, 1]範囲内にあること
     """
     # Arrange
@@ -120,6 +112,5 @@ def test_normalize_all_returns_all_expected_metrics() -> None:
         "ui_density",
     }
     assert set(result.keys()) == expected_keys
-    # 有効範囲チェックを統合
     for value in result.values():
         assert 0.0 <= value <= 1.0
