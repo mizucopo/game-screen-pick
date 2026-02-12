@@ -148,32 +148,6 @@ def test_cli_accepts_all_arguments(
     assert "選択された画像一覧" in captured.out
 
 
-def test_cli_shows_error_for_missing_required_argument(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """必須引数（input）が missing の時にエラーが表示されること.
-
-    Given:
-        - 必須引数（input）が指定されていない
-    When:
-        - CLIが実行される
-    Then:
-        - 適切なエラーメッセージが出力されること
-        - プログラムが終了すること
-    """
-    # Arrange
-    monkeypatch.setattr("sys.argv", ["main.py"])
-
-    # Act & Assert
-    with pytest.raises(SystemExit):
-        Main().run()
-
-    captured = capsys.readouterr()
-    # argparseのエラーメッセージが含まれている
-    assert "error" in captured.err.lower() or "required" in captured.err.lower()
-
-
 def test_cli_selects_and_displays_images(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

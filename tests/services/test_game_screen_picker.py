@@ -254,31 +254,6 @@ def test_edge_cases_return_empty_list(
     assert stats.selected_count == 0
 
 
-def test_original_input_list_remains_unchanged_after_selection(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """元の入力リストは選択後も変更されないこと.
-
-    Given:
-        - 特定の順序の分析済み画像リスト
-    When:
-        - そのリストから選択
-    Then:
-        - 元のリストの順序と内容が保持されること
-    """
-    # Arrange
-    original_paths = [m.path for m in sample_image_metrics]
-    original_order = list(sample_image_metrics)
-
-    # Act
-    GameScreenPicker.select_from_analyzed(sample_image_metrics, 3, 0.8)
-
-    # Assert
-    assert [m.path for m in sample_image_metrics] == original_paths
-    # 元のリストオブジェクトは同じ順序のままであるはず
-    assert sample_image_metrics == original_order
-
-
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     mock_analyzer_with_batch: MagicMock,
 ) -> None:

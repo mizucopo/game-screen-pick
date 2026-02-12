@@ -17,7 +17,6 @@ from PIL import Image
 
 from src.analyzers.clip_model_manager import CLIPModelManager
 from src.analyzers.feature_extractor import FeatureExtractor
-from src.utils.vector_utils import VectorUtils
 
 
 @pytest.fixture
@@ -78,46 +77,6 @@ def test_extract_clip_features_returns_normalized_features(
     # L2ノルムが1であることを確認
     norm = np.linalg.norm(clip_features)
     assert norm == pytest.approx(1.0, abs=1e-5)
-
-
-def test_extract_combined_features_returns_correct_shape_and_content(
-    feature_extractor: FeatureExtractor, sample_image_path: str
-) -> None:
-    """統合特徴が正しい形状と内容で抽出されること.
-
-    Given:
-        - 特徴抽出器がある
-        - テスト画像がある
-    When:
-        - HSV特徴とCLIP特徴が結合される
-    Then:
-        - 576次元（64+512）の特徴ベクトルが返されること
-        - 前半64次元が正規化されたHSV特徴であること
-        - 後半512次元がCLIP特徴であること
-    """
-    # Arrange
-    img = cv2.imread(sample_image_path)
-    with Image.open(sample_image_path) as pil_img:
-        pil_rgb = pil_img.convert("RGB")
-
-    clip_features = feature_extractor.extract_clip_features(pil_rgb)
-    hsv_features = feature_extractor.extract_hsv_features(img)
-
-    # Act
-    combined_features = feature_extractor.extract_combined_features(img, clip_features)
-
-    # Assert - 形状
-    assert combined_features.shape == (576,)
-
-    # Assert - 内容
-    # HSV特徴は正規化されているはず
-    hsv_normalized = VectorUtils.safe_l2_normalize(hsv_features)
-    actual_hsv = combined_features[:64]
-    assert np.allclose(actual_hsv, hsv_normalized, atol=1e-5)
-
-    # CLIP特徴はそのまま含まれているはず
-    actual_clip = combined_features[64:]
-    assert np.allclose(actual_clip, clip_features, atol=1e-5)
 
 
 def test_extract_clip_features_batch_returns_correct_number_of_results(

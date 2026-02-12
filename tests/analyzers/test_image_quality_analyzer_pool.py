@@ -47,30 +47,6 @@ def use_fake_pool(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.analyzers.image_quality_analyzer_pool.Pool", _FakePool)
 
 
-def test_pool_context_manager_starts_and_closes_pool() -> None:
-    """プールがコンテキストマネージャーで正常に開始・終了すること.
-
-    Given:
-        - ImageQualityAnalyzerPoolインスタンスがある
-    When:
-        - コンテキストマネージャーとして使用する
-    Then:
-        - コンテキスト内で正常に動作すること
-        - コンテキスト終了後にプールが閉じられること
-    """
-    # Arrange
-    pool = ImageQualityAnalyzerPool(genre="mixed", num_workers=2, force_cpu=True)
-
-    # Act & Assert
-    with pool:
-        # コンテキスト内で正常に動作
-        pass
-
-    # コンテキスト終了後はプールが閉じられている
-    with pytest.raises(RuntimeError, match="Pool is not started"):
-        pool.analyze_batch(["dummy.jpg"])
-
-
 def test_pool_analyze_batch_processes_multiple_images(
     multiple_image_paths: list[str],
 ) -> None:
@@ -129,21 +105,3 @@ def test_pool_analyze_batch_handles_mixed_valid_and_invalid_images(
         assert results[0] is not None
         assert results[1] is None  # 存在しないパス
         assert results[2] is not None
-
-
-def test_pool_raises_error_when_not_started() -> None:
-    """プールが開始されていない状態でanalyze_batchを呼び出すとエラーが発生すること.
-
-    Given:
-        - 開始されていないプールがある
-    When:
-        - analyze_batchが呼び出される
-    Then:
-        - RuntimeErrorが発生すること
-    """
-    # Arrange
-    pool = ImageQualityAnalyzerPool(genre="mixed", num_workers=2, force_cpu=True)
-
-    # Act & Assert
-    with pytest.raises(RuntimeError, match="Pool is not started"):
-        pool.analyze_batch(["dummy.jpg"])

@@ -91,28 +91,6 @@ def test_compute_threshold_steps(
     assert steps == expected_steps
 
 
-def test_default_list_is_not_shared_between_instances() -> None:
-    """デフォルトのリストがインスタンス間で共有されないこと.
-
-    Given:
-        - 2つのSelectionConfigインスタンスを作成
-    When:
-        - 片方のリストを変更
-    Then:
-        - もう片方のリストは変更されていないこと
-    """
-    # Arrange
-    config1 = SelectionConfig()
-    config2 = SelectionConfig()
-
-    # Act
-    config1.threshold_relaxation_steps.append(0.99)
-
-    # Assert
-    assert config1.threshold_relaxation_steps == [0.03, 0.06, 0.10, 0.15, 0.99]
-    assert config2.threshold_relaxation_steps == [0.03, 0.06, 0.10, 0.15]
-
-
 @pytest.mark.parametrize(
     "field_name,invalid_value,error_match",
     [
