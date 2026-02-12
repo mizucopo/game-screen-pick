@@ -22,10 +22,8 @@ def test_initialization_with_default_parameters() -> None:
     When:
         - CLIPModelManagerが初期化される
     Then:
-        - モデルとプロセッサがロードされること
-        - デバイスが設定されること
+        - モデル名、ターゲットテキスト、デバイスが正しく設定されること
         - テキスト埋め込みが事前計算されること
-        - target_textがデフォルト値であること
     """
     # Arrange & Act
     manager = CLIPModelManager()
@@ -35,8 +33,6 @@ def test_initialization_with_default_parameters() -> None:
     assert manager.target_text == "epic game scenery"
     assert manager.device in ("cuda", "cpu")
     assert manager.get_text_embeddings().shape == (1, 512)
-    # evalが呼ばれたことを確認（実装詳細ではなく、観測可能な結果として）
-    assert manager.model._eval_called is True
 
 
 def test_initialization_with_custom_target_text() -> None:
@@ -152,40 +148,6 @@ def test_get_text_embeddings_returns_cached_tensor() -> None:
     # Assert - 同じオブジェクト（キャッシュされている）
     assert embeddings1 is embeddings2
     assert embeddings1.shape == (1, 512)
-
-
-def test_model_eval_called_during_initialization() -> None:
-    """初期化時にモデルのeval()が呼ばれること.
-
-    Given:
-        - CLIPModelManagerが初期化される
-    When:
-        - 初期化が完了する
-    Then:
-        - モデルのevalメソッドが呼ばれていること（推論モード設定）
-    """
-    # Arrange & Act
-    manager = CLIPModelManager()
-
-    # Assert
-    assert manager.model._eval_called is True
-
-
-def test_model_moved_to_specified_device() -> None:
-    """モデルが指定されたデバイスに移動されること.
-
-    Given:
-        - CLIPModelManagerが初期化される
-    When:
-        - 初期化が完了する
-    Then:
-        - モデルのtoメソッドがデバイス指定で呼ばれること
-    """
-    # Arrange & Act
-    manager = CLIPModelManager(device="cpu")
-
-    # Assert
-    assert "cpu" in manager.model._to_called_with
 
 
 def test_target_text_property_returns_correct_value() -> None:

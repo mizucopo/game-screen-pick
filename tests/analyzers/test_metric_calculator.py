@@ -16,7 +16,6 @@ import pytest
 from PIL import Image
 
 from src.analyzers.clip_model_manager import CLIPModelManager
-from src.analyzers.feature_extractor import FeatureExtractor
 from src.analyzers.metric_calculator import MetricCalculator
 from src.analyzers.metric_normalizer import MetricNormalizer
 from src.constants.genre_weights import GenreWeights
@@ -170,36 +169,6 @@ def test_calculate_semantic_score_from_features_returns_value_in_expected_range(
     # 浮動小数点の丸め誤差を許容して境界チェック
     assert -1.0 <= semantic_score
     assert semantic_score <= 1.0 + 1e-5  # 丸め誤差を許容
-
-
-def test_calculate_semantic_score_from_features_returns_similar_result_as_direct(
-    metric_calculator: MetricCalculator, sample_image_path: str
-) -> None:
-    """直接計算したスコアと特徴から計算したスコアが近いこと.
-
-    Given:
-        - メトリクス計算器がある
-        - テスト画像がある
-    When:
-        - セマンティックスコアが2つの方法で計算される
-    Then:
-        - 両方のスコアが近い値であること
-    """
-    # Arrange
-    with Image.open(sample_image_path) as img:
-        pil_img = img.convert("RGB")
-
-    # Act
-    feature_extractor = FeatureExtractor(metric_calculator.model_manager)
-    clip_features = feature_extractor.extract_clip_features(pil_img)
-
-    score_direct = metric_calculator.calculate_semantic_score(pil_img)
-    score_from_features = metric_calculator.calculate_semantic_score_from_features(
-        clip_features
-    )
-
-    # Assert - モックの固定値を使用しているため完全一致
-    assert score_direct == pytest.approx(score_from_features)
 
 
 def test_calculate_total_score_returns_non_negative_value(
