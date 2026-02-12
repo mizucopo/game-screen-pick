@@ -70,7 +70,9 @@ class FeatureExtractor:
             return VectorUtils.safe_l2_normalize(features)
 
     def extract_combined_features(
-        self, img: np.ndarray, clip_features: np.ndarray
+        self,
+        img: np.ndarray,
+        clip_features: torch.Tensor | np.ndarray,
     ) -> np.ndarray:
         """HSV特徴とCLIP特徴を結合する.
 
@@ -80,21 +82,29 @@ class FeatureExtractor:
         Args:
             img: OpenCV画像（BGR形式、既に縮小されている）
             clip_features: CLIP画像埋め込み（512次元、正規化済み）
+                          torch.Tensorまたはnp.ndarray
 
         Returns:
-            結合された特徴ベクトル（576次元）
+            結合された特徴ベクトル（576次元、np.ndarray）
         """
         hsv_features = FeatureExtractor.extract_hsv_features(img)
         # L2正規化（既に正規化されているが、安全のため再正規化）
         hsv_normalized = VectorUtils.safe_l2_normalize(hsv_features)
+
+        # clip_featuresがtorch.Tensorの場合はnumpyに変換
+        if isinstance(clip_features, torch.Tensor):
+            clip_features_np = clip_features.cpu().numpy()
+        else:
+            clip_features_np = clip_features
+
         # 結合
-        return np.concatenate([hsv_normalized, clip_features])
+        return np.concatenate([hsv_normalized, clip_features_np])
 
     def extract_clip_features_batch(
         self,
         pil_images: Sequence[Image.Image | None],
         initial_batch_size: int = 32,
-    ) -> list[np.ndarray | None]:
+    ) -> list[torch.Tensor | None]:
         """複数のPIL画像に対してCLIP推論をバッチ実行して特徴を抽出.
 
         OOM対策（失敗したバッチのみ再試行）:
@@ -104,12 +114,18 @@ class FeatureExtractor:
         - 最小バッチサイズ1まで試行（32→16→8→4→2→1）
         - それでも失敗した画像はNoneとして返す
 
+        パフォーマンス最適化:
+        - CPU転送を削除し、torch.Tensorのまま返す
+        - バッチ処理でもtensor形式を維持することで、
+          後続のsemantic計算でのtensor→numpy→tensor往復を回避
+
         Args:
             pil_images: PIL画像のリスト（失敗した画像はNone）
             initial_batch_size: 初期バッチサイズ
 
         Returns:
             CLIP画像埋め込みのリスト（512次元、正規化済み、失敗した画像はNone）
+            ※torch.Tensorのまま返す（デバイス上に配置）
         """
         # 有効な画像のインデックスと画像を収集
         valid_indices = [i for i, img in enumerate(pil_images) if img is not None]
@@ -121,7 +137,7 @@ class FeatureExtractor:
             return [None] * len(pil_images)
 
         # 結果を格納する配列（初期値はNone）
-        results: list[np.ndarray | None] = [None] * len(pil_images)
+        results: list[torch.Tensor | None] = [None] * len(pil_images)
 
         # 現在のバッチサイズ
         current_batch_size = initial_batch_size
@@ -153,13 +169,11 @@ class FeatureExtractor:
 
                     # バッチ単位でL2正規化（テンソルのまま処理して高速化）
                     batch_features_normalized = F.normalize(image_features, p=2, dim=-1)
-                    # まとめてCPUに転送してNumPy配列に変換
-                    batch_features = batch_features_normalized.cpu().numpy()
 
                 # 結果を元のインデックスにマッピング
-                for j, features in enumerate(batch_features):
+                for j in range(len(batch_features_normalized)):
                     original_idx = valid_indices[batch_start + j]
-                    results[original_idx] = features
+                    results[original_idx] = batch_features_normalized[j]
 
                 # バッチ処理成功、次へ進む
                 i = batch_end

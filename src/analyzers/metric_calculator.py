@@ -65,21 +65,50 @@ class MetricCalculator:
         gray_mean = np.mean(gray)
         kernel = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
 
+        # OpenCVネイティブ関数で高速化（CV_32Fで精度は維持しつつ高速化）
+        laplacian = cv2.Laplacian(gray, cv2.CV_32F)
+        blur_score = float(laplacian.var())
+
+        # 標準偏差はcv2.meanStdDevで計算（高速化）
+        _, contrast_std = cv2.meanStdDev(gray)
+        contrast = float(contrast_std[0][0])
+
+        # エッジ密度：cv2.countNonZeroで高速化
+        edges = cv2.Canny(gray, 50, 150)
+        edge_density = cv2.countNonZero(edges) / gray_size
+
+        # UI密度：SobelをCV_32Fで計算し、二乗和の平方根でL1ノルム相当を高速計算
+        sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0)
+        ui_density = float(np.sum(np.abs(sobel_x))) / gray_size
+
+        # 彩度の標準偏差をmeanStdDevで高速化
+        _, saturation_std = cv2.meanStdDev(hsv[:, :, 1])
+        color_richness = float(saturation_std[0][0])
+
+        # アクション強度：フィルタ適用後の標準偏差をmeanStdDevで高速化
+        filtered = cv2.filter2D(gray, -1, kernel)
+        _, action_std = cv2.meanStdDev(filtered)
+        action_intensity = float(action_std[0][0])
+
+        # ドラマティックスコア：彩度と明度の閾値処理にcountNonZeroを活用
+        high_saturation = hsv[:, :, 1] > 180
+        high_value = hsv[:, :, 2] > 180
+        # 両条件を満たすピクセル数をカウント（論理積をuint8に変換してcountNonZero）
+        dramatic_pixels = cv2.countNonZero(
+            (high_saturation & high_value).astype(np.uint8)
+        )
+        dramatic_score = (dramatic_pixels / gray_size) * 1000
+
         return {
-            "blur_score": cv2.Laplacian(gray, cv2.CV_64F).var(),
-            "brightness": gray_mean,
-            "contrast": np.std(gray),
-            "edge_density": np.sum(cv2.Canny(gray, 50, 150) > 0) / gray_size,
-            "color_richness": np.std(hsv[:, :, 1]),
-            "ui_density": (
-                np.sum(np.abs(cv2.Sobel(gray, cv2.CV_64F, 1, 0))) / gray_size
-            ),
-            "action_intensity": np.std(cv2.filter2D(gray, -1, kernel)),
-            "visual_balance": max(0, 100 - abs(gray_mean - 128) * 0.5),
-            "dramatic_score": (
-                np.sum((hsv[:, :, 1] > 180) & (hsv[:, :, 2] > 180)) / gray_size
-            )
-            * 1000,
+            "blur_score": blur_score,
+            "brightness": float(gray_mean),
+            "contrast": contrast,
+            "edge_density": edge_density,
+            "color_richness": color_richness,
+            "ui_density": ui_density,
+            "action_intensity": action_intensity,
+            "visual_balance": float(max(0, 100 - abs(gray_mean - 128) * 0.5)),
+            "dramatic_score": dramatic_score,
         }
 
     def calculate_semantic_score(self, pil_img: PIL.Image.Image) -> float:
@@ -133,16 +162,17 @@ class MetricCalculator:
             return float(cosine_sim[0][0])
 
     def calculate_semantic_score_batch(
-        self, clip_features_list: list[np.ndarray | None]
+        self, clip_features_list: list[torch.Tensor | None]
     ) -> list[float | None]:
         """複数のCLIP特徴からセマンティックスコアをバッチ計算する.
 
-        画像ごとにCPU/NumPy ↔ Torch 変換を行うのではなく、
-        まとめてテンソルに変換して一括計算することで高速化する。
+        パフォーマンス最適化:
+        - torch.Tensorを直接受け取り、CPU/NumPy変換を回避
+        - まとめて行列積で一括計算
 
         Args:
             clip_features_list: 正規化済みのCLIP画像特徴のリスト
-                                （512次元、Noneを含む場合あり）
+                                （512次元、torch.Tensor、Noneを含む場合あり）
 
         Returns:
             セマンティックスコアのリスト（範囲: [-1, 1]、失敗した要素はNone）
@@ -151,28 +181,22 @@ class MetricCalculator:
         valid_indices = [
             i for i, features in enumerate(clip_features_list) if features is not None
         ]
-        valid_features = [
-            clip_features_list[i]
-            for i in valid_indices
-            if clip_features_list[i] is not None
-        ]
 
-        if not valid_features:
+        if not valid_indices:
             return [None] * len(clip_features_list)
 
         # 結果を格納する配列（初期値はNone）
         results: list[float | None] = [None] * len(clip_features_list)
 
         with torch.inference_mode():
-            # valid_featuresの要素はすべてnp.ndarrayであることが保証されている
-            # （valid_indicesでNoneを除外済み）
-            valid_features_array: list[np.ndarray] = [
-                f for f in valid_features if f is not None
+            # torch.Tensorをスタックしてバッチ化
+            # valid_indicesでNoneを除外済みだが、型チェッカーに明示するためにcast
+            from typing import cast
+
+            valid_tensors: list[torch.Tensor] = [
+                cast(torch.Tensor, clip_features_list[i]) for i in valid_indices
             ]
-            # まとめてテンソルに変換してデバイスに転送
-            batch_features = torch.from_numpy(
-                np.stack([f.astype(np.float32) for f in valid_features_array])
-            ).to(self.model_manager.device)
+            batch_features = torch.stack(valid_tensors)
 
             # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
             # コサイン類似度を一括計算
