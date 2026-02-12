@@ -96,7 +96,7 @@ class GameScreenPicker:
         # 全候補を対象にする（固定上位M件の制限を廃止）
         candidates = all_results
 
-        # 特徴量を事前にL2正規化（コサイン類似度 = 内積になる）
+        # 特徴ベクトルを事前にL2正規化（コサイン類似度 = 内積になる）
         # 正規化されたベクトル同士の内積はコサイン類似度と等価
         eps = 1e-8
         normalized_features = []
@@ -185,7 +185,7 @@ class GameScreenPicker:
         files = GameScreenPicker.load_image_files(folder, recursive)
         total_files = len(files)
 
-        # ランダムにシャッフル（フォルダやファイル名のバイアスを破壊）
+        # ランダムにシャッフル（フォルダやファイル名のバイアスを排除）
         self._rng.shuffle(files)
 
         if show_progress:
@@ -196,7 +196,7 @@ class GameScreenPicker:
         analyzed_ok = len(all_results)
         analyzed_fail = total_files - analyzed_ok
 
-        # スコア順にソート（最高画質が上にくる）
+        # スコア順にソート（最高品質が上にくる）
         all_results.sort(key=lambda x: x.total_score, reverse=True)
 
         # 多様性に基づいて選択
