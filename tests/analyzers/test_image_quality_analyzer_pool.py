@@ -37,7 +37,7 @@ class _FakePool:
     def map(self, func: Any, items: list[str]) -> list[ImageMetrics | None]:
         return [func(item) for item in items]
 
-    def terminate(self) -> None:
+    def close(self) -> None:
         return
 
     def join(self) -> None:

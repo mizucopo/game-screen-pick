@@ -31,25 +31,18 @@ jobs:
         id: pytest
         continue-on-error: true
         timeout-minutes: 10
-        shell: bash
-        env:
-          PYTHONFAULTHANDLER: "1"
         run: |
-          set -o pipefail
-          uv run pytest --tb=short -v -o faulthandler_timeout=30 2>&1 | tee pytest_output.txt
-          EXIT_CODE=${PIPESTATUS[0]}
-          if [ "$EXIT_CODE" -eq 0 ]; then
+          uv run pytest --tb=short -v 2>&1 | tee pytest_output.txt
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
             RESULT="✅ 成功"
           else
-            RESULT="❌ 失敗 (終了コード: $EXIT_CODE)"
+            RESULT="❌ 失敗 (終了コード: ${PIPESTATUS[0]})"
           fi
-          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
-          exit "$EXIT_CODE"
+          echo "result=$RESULT" >> $GITHUB_OUTPUT
 
       - name: Run mypy
         id: mypy
         continue-on-error: true
-        shell: bash
         run: |
           if uv run mypy > mypy_output.txt 2>&1; then
             RESULT="✅ 成功"
@@ -61,7 +54,6 @@ jobs:
       - name: Run ruff format check
         id: ruff-format
         continue-on-error: true
-        shell: bash
         run: |
           if uv run ruff format --check . > ruff_format_output.txt 2>&1; then
             RESULT="✅ 成功"
@@ -73,7 +65,6 @@ jobs:
       - name: Run ruff check
         id: ruff-check
         continue-on-error: true
-        shell: bash
         run: |
           if uv run ruff check . > ruff_check_output.txt 2>&1; then
             RESULT="✅ 成功"
@@ -86,7 +77,6 @@ jobs:
         if: github.event.pull_request.head.repo.fork == false
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           gh pr comment ${{ github.event.number }} --body "
           ## 🔍 Quality Checks Result
