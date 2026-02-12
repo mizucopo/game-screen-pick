@@ -72,7 +72,9 @@ class ImageQualityAnalyzerPool:
     def close(self) -> None:
         """プールを閉じる."""
         if self._pool is not None:
-            self._pool.close()
+            # close() + join() はワーカーが固まると待ち続けるため、
+            # 常に terminate() で確実にプロセスを終了させる。
+            self._pool.terminate()
             self._pool.join()
             self._pool = None
             logger.info("AnalyzerPool closed")
