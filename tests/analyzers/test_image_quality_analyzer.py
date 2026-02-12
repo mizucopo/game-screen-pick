@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 import pytest
 import torch
+from PIL import Image
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
@@ -459,9 +460,6 @@ def test_analyze_uses_combined_features_for_similarity(
         - 特徴ベクトルの後半がCLIP特徴であること
     """
     # Arrange
-    import cv2
-    from PIL import Image
-
     analyzer = ImageQualityAnalyzer()
 
     # Act

@@ -8,8 +8,8 @@ import os
 from multiprocessing.pool import Pool
 from typing import Any, List, Literal, Optional
 
-from .analyzer_worker import AnalyzerWorker
 from ..models.image_metrics import ImageMetrics
+from .analyzer_worker import AnalyzerWorker
 
 logger = logging.getLogger(__name__)
 

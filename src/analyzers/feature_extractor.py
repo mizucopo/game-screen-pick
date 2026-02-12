@@ -1,10 +1,12 @@
 """特徴抽出器 - HSV, CLIP, 統合特徴の抽出を行う."""
 
+import contextlib
 import logging
 from collections.abc import Sequence
 
 import cv2
 import numpy as np
+import torch
 import torch.nn.functional as F
 from PIL import Image
 
@@ -56,8 +58,6 @@ class FeatureExtractor:
         Returns:
             正規化されたCLIP画像埋め込み（512次元）
         """
-        import torch
-
         with torch.inference_mode():
             inputs = self.model_manager.processor(
                 images=pil_img,
@@ -111,9 +111,6 @@ class FeatureExtractor:
         Returns:
             CLIP画像埋め込みのリスト（512次元、正規化済み、失敗した画像はNone）
         """
-        import torch
-        import contextlib
-
         # 有効な画像のインデックスと画像を収集
         valid_indices = [i for i, img in enumerate(pil_images) if img is not None]
         valid_images: Sequence[Image.Image] = [

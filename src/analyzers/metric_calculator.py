@@ -4,14 +4,13 @@ import logging
 
 import cv2
 import numpy as np
+import PIL.Image
 import torch
 import torch.nn.functional as F
 
 from ..models.analyzer_config import AnalyzerConfig
 from .clip_model_manager import CLIPModelManager
 from .metric_normalizer import MetricNormalizer
-
-import PIL.Image
 
 logger = logging.getLogger(__name__)
 

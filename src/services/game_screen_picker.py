@@ -1,8 +1,8 @@
 """Game screen picker for diverse image selection."""
 
+import random
 from pathlib import Path
 from typing import List, Optional
-import random
 
 import numpy as np
 

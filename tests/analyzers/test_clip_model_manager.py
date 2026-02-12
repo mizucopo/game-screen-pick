@@ -9,6 +9,7 @@
 
 from unittest.mock import MagicMock
 
+from PIL import Image
 
 from src.analyzers.clip_model_manager import CLIPModelManager
 
@@ -90,8 +91,6 @@ def test_get_image_features_returns_correct_shape() -> None:
         - 正しい形状のテンソルが返されること
     """
     # Arrange
-    from PIL import Image
-
     manager = CLIPModelManager()
     mock_image = MagicMock(spec=Image.Image)
 
@@ -114,8 +113,6 @@ def test_get_image_features_batch_mode_returns_correct_shape() -> None:
         - バッチサイズに応じた形状のテンソルが返されること
     """
     # Arrange
-    from PIL import Image
-
     manager = CLIPModelManager()
     # モックプロセッサがバッチサイズを検出できるようにする
     # 実際のCLIPプロセッサはimages引数（リスト）からバッチサイズを取得
