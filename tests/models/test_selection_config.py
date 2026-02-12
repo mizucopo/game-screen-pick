@@ -48,27 +48,26 @@ def test_selection_config_initialization(
 
 
 @pytest.mark.parametrize(
-    "base_threshold,custom_steps,max_threshold,expected_steps",
+    "base_threshold,max_threshold,expected_steps",
     [
-        # デフォルトステップ
-        (0.72, None, 0.98, [0.72, 0.75, 0.78, 0.82, 0.87]),
-        # 上限制限
-        (0.95, None, 0.98, [0.95, 0.98, 0.98, 0.98, 0.98]),
-        # カスタムステップ
-        (0.70, [0.05, 0.15], 0.95, [0.70, 0.75, 0.85]),
+        # 通常のステップ計算
+        (0.72, 0.98, [0.72, 0.75, 0.78, 0.82, 0.87]),
+        # 上限制限（max_thresholdでキャップされる）
+        (0.95, 0.98, [0.95, 0.98, 0.98, 0.98, 0.98]),
+        # 低いベース値でのステップ計算
+        (0.50, 0.98, [0.50, 0.53, 0.56, 0.60, 0.65]),
     ],
 )
-def test_compute_threshold_steps(
+def test_compute_threshold_steps_with_defaults(
     base_threshold: float,
-    custom_steps: list[float] | None,
     max_threshold: float,
     expected_steps: list[float],
 ) -> None:
-    """しきい値ステップが正しく計算されること.
+    """デフォルトステップでのしきい値計算と上限制限が正しく動作すること.
 
     Given:
-        - SelectionConfigインスタンスがある
-        - ベースしきい値がある
+        - デフォルトステップを持つSelectionConfigがある
+        - ベースしきい値と最大しきい値がある
     When:
         - しきい値ステップを計算
     Then:
@@ -76,19 +75,38 @@ def test_compute_threshold_steps(
         - 上限制限が遵守されること
     """
     # Arrange
-    if custom_steps is None:
-        config = SelectionConfig(max_threshold=max_threshold)
-    else:
-        config = SelectionConfig(
-            threshold_relaxation_steps=custom_steps,
-            max_threshold=max_threshold,
-        )
+    config = SelectionConfig(max_threshold=max_threshold)
 
     # Act
     steps = config.compute_threshold_steps(base_threshold)
 
     # Assert
     assert steps == expected_steps
+
+
+def test_compute_threshold_steps_with_custom_steps() -> None:
+    """カスタムステップが正しく適用されること.
+
+    Given:
+        - カスタムステップを持つSelectionConfigがある
+    When:
+        - しきい値ステップを計算
+    Then:
+        - カスタムステップがベース値に加算されること
+    """
+    # Arrange
+    custom_steps = [0.05, 0.15]
+    base_threshold = 0.70
+    config = SelectionConfig(
+        threshold_relaxation_steps=custom_steps,
+        max_threshold=0.95,
+    )
+
+    # Act
+    steps = config.compute_threshold_steps(base_threshold)
+
+    # Assert
+    assert steps == [0.70, 0.75, 0.85]
 
 
 @pytest.mark.parametrize(

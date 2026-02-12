@@ -67,44 +67,55 @@ def test_calculate_raw_metrics_returns_expected_metrics(
         assert not np.isnan(value)
 
 
-@pytest.mark.parametrize(
-    "use_features",
-    [True, False],
-)
 def test_calculate_semantic_score_returns_value_in_expected_range(
     metric_calculator: MetricCalculator,
     sample_image_path: str,
-    use_features: bool,
 ) -> None:
-    """セマンティックスコアが期待される範囲で返されること.
+    """セマンティックスコアが期待される範囲で返されること（画像入力）.
 
     Given:
         - メトリクス計算器がある
-        - 特徴ベクトルまたはPIL画像からの入力がある
+        - PIL画像がある
     When:
         - セマンティックスコアが計算される
     Then:
         - スコアがコサイン類似度の範囲（[-1, 1]）にあること
     """
     # Arrange
-    if use_features:
-        semantic_input = np.ones(512) / np.sqrt(512.0)
-    else:
-        with Image.open(sample_image_path) as img:
-            semantic_input = img.convert("RGB")
+    with Image.open(sample_image_path) as img:
+        pil_img = img.convert("RGB")
 
     # Act
-    if use_features:
-        semantic_score = metric_calculator.calculate_semantic_score_from_features(
-            semantic_input
-        )
-    else:
-        semantic_score = metric_calculator.calculate_semantic_score(semantic_input)
+    semantic_score = metric_calculator.calculate_semantic_score(pil_img)
 
     # Assert
     assert isinstance(semantic_score, float)
     assert not np.isnan(semantic_score)
-    # 浮動小数点の丸め誤差を許容して境界チェック
+    assert -1.0 <= semantic_score <= 1.0 + 1e-5
+
+
+def test_calculate_semantic_score_from_features_returns_value_in_expected_range(
+    metric_calculator: MetricCalculator,
+) -> None:
+    """セマンティックスコアが期待される範囲で返されること（特徴ベクトル入力）.
+
+    Given:
+        - メトリクス計算器がある
+        - 正規化された特徴ベクトルがある
+    When:
+        - 特徴ベクトルからセマンティックスコアが計算される
+    Then:
+        - スコアがコサイン類似度の範囲（[-1, 1]）にあること
+    """
+    # Arrange
+    features = np.ones(512) / np.sqrt(512.0)
+
+    # Act
+    semantic_score = metric_calculator.calculate_semantic_score_from_features(features)
+
+    # Assert
+    assert isinstance(semantic_score, float)
+    assert not np.isnan(semantic_score)
     assert -1.0 <= semantic_score <= 1.0 + 1e-5
 
 
