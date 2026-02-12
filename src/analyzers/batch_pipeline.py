@@ -2,11 +2,10 @@
 
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import List, Optional
 
 import cv2
-import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from ..models.analyzer_config import AnalyzerConfig
@@ -14,6 +13,9 @@ from ..models.image_metrics import ImageMetrics
 
 from .feature_extractor import FeatureExtractor
 from .metric_calculator import MetricCalculator
+from .parallel_metrics_worker import ParallelMetricsWorker
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,7 @@ class BatchPipeline:
         feature_extractor: "FeatureExtractor",
         metric_calculator: "MetricCalculator",
         config: AnalyzerConfig,
+        max_workers: Optional[int] = None,
     ):
         """バッチ処理パイプラインを初期化する.
 
@@ -36,22 +39,34 @@ class BatchPipeline:
             feature_extractor: 特徴抽出器
             metric_calculator: メトリクス計算器
             config: アナライザー設定
+            max_workers: 並列処理の最大ワーカー数（NoneでCPUコア数自動）
         """
         self.feature_extractor = feature_extractor
         self.metric_calculator = metric_calculator
         self.config = config
+        self.max_workers = max_workers
+
+        # テキスト埋め込みをnumpy配列としてキャッシュ（プロセス間共有用）
+        self._text_embeddings_np = (
+            self.metric_calculator.model_manager.get_text_embeddings()
+            .cpu()
+            .numpy()
+            .flatten()
+        )
 
     def process_batch(
         self,
         paths: List[str],
         batch_size: int = 32,
         show_progress: bool = False,
+        parallel_processing: bool = True,
     ) -> List[Optional[ImageMetrics]]:
         """複数の画像をバッチ処理で解析する.
 
-        2段パイプライン構成:
+        3段パイプライン構成:
         1. I/O+CV前処理ステージを並列（ThreadPoolExecutor）
         2. CLIPステージはバッチで直列
+        3. メトリクス計算ステージを並列（ProcessPoolExecutor）
 
         メモリ効率化のためチャンク単位でストリーミング処理:
         - メモリ予算に基づいて動的にチャンクサイズを決定
@@ -62,6 +77,7 @@ class BatchPipeline:
             paths: 画像ファイルパスのリスト
             batch_size: CLIP推論のバッチサイズ（デフォルト32）
             show_progress: 進捗表示をするかどうか
+            parallel_processing: メトリクス計算を並列化するか（デフォルトTrue）
 
         Returns:
             解析結果のリスト（失敗した画像はNone）
@@ -86,76 +102,155 @@ class BatchPipeline:
                 pil_images, initial_batch_size=batch_size
             )
 
-            # ステージ3: セマンティックスコアをバッチ計算
-            semantic_scores = self.metric_calculator.calculate_semantic_score_batch(
-                clip_features_list
-            )
+            # ステージ3: チャンク単位で結果を構築（並列化）
+            if parallel_processing:
+                chunk_results = self._process_metrics_parallel(
+                    chunk_paths,
+                    pil_images,
+                    clip_features_list,
+                    chunk_start,
+                    len(paths),
+                    show_progress,
+                )
+            else:
+                # 従来の直列処理（フォールバック）
+                chunk_results = self._process_metrics_serial(
+                    chunk_paths,
+                    pil_images,
+                    clip_features_list,
+                    chunk_start,
+                    len(paths),
+                    show_progress,
+                )
 
-            # ステージ4: チャンク単位で結果を構築
-            for i, (path, pil_img, clip_features, semantic) in enumerate(
-                zip(chunk_paths, pil_images, clip_features_list, semantic_scores)
-            ):
-                if pil_img is None or clip_features is None:
-                    results.append(None)
-                    continue
-
-                if show_progress and (chunk_start + i) % 50 == 0:
-                    print(f"解析済み: {chunk_start + i}/{len(paths)}")
-
-                try:
-                    # メトリクス計算用に先に画像を縮小
-                    # （長辺max_dim px、アスペクト比保持）
-                    # フル解像度のままnp.array変換→後で縮小の二重処理を回避
-                    w, h = pil_img.size
-                    max_dim = self.config.max_dim
-                    if max(w, h) > max_dim:
-                        scale = max_dim / max(w, h)
-                        new_w, new_h = int(w * scale), int(h * scale)
-                        # PILのthumbnailを使用してアスペクト比を保持しつつ縮小
-                        pil_img_resized = pil_img.copy()
-                        pil_img_resized.thumbnail(
-                            (new_w, new_h), Image.Resampling.LANCZOS
-                        )
-                        img = cv2.cvtColor(np.array(pil_img_resized), cv2.COLOR_RGB2BGR)
-                    else:
-                        img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-                    # すべてのメトリクスを一括計算（セマンティックスコアは除外）
-                    raw, norm, _, total = self.metric_calculator.calculate_all_metrics(
-                        img,
-                        clip_features,
-                    )
-                    # バッチ計算したセマンティックスコアを使用
-                    if semantic is not None:
-                        total = self.metric_calculator.calculate_total_score(
-                            raw, norm, semantic
-                        )
-                    else:
-                        # semanticがNoneの場合はcalculate_all_metricsの結果を使用
-                        _, _, semantic, total = (
-                            self.metric_calculator.calculate_all_metrics(
-                                img,
-                                clip_features,
-                            )
-                        )
-
-                    # HSV特徴とCLIP特徴を結合
-                    features = self.feature_extractor.extract_combined_features(
-                        img,
-                        clip_features,
-                    )
-                    results.append(
-                        ImageMetrics(path, raw, norm, semantic, total, features)
-                    )
-                except self._get_expected_errors() as e:
-                    logger.warning(
-                        f"画像分析をスキップしました: {path}, "
-                        f"理由: {type(e).__name__}: {e}"
-                    )
-                    results.append(None)
+            results.extend(chunk_results)
 
             # チャンク処理完了後にメモリを解放
             del pil_images, clip_features_list
+
+        return results
+
+    def _process_metrics_serial(
+        self,
+        paths: List[str],
+        pil_images: List[Optional[Image.Image]],
+        clip_features_list: List[Optional["np.ndarray"]],
+        chunk_start: int,
+        total_paths: int,
+        show_progress: bool,
+    ) -> List[Optional[ImageMetrics]]:
+        """メトリクス計算を直列で実行する（フォールバック用）.
+
+        Args:
+            paths: 画像ファイルパスのリスト
+            pil_images: PIL画像のリスト
+            clip_features_list: CLIP特徴のリスト
+            chunk_start: チャンク開始位置
+            total_paths: 全パス数（進捗表示用）
+            show_progress: 進捗表示フラグ
+
+        Returns:
+            解析結果のリスト（失敗した画像はNone）
+        """
+        results: List[Optional[ImageMetrics]] = []
+
+        for i, (path, pil_img, clip_features) in enumerate(
+            zip(paths, pil_images, clip_features_list)
+        ):
+            if pil_img is None or clip_features is None:
+                results.append(None)
+                continue
+
+            if show_progress and (chunk_start + i) % 50 == 0:
+                print(f"解析済み: {chunk_start + i}/{total_paths}")
+
+            try:
+                # OpenCV形式（BGR）に変換
+                import numpy as np
+
+                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+                # すべてのメトリクスを一括計算
+                raw, norm, semantic, total = (
+                    self.metric_calculator.calculate_all_metrics(
+                        img,
+                        clip_features,
+                    )
+                )
+
+                # HSV特徴とCLIP特徴を結合
+                features = self.feature_extractor.extract_combined_features(
+                    img,
+                    clip_features,
+                )
+                results.append(ImageMetrics(path, raw, norm, semantic, total, features))
+            except self._get_expected_errors() as e:
+                logger.warning(
+                    f"画像分析をスキップしました: {path}, "
+                    f"理由: {type(e).__name__}: {e}"
+                )
+                results.append(None)
+
+        return results
+
+    def _process_metrics_parallel(
+        self,
+        paths: List[str],
+        pil_images: List[Optional[Image.Image]],
+        clip_features_list: List[Optional["np.ndarray"]],
+        chunk_start: int,
+        total_paths: int,
+        show_progress: bool,
+    ) -> List[Optional[ImageMetrics]]:
+        """メトリクス計算をProcessPoolExecutorで並列実行する.
+
+        Args:
+            paths: 画像ファイルパスのリスト
+            pil_images: PIL画像のリスト
+            clip_features_list: CLIP特徴のリスト
+            chunk_start: チャンク開始位置
+            total_paths: 全パス数（進捗表示用）
+            show_progress: 進捗表示フラグ
+
+        Returns:
+            解析結果のリスト（失敗した画像はNone）
+        """
+        # 有効なデータを収集
+        valid_items = []
+        for i, (path, pil_img, clip_features) in enumerate(
+            zip(paths, pil_images, clip_features_list)
+        ):
+            if pil_img is not None and clip_features is not None:
+                valid_items.append((i, path, pil_img, clip_features))
+
+        # 並列処理用の引数を準備
+        worker_args = [
+            (
+                path,
+                pil_img,
+                clip_features,
+                self._text_embeddings_np,
+                self.config.max_dim,
+                self.metric_calculator.weights,
+                self.config,
+            )
+            for _, path, pil_img, clip_features in valid_items
+        ]
+
+        # ProcessPoolExecutorで並列処理
+        results: List[Optional[ImageMetrics]] = [None] * len(paths)
+
+        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+            parallel_results = executor.map(
+                ParallelMetricsWorker.process_single_image, worker_args
+            )
+
+            for (idx, _, _, _), metrics in zip(valid_items, parallel_results):
+                results[idx] = metrics
+
+                # 進捗表示
+                if show_progress and (chunk_start + idx) % 50 == 0:
+                    print(f"解析済み: {chunk_start + idx}/{total_paths}")
 
         return results
 

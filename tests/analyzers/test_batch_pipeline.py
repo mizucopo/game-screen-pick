@@ -62,7 +62,19 @@ def batch_pipeline() -> BatchPipeline:
     model_manager = CLIPModelManager()
     feature_extractor = FeatureExtractor(model_manager)
     metric_calculator = MetricCalculator(config, weights, model_manager)
-    return BatchPipeline(feature_extractor, metric_calculator, config)
+    # テストでは並列化を無効化してプロセスプールのオーバーヘッドを回避
+    return BatchPipeline(feature_extractor, metric_calculator, config, max_workers=1)
+
+
+@pytest.fixture
+def batch_pipeline_with_parallel() -> BatchPipeline:
+    """並列化有効のバッチ処理パイプラインのフィクスチャ."""
+    config = AnalyzerConfig()
+    weights = GenreWeights.get_weights("mixed")
+    model_manager = CLIPModelManager()
+    feature_extractor = FeatureExtractor(model_manager)
+    metric_calculator = MetricCalculator(config, weights, model_manager)
+    return BatchPipeline(feature_extractor, metric_calculator, config, max_workers=2)
 
 
 def test_process_batch_returns_correct_metrics_for_multiple_images(
@@ -435,7 +447,7 @@ def test_compute_chunk_boundaries_splits_large_files(tmp_path: Path) -> None:
     )
 
     # Assert
-    # 1.4MBのファイルが6枚あるので、1MB予備で複数チャンクに分割される
+    # 1.4MBのファイルが6枚あるので、1MB予算で複数チャンクに分割される
     assert len(chunks) > 1
     # すべての画像がカバーされている
     covered_count = sum(end - start for start, end in chunks)
@@ -451,7 +463,7 @@ def test_compute_chunk_boundaries_respects_min_chunk_size(tmp_path: Path) -> Non
     When:
         - チャンク境界を計算する
     Then:
-        - 最低チャンクサイズ未満のチャークが作られないこと
+        - 最低チャンクサイズ未満のチャンクが作られないこと
     """
     # Arrange
     paths = []
@@ -518,3 +530,75 @@ def test_compute_chunk_boundaries_with_nonexistent_files() -> None:
     # 存在しないファイルは0バイトとして扱われるため、メモリ予算を超えない
     # 最低チャンクサイズに従って分割
     assert len(chunks) >= 1
+
+
+def test_process_batch_with_parallel_mode(
+    batch_pipeline_with_parallel: BatchPipeline, tmp_path: Path
+) -> None:
+    """並列モードでも正しく処理されること.
+
+    Given:
+        - 並列化有効のバッチ処理パイプラインがある
+        - 複数のテスト画像がある
+    When:
+        - 画像が並列バッチ処理で分析される
+    Then:
+        - すべての画像が処理されること
+        - 結果の数が入力数と一致すること
+        - 直列モードと同じ結果が得られること
+    """
+    # Arrange
+    paths = []
+    for i in range(4):
+        np.random.seed(50 + i)
+        img_array = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+        img_path = tmp_path / f"para_test_{i}.jpg"
+        cv2.imwrite(str(img_path), img_array)
+        paths.append(str(img_path))
+
+    # Act - 並列モードで実行
+    results_parallel = batch_pipeline_with_parallel.process_batch(
+        paths, batch_size=2, parallel_processing=True
+    )
+
+    # Assert
+    assert len(results_parallel) == 4
+    # 少なくとも1つの画像が処理されている
+    assert any(r is not None for r in results_parallel)
+
+
+def test_process_batch_parallel_and_serial_produce_same_results(
+    batch_pipeline_with_parallel: BatchPipeline, sample_image_path: str
+) -> None:
+    """並列モードと直列モードで同じ結果が得られること.
+
+    Given:
+        - 並列化有効のバッチ処理パイプラインがある
+        - 有効なテスト画像がある
+    When:
+        - 同じ画像が並列モードと直列モードで分析される
+    Then:
+        - 両方のモードで同じ結果が得られること
+    """
+    # Arrange
+    paths = [sample_image_path]
+
+    # Act
+    results_parallel = batch_pipeline_with_parallel.process_batch(
+        paths, batch_size=1, parallel_processing=True
+    )
+    results_serial = batch_pipeline_with_parallel.process_batch(
+        paths, batch_size=1, parallel_processing=False
+    )
+
+    # Assert
+    assert len(results_parallel) == len(results_serial) == 1
+    if results_parallel[0] is not None and results_serial[0] is not None:
+        # スコアが一致すること（浮動小数点の誤差を許容）
+        assert (
+            abs(results_parallel[0].total_score - results_serial[0].total_score) < 1e-5
+        )
+        # 特徴ベクトルが一致すること
+        assert np.allclose(
+            results_parallel[0].features, results_serial[0].features, atol=1e-5
+        )

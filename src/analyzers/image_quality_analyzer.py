@@ -55,7 +55,10 @@ class ImageQualityAnalyzer:
 
         # レイヤー4: バッチ処理（上記全てに依存）
         self.batch_pipeline = BatchPipeline(
-            self.feature_extractor, self.metric_calculator, self.config
+            self.feature_extractor,
+            self.metric_calculator,
+            self.config,
+            max_workers=None,
         )
 
     def analyze(self, path: str) -> Optional[ImageMetrics]:
@@ -103,6 +106,7 @@ class ImageQualityAnalyzer:
         paths: List[str],
         batch_size: int = 32,
         show_progress: bool = False,
+        parallel_processing: bool = True,
     ) -> List[Optional[ImageMetrics]]:
         """複数の画像をバッチ処理で解析する.
 
@@ -110,11 +114,14 @@ class ImageQualityAnalyzer:
             paths: 画像ファイルパスのリスト
             batch_size: CLIP推論のバッチサイズ（デフォルト32）
             show_progress: 進捗表示をするかどうか
+            parallel_processing: メトリクス計算を並列化するか（デフォルトTrue）
 
         Returns:
             解析結果のリスト（失敗した画像はNone）
         """
-        return self.batch_pipeline.process_batch(paths, batch_size, show_progress)
+        return self.batch_pipeline.process_batch(
+            paths, batch_size, show_progress, parallel_processing
+        )
 
     @staticmethod
     def _get_expected_errors() -> tuple[type[Exception], ...]:
