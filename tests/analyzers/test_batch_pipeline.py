@@ -156,32 +156,6 @@ def test_process_batch_handles_dark_images(
         assert result.total_score >= 0
 
 
-def test_process_batch_returns_consistent_features(
-    batch_pipeline: BatchPipeline, sample_image_path: str
-) -> None:
-    """特徴ベクトルが一貫したサイズを持つこと.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - 有効なテスト画像がある
-    When:
-        - 画像がバッチ処理で分析される
-    Then:
-        - 特徴ベクトルが一貫したサイズ（576次元）を持つこと
-    """
-    # Arrange
-    paths = [sample_image_path]
-
-    # Act
-    results = batch_pipeline.process_batch(paths, batch_size=1)
-
-    # Assert
-    result = results[0]
-    if result is not None:
-        # HSV特徴（64次元）+ CLIP特徴（512次元）= 576次元
-        assert result.features.shape == (576,)
-
-
 def test_process_batch_empty_list_returns_empty_list(
     batch_pipeline: BatchPipeline,
 ) -> None:

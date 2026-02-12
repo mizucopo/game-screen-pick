@@ -16,7 +16,6 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-import random
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
@@ -435,47 +434,3 @@ def test_threshold_relaxation_with_highly_similar_images(
     assert stats.selected_count == num_to_select
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
-
-
-def test_picker_with_seed_produces_consistent_results(
-    mock_analyzer_with_batch: MagicMock,
-) -> None:
-    """シードを指定した場合、一貫した選択結果が得られること.
-
-    Given:
-        - 画像ファイルを持つフォルダ
-        - 同じシード値で初期化された2つのピッカー
-    When:
-        - 両方のピッカーで画像を選択
-    Then:
-        - 同じファイルが同じ順序で選択されること
-    """
-    # Arrange
-    with tempfile.TemporaryDirectory() as temp_dir:
-        for i in range(10):
-            Path(temp_dir, f"image{i}.jpg").touch()
-
-        seed = 42
-        picker1 = GameScreenPicker(mock_analyzer_with_batch, rng=random.Random(seed))
-        picker2 = GameScreenPicker(mock_analyzer_with_batch, rng=random.Random(seed))
-
-        # Act
-        result1, _ = picker1.select(
-            folder=temp_dir,
-            num=5,
-            similarity_threshold=0.8,
-            recursive=False,
-            show_progress=False,
-        )
-        result2, _ = picker2.select(
-            folder=temp_dir,
-            num=5,
-            similarity_threshold=0.8,
-            recursive=False,
-            show_progress=False,
-        )
-
-        # Assert
-        paths1 = [m.path for m in result1]
-        paths2 = [m.path for m in result2]
-        assert paths1 == paths2

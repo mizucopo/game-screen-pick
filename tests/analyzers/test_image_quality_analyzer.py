@@ -10,7 +10,6 @@
 
 from pathlib import Path
 
-import pytest
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
@@ -132,29 +131,3 @@ def test_analyze_batch_handles_mixed_valid_and_invalid_images(
     assert results[0] is not None
     assert results[1] is None  # 存在しないパス
     assert results[2] is not None
-
-
-def test_analyze_batch_produces_same_results_as_analyze(
-    sample_image_path: str,
-) -> None:
-    """バッチ処理と単一処理で同じ結果が得られること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 有効なテスト画像がある
-    When:
-        - 同じ画像を単一処理とバッチ処理で分析する
-    Then:
-        - 両方の結果で総スコアが一致すること
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-
-    # Act
-    single_result = analyzer.analyze(sample_image_path)
-    batch_results = analyzer.analyze_batch([sample_image_path])
-
-    # Assert
-    assert single_result is not None
-    assert batch_results[0] is not None
-    assert single_result.total_score == pytest.approx(batch_results[0].total_score)

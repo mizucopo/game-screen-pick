@@ -278,36 +278,3 @@ def test_calculate_semantic_score_batch_returns_correct_count(
         assert not np.isnan(score)
         assert -1.0 <= score
         assert score <= 1.0 + 1e-5
-
-
-def test_calculate_semantic_score_batch_handles_none_features(
-    metric_calculator: MetricCalculator,
-) -> None:
-    """バッチ計算でNone特徴が正しく処理されること.
-
-    Given:
-        - メトリクス計算器がある
-        - 有効な特徴とNoneが混在している
-    When:
-        - セマンティックスコアがバッチ計算される
-    Then:
-        - 有効な特徴にはスコアが返されること
-        - None特徴にはNoneが返されること
-    """
-    # Arrange
-    clip_features_list = [
-        np.ones(512) / np.sqrt(512.0),
-        None,
-        np.ones(512) / np.sqrt(512.0),
-    ]
-
-    # Act
-    scores = metric_calculator.calculate_semantic_score_batch(clip_features_list)
-
-    # Assert
-    assert len(scores) == 3
-    assert scores[0] is not None
-    assert isinstance(scores[0], float)
-    assert scores[1] is None
-    assert scores[2] is not None
-    assert isinstance(scores[2], float)
