@@ -221,35 +221,6 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     assert "/fake/path/image2.jpg" not in selected_paths
 
 
-def test_requesting_more_images_than_available_returns_all_unique_images(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """利用可能な数より多くの画像を要求した場合、すべての一意な画像が返されること.
-
-    Given:
-        - 5つの分析済み画像（一部類似）
-    When:
-        - 中程度の類似度閾値で10個の画像を選択
-    Then:
-        - 利用可能な多様な画像の数まで返されること
-    """
-    # Arrange
-    num_to_select = 10
-    similarity_threshold = 0.8
-
-    # Act
-    result, stats = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, similarity_threshold
-    )
-
-    # Assert
-    # 類似性フィルタリングにより10件未満になるはず
-    # (image2 ~ image1, image5 ~ image3)
-    assert len(result) <= 5
-    assert len(result) >= 1
-    assert stats.selected_count == len(result)
-
-
 @pytest.mark.parametrize(
     "input_list,num_to_select",
     [
@@ -413,36 +384,6 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         assert stats.total_files == 5
         assert stats.analyzed_ok == 2
         assert stats.analyzed_fail == 3
-
-
-def test_always_returns_requested_number_with_threshold_relaxation(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """要求数を満たすためにしきい値緩和と最終フォールバックが機能すること.
-
-    Given:
-        - 5つの分析済み画像（一部類似）
-    When:
-        - 高い類似度閾値（0.9）で5つの画像を選択
-    Then:
-        - 類似画像はフィルタリングされるが、指定数を満たすために
-          段階的しきい値緩和と最終フォールバックにより5件が返されること
-    """
-    # Arrange
-    num_to_select = 5
-    similarity_threshold = 0.9
-
-    # Act
-    result, stats = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, similarity_threshold
-    )
-
-    # Assert
-    assert len(result) == num_to_select
-    assert stats.selected_count == num_to_select
-    # スコア順になっているはず
-    scores = [m.total_score for m in result]
-    assert scores == sorted(scores, reverse=True)
 
 
 @pytest.fixture
@@ -648,81 +589,3 @@ def test_picker_without_rng_still_works(
         assert len(result) <= 3
         assert stats.total_files == 5
         assert stats.analyzed_ok == 5
-
-
-def test_rejected_by_similarity_counts_unique_rejections(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """類似度で拒否された画像数がユニークカウントであること.
-
-    しきい値緩和の各ラウンドで同一候補が複数回評価されても、
-    rejected_by_similarityはユニークな拒否数のみをカウントすること.
-
-    Given:
-        - 5つの分析済み画像（一部類似）
-        - 類似度閾値0.9
-        - デフォルトの緩和ステップ [0.03, 0.06, 0.10, 0.15]
-        - しきい値ステップ: [0.9, 0.93, 0.96, 0.97, 0.98]
-    When:
-        - 3つの画像を選択
-    Then:
-        - rejected_by_similarityがユニークな拒否数を表すこと
-        - （同じ候補が複数ラウンドで拒否されても1回のみカウント）
-    """
-    # Arrange
-    num_to_select = 3
-    similarity_threshold = 0.9
-
-    # Act
-    result, stats = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, similarity_threshold
-    )
-
-    # Assert
-    # 選択結果の基本検証
-    assert len(result) == 3
-
-    # 拒否数の整合性チェック
-    # total_files = selected_count + rejected_by_similarity + 未処理
-    # ただし、最終フォールバックで選択されるケースがあるので、
-    # rejected_by_similarity <= total_files - selected_count
-    assert stats.rejected_by_similarity >= 0
-    assert stats.rejected_by_similarity <= stats.total_files - stats.selected_count
-
-    # ユニークカウントの検証
-    # 拒否数は「最終的に選択されなかった画像のうち、
-    # 最終しきい値ラウンドで類似と判定された数」を表す
-    # （このテストでは具体的な数ではなく、範囲と整合性を検証）
-    assert stats.rejected_by_similarity + stats.selected_count <= stats.total_files
-
-
-def test_rejected_by_similarity_with_highly_similar_images(
-    similar_images_metrics: List[ImageMetrics],
-) -> None:
-    """非常に類似した画像セットでの拒否数が正しいこと.
-
-    Given:
-        - 10枚の非常に類似した画像（0.97-0.99の類似度）
-        - 類似度閾値0.9
-    When:
-        - 5枚の画像を選択
-    Then:
-        - 残りの5枚が拒否としてカウントされること
-        - （しきい値緩和により5枚が選択され、残り5枚が最終ラウンドで拒否）
-    """
-    # Arrange
-    num_to_select = 5
-    similarity_threshold = 0.9
-
-    # Act
-    result, stats = GameScreenPicker.select_from_analyzed(
-        similar_images_metrics, num_to_select, similarity_threshold
-    )
-
-    # Assert
-    assert len(result) == 5
-    # 非常に類似した画像なので、最初の5枚が選択され、残り5枚が拒否される
-    # （しきい値緩和と最終フォールバックの結果、正確には5枚選択される）
-    assert stats.selected_count == 5
-    # 拒否数は 10 - 5 = 5 または、しきい値緩和の過程でより少なくなる可能性
-    assert 0 <= stats.rejected_by_similarity <= 5

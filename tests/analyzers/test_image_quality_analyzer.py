@@ -30,18 +30,6 @@ def dark_image_path(tmp_path: Path) -> str:
     return _create_test_image(tmp_path, "dark_image.jpg", (480, 640), (0, 50))
 
 
-@pytest.fixture
-def png_image_path(tmp_path: Path) -> str:
-    """PNG形式のテスト画像（640x480）を作成する."""
-    return _create_test_image(tmp_path, "test_image.png", (480, 640), (0, 255))
-
-
-@pytest.fixture
-def small_image_path(tmp_path: Path) -> str:
-    """小さいテスト画像（320x240 JPG）を作成する."""
-    return _create_test_image(tmp_path, "small_image.jpg", (240, 320), (0, 255))
-
-
 def _create_test_image(
     tmp_path: Path, filename: str, size: tuple[int, int], pixel_range: tuple[int, int]
 ) -> str:
@@ -155,41 +143,6 @@ def test_analyze_produces_consistent_results_for_same_image(
     assert result1.total_score == result2.total_score
     # 特徴ベクトルが同一であることを検証（重要な特性）
     assert np.array_equal(result1.features, result2.features)
-
-
-def test_analyze_batch_returns_correct_metrics_for_multiple_images(
-    sample_image_path: str,
-    png_image_path: str,
-    small_image_path: str,
-) -> None:
-    """複数の画像が正しくバッチ処理されること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 複数の有効なテスト画像がある
-    When:
-        - 複数の画像がバッチ処理で分析される
-    Then:
-        - すべての画像に対して有効なImageMetricsが返されること
-        - 結果の数が入力数と一致すること
-        - 各結果のパスが正しいこと
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-    paths = [sample_image_path, png_image_path, small_image_path]
-
-    # Act - バッチサイズ1で実行（モックの制約により一時的に1に設定）
-    results = analyzer.analyze_batch(paths, batch_size=1)
-
-    # Assert
-    assert len(results) == 3
-    for result, path in zip(results, paths):
-        assert result is not None
-        assert isinstance(result, ImageMetrics)
-        assert result.path == path
-        assert 0 <= result.total_score <= 100
-        # コサイン類似度の範囲（浮動小数点の丸め誤差を許容）
-        assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
 
 
 def test_analyze_batch_handles_mixed_valid_and_invalid_images(

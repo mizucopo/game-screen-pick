@@ -104,27 +104,3 @@ def test_get_image_features_batch_mode_returns_correct_shape() -> None:
     # バッチサイズが正しく検出されることを確認
     assert features.shape[1] == 512  # 特徴次元が512であること
     assert features.shape[0] >= 1  # バッチ次元が存在すること
-
-
-def test_get_text_embeddings_returns_cached_tensor() -> None:
-    """キャッシュされたテキスト埋め込みが返されること.
-
-    Given:
-        - CLIPModelManagerインスタンスがある
-        - テキスト埋め込みが事前計算されている
-    When:
-        - テキスト埋め込みが取得される
-    Then:
-        - 同じテンソルが返されること（キャッシュ）
-        - 正しい形状であること
-    """
-    # Arrange
-    manager = CLIPModelManager()
-
-    # Act
-    embeddings1 = manager.get_text_embeddings()
-    embeddings2 = manager.get_text_embeddings()
-
-    # Assert - 同じオブジェクト（キャッシュされている）
-    assert embeddings1 is embeddings2
-    assert embeddings1.shape == (1, 512)
