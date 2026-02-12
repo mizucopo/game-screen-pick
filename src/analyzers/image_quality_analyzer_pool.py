@@ -47,9 +47,9 @@ class ImageQualityAnalyzerPool:
 
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[Any],
+        _exc_type: Optional[type[BaseException]],
+        _exc_value: Optional[BaseException],
+        _traceback: Optional[Any],
     ) -> Literal[False]:
         """コンテキストマネージャーとして使用する場合のイグジット."""
         self.close()
