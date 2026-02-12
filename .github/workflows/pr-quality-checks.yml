@@ -31,14 +31,36 @@ jobs:
         id: pytest
         continue-on-error: true
         timeout-minutes: 10
+        shell: bash
+        env:
+          OMP_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
+          TOKENIZERS_PARALLELISM: "false"
+          PYTHONFAULTHANDLER: "1"
         run: |
-          uv run pytest --tb=short -v 2>&1 | tee pytest_output.txt
-          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+          set -o pipefail
+
+          # Linuxでforkとネイティブスレッドの組み合わせにより
+          # 稀にハングするため、multiprocessingを使うテストを分離実行する
+          uv run pytest --tb=short -v -o faulthandler_timeout=120 tests/analyzers/test_image_quality_analyzer_pool.py 2>&1 | tee pytest_output_pool.txt
+          POOL_STATUS=${PIPESTATUS[0]}
+
+          uv run pytest --tb=short -v -o faulthandler_timeout=120 --ignore=tests/analyzers/test_image_quality_analyzer_pool.py tests 2>&1 | tee pytest_output_main.txt
+          MAIN_STATUS=${PIPESTATUS[0]}
+
+          cat pytest_output_pool.txt pytest_output_main.txt > pytest_output.txt
+
+          if [ "$POOL_STATUS" -eq 0 ] && [ "$MAIN_STATUS" -eq 0 ]; then
             RESULT="✅ 成功"
+            EXIT_CODE=0
           else
-            RESULT="❌ 失敗 (終了コード: ${PIPESTATUS[0]})"
+            RESULT="❌ 失敗 (pool: $POOL_STATUS, main: $MAIN_STATUS)"
+            EXIT_CODE=1
           fi
           echo "result=$RESULT" >> $GITHUB_OUTPUT
+          exit $EXIT_CODE
 
       - name: Run mypy
         id: mypy
