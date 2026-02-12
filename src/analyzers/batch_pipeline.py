@@ -95,8 +95,22 @@ class BatchPipeline:
                     print(f"解析済み: {chunk_start + i}/{len(paths)}")
 
                 try:
-                    # OpenCV形式（BGR）に変換
-                    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+                    # メトリクス計算用に先に画像を縮小
+                    # （長辺max_dim px、アスペクト比保持）
+                    # フル解像度のままnp.array変換→後で縮小の二重処理を回避
+                    w, h = pil_img.size
+                    max_dim = self.config.max_dim
+                    if max(w, h) > max_dim:
+                        scale = max_dim / max(w, h)
+                        new_w, new_h = int(w * scale), int(h * scale)
+                        # PILのthumbnailを使用してアスペクト比を保持しつつ縮小
+                        pil_img_resized = pil_img.copy()
+                        pil_img_resized.thumbnail(
+                            (new_w, new_h), Image.Resampling.LANCZOS
+                        )
+                        img = cv2.cvtColor(np.array(pil_img_resized), cv2.COLOR_RGB2BGR)
+                    else:
+                        img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
                     # すべてのメトリクスを一括計算（セマンティックスコアは除外）
                     raw, norm, _, total = self.metric_calculator.calculate_all_metrics(
