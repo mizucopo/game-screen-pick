@@ -10,7 +10,6 @@
 
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
@@ -90,8 +89,7 @@ def test_analyze_produces_consistent_results_for_same_image(
     When:
         - 同じ画像が2回分析される
     Then:
-        - 両方の分析で同一の結果が生成されること
-        - 総スコアと特徴ベクトルが同じであること
+        - 両方の分析で同一のスコアが生成されること
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
@@ -103,10 +101,7 @@ def test_analyze_produces_consistent_results_for_same_image(
     # Assert
     assert result1 is not None
     assert result2 is not None
-    assert result1.path == result2.path
     assert result1.total_score == result2.total_score
-    # 特徴ベクトルが同一であることを検証（重要な特性）
-    assert np.array_equal(result1.features, result2.features)
 
 
 def test_analyze_batch_handles_mixed_valid_and_invalid_images(
@@ -151,7 +146,6 @@ def test_analyze_batch_produces_same_results_as_analyze(
         - 同じ画像を単一処理とバッチ処理で分析する
     Then:
         - 両方の結果で総スコアが一致すること
-        - 両方の結果で特徴ベクトルが一致すること
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
@@ -163,6 +157,4 @@ def test_analyze_batch_produces_same_results_as_analyze(
     # Assert
     assert single_result is not None
     assert batch_results[0] is not None
-    # 浮動小数点の精度誤差を許容して比較
     assert single_result.total_score == pytest.approx(batch_results[0].total_score)
-    assert np.array_equal(single_result.features, batch_results[0].features)

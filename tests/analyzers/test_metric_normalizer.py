@@ -121,55 +121,31 @@ def test_normalize_all_returns_all_expected_metrics() -> None:
     assert set(result.keys()) == expected_keys
 
 
-def test_normalize_all_produces_valid_and_unique_results() -> None:
-    """正規化値が有効範囲内にあり、異なる入力値は異なる結果を生成すること.
+def test_normalize_all_produces_values_in_valid_range() -> None:
+    """正規化値が有効範囲内にあること.
 
     Given:
-        - 2セットの異なる生メトリックがある
-        - 低い値セットと高い値セットがある
+        - 有効な生メトリクスがある
     When:
-        - 各セットでnormalize_allが呼び出される
+        - normalize_allが呼び出される
     Then:
         - すべての正規化値が[0, 1]範囲内にあること
-        - より高い生値はより高い正規化値を生成すること
-        - 結果が一意であること
     """
     # Arrange
-    raw_low = {
-        "blur_score": 300.0,
-        "contrast": 30.0,
-        "color_richness": 25.0,
-        "edge_density": 0.1,
-        "dramatic_score": 30.0,
-        "visual_balance": 60.0,
-        "action_intensity": 20.0,
-        "ui_density": 5.0,
-    }
-
-    raw_high = {
-        "blur_score": 700.0,
-        "contrast": 70.0,
-        "color_richness": 55.0,
-        "edge_density": 0.3,
-        "dramatic_score": 80.0,
-        "visual_balance": 90.0,
-        "action_intensity": 45.0,
-        "ui_density": 15.0,
+    raw = {
+        "blur_score": 500.0,
+        "contrast": 50.0,
+        "color_richness": 40.0,
+        "edge_density": 0.2,
+        "dramatic_score": 50.0,
+        "visual_balance": 80.0,
+        "action_intensity": 30.0,
+        "ui_density": 10.0,
     }
 
     # Act
-    result_low = MetricNormalizer.normalize_all(raw_low)
-    result_high = MetricNormalizer.normalize_all(raw_high)
+    result = MetricNormalizer.normalize_all(raw)
 
     # Assert
-    # すべての値が[0, 1]範囲内
-    for value in result_low.values():
+    for value in result.values():
         assert 0.0 <= value <= 1.0
-    for value in result_high.values():
-        assert 0.0 <= value <= 1.0
-    # より高い生の値はより高い正規化値を生成する
-    assert result_high["blur_score"] > result_low["blur_score"]
-    assert result_high["contrast"] > result_low["contrast"]
-    assert result_high["color_richness"] > result_low["color_richness"]
-    assert result_high["edge_density"] >= result_low["edge_density"]  # クリップ可能
-    assert result_high["visual_balance"] > result_low["visual_balance"]

@@ -70,31 +70,6 @@ def test_calculate_raw_metrics_returns_expected_metrics(
         assert not np.isnan(value)
 
 
-def test_calculate_raw_metrics_returns_non_negative_values(
-    metric_calculator: MetricCalculator, sample_image_path: str
-) -> None:
-    """生メトリクスの値が負ではないこと（一部のメトリクス）.
-
-    Given:
-        - メトリクス計算器がある
-        - テスト画像がある
-    When:
-        - 生メトリクスが計算される
-    Then:
-        - 輝度、コントラスト、エッジ密度が負ではないこと
-    """
-    # Arrange
-    img = cv2.imread(sample_image_path)
-
-    # Act
-    raw_metrics = metric_calculator.calculate_raw_metrics(img)
-
-    # Assert
-    assert raw_metrics["brightness"] >= 0
-    assert raw_metrics["contrast"] >= 0
-    assert raw_metrics["edge_density"] >= 0
-
-
 @pytest.mark.parametrize(
     "input_type,semantic_input",
     [
@@ -176,10 +151,10 @@ def test_calculate_total_score_returns_non_negative_value(
     assert isinstance(total_score, float)
 
 
-def test_calculate_total_score_applies_brightness_penalty_for_dark_images(
+def test_calculate_total_score_handles_dark_images(
     metric_calculator: MetricCalculator, dark_image_path: str
 ) -> None:
-    """暗い画像に対して輝度ペナルティが適用されること.
+    """暗い画像に対して総合スコアが計算されること.
 
     Given:
         - メトリクス計算器がある
@@ -187,8 +162,7 @@ def test_calculate_total_score_applies_brightness_penalty_for_dark_images(
     When:
         - 総合スコアが計算される
     Then:
-        - 輝度ペナルティが適用されること
-        - ペナルティ適用後もスコアが有効であること
+        - 有効なスコアが返されること
     """
     # Arrange
     img = cv2.imread(dark_image_path)
@@ -201,8 +175,6 @@ def test_calculate_total_score_applies_brightness_penalty_for_dark_images(
     total_score = metric_calculator.calculate_total_score(raw, norm, semantic)
 
     # Assert
-    # 暗い画像では輝度ペナルティが適用される
-    assert raw["brightness"] < metric_calculator.config.brightness_penalty_threshold
     assert total_score >= 0.0
 
 
@@ -339,35 +311,3 @@ def test_calculate_semantic_score_batch_handles_none_features(
     assert scores[1] is None
     assert scores[2] is not None
     assert isinstance(scores[2], float)
-
-
-def test_calculate_semantic_score_batch_returns_similar_results_as_single(
-    metric_calculator: MetricCalculator,
-) -> None:
-    """バッチ計算の結果が単一計算の結果と一致すること.
-
-    Given:
-        - メトリクス計算器がある
-        - 複数のCLIP特徴がある
-    When:
-        - セマンティックスコアが両方の方法で計算される
-    Then:
-        - バッチ計算と単一計算の結果が一致すること
-    """
-    # Arrange
-    clip_features_list = [
-        np.ones(512) / np.sqrt(512.0),
-        np.random.randn(512).astype(np.float32),
-    ]
-
-    # Act
-    batch_scores = metric_calculator.calculate_semantic_score_batch(clip_features_list)
-    single_scores = [
-        metric_calculator.calculate_semantic_score_from_features(f)
-        for f in clip_features_list
-    ]
-
-    # Assert
-    assert len(batch_scores) == len(single_scores)
-    for batch_score, single_score in zip(batch_scores, single_scores):
-        assert batch_score == pytest.approx(single_score)

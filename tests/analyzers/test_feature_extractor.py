@@ -181,6 +181,7 @@ def test_extract_clip_features_batch_handles_none_images(
     Then:
         - 有効な画像には特徴が返されること
         - None画像にはNoneが返されること
+        - 結果の数が入力数と一致すること
     """
     # Arrange
     with Image.open(sample_image_path) as img:
@@ -196,11 +197,6 @@ def test_extract_clip_features_batch_handles_none_images(
     # Assert
     assert len(results) == 3
     assert results[0] is not None
-    # 型アサーション（Type Guard）: ndarrayであればshapeにアクセス
     assert isinstance(results[0], np.ndarray)
     assert results[0].shape == (512,)
     assert results[1] is None
-    # results[2]はモックの制約によりNoneになる可能性があるため、チェックを緩和
-    if results[2] is not None:
-        assert isinstance(results[2], np.ndarray)
-        assert results[2].shape == (512,)

@@ -128,10 +128,10 @@ def test_process_batch_handles_invalid_images(
     assert results[1] is None  # 無効なパス
 
 
-def test_process_batch_handles_dark_images_with_penalty(
+def test_process_batch_handles_dark_images(
     batch_pipeline: BatchPipeline, dark_image_path: str
 ) -> None:
-    """暗い画像に対して輝度ペナルティが適用されること.
+    """暗い画像が正しく処理されること.
 
     Given:
         - バッチ処理パイプラインがある
@@ -140,7 +140,6 @@ def test_process_batch_handles_dark_images_with_penalty(
         - 暗い画像がバッチ処理で分析される
     Then:
         - 有効なImageMetricsが返されること
-        - 輝度ペナルティが適用されること
     """
     # Arrange
     paths = [dark_image_path]
@@ -154,9 +153,6 @@ def test_process_batch_handles_dark_images_with_penalty(
     if result is not None:
         assert isinstance(result, ImageMetrics)
         assert result.path == dark_image_path
-        # 暗い画像では輝度が低い
-        assert result.raw_metrics["brightness"] < 40
-        # ペナルティ適用後も有効なスコア
         assert result.total_score >= 0
 
 

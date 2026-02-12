@@ -135,6 +135,8 @@ def test_cli_accepts_all_arguments(
             "-s",
             "0.85",
             "-r",
+            "--seed",
+            "42",
         ],
     )
 
@@ -221,7 +223,7 @@ def test_cli_selects_and_displays_images(
 
 
 @pytest.mark.parametrize(
-    "setup_files,expected_files,description",
+    "setup_files,expected_files",
     [
         # 異なる名前のファイル
         (
@@ -236,7 +238,6 @@ def test_cli_selects_and_displays_images(
                 )
             ],
             ["image0.jpg", "image1.jpg", "image2.jpg"],
-            "異なる名前のファイル",
         ),
         # 同名ファイル（サフィックス付与）
         (
@@ -245,7 +246,6 @@ def test_cli_selects_and_displays_images(
                 ("folder1", [("image.jpg", 90.0)]),
             ],
             ["image.jpg", "image_1.jpg"],
-            "同名ファイル（サフィックス付与）",
         ),
     ],
 )
@@ -256,13 +256,12 @@ def test_cli_copies_images_to_output_directory(
     tmp_path: Path,
     setup_files: list[tuple[str, list[tuple[str, float]]]],
     expected_files: list[str],
-    description: str,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
     """画像が出力ディレクトリにコピーされること.
 
     Given:
-        - {description}が入力ディレクトリに存在する
+        - 入力ディレクトリにファイルが存在する
         - 出力ディレクトリが指定されている
     When:
         - CLIが `-c` オプションで実行される
@@ -271,20 +270,15 @@ def test_cli_copies_images_to_output_directory(
         - 画像が出力ディレクトリにコピーされること
         - 同名ファイルにはサフィックスが付与されること
         - 成功メッセージが表示されること
-    """.format(description=description)
-
+    """
     # Arrange
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     output_dir = tmp_path / "output"
 
-    # setup_filesの形式: [(folder_name, [(filename, score), ...]), ...]
-    # folder_nameが"setup"の場合はルートディレクトリに直接配置
-    files_config = setup_files
     results = []
-    all_files = []  # (folder_path, filename, score)
 
-    for folder_name, files in files_config:
+    for folder_name, files in setup_files:
         if folder_name == "setup":
             folder_path = input_dir
         else:
@@ -295,7 +289,6 @@ def test_cli_copies_images_to_output_directory(
             file_path = folder_path / filename
             file_path.touch()
             results.append(sample_image_metrics_factory(str(file_path), score))
-            all_files.append((folder_path, filename, score))
 
     stats = PickerStatistics(
         total_files=len(results),
@@ -314,17 +307,13 @@ def test_cli_copies_images_to_output_directory(
 
     # Assert
     captured = capsys.readouterr()
-    # 成功メッセージが表示される
     assert f"{len(results)} 枚を" in captured.out
     assert str(output_dir) in captured.out
     assert "保存しました" in captured.out
-    # 出力ディレクトリが作成されている
     assert output_dir.exists()
     assert output_dir.is_dir()
-    # すべての期待されるファイルが出力ディレクトリに存在する
     for expected_file in expected_files:
         assert (output_dir / expected_file).exists()
-    # 出力ディレクトリには正確に期待される数のファイルが存在
     output_files = list(output_dir.glob("*"))
     assert len(output_files) == len(expected_files)
 
@@ -453,49 +442,3 @@ def test_cli_validates_num_and_similarity_arguments(
         Main().run()
     captured = capsys.readouterr()
     assert error_message in captured.err
-
-
-def test_cli_accepts_seed_argument(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    mock_game_screen_picker: MagicMock,
-    test_image_directory: str,
-    sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
-) -> None:
-    """--seed 引数が正しく処理されること.
-
-    Given:
-        - 有効な入力ディレクトリが存在する
-        - --seed 引数が指定されている
-    When:
-        - CLIが --seed オプションで実行される
-    Then:
-        - プログラムが正常に完了すること
-        - 結果が正しく表示されること
-    """
-    # Arrange
-    seed_value = 42
-    img_path = Path(test_image_directory) / "image0.jpg"
-    img_path.touch()
-    results = [sample_image_metrics_factory(str(img_path), 95.0)]
-    stats = PickerStatistics(
-        total_files=5,
-        analyzed_ok=5,
-        analyzed_fail=0,
-        rejected_by_similarity=4,
-        selected_count=1,
-    )
-    mock_game_screen_picker.select.return_value = (results, stats)
-
-    monkeypatch.setattr(
-        "sys.argv",
-        ["main.py", test_image_directory, "-n", "5", "--seed", str(seed_value)],
-    )
-
-    # Act
-    Main().run()
-
-    # Assert
-    captured = capsys.readouterr()
-    assert "選択された画像一覧" in captured.out
-    assert captured.out.count("Score:") == 1
