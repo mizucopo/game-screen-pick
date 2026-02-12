@@ -16,7 +16,9 @@ import pytest
 from PIL import Image
 
 from src.analyzers.clip_model_manager import CLIPModelManager
+from src.analyzers.feature_extractor import FeatureExtractor
 from src.analyzers.metric_calculator import MetricCalculator
+from src.analyzers.metric_normalizer import MetricNormalizer
 from src.constants.genre_weights import GenreWeights
 from src.models.analyzer_config import AnalyzerConfig
 
@@ -188,8 +190,6 @@ def test_calculate_semantic_score_from_features_returns_similar_result_as_direct
         pil_img = img.convert("RGB")
 
     # Act
-    from src.analyzers.feature_extractor import FeatureExtractor
-
     feature_extractor = FeatureExtractor(metric_calculator.model_manager)
     clip_features = feature_extractor.extract_clip_features(pil_img)
 
@@ -227,7 +227,6 @@ def test_calculate_total_score_returns_non_negative_value(
         "visual_balance": 90.0,
         "dramatic_score": 50.0,
     }
-    from src.analyzers.metric_normalizer import MetricNormalizer
 
     norm = MetricNormalizer.normalize_all(raw)
     semantic = 0.5
@@ -257,7 +256,6 @@ def test_calculate_total_score_applies_brightness_penalty_for_dark_images(
     # Arrange
     img = cv2.imread(dark_image_path)
     raw = metric_calculator.calculate_raw_metrics(img)
-    from src.analyzers.metric_normalizer import MetricNormalizer
 
     norm = MetricNormalizer.normalize_all(raw)
     semantic = 0.5
@@ -361,7 +359,6 @@ def test_metric_calculator_uses_genre_weights(
         "visual_balance": 90.0,
         "dramatic_score": 50.0,
     }
-    from src.analyzers.metric_normalizer import MetricNormalizer
 
     norm = MetricNormalizer.normalize_all(raw)
     semantic = 0.5
@@ -406,7 +403,6 @@ def test_calculate_total_score_with_zero_semantic_weight(
         "visual_balance": 90.0,
         "dramatic_score": 50.0,
     }
-    from src.analyzers.metric_normalizer import MetricNormalizer
 
     norm = MetricNormalizer.normalize_all(raw)
     semantic = 0.5

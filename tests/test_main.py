@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
+from src.main import Main
 from src.models.image_metrics import ImageMetrics
 from src.models.picker_statistics import PickerStatistics
 from src.services.game_screen_picker import GameScreenPicker
@@ -138,8 +139,6 @@ def test_cli_accepts_all_arguments(
     )
 
     # Act
-    from src.main import Main
-
     Main().run()
 
     # Assert - 全オプション指定で正常完了すること
@@ -165,8 +164,6 @@ def test_cli_shows_error_for_missing_required_argument(
     monkeypatch.setattr("sys.argv", ["main.py"])
 
     # Act & Assert
-    from src.main import Main
-
     with pytest.raises(SystemExit):
         Main().run()
 
@@ -211,8 +208,6 @@ def test_cli_selects_and_displays_images(
     monkeypatch.setattr("sys.argv", ["main.py", test_image_directory, "-n", "7"])
 
     # Act
-    from src.main import Main
-
     Main().run()
 
     # Assert
@@ -277,7 +272,6 @@ def test_cli_copies_images_to_output_directory(
         - 同名ファイルにはサフィックスが付与されること
         - 成功メッセージが表示されること
     """.format(description=description)
-    from src.main import Main
 
     # Arrange
     input_dir = tmp_path / "input"
@@ -365,8 +359,6 @@ def test_cli_handles_empty_input_directory(
     monkeypatch.setattr("sys.argv", ["main.py", input_dir])
 
     # Act
-    from src.main import Main
-
     Main().run()
 
     # Assert
@@ -409,8 +401,6 @@ def test_cli_validates_input_directory(
         - 適切なエラーが発生すること
         - エラーメッセージにパスが含まれること
     """
-    from src.main import Main
-
     # ファイルパスのテストケースの場合はテストファイルを作成
     if input_path_fixture == "file_path":
         input_path = str(tmp_path / "image.jpg")
@@ -459,8 +449,6 @@ def test_cli_validates_num_and_similarity_arguments(
     # Arrange & Act & Assert
     monkeypatch.setattr("sys.argv", ["main.py", test_image_directory] + args)
 
-    from src.main import Main
-
     with pytest.raises(SystemExit):
         Main().run()
     captured = capsys.readouterr()
@@ -505,8 +493,6 @@ def test_cli_accepts_seed_argument(
     )
 
     # Act
-    from src.main import Main
-
     Main().run()
 
     # Assert
