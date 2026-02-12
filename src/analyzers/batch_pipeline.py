@@ -78,9 +78,14 @@ class BatchPipeline:
                 pil_images, initial_batch_size=batch_size
             )
 
-            # ステージ3: チャンク単位で結果を構築
-            for i, (path, pil_img, clip_features) in enumerate(
-                zip(chunk_paths, pil_images, clip_features_list)
+            # ステージ3: セマンティックスコアをバッチ計算
+            semantic_scores = self.metric_calculator.calculate_semantic_score_batch(
+                clip_features_list
+            )
+
+            # ステージ4: チャンク単位で結果を構築
+            for i, (path, pil_img, clip_features, semantic) in enumerate(
+                zip(chunk_paths, pil_images, clip_features_list, semantic_scores)
             ):
                 if pil_img is None or clip_features is None:
                     results.append(None)
@@ -93,13 +98,24 @@ class BatchPipeline:
                     # OpenCV形式（BGR）に変換
                     img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
-                    # すべてのメトリクスを一括計算
-                    raw, norm, semantic, total = (
-                        self.metric_calculator.calculate_all_metrics(
-                            img,
-                            clip_features,
-                        )
+                    # すべてのメトリクスを一括計算（セマンティックスコアは除外）
+                    raw, norm, _, total = self.metric_calculator.calculate_all_metrics(
+                        img,
+                        clip_features,
                     )
+                    # バッチ計算したセマンティックスコアを使用
+                    if semantic is not None:
+                        total = self.metric_calculator.calculate_total_score(
+                            raw, norm, semantic
+                        )
+                    else:
+                        # semanticがNoneの場合はcalculate_all_metricsの結果を使用
+                        _, _, semantic, total = (
+                            self.metric_calculator.calculate_all_metrics(
+                                img,
+                                clip_features,
+                            )
+                        )
 
                     # HSV特徴とCLIP特徴を結合
                     features = self.feature_extractor.extract_combined_features(

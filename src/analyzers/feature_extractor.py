@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 import cv2
 import numpy as np
+import torch.nn.functional as F
 from PIL import Image
 
 from ..utils.vector_utils import VectorUtils
@@ -147,12 +148,10 @@ class FeatureExtractor:
                         **inputs
                     )
 
-                    # L2正規化してNumPy配列に変換
-                    batch_features = []
-                    for j in range(image_features.shape[0]):
-                        features = image_features[j].cpu().numpy()
-                        normalized = VectorUtils.safe_l2_normalize(features)
-                        batch_features.append(normalized)
+                    # バッチ単位でL2正規化（テンソルのまま処理して高速化）
+                    batch_features_normalized = F.normalize(image_features, p=2, dim=-1)
+                    # まとめてCPUに転送してNumPy配列に変換
+                    batch_features = batch_features_normalized.cpu().numpy()
 
                 # 結果を元のインデックスにマッピング
                 for j, features in enumerate(batch_features):
