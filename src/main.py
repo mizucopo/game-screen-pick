@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
+from .cache.feature_cache import FeatureCache
 from .constants.genre_weights import GenreWeights
 from .models.image_metrics import ImageMetrics
 from .models.picker_statistics import PickerStatistics
@@ -50,9 +51,19 @@ class Main:
                 f"指定パスはフォルダではありません: {parsed_args.input}"
             )
 
+        # キャッシュ設定
+        cache = None
+        if not parsed_args.no_cache:
+            cache_path = parsed_args.cache_file
+            if cache_path is None and parsed_args.copy_to:
+                # デフォルト: 出力フォルダ配下の.cache
+                cache_path = Path(parsed_args.copy_to) / ".cache" / "cache.sqlite3"
+            if cache_path:
+                cache = FeatureCache(cache_path)
+
         # 依存関係の遅延初期化（引数パース後にジャンルが決まるため）
         if self._analyzer is None:
-            self._analyzer = ImageQualityAnalyzer(parsed_args.genre)
+            self._analyzer = ImageQualityAnalyzer(parsed_args.genre, cache=cache)
         if self._picker is None:
             seed = parsed_args.seed
             rng = random.Random(seed) if seed is not None else None
@@ -69,6 +80,10 @@ class Main:
             Main.copy_selected_images(best, parsed_args.copy_to)
 
         Main.display_results(best, stats)
+
+        # キャッシュを閉じる
+        if cache:
+            cache.close()
 
     @staticmethod
     def validate_positive_int(value: str) -> int:
@@ -153,6 +168,20 @@ class Main:
             type=int,
             default=None,
             help="乱数シード（再現可能な結果を得るために指定）",
+        )
+        parser.add_argument(
+            "--cache-file",
+            type=str,
+            default=None,
+            help=(
+                "キャッシュデータベースのパス"
+                "（デフォルト: 出力フォルダ/.cache/cache.sqlite3）"
+            ),
+        )
+        parser.add_argument(
+            "--no-cache",
+            action="store_true",
+            help="キャッシュを無効化する",
         )
         return parser.parse_args(self.args)
 

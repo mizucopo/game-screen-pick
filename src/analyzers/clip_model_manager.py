@@ -31,8 +31,8 @@ class CLIPModelManager:
         self.model_name = model_name
         self._target_text = target_text
 
-        # デバイス設定
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        # デバイス設定（CUDA → MPS → CPUの優先順位で自動検出）
+        self.device = device or self._detect_device()
 
         # モデルとプロセッサのロード
         self.model = CLIPModel.from_pretrained(model_name)
@@ -49,6 +49,19 @@ class CLIPModelManager:
 
         # テキスト埋め込みの事前計算とキャッシュ
         self._text_embeddings = self._precompute_text_embeddings()
+
+    @staticmethod
+    def _detect_device() -> str:
+        """利用可能な最適なデバイスを自動検出する.
+
+        Returns:
+            検出されたデバイス名（"cuda", "mps", "cpu"のいずれか）
+        """
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
 
     def _precompute_text_embeddings(self) -> torch.Tensor:
         """テキスト埋め込みを事前計算してキャッシュする.
