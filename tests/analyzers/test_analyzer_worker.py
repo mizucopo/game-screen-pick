@@ -8,101 +8,13 @@
 """
 
 from pathlib import Path
-from typing import Any, Generator
-from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
 import pytest
-import torch
 
 from src.analyzers.analyzer_worker import AnalyzerWorker
 from src.models.image_metrics import ImageMetrics
-
-
-@pytest.fixture(autouse=True)
-def mock_clip_model() -> Generator[Any, Any, Any]:
-    """700MBの重みロードを回避するためのCLIPモデルのモック.
-
-    512次元の正規化されたCLIP特徴ベクトルを返す（実際のモデルと同じ形状）.
-    バッチサイズに応じた形状を動的に返す.
-    """
-    with patch("transformers.CLIPModel.from_pretrained") as mock:
-        model = MagicMock()
-
-        # get_text_features用のモック（テキスト埋め込み）: (batch_size, 512)
-        def mock_get_text_features(**kwargs: object) -> torch.Tensor:
-            inputs = kwargs.get("input_ids")
-            if inputs is not None and isinstance(inputs, torch.Tensor):
-                batch_size = inputs.shape[0]
-            else:
-                batch_size = 1
-            return torch.ones(batch_size, 512) / torch.sqrt(torch.tensor(512.0))
-
-        # get_image_features用のモック（画像埋め込み）: (batch_size, 512)
-        def mock_get_image_features(**kwargs: object) -> torch.Tensor:
-            inputs = kwargs.get("pixel_values")
-            if inputs is not None and isinstance(inputs, torch.Tensor):
-                batch_size = inputs.shape[0]
-            else:
-                batch_size = 1
-            return torch.ones(batch_size, 512) / torch.sqrt(torch.tensor(512.0))
-
-        model.get_text_features = MagicMock(side_effect=mock_get_text_features)
-        model.get_image_features = MagicMock(side_effect=mock_get_image_features)
-        model.to = MagicMock(return_value=model)
-        model.eval = MagicMock()
-
-        mock.return_value = model
-        yield mock
-
-
-@pytest.fixture(autouse=True)
-def mock_clip_processor() -> Generator[Any, Any, Any]:
-    """トークナイザと特徴抽出器のロードを回避するためのCLIPプロセッサのモック.
-
-    呼び出し時に辞書のようなオブジェクトを返し、.to()メソッドをサポート.
-    バッチサイズに応じた形状を動的に返す. 固定値を使用して決定論的にする.
-    """
-    with patch("transformers.CLIPProcessor.from_pretrained") as mock:
-        processor = MagicMock()
-
-        def mock_processor(**kwargs: object) -> MagicMock:
-            images = kwargs.get("images")
-            if images is not None:
-                if isinstance(images, list):
-                    batch_size = len(images)
-                else:
-                    batch_size = 1
-            else:
-                batch_size = 1
-
-            input_ids = torch.tensor([[1, 2, 3]])
-            pixel_values = torch.ones(batch_size, 3, 224, 224) * 0.5
-            attention_mask = torch.tensor([[1, 1, 1]])
-
-            result_obj = MagicMock()
-            result_obj.input_ids = input_ids
-            result_obj.pixel_values = pixel_values
-            result_obj.attention_mask = attention_mask
-
-            # .to()メソッドをサポート（呼ばれたときも同じ属性を持つオブジェクトを返す）
-            def to_method(_device: str) -> MagicMock:
-                to_result = MagicMock()
-                to_result.input_ids = input_ids
-                to_result.pixel_values = pixel_values
-                to_result.attention_mask = attention_mask
-                to_result.to = MagicMock(side_effect=to_method)
-                return to_result
-
-            result_obj.to = MagicMock(side_effect=to_method)
-
-            return result_obj
-
-        processor.side_effect = mock_processor
-
-        mock.return_value = processor
-        yield mock
 
 
 @pytest.fixture

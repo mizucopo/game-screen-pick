@@ -18,7 +18,7 @@ jobs:
         id: setup-python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version-file: '.python-version'
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -30,11 +30,13 @@ jobs:
       - name: Run pytest
         id: pytest
         continue-on-error: true
+        timeout-minutes: 10
         run: |
-          if uv run pytest --tb=short --no-header > pytest_output.txt 2>&1; then
+          uv run pytest --tb=short -v 2>&1 | tee pytest_output.txt
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
             RESULT="✅ 成功"
           else
-            RESULT="❌ 失敗"
+            RESULT="❌ 失敗 (終了コード: ${PIPESTATUS[0]})"
           fi
           echo "result=$RESULT" >> $GITHUB_OUTPUT
 

@@ -8,99 +8,17 @@
 5. 高速実行（約2-5秒） - 重いモデルロードなし
 """
 
-from collections.abc import Generator
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
 import pytest
-import torch
 from PIL import Image
 
 from src.analyzers.clip_model_manager import CLIPModelManager
 from src.analyzers.metric_calculator import MetricCalculator
 from src.constants.genre_weights import GenreWeights
 from src.models.analyzer_config import AnalyzerConfig
-
-
-@pytest.fixture(autouse=True)
-def mock_clip_model() -> Generator[Any, Any, Any]:
-    """700MBの重みロードを回避するためのCLIPモデルのモック."""
-    with patch("transformers.CLIPModel.from_pretrained") as mock:
-        model = MagicMock()
-
-        def mock_get_text_features(**kwargs: object) -> torch.Tensor:
-            inputs = kwargs.get("input_ids")
-            if inputs is not None and isinstance(inputs, torch.Tensor):
-                batch_size = inputs.shape[0]
-            else:
-                batch_size = 1
-            return torch.ones(batch_size, 512) / torch.sqrt(torch.tensor(512.0))
-
-        def mock_get_image_features(**kwargs: object) -> torch.Tensor:
-            inputs = kwargs.get("pixel_values")
-            if inputs is not None and isinstance(inputs, torch.Tensor):
-                batch_size = inputs.shape[0]
-            else:
-                batch_size = 1
-            return torch.ones(batch_size, 512) / torch.sqrt(torch.tensor(512.0))
-
-        model.get_text_features = MagicMock(side_effect=mock_get_text_features)
-        model.get_image_features = MagicMock(side_effect=mock_get_image_features)
-        model.to = MagicMock(return_value=model)
-        model.eval = MagicMock()
-
-        mock.return_value = model
-        yield
-
-
-@pytest.fixture(autouse=True)
-def mock_clip_processor() -> Generator[None, None, None]:
-    """トークナイザと特徴抽出器のロードを回避するためのCLIPプロセッサのモック."""
-    with patch("transformers.CLIPProcessor.from_pretrained") as mock:
-        processor = MagicMock()
-
-        def mock_processor(**kwargs: object) -> MagicMock:
-            images = kwargs.get("images")
-            if images is not None:
-                if isinstance(images, list):
-                    batch_size = len(images)
-                else:
-                    batch_size = 1
-            else:
-                batch_size = 1
-
-            input_ids = torch.tensor([[1, 2, 3]])
-            pixel_values = torch.ones(batch_size, 3, 224, 224) * 0.5
-            attention_mask = torch.tensor([[1, 1, 1]])
-
-            result_obj = MagicMock()
-            result_obj.input_ids = input_ids
-            result_obj.pixel_values = pixel_values
-            result_obj.attention_mask = attention_mask
-
-            def getitem(_self: MagicMock, key: str) -> torch.Tensor:
-                if key == "input_ids":
-                    return input_ids
-                elif key == "pixel_values":
-                    return pixel_values
-                elif key == "attention_mask":
-                    return attention_mask
-                else:
-                    raise KeyError(key)
-
-            import types
-
-            result_obj.__getitem__ = types.MethodType(getitem, result_obj)
-            result_obj.to = MagicMock(return_value=result_obj)
-
-            return result_obj
-
-        processor.side_effect = mock_processor
-        mock.return_value = processor
-        yield
 
 
 @pytest.fixture

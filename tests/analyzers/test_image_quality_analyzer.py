@@ -9,8 +9,7 @@
 """
 
 from pathlib import Path
-from typing import Any, Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -20,114 +19,6 @@ import torch
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
 from src.utils.vector_utils import VectorUtils
-
-
-@pytest.fixture(autouse=True)
-def mock_clip_model() -> Generator[Any, Any, Any]:
-    """700MBの重みロードを回避するためのCLIPモデルのモック.
-
-    このfixtureは本物のCLIPモデルを以下のモックに置き換えます：
-    - 決定論的テストのために固定されたlogit値を返す
-    - GPU/CPU切り替えのための.to(device)呼び出しをサポート
-    - 512次元のCLIP特徴ベクトルを返す（実際のモデルと同じ形状）
-    - バッチサイズに応じた形状を返す（動的対応）
-    """
-    with patch("transformers.CLIPModel.from_pretrained") as mock:
-        model = MagicMock()
-
-        # get_text_features用のモック（テキスト埋め込み）: (batch_size, 512)
-        def mock_get_text_features(**kwargs: object) -> torch.Tensor:
-            # input_idsからバッチサイズを取得
-            inputs = kwargs.get("input_ids")
-            if inputs is not None and isinstance(inputs, torch.Tensor):
-                batch_size = inputs.shape[0]
-            else:
-                batch_size = 1
-            # 正規化された固定ベクトルを返す
-            return torch.ones(batch_size, 512) / torch.sqrt(torch.tensor(512.0))
-
-        # get_image_features用のモック（画像埋め込み）: (batch_size, 512)
-        def mock_get_image_features(**kwargs: object) -> torch.Tensor:
-            # pixel_valuesからバッチサイズを取得
-            inputs = kwargs.get("pixel_values")
-            if inputs is not None and isinstance(inputs, torch.Tensor):
-                batch_size = inputs.shape[0]
-            else:
-                batch_size = 1
-            # 正規化された固定ベクトルを返す
-            return torch.ones(batch_size, 512) / torch.sqrt(torch.tensor(512.0))
-
-        # メソッドをモック
-        model.get_text_features = MagicMock(side_effect=mock_get_text_features)
-        model.get_image_features = MagicMock(side_effect=mock_get_image_features)
-        model.to = MagicMock(return_value=model)
-        model.eval = MagicMock()
-
-        mock.return_value = model
-        yield mock
-
-
-@pytest.fixture(autouse=True)
-def mock_clip_processor() -> Generator[Any, Any, Any]:
-    """トークナイザと特徴抽出器のロードを回避するためのCLIPプロセッサのモック.
-
-    このfixtureは本物のCLIPプロセッサを以下のモックに置き換えます：
-    - テキストと画像のために固定されたテンソル形状を返す
-    - GPU/CPU切り替えのための.to(device)呼び出しをサポート
-    - バッチサイズに応じた形状を返す（動的対応）
-    """
-    with patch("transformers.CLIPProcessor.from_pretrained") as mock:
-        # processorは呼び出し可能で、辞書のようなオブジェクトを返す
-        processor = MagicMock()
-
-        def mock_processor(**kwargs: object) -> MagicMock:
-            # imagesからバッチサイズを取得
-            images = kwargs.get("images")
-            if images is not None:
-                if isinstance(images, list):
-                    batch_size = len(images)
-                else:
-                    batch_size = 1
-            else:
-                batch_size = 1
-
-            # 呼び出し時に返す辞書のようなオブジェクト
-            # torch.randnの代わりに固定値を使用して決定論的にする
-            input_ids = torch.tensor([[1, 2, 3]])
-            pixel_values = torch.ones(batch_size, 3, 224, 224) * 0.5
-            attention_mask = torch.tensor([[1, 1, 1]])
-
-            # MagicMockを作成して属性を設定
-            result_obj = MagicMock()
-            result_obj.input_ids = input_ids
-            result_obj.pixel_values = pixel_values
-            result_obj.attention_mask = attention_mask
-
-            # 辞書のように振る舞うための__getitem__を実装
-            def getitem(_self: MagicMock, key: str) -> torch.Tensor:
-                if key == "input_ids":
-                    return input_ids
-                elif key == "pixel_values":
-                    return pixel_values
-                elif key == "attention_mask":
-                    return attention_mask
-                else:
-                    raise KeyError(key)
-
-            # 束縛されたメソッドをMagicMockに設定
-            import types
-
-            result_obj.__getitem__ = types.MethodType(getitem, result_obj)
-
-            # .to()メソッドをサポート（自分自身を返す）
-            result_obj.to = MagicMock(return_value=result_obj)
-
-            return result_obj
-
-        processor.side_effect = mock_processor
-
-        mock.return_value = processor
-        yield mock
 
 
 @pytest.fixture
@@ -479,14 +370,10 @@ def test_analyze_batch_retries_only_failed_batches_on_oom(
         - すべての有効な画像の結果が返されること
     """
     # Arrange
+
     analyzer = ImageQualityAnalyzer()
     paths = [sample_image_path, png_image_path, small_image_path, dark_image_path]
     initial_batch_size = 32  # 十分に大きなバッチサイズ
-
-    # Act & Assert
-    # processorとmodelの両方をモックしてバッチサイズを正しく扱えるようにする
-    original_processor = analyzer._model_manager.processor
-    original_model = analyzer._model_manager.model
     call_count = [0]
 
     # .to()メソッドをサポートした辞書クラス
@@ -494,22 +381,26 @@ def test_analyze_batch_retries_only_failed_batches_on_oom(
         def to(self, _device: str) -> "TensorDict":
             return self
 
-    def mock_processor(**kwargs: object) -> TensorDict:
-        # バッチサイズを検出して実際のテンソルを返す
-        images = kwargs.get("images")
-        if isinstance(images, list):
-            batch_size = len(images)
-        else:
-            batch_size = 1
+    # processorのインスタンスを置き換えるためのモッククラス
+    class MockProcessorWithOOM:
+        """OOMをシミュレートするプロセッサモック."""
 
-        # 実際のPyTorchテンソルを含む辞書を返す
-        return TensorDict(
-            {
-                "input_ids": torch.tensor([[1, 2, 3]]),
-                "pixel_values": torch.ones(batch_size, 3, 224, 224) * 0.5,
-                "attention_mask": torch.tensor([[1, 1, 1]]),
-            }
-        )
+        def __call__(self, **kwargs: object) -> TensorDict:
+            # バッチサイズを検出して実際のテンソルを返す
+            images = kwargs.get("images")
+            if isinstance(images, list):
+                batch_size = len(images)
+            else:
+                batch_size = 1
+
+            # 実際のPyTorchテンソルを含む辞書を返す
+            return TensorDict(
+                {
+                    "input_ids": torch.tensor([[1, 2, 3]]),
+                    "pixel_values": torch.ones(batch_size, 3, 224, 224) * 0.5,
+                    "attention_mask": torch.tensor([[1, 1, 1]]),
+                }
+            )
 
     def mock_get_image_features_with_oom(
         pixel_values: torch.Tensor,
@@ -525,17 +416,23 @@ def test_analyze_batch_retries_only_failed_batches_on_oom(
         # 2回目以降は成功（バッチサイズが縮小されているはず）
         return torch.ones(actual_batch_size, 512) / torch.sqrt(torch.tensor(512.0))
 
-    # processorのside_effectを直接設定（MagicMockなので直接設定可能）
-    original_processor.side_effect = mock_processor  # type: ignore[attr-defined]
-    # get_image_featuresのside_effectを直接設定
-    original_model.get_image_features.side_effect = mock_get_image_features_with_oom
+    # Act & Assert - processorとmodelのメソッドを置き換え
+    original_processor = analyzer._model_manager.processor
+    original_get_image_features = analyzer._model_manager.model.get_image_features
 
     try:
+        # processorを置き換え
+        analyzer._model_manager.processor = MockProcessorWithOOM()  # type: ignore[assignment]
+        # modelのget_image_featuresを置き換え
+        analyzer._model_manager.model.get_image_features = (
+            mock_get_image_features_with_oom
+        )
+
         results = analyzer.analyze_batch(paths, batch_size=initial_batch_size)
     finally:
-        # テスト後にside_effectを元に戻す（autouse fixtureの影響をクリア）
-        original_processor.side_effect = None  # type: ignore[attr-defined]
-        original_model.get_image_features.side_effect = None
+        # 元に戻す
+        analyzer._model_manager.processor = original_processor
+        analyzer._model_manager.model.get_image_features = original_get_image_features
 
     # Assert - すべての画像が処理されている（観測可能な振る舞いのみ検証）
     assert len(results) == 4
