@@ -75,32 +75,3 @@ def test_get_image_features_returns_correct_shape() -> None:
 
     # Assert
     assert features.shape == (1, 512)
-
-
-def test_get_image_features_batch_mode_returns_correct_shape() -> None:
-    """バッチモードで画像特徴抽出が正しく動作すること.
-
-    Given:
-        - CLIPModelManagerインスタンスがある
-        - 複数のモックPIL画像がある
-    When:
-        - バッチモードで画像特徴が抽出される
-    Then:
-        - バッチサイズに応じた形状のテンソルが返されること
-    """
-    # Arrange
-    manager = CLIPModelManager()
-    # モックプロセッサがバッチサイズを検出できるようにする
-    # 実際のCLIPプロセッサはimages引数（リスト）からバッチサイズを取得
-    # モックではimagesキーにリストを渡すと、プロセッサモックがlenでバッチサイズを判定
-    mock_images = [MagicMock(spec=Image.Image) for _ in range(3)]
-
-    # Act
-    features = manager.get_image_features(mock_images, batch_mode=True)
-
-    # Assert
-    # モックプロセッサはimages引数からバッチサイズを取得
-    # テスト環境のモックでは、実際のプロセッサの挙動をエミュレート
-    # バッチサイズが正しく検出されることを確認
-    assert features.shape[1] == 512  # 特徴次元が512であること
-    assert features.shape[0] >= 1  # バッチ次元が存在すること

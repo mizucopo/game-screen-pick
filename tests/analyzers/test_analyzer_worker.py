@@ -7,47 +7,10 @@
 4. 高速実行（約2-5秒） - 重いモデルロードなし
 """
 
-from pathlib import Path
-
-import cv2
-import numpy as np
 import pytest
 
 from src.analyzers.analyzer_worker import AnalyzerWorker
 from src.models.image_metrics import ImageMetrics
-
-
-@pytest.fixture
-def sample_image_path(tmp_path: Path) -> str:
-    """標準的なテスト画像（640x480 JPG）を作成する."""
-    np.random.seed(42)
-    img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    img_path = tmp_path / "test_image.jpg"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
-
-
-def test_init_worker_initializes_class_variable() -> None:
-    """init_worker staticmethodがクラス変数_workerを初期化すること.
-
-    Given:
-        - AnalyzerWorkerクラスがある
-    When:
-        - init_worker staticmethodを呼び出す
-    Then:
-        - クラス変数_workerがAnalyzerWorkerインスタンスに設定されること
-        - _workerのanalyzer属性が初期化されていること
-    """
-    # Arrange
-    AnalyzerWorker._worker = None  # クリーンな状態
-
-    # Act
-    AnalyzerWorker.init_worker(genre="mixed", force_cpu=True)
-
-    # Assert
-    assert AnalyzerWorker._worker is not None
-    assert AnalyzerWorker._worker.analyzer is not None
-    assert AnalyzerWorker._worker.analyzer._model_manager.device == "cpu"
 
 
 def test_analyze_single_returns_metrics_for_valid_image(

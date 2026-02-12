@@ -10,47 +10,11 @@
 
 from pathlib import Path
 
-import cv2
 import numpy as np
 import pytest
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
-
-
-@pytest.fixture
-def sample_image_path(tmp_path: Path) -> str:
-    """標準的なテスト画像（640x480 JPG）を作成する."""
-    return _create_test_image(tmp_path, "test_image.jpg", (480, 640), (0, 255))
-
-
-@pytest.fixture
-def dark_image_path(tmp_path: Path) -> str:
-    """輝度ペナルティのテスト用に暗いテスト画像（640x480 JPG）を作成する."""
-    return _create_test_image(tmp_path, "dark_image.jpg", (480, 640), (0, 50))
-
-
-def _create_test_image(
-    tmp_path: Path, filename: str, size: tuple[int, int], pixel_range: tuple[int, int]
-) -> str:
-    """テスト画像を作成するヘルパー関数.
-
-    Args:
-        tmp_path: 一時ディレクトリパス
-        filename: 画像ファイル名
-        size: 画像サイズ（高さ、幅）
-        pixel_range: ピクセル値の範囲（最小、最大）
-
-    Returns:
-        作成された画像の絶対パス
-    """
-    np.random.seed(42)
-    img_array = np.random.randint(
-        pixel_range[0], pixel_range[1], (*size, 3), dtype=np.uint8
-    )
-    img_path = tmp_path / filename
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
 
 
 def test_analyze_returns_valid_metrics_with_genre_specific_weights(

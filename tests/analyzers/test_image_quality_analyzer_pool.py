@@ -7,11 +7,8 @@
 4. 高速実行（約2-5秒） - 重いモデルロードなし
 """
 
-from pathlib import Path
 from typing import Any
 
-import cv2
-import numpy as np
 import pytest
 
 from src.analyzers.image_quality_analyzer_pool import ImageQualityAnalyzerPool
@@ -48,29 +45,6 @@ class _FakePool:
 def use_fake_pool(monkeypatch: pytest.MonkeyPatch) -> None:
     """ImageQualityAnalyzerPoolが使うPool実装をフェイクに差し替える."""
     monkeypatch.setattr("src.analyzers.image_quality_analyzer_pool.Pool", _FakePool)
-
-
-@pytest.fixture
-def sample_image_path(tmp_path: Path) -> str:
-    """標準的なテスト画像（640x480 JPG）を作成する."""
-    np.random.seed(42)
-    img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    img_path = tmp_path / "test_image.jpg"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
-
-
-@pytest.fixture
-def multiple_image_paths(tmp_path: Path) -> list[str]:
-    """複数のテスト画像を作成する."""
-    paths = []
-    for i in range(3):
-        np.random.seed(42 + i)
-        img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        img_path = tmp_path / f"test_image_{i}.jpg"
-        cv2.imwrite(str(img_path), img_array)
-        paths.append(str(img_path))
-    return paths
 
 
 def test_pool_context_manager_starts_and_closes_pool() -> None:

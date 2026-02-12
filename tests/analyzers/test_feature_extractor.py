@@ -21,16 +21,6 @@ from src.utils.vector_utils import VectorUtils
 
 
 @pytest.fixture
-def sample_image_path(tmp_path: Path) -> str:
-    """標準的なテスト画像（640x480 JPG）を作成する."""
-    np.random.seed(42)
-    img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    img_path = tmp_path / "test_image.jpg"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
-
-
-@pytest.fixture
 def feature_extractor() -> FeatureExtractor:
     """特徴抽出器のフィクスチャ."""
     model_manager = CLIPModelManager()

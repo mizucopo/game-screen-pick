@@ -26,36 +26,6 @@ from src.models.image_metrics import ImageMetrics
 
 
 @pytest.fixture
-def sample_image_path(tmp_path: Path) -> str:
-    """標準的なテスト画像（640x480 JPG）を作成する."""
-    np.random.seed(42)
-    img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    img_path = tmp_path / "test_image.jpg"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
-
-
-@pytest.fixture
-def dark_image_path(tmp_path: Path) -> str:
-    """輝度ペナルティのテスト用に暗いテスト画像（640x480 JPG）を作成する."""
-    np.random.seed(42)
-    img_array = np.random.randint(0, 50, (480, 640, 3), dtype=np.uint8)
-    img_path = tmp_path / "dark_image.jpg"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
-
-
-@pytest.fixture
-def png_image_path(tmp_path: Path) -> str:
-    """PNG形式のテスト画像（640x480）を作成する."""
-    np.random.seed(42)
-    img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    img_path = tmp_path / "test_image.png"
-    cv2.imwrite(str(img_path), img_array)
-    return str(img_path)
-
-
-@pytest.fixture
 def batch_pipeline() -> BatchPipeline:
     """バッチ処理パイプラインのフィクスチャ."""
     config = AnalyzerConfig()
