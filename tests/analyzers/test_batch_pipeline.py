@@ -34,7 +34,7 @@ def batch_pipeline() -> BatchPipeline:
     return BatchPipeline(feature_extractor, metric_calculator, config)
 
 
-def test_process_batch_returns_correct_metrics_for_multiple_images(
+def test_process_batch_handles_multiple_images(
     batch_pipeline: BatchPipeline,
     sample_image_path: str,
     png_image_path: str,
@@ -53,7 +53,6 @@ def test_process_batch_returns_correct_metrics_for_multiple_images(
         - 各結果のパスが正しいこと
     """
     # Arrange
-    # 3枚目の画像を作成
     np.random.seed(43)
     img_array = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
     small_image_path = tmp_path / "small_image.jpg"
@@ -66,12 +65,10 @@ def test_process_batch_returns_correct_metrics_for_multiple_images(
 
     # Assert
     assert len(results) == 3
-    # 少なくとも1つの画像が処理されていることを確認
     assert any(r is not None for r in results)
     for result, path in zip(results, paths):
         if result is not None:
             assert isinstance(result, ImageMetrics)
             assert result.path == path
             assert 0 <= result.total_score <= 100
-            # コサイン類似度の範囲（浮動小数点の丸め誤差を許容）
             assert -1.0 <= result.semantic_score <= 1.0 + 1e-5

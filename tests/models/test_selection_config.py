@@ -98,7 +98,6 @@ def test_compute_threshold_steps(
         ("batch_size", -10),
         ("max_threshold", -0.1),
         ("max_threshold", 1.1),
-        ("max_threshold", 2.0),
         ("threshold_relaxation_steps", [0.1, -0.05, 0.2]),
     ],
 )

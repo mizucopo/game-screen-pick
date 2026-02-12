@@ -34,13 +34,12 @@ def test_initialization_sets_text_and_prepares_embeddings(
         - テキスト埋め込みが事前計算されること
     """
     # Arrange & Act
-    if target_text is None:
-        manager = CLIPModelManager()
-    else:
-        manager = CLIPModelManager(target_text=target_text)
+    manager = (
+        CLIPModelManager()
+        if target_text is None
+        else CLIPModelManager(target_text=target_text)
+    )
 
     # Assert
     assert manager.target_text == expected_text
-    # テキスト埋め込みが事前計算されていることを確認
-    embeddings = manager.get_text_embeddings()
-    assert embeddings is not None
+    assert manager.get_text_embeddings() is not None

@@ -94,19 +94,13 @@ def test_extract_clip_features_batch_returns_correct_number_of_results(
         - 各有効結果が512次元であること
     """
     # Arrange
-    # 複数のテスト画像を作成
-    paths = []
+    pil_images = []
     for i in range(3):
         np.random.seed(42 + i)
         img_array = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
         img_path = tmp_path / f"test_image_{i}.jpg"
         cv2.imwrite(str(img_path), img_array)
-        paths.append(str(img_path))
-
-    # PIL画像を読み込み
-    pil_images = []
-    for path in paths:
-        with Image.open(path) as img:
+        with Image.open(str(img_path)) as img:
             pil_images.append(img.convert("RGB"))
 
     # Act
@@ -116,7 +110,6 @@ def test_extract_clip_features_batch_returns_correct_number_of_results(
 
     # Assert
     assert len(results) == 3
-    # 少なくとも1つの画像が処理されていることを確認
     assert any(r is not None for r in results)
     for result in results:
         if result is not None:

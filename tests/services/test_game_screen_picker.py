@@ -11,7 +11,7 @@
 
 import tempfile
 from pathlib import Path
-from typing import List, cast
+from typing import List
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -53,13 +53,9 @@ def _create_features_with_similarity(
     Returns:
         指定された類似度を持つ新しい特徴ベクトル
     """
-    # ベースを正規化
     eps = 1e-8
     norm = np.linalg.norm(base_features)
-    if norm < eps:
-        base_normalized = base_features  # ゼロベクトルの場合はそのまま使用
-    else:
-        base_normalized = base_features / norm
+    base_normalized = base_features if norm < eps else base_features / norm
 
     # 直交成分の大きさを計算: sqrt(1 - cos^2)
     orthogonal_norm = np.sqrt(max(0, 1 - target_similarity**2))
@@ -69,9 +65,7 @@ def _create_features_with_similarity(
     random_vec = random_vec / np.linalg.norm(random_vec) * orthogonal_norm
 
     # 目標類似度を持つベクトルを合成
-    similar_features = target_similarity * base_normalized + random_vec
-
-    return cast(np.ndarray, similar_features)
+    return target_similarity * base_normalized + random_vec  # type: ignore[no-any-return]
 
 
 @pytest.fixture
@@ -132,65 +126,28 @@ def sample_image_metrics() -> List[ImageMetrics]:
     - image4: 低品質、image1と0.30の類似度（異なる特徴）
     - image5: 中品質、image3と0.96の類似度（0.9閾値を超過）
     """
-    np.random.seed(42)  # 再現性のためにシード固定
-
-    # ベース特徴ベクトル（image1）
+    np.random.seed(42)
     base_features = np.random.rand(128)
 
-    # 特徴ベクトルを作成
     features_list = [
-        base_features,  # image1: ベース特徴
-        _create_features_with_similarity(base_features, 0.96),  # image2: 類似
-        _create_features_with_similarity(base_features, 0.85),  # image3: 中程度の類似
-        _create_features_with_similarity(base_features, 0.30),  # image4: 低類似
+        base_features,
+        _create_features_with_similarity(base_features, 0.96),
+        _create_features_with_similarity(base_features, 0.85),
+        _create_features_with_similarity(base_features, 0.30),
     ]
-
-    # image5をimage3と高類似度で生成
-    features_list.append(
-        _create_features_with_similarity(features_list[2], 0.96),
-    )  # image5: image3に類似
+    # image5はimage3に類似
+    features_list.append(_create_features_with_similarity(features_list[2], 0.96))
 
     return [
         ImageMetrics(
-            path="/fake/path/image1.jpg",
-            raw_metrics={"blur_score": 100.0},
-            normalized_metrics={"blur_score": 0.9},
-            semantic_score=0.8,
-            total_score=95.0,
-            features=features_list[0],
-        ),
-        ImageMetrics(
-            path="/fake/path/image2.jpg",
-            raw_metrics={"blur_score": 80.0},
-            normalized_metrics={"blur_score": 0.7},
-            semantic_score=0.7,
-            total_score=85.0,
-            features=features_list[1],  # image1に類似
-        ),
-        ImageMetrics(
-            path="/fake/path/image3.jpg",
-            raw_metrics={"blur_score": 90.0},
-            normalized_metrics={"blur_score": 0.8},
-            semantic_score=0.75,
-            total_score=90.0,
-            features=features_list[2],  # image1と中程度の類似
-        ),
-        ImageMetrics(
-            path="/fake/path/image4.jpg",
-            raw_metrics={"blur_score": 30.0},
-            normalized_metrics={"blur_score": 0.3},
-            semantic_score=0.3,
-            total_score=40.0,
-            features=features_list[3],  # 低品質、異なる特徴
-        ),
-        ImageMetrics(
-            path="/fake/path/image5.jpg",
-            raw_metrics={"blur_score": 70.0},
-            normalized_metrics={"blur_score": 0.6},
-            semantic_score=0.6,
-            total_score=75.0,
-            features=features_list[4],  # image3に類似
-        ),
+            path=f"/fake/path/image{i}.jpg",
+            raw_metrics={"blur_score": 100.0 - i * 5},
+            normalized_metrics={"blur_score": 0.9 - i * 0.1},
+            semantic_score=0.8 - i * 0.05,
+            total_score=95.0 - i * 5,
+            features=features_list[i],
+        )
+        for i in range(5)
     ]
 
 
@@ -201,8 +158,8 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
 
     Given:
         - 様々なスコアを持つ5つの分析済み画像
-        - image1（スコア95）とimage2（スコア85）は類似した特徴を持つ
-        - image3（スコア90）は異なる特徴を持つ
+        - image0（スコア95）とimage1（スコア90）は類似した特徴を持つ
+        - image2（スコア85）は異なる特徴を持つ
     When:
         - 類似度閾値0.9で3つの画像を選択
     Then:
@@ -228,12 +185,11 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
         expected_fail=0,
         expected_selected=3,
     )
-    # 画像はスコア順になっているはず（高い順）
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
-    # Image 2 (similar to image 1) should be filtered out
     selected_paths = [m.path for m in result]
-    assert "/fake/path/image2.jpg" not in selected_paths
+    assert "/fake/path/image0.jpg" in selected_paths
+    assert "/fake/path/image1.jpg" not in selected_paths  # image0に類似
 
 
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
@@ -266,7 +222,6 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
         )
 
         # Assert
-        # 結果の基本検証
         assert len(result) <= 3
         _assert_stats_valid(
             stats,
@@ -275,9 +230,9 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
             expected_fail=0,
             expected_selected=len(result),
         )
-        # スコア順の検証
-        for i in range(len(result) - 1):
-            assert result[i].total_score >= result[i + 1].total_score
+        # スコア降順であることを確認
+        scores = [m.total_score for m in result]
+        assert scores == sorted(scores, reverse=True)
 
 
 def test_selecting_gracefully_handles_files_that_fail_to_analyze(
@@ -303,7 +258,6 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
             batch_size: int = 32,  # noqa: ARG001
             show_progress: bool = False,  # noqa: ARG001
         ) -> List[ImageMetrics | None]:
-            # 偶数インデックス（image0, image2, image4）はNoneを返す
             results: List[ImageMetrics | None] = []
             for path in paths:
                 idx = int(path.split("image")[-1].split(".")[0])
@@ -336,8 +290,7 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         )
 
         # Assert
-        # 奇数インデックスの画像のみ有効（image1, image3）
-        assert len(result) <= 2
+        assert len(result) <= 2  # 奇数インデックスのみ有効
         _assert_stats_valid(
             stats,
             expected_total=5,
@@ -353,21 +306,19 @@ def similar_images_metrics() -> List[ImageMetrics]:
     np.random.seed(42)
     base_features = np.random.rand(128)
 
-    similar_images: List[ImageMetrics] = []
-    for i in range(10):
-        target_sim = 0.97 + (i % 3) * 0.01
-        similar_features = _create_features_with_similarity(base_features, target_sim)
-        similar_images.append(
-            ImageMetrics(
-                path=f"/fake/path/similar{i}.jpg",
-                raw_metrics={"blur_score": 100.0 - i},
-                normalized_metrics={"blur_score": 0.9},
-                semantic_score=0.8,
-                total_score=100.0 - i,
-                features=similar_features,
-            )
+    return [
+        ImageMetrics(
+            path=f"/fake/path/similar{i}.jpg",
+            raw_metrics={"blur_score": 100.0 - i},
+            normalized_metrics={"blur_score": 0.9},
+            semantic_score=0.8,
+            total_score=100.0 - i,
+            features=_create_features_with_similarity(
+                base_features, 0.97 + (i % 3) * 0.01
+            ),
         )
-    return similar_images
+        for i in range(10)
+    ]
 
 
 def test_threshold_relaxation_with_highly_similar_images(

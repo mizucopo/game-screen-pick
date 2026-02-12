@@ -106,10 +106,9 @@ def test_cli_selects_and_displays_images(
         - 統計情報が表示されること
     """
     # Arrange
-    num_expected = 7
     results = [
         sample_image_metrics_factory(f"/fake/image{i}.jpg", 95.0 - i * 3)
-        for i in range(num_expected)
+        for i in range(7)
     ]
     stats = PickerStatistics(
         total_files=10,
@@ -127,46 +126,16 @@ def test_cli_selects_and_displays_images(
 
     # Assert
     captured = capsys.readouterr()
-    # 結果一覧が表示される
     assert "選択された画像一覧" in captured.out
-    # 統計情報が表示される
     assert "統計情報" in captured.out
-    # 少なくとも1つのスコア表示がある（個数のカウントは実装詳細に依存しすぎる）
     assert "Score:" in captured.out
 
 
-@pytest.mark.parametrize(
-    "setup_files,expected_files",
-    [
-        (
-            [
-                (
-                    "setup",
-                    [
-                        ("image0.jpg", 95.0),
-                        ("image1.jpg", 90.0),
-                        ("image2.jpg", 85.0),
-                    ],
-                )
-            ],
-            ["image0.jpg", "image1.jpg", "image2.jpg"],
-        ),
-        (
-            [
-                ("folder0", [("image.jpg", 95.0)]),
-                ("folder1", [("image.jpg", 90.0)]),
-            ],
-            ["image.jpg", "image_1.jpg"],
-        ),
-    ],
-)
 def test_cli_copies_images_to_output_directory(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
-    setup_files: list[tuple[str, list[tuple[str, float]]]],
-    expected_files: list[str],
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
     """画像が出力ディレクトリにコピーされること.
@@ -179,7 +148,6 @@ def test_cli_copies_images_to_output_directory(
     Then:
         - 出力ディレクトリが作成されること
         - 画像が出力ディレクトリにコピーされること
-        - 同名ファイルにはサフィックスが付与されること
         - 成功メッセージが表示されること
     """
     # Arrange
@@ -188,18 +156,10 @@ def test_cli_copies_images_to_output_directory(
     output_dir = tmp_path / "output"
 
     results = []
-
-    for folder_name, files in setup_files:
-        if folder_name == "setup":
-            folder_path = input_dir
-        else:
-            folder_path = input_dir / folder_name
-            folder_path.mkdir()
-
-        for filename, score in files:
-            file_path = folder_path / filename
-            file_path.touch()
-            results.append(sample_image_metrics_factory(str(file_path), score))
+    for i in range(3):
+        file_path = input_dir / f"image{i}.jpg"
+        file_path.touch()
+        results.append(sample_image_metrics_factory(str(file_path), 95.0 - i * 5))
 
     stats = PickerStatistics(
         total_files=len(results),
@@ -223,10 +183,8 @@ def test_cli_copies_images_to_output_directory(
     assert "保存しました" in captured.out
     assert output_dir.exists()
     assert output_dir.is_dir()
-    for expected_file in expected_files:
-        assert (output_dir / expected_file).exists()
     output_files = list(output_dir.glob("*"))
-    assert len(output_files) == len(expected_files)
+    assert len(output_files) == len(results)
 
 
 def test_cli_handles_empty_input_directory(

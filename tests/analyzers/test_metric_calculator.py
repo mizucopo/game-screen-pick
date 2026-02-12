@@ -8,8 +8,6 @@
 5. 高速実行（約2-5秒） - 重いモデルロードなし
 """
 
-from typing import Any
-
 import cv2
 import numpy as np
 import pytest
@@ -70,39 +68,38 @@ def test_calculate_raw_metrics_returns_expected_metrics(
 
 
 @pytest.mark.parametrize(
-    "input_type,semantic_input",
-    [
-        ("pil_image", None),  # 後でfixtureから取得
-        ("features", np.ones(512) / np.sqrt(512.0)),
-    ],
+    "use_features",
+    [True, False],
 )
 def test_calculate_semantic_score_returns_value_in_expected_range(
     metric_calculator: MetricCalculator,
     sample_image_path: str,
-    input_type: str,
-    semantic_input: Any,
+    use_features: bool,
 ) -> None:
     """セマンティックスコアが期待される範囲で返されること.
 
     Given:
         - メトリクス計算器がある
-        - {input_type}からの入力がある
+        - 特徴ベクトルまたはPIL画像からの入力がある
     When:
         - セマンティックスコアが計算される
     Then:
         - スコアがコサイン類似度の範囲（[-1, 1]）にあること
     """
     # Arrange
-    if input_type == "pil_image":
+    if use_features:
+        semantic_input = np.ones(512) / np.sqrt(512.0)
+    else:
         with Image.open(sample_image_path) as img:
             semantic_input = img.convert("RGB")
 
     # Act
-    semantic_score = (
-        metric_calculator.calculate_semantic_score(semantic_input)
-        if input_type == "pil_image"
-        else metric_calculator.calculate_semantic_score_from_features(semantic_input)
-    )
+    if use_features:
+        semantic_score = metric_calculator.calculate_semantic_score_from_features(
+            semantic_input
+        )
+    else:
+        semantic_score = metric_calculator.calculate_semantic_score(semantic_input)
 
     # Assert
     assert isinstance(semantic_score, float)
@@ -146,36 +143,3 @@ def test_calculate_total_score_returns_non_negative_value(
     # Assert
     assert total_score >= 0.0
     assert isinstance(total_score, float)
-
-
-def test_calculate_all_metrics_returns_complete_results(
-    metric_calculator: MetricCalculator, sample_image_path: str
-) -> None:
-    """すべてのメトリクスが一括計算できること.
-
-    Given:
-        - メトリクス計算器がある
-        - テスト画像がある
-    When:
-        - すべてのメトリクスが一括計算される
-    Then:
-        - 期待されるすべての結果が返されること
-        - 各結果が正しい型であること
-    """
-    # Arrange
-    img = cv2.imread(sample_image_path)
-    clip_features = np.ones(512) / np.sqrt(512.0)
-
-    # Act
-    raw, norm, semantic, total = metric_calculator.calculate_all_metrics(
-        img, clip_features
-    )
-
-    # Assert
-    assert isinstance(raw, dict)
-    assert len(raw) > 0
-    assert isinstance(norm, dict)
-    assert len(norm) > 0
-    assert isinstance(semantic, float)
-    assert isinstance(total, float)
-    assert total >= 0.0

@@ -16,11 +16,7 @@ from src.models.image_metrics import ImageMetrics
 
 
 class _FakePool:
-    """multiprocessing.Pool互換のテスト用フェイク.
-
-    実プロセスを生成せずに同等の呼び出しフローを再現し、
-    CI環境でのfork起因ハングを回避する。
-    """
+    """multiprocessing.Pool互換のテスト用フェイク."""
 
     def __init__(
         self,
@@ -60,7 +56,6 @@ def test_pool_analyze_batch_processes_multiple_images(
         - analyze_batchが呼び出される
     Then:
         - すべての画像に対して有効なImageMetricsが返されること
-        - 結果の数が入力数と一致すること
     """
     # Arrange
     with ImageQualityAnalyzerPool(genre="mixed", num_workers=2, force_cpu=True) as pool:
@@ -82,15 +77,12 @@ def test_pool_analyze_batch_handles_mixed_valid_and_invalid_images(
     """プールが有効な画像と無効な画像が混在する場合に正しく処理すること.
 
     Given:
-        - モックされたCLIPモデルがある
-        - 開始されたプールがある
         - 有効な画像パスと存在しないパスが混在している
     When:
         - analyze_batchが呼び出される
     Then:
         - 有効な画像にはImageMetricsが返されること
         - 無効なパスにはNoneが返されること
-        - 結果の数が入力数と一致すること
     """
     # Arrange
     nonexistent_path = "/path/that/does/not/exist.jpg"
