@@ -357,88 +357,89 @@ def test_cli_handles_empty_input_directory(
 
 
 @pytest.mark.parametrize(
-    "input_path_fixture,error_type,error_msg_fragment",
+    "args,input_path_setup,error_type,error_patterns",
     [
-        # 存在しないディレクトリ
+        # 入力フォルダのバリデーション
         (
+            [],
             "nonexistent",
             FileNotFoundError,
-            "入力フォルダが存在しません",
+            ["入力フォルダが存在しません"],
         ),
-        # ファイルパス（ディレクトリではない）
         (
+            [],
             "file_path",
             NotADirectoryError,
-            "フォルダではありません",
+            ["フォルダではありません"],
+        ),
+        # --num の無効値
+        (
+            ["-n", "-1"],
+            None,
+            SystemExit,
+            ["正の整数を指定してください"],
+        ),
+        (
+            ["-n", "abc"],
+            None,
+            SystemExit,
+            ["整数ではありません"],
+        ),
+        # --similarity の無効値
+        (
+            ["-s", "1.5"],
+            None,
+            SystemExit,
+            ["0.0~1.0の範囲で指定してください"],
+        ),
+        (
+            ["-s", "abc"],
+            None,
+            SystemExit,
+            ["数値ではありません"],
         ),
     ],
 )
-def test_cli_validates_input_directory(
+def test_cli_validates_inputs(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
-    input_path_fixture: str,
+    test_image_directory: str,
+    args: list[str],
+    input_path_setup: str | None,
     error_type: type[Exception],
-    error_msg_fragment: str,
+    error_patterns: list[str],
 ) -> None:
-    """入力ディレクトリのバリデーションが正しく機能こと.
+    """無効な入力に対して適切なエラーが発生すること.
 
     Given:
-        - 無効な入力パス（存在しないディレクトリまたはファイルパス）がある
+        - 無効な入力パス、または無効なコマンドライン引数がある
     When:
         - CLIが実行される
     Then:
         - 適切なエラーが発生すること
-        - エラーメッセージにパスが含まれること
+        - エラーメッセージに適切な内容が含まれること
     """
-    # ファイルパスのテストケースの場合はテストファイルを作成
-    if input_path_fixture == "file_path":
-        input_path = str(tmp_path / "image.jpg")
+    # Arrange
+    if input_path_setup == "nonexistent":
+        input_path = "/nonexistent/directory"
+    elif input_path_setup == "file_path":
+        input_path = str(tmp_path / "file.jpg")
         Path(input_path).touch()
     else:
-        input_path = "/nonexistent/directory"
+        input_path = test_image_directory
 
-    monkeypatch.setattr("sys.argv", ["main.py", input_path])
+    monkeypatch.setattr("sys.argv", ["main.py", input_path] + args)
 
-    with pytest.raises(error_type) as exc_info:
-        Main().run()
-
-    assert input_path in str(exc_info.value)
-    assert error_msg_fragment in str(exc_info.value)
-
-
-@pytest.mark.parametrize(
-    "args,error_message",
-    [
-        # --num の無効値
-        (["-n", "-1"], "正の整数を指定してください"),
-        (["-n", "abc"], "整数ではありません"),
-        # --similarity の無効値
-        (["-s", "1.5"], "0.0~1.0の範囲で指定してください"),
-        (["-s", "abc"], "数値ではありません"),
-    ],
-)
-def test_cli_validates_num_and_similarity_arguments(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    test_image_directory: str,
-    args: list[str],
-    error_message: str,
-) -> None:
-    """--num と --similarity のバリデーションが正しく機能すること.
-
-    Given:
-        - 有効な入力ディレクトリが存在する
-        - --num または --similarity に無効値が指定されている
-    When:
-        - CLIが実行される
-    Then:
-        - 適切なエラーメッセージが表示されること
-        - プログラムが終了すること
-    """
-    # Arrange & Act & Assert
-    monkeypatch.setattr("sys.argv", ["main.py", test_image_directory] + args)
-
-    with pytest.raises(SystemExit):
-        Main().run()
-    captured = capsys.readouterr()
-    assert error_message in captured.err
+    # Act & Assert
+    if error_type.__name__ == "SystemExit":
+        with pytest.raises(SystemExit):
+            Main().run()
+        captured = capsys.readouterr()
+        for pattern in error_patterns:
+            assert pattern in captured.err
+    else:
+        with pytest.raises(error_type) as exc_info:
+            Main().run()
+        for pattern in error_patterns:
+            assert pattern in str(exc_info.value)

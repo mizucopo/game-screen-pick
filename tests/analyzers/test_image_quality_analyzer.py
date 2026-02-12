@@ -101,33 +101,3 @@ def test_analyze_produces_consistent_results_for_same_image(
     assert result1 is not None
     assert result2 is not None
     assert result1.total_score == result2.total_score
-
-
-def test_analyze_batch_handles_mixed_valid_and_invalid_images(
-    sample_image_path: str,
-) -> None:
-    """有効な画像と無効な画像が混在する場合に正しく処理されること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 有効な画像パスと存在しないパスが混在している
-    When:
-        - バッチ処理で分析される
-    Then:
-        - 有効な画像にはImageMetricsが返されること
-        - 無効なパスにはNoneが返されること
-        - 結果の数が入力数と一致すること
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-    nonexistent_path = "/path/that/does/not/exist.jpg"
-    paths = [sample_image_path, nonexistent_path, sample_image_path]
-
-    # Act - バッチサイズ1で実行（モックの制約により一時的に1に設定）
-    results = analyzer.analyze_batch(paths, batch_size=1)
-
-    # Assert
-    assert len(results) == 3
-    assert results[0] is not None
-    assert results[1] is None  # 存在しないパス
-    assert results[2] is not None

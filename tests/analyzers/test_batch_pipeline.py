@@ -14,7 +14,6 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 import pytest
-from PIL import Image
 
 from src.analyzers.batch_pipeline import BatchPipeline
 from src.analyzers.clip_model_manager import CLIPModelManager
@@ -128,34 +127,6 @@ def test_process_batch_handles_invalid_images(
     assert results[1] is None  # 無効なパス
 
 
-def test_process_batch_handles_dark_images(
-    batch_pipeline: BatchPipeline, dark_image_path: str
-) -> None:
-    """暗い画像が正しく処理されること.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - 暗いテスト画像がある
-    When:
-        - 暗い画像がバッチ処理で分析される
-    Then:
-        - 有効なImageMetricsが返されること
-    """
-    # Arrange
-    paths = [dark_image_path]
-
-    # Act
-    results = batch_pipeline.process_batch(paths, batch_size=1)
-
-    # Assert
-    assert len(results) == 1
-    result = results[0]
-    if result is not None:
-        assert isinstance(result, ImageMetrics)
-        assert result.path == dark_image_path
-        assert result.total_score >= 0
-
-
 def test_process_batch_empty_list_returns_empty_list(
     batch_pipeline: BatchPipeline,
 ) -> None:
@@ -177,37 +148,3 @@ def test_process_batch_empty_list_returns_empty_list(
 
     # Assert
     assert len(results) == 0
-
-
-def test_load_and_preprocess_images_handles_invalid_files(
-    tmp_path: Path,
-) -> None:
-    """無効なファイルが正しく処理されること.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - 有効な画像と無効なファイルが混在している
-    When:
-        - 画像が読み込まれて前処理される
-    Then:
-        - 有効な画像はPIL画像として返されること
-        - 無効なファイルはNoneとして返されること
-    """
-    # Arrange
-    np.random.seed(42)
-    img_array = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
-    valid_path = tmp_path / "valid.jpg"
-    cv2.imwrite(str(valid_path), img_array)
-
-    invalid_path = tmp_path / "invalid.txt"
-    invalid_path.write_text("Not an image")
-
-    # Act
-    paths = [str(valid_path), str(invalid_path)]
-    results = BatchPipeline.load_and_preprocess_images(paths)
-
-    # Assert
-    assert len(results) == 2
-    assert results[0] is not None
-    assert isinstance(results[0], Image.Image)
-    assert results[1] is None

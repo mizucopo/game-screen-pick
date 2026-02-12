@@ -7,6 +7,7 @@
 4. 高速実行（約2-5秒） - 重いモデルロードなし
 """
 
+import pytest
 from unittest.mock import MagicMock
 
 from PIL import Image
@@ -14,44 +15,37 @@ from PIL import Image
 from src.analyzers.clip_model_manager import CLIPModelManager
 
 
-def test_initialization_with_default_parameters() -> None:
-    """デフォルトパラメータで正常に初期化されること.
+@pytest.mark.parametrize(
+    "target_text,expected_text",
+    [
+        (None, "epic game scenery"),  # デフォルト値
+        ("beautiful landscape", "beautiful landscape"),  # カスタム値
+    ],
+)
+def test_initialization_sets_text_and_prepares_embeddings(
+    target_text: str | None, expected_text: str
+) -> None:
+    """ターゲットテキストが設定され、テキスト埋め込みが事前計算されること.
 
     Given:
-        - デフォルトパラメータがある
+        - デフォルトまたはカスタムのターゲットテキストがある
     When:
         - CLIPModelManagerが初期化される
     Then:
-        - モデル名、ターゲットテキスト、デバイスが正しく設定されること
+        - target_textが正しく設定されること
         - テキスト埋め込みが事前計算されること
+        - モデル名とデバイスが適切に設定されること
     """
     # Arrange & Act
-    manager = CLIPModelManager()
+    if target_text is None:
+        manager = CLIPModelManager()
+    else:
+        manager = CLIPModelManager(target_text=target_text)
 
     # Assert
+    assert manager.target_text == expected_text
     assert manager.model_name == "openai/clip-vit-base-patch32"
-    assert manager.target_text == "epic game scenery"
     assert manager.device in ("cuda", "cpu")
-    assert manager.get_text_embeddings().shape == (1, 512)
-
-
-def test_initialization_with_custom_target_text() -> None:
-    """カスタムターゲットテキストで正常に初期化されること.
-
-    Given:
-        - カスタムターゲットテキストがある
-    When:
-        - CLIPModelManagerがカスタムテキストで初期化される
-    Then:
-        - target_textがカスタム値であること
-        - テキスト埋め込みが計算されること
-    """
-    # Arrange & Act
-    custom_text = "beautiful landscape"
-    manager = CLIPModelManager(target_text=custom_text)
-
-    # Assert
-    assert manager.target_text == custom_text
     assert manager.get_text_embeddings().shape == (1, 512)
 
 

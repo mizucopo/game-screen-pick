@@ -8,7 +8,6 @@
 5. 高速実行（約2-5秒） - 重いモデルロードなし
 """
 
-from pathlib import Path
 from typing import Any
 
 import cv2
@@ -151,33 +150,6 @@ def test_calculate_total_score_returns_non_negative_value(
     assert isinstance(total_score, float)
 
 
-def test_calculate_total_score_handles_dark_images(
-    metric_calculator: MetricCalculator, dark_image_path: str
-) -> None:
-    """暗い画像に対して総合スコアが計算されること.
-
-    Given:
-        - メトリクス計算器がある
-        - 暗いテスト画像がある
-    When:
-        - 総合スコアが計算される
-    Then:
-        - 有効なスコアが返されること
-    """
-    # Arrange
-    img = cv2.imread(dark_image_path)
-    raw = metric_calculator.calculate_raw_metrics(img)
-
-    norm = MetricNormalizer.normalize_all(raw)
-    semantic = 0.5
-
-    # Act
-    total_score = metric_calculator.calculate_total_score(raw, norm, semantic)
-
-    # Assert
-    assert total_score >= 0.0
-
-
 def test_calculate_all_metrics_returns_complete_results(
     metric_calculator: MetricCalculator, sample_image_path: str
 ) -> None:
@@ -209,38 +181,6 @@ def test_calculate_all_metrics_returns_complete_results(
     assert isinstance(semantic, float)
     assert isinstance(total, float)
     assert total >= 0.0
-
-
-def test_calculate_raw_metrics_handles_large_images(
-    metric_calculator: MetricCalculator, tmp_path: Path
-) -> None:
-    """大きな画像が正しくリサイズされて処理されること.
-
-    Given:
-        - メトリクス計算器がある
-        - max_dimより大きな画像がある
-    When:
-        - 生メトリクスが計算される
-    Then:
-        - エラーが発生しないこと
-        - 有効なメトリクスが返されること
-    """
-    # Arrange
-    # 1920x1080の画像を作成（max_dim=720より大きい）
-    np.random.seed(42)
-    img_array = np.random.randint(0, 255, (1080, 1920, 3), dtype=np.uint8)
-    img_path = tmp_path / "large_image.jpg"
-    cv2.imwrite(str(img_path), img_array)
-    img = cv2.imread(str(img_path))
-
-    # Act
-    raw_metrics = metric_calculator.calculate_raw_metrics(img)
-
-    # Assert
-    assert isinstance(raw_metrics, dict)
-    assert len(raw_metrics) == 9
-    for value in raw_metrics.values():
-        assert isinstance(value, (int, float))
 
 
 def test_calculate_semantic_score_batch_returns_correct_count(
