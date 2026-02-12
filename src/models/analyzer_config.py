@@ -16,6 +16,8 @@ class AnalyzerConfig:
         brightness_penalty_value: 輝度ペナルティの値
         semantic_weight: 総合スコア計算時のセマンティックスコアの重み
         score_multiplier: 総合スコアの乗数
+        result_max_workers: 結果構築（raw metric + feature結合）の並列処理ワーカー数
+            Noneでデフォルト値（min(8, max(1, os.cpu_count() - 1))）を使用
     """
 
     max_dim: int = 720
@@ -25,6 +27,7 @@ class AnalyzerConfig:
     brightness_penalty_value: float = 0.6
     semantic_weight: float = 0.002  # コサイン類似度[-1,1]用に調整（元の0.2から100倍）
     score_multiplier: float = 100.0
+    result_max_workers: int | None = None
 
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""

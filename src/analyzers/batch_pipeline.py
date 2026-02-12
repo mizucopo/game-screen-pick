@@ -1,11 +1,13 @@
 """バッチ処理パイプライン - 複数画像のバッチ処理をオーケストレーションする."""
 
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import cv2
 import numpy as np
+import torch
 from PIL import Image, UnidentifiedImageError
 
 from ..models.analyzer_config import AnalyzerConfig
@@ -41,6 +43,12 @@ class BatchPipeline:
         self.feature_extractor = feature_extractor
         self.metric_calculator = metric_calculator
         self.config = config
+        # 結果構築の並列処理ワーカー数を決定（デフォルトはmin(8, cpu_count-1)）
+        if config.result_max_workers is None:
+            cpu_count = os.cpu_count() or 1
+            self._result_max_workers = min(8, max(1, cpu_count - 1))
+        else:
+            self._result_max_workers = config.result_max_workers
 
     def process_batch(
         self,
@@ -92,57 +100,17 @@ class BatchPipeline:
                 clip_features_list
             )
 
-            # ステージ4: チャンク単位で結果を構築
-            for i, (path, pil_img, clip_features, semantic) in enumerate(
-                zip(chunk_paths, pil_images, clip_features_list, semantic_scores)
-            ):
-                if pil_img is None or clip_features is None or semantic is None:
-                    results.append(None)
-                    continue
-
-                if show_progress and (chunk_start + i) % 50 == 0:
-                    print(f"解析済み: {chunk_start + i}/{len(paths)}")
-
-                try:
-                    # メトリクス計算用に先に画像を縮小
-                    # （長辺max_dim px、アスペクト比保持）
-                    # フル解像度のままnp.array変換→後で縮小の二重処理を回避
-                    w, h = pil_img.size
-                    max_dim = self.config.max_dim
-                    if max(w, h) > max_dim:
-                        scale = max_dim / max(w, h)
-                        new_w, new_h = int(w * scale), int(h * scale)
-                        # PILのthumbnailを使用してアスペクト比を保持しつつ縮小
-                        pil_img_resized = pil_img.copy()
-                        pil_img_resized.thumbnail(
-                            (new_w, new_h), Image.Resampling.BILINEAR
-                        )
-                        img = cv2.cvtColor(np.array(pil_img_resized), cv2.COLOR_RGB2BGR)
-                    else:
-                        img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-                    # 生メトリクスと正規化メトリクスのみ計算
-                    # （セマンティックスコアはバッチ計算済みの値を使用）
-                    raw, norm = self.metric_calculator.calculate_raw_norm_metrics(img)
-                    # バッチ計算したセマンティックスコアを使用して総合スコアを計算
-                    total = self.metric_calculator.calculate_total_score(
-                        raw, norm, semantic
-                    )
-
-                    # HSV特徴とCLIP特徴を結合
-                    features = self.feature_extractor.extract_combined_features(
-                        img,
-                        clip_features,
-                    )
-                    results.append(
-                        ImageMetrics(path, raw, norm, semantic, total, features)
-                    )
-                except self._get_expected_errors() as e:
-                    logger.warning(
-                        f"画像分析をスキップしました: {path}, "
-                        f"理由: {type(e).__name__}: {e}"
-                    )
-                    results.append(None)
+            # ステージ4: チャンク単位で結果を構築（並列化）
+            chunk_results = self._process_result_parallel(
+                chunk_paths=chunk_paths,
+                pil_images=pil_images,
+                clip_features_list=clip_features_list,
+                semantic_scores=semantic_scores,
+                chunk_start=chunk_start,
+                total_paths=len(paths),
+                show_progress=show_progress,
+            )
+            results.extend(chunk_results)
 
             # チャンク処理完了後にメモリを解放
             del pil_images, clip_features_list
@@ -246,6 +214,130 @@ class BatchPipeline:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = list(executor.map(process_single, paths))
 
+        return results
+
+    def _process_single_result(
+        self,
+        path: str,
+        pil_img: Image.Image,
+        clip_features: torch.Tensor,
+        semantic: float,
+    ) -> Optional[ImageMetrics]:
+        """結果構築の単一画像処理.
+
+        raw metric計算、feature結合、総合スコア計算を行う。
+
+        Args:
+            path: 画像ファイルパス
+            pil_img: PIL画像
+            clip_features: CLIP特徴（torch.Tensor）
+            semantic: セマンティックスコア
+
+        Returns:
+            ImageMetricsオブジェクト（処理失敗時はNone）
+        """
+        try:
+            # メトリクス計算用に先に画像を縮小
+            # （長辺max_dim px、アスペクト比保持）
+            # フル解像度のままnp.array変換→後で縮小の二重処理を回避
+            w, h = pil_img.size
+            max_dim = self.config.max_dim
+            if max(w, h) > max_dim:
+                scale = max_dim / max(w, h)
+                new_w, new_h = int(w * scale), int(h * scale)
+                # PILのthumbnailを使用してアスペクト比を保持しつつ縮小
+                pil_img_resized = pil_img.copy()
+                pil_img_resized.thumbnail((new_w, new_h), Image.Resampling.BILINEAR)
+                img = cv2.cvtColor(np.array(pil_img_resized), cv2.COLOR_RGB2BGR)
+            else:
+                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+            # 生メトリクスと正規化メトリクスのみ計算
+            # （セマンティックスコアはバッチ計算済みの値を使用）
+            raw, norm = self.metric_calculator.calculate_raw_norm_metrics(img)
+            # バッチ計算したセマンティックスコアを使用して総合スコアを計算
+            total = self.metric_calculator.calculate_total_score(raw, norm, semantic)
+
+            # HSV特徴とCLIP特徴を結合
+            features = self.feature_extractor.extract_combined_features(
+                img,
+                clip_features,
+            )
+            return ImageMetrics(path, raw, norm, semantic, total, features)
+        except self._get_expected_errors() as e:
+            logger.warning(
+                f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
+            )
+            return None
+
+    def _process_result_parallel(
+        self,
+        chunk_paths: List[str],
+        pil_images: List[Optional[Image.Image]],
+        clip_features_list: List[Optional[torch.Tensor]],
+        semantic_scores: List[Optional[float]],
+        chunk_start: int,
+        total_paths: int,
+        show_progress: bool,
+    ) -> List[Optional[ImageMetrics]]:
+        """結果構築（raw metric + feature結合）を並列処理.
+
+        ThreadPoolExecutorを使用してチャンク内の画像処理を並列化する。
+
+        Args:
+            chunk_paths: チャンク内の画像パスリスト
+            pil_images: PIL画像リスト
+            clip_features_list: CLIP特徴リスト
+            semantic_scores: セマンティックスコアリスト
+            chunk_start: チャンクの開始インデックス
+            total_paths: 総画像数
+            show_progress: 進捗表示フラグ
+
+        Returns:
+            ImageMetricsオブジェクトのリスト（失敗時はNone）
+        """
+        # 並列処理するタスクを準備
+        # 型エイリアス（行長制限対応）
+        TaskDataType = tuple[str, Image.Image, torch.Tensor, float, int]
+        tasks: list[tuple[int, TaskDataType | None]] = []
+        for i, (path, pil_img, clip_features, semantic) in enumerate(
+            zip(
+                chunk_paths,
+                pil_images,
+                clip_features_list,
+                semantic_scores,
+            )
+        ):
+            if pil_img is None or clip_features is None or semantic is None:
+                tasks.append((i, None))  # Noneは処理スキップを示す
+            else:
+                # タスクを保存（インデックス付きで順序維持）
+                tasks.append(
+                    (i, (path, pil_img, clip_features, semantic, chunk_start + i))
+                )
+
+        # 並列処理関数
+        def process_task(
+            task_info: tuple[
+                int, tuple[str, Image.Image, torch.Tensor, float, int] | None
+            ],
+        ) -> tuple[int, Optional[ImageMetrics]]:
+            """単一タスクを処理する."""
+            idx, data = task_info
+            if data is None:
+                return idx, None
+            path, pil_img, clip_features, semantic, global_idx = data
+            if show_progress and global_idx % 50 == 0:
+                print(f"解析済み: {global_idx}/{total_paths}")
+            result = self._process_single_result(path, pil_img, clip_features, semantic)
+            return idx, result
+
+        # ThreadPoolExecutorで並列処理
+        with ThreadPoolExecutor(max_workers=self._result_max_workers) as executor:
+            results_map = dict(executor.map(process_task, tasks))
+
+        # 順序を維持して結果を返す
+        results = [results_map.get(i) for i in range(len(tasks))]
         return results
 
     @staticmethod
