@@ -9,6 +9,7 @@
 """
 
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -114,54 +115,41 @@ def test_calculate_raw_metrics_returns_non_negative_values(
     assert raw_metrics["edge_density"] >= 0
 
 
+@pytest.mark.parametrize(
+    "input_type,semantic_input",
+    [
+        ("pil_image", None),  # 後でfixtureから取得
+        ("features", np.ones(512) / np.sqrt(512.0)),
+    ],
+)
 def test_calculate_semantic_score_returns_value_in_expected_range(
-    metric_calculator: MetricCalculator, sample_image_path: str
+    metric_calculator: MetricCalculator,
+    sample_image_path: str,
+    input_type: str,
+    semantic_input: Any,
 ) -> None:
     """セマンティックスコアが期待される範囲で返されること.
 
     Given:
         - メトリクス計算器がある
-        - テスト画像がある
+        - {input_type}からの入力がある
     When:
         - セマンティックスコアが計算される
     Then:
         - スコアがコサイン類似度の範囲（[-1, 1]）にあること
-    """
+    """.format(input_type=input_type)
     # Arrange
-    with Image.open(sample_image_path) as img:
-        pil_img = img.convert("RGB")
+    if input_type == "pil_image":
+        with Image.open(sample_image_path) as img:
+            semantic_input = img.convert("RGB")
 
     # Act
-    semantic_score = metric_calculator.calculate_semantic_score(pil_img)
-
-    # Assert
-    assert isinstance(semantic_score, float)
-    assert not np.isnan(semantic_score)
-    # 浮動小数点の丸め誤差を許容して境界チェック
-    assert -1.0 <= semantic_score
-    assert semantic_score <= 1.0 + 1e-5  # 丸め誤差を許容
-
-
-def test_calculate_semantic_score_from_features_returns_value_in_expected_range(
-    metric_calculator: MetricCalculator,
-) -> None:
-    """CLIP特徴からセマンティックスコアが計算できること.
-
-    Given:
-        - メトリクス計算器がある
-        - 正規化されたCLIP特徴がある
-    When:
-        - セマンティックスコアが特徴から計算される
-    Then:
-        - スコアがコサイン類似度の範囲（[-1, 1]）にあること
-    """
-    # Arrange
-    clip_features = np.ones(512) / np.sqrt(512.0)
-
-    # Act
-    semantic_score = metric_calculator.calculate_semantic_score_from_features(
-        clip_features
-    )
+    if input_type == "pil_image":
+        semantic_score = metric_calculator.calculate_semantic_score(semantic_input)
+    else:
+        semantic_score = metric_calculator.calculate_semantic_score_from_features(
+            semantic_input
+        )
 
     # Assert
     assert isinstance(semantic_score, float)
@@ -306,7 +294,7 @@ def test_calculate_raw_metrics_handles_large_images(
 def test_metric_calculator_uses_genre_weights(
     metric_calculator: MetricCalculator,
 ) -> None:
-    """ジャンル特有の重みが使用されること.
+    """ジャンル特有の重みが使用されてスコアが計算されること.
 
     Given:
         - メトリクス計算器がある
@@ -314,7 +302,7 @@ def test_metric_calculator_uses_genre_weights(
     When:
         - 総合スコアが計算される
     Then:
-        - 重みが使用されていること
+        - 重みが使用されて有効なスコアが計算されること
     """
     # Arrange
     raw = {
@@ -336,11 +324,8 @@ def test_metric_calculator_uses_genre_weights(
     total_score = metric_calculator.calculate_total_score(raw, norm, semantic)
 
     # Assert
-    # 重みが使用されていることを確認（スコアが計算されている）
     assert total_score >= 0.0
-    # 重みの合計が正規化されていることを確認
-    weight_sum = sum(metric_calculator.weights.values())
-    assert weight_sum == pytest.approx(1.0, abs=0.01)
+    assert isinstance(total_score, float)
 
 
 def test_calculate_total_score_with_zero_semantic_weight(

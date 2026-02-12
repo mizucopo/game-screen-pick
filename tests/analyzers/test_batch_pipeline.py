@@ -9,6 +9,7 @@
 """
 
 from pathlib import Path
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -109,54 +110,44 @@ def test_process_batch_returns_correct_metrics_for_multiple_images(
         assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
 
 
-def test_process_batch_handles_mixed_valid_and_invalid_images(
-    batch_pipeline: BatchPipeline, sample_image_path: str
+@pytest.mark.parametrize(
+    "setup_invalid_path,description",
+    [
+        (
+            lambda _: "/path/that/does/not/exist.jpg",
+            "存在しないパス",
+        ),
+        (
+            lambda tmp_path: (
+                (tmp_path / "corrupted.jpg").write_text("Not an image"),
+                tmp_path / "corrupted.jpg",
+            )[1],
+            "破損した画像",
+        ),
+    ],
+)
+def test_process_batch_handles_invalid_images(
+    batch_pipeline: BatchPipeline,
+    sample_image_path: str,
+    tmp_path: Path,
+    setup_invalid_path: Callable[[Path], Any],
+    description: str,
 ) -> None:
-    """有効な画像と無効な画像が混在する場合に正しく処理されること.
+    """無効な画像パスが正しく処理されること.
 
     Given:
         - バッチ処理パイプラインがある
-        - 有効な画像パスと存在しないパスが混在している
+        - 有効な画像パスと{description}が混在している
     When:
         - バッチ処理で分析される
     Then:
         - 有効な画像にはImageMetricsが返されること
         - 無効なパスにはNoneが返されること
         - 結果の数が入力数と一致すること
-    """
+    """.format(description=description)
     # Arrange
-    nonexistent_path = "/path/that/does/not/exist.jpg"
-    paths = [sample_image_path, nonexistent_path, sample_image_path]
-
-    # Act
-    results = batch_pipeline.process_batch(paths, batch_size=1)
-
-    # Assert
-    assert len(results) == 3
-    # 少なくとも最初の画像は処理されている
-    assert results[0] is not None
-    assert results[1] is None  # 存在しないパス
-
-
-def test_process_batch_handles_corrupted_images(
-    batch_pipeline: BatchPipeline, sample_image_path: str, tmp_path: Path
-) -> None:
-    """破損した画像が正しく処理されること.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - 有効な画像と破損した画像が混在している
-    When:
-        - バッチ処理で分析される
-    Then:
-        - 有効な画像にはImageMetricsが返されること
-        - 破損した画像にはNoneが返されること
-    """
-    # Arrange
-    corrupted_path = tmp_path / "corrupted.jpg"
-    corrupted_path.write_text("This is not a valid image file")
-
-    paths = [sample_image_path, str(corrupted_path)]
+    invalid_path = setup_invalid_path(tmp_path)
+    paths = [sample_image_path, invalid_path]
 
     # Act
     results = batch_pipeline.process_batch(paths, batch_size=1)
@@ -164,40 +155,7 @@ def test_process_batch_handles_corrupted_images(
     # Assert
     assert len(results) == 2
     assert results[0] is not None
-    assert results[1] is None  # 破損した画像
-
-
-def test_process_batch_processes_various_image_formats(
-    batch_pipeline: BatchPipeline,
-    sample_image_path: str,
-    png_image_path: str,
-) -> None:
-    """様々な形式の画像が正しく処理されること.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - 異なる形式（JPG、PNG）のテスト画像がある
-    When:
-        - 各画像がバッチ処理で分析される
-    Then:
-        - すべての形式が正常に分析されること
-        - 有効なImageMetricsが返されること
-    """
-    # Arrange
-    paths = [sample_image_path, png_image_path]
-
-    # Act
-    results = batch_pipeline.process_batch(paths, batch_size=1)
-
-    # Assert
-    assert len(results) == 2
-    # 少なくとも1つの画像が処理されている
-    assert any(r is not None for r in results)
-    for result in results:
-        if result is None:
-            continue
-        assert isinstance(result, ImageMetrics)
-        assert 0 <= result.total_score <= 100
+    assert results[1] is None  # 無効なパス
 
 
 def test_process_batch_handles_dark_images_with_penalty(

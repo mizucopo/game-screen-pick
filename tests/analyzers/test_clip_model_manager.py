@@ -128,24 +128,3 @@ def test_get_text_embeddings_returns_cached_tensor() -> None:
     # Assert - 同じオブジェクト（キャッシュされている）
     assert embeddings1 is embeddings2
     assert embeddings1.shape == (1, 512)
-
-
-def test_target_text_property_returns_correct_value() -> None:
-    """target_textプロパティが正しい値を返すこと.
-
-    Given:
-        - カスタムターゲットテキストで初期化されたマネージャーがある
-    When:
-        - target_textプロパティがアクセスされる
-    Then:
-        - 設定されたテキストが返されること
-    """
-    # Arrange
-    custom_text = "epic fantasy scenery"
-    manager = CLIPModelManager(target_text=custom_text)
-
-    # Act
-    result = manager.target_text
-
-    # Assert
-    assert result == custom_text

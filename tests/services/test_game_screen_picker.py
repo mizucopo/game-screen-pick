@@ -73,6 +73,42 @@ def mock_analyzer() -> MagicMock:
 
 
 @pytest.fixture
+def mock_analyzer_with_batch(mock_analyzer: MagicMock) -> MagicMock:
+    """analyze_batchメソッドを持つモックImageQualityAnalyzer.
+
+    標準的なモック分析関数を提供します。
+    """
+
+    def mock_analyze_batch(
+        paths: List[str],
+        batch_size: int = 32,  # noqa: ARG001
+        show_progress: bool = False,  # noqa: ARG001
+    ) -> List[ImageMetrics | None]:
+        """テスト用のモック分析関数."""
+        results: List[ImageMetrics | None] = []
+        for path in paths:
+            try:
+                idx = int(path.split("image")[-1].split(".")[0])
+            except (ValueError, IndexError):
+                idx = 0
+            np.random.seed(idx)
+            results.append(
+                ImageMetrics(
+                    path=path,
+                    raw_metrics={"blur_score": 100 - idx * 10},
+                    normalized_metrics={"blur_score": 1.0 - idx * 0.1},
+                    semantic_score=0.8,
+                    total_score=100 - idx * 10,
+                    features=np.random.rand(128),
+                )
+            )
+        return results
+
+    mock_analyzer.analyze_batch = mock_analyze_batch
+    return mock_analyzer
+
+
+@pytest.fixture
 def sample_image_metrics() -> List[ImageMetrics]:
     """テスト用のサンプルImageMetricsを作成する.
 
@@ -275,7 +311,7 @@ def test_original_input_list_remains_unchanged_after_selection(
 
 
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
-    mock_analyzer: MagicMock,
+    mock_analyzer_with_batch: MagicMock,
 ) -> None:
     """完全な統合：ロード、分析、多様な画像の選択が行われること.
 
@@ -292,30 +328,7 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
         for i in range(5):
             Path(temp_dir, f"image{i}.jpg").touch()
 
-        # モックアナライザを設定
-        def simple_mock_analyze(path: str) -> ImageMetrics:
-            idx = int(path.split("image")[-1].split(".")[0])
-            # 各画像に異なる特徴ベクトルを割り当て
-            np.random.seed(idx)
-            features = np.random.rand(128)
-            return ImageMetrics(
-                path=path,
-                raw_metrics={"blur_score": 100 - idx * 10},
-                normalized_metrics={"blur_score": 1.0 - idx * 0.1},
-                semantic_score=0.8,
-                total_score=100 - idx * 10,
-                features=features,
-            )
-
-        def mock_analyze_batch(
-            paths: List[str],
-            batch_size: int = 32,  # noqa: ARG001
-            show_progress: bool = False,  # noqa: ARG001
-        ) -> List[ImageMetrics | None]:
-            return [simple_mock_analyze(p) for p in paths]
-
-        mock_analyzer.analyze_batch = mock_analyze_batch
-        picker = GameScreenPicker(mock_analyzer)
+        picker = GameScreenPicker(mock_analyzer_with_batch)
 
         # Act
         result, stats = picker.select(
@@ -485,7 +498,7 @@ def test_threshold_relaxation_with_highly_similar_images(
 
 
 def test_same_seed_produces_same_results(
-    mock_analyzer: MagicMock,
+    mock_analyzer_with_batch: MagicMock,
 ) -> None:
     """同じシードを指定した場合、同じ選択結果が得られること.
 
@@ -502,34 +515,10 @@ def test_same_seed_produces_same_results(
         for i in range(10):
             Path(temp_dir, f"image{i}.jpg").touch()
 
-        # モックアナライザを設定
-        def mock_analyze_batch(
-            paths: List[str],
-            batch_size: int = 32,  # noqa: ARG001
-            show_progress: bool = False,  # noqa: ARG001
-        ) -> List[ImageMetrics | None]:
-            results: List[ImageMetrics | None] = []
-            for path in paths:
-                idx = int(path.split("image")[-1].split(".")[0])
-                np.random.seed(idx)
-                results.append(
-                    ImageMetrics(
-                        path=path,
-                        raw_metrics={"blur_score": 100 - idx * 5},
-                        normalized_metrics={"blur_score": 1.0 - idx * 0.05},
-                        semantic_score=0.8,
-                        total_score=100 - idx * 5,
-                        features=np.random.rand(128),
-                    )
-                )
-            return results
-
-        mock_analyzer.analyze_batch = mock_analyze_batch
-
         # 同じシードで2つのピッカーを作成
         seed = 42
-        picker1 = GameScreenPicker(mock_analyzer, rng=random.Random(seed))
-        picker2 = GameScreenPicker(mock_analyzer, rng=random.Random(seed))
+        picker1 = GameScreenPicker(mock_analyzer_with_batch, rng=random.Random(seed))
+        picker2 = GameScreenPicker(mock_analyzer_with_batch, rng=random.Random(seed))
 
         # Act
         result1, _ = picker1.select(
@@ -582,7 +571,7 @@ def test_different_seeds_produce_different_results(
             results: List[ImageMetrics | None] = []
             for path in paths:
                 idx = int(path.split("image")[-1].split(".")[0])
-                # それぞれの画像に異なる特徴ベクトルを割り当てる
+                # それぞれの画像に異なる特徴ベクトルを割り当てる（シード固定）
                 np.random.seed(idx + 1000)  # 異なるシードで特徴を生成
                 results.append(
                     ImageMetrics(
@@ -626,7 +615,7 @@ def test_different_seeds_produce_different_results(
 
 
 def test_picker_without_rng_still_works(
-    mock_analyzer: MagicMock,
+    mock_analyzer_with_batch: MagicMock,
 ) -> None:
     """RNGを指定しない場合、デフォルトの乱数生成器が使用されること.
 
@@ -643,29 +632,7 @@ def test_picker_without_rng_still_works(
         for i in range(5):
             Path(temp_dir, f"image{i}.jpg").touch()
 
-        def mock_analyze_batch(
-            paths: List[str],
-            batch_size: int = 32,  # noqa: ARG001
-            show_progress: bool = False,  # noqa: ARG001
-        ) -> List[ImageMetrics | None]:
-            results: List[ImageMetrics | None] = []
-            for path in paths:
-                idx = int(path.split("image")[-1].split(".")[0])
-                np.random.seed(idx)
-                results.append(
-                    ImageMetrics(
-                        path=path,
-                        raw_metrics={"blur_score": 100 - idx * 10},
-                        normalized_metrics={"blur_score": 1.0 - idx * 0.1},
-                        semantic_score=0.8,
-                        total_score=100 - idx * 10,
-                        features=np.random.rand(128),
-                    )
-                )
-            return results
-
-        mock_analyzer.analyze_batch = mock_analyze_batch
-        picker = GameScreenPicker(mock_analyzer)  # RNGなし
+        picker = GameScreenPicker(mock_analyzer_with_batch)  # RNGなし
 
         # Act
         result, stats = picker.select(
