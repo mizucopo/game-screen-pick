@@ -1,7 +1,6 @@
 """バッチ処理パイプライン - 複数画像のバッチ処理をオーケストレーションする."""
 
 import logging
-import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
@@ -23,6 +22,9 @@ class BatchPipeline:
 
     複数の画像をバッチ処理で解析するオーケストレーションを行う。
     """
+
+    # RGB画像のチャンネル数（メモリ見積もり用）
+    RGB_CHANNELS: int = 3
 
     def __init__(
         self,
@@ -114,7 +116,7 @@ class BatchPipeline:
                         # PILのthumbnailを使用してアスペクト比を保持しつつ縮小
                         pil_img_resized = pil_img.copy()
                         pil_img_resized.thumbnail(
-                            (new_w, new_h), Image.Resampling.LANCZOS
+                            (new_w, new_h), Image.Resampling.BILINEAR
                         )
                         img = cv2.cvtColor(np.array(pil_img_resized), cv2.COLOR_RGB2BGR)
                     else:
@@ -172,12 +174,13 @@ class BatchPipeline:
         current_count = 0
 
         for i, path in enumerate(paths):
-            # ファイルサイズを取得（存在しない場合は0とする）
+            # PILで画像ヘッダのみ読み込み、デコード後のメモリを見積もる
             try:
-                file_size = os.path.getsize(path)
-                # 推定メモリ使用量はファイルサイズの約2倍（デコード後）とする
-                estimated_memory = file_size * 2
-            except OSError:
+                with Image.open(path) as img:
+                    width, height = img.size
+                    # RGB画像（RGB_CHANNELSチャンネル、1ピクセルあたり1バイト）と仮定
+                    estimated_memory = width * height * BatchPipeline.RGB_CHANNELS
+            except (OSError, UnidentifiedImageError):
                 estimated_memory = 0
 
             # チャンク追加でメモリ予算を超える場合は新規チャンクを検討
