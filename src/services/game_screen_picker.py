@@ -32,7 +32,8 @@ class GameScreenPicker:
         self.config = config or SelectionConfig()
         self._rng = rng or random.Random()
 
-    def _load_image_files(self, folder: str, recursive: bool) -> List[Path]:
+    @staticmethod
+    def load_image_files(folder: str, recursive: bool) -> List[Path]:
         """フォルダから画像ファイルのパスを取得する.
 
         Args:
@@ -181,7 +182,7 @@ class GameScreenPicker:
             (選択された画像メトリクスのリスト, 統計情報)
         """
         # ファイルを取得
-        files = self._load_image_files(folder, recursive)
+        files = GameScreenPicker.load_image_files(folder, recursive)
         total_files = len(files)
 
         # ランダムにシャッフル（フォルダやファイル名のバイアスを破壊）

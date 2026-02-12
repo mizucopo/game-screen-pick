@@ -6,11 +6,11 @@ import shutil
 from pathlib import Path
 from typing import List
 
-from .analyzers import ImageQualityAnalyzer
-from .models.genre_weights import GenreWeights
+from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
+from .constants.genre_weights import GenreWeights
 from .models.image_metrics import ImageMetrics
 from .models.picker_statistics import PickerStatistics
-from .services import GameScreenPicker
+from .services.game_screen_picker import GameScreenPicker
 from .utils.file_utils import FileUtils
 
 
@@ -66,11 +66,12 @@ class Main:
         )
 
         if parsed_args.copy_to and best:
-            self._copy_selected_images(best, parsed_args.copy_to)
+            Main.copy_selected_images(best, parsed_args.copy_to)
 
-        self._display_results(best, stats)
+        Main.display_results(best, stats)
 
-    def _validate_positive_int(self, value: str) -> int:
+    @staticmethod
+    def validate_positive_int(value: str) -> int:
         """正の整数をバリデーションする.
 
         Args:
@@ -92,7 +93,8 @@ class Main:
         except ValueError as e:
             raise argparse.ArgumentTypeError(f"'{value}' は整数ではありません") from e
 
-    def _validate_similarity_range(self, value: str) -> float:
+    @staticmethod
+    def validate_similarity_range(value: str) -> float:
         """類似度しきい値をバリデーションする（0.0 ~ 1.0）.
 
         Args:
@@ -127,7 +129,7 @@ class Main:
         parser.add_argument("input", help="入力フォルダ")
         parser.add_argument("-c", "--copy-to", help="出力フォルダ")
         parser.add_argument(
-            "-n", "--num", type=self._validate_positive_int, default=10, help="選択枚数"
+            "-n", "--num", type=Main.validate_positive_int, default=10, help="選択枚数"
         )
         parser.add_argument(
             "-g",
@@ -139,7 +141,7 @@ class Main:
         parser.add_argument(
             "-s",
             "--similarity",
-            type=self._validate_similarity_range,
+            type=Main.validate_similarity_range,
             default=0.72,
             help="類似度しきい値(0.7~0.85推奨)",
         )
@@ -154,9 +156,8 @@ class Main:
         )
         return parser.parse_args(self.args)
 
-    def _copy_selected_images(
-        self, selected: List[ImageMetrics], dest_dir: str
-    ) -> None:
+    @staticmethod
+    def copy_selected_images(selected: List[ImageMetrics], dest_dir: str) -> None:
         """選択された画像を出力ディレクトリにコピーする.
 
         Args:
@@ -171,9 +172,8 @@ class Main:
             shutil.copy2(res.path, unique_dest)
         print(f"\n{len(selected)} 枚を {dest_dir} に保存しました（多様性確保済み）。")
 
-    def _display_results(
-        self, selected: List[ImageMetrics], stats: PickerStatistics
-    ) -> None:
+    @staticmethod
+    def display_results(selected: List[ImageMetrics], stats: PickerStatistics) -> None:
         """選択結果を表示する.
 
         Args:

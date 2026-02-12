@@ -1,18 +1,14 @@
 """特徴抽出器 - HSV, CLIP, 統合特徴の抽出を行う."""
 
 import logging
+from collections.abc import Sequence
 
 import cv2
 import numpy as np
 from PIL import Image
 
-from ..utils import VectorUtils
+from ..utils.vector_utils import VectorUtils
 from .clip_model_manager import CLIPModelManager
-from .clip_types import (
-    BatchImageInput,
-    CLIPFeaturesOutput,
-    OptionalBatchImageInput,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +28,8 @@ class FeatureExtractor:
         """
         self.model_manager = model_manager
 
-    def extract_hsv_features(self, img: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def extract_hsv_features(img: np.ndarray) -> np.ndarray:
         """HSV色空間のヒストグラム特徴を抽出する.
 
         Args:
@@ -80,7 +77,7 @@ class FeatureExtractor:
         Returns:
             結合された特徴ベクトル（576次元）
         """
-        hsv_features = self.extract_hsv_features(img)
+        hsv_features = FeatureExtractor.extract_hsv_features(img)
         # L2正規化（既に正規化されているが、安全のため再正規化）
         hsv_normalized = VectorUtils.safe_l2_normalize(hsv_features)
         # 結合
@@ -88,9 +85,9 @@ class FeatureExtractor:
 
     def extract_clip_features_batch(
         self,
-        pil_images: OptionalBatchImageInput,
+        pil_images: Sequence[Image.Image | None],
         initial_batch_size: int = 32,
-    ) -> CLIPFeaturesOutput:
+    ) -> list[np.ndarray | None]:
         """複数のPIL画像に対してCLIP推論をバッチ実行して特徴を抽出.
 
         OOM対策（失敗したバッチのみ再試行）:
@@ -112,7 +109,9 @@ class FeatureExtractor:
 
         # 有効な画像のインデックスと画像を収集
         valid_indices = [i for i, img in enumerate(pil_images) if img is not None]
-        valid_images: BatchImageInput = [img for img in pil_images if img is not None]
+        valid_images: Sequence[Image.Image] = [
+            img for img in pil_images if img is not None
+        ]
 
         if not valid_images:
             return [None] * len(pil_images)

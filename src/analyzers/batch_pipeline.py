@@ -16,9 +16,6 @@ from .metric_calculator import MetricCalculator
 
 logger = logging.getLogger(__name__)
 
-# 型エイリアス（行長制限対応）
-_PreprocessResult = Optional[Image.Image]
-
 
 class BatchPipeline:
     """バッチ処理パイプライン.
@@ -74,7 +71,7 @@ class BatchPipeline:
             chunk_paths = paths[chunk_start:chunk_end]
 
             # ステージ1: チャンク単位でI/O + 前処理を並列実行
-            pil_images = self._load_and_preprocess_images(chunk_paths)
+            pil_images = BatchPipeline.load_and_preprocess_images(chunk_paths)
 
             # ステージ2: チャンク単位でバッチCLIP推論を実行
             clip_features_list = self.feature_extractor.extract_clip_features_batch(
@@ -124,9 +121,10 @@ class BatchPipeline:
 
         return results
 
-    def _load_and_preprocess_images(
-        self, paths: List[str], max_workers: Optional[int] = None
-    ) -> List[_PreprocessResult]:
+    @staticmethod
+    def load_and_preprocess_images(
+        paths: List[str], max_workers: Optional[int] = None
+    ) -> List[Optional[Image.Image]]:
         """複数のパスからPIL画像を読み込み、前処理まで並列実行する.
 
         I/O（画像読み込み）とCPU-bound処理（RGB変換）をThreadPoolExecutorで並列化.
@@ -139,7 +137,7 @@ class BatchPipeline:
             PIL画像のリスト（失敗したパスはNone）
         """
 
-        def process_single(path: str) -> _PreprocessResult:
+        def process_single(path: str) -> Optional[Image.Image]:
             """単一の画像を読み込み、前処理する."""
             try:
                 # PILで画像を読み込み

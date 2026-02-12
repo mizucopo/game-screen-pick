@@ -1,5 +1,7 @@
 """ベクトル操作ユーティリティ."""
 
+from typing import Any
+
 import numpy as np
 
 
@@ -7,7 +9,9 @@ class VectorUtils:
     """ベクトル操作に関するユーティリティクラス."""
 
     @staticmethod
-    def safe_l2_normalize(vec: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    def safe_l2_normalize(
+        vec: np.ndarray[Any, Any], eps: float = 1e-8
+    ) -> np.ndarray[Any, Any]:
         """ゼロ割れ安全なL2正規化を行う.
 
         Args:

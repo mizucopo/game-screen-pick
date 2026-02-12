@@ -38,24 +38,24 @@ class GenreWeights:
             "dramatic_score": 0.12,
         },
         "2d_rpg": {
-            "blur_score": 0.11,  # 低め - ピクセルアートは鮮明であるべき
-            "contrast": 0.17,  # 高め - ピクセルアートのコントラスト重要
-            "color_richness": 0.16,  # 中程度 - 限られたカラーパレット
-            "visual_balance": 0.21,  # 高め - シンプルな構図のバランス
-            "edge_density": 0.07,  # 低め - シンプルなスプライト
-            "action_intensity": 0.05,  # 低め - ターン制でゆっくり
-            "ui_density": 0.16,  # 高め - メニュー/テキストボックスが目立つ
-            "dramatic_score": 0.07,  # 低め - シネマティックさは重要度低い
+            "blur_score": 0.11,
+            "contrast": 0.17,
+            "color_richness": 0.16,
+            "visual_balance": 0.21,
+            "edge_density": 0.07,
+            "action_intensity": 0.05,
+            "ui_density": 0.16,
+            "dramatic_score": 0.07,
         },
         "3d_rpg": {
-            "blur_score": 0.18,  # やや高め - 高解像度シーンの鮮明さ重視
-            "contrast": 0.10,  # 低め - ソフトなライティング
-            "color_richness": 0.22,  # 高め - リッチで詳細なビジュアル
-            "visual_balance": 0.12,  # 中程度 - 広いシーンの構図
-            "edge_density": 0.13,  # 高め - 複雑で詳細なシーン
-            "action_intensity": 0.07,  # 低め - ストーリー重視
-            "ui_density": 0.04,  # 低め - 没入感重視
-            "dramatic_score": 0.14,  # 高め - シネマティックな瞬間
+            "blur_score": 0.18,
+            "contrast": 0.10,
+            "color_richness": 0.22,
+            "visual_balance": 0.12,
+            "edge_density": 0.13,
+            "action_intensity": 0.07,
+            "ui_density": 0.04,
+            "dramatic_score": 0.14,
         },
         "2d_shooting": {
             "blur_score": 0.18,

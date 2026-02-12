@@ -19,7 +19,7 @@ import torch
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
-from src.utils import VectorUtils
+from src.utils.vector_utils import VectorUtils
 
 
 @pytest.fixture(autouse=True)
@@ -435,7 +435,7 @@ def test_analyze_batch_falls_back_on_oom(
 
     # Act & Assert
     # CUDA OOMをモックして、2回目の呼び出しで成功するように設定
-    original_model = analyzer.model
+    original_model = analyzer._model_manager.model
     call_count = [0]
 
     def mock_get_image_features_with_oom(**_kwargs: object) -> torch.Tensor:  # noqa: ARG001
@@ -583,9 +583,9 @@ def test_analyze_uses_combined_features_for_similarity(
         img = cv2.cvtColor(np.array(pil_img_rgb), cv2.COLOR_RGB2BGR)
 
     # 個別の特徴を抽出して比較
-    expected_hsv = analyzer._extract_hsv_features(img)
+    expected_hsv = analyzer.feature_extractor.extract_hsv_features(img)
     expected_hsv_normalized = VectorUtils.safe_l2_normalize(expected_hsv)
-    expected_clip = analyzer._extract_clip_features(pil_img_rgb)
+    expected_clip = analyzer.feature_extractor.extract_clip_features(pil_img_rgb)
 
     # 結合特徴の前半64次元はHSV特徴（正規化済み）
     actual_hsv = result.features[:64]

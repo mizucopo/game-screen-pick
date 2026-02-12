@@ -8,48 +8,10 @@ import os
 from multiprocessing.pool import Pool
 from typing import Any, List, Literal, Optional
 
-from .image_quality_analyzer import ImageQualityAnalyzer
+from .analyzer_worker import AnalyzerWorker
 from ..models.image_metrics import ImageMetrics
 
 logger = logging.getLogger(__name__)
-
-# グローバル変数: 各ワーカープロセスで1回だけ初期化
-_analyzer: Optional[ImageQualityAnalyzer] = None
-
-
-def _init_worker(genre: str = "mixed", force_cpu: bool = False) -> None:
-    """ワーカープロセスの初期化関数.
-
-    各ワーカープロセスで1回だけ呼び出され、ImageQualityAnalyzerを初期化する。
-
-    Args:
-        genre: ジャンル重みの種類
-        force_cpu: GPUを無効化してCPUを強制する（複数ワーカーでの競合回避）
-    """
-    global _analyzer  # noqa: PLW0603
-    # device引数でCPUを強制（force_cpu=Trueの場合）
-    device = "cpu" if force_cpu else None
-    _analyzer = ImageQualityAnalyzer(genre=genre, device=device)
-    pid = os.getpid()
-    logger.info(
-        f"Worker {pid}: ImageQualityAnalyzer initialized (device={_analyzer.device})"
-    )
-
-
-def _analyze_single(path: str) -> Optional[ImageMetrics]:
-    """単一の画像を分析する.
-
-    ワーカープロセス内のグローバル_analyzerを使用する。
-
-    Args:
-        path: 画像ファイルパス
-
-    Returns:
-        分析結果（失敗時はNone）
-    """
-    global _analyzer
-    assert _analyzer is not None, "Analyzer not initialized. Call _init_worker first."
-    return _analyzer.analyze(path)
 
 
 class ImageQualityAnalyzerPool:
@@ -101,7 +63,7 @@ class ImageQualityAnalyzerPool:
 
         self._pool = Pool(
             processes=self._num_workers,
-            initializer=_init_worker,
+            initializer=AnalyzerWorker.init_worker,
             initargs=(self.genre, self._force_cpu),
         )
         self._actual_workers = self._num_workers or os.cpu_count() or 1
@@ -132,7 +94,7 @@ class ImageQualityAnalyzerPool:
         logger.info(
             f"Analyzing {len(paths)} images with {self._actual_workers} workers"
         )
-        results = self._pool.map(_analyze_single, paths)
+        results = self._pool.map(AnalyzerWorker.analyze_single, paths)
         return results
 
     @property
