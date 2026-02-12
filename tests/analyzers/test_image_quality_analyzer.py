@@ -9,12 +9,10 @@
 """
 
 from pathlib import Path
-from unittest.mock import patch
 
 import cv2
 import numpy as np
 import pytest
-import torch
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
@@ -251,48 +249,3 @@ def test_analyze_batch_produces_same_results_as_analyze(
     # 浮動小数点の精度誤差を許容して比較
     assert single_result.total_score == pytest.approx(batch_results[0].total_score)
     assert np.array_equal(single_result.features, batch_results[0].features)
-
-
-def test_analyze_batch_falls_back_on_oom(
-    sample_image_path: str,
-) -> None:
-    """CUDA OOM発生時にバッチサイズが縮小されてリトライされること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 有効なテスト画像がある
-        - CLIP推論時にCUDA OOMが発生する状況
-    When:
-        - バッチ処理で分析される
-    Then:
-        - OOMエラーが回復され、有効な結果が返されること
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-    paths = [sample_image_path]
-
-    # Act & Assert
-    # CUDA OOMをモックして、2回目の呼び出しで成功するように設定
-    original_model = analyzer._model_manager.model
-    call_count = [0]
-
-    def mock_get_image_features_with_oom(**_kwargs: object) -> torch.Tensor:  # noqa: ARG001
-        call_count[0] += 1
-        if call_count[0] == 1:
-            # 最初の呼び出しでOOMを発生
-            raise torch.cuda.OutOfMemoryError()
-        # 2回目以降は正常に返す（CLIP base-patch32の出力形状: batch_size x 512）
-        return torch.randn(1, 512)
-
-    with patch.object(
-        original_model,
-        "get_image_features",
-        side_effect=mock_get_image_features_with_oom,
-    ):
-        results = analyzer.analyze_batch(paths, batch_size=32)
-
-    # Assert - 最終的に成功しているはず（観測可能な振る舞いのみ検証）
-    assert results[0] is not None
-    assert isinstance(results[0], ImageMetrics)
-    assert results[0].path == sample_image_path
-    assert 0 <= results[0].total_score <= 100

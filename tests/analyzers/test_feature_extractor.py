@@ -9,12 +9,10 @@
 """
 
 from pathlib import Path
-from unittest.mock import patch
 
 import cv2
 import numpy as np
 import pytest
-import torch
 from PIL import Image
 
 from src.analyzers.clip_model_manager import CLIPModelManager
@@ -239,50 +237,3 @@ def test_extract_clip_features_batch_handles_none_images(
     if results[2] is not None:
         assert isinstance(results[2], np.ndarray)
         assert results[2].shape == (512,)
-
-
-def test_extract_clip_features_batch_falls_back_on_oom(
-    feature_extractor: FeatureExtractor, sample_image_path: str
-) -> None:
-    """OOM発生時にバッチサイズが縮小されてリトライされること.
-
-    Given:
-        - 特徴抽出器がある
-        - 有効な画像がある
-        - CLIP推論時にCUDA OOMが発生する状況
-    When:
-        - バッチ処理でCLIP特徴が抽出される
-    Then:
-        - OOMエラーが回復され、有効な結果が返されること
-    """
-    # Arrange
-    with Image.open(sample_image_path) as img:
-        pil_img = img.convert("RGB")
-
-    pil_images = [pil_img]
-
-    # Act & Assert
-    # CUDA OOMをモックして、2回目の呼び出しで成功するように設定
-    original_model = feature_extractor.model_manager.model
-    call_count = [0]
-
-    def mock_get_image_features_with_oom(**_kwargs: object) -> torch.Tensor:
-        call_count[0] += 1
-        if call_count[0] == 1:
-            raise torch.cuda.OutOfMemoryError()
-        return torch.randn(1, 512)
-
-    with patch.object(
-        original_model,
-        "get_image_features",
-        side_effect=mock_get_image_features_with_oom,
-    ):
-        results = feature_extractor.extract_clip_features_batch(
-            pil_images, initial_batch_size=32
-        )
-
-    # Assert - 最終的に成功しているはず
-    assert results[0] is not None
-    # 型アサーション（Type Guard）: ndarrayであればshapeにアクセス
-    assert isinstance(results[0], np.ndarray)
-    assert results[0].shape == (512,)

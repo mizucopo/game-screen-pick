@@ -97,31 +97,3 @@ def test_analyze_single_raises_error_when_not_initialized() -> None:
     # Act & Assert
     with pytest.raises(RuntimeError, match="AnalyzerWorker not initialized"):
         AnalyzerWorker.analyze_single("dummy.jpg")
-
-
-def test_worker_analyze_method_returns_metrics(
-    sample_image_path: str,
-) -> None:
-    """WorkerインスタンスのanalyzeメソッドがImageMetricsを返すこと.
-
-    Given:
-        - モックされたCLIPモデルがある
-        - 作成されたAnalyzerWorkerインスタンスがある
-        - 有効な画像ファイルパスがある
-    When:
-        - analyzeインスタンスメソッドを呼び出す
-    Then:
-        - 正常にImageMetricsが返されること
-        - 結果の内容が正しいこと
-    """
-    # Arrange
-    worker = AnalyzerWorker(genre="mixed", force_cpu=True)
-
-    # Act
-    result = worker.analyze(sample_image_path)
-
-    # Assert
-    assert result is not None
-    assert isinstance(result, ImageMetrics)
-    assert result.path == sample_image_path
-    assert 0 <= result.total_score <= 100

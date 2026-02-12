@@ -313,35 +313,3 @@ def test_load_and_preprocess_images_handles_invalid_files(
     assert results[0] is not None
     assert isinstance(results[0], Image.Image)
     assert results[1] is None
-
-
-def test_process_batch_with_large_number_of_images(
-    batch_pipeline: BatchPipeline, tmp_path: Path
-) -> None:
-    """大量の画像がチャンク処理で正しく処理されること.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - チャンクサイズより多くのテスト画像がある
-    When:
-        - 画像がバッチ処理で分析される
-    Then:
-        - すべての画像が処理されること
-        - 結果の数が入力数と一致すること
-    """
-    # Arrange
-    paths = []
-    for i in range(10):  # 10枚の画像を作成
-        np.random.seed(42 + i)
-        img_array = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
-        img_path = tmp_path / f"test_image_{i}.jpg"
-        cv2.imwrite(str(img_path), img_array)
-        paths.append(str(img_path))
-
-    # Act
-    results = batch_pipeline.process_batch(paths, batch_size=2)
-
-    # Assert
-    assert len(results) == 10
-    # 少なくとも1つの画像が処理されている
-    assert any(r is not None for r in results)

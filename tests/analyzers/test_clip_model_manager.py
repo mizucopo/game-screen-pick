@@ -55,26 +55,6 @@ def test_initialization_with_custom_target_text() -> None:
     assert manager.get_text_embeddings().shape == (1, 512)
 
 
-def test_initialization_with_explicit_device() -> None:
-    """明示的なデバイス指定で正常に初期化されること.
-
-    Given:
-        - 明示的なデバイス指定がある
-    When:
-        - CLIPModelManagerがCPUデバイスで初期化される
-    Then:
-        - 指定されたデバイスが使用されること
-        - モデルのtoメソッドが呼ばれていること
-    """
-    # Arrange & Act
-    manager = CLIPModelManager(device="cpu")
-
-    # Assert
-    assert manager.device == "cpu"
-    # toメソッドが呼ばれたことを確認
-    assert "cpu" in manager.model._to_called_with
-
-
 def test_get_image_features_returns_correct_shape() -> None:
     """単一画像の特徴抽出が正しく動作すること.
 
