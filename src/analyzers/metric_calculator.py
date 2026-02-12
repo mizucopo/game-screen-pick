@@ -173,8 +173,6 @@ class MetricCalculator:
             batch_features = torch.from_numpy(
                 np.stack([f.astype(np.float32) for f in valid_features_array])
             ).to(self.model_manager.device)
-            # 入力は既にL2正規化済みであるため、再正規化は行わない
-            # （calculate_semantic_score_from_featuresの動作と整合性を保つため）
 
             # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
             # コサイン類似度を一括計算

@@ -1,1 +1,1 @@
-"""Analyzers package for image analysis and metric normalization."""
+"""Analyzers package for image analysis and metric calculation."""

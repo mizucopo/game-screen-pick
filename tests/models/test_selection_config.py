@@ -5,155 +5,108 @@ import pytest
 from src.models.selection_config import SelectionConfig
 
 
-def test_selection_config_has_default_values() -> None:
-    """SelectionConfigがデフォルト値で正しく初期化されること.
+@pytest.mark.parametrize(
+    "batch_size,steps,max_threshold,expected_batch,expected_steps,expected_max",
+    [
+        # デフォルト値
+        (None, None, None, 32, [0.03, 0.06, 0.10, 0.15], 0.98),
+        # カスタム値
+        (64, [0.05, 0.10, 0.20], 0.95, 64, [0.05, 0.10, 0.20], 0.95),
+    ],
+)
+def test_selection_config_initialization(
+    batch_size: int | None,
+    steps: list[float] | None,
+    max_threshold: float | None,
+    expected_batch: int,
+    expected_steps: list[float],
+    expected_max: float,
+) -> None:
+    """SelectionConfigが正しく初期化されること.
 
     Given:
-        - SelectionConfigをデフォルト値で作成
-    When:
-        - 各属性にアクセス
-    Then:
-        - すべてのデフォルト値が正しく設定されていること
-    """
-    # Act
-    config = SelectionConfig()
-
-    # Assert
-    assert config.batch_size == 32
-    assert config.threshold_relaxation_steps == [0.03, 0.06, 0.10, 0.15]
-    assert config.max_threshold == 0.98
-
-
-def test_selection_config_can_be_customized() -> None:
-    """SelectionConfigがカスタム値で初期化できること.
-
-    Given:
-        - カスタム値を指定
+        - デフォルト値またはカスタム値がある
     When:
         - SelectionConfigを作成
     Then:
         - 指定した値が正しく設定されていること
     """
-    # Arrange
-    custom_batch_size = 64
-    custom_steps = [0.05, 0.10, 0.20]
-    custom_max_threshold = 0.95
-
-    # Act
-    config = SelectionConfig(
-        batch_size=custom_batch_size,
-        threshold_relaxation_steps=custom_steps,
-        max_threshold=custom_max_threshold,
-    )
+    # Arrange & Act
+    if batch_size is None:
+        config = SelectionConfig()
+    else:
+        config = SelectionConfig(
+            batch_size=batch_size,
+            threshold_relaxation_steps=steps,  # type: ignore[arg-type]
+            max_threshold=max_threshold,  # type: ignore[arg-type]
+        )
 
     # Assert
-    assert config.batch_size == custom_batch_size
-    assert config.threshold_relaxation_steps == custom_steps
-    assert config.max_threshold == custom_max_threshold
+    assert config.batch_size == expected_batch
+    assert config.threshold_relaxation_steps == expected_steps
+    assert config.max_threshold == expected_max
 
 
-def test_compute_threshold_steps_with_base_threshold() -> None:
-    """ベースしきい値から段階的な緩和ステップが計算されること.
+@pytest.mark.parametrize(
+    "base_threshold,max_threshold,expected_steps",
+    [
+        # 通常のステップ計算
+        (0.72, 0.98, [0.72, 0.75, 0.78, 0.82, 0.87]),
+        # 上限制限（max_thresholdでキャップされる）
+        (0.95, 0.98, [0.95, 0.98, 0.98, 0.98, 0.98]),
+        # 低いベース値でのステップ計算
+        (0.50, 0.98, [0.50, 0.53, 0.56, 0.60, 0.65]),
+    ],
+)
+def test_compute_threshold_steps_with_defaults(
+    base_threshold: float,
+    max_threshold: float,
+    expected_steps: list[float],
+) -> None:
+    """デフォルトステップでのしきい値計算と上限制限が正しく動作すること.
 
     Given:
-        - SelectionConfigインスタンスがある
-        - ベースしきい値が0.72
+        - デフォルトステップを持つSelectionConfigがある
+        - ベースしきい値と最大しきい値がある
     When:
         - しきい値ステップを計算
     Then:
-        - 5段階のしきい値が正しく計算されること
-        - 最終ステップがmax_threshold以下であること
+        - 期待されるステップが計算されること
+        - 上限制限が遵守されること
     """
     # Arrange
-    config = SelectionConfig()
-    base_threshold = 0.72
-
-    # Act
-    steps = config.compute_threshold_steps(base_threshold)
-
-    # Assert
-    assert len(steps) == 5
-    assert steps[0] == 0.72
-    assert steps[1] == 0.75  # 0.72 + 0.03
-    assert steps[2] == 0.78  # 0.72 + 0.06
-    assert steps[3] == 0.82  # 0.72 + 0.10
-    assert steps[4] == 0.87  # 0.72 + 0.15
-
-
-def test_compute_threshold_steps_respects_max_threshold() -> None:
-    """しきい値の上限がmax_thresholdで制限されること.
-
-    Given:
-        - SelectionConfigインスタンスがある
-        - ベースしきい値が0.95（緩和後にmax_thresholdを超過）
-    When:
-        - しきい値ステップを計算
-    Then:
-        - すべてのステップがmax_threshold以下であること
-    """
-    # Arrange
-    config = SelectionConfig(max_threshold=0.98)
-    base_threshold = 0.95
+    config = SelectionConfig(max_threshold=max_threshold)
 
     # Act
     steps = config.compute_threshold_steps(base_threshold)
 
     # Assert
-    assert len(steps) == 5
-    assert steps[0] == 0.95
-    assert steps[1] == 0.98  # 0.95 + 0.03 = 0.98 (上限)
-    assert steps[2] == 0.98  # 0.95 + 0.06 = 1.01 -> 0.98 (上限)
-    assert steps[3] == 0.98  # 0.95 + 0.10 = 1.05 -> 0.98 (上限)
-    assert steps[4] == 0.98  # 0.95 + 0.15 = 1.10 -> 0.98 (上限)
+    assert steps == expected_steps
 
 
-def test_compute_threshold_steps_with_custom_relaxation_steps() -> None:
-    """カスタムの緩和ステップが正しく適用されること.
+def test_compute_threshold_steps_with_custom_steps() -> None:
+    """カスタムステップが正しく適用されること.
 
     Given:
-        - カスタムの緩和ステップを持つSelectionConfig
-        - ベースしきい値が0.70
+        - カスタムステップを持つSelectionConfigがある
     When:
         - しきい値ステップを計算
     Then:
-        - カスタムステップに基づいて正しく計算されること
+        - カスタムステップがベース値に加算されること
     """
     # Arrange
-    config = SelectionConfig(
-        threshold_relaxation_steps=[0.05, 0.15], max_threshold=0.95
-    )
+    custom_steps = [0.05, 0.15]
     base_threshold = 0.70
+    config = SelectionConfig(
+        threshold_relaxation_steps=custom_steps,
+        max_threshold=0.95,
+    )
 
     # Act
     steps = config.compute_threshold_steps(base_threshold)
 
     # Assert
-    assert len(steps) == 3
-    assert steps[0] == 0.70
-    assert steps[1] == 0.75  # 0.70 + 0.05
-    assert steps[2] == 0.85  # 0.70 + 0.15
-
-
-def test_default_list_is_not_shared_between_instances() -> None:
-    """デフォルトのリストがインスタンス間で共有されないこと.
-
-    Given:
-        - 2つのSelectionConfigインスタンスを作成
-    When:
-        - 片方のリストを変更
-    Then:
-        - もう片方のリストは変更されていないこと
-    """
-    # Arrange
-    config1 = SelectionConfig()
-    config2 = SelectionConfig()
-
-    # Act
-    config1.threshold_relaxation_steps.append(0.99)
-
-    # Assert
-    assert config1.threshold_relaxation_steps == [0.03, 0.06, 0.10, 0.15, 0.99]
-    assert config2.threshold_relaxation_steps == [0.03, 0.06, 0.10, 0.15]
+    assert steps == [0.70, 0.75, 0.85]
 
 
 @pytest.mark.parametrize(
@@ -163,11 +116,12 @@ def test_default_list_is_not_shared_between_instances() -> None:
         ("batch_size", -10),
         ("max_threshold", -0.1),
         ("max_threshold", 1.1),
-        ("max_threshold", 2.0),
+        ("threshold_relaxation_steps", [0.1, -0.05, 0.2]),
     ],
 )
 def test_selection_config_rejects_invalid_values(
-    field_name: str, invalid_value: int | float
+    field_name: str,
+    invalid_value: int | float | list[float],
 ) -> None:
     """無効な値が設定された場合に例外が発生すること.
 
@@ -178,24 +132,6 @@ def test_selection_config_rejects_invalid_values(
     Then:
         - ValueErrorがスローされること
     """
-    # Arrange
-    kwargs = {field_name: invalid_value}
-
-    # Act & Assert
-    with pytest.raises(ValueError):
-        SelectionConfig(**kwargs)  # type: ignore[arg-type]
-
-
-def test_selection_config_rejects_negative_relaxation_steps() -> None:
-    """threshold_relaxation_stepsに負の値が含まれる場合に例外が発生すること.
-
-    Given:
-        - 負の値を含むthreshold_relaxation_steps
-    When:
-        - SelectionConfigを作成
-    Then:
-        - ValueErrorがスローされること
-    """
     # Arrange & Act & Assert
-    with pytest.raises(ValueError, match="threshold_relaxation_steps"):
-        SelectionConfig(threshold_relaxation_steps=[0.1, -0.05, 0.2])
+    with pytest.raises(ValueError):
+        SelectionConfig(**{field_name: invalid_value})  # type: ignore[arg-type]

@@ -5,9 +5,12 @@ CI環境でのハング問題を防ぐため、極力シンプルなモック構
 """
 
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import cv2
+import numpy as np
 import pytest
 import torch
 
@@ -101,3 +104,57 @@ def mock_clip_processor() -> Generator[Any, Any, Any]:
     with patch("transformers.CLIPProcessor.from_pretrained") as mock:
         mock.return_value = _MockProcessor()
         yield mock
+
+
+def _create_test_image(
+    tmp_path: Path, filename: str, size: tuple[int, int], pixel_range: tuple[int, int]
+) -> str:
+    """テスト画像を作成するヘルパー関数.
+
+    Args:
+        tmp_path: 一時ディレクトリパス
+        filename: 画像ファイル名
+        size: 画像サイズ（高さ、幅）
+        pixel_range: ピクセル値の範囲（最小、最大）
+
+    Returns:
+        作成された画像の絶対パス
+    """
+    np.random.seed(42)
+    img_array = np.random.randint(
+        pixel_range[0], pixel_range[1], (*size, 3), dtype=np.uint8
+    )
+    img_path = tmp_path / filename
+    cv2.imwrite(str(img_path), img_array)
+    return str(img_path)
+
+
+@pytest.fixture
+def sample_image_path(tmp_path: Path) -> str:
+    """標準的なテスト画像（640x480 JPG）を作成する."""
+    return _create_test_image(tmp_path, "test_image.jpg", (480, 640), (0, 255))
+
+
+@pytest.fixture
+def dark_image_path(tmp_path: Path) -> str:
+    """輝度ペナルティのテスト用に暗いテスト画像（640x480 JPG）を作成する."""
+    return _create_test_image(tmp_path, "dark_image.jpg", (480, 640), (0, 50))
+
+
+@pytest.fixture
+def png_image_path(tmp_path: Path) -> str:
+    """PNG形式のテスト画像（640x480）を作成する."""
+    return _create_test_image(tmp_path, "test_image.png", (480, 640), (0, 255))
+
+
+@pytest.fixture
+def multiple_image_paths(tmp_path: Path) -> list[str]:
+    """複数のテスト画像を作成する."""
+    paths = []
+    for i in range(3):
+        np.random.seed(42 + i)
+        img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        img_path = tmp_path / f"test_image_{i}.jpg"
+        cv2.imwrite(str(img_path), img_array)
+        paths.append(str(img_path))
+    return paths
