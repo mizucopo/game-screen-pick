@@ -215,6 +215,24 @@ class MetricCalculator:
             * self.config.score_multiplier,
         )
 
+    def calculate_raw_norm_metrics(
+        self, img: np.ndarray
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """生メトリクスと正規化メトリクスのみ計算する.
+
+        セマンティックスコアはバッチ計算済みの値を使用するため、
+        このメソッドでは計算しない。
+
+        Args:
+            img: OpenCV画像（BGR形式）
+
+        Returns:
+            (生メトリクス, 正規化メトリクス)のタプル
+        """
+        raw = self.calculate_raw_metrics(img)
+        norm = MetricNormalizer.normalize_all(raw)
+        return raw, norm
+
     def calculate_all_metrics(
         self, img: np.ndarray, clip_features: np.ndarray
     ) -> tuple[dict[str, float], dict[str, float], float, float]:
