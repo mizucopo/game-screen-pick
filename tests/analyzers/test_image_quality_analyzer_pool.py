@@ -17,6 +17,38 @@ from src.analyzers.image_quality_analyzer_pool import ImageQualityAnalyzerPool
 from src.models.image_metrics import ImageMetrics
 
 
+class _FakePool:
+    """multiprocessing.Pool互換のテスト用フェイク.
+
+    実プロセスを生成せずに同等の呼び出しフローを再現し、
+    CI環境でのfork起因ハングを回避する。
+    """
+
+    def __init__(
+        self,
+        processes: int | None = None,  # noqa: ARG002
+        initializer: Any | None = None,
+        initargs: tuple[Any, ...] = (),
+    ) -> None:
+        if initializer is not None:
+            initializer(*initargs)
+
+    def map(self, func: Any, items: list[str]) -> list[ImageMetrics | None]:
+        return [func(item) for item in items]
+
+    def terminate(self) -> None:
+        return
+
+    def join(self) -> None:
+        return
+
+
+@pytest.fixture(autouse=True)
+def use_fake_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ImageQualityAnalyzerPoolが使うPool実装をフェイクに差し替える."""
+    monkeypatch.setattr("src.analyzers.image_quality_analyzer_pool.Pool", _FakePool)
+
+
 @pytest.fixture
 def sample_image_path(tmp_path: Path) -> str:
     """標準的なテスト画像（640x480 JPG）を作成する."""
