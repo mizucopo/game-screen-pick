@@ -42,16 +42,18 @@ class MetricCalculator:
     def calculate_raw_metrics(self, img: np.ndarray) -> dict[str, float]:
         """生の画像メトリクスを計算する.
 
-        メトリクス計算用に画像を長辺max_dim pxに縮小して処理することで、
-        計算コストを削減する。アスペクト比は保持する。
+        注: 呼出し元（batch_pipeline.py）で既にmax_dimまで縮小された画像を
+        受け取ることを想定している。高解像度画像での二重リサイズを回避し、
+        メモリと計算コストを削減する。
 
         Args:
-            img: OpenCV画像（BGR形式）
+            img: OpenCV画像（BGR形式、既にmax_dim以下に縮小されている）
 
         Returns:
             生メトリクスの辞書
         """
-        # メトリクス計算用に画像を縮小（長辺max_dim px、アスペクト比保持）
+        # 念のため、画像サイズがmax_dimを超えている場合のみ縮小
+        # （通常はbatch_pipeline側で既に縮小済みのためスキップされる）
         h, w = img.shape[:2]
         if max(h, w) > self.config.max_dim:
             scale = self.config.max_dim / max(h, w)

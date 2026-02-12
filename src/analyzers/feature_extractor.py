@@ -32,8 +32,11 @@ class FeatureExtractor:
     def extract_hsv_features(img: np.ndarray) -> np.ndarray:
         """HSV色空間のヒストグラム特徴を抽出する.
 
+        注: 呼出し元（batch_pipeline.py）で既にmax_dim以下に縮小された画像を
+        受け取ることを想定している。
+
         Args:
-            img: OpenCV画像（BGR形式）
+            img: OpenCV画像（BGR形式、既に縮小されている）
 
         Returns:
             正規化されたHSVヒストグラム特徴（64次元）
@@ -70,8 +73,11 @@ class FeatureExtractor:
     ) -> np.ndarray:
         """HSV特徴とCLIP特徴を結合する.
 
+        注: imgは呼出し元（batch_pipeline.py）で既にmax_dim以下に
+        縮小された画像であることを想定している。
+
         Args:
-            img: OpenCV画像（BGR形式）
+            img: OpenCV画像（BGR形式、既に縮小されている）
             clip_features: CLIP画像埋め込み（512次元、正規化済み）
 
         Returns:
