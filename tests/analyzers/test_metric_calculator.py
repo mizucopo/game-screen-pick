@@ -418,3 +418,152 @@ def test_calculate_total_score_with_zero_semantic_weight(
     assert total_score >= 0.0
     # セマンティック重みが0でもスコアが計算されている
     assert total_score > 0
+
+
+def test_calculate_semantic_score_batch_returns_correct_count(
+    metric_calculator: MetricCalculator,
+) -> None:
+    """バッチ計算で正しい数の結果が返されること.
+
+    Given:
+        - メトリクス計算器がある
+        - 複数の正規化済みCLIP特徴がある
+    When:
+        - セマンティックスコアがバッチ計算される
+    Then:
+        - 入力数と同じ数の結果が返されること
+        - 各スコアが期待される範囲にあること
+    """
+    # Arrange
+    # 正規化済みのランダムベクトルを作成
+    vec = np.random.randn(512).astype(np.float32)
+    vec /= np.linalg.norm(vec)
+
+    clip_features_list = [
+        np.ones(512) / np.sqrt(512.0),
+        vec,
+        np.ones(512) / np.sqrt(512.0),
+    ]
+
+    # Act
+    scores = metric_calculator.calculate_semantic_score_batch(clip_features_list)
+
+    # Assert
+    assert len(scores) == 3
+    for score in scores:
+        assert isinstance(score, float)
+        assert not np.isnan(score)
+        assert -1.0 <= score
+        assert score <= 1.0 + 1e-5
+
+
+def test_calculate_semantic_score_batch_handles_none_features(
+    metric_calculator: MetricCalculator,
+) -> None:
+    """バッチ計算でNone特徴が正しく処理されること.
+
+    Given:
+        - メトリクス計算器がある
+        - 有効な特徴とNoneが混在している
+    When:
+        - セマンティックスコアがバッチ計算される
+    Then:
+        - 有効な特徴にはスコアが返されること
+        - None特徴にはNoneが返されること
+    """
+    # Arrange
+    clip_features_list = [
+        np.ones(512) / np.sqrt(512.0),
+        None,
+        np.ones(512) / np.sqrt(512.0),
+    ]
+
+    # Act
+    scores = metric_calculator.calculate_semantic_score_batch(clip_features_list)
+
+    # Assert
+    assert len(scores) == 3
+    assert scores[0] is not None
+    assert isinstance(scores[0], float)
+    assert scores[1] is None
+    assert scores[2] is not None
+    assert isinstance(scores[2], float)
+
+
+def test_calculate_semantic_score_batch_returns_similar_results_as_single(
+    metric_calculator: MetricCalculator,
+) -> None:
+    """バッチ計算の結果が単一計算の結果と一致すること.
+
+    Given:
+        - メトリクス計算器がある
+        - 複数のCLIP特徴がある
+    When:
+        - セマンティックスコアが両方の方法で計算される
+    Then:
+        - バッチ計算と単一計算の結果が一致すること
+    """
+    # Arrange
+    clip_features_list = [
+        np.ones(512) / np.sqrt(512.0),
+        np.random.randn(512).astype(np.float32),
+    ]
+
+    # Act
+    batch_scores = metric_calculator.calculate_semantic_score_batch(clip_features_list)
+    single_scores = [
+        metric_calculator.calculate_semantic_score_from_features(f)
+        for f in clip_features_list
+    ]
+
+    # Assert
+    assert len(batch_scores) == len(single_scores)
+    for batch_score, single_score in zip(batch_scores, single_scores):
+        assert batch_score == pytest.approx(single_score)
+
+
+def test_calculate_semantic_score_batch_returns_empty_list_for_empty_input(
+    metric_calculator: MetricCalculator,
+) -> None:
+    """空入力に対して空リストが返されること.
+
+    Given:
+        - メトリクス計算器がある
+        - 空のリストが入力される
+    When:
+        - セマンティックスコアがバッチ計算される
+    Then:
+        - 空のリストが返されること
+    """
+    # Arrange
+    clip_features_list: list[np.ndarray | None] = []
+
+    # Act
+    scores = metric_calculator.calculate_semantic_score_batch(clip_features_list)
+
+    # Assert
+    assert scores == []
+
+
+def test_calculate_semantic_score_batch_handles_all_none_features(
+    metric_calculator: MetricCalculator,
+) -> None:
+    """すべてNone特徴の入力に対してすべてNoneが返されること.
+
+    Given:
+        - メトリクス計算器がある
+        - すべてNoneのリストが入力される
+    When:
+        - セマンティックスコアがバッチ計算される
+    Then:
+        - すべてNoneのリストが返されること
+    """
+    # Arrange
+    clip_features_list: list[np.ndarray | None] = [None, None, None]
+
+    # Act
+    scores = metric_calculator.calculate_semantic_score_batch(clip_features_list)
+
+    # Assert
+    assert len(scores) == 3
+    assert all(s is None for s in scores)

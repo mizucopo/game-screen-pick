@@ -131,6 +131,61 @@ class MetricCalculator:
             cosine_sim = torch.matmul(image_features, text_embeddings.T)
             return float(cosine_sim[0][0])
 
+    def calculate_semantic_score_batch(
+        self, clip_features_list: list[np.ndarray | None]
+    ) -> list[float | None]:
+        """複数のCLIP特徴からセマンティックスコアをバッチ計算する.
+
+        画像ごとにCPU/NumPy ↔ Torch 変換を行うのではなく、
+        まとめてテンソルに変換して一括計算することで高速化する。
+
+        Args:
+            clip_features_list: 正規化済みのCLIP画像特徴のリスト
+                                （512次元、Noneを含む場合あり）
+
+        Returns:
+            セマンティックスコアのリスト（範囲: [-1, 1]、失敗した要素はNone）
+        """
+        # 有効な特徴のインデックスと特徴を収集
+        valid_indices = [
+            i for i, features in enumerate(clip_features_list) if features is not None
+        ]
+        valid_features = [
+            clip_features_list[i]
+            for i in valid_indices
+            if clip_features_list[i] is not None
+        ]
+
+        if not valid_features:
+            return [None] * len(clip_features_list)
+
+        # 結果を格納する配列（初期値はNone）
+        results: list[float | None] = [None] * len(clip_features_list)
+
+        with torch.inference_mode():
+            # valid_featuresの要素はすべてnp.ndarrayであることが保証されている
+            # （valid_indicesでNoneを除外済み）
+            valid_features_array: list[np.ndarray] = [
+                f for f in valid_features if f is not None
+            ]
+            # まとめてテンソルに変換してデバイスに転送
+            batch_features = torch.from_numpy(
+                np.stack([f.astype(np.float32) for f in valid_features_array])
+            ).to(self.model_manager.device)
+            # 入力は既にL2正規化済みであるため、再正規化は行わない
+            # （calculate_semantic_score_from_featuresの動作と整合性を保つため）
+
+            # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
+            # コサイン類似度を一括計算
+            text_embeddings = self.model_manager.get_text_embeddings()
+            cosine_sims = torch.matmul(batch_features, text_embeddings.T)
+
+            # 結果を元のインデックスにマッピング
+            for j, idx in enumerate(valid_indices):
+                results[idx] = float(cosine_sims[j][0])
+
+        return results
+
     def calculate_total_score(
         self, raw: dict[str, float], norm: dict[str, float], semantic: float
     ) -> float:
