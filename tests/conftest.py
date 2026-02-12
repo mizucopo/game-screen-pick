@@ -1,31 +1,49 @@
 """pytestの共通fixture設定.
 
 複雑なモック設定を一箇所に集約し、メンテナンス性とデバッグ性を向上させる。
+CI環境でのハング問題を防ぐため、極力シンプルなモック構造を採用する。
 """
 
 from collections.abc import Generator
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import torch
+
+
+class _SimpleDict(dict[str, Any]):
+    """辞書風アクセスと.to()メソッドをサポートするシンプルなクラス.
+
+    CI環境でのハング問題を防ぐため、MagicMockを使わずに実装。
+    """
+
+    def to(self, device: str) -> "_SimpleDict":  # noqa: ARG002
+        """デバイス移動のモック（自分自身を返す）."""
+        return self
 
 
 @pytest.fixture(scope="function", autouse=True)
 def mock_clip_model() -> Generator[Any, Any, Any]:
     """CLIPモデルのモック.
 
-    複雑なside_effectを排除し、単純で決定論的な振る舞いのみを実装。
+    極力シンプルな実装にし、CI環境でのハングを防止する。
     """
-    with patch("transformers.CLIPModel.from_pretrained") as mock:
-        model = MagicMock()
 
-        # 単純な固定値を返す（バッチサイズ対応なし）
-        def mock_get_text_features(**_kwargs: object) -> torch.Tensor:
+    # モデルオブジェクト（MagicMockではなく普通のクラス）
+    class _MockModel:
+        """CLIPモデルのモック."""
+
+        device = "cpu"
+        _eval_called = False
+        _to_called_with = []
+
+        def get_text_features(self, **_kwargs: object) -> torch.Tensor:
+            """テキスト特徴を返す."""
             return torch.ones(1, 512) / torch.sqrt(torch.tensor(512.0))
 
-        def mock_get_image_features(**kwargs: object) -> torch.Tensor:
-            # pixel_valuesからバッチサイズを取得
+        def get_image_features(self, **kwargs: object) -> torch.Tensor:
+            """画像特徴を返す."""
             inputs = kwargs.get("pixel_values")
             if inputs is not None and hasattr(inputs, "shape"):
                 batch_size = inputs.shape[0]
@@ -33,12 +51,23 @@ def mock_clip_model() -> Generator[Any, Any, Any]:
                 batch_size = 1
             return torch.ones(batch_size, 512) / torch.sqrt(torch.tensor(512.0))
 
-        model.get_text_features = MagicMock(side_effect=mock_get_text_features)
-        model.get_image_features = MagicMock(side_effect=mock_get_image_features)
-        model.to = MagicMock(return_value=model)
-        model.eval = MagicMock()
+        def to(self, device: str) -> "_MockModel":
+            """デバイス移動のモック（自分自身を返す）."""
+            self._to_called_with.append(device)
+            return self
 
-        mock.return_value = model
+        def eval(self) -> None:
+            """evalモードのモック（何もしない）."""
+            self._eval_called = True
+
+        # MagicMock互換のプロパティ
+        @property
+        def called(self) -> bool:
+            """MagicMock互換プロパティ."""
+            return True
+
+    with patch("transformers.CLIPModel.from_pretrained") as mock:
+        mock.return_value = _MockModel()
         yield mock
 
 
@@ -46,44 +75,29 @@ def mock_clip_model() -> Generator[Any, Any, Any]:
 def mock_clip_processor() -> Generator[Any, Any, Any]:
     """CLIPプロセッサのモック.
 
-    辞書のようなオブジェクトを返し、.to()メソッドをサポート。
-    バッチサイズに応じた形状を動的に返す。
+    _SimpleDictを使い、CI環境でのハングを防止する。
     """
+
+    def mock_processor_func(**kwargs: object) -> _SimpleDict:
+        """プロセッサの呼び出しをモックする."""
+        images = kwargs.get("images")
+        batch_size = len(images) if isinstance(images, list) else 1
+
+        return _SimpleDict(
+            {
+                "input_ids": torch.tensor([[1, 2, 3]]),
+                "pixel_values": torch.ones(batch_size, 3, 224, 224) * 0.5,
+                "attention_mask": torch.tensor([[1, 1, 1]]),
+            }
+        )
+
+    # プロセッサオブジェクト（callable）
+    class _MockProcessor:
+        """CLIPプロセッサのモック."""
+
+        def __call__(self, **kwargs: object) -> _SimpleDict:
+            return mock_processor_func(**kwargs)
+
     with patch("transformers.CLIPProcessor.from_pretrained") as mock:
-        processor = MagicMock()
-
-        def mock_processor(**kwargs: object) -> MagicMock:
-            # 単純な辞書を返す
-            images = kwargs.get("images")
-            batch_size = len(images) if isinstance(images, list) else 1
-
-            input_ids = torch.tensor([[1, 2, 3]])
-            pixel_values = torch.ones(batch_size, 3, 224, 224) * 0.5
-            attention_mask = torch.tensor([[1, 1, 1]])
-
-            result_obj = MagicMock()
-            result_obj.input_ids = input_ids
-            result_obj.pixel_values = pixel_values
-            result_obj.attention_mask = attention_mask
-
-            # 辞書のように振る舞うための__getitem__を実装
-            def getitem(_self: MagicMock, key: str) -> torch.Tensor:
-                if key == "input_ids":
-                    return input_ids
-                elif key == "pixel_values":
-                    return pixel_values
-                elif key == "attention_mask":
-                    return attention_mask
-                else:
-                    raise KeyError(key)
-
-            import types
-
-            result_obj.__getitem__ = types.MethodType(getitem, result_obj)
-            result_obj.to = MagicMock(return_value=result_obj)
-
-            return result_obj
-
-        processor.side_effect = mock_processor
-        mock.return_value = processor
+        mock.return_value = _MockProcessor()
         yield mock

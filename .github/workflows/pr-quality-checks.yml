@@ -32,7 +32,6 @@ jobs:
         continue-on-error: true
         timeout-minutes: 10
         run: |
-          # 出力をリアルタイムに表示しつつファイルにも保存
           uv run pytest --tb=short -v 2>&1 | tee pytest_output.txt
           if [ ${PIPESTATUS[0]} -eq 0 ]; then
             RESULT="✅ 成功"

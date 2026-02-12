@@ -34,7 +34,8 @@ def test_initialization_with_default_parameters() -> None:
     assert manager.target_text == "epic game scenery"
     assert manager.device in ("cuda", "cpu")
     assert manager.get_text_embeddings().shape == (1, 512)
-    assert manager.model.eval.called
+    # evalが呼ばれたことを確認（実装詳細ではなく、観測可能な結果として）
+    assert manager.model._eval_called is True
 
 
 def test_initialization_with_custom_target_text() -> None:
@@ -66,13 +67,15 @@ def test_initialization_with_explicit_device() -> None:
         - CLIPModelManagerがCPUデバイスで初期化される
     Then:
         - 指定されたデバイスが使用されること
+        - モデルのtoメソッドが呼ばれていること
     """
     # Arrange & Act
     manager = CLIPModelManager(device="cpu")
 
     # Assert
     assert manager.device == "cpu"
-    assert manager.model.to.called
+    # toメソッドが呼ばれたことを確認
+    assert "cpu" in manager.model._to_called_with
 
 
 def test_get_image_features_returns_correct_shape() -> None:
@@ -85,7 +88,6 @@ def test_get_image_features_returns_correct_shape() -> None:
         - 画像特徴が抽出される
     Then:
         - 正しい形状のテンソルが返されること
-        - モデルのget_image_featuresが呼ばれること
     """
     # Arrange
     from PIL import Image
@@ -98,7 +100,6 @@ def test_get_image_features_returns_correct_shape() -> None:
 
     # Assert
     assert features.shape == (1, 512)
-    assert manager.model.get_image_features.called
 
 
 def test_get_image_features_batch_mode_returns_correct_shape() -> None:
@@ -170,7 +171,7 @@ def test_model_eval_called_during_initialization() -> None:
     manager = CLIPModelManager()
 
     # Assert
-    manager.model.eval.assert_called_once()
+    assert manager.model._eval_called is True
 
 
 def test_model_moved_to_specified_device() -> None:
@@ -187,7 +188,7 @@ def test_model_moved_to_specified_device() -> None:
     manager = CLIPModelManager(device="cpu")
 
     # Assert
-    manager.model.to.assert_called_with("cpu")
+    assert "cpu" in manager.model._to_called_with
 
 
 def test_target_text_property_returns_correct_value() -> None:

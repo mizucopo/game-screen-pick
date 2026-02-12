@@ -370,14 +370,10 @@ def test_analyze_batch_retries_only_failed_batches_on_oom(
         - すべての有効な画像の結果が返されること
     """
     # Arrange
+
     analyzer = ImageQualityAnalyzer()
     paths = [sample_image_path, png_image_path, small_image_path, dark_image_path]
     initial_batch_size = 32  # 十分に大きなバッチサイズ
-
-    # Act & Assert
-    # processorとmodelの両方をモックしてバッチサイズを正しく扱えるようにする
-    original_processor = analyzer._model_manager.processor
-    original_model = analyzer._model_manager.model
     call_count = [0]
 
     # .to()メソッドをサポートした辞書クラス
@@ -385,22 +381,26 @@ def test_analyze_batch_retries_only_failed_batches_on_oom(
         def to(self, _device: str) -> "TensorDict":
             return self
 
-    def mock_processor(**kwargs: object) -> TensorDict:
-        # バッチサイズを検出して実際のテンソルを返す
-        images = kwargs.get("images")
-        if isinstance(images, list):
-            batch_size = len(images)
-        else:
-            batch_size = 1
+    # processorのインスタンスを置き換えるためのモッククラス
+    class MockProcessorWithOOM:
+        """OOMをシミュレートするプロセッサモック."""
 
-        # 実際のPyTorchテンソルを含む辞書を返す
-        return TensorDict(
-            {
-                "input_ids": torch.tensor([[1, 2, 3]]),
-                "pixel_values": torch.ones(batch_size, 3, 224, 224) * 0.5,
-                "attention_mask": torch.tensor([[1, 1, 1]]),
-            }
-        )
+        def __call__(self, **kwargs: object) -> TensorDict:
+            # バッチサイズを検出して実際のテンソルを返す
+            images = kwargs.get("images")
+            if isinstance(images, list):
+                batch_size = len(images)
+            else:
+                batch_size = 1
+
+            # 実際のPyTorchテンソルを含む辞書を返す
+            return TensorDict(
+                {
+                    "input_ids": torch.tensor([[1, 2, 3]]),
+                    "pixel_values": torch.ones(batch_size, 3, 224, 224) * 0.5,
+                    "attention_mask": torch.tensor([[1, 1, 1]]),
+                }
+            )
 
     def mock_get_image_features_with_oom(
         pixel_values: torch.Tensor,
@@ -416,17 +416,23 @@ def test_analyze_batch_retries_only_failed_batches_on_oom(
         # 2回目以降は成功（バッチサイズが縮小されているはず）
         return torch.ones(actual_batch_size, 512) / torch.sqrt(torch.tensor(512.0))
 
-    # processorのside_effectを直接設定（MagicMockなので直接設定可能）
-    original_processor.side_effect = mock_processor  # type: ignore[attr-defined]
-    # get_image_featuresのside_effectを直接設定
-    original_model.get_image_features.side_effect = mock_get_image_features_with_oom
+    # Act & Assert - processorとmodelのメソッドを置き換え
+    original_processor = analyzer._model_manager.processor
+    original_get_image_features = analyzer._model_manager.model.get_image_features
 
     try:
+        # processorを置き換え
+        analyzer._model_manager.processor = MockProcessorWithOOM()  # type: ignore[assignment]
+        # modelのget_image_featuresを置き換え
+        analyzer._model_manager.model.get_image_features = (
+            mock_get_image_features_with_oom
+        )
+
         results = analyzer.analyze_batch(paths, batch_size=initial_batch_size)
     finally:
-        # テスト後にside_effectを元に戻す（autouse fixtureの影響をクリア）
-        original_processor.side_effect = None  # type: ignore[attr-defined]
-        original_model.get_image_features.side_effect = None
+        # 元に戻す
+        analyzer._model_manager.processor = original_processor
+        analyzer._model_manager.model.get_image_features = original_get_image_features
 
     # Assert - すべての画像が処理されている（観測可能な振る舞いのみ検証）
     assert len(results) == 4
