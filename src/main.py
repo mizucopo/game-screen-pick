@@ -180,16 +180,16 @@ class Main:
             selected: 選択された画像メトリクスのリスト
             stats: 統計情報
         """
+        print("\n--- 選択された画像一覧 ---")
+        for i, res in enumerate(selected):
+            print(f"[{i + 1}] {Path(res.path).name} (Score: {res.total_score:.2f})")
+
         print("\n--- 統計情報 ---")
         print(f"総ファイル数: {stats.total_files}")
         print(f"解析成功: {stats.analyzed_ok}")
         print(f"解析失敗: {stats.analyzed_fail}")
         print(f"類似度で除外: {stats.rejected_by_similarity}")
         print(f"選択数: {stats.selected_count}")
-
-        print("\n--- 選択された画像一覧 ---")
-        for i, res in enumerate(selected):
-            print(f"[{i + 1}] {Path(res.path).name} (Score: {res.total_score:.2f})")
 
 
 def main() -> None:
