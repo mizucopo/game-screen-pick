@@ -95,7 +95,7 @@ class BatchPipeline:
             for i, (path, pil_img, clip_features, semantic) in enumerate(
                 zip(chunk_paths, pil_images, clip_features_list, semantic_scores)
             ):
-                if pil_img is None or clip_features is None:
+                if pil_img is None or clip_features is None or semantic is None:
                     results.append(None)
                     continue
 
@@ -120,24 +120,13 @@ class BatchPipeline:
                     else:
                         img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
-                    # すべてのメトリクスを一括計算（セマンティックスコアは除外）
-                    raw, norm, _, total = self.metric_calculator.calculate_all_metrics(
-                        img,
-                        clip_features,
+                    # 生メトリクスと正規化メトリクスのみ計算
+                    # （セマンティックスコアはバッチ計算済みの値を使用）
+                    raw, norm = self.metric_calculator.calculate_raw_norm_metrics(img)
+                    # バッチ計算したセマンティックスコアを使用して総合スコアを計算
+                    total = self.metric_calculator.calculate_total_score(
+                        raw, norm, semantic
                     )
-                    # バッチ計算したセマンティックスコアを使用
-                    if semantic is not None:
-                        total = self.metric_calculator.calculate_total_score(
-                            raw, norm, semantic
-                        )
-                    else:
-                        # semanticがNoneの場合はcalculate_all_metricsの結果を使用
-                        _, _, semantic, total = (
-                            self.metric_calculator.calculate_all_metrics(
-                                img,
-                                clip_features,
-                            )
-                        )
 
                     # HSV特徴とCLIP特徴を結合
                     features = self.feature_extractor.extract_combined_features(
