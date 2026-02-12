@@ -201,7 +201,11 @@ class MetricCalculator:
             # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
             # コサイン類似度を一括計算
             text_embeddings = self.model_manager.get_text_embeddings()
-            cosine_sims = torch.matmul(batch_features, text_embeddings.T)
+            # batch_features は autocast により float16 になる可能性があるため
+            # text_embeddings を同じ dtype にキャストして型不一致を回避
+            target_dtype = batch_features.dtype
+            casted_embeddings = text_embeddings.to(target_dtype).T
+            cosine_sims = torch.matmul(batch_features, casted_embeddings)
 
             # 結果を元のインデックスにマッピング
             for j, idx in enumerate(valid_indices):
