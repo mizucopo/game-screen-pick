@@ -1,11 +1,9 @@
 """MetricCalculatorの単体テスト.
 
 このテストモジュールは以下のベストプラクティスに従っています：
-1.「How」（実装詳細）ではなく「What」（観察可能な挙動）をテスト
-2. CLIPモデルを戦略的にモック化（700MB、10-30秒のロード時間）
-3. OpenCV操作、NumPy計算はモック化しない
-4. 明確なコメント付きのAAAパターン（Arrange, Act, Assert）を使用
-5. 高速実行（約2-5秒） - 重いモデルロードなし
+1. 「What」（観察可能な挙動）をテストし、「How」（実装詳細）を検証しない
+2. AAAパターン（Arrange, Act, Assert）を明確なコメントと共に使用
+3. 関数ベースのテスト構造（クラスベースではない）
 """
 
 import cv2
@@ -67,51 +65,39 @@ def test_calculate_raw_metrics_returns_expected_metrics(
         assert not np.isnan(value)
 
 
+@pytest.mark.parametrize(
+    "use_image_input",
+    [True, False],
+)
 def test_calculate_semantic_score_returns_value_in_expected_range(
     metric_calculator: MetricCalculator,
     sample_image_path: str,
+    use_image_input: bool,
 ) -> None:
-    """セマンティックスコアが期待される範囲で返されること（画像入力）.
+    """セマンティックスコアが期待される範囲で返されること.
 
     Given:
         - メトリクス計算器がある
-        - PIL画像がある
+        - PIL画像または正規化された特徴ベクトルがある
     When:
         - セマンティックスコアが計算される
     Then:
         - スコアがコサイン類似度の範囲（[-1, 1]）にあること
     """
     # Arrange
-    with Image.open(sample_image_path) as img:
-        pil_img = img.convert("RGB")
+    if use_image_input:
+        with Image.open(sample_image_path) as img:
+            pil_img = img.convert("RGB")
+    else:
+        features = np.ones(512) / np.sqrt(512.0)
 
     # Act
-    semantic_score = metric_calculator.calculate_semantic_score(pil_img)
-
-    # Assert
-    assert isinstance(semantic_score, float)
-    assert not np.isnan(semantic_score)
-    assert -1.0 <= semantic_score <= 1.0 + 1e-5
-
-
-def test_calculate_semantic_score_from_features_returns_value_in_expected_range(
-    metric_calculator: MetricCalculator,
-) -> None:
-    """セマンティックスコアが期待される範囲で返されること（特徴ベクトル入力）.
-
-    Given:
-        - メトリクス計算器がある
-        - 正規化された特徴ベクトルがある
-    When:
-        - 特徴ベクトルからセマンティックスコアが計算される
-    Then:
-        - スコアがコサイン類似度の範囲（[-1, 1]）にあること
-    """
-    # Arrange
-    features = np.ones(512) / np.sqrt(512.0)
-
-    # Act
-    semantic_score = metric_calculator.calculate_semantic_score_from_features(features)
+    if use_image_input:
+        semantic_score = metric_calculator.calculate_semantic_score(pil_img)
+    else:
+        semantic_score = metric_calculator.calculate_semantic_score_from_features(
+            features
+        )
 
     # Assert
     assert isinstance(semantic_score, float)
