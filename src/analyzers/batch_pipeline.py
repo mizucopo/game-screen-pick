@@ -15,6 +15,7 @@ from ..cache.feature_cache import FeatureCache
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.cache_entry_info import CacheEntryInfo
 from ..models.image_metrics import ImageMetrics
+from ..models.path_metadata import PathMetadata
 from .feature_extractor import FeatureExtractor
 from .metric_calculator import MetricCalculator
 
@@ -64,29 +65,69 @@ class BatchPipeline:
         else:
             self._result_max_workers = config.result_max_workers
 
+    @staticmethod
+    def _batch_convert_clip_features_to_numpy(
+        clip_features_list: List[Optional[torch.Tensor]],
+    ) -> List[Optional[np.ndarray]]:
+        """CLIP特徴をチャンク単位でまとめてCPUに転送.
+
+        GPU同期コストを削減するため、個別転送の代わりにバッチ転送を使用。
+
+        Args:
+            clip_features_list: GPU上のCLIP特徴リスト（Noneを含む場合あり）
+
+        Returns:
+            CPU上のNumPy配列リスト（元のNoneは保持）
+        """
+        valid_indices = [
+            i for i, features in enumerate(clip_features_list) if features is not None
+        ]
+
+        if not valid_indices:
+            return [None] * len(clip_features_list)
+
+        with torch.inference_mode():
+            # valid_indicesでフィルタリング済みなのでNoneは含まれない
+            valid_tensors = [
+                cast(torch.Tensor, clip_features_list[i]) for i in valid_indices
+            ]
+            batch_tensor = torch.stack(valid_tensors)
+            batch_cpu = batch_tensor.cpu()
+            batch_np = batch_cpu.numpy()
+
+        results: List[Optional[np.ndarray]] = [None] * len(clip_features_list)
+        for j, idx in enumerate(valid_indices):
+            results[idx] = batch_np[j]
+
+        return results
+
     def _get_cached_results(
         self, paths: List[str]
-    ) -> tuple[List[Optional[ImageMetrics]], List[int]]:
+    ) -> tuple[List[Optional[ImageMetrics]], List[PathMetadata]]:
         """キャッシュから取得できる結果を返す.
 
         パフォーマンス最適化のため、キャッシュヒット時のセマンティックスコア計算は
         バッチ処理で行う。また、キャッシュ一括取得（get_many）でDBアクセスを削減。
+        さらに、resolve/statの結果をPathMetadataとして保持し、後続処理での重複を回避。
 
         Args:
             paths: 画像ファイルパスのリスト
 
         Returns:
-            (キャッシュ結果リスト, 未キャッシュのインデックスリスト) のタプル
+            (キャッシュ結果リスト, 全パスのメタ情報) のタプル
             キャッシュ結果リストは、キャッシュにないインデックスはNone
         """
         if not self.cache:
-            return [None] * len(paths), list(range(len(paths)))
+            # キャッシュ無効時はメタ情報なしですべて未キャッシュとして扱う
+            metadata_list = [PathMetadata(path=path) for path in paths]
+            return [None] * len(paths), metadata_list
 
         from .metric_normalizer import MetricNormalizer
 
-        # 第1パス: 全パスのキャッシュキーを生成
+        # 第1パス: 全パスのキャッシュキーとメタ情報を生成
         cache_keys_with_meta = []
-        uncached_indices: List[int] = []
+        all_metadata: List[PathMetadata] = []
+        uncached_metadata: List[PathMetadata] = []
 
         for i, path in enumerate(paths):
             try:
@@ -100,11 +141,21 @@ class BatchPipeline:
                     target_text=self.target_text,
                     max_dim=self.config.max_dim,
                 )
+                # メタ情報を保存
+                metadata = PathMetadata(
+                    path=path,
+                    absolute_path=absolute_path,
+                    file_stat=file_stat,
+                    cache_key=cache_key,
+                )
+                all_metadata.append(metadata)
                 # インデックスとキーを紐付けて保存
                 cache_keys_with_meta.append((i, cache_key, path))
             except (OSError, ValueError):
                 # ファイルアクセスエラー等は未キャッシュとして扱う
-                uncached_indices.append(i)
+                metadata = PathMetadata(path=path)
+                all_metadata.append(metadata)
+                uncached_metadata.append(metadata)
 
         # get_manyで一括取得
         keys_to_lookup = [meta[1] for meta in cache_keys_with_meta]
@@ -128,14 +179,16 @@ class BatchPipeline:
                 if entry is not None:
                     cached_entries[idx] = CacheEntryInfo(path, entry, cache_key)
                 else:
-                    uncached_indices.append(idx)
+                    # キャッシュミス: cache_keyをクリアして未キャッシュとしてマーク
+                    all_metadata[idx].cache_key = None
+                    uncached_metadata.append(all_metadata[idx])
 
         # キャッシュヒットがない場合は早期リターン
         cached_indices = [
             i for i, entry in enumerate(cached_entries) if entry is not None
         ]
         if not cached_indices:
-            return [None] * len(paths), uncached_indices
+            return [None] * len(paths), all_metadata
 
         # 第2パス: ImageMetricsを構築（キャッシュヒット時）
         cached_results: List[Optional[ImageMetrics]] = [None] * len(paths)
@@ -161,7 +214,7 @@ class BatchPipeline:
                 combined_features,
             )
 
-        return cached_results, uncached_indices
+        return cached_results, all_metadata
 
     def process_batch(
         self,
@@ -185,6 +238,10 @@ class BatchPipeline:
         - 未キャッシュの画像のみバッチ処理を実行
         - 処理結果はキャッシュに保存
 
+        パフォーマンス最適化:
+        - resolve/statの結果をPathMetadataとして保持し重複を回避
+        - GPU→CPU転送をチャンク単位でまとめて実行
+
         Args:
             paths: 画像ファイルパスのリスト
             batch_size: CLIP推論のバッチサイズ（デフォルト32）
@@ -193,15 +250,17 @@ class BatchPipeline:
         Returns:
             解析結果のリスト（失敗した画像はNone）
         """
-        # ステージ0: キャッシュから結果を取得
-        cached_results, uncached_indices = self._get_cached_results(paths)
+        # ステージ0: キャッシュから結果を取得（メタ情報も収集）
+        cached_results, all_metadata = self._get_cached_results(paths)
 
         # 全てキャッシュにヒットした場合はそのまま返す
-        if not uncached_indices:
+        # メタ情報のcache_keyがNoneのものを未キャッシュとして判定
+        uncached_metadata = [m for m in all_metadata if m.cache_key is None]
+        if not uncached_metadata:
             return cached_results
 
         # 未キャッシュのパスのみ抽出
-        uncached_paths = [paths[i] for i in uncached_indices]
+        uncached_paths = [m.path for m in uncached_metadata]
 
         results: List[Optional[ImageMetrics]] = [None] * len(paths)
         # キャッシュ済みの結果を先に埋めておく
@@ -216,9 +275,15 @@ class BatchPipeline:
             self.config.min_chunk_size,
         )
 
-        for chunk_start, chunk_end in chunk_boundaries:
-            # uncached_paths内のチャンク
-            chunk_paths = uncached_paths[chunk_start:chunk_end]
+        # 未キャッシュのメタ情報を元のインデックスにマッピング
+        uncached_indices = [
+            i for i, m in enumerate(all_metadata) if m.cache_key is None
+        ]
+
+        for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_boundaries):
+            # uncached_metadata内のチャンク
+            chunk_metadata = uncached_metadata[chunk_start:chunk_end]
+            chunk_paths = [m.path for m in chunk_metadata]
 
             # ステージ1: チャンク単位でI/O + 前処理を並列実行
             pil_images = BatchPipeline.load_and_preprocess_images(chunk_paths)
@@ -233,14 +298,20 @@ class BatchPipeline:
                 clip_features_list
             )
 
+            # ステージ3.5: チャンク単位でまとめてGPU→CPU転送
+            clip_features_np_list = self._batch_convert_clip_features_to_numpy(
+                clip_features_list
+            )
+
             # ステージ4: チャンク単位で結果を構築（並列化）
             # 結果のインデックスを正しくマッピングするためのオフセット
             result_offset = uncached_indices[chunk_start]
             chunk_results = self._process_result_parallel(
                 chunk_paths=chunk_paths,
                 pil_images=pil_images,
-                clip_features_list=clip_features_list,
+                clip_features_list=clip_features_np_list,
                 semantic_scores=semantic_scores,
+                chunk_metadata=chunk_metadata,
                 chunk_start=result_offset,
                 total_paths=len(paths),
                 show_progress=show_progress,
@@ -252,7 +323,7 @@ class BatchPipeline:
                 results[original_idx] = chunk_result
 
             # チャンク処理完了後にメモリを解放
-            del pil_images, clip_features_list
+            del pil_images, clip_features_list, clip_features_np_list
 
         return results
 
@@ -359,8 +430,9 @@ class BatchPipeline:
         self,
         path: str,
         pil_img: Image.Image,
-        clip_features: torch.Tensor,
+        clip_features: np.ndarray,
         semantic: float,
+        metadata: PathMetadata | None = None,
     ) -> tuple[Optional[ImageMetrics], dict[str, Any] | None]:
         """結果構築の単一画像処理.
 
@@ -370,8 +442,9 @@ class BatchPipeline:
         Args:
             path: 画像ファイルパス
             pil_img: PIL画像
-            clip_features: CLIP特徴（torch.Tensor）
+            clip_features: CLIP特徴（np.ndarray、CPU上）
             semantic: セマンティックスコア
+            metadata: パスメタ情報（指定時はresolve/statを再利用）
 
         Returns:
             (ImageMetricsオブジェクト, キャッシュエントリ) のタプル
@@ -399,34 +472,41 @@ class BatchPipeline:
             # バッチ計算したセマンティックスコアを使用して総合スコアを計算
             total = self.metric_calculator.calculate_total_score(raw, norm, semantic)
 
-            # CLIP特徴をNumPyに変換してから結合
-            clip_features_np = clip_features.cpu().numpy()
             # HSV特徴とCLIP特徴を結合
             features = self.feature_extractor.extract_combined_features(
                 img,
-                clip_features_np,
+                clip_features,
             )
 
             # キャッシュエントリを構築（キャッシュが有効な場合）
             cache_entry: dict[str, Any] | None = None
             if self.cache:
                 try:
-                    absolute_path = str(Path(path).resolve())
-                    file_stat = Path(path).stat()
-                    cache_key = self.cache.generate_cache_key(
-                        absolute_path=absolute_path,
-                        file_size=file_stat.st_size,
-                        mtime_ns=int(file_stat.st_mtime_ns),
-                        model_name=self.model_name,
-                        target_text=self.target_text,
-                        max_dim=self.config.max_dim,
-                    )
+                    # メタ情報が渡されている場合は再利用
+                    if metadata and metadata.cache_key is not None:
+                        cache_key = metadata.cache_key
+                        absolute_path = metadata.absolute_path or str(
+                            Path(path).resolve()
+                        )
+                        file_stat = metadata.file_stat or Path(path).stat()
+                    else:
+                        # 従来通り取得（フォールバック）
+                        absolute_path = str(Path(path).resolve())
+                        file_stat = Path(path).stat()
+                        cache_key = self.cache.generate_cache_key(
+                            absolute_path=absolute_path,
+                            file_size=file_stat.st_size,
+                            mtime_ns=int(file_stat.st_mtime_ns),
+                            model_name=self.model_name,
+                            target_text=self.target_text,
+                            max_dim=self.config.max_dim,
+                        )
                     # HSV特徴は結合ベクトルの前半64要素
                     hsv_features = features[:64]
 
                     cache_entry = {
                         "cache_key": cache_key,
-                        "clip_features": clip_features_np,
+                        "clip_features": clip_features,
                         "raw_metrics": raw,
                         "hsv_features": hsv_features,
                         "semantic_score": semantic,
@@ -448,8 +528,9 @@ class BatchPipeline:
         self,
         chunk_paths: List[str],
         pil_images: List[Optional[Image.Image]],
-        clip_features_list: List[Optional[torch.Tensor]],
+        clip_features_list: List[Optional[np.ndarray]],
         semantic_scores: List[Optional[float]],
+        chunk_metadata: List[PathMetadata],
         chunk_start: int,
         total_paths: int,
         show_progress: bool,
@@ -461,8 +542,9 @@ class BatchPipeline:
         Args:
             chunk_paths: チャンク内の画像パスリスト
             pil_images: PIL画像リスト
-            clip_features_list: CLIP特徴リスト
+            clip_features_list: CLIP特徴リスト（np.ndarray、CPU上）
             semantic_scores: セマンティックスコアリスト
+            chunk_metadata: チャンク内のパスメタ情報リスト
             chunk_start: チャンクの開始インデックス
             total_paths: 総画像数
             show_progress: 進捗表示フラグ
@@ -472,14 +554,18 @@ class BatchPipeline:
         """
         # 並列処理するタスクを準備
         tasks: list[
-            tuple[int, tuple[str, Image.Image, torch.Tensor, float, int] | None]
+            tuple[
+                int,
+                tuple[str, Image.Image, np.ndarray, float, int, PathMetadata] | None,
+            ]
         ] = []
-        for i, (path, pil_img, clip_features, semantic) in enumerate(
+        for i, (path, pil_img, clip_features, semantic, metadata) in enumerate(
             zip(
                 chunk_paths,
                 pil_images,
                 clip_features_list,
                 semantic_scores,
+                chunk_metadata,
             )
         ):
             if pil_img is None or clip_features is None or semantic is None:
@@ -487,24 +573,35 @@ class BatchPipeline:
             else:
                 # タスクを保存（インデックス付きで順序維持）
                 tasks.append(
-                    (i, (path, pil_img, clip_features, semantic, chunk_start + i))
+                    (
+                        i,
+                        (
+                            path,
+                            pil_img,
+                            clip_features,
+                            semantic,
+                            chunk_start + i,
+                            metadata,
+                        ),
+                    )
                 )
 
         # 並列処理関数
         def process_task(
             task_info: tuple[
-                int, tuple[str, Image.Image, torch.Tensor, float, int] | None
+                int,
+                tuple[str, Image.Image, np.ndarray, float, int, PathMetadata] | None,
             ],
         ) -> tuple[int, Optional[ImageMetrics], dict[str, Any] | None]:
             """単一タスクを処理する."""
             idx, data = task_info
             if data is None:
                 return idx, None, None
-            path, pil_img, clip_features, semantic, global_idx = data
+            path, pil_img, clip_features, semantic, global_idx, metadata = data
             if show_progress and global_idx % 50 == 0:
                 print(f"解析済み: {global_idx}/{total_paths}")
             result, cache_entry = self._process_single_result(
-                path, pil_img, clip_features, semantic
+                path, pil_img, clip_features, semantic, metadata
             )
             return idx, result, cache_entry
 
