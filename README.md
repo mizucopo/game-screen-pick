@@ -19,9 +19,12 @@ uv run game-screen-pick <入力フォルダ> [オプション]
 
 - `-c <フォルダ>`, `--copy-to <フォルダ>`: 選択した画像をコピーする出力フォルダ
 - `-n <数値>`, `--num <数値>`: 選択枚数 (デフォルト: 10)
-- `-g <ジャンル>`, `--genre <ジャンル>`: ゲームジャンル (2d_rpg, 3d_rpg, fps, tps, 2d_action, 2d_shooting, 3d_action, puzzle, racing, strategy, adventure, mixed)
+- `-g <ジャンル>`, `--genre <ジャンル>`: ゲームジャンル (デフォルト: mixed)
 - `-s <数値>`, `--similarity <数値>`: 類似度しきい値 (デフォルト: 0.72)
 - `-r`, `--recursive`: サブフォルダも検索
+- `--seed <数値>`: 乱数シード（再現可能な結果を得るために指定）
+- `--cache-file <パス>`: キャッシュデータベースのパス
+- `--no-cache`: キャッシュを無効化する
 
 ### 使用例
 
@@ -35,3 +38,41 @@ uv run game-screen-pick ./screenshots -c ./output -g 2d_rpg -n 20
 # サブフォルダを含めて検索
 uv run game-screen-pick ./screenshots -r -n 10
 ```
+
+## キャッシュ機能
+
+解析結果は自動的にキャッシュされ、2回目以降の実行で再利用されます。
+
+- **保存場所**:
+  - `--copy-to` 指定時: `{出力フォルダ}/cache.sqlite3`
+  - それ以外: `~/.cache/game-screen-pick/cache.sqlite3`
+  - `--cache-file` でカスタムパスを指定可能
+- **キャッシュ対象**: CLIP特徴量、HSV特徴量、画質メトリクス
+- **キャッシュキー**: ファイルパス、ファイルサイズ、更新時刻、モデル名、ターゲットテキスト、解像度
+
+### キャッシュの無効化
+
+一時的にキャッシュを無効化する場合：
+
+```bash
+uv run game-screen-pick ./screenshots --no-cache
+```
+
+キャッシュを削除する場合：
+
+```bash
+# 出力フォルダを指定した場合
+rm ./output/cache.sqlite3
+
+# デフォルトの場所
+rm ~/.cache/game-screen-pick/cache.sqlite3
+```
+
+### キャッシュの無効化条件
+
+以下の場合、キャッシュは無効になり再解析が行われます：
+
+- ファイルが変更された（ファイルサイズまたは更新時刻が異なる）
+- 解析オプションが変更された（ジャンル、ターゲットテキストなど）
+- アルゴリズムが更新された（内部バージョン変更）
+

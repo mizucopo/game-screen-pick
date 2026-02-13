@@ -9,8 +9,10 @@ from typing import List
 from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from .cache.feature_cache import FeatureCache
 from .constants.genre_weights import GenreWeights
+from .models.analyzer_config import AnalyzerConfig
 from .models.image_metrics import ImageMetrics
 from .models.picker_statistics import PickerStatistics
+from .models.selection_config import SelectionConfig
 from .services.game_screen_picker import GameScreenPicker
 from .utils.file_utils import FileUtils
 
@@ -20,6 +22,10 @@ class Main:
 
     画像選択ツールのコマンドラインインターフェースを提供する。
     """
+
+    # デフォルトのキャッシュディレクトリ
+    DEFAULT_CACHE_DIR = Path.home() / ".cache" / "game-screen-pick"
+    DEFAULT_CACHE_FILE = DEFAULT_CACHE_DIR / "cache.sqlite3"
 
     def __init__(
         self,
@@ -55,19 +61,39 @@ class Main:
         cache = None
         if not parsed_args.no_cache:
             cache_path = parsed_args.cache_file
-            if cache_path is None and parsed_args.copy_to:
-                # デフォルト: 出力フォルダ配下の.cache
-                cache_path = Path(parsed_args.copy_to) / ".cache" / "cache.sqlite3"
+            if cache_path is None:
+                if parsed_args.copy_to:
+                    # --copy-to指定時は出力フォルダ直下にキャッシュを保存
+                    cache_path = Path(parsed_args.copy_to) / "cache.sqlite3"
+                else:
+                    # デフォルト: ユーザーキャッシュディレクトリ
+                    cache_path = Main.DEFAULT_CACHE_FILE
             if cache_path:
                 cache = FeatureCache(cache_path)
 
         # 依存関係の遅延初期化（引数パース後にジャンルが決まるため）
         if self._analyzer is None:
-            self._analyzer = ImageQualityAnalyzer(parsed_args.genre, cache=cache)
+            # AnalyzerConfigにCLI引数を反映
+            analyzer_config = AnalyzerConfig()
+            if parsed_args.result_max_workers is not None:
+                analyzer_config.result_max_workers = parsed_args.result_max_workers
+
+            self._analyzer = ImageQualityAnalyzer(
+                parsed_args.genre, cache=cache, config=analyzer_config
+            )
+
         if self._picker is None:
             seed = parsed_args.seed
             rng = random.Random(seed) if seed is not None else None
-            self._picker = GameScreenPicker(self._analyzer, rng=rng)
+
+            # SelectionConfigにCLI引数を反映
+            selection_config = SelectionConfig()
+            if parsed_args.batch_size is not None:
+                selection_config.batch_size = parsed_args.batch_size
+
+            self._picker = GameScreenPicker(
+                self._analyzer, config=selection_config, rng=rng
+            )
 
         best, stats = self._picker.select(
             parsed_args.input,
@@ -132,6 +158,29 @@ class Main:
         except ValueError as e:
             raise argparse.ArgumentTypeError(f"'{value}' は数値ではありません") from e
 
+    @staticmethod
+    def validate_positive_int_or_zero(value: str) -> int:
+        """0または正の整数をバリデーションする.
+
+        Args:
+            value: コマンドラインから渡された文字列値
+
+        Returns:
+            バリデーション済みの整数値
+
+        Raises:
+            argparse.ArgumentTypeError: 値が0以上の整数でない場合
+        """
+        try:
+            ivalue = int(value)
+            if ivalue < 0:
+                raise argparse.ArgumentTypeError(
+                    f"0以上の整数を指定してください（実際の値: {ivalue}）"
+                )
+            return ivalue
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(f"'{value}' は整数ではありません") from e
+
     def _parse_arguments(self) -> argparse.Namespace:
         """コマンドライン引数をパースする.
 
@@ -175,13 +224,31 @@ class Main:
             default=None,
             help=(
                 "キャッシュデータベースのパス"
-                "（デフォルト: 出力フォルダ/.cache/cache.sqlite3）"
+                "（デフォルト: ~/.cache/game-screen-pick/cache.sqlite3、"
+                "--copy-to指定時は {出力フォルダ}/cache.sqlite3）"
             ),
         )
         parser.add_argument(
             "--no-cache",
             action="store_true",
-            help="キャッシュを無効化する",
+            help="キャッシュを無効化する（デフォルトでは有効）",
+        )
+        parser.add_argument(
+            "--batch-size",
+            type=Main.validate_positive_int,
+            default=None,
+            help=(
+                "CLIP推論のバッチサイズ"
+                "（デフォルト: 32、大きいほど高速だがメモリ消費増加）"
+            ),
+        )
+        parser.add_argument(
+            "--result-max-workers",
+            type=Main.validate_positive_int_or_zero,
+            default=None,
+            help=(
+                "結果構築の並列ワーカー数（デフォルト: 自動設定、0でシングルスレッド）"
+            ),
         )
         return parser.parse_args(self.args)
 

@@ -498,3 +498,128 @@ def test_migration_from_old_schema_to_composite_key() -> None:
         np.testing.assert_array_equal(result.clip_features, clip_features)
         np.testing.assert_array_equal(result.hsv_features, hsv_features)
         assert result.raw_metrics == raw_metrics
+
+
+def test_get_many_retrieves_multiple_entries() -> None:
+    """get_manyで複数のエントリが正しく取得できること.
+
+    Given:
+        - 複数のテストエントリをキャッシュに保存
+    When:
+        - get_many()で一括取得
+    Then:
+        - すべてのキャッシュヒットしたエントリが正しく取得できること
+        - 存在しないキーに対してはNoneが返されること
+    """
+    # Arrange: 複数のエントリを保存
+    entries = []
+    cache_keys = []
+    expected_results = {}
+
+    for i in range(3):
+        clip_features = np.random.randn(512).astype(np.float32)
+        hsv_features = np.random.randn(64).astype(np.float32)
+        raw_metrics = {"blur_score": float(i * 10)}
+        cache_key: dict[str, str | int] = {
+            "absolute_path": f"/test/get_many_{i}.jpg",
+            "file_size": 1024 + i,
+            "mtime_ns": 1234567890 + i,
+            "model_name": "test_model",
+            "target_text": "test target",
+            "max_dim": 1280,
+            "metrics_version": "1",
+        }
+        cache_keys.append(cache_key)
+        entries.append((cache_key, clip_features, hsv_features, raw_metrics))
+        expected_results[
+            str(
+                (
+                    cache_key["absolute_path"],
+                    cache_key["file_size"],
+                    cache_key["mtime_ns"],
+                    cache_key["model_name"],
+                    cache_key["target_text"],
+                    cache_key["max_dim"],
+                    cache_key["metrics_version"],
+                )
+            )
+        ] = (clip_features, hsv_features, raw_metrics)
+
+    with FeatureCache(None) as cache:
+        for cache_key, clip_features, hsv_features, raw_metrics in entries:
+            cache.put(
+                cache_key=cache_key,
+                clip_features=clip_features,
+                raw_metrics=raw_metrics,
+                hsv_features=hsv_features,
+            )
+
+        # 存在しないキーも含める
+        nonexistent_key: dict[str, str | int] = {
+            "absolute_path": "/nonexistent.jpg",
+            "file_size": 9999,
+            "mtime_ns": 9999,
+            "model_name": "test_model",
+            "target_text": "test target",
+            "max_dim": 1280,
+            "metrics_version": "1",
+        }
+        cache_keys.append(nonexistent_key)
+
+        # Act: 一括取得
+        results = cache.get_many(cache_keys)
+
+        # Assert: 3つのエントリが取得でき、1つはNone
+        assert len(results) == 4
+
+        # 存在するキーが取得できることを確認
+        for i in range(3):
+            key_id = str(
+                (
+                    cache_keys[i]["absolute_path"],
+                    cache_keys[i]["file_size"],
+                    cache_keys[i]["mtime_ns"],
+                    cache_keys[i]["model_name"],
+                    cache_keys[i]["target_text"],
+                    cache_keys[i]["max_dim"],
+                    cache_keys[i]["metrics_version"],
+                )
+            )
+            result = results.get(key_id)
+            assert result is not None
+            expected_clip, expected_hsv, expected_raw = expected_results[key_id]
+            np.testing.assert_array_almost_equal(result.clip_features, expected_clip)
+            np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv)
+            assert result.raw_metrics == expected_raw
+
+        # 存在しないキーはNone
+        nonexistent_key_id = str(
+            (
+                nonexistent_key["absolute_path"],
+                nonexistent_key["file_size"],
+                nonexistent_key["mtime_ns"],
+                nonexistent_key["model_name"],
+                nonexistent_key["target_text"],
+                nonexistent_key["max_dim"],
+                nonexistent_key["metrics_version"],
+            )
+        )
+        assert results.get(nonexistent_key_id) is None
+
+
+def test_get_many_returns_empty_dict_for_empty_input() -> None:
+    """get_manyに空のリストを渡すと空の辞書が返されること.
+
+    Given:
+        - FeatureCacheインスタンスを作成
+    When:
+        - 空のリストでget_many()を呼び出し
+    Then:
+        - 空の辞書が返されること
+    """
+    # Arrange & Act
+    with FeatureCache(None) as cache:
+        results = cache.get_many([])
+
+    # Assert
+    assert results == {}
