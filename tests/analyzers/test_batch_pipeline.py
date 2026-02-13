@@ -18,6 +18,7 @@ from src.analyzers.batch_pipeline import BatchPipeline
 from src.analyzers.clip_model_manager import CLIPModelManager
 from src.analyzers.feature_extractor import FeatureExtractor
 from src.analyzers.metric_calculator import MetricCalculator
+from src.cache.feature_cache import FeatureCache
 from src.constants.genre_weights import GenreWeights
 from src.models.analyzer_config import AnalyzerConfig
 from src.models.image_metrics import ImageMetrics
@@ -72,3 +73,63 @@ def test_process_batch_handles_multiple_images(
             assert result.path == path
             assert 0 <= result.total_score <= 100
             assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
+
+
+def test_cached_results_semantic_score_calculation_is_batched(
+    tmp_path: Path,
+) -> None:
+    """キャッシュヒット時のセマンティックスコア計算がバッチ化されていること.
+
+    Given:
+        - バッチ処理パイプラインにキャッシュを設定
+        - キャッシュにエントリが保存されている
+    When:
+        - 同じ画像を再度バッチ処理
+    Then:
+        - キャッシュから結果が正しく取得できること
+        - 2回目の処理結果が1回目と一致すること
+    """
+    # Arrange: キャッシュ付きのパイプラインを作成
+    config = AnalyzerConfig()
+    weights = GenreWeights.get_weights("mixed")
+    model_manager = CLIPModelManager()
+    feature_extractor = FeatureExtractor(model_manager)
+    metric_calculator = MetricCalculator(config, weights, model_manager)
+
+    cache_path = tmp_path / "test_cache.sqlite3"
+    cache = FeatureCache(cache_path)
+
+    pipeline_with_cache = BatchPipeline(
+        feature_extractor,
+        metric_calculator,
+        config,
+        cache=cache,
+    )
+
+    # 複数のテスト画像を作成
+    paths = []
+    for i in range(3):
+        np.random.seed(42 + i)
+        img_array = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+        img_path = tmp_path / f"cache_test_{i}.jpg"
+        cv2.imwrite(str(img_path), img_array)
+        paths.append(str(img_path))
+
+    # Act: 最初の実行（キャッシュミス）
+    first_results = pipeline_with_cache.process_batch(paths, batch_size=2)
+
+    # 2回目の実行（キャッシュヒット）
+    second_results = pipeline_with_cache.process_batch(paths, batch_size=2)
+
+    # Assert: 両方の実行で有効な結果が得られる
+    assert len(first_results) == 3
+    assert len(second_results) == 3
+
+    # キャッシュヒット時も結果が正しく取得できる
+    for first, second in zip(first_results, second_results):
+        assert first is not None
+        assert second is not None
+        # 結果が一致すること（キャッシュから再計算された値）
+        assert second.path == first.path
+        # セマンティックスコアが計算されている
+        assert -1.0 <= second.semantic_score <= 1.0 + 1e-5

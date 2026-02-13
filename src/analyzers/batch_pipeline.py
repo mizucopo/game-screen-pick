@@ -4,7 +4,7 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional, cast
 
 import cv2
 import numpy as np
@@ -13,6 +13,7 @@ from PIL import Image, UnidentifiedImageError
 
 from ..cache.feature_cache import FeatureCache
 from ..models.analyzer_config import AnalyzerConfig
+from ..models.cache_entry_info import CacheEntryInfo
 from ..models.image_metrics import ImageMetrics
 from .feature_extractor import FeatureExtractor
 from .metric_calculator import MetricCalculator
@@ -66,6 +67,9 @@ class BatchPipeline:
     ) -> tuple[List[Optional[ImageMetrics]], List[int]]:
         """キャッシュから取得できる結果を返す.
 
+        パフォーマンス最適化のため、キャッシュヒット時のセマンティックスコア計算は
+        バッチ処理で行う。
+
         Args:
             paths: 画像ファイルパスのリスト
 
@@ -76,7 +80,10 @@ class BatchPipeline:
         if not self.cache:
             return [None] * len(paths), list(range(len(paths)))
 
-        cached_results: List[Optional[ImageMetrics]] = [None] * len(paths)
+        from .metric_normalizer import MetricNormalizer
+
+        # 第1パス: キャッシュエントリを収集
+        cached_entries: List[Optional[CacheEntryInfo]] = [None] * len(paths)
         uncached_indices: List[int] = []
 
         for i, path in enumerate(paths):
@@ -93,37 +100,58 @@ class BatchPipeline:
                 )
                 entry = self.cache.get(cache_key)
                 if entry is not None:
-                    # キャッシュヒット: CLIP特徴とHSV特徴を結合
-                    combined_features = np.concatenate(
-                        [entry.hsv_features, entry.clip_features]
-                    )
-                    # 正規化メトリクスを計算（生メトリクスから）
-                    from .metric_normalizer import MetricNormalizer
-
-                    norm = MetricNormalizer.normalize_all(entry.raw_metrics)
-                    # セマンティックスコアはCLIP特徴から再計算
-                    semantic = (
-                        self.metric_calculator.calculate_semantic_score_from_features(
-                            entry.clip_features
-                        )
-                    )
-                    # 総合スコアを計算
-                    total = self.metric_calculator.calculate_total_score(
-                        entry.raw_metrics, norm, semantic
-                    )
-                    cached_results[i] = ImageMetrics(
-                        path,
-                        entry.raw_metrics,
-                        norm,
-                        semantic,
-                        total,
-                        combined_features,
-                    )
+                    cached_entries[i] = CacheEntryInfo(path, entry, cache_key)
                 else:
                     uncached_indices.append(i)
             except (OSError, ValueError):
                 # ファイルアクセスエラー等は未キャッシュとして扱う
                 uncached_indices.append(i)
+
+        # キャッシュヒットがない場合は早期リターン
+        cached_indices = [
+            i for i, entry in enumerate(cached_entries) if entry is not None
+        ]
+        if not cached_indices:
+            return [None] * len(paths), uncached_indices
+
+        # 第2パス: セマンティックスコアをバッチ計算
+        clip_features_list: list[torch.Tensor | None] = []
+        for idx in cached_indices:
+            entry_info = cast(CacheEntryInfo, cached_entries[idx])
+            # NumPy配列をtorch.Tensorに変換（CPU上に配置）
+            # calculate_semantic_score_batch内でデバイス移動が行われる
+            clip_tensor = torch.from_numpy(
+                entry_info.entry.clip_features.astype(np.float32)
+            )
+            clip_features_list.append(clip_tensor)
+
+        semantic_scores = self.metric_calculator.calculate_semantic_score_batch(
+            clip_features_list
+        )
+
+        # 第3パス: ImageMetricsを構築
+        cached_results: List[Optional[ImageMetrics]] = [None] * len(paths)
+        for i, idx in enumerate(cached_indices):
+            entry_info = cast(CacheEntryInfo, cached_entries[idx])
+            semantic = cast(float, semantic_scores[i])
+            # CLIP特徴とHSV特徴を結合
+            combined_features = np.concatenate(
+                [entry_info.entry.hsv_features, entry_info.entry.clip_features]
+            )
+            # 正規化メトリクスを計算（生メトリクスから）
+            norm = MetricNormalizer.normalize_all(entry_info.entry.raw_metrics)
+            # 総合スコアを計算
+            total = self.metric_calculator.calculate_total_score(
+                entry_info.entry.raw_metrics, norm, semantic
+            )
+            cached_results[idx] = ImageMetrics(
+                entry_info.path,
+                entry_info.entry.raw_metrics,
+                norm,
+                semantic,
+                total,
+                combined_features,
+            )
 
         return cached_results, uncached_indices
 
@@ -325,11 +353,11 @@ class BatchPipeline:
         pil_img: Image.Image,
         clip_features: torch.Tensor,
         semantic: float,
-    ) -> Optional[ImageMetrics]:
+    ) -> tuple[Optional[ImageMetrics], dict[str, Any] | None]:
         """結果構築の単一画像処理.
 
         raw metric計算、feature結合、総合スコア計算を行う。
-        キャッシュが有効な場合は、計算結果をキャッシュに保存する。
+        キャッシュが有効な場合は、キャッシュエントリを返す。
 
         Args:
             path: 画像ファイルパス
@@ -338,7 +366,8 @@ class BatchPipeline:
             semantic: セマンティックスコア
 
         Returns:
-            ImageMetricsオブジェクト（処理失敗時はNone）
+            (ImageMetricsオブジェクト, キャッシュエントリ) のタプル
+            処理失敗時は (None, None)
         """
         try:
             # メトリクス計算用に先に画像を縮小
@@ -368,7 +397,8 @@ class BatchPipeline:
                 clip_features,
             )
 
-            # キャッシュが有効な場合は計算結果を保存
+            # キャッシュエントリを構築（キャッシュが有効な場合）
+            cache_entry: dict[str, Any] | None = None
             if self.cache:
                 try:
                     absolute_path = str(Path(path).resolve())
@@ -386,22 +416,24 @@ class BatchPipeline:
                     # HSV特徴は結合前のものを取得（結合ベクトルの前半64要素）
                     hsv_features = features[:64]
 
-                    self.cache.put(
-                        cache_key=cache_key,
-                        clip_features=clip_features_np,
-                        raw_metrics=raw,
-                        hsv_features=hsv_features,
-                    )
+                    cache_entry = {
+                        "cache_key": cache_key,
+                        "clip_features": clip_features_np,
+                        "raw_metrics": raw,
+                        "hsv_features": hsv_features,
+                    }
                 except Exception as e:
-                    # キャッシュ保存に失敗しても処理は継続
-                    logger.debug(f"キャッシュ保存に失敗しました: {path}, 理由: {e}")
+                    # キャッシュエントリ構築に失敗しても処理は継続
+                    logger.debug(
+                        f"キャッシュエントリ構築に失敗しました: {path}, 理由: {e}"
+                    )
 
-            return ImageMetrics(path, raw, norm, semantic, total, features)
+            return ImageMetrics(path, raw, norm, semantic, total, features), cache_entry
         except self._get_expected_errors() as e:
             logger.warning(
                 f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
             )
-            return None
+            return None, None
 
     def _process_result_parallel(
         self,
@@ -454,23 +486,38 @@ class BatchPipeline:
             task_info: tuple[
                 int, tuple[str, Image.Image, torch.Tensor, float, int] | None
             ],
-        ) -> tuple[int, Optional[ImageMetrics]]:
+        ) -> tuple[int, Optional[ImageMetrics], dict[str, Any] | None]:
             """単一タスクを処理する."""
             idx, data = task_info
             if data is None:
-                return idx, None
+                return idx, None, None
             path, pil_img, clip_features, semantic, global_idx = data
             if show_progress and global_idx % 50 == 0:
                 print(f"解析済み: {global_idx}/{total_paths}")
-            result = self._process_single_result(path, pil_img, clip_features, semantic)
-            return idx, result
+            result, cache_entry = self._process_single_result(
+                path, pil_img, clip_features, semantic
+            )
+            return idx, result, cache_entry
 
         # ThreadPoolExecutorで並列処理
         with ThreadPoolExecutor(max_workers=self._result_max_workers) as executor:
-            results_map = dict(executor.map(process_task, tasks))
+            executor_results = list(executor.map(process_task, tasks))
 
-        # 順序を維持して結果を返す
-        results = [results_map.get(i) for i in range(len(tasks))]
+        # 結果とキャッシュエントリを分離
+        results: list[Optional[ImageMetrics]] = [None] * len(tasks)
+        cache_entries: list[dict[str, Any]] = []
+        for idx, result, cache_entry in executor_results:
+            results[idx] = result
+            if cache_entry is not None:
+                cache_entries.append(cache_entry)
+
+        # メインスレッドでキャッシュを一括保存
+        if self.cache and cache_entries:
+            try:
+                self.cache.put_batch(cache_entries)
+            except Exception as e:
+                logger.debug(f"キャッシュ一括保存に失敗しました: {e}")
+
         return results
 
     @staticmethod
