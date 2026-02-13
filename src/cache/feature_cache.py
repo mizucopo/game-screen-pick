@@ -25,7 +25,7 @@ class FeatureCache:
     _init_lock = threading.Lock()
 
     # キャッシュスキーマのバージョン（アルゴリズム変更時に更新）
-    METRICS_VERSION: str = "1"
+    METRICS_VERSION: str = "2"  # float16 features
 
     def __init__(self, cache_path: Optional[str | Path] = None):
         """特徴量キャッシュを初期化する.
@@ -268,9 +268,13 @@ class FeatureCache:
             return None
 
         return CacheEntry(
-            clip_features=np.frombuffer(row["clip_features"], dtype=np.float32),
+            clip_features=np.frombuffer(row["clip_features"], dtype=np.float16).astype(
+                np.float32
+            ),
             raw_metrics=json.loads(row["raw_metrics"]),
-            hsv_features=np.frombuffer(row["hsv_features"], dtype=np.float32),
+            hsv_features=np.frombuffer(row["hsv_features"], dtype=np.float16).astype(
+                np.float32
+            ),
             semantic_score=row["semantic_score"],
         )
 
@@ -311,9 +315,9 @@ class FeatureCache:
                 cache_key["target_text"],
                 cache_key["max_dim"],
                 cache_key["metrics_version"],
-                clip_features.astype(np.float32).tobytes(),
+                clip_features.astype(np.float16).tobytes(),
                 json.dumps(raw_metrics),
-                hsv_features.astype(np.float32).tobytes(),
+                hsv_features.astype(np.float16).tobytes(),
                 semantic_score,
                 time.time(),
             ),
@@ -411,10 +415,17 @@ class FeatureCache:
                 row["max_dim"],
                 row["metrics_version"],
             )
+            # float16で読み出してfloat32に変換
+            clip = np.frombuffer(row["clip_features"], dtype=np.float16).astype(
+                np.float32
+            )
+            hsv = np.frombuffer(row["hsv_features"], dtype=np.float16).astype(
+                np.float32
+            )
             results[key_id] = CacheEntry(
-                clip_features=np.frombuffer(row["clip_features"], dtype=np.float32),
+                clip_features=clip,
                 raw_metrics=json.loads(row["raw_metrics"]),
-                hsv_features=np.frombuffer(row["hsv_features"], dtype=np.float32),
+                hsv_features=hsv,
                 semantic_score=row["semantic_score"],
             )
 
@@ -461,9 +472,9 @@ class FeatureCache:
                         cache_key["target_text"],
                         cache_key["max_dim"],
                         cache_key["metrics_version"],
-                        entry["clip_features"].astype(np.float32).tobytes(),
+                        entry["clip_features"].astype(np.float16).tobytes(),
                         json.dumps(entry["raw_metrics"]),
-                        entry["hsv_features"].astype(np.float32).tobytes(),
+                        entry["hsv_features"].astype(np.float16).tobytes(),
                         entry.get("semantic_score"),
                         time.time(),
                     )

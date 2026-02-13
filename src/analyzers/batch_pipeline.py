@@ -55,6 +55,8 @@ class BatchPipeline:
         self.cache = cache
         self.model_name = model_name
         self.target_text = target_text
+        # OpenCVのスレッド数を1に設定し、ThreadPoolExecutorとの競合を回避
+        cv2.setNumThreads(1)
         # 結果構築の並列処理ワーカー数を決定（デフォルトはmin(8, cpu_count-1)）
         if config.result_max_workers is None:
             cpu_count = os.cpu_count() or 1
