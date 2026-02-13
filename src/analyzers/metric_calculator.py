@@ -168,7 +168,7 @@ class MetricCalculator:
 
         パフォーマンス最適化:
         - torch.Tensorを直接受け取り、CPU/NumPy変換を回避
-        - まとめて行列積で一括計算
+        - CPU→GPU転送をバッチ化してまとめて行列積で一括計算
 
         Args:
             clip_features_list: 正規化済みのCLIP画像特徴のリスト
@@ -198,13 +198,20 @@ class MetricCalculator:
             ]
             batch_features = torch.stack(valid_tensors)
 
+            # CPU→GPU転送をバッチ化（まとめて転送してN回の転送を1回に削減）
+            batch_features = batch_features.to(self.model_manager.device)
+
             # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
             # コサイン類似度を一括計算
             text_embeddings = self.model_manager.get_text_embeddings()
             # batch_features は autocast により float16 になる可能性があるため
             # text_embeddings を同じ dtype にキャストして型不一致を回避
+            # また、デバイス転送も同時に行う
             target_dtype = batch_features.dtype
-            casted_embeddings = text_embeddings.to(target_dtype).T
+            embeddings_on_device = text_embeddings.to(target_dtype).to(
+                self.model_manager.device
+            )
+            casted_embeddings = embeddings_on_device.T
             cosine_sims = torch.matmul(batch_features, casted_embeddings)
 
             # 結果を元のインデックスにマッピング
