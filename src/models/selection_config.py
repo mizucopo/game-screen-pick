@@ -30,6 +30,24 @@ class SelectionConfig:
     )
     activity_bucket_mode: str = "quantile"
 
+    @classmethod
+    def from_cli_args(cls, **kwargs: int | None) -> "SelectionConfig":
+        """CLI引数から設定を作成する.
+
+        Args:
+            **kwargs: CLI引数（batch_size）
+                Noneでない引数のみデフォルト値を上書き
+
+        Returns:
+            SelectionConfigインスタンス
+        """
+        # デフォルト値を持つ設定を作成
+        config = cls()
+        # CLI引数で上書き（Noneでない値のみ）
+        if kwargs.get("batch_size") is not None:
+            config.batch_size = kwargs["batch_size"]  # type: ignore[assignment]
+        return config
+
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""
         if self.batch_size <= 0:

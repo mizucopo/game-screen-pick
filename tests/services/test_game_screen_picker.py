@@ -19,9 +19,108 @@ import pytest
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
+from src.models.normalized_metrics import NormalizedMetrics
+from src.models.raw_metrics import RawMetrics
 from src.models.picker_statistics import PickerStatistics
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
+
+
+def _create_image_metrics(
+    path: str,
+    raw_metrics: RawMetrics,
+    normalized_metrics: NormalizedMetrics,
+    semantic_score: float,
+    total_score: float,
+    features: np.ndarray,
+) -> ImageMetrics:
+    """ImageMetricsを作成するヘルパー関数."""
+    return ImageMetrics(
+        path=path,
+        raw_metrics=raw_metrics,
+        normalized_metrics=normalized_metrics,
+        semantic_score=semantic_score,
+        total_score=total_score,
+        features=features,
+    )
+
+
+def _create_image_metrics_from_dict(
+    path: str,
+    raw_metrics_dict: dict[str, float],
+    normalized_metrics_dict: dict[str, float],
+    semantic_score: float,
+    total_score: float,
+    features: np.ndarray,
+) -> ImageMetrics:
+    """辞書からImageMetricsを作成するヘルパー関数（テスト用）."""
+    # RawMetricsのデフォルト値を取得
+    blur_raw = raw_metrics_dict.get("blur_score", 0)
+    brightness_raw = raw_metrics_dict.get(
+        "brightness", raw_metrics_dict.get("blur_score", 100)
+    )
+    contrast_raw = raw_metrics_dict.get("contrast", 50)
+    edge_density_raw = raw_metrics_dict.get("edge_density", 0.1)
+    color_richness_raw = raw_metrics_dict.get("color_richness", 50)
+    ui_density_raw = raw_metrics_dict.get("ui_density", 10)
+    action_intensity_raw = raw_metrics_dict.get("action_intensity", 30)
+    visual_balance_raw = raw_metrics_dict.get("visual_balance", 80)
+    dramatic_raw = raw_metrics_dict.get(
+        "dramatic_score", raw_metrics_dict.get("dramatic_score", 50)
+    )
+
+    raw = RawMetrics(
+        blur_score=blur_raw,
+        bnrightness=brightness_raw,
+        contrast=contrast_raw,
+        edge_density=edge_density_raw,
+        color_richness=color_richness_raw,
+        ui_density=ui_density_raw,
+        action_intensity=action_intensity_raw,
+        visual_balance=visual_balance_raw,
+        dramatic_score=dramatic_raw,
+    )
+
+    # NormalizedMetricsのデフォルト値を取得
+    blur_norm = normalized_metrics_dict.get("blur_score", 0.5)
+    contrast_norm = normalized_metrics_dict.get("contrast", 0.5)
+    color_richness_norm = normalized_metrics_dict.get("color_richness", 0.5)
+    edge_density_norm = normalized_metrics_dict.get("edge_density", 0.5)
+    dramatic_norm = normalized_metrics_dict.get(
+        "dramatic_score", normalized_metrics_dict.get("dramatic_score", 0.5)
+    )
+    visual_balance_norm = normalized_metrics_dict.get("visual_balance", 0.5)
+    action_intensity_norm = normalized_metrics_dict.get("action_intensity", 0.5)
+    ui_density_norm = normalized_metrics_dict.get("ui_density", 0.5)
+
+    norm = NormalizedMetrics(
+        blur_score=blur_norm,
+        contrast=contrast_norm,
+        color_richness=color_richness_norm,
+        edge_density=edge_density_norm,
+        dramatic_score=dramatic_norm,
+        visual_balance=visual_balance_norm,
+        action_intensity=action_intensity_norm,
+        ui_density=ui_density_norm,
+    )
+    return ImageMetrics(
+        path=path,
+        raw_metrics=raw,
+        normalized_metrics=norm,
+        semantic_score=semantic_score,
+        total_score=total_score,
+        features=features,
+    )
+
+
+def _create_picker(config: SelectionConfig | None = None) -> GameScreenPicker:
+    """GameScreenPickerを作成するヘルパー関数（テスト用）.
+
+    select_from_analyzedメソッドはインスタンスメソッドなので、
+    適切なanalyzerとconfigを持つインスタンスを作成する必要がある。
+    """
+    analyzer = MagicMock(spec=ImageQualityAnalyzer)
+    return GameScreenPicker(analyzer=analyzer, config=config)
 
 
 def _assert_stats_valid(
@@ -101,10 +200,10 @@ def mock_analyzer_with_batch(mock_analyzer: MagicMock) -> MagicMock:
                 idx = 0
             np.random.seed(idx)
             results.append(
-                ImageMetrics(
+                _create_image_metrics_from_dict(
                     path=path,
-                    raw_metrics={"blur_score": 100 - idx * 10},
-                    normalized_metrics={"blur_score": 1.0 - idx * 0.1},
+                    raw_metrics_dict={"blur_score": 100 - idx * 10},
+                    normalized_metrics_dict={"blur_score": 1.0 - idx * 0.1},
                     semantic_score=0.8,
                     total_score=100 - idx * 10,
                     features=np.random.rand(128),
@@ -159,15 +258,15 @@ def sample_image_metrics() -> List[ImageMetrics]:
     ]
 
     return [
-        ImageMetrics(
+        _create_image_metrics_from_dict(
             path=f"/fake/path/image{i}.jpg",
-            raw_metrics={
+            raw_metrics_dict={
                 "blur_score": 100.0 - i * 5,
                 "action_intensity": activity_metrics[i]["action_intensity"] * 100,
                 "edge_density": activity_metrics[i]["edge_density"] * 0.2,
                 "dramatic_score": activity_metrics[i]["dramatic_score"] * 100,
             },
-            normalized_metrics={
+            normalized_metrics_dict={
                 "blur_score": 0.9 - i * 0.1,
                 "action_intensity": activity_metrics[i]["action_intensity"],
                 "edge_density": activity_metrics[i]["edge_density"],
@@ -277,15 +376,15 @@ def large_sample_image_metrics() -> List[ImageMetrics]:
     activity_metrics = low_metrics + mid_metrics + high_metrics
 
     return [
-        ImageMetrics(
+        _create_image_metrics_from_dict(
             path=f"/fake/path/image{i}.jpg",
-            raw_metrics={
+            raw_metrics_dict={
                 "blur_score": 100.0 - i * 1.5,
                 "action_intensity": activity_metrics[i]["action_intensity"] * 100,
                 "edge_density": activity_metrics[i]["edge_density"] * 0.2,
                 "dramatic_score": activity_metrics[i]["dramatic_score"] * 100,
             },
-            normalized_metrics={
+            normalized_metrics_dict={
                 "blur_score": 0.9 - i * 0.02,
                 "action_intensity": activity_metrics[i]["action_intensity"],
                 "edge_density": activity_metrics[i]["edge_density"],
@@ -318,13 +417,13 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     # Arrange
     num_to_select = 3
     similarity_threshold = 0.9
+    picker = _create_picker(SelectionConfig(activity_mix_enabled=False))
 
     # Act
-    result, stats = GameScreenPicker.select_from_analyzed(
+    result, stats = picker.select_from_analyzed(
         sample_image_metrics,
         num_to_select,
         similarity_threshold,
-        SelectionConfig(activity_mix_enabled=False),
     )
 
     # Assert
@@ -417,10 +516,10 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
                 else:
                     np.random.seed(idx)
                     results.append(
-                        ImageMetrics(
+                        _create_image_metrics_from_dict(
                             path=path,
-                            raw_metrics={"blur_score": 100 - idx * 10},
-                            normalized_metrics={"blur_score": 1.0 - idx * 0.1},
+                            raw_metrics_dict={"blur_score": 100 - idx * 10},
+                            normalized_metrics_dict={"blur_score": 1.0 - idx * 0.1},
                             semantic_score=0.8,
                             total_score=100 - idx * 10,
                             features=np.random.rand(128),
@@ -462,10 +561,10 @@ def similar_images_metrics() -> List[ImageMetrics]:
     base_features = np.random.rand(128)
 
     return [
-        ImageMetrics(
+        _create_image_metrics_from_dict(
             path=f"/fake/path/similar{i}.jpg",
-            raw_metrics={"blur_score": 100.0 - i},
-            normalized_metrics={"blur_score": 0.9},
+            raw_metrics_dict={"blur_score": 100.0 - i},
+            normalized_metrics_dict={"blur_score": 0.9},
             semantic_score=0.8,
             total_score=100.0 - i,
             features=_create_features_with_similarity(
@@ -491,15 +590,15 @@ def highly_similar_images_for_rejection_test() -> List[ImageMetrics]:
 
     # 0.99の類似度を持つ20枚の画像（最終しきい値0.98を超過）
     return [
-        ImageMetrics(
+        _create_image_metrics_from_dict(
             path=f"/fake/path/highly_similar{i}.jpg",
-            raw_metrics={
+            raw_metrics_dict={
                 "blur_score": 100.0 - i * 0.5,
                 "action_intensity": 50.0,
                 "edge_density": 0.1,
                 "dramatic_score": 50.0,
             },
-            normalized_metrics={
+            normalized_metrics_dict={
                 "blur_score": 0.9 - i * 0.01,
                 "action_intensity": 0.5,
                 "edge_density": 0.5,
@@ -529,13 +628,13 @@ def test_threshold_relaxation_with_highly_similar_images(
     # Arrange
     num_to_select = 10
     similarity_threshold = 0.9
+    picker = _create_picker(SelectionConfig(activity_mix_enabled=False))
 
     # Act
-    result, stats = GameScreenPicker.select_from_analyzed(
+    result, stats = picker.select_from_analyzed(
         similar_images_metrics,
         num_to_select,
         similarity_threshold,
-        SelectionConfig(activity_mix_enabled=False),
     )
 
     # Assert
@@ -570,13 +669,13 @@ def test_select_from_analyzed_with_activity_mix_enabled_tracks_similarity_reject
     # Arrange
     num_to_select = 5  # 5*3=15枚の候補を要求
     similarity_threshold = 0.9
+    picker = _create_picker(SelectionConfig(activity_mix_enabled=True))
 
     # Act
-    result, stats = GameScreenPicker.select_from_analyzed(
+    result, stats = picker.select_from_analyzed(
         highly_similar_images_for_rejection_test,
         num_to_select,
         similarity_threshold,
-        SelectionConfig(activity_mix_enabled=True),
     )
 
     # Assert
@@ -615,13 +714,15 @@ def test_select_from_analyzed_with_activity_mix_returns_diverse_selection(
     # Arrange
     num_to_select = 3
     similarity_threshold = 0.9
+    picker = _create_picker(
+        SelectionConfig(activity_mix_enabled=True, activity_mix_ratio=(0.3, 0.4, 0.3))
+    )
 
     # Act
-    result, stats = GameScreenPicker.select_from_analyzed(
+    result, stats = picker.select_from_analyzed(
         sample_image_metrics,
         num_to_select,
         similarity_threshold,
-        SelectionConfig(activity_mix_enabled=True, activity_mix_ratio=(0.3, 0.4, 0.3)),
     )
 
     # Assert

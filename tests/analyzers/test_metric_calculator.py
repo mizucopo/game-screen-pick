@@ -13,9 +13,10 @@ from PIL import Image
 
 from src.analyzers.clip_model_manager import CLIPModelManager
 from src.analyzers.metric_calculator import MetricCalculator
-from src.analyzers.metric_normalizer import MetricNormalizer
 from src.constants.score_weights import ScoreWeights
 from src.models.analyzer_config import AnalyzerConfig
+from src.models.normalized_metrics import NormalizedMetrics
+from src.models.raw_metrics import RawMetrics
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def test_calculate_raw_metrics_returns_expected_metrics(
     When:
         - 生メトリクスが計算される
     Then:
-        - 期待されるすべてのメトリクスキーが含まれていること
+        - 期待されるすべてのメトリクス属性が含まれていること
         - すべての値が数値であること
     """
     # Arrange
@@ -49,7 +50,17 @@ def test_calculate_raw_metrics_returns_expected_metrics(
     raw_metrics = metric_calculator.calculate_raw_metrics(img)
 
     # Assert
-    expected_keys = {
+    assert hasattr(raw_metrics, "blur_score")
+    assert hasattr(raw_metrics, "brightness")
+    assert hasattr(raw_metrics, "contrast")
+    assert hasattr(raw_metrics, "edge_density")
+    assert hasattr(raw_metrics, "color_richness")
+    assert hasattr(raw_metrics, "ui_density")
+    assert hasattr(raw_metrics, "action_intensity")
+    assert hasattr(raw_metrics, "visual_balance")
+    assert hasattr(raw_metrics, "dramatic_score")
+    # 値の型チェック
+    for attr in [
         "blur_score",
         "brightness",
         "contrast",
@@ -59,9 +70,8 @@ def test_calculate_raw_metrics_returns_expected_metrics(
         "action_intensity",
         "visual_balance",
         "dramatic_score",
-    }
-    assert set(raw_metrics.keys()) == expected_keys
-    for value in raw_metrics.values():
+    ]:
+        value = getattr(raw_metrics, attr)
         assert isinstance(value, (int, float))
         assert not np.isnan(value)
 
@@ -120,19 +130,28 @@ def test_calculate_total_score_returns_non_negative_value(
         - スコアが0以上であること
     """
     # Arrange
-    raw = {
-        "blur_score": 500.0,
-        "brightness": 100.0,
-        "contrast": 50.0,
-        "edge_density": 0.2,
-        "color_richness": 40.0,
-        "ui_density": 10.0,
-        "action_intensity": 30.0,
-        "visual_balance": 90.0,
-        "dramatic_score": 50.0,
-    }
+    raw = RawMetrics(
+        blur_score=500.0,
+        bnrightness=100.0,
+        contrast=50.0,
+        edge_density=0.2,
+        color_richness=40.0,
+        ui_density=10.0,
+        action_intensity=30.0,
+        visual_balance=90.0,
+        dramatic_score=50.0,
+    )
 
-    norm = MetricNormalizer.normalize_all(raw)
+    norm = NormalizedMetrics(
+        blur_score=1.0,
+        contrast=1.0,
+        color_richness=1.0,
+        edge_density=1.0,
+        dramatic_score=0.5,
+        visual_balance=0.9,
+        action_intensity=1.0,
+        ui_density=1.0,
+    )
     semantic = 0.5
 
     # Act

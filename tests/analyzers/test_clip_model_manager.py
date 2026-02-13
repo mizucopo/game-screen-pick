@@ -27,6 +27,7 @@ def test_initialization_sets_text_and_prepares_embeddings(
 
     Given:
         - デフォルトまたはカスタムのターゲットテキストがある
+        - CLIPモデルとプロセッサのモックが利用可能
     When:
         - CLIPModelManagerが初期化される
     Then:

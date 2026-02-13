@@ -123,6 +123,28 @@ class CLIPModelManager:
                     # 非バッチモードでシーケンスが渡された場合のフォールバック
                     raise ValueError("非バッチモードでは単一のPIL画像を渡してください")
 
+    def get_normalized_image_features(self, pil_image: Image.Image) -> torch.Tensor:
+        """PIL画像から正規化済みCLIP画像特徴を抽出する.
+
+        単一画像の特徴抽出をL2正規化済みで返すユーティリティメソッド.
+        feature_extractor.py と metric_calculator.py の重複コードを統合する.
+
+        Args:
+            pil_image: PIL画像オブジェクト（RGB形式）
+
+        Returns:
+            L2正規化済みのCLIP画像特徴テンソル（1次元の512要素）
+        """
+        with torch.inference_mode():
+            inputs = self.processor(
+                images=pil_image,
+                return_tensors="pt",
+                padding=True,
+            ).to(self.device)
+            image_features = self.model.get_image_features(**inputs)
+            # L2正規化して返す（最初の要素を抽出）
+            return F.normalize(image_features, p=2, dim=-1)[0]
+
     def get_text_embeddings(self) -> torch.Tensor:
         """キャッシュされたテキスト埋め込みを返す.
 

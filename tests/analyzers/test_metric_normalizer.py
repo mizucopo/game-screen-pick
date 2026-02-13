@@ -8,10 +8,12 @@
 """
 
 from src.analyzers.metric_normalizer import MetricNormalizer
+from src.models.normalized_metrics import NormalizedMetrics
+from src.models.raw_metrics import RawMetrics
 
 
 def test_sigmoid_with_default_steepness_produces_expected_curve() -> None:
-    """デフォルトの急峻さで期待されるsigmoid曲線が生成されること.
+    """デフォルトの急峻さで期待されるシグモイド曲線が生成されること.
 
     Given:
         - center値が50.0である
@@ -63,43 +65,39 @@ def test_sigmoid_handles_overflow_without_crashing() -> None:
 
 
 def test_normalize_all_returns_all_expected_metrics() -> None:
-    """すべての正規化メトリックを含む辞書が返されること.
+    """すべての正規化メトリクスを含むオブジェクトが返されること.
 
     Given:
-        - すべての必須フィールドを含む生メトリック辞書がある
+        - すべての必須フィールドを含む生メトリクスオブジェクトがある
     When:
         - normalize_allが呼び出される
     Then:
-        - すべての期待されるメトリックが返されること
+        - 期待されるすべてのメトリクスが返されること
         - すべての正規化値が[0, 1]範囲内にあること
     """
     # Arrange
-    raw = {
-        "blur_score": 500.0,
-        "contrast": 50.0,
-        "color_richness": 40.0,
-        "edge_density": 0.2,
-        "dramatic_score": 50.0,
-        "visual_balance": 80.0,
-        "action_intensity": 30.0,
-        "ui_density": 10.0,
-    }
+    raw = RawMetrics(
+        blur_score=500.0,
+        bnrightness=100.0,
+        contrast=50.0,
+        color_richness=40.0,
+        edge_density=0.2,
+        dramatic_score=50.0,
+        visual_balance=80.0,
+        action_intensity=30.0,
+        ui_density=10.0,
+    )
 
     # Act
     result = MetricNormalizer.normalize_all(raw)
 
     # Assert
-    assert len(result) == 8
-    expected_keys = {
-        "blur_score",
-        "contrast",
-        "color_richness",
-        "edge_density",
-        "dramatic_score",
-        "visual_balance",
-        "action_intensity",
-        "ui_density",
-    }
-    assert set(result.keys()) == expected_keys
-    for value in result.values():
-        assert 0.0 <= value <= 1.0
+    assert isinstance(result, NormalizedMetrics)
+    assert 0.0 <= result.blur_score <= 1.0
+    assert 0.0 <= result.contrast <= 1.0
+    assert 0.0 <= result.color_richness <= 1.0
+    assert 0.0 <= result.edge_density <= 1.0
+    assert 0.0 <= result.dramatic_score <= 1.0
+    assert 0.0 <= result.visual_balance <= 1.0
+    assert 0.0 <= result.action_intensity <= 1.0
+    assert 0.0 <= result.ui_density <= 1.0

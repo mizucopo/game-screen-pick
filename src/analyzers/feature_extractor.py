@@ -53,22 +53,20 @@ class FeatureExtractor:
     def extract_clip_features(self, pil_img: Image.Image) -> np.ndarray:
         """CLIP画像埋め込みを抽出する.
 
+        CLIPModelManager.get_normalized_image_features を使用し、
+        重複する推論コードを排除する。
+
         Args:
             pil_img: PIL画像（RGB形式）
 
         Returns:
             正規化されたCLIP画像埋め込み（512次元）
         """
-        with torch.inference_mode():
-            inputs = self.model_manager.processor(
-                images=pil_img,
-                return_tensors="pt",
-                padding=True,
-            ).to(self.model_manager.device)
-            image_features = self.model_manager.model.get_image_features(**inputs)
-            # L2正規化して返す
-            features = image_features[0].cpu().numpy()
-            return VectorUtils.safe_l2_normalize(features)
+        # CLIPModelManagerから正規化済み特徴を取得（torch.Tensor）
+        features_tensor = self.model_manager.get_normalized_image_features(pil_img)
+        # CPUに転送してNumPy配列に変換
+        features = features_tensor.cpu().numpy()
+        return VectorUtils.safe_l2_normalize(features)
 
     def extract_combined_features(
         self,

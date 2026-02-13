@@ -274,6 +274,7 @@ class BatchPipeline:
         """複数のパスからPIL画像を読み込み、前処理まで並列実行する.
 
         I/O（画像読み込み）とCPU-bound処理（RGB変換・縮小）をThreadPoolExecutorで並列化.
+        プリロード用executorを再利用し、スレッド過多を抑制する。
 
         Args:
             paths: 画像ファイルパスのリスト
@@ -289,12 +290,9 @@ class BatchPipeline:
         else:
             load_func = ImageUtils.load_as_rgb
 
-        # 設定からワーカー数を取得（Noneで自動設定）
-        max_workers = self.config.io_max_workers
-
-        # ThreadPoolExecutorで並列処理
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(load_func, paths))
+        # プリロード用executorを再利用（ネストしたThreadPoolExecutor作成を回避）
+        executor = self._get_preload_executor()
+        results = list(executor.map(load_func, paths))
 
         return results
 
@@ -414,20 +412,24 @@ class BatchPipeline:
             ThreadPoolExecutorインスタンス
         """
         if self._executor is None:
-            self._executor = ThreadPoolExecutor(max_workers=self._result_max_workers)
+            # ThreadPoolExecutor(max_workers=0) は ValueError になるため
+            # 0 の場合は 1 (シングルスレッド) に変換
+            workers = self._result_max_workers if self._result_max_workers > 0 else 1
+            self._executor = ThreadPoolExecutor(max_workers=workers)
         return self._executor
 
     def _get_preload_executor(self) -> ThreadPoolExecutor:
         """プリロード用スレッドプールを取得または作成.
 
+        I/O executor と同じプールを再利用し、スレッド過多を抑制する。
+
         Returns:
             ThreadPoolExecutorインスタンス
         """
         if self._preload_executor is None:
-            # 設定からワーカー数を取得
-            self._preload_executor = ThreadPoolExecutor(
-                max_workers=self.config.preload_workers
-            )
+            # 設定からワーカー数を取得（io_max_workersを使用）
+            max_workers = self.config.io_max_workers
+            self._preload_executor = ThreadPoolExecutor(max_workers=max_workers)
         return self._preload_executor
 
     def close(self) -> None:

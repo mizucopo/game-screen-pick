@@ -18,6 +18,8 @@ import pytest
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.main import Main
 from src.models.image_metrics import ImageMetrics
+from src.models.normalized_metrics import NormalizedMetrics
+from src.models.raw_metrics import RawMetrics
 from src.models.picker_statistics import PickerStatistics
 from src.services.game_screen_picker import GameScreenPicker
 
@@ -50,10 +52,31 @@ def sample_image_metrics_factory() -> Callable[[str, float], ImageMetrics]:
     """テスト用ImageMetricsを作成するファクトリ関数."""
 
     def _create(path: str, score: float) -> ImageMetrics:
+        raw = RawMetrics(
+            blur_score=score,
+            bnrightness=100.0,
+            contrast=50.0,
+            edge_density=0.1,
+            color_richness=50.0,
+            ui_density=10.0,
+            action_intensity=30.0,
+            visual_balance=80.0,
+            dramatic_score=50.0,
+        )
+        norm = NormalizedMetrics(
+            blur_score=score / 100.0,
+            contrast=0.5,
+            color_richness=0.5,
+            edge_density=0.5,
+            dramatic_score=0.5,
+            visual_balance=0.5,
+            action_intensity=0.5,
+            ui_density=0.5,
+        )
         return ImageMetrics(
             path=path,
-            raw_metrics={"blur_score": score},
-            normalized_metrics={"blur_score": score / 100.0},
+            raw_metrics=raw,
+            normalized_metrics=norm,
             semantic_score=0.8,
             total_score=score,
             features=np.random.rand(64),

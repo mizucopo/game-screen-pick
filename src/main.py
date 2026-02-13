@@ -50,26 +50,22 @@ class Main:
 
         # 依存関係の遅延初期化
         if self._analyzer is None:
-            # AnalyzerConfigにCLI引数を反映
-            analyzer_config = AnalyzerConfig()
-            if parsed_args.result_max_workers is not None:
-                analyzer_config.result_max_workers = parsed_args.result_max_workers
-            if parsed_args.max_dim is not None:
-                analyzer_config.max_dim = parsed_args.max_dim
-            if parsed_args.max_memory_mb is not None:
-                analyzer_config.max_memory_mb = parsed_args.max_memory_mb
-
+            # CLI引数を含めてAnalyzerConfigを一括生成
+            analyzer_config = AnalyzerConfig.from_cli_args(
+                result_max_workers=parsed_args.result_max_workers,
+                max_dim=parsed_args.max_dim,
+                max_memory_mb=parsed_args.max_memory_mb,
+            )
             self._analyzer = ImageQualityAnalyzer(config=analyzer_config)
 
         if self._picker is None:
             seed = parsed_args.seed
             rng = random.Random(seed) if seed is not None else None
 
-            # SelectionConfigにCLI引数を反映
-            selection_config = SelectionConfig()
-            if parsed_args.batch_size is not None:
-                selection_config.batch_size = parsed_args.batch_size
-
+            # CLI引数を含めてSelectionConfigを一括生成
+            selection_config = SelectionConfig.from_cli_args(
+                batch_size=parsed_args.batch_size,
+            )
             self._picker = GameScreenPicker(
                 self._analyzer, config=selection_config, rng=rng
             )
@@ -137,11 +133,16 @@ class Main:
     def validate_positive_int_or_zero(value: str) -> int:
         """0または正の整数をバリデーションする.
 
+        Note:
+            ThreadPoolExecutor(max_workers=0) は実行時エラーになるため、
+            0 は 1 に変換して返す（CLIヘルプの「0でシングルスレッド」
+            という仕様を維持しつつ、実行時エラーを回避）。
+
         Args:
             value: コマンドラインから渡された文字列値
 
         Returns:
-            バリデーション済みの整数値
+            バリデーション済みの整数値（0は1に変換）
 
         Raises:
             argparse.ArgumentTypeError: 値が0以上の整数でない場合
@@ -152,7 +153,9 @@ class Main:
                 raise argparse.ArgumentTypeError(
                     f"0以上の整数を指定してください（実際の値: {ivalue}）"
                 )
-            return ivalue
+            # ThreadPoolExecutor(max_workers=0) は ValueError になるため
+            # 0 を指定した場合は 1 (シングルスレッド) に変換
+            return ivalue if ivalue > 0 else 1
         except ValueError as e:
             raise argparse.ArgumentTypeError(f"'{value}' は整数ではありません") from e
 

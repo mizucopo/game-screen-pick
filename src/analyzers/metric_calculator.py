@@ -6,11 +6,13 @@ import cv2
 import numpy as np
 import PIL.Image
 import torch
-import torch.nn.functional as F
 
+from ..analyzers.metric_normalizer import MetricNormalizer
 from ..models.analyzer_config import AnalyzerConfig
+from ..models.normalized_metrics import NormalizedMetrics
+from ..models.raw_metrics import RawMetrics
+
 from .clip_model_manager import CLIPModelManager
-from .metric_normalizer import MetricNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,7 @@ class MetricCalculator:
         self.weights = weights
         self.model_manager = model_manager
 
-    def calculate_raw_metrics(self, img: np.ndarray) -> dict[str, float]:
+    def calculate_raw_metrics(self, img: np.ndarray) -> RawMetrics:
         """生の画像メトリクスを計算する.
 
         注: 呼出し元（batch_pipeline.py）で既にmax_dimまで縮小された画像を
@@ -49,7 +51,7 @@ class MetricCalculator:
             img: OpenCV画像（BGR形式、既にmax_dim以下に縮小されている）
 
         Returns:
-            生メトリクスの辞書
+            RawMetricsインスタンス
         """
         # 念のため、画像サイズがmax_dimを超えている場合のみ縮小
         # （通常はbatch_pipeline側で既に縮小済みのためスキップされる）
@@ -98,21 +100,25 @@ class MetricCalculator:
             (high_saturation & high_value).astype(np.uint8)
         )
         dramatic_score = (dramatic_pixels / gray_size) * 1000
+        visual_balance = float(max(0, 100 - abs(gray_mean - 128) * 0.5))
 
-        return {
-            "blur_score": blur_score,
-            "brightness": float(gray_mean),
-            "contrast": contrast,
-            "edge_density": edge_density,
-            "color_richness": color_richness,
-            "ui_density": ui_density,
-            "action_intensity": action_intensity,
-            "visual_balance": float(max(0, 100 - abs(gray_mean - 128) * 0.5)),
-            "dramatic_score": dramatic_score,
-        }
+        return RawMetrics(
+            blur_score=blur_score,
+            bnrightness=float(gray_mean),
+            contrast=contrast,
+            edge_density=edge_density,
+            color_richness=color_richness,
+            ui_density=ui_density,
+            action_intensity=action_intensity,
+            visual_balance=visual_balance,
+            dramatic_score=dramatic_score,
+        )
 
     def calculate_semantic_score(self, pil_img: PIL.Image.Image) -> float:
         """CLIPモデルを使用してセマンティックスコアを計算する.
+
+        CLIPModelManager.get_normalized_image_features を使用し、
+        重複する推論コードを排除する。
 
         Args:
             pil_img: PIL画像（RGB形式）
@@ -120,22 +126,16 @@ class MetricCalculator:
         Returns:
             コサイン類似度ベースのセマンティックスコア（範囲: [-1, 1]）
         """
-        with torch.inference_mode():
-            inputs = self.model_manager.processor(
-                images=pil_img,
-                return_tensors="pt",
-                padding=True,
-            ).to(self.model_manager.device)
-            image_features = self.model_manager.model.get_image_features(**inputs)
+        # CLIPModelManagerから正規化済み特徴を取得
+        image_features_normalized = self.model_manager.get_normalized_image_features(
+            pil_img
+        ).unsqueeze(0)
 
-            # 画像特徴をL2正規化
-            image_features_normalized = F.normalize(image_features, p=2, dim=-1)
-
-            # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
-            # コサイン類似度を計算
-            text_embeddings = self.model_manager.get_text_embeddings()
-            cosine_sim = torch.matmul(image_features_normalized, text_embeddings.T)
-            return float(cosine_sim[0][0])
+        # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
+        # コサイン類似度を計算
+        text_embeddings = self.model_manager.get_text_embeddings()
+        cosine_sim = torch.matmul(image_features_normalized, text_embeddings.T)
+        return float(cosine_sim[0][0])
 
     def calculate_semantic_score_from_features(
         self, clip_features: np.ndarray
@@ -223,7 +223,7 @@ class MetricCalculator:
         return results, batch_features, valid_indices
 
     def calculate_total_score(
-        self, raw: dict[str, float], norm: dict[str, float], semantic: float
+        self, raw: RawMetrics, norm: NormalizedMetrics, semantic: float
     ) -> float:
         """総合スコアを計算する.
 
@@ -235,12 +235,16 @@ class MetricCalculator:
         Returns:
             総合スコア
         """
+        # NormalizedMetricsを辞書のように扱って加重和を計算
+        norm_dict = norm.to_dict()
         weighted_sum = sum(
-            norm[k] * self.weights.get(k, 0.0) for k in norm if k in self.weights
+            norm_dict[k] * self.weights.get(k, 0.0)
+            for k in norm_dict
+            if k in self.weights
         )
         penalty = (
             self.config.brightness_penalty_value
-            if raw["brightness"] < self.config.brightness_penalty_threshold
+            if raw.bnrightness < self.config.brightness_penalty_threshold
             else 0.0
         )
         return max(
@@ -251,7 +255,7 @@ class MetricCalculator:
 
     def calculate_raw_norm_metrics(
         self, img: np.ndarray
-    ) -> tuple[dict[str, float], dict[str, float]]:
+    ) -> tuple[RawMetrics, NormalizedMetrics]:
         """生メトリクスと正規化メトリクスのみ計算する.
 
         セマンティックスコアはバッチ計算済みの値を使用するため、
@@ -261,7 +265,7 @@ class MetricCalculator:
             img: OpenCV画像（BGR形式）
 
         Returns:
-            (生メトリクス, 正規化メトリクス)のタプル
+            (RawMetrics, NormalizedMetrics)のタプル
         """
         raw = self.calculate_raw_metrics(img)
         norm = MetricNormalizer.normalize_all(raw)
@@ -269,7 +273,7 @@ class MetricCalculator:
 
     def calculate_all_metrics(
         self, img: np.ndarray, clip_features: np.ndarray
-    ) -> tuple[dict[str, float], dict[str, float], float, float]:
+    ) -> tuple[RawMetrics, NormalizedMetrics, float, float]:
         """すべてのメトリクスを一括計算する.
 
         Args:
@@ -277,7 +281,7 @@ class MetricCalculator:
             clip_features: CLIP画像特徴（512次元、正規化済み）
 
         Returns:
-            (生メトリクス, 正規化メトリクス, セマンティックスコア, 総合スコア)のタプル
+            (RawMetrics, NormalizedMetrics, セマンティックスコア, 総合スコア)のタプル
         """
         raw = self.calculate_raw_metrics(img)
         norm = MetricNormalizer.normalize_all(raw)

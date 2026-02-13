@@ -23,6 +23,7 @@ def test_analyze_returns_valid_metrics_with_default_weights(
     Given:
         - デフォルト設定のアナライザインスタンスがある
         - 有効なテスト画像がある
+        - CLIPモデルとプロセッサのモックが利用可能
     When:
         - 画像が分析される
     Then:
@@ -43,17 +44,17 @@ def test_analyze_returns_valid_metrics_with_default_weights(
     assert result.path == sample_image_path
     assert 0 <= result.total_score <= 100
     assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
-    assert len(result.normalized_metrics) > 0
+    # 正規化メトリクスの属性に直接アクセス
+    assert result.normalized_metrics.blur_score >= 0.0
 
 
-def test_analyze_returns_none_for_invalid_inputs(
-    tmp_path: Path,
-) -> None:
+def test_analyze_returns_none_for_invalid_inputs(tmp_path: Path) -> None:
     """無効な入力に対してNoneが返されること.
 
     Given:
         - アナライザインスタンスがある
         - 存在しないファイルパスと破損した画像がある
+        - CLIPモデルとプロセッサのモックが利用可能
     When:
         - 無効な入力が分析される
     Then:

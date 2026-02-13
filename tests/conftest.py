@@ -26,11 +26,12 @@ class _SimpleDict(dict[str, Any]):
         return self
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(scope="function")
 def mock_clip_model() -> Generator[Any, Any, Any]:
     """CLIPモデルのモック.
 
     極力シンプルな実装にし、CI環境でのハングを防止する。
+    明示的に使用するテストのみで適用する。
     """
 
     # モデルオブジェクト（MagicMockではなく普通のクラス）
@@ -74,11 +75,12 @@ def mock_clip_model() -> Generator[Any, Any, Any]:
         yield mock
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(scope="function")
 def mock_clip_processor() -> Generator[Any, Any, Any]:
     """CLIPプロセッサのモック.
 
     _SimpleDictを使い、CI環境でのハングを防止する。
+    明示的に使用するテストのみで適用する。
     """
 
     def mock_processor_func(**kwargs: object) -> _SimpleDict:

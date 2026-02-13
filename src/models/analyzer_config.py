@@ -66,3 +66,25 @@ class AnalyzerConfig:
                 f"score_multiplierは正の値である必要があります: {self.score_multiplier}"
             )
             raise ValueError(msg)
+
+    @classmethod
+    def from_cli_args(cls, **kwargs: int | None) -> "AnalyzerConfig":
+        """CLI引数から設定を作成する.
+
+        Args:
+            **kwargs: CLI引数（result_max_workers, max_dim, max_memory_mb）
+                Noneでない引数のみデフォルト値を上書き
+
+        Returns:
+            AnalyzerConfigインスタンス
+        """
+        # デフォルト値を持つ設定を作成
+        config = cls()
+        # CLI引数で上書き（Noneでない値のみ）
+        if kwargs.get("result_max_workers") is not None:
+            config.result_max_workers = kwargs["result_max_workers"]
+        if kwargs.get("max_dim") is not None:
+            config.max_dim = kwargs["max_dim"]  # type: ignore[assignment]
+        if kwargs.get("max_memory_mb") is not None:
+            config.max_memory_mb = kwargs["max_memory_mb"]  # type: ignore[assignment]
+        return config
