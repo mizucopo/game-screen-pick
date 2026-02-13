@@ -43,7 +43,9 @@ uv run game-screen-pick ./screenshots -r -n 10
 
 解析結果は自動的にキャッシュされ、2回目以降の実行で再利用されます。
 
-- **保存場所**: 出力フォルダ配下の `.cache/cache.sqlite3`（`--copy-to` 指定時）
+- **保存場所**:
+  - `--copy-to` 指定時: `{出力フォルダ}/cache.sqlite3`
+  - それ以外: `~/.cache/game-screen-pick/cache.sqlite3`
   - `--cache-file` でカスタムパスを指定可能
 - **キャッシュ対象**: CLIP特徴量、HSV特徴量、画質メトリクス
 - **キャッシュキー**: ファイルパス、ファイルサイズ、更新時刻、モデル名、ターゲットテキスト、解像度
@@ -59,8 +61,11 @@ uv run game-screen-pick ./screenshots --no-cache
 キャッシュを削除する場合：
 
 ```bash
-# デフォルトの場所に出力フォルダを指定した場合
-rm ./output/.cache/cache.sqlite3
+# 出力フォルダを指定した場合
+rm ./output/cache.sqlite3
+
+# デフォルトの場所
+rm ~/.cache/game-screen-pick/cache.sqlite3
 ```
 
 ### キャッシュの無効化条件
