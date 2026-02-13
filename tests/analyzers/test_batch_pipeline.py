@@ -170,7 +170,7 @@ def test_cached_results_use_stored_semantic_score(tmp_path: Path) -> None:
     # キャッシュキーを生成して保存
     file_stat = img_path.stat()
     cache_key = cache.generate_cache_key(
-        absolute_path=str(img_path.resolve()),
+        absolute_path=os.path.abspath(str(img_path)),
         file_size=file_stat.st_size,
         mtime_ns=int(file_stat.st_mtime_ns),
         model_name="openai/clip-vit-base-patch32",
@@ -179,12 +179,16 @@ def test_cached_results_use_stored_semantic_score(tmp_path: Path) -> None:
     )
 
     # semantic_score付きで保存
+    normalized_metrics = {"blur_score": 0.5}
+    total_score = 75.0
     cache.put(
         cache_key=cache_key,
         clip_features=clip_features,
         raw_metrics=raw_metrics,
         hsv_features=hsv_features,
         semantic_score=semantic_score,
+        normalized_metrics=normalized_metrics,
+        total_score=total_score,
     )
 
     # Act: キャッシュから取得
@@ -471,3 +475,78 @@ def test_process_single_result_reuses_metadata(
     assert result.path == sample_image_path
     assert 0 <= result.total_score <= 100
     assert result.semantic_score == semantic
+
+
+def test_cached_results_uses_stored_metrics(tmp_path: Path) -> None:
+    """キャッシュヒット時に保存されたnormalized_metricsとtotal_scoreが使用されること.
+
+    Given:
+        - normalized_metricsとtotal_score付きのエントリがキャッシュに保存されている
+    When:
+        - キャッシュから結果を取得
+    Then:
+        - 保存されたnormalized_metricsとtotal_scoreが使用されること
+        - 再計算がスキップされること
+    """
+    # Arrange: キャッシュ付きのパイプラインを作成
+    config = AnalyzerConfig()
+    weights = GenreWeights.get_weights("mixed")
+    model_manager = CLIPModelManager()
+    feature_extractor = FeatureExtractor(model_manager)
+    metric_calculator = MetricCalculator(config, weights, model_manager)
+
+    cache_path = tmp_path / "test_stored_metrics_cache.sqlite3"
+    cache = FeatureCache(cache_path)
+
+    pipeline = BatchPipeline(
+        feature_extractor,
+        metric_calculator,
+        config,
+        cache=cache,
+    )
+
+    # テスト画像を作成
+    np.random.seed(42)
+    img_array = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+    img_path = tmp_path / "stored_metrics_test.jpg"
+    cv2.imwrite(str(img_path), img_array)
+
+    # ファイル情報を事前に取得してキャッシュキーを作成
+    file_stat = img_path.stat()
+    cache_key = cache.generate_cache_key(
+        absolute_path=os.path.abspath(str(img_path)),
+        file_size=file_stat.st_size,
+        mtime_ns=int(file_stat.st_mtime_ns),
+        model_name="openai/clip-vit-base-patch32",
+        target_text="epic game scenery",
+        max_dim=config.max_dim,
+    )
+
+    # Act: 最初の実行（キャッシュミス）
+    first_results = pipeline.process_batch([str(img_path)], batch_size=1)
+
+    # Assert: 最初の実行で有効な結果が得られる
+    assert len(first_results) == 1
+    assert first_results[0] is not None
+    assert first_results[0].path == str(img_path)
+    assert -1.0 <= first_results[0].semantic_score <= 1.0 + 1e-5
+    assert 0 <= first_results[0].total_score <= 100
+
+    # キャッシュから直接取得して確認（事前に取得したcache_keyを使用）
+    entry = cache.get(cache_key)
+    assert entry is not None, f"Cache entry not found for key: {cache_key}"
+    # normalized_metricsとtotal_scoreが保存されていること
+    assert entry.normalized_metrics is not None
+    assert entry.total_score is not None
+
+    # 2回目の実行（キャッシュヒット）
+    second_results = pipeline.process_batch([str(img_path)], batch_size=1)
+
+    # Assert: 2回目の実行でも有効な結果が得られる
+    assert len(second_results) == 1
+    assert second_results[0] is not None
+
+    # キャッシュヒット時も結果が正しく取得できる
+    assert second_results[0].path == str(img_path)
+    assert -1.0 <= second_results[0].semantic_score <= 1.0 + 1e-5
+    assert 0 <= second_results[0].total_score <= 100

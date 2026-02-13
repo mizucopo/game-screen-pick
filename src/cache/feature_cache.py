@@ -25,7 +25,7 @@ class FeatureCache:
     _init_lock = threading.Lock()
 
     # キャッシュスキーマのバージョン（アルゴリズム変更時に更新）
-    METRICS_VERSION: str = "2"  # float16 features
+    METRICS_VERSION: str = "3"  # Add normalized_metrics and total_score
 
     def __init__(self, cache_path: Optional[str | Path] = None):
         """特徴量キャッシュを初期化する.
@@ -112,6 +112,8 @@ class FeatureCache:
             raw_metrics TEXT NOT NULL,
             hsv_features BLOB NOT NULL,
             semantic_score REAL,
+            normalized_metrics TEXT,
+            total_score REAL,
             created_at REAL NOT NULL,
             PRIMARY KEY (
                 absolute_path, model_name, target_text, max_dim, metrics_version
@@ -183,6 +185,8 @@ class FeatureCache:
                 raw_metrics TEXT NOT NULL,
                 hsv_features BLOB NOT NULL,
                 semantic_score REAL,
+                normalized_metrics TEXT,
+                total_score REAL,
                 created_at REAL NOT NULL,
                 PRIMARY KEY (
                     absolute_path, model_name, target_text, max_dim, metrics_version
@@ -243,7 +247,8 @@ class FeatureCache:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT clip_features, raw_metrics, hsv_features, semantic_score
+            SELECT clip_features, raw_metrics, hsv_features, semantic_score,
+                   normalized_metrics, total_score
             FROM feature_cache
             WHERE absolute_path = ?
               AND file_size = ?
@@ -276,6 +281,8 @@ class FeatureCache:
                 np.float32
             ),
             semantic_score=row["semantic_score"],
+            normalized_metrics=json.loads(row["normalized_metrics"]),
+            total_score=row["total_score"],
         )
 
     def put(
@@ -285,6 +292,8 @@ class FeatureCache:
         raw_metrics: dict[str, float],
         hsv_features: np.ndarray,
         semantic_score: float,
+        normalized_metrics: dict[str, float],
+        total_score: float,
     ) -> None:
         """特徴量をキャッシュに保存する.
 
@@ -294,6 +303,8 @@ class FeatureCache:
             raw_metrics: 生メトリクス
             hsv_features: HSV特徴（64次元）
             semantic_score: セマンティックスコア
+            normalized_metrics: 正規化メトリクス
+            total_score: 総合スコア
         """
         import time
 
@@ -304,8 +315,9 @@ class FeatureCache:
             INSERT OR REPLACE INTO feature_cache (
                 absolute_path, file_size, mtime_ns, model_name, target_text,
                 max_dim, metrics_version, clip_features, raw_metrics,
-                hsv_features, semantic_score, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                hsv_features, semantic_score, normalized_metrics, total_score,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cache_key["absolute_path"],
@@ -319,6 +331,8 @@ class FeatureCache:
                 json.dumps(raw_metrics),
                 hsv_features.astype(np.float16).tobytes(),
                 semantic_score,
+                json.dumps(normalized_metrics),
+                total_score,
                 time.time(),
             ),
         )
@@ -391,7 +405,9 @@ class FeatureCache:
                 fc.clip_features,
                 fc.raw_metrics,
                 fc.hsv_features,
-                fc.semantic_score
+                fc.semantic_score,
+                fc.normalized_metrics,
+                fc.total_score
             FROM feature_cache fc
             INNER JOIN temp_lookup tl ON
                 fc.absolute_path = tl.absolute_path AND
@@ -427,6 +443,8 @@ class FeatureCache:
                 raw_metrics=json.loads(row["raw_metrics"]),
                 hsv_features=hsv,
                 semantic_score=row["semantic_score"],
+                normalized_metrics=json.loads(row["normalized_metrics"]),
+                total_score=row["total_score"],
             )
 
         return results
@@ -450,6 +468,8 @@ class FeatureCache:
                 - raw_metrics: 生メトリクス（辞書）
                 - hsv_features: HSV特徴（64次元、np.ndarray）
                 - semantic_score: セマンティックスコア（オプション）
+                - normalized_metrics: 正規化メトリクス（オプション）
+                - total_score: 総合スコア（オプション）
         """
         import time
 
@@ -458,6 +478,13 @@ class FeatureCache:
 
         conn = self._get_connection()
         cursor = conn.cursor()
+        # 既に進行中のトランザクションがある場合はコミットしておく
+        # （get_many()等のTEMP TABLE操作でトランザクションが開始されている可能性）
+        try:
+            conn.commit()
+        except Exception:
+            pass  # トランザクションが開始されていない場合は無視
+
         cursor.execute("BEGIN TRANSACTION")
         try:
             insert_data = []
@@ -475,7 +502,9 @@ class FeatureCache:
                         entry["clip_features"].astype(np.float16).tobytes(),
                         json.dumps(entry["raw_metrics"]),
                         entry["hsv_features"].astype(np.float16).tobytes(),
-                        entry.get("semantic_score"),
+                        entry["semantic_score"],
+                        json.dumps(entry["normalized_metrics"]),
+                        entry["total_score"],
                         time.time(),
                     )
                 )
@@ -486,8 +515,9 @@ class FeatureCache:
                 INSERT OR REPLACE INTO feature_cache (
                     absolute_path, file_size, mtime_ns, model_name, target_text,
                     max_dim, metrics_version, clip_features, raw_metrics,
-                    hsv_features, semantic_score, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    hsv_features, semantic_score, normalized_metrics, total_score,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 insert_data,
             )
