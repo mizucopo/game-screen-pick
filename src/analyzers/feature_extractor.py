@@ -73,7 +73,7 @@ class FeatureExtractor:
     def extract_combined_features(
         self,
         img: np.ndarray,
-        clip_features: torch.Tensor | np.ndarray,
+        clip_features: np.ndarray,
     ) -> np.ndarray:
         """HSV特徴とCLIP特徴を結合する.
 
@@ -82,8 +82,7 @@ class FeatureExtractor:
 
         Args:
             img: OpenCV画像（BGR形式、既に縮小されている）
-            clip_features: CLIP画像埋め込み（512次元、正規化済み）
-                          torch.Tensorまたはnp.ndarray
+            clip_features: CLIP画像埋め込み（512次元、正規化済み、np.ndarray）
 
         Returns:
             結合された特徴ベクトル（576次元、np.ndarray）
@@ -92,14 +91,8 @@ class FeatureExtractor:
         # L2正規化（既に正規化されているが、安全のため再正規化）
         hsv_normalized = VectorUtils.safe_l2_normalize(hsv_features)
 
-        # clip_featuresがtorch.Tensorの場合はnumpyに変換
-        if isinstance(clip_features, torch.Tensor):
-            clip_features_np = clip_features.cpu().numpy()
-        else:
-            clip_features_np = clip_features
-
         # 結合
-        return np.concatenate([hsv_normalized, clip_features_np])
+        return np.concatenate([hsv_normalized, clip_features])
 
     def extract_clip_features_batch(
         self,

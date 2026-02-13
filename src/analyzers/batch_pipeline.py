@@ -414,10 +414,12 @@ class BatchPipeline:
             # バッチ計算したセマンティックスコアを使用して総合スコアを計算
             total = self.metric_calculator.calculate_total_score(raw, norm, semantic)
 
+            # CLIP特徴をNumPyに変換してから結合
+            clip_features_np = clip_features.cpu().numpy()
             # HSV特徴とCLIP特徴を結合
             features = self.feature_extractor.extract_combined_features(
                 img,
-                clip_features,
+                clip_features_np,
             )
 
             # キャッシュエントリを構築（キャッシュが有効な場合）
@@ -434,9 +436,7 @@ class BatchPipeline:
                         target_text=self.target_text,
                         max_dim=self.config.max_dim,
                     )
-                    # CLIP特徴をNumPyに変換（CPUからの転送を含む）
-                    clip_features_np = clip_features.cpu().numpy()
-                    # HSV特徴は結合前のものを取得（結合ベクトルの前半64要素）
+                    # HSV特徴は結合ベクトルの前半64要素
                     hsv_features = features[:64]
 
                     cache_entry = {

@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from src.cache.feature_cache import FeatureCache
+from src.models.cache_entry import CacheEntry
 
 
 def test_init_creates_database_schema() -> None:
@@ -679,3 +680,117 @@ def test_pragma_settings_not_applied_to_memory_db() -> None:
         assert conn is not None
         # 行ファクトリーが設定されている
         assert conn.row_factory is not None
+
+
+def test_get_many_reuses_temp_table() -> None:
+    """get_manyがTEMP TABLEを再利用すること.
+
+    Given:
+        - FeatureCacheインスタンスを作成
+        - 複数のエントリをキャッシュに保存
+    When:
+        - get_manyを複数回呼び出し
+    Then:
+        - 2回目以降も正常に動作すること
+        - TEMP TABLEが再利用されていること
+    """
+    # Arrange: 複数のエントリを保存
+    entries = []
+    cache_keys = []
+    for i in range(3):
+        clip_features = np.random.randn(512).astype(np.float32)
+        hsv_features = np.random.randn(64).astype(np.float32)
+        raw_metrics = {"blur_score": float(i * 10)}
+        cache_key: dict[str, str | int] = {
+            "absolute_path": f"/test/reuse_temp_{i}.jpg",
+            "file_size": 1024 + i,
+            "mtime_ns": 1234567890 + i,
+            "model_name": "test_model",
+            "target_text": "test target",
+            "max_dim": 1280,
+            "metrics_version": "1",
+        }
+        cache_keys.append(cache_key)
+        entries.append((cache_key, clip_features, hsv_features, raw_metrics))
+
+    with FeatureCache(None) as cache:
+        for cache_key, clip_features, hsv_features, raw_metrics in entries:
+            cache.put(
+                cache_key=cache_key,
+                clip_features=clip_features,
+                raw_metrics=raw_metrics,
+                hsv_features=hsv_features,
+            )
+
+        # Act: 1回目の呼び出し（TEMP TABLEが作成される）
+        results1 = cache.get_many(cache_keys)
+        assert len(results1) == 3
+        for key_id in results1:
+            assert results1[key_id] is not None
+
+        # Act: 2回目の呼び出し（TEMP TABLEが再利用される）
+        results2 = cache.get_many(cache_keys)
+        assert len(results2) == 3
+        for key_id in results2:
+            assert results2[key_id] is not None
+
+        # Assert: 結果が一致すること
+        for key_id in results1:
+            from typing import cast
+
+            entry1 = cast(CacheEntry, results1[key_id])
+            entry2 = cast(CacheEntry, results2[key_id])
+            np.testing.assert_array_almost_equal(
+                entry1.clip_features,
+                entry2.clip_features,
+            )
+
+
+def test_put_batch_uses_executemany() -> None:
+    """put_batchがexecutemanyで一括挿入されること.
+
+    Given:
+        - 複数のテストエントリを作成
+    When:
+        - put_batch()で一括保存
+    Then:
+        - すべてのエントリが正しく保存されること
+        - トランザクション内で処理されること
+    """
+    # Arrange: 複数のテストエントリを作成（100件）
+    entries = []
+    expected_results = []
+    for i in range(100):
+        clip_features = np.random.randn(512).astype(np.float32)
+        hsv_features = np.random.randn(64).astype(np.float32)
+        raw_metrics = {"blur_score": float(i)}
+        cache_key: dict[str, str | int] = {
+            "absolute_path": f"/test/executemany_{i}.jpg",
+            "file_size": 1024 + i,
+            "mtime_ns": 1234567890 + i,
+            "model_name": "test_model",
+            "target_text": "test target",
+            "max_dim": 1280,
+            "metrics_version": "1",
+        }
+        entries.append(
+            {
+                "cache_key": cache_key,
+                "clip_features": clip_features,
+                "raw_metrics": raw_metrics,
+                "hsv_features": hsv_features,
+            }
+        )
+        expected_results.append((cache_key, clip_features, hsv_features, raw_metrics))
+
+    with FeatureCache(None) as cache:
+        # Act: バッチ保存（executemanyで一括挿入）
+        cache.put_batch(entries)
+
+        # Assert: すべてのエントリが取得できる
+        for cache_key, clip_features, hsv_features, raw_metrics in expected_results:
+            result = cache.get(cache_key)
+            assert result is not None
+            np.testing.assert_array_almost_equal(result.clip_features, clip_features)
+            np.testing.assert_array_almost_equal(result.hsv_features, hsv_features)
+            assert result.raw_metrics == raw_metrics

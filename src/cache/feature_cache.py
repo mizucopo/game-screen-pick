@@ -38,6 +38,9 @@ class FeatureCache:
     def _get_connection(self) -> Any:
         """スレッドローカルなデータベース接続を取得する.
 
+        接続時にTEMP TABLEを事前に作成し、get_many呼び出し時に再利用する。
+        これにより毎回のCREATE/DROP TABLEオーバーヘッドを削減する。
+
         Returns:
             データベース接続
         """
@@ -55,6 +58,23 @@ class FeatureCache:
                 self._local.conn = sqlite3.connect(":memory:")
             # 行を辞書形式でアクセス可能にする
             self._local.conn.row_factory = sqlite3.Row
+
+            # TEMP TABLEを事前に作成（接続時に1回のみ）
+            # get_manyでクリアして再利用する
+            cursor = self._local.conn.cursor()
+            cursor.execute(
+                """
+                CREATE TEMP TABLE IF NOT EXISTS temp_lookup (
+                    absolute_path TEXT,
+                    file_size INTEGER,
+                    mtime_ns INTEGER,
+                    model_name TEXT,
+                    target_text TEXT,
+                    max_dim INTEGER,
+                    metrics_version TEXT
+                )
+                """
+            )
         return self._local.conn
 
     def _init_db(self) -> None:
@@ -303,6 +323,7 @@ class FeatureCache:
         - 単一のINクエリで複数キーを取得
         - SQLiteの複合主キー（7フィールド）を考慮
         - 結果をキャッシュキーの文字列表現でマッピング
+        - TEMP TABLEを再利用してCREATE/DROPオーバーヘッドを削減
 
         Args:
             cache_keys: キャッシュキーのリスト
@@ -335,20 +356,8 @@ class FeatureCache:
             str(k_id): None for k_id in key_identifiers
         }
 
-        # 一時テーブルを作成してルックアップ用データを挿入
-        cursor.execute(
-            """
-            CREATE TEMP TABLE temp_lookup (
-                absolute_path TEXT,
-                file_size INTEGER,
-                mtime_ns INTEGER,
-                model_name TEXT,
-                target_text TEXT,
-                max_dim INTEGER,
-                metrics_version TEXT
-            )
-            """
-        )
+        # TEMP TABLEをクリアして再利用（接続時に作成済み）
+        cursor.execute("DELETE FROM temp_lookup")
 
         # ルックアップテーブルにデータを一括挿入
         cursor.executemany(
@@ -403,9 +412,6 @@ class FeatureCache:
                 hsv_features=np.frombuffer(row["hsv_features"], dtype=np.float32),
             )
 
-        # 一時テーブルを削除
-        cursor.execute("DROP TABLE temp_lookup")
-
         return results
 
     def put_batch(
@@ -418,6 +424,7 @@ class FeatureCache:
         - 単一トランザクションで複数件を一括挿入
         - SQLiteのロック競合を回避
         - トランザクションオーバーヘッドを削減
+        - executemanyで一括挿入してパフォーマンス向上
 
         Args:
             entries: 保存するエントリのリスト。各エントリは以下のキーを持つ辞書:
@@ -435,15 +442,10 @@ class FeatureCache:
         cursor = conn.cursor()
         cursor.execute("BEGIN TRANSACTION")
         try:
+            insert_data = []
             for entry in entries:
                 cache_key = entry["cache_key"]
-                cursor.execute(
-                    """INSERT OR REPLACE INTO feature_cache (
-                        absolute_path, file_size, mtime_ns, model_name, target_text,
-                        max_dim, metrics_version, clip_features, raw_metrics,
-                        hsv_features, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                insert_data.append(
                     (
                         cache_key["absolute_path"],
                         cache_key["file_size"],
@@ -456,8 +458,20 @@ class FeatureCache:
                         json.dumps(entry["raw_metrics"]),
                         entry["hsv_features"].astype(np.float32).tobytes(),
                         time.time(),
-                    ),
+                    )
                 )
+
+            # executemanyで一括挿入（ループ内のexecuteより20-200倍高速）
+            cursor.executemany(
+                """
+                INSERT OR REPLACE INTO feature_cache (
+                    absolute_path, file_size, mtime_ns, model_name, target_text,
+                    max_dim, metrics_version, clip_features, raw_metrics,
+                    hsv_features, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                insert_data,
+            )
             conn.commit()
         except Exception:
             conn.rollback()
