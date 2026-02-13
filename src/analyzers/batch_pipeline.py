@@ -9,13 +9,15 @@ from typing import Any, List, Optional, cast
 import cv2
 import numpy as np
 import torch
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 
 from ..cache.feature_cache import FeatureCache
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.cache_entry_info import CacheEntryInfo
 from ..models.image_metrics import ImageMetrics
 from ..models.path_metadata import PathMetadata
+from ..utils.exception_handler import ExceptionHandler
+from ..utils.image_utils import ImageUtils
 from .feature_extractor import FeatureExtractor
 from .metric_calculator import MetricCalculator
 
@@ -412,7 +414,7 @@ class BatchPipeline:
                     else:
                         return img_file.copy()
 
-            except (FileNotFoundError, UnidentifiedImageError, OSError, ValueError):
+            except ExceptionHandler.get_expected_image_errors():
                 return None
 
         # ThreadPoolExecutorで並列処理
@@ -457,9 +459,9 @@ class BatchPipeline:
                 # PILのthumbnailを使用してアスペクト比を保持しつつ縮小
                 pil_img_resized = pil_img.copy()
                 pil_img_resized.thumbnail((new_w, new_h), Image.Resampling.BILINEAR)
-                img = cv2.cvtColor(np.array(pil_img_resized), cv2.COLOR_RGB2BGR)
+                img = ImageUtils.pil_to_cv2(pil_img_resized)
             else:
-                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+                img = ImageUtils.pil_to_cv2(pil_img)
 
             # 生メトリクスと正規化メトリクスのみ計算
             # （セマンティックスコアはバッチ計算済みの値を使用）
@@ -515,7 +517,7 @@ class BatchPipeline:
                     )
 
             return ImageMetrics(path, raw, norm, semantic, total, features), cache_entry
-        except self._get_expected_errors() as e:
+        except ExceptionHandler.get_expected_image_errors() as e:
             logger.warning(
                 f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
             )
@@ -622,14 +624,3 @@ class BatchPipeline:
                 logger.debug(f"キャッシュ一括保存に失敗しました: {e}")
 
         return results
-
-    @staticmethod
-    def _get_expected_errors() -> tuple[type[Exception], ...]:
-        """正常な失敗として扱うエラー型."""
-        return (
-            FileNotFoundError,
-            UnidentifiedImageError,
-            OSError,
-            cv2.error,
-            ValueError,
-        )

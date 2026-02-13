@@ -3,14 +3,14 @@
 import logging
 from typing import List, Optional
 
-import cv2
-import numpy as np
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 
 from ..cache.feature_cache import FeatureCache
 from ..constants.score_weights import ScoreWeights
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.image_metrics import ImageMetrics
+from ..utils.exception_handler import ExceptionHandler
+from ..utils.image_utils import ImageUtils
 from .batch_pipeline import BatchPipeline
 from .clip_model_manager import CLIPModelManager
 from .feature_extractor import FeatureExtractor
@@ -78,7 +78,7 @@ class ImageQualityAnalyzer:
                     pil_img_copy = pil_img.copy()
 
                 # OpenCV形式（BGR）に変換
-                img = cv2.cvtColor(np.array(pil_img_copy), cv2.COLOR_RGB2BGR)
+                img = ImageUtils.pil_to_cv2(pil_img_copy)
 
                 # CLIP特徴を抽出
                 clip_features = self.feature_extractor.extract_clip_features(
@@ -96,14 +96,11 @@ class ImageQualityAnalyzer:
                 )
 
                 return ImageMetrics(path, raw, norm, semantic, total, features)
-        except self._get_expected_errors() as e:
+        except ExceptionHandler.get_expected_image_errors() as e:
             logger.warning(
                 f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
             )
             return None
-        except self._get_unexpected_errors():
-            logger.error(f"予期しないエラーが発生しました: {path}", exc_info=True)
-            raise
 
     def analyze_batch(
         self,
@@ -122,26 +119,3 @@ class ImageQualityAnalyzer:
             解析結果のリスト（失敗した画像はNone）
         """
         return self.batch_pipeline.process_batch(paths, batch_size, show_progress)
-
-    @staticmethod
-    def _get_expected_errors() -> tuple[type[Exception], ...]:
-        """正常な失敗として扱うエラー型."""
-        return (
-            FileNotFoundError,
-            UnidentifiedImageError,
-            OSError,
-            cv2.error,
-            ValueError,
-        )
-
-    @staticmethod
-    def _get_unexpected_errors() -> tuple[type[Exception], ...]:
-        """異常な失敗として扱うエラー型（実装バグ）."""
-        return (
-            AttributeError,
-            TypeError,
-            KeyError,
-            IndexError,
-            RuntimeError,
-            MemoryError,
-        )

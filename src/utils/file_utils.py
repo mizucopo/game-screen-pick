@@ -1,6 +1,11 @@
 """ファイル操作ユーティリティ."""
 
+import logging
+import shutil
 from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class FileUtils:
@@ -38,3 +43,19 @@ class FileUtils:
             if not new_path.exists():
                 return new_path
             counter += 1
+
+    @staticmethod
+    def copy_selected_items(selected: list[Any], dest_dir: str) -> None:
+        """選択されたアイテムを出力ディレクトリにコピーする.
+
+        Args:
+            selected: path属性を持つオブジェクトのリスト
+            dest_dir: 出力先ディレクトリのパス
+        """
+        out = Path(dest_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        for res in selected:
+            original_filename = Path(res.path).name
+            unique_dest = FileUtils.get_unique_destination(out, original_filename)
+            shutil.copy2(res.path, unique_dest)
+        logger.info(f"{len(selected)} 件を {dest_dir} に保存しました。")
