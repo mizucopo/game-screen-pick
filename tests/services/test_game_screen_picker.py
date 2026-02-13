@@ -121,11 +121,21 @@ def sample_image_metrics() -> List[ImageMetrics]:
     """テスト用のサンプルImageMetricsを作成する.
 
     類似度が明示的に検証された画像セットを返します：
-    - image1: 高品質、ベース特徴
-    - image2: 中品質、image1と0.96の類似度（0.9閾値を超過）
-    - image3: 高品質、image1と0.85の類似度（0.9閾値以下）
-    - image4: 低品質、image1と0.30の類似度（異なる特徴）
-    - image5: 中品質、image3と0.96の類似度（0.9閾値を超過）
+    - image1: 高品質、ベース特徴（LOWバケットの活動量）
+    - image2: 中品質、image1と0.96の類似度（0.9閾値を超過）（LOWバケットの活動量）
+    - image3: 高品質、image1と0.85の類似度（0.9閾値以下）（MIDバケットの活動量）
+    - image4: 低品質、image1と0.30の類似度（異なる特徴）（HIGHバケットの活動量）
+    - image5: 中品質、image3と0.96の類似度（0.9閾値を超過）（HIGHバケットの活動量）
+
+    活動量指標の設計：
+    - 画像0-1: LOWバケット（活動量低め）
+      action_intensity 0.1-0.15, edge_density 0.1-0.15,
+      dramatic_score 0.1-0.15
+    - 画像2: MIDバケット（活動量中程度）
+      action_intensity 0.5, edge_density 0.5, dramatic_score 0.5
+    - 画像3-4: HIGHバケット（活動量高め）
+      action_intensity 0.8-0.9, edge_density 0.8-0.9,
+      dramatic_score 0.8-0.9
     """
     np.random.seed(42)
     base_features = np.random.rand(128)
@@ -139,11 +149,30 @@ def sample_image_metrics() -> List[ImageMetrics]:
     # image5はimage3に類似
     features_list.append(_create_features_with_similarity(features_list[2], 0.96))
 
+    # 活動量指標（LOW/MID/HIGHバケット）
+    activity_metrics = [
+        {"action_intensity": 0.1, "edge_density": 0.1, "dramatic_score": 0.1},
+        {"action_intensity": 0.15, "edge_density": 0.15, "dramatic_score": 0.15},
+        {"action_intensity": 0.5, "edge_density": 0.5, "dramatic_score": 0.5},
+        {"action_intensity": 0.8, "edge_density": 0.8, "dramatic_score": 0.8},
+        {"action_intensity": 0.9, "edge_density": 0.9, "dramatic_score": 0.9},
+    ]
+
     return [
         ImageMetrics(
             path=f"/fake/path/image{i}.jpg",
-            raw_metrics={"blur_score": 100.0 - i * 5},
-            normalized_metrics={"blur_score": 0.9 - i * 0.1},
+            raw_metrics={
+                "blur_score": 100.0 - i * 5,
+                "action_intensity": activity_metrics[i]["action_intensity"] * 100,
+                "edge_density": activity_metrics[i]["edge_density"] * 0.2,
+                "dramatic_score": activity_metrics[i]["dramatic_score"] * 100,
+            },
+            normalized_metrics={
+                "blur_score": 0.9 - i * 0.1,
+                "action_intensity": activity_metrics[i]["action_intensity"],
+                "edge_density": activity_metrics[i]["edge_density"],
+                "dramatic_score": activity_metrics[i]["dramatic_score"],
+            },
             semantic_score=0.8 - i * 0.05,
             total_score=95.0 - i * 5,
             features=features_list[i],
@@ -161,10 +190,21 @@ def large_sample_image_metrics() -> List[ImageMetrics]:
     除外が発生することを確認する。
 
     画像セット：
-    - image0-4: 高品質、image0と0.96の類似度（0.9閾値を超過）
-    - image5-9: 中品質、image5と0.96の類似度（0.9閾値を超過）
-    - image10-14: 異なる特徴を持つ画像
-    - image15-19: さらに異なる特徴を持つ画像
+    - image0-4: 類似グループ1（高品質、LOWバケットの活動量）
+    - image5-9: 類似グループ2（中品質、MIDバケットの活動量）
+    - image10-14: 異なる特徴（HIGHバケットの活動量）
+    - image15-19: さらに異なる特徴（HIGHバケットの活動量）
+
+    活動量指標の設計：
+    - 画像0-6: LOWバケット（活動量低め）
+      action_intensity 0.1-0.2, edge_density 0.1-0.2,
+      dramatic_score 0.1-0.2
+    - 画像7-13: MIDバケット（活動量中程度）
+      action_intensity 0.4-0.6, edge_density 0.4-0.6,
+      dramatic_score 0.4-0.6
+    - 画像14-19: HIGHバケット（活動量高め）
+      action_intensity 0.8-0.9, edge_density 0.8-0.9,
+      dramatic_score 0.8-0.9
     """
     np.random.seed(42)
     base_features1 = np.random.rand(128)
@@ -173,26 +213,26 @@ def large_sample_image_metrics() -> List[ImageMetrics]:
     base_features4 = np.random.rand(128)
 
     features_list = [
-        # image0-4: 類似グループ1（高品質）
+        # image0-4: 類似グループ1（高品質、LOWバケット）
         base_features1,
         _create_features_with_similarity(base_features1, 0.96),
         _create_features_with_similarity(base_features1, 0.96),
         _create_features_with_similarity(base_features1, 0.96),
         _create_features_with_similarity(base_features1, 0.96),
-        # image5-9: 類似グループ2（中品質）
+        # image5-9: 類似グループ2（中品質、LOWバケット）
         base_features2,
         _create_features_with_similarity(base_features2, 0.96),
         _create_features_with_similarity(base_features2, 0.96),
         _create_features_with_similarity(base_features2, 0.96),
         _create_features_with_similarity(base_features2, 0.96),
-        # image10-14: 異なる特徴
+        # image10-14: 異なる特徴（LOW/MIDバケット）
         base_features3,
         _create_features_with_similarity(base_features3, 0.85),
         _create_features_with_similarity(base_features3, 0.85),
         _create_features_with_similarity(base_features3, 0.85),
         _create_features_with_similarity(base_features3, 0.85),
         _create_features_with_similarity(base_features3, 0.85),
-        # image15-19: さらに異なる特徴
+        # image15-19: さらに異なる特徴（MID/HIGHバケット）
         base_features4,
         _create_features_with_similarity(base_features4, 0.80),
         _create_features_with_similarity(base_features4, 0.80),
@@ -201,11 +241,56 @@ def large_sample_image_metrics() -> List[ImageMetrics]:
         _create_features_with_similarity(base_features4, 0.80),
     ]
 
+    # 3つのバケット（LOW/MID/HIGH）に分散する活動量指標を設定
+    # LOWバケット（画像0-6）: 活動量低め
+    low_metrics = [
+        {"action_intensity": 0.1, "edge_density": 0.1, "dramatic_score": 0.1},
+        {"action_intensity": 0.12, "edge_density": 0.12, "dramatic_score": 0.12},
+        {"action_intensity": 0.14, "edge_density": 0.14, "dramatic_score": 0.14},
+        {"action_intensity": 0.16, "edge_density": 0.16, "dramatic_score": 0.16},
+        {"action_intensity": 0.18, "edge_density": 0.18, "dramatic_score": 0.18},
+        {"action_intensity": 0.2, "edge_density": 0.2, "dramatic_score": 0.2},
+        {"action_intensity": 0.22, "edge_density": 0.22, "dramatic_score": 0.22},
+    ]
+
+    # MIDバケット（画像7-13）: 活動量中程度
+    mid_metrics = [
+        {"action_intensity": 0.4, "edge_density": 0.4, "dramatic_score": 0.4},
+        {"action_intensity": 0.45, "edge_density": 0.45, "dramatic_score": 0.45},
+        {"action_intensity": 0.5, "edge_density": 0.5, "dramatic_score": 0.5},
+        {"action_intensity": 0.55, "edge_density": 0.55, "dramatic_score": 0.55},
+        {"action_intensity": 0.6, "edge_density": 0.6, "dramatic_score": 0.6},
+        {"action_intensity": 0.5, "edge_density": 0.5, "dramatic_score": 0.5},
+        {"action_intensity": 0.55, "edge_density": 0.55, "dramatic_score": 0.55},
+    ]
+
+    # HIGHバケット（画像14-19）: 活動量高め
+    high_metrics = [
+        {"action_intensity": 0.8, "edge_density": 0.8, "dramatic_score": 0.8},
+        {"action_intensity": 0.82, "edge_density": 0.82, "dramatic_score": 0.82},
+        {"action_intensity": 0.85, "edge_density": 0.85, "dramatic_score": 0.85},
+        {"action_intensity": 0.88, "edge_density": 0.88, "dramatic_score": 0.88},
+        {"action_intensity": 0.9, "edge_density": 0.9, "dramatic_score": 0.9},
+        {"action_intensity": 0.85, "edge_density": 0.85, "dramatic_score": 0.85},
+    ]
+
+    activity_metrics = low_metrics + mid_metrics + high_metrics
+
     return [
         ImageMetrics(
             path=f"/fake/path/image{i}.jpg",
-            raw_metrics={"blur_score": 100.0 - i * 1.5},
-            normalized_metrics={"blur_score": 0.9 - i * 0.02},
+            raw_metrics={
+                "blur_score": 100.0 - i * 1.5,
+                "action_intensity": activity_metrics[i]["action_intensity"] * 100,
+                "edge_density": activity_metrics[i]["edge_density"] * 0.2,
+                "dramatic_score": activity_metrics[i]["dramatic_score"] * 100,
+            },
+            normalized_metrics={
+                "blur_score": 0.9 - i * 0.02,
+                "action_intensity": activity_metrics[i]["action_intensity"],
+                "edge_density": activity_metrics[i]["edge_density"],
+                "dramatic_score": activity_metrics[i]["dramatic_score"],
+            },
             semantic_score=0.8 - i * 0.01,
             total_score=95.0 - i * 1.5,
             features=features_list[i],
@@ -460,9 +545,12 @@ def test_select_from_analyzed_with_activity_mix_enabled_tracks_similarity_reject
         expected_fail=0,
         expected_selected=num_to_select,
     )
-    # 活動量ミックスではnum*3枚の候補を要求するが、除外を記録するには
+    # 活動量ミックスではnum*3枚の候補を要求するが、類似度除外記録の検証には
     # さらに多くの画像が必要。現状ではrejected_by_similarity >= 0を確認する。
-    # 実際の除外挙動はtest_high_quality_images...で検証済み（image1除外）。
+    # 類似度除外の挙動自体はtest_high_quality_images...で検証済み（image1除外）。
+    # また、活動量バケット分割が正しく機能していることは、
+    # test_select_from_analyzed_with_activity_mix_returns_diverse_selectionで
+    # バケット分散の観点から検証される。
     assert stats.rejected_by_similarity >= 0
 
 
@@ -472,13 +560,14 @@ def test_select_from_analyzed_with_activity_mix_returns_diverse_selection(
     """活動量ミックス有効時、異なる活動量バケットから画像が選択されること.
 
     Given:
-        - 5つの分析済み画像
+        - 5つの分析済み画像（LOW/MID/HIGHバケットの活動量を持つ）
         - 活動量ミックスが有効な設定
     When:
         - 画像を選択
     Then:
         - 選択された画像が返されること
         - 統計情報が正しく記録されること
+        - 複数の活動量バケットから選択されていること（活動量ミックスの効果）
     """
     # Arrange
     num_to_select = 3
@@ -500,3 +589,30 @@ def test_select_from_analyzed_with_activity_mix_returns_diverse_selection(
     # スコア降順であることを確認
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
+
+    # 活動量スコアを計算して、複数のバケットから選ばれていることを確認
+    # sample_image_metricsの設計:
+    # - 画像0-1: LOWバケット (action_intensity 0.1-0.15)
+    # - 画像2: MIDバケット (action_intensity 0.5)
+    # - 画像3-4: HIGHバケット (action_intensity 0.8-0.9)
+    from src.constants.score_weights import ScoreWeights
+
+    activity_weights = ScoreWeights.get_activity_weights()
+    activity_scores = [
+        (
+            activity_weights.get("action_intensity", 0.55)
+            * m.normalized_metrics.get("action_intensity", 0)
+            + activity_weights.get("edge_density", 0.25)
+            * m.normalized_metrics.get("edge_density", 0)
+            + activity_weights.get("dramatic_score", 0.20)
+            * m.normalized_metrics.get("dramatic_score", 0)
+        )
+        for m in result
+    ]
+
+    # 選択された画像の活動量スコアに十分な分散があることを確認
+    # LOWバケット(0.1-0.2)とHIGHバケット(0.8-0.9)の範囲が含まれているか
+    assert min(activity_scores) < 0.3, "LOWバケットの画像が選択されている必要があります"
+    assert max(activity_scores) > 0.7, (
+        "HIGHバケットの画像が選択されている必要があります"
+    )
