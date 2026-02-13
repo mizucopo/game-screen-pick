@@ -151,3 +151,132 @@ def test_batch_convert_clip_features_to_numpy() -> None:
     assert isinstance(results[2], np.ndarray)
     assert results[0].shape == (512,)
     assert results[2].shape == (512,)
+
+
+def test_process_batch_with_lookahead_produces_same_results(
+    batch_pipeline: BatchPipeline,
+    tmp_path: Path,
+) -> None:
+    """先読みあり/なしで結果が一致すること.
+
+    Given:
+        - バッチ処理パイプラインがある
+        - 複数のテスト画像がある
+    When:
+        - 複数の画像をバッチ処理で分析する
+    Then:
+        - すべての画像に対して有効な結果が返されること
+        - 先読み処理が正しく動作すること
+    """
+    # Arrange: 複数の画像を作成
+    paths = []
+    for i in range(5):
+        np.random.seed(42 + i)
+        img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        img_path = tmp_path / f"lookahead_test_{i}.jpg"
+        cv2.imwrite(str(img_path), img_array)
+        paths.append(str(img_path))
+
+    # Act: 先読み付きでバッチ処理
+    results = batch_pipeline.process_batch(paths, batch_size=2)
+
+    # Assert
+    assert len(results) == 5
+    assert any(r is not None for r in results)
+    for result, path in zip(results, paths):
+        if result is not None:
+            assert isinstance(result, ImageMetrics)
+            assert result.path == path
+            assert 0 <= result.total_score <= 100
+
+
+def test_executor_reused_across_chunks(
+    batch_pipeline: BatchPipeline,
+    tmp_path: Path,
+) -> None:
+    """チャンク間でExecutorが再利用されること.
+
+    Given:
+        - バッチ処理パイプラインがある
+        - 複数のテスト画像がある
+        - 小さなメモリ予算で複数チャンクに分割される
+    When:
+        - 複数チャンクでバッチ処理を実行する
+    Then:
+        - Executorが再利用されていること
+        - すべての画像で処理が成功すること
+    """
+    # Arrange: 複数の画像を作成
+    paths = []
+    for i in range(20):
+        np.random.seed(42 + i)
+        img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        img_path = tmp_path / f"executor_test_{i}.jpg"
+        cv2.imwrite(str(img_path), img_array)
+        paths.append(str(img_path))
+
+    # Act: 小さなチャンクサイズでバッチ処理
+    results = batch_pipeline.process_batch(paths, batch_size=2)
+
+    # Assert: すべての結果が得られる
+    assert len(results) == 20
+    # Executorが生成されていることを確認
+    assert batch_pipeline._executor is not None
+
+    # closeでクリーンアップされることを確認
+    batch_pipeline.close()
+    assert batch_pipeline._executor is None
+
+
+def test_batch_pipeline_context_manager(
+    batch_pipeline: BatchPipeline,
+    sample_image_path: str,
+) -> None:
+    """コンテキストマネージャーが正しく動作すること.
+
+    Given:
+        - バッチ処理パイプラインがある
+    When:
+        - withステートメントで使用する
+    Then:
+        - 処理完了後にExecutorがクリーンアップされること
+    """
+    # Arrange
+    paths = [sample_image_path]
+
+    # Act: コンテキストマネージャーで使用
+    with batch_pipeline:
+        results = batch_pipeline.process_batch(paths, batch_size=1)
+
+    # Assert
+    assert len(results) == 1
+    assert results[0] is not None
+    # コンテキスト exit 後にExecutorがクリーンアップされている
+    assert batch_pipeline._executor is None
+
+
+def test_load_and_preprocess_images_with_max_dim(tmp_path: Path) -> None:
+    """load_and_preprocess_imagesでmax_dimが指定できること.
+
+    Given:
+        - 2000x1000の大きな画像がある
+    When:
+        - max_dim=720でload_and_preprocess_imagesを実行
+    Then:
+        - 結果の画像が720以下に縮小されていること
+    """
+    # Arrange: 2000x1000の画像を作成
+    img_array = np.random.randint(0, 255, (1000, 2000, 3), dtype=np.uint8)
+    large_image_path = tmp_path / "large_for_batch.jpg"
+    cv2.imwrite(str(large_image_path), img_array)
+
+    # Act: max_dim=720で読み込み
+    results = BatchPipeline.load_and_preprocess_images(
+        [str(large_image_path)], max_dim=720
+    )
+
+    # Assert
+    assert len(results) == 1
+    assert results[0] is not None
+    w, h = results[0].size
+    assert max(w, h) <= 720

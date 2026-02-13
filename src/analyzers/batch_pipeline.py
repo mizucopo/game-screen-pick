@@ -1,8 +1,11 @@
 """バッチ処理パイプライン - 複数画像のバッチ処理をオーケストレーションする."""
 
+import concurrent.futures
 import logging
 import os
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import cast
 
 import cv2
@@ -53,6 +56,9 @@ class BatchPipeline:
             self._result_max_workers = min(8, max(1, cpu_count - 1))
         else:
             self._result_max_workers = config.result_max_workers
+
+        # 共有Executor（チャンク間で再利用）
+        self._executor: ThreadPoolExecutor | None = None
 
     @staticmethod
     def _batch_convert_clip_features_to_numpy(
@@ -109,6 +115,7 @@ class BatchPipeline:
 
         パフォーマンス最適化:
         - GPU→CPU転送をチャンク単位でまとめて実行
+        - 先読み（lookahead）でI/OとCLIP推論をオーバーラップ
 
         Args:
             paths: 画像ファイルパスのリスト
@@ -127,44 +134,75 @@ class BatchPipeline:
             self.config.min_chunk_size,
         )
 
-        for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_boundaries):
-            chunk_paths = paths[chunk_start:chunk_end]
+        # 先読み用のスレッドプール
+        preload_executor = ThreadPoolExecutor(max_workers=1)
+        PilImagesFuture = concurrent.futures.Future[list[Image.Image | None]]
+        preload_futures: dict[int, PilImagesFuture] = {}
 
-            # ステージ1: チャンク単位でI/O + 前処理を並列実行
-            pil_images = BatchPipeline.load_and_preprocess_images(chunk_paths)
+        try:
+            # 最初のチャンクをプリロード（lookahead=2）
+            lookahead = 2
+            for i in range(min(lookahead, len(chunk_boundaries))):
+                chunk_start, chunk_end = chunk_boundaries[i]
+                chunk_paths = paths[chunk_start:chunk_end]
+                preload_futures[i] = preload_executor.submit(
+                    BatchPipeline.load_and_preprocess_images,
+                    chunk_paths,
+                    self.config.max_dim,
+                )
 
-            # ステージ2: チャンク単位でバッチCLIP推論を実行
-            clip_features_list = self.feature_extractor.extract_clip_features_batch(
-                pil_images, initial_batch_size=batch_size
-            )
+            for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_boundaries):
+                chunk_paths = paths[chunk_start:chunk_end]
 
-            # ステージ3: セマンティックスコアをバッチ計算
-            semantic_scores = self.metric_calculator.calculate_semantic_score_batch(
-                clip_features_list
-            )
+                # プリロードされた画像を取得
+                pil_images = preload_futures[chunk_idx].result()
+                del preload_futures[chunk_idx]
 
-            # ステージ3.5: チャンク単位でまとめてGPU→CPU転送
-            clip_features_np_list = self._batch_convert_clip_features_to_numpy(
-                clip_features_list
-            )
+                # 次のチャンクをプリロード
+                next_idx = chunk_idx + lookahead
+                if next_idx < len(chunk_boundaries) and next_idx not in preload_futures:
+                    next_start, next_end = chunk_boundaries[next_idx]
+                    next_paths = paths[next_start:next_end]
+                    preload_futures[next_idx] = preload_executor.submit(
+                        BatchPipeline.load_and_preprocess_images,
+                        next_paths,
+                        self.config.max_dim,
+                    )
 
-            # ステージ4: チャンク単位で結果を構築（並列化）
-            chunk_results = self._process_result_parallel(
-                chunk_paths=chunk_paths,
-                pil_images=pil_images,
-                clip_features_list=clip_features_np_list,
-                semantic_scores=semantic_scores,
-                chunk_start=chunk_start,
-                total_paths=len(paths),
-                show_progress=show_progress,
-            )
+                # ステージ2: チャンク単位でバッチCLIP推論を実行
+                clip_features_list = self.feature_extractor.extract_clip_features_batch(
+                    pil_images, initial_batch_size=batch_size
+                )
 
-            # 結果を正しい位置にマッピング
-            for i, chunk_result in enumerate(chunk_results):
-                results[chunk_start + i] = chunk_result
+                # ステージ3: セマンティックスコアをバッチ計算
+                semantic_scores = self.metric_calculator.calculate_semantic_score_batch(
+                    clip_features_list
+                )
 
-            # チャンク処理完了後にメモリを解放
-            del pil_images, clip_features_list, clip_features_np_list
+                # ステージ3.5: チャンク単位でまとめてGPU→CPU転送
+                clip_features_np_list = self._batch_convert_clip_features_to_numpy(
+                    clip_features_list
+                )
+
+                # ステージ4: チャンク単位で結果を構築（並列化）
+                chunk_results = self._process_result_parallel(
+                    chunk_paths=chunk_paths,
+                    pil_images=pil_images,
+                    clip_features_list=clip_features_np_list,
+                    semantic_scores=semantic_scores,
+                    chunk_start=chunk_start,
+                    total_paths=len(paths),
+                    show_progress=show_progress,
+                )
+
+                # 結果を正しい位置にマッピング
+                for i, chunk_result in enumerate(chunk_results):
+                    results[chunk_start + i] = chunk_result
+
+                # チャンク処理完了後にメモリを解放
+                del pil_images, clip_features_list, clip_features_np_list
+        finally:
+            preload_executor.shutdown(wait=True)
 
         return results
 
@@ -232,22 +270,32 @@ class BatchPipeline:
 
     @staticmethod
     def load_and_preprocess_images(
-        paths: list[str], max_workers: int | None = None
+        paths: list[str],
+        max_dim: int | None = None,
+        max_workers: int | None = None,
     ) -> list[Image.Image | None]:
         """複数のパスからPIL画像を読み込み、前処理まで並列実行する.
 
-        I/O（画像読み込み）とCPU-bound処理（RGB変換）をThreadPoolExecutorで並列化.
+        I/O（画像読み込み）とCPU-bound処理（RGB変換・縮小）をThreadPoolExecutorで並列化.
 
         Args:
             paths: 画像ファイルパスのリスト
+            max_dim: 長辺の最大ピクセル数（Noneの場合は縮小しない）
             max_workers: スレッドプールの最大ワーカー数（Noneで自動設定）
 
         Returns:
             PIL画像のリスト（失敗したパスはNone）
         """
+        if max_dim is not None:
+            load_func: Callable[[str], Image.Image | None] = partial(
+                ImageUtils.load_as_rgb_resized, max_dim=max_dim
+            )
+        else:
+            load_func = ImageUtils.load_as_rgb
+
         # ThreadPoolExecutorで並列処理
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(ImageUtils.load_as_rgb, paths))
+            results = list(executor.map(load_func, paths))
 
         return results
 
@@ -264,7 +312,7 @@ class BatchPipeline:
 
         Args:
             path: 画像ファイルパス
-            pil_img: PIL画像
+            pil_img: PIL画像（既にmax_dim以下に縮小済み）
             clip_features: CLIP特徴（np.ndarray、CPU上）
             semantic: セマンティックスコア
 
@@ -272,20 +320,8 @@ class BatchPipeline:
             ImageMetricsオブジェクト（処理失敗時はNone）
         """
         try:
-            # メトリクス計算用に先に画像を縮小
-            # （長辺max_dim px、アスペクト比保持）
-            # フル解像度のままnp.array変換→後で縮小の二重処理を回避
-            w, h = pil_img.size
-            max_dim = self.config.max_dim
-            if max(w, h) > max_dim:
-                scale = max_dim / max(w, h)
-                new_w, new_h = int(w * scale), int(h * scale)
-                # PILのthumbnailを使用してアスペクト比を保持しつつ縮小
-                pil_img_resized = pil_img.copy()
-                pil_img_resized.thumbnail((new_w, new_h), Image.Resampling.BILINEAR)
-                img = ImageUtils.pil_to_cv2(pil_img_resized)
-            else:
-                img = ImageUtils.pil_to_cv2(pil_img)
+            # pil_imgは既にload_and_preprocess_imagesで縮小済み
+            img = ImageUtils.pil_to_cv2(pil_img)
 
             # 生メトリクスと正規化メトリクスのみ計算
             # （セマンティックスコアはバッチ計算済みの値を使用）
@@ -360,9 +396,9 @@ class BatchPipeline:
             result = self._process_single_result(path, pil_img, clip_features, semantic)
             return idx, result
 
-        # ThreadPoolExecutorで並列処理
-        with ThreadPoolExecutor(max_workers=self._result_max_workers) as executor:
-            executor_results = list(executor.map(process_task, tasks))
+        # 共有Executorを使用
+        executor = self._get_executor()
+        executor_results = list(executor.map(process_task, tasks))
 
         # 結果を配置
         results: list[ImageMetrics | None] = [None] * len(tasks)
@@ -370,3 +406,35 @@ class BatchPipeline:
             results[idx] = result
 
         return results
+
+    def _get_executor(self) -> ThreadPoolExecutor:
+        """スレッドプールを取得または作成.
+
+        Returns:
+            ThreadPoolExecutorインスタンス
+        """
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=self._result_max_workers)
+        return self._executor
+
+    def close(self) -> None:
+        """スレッドプールをクリーンアップ."""
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
+
+    def __enter__(self) -> "BatchPipeline":
+        """コンテキストマネージャーのエントリー.
+
+        Returns:
+            自分自身
+        """
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        """コンテキストマネージーの exit.
+
+        Args:
+            *args: 例外情報（unused）
+        """
+        self.close()
