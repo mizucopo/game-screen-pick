@@ -72,7 +72,7 @@ def test_put_and_get_roundtrip() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "1",
+        "metrics_version": "2",
     }
 
     with FeatureCache(None) as cache:
@@ -90,8 +90,11 @@ def test_put_and_get_roundtrip() -> None:
 
         # Assert
         assert result is not None
-        np.testing.assert_array_almost_equal(result.clip_features, clip_features)
-        np.testing.assert_array_almost_equal(result.hsv_features, hsv_features)
+        # float16で保存されているため、精度が異なることを考慮
+        expected_clip = clip_features.astype(np.float16).astype(np.float32)
+        expected_hsv = hsv_features.astype(np.float16).astype(np.float32)
+        np.testing.assert_array_almost_equal(result.clip_features, expected_clip)
+        np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv)
         assert result.raw_metrics == raw_metrics
         assert result.semantic_score == semantic_score
 
@@ -114,7 +117,7 @@ def test_get_returns_none_for_nonexistent_key() -> None:
         "model_name": "test_model",
         "target_text": "test",
         "max_dim": 1280,
-        "metrics_version": "1",
+        "metrics_version": "2",
     }
 
     with FeatureCache(None) as cache:
@@ -146,7 +149,7 @@ def test_get_returns_none_when_file_size_changed() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "1",
+        "metrics_version": "2",
     }
 
     with FeatureCache(None) as cache:
@@ -189,7 +192,7 @@ def test_put_replaces_existing_entry() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "1",
+        "metrics_version": "2",
     }
 
     with FeatureCache(None) as cache:
@@ -240,7 +243,7 @@ def test_persistent_storage() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "1",
+        "metrics_version": "2",
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -262,7 +265,9 @@ def test_persistent_storage() -> None:
 
         # Assert
         assert result is not None
-        np.testing.assert_array_almost_equal(result.clip_features, clip_features)
+        # float16で保存されているため、精度が異なることを考慮
+        expected_clip = clip_features.astype(np.float16).astype(np.float32)
+        np.testing.assert_array_almost_equal(result.clip_features, expected_clip)
 
 
 def test_generate_cache_key() -> None:
@@ -322,7 +327,7 @@ def test_put_batch_saves_multiple_entries() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "1",
+            "metrics_version": "2",
         }
         entries.append(
             {
@@ -351,8 +356,11 @@ def test_put_batch_saves_multiple_entries() -> None:
         ) in expected_results:
             result = cache.get(cache_key)
             assert result is not None
-            np.testing.assert_array_almost_equal(result.clip_features, clip_features)
-            np.testing.assert_array_almost_equal(result.hsv_features, hsv_features)
+            # float16で保存されているため、精度が異なることを考慮
+            expected_clip = clip_features.astype(np.float16).astype(np.float32)
+            expected_hsv = hsv_features.astype(np.float16).astype(np.float32)
+            np.testing.assert_array_almost_equal(result.clip_features, expected_clip)
+            np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv)
             assert result.raw_metrics == raw_metrics
             assert result.semantic_score == semantic
 
@@ -382,7 +390,7 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
         "model_name": "model_A",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "1",
+        "metrics_version": "2",
     }
     cache_key2: dict[str, str | int] = {
         "absolute_path": "/test/same_path.jpg",
@@ -391,7 +399,7 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
         "model_name": "model_B",  # 異なるモデル
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "1",
+        "metrics_version": "2",
     }
     cache_key3: dict[str, str | int] = {
         "absolute_path": "/test/same_path.jpg",
@@ -400,7 +408,7 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
         "model_name": "model_A",
         "target_text": "epic game scenery",
         "max_dim": 640,  # 異なるmax_dim
-        "metrics_version": "1",
+        "metrics_version": "2",
     }
 
     with FeatureCache(None) as cache:
@@ -469,7 +477,7 @@ def test_get_many_retrieves_multiple_entries() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "1",
+            "metrics_version": "2",
         }
         cache_keys.append(cache_key)
         entries.append(
@@ -505,7 +513,7 @@ def test_get_many_retrieves_multiple_entries() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "1",
+            "metrics_version": "2",
         }
         cache_keys.append(nonexistent_key)
 
@@ -534,8 +542,13 @@ def test_get_many_retrieves_multiple_entries() -> None:
                 expected_raw,
                 expected_semantic,
             ) = expected_results[key_id]
-            np.testing.assert_array_almost_equal(result.clip_features, expected_clip)
-            np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv)
+            # float16で保存されているため、精度が異なることを考慮
+            expected_clip_f16 = expected_clip.astype(np.float16).astype(np.float32)
+            expected_hsv_f16 = expected_hsv.astype(np.float16).astype(np.float32)
+            np.testing.assert_array_almost_equal(
+                result.clip_features, expected_clip_f16
+            )
+            np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv_f16)
             assert result.raw_metrics == expected_raw
             assert result.semantic_score == expected_semantic
 
@@ -653,7 +666,7 @@ def test_get_many_reuses_temp_table() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "1",
+            "metrics_version": "2",
         }
         cache_keys.append(cache_key)
         entries.append(
@@ -720,7 +733,7 @@ def test_put_batch_uses_executemany() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "1",
+            "metrics_version": "2",
         }
         entries.append(
             {
@@ -749,8 +762,11 @@ def test_put_batch_uses_executemany() -> None:
         ) in expected_results:
             result = cache.get(cache_key)
             assert result is not None
-            np.testing.assert_array_almost_equal(result.clip_features, clip_features)
-            np.testing.assert_array_almost_equal(result.hsv_features, hsv_features)
+            # float16で保存されているため、精度が異なることを考慮
+            expected_clip = clip_features.astype(np.float16).astype(np.float32)
+            expected_hsv = hsv_features.astype(np.float16).astype(np.float32)
+            np.testing.assert_array_almost_equal(result.clip_features, expected_clip)
+            np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv)
             assert result.raw_metrics == raw_metrics
             assert result.semantic_score == semantic
 
@@ -777,7 +793,7 @@ def test_semantic_score_roundtrip() -> None:
         "model_name": "test_model",
         "target_text": "test target",
         "max_dim": 1280,
-        "metrics_version": "1",
+        "metrics_version": "2",
     }
 
     with FeatureCache(None) as cache:
@@ -885,7 +901,7 @@ def test_correct_schema_preserved() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "1",
+            "metrics_version": "2",
         }
 
         with FeatureCache(cache_path) as cache1:
@@ -902,7 +918,70 @@ def test_correct_schema_preserved() -> None:
             # Assert: データが保持されている
             result = cache2.get(cache_key)
             assert result is not None
-            np.testing.assert_array_equal(result.clip_features, clip_features)
-            np.testing.assert_array_equal(result.hsv_features, hsv_features)
+            # float16で保存されているため、精度が異なることを考慮
+            expected_clip = clip_features.astype(np.float16).astype(np.float32)
+            expected_hsv = hsv_features.astype(np.float16).astype(np.float32)
+            np.testing.assert_array_equal(result.clip_features, expected_clip)
+            np.testing.assert_array_equal(result.hsv_features, expected_hsv)
             assert result.raw_metrics == raw_metrics
             assert result.semantic_score == semantic
+
+
+def test_float16_features_roundtrip() -> None:
+    """float16で保存した特徴量が正しく変換されて読み出されること.
+
+    Given:
+        - float32の特徴量を作成
+    When:
+        - float16で保存してから読み出し
+    Then:
+        - float16の精度で丸められた特徴量が読み出されること
+        - 読み出し後はfloat32に変換されていること
+    """
+    # Arrange: float32で特徴量を作成
+    clip_features = np.array(
+        [0.12345678, -0.98765432, 1.0, -1.0, 0.0], dtype=np.float32
+    )
+    hsv_features = np.array([0.5, 0.25, 0.75, 0.125], dtype=np.float32)
+    raw_metrics = {"blur_score": 100.0}
+    semantic_score = 0.75
+    cache_key: dict[str, str | int] = {
+        "absolute_path": "/test/float16_roundtrip.jpg",
+        "file_size": 2048,
+        "mtime_ns": 9876543210,
+        "model_name": "test_model",
+        "target_text": "test target",
+        "max_dim": 1280,
+        "metrics_version": "2",
+    }
+
+    with FeatureCache(None) as cache:
+        # Act: 保存（内部でfloat16に変換される）
+        cache.put(
+            cache_key=cache_key,
+            clip_features=clip_features,
+            raw_metrics=raw_metrics,
+            hsv_features=hsv_features,
+            semantic_score=semantic_score,
+        )
+
+        # Act: 取得（float16から読み出してfloat32に変換される）
+        result = cache.get(cache_key)
+
+        # Assert
+        assert result is not None
+        # 読み出し後はfloat32になっていること
+        assert result.clip_features.dtype == np.float32
+        assert result.hsv_features.dtype == np.float32
+        # float16の精度で丸められていることを確認
+        # float16で保存すると、例えば0.12345678は0.1235に丸められる
+        expected_clip = clip_features.astype(np.float16).astype(np.float32)
+        expected_hsv = hsv_features.astype(np.float16).astype(np.float32)
+        np.testing.assert_array_almost_equal(
+            result.clip_features, expected_clip, decimal=4
+        )
+        np.testing.assert_array_almost_equal(
+            result.hsv_features, expected_hsv, decimal=4
+        )
+        assert result.raw_metrics == raw_metrics
+        assert result.semantic_score == semantic_score
