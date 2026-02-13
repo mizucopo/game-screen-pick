@@ -27,8 +27,8 @@ class BatchPipeline:
     複数の画像をバッチ処理で解析するオーケストレーションを行う。
     """
 
-    # RGB画像のチャンネル数（メモリ見積もり用）
-    RGB_CHANNELS: int = 3
+    # ファイルサイズからメモリ使用量を見積もるための係数
+    MEMORY_ESTIMATION_FACTOR: float = 2.5
 
     def __init__(
         self,
@@ -295,13 +295,13 @@ class BatchPipeline:
         current_count = 0
 
         for i, path in enumerate(paths):
-            # PILで画像ヘッダのみ読み込み、デコード後のメモリを見積もる
+            # os.statでファイルサイズを取得し、メモリを見積もる
             try:
-                with Image.open(path) as img:
-                    width, height = img.size
-                    # RGB画像（RGB_CHANNELSチャンネル、1ピクセルあたり1バイト）と仮定
-                    estimated_memory = width * height * BatchPipeline.RGB_CHANNELS
-            except (OSError, UnidentifiedImageError):
+                file_size = os.path.getsize(path)
+                estimated_memory = int(
+                    file_size * BatchPipeline.MEMORY_ESTIMATION_FACTOR
+                )
+            except (OSError, ValueError):
                 estimated_memory = 0
 
             # チャンク追加でメモリ予算を超える場合は新規チャンクを検討

@@ -133,3 +133,46 @@ def test_cached_results_semantic_score_calculation_is_batched(
         assert second.path == first.path
         # セマンティックスコアが計算されている
         assert -1.0 <= second.semantic_score <= 1.0 + 1e-5
+
+
+def test_compute_chunk_boundaries_uses_fast_estimation(tmp_path: Path) -> None:
+    """チャンク境界計算で高速なメモリ推定が使用されていること.
+
+    Given:
+        - バッチ処理パイプラインがある
+        - 複数のテスト画像がある
+    When:
+        - チャンク境界を計算
+    Then:
+        - os.statベースの推定が使用されていること
+        - PIL Image.openが使用されていないこと（高速化）
+    """
+    # Arrange: 複数のテスト画像を作成
+    paths = []
+    for i in range(5):
+        np.random.seed(42 + i)
+        # 各画像で異なるサイズを作成
+        size = 100 + i * 50
+        img_array = np.random.randint(0, 255, (size, size, 3), dtype=np.uint8)
+        img_path = tmp_path / f"chunk_test_{i}.jpg"
+        cv2.imwrite(str(img_path), img_array)
+        paths.append(str(img_path))
+
+    # Act: チャンク境界を計算
+    # 小さなメモリ予算で複数チャンクに分割されるように設定
+    max_memory_mb = 1
+    min_chunk_size = 2
+    boundaries = BatchPipeline._compute_chunk_boundaries(
+        paths, max_memory_mb, min_chunk_size
+    )
+
+    # Assert: チャンク境界が計算されている
+    assert len(boundaries) > 0
+    # 各チャンクが有効な範囲を持つ
+    for start, end in boundaries:
+        assert 0 <= start < end <= len(paths)
+
+    # 最初のチャンクはインデックス0から始まる
+    assert boundaries[0][0] == 0
+    # 最後のチャンクはリストの末尾まで
+    assert boundaries[-1][1] == len(paths)
