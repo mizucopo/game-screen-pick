@@ -163,19 +163,21 @@ class MetricCalculator:
 
     def calculate_semantic_score_batch(
         self, clip_features_list: list[torch.Tensor | None]
-    ) -> list[float | None]:
+    ) -> tuple[list[float | None], torch.Tensor | None, list[int]]:
         """複数のCLIP特徴からセマンティックスコアをバッチ計算する.
 
         パフォーマンス最適化:
         - torch.Tensorを直接受け取り、CPU/NumPy変換を回避
         - CPU→GPU転送をバッチ化してまとめて行列積で一括計算
+        - バッチ化したTensorを返却し、二重stackを回避
 
         Args:
             clip_features_list: 正規化済みのCLIP画像特徴のリスト
                                 （512次元、torch.Tensor、Noneを含む場合あり）
 
         Returns:
-            セマンティックスコアのリスト（範囲: [-1, 1]、失敗した要素はNone）
+            (セマンティックスコアのリスト, GPU上のバッチTensor, valid_indices)
+            セマンティックスコアの範囲: [-1, 1]、失敗した要素はNone
         """
         # 有効な特徴のインデックスと特徴を収集
         valid_indices = [
@@ -183,7 +185,7 @@ class MetricCalculator:
         ]
 
         if not valid_indices:
-            return [None] * len(clip_features_list)
+            return [None] * len(clip_features_list), None, []
 
         # 結果を格納する配列（初期値はNone）
         results: list[float | None] = [None] * len(clip_features_list)
@@ -218,7 +220,7 @@ class MetricCalculator:
             for j, idx in enumerate(valid_indices):
                 results[idx] = float(cosine_sims[j][0])
 
-        return results
+        return results, batch_features, valid_indices
 
     def calculate_total_score(
         self, raw: dict[str, float], norm: dict[str, float], semantic: float

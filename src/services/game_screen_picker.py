@@ -296,14 +296,16 @@ class GameScreenPicker:
 
                 candidate_feat = normalized_features[idx]
 
-                # 既に選ばれた画像たちと「見た目」を比較
+                # 既に選ばれた画像たちと「見た目」を比較（ベクトル化）
+                # selected_featuresを行列化して一括計算
                 is_similar = False
-                for sel_idx in selected_indices:
-                    sel_feat = normalized_features[sel_idx]
-                    sim = np.dot(candidate_feat, sel_feat)
-                    if sim > threshold:
+                if selected_indices:
+                    selected_features = np.array(
+                        [normalized_features[i] for i in selected_indices]
+                    )
+                    sims = selected_features @ candidate_feat
+                    if np.any(sims > threshold):
                         is_similar = True
-                        break
 
                 if not is_similar:
                     selected.append(candidate)

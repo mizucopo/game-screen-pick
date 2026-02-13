@@ -6,7 +6,6 @@ import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from typing import cast
 
 import cv2
 import numpy as np
@@ -59,38 +58,36 @@ class BatchPipeline:
 
         # 共有Executor（チャンク間で再利用）
         self._executor: ThreadPoolExecutor | None = None
+        self._preload_executor: ThreadPoolExecutor | None = None
 
     @staticmethod
-    def _batch_convert_clip_features_to_numpy(
+    def _convert_batch_features_to_numpy(
         clip_features_list: list[torch.Tensor | None],
+        batch_features: torch.Tensor | None,
+        valid_indices: list[int],
     ) -> list[np.ndarray | None]:
-        """CLIP特徴をチャンク単位でまとめてCPUに転送.
+        """セマンティック計算済みのバッチTensorを再利用してCPUに転送.
 
-        GPU同期コストを削減するため、個別転送の代わりにバッチ転送を使用。
+        二重stackを回避するため、calculate_semantic_score_batchで
+        既にstackされたバッチTensorを再利用する。
 
         Args:
-            clip_features_list: GPU上のCLIP特徴リスト（Noneを含む場合あり）
+            clip_features_list: 元のCLIP特徴リスト（Noneを含む場合あり）
+            batch_features: セマンティック計算済みのGPU上のバッチTensor
+            valid_indices: 有効な特徴のインデックスリスト
 
         Returns:
             CPU上のNumPy配列リスト（元のNoneは保持）
         """
-        valid_indices = [
-            i for i, features in enumerate(clip_features_list) if features is not None
-        ]
+        results: list[np.ndarray | None] = [None] * len(clip_features_list)
 
-        if not valid_indices:
-            return [None] * len(clip_features_list)
+        if batch_features is None or not valid_indices:
+            return results
 
         with torch.inference_mode():
-            # valid_indicesでフィルタリング済みなのでNoneは含まれない
-            valid_tensors = [
-                cast(torch.Tensor, clip_features_list[i]) for i in valid_indices
-            ]
-            batch_tensor = torch.stack(valid_tensors)
-            batch_cpu = batch_tensor.cpu()
+            batch_cpu = batch_features.cpu()
             batch_np = batch_cpu.numpy()
 
-        results: list[np.ndarray | None] = [None] * len(clip_features_list)
         for j, idx in enumerate(valid_indices):
             results[idx] = batch_np[j]
 
@@ -134,75 +131,74 @@ class BatchPipeline:
             self.config.min_chunk_size,
         )
 
-        # 先読み用のスレッドプール
-        preload_executor = ThreadPoolExecutor(max_workers=1)
+        # 先読み用のスレッドプール（インスタンスで再利用）
+        preload_executor = self._get_preload_executor()
         PilImagesFuture = concurrent.futures.Future[list[Image.Image | None]]
         preload_futures: dict[int, PilImagesFuture] = {}
 
-        try:
-            # 最初のチャンクをプリロード（lookahead=2）
-            lookahead = 2
-            for i in range(min(lookahead, len(chunk_boundaries))):
-                chunk_start, chunk_end = chunk_boundaries[i]
-                chunk_paths = paths[chunk_start:chunk_end]
-                preload_futures[i] = preload_executor.submit(
+        # 最初のチャンクをプリロード（lookahead=2）
+        lookahead = 2
+        for i in range(min(lookahead, len(chunk_boundaries))):
+            chunk_start, chunk_end = chunk_boundaries[i]
+            chunk_paths = paths[chunk_start:chunk_end]
+            preload_futures[i] = preload_executor.submit(
+                BatchPipeline.load_and_preprocess_images,
+                chunk_paths,
+                self.config.max_dim,
+            )
+
+        for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_boundaries):
+            chunk_paths = paths[chunk_start:chunk_end]
+
+            # プリロードされた画像を取得
+            pil_images = preload_futures[chunk_idx].result()
+            del preload_futures[chunk_idx]
+
+            # 次のチャンクをプリロード
+            next_idx = chunk_idx + lookahead
+            if next_idx < len(chunk_boundaries) and next_idx not in preload_futures:
+                next_start, next_end = chunk_boundaries[next_idx]
+                next_paths = paths[next_start:next_end]
+                preload_futures[next_idx] = preload_executor.submit(
                     BatchPipeline.load_and_preprocess_images,
-                    chunk_paths,
+                    next_paths,
                     self.config.max_dim,
                 )
 
-            for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_boundaries):
-                chunk_paths = paths[chunk_start:chunk_end]
+            # ステージ2: チャンク単位でバッチCLIP推論を実行
+            clip_features_list = self.feature_extractor.extract_clip_features_batch(
+                pil_images, initial_batch_size=batch_size
+            )
 
-                # プリロードされた画像を取得
-                pil_images = preload_futures[chunk_idx].result()
-                del preload_futures[chunk_idx]
-
-                # 次のチャンクをプリロード
-                next_idx = chunk_idx + lookahead
-                if next_idx < len(chunk_boundaries) and next_idx not in preload_futures:
-                    next_start, next_end = chunk_boundaries[next_idx]
-                    next_paths = paths[next_start:next_end]
-                    preload_futures[next_idx] = preload_executor.submit(
-                        BatchPipeline.load_and_preprocess_images,
-                        next_paths,
-                        self.config.max_dim,
-                    )
-
-                # ステージ2: チャンク単位でバッチCLIP推論を実行
-                clip_features_list = self.feature_extractor.extract_clip_features_batch(
-                    pil_images, initial_batch_size=batch_size
-                )
-
-                # ステージ3: セマンティックスコアをバッチ計算
-                semantic_scores = self.metric_calculator.calculate_semantic_score_batch(
+            # ステージ3: セマンティックスコアをバッチ計算（バッチTensorを再利用）
+            semantic_scores, batch_features, valid_indices = (
+                self.metric_calculator.calculate_semantic_score_batch(
                     clip_features_list
                 )
+            )
 
-                # ステージ3.5: チャンク単位でまとめてGPU→CPU転送
-                clip_features_np_list = self._batch_convert_clip_features_to_numpy(
-                    clip_features_list
-                )
+            # ステージ3.5: バッチTensorを再利用してGPU→CPU転送
+            clip_features_np_list = self._convert_batch_features_to_numpy(
+                clip_features_list, batch_features, valid_indices
+            )
 
-                # ステージ4: チャンク単位で結果を構築（並列化）
-                chunk_results = self._process_result_parallel(
-                    chunk_paths=chunk_paths,
-                    pil_images=pil_images,
-                    clip_features_list=clip_features_np_list,
-                    semantic_scores=semantic_scores,
-                    chunk_start=chunk_start,
-                    total_paths=len(paths),
-                    show_progress=show_progress,
-                )
+            # ステージ4: チャンク単位で結果を構築（並列化）
+            chunk_results = self._process_result_parallel(
+                chunk_paths=chunk_paths,
+                pil_images=pil_images,
+                clip_features_list=clip_features_np_list,
+                semantic_scores=semantic_scores,
+                chunk_start=chunk_start,
+                total_paths=len(paths),
+                show_progress=show_progress,
+            )
 
-                # 結果を正しい位置にマッピング
-                for i, chunk_result in enumerate(chunk_results):
-                    results[chunk_start + i] = chunk_result
+            # 結果を正しい位置にマッピング
+            for i, chunk_result in enumerate(chunk_results):
+                results[chunk_start + i] = chunk_result
 
-                # チャンク処理完了後にメモリを解放
-                del pil_images, clip_features_list, clip_features_np_list
-        finally:
-            preload_executor.shutdown(wait=True)
+            # チャンク処理完了後にメモリを解放
+            del pil_images, clip_features_list, clip_features_np_list
 
         return results
 
@@ -417,11 +413,25 @@ class BatchPipeline:
             self._executor = ThreadPoolExecutor(max_workers=self._result_max_workers)
         return self._executor
 
+    def _get_preload_executor(self) -> ThreadPoolExecutor:
+        """プリロード用スレッドプールを取得または作成.
+
+        Returns:
+            ThreadPoolExecutorインスタンス
+        """
+        if self._preload_executor is None:
+            # プリロードはI/O-boundなので、結果構築より多めのワーカーを使用
+            self._preload_executor = ThreadPoolExecutor(max_workers=2)
+        return self._preload_executor
+
     def close(self) -> None:
         """スレッドプールをクリーンアップ."""
         if self._executor is not None:
             self._executor.shutdown(wait=True)
             self._executor = None
+        if self._preload_executor is not None:
+            self._preload_executor.shutdown(wait=True)
+            self._preload_executor = None
 
     def __enter__(self) -> "BatchPipeline":
         """コンテキストマネージャーのエントリー.

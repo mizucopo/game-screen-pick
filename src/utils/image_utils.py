@@ -47,6 +47,10 @@ class ImageUtils:
     def load_as_rgb_resized(path: str, max_dim: int = 720) -> Image.Image | None:
         """画像を読み込み、RGB変換後にmax_dim以下に縮小して返す.
 
+        パフォーマンス最適化:
+        - JPEGの場合、draft()でデコード時の縮小ヒントを与える
+        - フルデコード後に縮小するよりもメモリ効率が良い
+
         Args:
             path: 画像ファイルパス
             max_dim: 長辺の最大ピクセル数（デフォルト720）
@@ -57,6 +61,14 @@ class ImageUtils:
         try:
             with Image.open(path) as img:
                 w, h = img.size
+
+                # JPEGの場合、draft()でデコード時の縮小ヒントを与える
+                # （thumbnail前に実行することで、フル解像度デコードを回避）
+                if img.format == "JPEG" and max(w, h) > max_dim:
+                    # draft()はデコード対象サイズのヒントを与えるだけで、
+                    # 正確にこのサイズになる保証はない
+                    img.draft("RGB", (max_dim, max_dim))
+
                 if max(w, h) > max_dim:
                     # アスペクト比保持で縮小
                     img.thumbnail((max_dim, max_dim), Image.Resampling.BILINEAR)

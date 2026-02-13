@@ -136,9 +136,18 @@ def test_batch_convert_clip_features_to_numpy() -> None:
         None,
         torch.randn(512).cuda() if torch.cuda.is_available() else torch.randn(512),
     ]
+    valid_indices = [0, 2]
+    batch_features = torch.stack(
+        [
+            torch.randn(512).cuda() if torch.cuda.is_available() else torch.randn(512),
+            torch.randn(512).cuda() if torch.cuda.is_available() else torch.randn(512),
+        ]
+    )
 
     # Act: バッチCPU転送を実行
-    results = BatchPipeline._batch_convert_clip_features_to_numpy(tensors)
+    results = BatchPipeline._convert_batch_features_to_numpy(
+        tensors, batch_features, valid_indices
+    )
 
     # Assert: 結果の数が一致する
     assert len(results) == 3

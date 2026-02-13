@@ -54,6 +54,10 @@ class Main:
             analyzer_config = AnalyzerConfig()
             if parsed_args.result_max_workers is not None:
                 analyzer_config.result_max_workers = parsed_args.result_max_workers
+            if parsed_args.max_dim is not None:
+                analyzer_config.max_dim = parsed_args.max_dim
+            if parsed_args.max_memory_mb is not None:
+                analyzer_config.max_memory_mb = parsed_args.max_memory_mb
 
             self._analyzer = ImageQualityAnalyzer(config=analyzer_config)
 
@@ -195,6 +199,24 @@ class Main:
             default=None,
             help=(
                 "結果構築の並列ワーカー数（デフォルト: 自動設定、0でシングルスレッド）"
+            ),
+        )
+        parser.add_argument(
+            "--max-dim",
+            type=Main.validate_positive_int,
+            default=720,
+            help=(
+                "画像リサイズ時の長辺の最大ピクセル数"
+                "（デフォルト: 720、小さいほど高速だが精度低下）"
+            ),
+        )
+        parser.add_argument(
+            "--max-memory-mb",
+            type=Main.validate_positive_int,
+            default=512,
+            help=(
+                "チャンク処理時のメモリ予算（MB）"
+                "（デフォルト: 512、大きいほどチャンクが大きくなる）"
             ),
         )
         return parser.parse_args(self.args)
