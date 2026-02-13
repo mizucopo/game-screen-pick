@@ -111,18 +111,16 @@ class BatchPipeline:
         if keys_to_lookup:
             cache_results = self.cache.get_many(keys_to_lookup)
 
-            # 結果をマッピング
+            # 結果をマッピング（タプルを直接使用して文字列化を回避）
             for idx, cache_key, path in cache_keys_with_meta:
-                key_id = str(
-                    (
-                        cache_key["absolute_path"],
-                        cache_key["file_size"],
-                        cache_key["mtime_ns"],
-                        cache_key["model_name"],
-                        cache_key["target_text"],
-                        cache_key["max_dim"],
-                        cache_key["metrics_version"],
-                    )
+                key_id = (
+                    cache_key["absolute_path"],
+                    cache_key["file_size"],
+                    cache_key["mtime_ns"],
+                    cache_key["model_name"],
+                    cache_key["target_text"],
+                    cache_key["max_dim"],
+                    cache_key["metrics_version"],
                 )
                 entry = cache_results.get(key_id)
                 if entry is not None:
@@ -137,26 +135,11 @@ class BatchPipeline:
         if not cached_indices:
             return [None] * len(paths), uncached_indices
 
-        # 第2パス: セマンティックスコアをバッチ計算
-        clip_features_list: list[torch.Tensor | None] = []
-        for idx in cached_indices:
-            entry_info = cast(CacheEntryInfo, cached_entries[idx])
-            # NumPy配列をtorch.Tensorに変換（CPU上に配置）
-            # calculate_semantic_score_batch内でデバイス移動が行われる
-            clip_tensor = torch.from_numpy(
-                entry_info.entry.clip_features.astype(np.float32)
-            )
-            clip_features_list.append(clip_tensor)
-
-        semantic_scores = self.metric_calculator.calculate_semantic_score_batch(
-            clip_features_list
-        )
-
-        # 第3パス: ImageMetricsを構築
+        # 第2パス: ImageMetricsを構築（キャッシュヒット時）
         cached_results: List[Optional[ImageMetrics]] = [None] * len(paths)
         for i, idx in enumerate(cached_indices):
             entry_info = cast(CacheEntryInfo, cached_entries[idx])
-            semantic = cast(float, semantic_scores[i])
+            semantic = entry_info.entry.semantic_score
             # CLIP特徴とHSV特徴を結合
             combined_features = np.concatenate(
                 [entry_info.entry.hsv_features, entry_info.entry.clip_features]
@@ -444,6 +427,7 @@ class BatchPipeline:
                         "clip_features": clip_features_np,
                         "raw_metrics": raw,
                         "hsv_features": hsv_features,
+                        "semantic_score": semantic,
                     }
                 except Exception as e:
                     # キャッシュエントリ構築に失敗しても処理は継続
@@ -485,9 +469,9 @@ class BatchPipeline:
             ImageMetricsオブジェクトのリスト（失敗時はNone）
         """
         # 並列処理するタスクを準備
-        # 型エイリアス（行長制限対応）
-        TaskDataType = tuple[str, Image.Image, torch.Tensor, float, int]
-        tasks: list[tuple[int, TaskDataType | None]] = []
+        tasks: list[
+            tuple[int, tuple[str, Image.Image, torch.Tensor, float, int] | None]
+        ] = []
         for i, (path, pil_img, clip_features, semantic) in enumerate(
             zip(
                 chunk_paths,

@@ -1,6 +1,7 @@
 """特徴量キャッシュ - 画像解析の中間結果をSQLiteで永続化する."""
 
 import json
+import logging
 import sqlite3
 import threading
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Any, Optional
 import numpy as np
 
 from ..models.cache_entry import CacheEntry
+
+logger = logging.getLogger(__name__)
 
 
 class FeatureCache:
@@ -77,44 +80,88 @@ class FeatureCache:
             )
         return self._local.conn
 
+    @staticmethod
+    def _normalize_sql(sql: str) -> str:
+        """SQL文字列を正規化して比較可能にする.
+
+        空白、改行、大文字小文字を正規化し、スキーマ比較を安定させる。
+
+        Args:
+            sql: 正規化するSQL文字列
+
+        Returns:
+            正規化されたSQL文字列
+        """
+        return " ".join(sql.strip().split()).upper()
+
+    def _get_expected_schema_sql(self) -> str:
+        """期待されるテーブル作成SQLを取得.
+
+        Returns:
+            期待されるCREATE TABLE文
+        """
+        return """CREATE TABLE feature_cache (
+            absolute_path TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            mtime_ns INTEGER NOT NULL,
+            model_name TEXT NOT NULL,
+            target_text TEXT NOT NULL,
+            max_dim INTEGER NOT NULL,
+            metrics_version TEXT NOT NULL,
+            clip_features BLOB NOT NULL,
+            raw_metrics TEXT NOT NULL,
+            hsv_features BLOB NOT NULL,
+            semantic_score REAL,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (
+                absolute_path, model_name, target_text, max_dim, metrics_version
+            )
+        )"""
+
     def _init_db(self) -> None:
         """データベーススキーマを初期化する.
 
-        必要に応じて既存スキーマから複合主キースキーマへマイグレーションを実行する。
+        スキーマが期待と異なる場合はテーブルをドロップして再作成する。
+        キャッシュデータは破棄されるが、次回実行時に再構築される。
         スレッドセーフのため、クラスロックを使用して初期化を保護する。
         """
         with FeatureCache._init_lock:
-            # ロック内でもう一度テーブル存在チェック（ダブルチェックロック）
             conn = self._get_connection()
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT name FROM sqlite_master
-                WHERE type='table' AND name='feature_cache'
-                """
-            )
-            if cursor.fetchone() is None:
-                # テーブルが存在しない場合、新しいスキーマで作成
-                self._create_new_schema(cursor)
-                conn.commit()
-                return
 
-            # 既存テーブルのスキーマを確認
+            # テーブルが存在する場合、スキーマを確認
             cursor.execute(
-                """
-                SELECT sql FROM sqlite_master
-                WHERE type='table' AND name='feature_cache'
-                """
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='table' AND name='feature_cache'"
             )
             result = cursor.fetchone()
-            existing_sql = result[0] if result else ""
 
-            # 既存スキーマの主キーを確認（PRIMARY KEYがabsolute_pathのみかチェック）
-            if "absolute_path TEXT PRIMARY KEY" in existing_sql:
-                # マイグレーション必要: 古いスキーマから新しいスキーマへ移行
-                self._migrate_to_composite_key(cursor)
+            if result is not None:
+                # 既存テーブルのスキーマを取得
+                existing_sql = result[0]
+                # スキーマを正規化して比較（空白、改行を正規化）
+                normalized_existing = self._normalize_sql(existing_sql)
+                normalized_expected = self._normalize_sql(
+                    self._get_expected_schema_sql()
+                )
+
+                if normalized_existing != normalized_expected:
+                    # スキーマが異なる場合はドロップして再作成
+                    logger.info(
+                        f"キャッシュスキーマが異なるためテーブルを再作成します: "
+                        f"expected={normalized_expected[:50]}..., "
+                        f"got={normalized_existing[:50]}..."
+                    )
+                    cursor.execute("DROP TABLE feature_cache")
+
+            # テーブル作成（存在しないか、ドロップされた場合）
+            cursor.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='feature_cache'"
+            )
+            if cursor.fetchone() is None:
+                self._create_new_schema(cursor)
                 conn.commit()
-            # 新しいスキーマの場合は何もしない（既に複合主キー）
 
     def _create_new_schema(self, cursor: sqlite3.Cursor) -> None:
         """新しい複合主キースキーマでテーブルを作成する.
@@ -135,6 +182,7 @@ class FeatureCache:
                 clip_features BLOB NOT NULL,
                 raw_metrics TEXT NOT NULL,
                 hsv_features BLOB NOT NULL,
+                semantic_score REAL,
                 created_at REAL NOT NULL,
                 PRIMARY KEY (
                     absolute_path, model_name, target_text, max_dim, metrics_version
@@ -149,52 +197,6 @@ class FeatureCache:
             ON feature_cache(absolute_path, file_size, mtime_ns)
             """
         )
-
-    def _migrate_to_composite_key(self, cursor: sqlite3.Cursor) -> None:
-        """古いスキーマから新しい複合主キースキーマへマイグレーションする.
-
-        手順:
-        1. 既存データをfeature_cache_backupに退避
-        2. 古いテーブルを削除
-        3. 新しいスキーマでテーブル作成
-        4. データを復元（INSERT OR REPLACEで重複処理）
-        5. バックアップテーブルを削除
-
-        Args:
-            cursor: データベースカーソル
-        """
-        import logging
-
-        logger = logging.getLogger(__name__)
-
-        # ステップ1: 既存テーブルをリネーム
-        cursor.execute("ALTER TABLE feature_cache RENAME TO feature_cache_backup")
-
-        # ステップ2: 新しいスキーマでテーブル作成
-        self._create_new_schema(cursor)
-
-        # ステップ3: データを復元
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO feature_cache (
-                absolute_path, file_size, mtime_ns, model_name, target_text,
-                max_dim, metrics_version, clip_features, raw_metrics,
-                hsv_features, created_at
-            )
-            SELECT
-                absolute_path, file_size, mtime_ns, model_name, target_text,
-                max_dim, metrics_version, clip_features, raw_metrics,
-                hsv_features, created_at
-            FROM feature_cache_backup
-            """
-        )
-
-        # 移行した行数をログ出力
-        migrated_count = cursor.rowcount
-        logger.info(f"キャッシュスキーマをマイグレーションしました: {migrated_count}件")
-
-        # ステップ4: バックアップテーブルを削除
-        cursor.execute("DROP TABLE feature_cache_backup")
 
     def generate_cache_key(
         self,
@@ -241,7 +243,7 @@ class FeatureCache:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT clip_features, raw_metrics, hsv_features
+            SELECT clip_features, raw_metrics, hsv_features, semantic_score
             FROM feature_cache
             WHERE absolute_path = ?
               AND file_size = ?
@@ -269,6 +271,7 @@ class FeatureCache:
             clip_features=np.frombuffer(row["clip_features"], dtype=np.float32),
             raw_metrics=json.loads(row["raw_metrics"]),
             hsv_features=np.frombuffer(row["hsv_features"], dtype=np.float32),
+            semantic_score=row["semantic_score"],
         )
 
     def put(
@@ -277,6 +280,7 @@ class FeatureCache:
         clip_features: np.ndarray,
         raw_metrics: dict[str, float],
         hsv_features: np.ndarray,
+        semantic_score: float,
     ) -> None:
         """特徴量をキャッシュに保存する.
 
@@ -285,6 +289,7 @@ class FeatureCache:
             clip_features: CLIP特徴（512次元）
             raw_metrics: 生メトリクス
             hsv_features: HSV特徴（64次元）
+            semantic_score: セマンティックスコア
         """
         import time
 
@@ -295,8 +300,8 @@ class FeatureCache:
             INSERT OR REPLACE INTO feature_cache (
                 absolute_path, file_size, mtime_ns, model_name, target_text,
                 max_dim, metrics_version, clip_features, raw_metrics,
-                hsv_features, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                hsv_features, semantic_score, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cache_key["absolute_path"],
@@ -309,6 +314,7 @@ class FeatureCache:
                 clip_features.astype(np.float32).tobytes(),
                 json.dumps(raw_metrics),
                 hsv_features.astype(np.float32).tobytes(),
+                semantic_score,
                 time.time(),
             ),
         )
@@ -316,20 +322,20 @@ class FeatureCache:
 
     def get_many(
         self, cache_keys: list[dict[str, str | int]]
-    ) -> dict[str, Optional[CacheEntry]]:
+    ) -> dict[tuple[Any, ...], Optional[CacheEntry]]:
         """複数のキャッシュキーで特徴量を一括取得する.
 
         パフォーマンス最適化:
         - 単一のINクエリで複数キーを取得
         - SQLiteの複合主キー（7フィールド）を考慮
-        - 結果をキャッシュキーの文字列表現でマッピング
+        - 結果をキャッシュキーのタプルでマッピング（文字列化を回避）
         - TEMP TABLEを再利用してCREATE/DROPオーバーヘッドを削減
 
         Args:
             cache_keys: キャッシュキーのリスト
 
         Returns:
-            キャッシュキーの文字列表現をキー、CacheEntry（ヒットしない場合はNone）を値とする辞書
+            キャッシュキーのタプルをキー、CacheEntry（ヒットしない場合はNone）を値とする辞書
         """
         if not cache_keys:
             return {}
@@ -351,9 +357,9 @@ class FeatureCache:
             for k in cache_keys
         ]
 
-        # 結果を格納する辞書（キーはタプルの文字列表現）
-        results: dict[str, Optional[CacheEntry]] = {
-            str(k_id): None for k_id in key_identifiers
+        # 結果を格納する辞書（キーはタプル、文字列化を回避）
+        results: dict[tuple[Any, ...], Optional[CacheEntry]] = {
+            k_id: None for k_id in key_identifiers
         }
 
         # TEMP TABLEをクリアして再利用（接続時に作成済み）
@@ -380,7 +386,8 @@ class FeatureCache:
                 fc.metrics_version,
                 fc.clip_features,
                 fc.raw_metrics,
-                fc.hsv_features
+                fc.hsv_features,
+                fc.semantic_score
             FROM feature_cache fc
             INNER JOIN temp_lookup tl ON
                 fc.absolute_path = tl.absolute_path AND
@@ -393,23 +400,22 @@ class FeatureCache:
             """
         )
 
-        # 結果をマッピング
+        # 結果をマッピング（タプルを直接使用して文字列化を回避）
         for row in cursor.fetchall():
-            key_id = str(
-                (
-                    row["absolute_path"],
-                    row["file_size"],
-                    row["mtime_ns"],
-                    row["model_name"],
-                    row["target_text"],
-                    row["max_dim"],
-                    row["metrics_version"],
-                )
+            key_id = (
+                row["absolute_path"],
+                row["file_size"],
+                row["mtime_ns"],
+                row["model_name"],
+                row["target_text"],
+                row["max_dim"],
+                row["metrics_version"],
             )
             results[key_id] = CacheEntry(
                 clip_features=np.frombuffer(row["clip_features"], dtype=np.float32),
                 raw_metrics=json.loads(row["raw_metrics"]),
                 hsv_features=np.frombuffer(row["hsv_features"], dtype=np.float32),
+                semantic_score=row["semantic_score"],
             )
 
         return results
@@ -432,6 +438,7 @@ class FeatureCache:
                 - clip_features: CLIP特徴（512次元、np.ndarray）
                 - raw_metrics: 生メトリクス（辞書）
                 - hsv_features: HSV特徴（64次元、np.ndarray）
+                - semantic_score: セマンティックスコア（オプション）
         """
         import time
 
@@ -457,6 +464,7 @@ class FeatureCache:
                         entry["clip_features"].astype(np.float32).tobytes(),
                         json.dumps(entry["raw_metrics"]),
                         entry["hsv_features"].astype(np.float32).tobytes(),
+                        entry.get("semantic_score"),
                         time.time(),
                     )
                 )
@@ -467,8 +475,8 @@ class FeatureCache:
                 INSERT OR REPLACE INTO feature_cache (
                     absolute_path, file_size, mtime_ns, model_name, target_text,
                     max_dim, metrics_version, clip_features, raw_metrics,
-                    hsv_features, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    hsv_features, semantic_score, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 insert_data,
             )
@@ -489,9 +497,16 @@ class FeatureCache:
 
     def __exit__(
         self,
-        _exc_type: type[BaseException] | None,
-        _exc_val: BaseException | None,
-        _exc_tb: Any,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
     ) -> None:
-        """コンテキストマネージャーの終了時に接続を閉じる."""
+        """コンテキストマネージャーの終了時に接続を閉じる.
+
+        Args:
+            exc_type: 例外タイプ（使用しない）
+            exc_val: 例外値（使用しない）
+            exc_tb: 例外トレースバック（使用しない）
+        """
+        _ = (exc_type, exc_val, exc_tb)  # 未使用警告を抑制
         self.close()
