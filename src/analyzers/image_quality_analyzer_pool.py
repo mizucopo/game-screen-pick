@@ -22,19 +22,16 @@ class ImageQualityAnalyzerPool:
 
     def __init__(
         self,
-        genre: str = "mixed",
         num_workers: Optional[int] = None,
         force_cpu: bool = False,
     ):
         """プールを初期化する.
 
         Args:
-            genre: ジャンル重みの種類
             num_workers: ワーカー数（Noneで自動設定）
             force_cpu: GPUを無効化してCPUを強制する
                        （複数ワーカーでのGPUメモリ競合を回避）
         """
-        self.genre = genre
         self._pool: Optional[Pool] = None
         self._num_workers = num_workers
         self._force_cpu = force_cpu
@@ -64,7 +61,7 @@ class ImageQualityAnalyzerPool:
         self._pool = Pool(
             processes=self._num_workers,
             initializer=AnalyzerWorker.init_worker,
-            initargs=(self.genre, self._force_cpu),
+            initargs=(self._force_cpu,),
         )
         self._actual_workers = self._num_workers or os.cpu_count() or 1
         logger.info(f"AnalyzerPool started with {self._actual_workers} workers")

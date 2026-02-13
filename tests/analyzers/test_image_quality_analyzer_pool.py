@@ -58,7 +58,7 @@ def test_pool_analyze_batch_processes_multiple_images(
         - すべての画像に対して有効なImageMetricsが返されること
     """
     # Arrange
-    with ImageQualityAnalyzerPool(genre="mixed", num_workers=2, force_cpu=True) as pool:
+    with ImageQualityAnalyzerPool(num_workers=2, force_cpu=True) as pool:
         # Act
         results = pool.analyze_batch(multiple_image_paths)
 
@@ -88,7 +88,7 @@ def test_pool_analyze_batch_handles_mixed_valid_and_invalid_images(
     nonexistent_path = "/path/that/does/not/exist.jpg"
     paths = [sample_image_path, nonexistent_path, sample_image_path]
 
-    with ImageQualityAnalyzerPool(genre="mixed", num_workers=2, force_cpu=True) as pool:
+    with ImageQualityAnalyzerPool(num_workers=2, force_cpu=True) as pool:
         # Act
         results = pool.analyze_batch(paths)
 

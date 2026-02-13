@@ -8,6 +8,9 @@ import numpy as np
 from src.cache.feature_cache import FeatureCache
 from src.models.cache_entry import CacheEntry
 
+# キャッシュで使用されるmetrics_version
+METRICS_VERSION = "4"
+
 
 def test_init_creates_database_schema() -> None:
     """データベーススキーマが正しく作成されること.
@@ -85,7 +88,7 @@ def test_put_and_get_roundtrip() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "3",
+        "metrics_version": METRICS_VERSION,
     }
 
     with FeatureCache(None) as cache:
@@ -135,7 +138,7 @@ def test_get_returns_none_for_nonexistent_key() -> None:
         "model_name": "test_model",
         "target_text": "test",
         "max_dim": 1280,
-        "metrics_version": "3",
+        "metrics_version": METRICS_VERSION,
     }
 
     with FeatureCache(None) as cache:
@@ -167,7 +170,7 @@ def test_get_returns_none_when_file_size_changed() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "3",
+        "metrics_version": METRICS_VERSION,
     }
 
     with FeatureCache(None) as cache:
@@ -214,7 +217,7 @@ def test_put_replaces_existing_entry() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "3",
+        "metrics_version": METRICS_VERSION,
     }
 
     with FeatureCache(None) as cache:
@@ -276,7 +279,7 @@ def test_persistent_storage() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "3",
+        "metrics_version": METRICS_VERSION,
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -372,7 +375,7 @@ def test_put_batch_saves_multiple_entries() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "3",
+            "metrics_version": METRICS_VERSION,
         }
         entries.append(
             {
@@ -450,7 +453,7 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
         "model_name": "model_A",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "3",
+        "metrics_version": METRICS_VERSION,
     }
     cache_key2: dict[str, str | int] = {
         "absolute_path": "/test/same_path.jpg",
@@ -459,7 +462,7 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
         "model_name": "model_B",  # 異なるモデル
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "3",
+        "metrics_version": METRICS_VERSION,
     }
     cache_key3: dict[str, str | int] = {
         "absolute_path": "/test/same_path.jpg",
@@ -468,7 +471,7 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
         "model_name": "model_A",
         "target_text": "epic game scenery",
         "max_dim": 640,  # 異なるmax_dim
-        "metrics_version": "3",
+        "metrics_version": METRICS_VERSION,
     }
 
     with FeatureCache(None) as cache:
@@ -545,7 +548,7 @@ def test_get_many_retrieves_multiple_entries() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "3",
+            "metrics_version": METRICS_VERSION,
         }
         cache_keys.append(cache_key)
         entries.append(
@@ -606,7 +609,7 @@ def test_get_many_retrieves_multiple_entries() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "3",
+            "metrics_version": METRICS_VERSION,
         }
         cache_keys.append(nonexistent_key)
 
@@ -766,7 +769,7 @@ def test_get_many_reuses_temp_table() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "3",
+            "metrics_version": METRICS_VERSION,
         }
         cache_keys.append(cache_key)
         entries.append(
@@ -837,7 +840,7 @@ def test_put_batch_uses_executemany() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "3",
+            "metrics_version": METRICS_VERSION,
         }
         entries.append(
             {
@@ -912,7 +915,7 @@ def test_semantic_score_roundtrip() -> None:
         "model_name": "test_model",
         "target_text": "test target",
         "max_dim": 1280,
-        "metrics_version": "3",
+        "metrics_version": METRICS_VERSION,
     }
 
     with FeatureCache(None) as cache:
@@ -1032,7 +1035,7 @@ def test_correct_schema_preserved() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "3",
+            "metrics_version": METRICS_VERSION,
         }
 
         with FeatureCache(cache_path) as cache1:
@@ -1091,7 +1094,7 @@ def test_float16_features_roundtrip() -> None:
         "model_name": "test_model",
         "target_text": "test target",
         "max_dim": 1280,
-        "metrics_version": "3",
+        "metrics_version": METRICS_VERSION,
     }
 
     with FeatureCache(None) as cache:

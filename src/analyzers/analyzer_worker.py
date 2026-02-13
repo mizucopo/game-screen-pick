@@ -19,15 +19,14 @@ class AnalyzerWorker:
     # クラス変数: ワーカープロセスごとにAnalyzerWorkerインスタンスを保持
     _worker: Optional["AnalyzerWorker"] = None
 
-    def __init__(self, genre: str, force_cpu: bool) -> None:
+    def __init__(self, force_cpu: bool) -> None:
         """ワーカーを初期化.
 
         Args:
-            genre: ジャンル重みの種類
             force_cpu: CPUを強制するかどうか
         """
         device = "cpu" if force_cpu else None
-        self.analyzer = ImageQualityAnalyzer(genre=genre, device=device)
+        self.analyzer = ImageQualityAnalyzer(device=device)
         pid = os.getpid()
         logger.info(
             f"Worker {pid}: ImageQualityAnalyzer initialized "
@@ -46,16 +45,15 @@ class AnalyzerWorker:
         return self.analyzer.analyze(path)
 
     @staticmethod
-    def init_worker(genre: str = "mixed", force_cpu: bool = False) -> None:
+    def init_worker(force_cpu: bool = False) -> None:
         """ワーカープロセスの初期化関数.
 
         各ワーカープロセスで1回だけ呼び出され、AnalyzerWorkerを初期化する。
 
         Args:
-            genre: ジャンル重みの種類
             force_cpu: GPUを無効化してCPUを強制する（複数ワーカーでの競合回避）
         """
-        AnalyzerWorker._worker = AnalyzerWorker(genre, force_cpu)
+        AnalyzerWorker._worker = AnalyzerWorker(force_cpu)
 
     @staticmethod
     def analyze_single(path: str) -> Optional[ImageMetrics]:

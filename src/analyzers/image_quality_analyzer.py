@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from ..cache.feature_cache import FeatureCache
-from ..constants.genre_weights import GenreWeights
+from ..constants.score_weights import ScoreWeights
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.image_metrics import ImageMetrics
 from .batch_pipeline import BatchPipeline
@@ -27,7 +27,6 @@ class ImageQualityAnalyzer:
 
     def __init__(
         self,
-        genre: str = "mixed",
         config: AnalyzerConfig | None = None,
         device: str | None = None,
         cache: FeatureCache | None = None,
@@ -35,13 +34,12 @@ class ImageQualityAnalyzer:
         """アナライザーを初期化する.
 
         Args:
-            genre: ジャンル（重み付け用）
             config: アナライザー設定（Noneの場合はデフォルト値を使用）
             device: 使用するデバイス（Noneの場合は自動検出）
             cache: 特徴量キャッシュ（Noneの場合はキャッシュ無効）
         """
         self.config = config or AnalyzerConfig()
-        self.weights = GenreWeights.get_weights(genre)
+        self.weights = ScoreWeights.get_weights()
         self.cache = cache
 
         # レイヤー1: モデル管理（プライベート）

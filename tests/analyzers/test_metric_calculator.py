@@ -14,7 +14,7 @@ from PIL import Image
 from src.analyzers.clip_model_manager import CLIPModelManager
 from src.analyzers.metric_calculator import MetricCalculator
 from src.analyzers.metric_normalizer import MetricNormalizer
-from src.constants.genre_weights import GenreWeights
+from src.constants.score_weights import ScoreWeights
 from src.models.analyzer_config import AnalyzerConfig
 
 
@@ -22,7 +22,7 @@ from src.models.analyzer_config import AnalyzerConfig
 def metric_calculator() -> MetricCalculator:
     """メトリクス計算器のフィクスチャ."""
     config = AnalyzerConfig()
-    weights = GenreWeights.get_weights("mixed")
+    weights = ScoreWeights.get_weights()
     # MPS環境でのテスト安定のためCPUデバイスを指定
     model_manager = CLIPModelManager(device="cpu")
     return MetricCalculator(config, weights, model_manager)
