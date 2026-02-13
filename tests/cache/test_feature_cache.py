@@ -623,3 +623,59 @@ def test_get_many_returns_empty_dict_for_empty_input() -> None:
 
     # Assert
     assert results == {}
+
+
+def test_pragma_settings_applied_to_file_db() -> None:
+    """ファイルDBに対してPRAGMA設定が適用されること.
+
+    Given:
+        - 一時ファイルでキャッシュを作成
+    When:
+        - データベース接続を取得してPRAGMA設定を確認
+    Then:
+        - WALモード、NORMAL同期、MEMORY一時ストレージが設定されていること
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache_path = Path(tmpdir) / "test_cache.sqlite3"
+
+        # Arrange & Act: キャッシュを初期化
+        with FeatureCache(cache_path) as cache:
+            conn = cache._get_connection()
+            cursor = conn.cursor()
+
+            # Assert: PRAGMA設定が適用されていることを確認
+            cursor.execute("PRAGMA journal_mode")
+            journal_mode = cursor.fetchone()[0]
+            # WALモードは'wal'を返す
+            assert journal_mode.lower() == "wal"
+
+            cursor.execute("PRAGMA synchronous")
+            synchronous = cursor.fetchone()[0]
+            assert synchronous == 1  # NORMAL = 1
+
+            cursor.execute("PRAGMA temp_store")
+            temp_store = cursor.fetchone()[0]
+            assert temp_store == 2  # MEMORY = 2
+
+
+def test_pragma_settings_not_applied_to_memory_db() -> None:
+    """インメモリDBに対してPRAGMA設定が適用されないこと.
+
+    Given:
+        - インメモリキャッシュを作成
+    When:
+        - データベース接続を取得
+    Then:
+        - 接続が正常に取得できること
+        - エラーが発生しないこと
+    """
+    # Arrange & Act: インメモリキャッシュを初期化
+    with FeatureCache(None) as cache:
+        conn = cache._get_connection()
+
+        # Assert: 接続が正常に取得できる
+        assert conn is not None
+        # 行ファクトリーが設定されている
+        assert conn.row_factory is not None

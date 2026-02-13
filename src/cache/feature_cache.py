@@ -44,9 +44,12 @@ class FeatureCache:
         if not hasattr(self._local, "conn"):
             if self.cache_path:
                 self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-                self._local.conn = sqlite3.connect(
-                    str(self.cache_path), check_same_thread=False
-                )
+                conn = sqlite3.connect(str(self.cache_path), check_same_thread=False)
+                # ファイルDBの場合はパフォーマンス最適化PRAGMAを設定
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA temp_store=MEMORY")
+                self._local.conn = conn
             else:
                 # インメモリデータベース（テスト用）
                 self._local.conn = sqlite3.connect(":memory:")
@@ -92,34 +95,6 @@ class FeatureCache:
                 self._migrate_to_composite_key(cursor)
                 conn.commit()
             # 新しいスキーマの場合は何もしない（既に複合主キー）
-        """データベーススキーマを初期化する.
-
-        必要に応じて既存スキーマから複合主キースキーマへマイグレーションを実行する。
-        """
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        # 既存テーブルのスキーマを確認
-        cursor.execute(
-            """
-            SELECT sql FROM sqlite_master
-            WHERE type='table' AND name='feature_cache'
-            """
-        )
-        result = cursor.fetchone()
-
-        if result is None:
-            # テーブルが存在しない場合、新しいスキーマで作成
-            self._create_new_schema(cursor)
-        else:
-            existing_sql = result[0]
-            # 既存スキーマの主キーを確認（PRIMARY KEYがabsolute_pathのみかチェック）
-            if "absolute_path TEXT PRIMARY KEY" in existing_sql:
-                # マイグレーション必要: 古いスキーマから新しいスキーマへ移行
-                self._migrate_to_composite_key(cursor)
-            # 新しいスキーマの場合は何もしない（既に複合主キー）
-
-        conn.commit()
 
     def _create_new_schema(self, cursor: sqlite3.Cursor) -> None:
         """新しい複合主キースキーマでテーブルを作成する.
@@ -500,9 +475,9 @@ class FeatureCache:
 
     def __exit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: Any,
+        _exc_type: type[BaseException] | None,
+        _exc_val: BaseException | None,
+        _exc_tb: Any,
     ) -> None:
         """コンテキストマネージャーの終了時に接続を閉じる."""
         self.close()
