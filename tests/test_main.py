@@ -9,7 +9,7 @@
 """
 
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -313,3 +313,172 @@ def test_cli_validates_inputs(
             Main().run()
         for pattern in error_patterns:
             assert pattern in str(exc_info.value)
+
+
+def test_batch_size_argument_passed_to_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """--batch-size引数がSelectionConfigに正しく渡されること.
+
+    Given:
+        - 有効な入力ディレクトリが存在する
+        - --batch-size引数を指定
+    When:
+        - CLIが実行される
+    Then:
+        - 指定したバッチサイズがSelectionConfigに設定されること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    from src.models.picker_statistics import PickerStatistics
+
+    empty_stats = PickerStatistics(
+        total_files=0,
+        analyzed_ok=0,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        selected_count=0,
+    )
+
+    # GameScreenPickerのモックを設定
+    def create_picker_with_config(
+        _analyzer: Any,
+        config: Any = None,
+        **kwargs: Any,  # noqa: ARG001
+    ) -> MagicMock:
+        """configが正しく渡されていることを確認する."""
+        assert config is not None
+        assert config.batch_size == 16  # 指定した値
+        picker = MagicMock(spec=GameScreenPicker)
+        picker.select.return_value = ([], empty_stats)
+        return picker
+
+    monkeypatch.setattr(
+        "src.main.GameScreenPicker",
+        create_picker_with_config,  # noqa: ARG005
+    )
+
+    args = ["main.py", str(input_dir), "--batch-size", "16", "--no-cache"]
+    monkeypatch.setattr("sys.argv", args)
+
+    # Act
+    Main().run()
+
+    # Assertは関数内で行われる
+
+
+def test_result_max_workers_argument_passed_to_config(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_game_screen_picker: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """--result-max-workers引数がAnalyzerConfigに正しく渡されること.
+
+    Given:
+        - 有効な入力ディレクトリが存在する
+        - --result-max-workers引数を指定
+    When:
+        - CLIが実行される
+    Then:
+        - 指定したワーカー数がAnalyzerConfigに設定されること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    from src.models.picker_statistics import PickerStatistics
+
+    empty_stats = PickerStatistics(
+        total_files=0,
+        analyzed_ok=0,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        selected_count=0,
+    )
+
+    mock_game_screen_picker.select.return_value = ([], empty_stats)
+
+    # ImageQualityAnalyzerのモックを設定
+    def create_analyzer_with_config(
+        _genre: Any,  # noqa: ARG001
+        _cache: Any = None,  # noqa: ARG001
+        config: Any = None,
+        **kwargs: Any,  # noqa: ARG001
+    ) -> MagicMock:
+        """configが正しく渡されていることを確認する."""
+        assert config is not None
+        assert config.result_max_workers == 4  # 指定した値
+        analyzer = MagicMock(spec=ImageQualityAnalyzer)
+        return analyzer
+
+    monkeypatch.setattr(
+        "src.main.ImageQualityAnalyzer",
+        create_analyzer_with_config,  # noqa: ARG005
+    )
+
+    args = ["main.py", str(input_dir), "--result-max-workers", "4", "--no-cache"]
+    monkeypatch.setattr("sys.argv", args)
+
+    # Act
+    Main().run()
+
+    # Assertは関数内で行われる
+
+
+def test_default_cache_enabled_without_copy_to(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_game_screen_picker: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """--copy-toなしでもキャッシュが有効になること.
+
+    Given:
+        - 有効な入力ディレクトリが存在する
+        - --copy-toを指定しない
+        - --no-cacheも指定しない
+    When:
+        - CLIが実行される
+    Then:
+        - デフォルトのキャッシュパスが使用されること
+        - ~/.cache/game-screen-pick/cache.sqlite3 が使用されること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    from src.models.picker_statistics import PickerStatistics
+
+    empty_stats = PickerStatistics(
+        total_files=0,
+        analyzed_ok=0,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        selected_count=0,
+    )
+    mock_game_screen_picker.select.return_value = ([], empty_stats)
+
+    # FeatureCacheのモックを設定
+    cache_mock = MagicMock()
+
+    def create_cache_with_default_path(cache_path: Any) -> MagicMock:
+        """デフォルトのキャッシュパスが使用されることを確認."""
+        # デフォルトパスが使用されていることを確認
+        assert cache_path is not None
+        assert "game-screen-pick" in str(cache_path)
+        return cache_mock
+
+    monkeypatch.setattr(
+        "src.main.FeatureCache",
+        create_cache_with_default_path,  # noqa: ARG005
+    )
+
+    args = ["main.py", str(input_dir)]
+    monkeypatch.setattr("sys.argv", args)
+
+    # Act
+    Main().run()
+
+    # Assertは関数内で行われる

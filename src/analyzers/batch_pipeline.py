@@ -68,7 +68,7 @@ class BatchPipeline:
         """キャッシュから取得できる結果を返す.
 
         パフォーマンス最適化のため、キャッシュヒット時のセマンティックスコア計算は
-        バッチ処理で行う。
+        バッチ処理で行う。また、キャッシュ一括取得（get_many）でDBアクセスを削減。
 
         Args:
             paths: 画像ファイルパスのリスト
@@ -82,8 +82,8 @@ class BatchPipeline:
 
         from .metric_normalizer import MetricNormalizer
 
-        # 第1パス: キャッシュエントリを収集
-        cached_entries: List[Optional[CacheEntryInfo]] = [None] * len(paths)
+        # 第1パス: 全パスのキャッシュキーを生成
+        cache_keys_with_meta = []
         uncached_indices: List[int] = []
 
         for i, path in enumerate(paths):
@@ -98,14 +98,37 @@ class BatchPipeline:
                     target_text=self.target_text,
                     max_dim=self.config.max_dim,
                 )
-                entry = self.cache.get(cache_key)
-                if entry is not None:
-                    cached_entries[i] = CacheEntryInfo(path, entry, cache_key)
-                else:
-                    uncached_indices.append(i)
+                # インデックスとキーを紐付けて保存
+                cache_keys_with_meta.append((i, cache_key, path))
             except (OSError, ValueError):
                 # ファイルアクセスエラー等は未キャッシュとして扱う
                 uncached_indices.append(i)
+
+        # get_manyで一括取得
+        keys_to_lookup = [meta[1] for meta in cache_keys_with_meta]
+        cached_entries: List[Optional[CacheEntryInfo]] = [None] * len(paths)
+
+        if keys_to_lookup:
+            cache_results = self.cache.get_many(keys_to_lookup)
+
+            # 結果をマッピング
+            for idx, cache_key, path in cache_keys_with_meta:
+                key_id = str(
+                    (
+                        cache_key["absolute_path"],
+                        cache_key["file_size"],
+                        cache_key["mtime_ns"],
+                        cache_key["model_name"],
+                        cache_key["target_text"],
+                        cache_key["max_dim"],
+                        cache_key["metrics_version"],
+                    )
+                )
+                entry = cache_results.get(key_id)
+                if entry is not None:
+                    cached_entries[idx] = CacheEntryInfo(path, entry, cache_key)
+                else:
+                    uncached_indices.append(idx)
 
         # キャッシュヒットがない場合は早期リターン
         cached_indices = [

@@ -319,6 +319,120 @@ class FeatureCache:
         )
         conn.commit()
 
+    def get_many(
+        self, cache_keys: list[dict[str, str | int]]
+    ) -> dict[str, Optional[CacheEntry]]:
+        """複数のキャッシュキーで特徴量を一括取得する.
+
+        パフォーマンス最適化:
+        - 単一のINクエリで複数キーを取得
+        - SQLiteの複合主キー（7フィールド）を考慮
+        - 結果をキャッシュキーの文字列表現でマッピング
+
+        Args:
+            cache_keys: キャッシュキーのリスト
+
+        Returns:
+            キャッシュキーの文字列表現をキー、CacheEntry（ヒットしない場合はNone）を値とする辞書
+        """
+        if not cache_keys:
+            return {}
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # キャッシュキーの一意識別子を生成（主キーフィールドのタプル）
+        key_identifiers = [
+            (
+                k["absolute_path"],
+                k["file_size"],
+                k["mtime_ns"],
+                k["model_name"],
+                k["target_text"],
+                k["max_dim"],
+                k["metrics_version"],
+            )
+            for k in cache_keys
+        ]
+
+        # 結果を格納する辞書（キーはタプルの文字列表現）
+        results: dict[str, Optional[CacheEntry]] = {
+            str(k_id): None for k_id in key_identifiers
+        }
+
+        # 一時テーブルを作成してルックアップ用データを挿入
+        cursor.execute(
+            """
+            CREATE TEMP TABLE temp_lookup (
+                absolute_path TEXT,
+                file_size INTEGER,
+                mtime_ns INTEGER,
+                model_name TEXT,
+                target_text TEXT,
+                max_dim INTEGER,
+                metrics_version TEXT
+            )
+            """
+        )
+
+        # ルックアップテーブルにデータを一括挿入
+        cursor.executemany(
+            """
+            INSERT INTO temp_lookup VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            key_identifiers,
+        )
+
+        # JOINで一括取得
+        cursor.execute(
+            """
+            SELECT
+                fc.absolute_path,
+                fc.file_size,
+                fc.mtime_ns,
+                fc.model_name,
+                fc.target_text,
+                fc.max_dim,
+                fc.metrics_version,
+                fc.clip_features,
+                fc.raw_metrics,
+                fc.hsv_features
+            FROM feature_cache fc
+            INNER JOIN temp_lookup tl ON
+                fc.absolute_path = tl.absolute_path AND
+                fc.file_size = tl.file_size AND
+                fc.mtime_ns = tl.mtime_ns AND
+                fc.model_name = tl.model_name AND
+                fc.target_text = tl.target_text AND
+                fc.max_dim = tl.max_dim AND
+                fc.metrics_version = tl.metrics_version
+            """
+        )
+
+        # 結果をマッピング
+        for row in cursor.fetchall():
+            key_id = str(
+                (
+                    row["absolute_path"],
+                    row["file_size"],
+                    row["mtime_ns"],
+                    row["model_name"],
+                    row["target_text"],
+                    row["max_dim"],
+                    row["metrics_version"],
+                )
+            )
+            results[key_id] = CacheEntry(
+                clip_features=np.frombuffer(row["clip_features"], dtype=np.float32),
+                raw_metrics=json.loads(row["raw_metrics"]),
+                hsv_features=np.frombuffer(row["hsv_features"], dtype=np.float32),
+            )
+
+        # 一時テーブルを削除
+        cursor.execute("DROP TABLE temp_lookup")
+
+        return results
+
     def put_batch(
         self,
         entries: list[dict[str, Any]],
