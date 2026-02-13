@@ -453,7 +453,11 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
 
 @pytest.fixture
 def similar_images_metrics() -> List[ImageMetrics]:
-    """非常に類似した画像セットを作成するfixture（0.97-0.99の類似度）."""
+    """非常に類似した画像セットを作成するfixture（0.97-0.99の類似度）.
+
+    10枚の非常に類似した画像を返します。
+    類似度が高いため、しきい値緩和のテストに使用されます。
+    """
     np.random.seed(42)
     base_features = np.random.rand(128)
 
@@ -469,6 +473,43 @@ def similar_images_metrics() -> List[ImageMetrics]:
             ),
         )
         for i in range(10)
+    ]
+
+
+@pytest.fixture
+def highly_similar_images_for_rejection_test() -> List[ImageMetrics]:
+    """類似度除外が確実に発生する画像セットを作成するfixture.
+
+    0.99の類似度を持つ20枚の画像（1つのベース特徴から生成）を返します。
+    最終しきい値（max_threshold=0.98）を超える類似度を持つため、
+    候補要求数より多い場合に除外が確実に発生します。
+
+    活動量指標としてMIDバケットの値を設定（活動量ミックスのテストで使用）。
+    """
+    np.random.seed(42)
+    base_features = np.random.rand(128)
+
+    # 0.99の類似度を持つ20枚の画像（最終しきい値0.98を超過）
+    return [
+        ImageMetrics(
+            path=f"/fake/path/highly_similar{i}.jpg",
+            raw_metrics={
+                "blur_score": 100.0 - i * 0.5,
+                "action_intensity": 50.0,
+                "edge_density": 0.1,
+                "dramatic_score": 50.0,
+            },
+            normalized_metrics={
+                "blur_score": 0.9 - i * 0.01,
+                "action_intensity": 0.5,
+                "edge_density": 0.5,
+                "dramatic_score": 0.5,
+            },
+            semantic_score=0.8,
+            total_score=100.0 - i * 0.5,
+            features=_create_features_with_similarity(base_features, 0.99),
+        )
+        for i in range(20)
     ]
 
 
@@ -511,26 +552,28 @@ def test_threshold_relaxation_with_highly_similar_images(
 
 
 def test_select_from_analyzed_with_activity_mix_enabled_tracks_similarity_rejections(
-    large_sample_image_metrics: List[ImageMetrics],
+    highly_similar_images_for_rejection_test: List[ImageMetrics],
 ) -> None:
     """活動量ミックス有効時、類似度による除外数が正しく記録されること.
 
     Given:
-        - 20の分析済み画像（類似グループを含む）
+        - 20枚の非常に類似した画像（0.99の類似度）
+        - 最終しきい値（max_threshold=0.98）を超える類似度
         - 活動量ミックスが有効な設定
     When:
         - select_from_analyzedで画像を選択
     Then:
-        - 統計情報のrejected_by_similarityが正しく記録されること
+        - 類似度により一部の候補が除外されること
+        - 統計情報のrejected_by_similarity > 0 であること（回帰検知）
         - 期待枚数の画像が選択されること
     """
     # Arrange
-    num_to_select = 5  # 9枚の画像から5枚を選択すると、類似度フィルタリングが発動する
+    num_to_select = 5  # 5*3=15枚の候補を要求
     similarity_threshold = 0.9
 
     # Act
     result, stats = GameScreenPicker.select_from_analyzed(
-        large_sample_image_metrics,
+        highly_similar_images_for_rejection_test,
         num_to_select,
         similarity_threshold,
         SelectionConfig(activity_mix_enabled=True),
@@ -545,13 +588,13 @@ def test_select_from_analyzed_with_activity_mix_enabled_tracks_similarity_reject
         expected_fail=0,
         expected_selected=num_to_select,
     )
-    # 活動量ミックスではnum*3枚の候補を要求するが、類似度除外記録の検証には
-    # さらに多くの画像が必要。現状ではrejected_by_similarity >= 0を確認する。
-    # 類似度除外の挙動自体はtest_high_quality_images...で検証済み（image1除外）。
-    # また、活動量バケット分割が正しく機能していることは、
-    # test_select_from_analyzed_with_activity_mix_returns_diverse_selectionで
-    # バケット分散の観点から検証される。
-    assert stats.rejected_by_similarity >= 0
+    # 0.99の類似度を持つ20枚の画像から15枚の候補を要求する場合、
+    # 最終しきい値0.98で類似判定が行われるため、除外が確実に発生する。
+    # これによりrejected_by_similarityの回帰検知が可能になる。
+    assert stats.rejected_by_similarity > 0, (
+        f"類似度による除外が発生していません。"
+        f" rejected_by_similarity={stats.rejected_by_similarity}, expected > 0"
+    )
 
 
 def test_select_from_analyzed_with_activity_mix_returns_diverse_selection(
@@ -584,8 +627,12 @@ def test_select_from_analyzed_with_activity_mix_returns_diverse_selection(
     # Assert
     assert len(result) == num_to_select
     # 活動量ミックスではnum*3枚の候補を要求するが、sample_image_metricsは5枚のみのため、
-    # 類似度フィルタリングが発動せずrejected_by_similarityは0になる（正常挙動）
-    assert stats.rejected_by_similarity >= 0
+    # 候補要求数を下回り類似度フィルタリングが発動しない。
+    # したがってrejected_by_similarityは0になることが期待される（回帰検知）
+    assert stats.rejected_by_similarity == 0, (
+        f"候補数不足により除外は発生しないはずですが、"
+        f" rejected_by_similarity={stats.rejected_by_similarity}"
+    )
     # スコア降順であることを確認
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
