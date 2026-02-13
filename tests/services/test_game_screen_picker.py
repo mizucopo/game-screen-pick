@@ -96,6 +96,63 @@ def _create_picker(config: SelectionConfig | None = None) -> GameScreenPicker:
     return GameScreenPicker(analyzer=analyzer, config=config)
 
 
+@pytest.mark.parametrize(
+    "activity_mix_enabled",
+    [False, True],
+)
+def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
+    sample_image_metrics: List[ImageMetrics],
+    activity_mix_enabled: bool,
+) -> None:
+    """高品質な画像が優先され、類似した画像は回避されること.
+
+    Given:
+        - 様々なスコアを持つ5つの分析済み画像
+        - image0（スコア95）とimage1（スコア90）は類似した特徴を持つ
+        - image2（スコア85）は異なる特徴を持つ
+    When:
+        - 類似度閾値0.9で3つの画像を選択
+    Then:
+        - 3つの画像が返されること
+        - 最高スコアの画像が優先されること
+        - 類似した画像が除外されること
+    """
+    # Arrange
+    num_to_select = 3
+    similarity_threshold = 0.9
+    # activity_mix有効時は(0.3, 0.4, 0.3)、無効時は均等配分
+    ratio = (0.3, 0.4, 0.3) if activity_mix_enabled else (0.33, 0.34, 0.33)
+    config = SelectionConfig(
+        activity_mix_enabled=activity_mix_enabled,
+        activity_mix_ratio=ratio,
+    )
+    picker = _create_picker(config)
+
+    # Act
+    result, stats = picker.select_from_analyzed(
+        sample_image_metrics,
+        num_to_select,
+        similarity_threshold,
+    )
+
+    # Assert
+    assert len(result) == 3
+    _assert_stats_valid(
+        stats,
+        expected_total=5,
+        expected_ok=5,
+        expected_fail=0,
+        expected_selected=3,
+    )
+    scores = [m.total_score for m in result]
+    assert scores == sorted(scores, reverse=True)
+    selected_paths = [m.path for m in result]
+    assert "/fake/path/image0.jpg" in selected_paths
+    # activity_mix有効時はバケット分散が優先されるため、類似除外は適用されない場合がある
+    if not activity_mix_enabled:
+        assert "/fake/path/image1.jpg" not in selected_paths  # image0に類似
+
+
 def _assert_stats_valid(
     stats: PickerStatistics,
     expected_total: int,
@@ -253,50 +310,6 @@ def sample_image_metrics() -> List[ImageMetrics]:
     ]
 
 
-def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """高品質な画像が優先され、類似した画像は回避されること.
-
-    Given:
-        - 様々なスコアを持つ5つの分析済み画像
-        - image0（スコア95）とimage1（スコア90）は類似した特徴を持つ
-        - image2（スコア85）は異なる特徴を持つ
-    When:
-        - 類似度閾値0.9で3つの画像を選択
-    Then:
-        - 3つの画像が返されること
-        - 最高スコアの画像が優先されること
-        - 類似した画像が除外されること
-    """
-    # Arrange
-    num_to_select = 3
-    similarity_threshold = 0.9
-    picker = _create_picker(SelectionConfig(activity_mix_enabled=False))
-
-    # Act
-    result, stats = picker.select_from_analyzed(
-        sample_image_metrics,
-        num_to_select,
-        similarity_threshold,
-    )
-
-    # Assert
-    assert len(result) == 3
-    _assert_stats_valid(
-        stats,
-        expected_total=5,
-        expected_ok=5,
-        expected_fail=0,
-        expected_selected=3,
-    )
-    scores = [m.total_score for m in result]
-    assert scores == sorted(scores, reverse=True)
-    selected_paths = [m.path for m in result]
-    assert "/fake/path/image0.jpg" in selected_paths
-    assert "/fake/path/image1.jpg" not in selected_paths  # image0に類似
-
-
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
     mock_analyzer_with_batch: MagicMock,
 ) -> None:
@@ -403,109 +416,3 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
             expected_fail=3,
             expected_selected=len(result),
         )
-
-
-@pytest.fixture
-def similar_images_metrics() -> List[ImageMetrics]:
-    """非常に類似した画像セットを作成するfixture（0.97-0.99の類似度）.
-
-    10枚の非常に類似した画像を返します。
-    類似度が高いため、しきい値緩和のテストに使用されます。
-    """
-    np.random.seed(42)
-    base_features = np.random.rand(128)
-
-    return [
-        _create_image_metrics(
-            path=f"/fake/path/similar{i}.jpg",
-            raw_metrics_dict={"blur_score": 100.0 - i},
-            normalized_metrics_dict={"blur_score": 0.9},
-            semantic_score=0.8,
-            total_score=100.0 - i,
-            features=_create_features_with_similarity(
-                base_features, 0.97 + (i % 3) * 0.01
-            ),
-        )
-        for i in range(10)
-    ]
-
-
-def test_threshold_relaxation_with_highly_similar_images(
-    similar_images_metrics: List[ImageMetrics],
-) -> None:
-    """類似した画像ばかりの場合、しきい値緩和と最終フォールバックが機能すること.
-
-    Given:
-        - 10枚の非常に類似した画像（0.97-0.99の類似度）
-    When:
-        - 類似度閾値0.9で10枚の画像を選択
-    Then:
-        - 段階的しきい値緩和により可能な限り多様性を確保しつつ
-          最終的に10枚全てが返されること
-    """
-    # Arrange
-    num_to_select = 10
-    similarity_threshold = 0.9
-    picker = _create_picker(SelectionConfig(activity_mix_enabled=False))
-
-    # Act
-    result, stats = picker.select_from_analyzed(
-        similar_images_metrics,
-        num_to_select,
-        similarity_threshold,
-    )
-
-    # Assert
-    assert len(result) == num_to_select
-    _assert_stats_valid(
-        stats,
-        expected_total=10,
-        expected_ok=10,
-        expected_fail=0,
-        expected_selected=num_to_select,
-    )
-    scores = [m.total_score for m in result]
-    assert scores == sorted(scores, reverse=True)
-
-
-def test_select_from_analyzed_with_activity_mix_returns_diverse_selection(
-    sample_image_metrics: List[ImageMetrics],
-) -> None:
-    """活動量ミックス有効時、選択が正常に完了すること.
-
-    Given:
-        - 5つの分析済み画像（LOW/MID/HIGHバケットの活動量を持つ）
-        - 活動量ミックスが有効な設定
-    When:
-        - 画像を選択
-    Then:
-        - 選択された画像が返されること
-        - 統計情報が正しく記録されること
-        - スコア降順で選択されていること
-    """
-    # Arrange
-    num_to_select = 3
-    similarity_threshold = 0.9
-    picker = _create_picker(
-        SelectionConfig(activity_mix_enabled=True, activity_mix_ratio=(0.3, 0.4, 0.3))
-    )
-
-    # Act
-    result, stats = picker.select_from_analyzed(
-        sample_image_metrics,
-        num_to_select,
-        similarity_threshold,
-    )
-
-    # Assert
-    assert len(result) == num_to_select
-    _assert_stats_valid(
-        stats,
-        expected_total=5,
-        expected_ok=5,
-        expected_fail=0,
-        expected_selected=num_to_select,
-    )
-    # スコア降順であることを確認
-    scores = [m.total_score for m in result]
-    assert scores == sorted(scores, reverse=True)

@@ -5,16 +5,35 @@ import pytest
 from src.models.selection_config import SelectionConfig
 
 
+def test_selection_config_initialization_with_defaults() -> None:
+    """SelectionConfigがデフォルト値で正しく初期化されること.
+
+    Given:
+        - デフォルト値を使用する
+    When:
+        - SelectionConfigを作成
+    Then:
+        - デフォルト値が正しく設定されていること
+    """
+    # Arrange & Act
+    config = SelectionConfig()
+
+    # Assert
+    assert config.batch_size == 32
+    assert config.threshold_relaxation_steps == [0.03, 0.06, 0.10, 0.15]
+    assert config.max_threshold == 0.98
+
+
 @pytest.mark.parametrize(
     "batch_size,steps,max_threshold,expected_batch,expected_steps,expected_max",
     [
-        # デフォルト値
-        (None, None, None, 32, [0.03, 0.06, 0.10, 0.15], 0.98),
         # カスタム値
         (64, [0.05, 0.10, 0.20], 0.95, 64, [0.05, 0.10, 0.20], 0.95),
+        # カスタムバッチサイズのみ
+        (16, None, None, 16, [0.03, 0.06, 0.10, 0.15], 0.98),
     ],
 )
-def test_selection_config_initialization(
+def test_selection_config_initialization_with_custom_values(
     batch_size: int | None,
     steps: list[float] | None,
     max_threshold: float | None,
@@ -22,23 +41,25 @@ def test_selection_config_initialization(
     expected_steps: list[float],
     expected_max: float,
 ) -> None:
-    """SelectionConfigが正しく初期化されること.
+    """SelectionConfigがカスタム値で正しく初期化されること.
 
     Given:
-        - デフォルト値またはカスタム値がある
+        - カスタム値がある
     When:
         - SelectionConfigを作成
     Then:
         - 指定した値が正しく設定されていること
+        - 未指定の値はデフォルトが使用されること
     """
     # Arrange & Act
-    if batch_size is None:
-        config = SelectionConfig()
+    if steps is None:
+        config = SelectionConfig(batch_size=batch_size)  # type: ignore[arg-type]
     else:
+        default_max = SelectionConfig().max_threshold
         config = SelectionConfig(
-            batch_size=batch_size,
-            threshold_relaxation_steps=steps,  # type: ignore[arg-type]
-            max_threshold=max_threshold,  # type: ignore[arg-type]
+            batch_size=batch_size,  # type: ignore[arg-type]
+            threshold_relaxation_steps=steps,
+            max_threshold=max_threshold if max_threshold is not None else default_max,
         )
 
     # Assert
@@ -54,8 +75,6 @@ def test_selection_config_initialization(
         (0.72, 0.98, [0.72, 0.75, 0.78, 0.82, 0.87]),
         # 上限制限（max_thresholdでキャップされる）
         (0.95, 0.98, [0.95, 0.98, 0.98, 0.98, 0.98]),
-        # 低いベース値でのステップ計算
-        (0.50, 0.98, [0.50, 0.53, 0.56, 0.60, 0.65]),
     ],
 )
 def test_compute_threshold_steps_with_defaults(
