@@ -1,6 +1,6 @@
 """AnalyzerConfig関連の型定義."""
 
-from typing_extensions import TypedDict
+from typing import TypedDict
 
 
 class AnalyzerConfigKwargs(TypedDict, total=False):

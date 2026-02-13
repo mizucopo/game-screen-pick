@@ -81,29 +81,32 @@ def test_select_diverse_indices_returns_valid_rejection_count() -> None:
     )
 
 
-def test_select_diverse_indices_rejected_once_not_counted_if_selected_later() -> None:
-    """厳しい閾値で一度拒否されても後段で選択された場合は除外数に含めないこと.
+def test_select_diverse_indices_rejection_count_across_threshold_steps() -> None:
+    """閾値ステップ間で除外数が正しく集計されること.
 
     Given:
         - 5件の特徴ベクトルがある
-        - 際立って異なる1件を含む
+        - 最初の2件は類似、残り3件は互いに異なる
     When:
-        - 厳しい閾値から緩い閾値へ段階的に緩和して選択する
+        - 緩い閾値から厳しい閾値へ段階的に厳格化して選択する
+        - 最初の緩い閾値で必要数選択されるため、2段階目は実行されない
     Then:
-        - 厳しい閾値で一度拒否されても緩い閾値で選択された場合、除外数に含まれないこと
+        - 最初のステップで選択された候補のみが選択されること
+        - 類似度で除外された候補のみが除外数にカウントされること
     """
-    # Arrange: 5件の特徴ベクトル（最初の2件は類似、3件目は際立って異なる）
+    # Arrange: 5件の特徴ベクトル（最初の2件は類似、残り3件は互いに異なる）
     vec_a = np.array([1.0, 0.0, 0.0])
-    vec_b = np.array([0.99, 0.01, 0.0])  # vec_aと類似
-    vec_c = np.array([0.0, 1.0, 0.0])  # 際立って異なる
-    vec_d = np.array([0.98, 0.02, 0.0])  # vec_aと類似
-    vec_e = np.array([0.0, 0.0, 1.0])  # 際立って異なる
+    vec_b = np.array([0.99, 0.01, 0.0])  # vec_aと類似（内積≈0.99）
+    vec_c = np.array([0.0, 1.0, 0.0])  # vec_aと直交
+    vec_d = np.array([0.98, 0.02, 0.0])  # vec_aと類似（内積≈0.98）
+    vec_e = np.array([0.0, 0.0, 1.0])  # vec_a, vec_cと直交
 
     # すべてL2正規化済みとする
     normalized_features = [vec_a, vec_b, vec_c, vec_d, vec_e]
 
-    # Act: 厳しい閾値（0.95）→ 緩い閾値（0.8）
-    threshold_steps = [0.95, 0.8]
+    # Act: 緩い閾値（0.8）→ 厳しい閾値（0.95）
+    # 最初の緩い閾値で3件選択されるため、2段階目は実行されない
+    threshold_steps = [0.8, 0.95]
     selected_indices, rejected_by_similarity = VectorUtils.select_diverse_indices(
         normalized_features=normalized_features,
         num=3,
@@ -111,9 +114,10 @@ def test_select_diverse_indices_rejected_once_not_counted_if_selected_later() ->
     )
 
     # Assert
-    # vec_a(0), vec_c(2), vec_e(4) が選択されるはず
-    # vec_b(1), vec_d(3) は類似度で除外されるはず
+    # vec_a(0), vec_c(2), vec_e(4) が選択される（どれも内積<0.8）
+    # vec_b(1), vec_d(3) はそれぞれvec_aとの類似度>0.8で除外される
     assert len(selected_indices) == 3
+    assert selected_indices == {0, 2, 4}
     assert rejected_by_similarity == 2  # vec_b, vec_d のみ除外
 
 
