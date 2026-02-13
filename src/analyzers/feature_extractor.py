@@ -21,7 +21,7 @@ class FeatureExtractor:
     """画像特徴抽出器.
 
     CLIPモデルマネージャーを使用して、HSV特徴、CLIP特徴、
-    および統合特徴を抽出する。
+    および統合特徴を抽出する。バッチCLIP推論とOOM対策も提供する。
     """
 
     def __init__(self, model_manager: "CLIPModelManager"):

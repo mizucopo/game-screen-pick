@@ -14,7 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 class AnalyzerWorker:
-    """ワーカープロセスでImageQualityAnalyzerを管理するクラス."""
+    """ワーカープロセスでImageQualityAnalyzerを管理するクラス.
+
+    マルチプロセス環境でプロセスごとにAnalyzerインスタンスを保持し、
+    モデルの再ロードを回避する。
+    """
 
     # クラス変数: ワーカープロセスごとにAnalyzerWorkerインスタンスを保持
     _worker: Optional["AnalyzerWorker"] = None

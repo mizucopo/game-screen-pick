@@ -7,7 +7,7 @@ from PIL import UnidentifiedImageError
 class ExceptionHandler:
     """例外ハンドリングユーティリティクラス.
 
-    画像処理で正常な失敗として扱う例外型を提供する。
+    画像処理で正常な失敗として扱う例外型のタプルを提供する。
     """
 
     @staticmethod

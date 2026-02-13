@@ -7,7 +7,10 @@ from ..models.raw_metrics import RawMetrics
 
 
 class MetricNormalizer:
-    """メトリクス正規化クラス."""
+    """メトリクス正規化クラス.
+
+    生メトリクスを0.0-1.0の範囲に正規化するシグモイド関数を提供する。
+    """
 
     @staticmethod
     def sigmoid(x: float, center: float, steepness: float = 0.1) -> float:

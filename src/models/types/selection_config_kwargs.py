@@ -7,6 +7,7 @@ class SelectionConfigKwargs(TypedDict, total=False):
     """SelectionConfig.from_cli_args の引数型.
 
     None でない値のみが渡されることを想定。
+    全てのフィールドがオプション（total=False）。
     """
 
     batch_size: int

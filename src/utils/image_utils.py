@@ -11,6 +11,7 @@ class ImageUtils:
     """画像処理ユーティリティクラス.
 
     PILとOpenCV間の画像変換機能と画像読み込み機能を提供する。
+    JPEGのdraft()によるデコード時の縮小ヒントもサポートする。
     """
 
     @staticmethod
