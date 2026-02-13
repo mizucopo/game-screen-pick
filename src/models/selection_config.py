@@ -69,6 +69,14 @@ class SelectionConfig:
             )
             raise ValueError(msg)
 
+        total_ratio = sum(self.activity_mix_ratio)
+        if not (0.99 <= total_ratio <= 1.01):
+            msg = (
+                "activity_mix_ratioの合計は1.0である必要です"
+                f"(許容誤差±0.01): {self.activity_mix_ratio} (合計: {total_ratio})"
+            )
+            raise ValueError(msg)
+
     def compute_threshold_steps(self, base_threshold: float) -> list[float]:
         """ベースのしきい値から段階的な緩和ステップを計算する.
 

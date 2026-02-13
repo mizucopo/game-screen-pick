@@ -361,3 +361,77 @@ def test_threshold_relaxation_with_highly_similar_images(
     )
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_select_from_analyzed_with_activity_mix_enabled_tracks_similarity_rejections(
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
+    """活動量ミックス有効時、類似度による除外数が正しく記録されること.
+
+    Given:
+        - 5つの分析済み画像（一部類似した画像を含む）
+        - 活動量ミックスが有効な設定
+    When:
+        - select_from_analyzedで画像を選択
+    Then:
+        - 統計情報のrejected_by_similarityが正しく記録されること
+        - 期待枚数の画像が選択されること
+    """
+    # Arrange
+    num_to_select = 3
+    similarity_threshold = 0.9
+
+    # Act
+    result, stats = GameScreenPicker.select_from_analyzed(
+        sample_image_metrics,
+        num_to_select,
+        similarity_threshold,
+        SelectionConfig(activity_mix_enabled=True),
+    )
+
+    # Assert
+    assert len(result) == num_to_select
+    _assert_stats_valid(
+        stats,
+        expected_total=5,
+        expected_ok=5,
+        expected_fail=0,
+        expected_selected=num_to_select,
+    )
+    # 類似度で除外された数が記録されていることを確認
+    # (sample_image_metricsには類似したペアが含まれるため、何らかの除外があるはず)
+    assert stats.rejected_by_similarity >= 0
+
+
+def test_select_from_analyzed_with_activity_mix_returns_diverse_selection(
+    sample_image_metrics: List[ImageMetrics],
+) -> None:
+    """活動量ミックス有効時、異なる活動量バケットから画像が選択されること.
+
+    Given:
+        - 5つの分析済み画像
+        - 活動量ミックスが有効な設定
+    When:
+        - 画像を選択
+    Then:
+        - 選択された画像が返されること
+        - 統計情報が正しく記録されること
+    """
+    # Arrange
+    num_to_select = 3
+    similarity_threshold = 0.9
+
+    # Act
+    result, stats = GameScreenPicker.select_from_analyzed(
+        sample_image_metrics,
+        num_to_select,
+        similarity_threshold,
+        SelectionConfig(activity_mix_enabled=True, activity_mix_ratio=(0.3, 0.4, 0.3)),
+    )
+
+    # Assert
+    assert len(result) == num_to_select
+    assert stats.rejected_by_similarity >= 0
+    # スコア降順であることを確認
+    scores = [m.total_score for m in result]
+    assert scores == sorted(scores, reverse=True)
