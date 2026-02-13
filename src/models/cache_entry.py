@@ -13,8 +13,10 @@ class CacheEntry:
         clip_features: CLIP特徴（512次元ベクトル）
         raw_metrics: 生メトリクス（9つの値）
         hsv_features: HSV特徴（64次元ベクトル）
+        semantic_score: セマンティックスコア
     """
 
     clip_features: np.ndarray
     raw_metrics: dict[str, float]
     hsv_features: np.ndarray
+    semantic_score: float

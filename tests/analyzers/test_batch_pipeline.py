@@ -135,6 +135,64 @@ def test_cached_results_semantic_score_calculation_is_batched(
         assert -1.0 <= second.semantic_score <= 1.0 + 1e-5
 
 
+def test_cached_results_use_stored_semantic_score(tmp_path: Path) -> None:
+    """キャッシュヒット時に保存されたsemantic_scoreが使用されること.
+
+    Given:
+        - semantic_score付きのエントリがキャッシュに保存されている
+    When:
+        - キャッシュから結果を取得
+    Then:
+        - 保存されたsemantic_scoreが使用されること
+        - 再計算がスキップされること
+    """
+    import numpy as np
+    from src.cache.feature_cache import FeatureCache
+
+    # Arrange: semantic_score付きでキャッシュにエントリを保存
+    cache_path = tmp_path / "test_semantic_cache.sqlite3"
+    cache = FeatureCache(cache_path)
+
+    # テスト用のキャッシュエントリを作成
+    clip_features = np.random.randn(512).astype(np.float32)
+    hsv_features = np.random.randn(64).astype(np.float32)
+    raw_metrics = {"blur_score": 100.0}
+    semantic_score = 0.85
+
+    # テスト画像を作成
+    np.random.seed(42)
+    img_array = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+    img_path = tmp_path / "semantic_cache_test.jpg"
+    cv2.imwrite(str(img_path), img_array)
+
+    # キャッシュキーを生成して保存
+    file_stat = img_path.stat()
+    cache_key = cache.generate_cache_key(
+        absolute_path=str(img_path.resolve()),
+        file_size=file_stat.st_size,
+        mtime_ns=int(file_stat.st_mtime_ns),
+        model_name="openai/clip-vit-base-patch32",
+        target_text="epic game scenery",
+        max_dim=1280,
+    )
+
+    # semantic_score付きで保存
+    cache.put(
+        cache_key=cache_key,
+        clip_features=clip_features,
+        raw_metrics=raw_metrics,
+        hsv_features=hsv_features,
+        semantic_score=semantic_score,
+    )
+
+    # Act: キャッシュから取得
+    result = cache.get(cache_key)
+
+    # Assert: semantic_scoreが正しく取得できる
+    assert result is not None
+    assert result.semantic_score == semantic_score
+
+
 def test_compute_chunk_boundaries_uses_fast_estimation(tmp_path: Path) -> None:
     """チャンク境界計算で高速なメモリ推定が使用されていること.
 

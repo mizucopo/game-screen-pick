@@ -64,6 +64,7 @@ def test_put_and_get_roundtrip() -> None:
         "visual_balance": 80.0,
         "dramatic_score": 50.0,
     }
+    semantic_score = 0.75
     cache_key: dict[str, str | int] = {
         "absolute_path": "/test/image.jpg",
         "file_size": 1024,
@@ -81,6 +82,7 @@ def test_put_and_get_roundtrip() -> None:
             clip_features=clip_features,
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
+            semantic_score=semantic_score,
         )
 
         # Act: 取得
@@ -91,6 +93,7 @@ def test_put_and_get_roundtrip() -> None:
         np.testing.assert_array_almost_equal(result.clip_features, clip_features)
         np.testing.assert_array_almost_equal(result.hsv_features, hsv_features)
         assert result.raw_metrics == raw_metrics
+        assert result.semantic_score == semantic_score
 
 
 def test_get_returns_none_for_nonexistent_key() -> None:
@@ -152,6 +155,7 @@ def test_get_returns_none_when_file_size_changed() -> None:
             clip_features=clip_features,
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
+            semantic_score=0.75,
         )
 
         # Act: file_sizeを変更して取得
@@ -195,6 +199,7 @@ def test_put_replaces_existing_entry() -> None:
             clip_features=original_features,
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
+            semantic_score=0.5,
         )
 
         # Act: 同じキーで更新
@@ -203,6 +208,7 @@ def test_put_replaces_existing_entry() -> None:
             clip_features=updated_features,
             raw_metrics={"blur_score": 200.0},
             hsv_features=hsv_features,
+            semantic_score=0.8,
         )
 
         # Assert: 更新後のデータが取得できる
@@ -210,6 +216,7 @@ def test_put_replaces_existing_entry() -> None:
         assert result is not None
         np.testing.assert_array_equal(result.clip_features, updated_features)
         assert result.raw_metrics["blur_score"] == 200.0
+        assert result.semantic_score == 0.8
 
 
 def test_persistent_storage() -> None:
@@ -246,6 +253,7 @@ def test_persistent_storage() -> None:
                 clip_features=clip_features,
                 raw_metrics=raw_metrics,
                 hsv_features=hsv_features,
+                semantic_score=0.75,
             )
 
         # Act: 別セッションで取得
@@ -306,6 +314,7 @@ def test_put_batch_saves_multiple_entries() -> None:
         clip_features = np.random.randn(512).astype(np.float32)
         hsv_features = np.random.randn(64).astype(np.float32)
         raw_metrics = {"blur_score": float(i * 10)}
+        semantic_score = 0.1 * i
         cache_key: dict[str, str | int] = {
             "absolute_path": f"/test/batch_image_{i}.jpg",
             "file_size": 1024 + i,
@@ -321,21 +330,31 @@ def test_put_batch_saves_multiple_entries() -> None:
                 "clip_features": clip_features,
                 "raw_metrics": raw_metrics,
                 "hsv_features": hsv_features,
+                "semantic_score": semantic_score,
             }
         )
-        expected_results.append((cache_key, clip_features, hsv_features, raw_metrics))
+        expected_results.append(
+            (cache_key, clip_features, hsv_features, raw_metrics, semantic_score)
+        )
 
     with FeatureCache(None) as cache:
         # Act: バッチ保存
         cache.put_batch(entries)
 
         # Assert: すべてのエントリが取得できる
-        for cache_key, clip_features, hsv_features, raw_metrics in expected_results:
+        for (
+            cache_key,
+            clip_features,
+            hsv_features,
+            raw_metrics,
+            semantic,
+        ) in expected_results:
             result = cache.get(cache_key)
             assert result is not None
             np.testing.assert_array_almost_equal(result.clip_features, clip_features)
             np.testing.assert_array_almost_equal(result.hsv_features, hsv_features)
             assert result.raw_metrics == raw_metrics
+            assert result.semantic_score == semantic
 
 
 def test_composite_key_allows_different_params_for_same_path() -> None:
@@ -391,18 +410,21 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
             clip_features=clip_features1,
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
+            semantic_score=0.5,
         )
         cache.put(
             cache_key=cache_key2,
             clip_features=clip_features2,
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
+            semantic_score=0.6,
         )
         cache.put(
             cache_key=cache_key3,
             clip_features=clip_features3,
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
+            semantic_score=0.7,
         )
 
         # Assert: 各エントリが独立して取得できる
@@ -417,88 +439,6 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
         np.testing.assert_array_equal(result1.clip_features, clip_features1)
         np.testing.assert_array_equal(result2.clip_features, clip_features2)
         np.testing.assert_array_equal(result3.clip_features, clip_features3)
-
-
-def test_migration_from_old_schema_to_composite_key() -> None:
-    """古いスキーマ（absolute_pathのみのPRIMARY KEY）から新しいスキーマへ正しく
-    マイグレーションされること.
-
-    Given:
-        - 古いスキーマで作成されたキャッシュデータベース
-    When:
-        - FeatureCacheを初期化してマイグレーションを実行
-    Then:
-        - 新しいスキーマに変換されること
-        - 既存データが保持されること
-    """
-    import tempfile
-    import sqlite3
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cache_path = Path(tmpdir) / "old_cache.sqlite3"
-
-        # Arrange: 古いスキーマでテーブルを作成
-        conn = sqlite3.connect(str(cache_path))
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            CREATE TABLE feature_cache (
-                absolute_path TEXT PRIMARY KEY,
-                file_size INTEGER NOT NULL,
-                mtime_ns INTEGER NOT NULL,
-                model_name TEXT NOT NULL,
-                target_text TEXT NOT NULL,
-                max_dim INTEGER NOT NULL,
-                metrics_version TEXT NOT NULL,
-                clip_features BLOB NOT NULL,
-                raw_metrics TEXT NOT NULL,
-                hsv_features BLOB NOT NULL,
-                created_at REAL NOT NULL
-            )
-            """
-        )
-
-        # テストデータを投入
-        import json
-
-        clip_features = np.ones(512, dtype=np.float32) * 0.5
-        hsv_features = np.ones(64, dtype=np.float32) * 0.3
-        raw_metrics = {"blur_score": 100.0}
-
-        cursor.execute(
-            """
-            INSERT INTO feature_cache VALUES (
-                '/old/image.jpg', 1024, 1234567890, 'old_model',
-                'test target', 1280, '1', ?, ?, ?, 1234567890.0
-            )
-            """,
-            (
-                clip_features.astype(np.float32).tobytes(),
-                json.dumps(raw_metrics),
-                hsv_features.astype(np.float32).tobytes(),
-            ),
-        )
-        conn.commit()
-        conn.close()
-
-        # Act: 新しいFeatureCacheを初期化（マイグレーションが実行される）
-        with FeatureCache(cache_path) as cache:
-            # 新しいスキーマでデータが取得できることを確認
-            cache_key = cache.generate_cache_key(
-                absolute_path="/old/image.jpg",
-                file_size=1024,
-                mtime_ns=1234567890,
-                model_name="old_model",
-                target_text="test target",
-                max_dim=1280,
-            )
-            result = cache.get(cache_key)
-
-        # Assert: データが正しくマイグレーションされている
-        assert result is not None
-        np.testing.assert_array_equal(result.clip_features, clip_features)
-        np.testing.assert_array_equal(result.hsv_features, hsv_features)
-        assert result.raw_metrics == raw_metrics
 
 
 def test_get_many_retrieves_multiple_entries() -> None:
@@ -521,6 +461,7 @@ def test_get_many_retrieves_multiple_entries() -> None:
         clip_features = np.random.randn(512).astype(np.float32)
         hsv_features = np.random.randn(64).astype(np.float32)
         raw_metrics = {"blur_score": float(i * 10)}
+        semantic_score = 0.1 * i
         cache_key: dict[str, str | int] = {
             "absolute_path": f"/test/get_many_{i}.jpg",
             "file_size": 1024 + i,
@@ -531,28 +472,29 @@ def test_get_many_retrieves_multiple_entries() -> None:
             "metrics_version": "1",
         }
         cache_keys.append(cache_key)
-        entries.append((cache_key, clip_features, hsv_features, raw_metrics))
+        entries.append(
+            (cache_key, clip_features, hsv_features, raw_metrics, semantic_score)
+        )
         expected_results[
-            str(
-                (
-                    cache_key["absolute_path"],
-                    cache_key["file_size"],
-                    cache_key["mtime_ns"],
-                    cache_key["model_name"],
-                    cache_key["target_text"],
-                    cache_key["max_dim"],
-                    cache_key["metrics_version"],
-                )
+            (
+                cache_key["absolute_path"],
+                cache_key["file_size"],
+                cache_key["mtime_ns"],
+                cache_key["model_name"],
+                cache_key["target_text"],
+                cache_key["max_dim"],
+                cache_key["metrics_version"],
             )
-        ] = (clip_features, hsv_features, raw_metrics)
+        ] = (clip_features, hsv_features, raw_metrics, semantic_score)
 
     with FeatureCache(None) as cache:
-        for cache_key, clip_features, hsv_features, raw_metrics in entries:
+        for cache_key, clip_features, hsv_features, raw_metrics, semantic in entries:
             cache.put(
                 cache_key=cache_key,
                 clip_features=clip_features,
                 raw_metrics=raw_metrics,
                 hsv_features=hsv_features,
+                semantic_score=semantic,
             )
 
         # 存在しないキーも含める
@@ -575,35 +517,37 @@ def test_get_many_retrieves_multiple_entries() -> None:
 
         # 存在するキーが取得できることを確認
         for i in range(3):
-            key_id = str(
-                (
-                    cache_keys[i]["absolute_path"],
-                    cache_keys[i]["file_size"],
-                    cache_keys[i]["mtime_ns"],
-                    cache_keys[i]["model_name"],
-                    cache_keys[i]["target_text"],
-                    cache_keys[i]["max_dim"],
-                    cache_keys[i]["metrics_version"],
-                )
+            key_id = (
+                cache_keys[i]["absolute_path"],
+                cache_keys[i]["file_size"],
+                cache_keys[i]["mtime_ns"],
+                cache_keys[i]["model_name"],
+                cache_keys[i]["target_text"],
+                cache_keys[i]["max_dim"],
+                cache_keys[i]["metrics_version"],
             )
             result = results.get(key_id)
             assert result is not None
-            expected_clip, expected_hsv, expected_raw = expected_results[key_id]
+            (
+                expected_clip,
+                expected_hsv,
+                expected_raw,
+                expected_semantic,
+            ) = expected_results[key_id]
             np.testing.assert_array_almost_equal(result.clip_features, expected_clip)
             np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv)
             assert result.raw_metrics == expected_raw
+            assert result.semantic_score == expected_semantic
 
         # 存在しないキーはNone
-        nonexistent_key_id = str(
-            (
-                nonexistent_key["absolute_path"],
-                nonexistent_key["file_size"],
-                nonexistent_key["mtime_ns"],
-                nonexistent_key["model_name"],
-                nonexistent_key["target_text"],
-                nonexistent_key["max_dim"],
-                nonexistent_key["metrics_version"],
-            )
+        nonexistent_key_id = (
+            nonexistent_key["absolute_path"],
+            nonexistent_key["file_size"],
+            nonexistent_key["mtime_ns"],
+            nonexistent_key["model_name"],
+            nonexistent_key["target_text"],
+            nonexistent_key["max_dim"],
+            nonexistent_key["metrics_version"],
         )
         assert results.get(nonexistent_key_id) is None
 
@@ -701,6 +645,7 @@ def test_get_many_reuses_temp_table() -> None:
         clip_features = np.random.randn(512).astype(np.float32)
         hsv_features = np.random.randn(64).astype(np.float32)
         raw_metrics = {"blur_score": float(i * 10)}
+        semantic_score = 0.1 * i
         cache_key: dict[str, str | int] = {
             "absolute_path": f"/test/reuse_temp_{i}.jpg",
             "file_size": 1024 + i,
@@ -711,15 +656,18 @@ def test_get_many_reuses_temp_table() -> None:
             "metrics_version": "1",
         }
         cache_keys.append(cache_key)
-        entries.append((cache_key, clip_features, hsv_features, raw_metrics))
+        entries.append(
+            (cache_key, clip_features, hsv_features, raw_metrics, semantic_score)
+        )
 
     with FeatureCache(None) as cache:
-        for cache_key, clip_features, hsv_features, raw_metrics in entries:
+        for cache_key, clip_features, hsv_features, raw_metrics, semantic in entries:
             cache.put(
                 cache_key=cache_key,
                 clip_features=clip_features,
                 raw_metrics=raw_metrics,
                 hsv_features=hsv_features,
+                semantic_score=semantic,
             )
 
         # Act: 1回目の呼び出し（TEMP TABLEが作成される）
@@ -764,6 +712,7 @@ def test_put_batch_uses_executemany() -> None:
         clip_features = np.random.randn(512).astype(np.float32)
         hsv_features = np.random.randn(64).astype(np.float32)
         raw_metrics = {"blur_score": float(i)}
+        semantic_score = 0.01 * i
         cache_key: dict[str, str | int] = {
             "absolute_path": f"/test/executemany_{i}.jpg",
             "file_size": 1024 + i,
@@ -779,18 +728,181 @@ def test_put_batch_uses_executemany() -> None:
                 "clip_features": clip_features,
                 "raw_metrics": raw_metrics,
                 "hsv_features": hsv_features,
+                "semantic_score": semantic_score,
             }
         )
-        expected_results.append((cache_key, clip_features, hsv_features, raw_metrics))
+        expected_results.append(
+            (cache_key, clip_features, hsv_features, raw_metrics, semantic_score)
+        )
 
     with FeatureCache(None) as cache:
         # Act: バッチ保存（executemanyで一括挿入）
         cache.put_batch(entries)
 
         # Assert: すべてのエントリが取得できる
-        for cache_key, clip_features, hsv_features, raw_metrics in expected_results:
+        for (
+            cache_key,
+            clip_features,
+            hsv_features,
+            raw_metrics,
+            semantic,
+        ) in expected_results:
             result = cache.get(cache_key)
             assert result is not None
             np.testing.assert_array_almost_equal(result.clip_features, clip_features)
             np.testing.assert_array_almost_equal(result.hsv_features, hsv_features)
             assert result.raw_metrics == raw_metrics
+            assert result.semantic_score == semantic
+
+
+def test_semantic_score_roundtrip() -> None:
+    """semantic_scoreが正しく保存・取得できること.
+
+    Given:
+        - semantic_scoreを含むテストデータを作成
+    When:
+        - キャッシュに保存してから取得
+    Then:
+        - semantic_scoreが正しく取得できること
+    """
+    # Arrange
+    clip_features = np.random.randn(512).astype(np.float32)
+    hsv_features = np.random.randn(64).astype(np.float32)
+    raw_metrics = {"blur_score": 100.0}
+    semantic_score = 0.75
+    cache_key: dict[str, str | int] = {
+        "absolute_path": "/test/semantic.jpg",
+        "file_size": 2048,
+        "mtime_ns": 9876543210,
+        "model_name": "test_model",
+        "target_text": "test target",
+        "max_dim": 1280,
+        "metrics_version": "1",
+    }
+
+    with FeatureCache(None) as cache:
+        # Act: 保存（semantic_scoreを指定）
+        cache.put(
+            cache_key=cache_key,
+            clip_features=clip_features,
+            raw_metrics=raw_metrics,
+            hsv_features=hsv_features,
+            semantic_score=semantic_score,
+        )
+
+        # Act: 取得
+        result = cache.get(cache_key)
+
+        # Assert
+        assert result is not None
+        assert result.semantic_score == semantic_score
+
+
+def test_table_recreated_when_schema_differs() -> None:
+    """スキーマが異なる場合にテーブルが再作成されること.
+
+    Given:
+        - 期待されるスキーマと異なる定義でテーブルが作成されている
+    When:
+        - FeatureCacheを初期化
+    Then:
+        - テーブルがドロップされて再作成されること
+        - 期待されるスキーマになること
+    """
+    import tempfile
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache_path = Path(tmpdir) / "invalid_cache.sqlite3"
+
+        # Arrange: 異なるスキーマでテーブルを作成（カラムが不足）
+        conn = sqlite3.connect(str(cache_path))
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE feature_cache (
+                absolute_path TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                max_dim INTEGER NOT NULL,
+                PRIMARY KEY (absolute_path, max_dim)
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        # Act: FeatureCacheを初期化（スキーマが異なるため再作成）
+        with FeatureCache(cache_path) as cache:
+            conn2 = cache._get_connection()
+            cursor2 = conn2.cursor()
+
+            # Assert: 期待されるスキーマになっていること
+            cursor2.execute("PRAGMA table_info(feature_cache)")
+            columns = [row[1] for row in cursor2.fetchall()]
+            assert "clip_features" in columns
+            assert "hsv_features" in columns
+            assert "semantic_score" in columns
+            assert "model_name" in columns
+            assert "target_text" in columns
+
+            # 複合主キーが正しく設定されていること
+            cursor2.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='table' AND name='feature_cache'"
+            )
+            schema_sql = cursor2.fetchone()[0]
+            assert "PRIMARY KEY" in schema_sql
+            assert "absolute_path" in schema_sql
+            assert "model_name" in schema_sql
+
+
+def test_correct_schema_preserved() -> None:
+    """スキーマが正しい場合は何もしないこと.
+
+    Given:
+        - 正しいスキーマでテーブルが作成されている
+        - データが保存されている
+    When:
+        - FeatureCacheを初期化
+    Then:
+        - テーブルが再作成されないこと
+        - 既存データが保持されること
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache_path = Path(tmpdir) / "correct_cache.sqlite3"
+
+        # Arrange: 正しいスキーマでFeatureCacheを作成し、データを保存
+        clip_features = np.ones(512, dtype=np.float32) * 0.5
+        hsv_features = np.ones(64, dtype=np.float32) * 0.3
+        raw_metrics = {"blur_score": 100.0}
+        semantic = 0.75
+        cache_key: dict[str, str | int] = {
+            "absolute_path": "/test/preserved.jpg",
+            "file_size": 2048,
+            "mtime_ns": 1234567890,
+            "model_name": "test_model",
+            "target_text": "test target",
+            "max_dim": 1280,
+            "metrics_version": "1",
+        }
+
+        with FeatureCache(cache_path) as cache1:
+            cache1.put(
+                cache_key=cache_key,
+                clip_features=clip_features,
+                raw_metrics=raw_metrics,
+                hsv_features=hsv_features,
+                semantic_score=semantic,
+            )
+
+        # Act: 同じパスでFeatureCacheを再度初期化
+        with FeatureCache(cache_path) as cache2:
+            # Assert: データが保持されている
+            result = cache2.get(cache_key)
+            assert result is not None
+            np.testing.assert_array_equal(result.clip_features, clip_features)
+            np.testing.assert_array_equal(result.hsv_features, hsv_features)
+            assert result.raw_metrics == raw_metrics
+            assert result.semantic_score == semantic
