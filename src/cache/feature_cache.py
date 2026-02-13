@@ -5,7 +5,7 @@ import logging
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -27,7 +27,7 @@ class FeatureCache:
     # キャッシュスキーマのバージョン（アルゴリズム変更時に更新）
     METRICS_VERSION: str = "4"  # 単一スコア重み化と活動量ミックス導入
 
-    def __init__(self, cache_path: Optional[str | Path] = None):
+    def __init__(self, cache_path: str | Path | None = None):
         """特徴量キャッシュを初期化する.
 
         Args:
@@ -234,7 +234,7 @@ class FeatureCache:
             "metrics_version": self.METRICS_VERSION,
         }
 
-    def get(self, cache_key: dict[str, str | int]) -> Optional[CacheEntry]:
+    def get(self, cache_key: dict[str, str | int]) -> CacheEntry | None:
         """キャッシュから特徴量を取得する.
 
         Args:
@@ -340,7 +340,7 @@ class FeatureCache:
 
     def get_many(
         self, cache_keys: list[dict[str, str | int]]
-    ) -> dict[tuple[Any, ...], Optional[CacheEntry]]:
+    ) -> dict[tuple[Any, ...], CacheEntry | None]:
         """複数のキャッシュキーで特徴量を一括取得する.
 
         パフォーマンス最適化:
@@ -376,7 +376,7 @@ class FeatureCache:
         ]
 
         # 結果を格納する辞書（キーはタプル、文字列化を回避）
-        results: dict[tuple[Any, ...], Optional[CacheEntry]] = {
+        results: dict[tuple[Any, ...], CacheEntry | None] = {
             k_id: None for k_id in key_identifiers
         }
 
