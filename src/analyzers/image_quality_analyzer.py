@@ -1,16 +1,12 @@
 """Image quality analyzer using CLIP and computer vision metrics."""
 
 import logging
-from typing import List, Optional
-
-import cv2
-import numpy as np
-from PIL import Image, UnidentifiedImageError
 
 from ..cache.feature_cache import FeatureCache
 from ..constants.score_weights import ScoreWeights
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.image_metrics import ImageMetrics
+from ..utils.image_utils import ImageUtils
 from .batch_pipeline import BatchPipeline
 from .clip_model_manager import CLIPModelManager
 from .feature_extractor import FeatureExtractor
@@ -65,52 +61,35 @@ class ImageQualityAnalyzer:
             target_text=self._model_manager.target_text,
         )
 
-    def analyze(self, path: str) -> Optional[ImageMetrics]:
+    def analyze(self, path: str) -> ImageMetrics | None:
         """画像を解析して品質スコアを計算する."""
-        try:
-            # PILで1回だけ読み込み、ファイル記述子のリークを防止
-            with Image.open(path) as pil_img:
-                # RGBモードに変換（必要な場合）
-                if pil_img.mode != "RGB":
-                    pil_img_rgb: Image.Image = pil_img.convert("RGB")
-                    pil_img_copy = pil_img_rgb.copy()
-                else:
-                    pil_img_copy = pil_img.copy()
-
-                # OpenCV形式（BGR）に変換
-                img = cv2.cvtColor(np.array(pil_img_copy), cv2.COLOR_RGB2BGR)
-
-                # CLIP特徴を抽出
-                clip_features = self.feature_extractor.extract_clip_features(
-                    pil_img_copy
-                )
-
-                # HSV特徴とCLIP特徴を結合
-                features = self.feature_extractor.extract_combined_features(
-                    img, clip_features
-                )
-
-                # すべてのメトリクスを一括計算
-                raw, norm, semantic, total = (
-                    self.metric_calculator.calculate_all_metrics(img, clip_features)
-                )
-
-                return ImageMetrics(path, raw, norm, semantic, total, features)
-        except self._get_expected_errors() as e:
-            logger.warning(
-                f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
-            )
+        pil_img_copy = ImageUtils.load_as_rgb(path)
+        if pil_img_copy is None:
+            logger.warning(f"画像の読み込みに失敗しました: {path}")
             return None
-        except self._get_unexpected_errors():
-            logger.error(f"予期しないエラーが発生しました: {path}", exc_info=True)
-            raise
+
+        # OpenCV形式（BGR）に変換
+        img = ImageUtils.pil_to_cv2(pil_img_copy)
+
+        # CLIP特徴を抽出
+        clip_features = self.feature_extractor.extract_clip_features(pil_img_copy)
+
+        # HSV特徴とCLIP特徴を結合
+        features = self.feature_extractor.extract_combined_features(img, clip_features)
+
+        # すべてのメトリクスを一括計算
+        raw, norm, semantic, total = self.metric_calculator.calculate_all_metrics(
+            img, clip_features
+        )
+
+        return ImageMetrics(path, raw, norm, semantic, total, features)
 
     def analyze_batch(
         self,
-        paths: List[str],
+        paths: list[str],
         batch_size: int = 32,
         show_progress: bool = False,
-    ) -> List[Optional[ImageMetrics]]:
+    ) -> list[ImageMetrics | None]:
         """複数の画像をバッチ処理で解析する.
 
         Args:
@@ -122,26 +101,3 @@ class ImageQualityAnalyzer:
             解析結果のリスト（失敗した画像はNone）
         """
         return self.batch_pipeline.process_batch(paths, batch_size, show_progress)
-
-    @staticmethod
-    def _get_expected_errors() -> tuple[type[Exception], ...]:
-        """正常な失敗として扱うエラー型."""
-        return (
-            FileNotFoundError,
-            UnidentifiedImageError,
-            OSError,
-            cv2.error,
-            ValueError,
-        )
-
-    @staticmethod
-    def _get_unexpected_errors() -> tuple[type[Exception], ...]:
-        """異常な失敗として扱うエラー型（実装バグ）."""
-        return (
-            AttributeError,
-            TypeError,
-            KeyError,
-            IndexError,
-            RuntimeError,
-            MemoryError,
-        )

@@ -2,7 +2,6 @@
 
 import random
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
 
@@ -22,7 +21,7 @@ class GameScreenPicker:
         self,
         analyzer: ImageQualityAnalyzer,
         config: SelectionConfig | None = None,
-        rng: Optional[random.Random] = None,
+        rng: random.Random | None = None,
     ):
         """ピッカーを初期化する.
 
@@ -37,7 +36,7 @@ class GameScreenPicker:
         self._activity_weights = ScoreWeights.get_activity_weights()
 
     @staticmethod
-    def load_image_files(folder: str, recursive: bool) -> List[Path]:
+    def load_image_files(folder: str, recursive: bool) -> list[Path]:
         """フォルダから画像ファイルのパスを取得する.
 
         Args:
@@ -56,8 +55,8 @@ class GameScreenPicker:
         ]
 
     def _analyze_images(
-        self, files: List[Path], show_progress: bool = False
-    ) -> List[ImageMetrics]:
+        self, files: list[Path], show_progress: bool = False
+    ) -> list[ImageMetrics]:
         """画像ファイルを解析して品質スコアを計算する（バッチ対応版）.
 
         Args:
@@ -95,9 +94,9 @@ class GameScreenPicker:
 
     @staticmethod
     def _assign_buckets(
-        images: List[ImageMetrics],
+        images: list[ImageMetrics],
         activity_weights: dict[str, float],
-    ) -> List[BucketedImage]:
+    ) -> list[BucketedImage]:
         """画像に活動量バケットを割り当てる.
 
         Args:
@@ -117,7 +116,7 @@ class GameScreenPicker:
         q30 = np.percentile(activity_scores, 30, method="linear")
         q70 = np.percentile(activity_scores, 70, method="linear")
 
-        bucketed: List[BucketedImage] = []
+        bucketed: list[BucketedImage] = []
         for img, score in zip(images, activity_scores):
             if score < q30:
                 bucket = ActivityBucket.LOW
@@ -131,12 +130,12 @@ class GameScreenPicker:
 
     @staticmethod
     def _select_with_activity_mix(
-        all_results: List[ImageMetrics],
+        all_results: list[ImageMetrics],
         num: int,
         activity_weights: dict[str, float],
         similarity_threshold: float,
         config: SelectionConfig | None = None,
-    ) -> tuple[List[ImageMetrics], int]:
+    ) -> tuple[list[ImageMetrics], int]:
         """活動量バケットを考慮して画像を選択する.
 
         Args:
@@ -168,7 +167,7 @@ class GameScreenPicker:
         )
 
         # バケットごとにグループ化
-        by_bucket: dict[ActivityBucket, List[BucketedImage]] = {
+        by_bucket: dict[ActivityBucket, list[BucketedImage]] = {
             ActivityBucket.LOW: [],
             ActivityBucket.MID: [],
             ActivityBucket.HIGH: [],
@@ -177,7 +176,7 @@ class GameScreenPicker:
             by_bucket[b.bucket].append(b)
 
         # num>=3かつ全バケット非空なら各バケット最低1枚を先取り
-        selected: List[ImageMetrics] = []
+        selected: list[ImageMetrics] = []
         selected_ids: set[int] = set()
 
         if num >= 3 and all(len(v) > 0 for v in by_bucket.values()):
@@ -241,11 +240,11 @@ class GameScreenPicker:
 
     @staticmethod
     def _select_diverse_images(
-        all_results: List[ImageMetrics],
+        all_results: list[ImageMetrics],
         num: int,
         similarity_threshold: float,
         config: SelectionConfig | None = None,
-    ) -> tuple[List[ImageMetrics], int]:
+    ) -> tuple[list[ImageMetrics], int]:
         """多様性を考慮して画像を選択する.
 
         Args:
@@ -281,7 +280,7 @@ class GameScreenPicker:
         # 段階的しきい値緩和のステップ
         threshold_steps = selection_config.compute_threshold_steps(similarity_threshold)
 
-        selected: List[ImageMetrics] = []
+        selected: list[ImageMetrics] = []
         selected_indices: set[int] = set()
         rejected_indices: set[int] = set()  # ユニークな拒否数を追跡
 
@@ -338,7 +337,7 @@ class GameScreenPicker:
         similarity_threshold: float,
         recursive: bool,
         show_progress: bool = True,
-    ) -> tuple[List[ImageMetrics], PickerStatistics]:
+    ) -> tuple[list[ImageMetrics], PickerStatistics]:
         """フォルダから画像を選択する.
 
         Args:
@@ -398,11 +397,11 @@ class GameScreenPicker:
 
     @staticmethod
     def select_from_analyzed(
-        analyzed_images: List[ImageMetrics],
+        analyzed_images: list[ImageMetrics],
         num: int,
         similarity_threshold: float,
         config: SelectionConfig | None = None,
-    ) -> tuple[List[ImageMetrics], PickerStatistics]:
+    ) -> tuple[list[ImageMetrics], PickerStatistics]:
         """解析済みの画像リストから多様性を考慮して選択する.
 
         このメソッドはIO操作を行わず、純粋なドメインロジックのみを提供する。

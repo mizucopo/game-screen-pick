@@ -4,18 +4,20 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, List, Optional, cast
+from typing import Any, cast
 
 import cv2
 import numpy as np
 import torch
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 
 from ..cache.feature_cache import FeatureCache
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.cache_entry_info import CacheEntryInfo
 from ..models.image_metrics import ImageMetrics
 from ..models.path_metadata import PathMetadata
+from ..utils.exception_handler import ExceptionHandler
+from ..utils.image_utils import ImageUtils
 from .feature_extractor import FeatureExtractor
 from .metric_calculator import MetricCalculator
 
@@ -67,8 +69,8 @@ class BatchPipeline:
 
     @staticmethod
     def _batch_convert_clip_features_to_numpy(
-        clip_features_list: List[Optional[torch.Tensor]],
-    ) -> List[Optional[np.ndarray]]:
+        clip_features_list: list[torch.Tensor | None],
+    ) -> list[np.ndarray | None]:
         """CLIP特徴をチャンク単位でまとめてCPUに転送.
 
         GPU同期コストを削減するため、個別転送の代わりにバッチ転送を使用。
@@ -95,15 +97,15 @@ class BatchPipeline:
             batch_cpu = batch_tensor.cpu()
             batch_np = batch_cpu.numpy()
 
-        results: List[Optional[np.ndarray]] = [None] * len(clip_features_list)
+        results: list[np.ndarray | None] = [None] * len(clip_features_list)
         for j, idx in enumerate(valid_indices):
             results[idx] = batch_np[j]
 
         return results
 
     def _get_cached_results(
-        self, paths: List[str]
-    ) -> tuple[List[Optional[ImageMetrics]], List[PathMetadata]]:
+        self, paths: list[str]
+    ) -> tuple[list[ImageMetrics | None], list[PathMetadata]]:
         """キャッシュから取得できる結果を返す.
 
         パフォーマンス最適化のため、キャッシュヒット時のセマンティックスコア計算は
@@ -124,8 +126,8 @@ class BatchPipeline:
 
         # 第1パス: 全パスのキャッシュキーとメタ情報を生成
         cache_keys_with_meta = []
-        all_metadata: List[PathMetadata] = []
-        uncached_metadata: List[PathMetadata] = []
+        all_metadata: list[PathMetadata] = []
+        uncached_metadata: list[PathMetadata] = []
 
         for i, path in enumerate(paths):
             try:
@@ -157,7 +159,7 @@ class BatchPipeline:
 
         # get_manyで一括取得
         keys_to_lookup = [meta[1] for meta in cache_keys_with_meta]
-        cached_entries: List[Optional[CacheEntryInfo]] = [None] * len(paths)
+        cached_entries: list[CacheEntryInfo | None] = [None] * len(paths)
 
         if keys_to_lookup:
             cache_results = self.cache.get_many(keys_to_lookup)
@@ -189,7 +191,7 @@ class BatchPipeline:
             return [None] * len(paths), all_metadata
 
         # 第2パス: ImageMetricsを構築（キャッシュヒット時）
-        cached_results: List[Optional[ImageMetrics]] = [None] * len(paths)
+        cached_results: list[ImageMetrics | None] = [None] * len(paths)
         for i, idx in enumerate(cached_indices):
             entry_info = cast(CacheEntryInfo, cached_entries[idx])
             semantic = entry_info.entry.semantic_score
@@ -213,10 +215,10 @@ class BatchPipeline:
 
     def process_batch(
         self,
-        paths: List[str],
+        paths: list[str],
         batch_size: int = 32,
         show_progress: bool = False,
-    ) -> List[Optional[ImageMetrics]]:
+    ) -> list[ImageMetrics | None]:
         """複数の画像をバッチ処理で解析する.
 
         2段パイプライン構成:
@@ -257,7 +259,7 @@ class BatchPipeline:
         # 未キャッシュのパスのみ抽出
         uncached_paths = [m.path for m in uncached_metadata]
 
-        results: List[Optional[ImageMetrics]] = [None] * len(paths)
+        results: list[ImageMetrics | None] = [None] * len(paths)
         # キャッシュ済みの結果を先に埋めておく
         for i, cached_result in enumerate(cached_results):
             if cached_result is not None:
@@ -275,7 +277,7 @@ class BatchPipeline:
             i for i, m in enumerate(all_metadata) if m.cache_key is None
         ]
 
-        for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_boundaries):
+        for _, (chunk_start, chunk_end) in enumerate(chunk_boundaries):
             # uncached_metadata内のチャンク
             chunk_metadata = uncached_metadata[chunk_start:chunk_end]
             chunk_paths = [m.path for m in chunk_metadata]
@@ -324,8 +326,8 @@ class BatchPipeline:
 
     @staticmethod
     def _compute_chunk_boundaries(
-        paths: List[str], max_memory_mb: int, min_chunk_size: int
-    ) -> List[tuple[int, int]]:
+        paths: list[str], max_memory_mb: int, min_chunk_size: int
+    ) -> list[tuple[int, int]]:
         """メモリ予算に基づいてチャンク境界を計算する.
 
         各画像のファイルサイズを取得し、指定されたメモリ予算を超えない
@@ -386,8 +388,8 @@ class BatchPipeline:
 
     @staticmethod
     def load_and_preprocess_images(
-        paths: List[str], max_workers: Optional[int] = None
-    ) -> List[Optional[Image.Image]]:
+        paths: list[str], max_workers: int | None = None
+    ) -> list[Image.Image | None]:
         """複数のパスからPIL画像を読み込み、前処理まで並列実行する.
 
         I/O（画像読み込み）とCPU-bound処理（RGB変換）をThreadPoolExecutorで並列化.
@@ -399,25 +401,9 @@ class BatchPipeline:
         Returns:
             PIL画像のリスト（失敗したパスはNone）
         """
-
-        def process_single(path: str) -> Optional[Image.Image]:
-            """単一の画像を読み込み、前処理する."""
-            try:
-                # PILで画像を読み込み
-                with Image.open(path) as img_file:
-                    # RGBモードに変換（必要な場合）
-                    if img_file.mode != "RGB":
-                        pil_img: Image.Image = img_file.convert("RGB")
-                        return pil_img.copy()
-                    else:
-                        return img_file.copy()
-
-            except (FileNotFoundError, UnidentifiedImageError, OSError, ValueError):
-                return None
-
         # ThreadPoolExecutorで並列処理
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(process_single, paths))
+            results = list(executor.map(ImageUtils.load_as_rgb, paths))
 
         return results
 
@@ -428,7 +414,7 @@ class BatchPipeline:
         clip_features: np.ndarray,
         semantic: float,
         metadata: PathMetadata | None = None,
-    ) -> tuple[Optional[ImageMetrics], dict[str, Any] | None]:
+    ) -> tuple[ImageMetrics | None, dict[str, Any] | None]:
         """結果構築の単一画像処理.
 
         raw metric計算、feature結合、総合スコア計算を行う。
@@ -457,9 +443,9 @@ class BatchPipeline:
                 # PILのthumbnailを使用してアスペクト比を保持しつつ縮小
                 pil_img_resized = pil_img.copy()
                 pil_img_resized.thumbnail((new_w, new_h), Image.Resampling.BILINEAR)
-                img = cv2.cvtColor(np.array(pil_img_resized), cv2.COLOR_RGB2BGR)
+                img = ImageUtils.pil_to_cv2(pil_img_resized)
             else:
-                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+                img = ImageUtils.pil_to_cv2(pil_img)
 
             # 生メトリクスと正規化メトリクスのみ計算
             # （セマンティックスコアはバッチ計算済みの値を使用）
@@ -515,7 +501,7 @@ class BatchPipeline:
                     )
 
             return ImageMetrics(path, raw, norm, semantic, total, features), cache_entry
-        except self._get_expected_errors() as e:
+        except ExceptionHandler.get_expected_image_errors() as e:
             logger.warning(
                 f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
             )
@@ -523,15 +509,15 @@ class BatchPipeline:
 
     def _process_result_parallel(
         self,
-        chunk_paths: List[str],
-        pil_images: List[Optional[Image.Image]],
-        clip_features_list: List[Optional[np.ndarray]],
-        semantic_scores: List[Optional[float]],
-        chunk_metadata: List[PathMetadata],
+        chunk_paths: list[str],
+        pil_images: list[Image.Image | None],
+        clip_features_list: list[np.ndarray | None],
+        semantic_scores: list[float | None],
+        chunk_metadata: list[PathMetadata],
         chunk_start: int,
         total_paths: int,
         show_progress: bool,
-    ) -> List[Optional[ImageMetrics]]:
+    ) -> list[ImageMetrics | None]:
         """結果構築（raw metric + feature結合）を並列処理.
 
         ThreadPoolExecutorを使用してチャンク内の画像処理を並列化する。
@@ -589,7 +575,7 @@ class BatchPipeline:
                 int,
                 tuple[str, Image.Image, np.ndarray, float, int, PathMetadata] | None,
             ],
-        ) -> tuple[int, Optional[ImageMetrics], dict[str, Any] | None]:
+        ) -> tuple[int, ImageMetrics | None, dict[str, Any] | None]:
             """単一タスクを処理する."""
             idx, data = task_info
             if data is None:
@@ -607,7 +593,7 @@ class BatchPipeline:
             executor_results = list(executor.map(process_task, tasks))
 
         # 結果とキャッシュエントリを分離
-        results: list[Optional[ImageMetrics]] = [None] * len(tasks)
+        results: list[ImageMetrics | None] = [None] * len(tasks)
         cache_entries: list[dict[str, Any]] = []
         for idx, result, cache_entry in executor_results:
             results[idx] = result
@@ -622,14 +608,3 @@ class BatchPipeline:
                 logger.debug(f"キャッシュ一括保存に失敗しました: {e}")
 
         return results
-
-    @staticmethod
-    def _get_expected_errors() -> tuple[type[Exception], ...]:
-        """正常な失敗として扱うエラー型."""
-        return (
-            FileNotFoundError,
-            UnidentifiedImageError,
-            OSError,
-            cv2.error,
-            ValueError,
-        )

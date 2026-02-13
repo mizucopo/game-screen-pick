@@ -6,7 +6,7 @@
 import logging
 import os
 from multiprocessing.pool import Pool
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 
 from ..models.image_metrics import ImageMetrics
 from .analyzer_worker import AnalyzerWorker
@@ -22,7 +22,7 @@ class ImageQualityAnalyzerPool:
 
     def __init__(
         self,
-        num_workers: Optional[int] = None,
+        num_workers: int | None = None,
         force_cpu: bool = False,
     ):
         """プールを初期化する.
@@ -32,7 +32,7 @@ class ImageQualityAnalyzerPool:
             force_cpu: GPUを無効化してCPUを強制する
                        （複数ワーカーでのGPUメモリ競合を回避）
         """
-        self._pool: Optional[Pool] = None
+        self._pool: Pool | None = None
         self._num_workers = num_workers
         self._force_cpu = force_cpu
         self._actual_workers: int = 0  # 実際のワーカー数をキャッシュ
@@ -44,9 +44,9 @@ class ImageQualityAnalyzerPool:
 
     def __exit__(
         self,
-        _exc_type: Optional[type[BaseException]],
-        _exc_value: Optional[BaseException],
-        _traceback: Optional[Any],
+        _exc_type: type[BaseException] | None,
+        _exc_value: BaseException | None,
+        _traceback: Any,
     ) -> Literal[False]:
         """コンテキストマネージャーとして使用する場合のイグジット."""
         self.close()
@@ -74,7 +74,7 @@ class ImageQualityAnalyzerPool:
             self._pool = None
             logger.info("AnalyzerPool closed")
 
-    def analyze_batch(self, paths: List[str]) -> List[Optional[ImageMetrics]]:
+    def analyze_batch(self, paths: list[str]) -> list[ImageMetrics | None]:
         """複数の画像を並列分析する.
 
         Args:

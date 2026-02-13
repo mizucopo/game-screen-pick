@@ -2,18 +2,15 @@
 
 import argparse
 import random
-import shutil
 from pathlib import Path
-from typing import List
 
 from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from .cache.feature_cache import FeatureCache
 from .models.analyzer_config import AnalyzerConfig
-from .models.image_metrics import ImageMetrics
-from .models.picker_statistics import PickerStatistics
 from .models.selection_config import SelectionConfig
 from .services.game_screen_picker import GameScreenPicker
 from .utils.file_utils import FileUtils
+from .utils.result_formatter import ResultFormatter
 
 
 class Main:
@@ -100,9 +97,9 @@ class Main:
         )
 
         if parsed_args.copy_to and best:
-            Main.copy_selected_images(best, parsed_args.copy_to)
+            FileUtils.copy_selected_items(best, parsed_args.copy_to)
 
-        Main.display_results(best, stats)
+        ResultFormatter.display_results(best, stats)
 
         # キャッシュを閉じる
         if cache:
@@ -239,41 +236,6 @@ class Main:
             ),
         )
         return parser.parse_args(self.args)
-
-    @staticmethod
-    def copy_selected_images(selected: List[ImageMetrics], dest_dir: str) -> None:
-        """選択された画像を出力ディレクトリにコピーする.
-
-        Args:
-            selected: 選択された画像メトリクスのリスト
-            dest_dir: 出力先ディレクトリのパス
-        """
-        out = Path(dest_dir)
-        out.mkdir(parents=True, exist_ok=True)
-        for res in selected:
-            original_filename = Path(res.path).name
-            unique_dest = FileUtils.get_unique_destination(out, original_filename)
-            shutil.copy2(res.path, unique_dest)
-        print(f"\n{len(selected)} 枚を {dest_dir} に保存しました（多様性確保済み）。")
-
-    @staticmethod
-    def display_results(selected: List[ImageMetrics], stats: PickerStatistics) -> None:
-        """選択結果を表示する.
-
-        Args:
-            selected: 選択された画像メトリクスのリスト
-            stats: 統計情報
-        """
-        print("\n--- 選択された画像一覧 ---")
-        for i, res in enumerate(selected):
-            print(f"[{i + 1}] {Path(res.path).name} (Score: {res.total_score:.2f})")
-
-        print("\n--- 統計情報 ---")
-        print(f"総ファイル数: {stats.total_files}")
-        print(f"解析成功: {stats.analyzed_ok}")
-        print(f"解析失敗: {stats.analyzed_fail}")
-        print(f"類似度で除外: {stats.rejected_by_similarity}")
-        print(f"選択数: {stats.selected_count}")
 
 
 def main() -> None:

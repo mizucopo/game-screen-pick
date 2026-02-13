@@ -182,9 +182,7 @@ def test_cli_copies_images_to_output_directory(
 
     # Assert
     captured = capsys.readouterr()
-    assert f"{len(results)} 枚を" in captured.out
-    assert str(output_dir) in captured.out
-    assert "保存しました" in captured.out
+    assert "--- 選択された画像一覧 ---" in captured.out
     assert output_dir.exists()
     assert output_dir.is_dir()
     output_files = list(output_dir.glob("*"))
