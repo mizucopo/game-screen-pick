@@ -20,6 +20,7 @@ import pytest
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
 from src.models.picker_statistics import PickerStatistics
+from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
 
 
@@ -173,7 +174,10 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
 
     # Act
     result, stats = GameScreenPicker.select_from_analyzed(
-        sample_image_metrics, num_to_select, similarity_threshold
+        sample_image_metrics,
+        num_to_select,
+        similarity_threshold,
+        SelectionConfig(activity_mix_enabled=False),
     )
 
     # Assert
@@ -340,7 +344,10 @@ def test_threshold_relaxation_with_highly_similar_images(
 
     # Act
     result, stats = GameScreenPicker.select_from_analyzed(
-        similar_images_metrics, num_to_select, similarity_threshold
+        similar_images_metrics,
+        num_to_select,
+        similarity_threshold,
+        SelectionConfig(activity_mix_enabled=False),
     )
 
     # Assert

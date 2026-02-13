@@ -129,13 +129,14 @@ class GameScreenPicker:
 
         return bucketed
 
+    @staticmethod
     def _select_with_activity_mix(
-        self,
         all_results: List[ImageMetrics],
         num: int,
         activity_weights: dict[str, float],
         similarity_threshold: float,
-    ) -> List[ImageMetrics]:
+        config: SelectionConfig | None = None,
+    ) -> tuple[List[ImageMetrics], int]:
         """活動量バケットを考慮して画像を選択する.
 
         Args:
@@ -143,23 +144,28 @@ class GameScreenPicker:
             num: 選択する画像数
             activity_weights: 活動量計算用の重み
             similarity_threshold: 類似度の閾値
+            config: 選択設定（Noneの場合はデフォルト値を使用）
 
         Returns:
-            選択された画像メトリクスのリスト
+            (選択された画像メトリクスのリスト, 類似度で除外された数) のタプル
         """
+        selection_config = config or SelectionConfig()
+
         # まず類似度フィルタリングを適用
-        diverse_candidates, _ = self._select_diverse_images(
+        diverse_candidates, rejected_count = GameScreenPicker._select_diverse_images(
             all_results,
             num * 3,  # 活動量ミックスのために候補を多めに取得
             similarity_threshold,
-            self.config,
+            selection_config,
         )
 
         if not diverse_candidates:
-            return []
+            return [], rejected_count
 
         # バケット付け
-        bucketed = self._assign_buckets(diverse_candidates, activity_weights)
+        bucketed = GameScreenPicker._assign_buckets(
+            diverse_candidates, activity_weights
+        )
 
         # バケットごとにグループ化
         by_bucket: dict[ActivityBucket, List[BucketedImage]] = {
@@ -186,10 +192,10 @@ class GameScreenPicker:
         remaining = num - len(selected)
         if remaining <= 0:
             selected.sort(key=lambda x: x.total_score, reverse=True)
-            return selected
+            return selected[:num], rejected_count
 
         # 30/40/30の目標配分を計算
-        ratio = self.config.activity_mix_ratio
+        ratio = selection_config.activity_mix_ratio
         target_counts = {
             ActivityBucket.LOW: max(1, round(num * ratio[0])),
             ActivityBucket.MID: max(1, round(num * ratio[1])),
@@ -231,7 +237,7 @@ class GameScreenPicker:
 
         # 総合スコア順でソート
         selected.sort(key=lambda x: x.total_score, reverse=True)
-        return selected[:num]
+        return selected[:num], rejected_count
 
     @staticmethod
     def _select_diverse_images(
@@ -365,12 +371,18 @@ class GameScreenPicker:
 
         # 多様性に基づいて選択
         if self.config.activity_mix_enabled:
-            selected = self._select_with_activity_mix(
-                all_results, num, self._activity_weights, similarity_threshold
+            (
+                selected,
+                rejected_by_similarity,
+            ) = GameScreenPicker._select_with_activity_mix(
+                all_results,
+                num,
+                self._activity_weights,
+                similarity_threshold,
+                self.config,
             )
-            rejected_by_similarity = 0
         else:
-            selected, rejected_by_similarity = self._select_diverse_images(
+            selected, rejected_by_similarity = GameScreenPicker._select_diverse_images(
                 all_results, num, similarity_threshold, self.config
             )
 
@@ -409,9 +421,24 @@ class GameScreenPicker:
         sorted_results = sorted(
             analyzed_images, key=lambda x: x.total_score, reverse=True
         )
-        selected, rejected_by_similarity = GameScreenPicker._select_diverse_images(
-            sorted_results, num, similarity_threshold, config
-        )
+        selection_config = config or SelectionConfig()
+
+        if selection_config.activity_mix_enabled:
+            activity_weights = ScoreWeights.get_activity_weights()
+            (
+                selected,
+                rejected_by_similarity,
+            ) = GameScreenPicker._select_with_activity_mix(
+                sorted_results,
+                num,
+                activity_weights,
+                similarity_threshold,
+                selection_config,
+            )
+        else:
+            selected, rejected_by_similarity = GameScreenPicker._select_diverse_images(
+                sorted_results, num, similarity_threshold, selection_config
+            )
 
         stats = PickerStatistics(
             total_files=len(analyzed_images),
