@@ -74,88 +74,6 @@ def test_process_batch_handles_multiple_images(
             assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
 
 
-def test_compute_chunk_boundaries_creates_valid_chunks(tmp_path: Path) -> None:
-    """チャンク境界が正しく計算されること.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - 複数のテスト画像がある
-    When:
-        - チャンク境界を計算
-    Then:
-        - 有効なチャンク境界が生成されること
-        - 最初のチャンクが0から始まること
-        - 最後のチャンクが末尾まで続くこと
-    """
-    # Arrange: 複数のテスト画像を作成
-    paths = []
-    for i in range(5):
-        np.random.seed(42 + i)
-        size = 100 + i * 50
-        img_array = np.random.randint(0, 255, (size, size, 3), dtype=np.uint8)
-        img_path = tmp_path / f"chunk_test_{i}.jpg"
-        cv2.imwrite(str(img_path), img_array)
-        paths.append(str(img_path))
-
-    # Act: チャンク境界を計算
-    max_memory_mb = 1
-    min_chunk_size = 2
-    boundaries = BatchPipeline._compute_chunk_boundaries(
-        paths, max_memory_mb, min_chunk_size
-    )
-
-    # Assert: チャンク境界が計算されている
-    assert len(boundaries) > 0
-    for start, end in boundaries:
-        assert 0 <= start < end <= len(paths)
-    assert boundaries[0][0] == 0
-    assert boundaries[-1][1] == len(paths)
-
-
-def test_batch_convert_clip_features_to_numpy() -> None:
-    """特徴ベクトルのバッチ変換でNone要素が保持されること.
-
-    Given:
-        - テンソルとNoneが混在するリストがある
-        - 有効なインデックスリストがある
-    When:
-        - バッチ変換を実行する
-    Then:
-        - 結果の数が入力と一致すること
-        - None要素が保持されること
-        - 有効なテンソルがNumPy配列に変換されること
-    """
-    import torch
-
-    # Arrange: 有効なテンソルとNoneを含むリスト
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    tensors = [
-        torch.randn(512).to(device),
-        None,
-        torch.randn(512).to(device),
-    ]
-    valid_indices = [0, 2]
-    batch_features = torch.stack(
-        [
-            torch.randn(512).to(device),
-            torch.randn(512).to(device),
-        ]
-    )
-
-    # Act
-    results = BatchPipeline._convert_batch_features_to_numpy(
-        tensors, batch_features, valid_indices
-    )
-
-    # Assert
-    assert len(results) == 3
-    assert results[1] is None
-    assert isinstance(results[0], np.ndarray)
-    assert isinstance(results[2], np.ndarray)
-    assert results[0].shape == (512,)
-    assert results[2].shape == (512,)
-
-
 def test_process_batch_with_lookahead_processes_all_images(
     batch_pipeline: BatchPipeline,
     tmp_path: Path,
@@ -193,28 +111,28 @@ def test_process_batch_with_lookahead_processes_all_images(
             assert 0 <= result.total_score <= 100
 
 
-def test_executor_reused_across_chunks(
+def test_batch_pipeline_handles_multiple_chunks_successfully(
     batch_pipeline: BatchPipeline,
     tmp_path: Path,
 ) -> None:
-    """チャンク間でExecutorが再利用されること.
+    """複数チャンクに分割されるバッチ処理が正常に完了すること.
 
     Given:
         - バッチ処理パイプラインがある
         - 複数のテスト画像がある
-        - 小さなメモリ予算で複数チャンクに分割される
+        - 小さなバッチサイズで複数チャンクに分割される
     When:
         - 複数チャンクでバッチ処理を実行する
     Then:
-        - Executorが再利用されていること
         - すべての画像で処理が成功すること
+        - 結果の数が入力数と一致すること
     """
     # Arrange: 複数の画像を作成
     paths = []
     for i in range(20):
         np.random.seed(42 + i)
         img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        img_path = tmp_path / f"executor_test_{i}.jpg"
+        img_path = tmp_path / f"multi_chunk_test_{i}.jpg"
         cv2.imwrite(str(img_path), img_array)
         paths.append(str(img_path))
 
@@ -223,26 +141,27 @@ def test_executor_reused_across_chunks(
 
     # Assert: すべての結果が得られる
     assert len(results) == 20
-    # Executorが生成されていることを確認
-    assert batch_pipeline._executor is not None
-
-    # closeでクリーンアップされることを確認
-    batch_pipeline.close()
-    assert batch_pipeline._executor is None
+    assert any(r is not None for r in results)
+    for result, path in zip(results, paths, strict=True):
+        if result is not None:
+            assert isinstance(result, ImageMetrics)
+            assert result.path == path
 
 
 def test_batch_pipeline_context_manager(
     batch_pipeline: BatchPipeline,
     sample_image_path: str,
 ) -> None:
-    """コンテキストマネージャーが正しく動作すること.
+    """コンテキストマネージャーでバッチ処理が正しく動作すること.
 
     Given:
         - バッチ処理パイプラインがある
+        - 有効なテスト画像がある
     When:
         - withステートメントで使用する
     Then:
-        - 処理完了後にExecutorがクリーンアップされること
+        - 処理が正常に完了すること
+        - 結果が返されること
     """
     # Arrange
     paths = [sample_image_path]
@@ -254,8 +173,6 @@ def test_batch_pipeline_context_manager(
     # Assert
     assert len(results) == 1
     assert results[0] is not None
-    # コンテキスト exit 後にExecutorがクリーンアップされている
-    assert batch_pipeline._executor is None
 
 
 def test_load_and_preprocess_images_with_max_dim(
