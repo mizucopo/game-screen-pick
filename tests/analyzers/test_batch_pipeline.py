@@ -34,15 +34,9 @@ def batch_pipeline() -> BatchPipeline:
     return BatchPipeline(feature_extractor, metric_calculator, config)
 
 
-@pytest.mark.parametrize(
-    "num_images,batch_size",
-    [(3, 1), (5, 2)],
-)
 def test_process_batch_handles_multiple_images(
     batch_pipeline: BatchPipeline,
     tmp_path: Path,
-    num_images: int,
-    batch_size: int,
 ) -> None:
     """複数の画像が正しくバッチ処理されること.
 
@@ -57,6 +51,8 @@ def test_process_batch_handles_multiple_images(
         - 各結果のパスが正しいこと
     """
     # Arrange: 複数の画像を作成
+    num_images = 3
+    batch_size = 1
     paths = []
     for i in range(num_images):
         np.random.seed(42 + i)

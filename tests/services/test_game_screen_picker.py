@@ -19,58 +19,10 @@ import pytest
 
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
-from src.models.normalized_metrics import NormalizedMetrics
-from src.models.raw_metrics import RawMetrics
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
 
-
-def _create_image_metrics(
-    path: str,
-    raw_metrics_dict: dict[str, float] | None = None,
-    normalized_metrics_dict: dict[str, float] | None = None,
-    semantic_score: float = 0.8,
-    total_score: float = 100.0,
-    features: np.ndarray | None = None,
-) -> ImageMetrics:
-    """ImageMetricsを作成するヘルパー関数."""
-    if features is None:
-        np.random.seed(42)
-        features = np.random.rand(128)
-
-    raw_metrics_dict = raw_metrics_dict or {}
-    raw = RawMetrics(
-        blur_score=raw_metrics_dict.get("blur_score", 100),
-        brightness=raw_metrics_dict.get("brightness", 100),
-        contrast=raw_metrics_dict.get("contrast", 50),
-        edge_density=raw_metrics_dict.get("edge_density", 0.1),
-        color_richness=raw_metrics_dict.get("color_richness", 50),
-        ui_density=raw_metrics_dict.get("ui_density", 10),
-        action_intensity=raw_metrics_dict.get("action_intensity", 30),
-        visual_balance=raw_metrics_dict.get("visual_balance", 80),
-        dramatic_score=raw_metrics_dict.get("dramatic_score", 50),
-    )
-
-    normalized_metrics_dict = normalized_metrics_dict or {}
-    norm = NormalizedMetrics(
-        blur_score=normalized_metrics_dict.get("blur_score", 0.5),
-        contrast=normalized_metrics_dict.get("contrast", 0.5),
-        color_richness=normalized_metrics_dict.get("color_richness", 0.5),
-        edge_density=normalized_metrics_dict.get("edge_density", 0.5),
-        dramatic_score=normalized_metrics_dict.get("dramatic_score", 0.5),
-        visual_balance=normalized_metrics_dict.get("visual_balance", 0.5),
-        action_intensity=normalized_metrics_dict.get("action_intensity", 0.5),
-        ui_density=normalized_metrics_dict.get("ui_density", 0.5),
-    )
-
-    return ImageMetrics(
-        path=path,
-        raw_metrics=raw,
-        normalized_metrics=norm,
-        semantic_score=semantic_score,
-        total_score=total_score,
-        features=features,
-    )
+from tests.conftest import create_image_metrics
 
 
 def _create_picker(config: SelectionConfig | None = None) -> GameScreenPicker:
@@ -200,7 +152,7 @@ def mock_analyzer_with_batch(mock_analyzer: MagicMock) -> MagicMock:
                 idx = 0
             np.random.seed(idx)
             results.append(
-                _create_image_metrics(
+                create_image_metrics(
                     path=path,
                     raw_metrics_dict={"blur_score": 100 - idx * 10},
                     normalized_metrics_dict={"blur_score": 1.0 - idx * 0.1},
@@ -248,7 +200,7 @@ def sample_image_metrics() -> List[ImageMetrics]:
     ]
 
     return [
-        _create_image_metrics(
+        create_image_metrics(
             path=f"/fake/path/image{i}.jpg",
             raw_metrics_dict={
                 "blur_score": 100.0 - i * 5,
@@ -341,7 +293,7 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
                 else:
                     np.random.seed(idx)
                     results.append(
-                        _create_image_metrics(
+                        create_image_metrics(
                             path=path,
                             raw_metrics_dict={"blur_score": 100 - idx * 10},
                             normalized_metrics_dict={"blur_score": 1.0 - idx * 0.1},

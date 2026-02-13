@@ -79,10 +79,10 @@ def test_extract_clip_features_returns_normalized_features(
     assert norm == pytest.approx(1.0, abs=1e-5)
 
 
-def test_extract_clip_features_batch_returns_correct_number_of_results(
+def test_extract_clip_features_batch_returns_correct_results(
     feature_extractor: FeatureExtractor, tmp_path: Path
 ) -> None:
-    """バッチ処理で正しい数の結果が返されること.
+    """バッチ処理でCLIP特徴が正しく抽出されること.
 
     Given:
         - 特徴抽出器がある

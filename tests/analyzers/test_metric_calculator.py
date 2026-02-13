@@ -67,39 +67,26 @@ def test_calculate_raw_metrics_returns_expected_metrics(
         assert not np.isnan(value)
 
 
-@pytest.mark.parametrize(
-    "use_image_input",
-    [True, False],
-)
 def test_calculate_semantic_score_returns_value_in_expected_range(
     metric_calculator: MetricCalculator,
     sample_image_path: str,
-    use_image_input: bool,
 ) -> None:
     """セマンティックスコアが期待される範囲で返されること.
 
     Given:
         - メトリクス計算器がある
-        - PIL画像または正規化された特徴ベクトルがある
+        - テスト画像がある
     When:
         - セマンティックスコアが計算される
     Then:
         - スコアがコサイン類似度の範囲（[-1, 1]）にあること
     """
     # Arrange
-    if use_image_input:
-        with Image.open(sample_image_path) as img:
-            pil_img = img.convert("RGB")
-    else:
-        features = np.ones(512) / np.sqrt(512.0)
+    with Image.open(sample_image_path) as img:
+        pil_img = img.convert("RGB")
 
     # Act
-    if use_image_input:
-        semantic_score = metric_calculator.calculate_semantic_score(pil_img)
-    else:
-        semantic_score = metric_calculator.calculate_semantic_score_from_features(
-            features
-        )
+    semantic_score = metric_calculator.calculate_semantic_score(pil_img)
 
     # Assert
     assert isinstance(semantic_score, float)

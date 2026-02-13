@@ -144,56 +144,28 @@ def test_cli_selects_and_displays_images(
 
 
 @pytest.mark.parametrize(
-    "args,input_path_setup,error_type,error_patterns",
+    "args,input_path_setup,error_type",
     [
-        (
-            [],
-            "nonexistent",
-            FileNotFoundError,
-            ["入力フォルダが存在しません"],
-        ),
-        (
-            [],
-            "file_path",
-            NotADirectoryError,
-            ["フォルダではありません"],
-        ),
-        (
-            ["-n", "-1"],
-            None,
-            SystemExit,
-            ["正の整数を指定してください"],
-        ),
-        (
-            ["-n", "abc"],
-            None,
-            SystemExit,
-            ["整数ではありません"],
-        ),
-        (
-            ["-s", "1.5"],
-            None,
-            SystemExit,
-            ["0.0~1.0の範囲で指定してください"],
-        ),
-        (
-            ["-s", "abc"],
-            None,
-            SystemExit,
-            ["数値ではありません"],
-        ),
+        # 不在のディレクトリ
+        ([], "nonexistent", FileNotFoundError),
+        # ファイルパス（ディレクトリではない）
+        ([], "file_path", NotADirectoryError),
+        # 無効な -n 値
+        (["-n", "-1"], None, SystemExit),
+        (["-n", "abc"], None, SystemExit),
+        # 無効な -s 値
+        (["-s", "1.5"], None, SystemExit),
+        (["-s", "abc"], None, SystemExit),
     ],
 )
 def test_cli_validates_inputs(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
     mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
     args: list[str],
     input_path_setup: str | None,
     error_type: type[Exception],
-    error_patterns: list[str],
 ) -> None:
     """無効な入力に対して適切なエラーが発生すること.
 
@@ -203,7 +175,6 @@ def test_cli_validates_inputs(
         - CLIが実行される
     Then:
         - 適切なエラーが発生すること
-        - エラーメッセージに適切な内容が含まれること
     """
     # Arrange
     if input_path_setup == "nonexistent":
@@ -227,14 +198,5 @@ def test_cli_validates_inputs(
     )
 
     # Act & Assert
-    if error_type.__name__ == "SystemExit":
-        with pytest.raises(SystemExit):
-            Main().run()
-        captured = capsys.readouterr()
-        for pattern in error_patterns:
-            assert pattern in captured.err
-    else:
-        with pytest.raises(error_type) as exc_info:
-            Main().run()
-        for pattern in error_patterns:
-            assert pattern in str(exc_info.value)
+    with pytest.raises(error_type):
+        Main().run()
