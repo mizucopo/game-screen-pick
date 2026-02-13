@@ -29,10 +29,7 @@ class MetricNormalizer:
             NormalizedMetricsインスタンス
         """
         # 辞書の場合は生メトリクスに変換
-        if isinstance(raw, dict):
-            raw_metrics = RawMetrics.from_dict(raw)
-        else:
-            raw_metrics = raw
+        raw_metrics = RawMetrics.from_dict(raw) if isinstance(raw, dict) else raw
 
         return NormalizedMetrics(
             blur_score=cls.sigmoid(raw_metrics.blur_score, center=500, steepness=0.005),

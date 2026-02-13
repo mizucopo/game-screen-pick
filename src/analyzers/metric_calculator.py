@@ -195,7 +195,7 @@ class MetricCalculator:
             from typing import cast
 
             valid_tensors: list[torch.Tensor] = [
-                cast(torch.Tensor, clip_features_list[i]) for i in valid_indices
+                cast("torch.Tensor", clip_features_list[i]) for i in valid_indices
             ]
             batch_features = torch.stack(valid_tensors)
 
