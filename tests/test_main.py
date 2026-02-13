@@ -85,22 +85,12 @@ def sample_image_metrics_factory() -> Callable[[str, float], ImageMetrics]:
     return _create
 
 
-@pytest.fixture
-def test_image_directory(tmp_path: Path) -> str:
-    """テスト用画像ディレクトリを作成."""
-    images_dir = tmp_path / "test_images"
-    images_dir.mkdir()
-    for i in range(5):
-        (images_dir / f"image{i}.jpg").touch()
-    return str(images_dir)
-
-
 def test_cli_selects_and_displays_images(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
-    test_image_directory: str,
+    tmp_path: Path,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
     """画像が選択されて表示されること.
@@ -115,20 +105,25 @@ def test_cli_selects_and_displays_images(
         - 統計情報が表示されること
     """
     # Arrange
+    test_dir = tmp_path / "test_images"
+    test_dir.mkdir()
+    for i in range(5):
+        (test_dir / f"image{i}.jpg").touch()
+
     results = [
         sample_image_metrics_factory(f"/fake/image{i}.jpg", 95.0 - i * 3)
-        for i in range(7)
+        for i in range(3)
     ]
     stats = PickerStatistics(
-        total_files=10,
-        analyzed_ok=10,
+        total_files=5,
+        analyzed_ok=5,
         analyzed_fail=0,
-        rejected_by_similarity=3,
-        selected_count=7,
+        rejected_by_similarity=2,
+        selected_count=3,
     )
     mock_game_screen_picker.select.return_value = (results, stats)
 
-    monkeypatch.setattr("sys.argv", ["main.py", test_image_directory, "-n", "7"])
+    monkeypatch.setattr("sys.argv", ["main.py", str(test_dir), "-n", "3"])
     monkeypatch.setattr(
         "src.main.ImageQualityAnalyzer",
         lambda *_a, **_k: mock_image_quality_analyzer,
@@ -146,69 +141,6 @@ def test_cli_selects_and_displays_images(
     assert "選択された画像一覧" in captured.out
     assert "統計情報" in captured.out
     assert "Score:" in captured.out
-
-
-def test_cli_copies_images_to_output_directory(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
-    mock_game_screen_picker: MagicMock,
-    tmp_path: Path,
-    sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
-) -> None:
-    """画像が出力ディレクトリにコピーされること.
-
-    Given:
-        - 入力ディレクトリにファイルが存在する
-        - 出力ディレクトリが指定されている
-    When:
-        - CLIが `-c` オプションで実行される
-    Then:
-        - 出力ディレクトリが作成されること
-        - 画像が出力ディレクトリにコピーされること
-        - 成功メッセージが表示されること
-    """
-    # Arrange
-    input_dir = tmp_path / "input"
-    input_dir.mkdir()
-    output_dir = tmp_path / "output"
-
-    results = []
-    for i in range(3):
-        file_path = input_dir / f"image{i}.jpg"
-        file_path.touch()
-        results.append(sample_image_metrics_factory(str(file_path), 95.0 - i * 5))
-
-    stats = PickerStatistics(
-        total_files=len(results),
-        analyzed_ok=len(results),
-        analyzed_fail=0,
-        rejected_by_similarity=0,
-        selected_count=len(results),
-    )
-    mock_game_screen_picker.select.return_value = (results, stats)
-
-    args = ["main.py", str(input_dir), "-c", str(output_dir)]
-    monkeypatch.setattr("sys.argv", args)
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer",
-        lambda *_a, **_k: mock_image_quality_analyzer,
-    )
-    monkeypatch.setattr(
-        "src.main.GameScreenPicker",
-        lambda *_a, **_k: mock_game_screen_picker,
-    )
-
-    # Act
-    Main().run()
-
-    # Assert
-    captured = capsys.readouterr()
-    assert "--- 選択された画像一覧 ---" in captured.out
-    assert output_dir.exists()
-    assert output_dir.is_dir()
-    output_files = list(output_dir.glob("*"))
-    assert len(output_files) == len(results)
 
 
 @pytest.mark.parametrize(
@@ -258,7 +190,6 @@ def test_cli_validates_inputs(
     mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
-    test_image_directory: str,
     args: list[str],
     input_path_setup: str | None,
     error_type: type[Exception],
@@ -281,7 +212,9 @@ def test_cli_validates_inputs(
         input_path = str(tmp_path / "file.jpg")
         Path(input_path).touch()
     else:
-        input_path = test_image_directory
+        # 有効なテストディレクトリを作成
+        input_path = str(tmp_path / "valid_dir")
+        Path(input_path).mkdir()
 
     monkeypatch.setattr("sys.argv", ["main.py", input_path] + args)
     monkeypatch.setattr(

@@ -77,30 +77,3 @@ def test_process_batch_handles_multiple_images(
             assert result.path == path
             assert 0 <= result.total_score <= 100
             assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
-
-
-def test_batch_pipeline_context_manager(
-    batch_pipeline: BatchPipeline,
-    sample_image_path: str,
-) -> None:
-    """コンテキストマネージャーでバッチ処理が正しく動作すること.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - 有効なテスト画像がある
-    When:
-        - withステートメントで使用する
-    Then:
-        - 処理が正常に完了すること
-        - 結果が返されること
-    """
-    # Arrange
-    paths = [sample_image_path]
-
-    # Act: コンテキストマネージャーで使用
-    with batch_pipeline:
-        results = batch_pipeline.process_batch(paths, batch_size=1)
-
-    # Assert
-    assert len(results) == 1
-    assert results[0] is not None

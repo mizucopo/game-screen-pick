@@ -20,7 +20,6 @@ import pytest
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
 from src.models.normalized_metrics import NormalizedMetrics
-from src.models.picker_statistics import PickerStatistics
 from src.models.raw_metrics import RawMetrics
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
@@ -125,13 +124,10 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
 
     # Assert
     assert len(result) == 3
-    _assert_stats_valid(
-        stats,
-        expected_total=5,
-        expected_ok=5,
-        expected_fail=0,
-        expected_selected=3,
-    )
+    assert stats.total_files == 5
+    assert stats.analyzed_ok == 5
+    assert stats.analyzed_fail == 0
+    assert stats.selected_count == 3
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
     selected_paths = [m.path for m in result]
@@ -139,20 +135,6 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     # activity_mix有効時はバケット分散が優先されるため、類似除外は適用されない場合がある
     if not activity_mix_enabled:
         assert "/fake/path/image1.jpg" not in selected_paths  # image0に類似
-
-
-def _assert_stats_valid(
-    stats: PickerStatistics,
-    expected_total: int,
-    expected_ok: int,
-    expected_fail: int,
-    expected_selected: int,
-) -> None:
-    """統計情報が期待値と一致することを検証するヘルパー関数."""
-    assert stats.total_files == expected_total
-    assert stats.analyzed_ok == expected_ok
-    assert stats.analyzed_fail == expected_fail
-    assert stats.selected_count == expected_selected
 
 
 def _create_features_with_similarity(
@@ -319,13 +301,10 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
 
         # Assert
         assert len(result) <= 3
-        _assert_stats_valid(
-            stats,
-            expected_total=5,
-            expected_ok=5,
-            expected_fail=0,
-            expected_selected=len(result),
-        )
+        assert stats.total_files == 5
+        assert stats.analyzed_ok == 5
+        assert stats.analyzed_fail == 0
+        assert stats.selected_count == len(result)
         # スコア降順であることを確認
         scores = [m.total_score for m in result]
         assert scores == sorted(scores, reverse=True)
@@ -387,10 +366,7 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
 
         # Assert
         assert len(result) <= 2  # 奇数インデックスのみ有効
-        _assert_stats_valid(
-            stats,
-            expected_total=5,
-            expected_ok=2,
-            expected_fail=3,
-            expected_selected=len(result),
-        )
+        assert stats.total_files == 5
+        assert stats.analyzed_ok == 2
+        assert stats.analyzed_fail == 3
+        assert stats.selected_count == len(result)

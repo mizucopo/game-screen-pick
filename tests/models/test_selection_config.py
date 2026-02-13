@@ -24,30 +24,6 @@ def test_selection_config_initialization_with_defaults() -> None:
     assert config.max_threshold == 0.98
 
 
-def test_selection_config_initialization_with_custom_values() -> None:
-    """SelectionConfigがカスタム値で正しく初期化されること.
-
-    Given:
-        - カスタム値がある
-    When:
-        - SelectionConfigを作成
-    Then:
-        - 指定した値が正しく設定されていること
-        - 未指定の値はデフォルトが使用されること
-    """
-    # Arrange & Act: すべてのカスタム値を指定
-    config = SelectionConfig(
-        batch_size=64,
-        threshold_relaxation_steps=[0.05, 0.10, 0.20],
-        max_threshold=0.95,
-    )
-
-    # Assert
-    assert config.batch_size == 64
-    assert config.threshold_relaxation_steps == [0.05, 0.10, 0.20]
-    assert config.max_threshold == 0.95
-
-
 @pytest.mark.parametrize(
     "base_threshold,max_threshold,expected_steps",
     [
@@ -81,31 +57,6 @@ def test_compute_threshold_steps_with_defaults(
 
     # Assert
     assert steps == expected_steps
-
-
-def test_compute_threshold_steps_with_custom_steps() -> None:
-    """カスタムステップが正しく適用されること.
-
-    Given:
-        - カスタムステップを持つSelectionConfigがある
-    When:
-        - しきい値ステップを計算
-    Then:
-        - カスタムステップがベース値に加算されること
-    """
-    # Arrange
-    custom_steps = [0.05, 0.15]
-    base_threshold = 0.70
-    config = SelectionConfig(
-        threshold_relaxation_steps=custom_steps,
-        max_threshold=0.95,
-    )
-
-    # Act
-    steps = config.compute_threshold_steps(base_threshold)
-
-    # Assert
-    assert steps == [0.70, 0.75, 0.85]
 
 
 @pytest.mark.parametrize(

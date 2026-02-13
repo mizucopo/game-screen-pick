@@ -50,7 +50,7 @@ def test_calculate_raw_metrics_returns_expected_metrics(
     raw_metrics = metric_calculator.calculate_raw_metrics(img)
 
     # Assert: 属性の存在と値の型チェック
-    for attr in [
+    expected_attrs = [
         "blur_score",
         "brightness",
         "contrast",
@@ -60,7 +60,8 @@ def test_calculate_raw_metrics_returns_expected_metrics(
         "action_intensity",
         "visual_balance",
         "dramatic_score",
-    ]:
+    ]
+    for attr in expected_attrs:
         value = getattr(raw_metrics, attr)
         assert isinstance(value, (int, float))
         assert not np.isnan(value)
