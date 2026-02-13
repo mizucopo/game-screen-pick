@@ -18,6 +18,9 @@ class FeatureCache:
     2回目以降の実行で再利用する。
     """
 
+    # スキーマ初期化用のクラスロック
+    _init_lock = threading.Lock()
+
     # キャッシュスキーマのバージョン（アルゴリズム変更時に更新）
     METRICS_VERSION: str = "1"
 
@@ -52,13 +55,82 @@ class FeatureCache:
         return self._local.conn
 
     def _init_db(self) -> None:
-        """データベーススキーマを初期化する."""
+        """データベーススキーマを初期化する.
+
+        必要に応じて既存スキーマから複合主キースキーマへマイグレーションを実行する。
+        スレッドセーフのため、クラスロックを使用して初期化を保護する。
+        """
+        with FeatureCache._init_lock:
+            # ロック内でもう一度テーブル存在チェック（ダブルチェックロック）
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name='feature_cache'
+                """
+            )
+            if cursor.fetchone() is None:
+                # テーブルが存在しない場合、新しいスキーマで作成
+                self._create_new_schema(cursor)
+                conn.commit()
+                return
+
+            # 既存テーブルのスキーマを確認
+            cursor.execute(
+                """
+                SELECT sql FROM sqlite_master
+                WHERE type='table' AND name='feature_cache'
+                """
+            )
+            result = cursor.fetchone()
+            existing_sql = result[0] if result else ""
+
+            # 既存スキーマの主キーを確認（PRIMARY KEYがabsolute_pathのみかチェック）
+            if "absolute_path TEXT PRIMARY KEY" in existing_sql:
+                # マイグレーション必要: 古いスキーマから新しいスキーマへ移行
+                self._migrate_to_composite_key(cursor)
+                conn.commit()
+            # 新しいスキーマの場合は何もしない（既に複合主キー）
+        """データベーススキーマを初期化する.
+
+        必要に応じて既存スキーマから複合主キースキーマへマイグレーションを実行する。
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
+
+        # 既存テーブルのスキーマを確認
         cursor.execute(
             """
-            CREATE TABLE IF NOT EXISTS feature_cache (
-                absolute_path TEXT PRIMARY KEY,
+            SELECT sql FROM sqlite_master
+            WHERE type='table' AND name='feature_cache'
+            """
+        )
+        result = cursor.fetchone()
+
+        if result is None:
+            # テーブルが存在しない場合、新しいスキーマで作成
+            self._create_new_schema(cursor)
+        else:
+            existing_sql = result[0]
+            # 既存スキーマの主キーを確認（PRIMARY KEYがabsolute_pathのみかチェック）
+            if "absolute_path TEXT PRIMARY KEY" in existing_sql:
+                # マイグレーション必要: 古いスキーマから新しいスキーマへ移行
+                self._migrate_to_composite_key(cursor)
+            # 新しいスキーマの場合は何もしない（既に複合主キー）
+
+        conn.commit()
+
+    def _create_new_schema(self, cursor: sqlite3.Cursor) -> None:
+        """新しい複合主キースキーマでテーブルを作成する.
+
+        Args:
+            cursor: データベースカーソル
+        """
+        cursor.execute(
+            """
+            CREATE TABLE feature_cache (
+                absolute_path TEXT NOT NULL,
                 file_size INTEGER NOT NULL,
                 mtime_ns INTEGER NOT NULL,
                 model_name TEXT NOT NULL,
@@ -68,18 +140,66 @@ class FeatureCache:
                 clip_features BLOB NOT NULL,
                 raw_metrics TEXT NOT NULL,
                 hsv_features BLOB NOT NULL,
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                PRIMARY KEY (
+                    absolute_path, model_name, target_text, max_dim, metrics_version
+                )
             )
             """
         )
         # パスとファイルサイズ、更新時刻で高速検索するためのインデックス
         cursor.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_file_signature
+            CREATE INDEX idx_file_signature
             ON feature_cache(absolute_path, file_size, mtime_ns)
             """
         )
-        conn.commit()
+
+    def _migrate_to_composite_key(self, cursor: sqlite3.Cursor) -> None:
+        """古いスキーマから新しい複合主キースキーマへマイグレーションする.
+
+        手順:
+        1. 既存データをfeature_cache_backupに退避
+        2. 古いテーブルを削除
+        3. 新しいスキーマでテーブル作成
+        4. データを復元（INSERT OR REPLACEで重複処理）
+        5. バックアップテーブルを削除
+
+        Args:
+            cursor: データベースカーソル
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        # ステップ1: 既存テーブルをリネーム
+        cursor.execute("ALTER TABLE feature_cache RENAME TO feature_cache_backup")
+
+        # ステップ2: 新しいスキーマでテーブル作成
+        self._create_new_schema(cursor)
+
+        # ステップ3: データを復元
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO feature_cache (
+                absolute_path, file_size, mtime_ns, model_name, target_text,
+                max_dim, metrics_version, clip_features, raw_metrics,
+                hsv_features, created_at
+            )
+            SELECT
+                absolute_path, file_size, mtime_ns, model_name, target_text,
+                max_dim, metrics_version, clip_features, raw_metrics,
+                hsv_features, created_at
+            FROM feature_cache_backup
+            """
+        )
+
+        # 移行した行数をログ出力
+        migrated_count = cursor.rowcount
+        logger.info(f"キャッシュスキーマをマイグレーションしました: {migrated_count}件")
+
+        # ステップ4: バックアップテーブルを削除
+        cursor.execute("DROP TABLE feature_cache_backup")
 
     def generate_cache_key(
         self,
@@ -198,6 +318,61 @@ class FeatureCache:
             ),
         )
         conn.commit()
+
+    def put_batch(
+        self,
+        entries: list[dict[str, Any]],
+    ) -> None:
+        """複数のエントリを単一トランザクションで一括保存する.
+
+        パフォーマンス最適化:
+        - 単一トランザクションで複数件を一括挿入
+        - SQLiteのロック競合を回避
+        - トランザクションオーバーヘッドを削減
+
+        Args:
+            entries: 保存するエントリのリスト。各エントリは以下のキーを持つ辞書:
+                - cache_key: キャッシュキー（辞書）
+                - clip_features: CLIP特徴（512次元、np.ndarray）
+                - raw_metrics: 生メトリクス（辞書）
+                - hsv_features: HSV特徴（64次元、np.ndarray）
+        """
+        import time
+
+        if not entries:
+            return
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("BEGIN TRANSACTION")
+        try:
+            for entry in entries:
+                cache_key = entry["cache_key"]
+                cursor.execute(
+                    """INSERT OR REPLACE INTO feature_cache (
+                        absolute_path, file_size, mtime_ns, model_name, target_text,
+                        max_dim, metrics_version, clip_features, raw_metrics,
+                        hsv_features, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cache_key["absolute_path"],
+                        cache_key["file_size"],
+                        cache_key["mtime_ns"],
+                        cache_key["model_name"],
+                        cache_key["target_text"],
+                        cache_key["max_dim"],
+                        cache_key["metrics_version"],
+                        entry["clip_features"].astype(np.float32).tobytes(),
+                        json.dumps(entry["raw_metrics"]),
+                        entry["hsv_features"].astype(np.float32).tobytes(),
+                        time.time(),
+                    ),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     def close(self) -> None:
         """データベース接続を閉じる."""

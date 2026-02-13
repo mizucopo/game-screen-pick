@@ -285,3 +285,216 @@ def test_generate_cache_key() -> None:
     assert cache_key["target_text"] == "test target"
     assert cache_key["max_dim"] == 1920
     assert cache_key["metrics_version"] == FeatureCache.METRICS_VERSION
+
+
+def test_put_batch_saves_multiple_entries() -> None:
+    """バッチ保存で複数のエントリが正しく保存されること.
+
+    Given:
+        - 複数のテストエントリを作成
+    When:
+        - put_batch()で一括保存
+    Then:
+        - すべてのエントリが正しく取得できること
+        - 単一トランザクションで処理されること
+    """
+    # Arrange: 複数のテストエントリを作成
+    entries = []
+    expected_results = []
+    for i in range(5):
+        clip_features = np.random.randn(512).astype(np.float32)
+        hsv_features = np.random.randn(64).astype(np.float32)
+        raw_metrics = {"blur_score": float(i * 10)}
+        cache_key: dict[str, str | int] = {
+            "absolute_path": f"/test/batch_image_{i}.jpg",
+            "file_size": 1024 + i,
+            "mtime_ns": 1234567890 + i,
+            "model_name": "test_model",
+            "target_text": "test target",
+            "max_dim": 1280,
+            "metrics_version": "1",
+        }
+        entries.append(
+            {
+                "cache_key": cache_key,
+                "clip_features": clip_features,
+                "raw_metrics": raw_metrics,
+                "hsv_features": hsv_features,
+            }
+        )
+        expected_results.append((cache_key, clip_features, hsv_features, raw_metrics))
+
+    with FeatureCache(None) as cache:
+        # Act: バッチ保存
+        cache.put_batch(entries)
+
+        # Assert: すべてのエントリが取得できる
+        for cache_key, clip_features, hsv_features, raw_metrics in expected_results:
+            result = cache.get(cache_key)
+            assert result is not None
+            np.testing.assert_array_almost_equal(result.clip_features, clip_features)
+            np.testing.assert_array_almost_equal(result.hsv_features, hsv_features)
+            assert result.raw_metrics == raw_metrics
+
+
+def test_composite_key_allows_different_params_for_same_path() -> None:
+    """複合主キーにより、同一パスで異なるパラメータのエントリが保存できること.
+
+    Given:
+        - 同一パスでmodel_name/max_dimが異なるエントリ
+    When:
+        - 各エントリを保存して取得
+    Then:
+        - 各エントリが独立して保存・取得できること
+    """
+    # Arrange
+    clip_features1 = np.ones(512, dtype=np.float32)
+    clip_features2 = np.zeros(512, dtype=np.float32) * 2
+    clip_features3 = np.ones(512, dtype=np.float32) * 3
+    hsv_features = np.ones(64, dtype=np.float32)
+    raw_metrics = {"blur_score": 100.0}
+
+    # 同一パスで異なるパラメータ
+    cache_key1: dict[str, str | int] = {
+        "absolute_path": "/test/same_path.jpg",
+        "file_size": 1024,
+        "mtime_ns": 1234567890,
+        "model_name": "model_A",
+        "target_text": "epic game scenery",
+        "max_dim": 1280,
+        "metrics_version": "1",
+    }
+    cache_key2: dict[str, str | int] = {
+        "absolute_path": "/test/same_path.jpg",
+        "file_size": 1024,
+        "mtime_ns": 1234567890,
+        "model_name": "model_B",  # 異なるモデル
+        "target_text": "epic game scenery",
+        "max_dim": 1280,
+        "metrics_version": "1",
+    }
+    cache_key3: dict[str, str | int] = {
+        "absolute_path": "/test/same_path.jpg",
+        "file_size": 1024,
+        "mtime_ns": 1234567890,
+        "model_name": "model_A",
+        "target_text": "epic game scenery",
+        "max_dim": 640,  # 異なるmax_dim
+        "metrics_version": "1",
+    }
+
+    with FeatureCache(None) as cache:
+        # Act: 3つのエントリを保存
+        cache.put(
+            cache_key=cache_key1,
+            clip_features=clip_features1,
+            raw_metrics=raw_metrics,
+            hsv_features=hsv_features,
+        )
+        cache.put(
+            cache_key=cache_key2,
+            clip_features=clip_features2,
+            raw_metrics=raw_metrics,
+            hsv_features=hsv_features,
+        )
+        cache.put(
+            cache_key=cache_key3,
+            clip_features=clip_features3,
+            raw_metrics=raw_metrics,
+            hsv_features=hsv_features,
+        )
+
+        # Assert: 各エントリが独立して取得できる
+        result1 = cache.get(cache_key1)
+        result2 = cache.get(cache_key2)
+        result3 = cache.get(cache_key3)
+
+        assert result1 is not None
+        assert result2 is not None
+        assert result3 is not None
+
+        np.testing.assert_array_equal(result1.clip_features, clip_features1)
+        np.testing.assert_array_equal(result2.clip_features, clip_features2)
+        np.testing.assert_array_equal(result3.clip_features, clip_features3)
+
+
+def test_migration_from_old_schema_to_composite_key() -> None:
+    """古いスキーマ（absolute_pathのみのPRIMARY KEY）から新しいスキーマへ正しく
+    マイグレーションされること.
+
+    Given:
+        - 古いスキーマで作成されたキャッシュデータベース
+    When:
+        - FeatureCacheを初期化してマイグレーションを実行
+    Then:
+        - 新しいスキーマに変換されること
+        - 既存データが保持されること
+    """
+    import tempfile
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache_path = Path(tmpdir) / "old_cache.sqlite3"
+
+        # Arrange: 古いスキーマでテーブルを作成
+        conn = sqlite3.connect(str(cache_path))
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE feature_cache (
+                absolute_path TEXT PRIMARY KEY,
+                file_size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                model_name TEXT NOT NULL,
+                target_text TEXT NOT NULL,
+                max_dim INTEGER NOT NULL,
+                metrics_version TEXT NOT NULL,
+                clip_features BLOB NOT NULL,
+                raw_metrics TEXT NOT NULL,
+                hsv_features BLOB NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+
+        # テストデータを投入
+        import json
+
+        clip_features = np.ones(512, dtype=np.float32) * 0.5
+        hsv_features = np.ones(64, dtype=np.float32) * 0.3
+        raw_metrics = {"blur_score": 100.0}
+
+        cursor.execute(
+            """
+            INSERT INTO feature_cache VALUES (
+                '/old/image.jpg', 1024, 1234567890, 'old_model',
+                'test target', 1280, '1', ?, ?, ?, 1234567890.0
+            )
+            """,
+            (
+                clip_features.astype(np.float32).tobytes(),
+                json.dumps(raw_metrics),
+                hsv_features.astype(np.float32).tobytes(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        # Act: 新しいFeatureCacheを初期化（マイグレーションが実行される）
+        with FeatureCache(cache_path) as cache:
+            # 新しいスキーマでデータが取得できることを確認
+            cache_key = cache.generate_cache_key(
+                absolute_path="/old/image.jpg",
+                file_size=1024,
+                mtime_ns=1234567890,
+                model_name="old_model",
+                target_text="test target",
+                max_dim=1280,
+            )
+            result = cache.get(cache_key)
+
+        # Assert: データが正しくマイグレーションされている
+        assert result is not None
+        np.testing.assert_array_equal(result.clip_features, clip_features)
+        np.testing.assert_array_equal(result.hsv_features, hsv_features)
+        assert result.raw_metrics == raw_metrics
