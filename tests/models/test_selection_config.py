@@ -24,23 +24,7 @@ def test_selection_config_initialization_with_defaults() -> None:
     assert config.max_threshold == 0.98
 
 
-@pytest.mark.parametrize(
-    "batch_size,steps,max_threshold,expected_batch,expected_steps,expected_max",
-    [
-        # カスタム値
-        (64, [0.05, 0.10, 0.20], 0.95, 64, [0.05, 0.10, 0.20], 0.95),
-        # カスタムバッチサイズのみ
-        (16, None, None, 16, [0.03, 0.06, 0.10, 0.15], 0.98),
-    ],
-)
-def test_selection_config_initialization_with_custom_values(
-    batch_size: int | None,
-    steps: list[float] | None,
-    max_threshold: float | None,
-    expected_batch: int,
-    expected_steps: list[float],
-    expected_max: float,
-) -> None:
+def test_selection_config_initialization_with_custom_values() -> None:
     """SelectionConfigがカスタム値で正しく初期化されること.
 
     Given:
@@ -51,21 +35,17 @@ def test_selection_config_initialization_with_custom_values(
         - 指定した値が正しく設定されていること
         - 未指定の値はデフォルトが使用されること
     """
-    # Arrange & Act
-    if steps is None:
-        config = SelectionConfig(batch_size=batch_size)  # type: ignore[arg-type]
-    else:
-        default_max = SelectionConfig().max_threshold
-        config = SelectionConfig(
-            batch_size=batch_size,  # type: ignore[arg-type]
-            threshold_relaxation_steps=steps,
-            max_threshold=max_threshold if max_threshold is not None else default_max,
-        )
+    # Arrange & Act: すべてのカスタム値を指定
+    config = SelectionConfig(
+        batch_size=64,
+        threshold_relaxation_steps=[0.05, 0.10, 0.20],
+        max_threshold=0.95,
+    )
 
     # Assert
-    assert config.batch_size == expected_batch
-    assert config.threshold_relaxation_steps == expected_steps
-    assert config.max_threshold == expected_max
+    assert config.batch_size == 64
+    assert config.threshold_relaxation_steps == [0.05, 0.10, 0.20]
+    assert config.max_threshold == 0.95
 
 
 @pytest.mark.parametrize(

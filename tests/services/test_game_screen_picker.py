@@ -33,48 +33,36 @@ def _create_image_metrics(
     semantic_score: float = 0.8,
     total_score: float = 100.0,
     features: np.ndarray | None = None,
-    raw_metrics: RawMetrics | None = None,
-    normalized_metrics: NormalizedMetrics | None = None,
 ) -> ImageMetrics:
-    """ImageMetricsを作成するヘルパー関数.
-
-    辞書またはRawMetrics/NormalizedMetricsオブジェクトのいずれかから
-    ImageMetricsを作成する。
-    """
+    """ImageMetricsを作成するヘルパー関数."""
     if features is None:
         np.random.seed(42)
         features = np.random.rand(128)
 
-    if raw_metrics is None:
-        raw_metrics_dict = raw_metrics_dict or {}
-        raw = RawMetrics(
-            blur_score=raw_metrics_dict.get("blur_score", 100),
-            brightness=raw_metrics_dict.get("brightness", 100),
-            contrast=raw_metrics_dict.get("contrast", 50),
-            edge_density=raw_metrics_dict.get("edge_density", 0.1),
-            color_richness=raw_metrics_dict.get("color_richness", 50),
-            ui_density=raw_metrics_dict.get("ui_density", 10),
-            action_intensity=raw_metrics_dict.get("action_intensity", 30),
-            visual_balance=raw_metrics_dict.get("visual_balance", 80),
-            dramatic_score=raw_metrics_dict.get("dramatic_score", 50),
-        )
-    else:
-        raw = raw_metrics
+    raw_metrics_dict = raw_metrics_dict or {}
+    raw = RawMetrics(
+        blur_score=raw_metrics_dict.get("blur_score", 100),
+        brightness=raw_metrics_dict.get("brightness", 100),
+        contrast=raw_metrics_dict.get("contrast", 50),
+        edge_density=raw_metrics_dict.get("edge_density", 0.1),
+        color_richness=raw_metrics_dict.get("color_richness", 50),
+        ui_density=raw_metrics_dict.get("ui_density", 10),
+        action_intensity=raw_metrics_dict.get("action_intensity", 30),
+        visual_balance=raw_metrics_dict.get("visual_balance", 80),
+        dramatic_score=raw_metrics_dict.get("dramatic_score", 50),
+    )
 
-    if normalized_metrics is None:
-        normalized_metrics_dict = normalized_metrics_dict or {}
-        norm = NormalizedMetrics(
-            blur_score=normalized_metrics_dict.get("blur_score", 0.5),
-            contrast=normalized_metrics_dict.get("contrast", 0.5),
-            color_richness=normalized_metrics_dict.get("color_richness", 0.5),
-            edge_density=normalized_metrics_dict.get("edge_density", 0.5),
-            dramatic_score=normalized_metrics_dict.get("dramatic_score", 0.5),
-            visual_balance=normalized_metrics_dict.get("visual_balance", 0.5),
-            action_intensity=normalized_metrics_dict.get("action_intensity", 0.5),
-            ui_density=normalized_metrics_dict.get("ui_density", 0.5),
-        )
-    else:
-        norm = normalized_metrics
+    normalized_metrics_dict = normalized_metrics_dict or {}
+    norm = NormalizedMetrics(
+        blur_score=normalized_metrics_dict.get("blur_score", 0.5),
+        contrast=normalized_metrics_dict.get("contrast", 0.5),
+        color_richness=normalized_metrics_dict.get("color_richness", 0.5),
+        edge_density=normalized_metrics_dict.get("edge_density", 0.5),
+        dramatic_score=normalized_metrics_dict.get("dramatic_score", 0.5),
+        visual_balance=normalized_metrics_dict.get("visual_balance", 0.5),
+        action_intensity=normalized_metrics_dict.get("action_intensity", 0.5),
+        ui_density=normalized_metrics_dict.get("ui_density", 0.5),
+    )
 
     return ImageMetrics(
         path=path,
@@ -218,8 +206,8 @@ def mock_analyzer_with_batch(mock_analyzer: MagicMock) -> MagicMock:
 
     def mock_analyze_batch(
         paths: List[str],
-        batch_size: int = 32,  # noqa: ARG001
-        show_progress: bool = False,  # noqa: ARG001
+        batch_size: int = 32,  # noqa: ARG001 (API互換性のため維持)
+        show_progress: bool = False,  # noqa: ARG001 (API互換性のため維持)
     ) -> List[ImageMetrics | None]:
         """テスト用のモック分析関数."""
         results: List[ImageMetrics | None] = []
@@ -250,21 +238,11 @@ def sample_image_metrics() -> List[ImageMetrics]:
     """テスト用のサンプルImageMetricsを作成する.
 
     類似度が明示的に検証された画像セットを返します：
-    - image1: 高品質、ベース特徴（LOWバケットの活動量）
-    - image2: 中品質、image1と0.96の類似度（0.9閾値を超過）（LOWバケットの活動量）
-    - image3: 高品質、image1と0.85の類似度（0.9閾値以下）（MIDバケットの活動量）
-    - image4: 低品質、image1と0.30の類似度（異なる特徴）（HIGHバケットの活動量）
-    - image5: 中品質、image3と0.96の類似度（0.9閾値を超過）（HIGHバケットの活動量）
-
-    活動量指標の設計：
-    - 画像0-1: LOWバケット（活動量低め）
-      action_intensity 0.1-0.15, edge_density 0.1-0.15,
-      dramatic_score 0.1-0.15
-    - 画像2: MIDバケット（活動量中程度）
-      action_intensity 0.5, edge_density 0.5, dramatic_score 0.5
-    - 画像3-4: HIGHバケット（活動量高め）
-      action_intensity 0.8-0.9, edge_density 0.8-0.9,
-      dramatic_score 0.8-0.9
+    - image0: 高品質、ベース特徴（LOWバケットの活動量）
+    - image1: 中品質、image0と0.96の類似度（0.9閾値を超過）（LOWバケットの活動量）
+    - image2: 高品質、image0と0.85の類似度（0.9閾値以下）（MIDバケットの活動量）
+    - image3: 低品質、image0と0.30の類似度（異なる特徴）（HIGHバケットの活動量）
+    - image4: 中品質、image2と0.96の類似度（0.9閾値を超過）（HIGHバケットの活動量）
     """
     np.random.seed(42)
     base_features = np.random.rand(128)
@@ -373,8 +351,8 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
 
         def mock_analyze_batch(
             paths: List[str],
-            batch_size: int = 32,  # noqa: ARG001
-            show_progress: bool = False,  # noqa: ARG001
+            batch_size: int = 32,  # noqa: ARG001 (API互換性のため維持)
+            show_progress: bool = False,  # noqa: ARG001 (API互換性のため維持)
         ) -> List[ImageMetrics | None]:
             results: List[ImageMetrics | None] = []
             for path in paths:

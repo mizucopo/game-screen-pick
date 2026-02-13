@@ -95,26 +95,10 @@ def test_image_directory(tmp_path: Path) -> str:
     return str(images_dir)
 
 
-@pytest.fixture(autouse=True)
-def setup_main_mocks(
-    monkeypatch: pytest.MonkeyPatch,
-    mock_image_quality_analyzer: MagicMock,
-    mock_game_screen_picker: MagicMock,
-) -> None:
-    """すべてのテストで必要なモック設定を自動的に適用する."""
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer",
-        lambda *a, **k: mock_image_quality_analyzer,  # noqa: ARG005
-    )
-    monkeypatch.setattr(
-        "src.main.GameScreenPicker",
-        lambda *a, **k: mock_game_screen_picker,  # noqa: ARG005
-    )
-
-
 def test_cli_selects_and_displays_images(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     test_image_directory: str,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
@@ -145,6 +129,14 @@ def test_cli_selects_and_displays_images(
     mock_game_screen_picker.select.return_value = (results, stats)
 
     monkeypatch.setattr("sys.argv", ["main.py", test_image_directory, "-n", "7"])
+    monkeypatch.setattr(
+        "src.main.ImageQualityAnalyzer",
+        lambda *_a, **_k: mock_image_quality_analyzer,
+    )
+    monkeypatch.setattr(
+        "src.main.GameScreenPicker",
+        lambda *_a, **_k: mock_game_screen_picker,
+    )
 
     # Act
     Main().run()
@@ -159,6 +151,7 @@ def test_cli_selects_and_displays_images(
 def test_cli_copies_images_to_output_directory(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
@@ -197,6 +190,14 @@ def test_cli_copies_images_to_output_directory(
 
     args = ["main.py", str(input_dir), "-c", str(output_dir)]
     monkeypatch.setattr("sys.argv", args)
+    monkeypatch.setattr(
+        "src.main.ImageQualityAnalyzer",
+        lambda *_a, **_k: mock_image_quality_analyzer,
+    )
+    monkeypatch.setattr(
+        "src.main.GameScreenPicker",
+        lambda *_a, **_k: mock_game_screen_picker,
+    )
 
     # Act
     Main().run()
@@ -254,6 +255,8 @@ def test_cli_copies_images_to_output_directory(
 def test_cli_validates_inputs(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    mock_image_quality_analyzer: MagicMock,
+    mock_game_screen_picker: MagicMock,
     tmp_path: Path,
     test_image_directory: str,
     args: list[str],
@@ -281,6 +284,14 @@ def test_cli_validates_inputs(
         input_path = test_image_directory
 
     monkeypatch.setattr("sys.argv", ["main.py", input_path] + args)
+    monkeypatch.setattr(
+        "src.main.ImageQualityAnalyzer",
+        lambda *_a, **_k: mock_image_quality_analyzer,
+    )
+    monkeypatch.setattr(
+        "src.main.GameScreenPicker",
+        lambda *_a, **_k: mock_game_screen_picker,
+    )
 
     # Act & Assert
     if error_type.__name__ == "SystemExit":
