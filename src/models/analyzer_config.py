@@ -83,21 +83,21 @@ class AnalyzerConfig:
                 Noneでない引数のみデフォルト値を上書き
 
         Returns:
-            AnalyzerConfigインスタンス
+            AnalyzerConfigインスタンス（__post_init__バリデーション適用済み）
         """
-        # デフォルト値を持つ設定を作成
-        config = cls()
+        # デフォルト値を取得
+        defaults: dict[str, int] = {
+            "result_max_workers": 32,
+            "max_dim": 720,
+            "max_memory_mb": 512,
+        }
         # CLI引数で上書き（Noneでない値のみ）
-        if kwargs.get("result_max_workers") is not None:
-            val = kwargs["result_max_workers"]
-            if isinstance(val, int):
-                config.result_max_workers = val
-        if kwargs.get("max_dim") is not None:
-            val = kwargs["max_dim"]
-            if isinstance(val, int):
-                config.max_dim = val
-        if kwargs.get("max_memory_mb") is not None:
-            val = kwargs["max_memory_mb"]
-            if isinstance(val, int):
-                config.max_memory_mb = val
-        return config
+        for key, value in kwargs.items():
+            if value is not None and key in defaults:
+                defaults[key] = value
+        # 検証を通すため新しいインスタンスを直接作成
+        return cls(
+            result_max_workers=defaults["result_max_workers"],
+            max_dim=defaults["max_dim"],
+            max_memory_mb=defaults["max_memory_mb"],
+        )

@@ -62,22 +62,22 @@ class ActivityMixSelector:
                 all_results, num * 3, similarity_threshold
             )
             # フィルタ済みプールが不足する場合は、all_resultsから補完用プールを追加
-            pool_for_buckting = list(filtered_pool)
+            pool_for_bucketing = list(filtered_pool)
             already_in_pool = {id(img) for img in filtered_pool}
-            if len(pool_for_buckting) < num:
+            if len(pool_for_bucketing) < num:
                 for img in all_results:
                     if id(img) not in already_in_pool:
-                        pool_for_buckting.append(img)
+                        pool_for_bucketing.append(img)
                         already_in_pool.add(id(img))
-                        if len(pool_for_buckting) >= num * 3:
+                        if len(pool_for_bucketing) >= num * 3:
                             break
         else:
             # 類似度フィルタなし
-            pool_for_buckting = all_results
+            pool_for_bucketing = all_results
             rejected_count = 0
 
         # ステップ2: プールを活動量スコアでバケット分け
-        bucketed_images = self._bucket_by_activity(pool_for_buckting)
+        bucketed_images = self._bucket_by_activity(pool_for_bucketing)
 
         # 活動量ミックスの比率を取得
         low_ratio, mid_ratio, high_ratio = self.config.activity_mix_ratio
@@ -193,11 +193,13 @@ class ActivityMixSelector:
         )
         selected: list[ImageMetrics] = []
         selected_indices: set[int] = set()
-        rejected_indices: set[int] = set()
+        rejected_indices: set[int] = set()  # 各ステップでのユニークな拒否数を追跡
 
         for threshold in threshold_steps:
+            # ステップごとに拒否インデックスをリセット（緩和された閾値で再評価するため）
+            step_rejected_indices: set[int] = set()
             for idx, candidate in enumerate(candidates):
-                if idx in selected_indices or idx in rejected_indices:
+                if idx in selected_indices:
                     continue
 
                 if len(selected) >= max_pool_size:
@@ -212,7 +214,8 @@ class ActivityMixSelector:
                     sims = selected_features_matrix[:selected_count] @ candidate_feat
                     if np.any(sims > threshold):
                         is_similar = True
-                        rejected_indices.add(idx)
+                        # 類似している場合はこのステップの拒否リストに追加してスキップ
+                        step_rejected_indices.add(idx)
                         continue
 
                 if not is_similar:
@@ -220,6 +223,9 @@ class ActivityMixSelector:
                     selected_indices.add(idx)
                     if len(selected) <= max_pool_size:
                         selected_features_matrix[len(selected) - 1] = candidate_feat
+
+            # ステップ終了時に拒否数を累積（統計用）
+            rejected_indices.update(step_rejected_indices)
 
             if len(selected) >= max_pool_size:
                 break
@@ -229,8 +235,8 @@ class ActivityMixSelector:
     def _bucket_by_activity(self, images: list[ImageMetrics]) -> list[BucketedImage]:
         """画像を活動量に基づいてバケット分けする.
 
-        quantileモードの場合、活動量スコアの33/67パーセンタイルを
-        境界値として使用し、画像数に応じてバケットサイズが調整される。
+        quantileモードの場合、順位（パーセンタイル）に基づいて3等分し、
+        同値スコアによる偏りを防ぐ。画像数に応じてバケットサイズが調整される。
 
         Args:
             images: 画像メトリクスのリスト
@@ -238,37 +244,33 @@ class ActivityMixSelector:
         Returns:
             バケット付けされた画像のリスト
         """
-        # すべての活動量スコアを計算
+        # すべての活動量スコアを計算し、スコア順にソート
         score_image_pairs: list[tuple[float, ImageMetrics]] = []
         for img in images:
             activity_score = self._calculate_activity_score(img)
             score_image_pairs.append((activity_score, img))
 
-        # quantileモードで境界値を計算（スコアでソート）
+        # 順位に基づいてバケット分け（同値スコアによる偏りを防止）
+        bucketed: list[BucketedImage] = []
         if score_image_pairs:
             sorted_pairs = sorted(score_image_pairs, key=lambda x: x[0])
             n = len(sorted_pairs)
-            # 33/67パーセンタイルを境界値に使用
-            low_idx = max(0, min(n // 3, n - 1))
-            high_idx = max(0, min(2 * n // 3, n - 1))
-            low_threshold = sorted_pairs[low_idx][0]
-            high_threshold = sorted_pairs[high_idx][0]
-        else:
-            low_threshold = 0.33
-            high_threshold = 0.67
+            # 順位に基づいて3等分
+            low_end = n // 3
+            high_end = 2 * n // 3
 
-        # 計算した境界値でバケット分け
-        bucketed: list[BucketedImage] = []
-        for activity_score, img in score_image_pairs:
-            if activity_score < low_threshold:
-                bucket = ActivityBucket.LOW
-            elif activity_score < high_threshold:
-                bucket = ActivityBucket.MID
-            else:
-                bucket = ActivityBucket.HIGH
-            bucketed.append(
-                BucketedImage(image=img, bucket=bucket, activity_score=activity_score)
-            )
+            for rank, (activity_score, img) in enumerate(sorted_pairs):
+                if rank < low_end:
+                    bucket = ActivityBucket.LOW
+                elif rank < high_end:
+                    bucket = ActivityBucket.MID
+                else:
+                    bucket = ActivityBucket.HIGH
+                bucketed.append(
+                    BucketedImage(
+                        image=img, bucket=bucket, activity_score=activity_score
+                    )
+                )
 
         return bucketed
 
@@ -287,23 +289,3 @@ class ActivityMixSelector:
             + self.activity_weights.get("edge_density", 0.25) * norm.edge_density
             + self.activity_weights.get("dramatic_score", 0.20) * norm.dramatic_score
         )
-
-    def _determine_bucket(self, activity_score: float) -> ActivityBucket:
-        """活動量スコアに基づいてバケットを決定する.
-
-        Args:
-            activity_score: 活動量スコア（0.0-1.0）
-
-        Returns:
-            活動量バケット
-        """
-        # テストデータに基づいて境界値を調整
-        # LOW: 0.1-0.15 (action_intensity) -> スコア約0.12-0.18
-        # MID: 0.5 -> スコア約0.5
-        # HIGH: 0.8-0.9 -> スコア約0.8-0.9
-        if activity_score < 0.3:
-            return ActivityBucket.LOW
-        elif activity_score < 0.7:
-            return ActivityBucket.MID
-        else:
-            return ActivityBucket.HIGH

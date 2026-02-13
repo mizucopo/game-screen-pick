@@ -34,7 +34,7 @@ class GameScreenPicker:
         self._activity_weights = ScoreWeights.get_activity_weights()
 
         # セレクターを初期化
-        self._diversity_selector = DiversitySelector(config=self.config, rng=self._rng)
+        self._diversity_selector = DiversitySelector(config=self.config)
         self._activity_mix_selector = ActivityMixSelector(
             activity_weights=self._activity_weights,
             config=self.config,

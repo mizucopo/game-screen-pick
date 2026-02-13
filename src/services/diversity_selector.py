@@ -1,7 +1,5 @@
 """多様性を考慮した画像選択ロジック."""
 
-import random
-
 import numpy as np
 
 from ..models.image_metrics import ImageMetrics
@@ -17,16 +15,13 @@ class DiversitySelector:
     def __init__(
         self,
         config: SelectionConfig | None = None,
-        rng: random.Random | None = None,
     ):
         """セレクターを初期化する.
 
         Args:
             config: 選択設定（Noneの場合はデフォルト値を使用）
-            rng: 乱数生成器（Noneの場合はデフォルトのRandomを使用）
         """
         self.config = config or SelectionConfig()
-        self._rng = rng or random.Random()
 
     def select(
         self,
@@ -70,13 +65,15 @@ class DiversitySelector:
         selected_features_matrix = np.zeros((num, feature_dim), dtype=np.float32)
         selected: list[ImageMetrics] = []
         selected_indices: set[int] = set()
-        rejected_indices: set[int] = set()  # ユニークな拒否数を追跡
+        rejected_indices: set[int] = set()  # 各ステップでのユニークな拒否数を追跡
 
         # 各しきい値で選択を試行
         for threshold in threshold_steps:
+            # ステップごとに拒否インデックスをリセット（緩和された閾値で再評価するため）
+            step_rejected_indices: set[int] = set()
             for idx, candidate in enumerate(candidates):
-                # 既に選択または永続拒否された候補はスキップ
-                if idx in selected_indices or idx in rejected_indices:
+                # 既に選択された候補はスキップ
+                if idx in selected_indices:
                     continue
 
                 if len(selected) >= num:
@@ -92,8 +89,8 @@ class DiversitySelector:
                     sims = selected_features_matrix[:selected_count] @ candidate_feat
                     if np.any(sims > threshold):
                         is_similar = True
-                        # 類似している場合は永続拒否リストに追加してスキップ
-                        rejected_indices.add(idx)
+                        # 類似している場合はこのステップの拒否リストに追加してスキップ
+                        step_rejected_indices.add(idx)
                         continue
 
                 if not is_similar:
@@ -102,6 +99,9 @@ class DiversitySelector:
                     # 事前確保した行列に特徴を追加
                     if len(selected) <= num:
                         selected_features_matrix[len(selected) - 1] = candidate_feat
+
+            # ステップ終了時に拒否数を累積（統計用）
+            rejected_indices.update(step_rejected_indices)
 
             if len(selected) >= num:
                 break
