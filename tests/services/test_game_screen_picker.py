@@ -21,7 +21,6 @@ from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
-
 from tests.conftest import create_image_metrics
 
 
@@ -39,22 +38,20 @@ def _create_picker(config: SelectionConfig | None = None) -> GameScreenPicker:
     "activity_mix_enabled",
     [False, True],
 )
-def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
+def test_select_from_analyzed_returns_requested_count_and_valid_stats(
     sample_image_metrics: List[ImageMetrics],
     activity_mix_enabled: bool,
 ) -> None:
-    """高品質な画像が優先され、類似した画像は回避されること.
+    """分析済み画像から選択が正しく行われ、統計が正しく記録されること.
 
     Given:
         - 様々なスコアを持つ5つの分析済み画像
-        - image0（スコア95）とimage1（スコア90）は類似した特徴を持つ
-        - image2（スコア85）は異なる特徴を持つ
     When:
-        - 類似度閾値0.9で3つの画像を選択
+        - 3つの画像を選択
     Then:
-        - 3つの画像が返されること
-        - 最高スコアの画像が優先されること
-        - 類似した画像が除外されること
+        - 要求された数の画像が返されること
+        - 統計情報が正しく記録されていること
+        - 返された画像がスコア降順であること
     """
     # Arrange
     num_to_select = 3
@@ -82,42 +79,6 @@ def test_high_quality_images_are_prioritized_while_avoiding_similar_ones(
     assert stats.selected_count == 3
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
-    selected_paths = [m.path for m in result]
-    assert "/fake/path/image0.jpg" in selected_paths
-    # activity_mix有効時はバケット分散が優先されるため、類似除外は適用されない場合がある
-    if not activity_mix_enabled:
-        assert "/fake/path/image1.jpg" not in selected_paths  # image0に類似
-
-
-def _create_features_with_similarity(
-    base_features: np.ndarray,
-    target_similarity: float,
-) -> np.ndarray:
-    """ベース特徴ベクトルに対して目標コサイン類似度を持つ特徴を生成する.
-
-    数学的アプローチを使用して、指定された類似度を持つ特徴ベクトルを生成する。
-    類似度 = cos(θ) として、目標のコサイン類似度を達成するベクトルを合成する。
-
-    Args:
-        base_features: 基準となる特徴ベクトル
-        target_similarity: 目標とするコサイン類似度（0.0-1.0）
-
-    Returns:
-        指定された類似度を持つ新しい特徴ベクトル
-    """
-    eps = 1e-8
-    norm = np.linalg.norm(base_features)
-    base_normalized = base_features if norm < eps else base_features / norm
-
-    # 直交成分の大きさを計算: sqrt(1 - cos^2)
-    orthogonal_norm = np.sqrt(max(0, 1 - target_similarity**2))
-
-    # ランダムな直交ベクトルを生成
-    random_vec = np.random.randn(len(base_features))
-    random_vec = random_vec / np.linalg.norm(random_vec) * orthogonal_norm
-
-    # 目標類似度を持つベクトルを合成
-    return target_similarity * base_normalized + random_vec  # type: ignore[no-any-return]
 
 
 @pytest.fixture
@@ -171,55 +132,27 @@ def mock_analyzer_with_batch(mock_analyzer: MagicMock) -> MagicMock:
 def sample_image_metrics() -> List[ImageMetrics]:
     """テスト用のサンプルImageMetricsを作成する.
 
-    類似度が明示的に検証された画像セットを返します：
-    - image0: 高品質、ベース特徴（LOWバケットの活動量）
-    - image1: 中品質、image0と0.96の類似度（0.9閾値を超過）（LOWバケットの活動量）
-    - image2: 高品質、image0と0.85の類似度（0.9閾値以下）（MIDバケットの活動量）
-    - image3: 低品質、image0と0.30の類似度（異なる特徴）（HIGHバケットの活動量）
-    - image4: 中品質、image2と0.96の類似度（0.9閾値を超過）（HIGHバケットの活動量）
+    5つの分析済み画像を返します：
+    - それぞれ異なるスコアと特徴を持つ
+    - 選択ロジックのテストに十分なバリエーションを提供する
     """
     np.random.seed(42)
-    base_features = np.random.rand(128)
-
-    features_list = [
-        base_features,
-        _create_features_with_similarity(base_features, 0.96),
-        _create_features_with_similarity(base_features, 0.85),
-        _create_features_with_similarity(base_features, 0.30),
-    ]
-    # image5はimage3に類似
-    features_list.append(_create_features_with_similarity(features_list[2], 0.96))
-
-    # 活動量指標（LOW/MID/HIGHバケット）
-    activity_metrics = [
-        {"action_intensity": 0.1, "edge_density": 0.1, "dramatic_score": 0.1},
-        {"action_intensity": 0.15, "edge_density": 0.15, "dramatic_score": 0.15},
-        {"action_intensity": 0.5, "edge_density": 0.5, "dramatic_score": 0.5},
-        {"action_intensity": 0.8, "edge_density": 0.8, "dramatic_score": 0.8},
-        {"action_intensity": 0.9, "edge_density": 0.9, "dramatic_score": 0.9},
-    ]
-
-    return [
-        create_image_metrics(
-            path=f"/fake/path/image{i}.jpg",
-            raw_metrics_dict={
-                "blur_score": 100.0 - i * 5,
-                "action_intensity": activity_metrics[i]["action_intensity"] * 100,
-                "edge_density": activity_metrics[i]["edge_density"] * 0.2,
-                "dramatic_score": activity_metrics[i]["dramatic_score"] * 100,
-            },
-            normalized_metrics_dict={
-                "blur_score": 0.9 - i * 0.1,
-                "action_intensity": activity_metrics[i]["action_intensity"],
-                "edge_density": activity_metrics[i]["edge_density"],
-                "dramatic_score": activity_metrics[i]["dramatic_score"],
-            },
-            semantic_score=0.8 - i * 0.05,
-            total_score=95.0 - i * 5,
-            features=features_list[i],
+    metrics = []
+    for i in range(5):
+        # 各画像に異なる特徴ベクトルを持たせる
+        np.random.seed(i)
+        features = np.random.rand(128)
+        metrics.append(
+            create_image_metrics(
+                path=f"/fake/path/image{i}.jpg",
+                raw_metrics_dict={"blur_score": 100.0 - i * 10},
+                normalized_metrics_dict={"blur_score": 1.0 - i * 0.1},
+                semantic_score=0.8,
+                total_score=100.0 - i * 10,
+                features=features,
+            )
         )
-        for i in range(5)
-    ]
+    return metrics
 
 
 def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(

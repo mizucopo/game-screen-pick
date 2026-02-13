@@ -47,17 +47,37 @@ def test_analyze_returns_valid_metrics_with_default_weights(
     assert result.normalized_metrics.blur_score >= 0.0
 
 
-def test_analyze_returns_none_for_invalid_inputs(tmp_path: Path) -> None:
-    """無効な入力に対してNoneが返されること.
+def test_analyze_returns_none_for_nonexistent_path() -> None:
+    """存在しないパスに対してNoneが返されること.
 
     Given:
         - アナライザインスタンスがある
-        - 存在しないファイルパスと破損した画像がある
-        - CLIPモデルとプロセッサのモックが利用可能
+        - 存在しないファイルパスがある
     When:
-        - 無効な入力が分析される
+        - 存在しないパスが分析される
     Then:
-        - すべてのケースでNoneが返されること
+        - Noneが返されること
+    """
+    # Arrange
+    analyzer = ImageQualityAnalyzer()
+
+    # Act
+    result = analyzer.analyze("/path/that/does/not/exist.jpg")
+
+    # Assert
+    assert result is None
+
+
+def test_analyze_returns_none_for_corrupted_image(tmp_path: Path) -> None:
+    """破損した画像に対してNoneが返されること.
+
+    Given:
+        - アナライザインスタンスがある
+        - 破損した画像ファイルがある
+    When:
+        - 破損した画像が分析される
+    Then:
+        - Noneが返されること
     """
     # Arrange
     analyzer = ImageQualityAnalyzer()
@@ -65,9 +85,7 @@ def test_analyze_returns_none_for_invalid_inputs(tmp_path: Path) -> None:
     corrupted_path.write_text("This is not a valid image file")
 
     # Act
-    result_nonexistent = analyzer.analyze("/path/that/does/not/exist.jpg")
-    result_corrupted = analyzer.analyze(str(corrupted_path))
+    result = analyzer.analyze(str(corrupted_path))
 
     # Assert
-    assert result_nonexistent is None
-    assert result_corrupted is None
+    assert result is None

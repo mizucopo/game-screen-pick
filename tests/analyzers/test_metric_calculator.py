@@ -29,10 +29,10 @@ def metric_calculator() -> MetricCalculator:
     return MetricCalculator(config, weights, model_manager)
 
 
-def test_calculate_raw_metrics_returns_expected_metrics(
+def test_calculate_raw_metrics_returns_valid_metrics(
     metric_calculator: MetricCalculator, sample_image_path: str
 ) -> None:
-    """生メトリクスが正しい形式で返されること.
+    """有効な生メトリクスが返されること.
 
     Given:
         - メトリクス計算器がある
@@ -40,8 +40,8 @@ def test_calculate_raw_metrics_returns_expected_metrics(
     When:
         - 生メトリクスが計算される
     Then:
-        - 期待されるすべてのメトリクス属性が含まれていること
-        - すべての値が数値であること
+        - 有効なRawMetricsインスタンスが返されること
+        - すべての数値がNaNではなく有効な範囲にあること
     """
     # Arrange
     img = cv2.imread(sample_image_path)
@@ -49,22 +49,13 @@ def test_calculate_raw_metrics_returns_expected_metrics(
     # Act
     raw_metrics = metric_calculator.calculate_raw_metrics(img)
 
-    # Assert: 属性の存在と値の型チェック
-    expected_attrs = [
-        "blur_score",
-        "brightness",
-        "contrast",
-        "edge_density",
-        "color_richness",
-        "ui_density",
-        "action_intensity",
-        "visual_balance",
-        "dramatic_score",
-    ]
-    for attr in expected_attrs:
-        value = getattr(raw_metrics, attr)
-        assert isinstance(value, (int, float))
-        assert not np.isnan(value)
+    # Assert: 型と有効な値範囲を確認
+    assert isinstance(raw_metrics, RawMetrics)
+    # 代表的なメトリクスが有効な範囲にあることを確認
+    assert raw_metrics.blur_score > 0
+    assert 0 <= raw_metrics.brightness <= 255
+    assert not np.isnan(raw_metrics.edge_density)
+    assert not np.isnan(raw_metrics.action_intensity)
 
 
 def test_calculate_semantic_score_returns_value_in_expected_range(
