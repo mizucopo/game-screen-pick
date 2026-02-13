@@ -7,7 +7,7 @@ from typing import Any
 class ResultFormatter:
     """結果フォーマットユーティリティクラス.
 
-    選択結果と統計情報の表示機能を提供する。
+    選択結果と統計情報をコンソールに出力する機能を提供する。
     """
 
     @staticmethod

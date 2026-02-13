@@ -18,6 +18,7 @@ class ImageQualityAnalyzer:
     """画像品質アナライザー（Facadeパターン）.
 
     複数のコンポーネントを統合し、公開APIを提供する。
+    CLIPモデルでセマンティック特徴を抽出し、画像メトリクスを計算する。
     """
 
     def __init__(

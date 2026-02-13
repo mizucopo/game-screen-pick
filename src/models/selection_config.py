@@ -11,13 +11,13 @@ class SelectionConfig:
     """画像選択の設定.
 
     Attributes:
-        batch_size: バッチ処理のバッチサイズ
+        batch_size: CLIP推論のバッチサイズ
         threshold_relaxation_steps: 類似度しきい値の段階的緩和ステップ
-            （ベースのしきい値に加算される値のリスト）
+            （ベースしきい値に加算される値のリスト）
         max_threshold: 類似度しきい値の上限
         activity_mix_enabled: 活動量ミックスを有効にするかどうか
         activity_mix_ratio: 活動量バケットの選択比率 (low, mid, high)
-        activity_bucket_mode: 活動量バケットの分割モード ("quantile"のみ)
+        activity_bucket_mode: 活動量バケットの分割モード（"quantile"のみ）
     """
 
     batch_size: int = 32

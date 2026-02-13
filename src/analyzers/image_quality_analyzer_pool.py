@@ -18,6 +18,7 @@ class ImageQualityAnalyzerPool:
     """ImageQualityAnalyzerのmultiprocessing pool.
 
     各ワーカープロセスがCLIPモデルを保持することで、モデルロードコストを削減する。
+    コンテキストマネージャーとして使用することで、poolのライフサイクルを管理する。
     """
 
     def __init__(

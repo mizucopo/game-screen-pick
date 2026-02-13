@@ -1,12 +1,13 @@
 """AnalyzerConfig関連の型定義."""
 
-from typing_extensions import TypedDict
+from typing import TypedDict
 
 
 class AnalyzerConfigKwargs(TypedDict, total=False):
     """AnalyzerConfig.from_cli_args の引数型.
 
     None でない値のみが渡されることを想定。
+    全てのフィールドがオプション（total=False）。
     """
 
     max_dim: int

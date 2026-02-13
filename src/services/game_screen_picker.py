@@ -13,7 +13,11 @@ from .diversity_selector import DiversitySelector
 
 
 class GameScreenPicker:
-    """ゲーム画面選択クラス."""
+    """ゲーム画面選択クラス.
+
+    画像品質アナライザーと選択セレクターを統合し、
+    フォルダからの画像選択処理を提供する。
+    """
 
     def __init__(
         self,

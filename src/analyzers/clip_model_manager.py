@@ -13,7 +13,10 @@ logger = logging.getLogger(__name__)
 
 
 class CLIPModelManager:
-    """CLIPモデルのライフサイクルとデバイス管理を行うクラス."""
+    """CLIPモデルのライフサイクルとデバイス管理を行うクラス.
+
+    モデルロード、テキスト埋め込みのキャッシュ、画像特徴抽出を提供する。
+    """
 
     def __init__(
         self,

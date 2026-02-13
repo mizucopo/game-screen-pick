@@ -6,7 +6,10 @@ import numpy as np
 
 
 class VectorUtils:
-    """ベクトル操作に関するユーティリティクラス."""
+    """ベクトル操作に関するユーティリティクラス.
+
+    画像特徴ベクトルの正規化と類似度フィルタリング機能を提供する。
+    """
 
     @staticmethod
     def safe_l2_normalize(
