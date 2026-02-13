@@ -1,9 +1,9 @@
 """画像選択の設定."""
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from ..constants.score_weights import ScoreWeights
+from .types.selection_config_kwargs import SelectionConfigKwargs
 
 
 @dataclass
@@ -32,7 +32,7 @@ class SelectionConfig:
     activity_bucket_mode: str = "quantile"
 
     @classmethod
-    def from_cli_args(cls, **kwargs: Any) -> "SelectionConfig":
+    def from_cli_args(cls, **kwargs: SelectionConfigKwargs) -> "SelectionConfig":
         """CLI引数から設定を作成する.
 
         Args:
@@ -42,11 +42,8 @@ class SelectionConfig:
         Returns:
             SelectionConfigインスタンス
         """
-        # Noneでない値のみを抽出してdataclassに渡す（デフォルト値はclass定義で管理）
-        filtered_kwargs = {
-            key: value for key, value in kwargs.items() if value is not None
-        }
-        return cls(**filtered_kwargs)
+        filtered = {k: v for k, v in kwargs.items() if v is not None}
+        return cls(**filtered)  # type: ignore[arg-type]
 
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""

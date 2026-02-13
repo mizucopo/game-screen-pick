@@ -142,12 +142,15 @@ class ActivityMixSelector:
                 ActivityBucket.MID: [],
                 ActivityBucket.HIGH: [],
             }
+            # id ベースの集合で「選択済み」を判定
+            # （ImageMetricsの等価比較に依存しないため）
+            selected_ids = {id(img) for img in selected}
             # バケットごとにスコア順に収集
             for bucket in ActivityBucket:
                 candidates = [
                     b.image
                     for b in bucketed_images
-                    if b.bucket == bucket and b.image not in selected
+                    if b.bucket == bucket and id(b.image) not in selected_ids
                 ]
                 remaining_by_bucket[bucket] = sorted(
                     candidates,

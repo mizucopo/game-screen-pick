@@ -1,7 +1,8 @@
 """画像品質アナライザーの設定."""
 
 from dataclasses import dataclass
-from typing import Any
+
+from .types.analyzer_config_kwargs import AnalyzerConfigKwargs
 
 
 @dataclass
@@ -76,7 +77,7 @@ class AnalyzerConfig:
             raise ValueError(msg)
 
     @classmethod
-    def from_cli_args(cls, **kwargs: Any) -> "AnalyzerConfig":
+    def from_cli_args(cls, **kwargs: AnalyzerConfigKwargs) -> "AnalyzerConfig":
         """CLI引数から設定を作成する.
 
         Args:
@@ -86,8 +87,5 @@ class AnalyzerConfig:
         Returns:
             AnalyzerConfigインスタンス（__post_init__バリデーション適用済み）
         """
-        # Noneでない値のみを抽出してdataclassに渡す（デフォルト値はclass定義で管理）
-        filtered_kwargs = {
-            key: value for key, value in kwargs.items() if value is not None
-        }
-        return cls(**filtered_kwargs)
+        filtered = {k: v for k, v in kwargs.items() if v is not None}
+        return cls(**filtered)  # type: ignore[arg-type]

@@ -67,13 +67,14 @@ class VectorUtils:
             (選択されたインデックスのセット, 類似度で除外された数) のタプル
 
         Note:
-            除外数は、類似度チェックによってスキップされた候補数のみをカウント。
-            max_pool_sizeなどの容量制約で未選択になったものは含まない。
+            除外数は、類似度チェックによって最終的に除外された候補数のみをカウント。
+            容量制約で未選択になったものは含まない。
         """
         feature_dim = len(normalized_features[0]) if normalized_features else 0
         selected_features_matrix = np.zeros((num, feature_dim), dtype=np.float32)
         selected_indices: set[int] = set()
-        rejected_by_similarity = 0
+        # 各候補が「類似度によって拒否されたか」を追跡
+        rejected_by_similarity_set: set[int] = set()
         selected_count = 0
 
         for threshold in threshold_steps:
@@ -90,7 +91,7 @@ class VectorUtils:
                     sims = selected_features_matrix[:selected_count] @ candidate_feat
                     if np.any(sims > threshold):
                         is_similar = True
-                        rejected_by_similarity += 1
+                        rejected_by_similarity_set.add(idx)
 
                 if not is_similar:
                     selected_features_matrix[selected_count] = candidate_feat
@@ -99,5 +100,8 @@ class VectorUtils:
 
             if selected_count >= num:
                 break
+
+        # 最終的に選択されなかった候補の中で、類似度によって拒否されたものをカウント
+        rejected_by_similarity = len(rejected_by_similarity_set - selected_indices)
 
         return selected_indices, rejected_by_similarity
