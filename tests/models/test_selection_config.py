@@ -135,3 +135,62 @@ def test_selection_config_rejects_invalid_values(
     # Arrange & Act & Assert
     with pytest.raises(ValueError):
         SelectionConfig(**{field_name: invalid_value})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "activity_mix_ratio,should_raise",
+    [
+        # 有効な合計値（浮動小数点の誤差を許容）
+        ((0.3, 0.4, 0.3), False),
+        ((0.33, 0.34, 0.33), False),
+        ((0.333, 0.333, 0.334), False),
+        ((1.0, 0.0, 0.0), False),
+        ((0.0, 1.0, 0.0), False),
+        ((0.0, 0.0, 1.0), False),
+        # 無効な合計値（1.0から大きくずれる）
+        ((1.0, 1.0, 1.0), True),
+        ((0.5, 0.5, 0.5), True),
+        ((0.1, 0.1, 0.1), True),
+        ((0.9, 0.9, 0.9), True),
+        ((0.0, 0.0, 0.0), True),
+    ],
+)
+def test_activity_mix_ratio_sum_validation(
+    activity_mix_ratio: tuple[float, float, float],
+    should_raise: bool,
+) -> None:
+    """activity_mix_ratioの合計値が1.0であることを検証すること.
+
+    Given:
+        - 様々なactivity_mix_ratioの値
+    When:
+        - SelectionConfigを作成
+    Then:
+        - 合計が1.0（許容範囲内）の場合は成功
+        - 合計が1.0から大きくずれる場合はValueError
+    """
+    # Arrange & Act & Assert
+    if should_raise:
+        with pytest.raises(ValueError, match="合計は1.0"):
+            SelectionConfig(activity_mix_ratio=activity_mix_ratio)
+    else:
+        config = SelectionConfig(activity_mix_ratio=activity_mix_ratio)
+        assert config.activity_mix_ratio == activity_mix_ratio
+
+
+def test_activity_mix_ratio_rejects_invalid_range() -> None:
+    """activity_mix_ratioの要素範囲検証が正しく機能すること.
+
+    Given:
+        - 0-1の範囲外の値を含むactivity_mix_ratio
+    When:
+        - SelectionConfigを作成
+    Then:
+        - ValueErrorがスローされること
+    """
+    # Arrange & Act & Assert
+    with pytest.raises(ValueError, match="0以上1以下"):
+        SelectionConfig(activity_mix_ratio=(-0.1, 0.5, 0.6))
+
+    with pytest.raises(ValueError, match="0以上1以下"):
+        SelectionConfig(activity_mix_ratio=(0.3, 0.4, 1.1))
