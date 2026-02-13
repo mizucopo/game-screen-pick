@@ -2,7 +2,6 @@
 
 import logging
 
-from ..cache.feature_cache import FeatureCache
 from ..constants.score_weights import ScoreWeights
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.image_metrics import ImageMetrics
@@ -25,18 +24,15 @@ class ImageQualityAnalyzer:
         self,
         config: AnalyzerConfig | None = None,
         device: str | None = None,
-        cache: FeatureCache | None = None,
     ):
         """アナライザーを初期化する.
 
         Args:
             config: アナライザー設定（Noneの場合はデフォルト値を使用）
             device: 使用するデバイス（Noneの場合は自動検出）
-            cache: 特徴量キャッシュ（Noneの場合はキャッシュ無効）
         """
         self.config = config or AnalyzerConfig()
         self.weights = ScoreWeights.get_weights()
-        self.cache = cache
 
         # レイヤー1: モデル管理（プライベート）
         self._model_manager = CLIPModelManager(
@@ -56,9 +52,6 @@ class ImageQualityAnalyzer:
             self.feature_extractor,
             self.metric_calculator,
             self.config,
-            cache=cache,
-            model_name=self._model_manager.model_name,
-            target_text=self._model_manager.target_text,
         )
 
     def analyze(self, path: str) -> ImageMetrics | None:
