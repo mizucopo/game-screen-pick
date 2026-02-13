@@ -1,6 +1,7 @@
 """画像品質アナライザーの設定."""
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -75,7 +76,7 @@ class AnalyzerConfig:
             raise ValueError(msg)
 
     @classmethod
-    def from_cli_args(cls, **kwargs: int | None) -> "AnalyzerConfig":
+    def from_cli_args(cls, **kwargs: Any) -> "AnalyzerConfig":
         """CLI引数から設定を作成する.
 
         Args:
@@ -85,18 +86,8 @@ class AnalyzerConfig:
         Returns:
             AnalyzerConfigインスタンス（__post_init__バリデーション適用済み）
         """
-        # CLI引数で上書きするパラメータを抽出
-        result_max_workers: int | None = kwargs.get("result_max_workers")
-        max_dim: int | None = kwargs.get("max_dim")
-        max_memory_mb: int | None = kwargs.get("max_memory_mb")
-        # 上書きするパラメータのみを含む辞書を作成
-        args: dict[str, int | None] = {}
-        if result_max_workers is not None:
-            args["result_max_workers"] = result_max_workers
-        if max_dim is not None:
-            args["max_dim"] = max_dim
-        if max_memory_mb is not None:
-            args["max_memory_mb"] = max_memory_mb
-        # デフォルト値は dataclass 定義を使用し、上書きするパラメータのみ指定
-        # mypy: 値フィルタリング済みだが型推論が追いつかないため ignore
-        return cls(**args)  # type: ignore[arg-type]
+        # Noneでない値のみを抽出してdataclassに渡す（デフォルト値はclass定義で管理）
+        filtered_kwargs = {
+            key: value for key, value in kwargs.items() if value is not None
+        }
+        return cls(**filtered_kwargs)

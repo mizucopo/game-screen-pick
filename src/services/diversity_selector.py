@@ -1,9 +1,8 @@
 """多様性を考慮した画像選択ロジック."""
 
-import numpy as np
-
 from ..models.image_metrics import ImageMetrics
 from ..models.selection_config import SelectionConfig
+from ..utils.vector_utils import VectorUtils
 
 
 class DiversitySelector:
@@ -47,71 +46,30 @@ class DiversitySelector:
         candidates = all_results
 
         # 特徴ベクトルを事前にL2正規化（コサイン類似度 = 内積になる）
-        eps = 1e-8
-        normalized_features = []
-        for c in candidates:
-            norm = np.linalg.norm(c.features)
-            if norm < eps:
-                # ゼロノルムの場合はゼロベクトルとして扱う
-                normalized_features.append(np.zeros_like(c.features))
-            else:
-                normalized_features.append(c.features / norm)
+        normalized_features = VectorUtils.normalize_feature_vectors(
+            [c.features for c in candidates]
+        )
 
         # 段階的しきい値緩和のステップ
         threshold_steps = self.config.compute_threshold_steps(similarity_threshold)
 
-        # 選択済み特徴を保持する行列（事前に最大サイズ確保）
-        feature_dim = len(normalized_features[0]) if normalized_features else 0
-        selected_features_matrix = np.zeros((num, feature_dim), dtype=np.float32)
-        selected: list[ImageMetrics] = []
-        selected_indices: set[int] = set()
-
-        # 各しきい値で選択を試行
-        for threshold in threshold_steps:
-            for idx, candidate in enumerate(candidates):
-                # 既に選択された候補はスキップ
-                if idx in selected_indices:
-                    continue
-
-                if len(selected) >= num:
-                    break
-
-                candidate_feat = normalized_features[idx]
-
-                # 既に選ばれた画像たちと「見た目」を比較（事前確保行列で効率化）
-                is_similar = False
-                if selected_indices:
-                    # selected_count分だけ行列のスライスを使用して類似度を計算
-                    selected_count = len(selected)
-                    sims = selected_features_matrix[:selected_count] @ candidate_feat
-                    if np.any(sims > threshold):
-                        is_similar = True
-                        continue
-
-                if not is_similar:
-                    selected.append(candidate)
-                    selected_indices.add(idx)
-                    # 事前確保した行列に特徴を追加
-                    if len(selected) <= num:
-                        selected_features_matrix[len(selected) - 1] = candidate_feat
-
-            if len(selected) >= num:
-                break
+        # 類似度フィルタリングを実行
+        selected_indices, rejected_by_similarity = VectorUtils.select_diverse_indices(
+            normalized_features=normalized_features,
+            num=num,
+            threshold_steps=threshold_steps,
+        )
 
         # 最終フォールバック：まだ不足する場合は未選択候補を総合スコア順で埋める
         # （類似度制約を外すため、rejected_indicesも考慮対象に含める）
-        if len(selected) < num:
-            for idx, candidate in enumerate(candidates):
+        if len(selected_indices) < num:
+            for idx, _candidate in enumerate(candidates):
                 if idx not in selected_indices:
-                    selected.append(candidate)
                     selected_indices.add(idx)
-                    if len(selected) >= num:
+                    if len(selected_indices) >= num:
                         break
 
         # スコア順でソートして返す
+        selected = [candidates[i] for i in selected_indices]
         selected.sort(key=lambda x: x.total_score, reverse=True)
-        # 類似度で除外された数は、最終的に未選択かつ全候補が充足している場合のみカウント
-        rejected_count = (
-            len(candidates) - len(selected_indices) if len(candidates) > num else 0
-        )
-        return selected[:num], rejected_count
+        return selected[:num], rejected_by_similarity

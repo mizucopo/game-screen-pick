@@ -1,6 +1,7 @@
 """画像選択の設定."""
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from ..constants.score_weights import ScoreWeights
 
@@ -31,7 +32,7 @@ class SelectionConfig:
     activity_bucket_mode: str = "quantile"
 
     @classmethod
-    def from_cli_args(cls, **kwargs: int | None) -> "SelectionConfig":
+    def from_cli_args(cls, **kwargs: Any) -> "SelectionConfig":
         """CLI引数から設定を作成する.
 
         Args:
@@ -41,16 +42,11 @@ class SelectionConfig:
         Returns:
             SelectionConfigインスタンス
         """
-        # デフォルト値を持つ設定を作成
-        defaults: dict[str, int] = {
-            "batch_size": 32,
+        # Noneでない値のみを抽出してdataclassに渡す（デフォルト値はclass定義で管理）
+        filtered_kwargs = {
+            key: value for key, value in kwargs.items() if value is not None
         }
-        # CLI引数で上書き（Noneでない値のみ）
-        for key, value in kwargs.items():
-            if value is not None and key in defaults:
-                defaults[key] = value
-        # 検証を通すため新しいインスタンスを直接作成
-        return cls(batch_size=defaults["batch_size"])
+        return cls(**filtered_kwargs)
 
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""

@@ -25,3 +25,79 @@ class VectorUtils:
         if norm < eps:
             return np.zeros_like(vec)
         return vec / norm
+
+    @staticmethod
+    def normalize_feature_vectors(
+        vectors: list[np.ndarray[Any, Any]], eps: float = 1e-8
+    ) -> list[np.ndarray[Any, Any]]:
+        """特徴ベクトルリストをL2正規化する.
+
+        Args:
+            vectors: 正規化する特徴ベクトルのリスト
+            eps: ゼロ割れ防止用の微小値
+
+        Returns:
+            L2正規化された特徴ベクトルのリスト
+        """
+        normalized = []
+        for vec in vectors:
+            norm = np.linalg.norm(vec)
+            if norm < eps:
+                normalized.append(np.zeros_like(vec))
+            else:
+                normalized.append(vec / norm)
+        return normalized
+
+    @staticmethod
+    def select_diverse_indices(
+        normalized_features: list[np.ndarray[Any, Any]],
+        num: int,
+        threshold_steps: list[float],
+    ) -> tuple[set[int], int]:
+        """類似度に基づいて多様なインデックスを選択する.
+
+        類似度で除外された数も正しく計測する。
+
+        Args:
+            normalized_features: L2正規化された特徴ベクトルのリスト
+            num: 選択する数
+            threshold_steps: 段階的なしきい値のリスト（厳しい順）
+
+        Returns:
+            (選択されたインデックスのセット, 類似度で除外された数) のタプル
+
+        Note:
+            除外数は、類似度チェックによってスキップされた候補数のみをカウント。
+            max_pool_sizeなどの容量制約で未選択になったものは含まない。
+        """
+        feature_dim = len(normalized_features[0]) if normalized_features else 0
+        selected_features_matrix = np.zeros((num, feature_dim), dtype=np.float32)
+        selected_indices: set[int] = set()
+        rejected_by_similarity = 0
+        selected_count = 0
+
+        for threshold in threshold_steps:
+            for idx, candidate_feat in enumerate(normalized_features):
+                if idx in selected_indices:
+                    continue
+
+                if selected_count >= num:
+                    break
+
+                # 類似度チェック
+                is_similar = False
+                if selected_indices:
+                    sims = selected_features_matrix[:selected_count] @ candidate_feat
+                    if np.any(sims > threshold):
+                        is_similar = True
+                        rejected_by_similarity += 1
+
+                if not is_similar:
+                    selected_features_matrix[selected_count] = candidate_feat
+                    selected_indices.add(idx)
+                    selected_count += 1
+
+            if selected_count >= num:
+                break
+
+        return selected_indices, rejected_by_similarity

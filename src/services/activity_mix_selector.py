@@ -1,11 +1,10 @@
 """活動量ミックスを考慮した画像選択ロジック."""
 
-import numpy as np
-
 from ..models.activity_bucket import ActivityBucket
 from ..models.bucketed_image import BucketedImage
 from ..models.image_metrics import ImageMetrics
 from ..models.selection_config import SelectionConfig
+from ..utils.vector_utils import VectorUtils
 
 
 class ActivityMixSelector:
@@ -196,56 +195,22 @@ class ActivityMixSelector:
             return [], 0
 
         # 特徴ベクトルを事前にL2正規化
-        eps = 1e-8
-        normalized_features = []
-        for c in candidates:
-            norm = np.linalg.norm(c.features)
-            if norm < eps:
-                normalized_features.append(np.zeros_like(c.features))
-            else:
-                normalized_features.append(c.features / norm)
+        normalized_features = VectorUtils.normalize_feature_vectors(
+            [c.features for c in candidates]
+        )
 
         # 段階的しきい値緩和
         threshold_steps = self.config.compute_threshold_steps(similarity_threshold)
 
-        feature_dim = len(normalized_features[0]) if normalized_features else 0
-        selected_features_matrix = np.zeros(
-            (max_pool_size, feature_dim), dtype=np.float32
+        # 類似度フィルタリングを実行
+        selected_indices, rejected_by_similarity = VectorUtils.select_diverse_indices(
+            normalized_features=normalized_features,
+            num=max_pool_size,
+            threshold_steps=threshold_steps,
         )
-        selected: list[ImageMetrics] = []
-        selected_indices: set[int] = set()
 
-        for threshold in threshold_steps:
-            for idx, candidate in enumerate(candidates):
-                if idx in selected_indices:
-                    continue
-
-                if len(selected) >= max_pool_size:
-                    break
-
-                candidate_feat = normalized_features[idx]
-
-                # 類似度チェック
-                is_similar = False
-                if selected_indices:
-                    selected_count = len(selected)
-                    sims = selected_features_matrix[:selected_count] @ candidate_feat
-                    if np.any(sims > threshold):
-                        is_similar = True
-                        continue
-
-                if not is_similar:
-                    selected.append(candidate)
-                    selected_indices.add(idx)
-                    if len(selected) <= max_pool_size:
-                        selected_features_matrix[len(selected) - 1] = candidate_feat
-
-            if len(selected) >= max_pool_size:
-                break
-
-        # 類似度で除外された数は、最終的に未選択の数
-        rejected_count = len(candidates) - len(selected_indices)
-        return selected, rejected_count
+        selected = [candidates[i] for i in sorted(selected_indices)]
+        return selected, rejected_by_similarity
 
     def _bucket_by_activity(self, images: list[ImageMetrics]) -> list[BucketedImage]:
         """画像を活動量に基づいてバケット分けする.
