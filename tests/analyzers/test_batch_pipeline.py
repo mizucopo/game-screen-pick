@@ -264,7 +264,9 @@ def test_batch_pipeline_context_manager(
     assert batch_pipeline._executor is None
 
 
-def test_load_and_preprocess_images_with_max_dim(tmp_path: Path) -> None:
+def test_load_and_preprocess_images_with_max_dim(
+    batch_pipeline: BatchPipeline, tmp_path: Path
+) -> None:
     """load_and_preprocess_imagesでmax_dimが指定できること.
 
     Given:
@@ -280,7 +282,7 @@ def test_load_and_preprocess_images_with_max_dim(tmp_path: Path) -> None:
     cv2.imwrite(str(large_image_path), img_array)
 
     # Act: max_dim=720で読み込み
-    results = BatchPipeline.load_and_preprocess_images(
+    results = batch_pipeline.load_and_preprocess_images(
         [str(large_image_path)], max_dim=720
     )
 

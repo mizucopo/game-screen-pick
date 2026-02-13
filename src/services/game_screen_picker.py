@@ -280,6 +280,9 @@ class GameScreenPicker:
         # 段階的しきい値緩和のステップ
         threshold_steps = selection_config.compute_threshold_steps(similarity_threshold)
 
+        # 選択済み特徴を保持する行列（事前に最大サイズ確保）
+        feature_dim = len(normalized_features[0]) if normalized_features else 0
+        selected_features_matrix = np.zeros((num, feature_dim), dtype=np.float32)
         selected: list[ImageMetrics] = []
         selected_indices: set[int] = set()
         rejected_indices: set[int] = set()  # ユニークな拒否数を追跡
@@ -296,20 +299,21 @@ class GameScreenPicker:
 
                 candidate_feat = normalized_features[idx]
 
-                # 既に選ばれた画像たちと「見た目」を比較（ベクトル化）
-                # selected_featuresを行列化して一括計算
+                # 既に選ばれた画像たちと「見た目」を比較（事前確保行列で効率化）
                 is_similar = False
                 if selected_indices:
-                    selected_features = np.array(
-                        [normalized_features[i] for i in selected_indices]
-                    )
-                    sims = selected_features @ candidate_feat
+                    # selected_count分だけ行列のスライスを使用して類似度計算
+                    selected_count = len(selected)
+                    sims = selected_features_matrix[:selected_count] @ candidate_feat
                     if np.any(sims > threshold):
                         is_similar = True
 
                 if not is_similar:
                     selected.append(candidate)
                     selected_indices.add(idx)
+                    # 事前確保した行列に特徴を追加
+                    if len(selected) <= num:
+                        selected_features_matrix[len(selected) - 1] = candidate_feat
                 else:
                     # 最終しきい値ラウンドで拒否された場合のみ記録
                     if threshold == threshold_steps[-1]:

@@ -30,6 +30,8 @@ class BatchPipeline:
 
     # ファイルサイズからメモリ使用量を見積もるための係数
     MEMORY_ESTIMATION_FACTOR: float = 2.5
+    # 進捗表示の間隔
+    PROGRESS_REPORT_INTERVAL: int = 500
 
     def __init__(
         self,
@@ -142,7 +144,7 @@ class BatchPipeline:
             chunk_start, chunk_end = chunk_boundaries[i]
             chunk_paths = paths[chunk_start:chunk_end]
             preload_futures[i] = preload_executor.submit(
-                BatchPipeline.load_and_preprocess_images,
+                self.load_and_preprocess_images,
                 chunk_paths,
                 self.config.max_dim,
             )
@@ -160,7 +162,7 @@ class BatchPipeline:
                 next_start, next_end = chunk_boundaries[next_idx]
                 next_paths = paths[next_start:next_end]
                 preload_futures[next_idx] = preload_executor.submit(
-                    BatchPipeline.load_and_preprocess_images,
+                    self.load_and_preprocess_images,
                     next_paths,
                     self.config.max_dim,
                 )
@@ -264,11 +266,10 @@ class BatchPipeline:
 
         return chunks
 
-    @staticmethod
     def load_and_preprocess_images(
+        self,
         paths: list[str],
         max_dim: int | None = None,
-        max_workers: int | None = None,
     ) -> list[Image.Image | None]:
         """複数のパスからPIL画像を読み込み、前処理まで並列実行する.
 
@@ -277,7 +278,6 @@ class BatchPipeline:
         Args:
             paths: 画像ファイルパスのリスト
             max_dim: 長辺の最大ピクセル数（Noneの場合は縮小しない）
-            max_workers: スレッドプールの最大ワーカー数（Noneで自動設定）
 
         Returns:
             PIL画像のリスト（失敗したパスはNone）
@@ -288,6 +288,9 @@ class BatchPipeline:
             )
         else:
             load_func = ImageUtils.load_as_rgb
+
+        # 設定からワーカー数を取得（Noneで自動設定）
+        max_workers = self.config.io_max_workers
 
         # ThreadPoolExecutorで並列処理
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -387,7 +390,8 @@ class BatchPipeline:
             if data is None:
                 return idx, None
             path, pil_img, clip_features, semantic, global_idx = data
-            if show_progress and global_idx % 50 == 0:
+            interval = BatchPipeline.PROGRESS_REPORT_INTERVAL
+            if show_progress and global_idx % interval == 0:
                 print(f"解析済み: {global_idx}/{total_paths}")
             result = self._process_single_result(path, pil_img, clip_features, semantic)
             return idx, result
@@ -420,8 +424,10 @@ class BatchPipeline:
             ThreadPoolExecutorインスタンス
         """
         if self._preload_executor is None:
-            # プリロードはI/O-boundなので、結果構築より多めのワーカーを使用
-            self._preload_executor = ThreadPoolExecutor(max_workers=2)
+            # 設定からワーカー数を取得
+            self._preload_executor = ThreadPoolExecutor(
+                max_workers=self.config.preload_workers
+            )
         return self._preload_executor
 
     def close(self) -> None:
