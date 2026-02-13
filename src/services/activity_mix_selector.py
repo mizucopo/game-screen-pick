@@ -112,10 +112,22 @@ class ActivityMixSelector:
         mid_num = bucket_targets[ActivityBucket.MID]
         high_num = bucket_targets[ActivityBucket.HIGH]
 
-        # 各バケットの候補を取得（スコア順）
-        low_bucketed = [b for b in bucketed_images if b.bucket == ActivityBucket.LOW]
-        mid_bucketed = [b for b in bucketed_images if b.bucket == ActivityBucket.MID]
-        high_bucketed = [b for b in bucketed_images if b.bucket == ActivityBucket.HIGH]
+        # 各バケットの候補を取得してスコア降順にソート（品質優先）
+        low_bucketed = sorted(
+            (b for b in bucketed_images if b.bucket == ActivityBucket.LOW),
+            key=lambda b: b.image.total_score,
+            reverse=True,
+        )
+        mid_bucketed = sorted(
+            (b for b in bucketed_images if b.bucket == ActivityBucket.MID),
+            key=lambda b: b.image.total_score,
+            reverse=True,
+        )
+        high_bucketed = sorted(
+            (b for b in bucketed_images if b.bucket == ActivityBucket.HIGH),
+            key=lambda b: b.image.total_score,
+            reverse=True,
+        )
 
         # 各バケットからターゲット数を選択
         selected: list[ImageMetrics] = []
@@ -131,9 +143,18 @@ class ActivityMixSelector:
                 ActivityBucket.MID: [],
                 ActivityBucket.HIGH: [],
             }
-            for b in bucketed_images:
-                if b.image not in selected:
-                    remaining_by_bucket[b.bucket].append(b.image)
+            # バケットごとにスコア順に収集
+            for bucket in ActivityBucket:
+                candidates = [
+                    b.image
+                    for b in bucketed_images
+                    if b.bucket == bucket and b.image not in selected
+                ]
+                remaining_by_bucket[bucket] = sorted(
+                    candidates,
+                    key=lambda img: img.total_score,
+                    reverse=True,
+                )
 
             # 各バケットから交互に補填してバランスを維持
             bucket_order = [ActivityBucket.LOW, ActivityBucket.MID, ActivityBucket.HIGH]
