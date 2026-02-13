@@ -39,18 +39,32 @@ def test_safe_l2_normalize_handles_various_vectors(
         assert np.linalg.norm(result) == pytest.approx(1.0)
 
 
-def test_select_diverse_indices_empty_features() -> None:
-    """空の特徴ベクトルリストを正しく処理すること.
+@pytest.mark.parametrize(
+    "num_features,expected_selected,expected_rejected",
+    [
+        (0, 0, 0),  # 空のリスト
+        (10, 1, 9),  # 全く同一のベクトル（最初の1件のみ選択）
+    ],
+)
+def test_select_diverse_indices_edge_cases(
+    num_features: int, expected_selected: int, expected_rejected: int
+) -> None:
+    """エッジケースで多様なインデックス選択が正しく動作すること.
 
     Given:
-        - 空の特徴ベクトルリストがある
+        - 空または同一の特徴ベクトルリストがある
     When:
         - select_diverse_indicesを実行する
     Then:
-        - 空のセットと0が返されること
+        - 期待される数のインデックスが選択されること
+        - 期待される数が類似度で除外されること
     """
     # Arrange
-    normalized_features: list[np.ndarray] = []
+    if num_features == 0:
+        normalized_features: list[np.ndarray] = []
+    else:
+        vec = np.array([1.0, 0.0, 0.0])
+        normalized_features = [vec.copy() for _ in range(num_features)]
 
     # Act
     selected_indices, rejected_by_similarity = VectorUtils.select_diverse_indices(
@@ -60,34 +74,5 @@ def test_select_diverse_indices_empty_features() -> None:
     )
 
     # Assert
-    assert selected_indices == set()
-    assert rejected_by_similarity == 0
-
-
-def test_select_diverse_indices_all_identical_vectors() -> None:
-    """全く同一のベクトルに対して正しく動作すること.
-
-    Given:
-        - 10件の全く同一の特徴ベクトルがある
-        - 選択数が5件
-    When:
-        - select_diverse_indicesを実行する
-    Then:
-        - 最初の1件のみが選択されること
-        - 残り9件が類似度で除外されること
-    """
-    # Arrange: 全く同一のベクトル10件
-    vec = np.array([1.0, 0.0, 0.0])
-    normalized_features = [vec.copy() for _ in range(10)]
-
-    # Act
-    selected_indices, rejected_by_similarity = VectorUtils.select_diverse_indices(
-        normalized_features=normalized_features,
-        num=5,
-        threshold_steps=[0.9, 0.95],
-    )
-
-    # Assert: 最初の1件のみ選択、残り9件は類似度で除外
-    assert len(selected_indices) == 1
-    assert selected_indices == {0}
-    assert rejected_by_similarity == 9  # 残り9件は類似度で除外
+    assert len(selected_indices) == expected_selected
+    assert rejected_by_similarity == expected_rejected

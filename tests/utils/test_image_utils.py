@@ -11,99 +11,66 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from src.utils.image_utils import ImageUtils
 
 
-def test_load_as_rgb_resized_shrinks_large_images(tmp_path: Path) -> None:
-    """大きな画像がmax_dim以下に縮小されること.
+@pytest.mark.parametrize(
+    "size,max_dim,expected_max_size",
+    [
+        # 大きな画像は縮小される
+        ((2000, 1000), 720, 720),
+        # 小さな画像はそのまま
+        ((300, 200), 720, 300),
+        # グレースケールもRGBに変換
+        ((100, 100), 720, 100),
+    ],
+)
+def test_load_as_rgb_resized(
+    tmp_path: Path,
+    size: tuple[int, int],
+    max_dim: int,
+    expected_max_size: int,
+) -> None:
+    """画像が正しくRGB形式でリサイズされて読み込まれること.
 
     Given:
-        - 2000x1000の画像がある
-        - max_dim=720で読み込む
-    When:
-        - load_as_rgb_resizedで読み込む
-    Then:
-        - 長辺が720以下であること
-        - アスペクト比が保持されていること
-    """
-    # Arrange: 2000x1000の画像を作成
-    img_array = np.random.randint(0, 255, (1000, 2000, 3), dtype=np.uint8)
-    large_image_path = tmp_path / "large_image.jpg"
-    cv2.imwrite(str(large_image_path), img_array)
-
-    # Act: max_dim=720で読み込み
-    result = ImageUtils.load_as_rgb_resized(str(large_image_path), max_dim=720)
-
-    # Assert
-    assert result is not None
-    w, h = result.size
-    max_size = max(w, h)
-    assert max_size <= 720
-    # アスペクト比が保持されている（元は2:1）
-    assert abs(w / h - 2.0) < 0.01
-
-
-def test_load_as_rgb_resized_preserves_small_images(tmp_path: Path) -> None:
-    """小さな画像がそのまま返されること.
-
-    Given:
-        - 300x200の画像がある
-        - max_dim=720で読み込む
-    When:
-        - load_as_rgb_resizedで読み込む
-    Then:
-        - 画像サイズが変更されていないこと
-    """
-    # Arrange: 300x200の画像を作成
-    img_array = np.random.randint(0, 255, (200, 300, 3), dtype=np.uint8)
-    small_image_path = tmp_path / "small_image.jpg"
-    cv2.imwrite(str(small_image_path), img_array)
-
-    # Act: max_dim=720で読み込み（画像が小さいので縮小されないはず）
-    result = ImageUtils.load_as_rgb_resized(str(small_image_path), max_dim=720)
-
-    # Assert
-    assert result is not None
-    w, h = result.size
-    assert w == 300
-    assert h == 200
-
-
-def test_load_as_rgb_resized_converts_to_rgb(tmp_path: Path) -> None:
-    """グレースケール画像がRGBに変換されること.
-
-    Given:
-        - グレースケール画像がある
+        - 指定されたサイズの画像がある
     When:
         - load_as_rgb_resizedで読み込む
     Then:
         - RGB形式の画像が返されること
+        - 長辺がmax_dim以下であること
     """
-    # Arrange: グレースケール画像を作成
-    img_array = np.random.randint(0, 255, (100, 100), dtype=np.uint8)
-    gray_image_path = tmp_path / "gray_image.jpg"
-    cv2.imwrite(str(gray_image_path), img_array)
+    # Arrange
+    channels = 1 if len(size) == 2 and size == (100, 100) else 3
+    shape = (*size, channels) if channels == 3 else size
+    img_array = np.random.randint(0, 255, shape, dtype=np.uint8)
+
+    suffix = "_gray.jpg" if channels == 1 else ".jpg"
+    image_path = tmp_path / f"test{suffix}"
+    cv2.imwrite(str(image_path), img_array)
 
     # Act
-    result = ImageUtils.load_as_rgb_resized(str(gray_image_path), max_dim=720)
+    result = ImageUtils.load_as_rgb_resized(str(image_path), max_dim=max_dim)
 
     # Assert
     assert result is not None
     assert result.mode == "RGB"
-    assert result.size == (100, 100)
+
+    w, h = result.size
+    max_size = max(w, h)
+    assert max_size == expected_max_size
+
+    # アスペクト比が保持されている
+    original_aspect = size[1] / size[0] if size[0] > 0 else 1.0
+    result_aspect = w / h if h > 0 else 1.0
+    assert abs(original_aspect - result_aspect) < 0.01
 
 
-def test_load_as_rgb_resized_returns_none_on_invalid_path() -> None:
-    """無効なパスでNoneが返されること.
-
-    Given:
-        - 存在しないファイルパスがある
-    When:
-        - load_as_rgb_resizedで読み込む
-    Then:
-        - Noneが返されること
-    """
+def test_load_as_rgb_resized_returns_none_for_invalid_path() -> None:
+    """無効なパスでNoneが返されること."""
     # Arrange
     invalid_path = "/nonexistent/path/image.jpg"
 

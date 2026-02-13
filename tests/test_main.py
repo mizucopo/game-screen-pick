@@ -15,20 +15,12 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.main import Main
 from src.models.image_metrics import ImageMetrics
 from src.models.normalized_metrics import NormalizedMetrics
 from src.models.picker_statistics import PickerStatistics
 from src.models.raw_metrics import RawMetrics
 from src.services.game_screen_picker import GameScreenPicker
-
-
-@pytest.fixture
-def mock_image_quality_analyzer() -> MagicMock:
-    """ImageQualityAnalyzerをモック（CLIPモデル読み込み回避）."""
-    analyzer = MagicMock(spec=ImageQualityAnalyzer)
-    return analyzer
 
 
 @pytest.fixture
@@ -88,7 +80,6 @@ def sample_image_metrics_factory() -> Callable[[str, float], ImageMetrics]:
 def test_cli_selects_and_displays_images(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
@@ -125,10 +116,6 @@ def test_cli_selects_and_displays_images(
 
     monkeypatch.setattr("sys.argv", ["main.py", str(test_dir), "-n", "3"])
     monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer",
-        lambda *_a, **_k: mock_image_quality_analyzer,
-    )
-    monkeypatch.setattr(
         "src.main.GameScreenPicker",
         lambda *_a, **_k: mock_game_screen_picker,
     )
@@ -160,7 +147,6 @@ def test_cli_selects_and_displays_images(
 )
 def test_cli_validates_inputs(
     monkeypatch: pytest.MonkeyPatch,
-    mock_image_quality_analyzer: MagicMock,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
     args: list[str],
@@ -188,10 +174,6 @@ def test_cli_validates_inputs(
         Path(input_path).mkdir()
 
     monkeypatch.setattr("sys.argv", ["main.py", input_path] + args)
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer",
-        lambda *_a, **_k: mock_image_quality_analyzer,
-    )
     monkeypatch.setattr(
         "src.main.GameScreenPicker",
         lambda *_a, **_k: mock_game_screen_picker,

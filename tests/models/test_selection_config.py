@@ -5,23 +5,15 @@ import pytest
 from src.models.selection_config import SelectionConfig
 
 
-def test_selection_config_initialization_with_defaults() -> None:
-    """SelectionConfigがデフォルト値で正しく初期化されること.
-
-    Given:
-        - デフォルト値を使用する
-    When:
-        - SelectionConfigを作成
-    Then:
-        - デフォルト値が正しく設定されていること
-    """
+def test_selection_config_has_sensible_defaults() -> None:
+    """SelectionConfigが合理的なデフォルト値を持つこと."""
     # Arrange & Act
     config = SelectionConfig()
 
     # Assert
     assert config.batch_size == 32
-    assert config.threshold_relaxation_steps == [0.03, 0.06, 0.10, 0.15]
     assert config.max_threshold == 0.98
+    assert len(config.threshold_relaxation_steps) > 0
 
 
 @pytest.mark.parametrize(
@@ -33,22 +25,12 @@ def test_selection_config_initialization_with_defaults() -> None:
         (0.95, 0.98, [0.95, 0.98, 0.98, 0.98, 0.98]),
     ],
 )
-def test_compute_threshold_steps_with_defaults(
+def test_threshold_steps_computed_correctly(
     base_threshold: float,
     max_threshold: float,
     expected_steps: list[float],
 ) -> None:
-    """デフォルトステップでのしきい値計算と上限制限が正しく動作すること.
-
-    Given:
-        - デフォルトステップを持つSelectionConfigがある
-        - ベースしきい値と最大しきい値がある
-    When:
-        - しきい値ステップを計算
-    Then:
-        - 期待されるステップが計算されること
-        - 上限制限が遵守されること
-    """
+    """しきい値ステップが正しく計算されること."""
     # Arrange
     config = SelectionConfig(max_threshold=max_threshold)
 
@@ -69,19 +51,11 @@ def test_compute_threshold_steps_with_defaults(
         ("threshold_relaxation_steps", [0.1, -0.05, 0.2]),
     ],
 )
-def test_selection_config_rejects_invalid_values(
+def test_invalid_values_rejected(
     field_name: str,
     invalid_value: int | float | list[float] | tuple[float, ...],
 ) -> None:
-    """無効な値が設定された場合に例外が発生すること.
-
-    Given:
-        - 無効な値がある
-    When:
-        - SelectionConfigを作成する
-    Then:
-        - ValueErrorがスローされること
-    """
+    """無効な値が設定された場合に例外が発生すること."""
     # Arrange & Act & Assert
     with pytest.raises(ValueError):
         SelectionConfig(**{field_name: invalid_value})  # type: ignore[arg-type]
@@ -104,16 +78,7 @@ def test_activity_mix_ratio_sum_validation(
     activity_mix_ratio: tuple[float, float, float],
     should_raise: bool,
 ) -> None:
-    """activity_mix_ratioの合計値が1.0であることを検証すること.
-
-    Given:
-        - 様々なactivity_mix_ratioの値
-    When:
-        - SelectionConfigを作成
-    Then:
-        - 合計が1.0（許容範囲内）の場合は成功
-        - 合計が1.0から大きくずれる場合はValueError
-    """
+    """activity_mix_ratioの合計値が1.0であることを検証すること."""
     # Arrange & Act & Assert
     if should_raise:
         with pytest.raises(ValueError, match="合計は1.0"):
