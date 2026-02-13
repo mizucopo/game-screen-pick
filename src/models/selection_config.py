@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 
+from ..constants.score_weights import ScoreWeights
+
 
 @dataclass
 class SelectionConfig:
@@ -12,6 +14,9 @@ class SelectionConfig:
         threshold_relaxation_steps: 類似度しきい値の段階的緩和ステップ
             （ベースのしきい値に加算される値のリスト）
         max_threshold: 類似度しきい値の上限
+        activity_mix_enabled: 活動量ミックスを有効にするかどうか
+        activity_mix_ratio: 活動量バケットの選択比率 (low, mid, high)
+        activity_bucket_mode: 活動量バケットの分割モード ("quantile"のみ)
     """
 
     batch_size: int = 32
@@ -19,6 +24,11 @@ class SelectionConfig:
         default_factory=lambda: [0.03, 0.06, 0.10, 0.15]
     )
     max_threshold: float = 0.98
+    activity_mix_enabled: bool = True
+    activity_mix_ratio: tuple[float, float, float] = field(
+        default_factory=lambda: ScoreWeights.DEFAULT_ACTIVITY_MIX_RATIO
+    )
+    activity_bucket_mode: str = "quantile"
 
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""
@@ -37,6 +47,27 @@ class SelectionConfig:
                     f"{step}"
                 )
                 raise ValueError(msg)
+
+        if self.activity_bucket_mode != "quantile":
+            msg = (
+                "activity_bucket_modeは'quantile'のみサポートしています: "
+                f"{self.activity_bucket_mode}"
+            )
+            raise ValueError(msg)
+
+        if len(self.activity_mix_ratio) != 3:
+            msg = (
+                "activity_mix_ratioは3要素のタプルである必要があります: "
+                f"{self.activity_mix_ratio}"
+            )
+            raise ValueError(msg)
+
+        if not all(0 <= r <= 1 for r in self.activity_mix_ratio):
+            msg = (
+                "activity_mix_ratioの各要素は0以上1以下である必要があります: "
+                f"{self.activity_mix_ratio}"
+            )
+            raise ValueError(msg)
 
     def compute_threshold_steps(self, base_threshold: float) -> list[float]:
         """ベースのしきい値から段階的な緩和ステップを計算する.

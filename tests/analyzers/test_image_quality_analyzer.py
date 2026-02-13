@@ -15,13 +15,13 @@ from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
 
 
-def test_analyze_returns_valid_metrics_with_genre_specific_weights(
+def test_analyze_returns_valid_metrics_with_default_weights(
     sample_image_path: str,
 ) -> None:
-    """ジャンル特有の重みで有効なメトリックが返されること.
+    """デフォルトの重みで有効なメトリックが返されること.
 
     Given:
-        - 特定ジャンルのアナライザインスタンスがある
+        - デフォルト設定のアナライザインスタンスがある
         - 有効なテスト画像がある
     When:
         - 画像が分析される
@@ -32,7 +32,7 @@ def test_analyze_returns_valid_metrics_with_genre_specific_weights(
     # Arrange
     # キャッシュを使用しないようにデバイスをCPUに指定
     # （MPS環境でキャッシュ未使用時のテストを安定させるため）
-    analyzer = ImageQualityAnalyzer(genre="2d_rpg", device="cpu")
+    analyzer = ImageQualityAnalyzer(device="cpu")
 
     # Act
     result = analyzer.analyze(sample_image_path)

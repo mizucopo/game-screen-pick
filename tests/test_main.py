@@ -403,7 +403,6 @@ def test_result_max_workers_argument_passed_to_config(
 
     # ImageQualityAnalyzerのモックを設定
     def create_analyzer_with_config(
-        _genre: Any,  # noqa: ARG001
         _cache: Any = None,  # noqa: ARG001
         config: Any = None,
         **kwargs: Any,  # noqa: ARG001

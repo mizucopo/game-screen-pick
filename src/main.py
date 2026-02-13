@@ -8,7 +8,6 @@ from typing import List
 
 from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from .cache.feature_cache import FeatureCache
-from .constants.genre_weights import GenreWeights
 from .models.analyzer_config import AnalyzerConfig
 from .models.image_metrics import ImageMetrics
 from .models.picker_statistics import PickerStatistics
@@ -71,16 +70,14 @@ class Main:
             if cache_path:
                 cache = FeatureCache(cache_path)
 
-        # 依存関係の遅延初期化（引数パース後にジャンルが決まるため）
+        # 依存関係の遅延初期化
         if self._analyzer is None:
             # AnalyzerConfigにCLI引数を反映
             analyzer_config = AnalyzerConfig()
             if parsed_args.result_max_workers is not None:
                 analyzer_config.result_max_workers = parsed_args.result_max_workers
 
-            self._analyzer = ImageQualityAnalyzer(
-                parsed_args.genre, cache=cache, config=analyzer_config
-            )
+            self._analyzer = ImageQualityAnalyzer(cache=cache, config=analyzer_config)
 
         if self._picker is None:
             seed = parsed_args.seed
@@ -187,20 +184,11 @@ class Main:
         Returns:
             パースされた引数のNamespace
         """
-        genre_choices = sorted(GenreWeights.DEFAULT_WEIGHTS.keys())
-
         parser = argparse.ArgumentParser(description="Diverse Game Screen Picker")
         parser.add_argument("input", help="入力フォルダ")
         parser.add_argument("-c", "--copy-to", help="出力フォルダ")
         parser.add_argument(
             "-n", "--num", type=Main.validate_positive_int, default=10, help="選択枚数"
-        )
-        parser.add_argument(
-            "-g",
-            "--genre",
-            default="mixed",
-            choices=genre_choices,
-            help="ジャンル (デフォルト: mixed)",
         )
         parser.add_argument(
             "-s",

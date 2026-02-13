@@ -7,6 +7,9 @@ from typing import List, Optional
 import numpy as np
 
 from ..analyzers.image_quality_analyzer import ImageQualityAnalyzer
+from ..constants.score_weights import ScoreWeights
+from ..models.activity_bucket import ActivityBucket
+from ..models.bucketed_image import BucketedImage
 from ..models.image_metrics import ImageMetrics
 from ..models.picker_statistics import PickerStatistics
 from ..models.selection_config import SelectionConfig
@@ -31,6 +34,7 @@ class GameScreenPicker:
         self.analyzer = analyzer
         self.config = config or SelectionConfig()
         self._rng = rng or random.Random()
+        self._activity_weights = ScoreWeights.get_activity_weights()
 
     @staticmethod
     def load_image_files(folder: str, recursive: bool) -> List[Path]:
@@ -68,6 +72,166 @@ class GameScreenPicker:
             paths, batch_size=self.config.batch_size, show_progress=show_progress
         )
         return [r for r in results if r is not None]
+
+    @staticmethod
+    def _calculate_activity_score(
+        image: ImageMetrics, weights: dict[str, float]
+    ) -> float:
+        """画像の活動量スコアを計算する.
+
+        Args:
+            image: 画像メトリクス
+            weights: 活動量計算用の重み
+
+        Returns:
+            活動量スコア（正規化済みメトリクスの加重平均）
+        """
+        norm = image.normalized_metrics
+        return (
+            weights.get("action_intensity", 0.55) * norm.get("action_intensity", 0)
+            + weights.get("edge_density", 0.25) * norm.get("edge_density", 0)
+            + weights.get("dramatic_score", 0.20) * norm.get("dramatic_score", 0)
+        )
+
+    @staticmethod
+    def _assign_buckets(
+        images: List[ImageMetrics],
+        activity_weights: dict[str, float],
+    ) -> List[BucketedImage]:
+        """画像に活動量バケットを割り当てる.
+
+        Args:
+            images: 画像メトリクスのリスト
+            activity_weights: 活動量計算用の重み
+
+        Returns:
+            バケット付けされた画像のリスト
+        """
+        # 活動量スコアを計算
+        activity_scores = [
+            GameScreenPicker._calculate_activity_score(img, activity_weights)
+            for img in images
+        ]
+
+        # q30/q70で分位点分割
+        q30 = np.percentile(activity_scores, 30, method="linear")
+        q70 = np.percentile(activity_scores, 70, method="linear")
+
+        bucketed: List[BucketedImage] = []
+        for img, score in zip(images, activity_scores):
+            if score < q30:
+                bucket = ActivityBucket.LOW
+            elif score < q70:
+                bucket = ActivityBucket.MID
+            else:
+                bucket = ActivityBucket.HIGH
+            bucketed.append(BucketedImage(img, bucket, score))
+
+        return bucketed
+
+    def _select_with_activity_mix(
+        self,
+        all_results: List[ImageMetrics],
+        num: int,
+        activity_weights: dict[str, float],
+        similarity_threshold: float,
+    ) -> List[ImageMetrics]:
+        """活動量バケットを考慮して画像を選択する.
+
+        Args:
+            all_results: 解析済みの画像メトリクスリスト（総合スコア降順）
+            num: 選択する画像数
+            activity_weights: 活動量計算用の重み
+            similarity_threshold: 類似度の閾値
+
+        Returns:
+            選択された画像メトリクスのリスト
+        """
+        # まず類似度フィルタリングを適用
+        diverse_candidates, _ = self._select_diverse_images(
+            all_results,
+            num * 3,  # 活動量ミックスのために候補を多めに取得
+            similarity_threshold,
+            self.config,
+        )
+
+        if not diverse_candidates:
+            return []
+
+        # バケット付け
+        bucketed = self._assign_buckets(diverse_candidates, activity_weights)
+
+        # バケットごとにグループ化
+        by_bucket: dict[ActivityBucket, List[BucketedImage]] = {
+            ActivityBucket.LOW: [],
+            ActivityBucket.MID: [],
+            ActivityBucket.HIGH: [],
+        }
+        for b in bucketed:
+            by_bucket[b.bucket].append(b)
+
+        # num>=3かつ全バケット非空なら各バケット最低1枚を先取り
+        selected: List[ImageMetrics] = []
+        selected_ids: set[int] = set()
+
+        if num >= 3 and all(len(v) > 0 for v in by_bucket.values()):
+            # 各バケットから最高スコアの画像を1枚選択
+            all_buckets = [ActivityBucket.LOW, ActivityBucket.MID, ActivityBucket.HIGH]
+            for bucket_type in all_buckets:
+                best = max(by_bucket[bucket_type], key=lambda x: x.image.total_score)
+                selected.append(best.image)
+                selected_ids.add(id(best.image))
+
+        # 残り枠を計算
+        remaining = num - len(selected)
+        if remaining <= 0:
+            selected.sort(key=lambda x: x.total_score, reverse=True)
+            return selected
+
+        # 30/40/30の目標配分を計算
+        ratio = self.config.activity_mix_ratio
+        target_counts = {
+            ActivityBucket.LOW: max(1, round(num * ratio[0])),
+            ActivityBucket.MID: max(1, round(num * ratio[1])),
+            ActivityBucket.HIGH: max(1, round(num * ratio[2])),
+        }
+
+        # 既選択分を差し引く
+        all_buckets = [ActivityBucket.LOW, ActivityBucket.MID, ActivityBucket.HIGH]
+        for bucket_type in all_buckets:
+            bucket_images = [b.image for b in by_bucket[bucket_type]]
+            if any(id(s) in [id(img) for img in bucket_images] for s in selected):
+                target_counts[bucket_type] -= 1
+
+        # 残りを総合スコア順に選択
+        # 優先順: mid > high > low（最大剰余法）
+        priority = [ActivityBucket.MID, ActivityBucket.HIGH, ActivityBucket.LOW]
+
+        for bucket_type in priority:
+            need = target_counts.get(bucket_type, 0)
+            if need <= 0:
+                continue
+
+            for b in by_bucket[bucket_type]:
+                if need <= 0:
+                    break
+                if id(b.image) not in selected_ids:
+                    selected.append(b.image)
+                    selected_ids.add(id(b.image))
+                    need -= 1
+
+        # まだ不足する場合は未選択候補を総合スコア順でフォールバック
+        if len(selected) < num:
+            for b in bucketed:
+                if len(selected) >= num:
+                    break
+                if id(b.image) not in selected_ids:
+                    selected.append(b.image)
+                    selected_ids.add(id(b.image))
+
+        # 総合スコア順でソート
+        selected.sort(key=lambda x: x.total_score, reverse=True)
+        return selected[:num]
 
     @staticmethod
     def _select_diverse_images(
@@ -200,9 +364,15 @@ class GameScreenPicker:
         all_results.sort(key=lambda x: x.total_score, reverse=True)
 
         # 多様性に基づいて選択
-        selected, rejected_by_similarity = self._select_diverse_images(
-            all_results, num, similarity_threshold, self.config
-        )
+        if self.config.activity_mix_enabled:
+            selected = self._select_with_activity_mix(
+                all_results, num, self._activity_weights, similarity_threshold
+            )
+            rejected_by_similarity = 0
+        else:
+            selected, rejected_by_similarity = self._select_diverse_images(
+                all_results, num, similarity_threshold, self.config
+            )
 
         stats = PickerStatistics(
             total_files=total_files,

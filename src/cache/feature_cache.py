@@ -25,7 +25,7 @@ class FeatureCache:
     _init_lock = threading.Lock()
 
     # キャッシュスキーマのバージョン（アルゴリズム変更時に更新）
-    METRICS_VERSION: str = "3"  # Add normalized_metrics and total_score
+    METRICS_VERSION: str = "4"  # 単一スコア重み化と活動量ミックス導入
 
     def __init__(self, cache_path: Optional[str | Path] = None):
         """特徴量キャッシュを初期化する.

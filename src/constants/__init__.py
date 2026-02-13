@@ -1,1 +1,1 @@
-"""Constants package for genre weights and other constants."""
+"""Constants package for score weights and other constants."""

@@ -14,13 +14,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
+from PIL import Image
 
 from src.analyzers.batch_pipeline import BatchPipeline
 from src.analyzers.clip_model_manager import CLIPModelManager
 from src.analyzers.feature_extractor import FeatureExtractor
 from src.analyzers.metric_calculator import MetricCalculator
 from src.cache.feature_cache import FeatureCache
-from src.constants.genre_weights import GenreWeights
+from src.constants.score_weights import ScoreWeights
 from src.models.analyzer_config import AnalyzerConfig
 from src.models.image_metrics import ImageMetrics
 from src.models.path_metadata import PathMetadata
@@ -30,7 +31,7 @@ from src.models.path_metadata import PathMetadata
 def batch_pipeline() -> BatchPipeline:
     """バッチ処理パイプラインのフィクスチャ."""
     config = AnalyzerConfig()
-    weights = GenreWeights.get_weights("mixed")
+    weights = ScoreWeights.get_weights()
     model_manager = CLIPModelManager()
     feature_extractor = FeatureExtractor(model_manager)
     metric_calculator = MetricCalculator(config, weights, model_manager)
@@ -93,7 +94,7 @@ def test_cached_results_semantic_score_calculation_is_batched(
     """
     # Arrange: キャッシュ付きのパイプラインを作成
     config = AnalyzerConfig()
-    weights = GenreWeights.get_weights("mixed")
+    weights = ScoreWeights.get_weights()
     model_manager = CLIPModelManager()
     feature_extractor = FeatureExtractor(model_manager)
     metric_calculator = MetricCalculator(config, weights, model_manager)
@@ -338,7 +339,7 @@ def test_process_batch_with_uncached_files(
     """
     # Arrange: キャッシュ付きのパイプラインを作成
     config = AnalyzerConfig()
-    weights = GenreWeights.get_weights("mixed")
+    weights = ScoreWeights.get_weights()
     model_manager = CLIPModelManager()
     feature_extractor = FeatureExtractor(model_manager)
     metric_calculator = MetricCalculator(config, weights, model_manager)
@@ -384,7 +385,7 @@ def test_get_cached_results_returns_metadata(tmp_path: Path) -> None:
     """
     # Arrange
     config = AnalyzerConfig()
-    weights = GenreWeights.get_weights("mixed")
+    weights = ScoreWeights.get_weights()
     model_manager = CLIPModelManager()
     feature_extractor = FeatureExtractor(model_manager)
     metric_calculator = MetricCalculator(config, weights, model_manager)
@@ -438,9 +439,7 @@ def test_process_single_result_reuses_metadata(
         - 有効なImageMetricsが返されること
     """
     # Arrange: 事前にメタ情報を収集
-    from pathlib import Path as StdPath
-
-    abs_path = str(StdPath(sample_image_path).resolve())
+    abs_path = str(Path(sample_image_path).resolve())
     file_stat = os.stat(sample_image_path)
 
     metadata = PathMetadata(
@@ -451,8 +450,6 @@ def test_process_single_result_reuses_metadata(
     )
 
     # PIL画像とCLIP特徴をモック
-    from PIL import Image
-
     np.random.seed(42)
     img_array = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
     pil_img = Image.fromarray(img_array)
@@ -462,7 +459,7 @@ def test_process_single_result_reuses_metadata(
     semantic = 0.5
 
     # Act: メタ情報付きで処理
-    result, cache_entry = batch_pipeline._process_single_result(
+    result, _cache_entry = batch_pipeline._process_single_result(
         path=sample_image_path,
         pil_img=pil_img,
         clip_features=clip_features,
@@ -490,7 +487,7 @@ def test_cached_results_uses_stored_metrics(tmp_path: Path) -> None:
     """
     # Arrange: キャッシュ付きのパイプラインを作成
     config = AnalyzerConfig()
-    weights = GenreWeights.get_weights("mixed")
+    weights = ScoreWeights.get_weights()
     model_manager = CLIPModelManager()
     feature_extractor = FeatureExtractor(model_manager)
     metric_calculator = MetricCalculator(config, weights, model_manager)
