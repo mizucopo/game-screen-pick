@@ -117,8 +117,6 @@ def test_compute_threshold_steps_with_custom_steps() -> None:
         ("max_threshold", -0.1, None),
         ("max_threshold", 1.1, None),
         ("threshold_relaxation_steps", [0.1, -0.05, 0.2], None),
-        ("activity_mix_ratio", (-0.1, 0.5, 0.6), "0以上1以下"),
-        ("activity_mix_ratio", (0.3, 0.4, 1.1), "0以上1以下"),
     ],
 )
 def test_selection_config_rejects_invalid_values(

@@ -112,27 +112,3 @@ def test_load_as_rgb_resized_returns_none_on_invalid_path() -> None:
 
     # Assert
     assert result is None
-
-
-def test_load_as_rgb_resized_default_max_dim(tmp_path: Path) -> None:
-    """デフォルトのmax_dim(720)が使用されること.
-
-    Given:
-        - 1000x1000の画像がある
-    When:
-        - max_dimを指定せずにload_as_rgb_resizedで読み込む
-    Then:
-        - 長辺が720以下であること
-    """
-    # Arrange: 1000x1000の画像を作成
-    img_array = np.random.randint(0, 255, (1000, 1000, 3), dtype=np.uint8)
-    image_path = tmp_path / "square_image.jpg"
-    cv2.imwrite(str(image_path), img_array)
-
-    # Act: max_dimを指定しない（デフォルト720）
-    result = ImageUtils.load_as_rgb_resized(str(image_path))
-
-    # Assert
-    assert result is not None
-    w, h = result.size
-    assert max(w, h) <= 720

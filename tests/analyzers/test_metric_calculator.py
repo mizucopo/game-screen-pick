@@ -49,17 +49,7 @@ def test_calculate_raw_metrics_returns_expected_metrics(
     # Act
     raw_metrics = metric_calculator.calculate_raw_metrics(img)
 
-    # Assert
-    assert hasattr(raw_metrics, "blur_score")
-    assert hasattr(raw_metrics, "brightness")
-    assert hasattr(raw_metrics, "contrast")
-    assert hasattr(raw_metrics, "edge_density")
-    assert hasattr(raw_metrics, "color_richness")
-    assert hasattr(raw_metrics, "ui_density")
-    assert hasattr(raw_metrics, "action_intensity")
-    assert hasattr(raw_metrics, "visual_balance")
-    assert hasattr(raw_metrics, "dramatic_score")
-    # 値の型チェック
+    # Assert: 属性の存在と値の型チェック
     for attr in [
         "blur_score",
         "brightness",

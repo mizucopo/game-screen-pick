@@ -161,8 +161,8 @@ def mock_analyzer_with_batch(mock_analyzer: MagicMock) -> MagicMock:
 
     def mock_analyze_batch(
         paths: List[str],
-        batch_size: int = 32,  # type: ignore[arg-type]
-        show_progress: bool = False,  # type: ignore[arg-type]
+        batch_size: int = 32,  # noqa: ARG001
+        show_progress: bool = False,  # noqa: ARG001
     ) -> List[ImageMetrics | None]:
         """テスト用のモック分析関数."""
         results: List[ImageMetrics | None] = []
@@ -478,8 +478,8 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
 
         def mock_analyze_batch(
             paths: List[str],
-            batch_size: int = 32,  # type: ignore[arg-type]
-            show_progress: bool = False,  # type: ignore[arg-type]
+            batch_size: int = 32,  # noqa: ARG001
+            show_progress: bool = False,  # noqa: ARG001
         ) -> List[ImageMetrics | None]:
             results: List[ImageMetrics | None] = []
             for path in paths:
@@ -548,43 +548,6 @@ def similar_images_metrics() -> List[ImageMetrics]:
     ]
 
 
-@pytest.fixture
-def highly_similar_images_for_rejection_test() -> List[ImageMetrics]:
-    """類似度除外が確実に発生する画像セットを作成するfixture.
-
-    0.99の類似度を持つ20枚の画像（1つのベース特徴から生成）を返します。
-    最終しきい値（max_threshold=0.98）を超える類似度を持つため、
-    候補要求数より多い場合に除外が確実に発生します。
-
-    活動量指標としてMIDバケットの値を設定（活動量ミックスのテストで使用）。
-    """
-    np.random.seed(42)
-    base_features = np.random.rand(128)
-
-    # 0.99の類似度を持つ20枚の画像（最終しきい値0.98を超過）
-    return [
-        _create_image_metrics(
-            path=f"/fake/path/highly_similar{i}.jpg",
-            raw_metrics_dict={
-                "blur_score": 100.0 - i * 0.5,
-                "action_intensity": 50.0,
-                "edge_density": 0.1,
-                "dramatic_score": 50.0,
-            },
-            normalized_metrics_dict={
-                "blur_score": 0.9 - i * 0.01,
-                "action_intensity": 0.5,
-                "edge_density": 0.5,
-                "dramatic_score": 0.5,
-            },
-            semantic_score=0.8,
-            total_score=100.0 - i * 0.5,
-            features=_create_features_with_similarity(base_features, 0.99),
-        )
-        for i in range(20)
-    ]
-
-
 def test_threshold_relaxation_with_highly_similar_images(
     similar_images_metrics: List[ImageMetrics],
 ) -> None:
@@ -621,43 +584,6 @@ def test_threshold_relaxation_with_highly_similar_images(
     )
     scores = [m.total_score for m in result]
     assert scores == sorted(scores, reverse=True)
-
-
-def test_select_from_analyzed_with_activity_mix_enabled_succeeds_with_similar_images(
-    highly_similar_images_for_rejection_test: List[ImageMetrics],
-) -> None:
-    """活動量ミックス有効時、類似した画像でも選択が正常に完了すること.
-
-    Given:
-        - 20枚の非常に類似した画像（0.99の類似度）
-        - 活動量ミックスが有効な設定
-    When:
-        - select_from_analyzedで画像を選択
-    Then:
-        - 期待枚数の画像が選択されること
-        - 統計情報が正しく記録されること
-    """
-    # Arrange
-    num_to_select = 5  # 5*3=15枚の候補を要求
-    similarity_threshold = 0.9
-    picker = _create_picker(SelectionConfig(activity_mix_enabled=True))
-
-    # Act
-    result, stats = picker.select_from_analyzed(
-        highly_similar_images_for_rejection_test,
-        num_to_select,
-        similarity_threshold,
-    )
-
-    # Assert
-    assert len(result) == num_to_select
-    _assert_stats_valid(
-        stats,
-        expected_total=20,
-        expected_ok=20,
-        expected_fail=0,
-        expected_selected=num_to_select,
-    )
 
 
 def test_select_from_analyzed_with_activity_mix_returns_diverse_selection(

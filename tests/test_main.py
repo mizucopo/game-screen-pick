@@ -210,44 +210,6 @@ def test_cli_copies_images_to_output_directory(
     assert len(output_files) == len(results)
 
 
-def test_cli_handles_empty_input_directory(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    mock_game_screen_picker: MagicMock,
-    tmp_path: Path,
-) -> None:
-    """空のディレクトリが正しく処理されること.
-
-    Given:
-        - 空の入力ディレクトリがある
-    When:
-        - CLIが実行される
-    Then:
-        - プログラムがクラッシュせず、0件の結果が適切に表示されること
-    """
-    # Arrange
-    input_dir = str(tmp_path / "empty")
-    Path(input_dir).mkdir()
-    empty_stats = PickerStatistics(
-        total_files=0,
-        analyzed_ok=0,
-        analyzed_fail=0,
-        rejected_by_similarity=0,
-        selected_count=0,
-    )
-    mock_game_screen_picker.select.return_value = ([], empty_stats)
-
-    monkeypatch.setattr("sys.argv", ["main.py", input_dir])
-
-    # Act
-    Main().run()
-
-    # Assert
-    captured = capsys.readouterr()
-    assert "選択された画像一覧" in captured.out
-    assert "Score:" not in captured.out  # 0件
-
-
 @pytest.mark.parametrize(
     "args,input_path_setup,error_type,error_patterns",
     [

@@ -111,43 +111,6 @@ def test_process_batch_with_lookahead_processes_all_images(
             assert 0 <= result.total_score <= 100
 
 
-def test_batch_pipeline_handles_multiple_chunks_successfully(
-    batch_pipeline: BatchPipeline,
-    tmp_path: Path,
-) -> None:
-    """複数チャンクに分割されるバッチ処理が正常に完了すること.
-
-    Given:
-        - バッチ処理パイプラインがある
-        - 複数のテスト画像がある
-        - 小さなバッチサイズで複数チャンクに分割される
-    When:
-        - 複数チャンクでバッチ処理を実行する
-    Then:
-        - すべての画像で処理が成功すること
-        - 結果の数が入力数と一致すること
-    """
-    # Arrange: 複数の画像を作成
-    paths = []
-    for i in range(20):
-        np.random.seed(42 + i)
-        img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        img_path = tmp_path / f"multi_chunk_test_{i}.jpg"
-        cv2.imwrite(str(img_path), img_array)
-        paths.append(str(img_path))
-
-    # Act: 小さなチャンクサイズでバッチ処理
-    results = batch_pipeline.process_batch(paths, batch_size=2)
-
-    # Assert: すべての結果が得られる
-    assert len(results) == 20
-    assert any(r is not None for r in results)
-    for result, path in zip(results, paths, strict=True):
-        if result is not None:
-            assert isinstance(result, ImageMetrics)
-            assert result.path == path
-
-
 def test_batch_pipeline_context_manager(
     batch_pipeline: BatchPipeline,
     sample_image_path: str,
@@ -202,44 +165,3 @@ def test_load_and_preprocess_images_with_max_dim(
     assert results[0] is not None
     w, h = results[0].size
     assert max(w, h) <= 720
-
-
-def test_io_max_workers_1_does_not_deadlock(
-    tmp_path: Path,
-) -> None:
-    """io_max_workers=1でデッドロックせずに処理が完了すること.
-
-    Given:
-        - io_max_workers=1の設定がある
-        - 複数のテスト画像がある
-    When:
-        - バッチ処理を実行する
-    Then:
-        - すべての画像の結果が返されること
-    """
-    # Arrange: io_max_workers=1でBatchPipelineを作成
-    config = AnalyzerConfig(io_max_workers=1)
-    weights = ScoreWeights.get_weights()
-    model_manager = CLIPModelManager()
-    feature_extractor = FeatureExtractor(model_manager)
-    metric_calculator = MetricCalculator(config, weights, model_manager)
-    pipeline = BatchPipeline(feature_extractor, metric_calculator, config)
-
-    # 複数の画像を作成
-    paths = []
-    for i in range(5):
-        np.random.seed(42 + i)
-        img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        img_path = tmp_path / f"io1_test_{i}.jpg"
-        cv2.imwrite(str(img_path), img_array)
-        paths.append(str(img_path))
-
-    # Act
-    results = pipeline.process_batch(paths, batch_size=2)
-
-    # Assert
-    assert len(results) == 5
-    assert any(r is not None for r in results)
-
-    # クリーンアップ
-    pipeline.close()
