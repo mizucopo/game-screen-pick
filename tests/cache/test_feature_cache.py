@@ -49,6 +49,7 @@ def test_put_and_get_roundtrip() -> None:
         - キャッシュに保存してから取得
     Then:
         - 保存したデータが正しく取得できること
+        - normalized_metricsとtotal_scoreも正しく保存・取得できること
     """
     # Arrange
     clip_features = np.random.randn(512).astype(np.float32)
@@ -65,6 +66,18 @@ def test_put_and_get_roundtrip() -> None:
         "dramatic_score": 50.0,
     }
     semantic_score = 0.75
+    normalized_metrics = {
+        "blur_score": 0.5,
+        "brightness": 0.6,
+        "contrast": 0.7,
+        "edge_density": 0.8,
+        "color_richness": 0.9,
+        "ui_density": 0.1,
+        "action_intensity": 0.2,
+        "visual_balance": 0.3,
+        "dramatic_score": 0.4,
+    }
+    total_score = 85.5
     cache_key: dict[str, str | int] = {
         "absolute_path": "/test/image.jpg",
         "file_size": 1024,
@@ -72,17 +85,19 @@ def test_put_and_get_roundtrip() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "2",
+        "metrics_version": "3",
     }
 
     with FeatureCache(None) as cache:
-        # Act: 保存
+        # Act: 保存（normalized_metricsとtotal_scoreを含む）
         cache.put(
             cache_key=cache_key,
             clip_features=clip_features,
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
             semantic_score=semantic_score,
+            normalized_metrics=normalized_metrics,
+            total_score=total_score,
         )
 
         # Act: 取得
@@ -97,6 +112,9 @@ def test_put_and_get_roundtrip() -> None:
         np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv)
         assert result.raw_metrics == raw_metrics
         assert result.semantic_score == semantic_score
+        # normalized_metricsとtotal_scoreが正しく保存・取得されること
+        assert result.normalized_metrics == normalized_metrics
+        assert result.total_score == total_score
 
 
 def test_get_returns_none_for_nonexistent_key() -> None:
@@ -117,7 +135,7 @@ def test_get_returns_none_for_nonexistent_key() -> None:
         "model_name": "test_model",
         "target_text": "test",
         "max_dim": 1280,
-        "metrics_version": "2",
+        "metrics_version": "3",
     }
 
     with FeatureCache(None) as cache:
@@ -149,16 +167,20 @@ def test_get_returns_none_when_file_size_changed() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "2",
+        "metrics_version": "3",
     }
 
     with FeatureCache(None) as cache:
+        normalized_metrics = {"blur_score": 0.5}
+        total_score = 75.0
         cache.put(
             cache_key=original_key,
             clip_features=clip_features,
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
             semantic_score=0.75,
+            normalized_metrics=normalized_metrics,
+            total_score=total_score,
         )
 
         # Act: file_sizeを変更して取得
@@ -192,26 +214,34 @@ def test_put_replaces_existing_entry() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "2",
+        "metrics_version": "3",
     }
 
     with FeatureCache(None) as cache:
         # 初期データを保存
+        normalized_metrics1 = {"blur_score": 0.5}
+        total_score1 = 75.0
         cache.put(
             cache_key=cache_key,
             clip_features=original_features,
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
             semantic_score=0.5,
+            normalized_metrics=normalized_metrics1,
+            total_score=total_score1,
         )
 
         # Act: 同じキーで更新
+        normalized_metrics2 = {"blur_score": 0.8}
+        total_score2 = 80.0
         cache.put(
             cache_key=cache_key,
             clip_features=updated_features,
             raw_metrics={"blur_score": 200.0},
             hsv_features=hsv_features,
             semantic_score=0.8,
+            normalized_metrics=normalized_metrics2,
+            total_score=total_score2,
         )
 
         # Assert: 更新後のデータが取得できる
@@ -220,6 +250,9 @@ def test_put_replaces_existing_entry() -> None:
         np.testing.assert_array_equal(result.clip_features, updated_features)
         assert result.raw_metrics["blur_score"] == 200.0
         assert result.semantic_score == 0.8
+        # normalized_metricsとtotal_scoreも更新されていること
+        assert result.normalized_metrics == normalized_metrics2
+        assert result.total_score == total_score2
 
 
 def test_persistent_storage() -> None:
@@ -243,13 +276,15 @@ def test_persistent_storage() -> None:
         "model_name": "openai/clip-vit-base-patch32",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "2",
+        "metrics_version": "3",
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
         cache_path = Path(tmpdir) / "test_cache.sqlite3"
 
         # 最初のセッションで保存
+        normalized_metrics = {"blur_score": 0.5}
+        total_score = 75.0
         with FeatureCache(cache_path) as cache1:
             cache1.put(
                 cache_key=cache_key,
@@ -257,6 +292,8 @@ def test_persistent_storage() -> None:
                 raw_metrics=raw_metrics,
                 hsv_features=hsv_features,
                 semantic_score=0.75,
+                normalized_metrics=normalized_metrics,
+                total_score=total_score,
             )
 
         # Act: 別セッションで取得
@@ -268,6 +305,11 @@ def test_persistent_storage() -> None:
         # float16で保存されているため、精度が異なることを考慮
         expected_clip = clip_features.astype(np.float16).astype(np.float32)
         np.testing.assert_array_almost_equal(result.clip_features, expected_clip)
+        assert result.raw_metrics == raw_metrics
+        assert result.semantic_score == 0.75
+        # normalized_metricsとtotal_scoreも永続化されていること
+        assert result.normalized_metrics == normalized_metrics
+        assert result.total_score == total_score
 
 
 def test_generate_cache_key() -> None:
@@ -310,6 +352,7 @@ def test_put_batch_saves_multiple_entries() -> None:
         - put_batch()で一括保存
     Then:
         - すべてのエントリが正しく取得できること
+        - normalized_metricsとtotal_scoreも正しく保存されること
         - 単一トランザクションで処理されること
     """
     # Arrange: 複数のテストエントリを作成
@@ -320,6 +363,8 @@ def test_put_batch_saves_multiple_entries() -> None:
         hsv_features = np.random.randn(64).astype(np.float32)
         raw_metrics = {"blur_score": float(i * 10)}
         semantic_score = 0.1 * i
+        normalized_metrics = {"blur_score": 0.5 * i}
+        total_score = 50.0 + i * 5
         cache_key: dict[str, str | int] = {
             "absolute_path": f"/test/batch_image_{i}.jpg",
             "file_size": 1024 + i,
@@ -327,7 +372,7 @@ def test_put_batch_saves_multiple_entries() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "2",
+            "metrics_version": "3",
         }
         entries.append(
             {
@@ -336,10 +381,20 @@ def test_put_batch_saves_multiple_entries() -> None:
                 "raw_metrics": raw_metrics,
                 "hsv_features": hsv_features,
                 "semantic_score": semantic_score,
+                "normalized_metrics": normalized_metrics,
+                "total_score": total_score,
             }
         )
         expected_results.append(
-            (cache_key, clip_features, hsv_features, raw_metrics, semantic_score)
+            (
+                cache_key,
+                clip_features,
+                hsv_features,
+                raw_metrics,
+                semantic_score,
+                normalized_metrics,
+                total_score,
+            )
         )
 
     with FeatureCache(None) as cache:
@@ -353,6 +408,8 @@ def test_put_batch_saves_multiple_entries() -> None:
             hsv_features,
             raw_metrics,
             semantic,
+            norm,
+            total,
         ) in expected_results:
             result = cache.get(cache_key)
             assert result is not None
@@ -363,6 +420,9 @@ def test_put_batch_saves_multiple_entries() -> None:
             np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv)
             assert result.raw_metrics == raw_metrics
             assert result.semantic_score == semantic
+            # normalized_metricsとtotal_scoreも正しく保存・取得されること
+            assert result.normalized_metrics == norm
+            assert result.total_score == total
 
 
 def test_composite_key_allows_different_params_for_same_path() -> None:
@@ -390,7 +450,7 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
         "model_name": "model_A",
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "2",
+        "metrics_version": "3",
     }
     cache_key2: dict[str, str | int] = {
         "absolute_path": "/test/same_path.jpg",
@@ -399,7 +459,7 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
         "model_name": "model_B",  # 異なるモデル
         "target_text": "epic game scenery",
         "max_dim": 1280,
-        "metrics_version": "2",
+        "metrics_version": "3",
     }
     cache_key3: dict[str, str | int] = {
         "absolute_path": "/test/same_path.jpg",
@@ -408,7 +468,7 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
         "model_name": "model_A",
         "target_text": "epic game scenery",
         "max_dim": 640,  # 異なるmax_dim
-        "metrics_version": "2",
+        "metrics_version": "3",
     }
 
     with FeatureCache(None) as cache:
@@ -419,6 +479,8 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
             semantic_score=0.5,
+            normalized_metrics={"blur_score": 0.5},
+            total_score=75.0,
         )
         cache.put(
             cache_key=cache_key2,
@@ -426,6 +488,8 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
             semantic_score=0.6,
+            normalized_metrics={"blur_score": 0.6},
+            total_score=80.0,
         )
         cache.put(
             cache_key=cache_key3,
@@ -433,6 +497,8 @@ def test_composite_key_allows_different_params_for_same_path() -> None:
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
             semantic_score=0.7,
+            normalized_metrics={"blur_score": 0.7},
+            total_score=85.0,
         )
 
         # Assert: 各エントリが独立して取得できる
@@ -470,6 +536,8 @@ def test_get_many_retrieves_multiple_entries() -> None:
         hsv_features = np.random.randn(64).astype(np.float32)
         raw_metrics = {"blur_score": float(i * 10)}
         semantic_score = 0.1 * i
+        normalized_metrics = {"blur_score": 0.5 * i}
+        total_score = 50.0 + i * 5
         cache_key: dict[str, str | int] = {
             "absolute_path": f"/test/get_many_{i}.jpg",
             "file_size": 1024 + i,
@@ -477,11 +545,19 @@ def test_get_many_retrieves_multiple_entries() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "2",
+            "metrics_version": "3",
         }
         cache_keys.append(cache_key)
         entries.append(
-            (cache_key, clip_features, hsv_features, raw_metrics, semantic_score)
+            (
+                cache_key,
+                clip_features,
+                hsv_features,
+                raw_metrics,
+                semantic_score,
+                normalized_metrics,
+                total_score,
+            )
         )
         expected_results[
             (
@@ -493,16 +569,33 @@ def test_get_many_retrieves_multiple_entries() -> None:
                 cache_key["max_dim"],
                 cache_key["metrics_version"],
             )
-        ] = (clip_features, hsv_features, raw_metrics, semantic_score)
+        ] = (
+            clip_features,
+            hsv_features,
+            raw_metrics,
+            semantic_score,
+            normalized_metrics,
+            total_score,
+        )
 
     with FeatureCache(None) as cache:
-        for cache_key, clip_features, hsv_features, raw_metrics, semantic in entries:
+        for (
+            cache_key,
+            clip_features,
+            hsv_features,
+            raw_metrics,
+            semantic,
+            norm,
+            total,
+        ) in entries:
             cache.put(
                 cache_key=cache_key,
                 clip_features=clip_features,
                 raw_metrics=raw_metrics,
                 hsv_features=hsv_features,
                 semantic_score=semantic,
+                normalized_metrics=norm,
+                total_score=total,
             )
 
         # 存在しないキーも含める
@@ -513,7 +606,7 @@ def test_get_many_retrieves_multiple_entries() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "2",
+            "metrics_version": "3",
         }
         cache_keys.append(nonexistent_key)
 
@@ -541,6 +634,8 @@ def test_get_many_retrieves_multiple_entries() -> None:
                 expected_hsv,
                 expected_raw,
                 expected_semantic,
+                expected_norm,
+                expected_total,
             ) = expected_results[key_id]
             # float16で保存されているため、精度が異なることを考慮
             expected_clip_f16 = expected_clip.astype(np.float16).astype(np.float32)
@@ -551,6 +646,9 @@ def test_get_many_retrieves_multiple_entries() -> None:
             np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv_f16)
             assert result.raw_metrics == expected_raw
             assert result.semantic_score == expected_semantic
+            # normalized_metricsとtotal_scoreも正しく取得できること
+            assert result.normalized_metrics == expected_norm
+            assert result.total_score == expected_total
 
         # 存在しないキーはNone
         nonexistent_key_id = (
@@ -659,6 +757,8 @@ def test_get_many_reuses_temp_table() -> None:
         hsv_features = np.random.randn(64).astype(np.float32)
         raw_metrics = {"blur_score": float(i * 10)}
         semantic_score = 0.1 * i
+        normalized_metrics = {"blur_score": 0.5 * i}
+        total_score = 50.0 + i * 5
         cache_key: dict[str, str | int] = {
             "absolute_path": f"/test/reuse_temp_{i}.jpg",
             "file_size": 1024 + i,
@@ -666,22 +766,23 @@ def test_get_many_reuses_temp_table() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "2",
+            "metrics_version": "3",
         }
         cache_keys.append(cache_key)
         entries.append(
-            (cache_key, clip_features, hsv_features, raw_metrics, semantic_score)
+            {
+                "cache_key": cache_key,
+                "clip_features": clip_features,
+                "raw_metrics": raw_metrics,
+                "hsv_features": hsv_features,
+                "semantic_score": semantic_score,
+                "normalized_metrics": normalized_metrics,
+                "total_score": total_score,
+            }
         )
 
     with FeatureCache(None) as cache:
-        for cache_key, clip_features, hsv_features, raw_metrics, semantic in entries:
-            cache.put(
-                cache_key=cache_key,
-                clip_features=clip_features,
-                raw_metrics=raw_metrics,
-                hsv_features=hsv_features,
-                semantic_score=semantic,
-            )
+        cache.put_batch(entries)
 
         # Act: 1回目の呼び出し（TEMP TABLEが作成される）
         results1 = cache.get_many(cache_keys)
@@ -716,6 +817,7 @@ def test_put_batch_uses_executemany() -> None:
         - put_batch()で一括保存
     Then:
         - すべてのエントリが正しく保存されること
+        - normalized_metricsとtotal_scoreも正しく保存されること
         - トランザクション内で処理されること
     """
     # Arrange: 複数のテストエントリを作成（100件）
@@ -726,6 +828,8 @@ def test_put_batch_uses_executemany() -> None:
         hsv_features = np.random.randn(64).astype(np.float32)
         raw_metrics = {"blur_score": float(i)}
         semantic_score = 0.01 * i
+        normalized_metrics = {"blur_score": 0.5 * i}
+        total_score = 50.0 + i * 0.5
         cache_key: dict[str, str | int] = {
             "absolute_path": f"/test/executemany_{i}.jpg",
             "file_size": 1024 + i,
@@ -733,7 +837,7 @@ def test_put_batch_uses_executemany() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "2",
+            "metrics_version": "3",
         }
         entries.append(
             {
@@ -742,10 +846,20 @@ def test_put_batch_uses_executemany() -> None:
                 "raw_metrics": raw_metrics,
                 "hsv_features": hsv_features,
                 "semantic_score": semantic_score,
+                "normalized_metrics": normalized_metrics,
+                "total_score": total_score,
             }
         )
         expected_results.append(
-            (cache_key, clip_features, hsv_features, raw_metrics, semantic_score)
+            (
+                cache_key,
+                clip_features,
+                hsv_features,
+                raw_metrics,
+                semantic_score,
+                normalized_metrics,
+                total_score,
+            )
         )
 
     with FeatureCache(None) as cache:
@@ -759,6 +873,8 @@ def test_put_batch_uses_executemany() -> None:
             hsv_features,
             raw_metrics,
             semantic,
+            norm,
+            total,
         ) in expected_results:
             result = cache.get(cache_key)
             assert result is not None
@@ -769,6 +885,9 @@ def test_put_batch_uses_executemany() -> None:
             np.testing.assert_array_almost_equal(result.hsv_features, expected_hsv)
             assert result.raw_metrics == raw_metrics
             assert result.semantic_score == semantic
+            # normalized_metricsとtotal_scoreも正しく保存・取得されること
+            assert result.normalized_metrics == norm
+            assert result.total_score == total
 
 
 def test_semantic_score_roundtrip() -> None:
@@ -793,17 +912,21 @@ def test_semantic_score_roundtrip() -> None:
         "model_name": "test_model",
         "target_text": "test target",
         "max_dim": 1280,
-        "metrics_version": "2",
+        "metrics_version": "3",
     }
 
     with FeatureCache(None) as cache:
         # Act: 保存（semantic_scoreを指定）
+        normalized_metrics = {"blur_score": 0.5}
+        total_score = 75.0
         cache.put(
             cache_key=cache_key,
             clip_features=clip_features,
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
             semantic_score=semantic_score,
+            normalized_metrics=normalized_metrics,
+            total_score=total_score,
         )
 
         # Act: 取得
@@ -812,6 +935,9 @@ def test_semantic_score_roundtrip() -> None:
         # Assert
         assert result is not None
         assert result.semantic_score == semantic_score
+        # normalized_metricsとtotal_scoreも正しく保存・取得されること
+        assert result.normalized_metrics == normalized_metrics
+        assert result.total_score == total_score
 
 
 def test_table_recreated_when_schema_differs() -> None:
@@ -858,6 +984,8 @@ def test_table_recreated_when_schema_differs() -> None:
             assert "clip_features" in columns
             assert "hsv_features" in columns
             assert "semantic_score" in columns
+            assert "normalized_metrics" in columns
+            assert "total_score" in columns
             assert "model_name" in columns
             assert "target_text" in columns
 
@@ -883,6 +1011,7 @@ def test_correct_schema_preserved() -> None:
     Then:
         - テーブルが再作成されないこと
         - 既存データが保持されること
+        - normalized_metricsとtotal_scoreも保持されること
     """
     import tempfile
 
@@ -894,6 +1023,8 @@ def test_correct_schema_preserved() -> None:
         hsv_features = np.ones(64, dtype=np.float32) * 0.3
         raw_metrics = {"blur_score": 100.0}
         semantic = 0.75
+        normalized_metrics = {"blur_score": 0.5}
+        total_score = 85.5
         cache_key: dict[str, str | int] = {
             "absolute_path": "/test/preserved.jpg",
             "file_size": 2048,
@@ -901,7 +1032,7 @@ def test_correct_schema_preserved() -> None:
             "model_name": "test_model",
             "target_text": "test target",
             "max_dim": 1280,
-            "metrics_version": "2",
+            "metrics_version": "3",
         }
 
         with FeatureCache(cache_path) as cache1:
@@ -911,6 +1042,8 @@ def test_correct_schema_preserved() -> None:
                 raw_metrics=raw_metrics,
                 hsv_features=hsv_features,
                 semantic_score=semantic,
+                normalized_metrics=normalized_metrics,
+                total_score=total_score,
             )
 
         # Act: 同じパスでFeatureCacheを再度初期化
@@ -925,6 +1058,9 @@ def test_correct_schema_preserved() -> None:
             np.testing.assert_array_equal(result.hsv_features, expected_hsv)
             assert result.raw_metrics == raw_metrics
             assert result.semantic_score == semantic
+            # normalized_metricsとtotal_scoreも保持されること
+            assert result.normalized_metrics == normalized_metrics
+            assert result.total_score == total_score
 
 
 def test_float16_features_roundtrip() -> None:
@@ -937,6 +1073,7 @@ def test_float16_features_roundtrip() -> None:
     Then:
         - float16の精度で丸められた特徴量が読み出されること
         - 読み出し後はfloat32に変換されていること
+        - normalized_metricsとtotal_scoreも正しく保存・取得できること
     """
     # Arrange: float32で特徴量を作成
     clip_features = np.array(
@@ -945,6 +1082,8 @@ def test_float16_features_roundtrip() -> None:
     hsv_features = np.array([0.5, 0.25, 0.75, 0.125], dtype=np.float32)
     raw_metrics = {"blur_score": 100.0}
     semantic_score = 0.75
+    normalized_metrics = {"blur_score": 0.5}
+    total_score = 85.5
     cache_key: dict[str, str | int] = {
         "absolute_path": "/test/float16_roundtrip.jpg",
         "file_size": 2048,
@@ -952,7 +1091,7 @@ def test_float16_features_roundtrip() -> None:
         "model_name": "test_model",
         "target_text": "test target",
         "max_dim": 1280,
-        "metrics_version": "2",
+        "metrics_version": "3",
     }
 
     with FeatureCache(None) as cache:
@@ -963,6 +1102,8 @@ def test_float16_features_roundtrip() -> None:
             raw_metrics=raw_metrics,
             hsv_features=hsv_features,
             semantic_score=semantic_score,
+            normalized_metrics=normalized_metrics,
+            total_score=total_score,
         )
 
         # Act: 取得（float16から読み出してfloat32に変換される）
@@ -985,3 +1126,6 @@ def test_float16_features_roundtrip() -> None:
         )
         assert result.raw_metrics == raw_metrics
         assert result.semantic_score == semantic_score
+        # normalized_metricsとtotal_scoreも正しく保存・取得されること
+        assert result.normalized_metrics == normalized_metrics
+        assert result.total_score == total_score

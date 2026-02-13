@@ -122,8 +122,6 @@ class BatchPipeline:
             metadata_list = [PathMetadata(path=path) for path in paths]
             return [None] * len(paths), metadata_list
 
-        from .metric_normalizer import MetricNormalizer
-
         # 第1パス: 全パスのキャッシュキーとメタ情報を生成
         cache_keys_with_meta = []
         all_metadata: List[PathMetadata] = []
@@ -131,7 +129,7 @@ class BatchPipeline:
 
         for i, path in enumerate(paths):
             try:
-                absolute_path = str(Path(path).resolve())
+                absolute_path = os.path.abspath(path)
                 file_stat = Path(path).stat()
                 cache_key = self.cache.generate_cache_key(
                     absolute_path=absolute_path,
@@ -199,12 +197,9 @@ class BatchPipeline:
             combined_features = np.concatenate(
                 [entry_info.entry.hsv_features, entry_info.entry.clip_features]
             )
-            # 正規化メトリクスを計算（生メトリクスから）
-            norm = MetricNormalizer.normalize_all(entry_info.entry.raw_metrics)
-            # 総合スコアを計算
-            total = self.metric_calculator.calculate_total_score(
-                entry_info.entry.raw_metrics, norm, semantic
-            )
+            # キャッシュに保存されている値を使用
+            norm = entry_info.entry.normalized_metrics
+            total = entry_info.entry.total_score
             cached_results[idx] = ImageMetrics(
                 entry_info.path,
                 entry_info.entry.raw_metrics,
@@ -491,7 +486,7 @@ class BatchPipeline:
                         file_stat = metadata.file_stat or Path(path).stat()
                     else:
                         # 従来通り取得（フォールバック）
-                        absolute_path = str(Path(path).resolve())
+                        absolute_path = os.path.abspath(path)
                         file_stat = Path(path).stat()
                         cache_key = self.cache.generate_cache_key(
                             absolute_path=absolute_path,
@@ -510,6 +505,8 @@ class BatchPipeline:
                         "raw_metrics": raw,
                         "hsv_features": hsv_features,
                         "semantic_score": semantic,
+                        "normalized_metrics": norm,
+                        "total_score": total,
                     }
                 except Exception as e:
                     # キャッシュエントリ構築に失敗しても処理は継続
