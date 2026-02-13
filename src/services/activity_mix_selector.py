@@ -214,11 +214,8 @@ class ActivityMixSelector:
         )
         selected: list[ImageMetrics] = []
         selected_indices: set[int] = set()
-        rejected_indices: set[int] = set()  # 各ステップでのユニークな拒否数を追跡
 
         for threshold in threshold_steps:
-            # ステップごとに拒否インデックスをリセット（緩和された閾値で再評価するため）
-            step_rejected_indices: set[int] = set()
             for idx, candidate in enumerate(candidates):
                 if idx in selected_indices:
                     continue
@@ -235,8 +232,6 @@ class ActivityMixSelector:
                     sims = selected_features_matrix[:selected_count] @ candidate_feat
                     if np.any(sims > threshold):
                         is_similar = True
-                        # 類似している場合はこのステップの拒否リストに追加してスキップ
-                        step_rejected_indices.add(idx)
                         continue
 
                 if not is_similar:
@@ -245,13 +240,12 @@ class ActivityMixSelector:
                     if len(selected) <= max_pool_size:
                         selected_features_matrix[len(selected) - 1] = candidate_feat
 
-            # ステップ終了時に拒否数を累積（統計用）
-            rejected_indices.update(step_rejected_indices)
-
             if len(selected) >= max_pool_size:
                 break
 
-        return selected, len(rejected_indices)
+        # 類似度で除外された数は、最終的に未選択の数
+        rejected_count = len(candidates) - len(selected_indices)
+        return selected, rejected_count
 
     def _bucket_by_activity(self, images: list[ImageMetrics]) -> list[BucketedImage]:
         """画像を活動量に基づいてバケット分けする.

@@ -85,19 +85,18 @@ class AnalyzerConfig:
         Returns:
             AnalyzerConfigインスタンス（__post_init__バリデーション適用済み）
         """
-        # デフォルト値を取得
-        defaults: dict[str, int] = {
-            "result_max_workers": 32,
-            "max_dim": 720,
-            "max_memory_mb": 512,
-        }
-        # CLI引数で上書き（Noneでない値のみ）
-        for key, value in kwargs.items():
-            if value is not None and key in defaults:
-                defaults[key] = value
-        # 検証を通すため新しいインスタンスを直接作成
-        return cls(
-            result_max_workers=defaults["result_max_workers"],
-            max_dim=defaults["max_dim"],
-            max_memory_mb=defaults["max_memory_mb"],
-        )
+        # CLI引数で上書きするパラメータを抽出
+        result_max_workers: int | None = kwargs.get("result_max_workers")
+        max_dim: int | None = kwargs.get("max_dim")
+        max_memory_mb: int | None = kwargs.get("max_memory_mb")
+        # 上書きするパラメータのみを含む辞書を作成
+        args: dict[str, int | None] = {}
+        if result_max_workers is not None:
+            args["result_max_workers"] = result_max_workers
+        if max_dim is not None:
+            args["max_dim"] = max_dim
+        if max_memory_mb is not None:
+            args["max_memory_mb"] = max_memory_mb
+        # デフォルト値は dataclass 定義を使用し、上書きするパラメータのみ指定
+        # mypy: 値フィルタリング済みだが型推論が追いつかないため ignore
+        return cls(**args)  # type: ignore[arg-type]
