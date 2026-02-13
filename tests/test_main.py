@@ -19,8 +19,8 @@ from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.main import Main
 from src.models.image_metrics import ImageMetrics
 from src.models.normalized_metrics import NormalizedMetrics
-from src.models.raw_metrics import RawMetrics
 from src.models.picker_statistics import PickerStatistics
+from src.models.raw_metrics import RawMetrics
 from src.services.game_screen_picker import GameScreenPicker
 
 

@@ -11,7 +11,6 @@ from ..analyzers.metric_normalizer import MetricNormalizer
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.normalized_metrics import NormalizedMetrics
 from ..models.raw_metrics import RawMetrics
-
 from .clip_model_manager import CLIPModelManager
 
 logger = logging.getLogger(__name__)

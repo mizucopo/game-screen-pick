@@ -1,7 +1,7 @@
 """共通例外定義."""
 
-from PIL import UnidentifiedImageError
 import cv2
+from PIL import UnidentifiedImageError
 
 
 class ExceptionHandler:

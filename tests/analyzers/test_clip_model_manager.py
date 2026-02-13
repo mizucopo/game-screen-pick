@@ -9,7 +9,6 @@
 
 import pytest
 
-
 from src.analyzers.clip_model_manager import CLIPModelManager
 
 

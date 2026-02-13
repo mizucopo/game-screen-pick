@@ -375,9 +375,14 @@ class BatchPipeline:
 
         # 並列処理するタスクを準備
         tasks: list[TaskTuple] = []
-        for i, (path, pil_img, clip_features, semantic) in enumerate(
-            zip(chunk_paths, pil_images, clip_features_list, semantic_scores)
-        ):
+        zipped = zip(
+            chunk_paths,
+            pil_images,
+            clip_features_list,
+            semantic_scores,
+            strict=True,
+        )
+        for i, (path, pil_img, clip_features, semantic) in enumerate(zipped):
             if pil_img is None or clip_features is None or semantic is None:
                 tasks.append((i, None))  # Noneは処理スキップを示す
             else:

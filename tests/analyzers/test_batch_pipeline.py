@@ -66,7 +66,7 @@ def test_process_batch_handles_multiple_images(
     # Assert
     assert len(results) == 3
     assert any(r is not None for r in results)
-    for result, path in zip(results, paths):
+    for result, path in zip(results, paths, strict=True):
         if result is not None:
             assert isinstance(result, ImageMetrics)
             assert result.path == path
@@ -192,7 +192,7 @@ def test_process_batch_with_lookahead_produces_same_results(
     # Assert
     assert len(results) == 5
     assert any(r is not None for r in results)
-    for result, path in zip(results, paths):
+    for result, path in zip(results, paths, strict=True):
         if result is not None:
             assert isinstance(result, ImageMetrics)
             assert result.path == path

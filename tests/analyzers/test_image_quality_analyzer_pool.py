@@ -64,7 +64,7 @@ def test_pool_analyze_batch_processes_multiple_images(
 
         # Assert
         assert len(results) == 3
-        for result, path in zip(results, multiple_image_paths):
+        for result, path in zip(results, multiple_image_paths, strict=True):
             assert result is not None
             assert isinstance(result, ImageMetrics)
             assert result.path == path

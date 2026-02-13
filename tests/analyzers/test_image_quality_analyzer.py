@@ -10,7 +10,6 @@
 
 from pathlib import Path
 
-
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
 
