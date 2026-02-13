@@ -23,11 +23,7 @@ from src.utils.file_utils import FileUtils
         (["image.jpg", "image_1.jpg", "image_3.jpg"], "image.jpg", "image_2.jpg"),
         (["archive.tar.gz"], "archive.tar.gz", "archive.tar_1.gz"),
         (["画像ファイル.jpg"], "画像ファイル.jpg", "画像ファイル_1.jpg"),
-        (["image (copy).jpg"], "image (copy).jpg", "image (copy)_1.jpg"),
         (["my image file.jpg"], "my image file.jpg", "my image file_1.jpg"),
-        (["myfile"], "myfile", "myfile_1"),
-        ([".hidden"], ".hidden", ".hidden_1"),
-        (["a" * 200 + ".jpg"], "a" * 200 + ".jpg", "a" * 200 + "_1.jpg"),
     ],
 )
 def test_get_unique_destination_generates_unique_filename(

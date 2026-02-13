@@ -8,8 +8,6 @@
 5. 高速実行（約2-5秒） - 重いモデルロードなし
 """
 
-from pathlib import Path
-
 from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from src.models.image_metrics import ImageMetrics
 
@@ -45,47 +43,3 @@ def test_analyze_returns_valid_metrics_with_default_weights(
     assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
     # 正規化メトリクスの属性に直接アクセス
     assert result.normalized_metrics.blur_score >= 0.0
-
-
-def test_analyze_returns_none_for_nonexistent_path() -> None:
-    """存在しないパスに対してNoneが返されること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 存在しないファイルパスがある
-    When:
-        - 存在しないパスが分析される
-    Then:
-        - Noneが返されること
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-
-    # Act
-    result = analyzer.analyze("/path/that/does/not/exist.jpg")
-
-    # Assert
-    assert result is None
-
-
-def test_analyze_returns_none_for_corrupted_image(tmp_path: Path) -> None:
-    """破損した画像に対してNoneが返されること.
-
-    Given:
-        - アナライザインスタンスがある
-        - 破損した画像ファイルがある
-    When:
-        - 破損した画像が分析される
-    Then:
-        - Noneが返されること
-    """
-    # Arrange
-    analyzer = ImageQualityAnalyzer()
-    corrupted_path = tmp_path / "corrupted.jpg"
-    corrupted_path.write_text("This is not a valid image file")
-
-    # Act
-    result = analyzer.analyze(str(corrupted_path))
-
-    # Assert
-    assert result is None

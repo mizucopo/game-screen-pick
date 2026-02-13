@@ -34,12 +34,31 @@ def _create_picker(config: SelectionConfig | None = None) -> GameScreenPicker:
     return GameScreenPicker(analyzer=analyzer, config=config)
 
 
+def _create_sample_image_metrics() -> List[ImageMetrics]:
+    """テスト用のサンプルImageMetricsを作成する."""
+    np.random.seed(42)
+    metrics = []
+    for i in range(5):
+        np.random.seed(i)
+        features = np.random.rand(128)
+        metrics.append(
+            create_image_metrics(
+                path=f"/fake/path/image{i}.jpg",
+                raw_metrics_dict={"blur_score": 100.0 - i * 10},
+                normalized_metrics_dict={"blur_score": 1.0 - i * 0.1},
+                semantic_score=0.8,
+                total_score=100.0 - i * 10,
+                features=features,
+            )
+        )
+    return metrics
+
+
 @pytest.mark.parametrize(
     "activity_mix_enabled",
     [False, True],
 )
 def test_select_from_analyzed_returns_requested_count_and_valid_stats(
-    sample_image_metrics: List[ImageMetrics],
     activity_mix_enabled: bool,
 ) -> None:
     """分析済み画像から選択が正しく行われ、統計が正しく記録されること.
@@ -54,6 +73,7 @@ def test_select_from_analyzed_returns_requested_count_and_valid_stats(
         - 返された画像がスコア降順であること
     """
     # Arrange
+    sample_image_metrics = _create_sample_image_metrics()
     num_to_select = 3
     similarity_threshold = 0.9
     # activity_mix有効時は(0.3, 0.4, 0.3)、無効時は均等配分
@@ -81,30 +101,25 @@ def test_select_from_analyzed_returns_requested_count_and_valid_stats(
     assert scores == sorted(scores, reverse=True)
 
 
-@pytest.fixture
-def mock_analyzer() -> MagicMock:
-    """モックImageQualityAnalyzerを作成する.
+def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images() -> None:
+    """完全な統合：ロード、分析、多様な画像の選択が行われること.
 
-    このfixtureはテスト中に重いMLモデルのロードを回避し、
-    代わりに選択ロジックに焦点を当てます。
+    Given:
+        - 5つの画像ファイルを持つフォルダ
+        - モックアナライザは一貫した結果を返す
+    When:
+        - 類似度閾値で3つの画像を選択
+    Then:
+        - フォルダから画像がロード・分析され、選択結果が返されること
     """
-    analyzer = MagicMock(spec=ImageQualityAnalyzer)
-    return analyzer
-
-
-@pytest.fixture
-def mock_analyzer_with_batch(mock_analyzer: MagicMock) -> MagicMock:
-    """analyze_batchメソッドを持つモックImageQualityAnalyzer.
-
-    標準的なモック分析関数を提供します。
-    """
+    # Arrange
+    mock_analyzer = MagicMock(spec=ImageQualityAnalyzer)
 
     def mock_analyze_batch(
         paths: List[str],
-        batch_size: int = 32,  # noqa: ARG001 (API互換性のため維持)
-        show_progress: bool = False,  # noqa: ARG001 (API互換性のため維持)
+        batch_size: int = 32,  # noqa: ARG001
+        show_progress: bool = False,  # noqa: ARG001
     ) -> List[ImageMetrics | None]:
-        """テスト用のモック分析関数."""
         results: List[ImageMetrics | None] = []
         for path in paths:
             try:
@@ -125,55 +140,12 @@ def mock_analyzer_with_batch(mock_analyzer: MagicMock) -> MagicMock:
         return results
 
     mock_analyzer.analyze_batch = mock_analyze_batch
-    return mock_analyzer
 
-
-@pytest.fixture
-def sample_image_metrics() -> List[ImageMetrics]:
-    """テスト用のサンプルImageMetricsを作成する.
-
-    5つの分析済み画像を返します：
-    - それぞれ異なるスコアと特徴を持つ
-    - 選択ロジックのテストに十分なバリエーションを提供する
-    """
-    np.random.seed(42)
-    metrics = []
-    for i in range(5):
-        # 各画像に異なる特徴ベクトルを持たせる
-        np.random.seed(i)
-        features = np.random.rand(128)
-        metrics.append(
-            create_image_metrics(
-                path=f"/fake/path/image{i}.jpg",
-                raw_metrics_dict={"blur_score": 100.0 - i * 10},
-                normalized_metrics_dict={"blur_score": 1.0 - i * 0.1},
-                semantic_score=0.8,
-                total_score=100.0 - i * 10,
-                features=features,
-            )
-        )
-    return metrics
-
-
-def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
-    mock_analyzer_with_batch: MagicMock,
-) -> None:
-    """完全な統合：ロード、分析、多様な画像の選択が行われること.
-
-    Given:
-        - 5つの画像ファイルを持つフォルダ
-        - モックアナライザは一貫した結果を返す
-    When:
-        - 類似度閾値で3つの画像を選択
-    Then:
-        - フォルダから画像がロード・分析され、選択結果が返されること
-    """
-    # Arrange
     with tempfile.TemporaryDirectory() as temp_dir:
         for i in range(5):
             Path(temp_dir, f"image{i}.jpg").touch()
 
-        picker = GameScreenPicker(mock_analyzer_with_batch)
+        picker = GameScreenPicker(mock_analyzer)
 
         # Act
         result, stats = picker.select(
@@ -190,14 +162,11 @@ def test_selecting_from_folder_loads_analyzes_and_returns_diverse_images(
         assert stats.analyzed_ok == 5
         assert stats.analyzed_fail == 0
         assert stats.selected_count == len(result)
-        # スコア降順であることを確認
         scores = [m.total_score for m in result]
         assert scores == sorted(scores, reverse=True)
 
 
-def test_selecting_gracefully_handles_files_that_fail_to_analyze(
-    mock_analyzer: MagicMock,
-) -> None:
+def test_selecting_gracefully_handles_files_that_fail_to_analyze() -> None:
     """分析に失敗したファイルが適切に処理されること.
 
     Given:
@@ -209,35 +178,38 @@ def test_selecting_gracefully_handles_files_that_fail_to_analyze(
         - 処理が継続され、有効な画像のみが返されること
     """
     # Arrange
+    mock_analyzer = MagicMock(spec=ImageQualityAnalyzer)
+
+    def mock_analyze_batch(
+        paths: List[str],
+        batch_size: int = 32,  # noqa: ARG001
+        show_progress: bool = False,  # noqa: ARG001
+    ) -> List[ImageMetrics | None]:
+        results: List[ImageMetrics | None] = []
+        for path in paths:
+            idx = int(path.split("image")[-1].split(".")[0])
+            if idx % 2 == 0:
+                results.append(None)
+            else:
+                np.random.seed(idx)
+                results.append(
+                    create_image_metrics(
+                        path=path,
+                        raw_metrics_dict={"blur_score": 100 - idx * 10},
+                        normalized_metrics_dict={"blur_score": 1.0 - idx * 0.1},
+                        semantic_score=0.8,
+                        total_score=100 - idx * 10,
+                        features=np.random.rand(128),
+                    )
+                )
+        return results
+
+    mock_analyzer.analyze_batch = mock_analyze_batch
+
     with tempfile.TemporaryDirectory() as temp_dir:
         for i in range(5):
             Path(temp_dir, f"image{i}.jpg").touch()
 
-        def mock_analyze_batch(
-            paths: List[str],
-            batch_size: int = 32,  # noqa: ARG001 (API互換性のため維持)
-            show_progress: bool = False,  # noqa: ARG001 (API互換性のため維持)
-        ) -> List[ImageMetrics | None]:
-            results: List[ImageMetrics | None] = []
-            for path in paths:
-                idx = int(path.split("image")[-1].split(".")[0])
-                if idx % 2 == 0:
-                    results.append(None)
-                else:
-                    np.random.seed(idx)
-                    results.append(
-                        create_image_metrics(
-                            path=path,
-                            raw_metrics_dict={"blur_score": 100 - idx * 10},
-                            normalized_metrics_dict={"blur_score": 1.0 - idx * 0.1},
-                            semantic_score=0.8,
-                            total_score=100 - idx * 10,
-                            features=np.random.rand(128),
-                        )
-                    )
-            return results
-
-        mock_analyzer.analyze_batch = mock_analyze_batch
         picker = GameScreenPicker(mock_analyzer)
 
         # Act
