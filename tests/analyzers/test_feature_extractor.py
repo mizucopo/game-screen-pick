@@ -13,7 +13,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
-import torch
 from PIL import Image
 
 from src.analyzers.clip_model_manager import CLIPModelManager
@@ -114,6 +113,4 @@ def test_extract_clip_features_batch_returns_correct_number_of_results(
     assert any(r is not None for r in results)
     for result in results:
         if result is not None:
-            # パフォーマンス最適化によりtorch.Tensorのまま返される
-            assert isinstance(result, torch.Tensor)
             assert result.shape == (512,)

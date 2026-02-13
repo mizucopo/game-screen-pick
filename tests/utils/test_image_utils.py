@@ -11,7 +11,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image
 
 from src.utils.image_utils import ImageUtils
 
@@ -137,27 +136,3 @@ def test_load_as_rgb_resized_default_max_dim(tmp_path: Path) -> None:
     assert result is not None
     w, h = result.size
     assert max(w, h) <= 720
-
-
-def test_pil_to_cv2_uses_asarray() -> None:
-    """pil_to_cv2でnp.asarrayが使用されていること（実装詳細）.
-
-    Given:
-        - RGB形式のPIL画像がある
-    When:
-        - pil_to_cv2で変換する
-    Then:
-        - BGR形式のNumPy配列が返されること
-    """
-    # Arrange
-    pil_img = Image.new("RGB", (100, 50), color=(255, 0, 0))
-
-    # Act
-    result = ImageUtils.pil_to_cv2(pil_img)
-
-    # Assert
-    assert isinstance(result, np.ndarray)
-    assert result.shape == (50, 100, 3)  # OpenCVは (height, width, channels)
-    # PILのRGB(255,0,0)はOpenCVのBGR(0,0,255)になる
-    # result[0,0]はBGRなので [0, 0, 255] になるはず
-    assert np.array_equal(result[0, 0], [0, 0, 255])

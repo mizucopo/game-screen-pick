@@ -74,8 +74,8 @@ def test_process_batch_handles_multiple_images(
             assert -1.0 <= result.semantic_score <= 1.0 + 1e-5
 
 
-def test_compute_chunk_boundaries_uses_fast_estimation(tmp_path: Path) -> None:
-    """チャンク境界計算で高速なメモリ推定が使用されていること.
+def test_compute_chunk_boundaries_creates_valid_chunks(tmp_path: Path) -> None:
+    """チャンク境界が正しく計算されること.
 
     Given:
         - バッチ処理パイプラインがある
@@ -83,14 +83,14 @@ def test_compute_chunk_boundaries_uses_fast_estimation(tmp_path: Path) -> None:
     When:
         - チャンク境界を計算
     Then:
-        - os.statベースの推定が使用されていること
-        - PIL Image.openが使用されていないこと（高速化）
+        - 有効なチャンク境界が生成されること
+        - 最初のチャンクが0から始まること
+        - 最後のチャンクが末尾まで続くこと
     """
     # Arrange: 複数のテスト画像を作成
     paths = []
     for i in range(5):
         np.random.seed(42 + i)
-        # 各画像で異なるサイズを作成
         size = 100 + i * 50
         img_array = np.random.randint(0, 255, (size, size, 3), dtype=np.uint8)
         img_path = tmp_path / f"chunk_test_{i}.jpg"
@@ -98,7 +98,6 @@ def test_compute_chunk_boundaries_uses_fast_estimation(tmp_path: Path) -> None:
         paths.append(str(img_path))
 
     # Act: チャンク境界を計算
-    # 小さなメモリ予算で複数チャンクに分割されるように設定
     max_memory_mb = 1
     min_chunk_size = 2
     boundaries = BatchPipeline._compute_chunk_boundaries(
@@ -107,75 +106,70 @@ def test_compute_chunk_boundaries_uses_fast_estimation(tmp_path: Path) -> None:
 
     # Assert: チャンク境界が計算されている
     assert len(boundaries) > 0
-    # 各チャンクが有効な範囲を持つ
     for start, end in boundaries:
         assert 0 <= start < end <= len(paths)
-
-    # 最初のチャンクはインデックス0から始まる
     assert boundaries[0][0] == 0
-    # 最後のチャンクはリストの末尾まで
     assert boundaries[-1][1] == len(paths)
 
 
 def test_batch_convert_clip_features_to_numpy() -> None:
-    """バッチCPU転送が正しく動作すること.
+    """特徴ベクトルのバッチ変換でNone要素が保持されること.
 
     Given:
-        - GPU上のCLIP特徴リストがある
+        - テンソルとNoneが混在するリストがある
+        - 有効なインデックスリストがある
     When:
-        - バッチCPU転送を実行する
+        - バッチ変換を実行する
     Then:
-        - 正しくNumPy配列に変換されること
-        - Noneの要素が保持されること
+        - 結果の数が入力と一致すること
+        - None要素が保持されること
+        - 有効なテンソルがNumPy配列に変換されること
     """
     import torch
 
     # Arrange: 有効なテンソルとNoneを含むリスト
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     tensors = [
-        torch.randn(512).cuda() if torch.cuda.is_available() else torch.randn(512),
+        torch.randn(512).to(device),
         None,
-        torch.randn(512).cuda() if torch.cuda.is_available() else torch.randn(512),
+        torch.randn(512).to(device),
     ]
     valid_indices = [0, 2]
     batch_features = torch.stack(
         [
-            torch.randn(512).cuda() if torch.cuda.is_available() else torch.randn(512),
-            torch.randn(512).cuda() if torch.cuda.is_available() else torch.randn(512),
+            torch.randn(512).to(device),
+            torch.randn(512).to(device),
         ]
     )
 
-    # Act: バッチCPU転送を実行
+    # Act
     results = BatchPipeline._convert_batch_features_to_numpy(
         tensors, batch_features, valid_indices
     )
 
-    # Assert: 結果の数が一致する
+    # Assert
     assert len(results) == 3
-
-    # Noneの要素が保持される
     assert results[1] is None
-
-    # 有効なテンソルがNumPy配列に変換される
     assert isinstance(results[0], np.ndarray)
     assert isinstance(results[2], np.ndarray)
     assert results[0].shape == (512,)
     assert results[2].shape == (512,)
 
 
-def test_process_batch_with_lookahead_produces_same_results(
+def test_process_batch_with_lookahead_processes_all_images(
     batch_pipeline: BatchPipeline,
     tmp_path: Path,
 ) -> None:
-    """先読みあり/なしで結果が一致すること.
+    """先読み付きバッチ処理ですべての画像が処理されること.
 
     Given:
         - バッチ処理パイプラインがある
         - 複数のテスト画像がある
     When:
-        - 複数の画像をバッチ処理で分析する
+        - 先読み付きで複数の画像をバッチ処理する
     Then:
         - すべての画像に対して有効な結果が返されること
-        - 先読み処理が正しく動作すること
+        - 結果のパスが正しいこと
     """
     # Arrange: 複数の画像を作成
     paths = []
@@ -186,7 +180,7 @@ def test_process_batch_with_lookahead_produces_same_results(
         cv2.imwrite(str(img_path), img_array)
         paths.append(str(img_path))
 
-    # Act: 先読み付きでバッチ処理
+    # Act
     results = batch_pipeline.process_batch(paths, batch_size=2)
 
     # Assert
@@ -296,7 +290,7 @@ def test_load_and_preprocess_images_with_max_dim(
 def test_io_max_workers_1_does_not_deadlock(
     tmp_path: Path,
 ) -> None:
-    """io_max_workers=1でデッドロックが発生しないこと.
+    """io_max_workers=1でデッドロックせずに処理が完了すること.
 
     Given:
         - io_max_workers=1の設定がある
@@ -304,7 +298,6 @@ def test_io_max_workers_1_does_not_deadlock(
     When:
         - バッチ処理を実行する
     Then:
-        - デッドロックせずに処理が完了すること
         - すべての画像の結果が返されること
     """
     # Arrange: io_max_workers=1でBatchPipelineを作成
@@ -324,13 +317,11 @@ def test_io_max_workers_1_does_not_deadlock(
         cv2.imwrite(str(img_path), img_array)
         paths.append(str(img_path))
 
-    # Act: io_max_workers=1でバッチ処理
-    # （デッドロックがあればtimeoutするが、pytestのデフォルトtimeoutで捕捉）
+    # Act
     results = pipeline.process_batch(paths, batch_size=2)
 
-    # Assert: すべての結果が返されている
+    # Assert
     assert len(results) == 5
-    # 少なくとも1つは成功しているはず
     assert any(r is not None for r in results)
 
     # クリーンアップ
