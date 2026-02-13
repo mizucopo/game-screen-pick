@@ -104,7 +104,7 @@ class MetricCalculator:
 
         return RawMetrics(
             blur_score=blur_score,
-            bnrightness=float(gray_mean),
+            brightness=float(gray_mean),
             contrast=contrast,
             edge_density=edge_density,
             color_richness=color_richness,
@@ -244,7 +244,7 @@ class MetricCalculator:
         )
         penalty = (
             self.config.brightness_penalty_value
-            if raw.bnrightness < self.config.brightness_penalty_threshold
+            if raw.brightness < self.config.brightness_penalty_threshold
             else 0.0
         )
         return max(

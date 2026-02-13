@@ -19,7 +19,6 @@ class AnalyzerConfig:
         result_max_workers: 結果構築（raw metric + feature結合）の並列処理ワーカー数
             Noneでデフォルト値（min(8, max(1, os.cpu_count() - 1))）を使用
         io_max_workers: 画像読み込みI/Oの並列処理ワーカー数。Noneで自動設定
-        preload_workers: プリロード用の並列処理ワーカー数
     """
 
     max_dim: int = 720
@@ -31,7 +30,6 @@ class AnalyzerConfig:
     score_multiplier: float = 100.0
     result_max_workers: int | None = None
     io_max_workers: int | None = None
-    preload_workers: int = 2
 
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""
@@ -66,6 +64,15 @@ class AnalyzerConfig:
                 f"score_multiplierは正の値である必要があります: {self.score_multiplier}"
             )
             raise ValueError(msg)
+        if self.result_max_workers is not None and self.result_max_workers < 0:
+            msg = (
+                f"result_max_workersは非負の値である必要があります: "
+                f"{self.result_max_workers}"
+            )
+            raise ValueError(msg)
+        if self.io_max_workers is not None and self.io_max_workers < 0:
+            msg = f"io_max_workersは非負の値である必要があります: {self.io_max_workers}"
+            raise ValueError(msg)
 
     @classmethod
     def from_cli_args(cls, **kwargs: int | None) -> "AnalyzerConfig":
@@ -82,9 +89,15 @@ class AnalyzerConfig:
         config = cls()
         # CLI引数で上書き（Noneでない値のみ）
         if kwargs.get("result_max_workers") is not None:
-            config.result_max_workers = kwargs["result_max_workers"]
+            val = kwargs["result_max_workers"]
+            if isinstance(val, int):
+                config.result_max_workers = val
         if kwargs.get("max_dim") is not None:
-            config.max_dim = kwargs["max_dim"]  # type: ignore[assignment]
+            val = kwargs["max_dim"]
+            if isinstance(val, int):
+                config.max_dim = val
         if kwargs.get("max_memory_mb") is not None:
-            config.max_memory_mb = kwargs["max_memory_mb"]  # type: ignore[assignment]
+            val = kwargs["max_memory_mb"]
+            if isinstance(val, int):
+                config.max_memory_mb = val
         return config

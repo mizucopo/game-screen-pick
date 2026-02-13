@@ -291,3 +291,47 @@ def test_load_and_preprocess_images_with_max_dim(
     assert results[0] is not None
     w, h = results[0].size
     assert max(w, h) <= 720
+
+
+def test_io_max_workers_1_does_not_deadlock(
+    tmp_path: Path,
+) -> None:
+    """io_max_workers=1でデッドロックが発生しないこと.
+
+    Given:
+        - io_max_workers=1の設定がある
+        - 複数のテスト画像がある
+    When:
+        - バッチ処理を実行する
+    Then:
+        - デッドロックせずに処理が完了すること
+        - すべての画像の結果が返されること
+    """
+    # Arrange: io_max_workers=1でBatchPipelineを作成
+    config = AnalyzerConfig(io_max_workers=1)
+    weights = ScoreWeights.get_weights()
+    model_manager = CLIPModelManager()
+    feature_extractor = FeatureExtractor(model_manager)
+    metric_calculator = MetricCalculator(config, weights, model_manager)
+    pipeline = BatchPipeline(feature_extractor, metric_calculator, config)
+
+    # 複数の画像を作成
+    paths = []
+    for i in range(5):
+        np.random.seed(42 + i)
+        img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        img_path = tmp_path / f"io1_test_{i}.jpg"
+        cv2.imwrite(str(img_path), img_array)
+        paths.append(str(img_path))
+
+    # Act: io_max_workers=1でバッチ処理
+    # （デッドロックがあればtimeoutするが、pytestのデフォルトtimeoutで捕捉）
+    results = pipeline.process_batch(paths, batch_size=2)
+
+    # Assert: すべての結果が返されている
+    assert len(results) == 5
+    # 少なくとも1つは成功しているはず
+    assert any(r is not None for r in results)
+
+    # クリーンアップ
+    pipeline.close()

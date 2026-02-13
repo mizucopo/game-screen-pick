@@ -78,7 +78,7 @@ def test_normalize_all_returns_all_expected_metrics() -> None:
     # Arrange
     raw = RawMetrics(
         blur_score=500.0,
-        bnrightness=100.0,
+        brightness=100.0,
         contrast=50.0,
         color_richness=40.0,
         edge_density=0.2,

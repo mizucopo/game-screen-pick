@@ -71,7 +71,7 @@ def _create_image_metrics_from_dict(
 
     raw = RawMetrics(
         blur_score=blur_raw,
-        bnrightness=brightness_raw,
+        brightness=brightness_raw,
         contrast=contrast_raw,
         edge_density=edge_density_raw,
         color_richness=color_richness_raw,

@@ -6,7 +6,7 @@ from .activity_bucket import ActivityBucket
 from .image_metrics import ImageMetrics
 
 
-@dataclass
+@dataclass(eq=False)
 class BucketedImage:
     """バケット付けされた画像."""
 

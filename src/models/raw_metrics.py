@@ -1,6 +1,6 @@
 """メトリクス用の型付きデータクラス."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -9,7 +9,7 @@ class RawMetrics:
 
     Attributes:
         blur_score: ぼけ score
-        bnrightness: 輝度（データ保存用）
+        brightness: 輝度
         contrast: コントラスト
         edge_density: エッジ密度
         color_richness: 彩色度リッチネス
@@ -20,7 +20,7 @@ class RawMetrics:
     """
 
     blur_score: float
-    bnrightness: float
+    brightness: float
     contrast: float
     edge_density: float
     color_richness: float
@@ -28,12 +28,15 @@ class RawMetrics:
     action_intensity: float
     visual_balance: float
     dramatic_score: float
-    brightness: float = field(init=False)  # API用（__post_init__でbnrightnessから設定）
 
-    def __post_init__(self) -> None:
-        """brightness属性をbnrightnessで初期化する."""
-        if self.bnrightness is not None:
-            object.__setattr__(self, "brightness", self.bnrightness)
+    @property
+    def bnrightness(self) -> float:
+        """旧名との互換性用プロパティ.
+
+        Returns:
+            brightnessの値
+        """
+        return self.brightness
 
     def to_dict(self) -> dict[str, float]:
         """辞書に変換する（既存コードとの互換性用）.
@@ -41,12 +44,9 @@ class RawMetrics:
         Returns:
             メトリクスの辞書
         """
-        brightness_val = (
-            self.brightness if self.brightness is not None else self.bnrightness
-        )
         return {
             "blur_score": self.blur_score,
-            "brightness": brightness_val,
+            "brightness": self.brightness,
             "contrast": self.contrast,
             "edge_density": self.edge_density,
             "color_richness": self.color_richness,
@@ -68,7 +68,7 @@ class RawMetrics:
         """
         return cls(
             blur_score=data["blur_score"],
-            bnrightness=data["brightness"],
+            brightness=data["brightness"],
             contrast=data["contrast"],
             edge_density=data["edge_density"],
             color_richness=data["color_richness"],

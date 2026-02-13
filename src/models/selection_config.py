@@ -42,11 +42,15 @@ class SelectionConfig:
             SelectionConfigインスタンス
         """
         # デフォルト値を持つ設定を作成
-        config = cls()
+        defaults: dict[str, int] = {
+            "batch_size": 32,
+        }
         # CLI引数で上書き（Noneでない値のみ）
-        if kwargs.get("batch_size") is not None:
-            config.batch_size = kwargs["batch_size"]  # type: ignore[assignment]
-        return config
+        for key, value in kwargs.items():
+            if value is not None and key in defaults:
+                defaults[key] = value
+        # 検証を通すため新しいインスタンスを直接作成
+        return cls(batch_size=defaults["batch_size"])
 
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""

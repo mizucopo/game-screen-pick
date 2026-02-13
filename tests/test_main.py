@@ -54,7 +54,7 @@ def sample_image_metrics_factory() -> Callable[[str, float], ImageMetrics]:
     def _create(path: str, score: float) -> ImageMetrics:
         raw = RawMetrics(
             blur_score=score,
-            bnrightness=100.0,
+            brightness=100.0,
             contrast=50.0,
             edge_density=0.1,
             color_richness=50.0,

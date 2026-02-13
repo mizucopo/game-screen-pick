@@ -132,7 +132,7 @@ def test_calculate_total_score_returns_non_negative_value(
     # Arrange
     raw = RawMetrics(
         blur_score=500.0,
-        bnrightness=100.0,
+        brightness=100.0,
         contrast=50.0,
         edge_density=0.2,
         color_richness=40.0,

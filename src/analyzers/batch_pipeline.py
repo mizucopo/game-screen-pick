@@ -60,7 +60,11 @@ class BatchPipeline:
 
         # 共有Executor（チャンク間で再利用）
         self._executor: ThreadPoolExecutor | None = None
+        # プリロード用Executor（io_max_workersベース、load_and_preprocess_images専用）
         self._preload_executor: ThreadPoolExecutor | None = None
+        # 内部処理用Executor（load_and_preprocess_images内部のmap用）
+        # io_max_workers=1でデッドロックを回避するため、別poolを使用
+        self._io_executor: ThreadPoolExecutor | None = None
 
     @staticmethod
     def _convert_batch_features_to_numpy(
@@ -274,7 +278,7 @@ class BatchPipeline:
         """複数のパスからPIL画像を読み込み、前処理まで並列実行する.
 
         I/O（画像読み込み）とCPU-bound処理（RGB変換・縮小）をThreadPoolExecutorで並列化.
-        プリロード用executorを再利用し、スレッド過多を抑制する。
+        内部処理用io_executorを使用し、プリロード用executorとの競合を回避する。
 
         Args:
             paths: 画像ファイルパスのリスト
@@ -290,8 +294,8 @@ class BatchPipeline:
         else:
             load_func = ImageUtils.load_as_rgb
 
-        # プリロード用executorを再利用（ネストしたThreadPoolExecutor作成を回避）
-        executor = self._get_preload_executor()
+        # io_executorを使用（preload_executorとのデッドロック回避）
+        executor = self._get_io_executor()
         results = list(executor.map(load_func, paths))
 
         return results
@@ -421,16 +425,34 @@ class BatchPipeline:
     def _get_preload_executor(self) -> ThreadPoolExecutor:
         """プリロード用スレッドプールを取得または作成.
 
-        I/O executor と同じプールを再利用し、スレッド過多を抑制する。
+        load_and_preprocess_images の実行専用プール。
+        io_max_workers=1 でのデッドロック回避のため、_get_io_executor とは
+        別々のインスタンスを使用する。
 
         Returns:
             ThreadPoolExecutorインスタンス
         """
         if self._preload_executor is None:
-            # 設定からワーカー数を取得（io_max_workersを使用）
-            max_workers = self.config.io_max_workers
+            # プリロードは並行度を必要とするため、io_max_workersが1の場合は2を確保
+            max_workers = self.config.io_max_workers or 1
+            if max_workers < 2:
+                max_workers = 2
             self._preload_executor = ThreadPoolExecutor(max_workers=max_workers)
         return self._preload_executor
+
+    def _get_io_executor(self) -> ThreadPoolExecutor:
+        """内部I/O処理用スレッドプールを取得または作成.
+
+        load_and_preprocess_images 内部の map 処理用。
+        プリロードexecutor とは分離し、io_max_workers=1 でのデッドロックを回避。
+
+        Returns:
+            ThreadPoolExecutorインスタンス
+        """
+        if self._io_executor is None:
+            max_workers = self.config.io_max_workers or 1
+            self._io_executor = ThreadPoolExecutor(max_workers=max_workers)
+        return self._io_executor
 
     def close(self) -> None:
         """スレッドプールをクリーンアップ."""
@@ -440,6 +462,9 @@ class BatchPipeline:
         if self._preload_executor is not None:
             self._preload_executor.shutdown(wait=True)
             self._preload_executor = None
+        if self._io_executor is not None:
+            self._io_executor.shutdown(wait=True)
+            self._io_executor = None
 
     def __enter__(self) -> "BatchPipeline":
         """コンテキストマネージャーのエントリー.

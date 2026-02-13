@@ -92,7 +92,8 @@ class DiversitySelector:
                     sims = selected_features_matrix[:selected_count] @ candidate_feat
                     if np.any(sims > threshold):
                         is_similar = True
-                        # 類似している場合はスキップして次の候補へ
+                        # 類似している場合は永続拒否リストに追加してスキップ
+                        rejected_indices.add(idx)
                         continue
 
                 if not is_similar:
@@ -106,10 +107,10 @@ class DiversitySelector:
                 break
 
         # 最終フォールバック：まだ不足する場合は未選択候補を総合スコア順で埋める
-        # （類似度制約を外す）
+        # （類似度制約を外すため、rejected_indicesも考慮対象に含める）
         if len(selected) < num:
             for idx, candidate in enumerate(candidates):
-                if idx not in selected_indices and idx not in rejected_indices:
+                if idx not in selected_indices:
                     selected.append(candidate)
                     selected_indices.add(idx)
                     if len(selected) >= num:
