@@ -235,12 +235,23 @@ class MetricCalculator:
         Returns:
             総合スコア
         """
-        # NormalizedMetricsを辞書のように扱って加重和を計算
-        norm_dict = norm.to_dict()
-        weighted_sum = sum(
-            norm_dict[k] * self.weights.get(k, 0.0)
-            for k in norm_dict
-            if k in self.weights
+        # NormalizedMetricsの加重和を計算
+        metric_names = (
+            "blur_score",
+            "contrast",
+            "color_richness",
+            "edge_density",
+            "dramatic_score",
+            "visual_balance",
+            "action_intensity",
+            "ui_density",
+        )
+        weighted_sum = float(
+            sum(
+                getattr(norm, k) * self.weights.get(k, 0.0)
+                for k in metric_names
+                if k in self.weights
+            )
         )
         penalty = (
             self.config.brightness_penalty_value
