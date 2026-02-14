@@ -1,18 +1,10 @@
-"""main.py CLIの単体テスト.
+"""main.py CLIの単体テスト."""
 
-このテストモジュールは以下のベストプラクティスに従っています：
-1. ユーザー視点でのCLI挙動をテスト（argparse、I/O、エラーハンドリング）
-2. モック使用を最小化 - 重いMLモデルとファイル操作のみモック化
-3. pytestのtmp_pathを使用したリアルなファイルシステムテスト
-4. 明確なコメント付きのAAAパターン（Arrange, Act, Assert）を使用
-5. caplogでログ出力をキャプチャしてユーザー向け出力を検証
-"""
-
-import logging
 from pathlib import Path
 from typing import Callable
 from unittest.mock import MagicMock
 
+import click
 import numpy as np
 import pytest
 
@@ -28,7 +20,6 @@ from src.services.game_screen_picker import GameScreenPicker
 def mock_game_screen_picker() -> MagicMock:
     """GameScreenPickerをモック（選択ロジック制御）."""
     picker = MagicMock(spec=GameScreenPicker)
-    # 戻り値を(結果リスト, 統計情報)のタプルにする
     empty_stats = PickerStatistics(
         total_files=0,
         analyzed_ok=0,
@@ -42,7 +33,7 @@ def mock_game_screen_picker() -> MagicMock:
 
 @pytest.fixture
 def sample_image_metrics_factory() -> Callable[[str, float], ImageMetrics]:
-    """テスト用ImageMetricsを作成するファクトリ関数."""
+    """テスト用ImageMetricsを作成するファクトリー関数."""
 
     def _create(path: str, score: float) -> ImageMetrics:
         raw = RawMetrics(
@@ -78,32 +69,36 @@ def sample_image_metrics_factory() -> Callable[[str, float], ImageMetrics]:
     return _create
 
 
-def test_cli_selects_and_displays_images(
+def test_cli_selects_and_copies_images(
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
 ) -> None:
-    """画像が選択されて表示されること.
+    """画像が選択されてコピーされること.
 
     Given:
         - 有効な入力ディレクトリが存在する
-        - モックされた analyzer と picker がある
+        - モックされた picker がある
     When:
         - CLIが実行される
     Then:
-        - 選択された画像が表示されること
-        - 統計情報が表示されること
+        - 選択された画像が出力ディレクトリにコピーされること
     """
     # Arrange
     test_dir = tmp_path / "test_images"
     test_dir.mkdir()
-    for i in range(5):
-        (test_dir / f"image{i}.jpg").touch()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
 
+    # テスト用の画像ファイルを作成（コピー対象）
+    for i in range(5):
+        img_path = test_dir / f"image{i}.jpg"
+        img_path.write_bytes(b"fake_image_data")
+
+    # 結果として返すImageMetricsは実際のファイルパスを指すようにする
     results = [
-        sample_image_metrics_factory(f"/fake/image{i}.jpg", 95.0 - i * 3)
+        sample_image_metrics_factory(str(test_dir / f"image{i}.jpg"), 95.0 - i * 3)
         for i in range(3)
     ]
     stats = PickerStatistics(
@@ -115,34 +110,37 @@ def test_cli_selects_and_displays_images(
     )
     mock_game_screen_picker.select.return_value = (results, stats)
 
-    monkeypatch.setattr("sys.argv", ["main.py", str(test_dir), "-n", "3"])
+    # オプションが前にくる形式: [オプション...] input output
+    args = ["-n", "3", str(test_dir), str(output_dir)]
+
     monkeypatch.setattr(
         "src.main.GameScreenPicker",
         lambda *_a, **_k: mock_game_screen_picker,
     )
 
     # Act
-    with caplog.at_level(logging.INFO):
-        Main().run()
+    Main(args=args).run()
 
     # Assert
-    assert "選択された画像一覧" in caplog.text
-    assert "統計情報" in caplog.text
+    # 出力ディレクトリにファイルがコピーされたことを確認
+    assert (output_dir / "image0.jpg").exists()
+    assert (output_dir / "image1.jpg").exists()
+    assert (output_dir / "image2.jpg").exists()
 
 
 @pytest.mark.parametrize(
-    "args,input_path_setup,error_type",
+    "args,input_path_setup",
     [
-        # 不在のディレクトリ
-        ([], "nonexistent", FileNotFoundError),
+        # 不存在のディレクトリ
+        ([], "nonexistent"),
         # ファイルパス（ディレクトリではない）
-        ([], "file_path", NotADirectoryError),
+        ([], "file_path"),
         # 無効な -n 値
-        (["-n", "-1"], None, SystemExit),
-        (["-n", "abc"], None, SystemExit),
+        (["-n", "-1"], None),
+        (["-n", "abc"], None),
         # 無効な -s 値
-        (["-s", "1.5"], None, SystemExit),
-        (["-s", "abc"], None, SystemExit),
+        (["-s", "1.5"], None),
+        (["-s", "abc"], None),
     ],
 )
 def test_cli_validates_inputs(
@@ -151,7 +149,6 @@ def test_cli_validates_inputs(
     tmp_path: Path,
     args: list[str],
     input_path_setup: str | None,
-    error_type: type[Exception],
 ) -> None:
     """無効な入力に対して適切なエラーが発生すること.
 
@@ -160,7 +157,7 @@ def test_cli_validates_inputs(
     When:
         - CLIが実行される
     Then:
-        - 適切なエラーが発生すること
+        - 適切なエラーが発生すること（clickはClickExceptionを発生させる）
     """
     # Arrange
     if input_path_setup == "nonexistent":
@@ -173,12 +170,17 @@ def test_cli_validates_inputs(
         input_path = str(tmp_path / "valid_dir")
         Path(input_path).mkdir()
 
-    monkeypatch.setattr("sys.argv", ["main.py", input_path] + args)
+    output_path = str(tmp_path / "output")
+
+    # オプションが前にくる形式: [オプション...] input output
+    full_args = args + [input_path, output_path]
+
     monkeypatch.setattr(
         "src.main.GameScreenPicker",
         lambda *_a, **_k: mock_game_screen_picker,
     )
 
     # Act & Assert
-    with pytest.raises(error_type):
-        Main().run()
+    # Clickのエラーは ClickException
+    with pytest.raises(click.ClickException):
+        Main(args=full_args).run()
