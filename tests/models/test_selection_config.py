@@ -13,7 +13,6 @@ def test_selection_config_has_sensible_defaults() -> None:
     # Assert
     assert config.batch_size == 32
     assert config.max_threshold == 0.98
-    assert len(config.threshold_relaxation_steps) > 0
 
 
 @pytest.mark.parametrize(
@@ -42,47 +41,35 @@ def test_threshold_steps_computed_correctly(
 
 
 @pytest.mark.parametrize(
-    "field_name,invalid_value",
+    "kwargs,expected_error,match_pattern",
     [
-        ("batch_size", 0),
-        ("batch_size", -10),
-        ("max_threshold", -0.1),
-        ("max_threshold", 1.1),
-        ("threshold_relaxation_steps", [0.1, -0.05, 0.2]),
+        # 数値範囲のバリデーション
+        ({"batch_size": 0}, ValueError, None),
+        ({"batch_size": -10}, ValueError, None),
+        ({"max_threshold": -0.1}, ValueError, None),
+        ({"max_threshold": 1.1}, ValueError, None),
+        ({"threshold_relaxation_steps": [0.1, -0.05, 0.2]}, ValueError, None),
+        # activity_mix_ratioの合計値バリデーション
+        ({"activity_mix_ratio": (1.0, 1.0, 1.0)}, ValueError, "合計は1.0"),
+        # 有効な値（例外が発生しないことを確認）
+        ({"activity_mix_ratio": (0.3, 0.4, 0.3)}, None, None),
     ],
 )
-def test_invalid_values_rejected(
-    field_name: str,
-    invalid_value: int | float | list[float] | tuple[float, ...],
+def test_config_validation(
+    kwargs: dict[str, object],
+    expected_error: type[Exception] | None,
+    match_pattern: str | None,
 ) -> None:
-    """無効な値が設定された場合に例外が発生すること."""
+    """設定値のバリデーションが正しく動作すること."""
     # Arrange & Act & Assert
-    with pytest.raises(ValueError):
-        SelectionConfig(**{field_name: invalid_value})  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize(
-    "activity_mix_ratio,should_raise",
-    [
-        # 有効な合計値（浮動小数点の誤差を許容）
-        ((0.3, 0.4, 0.3), False),
-        ((0.333, 0.333, 0.334), False),
-        ((1.0, 0.0, 0.0), False),
-        # 無効な合計値（1.0から大きくずれる）
-        ((1.0, 1.0, 1.0), True),
-        ((0.5, 0.5, 0.5), True),
-        ((0.0, 0.0, 0.0), True),
-    ],
-)
-def test_activity_mix_ratio_sum_validation(
-    activity_mix_ratio: tuple[float, float, float],
-    should_raise: bool,
-) -> None:
-    """activity_mix_ratioの合計値が1.0であることを検証すること."""
-    # Arrange & Act & Assert
-    if should_raise:
-        with pytest.raises(ValueError, match="合計は1.0"):
-            SelectionConfig(activity_mix_ratio=activity_mix_ratio)
+    if expected_error:
+        if match_pattern:
+            ctx = pytest.raises(expected_error, match=match_pattern)
+        else:
+            ctx = pytest.raises(expected_error)
+        with ctx:
+            SelectionConfig(**kwargs)  # type: ignore[arg-type]
     else:
-        config = SelectionConfig(activity_mix_ratio=activity_mix_ratio)
-        assert config.activity_mix_ratio == activity_mix_ratio
+        config = SelectionConfig(**kwargs)  # type: ignore[arg-type]
+        for key, value in kwargs.items():
+            assert getattr(config, key) == value

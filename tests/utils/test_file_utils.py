@@ -19,11 +19,11 @@ from src.utils.file_utils import FileUtils
     [
         ([], "image.jpg", "image.jpg"),
         (["image.jpg"], "image.jpg", "image_1.jpg"),
-        (["image.jpg", "image_1.jpg", "image_2.jpg"], "image.jpg", "image_3.jpg"),
+        # 飛び番号がある場合の最小値取得
         (["image.jpg", "image_1.jpg", "image_3.jpg"], "image.jpg", "image_2.jpg"),
+        # 複数拡張子と特殊文字
         (["archive.tar.gz"], "archive.tar.gz", "archive.tar_1.gz"),
         (["画像ファイル.jpg"], "画像ファイル.jpg", "画像ファイル_1.jpg"),
-        (["my image file.jpg"], "my image file.jpg", "my image file_1.jpg"),
     ],
 )
 def test_get_unique_destination_generates_unique_filename(

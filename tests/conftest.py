@@ -135,22 +135,25 @@ def _create_test_image(
     return str(img_path)
 
 
-@pytest.fixture
-def sample_image_path(tmp_path: Path) -> str:
-    """標準的なテスト画像（640x480 JPG）を作成する."""
-    return _create_test_image(tmp_path, "test_image.jpg", (480, 640), (0, 255))
+@pytest.fixture(
+    params=[
+        "test_image.jpg",
+        ("dark_image.jpg", (0, 50)),
+        "test_image.png",
+    ]
+)
+def sample_image_path(tmp_path: Path, request: pytest.FixtureRequest) -> str:
+    """標準的なテスト画像（640x480）を作成する.
 
-
-@pytest.fixture
-def dark_image_path(tmp_path: Path) -> str:
-    """輝度ペナルティのテスト用に暗いテスト画像（640x480 JPG）を作成する."""
-    return _create_test_image(tmp_path, "dark_image.jpg", (480, 640), (0, 50))
-
-
-@pytest.fixture
-def png_image_path(tmp_path: Path) -> str:
-    """PNG形式のテスト画像（640x480）を作成する."""
-    return _create_test_image(tmp_path, "test_image.png", (480, 640), (0, 255))
+    Parametrizeで様々なバリエーション（暗い画像、PNGなど）をカバー。
+    """
+    param = request.param
+    if isinstance(param, tuple):
+        filename, pixel_range = param
+    else:
+        filename = param
+        pixel_range = (0, 255)
+    return _create_test_image(tmp_path, filename, (480, 640), pixel_range)
 
 
 @pytest.fixture
@@ -224,3 +227,32 @@ def create_image_metrics(
         total_score=total_score,
         features=features,
     )
+
+
+def create_sample_metrics(
+    count: int, base_path: str = "/fake/path"
+) -> list[ImageMetrics]:
+    """テスト用のサンプルImageMetricsリストを作成する.
+
+    Args:
+        count: 作成するメトリクス数
+        base_path: 画像パスのベース（デフォルト: "/fake/path"）
+
+    Returns:
+        ImageMetricsのリスト
+    """
+    metrics = []
+    for i in range(count):
+        np.random.seed(i)
+        features = np.random.rand(128)
+        metrics.append(
+            create_image_metrics(
+                path=f"{base_path}/image{i}.jpg",
+                raw_metrics_dict={"blur_score": 100.0 - i * 10},
+                normalized_metrics_dict={"blur_score": 1.0 - i * 0.1},
+                semantic_score=0.8,
+                total_score=100.0 - i * 10,
+                features=features,
+            )
+        )
+    return metrics
