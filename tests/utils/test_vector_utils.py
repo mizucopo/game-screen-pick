@@ -39,40 +39,32 @@ def test_safe_l2_normalize_handles_various_vectors(
         assert np.linalg.norm(result) == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize(
-    "num_features,expected_selected,expected_rejected",
-    [
-        (0, 0, 0),  # 空のリスト
-        (10, 1, 9),  # 全く同一のベクトル（最初の1件のみ選択）
-    ],
-)
-def test_select_diverse_indices_edge_cases(
-    num_features: int, expected_selected: int, expected_rejected: int
-) -> None:
-    """エッジケースで多様なインデックス選択が正しく動作すること.
+def test_select_diverse_indices_handles_empty_and_identical_vectors() -> None:
+    """エッジケース（空リスト・同一ベクトル）で正しく動作すること.
 
     Given:
         - 空または同一の特徴ベクトルリストがある
     When:
         - select_diverse_indicesを実行する
     Then:
-        - 期待される数のインデックスが選択されること
-        - 期待される数が類似度で除外されること
+        - 最初の1件のみ選択され、残りは類似度で除外されること
     """
-    # Arrange
-    if num_features == 0:
-        normalized_features: list[np.ndarray] = []
-    else:
-        vec = np.array([1.0, 0.0, 0.0])
-        normalized_features = [vec.copy() for _ in range(num_features)]
+    # Arrange & Act: 空リスト
+    selected_empty, rejected_empty = VectorUtils.select_diverse_indices(
+        normalized_features=[],
+        num=5,
+        threshold_steps=[0.9, 0.95],
+    )
 
-    # Act
-    selected_indices, rejected_by_similarity = VectorUtils.select_diverse_indices(
-        normalized_features=normalized_features,
+    # Arrange & Act: 同一ベクトル10件
+    vec = np.array([1.0, 0.0, 0.0])
+    identical_features = [vec.copy() for _ in range(10)]
+    selected_identical, rejected_identical = VectorUtils.select_diverse_indices(
+        normalized_features=identical_features,
         num=5,
         threshold_steps=[0.9, 0.95],
     )
 
     # Assert
-    assert len(selected_indices) == expected_selected
-    assert rejected_by_similarity == expected_rejected
+    assert len(selected_empty) == 0 and rejected_empty == 0
+    assert len(selected_identical) == 1 and rejected_identical == 9

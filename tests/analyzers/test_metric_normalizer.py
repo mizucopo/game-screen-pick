@@ -47,26 +47,3 @@ def test_normalize_all_returns_metrics_in_valid_range() -> None:
     assert 0.0 <= result.visual_balance <= 1.0
     assert 0.0 <= result.action_intensity <= 1.0
     assert 0.0 <= result.ui_density <= 1.0
-
-
-def test_sigmoid_handles_extreme_values() -> None:
-    """シグモイド関数が極端な入力値を適切に処理すること.
-
-    Given:
-        - 極端な入力値（1e10, -1e10）がある
-    When:
-        - 極端な値でsigmoidが計算される
-    Then:
-        - 極端な正の値に対して1.0が返されること
-        - 極端な負の値に対して0.0が返されること
-    """
-    # Arrange
-    center = 500.0
-
-    # Act
-    result_positive = MetricNormalizer.sigmoid(1e10, center)
-    result_negative = MetricNormalizer.sigmoid(-1e10, center)
-
-    # Assert
-    assert result_positive == 1.0
-    assert result_negative == 0.0

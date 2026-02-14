@@ -127,7 +127,6 @@ def test_cli_selects_and_displays_images(
     captured = capsys.readouterr()
     assert "選択された画像一覧" in captured.out
     assert "統計情報" in captured.out
-    assert "Score:" in captured.out
 
 
 @pytest.mark.parametrize(

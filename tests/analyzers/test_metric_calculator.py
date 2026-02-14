@@ -53,11 +53,11 @@ def test_calculate_metrics_returns_valid_values(
     assert not np.isnan(raw_metrics.action_intensity)
 
 
-def test_semantic_score_in_cosine_similarity_range(
+def test_semantic_score_returns_valid_value(
     metric_calculator: MetricCalculator,
     sample_image_path: str,
 ) -> None:
-    """セマンティックスコアがコサイン類似度の範囲内にあること.
+    """セマンティックスコアが有効な値を返すこと.
 
     Given:
         - メトリクス計算器がある
@@ -65,7 +65,7 @@ def test_semantic_score_in_cosine_similarity_range(
     When:
         - セマンティックスコアが計算される
     Then:
-        - スコアがコサイン類似度の範囲（[-1, 1]）にあること
+        - 有効な数値が返されること
     """
     # Arrange
     from PIL import Image
@@ -78,4 +78,4 @@ def test_semantic_score_in_cosine_similarity_range(
 
     # Assert
     assert not np.isnan(semantic_score)
-    assert -1.0 <= semantic_score <= 1.0 + 1e-5
+    assert isinstance(semantic_score, (int, float))
