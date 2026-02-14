@@ -29,15 +29,6 @@ class RawMetrics:
     visual_balance: float
     dramatic_score: float
 
-    @property
-    def bnrightness(self) -> float:
-        """旧名との互換性用プロパティ.
-
-        Returns:
-            brightnessの値
-        """
-        return self.brightness
-
     def to_dict(self) -> dict[str, float]:
         """辞書に変換する（既存コードとの互換性用）.
 
