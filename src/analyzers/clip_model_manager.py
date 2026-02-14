@@ -45,7 +45,9 @@ class CLIPModelManager:
         self.model.to(self.device)
         self.model.eval()
 
-        # GPU最適化: TF32を許可（Ampere GPU以上で有効）
+        # GPU最適化: TF32を許可
+        # 理由: Ampere GPU以上ではTF32演算を使用することで、
+        #       精度をほぼ維持したまま行列演算を高速化できる
         if self.device == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
@@ -129,8 +131,8 @@ class CLIPModelManager:
     def get_normalized_image_features(self, pil_image: Image.Image) -> torch.Tensor:
         """PIL画像から正規化済みCLIP画像特徴を抽出する.
 
-        単一画像の特徴抽出をL2正規化済みで返すユーティリティメソッド.
-        feature_extractor.py と metric_calculator.py の重複コードを統合する.
+        単一画像の特徴抽出をL2正規化済みで返すユーティリティメソッド。
+        feature_extractor.py と metric_calculator.py の重複コードを統合する。
 
         Args:
             pil_image: PIL画像オブジェクト（RGB形式）

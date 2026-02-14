@@ -46,25 +46,18 @@ class DiversitySelector:
         # 全候補を対象にする（固定上位M件の制限を廃止）
         candidates = all_results
 
-        # 特徴ベクトルを事前にL2正規化（コサイン類似度 = 内積になる）
-        normalized_features = VectorUtils.normalize_feature_vectors(
-            [c.features for c in candidates]
-        )
-
-        # 段階的しきい値緩和のステップ
-        threshold_steps = self.config.compute_threshold_steps(similarity_threshold)
-
-        # 類似度フィルタリングを実行
-        selected_indices, rejected_by_similarity = VectorUtils.select_diverse_indices(
-            normalized_features=normalized_features,
+        # 類似度フィルタリングを実行（正規化、しきい値計算、選択をまとめて実行）
+        selected_indices, rejected_by_similarity = VectorUtils.filter_by_similarity(
+            candidates=[c.features for c in candidates],
             num=num,
-            threshold_steps=threshold_steps,
+            similarity_threshold=similarity_threshold,
+            compute_threshold_steps=self.config.compute_threshold_steps,
         )
 
         # 最終フォールバック：まだ不足する場合は未選択候補を総合スコア順で埋める
         # （類似度制約を外すため、rejected_indicesも考慮対象に含める）
         if len(selected_indices) < num:
-            for idx, _candidate in enumerate(candidates):
+            for idx in range(len(candidates)):
                 if idx not in selected_indices:
                     selected_indices.add(idx)
                     if len(selected_indices) >= num:

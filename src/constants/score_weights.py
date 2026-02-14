@@ -4,9 +4,11 @@ from typing import Dict
 
 
 class ScoreWeights:
-    """画像品質スコアリングの重み定義."""
+    """画像品質スコアリングの重み定義.
 
-    # ブログ用途向けの品質重み（合計1.0）
+    合計値は1.0に正規化されている。
+    """
+
     DEFAULT_WEIGHTS: Dict[str, float] = {
         "blur_score": 0.15,
         "contrast": 0.14,

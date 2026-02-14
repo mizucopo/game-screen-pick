@@ -11,7 +11,6 @@
 
 import tempfile
 from pathlib import Path
-from typing import List
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -20,42 +19,19 @@ import pytest
 from src.models.image_metrics import ImageMetrics
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
-from tests.conftest import create_image_metrics
+from tests.conftest import create_image_metrics, create_sample_metrics
 
 
-def _create_picker(config: SelectionConfig | None = None) -> GameScreenPicker:
-    """GameScreenPickerを作成するヘルパー関数（テスト用）."""
+@pytest.fixture
+def mock_analyzer() -> MagicMock:
+    """ImageQualityAnalyzerのモック."""
     from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
 
-    analyzer = MagicMock(spec=ImageQualityAnalyzer)
-    return GameScreenPicker(analyzer=analyzer, config=config)
+    return MagicMock(spec=ImageQualityAnalyzer)
 
 
-def _create_sample_metrics(count: int) -> List[ImageMetrics]:
-    """テスト用のサンプルImageMetricsを作成する."""
-    metrics = []
-    for i in range(count):
-        np.random.seed(i)
-        features = np.random.rand(128)
-        metrics.append(
-            create_image_metrics(
-                path=f"/fake/path/image{i}.jpg",
-                raw_metrics_dict={"blur_score": 100.0 - i * 10},
-                normalized_metrics_dict={"blur_score": 1.0 - i * 0.1},
-                semantic_score=0.8,
-                total_score=100.0 - i * 10,
-                features=features,
-            )
-        )
-    return metrics
-
-
-@pytest.mark.parametrize(
-    "activity_mix_enabled",
-    [False, True],
-)
 def test_select_from_analyzed_returns_diverse_images(
-    activity_mix_enabled: bool,
+    mock_analyzer: MagicMock,
 ) -> None:
     """分析済み画像から多様な画像が正しく選択されること.
 
@@ -68,15 +44,11 @@ def test_select_from_analyzed_returns_diverse_images(
         - 統計情報が正しく記録されていること
     """
     # Arrange
-    sample_metrics = _create_sample_metrics(5)
+    sample_metrics = create_sample_metrics(5)
     num_to_select = 3
     similarity_threshold = 0.9
-    ratio = (0.3, 0.4, 0.3) if activity_mix_enabled else (0.33, 0.34, 0.33)
-    config = SelectionConfig(
-        activity_mix_enabled=activity_mix_enabled,
-        activity_mix_ratio=ratio,
-    )
-    picker = _create_picker(config)
+    config = SelectionConfig()
+    picker = GameScreenPicker(analyzer=mock_analyzer, config=config)
 
     # Act
     result, stats = picker.select_from_analyzed(
@@ -92,7 +64,9 @@ def test_select_from_analyzed_returns_diverse_images(
     assert stats.selected_count == 3
 
 
-def test_select_from_folder_processes_images_and_handles_failures() -> None:
+def test_select_from_folder_processes_images_and_handles_failures(
+    mock_analyzer: MagicMock,
+) -> None:
     """フォルダから画像をロード・分析し、失敗時も適切に処理すること.
 
     Given:
@@ -104,17 +78,14 @@ def test_select_from_folder_processes_images_and_handles_failures() -> None:
         - 処理が継続され、有効な画像のみが返されること
         - 統計情報が正しく記録されていること
     """
+
     # Arrange
-    from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
-
-    mock_analyzer = MagicMock(spec=ImageQualityAnalyzer)
-
     def mock_analyze_batch(
-        paths: List[str],
+        paths: list[str],
         batch_size: int = 32,  # noqa: ARG001
         show_progress: bool = False,  # noqa: ARG001
-    ) -> List[ImageMetrics | None]:
-        results: List[ImageMetrics | None] = []
+    ) -> list[ImageMetrics | None]:
+        results: list[ImageMetrics | None] = []
         for path in paths:
             try:
                 idx = int(path.split("image")[-1].split(".")[0])

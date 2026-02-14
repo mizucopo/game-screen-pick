@@ -12,7 +12,7 @@ class RawMetrics:
         brightness: 輝度（平均輝度、0-255）
         contrast: コントラスト（輝度の標準偏差）
         edge_density: エッジ密度（Cannyエッジのピクセル比率）
-        color_richness: 色彩度リッチネス（彩度の標準偏差）
+        color_richness: 彩度リッチネス（彩度の標準偏差）
         ui_density: UI密度（Sobel横方向エッジ強度）
         action_intensity: アクション強度（カーネル適用後の標準偏差）
         visual_balance: 視覚的バランス（輝度が128に近いほど高スコア）

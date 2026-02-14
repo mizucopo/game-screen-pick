@@ -1,5 +1,6 @@
 """ベクトル操作ユーティリティ."""
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -77,9 +78,11 @@ class VectorUtils:
         selected_features_matrix = np.zeros((num, feature_dim), dtype=np.float32)
         selected_indices: set[int] = set()
         # 各候補が「類似度によって拒否されたか」を追跡
+        # （複数ステップで重複カウントしないようsetで管理）
         rejected_by_similarity_set: set[int] = set()
         selected_count = 0
 
+        # 容量制約または類似度チェックで全候補を走査
         for threshold in threshold_steps:
             for idx, candidate_feat in enumerate(normalized_features):
                 if idx in selected_indices:
@@ -104,7 +107,37 @@ class VectorUtils:
             if selected_count >= num:
                 break
 
-        # 最終的に選択されなかった候補の中で、類似度によって拒否されたものをカウント
+        # 類似度で一度拒否され、最終的に選択されなかった候補数をカウント
+        # （後続ステップで選択されたものは除外集合から除外）
         rejected_by_similarity = len(rejected_by_similarity_set - selected_indices)
 
         return selected_indices, rejected_by_similarity
+
+    @staticmethod
+    def filter_by_similarity(
+        candidates: list[np.ndarray[Any, Any]],
+        num: int,
+        similarity_threshold: float,
+        compute_threshold_steps: Callable[[float], list[float]],
+    ) -> tuple[set[int], int]:
+        """類似度に基づいて候補をフィルタリングする.
+
+        特徴ベクトルの正規化、しきい値ステップの計算、多様なインデックスの選択を
+        一連の処理として実行する。
+
+        Args:
+            candidates: 候補の特徴ベクトルリスト
+            num: 選択する数
+            similarity_threshold: 類似度の閾値
+            compute_threshold_steps: しきい値からステップリストを計算する関数
+
+        Returns:
+            (選択されたインデックスのセット, 類似度で除外された数) のタプル
+        """
+        normalized_features = VectorUtils.normalize_feature_vectors(candidates)
+        threshold_steps = compute_threshold_steps(similarity_threshold)
+        return VectorUtils.select_diverse_indices(
+            normalized_features=normalized_features,
+            num=num,
+            threshold_steps=threshold_steps,
+        )

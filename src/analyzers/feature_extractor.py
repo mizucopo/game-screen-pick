@@ -36,7 +36,7 @@ class FeatureExtractor:
     def extract_hsv_features(img: np.ndarray) -> np.ndarray:
         """HSV色空間のヒストグラム特徴を抽出する.
 
-        注: 呼出し元（batch_pipeline.py）で既にmax_dim以下に縮小された画像を
+        注: 呼び出し元（batch_pipeline.py）で既にmax_dim以下に縮小された画像を
         受け取ることを想定している。
 
         Args:
@@ -73,9 +73,9 @@ class FeatureExtractor:
         img: np.ndarray,
         clip_features: np.ndarray,
     ) -> np.ndarray:
-        """HSV特徴とCLIP特徴を結合する.
+        """HSV特徴とCLIP特徴を統合する.
 
-        注: imgは呼出し元（batch_pipeline.py）で既にmax_dim以下に
+        注: imgは呼び出し元（batch_pipeline.py）で既にmax_dim以下に
         縮小された画像であることを想定している。
 
         Args:
@@ -83,13 +83,13 @@ class FeatureExtractor:
             clip_features: CLIP画像埋め込み（512次元、正規化済み、np.ndarray）
 
         Returns:
-            結合された特徴ベクトル（576次元、np.ndarray）
+            統合された特徴ベクトル（576次元、np.ndarray）
         """
         hsv_features = FeatureExtractor.extract_hsv_features(img)
         # L2正規化（既に正規化されているが、安全のため再正規化）
         hsv_normalized = VectorUtils.safe_l2_normalize(hsv_features)
 
-        # 結合
+        # 統合
         return np.concatenate([hsv_normalized, clip_features])
 
     def extract_clip_features_batch(
@@ -125,7 +125,7 @@ class FeatureExtractor:
             img for img in pil_images if img is not None
         ]
 
-        if not valid_images:
+        if not valid_indices:
             return [None] * len(pil_images)
 
         # 結果を格納する配列（初期値はNone）
@@ -133,6 +133,7 @@ class FeatureExtractor:
 
         # 現在のバッチサイズ
         current_batch_size = initial_batch_size
+        # OOM時の指数バックオフ戦略: 32→16→8→4→2→1
 
         # 処理位置を追跡
         i = 0

@@ -1,5 +1,6 @@
 """Game screen picker for diverse image selection."""
 
+import logging
 import random
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from ..models.picker_statistics import PickerStatistics
 from ..models.selection_config import SelectionConfig
 from .activity_mix_selector import ActivityMixSelector
 from .diversity_selector import DiversitySelector
+
+logger = logging.getLogger(__name__)
 
 
 class GameScreenPicker:
@@ -109,7 +112,7 @@ class GameScreenPicker:
         self._rng.shuffle(files)
 
         if show_progress:
-            print(f"合計 {total_files} 枚を解析中...")
+            logger.info(f"合計 {total_files} 枚を解析中...")
 
         # 画像を解析
         all_results = self._analyze_images(files, show_progress)

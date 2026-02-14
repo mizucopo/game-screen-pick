@@ -19,8 +19,7 @@ class FileUtils:
     def get_unique_destination(dest_dir: Path, filename: str) -> Path:
         """出力ディレクトリ内で一意なファイルパスを生成する.
 
-        同名のファイルが存在する場合、連番サフィックスを付与して衝突を回避する。
-        ファイル名の拡張子は維持される。
+        同名のファイルが存在する場合は連番サフィックスを付与する。
 
         Args:
             dest_dir: 出力先ディレクトリのパス

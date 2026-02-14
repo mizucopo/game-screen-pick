@@ -1,6 +1,7 @@
 """メトリクス計算器 - 生メトリクス、セマンティックスコア、総合スコアの計算を行う."""
 
 import logging
+from typing import cast
 
 import cv2
 import numpy as np
@@ -40,10 +41,45 @@ class MetricCalculator:
         self.weights = weights
         self.model_manager = model_manager
 
+    def _compute_cosine_similarity(self, image_features: torch.Tensor) -> float:
+        """画像特徴とテキスト埋め込みのコサイン類似度を計算する.
+
+        Args:
+            image_features: 画像特徴ベクトル（正規化済み、デバイス転送済み、
+                            バッチ次元あり: [1, feature_dim]）
+
+        Returns:
+            コサイン類似度（範囲: [-1, 1]）
+        """
+        text_embeddings = self.model_manager.get_text_embeddings()
+        cosine_sim = torch.matmul(image_features, text_embeddings.T)
+        return float(cosine_sim[0][0])
+
+    def _compute_cosine_similarity_batch(
+        self, batch_features: torch.Tensor
+    ) -> torch.Tensor:
+        """画像特徴バッチとテキスト埋め込みのコサイン類似度を一括計算する.
+
+        Args:
+            batch_features: 画像特徴バッチ（正規化済み、デバイス転送済み）
+                            形状: [batch_size, feature_dim]
+
+        Returns:
+            コサイン類似度のテンソル（形状: [batch_size, 1]）
+        """
+        text_embeddings = self.model_manager.get_text_embeddings()
+        # autocast下ではbatch_featuresがfloat16になる可能性があるため
+        # text_embeddingsも同じdtypeにキャストして型不一致によるエラーを回避
+        target_dtype = batch_features.dtype
+        embeddings_on_device = text_embeddings.to(target_dtype).to(
+            self.model_manager.device
+        )
+        return torch.matmul(batch_features, embeddings_on_device.T)
+
     def calculate_raw_metrics(self, img: np.ndarray) -> RawMetrics:
         """生の画像メトリクスを計算する.
 
-        注: 呼出し元（batch_pipeline.py）で既にmax_dimまで縮小された画像を
+        注: 呼び出し元（batch_pipeline.py）で既にmax_dimまで縮小された画像を
         受け取ることを想定している。高解像度画像での二重リサイズを回避し、
         メモリと計算コストを削減する。
 
@@ -131,11 +167,7 @@ class MetricCalculator:
             pil_img
         ).unsqueeze(0)
 
-        # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
-        # コサイン類似度を計算
-        text_embeddings = self.model_manager.get_text_embeddings()
-        cosine_sim = torch.matmul(image_features_normalized, text_embeddings.T)
-        return float(cosine_sim[0][0])
+        return self._compute_cosine_similarity(image_features_normalized)
 
     def calculate_semantic_score_from_features(
         self, clip_features: np.ndarray
@@ -155,11 +187,7 @@ class MetricCalculator:
                 .unsqueeze(0)
                 .to(self.model_manager.device)
             )
-            # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
-            # コサイン類似度を計算
-            text_embeddings = self.model_manager.get_text_embeddings()
-            cosine_sim = torch.matmul(image_features, text_embeddings.T)
-            return float(cosine_sim[0][0])
+            return self._compute_cosine_similarity(image_features)
 
     def calculate_semantic_score_batch(
         self, clip_features_list: list[torch.Tensor | None]
@@ -193,8 +221,6 @@ class MetricCalculator:
         with torch.inference_mode():
             # torch.Tensorをスタックしてバッチ化
             # valid_indicesでNoneを除外済みだが、型チェッカーに明示するためにcast
-            from typing import cast
-
             valid_tensors: list[torch.Tensor] = [
                 cast("torch.Tensor", clip_features_list[i]) for i in valid_indices
             ]
@@ -205,16 +231,7 @@ class MetricCalculator:
 
             # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
             # コサイン類似度を一括計算
-            text_embeddings = self.model_manager.get_text_embeddings()
-            # batch_features は autocast により float16 になる可能性があるため
-            # text_embeddings を同じ dtype にキャストして型不一致を回避
-            # また、デバイス転送も同時に行う
-            target_dtype = batch_features.dtype
-            embeddings_on_device = text_embeddings.to(target_dtype).to(
-                self.model_manager.device
-            )
-            casted_embeddings = embeddings_on_device.T
-            cosine_sims = torch.matmul(batch_features, casted_embeddings)
+            cosine_sims = self._compute_cosine_similarity_batch(batch_features)
 
             # 結果を元のインデックスにマッピング
             for j, idx in enumerate(valid_indices):
@@ -267,7 +284,7 @@ class MetricCalculator:
     def calculate_raw_norm_metrics(
         self, img: np.ndarray
     ) -> tuple[RawMetrics, NormalizedMetrics]:
-        """生メトリクスと正規化メトリクスのみ計算する.
+        """生メトリクスと正規化メトリクスのみ計算する。
 
         セマンティックスコアはバッチ計算済みの値を使用するため、
         このメソッドでは計算しない。

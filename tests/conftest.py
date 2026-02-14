@@ -1,115 +1,17 @@
 """pytestの共通fixture設定.
 
-複雑なモック設定を一箇所に集約し、メンテナンス性とデバッグ性を向上させる。
-CI環境でのハング問題を防ぐため、極力シンプルなモック構造を採用する。
+テスト用ヘルパー関数とfixtureを提供する。
 """
 
-from collections.abc import Generator
 from pathlib import Path
-from typing import Any
-from unittest.mock import patch
 
 import cv2
 import numpy as np
 import pytest
-import torch
 
 from src.models.image_metrics import ImageMetrics
 from src.models.normalized_metrics import NormalizedMetrics
 from src.models.raw_metrics import RawMetrics
-
-
-class _SimpleDict(dict[str, Any]):
-    """辞書風アクセスと.to()メソッドをサポートするシンプルなクラス.
-
-    CI環境でのハング問題を防ぐため、MagicMockを使わずに実装。
-    """
-
-    def to(self, device: str) -> "_SimpleDict":  # noqa: ARG002
-        """デバイス移動のモック（自分自身を返す）."""
-        return self
-
-
-@pytest.fixture(scope="function")
-def mock_clip_model() -> Generator[Any, Any, Any]:
-    """CLIPモデルのモック.
-
-    極力シンプルな実装にし、CI環境でのハングを防止する。
-    明示的に使用するテストのみで適用する。
-    """
-
-    # モデルオブジェクト（MagicMockではなく普通のクラス）
-    class _MockModel:
-        """CLIPモデルのモック."""
-
-        device = "cpu"
-        _eval_called = False
-        _to_called_with = []
-
-        def get_text_features(self, **_kwargs: object) -> torch.Tensor:
-            """テキスト特徴を返す."""
-            return torch.ones(1, 512) / torch.sqrt(torch.tensor(512.0))
-
-        def get_image_features(self, **kwargs: object) -> torch.Tensor:
-            """画像特徴を返す."""
-            inputs = kwargs.get("pixel_values")
-            if inputs is not None and hasattr(inputs, "shape"):
-                batch_size = inputs.shape[0]
-            else:
-                batch_size = 1
-            return torch.ones(batch_size, 512) / torch.sqrt(torch.tensor(512.0))
-
-        def to(self, device: str) -> "_MockModel":
-            """デバイス移動のモック（自分自身を返す）."""
-            self._to_called_with.append(device)
-            return self
-
-        def eval(self) -> None:
-            """evalモードのモック（何もしない）."""
-            self._eval_called = True
-
-        # MagicMock互換のプロパティ
-        @property
-        def called(self) -> bool:
-            """MagicMock互換プロパティ."""
-            return True
-
-    with patch("transformers.CLIPModel.from_pretrained") as mock:
-        mock.return_value = _MockModel()
-        yield mock
-
-
-@pytest.fixture(scope="function")
-def mock_clip_processor() -> Generator[Any, Any, Any]:
-    """CLIPプロセッサのモック.
-
-    _SimpleDictを使い、CI環境でのハングを防止する。
-    明示的に使用するテストのみで適用する。
-    """
-
-    def mock_processor_func(**kwargs: object) -> _SimpleDict:
-        """プロセッサの呼び出しをモックする."""
-        images = kwargs.get("images")
-        batch_size = len(images) if isinstance(images, list) else 1
-
-        return _SimpleDict(
-            {
-                "input_ids": torch.tensor([[1, 2, 3]]),
-                "pixel_values": torch.ones(batch_size, 3, 224, 224) * 0.5,
-                "attention_mask": torch.tensor([[1, 1, 1]]),
-            }
-        )
-
-    # プロセッサオブジェクト（callable）
-    class _MockProcessor:
-        """CLIPプロセッサのモック."""
-
-        def __call__(self, **kwargs: object) -> _SimpleDict:
-            return mock_processor_func(**kwargs)
-
-    with patch("transformers.CLIPProcessor.from_pretrained") as mock:
-        mock.return_value = _MockProcessor()
-        yield mock
 
 
 def _create_test_image(
@@ -135,22 +37,25 @@ def _create_test_image(
     return str(img_path)
 
 
-@pytest.fixture
-def sample_image_path(tmp_path: Path) -> str:
-    """標準的なテスト画像（640x480 JPG）を作成する."""
-    return _create_test_image(tmp_path, "test_image.jpg", (480, 640), (0, 255))
+@pytest.fixture(
+    params=[
+        "test_image.jpg",
+        ("dark_image.jpg", (0, 50)),
+        "test_image.png",
+    ]
+)
+def sample_image_path(tmp_path: Path, request: pytest.FixtureRequest) -> str:
+    """標準的なテスト画像（640x480）を作成する.
 
-
-@pytest.fixture
-def dark_image_path(tmp_path: Path) -> str:
-    """輝度ペナルティのテスト用に暗いテスト画像（640x480 JPG）を作成する."""
-    return _create_test_image(tmp_path, "dark_image.jpg", (480, 640), (0, 50))
-
-
-@pytest.fixture
-def png_image_path(tmp_path: Path) -> str:
-    """PNG形式のテスト画像（640x480）を作成する."""
-    return _create_test_image(tmp_path, "test_image.png", (480, 640), (0, 255))
+    Parametrizeで様々なバリエーション（暗い画像、PNGなど）をカバー。
+    """
+    param = request.param
+    if isinstance(param, tuple):
+        filename, pixel_range = param
+    else:
+        filename = param
+        pixel_range = (0, 255)
+    return _create_test_image(tmp_path, filename, (480, 640), pixel_range)
 
 
 @pytest.fixture
@@ -224,3 +129,32 @@ def create_image_metrics(
         total_score=total_score,
         features=features,
     )
+
+
+def create_sample_metrics(
+    count: int, base_path: str = "/fake/path"
+) -> list[ImageMetrics]:
+    """テスト用のサンプルImageMetricsリストを作成する.
+
+    Args:
+        count: 作成するメトリクス数
+        base_path: 画像パスのベース（デフォルト: "/fake/path"）
+
+    Returns:
+        ImageMetricsのリスト
+    """
+    metrics = []
+    for i in range(count):
+        np.random.seed(i)
+        features = np.random.rand(128)
+        metrics.append(
+            create_image_metrics(
+                path=f"{base_path}/image{i}.jpg",
+                raw_metrics_dict={"blur_score": 100.0 - i * 10},
+                normalized_metrics_dict={"blur_score": 1.0 - i * 0.1},
+                semantic_score=0.8,
+                total_score=100.0 - i * 10,
+                features=features,
+            )
+        )
+    return metrics
