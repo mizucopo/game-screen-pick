@@ -39,6 +39,11 @@ uv run game-screen-pick -n 20 ./screenshots ./output
 uv run game-screen-pick -r -n 10 ./screenshots ./output
 ```
 
+### 出力フォルダ
+
+出力フォルダが存在しない場合は自動的に作成されます。
+親ディレクトリも含めて必要な階層が自動作成されます。
+
 ## 選択アルゴリズム
 
 ### スコアリング
