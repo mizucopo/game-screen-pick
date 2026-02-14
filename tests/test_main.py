@@ -97,12 +97,16 @@ def test_cli_selects_and_copies_images(
 
 
 @pytest.mark.parametrize(
-    "args,input_path_setup",
+    "args,input_path_setup,error_pattern",
     [
-        ([], "nonexistent"),  # 不存在のディレクトリ
-        ([], "file_path"),  # ファイルパス（ディレクトリではない）
-        (["-n", "-1"], None),  # 無効な -n 値（負の数値）
-        (["-s", "1.5"], None),  # 無効な -s 値（範囲外）
+        # 不存在のディレクトリ（click.Pathのバリデーション）
+        ([], "nonexistent", "does not exist"),
+        # ファイルパス（ディレクトリではない）
+        ([], "file_path", "is a file"),
+        # 無効な -n 値（負の数値）
+        (["-n", "-1"], None, "正の整数"),
+        # 無効な -s 値（範囲外）
+        (["-s", "1.5"], None, "0.0~1.0"),
     ],
 )
 def test_cli_validates_inputs(
@@ -111,8 +115,17 @@ def test_cli_validates_inputs(
     tmp_path: Path,
     args: list[str],
     input_path_setup: str | None,
+    error_pattern: str,
 ) -> None:
-    """無効な入力に対して適切なエラーが発生こと."""
+    """無効な入力に対して適切なエラーが発生こと.
+
+    Given:
+        - 無効な入力値または無効なパス
+    When:
+        - CLIが実行される
+    Then:
+        - 適切なエラーメッセージ付きでClickExceptionが発生すること
+    """
     # Arrange
     if input_path_setup == "nonexistent":
         input_path = "/nonexistent/directory"
@@ -131,5 +144,5 @@ def test_cli_validates_inputs(
     )
 
     # Act & Assert
-    with pytest.raises(click.ClickException):
+    with pytest.raises(click.ClickException, match=error_pattern):
         Main(args=full_args).run()

@@ -44,11 +44,11 @@ def test_threshold_steps_computed_correctly(
     "kwargs,expected_error,match_pattern",
     [
         # 数値範囲のバリデーション
-        ({"batch_size": 0}, ValueError, None),
-        ({"batch_size": -10}, ValueError, None),
-        ({"max_threshold": -0.1}, ValueError, None),
-        ({"max_threshold": 1.1}, ValueError, None),
-        ({"threshold_relaxation_steps": [0.1, -0.05, 0.2]}, ValueError, None),
+        ({"batch_size": 0}, ValueError, "正の整数"),
+        ({"batch_size": -10}, ValueError, "正の整数"),
+        ({"max_threshold": -0.1}, ValueError, "0以上1以下"),
+        ({"max_threshold": 1.1}, ValueError, "0以上1以下"),
+        ({"threshold_relaxation_steps": [0.1, -0.05, 0.2]}, ValueError, "非負"),
         # activity_mix_ratioの合計値バリデーション
         ({"activity_mix_ratio": (1.0, 1.0, 1.0)}, ValueError, "合計は1.0"),
         # 有効な値（例外が発生しないことを確認）

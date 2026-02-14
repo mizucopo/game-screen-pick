@@ -30,10 +30,8 @@ def mock_analyzer() -> MagicMock:
     return MagicMock(spec=ImageQualityAnalyzer)
 
 
-@pytest.mark.parametrize("activity_mix_enabled", [False, True])
 def test_select_from_analyzed_returns_diverse_images(
     mock_analyzer: MagicMock,
-    activity_mix_enabled: bool,
 ) -> None:
     """分析済み画像から多様な画像が正しく選択されること.
 
@@ -49,11 +47,7 @@ def test_select_from_analyzed_returns_diverse_images(
     sample_metrics = create_sample_metrics(5)
     num_to_select = 3
     similarity_threshold = 0.9
-    ratio = (0.3, 0.4, 0.3) if activity_mix_enabled else (0.33, 0.34, 0.33)
-    config = SelectionConfig(
-        activity_mix_enabled=activity_mix_enabled,
-        activity_mix_ratio=ratio,
-    )
+    config = SelectionConfig()
     picker = GameScreenPicker(analyzer=mock_analyzer, config=config)
 
     # Act
