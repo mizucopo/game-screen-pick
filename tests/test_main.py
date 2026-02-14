@@ -5,9 +5,10 @@
 2. モック使用を最小化 - 重いMLモデルとファイル操作のみモック化
 3. pytestのtmp_pathを使用したリアルなファイルシステムテスト
 4. 明確なコメント付きのAAAパターン（Arrange, Act, Assert）を使用
-5. capsysでstdoutをキャプチャしてユーザー向け出力を検証
+5. caplogでログ出力をキャプチャしてユーザー向け出力を検証
 """
 
+import logging
 from pathlib import Path
 from typing import Callable
 from unittest.mock import MagicMock
@@ -79,7 +80,7 @@ def sample_image_metrics_factory() -> Callable[[str, float], ImageMetrics]:
 
 def test_cli_selects_and_displays_images(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
     sample_image_metrics_factory: Callable[[str, float], ImageMetrics],
@@ -121,12 +122,12 @@ def test_cli_selects_and_displays_images(
     )
 
     # Act
-    Main().run()
+    with caplog.at_level(logging.INFO):
+        Main().run()
 
     # Assert
-    captured = capsys.readouterr()
-    assert "選択された画像一覧" in captured.out
-    assert "統計情報" in captured.out
+    assert "選択された画像一覧" in caplog.text
+    assert "統計情報" in caplog.text
 
 
 @pytest.mark.parametrize(

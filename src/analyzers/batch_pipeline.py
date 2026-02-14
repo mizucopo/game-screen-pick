@@ -404,7 +404,7 @@ class BatchPipeline:
             path, pil_img, clip_features, semantic, global_idx = data
             interval = BatchPipeline.PROGRESS_REPORT_INTERVAL
             if show_progress and global_idx % interval == 0:
-                print(f"解析済み: {global_idx}/{total_paths}")
+                logger.info(f"解析済み: {global_idx}/{total_paths}")
             result = self._process_single_result(path, pil_img, clip_features, semantic)
             return idx, result
 

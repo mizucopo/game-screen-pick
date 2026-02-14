@@ -1,7 +1,9 @@
 """game_screen_pick - 高精度・コンテンツ多様性重視選択ツール."""
 
 import argparse
+import logging
 import random
+import sys
 from pathlib import Path
 
 from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
@@ -10,6 +12,8 @@ from .models.selection_config import SelectionConfig
 from .services.game_screen_picker import GameScreenPicker
 from .utils.file_utils import FileUtils
 from .utils.result_formatter import ResultFormatter
+
+logger = logging.getLogger(__name__)
 
 
 class Main:
@@ -231,6 +235,12 @@ def main() -> None:
 
     pyproject.tomlの[project.scripts]から呼び出される。
     """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        stream=sys.stdout,
+        force=True,
+    )
     Main().run()
 
 
