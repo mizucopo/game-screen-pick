@@ -1,6 +1,7 @@
 """メトリクス計算器 - 生メトリクス、セマンティックスコア、総合スコアの計算を行う."""
 
 import logging
+from typing import cast
 
 import cv2
 import numpy as np
@@ -193,8 +194,6 @@ class MetricCalculator:
         with torch.inference_mode():
             # torch.Tensorをスタックしてバッチ化
             # valid_indicesでNoneを除外済みだが、型チェッカーに明示するためにcast
-            from typing import cast
-
             valid_tensors: list[torch.Tensor] = [
                 cast("torch.Tensor", clip_features_list[i]) for i in valid_indices
             ]
