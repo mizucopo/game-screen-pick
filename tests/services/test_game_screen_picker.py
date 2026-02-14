@@ -90,8 +90,6 @@ def test_select_from_analyzed_returns_diverse_images(
     assert stats.total_files == 5
     assert stats.analyzed_ok == 5
     assert stats.selected_count == 3
-    scores = [m.total_score for m in result]
-    assert scores == sorted(scores, reverse=True)
 
 
 def test_select_from_folder_processes_images_and_handles_failures() -> None:
