@@ -131,8 +131,8 @@ class CLIPModelManager:
     def get_normalized_image_features(self, pil_image: Image.Image) -> torch.Tensor:
         """PIL画像から正規化済みCLIP画像特徴を抽出する.
 
-        単一画像の特徴抽出をL2正規化済みで返すユーティリティメソッド.
-        feature_extractor.py と metric_calculator.py の重複コードを統合する.
+        単一画像の特徴抽出をL2正規化済みで返すユーティリティメソッド。
+        feature_extractor.py と metric_calculator.py の重複コードを統合する。
 
         Args:
             pil_image: PIL画像オブジェクト（RGB形式）

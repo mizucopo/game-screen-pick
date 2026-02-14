@@ -79,7 +79,7 @@ class MetricCalculator:
     def calculate_raw_metrics(self, img: np.ndarray) -> RawMetrics:
         """生の画像メトリクスを計算する.
 
-        注: 呼出し元（batch_pipeline.py）で既にmax_dimまで縮小された画像を
+        注: 呼び出し元（batch_pipeline.py）で既にmax_dimまで縮小された画像を
         受け取ることを想定している。高解像度画像での二重リサイズを回避し、
         メモリと計算コストを削減する。
 
@@ -284,7 +284,7 @@ class MetricCalculator:
     def calculate_raw_norm_metrics(
         self, img: np.ndarray
     ) -> tuple[RawMetrics, NormalizedMetrics]:
-        """生メトリクスと正規化メトリクスのみ計算する.
+        """生メトリクスと正規化メトリクスのみ計算する。
 
         セマンティックスコアはバッチ計算済みの値を使用するため、
         このメソッドでは計算しない。
