@@ -82,8 +82,7 @@ class Main:
             parsed_args.recursive,
         )
 
-        if parsed_args.copy_to and best:
-            FileUtils.copy_selected_items(best, parsed_args.copy_to)
+        FileUtils.copy_selected_items(best, parsed_args.output)
 
         ResultFormatter.display_results(best, stats)
 
@@ -172,7 +171,7 @@ class Main:
         """
         parser = argparse.ArgumentParser(description="Diverse Game Screen Picker")
         parser.add_argument("input", help="入力フォルダ")
-        parser.add_argument("-c", "--copy-to", help="出力フォルダ")
+        parser.add_argument("output", help="出力フォルダ")
         parser.add_argument(
             "-n", "--num", type=Main.validate_positive_int, default=10, help="選択枚数"
         )
