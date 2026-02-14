@@ -1,0 +1,81 @@
+"""image_utils.pyの単体テスト.
+
+このテストモジュールは以下のベストプラクティスに従っています：
+1. 純粋関数としての動作を検証
+2. AAAパターン（Arrange, Act, Assert）を使用
+3. 明確な日本語コメントでテスト意図を説明
+4. エッジケース、境界値を網羅
+"""
+
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+
+from src.utils.image_utils import ImageUtils
+
+
+@pytest.mark.parametrize(
+    "size,max_dim,expected_max_size",
+    [
+        # 大きな画像は縮小される
+        ((2000, 1000), 720, 720),
+        # 小さな画像はそのまま
+        ((300, 200), 720, 300),
+        # グレースケールもRGBに変換
+        ((100, 100), 720, 100),
+    ],
+)
+def test_load_as_rgb_resized(
+    tmp_path: Path,
+    size: tuple[int, int],
+    max_dim: int,
+    expected_max_size: int,
+) -> None:
+    """画像が正しくRGB形式でリサイズされて読み込まれること.
+
+    Given:
+        - 指定されたサイズの画像がある
+    When:
+        - load_as_rgb_resizedで読み込む
+    Then:
+        - RGB形式の画像が返されること
+        - 長辺がmax_dim以下であること
+    """
+    # Arrange
+    channels = 1 if len(size) == 2 and size == (100, 100) else 3
+    shape = (*size, channels) if channels == 3 else size
+    img_array = np.random.randint(0, 255, shape, dtype=np.uint8)
+
+    suffix = "_gray.jpg" if channels == 1 else ".jpg"
+    image_path = tmp_path / f"test{suffix}"
+    cv2.imwrite(str(image_path), img_array)
+
+    # Act
+    result = ImageUtils.load_as_rgb_resized(str(image_path), max_dim=max_dim)
+
+    # Assert
+    assert result is not None
+    assert result.mode == "RGB"
+
+    w, h = result.size
+    max_size = max(w, h)
+    assert max_size == expected_max_size
+
+    # アスペクト比が保持されている
+    original_aspect = size[1] / size[0] if size[0] > 0 else 1.0
+    result_aspect = w / h if h > 0 else 1.0
+    assert abs(original_aspect - result_aspect) < 0.01
+
+
+def test_load_as_rgb_resized_returns_none_for_invalid_path() -> None:
+    """無効なパスでNoneが返されること."""
+    # Arrange
+    invalid_path = "/nonexistent/path/image.jpg"
+
+    # Act
+    result = ImageUtils.load_as_rgb_resized(invalid_path, max_dim=720)
+
+    # Assert
+    assert result is None

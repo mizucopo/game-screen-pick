@@ -1,0 +1,31 @@
+# Git Flow
+
+- main: Production
+- develop: Development
+- feature/*: Features (branch from develop, merge to develop)
+- release/*: Not used
+- hotfix/*: Not used
+
+## Workflow
+git checkout develop && git pull
+git checkout -b feature/*
+gh pr create --base develop
+
+## Quality Check
+uv run task test
+
+## Code Organization Rules
+- 1 file = 1 class
+- 1 class = 1 test file
+- When fixing linting errors, modify only the affected code files - never modify pyproject.toml configuration.
+
+## Testing Guidelines (Strict Adherence)
+- **Framework**: Use function-based tests (pytest), not class-based.
+- **Language**: Write all test comments (especially AAA steps) and docstrings in Japanese to clarify the test intent.
+- **Strategy**: Test "What" (observable behavior/results), not "How" (implementation details). Avoid verifying internal method call counts or execution order.
+- **Mocking**: Minimize mocks. Use real instances for domain logic; mock only uncontrolled external boundaries (DB, API, SMTP).
+- **Architecture**: Separate domain logic from IO. Refactor to Humble Object/Hexagonal patterns if needed to ensure logic is testable without IO.
+- **Structure**:
+  - Use **AAA Pattern** (Arrange, Act, Assert) with explicit comments.
+  - Naming: Describe business requirements (e.g., `sum_of_two_numbers_returns_total_value`), not method names.
+- **Scope**: Never test private methods directly. Cover them indirectly via public interfaces.
