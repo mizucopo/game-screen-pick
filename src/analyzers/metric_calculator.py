@@ -41,6 +41,41 @@ class MetricCalculator:
         self.weights = weights
         self.model_manager = model_manager
 
+    def _compute_cosine_similarity(self, image_features: torch.Tensor) -> float:
+        """画像特徴とテキスト埋め込みのコサイン類似度を計算する.
+
+        Args:
+            image_features: 画像特徴ベクトル（正規化済み、デバイス転送済み、
+                            バッチ次元あり: [1, feature_dim]）
+
+        Returns:
+            コサイン類似度（範囲: [-1, 1]）
+        """
+        text_embeddings = self.model_manager.get_text_embeddings()
+        cosine_sim = torch.matmul(image_features, text_embeddings.T)
+        return float(cosine_sim[0][0])
+
+    def _compute_cosine_similarity_batch(
+        self, batch_features: torch.Tensor
+    ) -> torch.Tensor:
+        """画像特徴バッチとテキスト埋め込みのコサイン類似度を一括計算する.
+
+        Args:
+            batch_features: 画像特徴バッチ（正規化済み、デバイス転送済み）
+                            形状: [batch_size, feature_dim]
+
+        Returns:
+            コサイン類似度のテンソル（形状: [batch_size, 1]）
+        """
+        text_embeddings = self.model_manager.get_text_embeddings()
+        # autocast下ではbatch_featuresがfloat16になる可能性があるため
+        # text_embeddingsも同じdtypeにキャストして型不一致によるエラーを回避
+        target_dtype = batch_features.dtype
+        embeddings_on_device = text_embeddings.to(target_dtype).to(
+            self.model_manager.device
+        )
+        return torch.matmul(batch_features, embeddings_on_device.T)
+
     def calculate_raw_metrics(self, img: np.ndarray) -> RawMetrics:
         """生の画像メトリクスを計算する.
 
@@ -132,11 +167,7 @@ class MetricCalculator:
             pil_img
         ).unsqueeze(0)
 
-        # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
-        # コサイン類似度を計算
-        text_embeddings = self.model_manager.get_text_embeddings()
-        cosine_sim = torch.matmul(image_features_normalized, text_embeddings.T)
-        return float(cosine_sim[0][0])
+        return self._compute_cosine_similarity(image_features_normalized)
 
     def calculate_semantic_score_from_features(
         self, clip_features: np.ndarray
@@ -156,11 +187,7 @@ class MetricCalculator:
                 .unsqueeze(0)
                 .to(self.model_manager.device)
             )
-            # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
-            # コサイン類似度を計算
-            text_embeddings = self.model_manager.get_text_embeddings()
-            cosine_sim = torch.matmul(image_features, text_embeddings.T)
-            return float(cosine_sim[0][0])
+            return self._compute_cosine_similarity(image_features)
 
     def calculate_semantic_score_batch(
         self, clip_features_list: list[torch.Tensor | None]
@@ -204,16 +231,7 @@ class MetricCalculator:
 
             # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
             # コサイン類似度を一括計算
-            text_embeddings = self.model_manager.get_text_embeddings()
-            # autocast下ではbatch_featuresがfloat16になる可能性があるため
-            # text_embeddingsも同じdtypeにキャストして型不一致によるエラーを回避
-            # （matmulの引数は同じdtypeである必要がある）
-            target_dtype = batch_features.dtype
-            embeddings_on_device = text_embeddings.to(target_dtype).to(
-                self.model_manager.device
-            )
-            casted_embeddings = embeddings_on_device.T
-            cosine_sims = torch.matmul(batch_features, casted_embeddings)
+            cosine_sims = self._compute_cosine_similarity_batch(batch_features)
 
             # 結果を元のインデックスにマッピング
             for j, idx in enumerate(valid_indices):

@@ -1,5 +1,6 @@
 """ベクトル操作ユーティリティ."""
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -111,3 +112,32 @@ class VectorUtils:
         rejected_by_similarity = len(rejected_by_similarity_set - selected_indices)
 
         return selected_indices, rejected_by_similarity
+
+    @staticmethod
+    def filter_by_similarity(
+        candidates: list[np.ndarray[Any, Any]],
+        num: int,
+        similarity_threshold: float,
+        compute_threshold_steps: Callable[[float], list[float]],
+    ) -> tuple[set[int], int]:
+        """類似度に基づいて候補をフィルタリングする.
+
+        特徴ベクトルの正規化、しきい値ステップの計算、多様なインデックスの選択を
+        一連の処理として実行する。
+
+        Args:
+            candidates: 候補の特徴ベクトルリスト
+            num: 選択する数
+            similarity_threshold: 類似度の閾値
+            compute_threshold_steps: しきい値からステップリストを計算する関数
+
+        Returns:
+            (選択されたインデックスのセット, 類似度で除外された数) のタプル
+        """
+        normalized_features = VectorUtils.normalize_feature_vectors(candidates)
+        threshold_steps = compute_threshold_steps(similarity_threshold)
+        return VectorUtils.select_diverse_indices(
+            normalized_features=normalized_features,
+            num=num,
+            threshold_steps=threshold_steps,
+        )

@@ -2,11 +2,11 @@
 
 from dataclasses import dataclass
 
-from .types.analyzer_config_kwargs import AnalyzerConfigKwargs
+from .config_from_args_mixin import ConfigFromArgsMixin
 
 
 @dataclass
-class AnalyzerConfig:
+class AnalyzerConfig(ConfigFromArgsMixin):
     """画像品質アナライザーの設定.
 
     Attributes:
@@ -75,17 +75,3 @@ class AnalyzerConfig:
         if self.io_max_workers is not None and self.io_max_workers < 0:
             msg = f"io_max_workersは非負の値である必要があります: {self.io_max_workers}"
             raise ValueError(msg)
-
-    @classmethod
-    def from_cli_args(cls, **kwargs: AnalyzerConfigKwargs) -> "AnalyzerConfig":
-        """CLI引数から設定を作成する.
-
-        Args:
-            **kwargs: CLI引数（result_max_workers, max_dim, max_memory_mb）
-                Noneでない引数のみデフォルト値を上書き
-
-        Returns:
-            AnalyzerConfigインスタンス（__post_init__バリデーション適用済み）
-        """
-        filtered = {k: v for k, v in kwargs.items() if v is not None}
-        return cls(**filtered)  # type: ignore[arg-type]

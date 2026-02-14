@@ -3,11 +3,11 @@
 from dataclasses import dataclass, field
 
 from ..constants.score_weights import ScoreWeights
-from .types.selection_config_kwargs import SelectionConfigKwargs
+from .config_from_args_mixin import ConfigFromArgsMixin
 
 
 @dataclass
-class SelectionConfig:
+class SelectionConfig(ConfigFromArgsMixin):
     """画像選択の設定.
 
     Attributes:
@@ -30,20 +30,6 @@ class SelectionConfig:
         default_factory=lambda: ScoreWeights.DEFAULT_ACTIVITY_MIX_RATIO
     )
     activity_bucket_mode: str = "quantile"
-
-    @classmethod
-    def from_cli_args(cls, **kwargs: SelectionConfigKwargs) -> "SelectionConfig":
-        """CLI引数から設定を作成する.
-
-        Args:
-            **kwargs: CLI引数（batch_size）
-                Noneでない引数のみデフォルト値を上書き
-
-        Returns:
-            SelectionConfigインスタンス
-        """
-        filtered = {k: v for k, v in kwargs.items() if v is not None}
-        return cls(**filtered)  # type: ignore[arg-type]
 
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""

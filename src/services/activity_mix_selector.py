@@ -201,19 +201,12 @@ class ActivityMixSelector:
         if not candidates or max_pool_size <= 0:
             return [], 0
 
-        # 特徴ベクトルを事前にL2正規化
-        normalized_features = VectorUtils.normalize_feature_vectors(
-            [c.features for c in candidates]
-        )
-
-        # 段階的しきい値緩和
-        threshold_steps = self.config.compute_threshold_steps(similarity_threshold)
-
-        # 類似度フィルタリングを実行
-        selected_indices, rejected_by_similarity = VectorUtils.select_diverse_indices(
-            normalized_features=normalized_features,
+        # 類似度フィルタリングを実行（正規化、しきい値計算、選択をまとめて実行）
+        selected_indices, rejected_by_similarity = VectorUtils.filter_by_similarity(
+            candidates=[c.features for c in candidates],
             num=max_pool_size,
-            threshold_steps=threshold_steps,
+            similarity_threshold=similarity_threshold,
+            compute_threshold_steps=self.config.compute_threshold_steps,
         )
 
         selected = [candidates[i] for i in sorted(selected_indices)]
