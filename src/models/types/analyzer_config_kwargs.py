@@ -4,11 +4,7 @@ from typing import TypedDict
 
 
 class AnalyzerConfigKwargs(TypedDict, total=False):
-    """AnalyzerConfig.from_cli_args の引数型.
-
-    None でない値のみが渡されることを想定。
-    全てのフィールドがオプション（total=False）。
-    """
+    """AnalyzerConfig.from_cli_args の引数型."""
 
     max_dim: int
     max_memory_mb: int

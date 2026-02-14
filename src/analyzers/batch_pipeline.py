@@ -108,9 +108,11 @@ class BatchPipeline:
     ) -> list[ImageMetrics | None]:
         """複数の画像をバッチ処理で解析する.
 
-        2段パイプライン構成:
-        1. I/O+CV前処理ステージを並列（ThreadPoolExecutor）
-        2. CLIPステージはバッチで直列
+        パイプライン構成（各チャンク内で4ステージを並列実行）:
+        1. ステージ1: Lookaheadプリロード（I/O+CV前処理）
+        2. ステージ2: バッチCLIP推論
+        3. ステージ3: バッチセマンティックスコア計算
+        4. ステージ4: 並列結果構築（raw metric + feature結合）
 
         メモリ効率化のためチャンク単位でストリーミング処理:
         - メモリ予算に基づいて動的にチャンクサイズを決定
@@ -371,6 +373,8 @@ class BatchPipeline:
             ImageMetricsオブジェクトのリスト（失敗時はNone）
         """
         # タスクの型エイリアス
+        # TaskData: (path, pil_img, clip_features, semantic, global_idx) または None
+        # TaskTuple: (local_idx, TaskData) - local_idxで結果の順序を維持
         TaskData = tuple[str, Image.Image, np.ndarray, float, int] | None
         TaskTuple = tuple[int, TaskData]
 

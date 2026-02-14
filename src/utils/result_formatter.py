@@ -1,4 +1,7 @@
-"""結果フォーマットユーティリティ."""
+"""結果フォーマットユーティリティクラス.
+
+選択結果と統計情報をコンソールに出力する機能を提供する。
+"""
 
 from pathlib import Path
 from typing import Any

@@ -205,9 +205,9 @@ class MetricCalculator:
             # キャッシュされたテキスト埋め込み（既にL2正規化済み）との
             # コサイン類似度を一括計算
             text_embeddings = self.model_manager.get_text_embeddings()
-            # batch_features は autocast により float16 になる可能性があるため
-            # text_embeddings を同じ dtype にキャストして型不一致を回避
-            # また、デバイス転送も同時に行う
+            # autocast下ではbatch_featuresがfloat16になる可能性があるため
+            # text_embeddingsも同じdtypeにキャストして型不一致によるエラーを回避
+            # （matmulの引数は同じdtypeである必要がある）
             target_dtype = batch_features.dtype
             embeddings_on_device = text_embeddings.to(target_dtype).to(
                 self.model_manager.device

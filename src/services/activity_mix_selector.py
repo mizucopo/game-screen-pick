@@ -51,8 +51,9 @@ class ActivityMixSelector:
         if not all_results:
             return [], 0
 
-        # 全候補数がnum*3未満の場合は類似度フィルタをスキップ
-        # （十分な候補がないため、除外すると選択数を満たせなくなる）
+        # 類似度フィルタの適用条件:
+        # 候補数がnum*3以上の場合のみ適用
+        # 理由: 十分な候補がない場合に類似度で除外すると、選択数を満たせなくなるため
         apply_similarity_filter = len(all_results) >= num * 3
 
         if apply_similarity_filter:
@@ -144,7 +145,9 @@ class ActivityMixSelector:
                 ActivityBucket.HIGH: [],
             }
             # id ベースの集合で「選択済み」を判定
-            # （ImageMetricsの等価比較に依存しないため）
+            # 理由: ImageMetricsの__eq__はvalueベースの比較を実装しており、
+            #       集合演算中にValueErrorを引き起こす可能性があるため、
+            #       identity(id)ベースで判定することで安全に除外チェックを行う
             selected_ids = {id(img) for img in selected}
             # バケットごとにスコア順に収集
             for bucket in ActivityBucket:

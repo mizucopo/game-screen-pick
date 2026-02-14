@@ -1,4 +1,4 @@
-"""Metric normalizer for image quality metrics."""
+"""画像品質メトリクス正規化ユーティリティ."""
 
 import math
 

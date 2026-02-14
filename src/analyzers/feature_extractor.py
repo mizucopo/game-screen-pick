@@ -133,6 +133,7 @@ class FeatureExtractor:
 
         # 現在のバッチサイズ
         current_batch_size = initial_batch_size
+        # OOM時の指数バックオフ戦略: 32→16→8→4→2→1
 
         # 処理位置を追跡
         i = 0

@@ -28,7 +28,7 @@ class AnalyzerConfig:
     min_chunk_size: int = 16  # 最低16枚は1チャンクで処理
     brightness_penalty_threshold: float = 35.0
     brightness_penalty_value: float = 0.15
-    semantic_weight: float = 0.03  # コサイン類似度[-1,1]用に調整（元の0.2から100倍）
+    semantic_weight: float = 0.03  # コサイン類似度[-1,1]用に調整
     score_multiplier: float = 100.0
     result_max_workers: int | None = None
     io_max_workers: int | None = None

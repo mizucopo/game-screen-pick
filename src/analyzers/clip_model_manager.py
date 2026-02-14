@@ -45,7 +45,9 @@ class CLIPModelManager:
         self.model.to(self.device)
         self.model.eval()
 
-        # GPU最適化: TF32を許可（Ampere GPU以上で有効）
+        # GPU最適化: TF32を許可
+        # 理由: Ampere GPU以上ではTF32演算を使用することで、
+        #       精度をほぼ維持したまま行列演算を高速化できる
         if self.device == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
