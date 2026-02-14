@@ -12,12 +12,11 @@ uv sync
 ### 実行方法
 
 ```bash
-uv run game-screen-pick <入力フォルダ> [オプション]
+uv run game-screen-pick <入力フォルダ> <出力フォルダ> [オプション]
 ```
 
 ### オプション
 
-- `-c <フォルダ>`, `--copy-to <フォルダ>`: 選択した画像をコピーする出力フォルダ
 - `-n <数値>`, `--num <数値>`: 選択枚数 (デフォルト: 10)
 - `-s <数値>`, `--similarity <数値>`: 類似度しきい値 (デフォルト: 0.72)
 - `-r`, `--recursive`: サブフォルダも検索
@@ -30,14 +29,14 @@ uv run game-screen-pick <入力フォルダ> [オプション]
 ### 使用例
 
 ```bash
-# スクリーンショットから15枚選択
-uv run game-screen-pick ./screenshots -n 15
+# スクリーンショットから15枚選択して出力フォルダにコピー
+uv run game-screen-pick ./screenshots ./output -n 15
 
-# 選択した画像をコピー
-uv run game-screen-pick ./screenshots -c ./output -n 20
+# 選択枚数を指定してコピー
+uv run game-screen-pick ./screenshots ./output -n 20
 
 # サブフォルダを含めて検索
-uv run game-screen-pick ./screenshots -r -n 10
+uv run game-screen-pick ./screenshots ./output -r -n 10
 ```
 
 ## 選択アルゴリズム
