@@ -42,6 +42,7 @@ def test_calculate_metrics_returns_valid_values(
     """
     # Arrange
     img = cv2.imread(sample_image_path)
+    assert img is not None, f"テスト画像が読み込めません: {sample_image_path}"
 
     # Act
     raw_metrics = metric_calculator.calculate_raw_metrics(img)
