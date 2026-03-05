@@ -5,7 +5,11 @@
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..models.image_metrics import ImageMetrics
+    from ..models.picker_statistics import PickerStatistics
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +21,9 @@ class ResultFormatter:
     """
 
     @staticmethod
-    def display_results(selected: list[Any], stats: Any) -> None:
+    def display_results(
+        selected: list["ImageMetrics"], stats: "PickerStatistics"
+    ) -> None:
         """選択結果を表示する.
 
         Args:

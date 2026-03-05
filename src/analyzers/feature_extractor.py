@@ -11,7 +11,6 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from ..utils.vector_utils import VectorUtils
 from .clip_model_manager import CLIPModelManager
 
 logger = logging.getLogger(__name__)
@@ -64,9 +63,8 @@ class FeatureExtractor:
         """
         # CLIPModelManagerから正規化済み特徴を取得（torch.Tensor）
         features_tensor = self.model_manager.get_normalized_image_features(pil_img)
-        # CPUに転送してNumPy配列に変換
-        features = features_tensor.cpu().numpy()
-        return VectorUtils.safe_l2_normalize(features)
+        # CPUに転送してNumPy配列に変換（既にL2正規化済み）
+        return features_tensor.cpu().numpy()
 
     def extract_combined_features(
         self,
@@ -86,11 +84,10 @@ class FeatureExtractor:
             統合された特徴ベクトル（576次元、np.ndarray）
         """
         hsv_features = FeatureExtractor.extract_hsv_features(img)
-        # L2正規化（既に正規化されているが、安全のため再正規化）
-        hsv_normalized = VectorUtils.safe_l2_normalize(hsv_features)
+        # cv2.normalizeで既に正規化済み
 
         # 統合
-        return np.concatenate([hsv_normalized, clip_features])
+        return np.concatenate([hsv_features, clip_features])
 
     def extract_clip_features_batch(
         self,
