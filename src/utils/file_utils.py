@@ -3,7 +3,10 @@
 import logging
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..models.image_metrics import ImageMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +48,11 @@ class FileUtils:
             counter += 1
 
     @staticmethod
-    def copy_selected_items(selected: list[Any], dest_dir: str) -> None:
+    def copy_selected_items(selected: list["ImageMetrics"], dest_dir: str) -> None:
         """選択されたアイテムを出力ディレクトリにコピーする.
 
         Args:
-            selected: path属性を持つオブジェクトのリスト
+            selected: 選択された画像メトリクスのリスト
             dest_dir: 出力先ディレクトリのパス
         """
         out = Path(dest_dir)

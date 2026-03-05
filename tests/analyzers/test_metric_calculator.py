@@ -16,9 +16,9 @@ from src.constants.score_weights import ScoreWeights
 from src.models.analyzer_config import AnalyzerConfig
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def metric_calculator() -> MetricCalculator:
-    """メトリクス計算器のフィクスチャ."""
+    """メトリクス計算器のフィクスチャ（モジュールスコープでモデル再利用）."""
     config = AnalyzerConfig()
     weights = ScoreWeights.get_weights()
     # MPS環境でのテスト安定のためCPUデバイスを指定
@@ -42,6 +42,7 @@ def test_calculate_metrics_returns_valid_values(
     """
     # Arrange
     img = cv2.imread(sample_image_path)
+    assert img is not None, f"テスト画像が読み込めません: {sample_image_path}"
 
     # Act
     raw_metrics = metric_calculator.calculate_raw_metrics(img)

@@ -58,19 +58,6 @@ def sample_image_path(tmp_path: Path, request: pytest.FixtureRequest) -> str:
     return _create_test_image(tmp_path, filename, (480, 640), pixel_range)
 
 
-@pytest.fixture
-def multiple_image_paths(tmp_path: Path) -> list[str]:
-    """複数のテスト画像を作成する."""
-    paths = []
-    for i in range(3):
-        np.random.seed(42 + i)
-        img_array = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        img_path = tmp_path / f"test_image_{i}.jpg"
-        cv2.imwrite(str(img_path), img_array)
-        paths.append(str(img_path))
-    return paths
-
-
 def create_image_metrics(
     path: str,
     raw_metrics_dict: dict[str, float] | None = None,

@@ -114,53 +114,44 @@ class ActivityMixSelector:
         high_num = bucket_targets[ActivityBucket.HIGH]
 
         # 各バケットの候補を取得してスコア降順にソート（品質優先）
-        low_bucketed = sorted(
-            (b for b in bucketed_images if b.bucket == ActivityBucket.LOW),
-            key=lambda b: b.image.total_score,
-            reverse=True,
-        )
-        mid_bucketed = sorted(
-            (b for b in bucketed_images if b.bucket == ActivityBucket.MID),
-            key=lambda b: b.image.total_score,
-            reverse=True,
-        )
-        high_bucketed = sorted(
-            (b for b in bucketed_images if b.bucket == ActivityBucket.HIGH),
-            key=lambda b: b.image.total_score,
-            reverse=True,
-        )
+        # dict comprehensionで1回のパスでバケット分け
+        bucketed_by_activity: dict[ActivityBucket, list[BucketedImage]] = {
+            bucket: sorted(
+                [b for b in bucketed_images if b.bucket == bucket],
+                key=lambda b: b.image.total_score,
+                reverse=True,
+            )
+            for bucket in ActivityBucket
+        }
 
         # 各バケットからターゲット数を選択
         selected: list[ImageMetrics] = []
-        selected.extend([b.image for b in low_bucketed[:low_num]])
-        selected.extend([b.image for b in mid_bucketed[:mid_num]])
-        selected.extend([b.image for b in high_bucketed[:high_num]])
+        selected.extend(
+            [b.image for b in bucketed_by_activity[ActivityBucket.LOW][:low_num]]
+        )
+        selected.extend(
+            [b.image for b in bucketed_by_activity[ActivityBucket.MID][:mid_num]]
+        )
+        selected.extend(
+            [b.image for b in bucketed_by_activity[ActivityBucket.HIGH][:high_num]]
+        )
 
         # まだ不足する場合は他のバケットから補填
         if len(selected) < num:
-            # 選択されていない画像をバケットごとに分類
-            remaining_by_bucket: dict[ActivityBucket, list[ImageMetrics]] = {
-                ActivityBucket.LOW: [],
-                ActivityBucket.MID: [],
-                ActivityBucket.HIGH: [],
-            }
             # id ベースの集合で「選択済み」を判定
             # 理由: ImageMetricsの__eq__はvalueベースの比較を実装しており、
             #       集合演算中にValueErrorを引き起こす可能性があるため、
             #       identity(id)ベースで判定することで安全に除外チェックを行う
             selected_ids = {id(img) for img in selected}
-            # バケットごとにスコア順に収集
-            for bucket in ActivityBucket:
-                candidates = [
+            # 選択されていない画像をバケットごとに分類
+            remaining_by_bucket: dict[ActivityBucket, list[ImageMetrics]] = {
+                bucket: [
                     b.image
-                    for b in bucketed_images
-                    if b.bucket == bucket and id(b.image) not in selected_ids
+                    for b in bucketed_by_activity[bucket]
+                    if id(b.image) not in selected_ids
                 ]
-                remaining_by_bucket[bucket] = sorted(
-                    candidates,
-                    key=lambda img: img.total_score,
-                    reverse=True,
-                )
+                for bucket in ActivityBucket
+            }
 
             # 各バケットから交互に補填してバランスを維持
             bucket_order = [ActivityBucket.LOW, ActivityBucket.MID, ActivityBucket.HIGH]
