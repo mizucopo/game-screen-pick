@@ -50,4 +50,3 @@ def test_get_unique_destination_generates_unique_filename(
 
     # Assert
     assert result == tmp_path / expected
-    assert result.name == expected

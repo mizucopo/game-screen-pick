@@ -16,9 +16,9 @@ from src.constants.score_weights import ScoreWeights
 from src.models.analyzer_config import AnalyzerConfig
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def metric_calculator() -> MetricCalculator:
-    """メトリクス計算器のフィクスチャ."""
+    """メトリクス計算器のフィクスチャ（モジュールスコープでモデル再利用）."""
     config = AnalyzerConfig()
     weights = ScoreWeights.get_weights()
     # MPS環境でのテスト安定のためCPUデバイスを指定
