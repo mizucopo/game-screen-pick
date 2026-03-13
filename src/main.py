@@ -178,6 +178,7 @@ class Main:
             "(デフォルト: 512、大きいほどチャンクが大きくなる）"
         ),
     )
+    @click.option("--debug", is_flag=True, help="デバッグログを有効化")
     @click.argument(
         "input", type=click.Path(exists=True, file_okay=False, dir_okay=True)
     )
@@ -191,6 +192,7 @@ class Main:
         result_max_workers: int | None,
         max_dim: int,
         max_memory_mb: int,
+        debug: bool,
         input: str,
         output: str,
     ) -> None:
@@ -201,35 +203,47 @@ class Main:
           game-screen-pick -n 15 ./screenshots ./output
           game-screen-pick -r -n 10 ./screenshots ./output
         """
-        # 入力フォルダのパスを検証
-        input_path = Path(input)
-        if not input_path.is_dir():
-            raise click.BadParameter(
-                f"指定パスはフォルダではありません: {input}", param_hint="input"
+        # デバッグモードの場合はログレベルをDEBUGに設定
+        if debug:
+            logging.getLogger().setLevel(logging.DEBUG)
+
+        try:
+            # 入力フォルダのパスを検証
+            input_path = Path(input)
+            if not input_path.is_dir():
+                raise click.BadParameter(
+                    f"指定パスはフォルダではありません: {input}", param_hint="input"
+                )
+
+            # 依存関係の遅延初期化
+            analyzer_config = AnalyzerConfig.from_cli_args(
+                result_max_workers=result_max_workers,
+                max_dim=max_dim,
+                max_memory_mb=max_memory_mb,
+            )
+            analyzer = ImageQualityAnalyzer(config=analyzer_config)
+
+            rng = random.Random(seed) if seed is not None else None
+
+            selection_config = SelectionConfig.from_cli_args(batch_size=batch_size)
+            picker = GameScreenPicker(analyzer, config=selection_config, rng=rng)
+
+            best, stats = picker.select(
+                str(input_path),
+                num,
+                similarity,
+                recursive,
             )
 
-        # 依存関係の遅延初期化
-        analyzer_config = AnalyzerConfig.from_cli_args(
-            result_max_workers=result_max_workers,
-            max_dim=max_dim,
-            max_memory_mb=max_memory_mb,
-        )
-        analyzer = ImageQualityAnalyzer(config=analyzer_config)
+            FileUtils.copy_selected_items(best, output)
+            ResultFormatter.display_results(best, stats)
 
-        rng = random.Random(seed) if seed is not None else None
+        except Exception as e:
+            import traceback
 
-        selection_config = SelectionConfig.from_cli_args(batch_size=batch_size)
-        picker = GameScreenPicker(analyzer, config=selection_config, rng=rng)
-
-        best, stats = picker.select(
-            str(input_path),
-            num,
-            similarity,
-            recursive,
-        )
-
-        FileUtils.copy_selected_items(best, output)
-        ResultFormatter.display_results(best, stats)
+            logger.error(f"予期しないエラーが発生しました: {type(e).__name__}: {e}")
+            logger.error(traceback.format_exc())
+            raise SystemExit(1) from None
 
     def run(self) -> None:
         """CLIを実行する.
