@@ -1,38 +1,4 @@
-# Git Flow
-
-## WHY
-Adopt a simple branching strategy to balance parallel development and quality assurance in team collaboration.
-Minimize impact on production while enabling independent feature development.
-
-## WHAT
-- main: Production (production-ready code)
-- develop: Development (integration branch for features)
-- feature/*: Features (branch from develop, merge to develop)
-- release/*: Not used
-- hotfix/*: Not used
-
-## HOW
-```bash
-# Start feature development
-git checkout develop && git pull
-git checkout -b feature/<feature-name>
-
-# Create pull request
-gh pr create --base develop
-
-# File operations
-git mv <old-path> <new-path>  # Move files
-git rm <path>                  # Delete files
-```
-
 ## Documentation
-
-### WHY
-Maintain consistency between code and documentation so developers can work with accurate information.
-
-### WHAT
-- README.md: Project overview, setup instructions, usage guide
-- Other docs: API specs, architecture explanations, etc.
 
 ### HOW
 - Update related documentation when code changes affect users
@@ -41,12 +7,13 @@ Maintain consistency between code and documentation so developers can work with 
 - Split large docs into separate files in `docs/` folder
 - Add links to split docs in README
 
-## Directory Structure
+## File Operations
 
-```
-- src/ - Domain logic
-- stubs/ - Type stub files
-- tests/ - Test code
+### HOW
+```bash
+# File operations
+git mv <old-path> <new-path>  # Move files
+git rm <path>                  # Delete files
 ```
 
 ## Code Organization Rules
@@ -67,11 +34,7 @@ Follow single responsibility principle to minimize scope of changes.
 - Fix lint errors in code, never relax configuration
 - Place imports at the top of the file, never in the middle
 
-## Testing Guidelines (Strict Adherence)
-
-### WHY
-Tests are executable documentation of specifications and a safety net against regressions.
-Test behavior, not implementation details, to prevent test breakage during refactoring.
+## Testing Guidelines
 
 ### WHAT
 - **Framework**: Use function-based tests (pytest), not class-based
@@ -91,14 +54,6 @@ Test behavior, not implementation details, to prevent test breakage during refac
   - Then: "〜を返す", "〜が生成" → "〜が返されること", "〜が生成されること"
 
 ## Quality Check
-
-### WHY
-Verify code quality and detect unexpected behavior before committing.
-Ensure continuous quality assurance through automated testing.
-
-### WHAT
-- Run test suite
-- Verify test coverage
 
 ### HOW
 ```bash
