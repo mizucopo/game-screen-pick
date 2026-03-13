@@ -29,8 +29,6 @@ class BatchPipeline:
     チャンク分割とlookaheadプリロードによるメモリ効率化を実現する。
     """
 
-    # ファイルサイズからメモリ使用量を見積もるための係数
-    MEMORY_ESTIMATION_FACTOR: float = 2.5
     # 進捗表示の間隔
     PROGRESS_REPORT_INTERVAL: int = 500
 
@@ -138,6 +136,7 @@ class BatchPipeline:
             paths,
             self.config.max_memory_mb,
             self.config.min_chunk_size,
+            self.config.max_dim,
         )
 
         # 先読み用のスレッドプール（インスタンスで再利用）
@@ -158,9 +157,16 @@ class BatchPipeline:
 
         for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_boundaries):
             chunk_paths = paths[chunk_start:chunk_end]
+            logger.debug(
+                f"チャンク処理開始: {chunk_idx + 1}/{len(chunk_boundaries)} "
+                f"({chunk_start}-{chunk_end}, {len(chunk_paths)}枚)"
+            )
 
             # プリロードされた画像を取得
+            logger.debug(f"プリロード画像を取得中: チャンク{chunk_idx}")
             pil_images = preload_futures[chunk_idx].result()
+            valid_count = len([p for p in pil_images if p is not None])
+            logger.debug(f"プリロード完了: {valid_count}枚有効")
             del preload_futures[chunk_idx]
 
             # 次のチャンクをプリロード
@@ -173,18 +179,26 @@ class BatchPipeline:
                     next_paths,
                     self.config.max_dim,
                 )
+                logger.debug(f"次チャンクのプリロード開始: チャンク{next_idx}")
 
             # ステージ2: チャンク単位でバッチCLIP推論を実行
+            logger.debug(f"CLIP推論開始: {len(pil_images)}枚")
             clip_features_list = self.feature_extractor.extract_clip_features_batch(
                 pil_images, initial_batch_size=batch_size
             )
+            logger.debug(
+                f"CLIP推論完了: "
+                f"{len([f for f in clip_features_list if f is not None])}枚成功"
+            )
 
             # ステージ3: セマンティックスコアをバッチ計算（バッチTensorを再利用）
+            logger.debug("セマンティックスコア計算開始")
             semantic_scores, batch_features, valid_indices = (
                 self.metric_calculator.calculate_semantic_score_batch(
                     clip_features_list
                 )
             )
+            logger.debug(f"セマンティックスコア計算完了: {len(valid_indices)}枚有効")
 
             # ステージ3.5: バッチTensorを再利用してGPU→CPU転送
             clip_features_np_list = self._convert_batch_features_to_numpy(
@@ -213,21 +227,35 @@ class BatchPipeline:
 
     @staticmethod
     def _compute_chunk_boundaries(
-        paths: list[str], max_memory_mb: int, min_chunk_size: int
+        paths: list[str],
+        max_memory_mb: int,
+        min_chunk_size: int,
+        max_dim: int | None = None,
     ) -> list[tuple[int, int]]:
         """メモリ予算に基づいてチャンク境界を計算する.
 
-        各画像のファイルサイズを取得し、指定されたメモリ予算を超えない
-        ように動的にチャンクを分割する。
+        画像解像度ベースでメモリ使用量を見積もり、max_dimで縮小後の
+        サイズを考慮してチャンクを分割する。
+
+        見積もり式:
+        - 1ピクセルあたり約4バイト（RGBA + PILオーバーヘッド）
+        - PIL Image: width × height × 4 bytes
+        - CLIP Tensor: 追加で同等程度
+        - 安全係数: 3.0
 
         Args:
             paths: 画像ファイルパスのリスト
             max_memory_mb: チャンクあたりの最大メモリ予算（MB）
             min_chunk_size: 最低限確保するチャンクサイズ
+            max_dim: 長辺の最大ピクセル数（Noneの場合は縮小しない）
 
         Returns:
             (start_index, end_index) のタプルリスト
         """
+        BYTES_PER_PIXEL = 4  # RGBA
+        SAFETY_FACTOR = 3.0  # CLIP Tensor等を考慮した安全係数
+        DEFAULT_MEMORY = 1024 * 1024  # 読み込み失敗時のデフォルト値（1MB相当）
+
         max_memory_bytes = max_memory_mb * 1024 * 1024
         chunks = []
         current_start = 0
@@ -235,37 +263,40 @@ class BatchPipeline:
         current_count = 0
 
         for i, path in enumerate(paths):
-            # os.statでファイルサイズを取得し、メモリを見積もる
+            # 画像の解像度からメモリを見積もる
             try:
-                file_size = os.path.getsize(path)
-                estimated_memory = int(
-                    file_size * BatchPipeline.MEMORY_ESTIMATION_FACTOR
-                )
-            except (OSError, ValueError):
-                estimated_memory = 0
+                with Image.open(path) as img:
+                    width, height = img.size
+                    # max_dimで縮小後のサイズを計算
+                    if max_dim is not None:
+                        scale = min(max_dim / max(width, height), 1.0)
+                        width = int(width * scale)
+                        height = int(height * scale)
+                    estimated_memory = int(
+                        width * height * BYTES_PER_PIXEL * SAFETY_FACTOR
+                    )
+            except Exception:
+                # 読み込み失敗時はデフォルト値（1MB相当）
+                estimated_memory = DEFAULT_MEMORY
 
             # チャンク追加でメモリ予算を超える場合は新規チャンクを検討
             would_exceed = current_memory + estimated_memory > max_memory_bytes
             has_min_images = current_count >= min_chunk_size
-            can_split = i > 0  # 最初の要素で分割しない
+            can_split = i > 0
 
             if would_exceed and has_min_images and can_split:
-                # 現在のチャンクを確定
                 chunks.append((current_start, i))
                 current_start = i
                 current_memory = estimated_memory
                 current_count = 1
             else:
-                # 現在のチャンクに追加
                 current_memory += estimated_memory
                 current_count += 1
 
         # 最後のチャンクを追加
         if current_start < len(paths):
             final_chunk = (current_start, len(paths))
-            # 最後のチャンクがmin_chunk_size未満で、前のチャンクがある場合はマージ
             if chunks and final_chunk[1] - final_chunk[0] < min_chunk_size:
-                # 前のチャンクとマージ
                 prev_start, _ = chunks.pop()
                 chunks.append((prev_start, final_chunk[1]))
             else:
