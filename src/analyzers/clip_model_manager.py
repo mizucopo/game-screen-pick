@@ -1,6 +1,7 @@
 """CLIPモデルのライフサイクルを管理するマネージャー."""
 
 import logging
+import os
 from collections.abc import Sequence
 from typing import Optional
 
@@ -62,6 +63,25 @@ class CLIPModelManager:
         Returns:
             検出されたデバイス名（"cuda", "mps", "cpu"のいずれか）
         """
+        # 診断情報の出力
+        if torch.cuda.is_available():
+            device_name = torch.cuda.get_device_name(0)
+            logger.info(f"CUDA が利用可能です (device: {device_name})")
+        else:
+            if torch.version.cuda:
+                ld_path = os.environ.get("LD_LIBRARY_PATH", "未設定")
+                logger.warning(
+                    f"CUDA が検出されません。"
+                    f"torch.version.cuda={torch.version.cuda}, "
+                    f"LD_LIBRARY_PATH={ld_path}"
+                )
+            else:
+                logger.warning(
+                    "CUDA が検出されません。"
+                    "CPU-only版PyTorchがインストールされています。"
+                    "CUDA版をインストールしてください。"
+                )
+
         if torch.cuda.is_available():
             return "cuda"
         if torch.backends.mps.is_available():
