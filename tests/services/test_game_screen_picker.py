@@ -1,133 +1,174 @@
 """GameScreenPickerの単体テスト.
 
-このテストモジュールは以下のベストプラクティスに従っています：
-1. 「What」（観察可能な挙動）をテスト
-2. モック使用を最小限に抑える - 外部依存関係のみモックを使用
-   （ファイルシステム、重いMLモデル）
-3. テスト可能性を高めるためにドメインロジックをIO操作から分離
-4. 明確なコメント付きのAAAパターン（Arrange, Act, Assert）を使用
-5. パブリックメソッドを通じてプライベートメソッドを間接的にテスト
+scene mix ベースへ再設計されたピッカーについて、
+解析済み入力からの選定とフォルダ起点の統計集計を公開API経由で確認する。
 """
 
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
-from unittest.mock import MagicMock
+from typing import cast
 
-import numpy as np
-import pytest
+import torch
 
-from src.models.image_metrics import ImageMetrics
+from src.analyzers.metric_calculator import MetricCalculator
+from src.models.analyzed_image import AnalyzedImage
+from src.models.analyzer_config import AnalyzerConfig
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
-from tests.conftest import create_image_metrics, create_sample_metrics
+from tests.conftest import create_analyzed_image
 
 
-@pytest.fixture
-def mock_analyzer() -> MagicMock:
-    """ImageQualityAnalyzerのモック."""
-    from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
+class DummyModelManager:
+    """固定テキスト埋め込みを返すダミーモデル."""
 
-    return MagicMock(spec=ImageQualityAnalyzer)
+    def get_text_embeddings(self, texts: Sequence[str]) -> torch.Tensor:
+        """promptに応じた固定ベクトルを返す."""
+        embeddings = []
+        for text in texts:
+            lowered = text.lower()
+            if "dialogue" in lowered or "cutscene" in lowered or "event" in lowered:
+                embeddings.append(torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32))
+            elif (
+                "menu" in lowered
+                or "title" in lowered
+                or "game over" in lowered
+                or "result" in lowered
+                or "reward" in lowered
+                or "loading" in lowered
+            ):
+                embeddings.append(torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32))
+            else:
+                embeddings.append(torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32))
+        return torch.stack(embeddings)
 
 
-def test_select_from_analyzed_returns_diverse_images(
-    mock_analyzer: MagicMock,
-) -> None:
-    """分析済み画像から多様な画像が正しく選択されること.
+class FakeAnalyzer:
+    """GameScreenPicker向けの軽量アナライザー.
+
+    事前に組み立てた `AnalyzedImage` を返し、
+    実ファイル解析なしでピッカーのドメインロジックだけをテストする。
+    """
+
+    def __init__(self, analyzed_images: list[AnalyzedImage]) -> None:
+        self._analyzed_images = analyzed_images
+        self.metric_calculator = MetricCalculator(AnalyzerConfig())
+        self.model_manager = DummyModelManager()
+
+    def analyze_batch(
+        self,
+        paths: list[str],
+        batch_size: int = 32,
+        show_progress: bool = False,
+    ) -> list[AnalyzedImage | None]:
+        del batch_size, show_progress
+        return cast(list[AnalyzedImage | None], self._analyzed_images[: len(paths)])
+
+
+def _make_analyzed_images() -> list[AnalyzedImage]:
+    """scene mix テスト用の解析済み画像群を作成する.
+
+    Returns:
+        gameplay 5件、event 4件、other 1件の `AnalyzedImage` 一覧。
+    """
+    images = []
+    for idx in range(5):
+        features = torch.tensor([1.0, 0.0, 0.0]).numpy()
+        combined = torch.zeros(576)
+        combined[idx] = 1.0
+        images.append(
+            create_analyzed_image(
+                path=f"/tmp/gameplay_{idx}.jpg",
+                clip_features=features,
+                combined_features=combined.numpy(),
+                normalized_metrics_dict={"action_intensity": 0.6, "ui_density": 0.5},
+            )
+        )
+    for idx in range(4):
+        features = torch.tensor([0.0, 1.0, 0.0]).numpy()
+        combined = torch.zeros(576)
+        combined[100 + idx] = 1.0
+        images.append(
+            create_analyzed_image(
+                path=f"/tmp/event_{idx}.jpg",
+                clip_features=features,
+                combined_features=combined.numpy(),
+                normalized_metrics_dict={"action_intensity": 0.4, "ui_density": 0.4},
+                layout_dict={"dialogue_overlay_score": 0.5},
+            )
+        )
+    features = torch.tensor([0.0, 0.0, 1.0]).numpy()
+    combined = torch.zeros(576)
+    combined[200] = 1.0
+    images.append(
+        create_analyzed_image(
+            path="/tmp/other_0.jpg",
+            clip_features=features,
+            combined_features=combined.numpy(),
+            normalized_metrics_dict={"action_intensity": 0.2, "ui_density": 0.7},
+            layout_dict={"menu_layout_score": 0.6, "title_layout_score": 0.4},
+        )
+    )
+    return images
+
+
+def test_select_from_analyzed_returns_scene_mix() -> None:
+    """解析済み画像から50/40/10のscene mixで選ばれること.
 
     Given:
-        - 様々なスコアを持つ5つの分析済み画像
+        - gameplay / event / other が既定比率ぶん揃った解析済み画像群がある
     When:
-        - 3つの画像を選択
+        - `select_from_analyzed` で10件を選択する
     Then:
-        - 要求された数の画像が返されること
-        - 統計情報が正しく記録されていること
+        - 既定の 50 / 40 / 10 に一致する目標値と実績が返ること
     """
     # Arrange
-    sample_metrics = create_sample_metrics(5)
-    num_to_select = 3
-    similarity_threshold = 0.9
-    config = SelectionConfig()
-    picker = GameScreenPicker(analyzer=mock_analyzer, config=config)
+    analyzed_images = _make_analyzed_images()
+    analyzer = FakeAnalyzer(analyzed_images)
+    picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
 
     # Act
-    result, stats = picker.select_from_analyzed(
-        sample_metrics,
-        num_to_select,
-        similarity_threshold,
-    )
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=10)
 
     # Assert
-    assert len(result) == 3
-    assert stats.total_files == 5
-    assert stats.analyzed_ok == 5
-    assert stats.selected_count == 3
+    assert len(selected) == 10
+    assert len(rejected) == 0
+    assert stats.scene_mix_target == {"gameplay": 5, "event": 4, "other": 1}
+    assert stats.scene_mix_actual == {"gameplay": 5, "event": 4, "other": 1}
+    assert stats.selected_count == 10
 
 
-def test_select_from_folder_processes_images_and_handles_failures(
-    mock_analyzer: MagicMock,
-) -> None:
-    """フォルダから画像をロード・分析し、失敗時も適切に処理すること.
+def test_select_from_folder_processes_images_and_handles_failures() -> None:
+    """フォルダ選択時に統計情報が正しく計算されること.
 
     Given:
-        - 5つの画像ファイルを持つフォルダ
-        - アナライザは一部のファイルに対してNoneを返す
+        - 入力フォルダには5件の画像パスがある
+        - Analyzer はそのうち先頭3件分だけ解析結果を返す
     When:
-        - 画像を選択
+        - `select` でフォルダ起点の選定を行う
     Then:
-        - 処理が継続され、有効な画像のみが返されること
-        - 統計情報が正しく記録されていること
+        - 選択結果は3件となり、未解析2件が失敗数として集計されること
     """
-
     # Arrange
-    def mock_analyze_batch(
-        paths: list[str],
-        batch_size: int = 32,  # noqa: ARG001
-        show_progress: bool = False,  # noqa: ARG001
-    ) -> list[ImageMetrics | None]:
-        results: list[ImageMetrics | None] = []
-        for path in paths:
-            try:
-                idx = int(path.split("image")[-1].split(".")[0])
-            except (ValueError, IndexError):
-                idx = 0
-            # 偶数インデックスは失敗とする
-            if idx % 2 == 0:
-                results.append(None)
-            else:
-                np.random.seed(idx)
-                results.append(
-                    create_image_metrics(
-                        path=path,
-                        raw_metrics_dict={"blur_score": 100 - idx * 10},
-                        normalized_metrics_dict={"blur_score": 1.0 - idx * 0.1},
-                        semantic_score=0.8,
-                        total_score=100 - idx * 10,
-                        features=np.random.rand(128),
-                    )
-                )
-        return results
-
-    mock_analyzer.analyze_batch = mock_analyze_batch
+    analyzed_images = _make_analyzed_images()[:3]
+    analyzer = FakeAnalyzer(analyzed_images)
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        for i in range(5):
-            Path(temp_dir, f"image{i}.jpg").touch()
+        for idx in range(5):
+            Path(temp_dir, f"image{idx}.jpg").touch()
 
-        picker = GameScreenPicker(mock_analyzer)
+        picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
 
         # Act
-        result, stats = picker.select(
+        selected, _rejected, stats = picker.select(
             folder=temp_dir,
             num=5,
-            similarity_threshold=0.8,
             recursive=False,
             show_progress=False,
         )
 
         # Assert
-        assert len(result) <= 2  # 奇数インデックスのみ有効
+        assert len(selected) == 3
         assert stats.total_files == 5
-        assert stats.analyzed_ok == 2
-        assert stats.analyzed_fail == 3
-        assert stats.selected_count == len(result)
+        assert stats.analyzed_ok == 3
+        assert stats.analyzed_fail == 2

@@ -16,7 +16,6 @@ class AnalyzerConfig(ConfigFromArgsMixin):
         min_chunk_size: メモリ予算が大きい場合でも最低限確保するチャンクサイズ
         brightness_penalty_threshold: 輝度ペナルティを適用する輝度の境界値
         brightness_penalty_value: 輝度ペナルティの値
-        semantic_weight: 総合スコア計算時のセマンティックスコアの重み
         score_multiplier: 総合スコアの乗数
         result_max_workers: 結果構築（raw metric + feature結合）の並列処理ワーカー数
             Noneでデフォルト値（min(8, max(1, os.cpu_count() - 1))）を使用
@@ -28,7 +27,6 @@ class AnalyzerConfig(ConfigFromArgsMixin):
     min_chunk_size: int = 16  # 最低16枚は1チャンクで処理
     brightness_penalty_threshold: float = 35.0
     brightness_penalty_value: float = 0.15
-    semantic_weight: float = 0.03  # コサイン類似度[-1,1]用に調整
     score_multiplier: float = 100.0
     result_max_workers: int | None = None
     io_max_workers: int | None = None
@@ -54,11 +52,6 @@ class AnalyzerConfig(ConfigFromArgsMixin):
             msg = (
                 "brightness_penalty_valueは非負の値である必要があります: "
                 f"{self.brightness_penalty_value}"
-            )
-            raise ValueError(msg)
-        if self.semantic_weight < 0:
-            msg = (
-                f"semantic_weightは非負の値である必要があります: {self.semantic_weight}"
             )
             raise ValueError(msg)
         if self.score_multiplier <= 0:

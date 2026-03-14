@@ -1,14 +1,18 @@
-"""Image quality analyzer using CLIP and computer vision metrics."""
+"""画像解析Facade.
+
+CLIP特徴抽出、画質メトリクス計算、レイアウトヒューリスティクス抽出を
+まとめて提供し、scene判定前の中立解析結果を返す。
+"""
 
 import logging
 
-from ..constants.score_weights import ScoreWeights
+from ..models.analyzed_image import AnalyzedImage
 from ..models.analyzer_config import AnalyzerConfig
-from ..models.image_metrics import ImageMetrics
 from ..utils.image_utils import ImageUtils
 from .batch_pipeline import BatchPipeline
 from .clip_model_manager import CLIPModelManager
 from .feature_extractor import FeatureExtractor
+from .layout_analyzer import LayoutAnalyzer
 from .metric_calculator import MetricCalculator
 
 logger = logging.getLogger(__name__)
@@ -18,7 +22,7 @@ class ImageQualityAnalyzer:
     """画像品質アナライザー（Facadeパターン）.
 
     複数のコンポーネントを統合し、公開APIを提供する。
-    CLIPモデルでセマンティック特徴を抽出し、画像メトリクスを計算する。
+    CLIP特徴と画像メトリクスを抽出し、中立な分析結果を返す。
     """
 
     def __init__(
@@ -33,20 +37,15 @@ class ImageQualityAnalyzer:
             device: 使用するデバイス（Noneの場合は自動検出）
         """
         self.config = config or AnalyzerConfig()
-        self.weights = ScoreWeights.get_weights()
 
         # レイヤー1: モデル管理（プライベート）
-        self._model_manager = CLIPModelManager(
-            target_text="epic game scenery", device=device
-        )
+        self._model_manager = CLIPModelManager(device=device)
 
         # レイヤー2: 特徴抽出（モデルに依存）
         self.feature_extractor = FeatureExtractor(self._model_manager)
 
-        # レイヤー3: スコア計算（モデルのテキスト埋め込みに依存）
-        self.metric_calculator = MetricCalculator(
-            self.config, self.weights, self._model_manager
-        )
+        # レイヤー3: メトリクス計算
+        self.metric_calculator = MetricCalculator(self.config)
 
         # レイヤー4: バッチ処理（上記全てに依存）
         self.batch_pipeline = BatchPipeline(
@@ -55,8 +54,29 @@ class ImageQualityAnalyzer:
             self.config,
         )
 
-    def analyze(self, path: str) -> ImageMetrics | None:
-        """画像を解析して品質スコアを計算する."""
+    @property
+    def model_manager(self) -> CLIPModelManager:
+        """CLIPモデルマネージャーを返す.
+
+        Returns:
+            scene判定用テキスト埋め込みの取得にも使う `CLIPModelManager` 。
+        """
+        return self._model_manager
+
+    def analyze(self, path: str) -> AnalyzedImage | None:
+        """画像を解析して中立な特徴を計算する.
+
+        単一画像向けの同期APIで、CLIP特徴、結合特徴、画質メトリクス、
+        レイアウトヒューリスティクスを一度に計算する。
+        この段階ではscene labelや選定スコアは付与せず、
+        後段の `SceneScorer` と `CandidateScorer` が扱う素材だけを返す。
+
+        Args:
+            path: 解析対象画像のファイルパス。
+
+        Returns:
+            中立解析結果 `AnalyzedImage` 。読み込み失敗時は `None` 。
+        """
         pil_img_copy = ImageUtils.load_as_rgb(path)
         if pil_img_copy is None:
             logger.warning(f"画像の読み込みに失敗しました: {path}")
@@ -69,22 +89,35 @@ class ImageQualityAnalyzer:
         clip_features = self.feature_extractor.extract_clip_features(pil_img_copy)
 
         # HSV特徴とCLIP特徴を結合
-        features = self.feature_extractor.extract_combined_features(img, clip_features)
-
-        # すべてのメトリクスを一括計算
-        raw, norm, semantic, total = self.metric_calculator.calculate_all_metrics(
-            img, clip_features
+        combined_features = self.feature_extractor.extract_combined_features(
+            img,
+            clip_features,
         )
 
-        return ImageMetrics(path, raw, norm, semantic, total, features)
+        # すべてのメトリクスを一括計算
+        raw, norm = self.metric_calculator.calculate_all_metrics(img)
+        layout_heuristics = LayoutAnalyzer.analyze(img)
+
+        return AnalyzedImage(
+            path=path,
+            raw_metrics=raw,
+            normalized_metrics=norm,
+            clip_features=clip_features,
+            combined_features=combined_features,
+            layout_heuristics=layout_heuristics,
+        )
 
     def analyze_batch(
         self,
         paths: list[str],
         batch_size: int = 32,
         show_progress: bool = False,
-    ) -> list[ImageMetrics | None]:
+    ) -> list[AnalyzedImage | None]:
         """複数の画像をバッチ処理で解析する.
+
+        単一画像APIと同じ中立解析結果を返すが、
+        実装は `BatchPipeline` に委譲し、チャンク分割と先読みを用いて
+        大量画像をメモリ予算内で処理する。
 
         Args:
             paths: 画像ファイルパスのリスト

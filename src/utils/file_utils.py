@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..models.image_metrics import ImageMetrics
+    from ..models.scored_candidate import ScoredCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class FileUtils:
             counter += 1
 
     @staticmethod
-    def copy_selected_items(selected: list["ImageMetrics"], dest_dir: str) -> None:
+    def copy_selected_items(selected: list["ScoredCandidate"], dest_dir: str) -> None:
         """選択されたアイテムを出力ディレクトリにコピーする.
 
         Args:

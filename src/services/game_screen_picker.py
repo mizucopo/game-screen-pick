@@ -1,188 +1,265 @@
-"""Game screen picker for diverse image selection."""
+"""ゲーム画面ピッカーの統合オーケストレーション."""
 
-import logging
 import random
 from pathlib import Path
+from typing import Protocol
 
-from ..analyzers.image_quality_analyzer import ImageQualityAnalyzer
-from ..constants.score_weights import ScoreWeights
-from ..models.image_metrics import ImageMetrics
+from ..analyzers.metric_calculator import MetricCalculator
+from ..constants.selection_profiles import PROFILE_REGISTRY
+from ..models.analyzed_image import AnalyzedImage
 from ..models.picker_statistics import PickerStatistics
+from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_config import SelectionConfig
-from .activity_mix_selector import ActivityMixSelector
-from .diversity_selector import DiversitySelector
+from ..services.candidate_scorer import CandidateScorer
+from ..services.profile_resolver import ProfileResolver
+from ..services.scene_mix_selector import SceneMixSelector
+from ..services.scene_scorer import SceneScorer, TextEmbeddingProvider
 
-logger = logging.getLogger(__name__)
+
+class AnalyzerLike(Protocol):
+    """GameScreenPickerが必要とする最小Analyzerインターフェース.
+
+    具体実装に依存せず、scene判定と候補採点に必要な
+    最小限の公開面だけを表す。
+    """
+
+    @property
+    def model_manager(self) -> TextEmbeddingProvider:
+        """埋め込み取得器を返す."""
+
+    @property
+    def metric_calculator(self) -> MetricCalculator:
+        """MetricCalculatorを返す."""
+
+    def analyze_batch(
+        self,
+        paths: list[str],
+        batch_size: int = 32,
+        show_progress: bool = False,
+    ) -> list[AnalyzedImage | None]:
+        """画像をバッチ解析する."""
 
 
 class GameScreenPicker:
-    """ゲーム画面選択クラス.
+    """画像解析と選定を統合する.
 
-    画像品質アナライザーと選択セレクターを統合し、
-    フォルダからの画像選択処理を提供する。
+    フォルダ走査、解析、scene評価、profile解決、候補採点、
+    scene mix 選定、統計生成までをひとつの入り口として提供する。
     """
 
     def __init__(
         self,
-        analyzer: ImageQualityAnalyzer,
+        analyzer: AnalyzerLike,
         config: SelectionConfig | None = None,
         rng: random.Random | None = None,
     ):
         """ピッカーを初期化する.
 
         Args:
-            analyzer: 画像品質アナライザー
-            config: 選択設定（Noneの場合はデフォルト値を使用）
-            rng: 乱数生成器（Noneの場合はデフォルトのRandomを使用）
+            analyzer: 中立解析結果を返すAnalyzer実装。
+            config: scene mix、類似度しきい値、profile指定を含む選択設定。
+            rng: 入力順のバイアスを避けるために使う乱数生成器。
+                未指定時は内部で `random.Random()` を生成する。
         """
         self.analyzer = analyzer
         self.config = config or SelectionConfig()
         self._rng = rng or random.Random()
-        self._activity_weights = ScoreWeights.get_activity_weights()
-
-        # セレクターを初期化
-        self._diversity_selector = DiversitySelector(config=self.config)
-        self._activity_mix_selector = ActivityMixSelector(
-            activity_weights=self._activity_weights,
-            config=self.config,
-        )
+        self._scene_scorer = SceneScorer(self.analyzer.model_manager)
+        self._profile_resolver = ProfileResolver()
+        self._candidate_scorer = CandidateScorer(self.analyzer.metric_calculator)
+        self._scene_mix_selector = SceneMixSelector(self.config)
 
     @staticmethod
     def load_image_files(folder: str, recursive: bool) -> list[Path]:
-        """フォルダから画像ファイルのパスを取得する.
+        """フォルダから画像ファイルを取得する.
 
         Args:
-            folder: 画像フォルダのパス
-            recursive: サブフォルダも再帰的に探索するかどうか
+            folder: 入力フォルダのパス。
+            recursive: サブフォルダも含めて探索するかどうか。
 
         Returns:
-            画像ファイルのパスリスト
+            対応拡張子を持つ画像パスの一覧。
         """
         path_obj = Path(folder)
-        exts = {".jpg", ".jpeg", ".png", ".bmp"}
+        extensions = {".jpg", ".jpeg", ".png", ".bmp"}
         return [
-            p
-            for p in (path_obj.rglob("*") if recursive else path_obj.glob("*"))
-            if p.suffix.lower() in exts
+            path
+            for path in (path_obj.rglob("*") if recursive else path_obj.glob("*"))
+            if path.suffix.lower() in extensions
         ]
 
     def _analyze_images(
-        self, files: list[Path], show_progress: bool = False
-    ) -> list[ImageMetrics]:
-        """画像ファイルを解析して品質スコアを計算する（バッチ対応版）.
+        self,
+        files: list[Path],
+        show_progress: bool = False,
+    ) -> list[AnalyzedImage]:
+        """画像を解析して中立特徴を取得する.
+
+        AnalyzerのバッチAPIを使って画像群を一括解析し、
+        読み込み失敗や解析失敗で `None` になった要素をここで除外する。
+        返却値はまだscene判定や選定スコアを持たない中立データである。
 
         Args:
-            files: 画像ファイルのパスリスト
-            show_progress: 進捗表示をするかどうか
+            files: 解析対象の画像パス一覧。
+            show_progress: 解析進捗ログを出すかどうか。
 
         Returns:
-            解析結果のリスト
+            正常に解析できた `AnalyzedImage` のみを含むリスト。
         """
-        paths = [str(f) for f in files]
+        paths = [str(file_path) for file_path in files]
         results = self.analyzer.analyze_batch(
-            paths, batch_size=self.config.batch_size, show_progress=show_progress
+            paths,
+            batch_size=self.config.batch_size,
+            show_progress=show_progress,
         )
-        return [r for r in results if r is not None]
+        return [result for result in results if result is not None]
+
+    def _score_candidates(
+        self,
+        analyzed_images: list[AnalyzedImage],
+    ) -> tuple[list[ScoredCandidate], str, dict[str, int], dict[str, float]]:
+        """scene評価とprofile解決を行い、最終候補を作る.
+
+        各画像へ `SceneScorer` で画面種別スコアを付与し、
+        `ProfileResolver` で `auto` を `active` / `static` へ解決したうえで、
+        `CandidateScorer` により品質・活動量・最終選定スコアを計算する。
+        あわせて、レポート用のscene分布も集計する。
+
+        Args:
+            analyzed_images: scene判定前の中立解析結果。
+
+        Returns:
+            1. 最終スコア付き候補のリスト
+            2. 解決済みプロファイル名
+            3. scene labelごとの件数分布
+            4. profile解決時に使ったスコア内訳
+        """
+        assessments = [self._scene_scorer.assess(image) for image in analyzed_images]
+        resolved_profile, profile_scores = self._profile_resolver.resolve(
+            self.config.profile,
+            analyzed_images,
+            assessments,
+        )
+        profile = PROFILE_REGISTRY[resolved_profile]
+
+        candidates = [
+            self._candidate_scorer.score(image, assessment, profile)
+            for image, assessment in zip(analyzed_images, assessments, strict=True)
+        ]
+        scene_distribution = {
+            "gameplay": sum(
+                1
+                for candidate in candidates
+                if candidate.scene_assessment.scene_label.value == "gameplay"
+            ),
+            "event": sum(
+                1
+                for candidate in candidates
+                if candidate.scene_assessment.scene_label.value == "event"
+            ),
+            "other": sum(
+                1
+                for candidate in candidates
+                if candidate.scene_assessment.scene_label.value == "other"
+            ),
+        }
+        return candidates, resolved_profile, scene_distribution, profile_scores
 
     def select(
         self,
         folder: str,
         num: int,
-        similarity_threshold: float,
         recursive: bool,
         show_progress: bool = True,
-    ) -> tuple[list[ImageMetrics], PickerStatistics]:
+    ) -> tuple[list[ScoredCandidate], list[ScoredCandidate], PickerStatistics]:
         """フォルダから画像を選択する.
 
+        入力フォルダから対象画像を集め、順序バイアスを避けるために
+        シャッフルした後、中立解析とscene mix選定を順に実行する。
+        フォルダ単位のI/Oを伴う高水準APIとして使うことを想定している。
+
         Args:
-            folder: 画像フォルダのパス
-            num: 選択する画像数
-            similarity_threshold: 類似度の閾値
-            recursive: サブフォルダも探索するかどうか
-            show_progress: 進捗表示をするかどうか
+            folder: 入力画像フォルダ。
+            num: 選択したい画像枚数。
+            recursive: サブフォルダも探索対象に含めるかどうか。
+            show_progress: 解析進捗ログを出すかどうか。
 
         Returns:
-            (選択された画像メトリクスのリスト, 統計情報)
+            1. 選択された候補
+            2. 非選択になった候補
+            3. 実行統計をまとめた `PickerStatistics`
         """
-        # ファイルを取得
         files = GameScreenPicker.load_image_files(folder, recursive)
         total_files = len(files)
-
-        # ランダムにシャッフル（フォルダやファイル名のバイアスを排除）
         self._rng.shuffle(files)
 
-        if show_progress:
-            logger.info(f"合計 {total_files} 枚を解析中...")
-
-        # 画像を解析
-        all_results = self._analyze_images(files, show_progress)
-        analyzed_ok = len(all_results)
+        analyzed_images = self._analyze_images(files, show_progress)
+        analyzed_ok = len(analyzed_images)
         analyzed_fail = total_files - analyzed_ok
 
-        # スコア順にソート（最高品質が上にくる）
-        all_results.sort(key=lambda x: x.total_score, reverse=True)
-
-        # 多様性に基づいて選択
-        if self.config.activity_mix_enabled:
-            selected, rejected_by_similarity = self._activity_mix_selector.select(
-                all_results,
-                num,
-                similarity_threshold,
-            )
-        else:
-            selected, rejected_by_similarity = self._diversity_selector.select(
-                all_results, num, similarity_threshold
-            )
-
-        stats = PickerStatistics(
+        return self.select_from_analyzed(
+            analyzed_images=analyzed_images,
             total_files=total_files,
-            analyzed_ok=analyzed_ok,
             analyzed_fail=analyzed_fail,
-            rejected_by_similarity=rejected_by_similarity,
-            selected_count=len(selected),
+            num=num,
         )
-
-        return selected, stats
 
     def select_from_analyzed(
         self,
-        analyzed_images: list[ImageMetrics],
+        analyzed_images: list[AnalyzedImage],
         num: int,
-        similarity_threshold: float,
-    ) -> tuple[list[ImageMetrics], PickerStatistics]:
-        """解析済みの画像リストから多様性を考慮して選択する.
+        total_files: int | None = None,
+        analyzed_fail: int = 0,
+    ) -> tuple[list[ScoredCandidate], list[ScoredCandidate], PickerStatistics]:
+        """解析済み画像から候補を選択する.
 
-        このメソッドはIO操作を行わず、純粋なドメインロジックのみを提供する。
-        テストや既に解析済みの画像がある場合に使用する。
+        このメソッドはファイルI/Oを行わず、ドメインロジックだけを扱う。
+        scene判定、profile解決、候補採点、scene mix選定、統計生成を
+        純粋に組み合わせるため、単体テストや再選定処理の入り口として使える。
 
         Args:
-            analyzed_images: 解析済みの画像メトリクスリスト
-            num: 選択する画像数
-            similarity_threshold: 類似度の閾値
+            analyzed_images: 解析済みの中立画像データ。
+            num: 選択したい画像枚数。
+            total_files: 元の入力総数。 `None` の場合は解析済み件数を使う。
+            analyzed_fail: 解析失敗件数。フォルダ起点の統計で使う。
 
         Returns:
-            (選択された画像メトリクスのリスト, 統計情報)
+            1. 選択された候補
+            2. 非選択候補を選定スコア順に並べたリスト
+            3. scene mix目標値と実績を含む `PickerStatistics`
         """
-        # スコア順にソート（コピーを作成して元のリストを変更しない）
-        sorted_results = sorted(
-            analyzed_images, key=lambda x: x.total_score, reverse=True
+        candidates, resolved_profile, scene_distribution, _profile_scores = (
+            self._score_candidates(analyzed_images)
         )
-
-        if self.config.activity_mix_enabled:
-            selected, rejected_by_similarity = self._activity_mix_selector.select(
-                sorted_results, num, similarity_threshold
-            )
-        else:
-            selected, rejected_by_similarity = self._diversity_selector.select(
-                sorted_results, num, similarity_threshold
-            )
+        profile = PROFILE_REGISTRY[resolved_profile]
+        selected, rejected_by_similarity, scene_mix_target, scene_mix_actual = (
+            self._scene_mix_selector.select(candidates, num, profile)
+        )
+        selected_ids = {id(candidate) for candidate in selected}
+        rejected = sorted(
+            [
+                candidate
+                for candidate in candidates
+                if id(candidate) not in selected_ids
+            ],
+            key=lambda item: item.selection_score,
+            reverse=True,
+        )
 
         stats = PickerStatistics(
-            total_files=len(analyzed_images),
+            total_files=total_files
+            if total_files is not None
+            else len(analyzed_images),
             analyzed_ok=len(analyzed_images),
-            analyzed_fail=0,
+            analyzed_fail=analyzed_fail,
             rejected_by_similarity=rejected_by_similarity,
             selected_count=len(selected),
+            resolved_profile=resolved_profile,
+            scene_distribution=scene_distribution,
+            scene_mix_target=scene_mix_target,
+            scene_mix_actual=scene_mix_actual,
+            threshold_relaxation_used=self.config.compute_threshold_steps(
+                self.config.similarity_threshold
+            ),
         )
-
-        return selected, stats
+        return selected, rejected, stats
