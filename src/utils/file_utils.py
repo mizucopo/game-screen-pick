@@ -3,10 +3,8 @@
 import logging
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from ..models.scored_candidate import ScoredCandidate
+from ..models.scored_candidate import ScoredCandidate
 
 logger = logging.getLogger(__name__)
 
