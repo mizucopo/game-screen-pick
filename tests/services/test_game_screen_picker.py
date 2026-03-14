@@ -5,64 +5,15 @@ scene mix ベースへ再設計されたピッカーについて、
 """
 
 import tempfile
-from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
 
 import torch
 
-from src.analyzers.metric_calculator import MetricCalculator
 from src.models.analyzed_image import AnalyzedImage
-from src.models.analyzer_config import AnalyzerConfig
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
 from tests.conftest import create_analyzed_image
-
-
-class DummyModelManager:
-    """固定テキスト埋め込みを返すダミーモデル."""
-
-    def get_text_embeddings(self, texts: Sequence[str]) -> torch.Tensor:
-        """promptに応じた固定ベクトルを返す."""
-        embeddings = []
-        for text in texts:
-            lowered = text.lower()
-            if "dialogue" in lowered or "cutscene" in lowered or "event" in lowered:
-                embeddings.append(torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32))
-            elif (
-                "menu" in lowered
-                or "title" in lowered
-                or "game over" in lowered
-                or "result" in lowered
-                or "reward" in lowered
-                or "loading" in lowered
-            ):
-                embeddings.append(torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32))
-            else:
-                embeddings.append(torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32))
-        return torch.stack(embeddings)
-
-
-class FakeAnalyzer:
-    """GameScreenPicker向けの軽量アナライザー.
-
-    事前に組み立てた `AnalyzedImage` を返し、
-    実ファイル解析なしでピッカーのドメインロジックだけをテストする。
-    """
-
-    def __init__(self, analyzed_images: list[AnalyzedImage]) -> None:
-        self._analyzed_images = analyzed_images
-        self.metric_calculator = MetricCalculator(AnalyzerConfig())
-        self.model_manager = DummyModelManager()
-
-    def analyze_batch(
-        self,
-        paths: list[str],
-        batch_size: int = 32,
-        show_progress: bool = False,
-    ) -> list[AnalyzedImage | None]:
-        del batch_size, show_progress
-        return cast(list[AnalyzedImage | None], self._analyzed_images[: len(paths)])
+from tests.fake_analyzer import FakeAnalyzer
 
 
 def _make_analyzed_images() -> list[AnalyzedImage]:

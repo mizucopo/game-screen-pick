@@ -4,36 +4,11 @@ CLIP 風の固定埋め込みとレイアウトヒューリスティクスを使
 gameplay / event / other の3分類が期待通りに働くかを確認する。
 """
 
-from collections.abc import Sequence
-
 import torch
 
 from src.services.scene_scorer import SceneScorer
 from tests.conftest import create_analyzed_image
-
-
-class DummyModelManager:
-    """promptごとに固定埋め込みを返すダミーモデル."""
-
-    def get_text_embeddings(self, texts: Sequence[str]) -> torch.Tensor:
-        """テキスト埋め込みを返す."""
-        embeddings = []
-        for text in texts:
-            lowered = text.lower()
-            if "dialogue" in lowered or "cutscene" in lowered or "event" in lowered:
-                embeddings.append(torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32))
-            elif (
-                "menu" in lowered
-                or "title" in lowered
-                or "game over" in lowered
-                or "result" in lowered
-                or "reward" in lowered
-                or "loading" in lowered
-            ):
-                embeddings.append(torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32))
-            else:
-                embeddings.append(torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32))
-        return torch.stack(embeddings)
+from tests.dummy_model_manager import DummyModelManager
 
 
 def test_scene_scorer_prefers_gameplay_for_gameplay_like_image() -> None:

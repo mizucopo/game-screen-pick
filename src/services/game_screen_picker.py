@@ -2,42 +2,17 @@
 
 import random
 from pathlib import Path
-from typing import Protocol
 
-from ..analyzers.metric_calculator import MetricCalculator
 from ..constants.selection_profiles import PROFILE_REGISTRY
 from ..models.analyzed_image import AnalyzedImage
 from ..models.picker_statistics import PickerStatistics
 from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_config import SelectionConfig
+from ..protocols.analyzer_like import AnalyzerLike
 from ..services.candidate_scorer import CandidateScorer
 from ..services.profile_resolver import ProfileResolver
 from ..services.scene_mix_selector import SceneMixSelector
-from ..services.scene_scorer import SceneScorer, TextEmbeddingProvider
-
-
-class AnalyzerLike(Protocol):
-    """GameScreenPickerが必要とする最小Analyzerインターフェース.
-
-    具体実装に依存せず、scene判定と候補採点に必要な
-    最小限の公開面だけを表す。
-    """
-
-    @property
-    def model_manager(self) -> TextEmbeddingProvider:
-        """埋め込み取得器を返す."""
-
-    @property
-    def metric_calculator(self) -> MetricCalculator:
-        """MetricCalculatorを返す."""
-
-    def analyze_batch(
-        self,
-        paths: list[str],
-        batch_size: int = 32,
-        show_progress: bool = False,
-    ) -> list[AnalyzedImage | None]:
-        """画像をバッチ解析する."""
+from ..services.scene_scorer import SceneScorer
 
 
 class GameScreenPicker:
