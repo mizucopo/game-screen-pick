@@ -39,12 +39,10 @@ class ReportWriter:
             "scene_mix_actual": stats.scene_mix_actual,
             "threshold_relaxation_used": stats.threshold_relaxation_used,
             "selected": [
-                ReportWriter._serialize_candidate(candidate)
-                for candidate in selected
+                ReportWriter._serialize_candidate(candidate) for candidate in selected
             ],
             "rejected": [
-                ReportWriter._serialize_candidate(candidate)
-                for candidate in rejected
+                ReportWriter._serialize_candidate(candidate) for candidate in rejected
             ],
         }
         report_path = Path(path)

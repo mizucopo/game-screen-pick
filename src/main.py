@@ -204,11 +204,7 @@ class Main:
         }
         merged = {
             **config_values,
-            **{
-                key: value
-                for key, value in cli_overrides.items()
-                if value is not None
-            },
+            **{key: value for key, value in cli_overrides.items() if value is not None},
         }
         return SelectionConfig.from_cli_args(**merged)
 
