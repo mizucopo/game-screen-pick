@@ -139,6 +139,10 @@ class FeatureExtractor:
             batch_start = i
             batch_end = min(i + current_batch_size, len(valid_images))
             batch = valid_images[batch_start:batch_end]
+            logger.debug(
+                f"CLIPバッチ処理: 位置{batch_start}-{batch_end}/{len(valid_images)} "
+                f"(バッチサイズ={current_batch_size})"
+            )
 
             try:
                 # GPU/CUDA/MPSの場合はautocastでfp16推論を使用（高速化）
@@ -198,7 +202,11 @@ class FeatureExtractor:
                         # 処理済みの結果は残すが、未処理の画像はNoneのまま
                         break
                 else:
-                    # OOM以外のRuntimeErrorはそのまま再raise
+                    # OOM以外のRuntimeErrorは詳細をログ出力して再raise
+                    logger.error(
+                        f"CLIP推論でRuntimeErrorが発生しました（OOM以外）: "
+                        f"{type(e).__name__}: {e}"
+                    )
                     raise
 
         return results
