@@ -34,12 +34,11 @@ class Main:
     Analyzer / Picker の初期化、結果出力までの実行フローをまとめる。
     """
 
-    def __init__(self, args: list[str] | None = None):
+    def __init__(self, args: list[str]):
         """Mainクラスを初期化する.
 
         Args:
-            args: テスト時などに使う疑似コマンドライン引数。
-                `None` の場合は実際の `sys.argv` を利用する。
+            args: コマンドライン引数。テスト時は空リストを渡す。
         """
         self.args = args
 
@@ -397,8 +396,7 @@ class Main:
     def run(self) -> None:
         """CLIを実行する.
 
-        テスト時は `self.args` を `sys.argv` へ一時反映し、
-        本番実行時と同じClickフローで `_execute` を呼び出す。
+        `self.args` を `sys.argv` へ一時反映し、Clickフローで `_execute` を呼び出す。
 
         Returns:
             なし。
@@ -407,15 +405,12 @@ class Main:
             click.ClickException: Clickが検出した入力エラー。
             SystemExit: 実行時エラーを終了コードへ変換した場合。
         """
-        if self.args is not None:
-            original_argv = sys.argv
-            try:
-                sys.argv = ["game-screen-pick"] + self.args
-                self._execute(standalone_mode=False)
-            finally:
-                sys.argv = original_argv
-        else:
+        original_argv = sys.argv
+        try:
+            sys.argv = ["game-screen-pick"] + self.args
             self._execute(standalone_mode=False)
+        finally:
+            sys.argv = original_argv
 
 
 def cli_main() -> None:
@@ -424,7 +419,7 @@ def cli_main() -> None:
     `pyproject.toml` の script entrypoint から呼ばれる薄いラッパーで、
     `Main` を生成して実行するだけに責務を限定する。
     """
-    Main().run()
+    Main(sys.argv[1:]).run()
 
 
 if __name__ == "__main__":
