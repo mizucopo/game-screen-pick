@@ -1,9 +1,9 @@
 """中立解析結果を最終候補へ変換する採点器."""
 
 from ..analyzers.metric_calculator import MetricCalculator
+from ..constants.scene_label import SceneLabel
 from ..models.analyzed_image import AnalyzedImage
 from ..models.scene_assessment import SceneAssessment
-from ..models.scene_label import SceneLabel
 from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_profile import SelectionProfile
 

@@ -6,8 +6,8 @@ scene mix 比率の目標計算と不足時の再配分が、
 
 import numpy as np
 
+from src.constants.scene_label import SceneLabel
 from src.constants.selection_profiles import ACTIVE_PROFILE
-from src.models.scene_label import SceneLabel
 from src.models.scene_mix import SceneMix
 from src.models.scored_candidate import ScoredCandidate
 from src.models.selection_config import SelectionConfig

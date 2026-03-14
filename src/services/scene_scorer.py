@@ -8,9 +8,9 @@ from typing import Any
 
 import numpy as np
 
+from ..constants.scene_label import SceneLabel
 from ..models.analyzed_image import AnalyzedImage
 from ..models.scene_assessment import SceneAssessment
-from ..models.scene_label import SceneLabel
 from ..protocols.text_embedding_provider import TextEmbeddingProvider
 
 

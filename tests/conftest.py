@@ -11,12 +11,12 @@ import cv2
 import numpy as np
 import pytest
 
+from src.constants.scene_label import SceneLabel
 from src.models.analyzed_image import AnalyzedImage
 from src.models.layout_heuristics import LayoutHeuristics
 from src.models.normalized_metrics import NormalizedMetrics
 from src.models.raw_metrics import RawMetrics
 from src.models.scene_assessment import SceneAssessment
-from src.models.scene_label import SceneLabel
 from src.models.scored_candidate import ScoredCandidate
 
 

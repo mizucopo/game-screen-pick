@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from .scene_label import SceneLabel
+from ..constants.scene_label import SceneLabel
 
 
 @dataclass(frozen=True)

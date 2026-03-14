@@ -1,6 +1,6 @@
 """scene mix と activity mix を両立する選定ロジック."""
 
-from ..models.scene_label import SceneLabel
+from ..constants.scene_label import SceneLabel
 from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_config import SelectionConfig
 from ..models.selection_profile import SelectionProfile
