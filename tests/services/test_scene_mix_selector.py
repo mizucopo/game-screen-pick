@@ -144,7 +144,16 @@ def test_scene_mix_selector_redistributes_when_other_is_missing() -> None:
 
 
 def test_scene_mix_selector_keeps_similar_candidates_out() -> None:
-    """scene target を満たすために類似画像を戻さないこと."""
+    """scene target を満たすために類似画像を戻さないこと.
+
+    Given:
+        - gameplay 100%の設定で選択が行われる
+        - 類似した特徴を持つ候補と異なる特徴を持つ候補が混在している
+    When:
+        - 3件の選択が実行される
+    Then:
+        - 類似画像は除外され、多様な候補のみが選択されること
+    """
     # Arrange
     config = SelectionConfig(scene_mix=SceneMix(gameplay=1.0, event=0.0, other=0.0))
     selector = SceneMixSelector(config)
@@ -183,7 +192,16 @@ def test_scene_mix_selector_keeps_similar_candidates_out() -> None:
 
 
 def test_scene_mix_selector_rejects_similar_candidate_across_scenes() -> None:
-    """別sceneでも既選択画像に近い候補は除外されること."""
+    """別sceneでも既選択画像に近い候補は除外されること.
+
+    Given:
+        - gameplay/event 50%ずつの設定で選択が行われる
+        - event候補の1件が既選択gameplay画像に非常に近い特徴を持つ
+    When:
+        - 2件の選択が実行される
+    Then:
+        - gameplayに近いevent候補は除外され、遠い候補が選択されること
+    """
     # Arrange
     config = SelectionConfig(scene_mix=SceneMix(gameplay=0.5, event=0.5, other=0.0))
     selector = SceneMixSelector(config)
@@ -222,7 +240,17 @@ def test_scene_mix_selector_rejects_similar_candidate_across_scenes() -> None:
 
 
 def test_scene_mix_selector_redistributes_shortage_to_other_scene() -> None:
-    """不足したscene分を他sceneの多様な候補で埋めること."""
+    """不足したscene分を他sceneの多様な候補で埋めること.
+
+    Given:
+        - gameplay/event 50%ずつの設定で選択が行われる
+        - gameplay候補の一部が類似しており除外される
+        - event候補は十分に多様である
+    When:
+        - 4件の選択が実行される
+    Then:
+        - gameplayの不足分がeventの多様な候補で補完されること
+    """
     # Arrange
     config = SelectionConfig(scene_mix=SceneMix(gameplay=0.5, event=0.5, other=0.0))
     selector = SceneMixSelector(config)
@@ -275,7 +303,16 @@ def test_scene_mix_selector_redistributes_shortage_to_other_scene() -> None:
 
 
 def test_scene_mix_selector_returns_fewer_when_all_candidates_are_homogeneous() -> None:
-    """入力全体が同質なら要求枚数未満で返すこと."""
+    """入力全体が同質なら要求枚数未満で返すこと.
+
+    Given:
+        - gameplay 100%の設定で選択が行われる
+        - すべての候補が同一の特徴を持つ
+    When:
+        - 3件の選択が要求される
+    Then:
+        - 類似除外により1件のみ選択され、要求枚数未満で返されること
+    """
     # Arrange
     config = SelectionConfig(scene_mix=SceneMix(gameplay=1.0, event=0.0, other=0.0))
     selector = SceneMixSelector(config)

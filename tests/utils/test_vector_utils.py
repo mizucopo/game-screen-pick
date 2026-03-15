@@ -72,7 +72,16 @@ def test_select_diverse_indices_handles_empty_and_identical_vectors() -> None:
 
 
 def test_filter_by_similarity_checks_against_seed_features() -> None:
-    """既選択特徴をseedとして類似候補を除外できること."""
+    """既選択特徴をseedとして類似候補を除外できること.
+
+    Given:
+        - seed特徴として1件のベクトルが指定されている
+        - 候補にseedと同一のベクトルと異なるベクトルが含まれている
+    When:
+        - filter_by_similarityが実行される
+    Then:
+        - seedと同一の候補は除外され、異なる候補のみが選択されること
+    """
     # Arrange
     seed = [np.array([1.0, 0.0, 0.0])]
     candidates = [

@@ -139,7 +139,17 @@ def test_select_from_analyzed_returns_scene_mix() -> None:
 
 
 def test_select_from_analyzed_allows_short_result() -> None:
-    """多様性不足なら要求枚数未満でも正常に返すこと."""
+    """多様性不足なら要求枚数未満でも正常に返すこと.
+
+    Given:
+        - 各scene内で候補が互いに非常に似ている画像群がある
+        - gameplay/event 50%ずつの設定で選択が行われる
+    When:
+        - 4件の選択が要求される
+    Then:
+        - 多様性判定により各scene 1件ずつ計2件のみ選択されること
+        - 残り2件が除外としてカウントされること
+    """
     # Arrange
     analyzed_images = _make_homogeneous_scene_mix_images()
     analyzer = FakeAnalyzer(analyzed_images)

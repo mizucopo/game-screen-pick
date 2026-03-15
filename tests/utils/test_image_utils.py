@@ -70,7 +70,15 @@ def test_load_as_rgb_resized(
 
 
 def test_load_as_rgb_resized_returns_none_for_invalid_path() -> None:
-    """無効なパスでNoneが返されること."""
+    """無効なパスでNoneが返されること.
+
+    Given:
+        - 存在しないファイルパスが指定されている
+    When:
+        - load_as_rgb_resizedが実行される
+    Then:
+        - Noneが返されること
+    """
     # Arrange
     invalid_path = "/nonexistent/path/image.jpg"
 
