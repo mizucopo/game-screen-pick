@@ -50,7 +50,7 @@ class FileUtils:
         """選択されたアイテムを出力ディレクトリにコピーする.
 
         Args:
-            selected: 選択された画像メトリクスのリスト
+            selected: 選択された候補のリスト
             dest_dir: 出力先ディレクトリのパス
         """
         out = Path(dest_dir)

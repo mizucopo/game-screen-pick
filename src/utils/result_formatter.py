@@ -25,7 +25,7 @@ class ResultFormatter:
         """選択結果を表示する.
 
         Args:
-            selected: 選択された画像メトリクスのリスト
+            selected: 選択された候補のリスト
             stats: 統計情報
         """
         logger.info("--- 選択された画像一覧 ---")
