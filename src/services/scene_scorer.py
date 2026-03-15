@@ -22,6 +22,7 @@ class SceneScorer:
     汎用ヒューリスティクスだけで画面種別を推定する。
     """
 
+    AMBIGUITY_MARGIN = 0.05
     PROMPT_GROUPS: dict[str, tuple[str, ...]] = {
         "gameplay": (
             "video game gameplay screenshot with heads-up display",
@@ -32,13 +33,20 @@ class SceneScorer:
         "event": (
             "video game dialogue event scene",
             "story cutscene from a video game",
-            "character conversation event in a game",
-            "scripted event scene in a role-playing game",
+            "boss introduction cutscene from a video game",
+            "scripted dramatic event in a video game",
+            "stage intro cinematic from a video game",
+            "character close-up event scene in a video game",
         ),
         "other": (
             "video game main menu screen",
             "game title screen",
             "game over screen",
+            "full-screen world map from a video game",
+            "inventory or equipment menu from a video game",
+            "skill tree or upgrade menu from a video game",
+            "shop or merchant screen from a video game",
+            "pause or settings menu from a video game",
             "video game result or reward screen",
             "loading screen from a video game",
         ),
@@ -107,18 +115,26 @@ class SceneScorer:
         """
         return max(0.0, min(1.0, value))
 
-    def assess(self, analyzed_image: AnalyzedImage) -> SceneAssessment:
+    def assess(
+        self,
+        analyzed_image: AnalyzedImage,
+        distinctiveness_score: float = 0.5,
+    ) -> SceneAssessment:
         """単一画像の画面種別を評価する.
 
         まずCLIP特徴と各プロンプト群の内積から
         gameplay / event / other の基礎スコアを作り、
-        その後で UI量、会話オーバーレイ、メニュー配置、
-        タイトル画面らしさ、ゲームオーバー画面らしさを加減算して補正する。
-        最終的な `scene_label` は最大スコアのラベル、
-        `scene_confidence` は1位と2位の差分で表す。
+        その後で入力全体に対する頻出度、UI量、会話オーバーレイ、
+        メニュー配置、タイトル画面らしさ、ゲームオーバー画面らしさを
+        加減算して補正する。
+        最終的な `scene_label` は最大スコアを基本にしつつ、
+        gameplay と other が僅差なら other へ倒す。
+        `scene_confidence` は採用ラベルと次点候補の差分で表す。
 
         Args:
             analyzed_image: scene判定前の中立解析結果。
+            distinctiveness_score: 入力全体に対する相対差分量スコア。
+                0に近いほど頻出、1に近いほど珍しい画像を表す。
 
         Returns:
             3系統のスコア、最終ラベル、信頼度を持つ `SceneAssessment` 。
@@ -126,6 +142,10 @@ class SceneScorer:
         clip_features = analyzed_image.clip_features
         heuristics = analyzed_image.layout_heuristics
         norm = analyzed_image.normalized_metrics
+        gameplay_typicality = self._clamp(1.0 - distinctiveness_score)
+        support_ui_score = self._clamp(
+            0.65 * norm.ui_density + 0.35 * (1.0 - norm.action_intensity)
+        )
 
         gameplay_base = self._mean_top_two(
             self._prompt_embeddings["gameplay"] @ clip_features
@@ -139,25 +159,32 @@ class SceneScorer:
 
         gameplay_score = self._clamp(
             gameplay_base
+            + 0.18 * gameplay_typicality
             + 0.10 * norm.ui_density
             + 0.08 * norm.action_intensity
+            - 0.10 * support_ui_score
             - 0.08 * heuristics.menu_layout_score
             - 0.06 * heuristics.title_layout_score
             - 0.06 * heuristics.game_over_layout_score
-            - 0.04 * heuristics.dialogue_overlay_score
+            - 0.05 * heuristics.dialogue_overlay_score
         )
         event_score = self._clamp(
             event_base
             + 0.14 * heuristics.dialogue_overlay_score
+            + 0.10 * distinctiveness_score
+            + 0.08 * norm.dramatic_score
             + 0.04 * norm.color_richness
+            - 0.06 * support_ui_score
             - 0.04 * heuristics.menu_layout_score
         )
         other_score = self._clamp(
             other_base
+            + 0.18 * support_ui_score
             + 0.14 * heuristics.menu_layout_score
             + 0.12 * heuristics.title_layout_score
             + 0.12 * heuristics.game_over_layout_score
-            - 0.04 * norm.action_intensity
+            + 0.06 * distinctiveness_score
+            - 0.06 * gameplay_typicality
         )
 
         label_scores = {
@@ -170,7 +197,17 @@ class SceneScorer:
         )
         scene_label, top_score = ordered_scores[0]
         second_score = ordered_scores[1][1] if len(ordered_scores) > 1 else 0.0
-        scene_confidence = self._clamp(top_score - second_score)
+        if (
+            top_score - second_score <= self.AMBIGUITY_MARGIN
+            and other_score >= top_score - self.AMBIGUITY_MARGIN
+        ):
+            scene_label = SceneLabel.OTHER
+
+        chosen_score = label_scores[scene_label]
+        unchosen_scores = [
+            score for label, score in label_scores.items() if label != scene_label
+        ]
+        scene_confidence = self._clamp(chosen_score - max(unchosen_scores, default=0.0))
 
         return SceneAssessment(
             gameplay_score=gameplay_score,

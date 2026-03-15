@@ -11,7 +11,15 @@ class DummyModelManager:
         embeddings = []
         for text in texts:
             lowered = text.lower()
-            if "dialogue" in lowered or "cutscene" in lowered or "event" in lowered:
+            if (
+                "dialogue" in lowered
+                or "cutscene" in lowered
+                or "event" in lowered
+                or "boss introduction" in lowered
+                or "stage intro" in lowered
+                or "dramatic" in lowered
+                or "close-up" in lowered
+            ):
                 embeddings.append(torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32))
             elif (
                 "menu" in lowered
@@ -20,6 +28,15 @@ class DummyModelManager:
                 or "result" in lowered
                 or "reward" in lowered
                 or "loading" in lowered
+                or "world map" in lowered
+                or "inventory" in lowered
+                or "equipment" in lowered
+                or "skill tree" in lowered
+                or "upgrade" in lowered
+                or "shop" in lowered
+                or "merchant" in lowered
+                or "pause" in lowered
+                or "settings" in lowered
             ):
                 embeddings.append(torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32))
             else:

@@ -14,6 +14,7 @@ from src.models.analyzed_image import AnalyzedImage
 from src.models.scene_mix import SceneMix
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
+from src.services.whole_input_profiler import WholeInputProfiler
 from tests.conftest import create_analyzed_image
 from tests.fake_analyzer import FakeAnalyzer
 
@@ -137,6 +138,97 @@ def test_select_from_analyzed_returns_scene_mix() -> None:
     assert stats.scene_mix_target == {"gameplay": 5, "event": 4, "other": 1}
     assert stats.scene_mix_actual == {"gameplay": 5, "event": 4, "other": 1}
     assert stats.selected_count == 10
+
+
+def test_score_candidates_uses_frequency_based_gameplay_scene_distribution() -> None:
+    """頻出する主画面群がgameplayへ、稀な演出と補助UIが別sceneへ分かれること.
+
+    Given:
+        - 同種のgameplay画像が複数ある（頻出クラスタ）
+        - boss_introやworld_mapのような稀な画像がある
+    When:
+        - 候補スコアリングとscene分類を実行する
+    Then:
+        - 頻出gameplay群がgameplay sceneへ分類されること
+        - boss_introがeventへ、world_mapがotherへ分類されること
+    """
+
+    # Arrange
+    def feature(
+        index: int,
+        delta_index: int | None = None,
+        delta: float = 0.0,
+    ) -> np.ndarray:
+        vector = np.zeros(101, dtype=np.float32)
+        vector[index] = 1.0
+        if delta_index is not None:
+            vector[delta_index] = delta
+        return vector
+
+    gameplay_variants = [
+        feature(0, 1, 0.01),
+        feature(0, 2, 0.01),
+        feature(0, 3, 0.01),
+        feature(0, 4, 0.01),
+    ]
+    boss_intro_feature = feature(50)
+    world_map_feature = feature(70)
+    analyzed_images = [
+        create_analyzed_image(
+            path=f"/tmp/gameplay_{index}.jpg",
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(content_feature, (0, 475)),
+            content_features=content_feature,
+            normalized_metrics_dict={"action_intensity": 0.7, "ui_density": 0.5},
+        )
+        for index, content_feature in enumerate(gameplay_variants)
+    ]
+    analyzed_images.extend(
+        [
+            create_analyzed_image(
+                path="/tmp/boss_intro.jpg",
+                clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
+                combined_features=np.pad(boss_intro_feature, (0, 475)),
+                content_features=boss_intro_feature,
+                normalized_metrics_dict={
+                    "action_intensity": 0.2,
+                    "ui_density": 0.2,
+                    "dramatic_score": 0.9,
+                    "color_richness": 0.7,
+                },
+                layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
+            ),
+            create_analyzed_image(
+                path="/tmp/world_map.jpg",
+                clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
+                combined_features=np.pad(world_map_feature, (0, 475)),
+                content_features=world_map_feature,
+                normalized_metrics_dict={"action_intensity": 0.1, "ui_density": 0.9},
+                layout_dict={"menu_layout_score": 0.6},
+            ),
+        ]
+    )
+    analyzer = FakeAnalyzer(analyzed_images)
+    picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
+    adaptive_scores = WholeInputProfiler().score_images(analyzed_images)
+
+    # Act
+    candidates, _resolved_profile, scene_distribution, _profile_scores = (
+        picker._score_candidates(analyzed_images, adaptive_scores)
+    )
+
+    # Assert
+    labels_by_path = {
+        candidate.analyzed_image.path: candidate.scene_assessment.scene_label.value
+        for candidate in candidates
+    }
+    assert scene_distribution == {"gameplay": 4, "event": 1, "other": 1}
+    assert labels_by_path["/tmp/gameplay_0.jpg"] == "gameplay"
+    assert labels_by_path["/tmp/gameplay_1.jpg"] == "gameplay"
+    assert labels_by_path["/tmp/gameplay_2.jpg"] == "gameplay"
+    assert labels_by_path["/tmp/gameplay_3.jpg"] == "gameplay"
+    assert labels_by_path["/tmp/boss_intro.jpg"] == "event"
+    assert labels_by_path["/tmp/world_map.jpg"] == "other"
 
 
 def test_select_from_analyzed_allows_short_result() -> None:

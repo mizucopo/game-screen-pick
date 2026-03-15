@@ -66,7 +66,13 @@ uv run game-screen-pick --config ./picker.toml --report-json ./report.json ./scr
 - `event`: 40%
 - `other`: 10%
 
-`other` にはメニュー、タイトル、ゲームオーバーなどの非プレイ系画面が含まれます。
+各 scene の意味は次の通りです。
+
+- `gameplay`: 入力全体で繰り返し現れやすい主画面。通常戦闘、探索、移動などのプレイ中画面。
+- `event`: 物語や演出として見せたい場面。会話、カットシーン、ボス登場、ステージ導入、特殊演出など。
+- `other`: 主画面以外の補助・遷移・システム寄り画面。マップ、装備、スキルツリー、ショップ、設定、ロード、リザルト、報酬、タイトル、ゲームオーバーなど。
+
+曖昧な画像は `other` に倒して扱います。
 比率は `--scene-mix` または設定ファイルで後から調整できます。
 ただし、似た画像ばかりになる場合は scene 比率より多様性を優先するため、
 最終的な `scene_mix_actual` は目標値からずれることがあります。
@@ -75,7 +81,7 @@ uv run game-screen-pick --config ./picker.toml --report-json ./report.json ./scr
 
 各画像は以下の2段階で評価されます。
 
-- **画面種別スコア**: CLIP のゼロショット判定と OpenCV ヒューリスティクスから `gameplay` / `event` / `other` を推定
+- **画面種別スコア**: CLIP のゼロショット判定、OpenCV ヒューリスティクス、入力全体での頻出度から `gameplay` / `event` / `other` を推定
 - **画質スコア**: `blur_score`, `contrast`, `color_richness`, `visual_balance`, `edge_density`, `action_intensity`, `ui_density`, `dramatic_score`
 
 最終的な選択順は、画面種別スコアを主軸にしつつ、画質スコアを補助として使用します。

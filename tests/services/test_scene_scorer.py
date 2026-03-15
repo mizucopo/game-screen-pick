@@ -4,6 +4,7 @@ CLIP 風の固定埋め込みとレイアウトヒューリスティクスを使
 gameplay / event / other の3分類が期待通りに働くかを確認する。
 """
 
+import pytest
 import torch
 
 from src.services.scene_scorer import SceneScorer
@@ -39,11 +40,39 @@ def test_scene_scorer_prefers_gameplay_for_gameplay_like_image() -> None:
     assert assessment.gameplay_score > assessment.other_score
 
 
-def test_scene_scorer_prefers_event_for_event_like_image() -> None:
-    """イベント画面ではevent_scoreが最も高くなること.
+def test_scene_scorer_rewards_frequent_gameplay_cluster() -> None:
+    """頻出クラスタに属する画像ほどgameplayへ寄ること.
 
     Given:
-        - event 向け埋め込みと会話オーバーレイ寄りの特徴を持つ画像がある
+        - gameplay向け埋め込みを持つ同種の画像がある
+    When:
+        - 差分量スコアの低い場合と高い場合で評価する
+    Then:
+        - 頻出側の方が gameplay_score が高くなること
+    """
+    # Arrange
+    scorer = SceneScorer(DummyModelManager())
+    image = create_analyzed_image(
+        path="/tmp/gameplay_cluster.jpg",
+        clip_features=torch.tensor([0.6, 0.0, 0.0]).numpy(),
+        combined_features=torch.tensor([0.6, 0.0, 0.0, 0.0]).numpy(),
+    )
+
+    # Act
+    frequent = scorer.assess(image, distinctiveness_score=0.1)
+    rare = scorer.assess(image, distinctiveness_score=0.9)
+
+    # Assert
+    assert frequent.scene_label.value == "gameplay"
+    assert frequent.gameplay_score > frequent.other_score
+    assert frequent.gameplay_score > rare.gameplay_score
+
+
+def test_scene_scorer_prefers_event_for_boss_intro_like_image() -> None:
+    """会話なしの演出シーンでもeventへ寄ること.
+
+    Given:
+        - event 向け埋め込みとドラマ性の高い導入演出画面がある
     When:
         - SceneScorer で評価する
     Then:
@@ -52,10 +81,16 @@ def test_scene_scorer_prefers_event_for_event_like_image() -> None:
     # Arrange
     scorer = SceneScorer(DummyModelManager())
     image = create_analyzed_image(
-        path="/tmp/event.jpg",
+        path="/tmp/boss_intro.jpg",
         clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
         combined_features=torch.tensor([0.0, 1.0, 0.0, 0.0]).numpy(),
-        layout_dict={"dialogue_overlay_score": 0.6, "menu_layout_score": 0.0},
+        normalized_metrics_dict={
+            "action_intensity": 0.2,
+            "ui_density": 0.2,
+            "dramatic_score": 0.9,
+            "color_richness": 0.7,
+        },
+        layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
     )
 
     # Act
@@ -67,11 +102,24 @@ def test_scene_scorer_prefers_event_for_event_like_image() -> None:
     assert assessment.event_score > assessment.other_score
 
 
-def test_scene_scorer_prefers_other_for_other_like_image() -> None:
-    """メニュー系画面ではother_scoreが最も高くなること.
+@pytest.mark.parametrize(
+    ("screen_name", "layout_dict"),
+    [
+        ("map", {"menu_layout_score": 0.3}),
+        ("equipment", {"menu_layout_score": 0.5}),
+        ("shop", {"menu_layout_score": 0.4}),
+        ("result_reward", {"menu_layout_score": 0.4, "title_layout_score": 0.2}),
+    ],
+)
+def test_scene_scorer_prefers_other_for_support_ui_screens(
+    screen_name: str,
+    layout_dict: dict[str, float],
+) -> None:
+    """補助UIや遷移画面はotherへ寄ること.
 
     Given:
-        - other 向け埋め込みとメニュー / タイトル寄りの特徴を持つ画像がある
+        - map、equipment、shop、result_reward などの補助UI画面がある
+        - それぞれ menu_layout_score や title_layout_score を持つ
     When:
         - SceneScorer で評価する
     Then:
@@ -80,16 +128,73 @@ def test_scene_scorer_prefers_other_for_other_like_image() -> None:
     # Arrange
     scorer = SceneScorer(DummyModelManager())
     image = create_analyzed_image(
-        path="/tmp/other.jpg",
+        path=f"/tmp/{screen_name}.jpg",
         clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
         combined_features=torch.tensor([0.0, 0.0, 1.0, 0.0]).numpy(),
-        layout_dict={"menu_layout_score": 0.6, "title_layout_score": 0.4},
+        normalized_metrics_dict={"action_intensity": 0.1, "ui_density": 0.9},
+        layout_dict=layout_dict,
     )
 
     # Act
-    assessment = scorer.assess(image)
+    assessment = scorer.assess(image, distinctiveness_score=0.8)
 
     # Assert
     assert assessment.scene_label.value == "other"
     assert assessment.other_score > assessment.gameplay_score
     assert assessment.other_score > assessment.event_score
+
+
+def test_scene_scorer_falls_back_to_other_for_ambiguous_gameplay_and_other() -> None:
+    """gameplay と other が僅差なら other に倒すこと.
+
+    Given:
+        - gameplay と other のスコアが僅差（0.05以下）の画像がある
+    When:
+        - SceneScorer で評価する
+    Then:
+        - scene label が other になること
+        - confidence が 0.0 になること
+    """
+    # Arrange
+    scorer = SceneScorer(DummyModelManager())
+    image = create_analyzed_image(
+        path="/tmp/ambiguous.jpg",
+        clip_features=torch.tensor([0.68, 0.0, 0.65]).numpy(),
+        combined_features=torch.tensor([0.68, 0.0, 0.65, 0.0]).numpy(),
+    )
+
+    # Act
+    assessment = scorer.assess(image, distinctiveness_score=0.5)
+
+    # Assert
+    assert assessment.gameplay_score > assessment.other_score
+    assert assessment.gameplay_score - assessment.other_score <= 0.05
+    assert assessment.scene_label.value == "other"
+    assert assessment.scene_confidence == 0.0
+
+
+def test_scene_scorer_uses_neutral_distinctiveness_when_omitted() -> None:
+    """distinctiveness未指定時は中立値0.5と同じ判定になること.
+
+    Given:
+        - distinctiveness_score を指定せずに評価する画像がある
+    When:
+        - 明示的に0.5を指定した場合と比較する
+    Then:
+        - 両者の結果が完全に一致すること
+    """
+    # Arrange
+    scorer = SceneScorer(DummyModelManager())
+    image = create_analyzed_image(
+        path="/tmp/neutral_default.jpg",
+        clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
+        combined_features=torch.tensor([0.0, 1.0, 0.0, 0.0]).numpy(),
+        normalized_metrics_dict={"dramatic_score": 0.8, "ui_density": 0.2},
+    )
+
+    # Act
+    without_arg = scorer.assess(image)
+    explicit_neutral = scorer.assess(image, distinctiveness_score=0.5)
+
+    # Assert
+    assert without_arg == explicit_neutral

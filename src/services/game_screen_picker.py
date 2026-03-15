@@ -123,7 +123,15 @@ class GameScreenPicker:
             3. scene labelごとの件数分布
             4. profile解決時に使ったスコア内訳
         """
-        assessments = [self._scene_scorer.assess(image) for image in analyzed_images]
+        assessments = [
+            self._scene_scorer.assess(
+                image,
+                distinctiveness_score=adaptive_scores_by_image_id[
+                    id(image)
+                ].distinctiveness_score,
+            )
+            for image in analyzed_images
+        ]
         resolved_profile, profile_scores = self._profile_resolver.resolve(
             self.config.profile,
             analyzed_images,
