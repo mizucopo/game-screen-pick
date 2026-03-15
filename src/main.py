@@ -211,7 +211,7 @@ class Main:
     @click.option(
         "-n",
         "--num",
-        default=10,
+        default=100,
         type=int,
         callback=lambda _ctx, _param, x: Main.validate_positive_int(x),
         help="選択枚数",
