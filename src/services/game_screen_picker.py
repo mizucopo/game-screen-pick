@@ -126,9 +126,7 @@ class GameScreenPicker:
         assessments = [
             self._scene_scorer.assess(
                 image,
-                distinctiveness_score=adaptive_scores_by_image_id[
-                    id(image)
-                ].distinctiveness_score,
+                adaptive_scores_by_image_id[id(image)],
             )
             for image in analyzed_images
         ]

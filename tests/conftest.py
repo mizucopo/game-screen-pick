@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from src.constants.scene_label import SceneLabel
+from src.models.adaptive_scores import AdaptiveScores
 from src.models.analyzed_image import AnalyzedImage
 from src.models.layout_heuristics import LayoutHeuristics
 from src.models.normalized_metrics import NormalizedMetrics
@@ -145,6 +146,19 @@ def create_analyzed_image(
     )
 
 
+def create_adaptive_scores(
+    information_score: float = 0.5,
+    distinctiveness_score: float = 0.5,
+    visibility_score: float = 0.5,
+) -> AdaptiveScores:
+    """`AdaptiveScores` を作成する共通ヘルパー."""
+    return AdaptiveScores(
+        information_score=information_score,
+        distinctiveness_score=distinctiveness_score,
+        visibility_score=visibility_score,
+    )
+
+
 def create_scored_candidate(
     path: str,
     scene_label: SceneLabel = SceneLabel.GAMEPLAY,
@@ -152,6 +166,8 @@ def create_scored_candidate(
     event_score: float = 0.3,
     other_score: float = 0.1,
     scene_confidence: float = 0.5,
+    transition_risk_score: float = 0.0,
+    transition_suppressed_event: bool = False,
     quality_score: float = 0.6,
     activity_score: float = 0.5,
     selection_score: float = 60.0,
@@ -186,6 +202,8 @@ def create_scored_candidate(
         other_score=other_score,
         scene_label=scene_label,
         scene_confidence=scene_confidence,
+        transition_risk_score=transition_risk_score,
+        transition_suppressed_event=transition_suppressed_event,
     )
     return ScoredCandidate(
         analyzed_image=analyzed,

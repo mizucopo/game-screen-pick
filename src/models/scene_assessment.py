@@ -14,3 +14,5 @@ class SceneAssessment:
     other_score: float
     scene_label: SceneLabel
     scene_confidence: float
+    transition_risk_score: float
+    transition_suppressed_event: bool

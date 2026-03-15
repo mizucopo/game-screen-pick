@@ -255,6 +255,80 @@ def test_content_filter_rejects_mid_fade_frames_with_70_percent_dark_ratio() -> 
     assert result.content_filter_breakdown["temporal_transition"] == 0
 
 
+def test_content_filter_rejects_bright_and_dim_transition_frames() -> None:
+    """washed-out / dimmed な遷移フレームも static fade 判定で落ちること."""
+    images = [
+        create_analyzed_image(
+            path="/tmp/good_event.jpg",
+            raw_metrics_dict={
+                "brightness": 148.0,
+                "contrast": 18.0,
+                "edge_density": 0.20,
+                "action_intensity": 12.0,
+                "luminance_entropy": 1.4,
+                "luminance_range": 39.0,
+                "near_white_ratio": 0.08,
+                "dominant_tone_ratio": 0.60,
+            },
+            content_features=_feature(0),
+            combined_features=np.pad(_feature(0), (0, 475)),
+        ),
+        create_analyzed_image(
+            path="/tmp/good_gameplay.jpg",
+            raw_metrics_dict={
+                "brightness": 92.0,
+                "contrast": 17.0,
+                "edge_density": 0.21,
+                "action_intensity": 16.0,
+                "luminance_entropy": 1.2,
+                "luminance_range": 35.0,
+                "near_black_ratio": 0.14,
+                "dominant_tone_ratio": 0.62,
+            },
+            content_features=_feature(1),
+            combined_features=np.pad(_feature(1), (0, 475)),
+        ),
+        create_analyzed_image(
+            path="/tmp/bright_transition.jpg",
+            raw_metrics_dict={
+                "brightness": 222.0,
+                "contrast": 4.0,
+                "edge_density": 0.02,
+                "action_intensity": 2.0,
+                "luminance_entropy": 0.55,
+                "luminance_range": 8.0,
+                "near_white_ratio": 0.52,
+                "dominant_tone_ratio": 0.88,
+            },
+            content_features=_feature(2),
+            combined_features=np.pad(_feature(2), (0, 475)),
+        ),
+        create_analyzed_image(
+            path="/tmp/dim_transition.jpg",
+            raw_metrics_dict={
+                "brightness": 36.0,
+                "contrast": 3.5,
+                "edge_density": 0.02,
+                "action_intensity": 1.8,
+                "luminance_entropy": 0.55,
+                "luminance_range": 8.0,
+                "near_black_ratio": 0.55,
+                "dominant_tone_ratio": 0.85,
+            },
+            content_features=_feature(3),
+            combined_features=np.pad(_feature(3), (0, 475)),
+        ),
+    ]
+
+    result = ContentFilter(WholeInputProfiler()).filter(images)
+
+    assert {image.path for image in result.kept_images} == {
+        "/tmp/good_event.jpg",
+        "/tmp/good_gameplay.jpg",
+    }
+    assert result.content_filter_breakdown["fade_transition"] == 2
+
+
 def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> None:
     """通常 -> 暗転途中 -> 通常 の中央だけが temporal 判定で落ちること.
 

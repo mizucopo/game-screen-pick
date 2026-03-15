@@ -50,6 +50,7 @@ class ReportWriter:
             "scene_diagnostics_summary": ReportWriter._build_scene_diagnostics_summary(
                 selected_payload,
                 rejected_payload,
+                stats,
             ),
             "selected": selected_payload,
             "rejected": rejected_payload,
@@ -98,16 +99,22 @@ class ReportWriter:
         final_scene_label = candidate.scene_assessment.scene_label.value
         return {
             "scene_confidence": round(candidate.scene_assessment.scene_confidence, 4),
+            "transition_risk_score": round(
+                candidate.scene_assessment.transition_risk_score, 4
+            ),
             "argmax_scene_label": argmax_scene_label,
             "argmax_score": round(argmax_score, 4),
             "argmax_margin": round(argmax_score - second_score, 4),
             "fallback_applied": (
-                final_scene_label == SceneLabel.OTHER.value
-                and final_scene_label != argmax_scene_label
+                argmax_scene_label == SceneLabel.GAMEPLAY.value
+                and final_scene_label == SceneLabel.OTHER.value
             ),
             "event_promotion_applied": (
-                final_scene_label == SceneLabel.EVENT.value
-                and final_scene_label != argmax_scene_label
+                argmax_scene_label == SceneLabel.GAMEPLAY.value
+                and final_scene_label == SceneLabel.EVENT.value
+            ),
+            "transition_suppressed_event": (
+                candidate.scene_assessment.transition_suppressed_event is True
             ),
             "event_gap_to_winner": round(
                 max(0.0, argmax_score - candidate.scene_assessment.event_score),
@@ -119,6 +126,7 @@ class ReportWriter:
     def _build_scene_diagnostics_summary(
         selected: list[dict[str, object]],
         rejected: list[dict[str, object]],
+        stats: PickerStatistics,
     ) -> dict[str, object]:
         """候補一覧から scene 診断の集計値を組み立てる."""
         all_candidates = selected + rejected
@@ -173,6 +181,16 @@ class ReportWriter:
                     1
                     for candidate in all_candidates
                     if candidate["event_promotion_applied"] is True
+                ),
+            },
+            "transition_counts": {
+                "fade_transition_rejected": stats.content_filter_breakdown.get(
+                    "fade_transition", 0
+                ),
+                "event_suppressed": sum(
+                    1
+                    for candidate in all_candidates
+                    if candidate["transition_suppressed_event"] is True
                 ),
             },
         }

@@ -1,5 +1,7 @@
 """入力全体適応の hard reject フィルタ."""
 
+from typing import Any
+
 import numpy as np
 
 from ..models.adaptive_scores import AdaptiveScores
@@ -22,6 +24,17 @@ class ContentFilter:
     )
     TEMPORAL_SIMILARITY_THRESHOLD = 0.90
     TEMPORAL_VISIBILITY_MARGIN = 0.25
+    FADE_EXPOSURE_RATIO_THRESHOLD = 0.45
+    FADE_DARK_BRIGHTNESS_THRESHOLD = 48.0
+    FADE_BRIGHT_BRIGHTNESS_THRESHOLD = 208.0
+    FADE_VISIBILITY_THRESHOLD = 0.30
+    FADE_INFORMATION_THRESHOLD = 0.35
+    TRANSITION_VISIBILITY_THRESHOLD = 0.38
+    TRANSITION_INFORMATION_THRESHOLD = 0.40
+    TRANSITION_MIN_CONTRAST = 7.0
+    TRANSITION_MIN_EDGE_DENSITY = 0.05
+    TRANSITION_MIN_DOMINANT_TONE_RATIO = 0.78
+    TRANSITION_MIN_LUMINANCE_RANGE = 22.0
 
     def __init__(self, profiler: WholeInputProfiler):
         """ContentFilterを初期化する."""
@@ -96,17 +109,51 @@ class ContentFilter:
         ):
             return "single_tone"
 
-        if (
-            (raw.near_black_ratio >= 0.65 or raw.near_white_ratio >= 0.65)
-            and adaptive_scores.visibility_score < 0.30
-            and (
-                raw.luminance_range <= p25_range
-                or adaptive_scores.information_score < 0.35
-            )
-        ):
+        if ContentFilter._is_fade_transition(raw, profile, adaptive_scores, p25_range):
             return "fade_transition"
 
         return None
+
+    @classmethod
+    def _is_fade_transition(
+        cls,
+        raw: Any,
+        profile: WholeInputProfile,
+        adaptive_scores: AdaptiveScores,
+        p25_range: float,
+    ) -> bool:
+        """暗転・明転・露出過多/不足の遷移フレームかどうかを返す."""
+        obvious_fade = (
+            (raw.near_black_ratio >= 0.65 or raw.near_white_ratio >= 0.65)
+            and adaptive_scores.visibility_score < cls.FADE_VISIBILITY_THRESHOLD
+            and (
+                raw.luminance_range <= p25_range
+                or adaptive_scores.information_score < cls.FADE_INFORMATION_THRESHOLD
+            )
+        )
+        if obvious_fade:
+            return True
+
+        exposure_extreme = (
+            max(raw.near_black_ratio, raw.near_white_ratio)
+            >= cls.FADE_EXPOSURE_RATIO_THRESHOLD
+            or raw.brightness <= cls.FADE_DARK_BRIGHTNESS_THRESHOLD
+            or raw.brightness >= cls.FADE_BRIGHT_BRIGHTNESS_THRESHOLD
+        )
+        weak_structure = (
+            raw.dominant_tone_ratio >= cls.TRANSITION_MIN_DOMINANT_TONE_RATIO
+            or raw.luminance_range
+            <= max(cls.TRANSITION_MIN_LUMINANCE_RANGE, profile.luminance_range.p25)
+        )
+        return (
+            exposure_extreme
+            and adaptive_scores.visibility_score < cls.TRANSITION_VISIBILITY_THRESHOLD
+            and adaptive_scores.information_score < cls.TRANSITION_INFORMATION_THRESHOLD
+            and raw.contrast <= max(cls.TRANSITION_MIN_CONTRAST, profile.contrast.p25)
+            and raw.edge_density
+            <= max(cls.TRANSITION_MIN_EDGE_DENSITY, profile.edge_density.p25)
+            and weak_structure
+        )
 
     def _find_temporal_rejections(
         self,

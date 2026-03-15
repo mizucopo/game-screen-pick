@@ -200,9 +200,11 @@ def test_cli_writes_report_json(
         "temporal_transition": 0,
     }
     assert payload["selected"][0]["scene_confidence"] == 0.5
+    assert payload["selected"][0]["transition_risk_score"] == 0.0
     assert payload["selected"][0]["argmax_scene_label"] == "gameplay"
     assert payload["selected"][0]["fallback_applied"] is False
     assert payload["selected"][0]["event_promotion_applied"] is False
+    assert payload["selected"][0]["transition_suppressed_event"] is False
     assert payload["scene_diagnostics_summary"]["argmax_distribution"] == {
         "gameplay": 1,
         "event": 0,
@@ -213,6 +215,10 @@ def test_cli_writes_report_json(
         "promoted_from_gameplay": 0,
         "avg_scene_confidence": 0.0,
         "low_confidence_count": 0,
+    }
+    assert payload["scene_diagnostics_summary"]["transition_counts"] == {
+        "fade_transition_rejected": 0,
+        "event_suppressed": 0,
     }
 
 

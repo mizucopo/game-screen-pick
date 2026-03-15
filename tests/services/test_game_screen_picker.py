@@ -560,3 +560,96 @@ def test_select_from_analyzed_rejects_mid_fade_regression() -> None:
     assert rejected == []
     assert stats.rejected_by_content_filter == 3
     assert stats.content_filter_breakdown["fade_transition"] == 3
+
+
+def test_select_from_analyzed_excludes_bright_and_dim_transition_frames() -> None:
+    """明転途中・暗転途中の event 風フレームが候補に残らないこと."""
+
+    def feature(index: int) -> np.ndarray:
+        vector = np.zeros(101, dtype=np.float32)
+        vector[index] = 1.0
+        return vector
+
+    analyzed_images = [
+        create_analyzed_image(
+            path="/tmp/good_gameplay.jpg",
+            raw_metrics_dict={
+                "brightness": 96.0,
+                "contrast": 18.0,
+                "edge_density": 0.20,
+                "action_intensity": 18.0,
+                "luminance_entropy": 1.3,
+                "luminance_range": 36.0,
+                "near_black_ratio": 0.12,
+                "dominant_tone_ratio": 0.60,
+            },
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(0), (0, 475)),
+            content_features=feature(0),
+        ),
+        create_analyzed_image(
+            path="/tmp/good_event.jpg",
+            raw_metrics_dict={
+                "brightness": 145.0,
+                "contrast": 20.0,
+                "edge_density": 0.18,
+                "action_intensity": 12.0,
+                "luminance_entropy": 1.4,
+                "luminance_range": 38.0,
+                "near_white_ratio": 0.10,
+                "dominant_tone_ratio": 0.58,
+            },
+            clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(1), (0, 475)),
+            content_features=feature(1),
+            layout_dict={"dialogue_overlay_score": 0.55},
+        ),
+        create_analyzed_image(
+            path="/tmp/bright_transition.jpg",
+            raw_metrics_dict={
+                "brightness": 222.0,
+                "contrast": 4.0,
+                "edge_density": 0.02,
+                "action_intensity": 2.0,
+                "luminance_entropy": 0.55,
+                "luminance_range": 8.0,
+                "near_white_ratio": 0.52,
+                "dominant_tone_ratio": 0.88,
+            },
+            clip_features=torch.tensor([0.10, 0.85, 0.02]).numpy(),
+            combined_features=np.pad(feature(2), (0, 475)),
+            content_features=feature(2),
+            layout_dict={"dialogue_overlay_score": 0.35},
+        ),
+        create_analyzed_image(
+            path="/tmp/dim_transition.jpg",
+            raw_metrics_dict={
+                "brightness": 36.0,
+                "contrast": 3.5,
+                "edge_density": 0.02,
+                "action_intensity": 1.8,
+                "luminance_entropy": 0.55,
+                "luminance_range": 8.0,
+                "near_black_ratio": 0.55,
+                "dominant_tone_ratio": 0.85,
+            },
+            clip_features=torch.tensor([0.10, 0.82, 0.03]).numpy(),
+            combined_features=np.pad(feature(3), (0, 475)),
+            content_features=feature(3),
+            layout_dict={"dialogue_overlay_score": 0.30},
+        ),
+    ]
+    analyzer = FakeAnalyzer(analyzed_images)
+    config = SelectionConfig(scene_mix=SceneMix(gameplay=0.5, event=0.5, other=0.0))
+    picker = GameScreenPicker(analyzer=analyzer, config=config)
+
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=4)
+
+    assert rejected == []
+    assert {candidate.path for candidate in selected} == {
+        "/tmp/good_gameplay.jpg",
+        "/tmp/good_event.jpg",
+    }
+    assert stats.rejected_by_content_filter == 2
+    assert stats.content_filter_breakdown["fade_transition"] == 2
+    assert stats.scene_mix_actual == {"gameplay": 1, "event": 1, "other": 0}
