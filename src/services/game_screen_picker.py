@@ -4,15 +4,18 @@ import random
 from pathlib import Path
 
 from ..constants.selection_profiles import PROFILE_REGISTRY
+from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.picker_statistics import PickerStatistics
 from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_config import SelectionConfig
 from ..protocols.analyzer_like import AnalyzerLike
 from ..services.candidate_scorer import CandidateScorer
+from ..services.content_filter import ContentFilter
 from ..services.profile_resolver import ProfileResolver
 from ..services.scene_mix_selector import SceneMixSelector
 from ..services.scene_scorer import SceneScorer
+from ..services.whole_input_profiler import WholeInputProfiler
 
 
 class GameScreenPicker:
@@ -43,6 +46,7 @@ class GameScreenPicker:
         self._profile_resolver = ProfileResolver()
         self._candidate_scorer = CandidateScorer(self.analyzer.metric_calculator)
         self._scene_mix_selector = SceneMixSelector(self.config)
+        self._content_filter = ContentFilter(WholeInputProfiler())
 
     @staticmethod
     def load_image_files(folder: str, recursive: bool) -> list[Path]:
@@ -92,6 +96,7 @@ class GameScreenPicker:
     def _score_candidates(
         self,
         analyzed_images: list[AnalyzedImage],
+        adaptive_scores_by_image_id: dict[int, AdaptiveScores],
     ) -> tuple[list[ScoredCandidate], str, dict[str, int], dict[str, float]]:
         """scene評価とprofile解決を行い、最終候補を作る.
 
@@ -102,6 +107,7 @@ class GameScreenPicker:
 
         Args:
             analyzed_images: scene判定前の中立解析結果。
+            adaptive_scores_by_image_id: 入力全体適応スコア。
 
         Returns:
             1. 最終スコア付き候補のリスト
@@ -118,7 +124,13 @@ class GameScreenPicker:
         profile = PROFILE_REGISTRY[resolved_profile]
 
         candidates = [
-            self._candidate_scorer.score(image, assessment, profile)
+            self._candidate_scorer.score(
+                image,
+                assessment,
+                profile,
+                adaptive_scores_by_image_id[id(image)].information_score,
+                adaptive_scores_by_image_id[id(image)].distinctiveness_score,
+            )
             for image, assessment in zip(analyzed_images, assessments, strict=True)
         ]
         scene_distribution = {
@@ -203,8 +215,11 @@ class GameScreenPicker:
             2. 非選択候補を選定スコア順に並べたリスト
             3. scene mix目標値と実績を含む `PickerStatistics`
         """
+        content_filter_result = self._content_filter.filter(analyzed_images)
+        filtered_images = content_filter_result.kept_images
+        adaptive_scores_by_image_id = content_filter_result.adaptive_scores_by_image_id
         candidates, resolved_profile, scene_distribution, _profile_scores = (
-            self._score_candidates(analyzed_images)
+            self._score_candidates(filtered_images, adaptive_scores_by_image_id)
         )
         profile = PROFILE_REGISTRY[resolved_profile]
         selected, rejected_by_similarity, scene_mix_target, scene_mix_actual = (
@@ -228,6 +243,7 @@ class GameScreenPicker:
             analyzed_ok=len(analyzed_images),
             analyzed_fail=analyzed_fail,
             rejected_by_similarity=rejected_by_similarity,
+            rejected_by_content_filter=content_filter_result.rejected_by_content_filter,
             selected_count=len(selected),
             resolved_profile=resolved_profile,
             scene_distribution=scene_distribution,
@@ -236,5 +252,6 @@ class GameScreenPicker:
             threshold_relaxation_used=self.config.compute_threshold_steps(
                 self.config.similarity_threshold
             ),
+            content_filter_breakdown=content_filter_result.content_filter_breakdown,
         )
         return selected, rejected, stats

@@ -52,6 +52,10 @@ class MetricCalculator:
         gray_size = gray.size
         gray_mean = cv2.mean(gray)[0]
         kernel = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
+        gray_flat = gray.reshape(-1)
+        gray_hist = np.bincount(gray_flat, minlength=256).astype(np.float32)
+        gray_prob = gray_hist / gray_size
+        non_zero_prob = gray_prob[gray_prob > 0]
 
         # OpenCVネイティブ関数で高速化（CV_32Fで精度は維持しつつ高速化）
         laplacian = cv2.Laplacian(gray, cv2.CV_32F)
@@ -87,6 +91,15 @@ class MetricCalculator:
         )
         dramatic_score = (dramatic_pixels / gray_size) * 1000
         visual_balance = float(max(0, 100 - abs(gray_mean - 128) * 0.5))
+        luminance_entropy = float(
+            -(non_zero_prob * np.log2(non_zero_prob)).sum()
+        )
+        luminance_p5, luminance_p95 = np.percentile(gray_flat, [5, 95])
+        luminance_range = float(luminance_p95 - luminance_p5)
+        near_black_ratio = float(np.mean(gray_flat <= 12))
+        near_white_ratio = float(np.mean(gray_flat >= 243))
+        dominant_tone_hist = np.bincount(gray_flat // 16, minlength=16)
+        dominant_tone_ratio = float(dominant_tone_hist.max() / gray_size)
 
         return RawMetrics(
             blur_score=blur_score,
@@ -98,6 +111,11 @@ class MetricCalculator:
             action_intensity=action_intensity,
             visual_balance=visual_balance,
             dramatic_score=dramatic_score,
+            luminance_entropy=luminance_entropy,
+            luminance_range=luminance_range,
+            near_black_ratio=near_black_ratio,
+            near_white_ratio=near_white_ratio,
+            dominant_tone_ratio=dominant_tone_ratio,
         )
 
     def calculate_quality_score(
@@ -120,12 +138,6 @@ class MetricCalculator:
                 for metric_name in metric_names
             )
         )
-
-    def calculate_brightness_penalty(self, raw: RawMetrics) -> float:
-        """暗すぎる画像へのペナルティを返す."""
-        if raw.brightness < self.config.brightness_penalty_threshold:
-            return self.config.brightness_penalty_value
-        return 0.0
 
     def calculate_raw_norm_metrics(
         self, img: np.ndarray

@@ -320,6 +320,10 @@ class BatchPipeline:
                 img,
                 clip_features,
             )
+            content_features = self.feature_extractor.extract_content_features(
+                img,
+                raw_metrics,
+            )
             layout_heuristics = LayoutAnalyzer.analyze(img)
             return AnalyzedImage(
                 path=path,
@@ -327,6 +331,7 @@ class BatchPipeline:
                 normalized_metrics=normalized_metrics,
                 clip_features=clip_features,
                 combined_features=combined_features,
+                content_features=content_features,
                 layout_heuristics=layout_heuristics,
             )
         except ExceptionHandler.get_expected_image_errors() as error:

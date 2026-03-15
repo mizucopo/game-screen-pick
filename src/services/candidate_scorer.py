@@ -24,19 +24,23 @@ class CandidateScorer:
         analyzed_image: AnalyzedImage,
         assessment: SceneAssessment,
         profile: SelectionProfile,
+        information_score: float,
+        distinctiveness_score: float,
     ) -> ScoredCandidate:
         """中立解析結果を最終候補に変換する.
 
         品質スコアは画質メトリクスのみから算出し、
         活動量スコアは action / edge / UI / gameplay score を
         プロファイル重みで合成する。最終的な `selection_score` は
-        scene mix向けスコアと品質スコアを基準にしつつ、
-        明るすぎる画像にはペナルティを加える。
+        scene mix向けスコア、品質スコア、入力全体に対する
+        情報量スコア、差分量スコアを固定重みで合成する。
 
         Args:
             analyzed_image: 中立解析済みの画像データ。
             assessment: scene判定結果。
             profile: 選択時に使う解決済みプロファイル。
+            information_score: 入力全体に対する相対情報量スコア。
+            distinctiveness_score: 入力全体に対する相対差分量スコア。
 
         Returns:
             選定に必要な全スコアを持つ `ScoredCandidate` 。
@@ -55,17 +59,15 @@ class CandidateScorer:
             + profile.activity_weights["gameplay_score"] * assessment.gameplay_score
         )
         scene_mix_score = self._calculate_scene_mix_score(assessment)
-        brightness_penalty = self.metric_calculator.calculate_brightness_penalty(
-            analyzed_image.raw_metrics
-        )
         selection_score = max(
             0.0,
-            (
-                profile.selection_scene_weight * scene_mix_score
-                + profile.selection_quality_weight * quality_score
-                - brightness_penalty
-            )
-            * self.metric_calculator.config.score_multiplier,
+            100.0
+            * (
+                0.50 * scene_mix_score
+                + 0.25 * quality_score
+                + 0.15 * information_score
+                + 0.10 * distinctiveness_score
+            ),
         )
         return ScoredCandidate(
             analyzed_image=analyzed_image,

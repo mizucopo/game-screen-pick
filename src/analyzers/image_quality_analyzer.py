@@ -88,14 +88,13 @@ class ImageQualityAnalyzer:
         # CLIP特徴を抽出
         clip_features = self.feature_extractor.extract_clip_features(pil_img_copy)
 
-        # HSV特徴とCLIP特徴を結合
+        # すべてのメトリクスを一括計算
+        raw, norm = self.metric_calculator.calculate_all_metrics(img)
         combined_features = self.feature_extractor.extract_combined_features(
             img,
             clip_features,
         )
-
-        # すべてのメトリクスを一括計算
-        raw, norm = self.metric_calculator.calculate_all_metrics(img)
+        content_features = self.feature_extractor.extract_content_features(img, raw)
         layout_heuristics = LayoutAnalyzer.analyze(img)
 
         return AnalyzedImage(
@@ -104,6 +103,7 @@ class ImageQualityAnalyzer:
             normalized_metrics=norm,
             clip_features=clip_features,
             combined_features=combined_features,
+            content_features=content_features,
             layout_heuristics=layout_heuristics,
         )
 

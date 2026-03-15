@@ -17,6 +17,11 @@ class RawMetrics:
         action_intensity: アクション強度（カーネル適用後の標準偏差）
         visual_balance: 視覚的バランス（輝度が128に近いほど高スコア）
         dramatic_score: ドラマティックスコア（高彩度・高輝度ピクセル比率）
+        luminance_entropy: 輝度ヒストグラムのエントロピー
+        luminance_range: 輝度のp95-p5レンジ
+        near_black_ratio: ほぼ黒のピクセル比率
+        near_white_ratio: ほぼ白のピクセル比率
+        dominant_tone_ratio: 16階調化したときの最多階調比率
     """
 
     blur_score: float
@@ -28,3 +33,8 @@ class RawMetrics:
     action_intensity: float
     visual_balance: float
     dramatic_score: float
+    luminance_entropy: float
+    luminance_range: float
+    near_black_ratio: float
+    near_white_ratio: float
+    dominant_tone_ratio: float

@@ -38,6 +38,8 @@ class ReportWriter:
             "scene_mix_target": stats.scene_mix_target,
             "scene_mix_actual": stats.scene_mix_actual,
             "threshold_relaxation_used": stats.threshold_relaxation_used,
+            "rejected_by_content_filter": stats.rejected_by_content_filter,
+            "content_filter_breakdown": stats.content_filter_breakdown,
             "selected": [
                 ReportWriter._serialize_candidate(candidate) for candidate in selected
             ],

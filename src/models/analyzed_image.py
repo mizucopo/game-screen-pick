@@ -19,4 +19,5 @@ class AnalyzedImage:
     normalized_metrics: NormalizedMetrics
     clip_features: np.ndarray[Any, Any]
     combined_features: np.ndarray[Any, Any]
+    content_features: np.ndarray[Any, Any]
     layout_heuristics: LayoutHeuristics

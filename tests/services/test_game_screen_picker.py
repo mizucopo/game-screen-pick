@@ -7,6 +7,7 @@ scene mix ベースへ再設計されたピッカーについて、
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from src.models.analyzed_image import AnalyzedImage
@@ -203,3 +204,153 @@ def test_select_from_folder_processes_images_and_handles_failures() -> None:
         assert stats.total_files == 5
         assert stats.analyzed_ok == 3
         assert stats.analyzed_fail == 2
+
+
+def test_select_from_analyzed_filters_content_before_scene_mix() -> None:
+    """content filter通過後の候補だけでscene mixが適用されること.
+
+    Given:
+        - blackout、whiteout、単色、フェード遷移などの低情報量フレームを含む画像群がある
+        - 高情報量の暗いgameplay/eventフレームもある
+        - gameplay/event 50%ずつのscene mix設定がある
+    When:
+        - select_from_analyzedで選択する
+    Then:
+        - content filterで低情報量フレームが除外されること
+        - 残った候補に対してscene mixが適用されること
+    """
+    # Arrange
+    def feature(
+        index: int,
+        delta_index: int | None = None,
+        delta: float = 0.0,
+    ) -> np.ndarray:
+        vector = np.zeros(101, dtype=np.float32)
+        vector[index] = 1.0
+        if delta_index is not None:
+            vector[delta_index] = delta
+        return vector
+
+    analyzed_images = [
+        create_analyzed_image(
+            path="/tmp/dark_gameplay.jpg",
+            raw_metrics_dict={
+                "brightness": 28.0,
+                "contrast": 22.0,
+                "edge_density": 0.34,
+                "action_intensity": 24.0,
+                "luminance_entropy": 1.5,
+                "luminance_range": 48.0,
+                "near_black_ratio": 0.12,
+                "dominant_tone_ratio": 0.62,
+            },
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(0), (0, 475)),
+            content_features=feature(0),
+        ),
+        create_analyzed_image(
+            path="/tmp/dark_event.jpg",
+            raw_metrics_dict={
+                "brightness": 26.0,
+                "contrast": 18.0,
+                "edge_density": 0.28,
+                "action_intensity": 20.0,
+                "luminance_entropy": 1.2,
+                "luminance_range": 40.0,
+                "near_black_ratio": 0.18,
+                "dominant_tone_ratio": 0.67,
+            },
+            clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(1), (0, 475)),
+            content_features=feature(1),
+            layout_dict={"dialogue_overlay_score": 0.6},
+        ),
+        create_analyzed_image(
+            path="/tmp/blackout.jpg",
+            raw_metrics_dict={
+                "brightness": 1.0,
+                "contrast": 0.2,
+                "edge_density": 0.001,
+                "action_intensity": 0.1,
+                "luminance_entropy": 0.05,
+                "luminance_range": 1.0,
+                "near_black_ratio": 0.99,
+                "dominant_tone_ratio": 1.0,
+            },
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(2), (0, 475)),
+            content_features=feature(2),
+        ),
+        create_analyzed_image(
+            path="/tmp/whiteout.jpg",
+            raw_metrics_dict={
+                "brightness": 250.0,
+                "contrast": 0.3,
+                "edge_density": 0.001,
+                "action_intensity": 0.1,
+                "luminance_entropy": 0.05,
+                "luminance_range": 1.0,
+                "near_white_ratio": 0.99,
+                "dominant_tone_ratio": 1.0,
+            },
+            clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
+            combined_features=np.pad(feature(2, 3, 0.01), (0, 475)),
+            content_features=feature(2, 3, 0.01),
+        ),
+        create_analyzed_image(
+            path="/tmp/single_tone.jpg",
+            raw_metrics_dict={
+                "brightness": 120.0,
+                "contrast": 0.2,
+                "edge_density": 0.001,
+                "action_intensity": 0.1,
+                "luminance_entropy": 0.08,
+                "luminance_range": 3.0,
+                "dominant_tone_ratio": 0.96,
+            },
+            clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
+            combined_features=np.pad(feature(2, 4, 0.02), (0, 475)),
+            content_features=feature(2, 4, 0.02),
+        ),
+        create_analyzed_image(
+            path="/tmp/fade_transition.jpg",
+            raw_metrics_dict={
+                "brightness": 12.0,
+                "contrast": 0.0,
+                "edge_density": 0.0,
+                "action_intensity": 0.0,
+                "luminance_entropy": 0.0,
+                "luminance_range": 0.0,
+                "near_black_ratio": 0.85,
+                "dominant_tone_ratio": 0.90,
+            },
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(2, 5, 0.005), (0, 475)),
+            content_features=feature(2, 5, 0.005),
+        ),
+    ]
+    analyzer = FakeAnalyzer(analyzed_images)
+    picker = GameScreenPicker(
+        analyzer=analyzer,
+        config=SelectionConfig(scene_mix=SceneMix(gameplay=0.5, event=0.5, other=0.0)),
+    )
+
+    # Act
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=4)
+
+    # Assert
+    assert len(selected) == 2
+    assert len(rejected) == 0
+    assert {candidate.path for candidate in selected} == {
+        "/tmp/dark_gameplay.jpg",
+        "/tmp/dark_event.jpg",
+    }
+    assert stats.rejected_by_content_filter == 4
+    assert stats.content_filter_breakdown == {
+        "blackout": 1,
+        "whiteout": 1,
+        "single_tone": 1,
+        "fade_transition": 1,
+    }
+    assert stats.scene_distribution == {"gameplay": 1, "event": 1, "other": 0}
+    assert stats.scene_mix_actual == {"gameplay": 1, "event": 1, "other": 0}

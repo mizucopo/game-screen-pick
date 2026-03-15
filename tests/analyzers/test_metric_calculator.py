@@ -1,7 +1,7 @@
 """MetricCalculatorの単体テスト.
 
 このテストモジュールでは、現行実装の公開挙動として
-生メトリクス計算、quality score 計算、brightness penalty を検証する。
+生メトリクス計算、quality score 計算、新しい輝度分布メトリクスを検証する。
 実装詳細ではなく、観測可能な戻り値だけを見る方針を取る。
 """
 
@@ -83,24 +83,42 @@ def test_quality_score_uses_weights(metric_calculator: MetricCalculator) -> None
     assert 0.0 <= score <= 1.0
 
 
-def test_brightness_penalty_applies_to_dark_image(
+def test_calculate_metrics_distinguishes_flat_and_textured_frames(
     metric_calculator: MetricCalculator,
 ) -> None:
-    """暗い画像にbrightness penaltyが適用されること.
+    """black/white/single-tone と暗い高情報量画像が分離されること.
 
     Given:
-        - 明るさが極端に低い画像がある
+        - 真っ黒、真っ白、単色、暗いが情報量のある画像がある
     When:
-        - brightness penalty を計算する
+        - 生メトリクスを計算する
     Then:
-        - 設定済みの penalty 値がそのまま返ること
+        - 平坦な画像群では分布メトリクスが低くなり
+        - 暗いが情報量のある画像では entropy/range/edge が高くなること
     """
     # Arrange
-    dark_image = np.zeros((32, 32, 3), dtype=np.uint8)
-    raw_metrics = metric_calculator.calculate_raw_metrics(dark_image)
+    black_image = np.zeros((64, 64, 3), dtype=np.uint8)
+    white_image = np.full((64, 64, 3), 255, dtype=np.uint8)
+    single_tone_image = np.full((64, 64, 3), (0, 220, 255), dtype=np.uint8)
+    dark_textured_image = np.zeros((64, 64, 3), dtype=np.uint8) + 20
+    for offset in range(0, 64, 8):
+        cv2.line(dark_textured_image, (0, offset), (63, offset), (40, 40, 40), 1)
+        cv2.line(dark_textured_image, (offset, 0), (63, 63 - offset), (55, 55, 55), 1)
 
     # Act
-    penalty = metric_calculator.calculate_brightness_penalty(raw_metrics)
+    black_metrics = metric_calculator.calculate_raw_metrics(black_image)
+    white_metrics = metric_calculator.calculate_raw_metrics(white_image)
+    single_tone_metrics = metric_calculator.calculate_raw_metrics(single_tone_image)
+    dark_textured_metrics = metric_calculator.calculate_raw_metrics(dark_textured_image)
 
     # Assert
-    assert penalty == metric_calculator.config.brightness_penalty_value
+    assert black_metrics.near_black_ratio == pytest.approx(1.0)
+    assert white_metrics.near_white_ratio == pytest.approx(1.0)
+    assert single_tone_metrics.dominant_tone_ratio == pytest.approx(1.0)
+    assert black_metrics.luminance_entropy == pytest.approx(0.0)
+    assert white_metrics.luminance_entropy == pytest.approx(0.0)
+    assert single_tone_metrics.luminance_range == pytest.approx(0.0)
+    assert dark_textured_metrics.luminance_entropy > single_tone_metrics.luminance_entropy
+    assert dark_textured_metrics.luminance_range > single_tone_metrics.luminance_range
+    assert dark_textured_metrics.edge_density > single_tone_metrics.edge_density
+    assert dark_textured_metrics.action_intensity > black_metrics.action_intensity

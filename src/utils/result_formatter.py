@@ -32,14 +32,16 @@ class ResultFormatter:
         for i, res in enumerate(selected):
             logger.info(
                 f"[{i + 1}] {Path(res.path).name} "
-                f"(Scene: {res.scene_assessment.scene_label.value}, "
-                f"Score: {res.selection_score:.2f})"
+                f"(画面種別: {res.scene_assessment.scene_label.value}, "
+                f"スコア: {res.selection_score:.2f})"
             )
 
         logger.info("--- 統計情報 ---")
         logger.info(f"総ファイル数: {stats.total_files}")
         logger.info(f"解析成功: {stats.analyzed_ok}")
         logger.info(f"解析失敗: {stats.analyzed_fail}")
+        logger.info(f"コンテンツフィルターで除外: {stats.rejected_by_content_filter}")
+        logger.info(f"コンテンツフィルター内訳: {stats.content_filter_breakdown}")
         logger.info(f"類似度で除外: {stats.rejected_by_similarity}")
         logger.info(f"選択数: {stats.selected_count}")
         logger.info(f"プロファイル: {stats.resolved_profile}")

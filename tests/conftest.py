@@ -71,6 +71,7 @@ def create_analyzed_image(
     normalized_metrics_dict: dict[str, float] | None = None,
     clip_features: np.ndarray[Any, Any] | None = None,
     combined_features: np.ndarray[Any, Any] | None = None,
+    content_features: np.ndarray[Any, Any] | None = None,
     layout_dict: dict[str, float] | None = None,
 ) -> AnalyzedImage:
     """`AnalyzedImage` を作成する共通ヘルパー.
@@ -104,6 +105,11 @@ def create_analyzed_image(
         action_intensity=raw_metrics_dict.get("action_intensity", 30),
         visual_balance=raw_metrics_dict.get("visual_balance", 80),
         dramatic_score=raw_metrics_dict.get("dramatic_score", 50),
+        luminance_entropy=raw_metrics_dict.get("luminance_entropy", 1.0),
+        luminance_range=raw_metrics_dict.get("luminance_range", 40.0),
+        near_black_ratio=raw_metrics_dict.get("near_black_ratio", 0.0),
+        near_white_ratio=raw_metrics_dict.get("near_white_ratio", 0.0),
+        dominant_tone_ratio=raw_metrics_dict.get("dominant_tone_ratio", 0.5),
     )
 
     normalized_metrics_dict = normalized_metrics_dict or {}
@@ -125,6 +131,8 @@ def create_analyzed_image(
         title_layout_score=layout_dict.get("title_layout_score", 0.1),
         game_over_layout_score=layout_dict.get("game_over_layout_score", 0.1),
     )
+    if content_features is None:
+        content_features = np.asarray(combined_features[:101], dtype=np.float32)
 
     return AnalyzedImage(
         path=path,
@@ -132,6 +140,7 @@ def create_analyzed_image(
         normalized_metrics=norm,
         clip_features=clip_features,
         combined_features=combined_features,
+        content_features=content_features,
         layout_heuristics=heuristics,
     )
 
