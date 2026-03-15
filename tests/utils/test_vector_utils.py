@@ -66,5 +66,29 @@ def test_select_diverse_indices_handles_empty_and_identical_vectors() -> None:
     )
 
     # Assert
-    assert len(selected_empty) == 0 and rejected_empty == 0
-    assert len(selected_identical) == 1 and rejected_identical == 9
+    assert len(selected_empty) == 0 and len(rejected_empty) == 0
+    assert selected_identical == [0]
+    assert len(rejected_identical) == 9
+
+
+def test_filter_by_similarity_checks_against_seed_features() -> None:
+    """既選択特徴をseedとして類似候補を除外できること."""
+    # Arrange
+    seed = [np.array([1.0, 0.0, 0.0])]
+    candidates = [
+        np.array([1.0, 0.0, 0.0]),
+        np.array([0.0, 1.0, 0.0]),
+    ]
+
+    # Act
+    selected, rejected = VectorUtils.filter_by_similarity(
+        candidates=candidates,
+        num=2,
+        similarity_threshold=0.9,
+        compute_threshold_steps=lambda base: [base],
+        seed_features=seed,
+    )
+
+    # Assert
+    assert selected == [1]
+    assert rejected == {0}

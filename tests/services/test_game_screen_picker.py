@@ -10,10 +10,25 @@ from pathlib import Path
 import torch
 
 from src.models.analyzed_image import AnalyzedImage
+from src.models.scene_mix import SceneMix
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
 from tests.conftest import create_analyzed_image
 from tests.fake_analyzer import FakeAnalyzer
+
+
+def _make_feature(index: int) -> torch.Tensor:
+    """類似度判定用の one-hot 特徴を作る."""
+    feature = torch.zeros(576)
+    feature[index] = 1.0
+    return feature
+
+
+def _make_near_duplicate(base: torch.Tensor, index: int) -> torch.Tensor:
+    """base に非常に近い特徴を作る."""
+    feature = base.clone()
+    feature[index] = 0.01
+    return feature
 
 
 def _make_analyzed_images() -> list[AnalyzedImage]:
@@ -63,6 +78,40 @@ def _make_analyzed_images() -> list[AnalyzedImage]:
     return images
 
 
+def _make_homogeneous_scene_mix_images() -> list[AnalyzedImage]:
+    """多様性不足を再現する解析済み画像群を作成する."""
+    gameplay_base = _make_feature(0)
+    event_base = _make_feature(100)
+    return [
+        create_analyzed_image(
+            path="/tmp/gameplay_0.jpg",
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=gameplay_base.numpy(),
+            normalized_metrics_dict={"action_intensity": 0.6, "ui_density": 0.5},
+        ),
+        create_analyzed_image(
+            path="/tmp/gameplay_1.jpg",
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=_make_near_duplicate(gameplay_base, 1).numpy(),
+            normalized_metrics_dict={"action_intensity": 0.6, "ui_density": 0.5},
+        ),
+        create_analyzed_image(
+            path="/tmp/event_0.jpg",
+            clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
+            combined_features=event_base.numpy(),
+            normalized_metrics_dict={"action_intensity": 0.4, "ui_density": 0.4},
+            layout_dict={"dialogue_overlay_score": 0.5},
+        ),
+        create_analyzed_image(
+            path="/tmp/event_1.jpg",
+            clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
+            combined_features=_make_near_duplicate(event_base, 101).numpy(),
+            normalized_metrics_dict={"action_intensity": 0.4, "ui_density": 0.4},
+            layout_dict={"dialogue_overlay_score": 0.5},
+        ),
+    ]
+
+
 def test_select_from_analyzed_returns_scene_mix() -> None:
     """解析済み画像から50/40/10のscene mixで選ばれること.
 
@@ -87,6 +136,27 @@ def test_select_from_analyzed_returns_scene_mix() -> None:
     assert stats.scene_mix_target == {"gameplay": 5, "event": 4, "other": 1}
     assert stats.scene_mix_actual == {"gameplay": 5, "event": 4, "other": 1}
     assert stats.selected_count == 10
+
+
+def test_select_from_analyzed_allows_short_result() -> None:
+    """多様性不足なら要求枚数未満でも正常に返すこと."""
+    # Arrange
+    analyzed_images = _make_homogeneous_scene_mix_images()
+    analyzer = FakeAnalyzer(analyzed_images)
+    picker = GameScreenPicker(
+        analyzer=analyzer,
+        config=SelectionConfig(scene_mix=SceneMix(gameplay=0.5, event=0.5, other=0.0)),
+    )
+
+    # Act
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=4)
+
+    # Assert
+    assert len(selected) == 2
+    assert len(rejected) == 2
+    assert stats.selected_count == 2
+    assert stats.scene_mix_target == {"gameplay": 2, "event": 2, "other": 0}
+    assert stats.scene_mix_actual == {"gameplay": 1, "event": 1, "other": 0}
 
 
 def test_select_from_folder_processes_images_and_handles_failures() -> None:

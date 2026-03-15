@@ -1,4 +1,8 @@
-"""scene mix と activity mix を両立する選定ロジック."""
+"""scene mix と全体多様性を両立する選定ロジック."""
+
+from typing import Any
+
+import numpy as np
 
 from ..constants.scene_label import SceneLabel
 from ..models.scored_candidate import ScoredCandidate
@@ -8,10 +12,11 @@ from ..utils.vector_utils import VectorUtils
 
 
 class SceneMixSelector:
-    """画面種別ミックスを維持しつつ候補を選ぶ.
+    """画面種別ミックスを維持しつつ全体で多様な候補を選ぶ.
 
-    まず gameplay / event / other の比率を守り、
-    その後で各scene bucket内の活動量偏りを緩和する二段構成を取る。
+    まず gameplay / event / other の比率を優先し、
+    その後で不足枠を scene をまたいで再配分する。
+    類似度判定は最終選択結果全体に対して適用する。
     """
 
     SCENE_ORDER = (SceneLabel.GAMEPLAY, SceneLabel.EVENT, SceneLabel.OTHER)
@@ -35,12 +40,9 @@ class SceneMixSelector:
         処理順は以下の通り。
         1. `selection_score` 順に並べた候補を scene label ごとに分桶する
         2. scene mix比率から目標枚数を求める
-        3. 各bucket内で類似度フィルタを通し、多様プールを作る
+        3. 各bucket内で、全体選択済み候補も加味した類似度フィルタを通す
         4. 多様プール内で activity mix を適用し、低・中・高活動量の偏りを減らす
-        5. 不足枠があれば `gameplay -> event -> other` の順で再配分する
-
-        `other` は少量含める前提のため、最初の目標枠を超えて
-        積極的に増やすのではなく、再配分時の最後の受け皿として扱う。
+        5. 不足枠があれば scene を無視して全体の高得点候補から再配分する
 
         Args:
             candidates: 画面種別と選定スコアが付与済みの候補。
@@ -53,7 +55,7 @@ class SceneMixSelector:
             3. scene labelごとの目標枚数
             4. 実際に選ばれたscene labelごとの枚数
         """
-        if not candidates:
+        if num <= 0 or not candidates:
             empty_counts = {label.value: 0 for label in self.SCENE_ORDER}
             return [], 0, empty_counts, empty_counts
 
@@ -72,39 +74,43 @@ class SceneMixSelector:
 
         selected: list[ScoredCandidate] = []
         selected_ids: set[int] = set()
-        rejected_by_similarity = 0
+        selected_features: list[np.ndarray[Any, Any]] = []
+        rejected_by_similarity_ids: set[int] = set()
 
         for label in self.SCENE_ORDER:
-            bucket_selected, bucket_rejected = self._select_scene_bucket(
+            bucket_selected, bucket_rejected_ids = self._select_scene_bucket(
                 candidates=scene_buckets[label],
                 target=targets[label],
                 profile=profile,
                 selected_ids=selected_ids,
+                selected_features=selected_features,
             )
-            selected.extend(bucket_selected)
-            selected_ids.update(id(candidate) for candidate in bucket_selected)
-            rejected_by_similarity += bucket_rejected
+            self._extend_selection(
+                selected=selected,
+                selected_ids=selected_ids,
+                selected_features=selected_features,
+                additions=bucket_selected,
+            )
+            rejected_by_similarity_ids.update(bucket_rejected_ids)
 
         remaining_slots = num - len(selected)
         if remaining_slots > 0:
-            for label in self.SCENE_ORDER:
-                if remaining_slots <= 0:
-                    break
-                remaining_candidates = [
-                    candidate
-                    for candidate in scene_buckets[label]
-                    if id(candidate) not in selected_ids
-                ]
-                bucket_selected, bucket_rejected = self._select_scene_bucket(
-                    candidates=remaining_candidates,
-                    target=remaining_slots,
-                    profile=profile,
-                    selected_ids=selected_ids,
-                )
-                selected.extend(bucket_selected)
-                selected_ids.update(id(candidate) for candidate in bucket_selected)
-                rejected_by_similarity += bucket_rejected
-                remaining_slots = num - len(selected)
+            (
+                redistributed,
+                redistributed_rejected_ids,
+            ) = self._select_remaining_candidates(
+                candidates=sorted_candidates,
+                target=remaining_slots,
+                selected_ids=selected_ids,
+                selected_features=selected_features,
+            )
+            self._extend_selection(
+                selected=selected,
+                selected_ids=selected_ids,
+                selected_features=selected_features,
+                additions=redistributed,
+            )
+            rejected_by_similarity_ids.update(redistributed_rejected_ids)
 
         selected.sort(key=lambda item: item.selection_score, reverse=True)
         actuals = {
@@ -116,6 +122,7 @@ class SceneMixSelector:
             for label in self.SCENE_ORDER
         }
         target_map = {label.value: targets[label] for label in self.SCENE_ORDER}
+        rejected_by_similarity = len(rejected_by_similarity_ids - selected_ids)
         return selected[:num], rejected_by_similarity, target_map, actuals
 
     def _calculate_targets(self, num: int) -> dict[SceneLabel, int]:
@@ -154,53 +161,101 @@ class SceneMixSelector:
         target: int,
         profile: SelectionProfile,
         selected_ids: set[int],
-    ) -> tuple[list[ScoredCandidate], int]:
+        selected_features: list[np.ndarray[Any, Any]],
+    ) -> tuple[list[ScoredCandidate], set[int]]:
         """単一scene bucketから候補を選択する.
 
-        まず未選択候補だけに絞り、類似度フィルタで多様プールを作る。
-        その後、同じscene bucket内で `activity_mix` を適用して
-        動きの少ない画像と多い画像の偏りを抑えながら最終採用数を決める。
+        まず未選択候補だけに絞り、全体で既に選ばれた画像との
+        類似度も含めて多様プールを作る。その後、同じscene bucket内で
+        `activity_mix` を適用して活動量の偏りを抑えながら最終採用数を決める。
 
         Args:
             candidates: ひとつのscene labelに属する候補群。
             target: このbucketから確保したい枚数。
             profile: 活動量配分を決める解決済みプロファイル。
             selected_ids: 他bucketで既に選ばれた候補のID集合。
+            selected_features: 全体で既に採用済み候補の特徴ベクトル。
 
         Returns:
             1. このbucketから選ばれた候補
-            2. 類似度フィルタで除外された件数
+            2. 類似度フィルタで除外された候補ID集合
         """
         if target <= 0 or not candidates:
-            return [], 0
+            return [], set()
 
         unselected_candidates = [
             candidate for candidate in candidates if id(candidate) not in selected_ids
         ]
         if not unselected_candidates:
-            return [], 0
+            return [], set()
 
         pool_size = min(len(unselected_candidates), max(target * 3, target))
-        selected_indices, rejected_by_similarity = VectorUtils.filter_by_similarity(
+        selected_indices, rejected_indices = VectorUtils.filter_by_similarity(
             candidates=[
                 candidate.combined_features for candidate in unselected_candidates
             ],
             num=pool_size,
             similarity_threshold=self.config.similarity_threshold,
             compute_threshold_steps=self.config.compute_threshold_steps,
+            seed_features=selected_features,
         )
-        diverse_pool = [unselected_candidates[idx] for idx in sorted(selected_indices)]
-        if len(diverse_pool) < target:
-            seen_ids = {id(candidate) for candidate in diverse_pool}
-            for candidate in unselected_candidates:
-                if id(candidate) not in seen_ids:
-                    diverse_pool.append(candidate)
-                    seen_ids.add(id(candidate))
-                if len(diverse_pool) >= target:
-                    break
+        diverse_pool = [unselected_candidates[idx] for idx in selected_indices]
+        rejected_by_similarity_ids = {
+            id(unselected_candidates[idx]) for idx in rejected_indices
+        }
+        if not diverse_pool:
+            return [], rejected_by_similarity_ids
 
-        selected = self._select_with_activity_mix(diverse_pool, target, profile)
-        return selected, rejected_by_similarity
+        selected = self._select_with_activity_mix(
+            diverse_pool,
+            min(target, len(diverse_pool)),
+            profile,
+        )
+        return selected, rejected_by_similarity_ids
+
+    def _select_remaining_candidates(
+        self,
+        candidates: list[ScoredCandidate],
+        target: int,
+        selected_ids: set[int],
+        selected_features: list[np.ndarray[Any, Any]],
+    ) -> tuple[list[ScoredCandidate], set[int]]:
+        """scene target 充足後の残枠を全体候補から再配分する."""
+        if target <= 0:
+            return [], set()
+
+        remaining_candidates = [
+            candidate for candidate in candidates if id(candidate) not in selected_ids
+        ]
+        if not remaining_candidates:
+            return [], set()
+
+        selected_indices, rejected_indices = VectorUtils.filter_by_similarity(
+            candidates=[
+                candidate.combined_features for candidate in remaining_candidates
+            ],
+            num=target,
+            similarity_threshold=self.config.similarity_threshold,
+            compute_threshold_steps=self.config.compute_threshold_steps,
+            seed_features=selected_features,
+        )
+        selected = [remaining_candidates[idx] for idx in selected_indices]
+        rejected_by_similarity_ids = {
+            id(remaining_candidates[idx]) for idx in rejected_indices
+        }
+        return selected, rejected_by_similarity_ids
+
+    @staticmethod
+    def _extend_selection(
+        selected: list[ScoredCandidate],
+        selected_ids: set[int],
+        selected_features: list[np.ndarray[Any, Any]],
+        additions: list[ScoredCandidate],
+    ) -> None:
+        """選択結果と全体類似度チェック用の状態をまとめて更新する."""
+        selected.extend(additions)
+        selected_ids.update(id(candidate) for candidate in additions)
+        selected_features.extend(candidate.combined_features for candidate in additions)
 
     @staticmethod
     def _select_with_activity_mix(

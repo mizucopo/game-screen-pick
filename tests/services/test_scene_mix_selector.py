@@ -15,6 +15,24 @@ from src.services.scene_mix_selector import SceneMixSelector
 from tests.conftest import create_scored_candidate
 
 
+def _make_feature(index: int) -> np.ndarray:
+    """one-hot特徴ベクトルを作る."""
+    feature = np.zeros(576, dtype=np.float32)
+    feature[index] = 1.0
+    return feature
+
+
+def _make_near_duplicate(
+    base: np.ndarray,
+    index: int,
+    delta: float = 0.01,
+) -> np.ndarray:
+    """base に非常に近い特徴ベクトルを作る."""
+    feature = base.copy()
+    feature[index] = delta
+    return feature
+
+
 def _make_candidate(index: int, label: SceneLabel) -> ScoredCandidate:
     """指定scene labelを持つ候補を1件作成する.
 
@@ -25,8 +43,7 @@ def _make_candidate(index: int, label: SceneLabel) -> ScoredCandidate:
     Returns:
         類似度判定用特徴を持つ `ScoredCandidate` 。
     """
-    base = np.zeros(576, dtype=np.float32)
-    base[index] = 1.0
+    base = _make_feature(index)
     gameplay_score = 0.8 if label == SceneLabel.GAMEPLAY else 0.2
     event_score = 0.8 if label == SceneLabel.EVENT else 0.2
     other_score = 0.8 if label == SceneLabel.OTHER else 0.2
@@ -124,3 +141,160 @@ def test_scene_mix_selector_redistributes_when_other_is_missing() -> None:
     assert targets == {"gameplay": 5, "event": 4, "other": 1}
     assert actuals["other"] == 0
     assert actuals["gameplay"] + actuals["event"] == 10
+
+
+def test_scene_mix_selector_keeps_similar_candidates_out() -> None:
+    """scene target を満たすために類似画像を戻さないこと."""
+    # Arrange
+    config = SelectionConfig(scene_mix=SceneMix(gameplay=1.0, event=0.0, other=0.0))
+    selector = SceneMixSelector(config)
+    base = _make_feature(0)
+    candidates = [
+        create_scored_candidate(
+            path="/tmp/gameplay_a.jpg",
+            scene_label=SceneLabel.GAMEPLAY,
+            selection_score=100.0,
+            combined_features=base,
+        ),
+        create_scored_candidate(
+            path="/tmp/gameplay_b.jpg",
+            scene_label=SceneLabel.GAMEPLAY,
+            selection_score=99.0,
+            combined_features=_make_near_duplicate(base, 1),
+        ),
+        create_scored_candidate(
+            path="/tmp/gameplay_c.jpg",
+            scene_label=SceneLabel.GAMEPLAY,
+            selection_score=80.0,
+            combined_features=_make_feature(10),
+        ),
+    ]
+
+    # Act
+    selected, rejected, _, actuals = selector.select(candidates, 3, ACTIVE_PROFILE)
+
+    # Assert
+    assert [candidate.path for candidate in selected] == [
+        "/tmp/gameplay_a.jpg",
+        "/tmp/gameplay_c.jpg",
+    ]
+    assert rejected == 1
+    assert actuals == {"gameplay": 2, "event": 0, "other": 0}
+
+
+def test_scene_mix_selector_rejects_similar_candidate_across_scenes() -> None:
+    """別sceneでも既選択画像に近い候補は除外されること."""
+    # Arrange
+    config = SelectionConfig(scene_mix=SceneMix(gameplay=0.5, event=0.5, other=0.0))
+    selector = SceneMixSelector(config)
+    gameplay_feature = _make_feature(0)
+    candidates = [
+        create_scored_candidate(
+            path="/tmp/gameplay_a.jpg",
+            scene_label=SceneLabel.GAMEPLAY,
+            selection_score=100.0,
+            combined_features=gameplay_feature,
+        ),
+        create_scored_candidate(
+            path="/tmp/event_near.jpg",
+            scene_label=SceneLabel.EVENT,
+            selection_score=99.0,
+            combined_features=_make_near_duplicate(gameplay_feature, 1),
+        ),
+        create_scored_candidate(
+            path="/tmp/event_far.jpg",
+            scene_label=SceneLabel.EVENT,
+            selection_score=80.0,
+            combined_features=_make_feature(10),
+        ),
+    ]
+
+    # Act
+    selected, rejected, _, actuals = selector.select(candidates, 2, ACTIVE_PROFILE)
+
+    # Assert
+    assert [candidate.path for candidate in selected] == [
+        "/tmp/gameplay_a.jpg",
+        "/tmp/event_far.jpg",
+    ]
+    assert rejected == 1
+    assert actuals == {"gameplay": 1, "event": 1, "other": 0}
+
+
+def test_scene_mix_selector_redistributes_shortage_to_other_scene() -> None:
+    """不足したscene分を他sceneの多様な候補で埋めること."""
+    # Arrange
+    config = SelectionConfig(scene_mix=SceneMix(gameplay=0.5, event=0.5, other=0.0))
+    selector = SceneMixSelector(config)
+    gameplay_feature = _make_feature(0)
+    candidates = [
+        create_scored_candidate(
+            path="/tmp/gameplay_a.jpg",
+            scene_label=SceneLabel.GAMEPLAY,
+            selection_score=100.0,
+            combined_features=gameplay_feature,
+        ),
+        create_scored_candidate(
+            path="/tmp/gameplay_b.jpg",
+            scene_label=SceneLabel.GAMEPLAY,
+            selection_score=99.0,
+            combined_features=_make_near_duplicate(gameplay_feature, 1),
+        ),
+        create_scored_candidate(
+            path="/tmp/event_a.jpg",
+            scene_label=SceneLabel.EVENT,
+            selection_score=98.0,
+            combined_features=_make_feature(10),
+        ),
+        create_scored_candidate(
+            path="/tmp/event_b.jpg",
+            scene_label=SceneLabel.EVENT,
+            selection_score=97.0,
+            combined_features=_make_feature(20),
+        ),
+        create_scored_candidate(
+            path="/tmp/event_c.jpg",
+            scene_label=SceneLabel.EVENT,
+            selection_score=96.0,
+            combined_features=_make_feature(30),
+        ),
+    ]
+
+    # Act
+    selected, rejected, _, actuals = selector.select(candidates, 4, ACTIVE_PROFILE)
+
+    # Assert
+    assert [candidate.path for candidate in selected] == [
+        "/tmp/gameplay_a.jpg",
+        "/tmp/event_a.jpg",
+        "/tmp/event_b.jpg",
+        "/tmp/event_c.jpg",
+    ]
+    assert rejected == 1
+    assert actuals == {"gameplay": 1, "event": 3, "other": 0}
+
+
+def test_scene_mix_selector_returns_fewer_when_all_candidates_are_homogeneous() -> None:
+    """入力全体が同質なら要求枚数未満で返すこと."""
+    # Arrange
+    config = SelectionConfig(scene_mix=SceneMix(gameplay=1.0, event=0.0, other=0.0))
+    selector = SceneMixSelector(config)
+    feature = _make_feature(0)
+    candidates = [
+        create_scored_candidate(
+            path=f"/tmp/gameplay_{index}.jpg",
+            scene_label=SceneLabel.GAMEPLAY,
+            selection_score=100.0 - index,
+            combined_features=feature.copy(),
+        )
+        for index in range(5)
+    ]
+
+    # Act
+    selected, rejected, _, actuals = selector.select(candidates, 3, ACTIVE_PROFILE)
+
+    # Assert
+    assert len(selected) == 1
+    assert selected[0].path == "/tmp/gameplay_0.jpg"
+    assert rejected == 4
+    assert actuals == {"gameplay": 1, "event": 0, "other": 0}
