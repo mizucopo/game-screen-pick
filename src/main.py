@@ -251,6 +251,11 @@ class Main:
         help="JSONレポートの出力先",
     )
     @click.option(
+        "--rename",
+        is_flag=True,
+        help="scene別に gameplay0001.ext 形式で出力ファイル名を付け直す",
+    )
+    @click.option(
         "--seed",
         type=int,
         default=None,
@@ -301,6 +306,7 @@ class Main:
         config_path: str | None,
         scene_mix: SceneMix | None,
         report_json: str | None,
+        rename: bool,
         seed: int | None,
         batch_size: int | None,
         result_max_workers: int | None,
@@ -321,6 +327,7 @@ class Main:
         \b
         使用例:
           game-screen-pick -n 15 ./screenshots ./output
+          game-screen-pick --rename ./screenshots ./output
           game-screen-pick --scene-mix gameplay=0.6,event=0.3,other=0.1 ./in ./out
 
         Args:
@@ -331,6 +338,7 @@ class Main:
             config_path: TOML設定ファイルのパス。
             scene_mix: CLIから上書きする画面種別比率。
             report_json: JSONレポートの出力先パス。
+            rename: scene別の連番ファイル名で出力するかどうか。
             seed: シャッフル順を固定するための乱数シード。
             batch_size: CLIP推論のバッチサイズ上書き。
             result_max_workers: 結果構築に使う並列ワーカー数。
@@ -380,7 +388,12 @@ class Main:
                 num=num,
                 recursive=recursive,
             )
-            FileUtils.copy_selected_items(selected, output)
+            FileUtils.copy_selected_items(
+                selected,
+                output,
+                rename=rename,
+                requested_num=num,
+            )
             ResultFormatter.display_results(selected, stats)
             if report_json is not None:
                 ReportWriter.write(report_json, selected, rejected, stats)

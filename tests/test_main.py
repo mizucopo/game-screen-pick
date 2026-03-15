@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import click
 import pytest
 
+from src.constants.scene_label import SceneLabel
 from src.main import Main
 from src.models.picker_statistics import PickerStatistics
 from src.services.game_screen_picker import GameScreenPicker
@@ -198,6 +199,167 @@ def test_cli_writes_report_json(
         "fade_transition": 0,
         "temporal_transition": 0,
     }
+
+
+def test_cli_renames_outputs_by_scene(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_game_screen_picker: MagicMock,
+    setup_test_dirs: tuple[Path, Path],
+) -> None:
+    """--rename指定時にscene別の連番ファイル名で出力されること.
+
+    Given:
+        - 異なるsceneラベルを持つ複数の選択画像がある
+        - 異なる拡張子（png, jpg, bmp）を含む
+    When:
+        - `--rename` オプション付きでCLIを実行する
+    Then:
+        - scene名と連番（4桁ゼロ埋め）でリネームされること
+        - 元の拡張子が維持されること
+    """
+    # Arrange
+    test_dir, output_dir = setup_test_dirs
+    sources = {
+        "gameplay_png": test_dir / "source_gameplay.png",
+        "event_jpg": test_dir / "source_event.jpg",
+        "other_bmp": test_dir / "source_other.bmp",
+        "gameplay_jpg": test_dir / "source_gameplay2.jpg",
+    }
+    for path in sources.values():
+        path.write_bytes(b"fake_image_data")
+
+    results = [
+        create_scored_candidate(
+            path=str(sources["gameplay_png"]),
+            scene_label=SceneLabel.GAMEPLAY,
+        ),
+        create_scored_candidate(
+            path=str(sources["event_jpg"]),
+            scene_label=SceneLabel.EVENT,
+        ),
+        create_scored_candidate(
+            path=str(sources["other_bmp"]),
+            scene_label=SceneLabel.OTHER,
+        ),
+        create_scored_candidate(
+            path=str(sources["gameplay_jpg"]),
+            scene_label=SceneLabel.GAMEPLAY,
+        ),
+    ]
+    stats = PickerStatistics(
+        total_files=4,
+        analyzed_ok=4,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        rejected_by_content_filter=0,
+        selected_count=4,
+        resolved_profile="active",
+        scene_distribution={"gameplay": 2, "event": 1, "other": 1},
+        scene_mix_target={"gameplay": 2, "event": 1, "other": 1},
+        scene_mix_actual={"gameplay": 2, "event": 1, "other": 1},
+        threshold_relaxation_used=[0.72],
+        content_filter_breakdown={
+            "blackout": 0,
+            "whiteout": 0,
+            "single_tone": 0,
+            "fade_transition": 0,
+            "temporal_transition": 0,
+        },
+    )
+    mock_game_screen_picker.select.return_value = (results, [], stats)
+    monkeypatch.setattr(
+        "src.main.GameScreenPicker",
+        lambda *_args, **_kwargs: mock_game_screen_picker,
+    )
+    monkeypatch.setattr(
+        "src.main.ImageQualityAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
+    )
+
+    # Act
+    Main(
+        args=[
+            "-n",
+            "4",
+            "--rename",
+            str(test_dir),
+            str(output_dir),
+        ]
+    ).run()
+
+    # Assert
+    assert (output_dir / "gameplay0001.png").exists()
+    assert (output_dir / "event0001.jpg").exists()
+    assert (output_dir / "other0001.bmp").exists()
+    assert (output_dir / "gameplay0002.jpg").exists()
+
+
+def test_cli_rename_extends_zero_padding_from_num(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_game_screen_picker: MagicMock,
+    setup_test_dirs: tuple[Path, Path],
+) -> None:
+    """-nの桁数が4を超える場合はゼロ埋めが拡張されること.
+
+    Given:
+        - `-n 10000` で5桁の要求枚数が指定されている
+        - 選択画像が1件ある
+    When:
+        - `--rename` オプション付きでCLIを実行する
+    Then:
+        - 連番が5桁のゼロ埋めでリネームされること
+    """
+    # Arrange
+    test_dir, output_dir = setup_test_dirs
+    source = test_dir / "image0.jpg"
+    source.write_bytes(b"fake_image_data")
+
+    results = [
+        create_scored_candidate(path=str(source), scene_label=SceneLabel.GAMEPLAY)
+    ]
+    stats = PickerStatistics(
+        total_files=1,
+        analyzed_ok=1,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        rejected_by_content_filter=0,
+        selected_count=1,
+        resolved_profile="active",
+        scene_distribution={"gameplay": 1, "event": 0, "other": 0},
+        scene_mix_target={"gameplay": 1, "event": 0, "other": 0},
+        scene_mix_actual={"gameplay": 1, "event": 0, "other": 0},
+        threshold_relaxation_used=[0.72],
+        content_filter_breakdown={
+            "blackout": 0,
+            "whiteout": 0,
+            "single_tone": 0,
+            "fade_transition": 0,
+            "temporal_transition": 0,
+        },
+    )
+    mock_game_screen_picker.select.return_value = (results, [], stats)
+    monkeypatch.setattr(
+        "src.main.GameScreenPicker",
+        lambda *_args, **_kwargs: mock_game_screen_picker,
+    )
+    monkeypatch.setattr(
+        "src.main.ImageQualityAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
+    )
+
+    # Act
+    Main(
+        args=[
+            "-n",
+            "10000",
+            "--rename",
+            str(test_dir),
+            str(output_dir),
+        ]
+    ).run()
+
+    # Assert
+    assert (output_dir / "gameplay00001.jpg").exists()
 
 
 def test_build_selection_config_prefers_cli_over_config(tmp_path: Path) -> None:
