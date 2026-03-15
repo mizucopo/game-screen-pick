@@ -23,9 +23,11 @@ class SceneScorer:
     """
 
     AMBIGUITY_MARGIN = 0.05
-    EVENT_PROMOTION_MARGIN = 0.08
+    EVENT_PROMOTION_MARGIN = 0.02
+    EVENT_PROMOTION_MIN_SCORE = 0.40
     EVENT_PROMOTION_MIN_SIGNAL = 0.45
-    EVENT_PROMOTION_MAX_SUPPORT_UI = 0.65
+    EVENT_PROMOTION_MAX_SUPPORT_UI = 0.60
+    EVENT_PROMOTION_OTHER_MARGIN = 0.01
     PROMPT_GROUPS: dict[str, tuple[str, ...]] = {
         "gameplay": (
             "video game gameplay screenshot with heads-up display",
@@ -209,19 +211,22 @@ class SceneScorer:
         ordered_scores = sorted(
             label_scores.items(), key=lambda item: item[1], reverse=True
         )
-        scene_label, top_score = ordered_scores[0]
+        argmax_scene_label, argmax_score = ordered_scores[0]
         second_score = ordered_scores[1][1] if len(ordered_scores) > 1 else 0.0
+        scene_label = argmax_scene_label
         if (
-            top_score - second_score <= self.AMBIGUITY_MARGIN
-            and other_score >= top_score - self.AMBIGUITY_MARGIN
+            argmax_scene_label == SceneLabel.GAMEPLAY
+            and argmax_score - second_score <= self.AMBIGUITY_MARGIN
+            and other_score >= argmax_score - self.AMBIGUITY_MARGIN
         ):
             scene_label = SceneLabel.OTHER
         elif (
-            scene_label == SceneLabel.GAMEPLAY
+            argmax_scene_label == SceneLabel.GAMEPLAY
             and event_score >= gameplay_score - self.EVENT_PROMOTION_MARGIN
+            and event_score >= self.EVENT_PROMOTION_MIN_SCORE
             and rare_cinematic_score >= self.EVENT_PROMOTION_MIN_SIGNAL
             and support_ui_score <= self.EVENT_PROMOTION_MAX_SUPPORT_UI
-            and event_score >= other_score + 0.02
+            and other_score <= event_score + self.EVENT_PROMOTION_OTHER_MARGIN
         ):
             scene_label = SceneLabel.EVENT
 

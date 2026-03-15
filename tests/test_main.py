@@ -199,6 +199,10 @@ def test_cli_writes_report_json(
         "fade_transition": 0,
         "temporal_transition": 0,
     }
+    assert payload["selected"][0]["scene_confidence"] == 0.5
+    assert payload["selected"][0]["argmax_scene_label"] == "gameplay"
+    assert payload["selected"][0]["fallback_applied"] is False
+    assert payload["selected"][0]["event_promotion_applied"] is False
 
 
 def test_cli_renames_outputs_by_scene(

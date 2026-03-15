@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from ..constants.scene_label import SceneLabel
 from ..models.picker_statistics import PickerStatistics
 from ..models.scored_candidate import ScoredCandidate
 
@@ -64,7 +65,7 @@ class ReportWriter:
         Returns:
             scene label と主要スコアだけを抜き出した辞書。
         """
-        return {
+        base_payload = {
             "path": candidate.path,
             "scene_label": candidate.scene_assessment.scene_label.value,
             "gameplay_score": round(candidate.scene_assessment.gameplay_score, 4),
@@ -72,4 +73,38 @@ class ReportWriter:
             "other_score": round(candidate.scene_assessment.other_score, 4),
             "quality_score": round(candidate.quality_score, 4),
             "selection_score": round(candidate.selection_score, 4),
+        }
+        return base_payload | ReportWriter._build_scene_diagnostics(candidate)
+
+    @staticmethod
+    def _build_scene_diagnostics(candidate: ScoredCandidate) -> dict[str, object]:
+        """scene判定の補助診断情報を組み立てる."""
+        label_scores = {
+            SceneLabel.GAMEPLAY.value: candidate.scene_assessment.gameplay_score,
+            SceneLabel.EVENT.value: candidate.scene_assessment.event_score,
+            SceneLabel.OTHER.value: candidate.scene_assessment.other_score,
+        }
+        ordered_scores = sorted(
+            label_scores.items(), key=lambda item: item[1], reverse=True
+        )
+        argmax_scene_label, argmax_score = ordered_scores[0]
+        second_score = ordered_scores[1][1] if len(ordered_scores) > 1 else 0.0
+        final_scene_label = candidate.scene_assessment.scene_label.value
+        return {
+            "scene_confidence": round(candidate.scene_assessment.scene_confidence, 4),
+            "argmax_scene_label": argmax_scene_label,
+            "argmax_score": round(argmax_score, 4),
+            "argmax_margin": round(argmax_score - second_score, 4),
+            "fallback_applied": (
+                final_scene_label == SceneLabel.OTHER.value
+                and final_scene_label != argmax_scene_label
+            ),
+            "event_promotion_applied": (
+                final_scene_label == SceneLabel.EVENT.value
+                and final_scene_label != argmax_scene_label
+            ),
+            "event_gap_to_winner": round(
+                max(0.0, argmax_score - candidate.scene_assessment.event_score),
+                4,
+            ),
         }
