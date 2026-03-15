@@ -255,6 +255,47 @@ def test_content_filter_rejects_mid_fade_frames_with_70_percent_dark_ratio() -> 
     assert result.content_filter_breakdown["temporal_transition"] == 0
 
 
+def test_content_filter_rejects_borderline_whiteout_frame() -> None:
+    """90%台前半の白飛びフレームも whiteout で除外されること."""
+    images = [
+        create_analyzed_image(
+            path="/tmp/good_event.jpg",
+            raw_metrics_dict={
+                "brightness": 168.0,
+                "contrast": 18.0,
+                "edge_density": 0.20,
+                "action_intensity": 14.0,
+                "luminance_entropy": 1.3,
+                "luminance_range": 36.0,
+                "near_white_ratio": 0.20,
+                "dominant_tone_ratio": 0.62,
+            },
+            content_features=_feature(0),
+            combined_features=np.pad(_feature(0), (0, 475)),
+        ),
+        create_analyzed_image(
+            path="/tmp/borderline_whiteout.jpg",
+            raw_metrics_dict={
+                "brightness": 246.0,
+                "contrast": 4.5,
+                "edge_density": 0.01,
+                "action_intensity": 0.5,
+                "luminance_entropy": 0.50,
+                "luminance_range": 8.0,
+                "near_white_ratio": 0.93,
+                "dominant_tone_ratio": 0.91,
+            },
+            content_features=_feature(1),
+            combined_features=np.pad(_feature(1), (0, 475)),
+        ),
+    ]
+
+    result = ContentFilter(WholeInputProfiler()).filter(images)
+
+    assert {image.path for image in result.kept_images} == {"/tmp/good_event.jpg"}
+    assert result.content_filter_breakdown["whiteout"] == 1
+
+
 def test_content_filter_rejects_bright_and_dim_transition_frames() -> None:
     """washed-out / dimmed な遷移フレームも static fade 判定で落ちること."""
     images = [
@@ -363,8 +404,8 @@ def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> N
             "action_intensity": 3.0,
             "luminance_entropy": 0.8,
             "luminance_range": 18.0,
-            "near_black_ratio": 0.40,
-            "dominant_tone_ratio": 0.72,
+            "near_black_ratio": 0.28,
+            "dominant_tone_ratio": 0.70,
         },
         content_features=_feature(11),
         combined_features=np.pad(_feature(11), (0, 475)),
@@ -433,8 +474,8 @@ def test_temporal_transition_not_triggered_for_dissimilar_neighbors() -> None:
             "action_intensity": 3.0,
             "luminance_entropy": 0.8,
             "luminance_range": 18.0,
-            "near_black_ratio": 0.40,
-            "dominant_tone_ratio": 0.72,
+            "near_black_ratio": 0.28,
+            "dominant_tone_ratio": 0.70,
         },
         content_features=_feature(21),
         combined_features=np.pad(_feature(21), (0, 475)),

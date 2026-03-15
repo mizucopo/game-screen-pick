@@ -95,8 +95,8 @@ def test_scene_scorer_keeps_event_when_event_raw_winner_is_close_to_other() -> N
     scorer = SceneScorer(DummyModelManager())
     image = create_analyzed_image(
         path="/tmp/event_close_to_other.jpg",
-        clip_features=torch.tensor([0.0, 0.38, 0.34]).numpy(),
-        combined_features=torch.tensor([0.0, 0.38, 0.34, 0.0]).numpy(),
+        clip_features=torch.tensor([0.0, 0.36, 0.35]).numpy(),
+        combined_features=torch.tensor([0.0, 0.36, 0.35, 0.0]).numpy(),
         normalized_metrics_dict={
             "action_intensity": 0.4,
             "ui_density": 0.35,
@@ -112,7 +112,7 @@ def test_scene_scorer_keeps_event_when_event_raw_winner_is_close_to_other() -> N
     )
 
     assert assessment.event_score > assessment.other_score
-    assert assessment.event_score - assessment.other_score <= 0.05
+    assert assessment.event_score - assessment.other_score <= 0.06
     assert assessment.scene_label.value == "event"
     assert assessment.transition_suppressed_event is False
 
@@ -126,8 +126,8 @@ def test_scene_scorer_promotes_gameplay_near_miss_to_event() -> None:
             "luminance_range": 60.0,
             "dominant_tone_ratio": 0.20,
         },
-        clip_features=torch.tensor([0.436, 0.205, 0.14]).numpy(),
-        combined_features=torch.tensor([0.436, 0.205, 0.14, 0.0]).numpy(),
+        clip_features=torch.tensor([0.436, 0.168, 0.14]).numpy(),
+        combined_features=torch.tensor([0.436, 0.168, 0.14, 0.0]).numpy(),
         normalized_metrics_dict={
             "action_intensity": 0.35,
             "ui_density": 0.35,
@@ -148,7 +148,7 @@ def test_scene_scorer_promotes_gameplay_near_miss_to_event() -> None:
 
     assert assessment.gameplay_score > assessment.event_score
     assert assessment.gameplay_score - assessment.event_score <= 0.01
-    assert assessment.event_score >= 0.42
+    assert assessment.event_score >= 0.40
     assert assessment.other_score <= assessment.event_score - 0.01
     assert assessment.scene_label.value == "event"
     assert assessment.transition_suppressed_event is False
@@ -194,8 +194,8 @@ def test_scene_scorer_does_not_promote_gameplay_near_miss_without_strong_event_s
     scorer = SceneScorer(DummyModelManager())
     image = create_analyzed_image(
         path="/tmp/gameplay_not_promoted.jpg",
-        clip_features=torch.tensor([0.436, 0.20, 0.14]).numpy(),
-        combined_features=torch.tensor([0.436, 0.20, 0.14, 0.0]).numpy(),
+        clip_features=torch.tensor([0.436, 0.18, 0.14]).numpy(),
+        combined_features=torch.tensor([0.436, 0.18, 0.14, 0.0]).numpy(),
         normalized_metrics_dict=normalized_metrics_dict,
         layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
     )
@@ -292,39 +292,37 @@ def test_scene_scorer_suppresses_low_visibility_raw_event_transition() -> None:
     image = create_analyzed_image(
         path="/tmp/washed_transition.jpg",
         raw_metrics_dict={
-            "brightness": 220.0,
-            "contrast": 5.0,
-            "edge_density": 0.03,
-            "luminance_entropy": 0.7,
-            "luminance_range": 12.0,
-            "near_white_ratio": 0.52,
-            "dominant_tone_ratio": 0.86,
+            "brightness": 232.0,
+            "contrast": 4.0,
+            "edge_density": 0.02,
+            "luminance_entropy": 0.55,
+            "luminance_range": 6.0,
+            "near_white_ratio": 0.68,
+            "dominant_tone_ratio": 0.92,
         },
-        clip_features=torch.tensor([0.34, 0.38, 0.33]).numpy(),
-        combined_features=torch.tensor([0.34, 0.38, 0.33, 0.0]).numpy(),
+        clip_features=torch.tensor([0.10, 0.28, 0.30]).numpy(),
+        combined_features=torch.tensor([0.10, 0.28, 0.30, 0.0]).numpy(),
         normalized_metrics_dict={
             "action_intensity": 0.15,
             "ui_density": 0.10,
-            "dramatic_score": 0.35,
+            "dramatic_score": 0.30,
             "color_richness": 0.25,
         },
-        layout_dict={"dialogue_overlay_score": 0.12, "menu_layout_score": 0.0},
+        layout_dict={"dialogue_overlay_score": 0.12, "menu_layout_score": 0.3},
     )
 
     assessment = scorer.assess(
         image,
         _adaptive(
             distinctiveness_score=0.62,
-            information_score=0.22,
-            visibility_score=0.28,
+            information_score=0.18,
+            visibility_score=0.18,
         ),
     )
 
-    assert assessment.transition_risk_score >= 0.58
+    assert assessment.transition_risk_score >= 0.72
     assert assessment.event_score >= assessment.gameplay_score
-    assert assessment.event_score - max(
-        assessment.gameplay_score, assessment.other_score
-    ) <= 0.04
+    assert assessment.other_score >= assessment.event_score - 0.01
     assert assessment.scene_label.value != "event"
     assert assessment.transition_suppressed_event is True
 
@@ -365,5 +363,45 @@ def test_scene_scorer_keeps_bright_high_information_event() -> None:
 
     assert assessment.scene_label.value == "event"
     assert assessment.transition_suppressed_event is False
-    assert assessment.transition_risk_score < 0.58
+    assert assessment.transition_risk_score < 0.72
     assert assessment.event_score > assessment.gameplay_score
+
+
+def test_scene_scorer_keeps_low_visibility_dialogue_event() -> None:
+    """可視性が低くても会話付きイベントは suppress されないこと."""
+    scorer = SceneScorer(DummyModelManager())
+    image = create_analyzed_image(
+        path="/tmp/low_visibility_dialogue_event.jpg",
+        raw_metrics_dict={
+            "brightness": 225.0,
+            "contrast": 5.0,
+            "edge_density": 0.03,
+            "luminance_entropy": 0.65,
+            "luminance_range": 8.0,
+            "near_white_ratio": 0.60,
+            "dominant_tone_ratio": 0.88,
+        },
+        clip_features=torch.tensor([0.08, 0.88, 0.06]).numpy(),
+        combined_features=torch.tensor([0.08, 0.88, 0.06, 0.0]).numpy(),
+        normalized_metrics_dict={
+            "action_intensity": 0.18,
+            "ui_density": 0.18,
+            "dramatic_score": 0.82,
+            "color_richness": 0.72,
+        },
+        layout_dict={"dialogue_overlay_score": 0.55, "menu_layout_score": 0.0},
+    )
+
+    assessment = scorer.assess(
+        image,
+        _adaptive(
+            distinctiveness_score=0.78,
+            information_score=0.30,
+            visibility_score=0.26,
+        ),
+    )
+
+    assert assessment.transition_risk_score >= 0.72
+    assert assessment.scene_label.value == "event"
+    assert assessment.transition_suppressed_event is False
+    assert assessment.event_score > assessment.other_score

@@ -24,17 +24,22 @@ class ContentFilter:
     )
     TEMPORAL_SIMILARITY_THRESHOLD = 0.90
     TEMPORAL_VISIBILITY_MARGIN = 0.25
-    FADE_EXPOSURE_RATIO_THRESHOLD = 0.45
-    FADE_DARK_BRIGHTNESS_THRESHOLD = 48.0
-    FADE_BRIGHT_BRIGHTNESS_THRESHOLD = 208.0
+    WHITOUT_NEAR_WHITE_THRESHOLD = 0.92
+    WHITEOUT_LUMINANCE_ENTROPY_THRESHOLD = 0.55
+    WHITEOUT_BRIGHTNESS_THRESHOLD = 245.0
+    WHITEOUT_MAX_CONTRAST = 6.0
+    WHITEOUT_MAX_EDGE_DENSITY = 0.02
+    WHITEOUT_MIN_DOMINANT_TONE_RATIO = 0.88
+    DIRECT_FADE_NEAR_WHITE_THRESHOLD = 0.32
+    DIRECT_FADE_NEAR_BLACK_THRESHOLD = 0.32
+    DIRECT_FADE_BRIGHTNESS_THRESHOLD = 210.0
+    DIRECT_FADE_DARKNESS_THRESHOLD = 48.0
+    DIRECT_FADE_MAX_CONTRAST = 10.0
+    DIRECT_FADE_MAX_EDGE_DENSITY = 0.07
+    DIRECT_FADE_MIN_DOMINANT_TONE_RATIO = 0.72
+    DIRECT_FADE_MIN_LUMINANCE_RANGE = 28.0
     FADE_VISIBILITY_THRESHOLD = 0.30
     FADE_INFORMATION_THRESHOLD = 0.35
-    TRANSITION_VISIBILITY_THRESHOLD = 0.38
-    TRANSITION_INFORMATION_THRESHOLD = 0.40
-    TRANSITION_MIN_CONTRAST = 7.0
-    TRANSITION_MIN_EDGE_DENSITY = 0.05
-    TRANSITION_MIN_DOMINANT_TONE_RATIO = 0.78
-    TRANSITION_MIN_LUMINANCE_RANGE = 22.0
 
     def __init__(self, profiler: WholeInputProfiler):
         """ContentFilterを初期化する."""
@@ -95,9 +100,21 @@ class ContentFilter:
             return "blackout"
 
         if (
-            raw.near_white_ratio >= 0.97
-            and raw.luminance_entropy <= 0.35
-            and raw.luminance_range <= p10_range
+            raw.near_white_ratio >= ContentFilter.WHITOUT_NEAR_WHITE_THRESHOLD
+            and raw.luminance_entropy
+            <= ContentFilter.WHITEOUT_LUMINANCE_ENTROPY_THRESHOLD
+            and raw.luminance_range <= max(12.0, profile.luminance_range.p25)
+        ):
+            return "whiteout"
+
+        if (
+            raw.brightness >= ContentFilter.WHITEOUT_BRIGHTNESS_THRESHOLD
+            and raw.contrast
+            <= max(ContentFilter.WHITEOUT_MAX_CONTRAST, profile.contrast.p10)
+            and raw.edge_density
+            <= max(ContentFilter.WHITEOUT_MAX_EDGE_DENSITY, profile.edge_density.p10)
+            and raw.dominant_tone_ratio
+            >= ContentFilter.WHITEOUT_MIN_DOMINANT_TONE_RATIO
         ):
             return "whiteout"
 
@@ -134,24 +151,24 @@ class ContentFilter:
         if obvious_fade:
             return True
 
-        exposure_extreme = (
-            max(raw.near_black_ratio, raw.near_white_ratio)
-            >= cls.FADE_EXPOSURE_RATIO_THRESHOLD
-            or raw.brightness <= cls.FADE_DARK_BRIGHTNESS_THRESHOLD
-            or raw.brightness >= cls.FADE_BRIGHT_BRIGHTNESS_THRESHOLD
+        bright_fade = (
+            raw.near_white_ratio >= cls.DIRECT_FADE_NEAR_WHITE_THRESHOLD
+            or raw.brightness >= max(cls.DIRECT_FADE_BRIGHTNESS_THRESHOLD, profile.brightness.p90)
+        )
+        dark_fade = (
+            raw.near_black_ratio >= cls.DIRECT_FADE_NEAR_BLACK_THRESHOLD
+            or raw.brightness <= min(cls.DIRECT_FADE_DARKNESS_THRESHOLD, profile.brightness.p10)
         )
         weak_structure = (
-            raw.dominant_tone_ratio >= cls.TRANSITION_MIN_DOMINANT_TONE_RATIO
+            raw.dominant_tone_ratio >= cls.DIRECT_FADE_MIN_DOMINANT_TONE_RATIO
             or raw.luminance_range
-            <= max(cls.TRANSITION_MIN_LUMINANCE_RANGE, profile.luminance_range.p25)
+            <= max(cls.DIRECT_FADE_MIN_LUMINANCE_RANGE, profile.luminance_range.p25)
         )
         return (
-            exposure_extreme
-            and adaptive_scores.visibility_score < cls.TRANSITION_VISIBILITY_THRESHOLD
-            and adaptive_scores.information_score < cls.TRANSITION_INFORMATION_THRESHOLD
-            and raw.contrast <= max(cls.TRANSITION_MIN_CONTRAST, profile.contrast.p25)
+            (bright_fade or dark_fade)
+            and raw.contrast <= max(cls.DIRECT_FADE_MAX_CONTRAST, profile.contrast.p25)
             and raw.edge_density
-            <= max(cls.TRANSITION_MIN_EDGE_DENSITY, profile.edge_density.p25)
+            <= max(cls.DIRECT_FADE_MAX_EDGE_DENSITY, profile.edge_density.p25)
             and weak_structure
         )
 

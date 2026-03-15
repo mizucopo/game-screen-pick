@@ -231,6 +231,84 @@ def test_score_candidates_uses_frequency_based_gameplay_scene_distribution() -> 
     assert labels_by_path["/tmp/world_map.jpg"] == "other"
 
 
+def test_score_candidates_retains_multiple_event_candidates_after_recall_tuning() -> None:
+    """複数の event 画面が候補分布で event に残ること."""
+
+    def feature(index: int) -> np.ndarray:
+        vector = np.zeros(301, dtype=np.float32)
+        vector[index] = 1.0
+        return vector
+
+    analyzed_images = [
+        create_analyzed_image(
+            path=f"/tmp/gameplay_{index}.jpg",
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(index), (0, 475)),
+            content_features=feature(index),
+            normalized_metrics_dict={"action_intensity": 0.65, "ui_density": 0.55},
+        )
+        for index in range(4)
+    ]
+    analyzed_images.extend(
+        [
+            create_analyzed_image(
+                path=f"/tmp/event_{index}.jpg",
+                clip_features=torch.tensor([0.05, 0.92, 0.02]).numpy(),
+                combined_features=np.pad(feature(100 + index), (0, 475)),
+                content_features=feature(100 + index),
+                normalized_metrics_dict={
+                    "action_intensity": 0.20,
+                    "ui_density": 0.18,
+                    "dramatic_score": 0.80,
+                    "color_richness": 0.72,
+                },
+                layout_dict={"dialogue_overlay_score": 0.55},
+            )
+            for index in range(3)
+        ]
+    )
+    analyzed_images.append(
+        create_analyzed_image(
+            path="/tmp/other_0.jpg",
+            clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
+            combined_features=np.pad(feature(200), (0, 475)),
+            content_features=feature(200),
+            normalized_metrics_dict={"action_intensity": 0.12, "ui_density": 0.85},
+            layout_dict={"menu_layout_score": 0.55},
+        )
+    )
+    analyzed_images.append(
+        create_analyzed_image(
+            path="/tmp/bright_transition.jpg",
+            raw_metrics_dict={
+                "brightness": 222.0,
+                "contrast": 4.0,
+                "edge_density": 0.02,
+                "action_intensity": 2.0,
+                "luminance_entropy": 0.55,
+                "luminance_range": 8.0,
+                "near_white_ratio": 0.52,
+                "dominant_tone_ratio": 0.88,
+            },
+            clip_features=torch.tensor([0.08, 0.86, 0.04]).numpy(),
+            combined_features=np.pad(feature(250), (0, 475)),
+            content_features=feature(250),
+            layout_dict={"dialogue_overlay_score": 0.35},
+        )
+    )
+
+    analyzer = FakeAnalyzer(analyzed_images)
+    picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
+
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=8)
+
+    assert len(selected) == 8
+    assert rejected == []
+    assert stats.content_filter_breakdown["fade_transition"] == 1
+    assert stats.scene_distribution == {"gameplay": 4, "event": 3, "other": 1}
+    assert stats.scene_mix_actual == {"gameplay": 4, "event": 3, "other": 1}
+
+
 def test_select_from_analyzed_allows_short_result() -> None:
     """多様性不足なら要求枚数未満でも正常に返すこと.
 

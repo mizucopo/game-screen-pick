@@ -25,18 +25,21 @@ class SceneScorer:
 
     AMBIGUITY_MARGIN = 0.05
     EVENT_PROMOTION_MARGIN = 0.01
-    EVENT_PROMOTION_MIN_SCORE = 0.42
+    EVENT_PROMOTION_MIN_SCORE = 0.40
     EVENT_PROMOTION_MIN_SIGNAL = 0.50
     EVENT_PROMOTION_MIN_DISTINCTIVENESS = 0.60
     EVENT_PROMOTION_MAX_ACTION = 0.45
     EVENT_PROMOTION_MAX_UI = 0.45
     EVENT_PROMOTION_MAX_SUPPORT_UI = 0.55
     EVENT_PROMOTION_MIN_OTHER_GAP = 0.01
-    TRANSITION_RISK_EVENT_PENALTY = 0.16
-    TRANSITION_SUPPRESS_MIN_RISK = 0.58
-    TRANSITION_SUPPRESS_MAX_VISIBILITY = 0.48
-    TRANSITION_SUPPRESS_MAX_INFORMATION = 0.45
-    TRANSITION_SUPPRESS_MAX_MARGIN = 0.04
+    TRANSITION_RISK_EVENT_PENALTY = 0.06
+    TRANSITION_SUPPRESS_MIN_RISK = 0.72
+    TRANSITION_SUPPRESS_MAX_VISIBILITY = 0.42
+    TRANSITION_SUPPRESS_MAX_INFORMATION = 0.35
+    TRANSITION_SUPPRESS_MAX_MARGIN = 0.02
+    TRANSITION_SUPPRESS_MAX_DIALOGUE_OVERLAY = 0.15
+    TRANSITION_SUPPRESS_MAX_DRAMATIC = 0.45
+    TRANSITION_SUPPRESS_MAX_OTHER_GAP = 0.01
     TRANSITION_RISK_LUMINANCE_RANGE_SCALE = 48.0
     PROMPT_GROUPS: dict[str, tuple[str, ...]] = {
         "gameplay": (
@@ -201,12 +204,13 @@ class SceneScorer:
             - 0.05 * heuristics.dialogue_overlay_score
         )
         event_score = self._clamp(
-            1.10 * event_base
+            1.18 * event_base
             + 0.14 * heuristics.dialogue_overlay_score
-            + 0.22 * rare_cinematic_score
-            + 0.08 * distinctiveness_score
+            + 0.28 * rare_cinematic_score
+            + 0.10 * distinctiveness_score
             + 0.06 * norm.color_richness
             - 0.02 * heuristics.menu_layout_score
+            - 0.04 * support_ui_score
             - self.TRANSITION_RISK_EVENT_PENALTY * transition_risk_score
         )
         other_score = self._clamp(
@@ -238,6 +242,10 @@ class SceneScorer:
             and visibility_score <= self.TRANSITION_SUPPRESS_MAX_VISIBILITY
             and information_score <= self.TRANSITION_SUPPRESS_MAX_INFORMATION
             and argmax_margin <= self.TRANSITION_SUPPRESS_MAX_MARGIN
+            and heuristics.dialogue_overlay_score
+            <= self.TRANSITION_SUPPRESS_MAX_DIALOGUE_OVERLAY
+            and norm.dramatic_score <= self.TRANSITION_SUPPRESS_MAX_DRAMATIC
+            and other_score >= event_score - self.TRANSITION_SUPPRESS_MAX_OTHER_GAP
         ):
             scene_label = (
                 SceneLabel.GAMEPLAY
