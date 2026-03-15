@@ -51,7 +51,9 @@ class FeatureExtractor:
         return cv2.normalize(hist, hist).flatten()
 
     @staticmethod
-    def extract_content_features(img: np.ndarray, raw_metrics: RawMetrics) -> np.ndarray:
+    def extract_content_features(
+        img: np.ndarray, raw_metrics: RawMetrics
+    ) -> np.ndarray:
         """入力全体適応用の内容特徴を抽出する."""
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         gray_hist = cv2.calcHist([gray], [0], None, [32], [0, 256])

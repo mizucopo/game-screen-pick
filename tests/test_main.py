@@ -43,6 +43,7 @@ def mock_game_screen_picker() -> Generator[MagicMock, None, None]:
             "whiteout": 0,
             "single_tone": 0,
             "fade_transition": 0,
+            "temporal_transition": 0,
         },
     )
     picker.select.return_value = ([], [], empty_stats)
@@ -100,6 +101,7 @@ def test_cli_selects_and_copies_images(
             "whiteout": 0,
             "single_tone": 0,
             "fade_transition": 0,
+            "temporal_transition": 0,
         },
     )
     mock_game_screen_picker.select.return_value = (results, [], stats)
@@ -162,6 +164,7 @@ def test_cli_writes_report_json(
             "whiteout": 0,
             "single_tone": 0,
             "fade_transition": 0,
+            "temporal_transition": 0,
         },
     )
     mock_game_screen_picker.select.return_value = (results, [], stats)
@@ -193,6 +196,7 @@ def test_cli_writes_report_json(
         "whiteout": 0,
         "single_tone": 0,
         "fade_transition": 0,
+        "temporal_transition": 0,
     }
 
 

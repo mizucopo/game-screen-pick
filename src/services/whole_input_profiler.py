@@ -22,6 +22,10 @@ class WholeInputProfiler:
         "luminance_range": 0.20,
     }
     DISTINCTIVENESS_NEIGHBORS = 3
+    VISIBILITY_RANGE_SCALE = 32.0
+    VISIBILITY_ENTROPY_SCALE = 1.5
+    VISIBILITY_EDGE_SCALE = 0.08
+    VISIBILITY_CONTRAST_SCALE = 12.0
 
     def build_profile(self, images: list[AnalyzedImage]) -> WholeInputProfile:
         """入力全体から主要メトリクスの分布を作る."""
@@ -67,10 +71,12 @@ class WholeInputProfiler:
 
         information_scores = self._calculate_information_scores(images)
         distinctiveness_scores = self._calculate_distinctiveness_scores(images)
+        visibility_scores = self._calculate_visibility_scores(images)
         return {
             id(image): AdaptiveScores(
                 information_score=information_scores[id(image)],
                 distinctiveness_score=distinctiveness_scores[id(image)],
+                visibility_score=visibility_scores[id(image)],
             )
             for image in images
         }
@@ -98,10 +104,7 @@ class WholeInputProfiler:
         metric_values = {
             metric_name: np.sort(
                 np.asarray(
-                    [
-                        getattr(image.raw_metrics, metric_name)
-                        for image in images
-                    ],
+                    [getattr(image.raw_metrics, metric_name) for image in images],
                     dtype=np.float32,
                 )
             )
@@ -113,7 +116,9 @@ class WholeInputProfiler:
             score = 0.0
             for metric_name, weight in self.INFORMATION_WEIGHTS.items():
                 value = getattr(image.raw_metrics, metric_name)
-                score += weight * self._percentile_rank(value, metric_values[metric_name])
+                score += weight * self._percentile_rank(
+                    value, metric_values[metric_name]
+                )
             information_scores[id(image)] = float(score)
         return information_scores
 
@@ -151,14 +156,31 @@ class WholeInputProfiler:
         if np.isclose(min_distance, max_distance):
             normalized_distances = np.zeros(len(images), dtype=np.float32)
         else:
-            normalized_distances = (
-                mean_nearest_distances - min_distance
-            ) / (max_distance - min_distance)
+            normalized_distances = (mean_nearest_distances - min_distance) / (
+                max_distance - min_distance
+            )
 
         return {
             id(image): float(normalized_distances[index])
             for index, image in enumerate(images)
         }
+
+    def _calculate_visibility_scores(
+        self,
+        images: list[AnalyzedImage],
+    ) -> dict[int, float]:
+        """絶対的な見えやすさスコアを返す."""
+        visibility_scores: dict[int, float] = {}
+        for image in images:
+            raw = image.raw_metrics
+            visibility_scores[id(image)] = float(
+                0.30 * min(1.0, raw.luminance_range / self.VISIBILITY_RANGE_SCALE)
+                + 0.25 * min(1.0, raw.luminance_entropy / self.VISIBILITY_ENTROPY_SCALE)
+                + 0.20 * min(1.0, raw.edge_density / self.VISIBILITY_EDGE_SCALE)
+                + 0.15 * min(1.0, raw.contrast / self.VISIBILITY_CONTRAST_SCALE)
+                + 0.10 * (1.0 - max(raw.near_black_ratio, raw.near_white_ratio))
+            )
+        return visibility_scores
 
     @staticmethod
     def _percentile_rank(value: float, sorted_values: np.ndarray[Any, Any]) -> float:

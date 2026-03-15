@@ -91,9 +91,7 @@ class MetricCalculator:
         )
         dramatic_score = (dramatic_pixels / gray_size) * 1000
         visual_balance = float(max(0, 100 - abs(gray_mean - 128) * 0.5))
-        luminance_entropy = float(
-            -(non_zero_prob * np.log2(non_zero_prob)).sum()
-        )
+        luminance_entropy = float(-(non_zero_prob * np.log2(non_zero_prob)).sum())
         luminance_p5, luminance_p95 = np.percentile(gray_flat, [5, 95])
         luminance_range = float(luminance_p95 - luminance_p5)
         near_black_ratio = float(np.mean(gray_flat <= 12))

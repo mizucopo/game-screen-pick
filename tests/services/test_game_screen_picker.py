@@ -219,6 +219,7 @@ def test_select_from_analyzed_filters_content_before_scene_mix() -> None:
         - content filterで低情報量フレームが除外されること
         - 残った候補に対してscene mixが適用されること
     """
+
     # Arrange
     def feature(
         index: int,
@@ -351,6 +352,119 @@ def test_select_from_analyzed_filters_content_before_scene_mix() -> None:
         "whiteout": 1,
         "single_tone": 1,
         "fade_transition": 1,
+        "temporal_transition": 0,
     }
     assert stats.scene_distribution == {"gameplay": 1, "event": 1, "other": 0}
     assert stats.scene_mix_actual == {"gameplay": 1, "event": 1, "other": 0}
+
+
+def test_select_from_analyzed_rejects_mid_fade_regression() -> None:
+    """従来残っていた fade70 が候補から外れること.
+
+    Given:
+        - 通常フレームと70%以上の暗転途中フレームを含む画像群がある
+        - gameplay/event 75/25 のscene mix設定がある
+    When:
+        - select_from_analyzedで選択する
+    Then:
+        - fade70、fade75、fade82がfade_transitionとして除外されること
+        - 通常フレームのみが選択されること
+    """
+
+    # Arrange
+    def feature(index: int) -> np.ndarray:
+        vector = np.zeros(101, dtype=np.float32)
+        vector[index] = 1.0
+        return vector
+
+    analyzed_images = [
+        create_analyzed_image(
+            path="/tmp/good1.jpg",
+            raw_metrics_dict={
+                "contrast": 18.0,
+                "edge_density": 0.28,
+                "action_intensity": 20.0,
+                "luminance_entropy": 1.2,
+                "luminance_range": 40.0,
+                "near_black_ratio": 0.18,
+                "dominant_tone_ratio": 0.67,
+            },
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(0), (0, 475)),
+            content_features=feature(0),
+        ),
+        create_analyzed_image(
+            path="/tmp/good2.jpg",
+            raw_metrics_dict={
+                "contrast": 16.0,
+                "edge_density": 0.22,
+                "action_intensity": 17.0,
+                "luminance_entropy": 1.0,
+                "luminance_range": 34.0,
+                "near_black_ratio": 0.22,
+                "dominant_tone_ratio": 0.70,
+            },
+            clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(1), (0, 475)),
+            content_features=feature(1),
+            layout_dict={"dialogue_overlay_score": 0.5},
+        ),
+        create_analyzed_image(
+            path="/tmp/fade70.jpg",
+            raw_metrics_dict={
+                "contrast": 3.5,
+                "edge_density": 0.015,
+                "action_intensity": 1.2,
+                "luminance_entropy": 0.42,
+                "luminance_range": 9.0,
+                "near_black_ratio": 0.70,
+                "dominant_tone_ratio": 0.88,
+            },
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(2), (0, 475)),
+            content_features=feature(2),
+        ),
+        create_analyzed_image(
+            path="/tmp/fade75.jpg",
+            raw_metrics_dict={
+                "contrast": 2.5,
+                "edge_density": 0.010,
+                "action_intensity": 0.8,
+                "luminance_entropy": 0.36,
+                "luminance_range": 8.0,
+                "near_black_ratio": 0.75,
+                "dominant_tone_ratio": 0.89,
+            },
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(3), (0, 475)),
+            content_features=feature(3),
+        ),
+        create_analyzed_image(
+            path="/tmp/fade82.jpg",
+            raw_metrics_dict={
+                "contrast": 2.0,
+                "edge_density": 0.008,
+                "action_intensity": 0.4,
+                "luminance_entropy": 0.32,
+                "luminance_range": 6.0,
+                "near_black_ratio": 0.82,
+                "dominant_tone_ratio": 0.90,
+            },
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(4), (0, 475)),
+            content_features=feature(4),
+        ),
+    ]
+    analyzer = FakeAnalyzer(analyzed_images)
+    config = SelectionConfig(scene_mix=SceneMix(gameplay=0.75, event=0.25, other=0.0))
+    picker = GameScreenPicker(analyzer=analyzer, config=config)
+
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=3)
+
+    assert [candidate.path for candidate in selected] == [
+        "/tmp/good1.jpg",
+        "/tmp/good2.jpg",
+    ]
+    assert rejected == []
+    assert stats.rejected_by_content_filter == 3
+    assert stats.content_filter_breakdown["fade_transition"] == 3

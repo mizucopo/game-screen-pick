@@ -118,7 +118,9 @@ def test_calculate_metrics_distinguishes_flat_and_textured_frames(
     assert black_metrics.luminance_entropy == pytest.approx(0.0)
     assert white_metrics.luminance_entropy == pytest.approx(0.0)
     assert single_tone_metrics.luminance_range == pytest.approx(0.0)
-    assert dark_textured_metrics.luminance_entropy > single_tone_metrics.luminance_entropy
+    assert (
+        dark_textured_metrics.luminance_entropy > single_tone_metrics.luminance_entropy
+    )
     assert dark_textured_metrics.luminance_range > single_tone_metrics.luminance_range
     assert dark_textured_metrics.edge_density > single_tone_metrics.edge_density
     assert dark_textured_metrics.action_intensity > black_metrics.action_intensity

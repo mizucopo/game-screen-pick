@@ -9,3 +9,4 @@ class AdaptiveScores:
 
     information_score: float
     distinctiveness_score: float
+    visibility_score: float

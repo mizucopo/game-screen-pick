@@ -1,6 +1,7 @@
 """ゲーム画面ピッカーの統合オーケストレーション."""
 
 import random
+import re
 from pathlib import Path
 
 from ..constants.selection_profiles import PROFILE_REGISTRY
@@ -61,11 +62,18 @@ class GameScreenPicker:
         """
         path_obj = Path(folder)
         extensions = {".jpg", ".jpeg", ".png", ".bmp"}
-        return [
+        files = [
             path
             for path in (path_obj.rglob("*") if recursive else path_obj.glob("*"))
             if path.suffix.lower() in extensions
         ]
+        return sorted(
+            files,
+            key=lambda path: [
+                int(chunk) if chunk.isdigit() else chunk.lower()
+                for chunk in re.split(r"(\d+)", path.relative_to(path_obj).as_posix())
+            ],
+        )
 
     def _analyze_images(
         self,
@@ -161,8 +169,8 @@ class GameScreenPicker:
     ) -> tuple[list[ScoredCandidate], list[ScoredCandidate], PickerStatistics]:
         """フォルダから画像を選択する.
 
-        入力フォルダから対象画像を集め、順序バイアスを避けるために
-        シャッフルした後、中立解析とscene mix選定を順に実行する。
+        入力フォルダから対象画像を自然順で集め、
+        中立解析とcontent filterを通した後にscene mix選定を実行する。
         フォルダ単位のI/Oを伴う高水準APIとして使うことを想定している。
 
         Args:
@@ -178,7 +186,6 @@ class GameScreenPicker:
         """
         files = GameScreenPicker.load_image_files(folder, recursive)
         total_files = len(files)
-        self._rng.shuffle(files)
 
         analyzed_images = self._analyze_images(files, show_progress)
         analyzed_ok = len(analyzed_images)

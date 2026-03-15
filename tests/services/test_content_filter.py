@@ -1,14 +1,22 @@
 """ContentFilterの単体テスト."""
 
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import torch
 
 from src.services.content_filter import ContentFilter
+from src.services.game_screen_picker import GameScreenPicker
 from src.services.whole_input_profiler import WholeInputProfiler
 from tests.conftest import create_analyzed_image
 
 
-def _feature(index: int, delta_index: int | None = None, delta: float = 0.0) -> np.ndarray:
+def _feature(
+    index: int,
+    delta_index: int | None = None,
+    delta: float = 0.0,
+) -> np.ndarray:
     """content filter 用の決定的な特徴ベクトルを作る."""
     feature = np.zeros(101, dtype=np.float32)
     feature[index] = 1.0
@@ -152,8 +160,261 @@ def test_content_filter_rejects_flat_frames_and_keeps_informative_dark_frames() 
         "whiteout": 1,
         "single_tone": 1,
         "fade_transition": 1,
+        "temporal_transition": 0,
     }
     assert (
         result.adaptive_scores_by_image_id[id(dark_gameplay)].information_score
         > result.adaptive_scores_by_image_id[id(fade_transition)].information_score
     )
+    assert (
+        result.adaptive_scores_by_image_id[id(dark_gameplay)].visibility_score
+        > result.adaptive_scores_by_image_id[id(fade_transition)].visibility_score
+    )
+
+
+def test_content_filter_rejects_mid_fade_frames_with_70_percent_dark_ratio() -> None:
+    """70〜75% 暗転途中フレームが static fade 判定で落ちること.
+
+    Given:
+        - 70%と75%の暗転途中フレームを含む画像群がある
+        - 通常の高情報量フレームもある
+    When:
+        - ContentFilterでフィルタリングする
+    Then:
+        - 暗転途中フレームがfade_transitionとして除外されること
+    """
+    # Arrange
+    images = [
+        create_analyzed_image(
+            path="/tmp/good1.jpg",
+            raw_metrics_dict={
+                "contrast": 18.0,
+                "edge_density": 0.28,
+                "action_intensity": 20.0,
+                "luminance_entropy": 1.2,
+                "luminance_range": 40.0,
+                "near_black_ratio": 0.18,
+                "dominant_tone_ratio": 0.67,
+            },
+            content_features=_feature(0),
+            combined_features=np.pad(_feature(0), (0, 475)),
+        ),
+        create_analyzed_image(
+            path="/tmp/good2.jpg",
+            raw_metrics_dict={
+                "contrast": 16.0,
+                "edge_density": 0.22,
+                "action_intensity": 17.0,
+                "luminance_entropy": 1.0,
+                "luminance_range": 34.0,
+                "near_black_ratio": 0.22,
+                "dominant_tone_ratio": 0.70,
+            },
+            content_features=_feature(1),
+            combined_features=np.pad(_feature(1), (0, 475)),
+        ),
+        create_analyzed_image(
+            path="/tmp/fade70.jpg",
+            raw_metrics_dict={
+                "contrast": 3.5,
+                "edge_density": 0.015,
+                "action_intensity": 1.2,
+                "luminance_entropy": 0.42,
+                "luminance_range": 9.0,
+                "near_black_ratio": 0.70,
+                "dominant_tone_ratio": 0.88,
+            },
+            content_features=_feature(2),
+            combined_features=np.pad(_feature(2), (0, 475)),
+        ),
+        create_analyzed_image(
+            path="/tmp/fade75.jpg",
+            raw_metrics_dict={
+                "contrast": 2.5,
+                "edge_density": 0.010,
+                "action_intensity": 0.8,
+                "luminance_entropy": 0.36,
+                "luminance_range": 8.0,
+                "near_black_ratio": 0.75,
+                "dominant_tone_ratio": 0.89,
+            },
+            content_features=_feature(3),
+            combined_features=np.pad(_feature(3), (0, 475)),
+        ),
+    ]
+
+    # Act
+    result = ContentFilter(WholeInputProfiler()).filter(images)
+
+    # Assert
+    assert {image.path for image in result.kept_images} == {
+        "/tmp/good1.jpg",
+        "/tmp/good2.jpg",
+    }
+    assert result.content_filter_breakdown["fade_transition"] == 2
+    assert result.content_filter_breakdown["temporal_transition"] == 0
+
+
+def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> None:
+    """通常 -> 暗転途中 -> 通常 の中央だけが temporal 判定で落ちること.
+
+    Given:
+        - 通常フレーム、遷移途中フレーム、通常フレームの順序で画像群がある
+        - 前後フレームは互いに似ている
+    When:
+        - ContentFilterでフィルタリングする
+    Then:
+        - 中央の遷移途中フレームだけがtemporal_transitionとして除外されること
+    """
+    # Arrange
+    prev_frame = create_analyzed_image(
+        path="/tmp/frame_001.jpg",
+        raw_metrics_dict={
+            "contrast": 18.0,
+            "edge_density": 0.18,
+            "action_intensity": 10.0,
+            "luminance_entropy": 1.3,
+            "luminance_range": 38.0,
+            "near_black_ratio": 0.15,
+            "dominant_tone_ratio": 0.62,
+        },
+        content_features=_feature(10),
+        combined_features=np.pad(_feature(10), (0, 475)),
+    )
+    mid_transition = create_analyzed_image(
+        path="/tmp/frame_002.jpg",
+        raw_metrics_dict={
+            "contrast": 5.0,
+            "edge_density": 0.04,
+            "action_intensity": 3.0,
+            "luminance_entropy": 0.8,
+            "luminance_range": 18.0,
+            "near_black_ratio": 0.40,
+            "dominant_tone_ratio": 0.72,
+        },
+        content_features=_feature(11),
+        combined_features=np.pad(_feature(11), (0, 475)),
+    )
+    next_frame = create_analyzed_image(
+        path="/tmp/frame_003.jpg",
+        raw_metrics_dict={
+            "contrast": 17.0,
+            "edge_density": 0.17,
+            "action_intensity": 9.0,
+            "luminance_entropy": 1.25,
+            "luminance_range": 37.0,
+            "near_black_ratio": 0.16,
+            "dominant_tone_ratio": 0.63,
+        },
+        content_features=_feature(10, 12, 0.01),
+        combined_features=np.pad(_feature(10, 12, 0.01), (0, 475)),
+    )
+
+    # Act
+    result = ContentFilter(WholeInputProfiler()).filter(
+        [prev_frame, mid_transition, next_frame]
+    )
+
+    # Assert
+    assert {image.path for image in result.kept_images} == {
+        "/tmp/frame_001.jpg",
+        "/tmp/frame_003.jpg",
+    }
+    assert result.content_filter_breakdown["temporal_transition"] == 1
+    assert result.content_filter_breakdown["fade_transition"] == 0
+
+
+def test_temporal_transition_not_triggered_for_dissimilar_neighbors() -> None:
+    """前後フレームが似ていなければ temporal 判定は発火しないこと.
+
+    Given:
+        - 前後フレームが互いに似ていない画像群がある
+        - 中央のフレームは遷移途中のような特徴を持つ
+    When:
+        - ContentFilterでフィルタリングする
+    Then:
+        - すべてのフレームが保持されること
+        - temporal_transitionによる除外が発生しないこと
+    """
+    # Arrange
+    mixed_prev = create_analyzed_image(
+        path="/tmp/mixed_prev.jpg",
+        raw_metrics_dict={
+            "contrast": 18.0,
+            "edge_density": 0.18,
+            "action_intensity": 10.0,
+            "luminance_entropy": 1.3,
+            "luminance_range": 38.0,
+            "near_black_ratio": 0.15,
+            "dominant_tone_ratio": 0.62,
+        },
+        content_features=_feature(20),
+        combined_features=np.pad(_feature(20), (0, 475)),
+    )
+    mixed_current = create_analyzed_image(
+        path="/tmp/mixed_current.jpg",
+        raw_metrics_dict={
+            "contrast": 5.0,
+            "edge_density": 0.04,
+            "action_intensity": 3.0,
+            "luminance_entropy": 0.8,
+            "luminance_range": 18.0,
+            "near_black_ratio": 0.40,
+            "dominant_tone_ratio": 0.72,
+        },
+        content_features=_feature(21),
+        combined_features=np.pad(_feature(21), (0, 475)),
+    )
+    mixed_next = create_analyzed_image(
+        path="/tmp/mixed_next.jpg",
+        raw_metrics_dict={
+            "contrast": 17.0,
+            "edge_density": 0.17,
+            "action_intensity": 9.0,
+            "luminance_entropy": 1.25,
+            "luminance_range": 37.0,
+            "near_black_ratio": 0.16,
+            "dominant_tone_ratio": 0.63,
+        },
+        content_features=_feature(30),
+        combined_features=np.pad(_feature(30), (0, 475)),
+    )
+
+    # Act
+    result = ContentFilter(WholeInputProfiler()).filter(
+        [mixed_prev, mixed_current, mixed_next]
+    )
+
+    # Assert
+    assert {image.path for image in result.kept_images} == {
+        "/tmp/mixed_prev.jpg",
+        "/tmp/mixed_current.jpg",
+        "/tmp/mixed_next.jpg",
+    }
+    assert result.content_filter_breakdown["temporal_transition"] == 0
+
+
+def test_load_image_files_returns_natural_order() -> None:
+    """入力ファイルは自然順で返ること.
+
+    Given:
+        - 数字を含むファイル名が混在したディレクトリがある
+        - frame1.jpg, frame10.jpg, frame2.jpg の順で作成される
+    When:
+        - load_image_filesでファイル一覧を取得する
+    Then:
+        - 自然順（frame1, frame2, frame10）で返されること
+    """
+    # Arrange
+    with tempfile.TemporaryDirectory() as temp_dir:
+        Path(temp_dir, "frame10.jpg").touch()
+        Path(temp_dir, "frame2.jpg").touch()
+        Path(temp_dir, "frame1.jpg").touch()
+
+        files = GameScreenPicker.load_image_files(temp_dir, recursive=False)
+
+    assert [path.name for path in files] == [
+        "frame1.jpg",
+        "frame2.jpg",
+        "frame10.jpg",
+    ]
