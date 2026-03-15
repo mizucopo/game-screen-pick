@@ -33,6 +33,12 @@ class ReportWriter:
             rejected: 非選択となった候補。
             stats: scene mix実績を含む集計情報。
         """
+        selected_payload = [
+            ReportWriter._serialize_candidate(candidate) for candidate in selected
+        ]
+        rejected_payload = [
+            ReportWriter._serialize_candidate(candidate) for candidate in rejected
+        ]
         payload = {
             "resolved_profile": stats.resolved_profile,
             "scene_distribution": stats.scene_distribution,
@@ -41,12 +47,12 @@ class ReportWriter:
             "threshold_relaxation_used": stats.threshold_relaxation_used,
             "rejected_by_content_filter": stats.rejected_by_content_filter,
             "content_filter_breakdown": stats.content_filter_breakdown,
-            "selected": [
-                ReportWriter._serialize_candidate(candidate) for candidate in selected
-            ],
-            "rejected": [
-                ReportWriter._serialize_candidate(candidate) for candidate in rejected
-            ],
+            "scene_diagnostics_summary": ReportWriter._build_scene_diagnostics_summary(
+                selected_payload,
+                rejected_payload,
+            ),
+            "selected": selected_payload,
+            "rejected": rejected_payload,
         }
         report_path = Path(path)
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,4 +113,66 @@ class ReportWriter:
                 max(0.0, argmax_score - candidate.scene_assessment.event_score),
                 4,
             ),
+        }
+
+    @staticmethod
+    def _build_scene_diagnostics_summary(
+        selected: list[dict[str, object]],
+        rejected: list[dict[str, object]],
+    ) -> dict[str, object]:
+        """候補一覧から scene 診断の集計値を組み立てる."""
+        all_candidates = selected + rejected
+        argmax_distribution = {
+            scene_label.value: sum(
+                1
+                for candidate in all_candidates
+                if candidate["argmax_scene_label"] == scene_label.value
+            )
+            for scene_label in SceneLabel
+        }
+        selected_events = [
+            candidate for candidate in selected if candidate["scene_label"] == "event"
+        ]
+        raw_event_count = sum(
+            1
+            for candidate in selected_events
+            if candidate["argmax_scene_label"] == SceneLabel.EVENT.value
+        )
+        promoted_from_gameplay_count = sum(
+            1
+            for candidate in selected_events
+            if candidate["event_promotion_applied"] is True
+            and candidate["argmax_scene_label"] == SceneLabel.GAMEPLAY.value
+        )
+        avg_scene_confidence = (
+            sum(float(candidate["scene_confidence"]) for candidate in selected_events)
+            / len(selected_events)
+            if selected_events
+            else 0.0
+        )
+        low_confidence_count = sum(
+            1
+            for candidate in selected_events
+            if float(candidate["scene_confidence"]) < 0.03
+        )
+        return {
+            "argmax_distribution": argmax_distribution,
+            "selected_event_breakdown": {
+                "raw_event": raw_event_count,
+                "promoted_from_gameplay": promoted_from_gameplay_count,
+                "avg_scene_confidence": round(avg_scene_confidence, 4),
+                "low_confidence_count": low_confidence_count,
+            },
+            "adjustment_counts": {
+                "fallback_applied": sum(
+                    1
+                    for candidate in all_candidates
+                    if candidate["fallback_applied"] is True
+                ),
+                "event_promotion_applied": sum(
+                    1
+                    for candidate in all_candidates
+                    if candidate["event_promotion_applied"] is True
+                ),
+            },
         }

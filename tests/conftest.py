@@ -151,6 +151,7 @@ def create_scored_candidate(
     gameplay_score: float = 0.8,
     event_score: float = 0.3,
     other_score: float = 0.1,
+    scene_confidence: float = 0.5,
     quality_score: float = 0.6,
     activity_score: float = 0.5,
     selection_score: float = 60.0,
@@ -165,6 +166,7 @@ def create_scored_candidate(
         gameplay_score: gameplay 向けスコア。
         event_score: event 向けスコア。
         other_score: other 向けスコア。
+        scene_confidence: scene判定の信頼度。
         quality_score: 画質スコア。
         activity_score: 活動量スコア。
         selection_score: 最終選定スコア。
@@ -183,7 +185,7 @@ def create_scored_candidate(
         event_score=event_score,
         other_score=other_score,
         scene_label=scene_label,
-        scene_confidence=0.5,
+        scene_confidence=scene_confidence,
     )
     return ScoredCandidate(
         analyzed_image=analyzed,

@@ -23,11 +23,14 @@ class SceneScorer:
     """
 
     AMBIGUITY_MARGIN = 0.05
-    EVENT_PROMOTION_MARGIN = 0.02
-    EVENT_PROMOTION_MIN_SCORE = 0.40
-    EVENT_PROMOTION_MIN_SIGNAL = 0.45
-    EVENT_PROMOTION_MAX_SUPPORT_UI = 0.60
-    EVENT_PROMOTION_OTHER_MARGIN = 0.01
+    EVENT_PROMOTION_MARGIN = 0.01
+    EVENT_PROMOTION_MIN_SCORE = 0.42
+    EVENT_PROMOTION_MIN_SIGNAL = 0.50
+    EVENT_PROMOTION_MIN_DISTINCTIVENESS = 0.60
+    EVENT_PROMOTION_MAX_ACTION = 0.45
+    EVENT_PROMOTION_MAX_UI = 0.45
+    EVENT_PROMOTION_MAX_SUPPORT_UI = 0.55
+    EVENT_PROMOTION_MIN_OTHER_GAP = 0.01
     PROMPT_GROUPS: dict[str, tuple[str, ...]] = {
         "gameplay": (
             "video game gameplay screenshot with heads-up display",
@@ -225,8 +228,11 @@ class SceneScorer:
             and event_score >= gameplay_score - self.EVENT_PROMOTION_MARGIN
             and event_score >= self.EVENT_PROMOTION_MIN_SCORE
             and rare_cinematic_score >= self.EVENT_PROMOTION_MIN_SIGNAL
+            and distinctiveness_score >= self.EVENT_PROMOTION_MIN_DISTINCTIVENESS
+            and norm.action_intensity <= self.EVENT_PROMOTION_MAX_ACTION
+            and norm.ui_density <= self.EVENT_PROMOTION_MAX_UI
             and support_ui_score <= self.EVENT_PROMOTION_MAX_SUPPORT_UI
-            and other_score <= event_score + self.EVENT_PROMOTION_OTHER_MARGIN
+            and event_score >= other_score + self.EVENT_PROMOTION_MIN_OTHER_GAP
         ):
             scene_label = SceneLabel.EVENT
 

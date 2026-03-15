@@ -134,27 +134,82 @@ def test_scene_scorer_promotes_gameplay_near_miss_to_event() -> None:
     scorer = SceneScorer(DummyModelManager())
     image = create_analyzed_image(
         path="/tmp/gameplay_near_miss.jpg",
-        clip_features=torch.tensor([0.38, 0.195, 0.17]).numpy(),
-        combined_features=torch.tensor([0.38, 0.195, 0.17, 0.0]).numpy(),
+        clip_features=torch.tensor([0.436, 0.20, 0.14]).numpy(),
+        combined_features=torch.tensor([0.436, 0.20, 0.14, 0.0]).numpy(),
         normalized_metrics_dict={
-            "action_intensity": 0.4,
-            "ui_density": 0.5,
-            "dramatic_score": 0.7,
+            "action_intensity": 0.35,
+            "ui_density": 0.35,
+            "dramatic_score": 0.8,
             "color_richness": 0.5,
         },
         layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
     )
 
     # Act
-    assessment = scorer.assess(image, distinctiveness_score=0.7)
+    assessment = scorer.assess(image, distinctiveness_score=0.75)
 
     # Assert
     assert assessment.gameplay_score > assessment.event_score
-    assert assessment.gameplay_score - assessment.event_score <= 0.02
-    assert assessment.event_score >= 0.40
-    assert assessment.other_score <= assessment.event_score + 0.01
+    assert assessment.gameplay_score - assessment.event_score <= 0.01
+    assert assessment.event_score >= 0.42
+    assert assessment.other_score <= assessment.event_score - 0.01
     assert assessment.scene_label.value == "event"
     assert assessment.event_score >= assessment.other_score
+
+
+@pytest.mark.parametrize(
+    ("distinctiveness_score", "normalized_metrics_dict"),
+    [
+        (
+            0.55,
+            {
+                "action_intensity": 0.35,
+                "ui_density": 0.35,
+                "dramatic_score": 0.8,
+                "color_richness": 0.5,
+            },
+        ),
+        (
+            0.75,
+            {
+                "action_intensity": 0.50,
+                "ui_density": 0.35,
+                "dramatic_score": 0.8,
+                "color_richness": 0.5,
+            },
+        ),
+        (
+            0.75,
+            {
+                "action_intensity": 0.35,
+                "ui_density": 0.50,
+                "dramatic_score": 0.8,
+                "color_richness": 0.5,
+            },
+        ),
+    ],
+)
+def test_scene_scorer_does_not_promote_gameplay_near_miss_without_strong_event_signal(
+    distinctiveness_score: float,
+    normalized_metrics_dict: dict[str, float],
+) -> None:
+    """弱い signal の gameplay near miss は event に昇格しないこと."""
+    # Arrange
+    scorer = SceneScorer(DummyModelManager())
+    image = create_analyzed_image(
+        path="/tmp/gameplay_not_promoted.jpg",
+        clip_features=torch.tensor([0.436, 0.20, 0.14]).numpy(),
+        combined_features=torch.tensor([0.436, 0.20, 0.14, 0.0]).numpy(),
+        normalized_metrics_dict=normalized_metrics_dict,
+        layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
+    )
+
+    # Act
+    assessment = scorer.assess(image, distinctiveness_score=distinctiveness_score)
+
+    # Assert
+    assert assessment.gameplay_score > assessment.event_score
+    assert assessment.scene_label.value == "gameplay"
 
 
 @pytest.mark.parametrize(

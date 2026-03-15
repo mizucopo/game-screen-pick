@@ -203,6 +203,17 @@ def test_cli_writes_report_json(
     assert payload["selected"][0]["argmax_scene_label"] == "gameplay"
     assert payload["selected"][0]["fallback_applied"] is False
     assert payload["selected"][0]["event_promotion_applied"] is False
+    assert payload["scene_diagnostics_summary"]["argmax_distribution"] == {
+        "gameplay": 1,
+        "event": 0,
+        "other": 0,
+    }
+    assert payload["scene_diagnostics_summary"]["selected_event_breakdown"] == {
+        "raw_event": 0,
+        "promoted_from_gameplay": 0,
+        "avg_scene_confidence": 0.0,
+        "low_confidence_count": 0,
+    }
 
 
 def test_cli_renames_outputs_by_scene(
