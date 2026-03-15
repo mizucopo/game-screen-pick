@@ -19,6 +19,11 @@ class DummyModelManager:
                 or "stage intro" in lowered
                 or "dramatic" in lowered
                 or "close-up" in lowered
+                or "cinematic" in lowered
+                or "portraits" in lowered
+                or "villain introduction" in lowered
+                or "scripted sequence" in lowered
+                or "subtitles" in lowered
             ):
                 embeddings.append(torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32))
             elif (

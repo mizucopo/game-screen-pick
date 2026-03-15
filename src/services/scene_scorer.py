@@ -23,6 +23,9 @@ class SceneScorer:
     """
 
     AMBIGUITY_MARGIN = 0.05
+    EVENT_PROMOTION_MARGIN = 0.08
+    EVENT_PROMOTION_MIN_SIGNAL = 0.45
+    EVENT_PROMOTION_MAX_SUPPORT_UI = 0.65
     PROMPT_GROUPS: dict[str, tuple[str, ...]] = {
         "gameplay": (
             "video game gameplay screenshot with heads-up display",
@@ -33,10 +36,15 @@ class SceneScorer:
         "event": (
             "video game dialogue event scene",
             "story cutscene from a video game",
+            "in-engine cinematic scene from a video game",
             "boss introduction cutscene from a video game",
             "scripted dramatic event in a video game",
             "stage intro cinematic from a video game",
             "character close-up event scene in a video game",
+            "story scene with character portraits in a video game",
+            "villain introduction scene from a video game",
+            "special scripted sequence in a video game",
+            "conversation scene with subtitles in a video game",
         ),
         "other": (
             "video game main menu screen",
@@ -146,6 +154,12 @@ class SceneScorer:
         support_ui_score = self._clamp(
             0.65 * norm.ui_density + 0.35 * (1.0 - norm.action_intensity)
         )
+        rare_cinematic_score = self._clamp(
+            0.55 * distinctiveness_score
+            + 0.30 * norm.dramatic_score
+            + 0.15 * (1.0 - support_ui_score)
+            - 0.20
+        )
 
         gameplay_base = self._mean_top_two(
             self._prompt_embeddings["gameplay"] @ clip_features
@@ -163,19 +177,19 @@ class SceneScorer:
             + 0.10 * norm.ui_density
             + 0.08 * norm.action_intensity
             - 0.10 * support_ui_score
+            - 0.10 * rare_cinematic_score
             - 0.08 * heuristics.menu_layout_score
             - 0.06 * heuristics.title_layout_score
             - 0.06 * heuristics.game_over_layout_score
             - 0.05 * heuristics.dialogue_overlay_score
         )
         event_score = self._clamp(
-            event_base
+            1.10 * event_base
             + 0.14 * heuristics.dialogue_overlay_score
-            + 0.10 * distinctiveness_score
-            + 0.08 * norm.dramatic_score
-            + 0.04 * norm.color_richness
-            - 0.06 * support_ui_score
-            - 0.04 * heuristics.menu_layout_score
+            + 0.22 * rare_cinematic_score
+            + 0.08 * distinctiveness_score
+            + 0.06 * norm.color_richness
+            - 0.02 * heuristics.menu_layout_score
         )
         other_score = self._clamp(
             other_base
@@ -202,6 +216,14 @@ class SceneScorer:
             and other_score >= top_score - self.AMBIGUITY_MARGIN
         ):
             scene_label = SceneLabel.OTHER
+        elif (
+            scene_label == SceneLabel.GAMEPLAY
+            and event_score >= gameplay_score - self.EVENT_PROMOTION_MARGIN
+            and rare_cinematic_score >= self.EVENT_PROMOTION_MIN_SIGNAL
+            and support_ui_score <= self.EVENT_PROMOTION_MAX_SUPPORT_UI
+            and event_score >= other_score + 0.02
+        ):
+            scene_label = SceneLabel.EVENT
 
         chosen_score = label_scores[scene_label]
         unchosen_scores = [

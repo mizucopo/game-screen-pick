@@ -102,6 +102,31 @@ def test_scene_scorer_prefers_event_for_boss_intro_like_image() -> None:
     assert assessment.event_score > assessment.other_score
 
 
+def test_scene_scorer_promotes_rare_cinematic_scene_to_event() -> None:
+    """稀で演出寄りの画面は gameplay 優勢でも event へ昇格できること."""
+    # Arrange
+    scorer = SceneScorer(DummyModelManager())
+    image = create_analyzed_image(
+        path="/tmp/rare_cinematic.jpg",
+        clip_features=torch.tensor([0.62, 0.56, 0.10]).numpy(),
+        combined_features=torch.tensor([0.62, 0.56, 0.10, 0.0]).numpy(),
+        normalized_metrics_dict={
+            "action_intensity": 0.2,
+            "ui_density": 0.2,
+            "dramatic_score": 0.9,
+            "color_richness": 0.7,
+        },
+        layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
+    )
+
+    # Act
+    assessment = scorer.assess(image, distinctiveness_score=0.9)
+
+    # Assert
+    assert assessment.scene_label.value == "event"
+    assert assessment.event_score >= assessment.other_score
+
+
 @pytest.mark.parametrize(
     ("screen_name", "layout_dict"),
     [
@@ -159,8 +184,8 @@ def test_scene_scorer_falls_back_to_other_for_ambiguous_gameplay_and_other() -> 
     scorer = SceneScorer(DummyModelManager())
     image = create_analyzed_image(
         path="/tmp/ambiguous.jpg",
-        clip_features=torch.tensor([0.68, 0.0, 0.65]).numpy(),
-        combined_features=torch.tensor([0.68, 0.0, 0.65, 0.0]).numpy(),
+        clip_features=torch.tensor([0.73, 0.0, 0.65]).numpy(),
+        combined_features=torch.tensor([0.73, 0.0, 0.65, 0.0]).numpy(),
     )
 
     # Act
