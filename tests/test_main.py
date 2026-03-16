@@ -55,7 +55,17 @@ def test_cli_selects_and_copies_images(
     mock_game_screen_picker: MagicMock,
     setup_test_dirs: tuple[Path, Path],
 ) -> None:
-    """CLIが画像を選択してコピーすること."""
+    """CLIが画像を選択してコピーすること.
+
+    Given:
+        - 入力ディレクトリに5件の画像がある
+        - GameScreenPickerが3件を選択して返す
+        - モックされたpicker/analyzerが設定されている
+    When:
+        - CLIで -n 3 を指定して実行する
+    Then:
+        - 出力ディレクトリに3件の画像がコピーされること
+    """
     # Arrange
     test_dir, output_dir = setup_test_dirs
     for index in range(5):
@@ -110,7 +120,18 @@ def test_cli_writes_report_json_with_new_fields(
     mock_game_screen_picker: MagicMock,
     setup_test_dirs: tuple[Path, Path],
 ) -> None:
-    """CLIが新しいフィールドを含むJSONレポートを出力すること."""
+    """CLIが新しいフィールドを含むJSONレポートを出力すること.
+
+    Given:
+        - 入力ディレクトリに1件の画像がある
+        - 選択結果にplay_score/event_score/density_score/score_bandが含まれる
+        - --report-jsonオプションが指定されている
+    When:
+        - CLIを実行する
+    Then:
+        - JSONレポートに各スコアフィールドが出力されること
+        - output_pathが正しく記録されること
+    """
     # Arrange
     test_dir, output_dir = setup_test_dirs
     report_path = output_dir / "report.json"
@@ -182,7 +203,19 @@ def test_cli_renames_outputs_by_scene(
     mock_game_screen_picker: MagicMock,
     setup_test_dirs: tuple[Path, Path],
 ) -> None:
-    """CLIがscene別にファイル名を変更すること."""
+    """CLIがscene別にファイル名を変更すること.
+
+    Given:
+        - 入力ディレクトリにplay画像2件、event画像1件がある
+        - --renameオプションが指定されている
+        - 拡張子が混在している（png/jpg）
+    When:
+        - CLIを実行する
+    Then:
+        - play画像がplay0001/play0002にリネームされること
+        - event画像がevent0001にリネームされること
+        - 元の拡張子が保持されること
+    """
     # Arrange
     test_dir, output_dir = setup_test_dirs
     sources = {
@@ -247,7 +280,18 @@ def test_cli_renames_outputs_by_scene(
 
 
 def test_build_selection_config_prefers_cli_over_config(tmp_path: Path) -> None:
-    """CLIオプションが設定ファイルより優先されること."""
+    """CLIオプションが設定ファイルより優先されること.
+
+    Given:
+        - 設定ファイルにprofile=static/similarity=0.66が書かれている
+        - CLIオプションでprofile=active/similarity=0.8が指定されている
+    When:
+        - build_selection_configを呼び出す
+    Then:
+        - profileはCLIのactiveが優先されること
+        - similarityはCLIの0.8が優先されること
+        - scene_mixは設定ファイルの値が使用されること
+    """
     # Arrange
     config_path = tmp_path / "picker.toml"
     config_path.write_text(
@@ -287,7 +331,15 @@ def test_cli_validates_inputs(
     args: list[str],
     error_pattern: str,
 ) -> None:
-    """CLIが無効な入力をバリデーションすること."""
+    """CLIが無効な入力をバリデーションすること.
+
+    Given:
+        - 無効な入力値が指定されている（負の数、範囲外の値など）
+    When:
+        - CLIを実行する
+    Then:
+        - 適切なエラーメッセージで例外が発生すること
+    """
     # Arrange
     input_path = tmp_path / "input"
     output_path = tmp_path / "output"

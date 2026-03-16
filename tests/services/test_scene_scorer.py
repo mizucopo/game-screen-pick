@@ -21,7 +21,18 @@ def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
 
 
 def test_scene_scorer_assigns_dense_cluster_to_play() -> None:
-    """近傍密度が高い候補群が play へ割り当てられること."""
+    """近傍密度が高い候補群が play へ割り当てられること.
+
+    Given:
+        - 互いに似た特徴を持つ画像群（高密度クラスタ）がある
+        - 孤立した特徴を持つ画像群（低密度）がある
+        - scene_mix比率が70/30に設定されている
+    When:
+        - SceneScorerでscene評価を行う
+    Then:
+        - 高密度クラスタの画像がplayに割り当てられること
+        - 低密度の画像の一部がeventに割り当てられること
+    """
     # Arrange
     scorer = SceneScorer()
     base = _feature(0)
@@ -64,7 +75,17 @@ def test_scene_scorer_assigns_dense_cluster_to_play() -> None:
 
 
 def test_scene_scorer_normalizes_density_scores() -> None:
-    """density_score が 0..1 に正規化されること."""
+    """density_score が 0..1 に正規化されること.
+
+    Given:
+        - 異なる特徴を持つ2つの画像がある
+        - scene_mix比率が50/50に設定されている
+    When:
+        - SceneScorerでscene評価を行う
+    Then:
+        - すべてのdensity_scoreが0.0〜1.0の範囲になること
+        - play/event両方のラベルが割り当てられること
+    """
     # Arrange
     scorer = SceneScorer()
     images = [

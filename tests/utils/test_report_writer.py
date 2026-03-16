@@ -60,7 +60,19 @@ def _build_stats() -> PickerStatistics:
 
 
 def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
-    """play/eventフィールドが正しくシリアライズされること."""
+    """play/eventフィールドが正しくシリアライズされること.
+
+    Given:
+        - play候補にplay_score/event_score/density_score/score_bandが設定されている
+        - event候補にoutlier_rejectedがTrueで設定されている
+        - 統計情報にscene_distribution/scene_mix_targetがある
+    When:
+        - ReportWriterでJSONレポートを出力する
+    Then:
+        - 各スコアフィールドが正しく出力されること
+        - output_pathが正しく記録されること
+        - outlier_rejectedがTrueで出力されること
+    """
     # Arrange
     report_path = tmp_path / "report.json"
     selected = [
@@ -111,7 +123,19 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
 
 
 def test_report_writer_keeps_whole_input_profile(tmp_path: Path) -> None:
-    """whole_input_profileが保持されること."""
+    """whole_input_profileが保持されること.
+
+    Given:
+        - 統計情報にwhole_input_profileが含まれている
+        - content_filter_breakdownにfade_transition=2がある
+        - rejected_by_content_filter=2がある
+    When:
+        - ReportWriterでJSONレポートを出力する
+    Then:
+        - whole_input_profileが出力されること
+        - content_filter_breakdownが正しく出力されること
+        - scene_diagnostics_summaryが含まれないこと
+    """
     # Arrange
     report_path = tmp_path / "report.json"
     selected = [create_scored_candidate(path="/tmp/selected.jpg")]

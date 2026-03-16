@@ -22,7 +22,18 @@ def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
 
 
 def test_select_from_analyzed_filters_content_before_play_event_assignment() -> None:
-    """content filter の除外が先に適用されること."""
+    """content filter の除外が先に適用されること.
+
+    Given:
+        - blackout判定される暗い画像がある
+        - 正常なplay画像とevent画像がある
+        - scene_mix比率が50/50に設定されている
+    When:
+        - 2件を選択する
+    Then:
+        - play画像とevent画像が選ばれること
+        - blackout画像がcontent_filterで除外されること
+    """
     # Arrange
     dark = create_analyzed_image(
         path="/tmp/dark.jpg",
@@ -59,7 +70,18 @@ def test_select_from_analyzed_filters_content_before_play_event_assignment() -> 
 
 
 def test_select_from_analyzed_assigns_dense_candidates_to_play() -> None:
-    """密度の高いクラスタが play へ寄ること."""
+    """密度の高いクラスタが play へ寄ること.
+
+    Given:
+        - 互いに似た3件の画像（高密度クラスタ）がある
+        - 孤立した2件の画像（低密度）がある
+        - scene_mix比率が70/30に設定されている
+    When:
+        - 5件を選択する
+    Then:
+        - 高密度クラスタがplayに割り当てられること
+        - 低密度画像の一部がeventに割り当てられること
+    """
     # Arrange
     base = _feature(0)
     analyzed_images = [
@@ -103,7 +125,19 @@ def test_select_from_analyzed_assigns_dense_candidates_to_play() -> None:
 
 
 def test_select_from_analyzed_spreads_score_bands_and_rejects_duplicates() -> None:
-    """band 分散と global 類似度除外が同時に働くこと."""
+    """band 分散と global 類似度除外が同時に働くこと.
+
+    Given:
+        - 異なるスコア帯のplay画像がある
+        - play画像と類似するevent画像がある
+        - 類似しないevent画像がある
+        - scene_mix比率が50/50に設定されている
+    When:
+        - 4件を選択する
+    Then:
+        - 類似画像が類似度除外されること
+        - 選択候補に複数のscore_bandが含まれること
+    """
     # Arrange
     base = _feature(0)
     analyzed_images = [
