@@ -19,6 +19,10 @@ def _build_stats() -> PickerStatistics:
             path="/tmp/profile_0.jpg",
             raw_metrics_dict={
                 "brightness": 95.0,
+                "contrast": 0.45,
+                "edge_density": 0.12,
+                "action_intensity": 0.08,
+                "luminance_entropy": 5.2,
                 "near_black_ratio": 0.08,
                 "near_white_ratio": 0.04,
                 "dominant_tone_ratio": 0.58,
@@ -29,6 +33,10 @@ def _build_stats() -> PickerStatistics:
             path="/tmp/profile_1.jpg",
             raw_metrics_dict={
                 "brightness": 125.0,
+                "contrast": 0.52,
+                "edge_density": 0.18,
+                "action_intensity": 0.15,
+                "luminance_entropy": 6.1,
                 "near_black_ratio": 0.02,
                 "near_white_ratio": 0.10,
                 "dominant_tone_ratio": 0.64,
@@ -153,5 +161,10 @@ def test_report_writer_keeps_whole_input_profile(tmp_path: Path) -> None:
     assert payload["rejected_by_content_filter"] == 2
     assert payload["content_filter_breakdown"]["fade_transition"] == 2
     assert payload["whole_input_profile"] is not None
+    profile = payload["whole_input_profile"]
+    assert "contrast" in profile
+    assert "edge_density" in profile
+    assert "action_intensity" in profile
+    assert "luminance_entropy" in profile
     assert "scene_diagnostics_summary" not in payload
     assert "score_band" in payload["selected"][0]
