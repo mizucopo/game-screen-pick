@@ -11,7 +11,7 @@ class AnalyzerConfig(ConfigFromArgsMixin):
 
     Attributes:
         max_dim: メトリクス計算用の画像リサイズ時の長辺の最大ピクセル数
-        max_memory_mb: チャンク処理時のメモリ予算（MB）。画像サイズ合計が
+        max_memory_gb: チャンク処理時のメモリ予算（GB）。画像サイズ合計が
             この値を超えないように動的チャンク分割
         min_chunk_size: メモリ予算が大きい場合でも最低限確保するチャンクサイズ
         brightness_penalty_threshold: 輝度ペナルティを適用する輝度の境界値
@@ -23,7 +23,7 @@ class AnalyzerConfig(ConfigFromArgsMixin):
     """
 
     max_dim: int = 720
-    max_memory_mb: int = 512  # 約512MBのメモリ予算で動的チャンク
+    max_memory_gb: int = 1  # 約1GBのメモリ予算で動的チャンク
     min_chunk_size: int = 16  # 最低16枚は1チャンクで処理
     brightness_penalty_threshold: float = 35.0
     brightness_penalty_value: float = 0.15
@@ -36,8 +36,8 @@ class AnalyzerConfig(ConfigFromArgsMixin):
         if self.max_dim <= 0:
             msg = f"max_dimは正の整数である必要があります: {self.max_dim}"
             raise ValueError(msg)
-        if self.max_memory_mb <= 0:
-            msg = f"max_memory_mbは正の整数である必要があります: {self.max_memory_mb}"
+        if self.max_memory_gb <= 0:
+            msg = f"max_memory_gbは正の整数である必要があります: {self.max_memory_gb}"
             raise ValueError(msg)
         if self.min_chunk_size <= 0:
             msg = f"min_chunk_sizeは正の整数である必要があります: {self.min_chunk_size}"

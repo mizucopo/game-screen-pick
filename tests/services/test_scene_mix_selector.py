@@ -163,3 +163,59 @@ def test_scene_mix_selector_assigns_score_bands() -> None:
         "mid_high",
         "high",
     }
+
+
+def test_scene_mix_selector_fallback_includes_outliers() -> None:
+    """外れ値除外された候補が fallback で選ばれること.
+
+    Given:
+        - 4件のplay候補がある
+        - selection_score=[0.1, 0.2, 0.3, 100.0] で100.0が外れ値
+        - scene_mix比率が100/0に設定されている
+    When:
+        - 4件を選択する
+    Then:
+        - 4件全てが選ばれること
+        - targetsとactualsが一致すること
+        - 外れ値が最後に選ばれること
+    """
+    # Arrange
+    selector = SceneMixSelector(
+        SelectionConfig(scene_mix=SceneMix(play=1.0, event=0.0))
+    )
+    candidates = [
+        create_scored_candidate(
+            path="/tmp/play_normal_1.jpg",
+            scene_label=SceneLabel.PLAY,
+            selection_score=0.1,
+            combined_features=_feature(0),
+        ),
+        create_scored_candidate(
+            path="/tmp/play_normal_2.jpg",
+            scene_label=SceneLabel.PLAY,
+            selection_score=0.2,
+            combined_features=_feature(1),
+        ),
+        create_scored_candidate(
+            path="/tmp/play_normal_3.jpg",
+            scene_label=SceneLabel.PLAY,
+            selection_score=0.3,
+            combined_features=_feature(2),
+        ),
+        create_scored_candidate(
+            path="/tmp/play_outlier.jpg",
+            scene_label=SceneLabel.PLAY,
+            selection_score=100.0,
+            combined_features=_feature(3),
+        ),
+    ]
+
+    # Act
+    selected, _, targets, actuals = selector.select(candidates, 4)
+
+    # Assert
+    assert len(selected) == 4, "4件全てが選ばれること"
+    assert targets == {"play": 4, "event": 0}
+    assert actuals == {"play": 4, "event": 0}, "targetsとactualsが一致すること"
+    assert selected[-1].path == "/tmp/play_outlier.jpg", "外れ値が最後に選ばれること"
+    assert selected[-1].score_band == "outlier", "外れ値のscore_bandが保持されること"

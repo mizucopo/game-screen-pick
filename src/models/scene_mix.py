@@ -26,13 +26,6 @@ class SceneMix:
             )
             raise ValueError(msg)
 
-    def as_dict(self) -> dict[str, float]:
-        """辞書形式で返す."""
-        return {
-            "play": self.play,
-            "event": self.event,
-        }
-
     def calculate_allocation(self, total: int) -> dict[SceneLabel, int]:
         """総数から play/event の配分を計算する.
 
