@@ -137,8 +137,7 @@ class Main:
             解析済みの `SceneMix` 。未指定時は `None` を返す。
 
         Raises:
-            click.BadParameter: 形式不正、要素不足、数値変換失敗時。
-            ValueError: `SceneMix` の整合性検証に失敗した場合。
+            click.BadParameter: 形式不正、要素不足、数値変換失敗、整合性検証失敗時。
         """
         if value is None:
             return None
@@ -160,10 +159,13 @@ class Main:
         expected_keys = {"play", "event"}
         if set(pairs) != expected_keys:
             raise click.BadParameter("scene-mixには play,event の2要素が必要です")
-        return SceneMix(
-            play=pairs["play"],
-            event=pairs["event"],
-        )
+        try:
+            return SceneMix(
+                play=pairs["play"],
+                event=pairs["event"],
+            )
+        except ValueError as error:
+            raise click.BadParameter(str(error)) from error
 
     @staticmethod
     def build_selection_config(
@@ -418,13 +420,15 @@ class Main:
             なし。
 
         Raises:
-            click.ClickException: Clickが検出した入力エラー。
             SystemExit: 実行時エラーを終了コードへ変換した場合。
         """
         original_argv = sys.argv
         try:
             sys.argv = ["game-screen-pick"] + self.args
             self._execute(standalone_mode=False)
+        except click.ClickException as error:
+            error.show()
+            raise SystemExit(error.exit_code) from error
         finally:
             sys.argv = original_argv
 

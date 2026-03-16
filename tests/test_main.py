@@ -330,6 +330,7 @@ def test_cli_validates_inputs(
     monkeypatch: pytest.MonkeyPatch,
     mock_game_screen_picker: MagicMock,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
     args: list[str],
     error_pattern: str,
 ) -> None:
@@ -340,7 +341,7 @@ def test_cli_validates_inputs(
     When:
         - CLIを実行する
     Then:
-        - 適切なエラーメッセージで例外が発生すること
+        - 適切なエラーメッセージが表示され、SystemExitで終了すること
     """
     # Arrange
     input_path = tmp_path / "input"
@@ -357,5 +358,7 @@ def test_cli_validates_inputs(
     )
 
     # Act / Assert
-    with pytest.raises(Exception, match=error_pattern):
+    with pytest.raises(SystemExit):
         Main(args=[*args, str(input_path), str(output_path)]).run()
+    captured = capsys.readouterr()
+    assert error_pattern in captured.err
