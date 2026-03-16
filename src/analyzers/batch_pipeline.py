@@ -190,6 +190,10 @@ class BatchPipeline:
             for offset, chunk_result in enumerate(chunk_results):
                 results[chunk_start + offset] = chunk_result
 
+            # チャンク完了時の進捗ログ
+            if show_progress:
+                logger.info(f"処理済み: {chunk_end}/{len(paths)}")
+
         return results
 
     @staticmethod
