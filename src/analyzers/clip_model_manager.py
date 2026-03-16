@@ -36,10 +36,12 @@ class CLIPModelManager:
         self.device = device or self._detect_device()
 
         # モデルとプロセッサのロード
+        logger.info(f"CLIPモデルをロードしています ({model_name})...")
         self.model = CLIPModel.from_pretrained(model_name)
         self.processor = CLIPProcessor.from_pretrained(model_name)
 
         # デバイスにモデルを転送
+        logger.info(f"モデルをデバイスに転送しています ({self.device})...")
         self.model.to(self.device)
         self.model.eval()
 
@@ -79,10 +81,14 @@ class CLIPModelManager:
                 )
 
         if torch.cuda.is_available():
-            return "cuda"
-        if torch.backends.mps.is_available():
-            return "mps"
-        return "cpu"
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+        logger.info(f"デバイス: {device} を使用します")
+        return device
 
     def get_image_features(
         self, pil_image: Image.Image | Sequence[Image.Image], batch_mode: bool = False

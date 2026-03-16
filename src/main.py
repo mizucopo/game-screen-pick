@@ -380,6 +380,7 @@ class Main:
             analyzer = ImageQualityAnalyzer(config=analyzer_config)
             rng = random.Random(seed) if seed is not None else None
             picker = GameScreenPicker(analyzer, config=selection_config, rng=rng)
+            logger.info("画像処理を開始します...")
 
             selected, rejected, stats = picker.select(
                 folder=str(input_path),
