@@ -258,7 +258,17 @@ def test_content_filter_rejects_mid_fade_frames_with_70_percent_dark_ratio() -> 
 
 
 def test_content_filter_rejects_borderline_whiteout_frame() -> None:
-    """90%台前半の白飛びフレームも whiteout で除外されること."""
+    """90%台前半の白飛びフレームも whiteout で除外されること.
+
+    Given:
+        - 正常なevent画像がある
+        - near_white_ratioが93%の白飛びフレームがある
+    When:
+        - ContentFilterでフィルタリングする
+    Then:
+        - 白飛びフレームがwhiteoutとして除外されること
+    """
+    # Arrange
     images = [
         create_analyzed_image(
             path="/tmp/good_event.jpg",
@@ -292,14 +302,26 @@ def test_content_filter_rejects_borderline_whiteout_frame() -> None:
         ),
     ]
 
+    # Act
     result = ContentFilter(WholeInputProfiler()).filter(images)
 
+    # Assert
     assert {image.path for image in result.kept_images} == {"/tmp/good_event.jpg"}
     assert result.content_filter_breakdown["whiteout"] == 1
 
 
 def test_content_filter_rejects_bright_washed_out_frame_as_whiteout() -> None:
-    """near_white が低めでも強い白飛びは whiteout になること."""
+    """near_white が低めでも強い白飛びは whiteout になること.
+
+    Given:
+        - 正常なevent画像がある
+        - 明るさが高くコントラストが低い白飛びフレームがある
+    When:
+        - ContentFilterでフィルタリングする
+    Then:
+        - 白飛びフレームがwhiteoutとして除外されること
+    """
+    # Arrange
     images = [
         create_analyzed_image(
             path="/tmp/good_event.jpg",
@@ -333,14 +355,26 @@ def test_content_filter_rejects_bright_washed_out_frame_as_whiteout() -> None:
         ),
     ]
 
+    # Act
     result = ContentFilter(WholeInputProfiler()).filter(images)
 
+    # Assert
     assert {image.path for image in result.kept_images} == {"/tmp/good_event.jpg"}
     assert result.content_filter_breakdown["whiteout"] == 1
 
 
 def test_content_filter_rejects_washed_out_gameplay_frame_as_fade_transition() -> None:
-    """構図が少し見える明転中 gameplay は fade_transition になること."""
+    """構図が少し見える明転中 gameplay は fade_transition になること.
+
+    Given:
+        - 正常なgameplay画像がある
+        - 明転中で構図が少し見えるgameplayフレームがある
+    When:
+        - ContentFilterでフィルタリングする
+    Then:
+        - 明転中のフレームがfade_transitionとして除外されること
+    """
+    # Arrange
     images = [
         create_analyzed_image(
             path="/tmp/good_gameplay.jpg",
@@ -374,14 +408,27 @@ def test_content_filter_rejects_washed_out_gameplay_frame_as_fade_transition() -
         ),
     ]
 
+    # Act
     result = ContentFilter(WholeInputProfiler()).filter(images)
 
+    # Assert
     assert {image.path for image in result.kept_images} == {"/tmp/good_gameplay.jpg"}
     assert result.content_filter_breakdown["fade_transition"] == 1
 
 
 def test_content_filter_rejects_bright_and_dim_transition_frames() -> None:
-    """washed-out / dimmed な遷移フレームも static fade 判定で落ちること."""
+    """washed-out / dimmed な遷移フレームも static fade 判定で落ちること.
+
+    Given:
+        - 正常なevent画像とgameplay画像がある
+        - 明るい遷移フレーム（washed-out）がある
+        - 暗い遷移フレーム（dimmed）がある
+    When:
+        - ContentFilterでフィルタリングする
+    Then:
+        - 遷移フレームがstatic fade判定で除外されること
+    """
+    # Arrange
     images = [
         create_analyzed_image(
             path="/tmp/good_event.jpg",
@@ -445,8 +492,10 @@ def test_content_filter_rejects_bright_and_dim_transition_frames() -> None:
         ),
     ]
 
+    # Act
     result = ContentFilter(WholeInputProfiler()).filter(images)
 
+    # Assert
     assert {image.path for image in result.kept_images} == {
         "/tmp/good_event.jpg",
         "/tmp/good_gameplay.jpg",
@@ -460,7 +509,17 @@ def test_content_filter_rejects_bright_and_dim_transition_frames() -> None:
 
 
 def test_content_filter_rejects_event0026_like_dimmed_system_frame() -> None:
-    """dimmed title/save 系フレームが fade_transition で落ちること."""
+    """dimmed title/save 系フレームが fade_transition で落ちること.
+
+    Given:
+        - 正常なevent画像がある
+        - 薄暗いtitle/save系フレームがある
+    When:
+        - ContentFilterでフィルタリングする
+    Then:
+        - dimmedフレームがfade_transitionとして除外されること
+    """
+    # Arrange
     images = [
         create_analyzed_image(
             path="/tmp/good_event.jpg",
@@ -503,14 +562,26 @@ def test_content_filter_rejects_event0026_like_dimmed_system_frame() -> None:
         ),
     ]
 
+    # Act
     result = ContentFilter(WholeInputProfiler()).filter(images)
 
+    # Assert
     assert {image.path for image in result.kept_images} == {"/tmp/good_event.jpg"}
     assert result.content_filter_breakdown["fade_transition"] == 1
 
 
 def test_content_filter_rejects_event0031_like_dimmed_gameplay_frame() -> None:
-    """暗い veiled gameplay も fade_transition で落ちること."""
+    """暗い veiled gameplay も fade_transition で落ちること.
+
+    Given:
+        - 正常なgameplay画像がある
+        - 暗いveiled gameplayフレームがある
+    When:
+        - ContentFilterでフィルタリングする
+    Then:
+        - 暗いveiledフレームがfade_transitionとして除外されること
+    """
+    # Arrange
     images = [
         create_analyzed_image(
             path="/tmp/good_gameplay.jpg",
@@ -549,14 +620,27 @@ def test_content_filter_rejects_event0031_like_dimmed_gameplay_frame() -> None:
         ),
     ]
 
+    # Act
     result = ContentFilter(WholeInputProfiler()).filter(images)
 
+    # Assert
     assert {image.path for image in result.kept_images} == {"/tmp/good_gameplay.jpg"}
     assert result.content_filter_breakdown["fade_transition"] == 1
 
 
 def test_relative_transition_uses_whole_input_brightness_tendency() -> None:
-    """入力全体の通常明度帯から外れた bright/dark outlier を落とすこと."""
+    """入力全体の通常明度帯から外れた bright/dark outlier を落とすこと.
+
+    Given:
+        - 通常明度帯（102〜132）の正常な画像が6枚ある
+        - 明るいoutlierフレームがある
+        - 暗いoutlierフレームがある
+    When:
+        - ContentFilterでフィルタリングする
+    Then:
+        - 明るいoutlierと暗いoutlierが除外されること
+    """
+    # Arrange
     images = [
         create_analyzed_image(
             path=f"/tmp/good_{index}.jpg",
@@ -612,8 +696,10 @@ def test_relative_transition_uses_whole_input_brightness_tendency() -> None:
         ]
     )
 
+    # Act
     result = ContentFilter(WholeInputProfiler()).filter(images)
 
+    # Assert
     assert "/tmp/other0052.jpg" not in {image.path for image in result.kept_images}
     assert "/tmp/event0005.jpg" not in {image.path for image in result.kept_images}
     assert (
