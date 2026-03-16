@@ -54,15 +54,6 @@ class ImageQualityAnalyzer:
             self.config,
         )
 
-    @property
-    def model_manager(self) -> CLIPModelManager:
-        """CLIPモデルマネージャーを返す.
-
-        Returns:
-            scene判定用テキスト埋め込みの取得にも使う `CLIPModelManager` 。
-        """
-        return self._model_manager
-
     def analyze(self, path: str) -> AnalyzedImage | None:
         """画像を解析して中立な特徴を計算する.
 

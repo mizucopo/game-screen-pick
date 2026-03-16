@@ -39,8 +39,6 @@ class CLIPModelManager:
         self._model: CLIPModel | None = None
         self._processor: CLIPProcessor | None = None
 
-        self._text_embedding_cache: dict[str, torch.Tensor] = {}
-
     @property
     def model(self) -> CLIPModel:
         """モデルを返す（必要に応じてロード）."""
@@ -177,27 +175,3 @@ class CLIPModelManager:
             image_features = self.model.get_image_features(**inputs)
             # L2正規化して返す（最初の要素を抽出）
             return F.normalize(image_features, p=2, dim=-1)[0]
-
-    def get_text_embeddings(self, texts: Sequence[str]) -> torch.Tensor:
-        """テキスト埋め込みを返す.
-
-        Returns:
-            テキスト埋め込みテンソル
-        """
-        missing_texts = [
-            text for text in texts if text not in self._text_embedding_cache
-        ]
-        if missing_texts:
-            with torch.inference_mode():
-                inputs = self.processor(
-                    text=list(missing_texts),
-                    return_tensors="pt",
-                    padding=True,
-                ).to(self.device)
-                text_features: torch.Tensor = self.model.get_text_features(**inputs)
-                normalized = F.normalize(text_features, p=2, dim=-1)
-                for idx, text in enumerate(missing_texts):
-                    self._text_embedding_cache[text] = normalized[idx]
-
-        ordered_embeddings = [self._text_embedding_cache[text] for text in texts]
-        return torch.stack(ordered_embeddings)
