@@ -20,7 +20,10 @@ def test_selection_config_has_sensible_defaults() -> None:
     Then:
         - profile、similarity、scene mix を含む既定値が入っていること
     """
-    # Arrange & Act
+    # Arrange
+    # (引数なしでデフォルト設定を使用)
+
+    # Act
     config = SelectionConfig()
 
     # Assert
@@ -55,8 +58,11 @@ def test_threshold_steps_computed_correctly(
     # Arrange
     config = SelectionConfig(max_threshold=max_threshold)
 
-    # Act / Assert
-    assert config.compute_threshold_steps(base_threshold) == expected_steps
+    # Act
+    steps = config.compute_threshold_steps(base_threshold)
+
+    # Assert
+    assert steps == expected_steps
 
 
 @pytest.mark.parametrize(
@@ -87,7 +93,10 @@ def test_config_validation(
     Then:
         - 無効値では例外、有効値ではそのまま保持されること
     """
-    # Arrange / Act / Assert
+    # Arrange
+    # (パラメータ化されたkwargsを使用)
+
+    # Act / Assert
     if expected_error:
         with pytest.raises(expected_error, match=match_pattern):
             SelectionConfig(**kwargs)  # type: ignore[arg-type]
@@ -107,6 +116,9 @@ def test_scene_mix_validation_rejects_invalid_total() -> None:
     Then:
         - 合計値バリデーションで失敗すること
     """
-    # Arrange / Act / Assert
+    # Arrange
+    # (無効な比率を使用)
+
+    # Act / Assert
     with pytest.raises(ValueError, match="scene_mixの合計"):
         SceneMix(play=0.6, event=0.3)

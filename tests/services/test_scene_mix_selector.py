@@ -23,6 +23,7 @@ def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
 
 def test_scene_mix_selector_respects_play_event_ratio() -> None:
     """既定の 70/30 比率で選ばれること."""
+    # Arrange
     selector = SceneMixSelector(SelectionConfig(scene_mix=SceneMix(play=0.7, event=0.3)))
     candidates = [
         *[
@@ -51,8 +52,10 @@ def test_scene_mix_selector_respects_play_event_ratio() -> None:
         ],
     ]
 
+    # Act
     selected, _, targets, actuals = selector.select(candidates, 10)
 
+    # Assert
     assert len(selected) == 10
     assert targets == {"play": 7, "event": 3}
     assert actuals == {"play": 7, "event": 3}
@@ -60,6 +63,7 @@ def test_scene_mix_selector_respects_play_event_ratio() -> None:
 
 def test_scene_mix_selector_keeps_similar_candidates_out_globally() -> None:
     """カテゴリをまたいでも類似画像を戻さないこと."""
+    # Arrange
     selector = SceneMixSelector(SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)))
     base = _feature(0)
     candidates = [
@@ -83,8 +87,10 @@ def test_scene_mix_selector_keeps_similar_candidates_out_globally() -> None:
         ),
     ]
 
+    # Act
     selected, rejected, _, actuals = selector.select(candidates, 2)
 
+    # Assert
     assert [candidate.path for candidate in selected] == [
         "/tmp/play_a.jpg",
         "/tmp/event_far.jpg",
@@ -95,6 +101,7 @@ def test_scene_mix_selector_keeps_similar_candidates_out_globally() -> None:
 
 def test_scene_mix_selector_assigns_score_bands() -> None:
     """選択候補へ score_band が設定されること."""
+    # Arrange
     selector = SceneMixSelector(SelectionConfig(scene_mix=SceneMix(play=1.0, event=0.0)))
     candidates = [
         create_scored_candidate(
@@ -109,8 +116,10 @@ def test_scene_mix_selector_assigns_score_bands() -> None:
         for index, score in enumerate([0.1, 0.3, 0.5, 0.7, 0.9])
     ]
 
+    # Act
     selected, _, _, _ = selector.select(candidates, 5)
 
+    # Assert
     assert {candidate.score_band for candidate in selected} == {
         "low",
         "mid_low",

@@ -22,6 +22,7 @@ def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
 
 def test_scene_scorer_assigns_dense_cluster_to_play() -> None:
     """近傍密度が高い候補群が play へ割り当てられること."""
+    # Arrange
     scorer = SceneScorer()
     base = _feature(0)
     images = [
@@ -47,12 +48,14 @@ def test_scene_scorer_assigns_dense_cluster_to_play() -> None:
         ),
     ]
 
+    # Act
     assessments = scorer.assess_batch(images, SceneMix(play=0.7, event=0.3))
     labels_by_path = {
         image.path: assessment.scene_label
         for image, assessment in zip(images, assessments, strict=True)
     }
 
+    # Assert
     assert labels_by_path["/tmp/play_a.jpg"] == SceneLabel.PLAY
     assert labels_by_path["/tmp/play_b.jpg"] == SceneLabel.PLAY
     assert labels_by_path["/tmp/play_c.jpg"] == SceneLabel.PLAY
@@ -62,14 +65,17 @@ def test_scene_scorer_assigns_dense_cluster_to_play() -> None:
 
 def test_scene_scorer_normalizes_density_scores() -> None:
     """density_score が 0..1 に正規化されること."""
+    # Arrange
     scorer = SceneScorer()
     images = [
         create_analyzed_image(path="/tmp/a.jpg", combined_features=_feature(0)),
         create_analyzed_image(path="/tmp/b.jpg", combined_features=_feature(1)),
     ]
 
+    # Act
     assessments = scorer.assess_batch(images, SceneMix(play=0.5, event=0.5))
 
+    # Assert
     assert all(0.0 <= assessment.density_score <= 1.0 for assessment in assessments)
     assert {assessment.scene_label for assessment in assessments} == {
         SceneLabel.PLAY,

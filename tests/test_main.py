@@ -55,6 +55,8 @@ def test_cli_selects_and_copies_images(
     mock_game_screen_picker: MagicMock,
     setup_test_dirs: tuple[Path, Path],
 ) -> None:
+    """CLIが画像を選択してコピーすること."""
+    # Arrange
     test_dir, output_dir = setup_test_dirs
     for index in range(5):
         (test_dir / f"image{index}.jpg").write_bytes(b"fake_image_data")
@@ -94,8 +96,10 @@ def test_cli_selects_and_copies_images(
         lambda *_args, **_kwargs: MagicMock(),
     )
 
+    # Act
     Main(args=["-n", "3", str(test_dir), str(output_dir)]).run()
 
+    # Assert
     assert (output_dir / "image0.jpg").exists()
     assert (output_dir / "image1.jpg").exists()
     assert (output_dir / "image2.jpg").exists()
@@ -106,6 +110,8 @@ def test_cli_writes_report_json_with_new_fields(
     mock_game_screen_picker: MagicMock,
     setup_test_dirs: tuple[Path, Path],
 ) -> None:
+    """CLIが新しいフィールドを含むJSONレポートを出力すること."""
+    # Arrange
     test_dir, output_dir = setup_test_dirs
     report_path = output_dir / "report.json"
     source = test_dir / "image0.jpg"
@@ -152,6 +158,7 @@ def test_cli_writes_report_json_with_new_fields(
         lambda *_args, **_kwargs: MagicMock(),
     )
 
+    # Act
     Main(
         args=[
             "--report-json",
@@ -161,6 +168,7 @@ def test_cli_writes_report_json_with_new_fields(
         ]
     ).run()
 
+    # Assert
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["selected"][0]["path"] == str(source)
     assert payload["selected"][0]["output_path"] == str((output_dir / "image0.jpg").resolve())
@@ -174,6 +182,8 @@ def test_cli_renames_outputs_by_scene(
     mock_game_screen_picker: MagicMock,
     setup_test_dirs: tuple[Path, Path],
 ) -> None:
+    """CLIがscene別にファイル名を変更すること."""
+    # Arrange
     test_dir, output_dir = setup_test_dirs
     sources = {
         "play_png": test_dir / "source_play.png",
@@ -227,14 +237,18 @@ def test_cli_renames_outputs_by_scene(
         lambda *_args, **_kwargs: MagicMock(),
     )
 
+    # Act
     Main(args=["-n", "3", "--rename", str(test_dir), str(output_dir)]).run()
 
+    # Assert
     assert (output_dir / "play0001.png").exists()
     assert (output_dir / "event0001.jpg").exists()
     assert (output_dir / "play0002.jpg").exists()
 
 
 def test_build_selection_config_prefers_cli_over_config(tmp_path: Path) -> None:
+    """CLIオプションが設定ファイルより優先されること."""
+    # Arrange
     config_path = tmp_path / "picker.toml"
     config_path.write_text(
         '[selection]\nprofile = "static"\n'
@@ -243,6 +257,7 @@ def test_build_selection_config_prefers_cli_over_config(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    # Act
     config = Main.build_selection_config(
         config_path=str(config_path),
         profile="active",
@@ -251,6 +266,7 @@ def test_build_selection_config_prefers_cli_over_config(tmp_path: Path) -> None:
         batch_size=None,
     )
 
+    # Assert
     assert config.profile == "active"
     assert config.similarity_threshold == 0.8
     assert config.scene_mix.play == 0.6
@@ -271,6 +287,8 @@ def test_cli_validates_inputs(
     args: list[str],
     error_pattern: str,
 ) -> None:
+    """CLIが無効な入力をバリデーションすること."""
+    # Arrange
     input_path = tmp_path / "input"
     output_path = tmp_path / "output"
     input_path.mkdir()
@@ -284,5 +302,6 @@ def test_cli_validates_inputs(
         lambda *_args, **_kwargs: MagicMock(),
     )
 
+    # Act / Assert
     with pytest.raises(Exception, match=error_pattern):
         Main(args=[*args, str(input_path), str(output_path)]).run()

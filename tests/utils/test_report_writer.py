@@ -60,6 +60,8 @@ def _build_stats() -> PickerStatistics:
 
 
 def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
+    """play/eventフィールドが正しくシリアライズされること."""
+    # Arrange
     report_path = tmp_path / "report.json"
     selected = [
         create_scored_candidate(
@@ -85,6 +87,7 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
         )
     ]
 
+    # Act
     ReportWriter.write(
         path=str(report_path),
         selected=selected,
@@ -95,6 +98,7 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
         },
     )
 
+    # Assert
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["scene_distribution"] == {"play": 2, "event": 2}
     assert payload["scene_mix_target"] == {"play": 1, "event": 1}
@@ -107,9 +111,12 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
 
 
 def test_report_writer_keeps_whole_input_profile(tmp_path: Path) -> None:
+    """whole_input_profileが保持されること."""
+    # Arrange
     report_path = tmp_path / "report.json"
     selected = [create_scored_candidate(path="/tmp/selected.jpg")]
 
+    # Act
     ReportWriter.write(
         path=str(report_path),
         selected=selected,
@@ -117,6 +124,7 @@ def test_report_writer_keeps_whole_input_profile(tmp_path: Path) -> None:
         stats=_build_stats(),
     )
 
+    # Assert
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["rejected_by_content_filter"] == 2
     assert payload["content_filter_breakdown"]["fade_transition"] == 2

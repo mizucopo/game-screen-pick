@@ -23,6 +23,7 @@ def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
 
 def test_select_from_analyzed_filters_content_before_play_event_assignment() -> None:
     """content filter の除外が先に適用されること."""
+    # Arrange
     dark = create_analyzed_image(
         path="/tmp/dark.jpg",
         raw_metrics_dict={
@@ -46,8 +47,10 @@ def test_select_from_analyzed_filters_content_before_play_event_assignment() -> 
         config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
     )
 
+    # Act
     selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=2)
 
+    # Assert
     assert {candidate.path for candidate in selected} == {"/tmp/play.jpg", "/tmp/event.jpg"}
     assert rejected == []
     assert stats.rejected_by_content_filter == 1
@@ -57,6 +60,7 @@ def test_select_from_analyzed_filters_content_before_play_event_assignment() -> 
 
 def test_select_from_analyzed_assigns_dense_candidates_to_play() -> None:
     """密度の高いクラスタが play へ寄ること."""
+    # Arrange
     base = _feature(0)
     analyzed_images = [
         create_analyzed_image(
@@ -85,8 +89,10 @@ def test_select_from_analyzed_assigns_dense_candidates_to_play() -> None:
         config=SelectionConfig(scene_mix=SceneMix(play=0.7, event=0.3)),
     )
 
+    # Act
     selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=5)
 
+    # Assert
     assert len(selected) >= 2
     assert all(candidate.scene_assessment.scene_label.value in {"play", "event"} for candidate in selected)
     assert len(rejected) >= 1
@@ -98,6 +104,7 @@ def test_select_from_analyzed_assigns_dense_candidates_to_play() -> None:
 
 def test_select_from_analyzed_spreads_score_bands_and_rejects_duplicates() -> None:
     """band 分散と global 類似度除外が同時に働くこと."""
+    # Arrange
     base = _feature(0)
     analyzed_images = [
         create_analyzed_image(path="/tmp/play_low.jpg", combined_features=_feature(10)),
@@ -115,8 +122,10 @@ def test_select_from_analyzed_spreads_score_bands_and_rejects_duplicates() -> No
         config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
     )
 
+    # Act
     selected, _rejected, stats = picker.select_from_analyzed(analyzed_images, num=4)
 
+    # Assert
     assert stats.rejected_by_similarity >= 1
     assert len({candidate.score_band for candidate in selected}) >= 2
     assert all(candidate.score_band is not None for candidate in selected)

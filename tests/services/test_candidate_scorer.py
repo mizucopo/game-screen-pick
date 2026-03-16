@@ -11,9 +11,11 @@ from tests.conftest import create_analyzed_image
 
 def test_candidate_scorer_uses_scene_specific_score() -> None:
     """play/event で selection_score の参照先が切り替わること."""
+    # Arrange
     scorer = CandidateScorer(MetricCalculator(AnalyzerConfig()))
     image = create_analyzed_image(path="/tmp/frame.jpg")
 
+    # Act
     play_candidate = scorer.score(
         analyzed_image=image,
         assessment=SceneAssessment(
@@ -37,6 +39,7 @@ def test_candidate_scorer_uses_scene_specific_score() -> None:
         profile=ACTIVE_PROFILE,
     )
 
+    # Assert
     assert play_candidate.selection_score == 0.72
     assert event_candidate.selection_score == 0.80
     assert 0.0 <= play_candidate.quality_score <= 1.0
