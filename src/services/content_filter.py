@@ -8,7 +8,11 @@ from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.content_filter_result import ContentFilterResult
 from ..models.whole_input_profile import WholeInputProfile
-from ..utils.transition_metrics import calculate_bright_washout_score
+from ..utils.transition_metrics import (
+    calculate_bright_washout_score,
+    calculate_system_ui_signal,
+    calculate_veiled_transition_score,
+)
 from ..utils.vector_utils import VectorUtils
 from .whole_input_profiler import WholeInputProfiler
 
@@ -31,9 +35,11 @@ class ContentFilter:
     WHITEOUT_MAX_CONTRAST = 6.0
     WHITEOUT_MAX_EDGE_DENSITY = 0.02
     WHITEOUT_MIN_DOMINANT_TONE_RATIO = 0.88
-    WHITEOUT_BRIGHT_WASHOUT_THRESHOLD = 0.72
-    WHITEOUT_MAX_VISIBILITY = 0.58
-    WHITEOUT_MAX_INFORMATION = 0.50
+    WHITEOUT_BRIGHT_WASHOUT_THRESHOLD = 0.60
+    WHITEOUT_RELAXED_MIN_BRIGHTNESS = 200.0
+    WHITEOUT_RELAXED_MAX_CONTRAST = 8.0
+    WHITEOUT_RELAXED_MAX_EDGE_DENSITY = 0.05
+    WHITEOUT_RELAXED_MAX_VISIBILITY = 0.76
     DIRECT_FADE_NEAR_WHITE_THRESHOLD = 0.32
     DIRECT_FADE_NEAR_BLACK_THRESHOLD = 0.32
     DIRECT_FADE_BRIGHTNESS_THRESHOLD = 210.0
@@ -47,6 +53,10 @@ class ContentFilter:
     BRIGHT_WASHOUT_FADE_MIN_NEAR_WHITE_RATIO = 0.28
     BRIGHT_WASHOUT_FADE_MAX_VISIBILITY = 0.68
     BRIGHT_WASHOUT_FADE_MAX_INFORMATION = 0.55
+    VEILED_FADE_THRESHOLD = 0.50
+    VEILED_FADE_MIN_BRIGHT_WASHOUT = 0.45
+    VEILED_FADE_MIN_EXTREME_RATIO = 0.24
+    VEILED_FADE_MIN_SYSTEM_UI = 0.24
     FADE_VISIBILITY_THRESHOLD = 0.30
     FADE_INFORMATION_THRESHOLD = 0.35
 
@@ -101,6 +111,13 @@ class ContentFilter:
         p10_range = max(12.0, profile.luminance_range.p10)
         p25_range = max(14.0, profile.luminance_range.p25)
         bright_washout_score = calculate_bright_washout_score(raw)
+        system_ui_signal = calculate_system_ui_signal(image.layout_heuristics)
+        veiled_transition_score = calculate_veiled_transition_score(
+            raw,
+            adaptive_scores,
+            image.layout_heuristics,
+            image.normalized_metrics,
+        )
 
         if (
             raw.near_black_ratio >= 0.97
@@ -130,9 +147,16 @@ class ContentFilter:
 
         if (
             bright_washout_score >= ContentFilter.WHITEOUT_BRIGHT_WASHOUT_THRESHOLD
-            and raw.brightness >= 220.0
-            and adaptive_scores.visibility_score <= ContentFilter.WHITEOUT_MAX_VISIBILITY
-            and adaptive_scores.information_score <= ContentFilter.WHITEOUT_MAX_INFORMATION
+            and raw.brightness >= ContentFilter.WHITEOUT_RELAXED_MIN_BRIGHTNESS
+            and raw.contrast
+            <= max(ContentFilter.WHITEOUT_RELAXED_MAX_CONTRAST, profile.contrast.p25)
+            and raw.edge_density
+            <= max(
+                ContentFilter.WHITEOUT_RELAXED_MAX_EDGE_DENSITY,
+                profile.edge_density.p25,
+            )
+            and adaptive_scores.visibility_score
+            <= ContentFilter.WHITEOUT_RELAXED_MAX_VISIBILITY
         ):
             return "whiteout"
 
@@ -150,6 +174,8 @@ class ContentFilter:
             adaptive_scores,
             p25_range,
             bright_washout_score,
+            veiled_transition_score,
+            system_ui_signal,
         ):
             return "fade_transition"
 
@@ -163,6 +189,8 @@ class ContentFilter:
         adaptive_scores: AdaptiveScores,
         p25_range: float,
         bright_washout_score: float,
+        veiled_transition_score: float,
+        system_ui_signal: float,
     ) -> bool:
         """暗転・明転・露出過多/不足の遷移フレームかどうかを返す."""
         obvious_fade = (
@@ -189,6 +217,18 @@ class ContentFilter:
             )
         )
         if bright_washout_fade:
+            return True
+
+        veiled_fade = (
+            veiled_transition_score >= cls.VEILED_FADE_THRESHOLD
+            and (
+                bright_washout_score >= cls.VEILED_FADE_MIN_BRIGHT_WASHOUT
+                or raw.near_white_ratio >= cls.VEILED_FADE_MIN_EXTREME_RATIO
+                or raw.near_black_ratio >= cls.VEILED_FADE_MIN_EXTREME_RATIO
+                or system_ui_signal >= cls.VEILED_FADE_MIN_SYSTEM_UI
+            )
+        )
+        if veiled_fade:
             return True
 
         bright_fade = (

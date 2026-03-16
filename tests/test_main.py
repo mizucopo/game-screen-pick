@@ -203,6 +203,8 @@ def test_cli_writes_report_json(
     assert payload["selected"][0]["path"] == str(source)
     assert payload["selected"][0]["output_path"] == str((output_dir / "image0.jpg").resolve())
     assert payload["selected"][0]["transition_risk_score"] == 0.0
+    assert payload["selected"][0]["bright_washout_score"] == 0.0
+    assert payload["selected"][0]["veiled_transition_score"] == 0.0
     assert payload["selected"][0]["argmax_scene_label"] == "gameplay"
     assert payload["selected"][0]["fallback_applied"] is False
     assert payload["selected"][0]["event_promotion_applied"] is False

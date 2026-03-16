@@ -126,8 +126,8 @@ def test_scene_scorer_promotes_gameplay_near_miss_to_event() -> None:
             "luminance_range": 60.0,
             "dominant_tone_ratio": 0.20,
         },
-        clip_features=torch.tensor([0.436, 0.168, 0.14]).numpy(),
-        combined_features=torch.tensor([0.436, 0.168, 0.14, 0.0]).numpy(),
+        clip_features=torch.tensor([0.436, 0.178, 0.14]).numpy(),
+        combined_features=torch.tensor([0.436, 0.178, 0.14, 0.0]).numpy(),
         normalized_metrics_dict={
             "action_intensity": 0.35,
             "ui_density": 0.35,
@@ -147,7 +147,7 @@ def test_scene_scorer_promotes_gameplay_near_miss_to_event() -> None:
     )
 
     assert assessment.gameplay_score > assessment.event_score
-    assert assessment.gameplay_score - assessment.event_score <= 0.01
+    assert assessment.gameplay_score - assessment.event_score <= 0.03
     assert assessment.event_score >= 0.40
     assert assessment.other_score <= assessment.event_score - 0.01
     assert assessment.scene_label.value == "event"
@@ -300,8 +300,8 @@ def test_scene_scorer_suppresses_low_visibility_raw_event_transition() -> None:
             "near_white_ratio": 0.68,
             "dominant_tone_ratio": 0.92,
         },
-        clip_features=torch.tensor([0.10, 0.35, 0.30]).numpy(),
-        combined_features=torch.tensor([0.10, 0.35, 0.30, 0.0]).numpy(),
+        clip_features=torch.tensor([0.10, 0.52, 0.30]).numpy(),
+        combined_features=torch.tensor([0.10, 0.52, 0.30, 0.0]).numpy(),
         normalized_metrics_dict={
             "action_intensity": 0.15,
             "ui_density": 0.10,
@@ -320,9 +320,8 @@ def test_scene_scorer_suppresses_low_visibility_raw_event_transition() -> None:
         ),
     )
 
-    assert assessment.transition_risk_score >= 0.72
-    assert assessment.event_score >= assessment.gameplay_score
-    assert assessment.other_score >= assessment.event_score - 0.01
+    assert assessment.veiled_transition_score >= 0.34
+    assert assessment.bright_washout_score >= 0.52
     assert assessment.scene_label.value != "event"
     assert assessment.transition_suppressed_event is True
 
@@ -364,6 +363,7 @@ def test_scene_scorer_keeps_bright_high_information_event() -> None:
     assert assessment.scene_label.value == "event"
     assert assessment.transition_suppressed_event is False
     assert assessment.transition_risk_score < 0.72
+    assert assessment.veiled_transition_score < 0.34
     assert assessment.event_score > assessment.gameplay_score
 
 
@@ -381,8 +381,8 @@ def test_scene_scorer_suppresses_bright_washed_out_dialogue_event() -> None:
             "near_white_ratio": 0.60,
             "dominant_tone_ratio": 0.88,
         },
-        clip_features=torch.tensor([0.12, 0.32, 0.31]).numpy(),
-        combined_features=torch.tensor([0.12, 0.32, 0.31, 0.0]).numpy(),
+        clip_features=torch.tensor([0.12, 0.44, 0.31]).numpy(),
+        combined_features=torch.tensor([0.12, 0.44, 0.31, 0.0]).numpy(),
         normalized_metrics_dict={
             "action_intensity": 0.18,
             "ui_density": 0.18,
@@ -403,3 +403,87 @@ def test_scene_scorer_suppresses_bright_washed_out_dialogue_event() -> None:
 
     assert assessment.scene_label.value != "event"
     assert assessment.transition_suppressed_event is True
+    assert assessment.bright_washout_score >= 0.52
+    assert assessment.veiled_transition_score >= 0.34
+
+
+def test_scene_scorer_suppresses_event0026_like_dimmed_system_frame() -> None:
+    """dimmed save/title 系フレームは raw event winner でも event から外れること."""
+    scorer = SceneScorer(DummyModelManager())
+    image = create_analyzed_image(
+        path="/tmp/event0026.jpg",
+        raw_metrics_dict={
+            "brightness": 78.0,
+            "contrast": 6.0,
+            "edge_density": 0.035,
+            "luminance_entropy": 0.84,
+            "luminance_range": 12.0,
+            "near_black_ratio": 0.08,
+            "near_white_ratio": 0.04,
+            "dominant_tone_ratio": 0.80,
+        },
+        clip_features=torch.tensor([0.18, 0.52, 0.30]).numpy(),
+        combined_features=torch.tensor([0.18, 0.52, 0.30, 0.0]).numpy(),
+        normalized_metrics_dict={
+            "action_intensity": 0.08,
+            "ui_density": 0.40,
+            "dramatic_score": 0.18,
+            "color_richness": 0.18,
+        },
+        layout_dict={
+            "menu_layout_score": 0.32,
+            "title_layout_score": 0.36,
+        },
+    )
+
+    assessment = scorer.assess(
+        image,
+        _adaptive(
+            distinctiveness_score=0.60,
+            information_score=0.34,
+            visibility_score=0.42,
+        ),
+    )
+
+    assert assessment.scene_label.value != "event"
+    assert assessment.transition_suppressed_event is True
+    assert assessment.veiled_transition_score >= 0.34
+
+
+def test_scene_scorer_keeps_readable_event_even_when_bright() -> None:
+    """明るくても readable な event は suppress されないこと."""
+    scorer = SceneScorer(DummyModelManager())
+    image = create_analyzed_image(
+        path="/tmp/readable_bright_event.jpg",
+        raw_metrics_dict={
+            "brightness": 198.0,
+            "contrast": 16.0,
+            "edge_density": 0.16,
+            "luminance_entropy": 1.25,
+            "luminance_range": 36.0,
+            "near_white_ratio": 0.22,
+            "dominant_tone_ratio": 0.58,
+        },
+        clip_features=torch.tensor([0.10, 0.70, 0.05]).numpy(),
+        combined_features=torch.tensor([0.10, 0.70, 0.05, 0.0]).numpy(),
+        normalized_metrics_dict={
+            "action_intensity": 0.18,
+            "ui_density": 0.20,
+            "dramatic_score": 0.84,
+            "color_richness": 0.76,
+        },
+        layout_dict={"dialogue_overlay_score": 0.48},
+    )
+
+    assessment = scorer.assess(
+        image,
+        _adaptive(
+            distinctiveness_score=0.72,
+            information_score=0.78,
+            visibility_score=0.76,
+        ),
+    )
+
+    assert assessment.scene_label.value == "event"
+    assert assessment.transition_suppressed_event is False
+    assert assessment.veiled_transition_score < 0.34

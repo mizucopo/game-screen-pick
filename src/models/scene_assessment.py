@@ -15,4 +15,6 @@ class SceneAssessment:
     scene_label: SceneLabel
     scene_confidence: float
     transition_risk_score: float
+    bright_washout_score: float
+    veiled_transition_score: float
     transition_suppressed_event: bool

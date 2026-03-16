@@ -167,6 +167,8 @@ def create_scored_candidate(
     other_score: float = 0.1,
     scene_confidence: float = 0.5,
     transition_risk_score: float = 0.0,
+    bright_washout_score: float = 0.0,
+    veiled_transition_score: float = 0.0,
     transition_suppressed_event: bool = False,
     quality_score: float = 0.6,
     activity_score: float = 0.5,
@@ -203,6 +205,8 @@ def create_scored_candidate(
         scene_label=scene_label,
         scene_confidence=scene_confidence,
         transition_risk_score=transition_risk_score,
+        bright_washout_score=bright_washout_score,
+        veiled_transition_score=veiled_transition_score,
         transition_suppressed_event=transition_suppressed_event,
     )
     return ScoredCandidate(

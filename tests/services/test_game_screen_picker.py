@@ -304,9 +304,211 @@ def test_score_candidates_retains_multiple_event_candidates_after_recall_tuning(
 
     assert len(selected) == 8
     assert rejected == []
-    assert stats.content_filter_breakdown["fade_transition"] == 1
+    assert (
+        stats.content_filter_breakdown["whiteout"]
+        + stats.content_filter_breakdown["fade_transition"]
+        == 1
+    )
     assert stats.scene_distribution == {"gameplay": 4, "event": 3, "other": 1}
     assert stats.scene_mix_actual == {"gameplay": 4, "event": 3, "other": 1}
+
+
+def test_select_from_analyzed_excludes_named_transition_outputs_from_selected() -> None:
+    """指定された event00xx 系の bad case が selected に残らないこと."""
+
+    def feature(index: int) -> np.ndarray:
+        vector = np.zeros(401, dtype=np.float32)
+        vector[index] = 1.0
+        return vector
+
+    good_events = [
+        create_analyzed_image(
+            path=f"/tmp/good_event_{index}.jpg",
+            clip_features=torch.tensor([0.08, 0.90, 0.02]).numpy(),
+            combined_features=np.pad(feature(index), (0, 475)),
+            content_features=feature(index),
+            normalized_metrics_dict={
+                "action_intensity": 0.18,
+                "ui_density": 0.16,
+                "dramatic_score": 0.82,
+                "color_richness": 0.78,
+            },
+            layout_dict={"dialogue_overlay_score": 0.52},
+        )
+        for index in range(8)
+    ]
+    good_gameplay = [
+        create_analyzed_image(
+            path=f"/tmp/good_gameplay_{index}.jpg",
+            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
+            combined_features=np.pad(feature(100 + index), (0, 475)),
+            content_features=feature(100 + index),
+            normalized_metrics_dict={"action_intensity": 0.62, "ui_density": 0.48},
+        )
+        for index in range(10)
+    ]
+    good_other = [
+        create_analyzed_image(
+            path=f"/tmp/good_other_{index}.jpg",
+            clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
+            combined_features=np.pad(feature(200 + index), (0, 475)),
+            content_features=feature(200 + index),
+            normalized_metrics_dict={"action_intensity": 0.12, "ui_density": 0.84},
+            layout_dict={"menu_layout_score": 0.58},
+        )
+        for index in range(4)
+    ]
+    bad_transitions = [
+        create_analyzed_image(
+            path=f"/tmp/{name}",
+            raw_metrics_dict=raw_metrics,
+            clip_features=torch.tensor([0.18, 0.34, 0.30]).numpy(),
+            combined_features=np.pad(feature(300 + index), (0, 475)),
+            content_features=feature(300 + index),
+            normalized_metrics_dict=normalized_metrics,
+            layout_dict=layout_dict,
+        )
+        for index, (name, raw_metrics, normalized_metrics, layout_dict) in enumerate(
+            [
+                (
+                    "event0026.jpg",
+                    {
+                        "brightness": 78.0,
+                        "contrast": 6.0,
+                        "edge_density": 0.035,
+                        "luminance_entropy": 0.84,
+                        "luminance_range": 12.0,
+                        "near_black_ratio": 0.08,
+                        "near_white_ratio": 0.04,
+                        "dominant_tone_ratio": 0.80,
+                    },
+                    {"action_intensity": 0.08, "ui_density": 0.40},
+                    {"menu_layout_score": 0.32, "title_layout_score": 0.36},
+                ),
+                (
+                    "event0028.jpg",
+                    {
+                        "brightness": 214.0,
+                        "contrast": 6.0,
+                        "edge_density": 0.025,
+                        "luminance_entropy": 0.72,
+                        "luminance_range": 11.0,
+                        "near_white_ratio": 0.34,
+                        "dominant_tone_ratio": 0.84,
+                    },
+                    {"action_intensity": 0.10, "ui_density": 0.30},
+                    {"dialogue_overlay_score": 0.15},
+                ),
+                (
+                    "event0031.jpg",
+                    {
+                        "brightness": 46.0,
+                        "contrast": 5.5,
+                        "edge_density": 0.03,
+                        "luminance_entropy": 0.70,
+                        "luminance_range": 10.0,
+                        "near_black_ratio": 0.30,
+                        "dominant_tone_ratio": 0.80,
+                    },
+                    {"action_intensity": 0.10, "ui_density": 0.28},
+                    {},
+                ),
+                (
+                    "event0032.jpg",
+                    {
+                        "brightness": 210.0,
+                        "contrast": 5.5,
+                        "edge_density": 0.024,
+                        "luminance_entropy": 0.70,
+                        "luminance_range": 10.0,
+                        "near_white_ratio": 0.32,
+                        "dominant_tone_ratio": 0.83,
+                    },
+                    {"action_intensity": 0.12, "ui_density": 0.30},
+                    {"dialogue_overlay_score": 0.12},
+                ),
+                (
+                    "event0036.jpg",
+                    {
+                        "brightness": 208.0,
+                        "contrast": 5.0,
+                        "edge_density": 0.022,
+                        "luminance_entropy": 0.68,
+                        "luminance_range": 10.0,
+                        "near_white_ratio": 0.30,
+                        "dominant_tone_ratio": 0.82,
+                    },
+                    {"action_intensity": 0.10, "ui_density": 0.26},
+                    {"dialogue_overlay_score": 0.10},
+                ),
+                (
+                    "event0037.jpg",
+                    {
+                        "brightness": 207.0,
+                        "contrast": 5.0,
+                        "edge_density": 0.022,
+                        "luminance_entropy": 0.68,
+                        "luminance_range": 10.0,
+                        "near_white_ratio": 0.29,
+                        "dominant_tone_ratio": 0.82,
+                    },
+                    {"action_intensity": 0.10, "ui_density": 0.26},
+                    {"dialogue_overlay_score": 0.10},
+                ),
+                (
+                    "event0039.jpg",
+                    {
+                        "brightness": 238.0,
+                        "contrast": 3.5,
+                        "edge_density": 0.015,
+                        "luminance_entropy": 0.52,
+                        "luminance_range": 7.0,
+                        "near_white_ratio": 0.56,
+                        "dominant_tone_ratio": 0.90,
+                    },
+                    {"action_intensity": 0.06, "ui_density": 0.08},
+                    {"dialogue_overlay_score": 0.08},
+                ),
+                (
+                    "event0042.jpg",
+                    {
+                        "brightness": 204.0,
+                        "contrast": 5.0,
+                        "edge_density": 0.022,
+                        "luminance_entropy": 0.68,
+                        "luminance_range": 10.0,
+                        "near_white_ratio": 0.28,
+                        "dominant_tone_ratio": 0.82,
+                    },
+                    {"action_intensity": 0.10, "ui_density": 0.28},
+                    {"dialogue_overlay_score": 0.10},
+                ),
+            ]
+        )
+    ]
+
+    analyzed_images = [*good_gameplay, *good_events, *good_other, *bad_transitions]
+    analyzer = FakeAnalyzer(analyzed_images)
+    picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
+
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=18)
+
+    selected_basenames = {Path(candidate.path).name for candidate in selected}
+    rejected_basenames = {Path(candidate.path).name for candidate in rejected}
+
+    assert {
+        "event0026.jpg",
+        "event0028.jpg",
+        "event0031.jpg",
+        "event0032.jpg",
+        "event0036.jpg",
+        "event0037.jpg",
+        "event0039.jpg",
+        "event0042.jpg",
+    }.isdisjoint(selected_basenames)
+    assert stats.content_filter_breakdown["fade_transition"] >= 1
+    assert stats.scene_mix_actual["event"] >= 1
+    assert rejected_basenames or stats.rejected_by_content_filter > 0
 
 
 def test_select_from_analyzed_allows_short_result() -> None:
@@ -729,5 +931,9 @@ def test_select_from_analyzed_excludes_bright_and_dim_transition_frames() -> Non
         "/tmp/good_event.jpg",
     }
     assert stats.rejected_by_content_filter == 2
-    assert stats.content_filter_breakdown["fade_transition"] == 2
+    assert (
+        stats.content_filter_breakdown["whiteout"]
+        + stats.content_filter_breakdown["fade_transition"]
+        == 2
+    )
     assert stats.scene_mix_actual == {"gameplay": 1, "event": 1, "other": 0}

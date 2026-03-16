@@ -6,6 +6,7 @@ from ..models.analyzed_image import AnalyzedImage
 from ..models.scene_assessment import SceneAssessment
 from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_profile import SelectionProfile
+from ..utils.transition_metrics import clamp01
 
 
 class CandidateScorer:
@@ -59,7 +60,7 @@ class CandidateScorer:
             + profile.activity_weights["gameplay_score"] * assessment.gameplay_score
         )
         scene_mix_score = self._calculate_scene_mix_score(assessment)
-        selection_score = max(
+        base_selection_score = max(
             0.0,
             100.0
             * (
@@ -68,6 +69,16 @@ class CandidateScorer:
                 + 0.15 * information_score
                 + 0.10 * distinctiveness_score
             ),
+        )
+        low_confidence_factor = clamp01((0.08 - assessment.scene_confidence) / 0.08)
+        transition_selection_penalty = (
+            14.0 * assessment.veiled_transition_score
+            + 8.0 * assessment.veiled_transition_score * low_confidence_factor
+        )
+        if assessment.transition_suppressed_event:
+            transition_selection_penalty += 6.0
+        selection_score = max(
+            0.0, base_selection_score - transition_selection_penalty
         )
         return ScoredCandidate(
             analyzed_image=analyzed_image,

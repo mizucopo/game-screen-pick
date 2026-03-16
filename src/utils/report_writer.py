@@ -113,6 +113,12 @@ class ReportWriter:
             "transition_risk_score": round(
                 candidate.scene_assessment.transition_risk_score, 4
             ),
+            "bright_washout_score": round(
+                candidate.scene_assessment.bright_washout_score, 4
+            ),
+            "veiled_transition_score": round(
+                candidate.scene_assessment.veiled_transition_score, 4
+            ),
             "argmax_scene_label": argmax_scene_label,
             "argmax_score": round(argmax_score, 4),
             "argmax_margin": round(argmax_score - second_score, 4),

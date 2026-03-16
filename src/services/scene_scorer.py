@@ -13,7 +13,12 @@ from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.scene_assessment import SceneAssessment
 from ..protocols.text_embedding_provider import TextEmbeddingProvider
-from ..utils.transition_metrics import calculate_bright_washout_score
+from ..utils.transition_metrics import (
+    calculate_bright_washout_score,
+    calculate_support_ui_score,
+    calculate_system_ui_signal,
+    calculate_veiled_transition_score,
+)
 
 
 class SceneScorer:
@@ -34,18 +39,16 @@ class SceneScorer:
     EVENT_PROMOTION_MAX_SUPPORT_UI = 0.55
     EVENT_PROMOTION_MIN_OTHER_GAP = 0.01
     TRANSITION_RISK_EVENT_PENALTY = 0.06
-    BRIGHT_WASHOUT_EVENT_PENALTY = 0.10
-    BRIGHT_WASHOUT_SUPPRESS_MIN_SCORE = 0.62
-    BRIGHT_WASHOUT_SUPPRESS_MAX_MARGIN = 0.08
-    BRIGHT_WASHOUT_SUPPRESS_MAX_OTHER_GAP = 0.08
-    BRIGHT_WASHOUT_HARD_SUPPRESS_MIN_SCORE = 0.78
-    TRANSITION_SUPPRESS_MIN_RISK = 0.72
-    TRANSITION_SUPPRESS_MAX_VISIBILITY = 0.42
-    TRANSITION_SUPPRESS_MAX_INFORMATION = 0.35
-    TRANSITION_SUPPRESS_MAX_MARGIN = 0.02
-    TRANSITION_SUPPRESS_MAX_DIALOGUE_OVERLAY = 0.15
-    TRANSITION_SUPPRESS_MAX_DRAMATIC = 0.45
-    TRANSITION_SUPPRESS_MAX_OTHER_GAP = 0.01
+    BRIGHT_WASHOUT_EVENT_PENALTY = 0.12
+    VEILED_TRANSITION_EVENT_PENALTY = 0.18
+    VEILED_SUPPRESS_MIN_SCORE = 0.34
+    VEILED_SUPPRESS_MAX_MARGIN = 0.09
+    VEILED_SUPPRESS_MAX_OTHER_GAP = 0.12
+    SYSTEM_UI_SUPPRESS_MIN_SIGNAL = 0.30
+    SYSTEM_UI_SUPPRESS_MAX_VISIBILITY = 0.50
+    SYSTEM_UI_SUPPRESS_MAX_MARGIN = 0.12
+    BRIGHT_WASHOUT_SUPPRESS_MIN_SCORE = 0.52
+    BRIGHT_WASHOUT_SUPPRESS_MAX_MARGIN = 0.10
     TRANSITION_RISK_LUMINANCE_RANGE_SCALE = 48.0
     PROMPT_GROUPS: dict[str, tuple[str, ...]] = {
         "gameplay": (
@@ -176,9 +179,8 @@ class SceneScorer:
         information_score = adaptive_scores.information_score
         visibility_score = adaptive_scores.visibility_score
         gameplay_typicality = self._clamp(1.0 - distinctiveness_score)
-        support_ui_score = self._clamp(
-            0.65 * norm.ui_density + 0.35 * (1.0 - norm.action_intensity)
-        )
+        support_ui_score = calculate_support_ui_score(norm)
+        system_ui_signal = calculate_system_ui_signal(heuristics)
         rare_cinematic_score = self._clamp(
             0.55 * distinctiveness_score
             + 0.30 * norm.dramatic_score
@@ -187,6 +189,12 @@ class SceneScorer:
         )
         transition_risk_score = self._calculate_transition_risk(raw, adaptive_scores)
         bright_washout_score = calculate_bright_washout_score(raw)
+        veiled_transition_score = calculate_veiled_transition_score(
+            raw,
+            adaptive_scores,
+            heuristics,
+            norm,
+        )
 
         gameplay_base = self._mean_top_two(
             self._prompt_embeddings["gameplay"] @ clip_features
@@ -220,6 +228,7 @@ class SceneScorer:
             - 0.04 * support_ui_score
             - self.TRANSITION_RISK_EVENT_PENALTY * transition_risk_score
             - self.BRIGHT_WASHOUT_EVENT_PENALTY * bright_washout_score
+            - self.VEILED_TRANSITION_EVENT_PENALTY * veiled_transition_score
         )
         other_score = self._clamp(
             other_base
@@ -244,38 +253,28 @@ class SceneScorer:
         argmax_margin = argmax_score - second_score
         scene_label = argmax_scene_label
         transition_suppressed_event = False
-        bright_washout_suppressed = (
+        veiled_transition_suppressed = (
             argmax_scene_label == SceneLabel.EVENT
             and (
                 (
-                    bright_washout_score >= self.BRIGHT_WASHOUT_SUPPRESS_MIN_SCORE
-                    and argmax_margin <= self.BRIGHT_WASHOUT_SUPPRESS_MAX_MARGIN
-                    and other_score
-                    >= event_score - self.BRIGHT_WASHOUT_SUPPRESS_MAX_OTHER_GAP
+                    veiled_transition_score >= self.VEILED_SUPPRESS_MIN_SCORE
+                    and argmax_margin <= self.VEILED_SUPPRESS_MAX_MARGIN
+                    and other_score >= event_score - self.VEILED_SUPPRESS_MAX_OTHER_GAP
                 )
                 or (
-                    bright_washout_score
-                    >= self.BRIGHT_WASHOUT_HARD_SUPPRESS_MIN_SCORE
-                    and other_score >= gameplay_score
+                    system_ui_signal >= self.SYSTEM_UI_SUPPRESS_MIN_SIGNAL
+                    and visibility_score <= self.SYSTEM_UI_SUPPRESS_MAX_VISIBILITY
+                    and argmax_margin <= self.SYSTEM_UI_SUPPRESS_MAX_MARGIN
+                )
+                or (
+                    bright_washout_score >= self.BRIGHT_WASHOUT_SUPPRESS_MIN_SCORE
+                    and argmax_margin <= self.BRIGHT_WASHOUT_SUPPRESS_MAX_MARGIN
                 )
             )
         )
-        generic_transition_suppressed = (
-            argmax_scene_label == SceneLabel.EVENT
-            and transition_risk_score >= self.TRANSITION_SUPPRESS_MIN_RISK
-            and visibility_score <= self.TRANSITION_SUPPRESS_MAX_VISIBILITY
-            and information_score <= self.TRANSITION_SUPPRESS_MAX_INFORMATION
-            and argmax_margin <= self.TRANSITION_SUPPRESS_MAX_MARGIN
-            and heuristics.dialogue_overlay_score
-            <= self.TRANSITION_SUPPRESS_MAX_DIALOGUE_OVERLAY
-            and norm.dramatic_score <= self.TRANSITION_SUPPRESS_MAX_DRAMATIC
-            and other_score >= event_score - self.TRANSITION_SUPPRESS_MAX_OTHER_GAP
-        )
-        if bright_washout_suppressed or generic_transition_suppressed:
+        if veiled_transition_suppressed:
             scene_label = (
-                SceneLabel.GAMEPLAY
-                if gameplay_score >= other_score
-                else SceneLabel.OTHER
+                SceneLabel.OTHER if other_score >= gameplay_score else SceneLabel.GAMEPLAY
             )
             transition_suppressed_event = True
         elif (
@@ -310,6 +309,8 @@ class SceneScorer:
             scene_label=scene_label,
             scene_confidence=scene_confidence,
             transition_risk_score=transition_risk_score,
+            bright_washout_score=bright_washout_score,
+            veiled_transition_score=veiled_transition_score,
             transition_suppressed_event=transition_suppressed_event,
         )
 

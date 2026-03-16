@@ -98,6 +98,8 @@ def test_report_writer_adds_scene_diagnostics_to_candidates(tmp_path: Path) -> N
     assert selected_entry["scene_confidence"] == 0.02
     assert selected_entry["output_path"] == "/tmp/output/event0001.jpg"
     assert selected_entry["transition_risk_score"] == 0.11
+    assert selected_entry["bright_washout_score"] == 0.0
+    assert selected_entry["veiled_transition_score"] == 0.0
     assert selected_entry["argmax_scene_label"] == "gameplay"
     assert selected_entry["argmax_score"] == 0.42
     assert selected_entry["argmax_margin"] == 0.01
@@ -179,6 +181,8 @@ def test_report_writer_keeps_existing_top_level_payload(tmp_path: Path) -> None:
     }
     assert "scene_confidence" in payload["selected"][0]
     assert "transition_risk_score" in payload["selected"][0]
+    assert "bright_washout_score" in payload["selected"][0]
+    assert "veiled_transition_score" in payload["selected"][0]
     assert "transition_suppressed_event" in payload["selected"][0]
     assert "output_path" not in payload["selected"][0]
     assert "scene_diagnostics_summary" in payload
