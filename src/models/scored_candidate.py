@@ -1,4 +1,4 @@
-"""Candidate enriched with scene and selection scores."""
+"""画面種別スコアと選定スコアを持つ候補。"""
 
 from dataclasses import dataclass
 from typing import Any

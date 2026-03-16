@@ -1,4 +1,4 @@
-"""Scene bucket labels used during selection."""
+"""選定時に使用する画面種別ラベル。"""
 
 from enum import StrEnum
 

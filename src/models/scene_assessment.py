@@ -1,4 +1,4 @@
-"""Scene assessment derived from CLIP and heuristics."""
+"""CLIPとヒューリスティクスから導出される画面評価。"""
 
 from dataclasses import dataclass
 

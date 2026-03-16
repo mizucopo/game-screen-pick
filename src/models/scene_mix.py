@@ -1,4 +1,4 @@
-"""Scene mix ratio model."""
+"""画面種別ミックス比率モデル。"""
 
 from dataclasses import dataclass
 

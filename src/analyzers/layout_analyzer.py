@@ -1,4 +1,4 @@
-"""Layout heuristic analyzer."""
+"""レイアウトヒューリスティクス解析器。"""
 
 import cv2
 import numpy as np

@@ -1,4 +1,4 @@
-"""Neutral analysis result before scene-specific scoring."""
+"""scene判定前の中立解析結果。"""
 
 from dataclasses import dataclass
 from typing import Any

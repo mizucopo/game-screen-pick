@@ -1,4 +1,4 @@
-"""Game screen picker statistics."""
+"""ゲーム画面ピッカーの統計情報。"""
 
 from dataclasses import dataclass
 

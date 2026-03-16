@@ -1,4 +1,4 @@
-"""Layout heuristic scores derived from image structure."""
+"""画像構造から導出されるレイアウトヒューリスティクス。"""
 
 from dataclasses import dataclass
 

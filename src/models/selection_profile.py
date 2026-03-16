@@ -1,4 +1,4 @@
-"""Selection profile definitions."""
+"""選定プロファイル定義。"""
 
 from dataclasses import dataclass
 
