@@ -1,23 +1,15 @@
 """scene mix と全体多様性を両立する選定ロジック."""
 
 from collections import deque
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
 from ..constants.scene_label import SceneLabel
+from ..models.bucket_plan import BucketPlan
 from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_config import SelectionConfig
 from ..utils.vector_utils import VectorUtils
-
-
-@dataclass
-class BucketPlan:
-    """カテゴリ別の選定準備結果."""
-
-    ordered_candidates: list[ScoredCandidate]
-    leftovers: list[ScoredCandidate]
 
 
 class SceneMixSelector:
