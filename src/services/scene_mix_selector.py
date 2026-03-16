@@ -122,19 +122,19 @@ class SceneMixSelector:
             candidate.outlier_rejected = False
             candidate.score_band = None
 
-        eligible_candidates = self._exclude_outliers(candidates)
+        eligible_candidates, outlier_candidates = self._exclude_outliers(candidates)
         band_count = min(max(target, 1), 5)
         band_queues = self._build_band_queues(eligible_candidates, band_count)
         ordered_candidates = self._round_robin_bands(band_queues)
-        return BucketPlan(ordered_candidates, [])
+        return BucketPlan(ordered_candidates, outlier_candidates)
 
     def _exclude_outliers(
         self,
         candidates: list[ScoredCandidate],
-    ) -> list[ScoredCandidate]:
-        """selection_score の外れ値を除外する."""
+    ) -> tuple[list[ScoredCandidate], list[ScoredCandidate]]:
+        """selection_score の外れ値を除外し、(適格候補, 外れ値候補) を返す."""
         if len(candidates) < self.MIN_OUTLIER_SAMPLES:
-            return list(candidates)
+            return list(candidates), []
 
         scores = np.asarray(
             [candidate.selection_score for candidate in candidates],
@@ -143,11 +143,12 @@ class SceneMixSelector:
         q1, q3 = np.percentile(scores, [25, 75])
         iqr = q3 - q1
         if np.isclose(iqr, 0.0):
-            return list(candidates)
+            return list(candidates), []
 
         lower = float(q1 - 1.5 * iqr)
         upper = float(q3 + 1.5 * iqr)
         eligible_candidates: list[ScoredCandidate] = []
+        outlier_candidates: list[ScoredCandidate] = []
         for candidate in candidates:
             score = candidate.selection_score
             if lower <= score <= upper:
@@ -155,7 +156,8 @@ class SceneMixSelector:
             else:
                 candidate.outlier_rejected = True
                 candidate.score_band = "outlier"
-        return eligible_candidates
+                outlier_candidates.append(candidate)
+        return eligible_candidates, outlier_candidates
 
     def _build_band_queues(
         self,
