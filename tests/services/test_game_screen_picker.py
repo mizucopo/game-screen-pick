@@ -1,5 +1,8 @@
 """GameScreenPickerの単体テスト."""
 
+import random
+from pathlib import Path
+
 import numpy as np
 
 from src.models.scene_mix import SceneMix
@@ -173,3 +176,93 @@ def test_select_from_analyzed_spreads_score_bands_and_rejects_duplicates() -> No
     assert stats.rejected_by_similarity >= 1
     assert len({candidate.score_band for candidate in selected}) >= 2
     assert all(candidate.score_band is not None for candidate in selected)
+
+
+def test_load_image_files_with_same_seed_returns_same_order(
+    tmp_path: Path,
+) -> None:
+    """同じシードで同じ順序が返されること.
+
+    Given:
+        - 名前順で並べると異なる順序になる複数の画像ファイルがある
+        - 同じシード値で2つの乱数生成器を作成する
+    When:
+        - 両方の乱数生成器を使ってload_image_filesを実行する
+    Then:
+        - 両方の結果が同じ順序で返されること
+    """
+    # Arrange
+    for name in ["z.jpg", "a.jpg", "m.jpg"]:
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+
+    rng1 = random.Random(42)
+    rng2 = random.Random(42)
+
+    # Act
+    result1 = GameScreenPicker.load_image_files(
+        str(tmp_path), recursive=False, rng=rng1
+    )
+    result2 = GameScreenPicker.load_image_files(
+        str(tmp_path), recursive=False, rng=rng2
+    )
+
+    # Assert
+    names1 = [p.name for p in result1]
+    names2 = [p.name for p in result2]
+    assert names1 == names2
+
+
+def test_load_image_files_with_different_seeds_returns_different_order(
+    tmp_path: Path,
+) -> None:
+    """異なるシードで異なる順序が返されること.
+
+    Given:
+        - 名前順で並べると異なる順序になる複数の画像ファイルがある
+        - 異なるシード値で2つの乱数生成器を作成する
+    When:
+        - 両方の乱数生成器を使ってload_image_filesを実行する
+    Then:
+        - 両方の結果が異なる順序で返されること
+    """
+    # Arrange
+    for name in ["z.jpg", "a.jpg", "m.jpg", "p.jpg", "q.jpg"]:
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+
+    rng1 = random.Random(42)
+    rng2 = random.Random(123)
+
+    # Act
+    result1 = GameScreenPicker.load_image_files(
+        str(tmp_path), recursive=False, rng=rng1
+    )
+    result2 = GameScreenPicker.load_image_files(
+        str(tmp_path), recursive=False, rng=rng2
+    )
+
+    # Assert
+    names1 = [p.name for p in result1]
+    names2 = [p.name for p in result2]
+    assert names1 != names2
+
+
+def test_load_image_files_without_rng_returns_natural_order(tmp_path: Path) -> None:
+    """rng未指定時に自然順で返されること.
+
+    Given:
+        - 辞書順とは異なる自然順を持つ複数の画像ファイルがある
+    When:
+        - rngを指定せずにload_image_filesを実行する
+    Then:
+        - 自然順ソートされた結果が返されること
+    """
+    # Arrange
+    for name in ["file10.jpg", "file1.jpg", "file2.jpg"]:
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+
+    # Act
+    result = GameScreenPicker.load_image_files(str(tmp_path), recursive=False, rng=None)
+
+    # Assert
+    names = [p.name for p in result]
+    assert names == ["file1.jpg", "file2.jpg", "file10.jpg"]

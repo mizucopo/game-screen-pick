@@ -50,12 +50,17 @@ class GameScreenPicker:
         self._content_filter = ContentFilter(WholeInputProfiler())
 
     @staticmethod
-    def load_image_files(folder: str, recursive: bool) -> list[Path]:
+    def load_image_files(
+        folder: str,
+        recursive: bool,
+        rng: random.Random | None = None,
+    ) -> list[Path]:
         """フォルダから画像ファイルを取得する.
 
         Args:
             folder: 入力フォルダのパス。
             recursive: サブフォルダも含めて探索するかどうか。
+            rng: シャッフルに使う乱数生成器。未指定時はシャッフルしない。
 
         Returns:
             対応拡張子を持つ画像パスの一覧。
@@ -67,13 +72,16 @@ class GameScreenPicker:
             for path in (path_obj.rglob("*") if recursive else path_obj.glob("*"))
             if path.suffix.lower() in extensions
         ]
-        return sorted(
+        files = sorted(
             files,
             key=lambda path: [
                 int(chunk) if chunk.isdigit() else chunk.lower()
                 for chunk in re.split(r"(\d+)", path.relative_to(path_obj).as_posix())
             ],
         )
+        if rng is not None:
+            rng.shuffle(files)
+        return files
 
     def _analyze_images(
         self,
@@ -177,7 +185,7 @@ class GameScreenPicker:
             2. 非選択になった候補
             3. 実行統計をまとめた `PickerStatistics`
         """
-        files = GameScreenPicker.load_image_files(folder, recursive)
+        files = GameScreenPicker.load_image_files(folder, recursive, self._rng)
         total_files = len(files)
 
         analyzed_images = self._analyze_images(files, show_progress)
