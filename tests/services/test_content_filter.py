@@ -162,6 +162,8 @@ def test_content_filter_rejects_flat_frames_and_keeps_informative_dark_frames() 
         "fade_transition": 1,
         "temporal_transition": 0,
     }
+    assert result.whole_input_profile.brightness.p50 > 0.0
+    assert result.whole_input_profile.near_white_ratio.p90 >= 0.0
     assert (
         result.adaptive_scores_by_image_id[id(dark_gameplay)].information_score
         > result.adaptive_scores_by_image_id[id(fade_transition)].information_score
@@ -551,6 +553,70 @@ def test_content_filter_rejects_event0031_like_dimmed_gameplay_frame() -> None:
 
     assert {image.path for image in result.kept_images} == {"/tmp/good_gameplay.jpg"}
     assert result.content_filter_breakdown["fade_transition"] == 1
+
+
+def test_content_filter_uses_whole_input_brightness_tendency_for_relative_transition_rejects() -> None:
+    """入力全体の通常明度帯から外れた bright/dark outlier を落とすこと."""
+    images = [
+        create_analyzed_image(
+            path=f"/tmp/good_{index}.jpg",
+            raw_metrics_dict={
+                "brightness": 102.0 + index * 6.0,
+                "contrast": 16.0,
+                "edge_density": 0.17,
+                "action_intensity": 12.0,
+                "luminance_entropy": 1.15,
+                "luminance_range": 33.0,
+                "near_black_ratio": 0.05,
+                "near_white_ratio": 0.05,
+                "dominant_tone_ratio": 0.58,
+            },
+            content_features=_feature(index),
+            combined_features=np.pad(_feature(index), (0, 475)),
+        )
+        for index in range(6)
+    ]
+    images.extend(
+        [
+            create_analyzed_image(
+                path="/tmp/other0052.jpg",
+                raw_metrics_dict={
+                    "brightness": 222.0,
+                    "contrast": 5.0,
+                    "edge_density": 0.025,
+                    "action_intensity": 1.0,
+                    "luminance_entropy": 0.66,
+                    "luminance_range": 9.0,
+                    "near_white_ratio": 0.38,
+                    "dominant_tone_ratio": 0.88,
+                },
+                content_features=_feature(10),
+                combined_features=np.pad(_feature(10), (0, 475)),
+            ),
+            create_analyzed_image(
+                path="/tmp/event0005.jpg",
+                raw_metrics_dict={
+                    "brightness": 52.0,
+                    "contrast": 5.5,
+                    "edge_density": 0.03,
+                    "action_intensity": 1.0,
+                    "luminance_entropy": 0.76,
+                    "luminance_range": 11.0,
+                    "near_black_ratio": 0.22,
+                    "near_white_ratio": 0.02,
+                    "dominant_tone_ratio": 0.82,
+                },
+                content_features=_feature(11),
+                combined_features=np.pad(_feature(11), (0, 475)),
+            ),
+        ]
+    )
+
+    result = ContentFilter(WholeInputProfiler()).filter(images)
+
+    assert "/tmp/other0052.jpg" not in {image.path for image in result.kept_images}
+    assert "/tmp/event0005.jpg" not in {image.path for image in result.kept_images}
+    assert result.content_filter_breakdown["whiteout"] + result.content_filter_breakdown["fade_transition"] >= 2
 
 
 def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> None:

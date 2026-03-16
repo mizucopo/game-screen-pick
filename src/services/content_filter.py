@@ -10,6 +10,7 @@ from ..models.content_filter_result import ContentFilterResult
 from ..models.whole_input_profile import WholeInputProfile
 from ..utils.transition_metrics import (
     calculate_bright_washout_score,
+    calculate_relative_transition_scores,
     calculate_system_ui_signal,
     calculate_veiled_transition_score,
 )
@@ -98,6 +99,7 @@ class ContentFilter:
             adaptive_scores_by_image_id=adaptive_scores,
             rejected_by_content_filter=sum(breakdown.values()),
             content_filter_breakdown=breakdown,
+            whole_input_profile=profile,
         )
 
     @staticmethod
@@ -117,6 +119,18 @@ class ContentFilter:
             adaptive_scores,
             image.layout_heuristics,
             image.normalized_metrics,
+        )
+        (
+            relative_bright_transition_score,
+            relative_dark_transition_score,
+            _relative_transition_score,
+            _relative_transition_polarity,
+        ) = calculate_relative_transition_scores(
+            raw,
+            adaptive_scores,
+            image.layout_heuristics,
+            image.normalized_metrics,
+            profile,
         )
 
         if (
@@ -167,6 +181,31 @@ class ContentFilter:
             and raw.edge_density <= profile.edge_density.p25
         ):
             return "single_tone"
+
+        if (
+            relative_bright_transition_score >= 0.62
+            and (
+                adaptive_scores.visibility_score <= 0.78
+                or adaptive_scores.information_score <= 0.62
+            )
+            and (
+                raw.near_white_ratio >= profile.near_white_ratio.p90
+                or bright_washout_score >= 0.28
+            )
+        ):
+            if (
+                relative_bright_transition_score >= 0.78
+                or raw.near_white_ratio >= 0.65
+            ):
+                return "whiteout"
+            return "fade_transition"
+
+        if (
+            relative_dark_transition_score >= 0.60
+            and adaptive_scores.visibility_score <= 0.60
+            and raw.brightness <= profile.brightness.p25
+        ):
+            return "fade_transition"
 
         if ContentFilter._is_fade_transition(
             raw,

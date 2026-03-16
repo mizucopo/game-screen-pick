@@ -6,11 +6,37 @@ from pathlib import Path
 from src.constants.scene_label import SceneLabel
 from src.models.picker_statistics import PickerStatistics
 from src.utils.report_writer import ReportWriter
-from tests.conftest import create_scored_candidate
+from tests.conftest import (
+    build_whole_input_profile,
+    create_analyzed_image,
+    create_scored_candidate,
+)
 
 
 def _build_stats() -> PickerStatistics:
     """ReportWriter用の最小統計情報を作る."""
+    whole_input_profile = build_whole_input_profile(
+        create_analyzed_image(
+            path="/tmp/profile_0.jpg",
+            raw_metrics_dict={
+                "brightness": 95.0,
+                "near_black_ratio": 0.08,
+                "near_white_ratio": 0.04,
+                "dominant_tone_ratio": 0.58,
+                "luminance_range": 32.0,
+            },
+        ),
+        create_analyzed_image(
+            path="/tmp/profile_1.jpg",
+            raw_metrics_dict={
+                "brightness": 125.0,
+                "near_black_ratio": 0.02,
+                "near_white_ratio": 0.10,
+                "dominant_tone_ratio": 0.64,
+                "luminance_range": 40.0,
+            },
+        ),
+    )
     return PickerStatistics(
         total_files=4,
         analyzed_ok=4,
@@ -30,6 +56,7 @@ def _build_stats() -> PickerStatistics:
             "fade_transition": 2,
             "temporal_transition": 0,
         },
+        whole_input_profile=whole_input_profile,
     )
 
 
@@ -45,6 +72,10 @@ def test_report_writer_adds_scene_diagnostics_to_candidates(tmp_path: Path) -> N
             other_score=0.39,
             scene_confidence=0.02,
             transition_risk_score=0.11,
+            relative_bright_transition_score=0.12,
+            relative_dark_transition_score=0.02,
+            relative_transition_score=0.12,
+            relative_transition_polarity="bright",
         ),
         create_scored_candidate(
             path="/tmp/raw_event.jpg",
@@ -54,6 +85,10 @@ def test_report_writer_adds_scene_diagnostics_to_candidates(tmp_path: Path) -> N
             other_score=0.41,
             scene_confidence=0.06,
             transition_risk_score=0.08,
+            relative_bright_transition_score=0.05,
+            relative_dark_transition_score=0.02,
+            relative_transition_score=0.05,
+            relative_transition_polarity="bright",
         ),
     ]
     rejected = [
@@ -65,6 +100,10 @@ def test_report_writer_adds_scene_diagnostics_to_candidates(tmp_path: Path) -> N
             other_score=0.41,
             scene_confidence=0.01,
             transition_risk_score=0.12,
+            relative_bright_transition_score=0.03,
+            relative_dark_transition_score=0.20,
+            relative_transition_score=0.20,
+            relative_transition_polarity="dark",
         ),
         create_scored_candidate(
             path="/tmp/suppressed.jpg",
@@ -74,6 +113,10 @@ def test_report_writer_adds_scene_diagnostics_to_candidates(tmp_path: Path) -> N
             other_score=0.39,
             scene_confidence=0.0,
             transition_risk_score=0.63,
+            relative_bright_transition_score=0.66,
+            relative_dark_transition_score=0.08,
+            relative_transition_score=0.66,
+            relative_transition_polarity="bright",
             transition_suppressed_event=True,
         ),
     ]
@@ -100,6 +143,10 @@ def test_report_writer_adds_scene_diagnostics_to_candidates(tmp_path: Path) -> N
     assert selected_entry["transition_risk_score"] == 0.11
     assert selected_entry["bright_washout_score"] == 0.0
     assert selected_entry["veiled_transition_score"] == 0.0
+    assert selected_entry["relative_bright_transition_score"] == 0.12
+    assert selected_entry["relative_dark_transition_score"] == 0.02
+    assert selected_entry["relative_transition_score"] == 0.12
+    assert selected_entry["relative_transition_polarity"] == "bright"
     assert selected_entry["argmax_scene_label"] == "gameplay"
     assert selected_entry["argmax_score"] == 0.42
     assert selected_entry["argmax_margin"] == 0.01
@@ -179,10 +226,22 @@ def test_report_writer_keeps_existing_top_level_payload(tmp_path: Path) -> None:
         "fade_transition": 2,
         "temporal_transition": 0,
     }
+    assert payload["whole_input_profile"] is not None
+    assert set(payload["whole_input_profile"]) == {
+        "brightness",
+        "near_black_ratio",
+        "near_white_ratio",
+        "dominant_tone_ratio",
+        "luminance_range",
+    }
     assert "scene_confidence" in payload["selected"][0]
     assert "transition_risk_score" in payload["selected"][0]
     assert "bright_washout_score" in payload["selected"][0]
     assert "veiled_transition_score" in payload["selected"][0]
+    assert "relative_bright_transition_score" in payload["selected"][0]
+    assert "relative_dark_transition_score" in payload["selected"][0]
+    assert "relative_transition_score" in payload["selected"][0]
+    assert "relative_transition_polarity" in payload["selected"][0]
     assert "transition_suppressed_event" in payload["selected"][0]
     assert "output_path" not in payload["selected"][0]
     assert "scene_diagnostics_summary" in payload

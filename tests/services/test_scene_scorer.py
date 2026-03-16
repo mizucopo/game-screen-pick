@@ -8,7 +8,11 @@ import pytest
 import torch
 
 from src.services.scene_scorer import SceneScorer
-from tests.conftest import create_adaptive_scores, create_analyzed_image
+from tests.conftest import (
+    build_whole_input_profile,
+    create_adaptive_scores,
+    create_analyzed_image,
+)
 from tests.dummy_model_manager import DummyModelManager
 
 
@@ -25,6 +29,47 @@ def _adaptive(
     )
 
 
+def _baseline_images(prefix: str = "/tmp/reference") -> list:
+    """入力全体の通常明度帯を作る."""
+    return [
+        create_analyzed_image(
+            path=f"{prefix}_{index}.jpg",
+            raw_metrics_dict={
+                "brightness": brightness,
+                "contrast": 16.0,
+                "edge_density": 0.16,
+                "luminance_entropy": 1.2,
+                "luminance_range": 34.0,
+                "near_black_ratio": 0.04,
+                "near_white_ratio": 0.05,
+                "dominant_tone_ratio": 0.58,
+            },
+            normalized_metrics_dict={
+                "action_intensity": 0.35,
+                "ui_density": 0.28,
+                "dramatic_score": 0.45,
+                "color_richness": 0.55,
+            },
+        )
+        for index, brightness in enumerate((102.0, 108.0, 114.0, 120.0, 126.0, 132.0))
+    ]
+
+
+def _assess(
+    scorer: SceneScorer,
+    image,
+    adaptive_scores,
+    reference_images: list | None = None,
+):
+    """relative profile を含めて SceneScorer を呼び出す."""
+    profile_images = [*(reference_images or []), image]
+    return scorer.assess(
+        image,
+        adaptive_scores,
+        build_whole_input_profile(*profile_images),
+    )
+
+
 def test_scene_scorer_prefers_gameplay_for_gameplay_like_image() -> None:
     """通常画面ではgameplay_scoreが最も高くなること."""
     scorer = SceneScorer(DummyModelManager())
@@ -35,7 +80,7 @@ def test_scene_scorer_prefers_gameplay_for_gameplay_like_image() -> None:
         layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
     )
 
-    assessment = scorer.assess(image, _adaptive())
+    assessment = _assess(scorer, image, _adaptive())
 
     assert assessment.scene_label.value == "gameplay"
     assert assessment.gameplay_score > assessment.event_score
@@ -52,11 +97,13 @@ def test_scene_scorer_rewards_frequent_gameplay_cluster() -> None:
         combined_features=torch.tensor([0.6, 0.0, 0.0, 0.0]).numpy(),
     )
 
-    frequent = scorer.assess(
+    frequent = _assess(
+        scorer,
         image,
         _adaptive(distinctiveness_score=0.1),
     )
-    rare = scorer.assess(
+    rare = _assess(
+        scorer,
         image,
         _adaptive(distinctiveness_score=0.9),
     )
@@ -82,7 +129,7 @@ def test_scene_scorer_prefers_event_for_boss_intro_like_image() -> None:
         layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
     )
 
-    assessment = scorer.assess(image, _adaptive())
+    assessment = _assess(scorer, image, _adaptive())
 
     assert assessment.scene_label.value == "event"
     assert assessment.event_score > assessment.gameplay_score
@@ -106,7 +153,8 @@ def test_scene_scorer_keeps_event_when_event_raw_winner_is_close_to_other() -> N
         layout_dict={"dialogue_overlay_score": 0.2},
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(distinctiveness_score=0.3),
     )
@@ -126,8 +174,8 @@ def test_scene_scorer_promotes_gameplay_near_miss_to_event() -> None:
             "luminance_range": 60.0,
             "dominant_tone_ratio": 0.20,
         },
-        clip_features=torch.tensor([0.436, 0.178, 0.14]).numpy(),
-        combined_features=torch.tensor([0.436, 0.178, 0.14, 0.0]).numpy(),
+        clip_features=torch.tensor([0.436, 0.18, 0.14]).numpy(),
+        combined_features=torch.tensor([0.436, 0.18, 0.14, 0.0]).numpy(),
         normalized_metrics_dict={
             "action_intensity": 0.35,
             "ui_density": 0.35,
@@ -137,7 +185,8 @@ def test_scene_scorer_promotes_gameplay_near_miss_to_event() -> None:
         layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(
             distinctiveness_score=0.75,
@@ -200,7 +249,8 @@ def test_scene_scorer_does_not_promote_gameplay_near_miss_without_strong_event_s
         layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(distinctiveness_score=distinctiveness_score),
     )
@@ -232,7 +282,8 @@ def test_scene_scorer_prefers_other_for_support_ui_screens(
         layout_dict=layout_dict,
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(distinctiveness_score=0.8),
     )
@@ -257,7 +308,8 @@ def test_scene_scorer_keeps_support_ui_near_miss_as_other() -> None:
         },
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(distinctiveness_score=0.7),
     )
@@ -275,7 +327,8 @@ def test_scene_scorer_falls_back_to_other_for_ambiguous_gameplay_and_other() -> 
         combined_features=torch.tensor([0.73, 0.0, 0.65, 0.0]).numpy(),
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(distinctiveness_score=0.5),
     )
@@ -311,17 +364,20 @@ def test_scene_scorer_suppresses_low_visibility_raw_event_transition() -> None:
         layout_dict={"dialogue_overlay_score": 0.12, "menu_layout_score": 0.3},
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(
             distinctiveness_score=0.62,
             information_score=0.18,
             visibility_score=0.18,
         ),
+        reference_images=_baseline_images(),
     )
 
     assert assessment.veiled_transition_score >= 0.34
     assert assessment.bright_washout_score >= 0.52
+    assert assessment.relative_bright_transition_score >= 0.61
     assert assessment.scene_label.value != "event"
     assert assessment.transition_suppressed_event is True
 
@@ -351,19 +407,22 @@ def test_scene_scorer_keeps_bright_high_information_event() -> None:
         layout_dict={"dialogue_overlay_score": 0.55, "menu_layout_score": 0.0},
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(
             distinctiveness_score=0.72,
             information_score=0.85,
             visibility_score=0.82,
         ),
+        reference_images=_baseline_images(),
     )
 
     assert assessment.scene_label.value == "event"
     assert assessment.transition_suppressed_event is False
     assert assessment.transition_risk_score < 0.72
     assert assessment.veiled_transition_score < 0.34
+    assert assessment.relative_bright_transition_score >= 0.61
     assert assessment.event_score > assessment.gameplay_score
 
 
@@ -392,19 +451,22 @@ def test_scene_scorer_suppresses_bright_washed_out_dialogue_event() -> None:
         layout_dict={"dialogue_overlay_score": 0.55, "menu_layout_score": 0.15},
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(
             distinctiveness_score=0.68,
             information_score=0.28,
             visibility_score=0.32,
         ),
+        reference_images=_baseline_images(),
     )
 
     assert assessment.scene_label.value != "event"
     assert assessment.transition_suppressed_event is True
     assert assessment.bright_washout_score >= 0.52
     assert assessment.veiled_transition_score >= 0.34
+    assert assessment.relative_bright_transition_score >= 0.62
 
 
 def test_scene_scorer_suppresses_event0026_like_dimmed_system_frame() -> None:
@@ -436,18 +498,21 @@ def test_scene_scorer_suppresses_event0026_like_dimmed_system_frame() -> None:
         },
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(
             distinctiveness_score=0.60,
             information_score=0.34,
             visibility_score=0.42,
         ),
+        reference_images=_baseline_images(),
     )
 
     assert assessment.scene_label.value != "event"
     assert assessment.transition_suppressed_event is True
     assert assessment.veiled_transition_score >= 0.34
+    assert assessment.relative_dark_transition_score >= 0.53
 
 
 def test_scene_scorer_keeps_readable_event_even_when_bright() -> None:
@@ -475,15 +540,18 @@ def test_scene_scorer_keeps_readable_event_even_when_bright() -> None:
         layout_dict={"dialogue_overlay_score": 0.48},
     )
 
-    assessment = scorer.assess(
+    assessment = _assess(
+        scorer,
         image,
         _adaptive(
             distinctiveness_score=0.72,
             information_score=0.78,
             visibility_score=0.76,
         ),
+        reference_images=_baseline_images(),
     )
 
     assert assessment.scene_label.value == "event"
     assert assessment.transition_suppressed_event is False
     assert assessment.veiled_transition_score < 0.34
+    assert assessment.relative_bright_transition_score >= 0.55

@@ -17,4 +17,8 @@ class SceneAssessment:
     transition_risk_score: float
     bright_washout_score: float
     veiled_transition_score: float
+    relative_bright_transition_score: float
+    relative_dark_transition_score: float
+    relative_transition_score: float
+    relative_transition_polarity: str
     transition_suppressed_event: bool

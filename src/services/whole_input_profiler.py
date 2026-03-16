@@ -38,6 +38,9 @@ class WholeInputProfiler:
                 action_intensity=empty,
                 luminance_entropy=empty,
                 luminance_range=empty,
+                near_black_ratio=empty,
+                near_white_ratio=empty,
+                dominant_tone_ratio=empty,
             )
 
         return WholeInputProfile(
@@ -58,6 +61,15 @@ class WholeInputProfiler:
             ),
             luminance_range=self._build_distribution(
                 [image.raw_metrics.luminance_range for image in images]
+            ),
+            near_black_ratio=self._build_distribution(
+                [image.raw_metrics.near_black_ratio for image in images]
+            ),
+            near_white_ratio=self._build_distribution(
+                [image.raw_metrics.near_white_ratio for image in images]
+            ),
+            dominant_tone_ratio=self._build_distribution(
+                [image.raw_metrics.dominant_tone_ratio for image in images]
             ),
         )
 

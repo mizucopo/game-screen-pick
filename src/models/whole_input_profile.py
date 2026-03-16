@@ -15,3 +15,6 @@ class WholeInputProfile:
     action_intensity: MetricDistribution
     luminance_entropy: MetricDistribution
     luminance_range: MetricDistribution
+    near_black_ratio: MetricDistribution
+    near_white_ratio: MetricDistribution
+    dominant_tone_ratio: MetricDistribution

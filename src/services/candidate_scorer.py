@@ -77,8 +77,30 @@ class CandidateScorer:
         )
         if assessment.transition_suppressed_event:
             transition_selection_penalty += 6.0
+        relative_low_confidence_factor = clamp01(
+            (0.06 - assessment.scene_confidence) / 0.06
+        )
+        relative_transition_penalty = (
+            18.0 * assessment.relative_transition_score
+            + 10.0
+            * assessment.relative_transition_score
+            * relative_low_confidence_factor
+        )
+        if (
+            assessment.relative_transition_polarity == "bright"
+            and assessment.relative_bright_transition_score >= 0.62
+        ):
+            relative_transition_penalty += 6.0
+        if (
+            assessment.relative_transition_polarity == "dark"
+            and assessment.relative_dark_transition_score >= 0.60
+        ):
+            relative_transition_penalty += 5.0
         selection_score = max(
-            0.0, base_selection_score - transition_selection_penalty
+            0.0,
+            base_selection_score
+            - transition_selection_penalty
+            - relative_transition_penalty,
         )
         return ScoredCandidate(
             analyzed_image=analyzed_image,

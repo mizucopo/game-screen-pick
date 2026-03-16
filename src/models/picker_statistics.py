@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from .whole_input_profile import WholeInputProfile
+
 
 @dataclass
 class PickerStatistics:
@@ -20,6 +22,7 @@ class PickerStatistics:
         scene_mix_actual: 実際の画面種別配分
         threshold_relaxation_used: 類似度しきい値緩和ステップ
         content_filter_breakdown: content filter 除外理由ごとの件数
+        whole_input_profile: 入力全体の明暗傾向プロフィール
     """
 
     total_files: int
@@ -34,3 +37,4 @@ class PickerStatistics:
     scene_mix_actual: dict[str, int]
     threshold_relaxation_used: list[float]
     content_filter_breakdown: dict[str, int]
+    whole_input_profile: WholeInputProfile | None = None

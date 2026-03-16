@@ -19,6 +19,8 @@ from src.models.normalized_metrics import NormalizedMetrics
 from src.models.raw_metrics import RawMetrics
 from src.models.scene_assessment import SceneAssessment
 from src.models.scored_candidate import ScoredCandidate
+from src.models.whole_input_profile import WholeInputProfile
+from src.services.whole_input_profiler import WholeInputProfiler
 
 
 def _create_test_image(
@@ -159,6 +161,11 @@ def create_adaptive_scores(
     )
 
 
+def build_whole_input_profile(*images: AnalyzedImage) -> WholeInputProfile:
+    """入力画像群からWholeInputProfileを作る."""
+    return WholeInputProfiler().build_profile(list(images))
+
+
 def create_scored_candidate(
     path: str,
     scene_label: SceneLabel = SceneLabel.GAMEPLAY,
@@ -169,6 +176,10 @@ def create_scored_candidate(
     transition_risk_score: float = 0.0,
     bright_washout_score: float = 0.0,
     veiled_transition_score: float = 0.0,
+    relative_bright_transition_score: float = 0.0,
+    relative_dark_transition_score: float = 0.0,
+    relative_transition_score: float = 0.0,
+    relative_transition_polarity: str = "bright",
     transition_suppressed_event: bool = False,
     quality_score: float = 0.6,
     activity_score: float = 0.5,
@@ -207,6 +218,10 @@ def create_scored_candidate(
         transition_risk_score=transition_risk_score,
         bright_washout_score=bright_washout_score,
         veiled_transition_score=veiled_transition_score,
+        relative_bright_transition_score=relative_bright_transition_score,
+        relative_dark_transition_score=relative_dark_transition_score,
+        relative_transition_score=relative_transition_score,
+        relative_transition_polarity=relative_transition_polarity,
         transition_suppressed_event=transition_suppressed_event,
     )
     return ScoredCandidate(

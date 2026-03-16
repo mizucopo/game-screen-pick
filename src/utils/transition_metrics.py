@@ -66,3 +66,82 @@ def calculate_veiled_transition_score(
         + 0.08 * system_ui_signal
         + 0.08 * support_ui_score
     )
+
+
+def calculate_relative_transition_scores(
+    raw_metrics: Any,
+    adaptive_scores: Any,
+    heuristics: Any,
+    normalized_metrics: Any,
+    whole_input_profile: Any,
+) -> tuple[float, float, float, str]:
+    """入力全体分布に対する明転・暗転 outlier スコアを返す."""
+    bright_tail_width = max(
+        8.0,
+        whole_input_profile.brightness.p90 - whole_input_profile.brightness.p50,
+    )
+    dark_tail_width = max(
+        8.0,
+        whole_input_profile.brightness.p50 - whole_input_profile.brightness.p10,
+    )
+    bright_outlier = clamp01(
+        (raw_metrics.brightness - whole_input_profile.brightness.p90)
+        / bright_tail_width
+    )
+    dark_outlier = clamp01(
+        (whole_input_profile.brightness.p10 - raw_metrics.brightness) / dark_tail_width
+    )
+    near_white_outlier = clamp01(
+        (
+            raw_metrics.near_white_ratio
+            - max(0.05, whole_input_profile.near_white_ratio.p90)
+        )
+        / 0.18
+    )
+    near_black_outlier = clamp01(
+        (
+            raw_metrics.near_black_ratio
+            - max(0.05, whole_input_profile.near_black_ratio.p90)
+        )
+        / 0.18
+    )
+    dominant_tone_outlier = clamp01(
+        (
+            raw_metrics.dominant_tone_ratio
+            - max(0.55, whole_input_profile.dominant_tone_ratio.p90)
+        )
+        / 0.20
+    )
+    contrast_penalty = clamp01(1.0 - raw_metrics.contrast / 18.0)
+    edge_penalty = clamp01(1.0 - raw_metrics.edge_density / 0.14)
+    range_penalty = clamp01(1.0 - raw_metrics.luminance_range / 48.0)
+    structure_loss = clamp01(
+        0.40 * contrast_penalty + 0.35 * edge_penalty + 0.25 * range_penalty
+    )
+    bright_washout_score = calculate_bright_washout_score(raw_metrics)
+    relative_bright_transition_score = clamp01(
+        0.35 * bright_outlier
+        + 0.25 * near_white_outlier
+        + 0.20 * bright_washout_score
+        + 0.20 * structure_loss
+    )
+    relative_dark_transition_score = clamp01(
+        0.40 * dark_outlier
+        + 0.25 * near_black_outlier
+        + 0.20 * dominant_tone_outlier
+        + 0.15 * structure_loss
+    )
+    relative_transition_score = max(
+        relative_bright_transition_score, relative_dark_transition_score
+    )
+    relative_transition_polarity = (
+        "bright"
+        if relative_bright_transition_score >= relative_dark_transition_score
+        else "dark"
+    )
+    return (
+        relative_bright_transition_score,
+        relative_dark_transition_score,
+        relative_transition_score,
+        relative_transition_polarity,
+    )

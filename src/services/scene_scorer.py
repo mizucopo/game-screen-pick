@@ -12,9 +12,11 @@ from ..constants.scene_label import SceneLabel
 from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.scene_assessment import SceneAssessment
+from ..models.whole_input_profile import WholeInputProfile
 from ..protocols.text_embedding_provider import TextEmbeddingProvider
 from ..utils.transition_metrics import (
     calculate_bright_washout_score,
+    calculate_relative_transition_scores,
     calculate_support_ui_score,
     calculate_system_ui_signal,
     calculate_veiled_transition_score,
@@ -151,6 +153,7 @@ class SceneScorer:
         self,
         analyzed_image: AnalyzedImage,
         adaptive_scores: AdaptiveScores,
+        whole_input_profile: WholeInputProfile,
     ) -> SceneAssessment:
         """単一画像の画面種別を評価する.
 
@@ -195,6 +198,18 @@ class SceneScorer:
             heuristics,
             norm,
         )
+        (
+            relative_bright_transition_score,
+            relative_dark_transition_score,
+            relative_transition_score,
+            relative_transition_polarity,
+        ) = calculate_relative_transition_scores(
+            raw,
+            adaptive_scores,
+            heuristics,
+            norm,
+            whole_input_profile,
+        )
 
         gameplay_base = self._mean_top_two(
             self._prompt_embeddings["gameplay"] @ clip_features
@@ -217,6 +232,7 @@ class SceneScorer:
             - 0.06 * heuristics.title_layout_score
             - 0.06 * heuristics.game_over_layout_score
             - 0.05 * heuristics.dialogue_overlay_score
+            - 0.04 * relative_transition_score
         )
         event_score = self._clamp(
             1.18 * event_base
@@ -229,6 +245,7 @@ class SceneScorer:
             - self.TRANSITION_RISK_EVENT_PENALTY * transition_risk_score
             - self.BRIGHT_WASHOUT_EVENT_PENALTY * bright_washout_score
             - self.VEILED_TRANSITION_EVENT_PENALTY * veiled_transition_score
+            - 0.08 * relative_transition_score
         )
         other_score = self._clamp(
             other_base
@@ -238,6 +255,7 @@ class SceneScorer:
             + 0.12 * heuristics.game_over_layout_score
             + 0.06 * distinctiveness_score
             - 0.06 * gameplay_typicality
+            - 0.04 * relative_transition_score
         )
 
         label_scores = {
@@ -311,6 +329,10 @@ class SceneScorer:
             transition_risk_score=transition_risk_score,
             bright_washout_score=bright_washout_score,
             veiled_transition_score=veiled_transition_score,
+            relative_bright_transition_score=relative_bright_transition_score,
+            relative_dark_transition_score=relative_dark_transition_score,
+            relative_transition_score=relative_transition_score,
+            relative_transition_polarity=relative_transition_polarity,
             transition_suppressed_event=transition_suppressed_event,
         )
 

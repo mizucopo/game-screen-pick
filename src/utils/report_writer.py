@@ -4,8 +4,10 @@ import json
 from pathlib import Path
 
 from ..constants.scene_label import SceneLabel
+from ..models.metric_distribution import MetricDistribution
 from ..models.picker_statistics import PickerStatistics
 from ..models.scored_candidate import ScoredCandidate
+from ..models.whole_input_profile import WholeInputProfile
 
 
 class ReportWriter:
@@ -53,6 +55,7 @@ class ReportWriter:
             "threshold_relaxation_used": stats.threshold_relaxation_used,
             "rejected_by_content_filter": stats.rejected_by_content_filter,
             "content_filter_breakdown": stats.content_filter_breakdown,
+            "whole_input_profile": ReportWriter._serialize_whole_input_profile(stats),
             "scene_diagnostics_summary": ReportWriter._build_scene_diagnostics_summary(
                 selected_payload,
                 rejected_payload,
@@ -118,6 +121,18 @@ class ReportWriter:
             ),
             "veiled_transition_score": round(
                 candidate.scene_assessment.veiled_transition_score, 4
+            ),
+            "relative_bright_transition_score": round(
+                candidate.scene_assessment.relative_bright_transition_score, 4
+            ),
+            "relative_dark_transition_score": round(
+                candidate.scene_assessment.relative_dark_transition_score, 4
+            ),
+            "relative_transition_score": round(
+                candidate.scene_assessment.relative_transition_score, 4
+            ),
+            "relative_transition_polarity": (
+                candidate.scene_assessment.relative_transition_polarity
             ),
             "argmax_scene_label": argmax_scene_label,
             "argmax_score": round(argmax_score, 4),
@@ -210,4 +225,40 @@ class ReportWriter:
                     if candidate["transition_suppressed_event"] is True
                 ),
             },
+        }
+
+    @staticmethod
+    def _serialize_distribution(
+        distribution: MetricDistribution,
+    ) -> dict[str, float]:
+        """分布プロフィールをJSON向け辞書へ変換する."""
+        return {
+            "p10": round(distribution.p10, 4),
+            "p25": round(distribution.p25, 4),
+            "p50": round(distribution.p50, 4),
+            "p90": round(distribution.p90, 4),
+        }
+
+    @staticmethod
+    def _serialize_whole_input_profile(
+        stats: PickerStatistics,
+    ) -> dict[str, dict[str, float]] | None:
+        """入力全体分布プロフィールをJSON向けに直列化する."""
+        profile = stats.whole_input_profile
+        if profile is None:
+            return None
+        return {
+            "brightness": ReportWriter._serialize_distribution(profile.brightness),
+            "near_black_ratio": ReportWriter._serialize_distribution(
+                profile.near_black_ratio
+            ),
+            "near_white_ratio": ReportWriter._serialize_distribution(
+                profile.near_white_ratio
+            ),
+            "dominant_tone_ratio": ReportWriter._serialize_distribution(
+                profile.dominant_tone_ratio
+            ),
+            "luminance_range": ReportWriter._serialize_distribution(
+                profile.luminance_range
+            ),
         }

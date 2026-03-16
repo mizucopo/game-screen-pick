@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from .adaptive_scores import AdaptiveScores
 from .analyzed_image import AnalyzedImage
+from .whole_input_profile import WholeInputProfile
 
 
 @dataclass(frozen=True)
@@ -14,3 +15,4 @@ class ContentFilterResult:
     adaptive_scores_by_image_id: dict[int, AdaptiveScores]
     rejected_by_content_filter: int
     content_filter_breakdown: dict[str, int]
+    whole_input_profile: WholeInputProfile
