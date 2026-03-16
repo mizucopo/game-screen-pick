@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from ..constants.scene_label import SceneLabel
+
 
 @dataclass(frozen=True)
 class SceneMix:
@@ -30,3 +32,23 @@ class SceneMix:
             "play": self.play,
             "event": self.event,
         }
+
+    def calculate_allocation(self, total: int) -> dict[SceneLabel, int]:
+        """総数から play/event の配分を計算する.
+
+        Args:
+            total: 配分する総数。
+
+        Returns:
+            SceneLabelごとの配分数。
+        """
+        raw_play = total * self.play
+        raw_event = total * self.event
+        play_target = int(raw_play)
+        event_target = int(raw_event)
+        remainder = total - (play_target + event_target)
+        if remainder > 0 and raw_play - play_target >= raw_event - event_target:
+            play_target += 1
+        elif remainder > 0:
+            event_target += 1
+        return {SceneLabel.PLAY: play_target, SceneLabel.EVENT: event_target}

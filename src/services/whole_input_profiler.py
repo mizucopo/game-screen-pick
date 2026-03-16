@@ -154,9 +154,11 @@ class WholeInputProfiler:
         neighbor_count = min(self.DISTINCTIVENESS_NEIGHBORS, len(images) - 1)
         mean_nearest_distances = np.zeros(len(images), dtype=np.float32)
 
-        for index, feature in enumerate(normalized_features):
-            similarities = normalized_features @ feature
-            similarities[index] = -np.inf
+        # 一度の行列乗算で全類似度を計算し、O(n²)を最適化
+        similarities_matrix = normalized_features @ normalized_features.T
+        np.fill_diagonal(similarities_matrix, -np.inf)
+        for index in range(len(images)):
+            similarities = similarities_matrix[index]
             nearest_similarities = np.partition(similarities, -neighbor_count)[
                 -neighbor_count:
             ]

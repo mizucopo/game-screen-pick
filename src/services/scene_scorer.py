@@ -24,7 +24,8 @@ class SceneScorer:
             return []
 
         density_scores = self._calculate_density_scores(analyzed_images)
-        play_target = self._calculate_play_target(len(analyzed_images), scene_mix)
+        allocation = scene_mix.calculate_allocation(len(analyzed_images))
+        play_target = allocation[SceneLabel.PLAY]
         ordered_indices = sorted(
             range(len(analyzed_images)),
             key=lambda index: density_scores[index],
@@ -68,9 +69,11 @@ class SceneScorer:
         neighbor_count = min(cls.TOP_K_NEIGHBORS, len(analyzed_images) - 1)
         raw_scores = np.zeros(len(analyzed_images), dtype=np.float32)
 
-        for index, feature in enumerate(normalized_features):
-            similarities = normalized_features @ feature
-            similarities[index] = -np.inf
+        # 一度の行列乗算で全類似度を計算し、O(n²)を最適化
+        similarities_matrix = normalized_features @ normalized_features.T
+        np.fill_diagonal(similarities_matrix, -np.inf)
+        for index in range(len(analyzed_images)):
+            similarities = similarities_matrix[index]
             nearest = np.partition(similarities, -neighbor_count)[-neighbor_count:]
             raw_scores[index] = float(np.mean(nearest))
 
@@ -80,15 +83,3 @@ class SceneScorer:
             return [0.5 for _ in analyzed_images]
         normalized_scores = (raw_scores - min_score) / (max_score - min_score)
         return [float(score) for score in normalized_scores]
-
-    @staticmethod
-    def _calculate_play_target(total: int, scene_mix: SceneMix) -> int:
-        """play 枚数の目標値を返す."""
-        raw_play = total * scene_mix.play
-        raw_event = total * scene_mix.event
-        base_play = int(raw_play)
-        base_event = int(raw_event)
-        remainder = total - (base_play + base_event)
-        if remainder <= 0:
-            return base_play
-        return base_play + int(raw_play - base_play >= raw_event - base_event)

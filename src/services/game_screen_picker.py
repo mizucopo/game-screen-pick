@@ -4,6 +4,7 @@ import random
 import re
 from pathlib import Path
 
+from ..constants.scene_label import SceneLabel
 from ..constants.selection_profiles import PROFILE_REGISTRY
 from ..models.analyzed_image import AnalyzedImage
 from ..models.picker_statistics import PickerStatistics
@@ -139,15 +140,15 @@ class GameScreenPicker:
             for image, assessment in zip(analyzed_images, assessments, strict=True)
         ]
         scene_distribution = {
-            "play": sum(
+            SceneLabel.PLAY: sum(
                 1
                 for candidate in candidates
-                if candidate.scene_assessment.scene_label.value == "play"
+                if candidate.scene_assessment.scene_label == SceneLabel.PLAY
             ),
-            "event": sum(
+            SceneLabel.EVENT: sum(
                 1
                 for candidate in candidates
-                if candidate.scene_assessment.scene_label.value == "event"
+                if candidate.scene_assessment.scene_label == SceneLabel.EVENT
             ),
         }
         return candidates, resolved_profile, scene_distribution, profile_scores

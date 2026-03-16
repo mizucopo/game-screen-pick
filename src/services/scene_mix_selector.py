@@ -107,19 +107,7 @@ class SceneMixSelector:
 
     def _calculate_targets(self, num: int) -> dict[SceneLabel, int]:
         """scene mix 比率から目標枚数を計算する."""
-        raw_play = num * self.config.scene_mix.play
-        raw_event = num * self.config.scene_mix.event
-        play_target = int(raw_play)
-        event_target = int(raw_event)
-        remainder = num - (play_target + event_target)
-        if remainder > 0 and raw_play - play_target >= raw_event - event_target:
-            play_target += 1
-        elif remainder > 0:
-            event_target += 1
-        return {
-            SceneLabel.PLAY: play_target,
-            SceneLabel.EVENT: event_target,
-        }
+        return self.config.scene_mix.calculate_allocation(num)
 
     def _prepare_bucket(
         self,

@@ -1,14 +1,12 @@
 """遷移フレーム判定に使う共通メトリクス."""
 
-from typing import Any
-
 
 def clamp01(value: float) -> float:
     """値を 0..1 に丸める."""
     return max(0.0, min(1.0, value))
 
 
-def calculate_bright_washout_score(raw_metrics: Any) -> float:
+def calculate_bright_washout_score(raw_metrics: "RawMetrics") -> float:
     """明転・白飛び寄りの washed-out 度合いを返す."""
     brightness_score = clamp01((raw_metrics.brightness - 180.0) / 75.0)
     contrast_penalty = 1.0 - clamp01(raw_metrics.contrast / 18.0)
@@ -24,7 +22,7 @@ def calculate_bright_washout_score(raw_metrics: Any) -> float:
     )
 
 
-def calculate_system_ui_signal(heuristics: Any) -> float:
+def calculate_system_ui_signal(heuristics: "LayoutHeuristics") -> float:
     """システムUIらしさの強いレイアウト信号を返す."""
     return max(
         heuristics.menu_layout_score,
@@ -33,7 +31,7 @@ def calculate_system_ui_signal(heuristics: Any) -> float:
     )
 
 
-def calculate_support_ui_score(normalized_metrics: Any) -> float:
+def calculate_support_ui_score(normalized_metrics: "NormalizedMetrics") -> float:
     """support UI 寄りの見た目を返す."""
     return clamp01(
         0.65 * normalized_metrics.ui_density
@@ -42,10 +40,10 @@ def calculate_support_ui_score(normalized_metrics: Any) -> float:
 
 
 def calculate_veiled_transition_score(
-    raw_metrics: Any,
-    adaptive_scores: Any,
-    heuristics: Any,
-    normalized_metrics: Any,
+    raw_metrics: "RawMetrics",
+    adaptive_scores: "AdaptiveScores",
+    heuristics: "LayoutHeuristics",
+    normalized_metrics: "NormalizedMetrics",
 ) -> float:
     """明転・暗転・veiled UI を含む遷移途中らしさを返す."""
     exposure_extreme = max(raw_metrics.near_black_ratio, raw_metrics.near_white_ratio)
@@ -69,11 +67,11 @@ def calculate_veiled_transition_score(
 
 
 def calculate_relative_transition_scores(
-    raw_metrics: Any,
-    adaptive_scores: Any,
-    heuristics: Any,
-    normalized_metrics: Any,
-    whole_input_profile: Any,
+    raw_metrics: "RawMetrics",
+    _adaptive_scores: "AdaptiveScores",
+    _heuristics: "LayoutHeuristics",
+    _normalized_metrics: "NormalizedMetrics",
+    whole_input_profile: "WholeInputProfile",
 ) -> tuple[float, float, float, str]:
     """入力全体分布に対する明転・暗転 outlier スコアを返す."""
     bright_tail_width = max(
