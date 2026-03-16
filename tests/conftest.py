@@ -12,7 +12,6 @@ import numpy as np
 import pytest
 
 from src.constants.scene_label import SceneLabel
-from src.models.adaptive_scores import AdaptiveScores
 from src.models.analyzed_image import AnalyzedImage
 from src.models.layout_heuristics import LayoutHeuristics
 from src.models.normalized_metrics import NormalizedMetrics
@@ -148,19 +147,6 @@ def create_analyzed_image(
     )
 
 
-def create_adaptive_scores(
-    information_score: float = 0.5,
-    distinctiveness_score: float = 0.5,
-    visibility_score: float = 0.5,
-) -> AdaptiveScores:
-    """`AdaptiveScores` を作成する共通ヘルパー."""
-    return AdaptiveScores(
-        information_score=information_score,
-        distinctiveness_score=distinctiveness_score,
-        visibility_score=visibility_score,
-    )
-
-
 def build_whole_input_profile(*images: AnalyzedImage) -> WholeInputProfile:
     """入力画像群からWholeInputProfileを作る."""
     return WholeInputProfiler().build_profile(list(images))
@@ -217,40 +203,3 @@ def create_scored_candidate(
         score_band=score_band,
         outlier_rejected=outlier_rejected,
     )
-
-
-def create_sample_candidates(
-    count: int,
-    base_path: str = "/fake/path",
-) -> list[ScoredCandidate]:
-    """テスト用のサンプル候補を作成する.
-
-    play / event を順番に巡回させながら候補を作り、
-    scene mix や類似度選定のテストで使える入力集合を返す。
-
-    Args:
-        count: 作成する候補数。
-        base_path: 生成パスの接頭辞。
-
-    Returns:
-        `ScoredCandidate` のリスト。
-    """
-    candidates = []
-    scene_cycle = [SceneLabel.PLAY, SceneLabel.EVENT]
-    for index in range(count):
-        np.random.seed(index)
-        combined_features = np.random.rand(576)
-        label = scene_cycle[index % len(scene_cycle)]
-        candidates.append(
-            create_scored_candidate(
-                path=f"{base_path}/image{index}.jpg",
-                scene_label=label,
-                play_score=0.8 if label == SceneLabel.PLAY else 0.2,
-                event_score=0.8 if label == SceneLabel.EVENT else 0.2,
-                density_score=0.8 if label == SceneLabel.PLAY else 0.2,
-                quality_score=0.6 - index * 0.01,
-                selection_score=0.8 if label == SceneLabel.PLAY else 0.2,
-                combined_features=combined_features,
-            )
-        )
-    return candidates
