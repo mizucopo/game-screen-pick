@@ -171,7 +171,9 @@ class SceneMixSelector:
         band_names = self.BAND_LABELS[band_count]
         band_queues: list[deque[ScoredCandidate]] = []
         for band_name, group in zip(band_names, groups, strict=True):
-            group_candidates = [candidate for candidate in group.tolist() if candidate is not None]
+            group_candidates = [
+                candidate for candidate in group.tolist() if candidate is not None
+            ]
             if not group_candidates:
                 continue
             band_center = float(
@@ -231,13 +233,17 @@ class SceneMixSelector:
             return [], set(), list(ordered_candidates)
 
         selectable_candidates = [
-            candidate for candidate in ordered_candidates if id(candidate) not in selected_ids
+            candidate
+            for candidate in ordered_candidates
+            if id(candidate) not in selected_ids
         ]
         if not selectable_candidates:
             return [], set(), []
 
         selected_indices, rejected_indices = VectorUtils.filter_by_similarity(
-            candidates=[candidate.combined_features for candidate in selectable_candidates],
+            candidates=[
+                candidate.combined_features for candidate in selectable_candidates
+            ],
             num=target,
             similarity_threshold=self.config.similarity_threshold,
             compute_threshold_steps=self.config.compute_threshold_steps,
@@ -248,7 +254,9 @@ class SceneMixSelector:
             id(selectable_candidates[index]) for index in rejected_indices
         }
         leftover_indices = (
-            set(range(len(selectable_candidates))) - set(selected_indices) - rejected_indices
+            set(range(len(selectable_candidates)))
+            - set(selected_indices)
+            - rejected_indices
         )
         leftovers = [selectable_candidates[index] for index in sorted(leftover_indices)]
         return selected, rejected_by_similarity_ids, leftovers

@@ -62,7 +62,10 @@ def test_select_from_analyzed_filters_content_before_play_event_assignment() -> 
     selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=2)
 
     # Assert
-    assert {candidate.path for candidate in selected} == {"/tmp/play.jpg", "/tmp/event.jpg"}
+    assert {candidate.path for candidate in selected} == {
+        "/tmp/play.jpg",
+        "/tmp/event.jpg",
+    }
     assert rejected == []
     assert stats.rejected_by_content_filter == 1
     assert stats.content_filter_breakdown["blackout"] == 1
@@ -116,7 +119,10 @@ def test_select_from_analyzed_assigns_dense_candidates_to_play() -> None:
 
     # Assert
     assert len(selected) >= 2
-    assert all(candidate.scene_assessment.scene_label.value in {"play", "event"} for candidate in selected)
+    assert all(
+        candidate.scene_assessment.scene_label.value in {"play", "event"}
+        for candidate in selected
+    )
     assert len(rejected) >= 1
     assert stats.scene_distribution == {"play": 4, "event": 1}
     assert stats.scene_mix_target == {"play": 4, "event": 1}
@@ -148,8 +154,12 @@ def test_select_from_analyzed_spreads_score_bands_and_rejects_duplicates() -> No
             path="/tmp/event_dup.jpg",
             combined_features=_near_duplicate(base, 1),
         ),
-        create_analyzed_image(path="/tmp/event_far.jpg", combined_features=_feature(100)),
-        create_analyzed_image(path="/tmp/event_far2.jpg", combined_features=_feature(200)),
+        create_analyzed_image(
+            path="/tmp/event_far.jpg", combined_features=_feature(100)
+        ),
+        create_analyzed_image(
+            path="/tmp/event_far2.jpg", combined_features=_feature(200)
+        ),
     ]
     picker = GameScreenPicker(
         analyzer=FakeAnalyzer(analyzed_images),

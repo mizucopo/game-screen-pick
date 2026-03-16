@@ -1,5 +1,13 @@
 """遷移フレーム判定に使う共通メトリクス."""
 
+from __future__ import annotations
+
+from ..models.adaptive_scores import AdaptiveScores
+from ..models.layout_heuristics import LayoutHeuristics
+from ..models.normalized_metrics import NormalizedMetrics
+from ..models.raw_metrics import RawMetrics
+from ..models.whole_input_profile import WholeInputProfile
+
 
 def clamp01(value: float) -> float:
     """値を 0..1 に丸める."""

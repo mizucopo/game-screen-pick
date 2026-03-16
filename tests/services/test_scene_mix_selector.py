@@ -34,7 +34,9 @@ def test_scene_mix_selector_respects_play_event_ratio() -> None:
         - targetsとactualsが一致すること
     """
     # Arrange
-    selector = SceneMixSelector(SelectionConfig(scene_mix=SceneMix(play=0.7, event=0.3)))
+    selector = SceneMixSelector(
+        SelectionConfig(scene_mix=SceneMix(play=0.7, event=0.3))
+    )
     candidates = [
         *[
             create_scored_candidate(
@@ -85,7 +87,9 @@ def test_scene_mix_selector_keeps_similar_candidates_out_globally() -> None:
         - 類似候補が除外されること
     """
     # Arrange
-    selector = SceneMixSelector(SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)))
+    selector = SceneMixSelector(
+        SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5))
+    )
     base = _feature(0)
     candidates = [
         create_scored_candidate(
@@ -132,7 +136,9 @@ def test_scene_mix_selector_assigns_score_bands() -> None:
         - 各候補にlow/mid_low/mid/mid_high/highのscore_bandが設定されること
     """
     # Arrange
-    selector = SceneMixSelector(SelectionConfig(scene_mix=SceneMix(play=1.0, event=0.0)))
+    selector = SceneMixSelector(
+        SelectionConfig(scene_mix=SceneMix(play=1.0, event=0.0))
+    )
     candidates = [
         create_scored_candidate(
             path=f"/tmp/play_{index}.jpg",

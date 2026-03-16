@@ -192,7 +192,9 @@ def test_cli_writes_report_json_with_new_fields(
     # Assert
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["selected"][0]["path"] == str(source)
-    assert payload["selected"][0]["output_path"] == str((output_dir / "image0.jpg").resolve())
+    assert payload["selected"][0]["output_path"] == str(
+        (output_dir / "image0.jpg").resolve()
+    )
     assert payload["selected"][0]["play_score"] == 0.8
     assert payload["selected"][0]["event_score"] == 0.2
     assert payload["selected"][0]["score_band"] == "high"

@@ -555,7 +555,7 @@ def test_content_filter_rejects_event0031_like_dimmed_gameplay_frame() -> None:
     assert result.content_filter_breakdown["fade_transition"] == 1
 
 
-def test_content_filter_uses_whole_input_brightness_tendency_for_relative_transition_rejects() -> None:
+def test_relative_transition_uses_whole_input_brightness_tendency() -> None:
     """入力全体の通常明度帯から外れた bright/dark outlier を落とすこと."""
     images = [
         create_analyzed_image(
@@ -616,7 +616,11 @@ def test_content_filter_uses_whole_input_brightness_tendency_for_relative_transi
 
     assert "/tmp/other0052.jpg" not in {image.path for image in result.kept_images}
     assert "/tmp/event0005.jpg" not in {image.path for image in result.kept_images}
-    assert result.content_filter_breakdown["whiteout"] + result.content_filter_breakdown["fade_transition"] >= 2
+    assert (
+        result.content_filter_breakdown["whiteout"]
+        + result.content_filter_breakdown["fade_transition"]
+        >= 2
+    )
 
 
 def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> None:

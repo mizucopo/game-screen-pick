@@ -29,8 +29,8 @@ class ProfileResolver:
         ) / len(analyzed_images)
 
         active_score = 0.45 * avg_action + 0.35 * avg_edge + 0.20 * (1.0 - avg_ui)
-        static_score = 0.50 * avg_ui + 0.25 * (1.0 - avg_action) + 0.25 * (
-            1.0 - avg_edge
+        static_score = (
+            0.50 * avg_ui + 0.25 * (1.0 - avg_action) + 0.25 * (1.0 - avg_edge)
         )
 
         resolved = "active" if active_score >= static_score else "static"

@@ -139,13 +139,13 @@ class GameScreenPicker:
             )
             for image, assessment in zip(analyzed_images, assessments, strict=True)
         ]
-        scene_distribution = {
-            SceneLabel.PLAY: sum(
+        scene_distribution: dict[str, int] = {
+            SceneLabel.PLAY.value: sum(
                 1
                 for candidate in candidates
                 if candidate.scene_assessment.scene_label == SceneLabel.PLAY
             ),
-            SceneLabel.EVENT: sum(
+            SceneLabel.EVENT.value: sum(
                 1
                 for candidate in candidates
                 if candidate.scene_assessment.scene_label == SceneLabel.EVENT

@@ -159,9 +159,7 @@ class Main:
 
         expected_keys = {"play", "event"}
         if set(pairs) != expected_keys:
-            raise click.BadParameter(
-                "scene-mixには play,event の2要素が必要です"
-            )
+            raise click.BadParameter("scene-mixには play,event の2要素が必要です")
         return SceneMix(
             play=pairs["play"],
             event=pairs["event"],

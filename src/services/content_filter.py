@@ -1,12 +1,11 @@
 """入力全体適応の hard reject フィルタ."""
 
-from typing import Any
-
 import numpy as np
 
 from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.content_filter_result import ContentFilterResult
+from ..models.raw_metrics import RawMetrics
 from ..models.whole_input_profile import WholeInputProfile
 from ..utils.transition_metrics import (
     calculate_bright_washout_score,
@@ -193,10 +192,7 @@ class ContentFilter:
                 or bright_washout_score >= 0.28
             )
         ):
-            if (
-                relative_bright_transition_score >= 0.78
-                or raw.near_white_ratio >= 0.65
-            ):
+            if relative_bright_transition_score >= 0.78 or raw.near_white_ratio >= 0.65:
                 return "whiteout"
             return "fade_transition"
 
@@ -223,7 +219,7 @@ class ContentFilter:
     @classmethod
     def _is_fade_transition(
         cls,
-        raw: Any,
+        raw: RawMetrics,
         profile: WholeInputProfile,
         adaptive_scores: AdaptiveScores,
         p25_range: float,
@@ -250,7 +246,8 @@ class ContentFilter:
                 or raw.near_white_ratio >= cls.BRIGHT_WASHOUT_FADE_MIN_NEAR_WHITE_RATIO
             )
             and (
-                adaptive_scores.visibility_score <= cls.BRIGHT_WASHOUT_FADE_MAX_VISIBILITY
+                adaptive_scores.visibility_score
+                <= cls.BRIGHT_WASHOUT_FADE_MAX_VISIBILITY
                 or adaptive_scores.information_score
                 <= cls.BRIGHT_WASHOUT_FADE_MAX_INFORMATION
             )
@@ -258,25 +255,24 @@ class ContentFilter:
         if bright_washout_fade:
             return True
 
-        veiled_fade = (
-            veiled_transition_score >= cls.VEILED_FADE_THRESHOLD
-            and (
-                bright_washout_score >= cls.VEILED_FADE_MIN_BRIGHT_WASHOUT
-                or raw.near_white_ratio >= cls.VEILED_FADE_MIN_EXTREME_RATIO
-                or raw.near_black_ratio >= cls.VEILED_FADE_MIN_EXTREME_RATIO
-                or system_ui_signal >= cls.VEILED_FADE_MIN_SYSTEM_UI
-            )
+        veiled_fade = veiled_transition_score >= cls.VEILED_FADE_THRESHOLD and (
+            bright_washout_score >= cls.VEILED_FADE_MIN_BRIGHT_WASHOUT
+            or raw.near_white_ratio >= cls.VEILED_FADE_MIN_EXTREME_RATIO
+            or raw.near_black_ratio >= cls.VEILED_FADE_MIN_EXTREME_RATIO
+            or system_ui_signal >= cls.VEILED_FADE_MIN_SYSTEM_UI
         )
         if veiled_fade:
             return True
 
         bright_fade = (
             raw.near_white_ratio >= cls.DIRECT_FADE_NEAR_WHITE_THRESHOLD
-            or raw.brightness >= max(cls.DIRECT_FADE_BRIGHTNESS_THRESHOLD, profile.brightness.p90)
+            or raw.brightness
+            >= max(cls.DIRECT_FADE_BRIGHTNESS_THRESHOLD, profile.brightness.p90)
         )
         dark_fade = (
             raw.near_black_ratio >= cls.DIRECT_FADE_NEAR_BLACK_THRESHOLD
-            or raw.brightness <= min(cls.DIRECT_FADE_DARKNESS_THRESHOLD, profile.brightness.p10)
+            or raw.brightness
+            <= min(cls.DIRECT_FADE_DARKNESS_THRESHOLD, profile.brightness.p10)
         )
         weak_structure = (
             raw.dominant_tone_ratio >= cls.DIRECT_FADE_MIN_DOMINANT_TONE_RATIO

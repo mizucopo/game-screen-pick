@@ -37,9 +37,7 @@ class SceneScorer:
         for index, density_score in enumerate(density_scores):
             play_score = density_score
             event_score = 1.0 - density_score
-            scene_label = (
-                SceneLabel.PLAY if index in play_indices else SceneLabel.EVENT
-            )
+            scene_label = SceneLabel.PLAY if index in play_indices else SceneLabel.EVENT
             assessments.append(
                 SceneAssessment(
                     play_score=play_score,
