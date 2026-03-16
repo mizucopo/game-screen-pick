@@ -47,8 +47,23 @@ class SceneMix:
         play_target = int(raw_play)
         event_target = int(raw_event)
         remainder = total - (play_target + event_target)
-        if remainder > 0 and raw_play - play_target >= raw_event - event_target:
-            play_target += 1
-        elif remainder > 0:
-            event_target += 1
+        play_fractional = raw_play - play_target
+        event_fractional = raw_event - event_target
+
+        while remainder > 0:
+            # 小数部が大きい方に+1
+            if play_fractional >= event_fractional:
+                play_target += 1
+            else:
+                event_target += 1
+            remainder -= 1
+
+        while remainder < 0:
+            # 小数部が小さい方から-1
+            if play_fractional <= event_fractional:
+                play_target -= 1
+            else:
+                event_target -= 1
+            remainder += 1
+
         return {SceneLabel.PLAY: play_target, SceneLabel.EVENT: event_target}
