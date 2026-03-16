@@ -21,6 +21,7 @@ class ReportWriter:
         selected: list[ScoredCandidate],
         rejected: list[ScoredCandidate],
         stats: PickerStatistics,
+        output_paths_by_candidate_id: dict[int, str] | None = None,
     ) -> None:
         """JSONレポートを書き出す.
 
@@ -33,8 +34,13 @@ class ReportWriter:
             rejected: 非選択となった候補。
             stats: scene mix実績を含む集計情報。
         """
+        output_paths_by_candidate_id = output_paths_by_candidate_id or {}
         selected_payload = [
-            ReportWriter._serialize_candidate(candidate) for candidate in selected
+            ReportWriter._serialize_candidate(
+                candidate,
+                output_paths_by_candidate_id.get(id(candidate)),
+            )
+            for candidate in selected
         ]
         rejected_payload = [
             ReportWriter._serialize_candidate(candidate) for candidate in rejected
@@ -63,7 +69,10 @@ class ReportWriter:
         )
 
     @staticmethod
-    def _serialize_candidate(candidate: ScoredCandidate) -> dict[str, object]:
+    def _serialize_candidate(
+        candidate: ScoredCandidate,
+        output_path: str | None = None,
+    ) -> dict[str, object]:
         """候補1件を辞書へ変換する.
 
         Args:
@@ -81,6 +90,8 @@ class ReportWriter:
             "quality_score": round(candidate.quality_score, 4),
             "selection_score": round(candidate.selection_score, 4),
         }
+        if output_path is not None:
+            base_payload["output_path"] = output_path
         return base_payload | ReportWriter._build_scene_diagnostics(candidate)
 
     @staticmethod

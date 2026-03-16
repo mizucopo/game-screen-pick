@@ -296,6 +296,88 @@ def test_content_filter_rejects_borderline_whiteout_frame() -> None:
     assert result.content_filter_breakdown["whiteout"] == 1
 
 
+def test_content_filter_rejects_bright_washed_out_frame_as_whiteout() -> None:
+    """near_white が低めでも強い白飛びは whiteout になること."""
+    images = [
+        create_analyzed_image(
+            path="/tmp/good_event.jpg",
+            raw_metrics_dict={
+                "brightness": 165.0,
+                "contrast": 18.0,
+                "edge_density": 0.20,
+                "action_intensity": 12.0,
+                "luminance_entropy": 1.3,
+                "luminance_range": 36.0,
+                "near_white_ratio": 0.18,
+                "dominant_tone_ratio": 0.58,
+            },
+            content_features=_feature(0),
+            combined_features=np.pad(_feature(0), (0, 475)),
+        ),
+        create_analyzed_image(
+            path="/tmp/bright_whiteout.jpg",
+            raw_metrics_dict={
+                "brightness": 230.0,
+                "contrast": 3.0,
+                "edge_density": 0.008,
+                "action_intensity": 0.8,
+                "luminance_entropy": 0.40,
+                "luminance_range": 6.0,
+                "near_white_ratio": 0.58,
+                "dominant_tone_ratio": 0.93,
+            },
+            content_features=_feature(1),
+            combined_features=np.pad(_feature(1), (0, 475)),
+        ),
+    ]
+
+    result = ContentFilter(WholeInputProfiler()).filter(images)
+
+    assert {image.path for image in result.kept_images} == {"/tmp/good_event.jpg"}
+    assert result.content_filter_breakdown["whiteout"] == 1
+
+
+def test_content_filter_rejects_washed_out_gameplay_frame_as_fade_transition() -> None:
+    """構図が少し見える明転中 gameplay は fade_transition になること."""
+    images = [
+        create_analyzed_image(
+            path="/tmp/good_gameplay.jpg",
+            raw_metrics_dict={
+                "brightness": 110.0,
+                "contrast": 16.0,
+                "edge_density": 0.18,
+                "action_intensity": 14.0,
+                "luminance_entropy": 1.2,
+                "luminance_range": 34.0,
+                "near_white_ratio": 0.10,
+                "dominant_tone_ratio": 0.60,
+            },
+            content_features=_feature(0),
+            combined_features=np.pad(_feature(0), (0, 475)),
+        ),
+        create_analyzed_image(
+            path="/tmp/washed_out_gameplay.jpg",
+            raw_metrics_dict={
+                "brightness": 206.0,
+                "contrast": 5.5,
+                "edge_density": 0.025,
+                "action_intensity": 2.5,
+                "luminance_entropy": 0.62,
+                "luminance_range": 10.0,
+                "near_white_ratio": 0.36,
+                "dominant_tone_ratio": 0.86,
+            },
+            content_features=_feature(1),
+            combined_features=np.pad(_feature(1), (0, 475)),
+        ),
+    ]
+
+    result = ContentFilter(WholeInputProfiler()).filter(images)
+
+    assert {image.path for image in result.kept_images} == {"/tmp/good_gameplay.jpg"}
+    assert result.content_filter_breakdown["fade_transition"] == 1
+
+
 def test_content_filter_rejects_bright_and_dim_transition_frames() -> None:
     """washed-out / dimmed な遷移フレームも static fade 判定で落ちること."""
     images = [

@@ -79,7 +79,7 @@ class FileUtils:
         dest_dir: str,
         rename: bool = False,
         requested_num: int | None = None,
-    ) -> None:
+    ) -> dict[int, str]:
         """選択されたアイテムを出力ディレクトリにコピーする.
 
         Args:
@@ -87,10 +87,14 @@ class FileUtils:
             dest_dir: 出力先ディレクトリのパス
             rename: scene別の連番ファイル名で出力するかどうか
             requested_num: CLIで要求された出力枚数
+
+        Returns:
+            candidate object id から実際にコピーした絶対パスへの対応表
         """
         out = Path(dest_dir)
         out.mkdir(parents=True, exist_ok=True)
         scene_counters: dict[str, int] = defaultdict(int)
+        copied_paths_by_candidate_id: dict[int, str] = {}
         for res in selected:
             if rename:
                 if requested_num is None:
@@ -108,4 +112,6 @@ class FileUtils:
                 filename = Path(res.path).name
             unique_dest = FileUtils.get_unique_destination(out, filename)
             shutil.copy2(res.path, unique_dest)
+            copied_paths_by_candidate_id[id(res)] = str(unique_dest.resolve())
         logger.info(f"{len(selected)} 件を {dest_dir} に保存しました。")
+        return copied_paths_by_candidate_id

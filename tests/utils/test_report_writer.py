@@ -83,6 +83,10 @@ def test_report_writer_adds_scene_diagnostics_to_candidates(tmp_path: Path) -> N
         selected=selected,
         rejected=rejected,
         stats=_build_stats(),
+        output_paths_by_candidate_id={
+            id(selected[0]): "/tmp/output/event0001.jpg",
+            id(selected[1]): "/tmp/output/event0002.jpg",
+        },
     )
 
     payload = json.loads(report_path.read_text(encoding="utf-8"))
@@ -92,6 +96,7 @@ def test_report_writer_adds_scene_diagnostics_to_candidates(tmp_path: Path) -> N
     diagnostics_summary = payload["scene_diagnostics_summary"]
 
     assert selected_entry["scene_confidence"] == 0.02
+    assert selected_entry["output_path"] == "/tmp/output/event0001.jpg"
     assert selected_entry["transition_risk_score"] == 0.11
     assert selected_entry["argmax_scene_label"] == "gameplay"
     assert selected_entry["argmax_score"] == 0.42
@@ -104,6 +109,7 @@ def test_report_writer_adds_scene_diagnostics_to_candidates(tmp_path: Path) -> N
     assert fallback_entry["argmax_scene_label"] == "gameplay"
     assert fallback_entry["fallback_applied"] is True
     assert fallback_entry["transition_suppressed_event"] is False
+    assert "output_path" not in fallback_entry
 
     assert suppressed_entry["argmax_scene_label"] == "event"
     assert suppressed_entry["fallback_applied"] is False
@@ -174,4 +180,5 @@ def test_report_writer_keeps_existing_top_level_payload(tmp_path: Path) -> None:
     assert "scene_confidence" in payload["selected"][0]
     assert "transition_risk_score" in payload["selected"][0]
     assert "transition_suppressed_event" in payload["selected"][0]
+    assert "output_path" not in payload["selected"][0]
     assert "scene_diagnostics_summary" in payload

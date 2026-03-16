@@ -8,6 +8,7 @@ from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.content_filter_result import ContentFilterResult
 from ..models.whole_input_profile import WholeInputProfile
+from ..utils.transition_metrics import calculate_bright_washout_score
 from ..utils.vector_utils import VectorUtils
 from .whole_input_profiler import WholeInputProfiler
 
@@ -24,12 +25,15 @@ class ContentFilter:
     )
     TEMPORAL_SIMILARITY_THRESHOLD = 0.90
     TEMPORAL_VISIBILITY_MARGIN = 0.25
-    WHITOUT_NEAR_WHITE_THRESHOLD = 0.92
+    WHITEOUT_NEAR_WHITE_THRESHOLD = 0.92
     WHITEOUT_LUMINANCE_ENTROPY_THRESHOLD = 0.55
     WHITEOUT_BRIGHTNESS_THRESHOLD = 245.0
     WHITEOUT_MAX_CONTRAST = 6.0
     WHITEOUT_MAX_EDGE_DENSITY = 0.02
     WHITEOUT_MIN_DOMINANT_TONE_RATIO = 0.88
+    WHITEOUT_BRIGHT_WASHOUT_THRESHOLD = 0.72
+    WHITEOUT_MAX_VISIBILITY = 0.58
+    WHITEOUT_MAX_INFORMATION = 0.50
     DIRECT_FADE_NEAR_WHITE_THRESHOLD = 0.32
     DIRECT_FADE_NEAR_BLACK_THRESHOLD = 0.32
     DIRECT_FADE_BRIGHTNESS_THRESHOLD = 210.0
@@ -38,6 +42,11 @@ class ContentFilter:
     DIRECT_FADE_MAX_EDGE_DENSITY = 0.07
     DIRECT_FADE_MIN_DOMINANT_TONE_RATIO = 0.72
     DIRECT_FADE_MIN_LUMINANCE_RANGE = 28.0
+    BRIGHT_WASHOUT_FADE_THRESHOLD = 0.58
+    BRIGHT_WASHOUT_FADE_MIN_BRIGHTNESS = 195.0
+    BRIGHT_WASHOUT_FADE_MIN_NEAR_WHITE_RATIO = 0.28
+    BRIGHT_WASHOUT_FADE_MAX_VISIBILITY = 0.68
+    BRIGHT_WASHOUT_FADE_MAX_INFORMATION = 0.55
     FADE_VISIBILITY_THRESHOLD = 0.30
     FADE_INFORMATION_THRESHOLD = 0.35
 
@@ -91,6 +100,7 @@ class ContentFilter:
         raw = image.raw_metrics
         p10_range = max(12.0, profile.luminance_range.p10)
         p25_range = max(14.0, profile.luminance_range.p25)
+        bright_washout_score = calculate_bright_washout_score(raw)
 
         if (
             raw.near_black_ratio >= 0.97
@@ -100,7 +110,7 @@ class ContentFilter:
             return "blackout"
 
         if (
-            raw.near_white_ratio >= ContentFilter.WHITOUT_NEAR_WHITE_THRESHOLD
+            raw.near_white_ratio >= ContentFilter.WHITEOUT_NEAR_WHITE_THRESHOLD
             and raw.luminance_entropy
             <= ContentFilter.WHITEOUT_LUMINANCE_ENTROPY_THRESHOLD
             and raw.luminance_range <= max(12.0, profile.luminance_range.p25)
@@ -119,6 +129,14 @@ class ContentFilter:
             return "whiteout"
 
         if (
+            bright_washout_score >= ContentFilter.WHITEOUT_BRIGHT_WASHOUT_THRESHOLD
+            and raw.brightness >= 220.0
+            and adaptive_scores.visibility_score <= ContentFilter.WHITEOUT_MAX_VISIBILITY
+            and adaptive_scores.information_score <= ContentFilter.WHITEOUT_MAX_INFORMATION
+        ):
+            return "whiteout"
+
+        if (
             raw.dominant_tone_ratio >= 0.92
             and raw.luminance_range <= p10_range
             and raw.contrast <= profile.contrast.p25
@@ -126,7 +144,13 @@ class ContentFilter:
         ):
             return "single_tone"
 
-        if ContentFilter._is_fade_transition(raw, profile, adaptive_scores, p25_range):
+        if ContentFilter._is_fade_transition(
+            raw,
+            profile,
+            adaptive_scores,
+            p25_range,
+            bright_washout_score,
+        ):
             return "fade_transition"
 
         return None
@@ -138,6 +162,7 @@ class ContentFilter:
         profile: WholeInputProfile,
         adaptive_scores: AdaptiveScores,
         p25_range: float,
+        bright_washout_score: float,
     ) -> bool:
         """暗転・明転・露出過多/不足の遷移フレームかどうかを返す."""
         obvious_fade = (
@@ -149,6 +174,21 @@ class ContentFilter:
             )
         )
         if obvious_fade:
+            return True
+
+        bright_washout_fade = (
+            bright_washout_score >= cls.BRIGHT_WASHOUT_FADE_THRESHOLD
+            and (
+                raw.brightness >= cls.BRIGHT_WASHOUT_FADE_MIN_BRIGHTNESS
+                or raw.near_white_ratio >= cls.BRIGHT_WASHOUT_FADE_MIN_NEAR_WHITE_RATIO
+            )
+            and (
+                adaptive_scores.visibility_score <= cls.BRIGHT_WASHOUT_FADE_MAX_VISIBILITY
+                or adaptive_scores.information_score
+                <= cls.BRIGHT_WASHOUT_FADE_MAX_INFORMATION
+            )
+        )
+        if bright_washout_fade:
             return True
 
         bright_fade = (

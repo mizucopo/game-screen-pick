@@ -13,6 +13,7 @@ from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.scene_assessment import SceneAssessment
 from ..protocols.text_embedding_provider import TextEmbeddingProvider
+from ..utils.transition_metrics import calculate_bright_washout_score
 
 
 class SceneScorer:
@@ -33,6 +34,11 @@ class SceneScorer:
     EVENT_PROMOTION_MAX_SUPPORT_UI = 0.55
     EVENT_PROMOTION_MIN_OTHER_GAP = 0.01
     TRANSITION_RISK_EVENT_PENALTY = 0.06
+    BRIGHT_WASHOUT_EVENT_PENALTY = 0.10
+    BRIGHT_WASHOUT_SUPPRESS_MIN_SCORE = 0.62
+    BRIGHT_WASHOUT_SUPPRESS_MAX_MARGIN = 0.08
+    BRIGHT_WASHOUT_SUPPRESS_MAX_OTHER_GAP = 0.08
+    BRIGHT_WASHOUT_HARD_SUPPRESS_MIN_SCORE = 0.78
     TRANSITION_SUPPRESS_MIN_RISK = 0.72
     TRANSITION_SUPPRESS_MAX_VISIBILITY = 0.42
     TRANSITION_SUPPRESS_MAX_INFORMATION = 0.35
@@ -180,6 +186,7 @@ class SceneScorer:
             - 0.20
         )
         transition_risk_score = self._calculate_transition_risk(raw, adaptive_scores)
+        bright_washout_score = calculate_bright_washout_score(raw)
 
         gameplay_base = self._mean_top_two(
             self._prompt_embeddings["gameplay"] @ clip_features
@@ -212,6 +219,7 @@ class SceneScorer:
             - 0.02 * heuristics.menu_layout_score
             - 0.04 * support_ui_score
             - self.TRANSITION_RISK_EVENT_PENALTY * transition_risk_score
+            - self.BRIGHT_WASHOUT_EVENT_PENALTY * bright_washout_score
         )
         other_score = self._clamp(
             other_base
@@ -236,7 +244,23 @@ class SceneScorer:
         argmax_margin = argmax_score - second_score
         scene_label = argmax_scene_label
         transition_suppressed_event = False
-        if (
+        bright_washout_suppressed = (
+            argmax_scene_label == SceneLabel.EVENT
+            and (
+                (
+                    bright_washout_score >= self.BRIGHT_WASHOUT_SUPPRESS_MIN_SCORE
+                    and argmax_margin <= self.BRIGHT_WASHOUT_SUPPRESS_MAX_MARGIN
+                    and other_score
+                    >= event_score - self.BRIGHT_WASHOUT_SUPPRESS_MAX_OTHER_GAP
+                )
+                or (
+                    bright_washout_score
+                    >= self.BRIGHT_WASHOUT_HARD_SUPPRESS_MIN_SCORE
+                    and other_score >= gameplay_score
+                )
+            )
+        )
+        generic_transition_suppressed = (
             argmax_scene_label == SceneLabel.EVENT
             and transition_risk_score >= self.TRANSITION_SUPPRESS_MIN_RISK
             and visibility_score <= self.TRANSITION_SUPPRESS_MAX_VISIBILITY
@@ -246,7 +270,8 @@ class SceneScorer:
             <= self.TRANSITION_SUPPRESS_MAX_DIALOGUE_OVERLAY
             and norm.dramatic_score <= self.TRANSITION_SUPPRESS_MAX_DRAMATIC
             and other_score >= event_score - self.TRANSITION_SUPPRESS_MAX_OTHER_GAP
-        ):
+        )
+        if bright_washout_suppressed or generic_transition_suppressed:
             scene_label = (
                 SceneLabel.GAMEPLAY
                 if gameplay_score >= other_score

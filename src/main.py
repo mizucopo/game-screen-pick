@@ -388,7 +388,7 @@ class Main:
                 num=num,
                 recursive=recursive,
             )
-            FileUtils.copy_selected_items(
+            copied_paths_by_candidate_id = FileUtils.copy_selected_items(
                 selected,
                 output,
                 rename=rename,
@@ -396,7 +396,13 @@ class Main:
             )
             ResultFormatter.display_results(selected, stats)
             if report_json is not None:
-                ReportWriter.write(report_json, selected, rejected, stats)
+                ReportWriter.write(
+                    report_json,
+                    selected,
+                    rejected,
+                    stats,
+                    output_paths_by_candidate_id=copied_paths_by_candidate_id,
+                )
 
         except click.ClickException:
             raise

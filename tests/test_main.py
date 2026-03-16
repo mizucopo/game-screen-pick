@@ -200,6 +200,8 @@ def test_cli_writes_report_json(
         "temporal_transition": 0,
     }
     assert payload["selected"][0]["scene_confidence"] == 0.5
+    assert payload["selected"][0]["path"] == str(source)
+    assert payload["selected"][0]["output_path"] == str((output_dir / "image0.jpg").resolve())
     assert payload["selected"][0]["transition_risk_score"] == 0.0
     assert payload["selected"][0]["argmax_scene_label"] == "gameplay"
     assert payload["selected"][0]["fallback_applied"] is False
@@ -220,6 +222,69 @@ def test_cli_writes_report_json(
         "fade_transition_rejected": 0,
         "event_suppressed": 0,
     }
+
+
+def test_cli_writes_report_json_with_renamed_output_path(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_game_screen_picker: MagicMock,
+    setup_test_dirs: tuple[Path, Path],
+) -> None:
+    """rename時の最終出力先が report に記録されること."""
+    test_dir, output_dir = setup_test_dirs
+    report_path = output_dir / "report.json"
+    source = test_dir / "source_event.jpg"
+    source.write_bytes(b"fake_image_data")
+
+    results = [
+        create_scored_candidate(path=str(source), scene_label=SceneLabel.EVENT)
+    ]
+    stats = PickerStatistics(
+        total_files=1,
+        analyzed_ok=1,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        rejected_by_content_filter=0,
+        selected_count=1,
+        resolved_profile="static",
+        scene_distribution={"gameplay": 0, "event": 1, "other": 0},
+        scene_mix_target={"gameplay": 0, "event": 1, "other": 0},
+        scene_mix_actual={"gameplay": 0, "event": 1, "other": 0},
+        threshold_relaxation_used=[0.72],
+        content_filter_breakdown={
+            "blackout": 0,
+            "whiteout": 0,
+            "single_tone": 0,
+            "fade_transition": 0,
+            "temporal_transition": 0,
+        },
+    )
+    mock_game_screen_picker.select.return_value = (results, [], stats)
+    monkeypatch.setattr(
+        "src.main.GameScreenPicker",
+        lambda *_args, **_kwargs: mock_game_screen_picker,
+    )
+    monkeypatch.setattr(
+        "src.main.ImageQualityAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
+    )
+
+    Main(
+        args=[
+            "-n",
+            "1",
+            "--rename",
+            "--report-json",
+            str(report_path),
+            str(test_dir),
+            str(output_dir),
+        ]
+    ).run()
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["selected"][0]["path"] == str(source)
+    assert payload["selected"][0]["output_path"] == str(
+        (output_dir / "event0001.jpg").resolve()
+    )
 
 
 def test_cli_renames_outputs_by_scene(
