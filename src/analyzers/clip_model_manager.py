@@ -35,15 +35,40 @@ class CLIPModelManager:
         # デバイス設定（CUDA → MPS → CPUの優先順位で自動検出）
         self.device = device or self._detect_device()
 
-        # モデルとプロセッサのロード
-        logger.info(f"CLIPモデルをロードしています ({model_name})...")
-        self.model = CLIPModel.from_pretrained(model_name)
-        self.processor = CLIPProcessor.from_pretrained(model_name)
+        # モデルとプロセッサは遅延初期化（実際に使用されるまでロードしない）
+        self._model: CLIPModel | None = None
+        self._processor: CLIPProcessor | None = None
+
+        self._text_embedding_cache: dict[str, torch.Tensor] = {}
+
+    @property
+    def model(self) -> CLIPModel:
+        """モデルを返す（必要に応じてロード）."""
+        self._ensure_model_loaded()
+        assert self._model is not None
+        return self._model
+
+    @property
+    def processor(self) -> CLIPProcessor:
+        """プロセッサを返す（必要に応じてロード）."""
+        self._ensure_model_loaded()
+        assert self._processor is not None
+        return self._processor
+
+    def _ensure_model_loaded(self) -> None:
+        """モデルが未ロードならロードする."""
+        if self._model is not None:
+            return
+
+        logger.info(f"CLIPモデルをロードしています ({self.model_name})...")
+        self._model = CLIPModel.from_pretrained(self.model_name)
+        self._processor = CLIPProcessor.from_pretrained(self.model_name)
 
         # デバイスにモデルを転送
         logger.info(f"モデルをデバイスに転送しています ({self.device})...")
-        self.model.to(self.device)
-        self.model.eval()
+        assert self._model is not None  # 型チェッカー用
+        self._model.to(torch.device(self.device))  # type: ignore[arg-type]
+        self._model.eval()
 
         # GPU最適化: TF32を許可
         # 理由: Ampere GPU以上ではTF32演算を使用することで、
@@ -51,8 +76,6 @@ class CLIPModelManager:
         if self.device == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
-
-        self._text_embedding_cache: dict[str, torch.Tensor] = {}
 
     @staticmethod
     def _detect_device() -> str:
