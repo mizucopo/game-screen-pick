@@ -377,31 +377,31 @@ class Main:
                 batch_size=batch_size,
             )
 
-            analyzer = ImageQualityAnalyzer(config=analyzer_config)
-            rng = random.Random(seed) if seed is not None else None
-            picker = GameScreenPicker(analyzer, config=selection_config, rng=rng)
-            logger.info("画像処理を開始します...")
+            with ImageQualityAnalyzer(config=analyzer_config) as analyzer:
+                rng = random.Random(seed) if seed is not None else None
+                picker = GameScreenPicker(analyzer, config=selection_config, rng=rng)
+                logger.info("画像処理を開始します...")
 
-            selected, rejected, stats = picker.select(
-                folder=str(input_path),
-                num=num,
-                recursive=recursive,
-            )
-            copied_paths_by_candidate_id = FileUtils.copy_selected_items(
-                selected,
-                output,
-                rename=rename,
-                requested_num=num,
-            )
-            ResultFormatter.display_results(selected, stats)
-            if report_json is not None:
-                ReportWriter.write(
-                    report_json,
-                    selected,
-                    rejected,
-                    stats,
-                    output_paths_by_candidate_id=copied_paths_by_candidate_id,
+                selected, rejected, stats = picker.select(
+                    folder=str(input_path),
+                    num=num,
+                    recursive=recursive,
                 )
+                copied_paths_by_candidate_id = FileUtils.copy_selected_items(
+                    selected,
+                    output,
+                    rename=rename,
+                    requested_num=num,
+                )
+                ResultFormatter.display_results(selected, stats)
+                if report_json is not None:
+                    ReportWriter.write(
+                        report_json,
+                        selected,
+                        rejected,
+                        stats,
+                        output_paths_by_candidate_id=copied_paths_by_candidate_id,
+                    )
 
         except click.ClickException:
             raise
