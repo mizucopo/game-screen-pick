@@ -1,29 +1,26 @@
 """MetricCalculatorの単体テスト.
 
-このテストモジュールは以下のベストプラクティスに従っています：
-1. 「What」（観察可能な挙動）をテストし、「How」（実装詳細）を検証しない
-2. AAAパターン（Arrange, Act, Assert）を明確なコメントと共に使用
-3. 関数ベースのテスト構造（クラスベースではない）
+このテストモジュールでは、現行実装の公開挙動として
+生メトリクス計算、quality score 計算、新しい輝度分布メトリクスを検証する。
+実装詳細ではなく、観測可能な戻り値だけを見る方針を取る。
 """
 
 import cv2
 import numpy as np
 import pytest
 
-from src.analyzers.clip_model_manager import CLIPModelManager
 from src.analyzers.metric_calculator import MetricCalculator
-from src.constants.score_weights import ScoreWeights
 from src.models.analyzer_config import AnalyzerConfig
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def metric_calculator() -> MetricCalculator:
-    """メトリクス計算器のフィクスチャ（モジュールスコープでモデル再利用）."""
-    config = AnalyzerConfig()
-    weights = ScoreWeights.get_weights()
-    # MPS環境でのテスト安定のためCPUデバイスを指定
-    model_manager = CLIPModelManager(device="cpu")
-    return MetricCalculator(config, weights, model_manager)
+    """メトリクス計算器のfixture.
+
+    scene mix 対応後の `MetricCalculator` を
+    デフォルト設定で使い回すための軽量fixture。
+    """
+    return MetricCalculator(AnalyzerConfig())
 
 
 def test_calculate_metrics_returns_valid_values(
@@ -33,12 +30,11 @@ def test_calculate_metrics_returns_valid_values(
 
     Given:
         - メトリクス計算器がある
-        - テスト画像がある
+        - 読み込み可能なテスト画像がある
     When:
-        - メトリクスが計算される
+        - 生メトリクスを計算する
     Then:
-        - 有効なメトリクスインスタンスが返されること
-        - すべての数値が有効な範囲にあること
+        - 主要メトリクスが期待範囲の値として返ること
     """
     # Arrange
     img = cv2.imread(sample_image_path)
@@ -47,36 +43,84 @@ def test_calculate_metrics_returns_valid_values(
     # Act
     raw_metrics = metric_calculator.calculate_raw_metrics(img)
 
-    # Assert: 有効な値範囲を確認
+    # Assert
     assert raw_metrics.blur_score > 0
     assert 0 <= raw_metrics.brightness <= 255
     assert not np.isnan(raw_metrics.edge_density)
     assert not np.isnan(raw_metrics.action_intensity)
 
 
-def test_semantic_score_returns_valid_value(
-    metric_calculator: MetricCalculator,
-    sample_image_path: str,
-) -> None:
-    """セマンティックスコアが有効な値を返すこと.
+def test_quality_score_uses_weights(metric_calculator: MetricCalculator) -> None:
+    """quality_scoreが指定重みで計算されること.
 
     Given:
-        - メトリクス計算器がある
-        - テスト画像がある
+        - 正規化メトリクスを計算できる画像がある
+        - 一部の項目だけに重みを持つ quality weight がある
     When:
-        - セマンティックスコアが計算される
+        - quality score を計算する
     Then:
-        - 有効な数値が返されること
+        - 0.0 以上 1.0 以下のスコアとして返ること
     """
     # Arrange
-    from PIL import Image
-
-    with Image.open(sample_image_path) as img:
-        pil_img = img.convert("RGB")
+    _, norm = metric_calculator.calculate_raw_norm_metrics(
+        np.full((32, 32, 3), 180, dtype=np.uint8)
+    )
+    weights = {
+        "blur_score": 0.5,
+        "contrast": 0.5,
+        "color_richness": 0.0,
+        "edge_density": 0.0,
+        "dramatic_score": 0.0,
+        "visual_balance": 0.0,
+        "action_intensity": 0.0,
+        "ui_density": 0.0,
+    }
 
     # Act
-    semantic_score = metric_calculator.calculate_semantic_score(pil_img)
+    score = metric_calculator.calculate_quality_score(norm, weights)
 
     # Assert
-    assert not np.isnan(semantic_score)
-    assert isinstance(semantic_score, (int, float))
+    assert 0.0 <= score <= 1.0
+
+
+def test_calculate_metrics_distinguishes_flat_and_textured_frames(
+    metric_calculator: MetricCalculator,
+) -> None:
+    """black/white/single-tone と暗い高情報量画像が分離されること.
+
+    Given:
+        - 真っ黒、真っ白、単色、暗いが情報量のある画像がある
+    When:
+        - 生メトリクスを計算する
+    Then:
+        - 平坦な画像群では分布メトリクスが低くなり
+        - 暗いが情報量のある画像では entropy/range/edge が高くなること
+    """
+    # Arrange
+    black_image = np.zeros((64, 64, 3), dtype=np.uint8)
+    white_image = np.full((64, 64, 3), 255, dtype=np.uint8)
+    single_tone_image = np.full((64, 64, 3), (0, 220, 255), dtype=np.uint8)
+    dark_textured_image = np.zeros((64, 64, 3), dtype=np.uint8) + 20
+    for offset in range(0, 64, 8):
+        cv2.line(dark_textured_image, (0, offset), (63, offset), (40, 40, 40), 1)
+        cv2.line(dark_textured_image, (offset, 0), (63, 63 - offset), (55, 55, 55), 1)
+
+    # Act
+    black_metrics = metric_calculator.calculate_raw_metrics(black_image)
+    white_metrics = metric_calculator.calculate_raw_metrics(white_image)
+    single_tone_metrics = metric_calculator.calculate_raw_metrics(single_tone_image)
+    dark_textured_metrics = metric_calculator.calculate_raw_metrics(dark_textured_image)
+
+    # Assert
+    assert black_metrics.near_black_ratio == pytest.approx(1.0)
+    assert white_metrics.near_white_ratio == pytest.approx(1.0)
+    assert single_tone_metrics.dominant_tone_ratio == pytest.approx(1.0)
+    assert black_metrics.luminance_entropy == pytest.approx(0.0)
+    assert white_metrics.luminance_entropy == pytest.approx(0.0)
+    assert single_tone_metrics.luminance_range == pytest.approx(0.0)
+    assert (
+        dark_textured_metrics.luminance_entropy > single_tone_metrics.luminance_entropy
+    )
+    assert dark_textured_metrics.luminance_range > single_tone_metrics.luminance_range
+    assert dark_textured_metrics.edge_density > single_tone_metrics.edge_density
+    assert dark_textured_metrics.action_intensity > black_metrics.action_intensity

@@ -22,27 +22,26 @@ class CLIPModelManager:
     def __init__(
         self,
         model_name: str = "openai/clip-vit-base-patch32",
-        target_text: str = "epic game scenery",
         device: Optional[str] = None,
     ):
         """CLIPモデルマネージャーを初期化する.
 
         Args:
             model_name: 使用するCLIPモデル名
-            target_text: セマンティック検索用のターゲットテキスト
             device: 使用するデバイス（Noneの場合は自動検出）
         """
         self.model_name = model_name
-        self._target_text = target_text
 
         # デバイス設定（CUDA → MPS → CPUの優先順位で自動検出）
         self.device = device or self._detect_device()
 
         # モデルとプロセッサのロード
+        logger.info(f"CLIPモデルをロードしています ({model_name})...")
         self.model = CLIPModel.from_pretrained(model_name)
         self.processor = CLIPProcessor.from_pretrained(model_name)
 
         # デバイスにモデルを転送
+        logger.info(f"モデルをデバイスに転送しています ({self.device})...")
         self.model.to(self.device)
         self.model.eval()
 
@@ -53,8 +52,7 @@ class CLIPModelManager:
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
 
-        # テキスト埋め込みの事前計算とキャッシュ
-        self._text_embeddings = self._precompute_text_embeddings()
+        self._text_embedding_cache: dict[str, torch.Tensor] = {}
 
     @staticmethod
     def _detect_device() -> str:
@@ -83,27 +81,14 @@ class CLIPModelManager:
                 )
 
         if torch.cuda.is_available():
-            return "cuda"
-        if torch.backends.mps.is_available():
-            return "mps"
-        return "cpu"
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
 
-    def _precompute_text_embeddings(self) -> torch.Tensor:
-        """テキスト埋め込みを事前計算してキャッシュする.
-
-        Returns:
-            L2正規化済みのテキスト埋め込みテンソル（1次元の512要素）
-        """
-        with torch.inference_mode():
-            inputs = self.processor(
-                text=[self._target_text],
-                return_tensors="pt",
-                padding=True,
-            ).to(self.device)
-            text_features: torch.Tensor = self.model.get_text_features(**inputs)
-            # L2正規化を適用してコサイン類似度計算を可能にする
-            text_features_normalized = F.normalize(text_features, p=2, dim=-1)
-            return text_features_normalized
+        logger.info(f"デバイス: {device} を使用します")
+        return device
 
     def get_image_features(
         self, pil_image: Image.Image | Sequence[Image.Image], batch_mode: bool = False
@@ -170,15 +155,26 @@ class CLIPModelManager:
             # L2正規化して返す（最初の要素を抽出）
             return F.normalize(image_features, p=2, dim=-1)[0]
 
-    def get_text_embeddings(self) -> torch.Tensor:
-        """キャッシュされたテキスト埋め込みを返す.
+    def get_text_embeddings(self, texts: Sequence[str]) -> torch.Tensor:
+        """テキスト埋め込みを返す.
 
         Returns:
             テキスト埋め込みテンソル
         """
-        return self._text_embeddings
+        missing_texts = [
+            text for text in texts if text not in self._text_embedding_cache
+        ]
+        if missing_texts:
+            with torch.inference_mode():
+                inputs = self.processor(
+                    text=list(missing_texts),
+                    return_tensors="pt",
+                    padding=True,
+                ).to(self.device)
+                text_features: torch.Tensor = self.model.get_text_features(**inputs)
+                normalized = F.normalize(text_features, p=2, dim=-1)
+                for idx, text in enumerate(missing_texts):
+                    self._text_embedding_cache[text] = normalized[idx]
 
-    @property
-    def target_text(self) -> str:
-        """ターゲットテキストを返す."""
-        return self._target_text
+        ordered_embeddings = [self._text_embedding_cache[text] for text in texts]
+        return torch.stack(ordered_embeddings)

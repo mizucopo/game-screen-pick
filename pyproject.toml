@@ -1,6 +1,6 @@
 [project]
 name = "game-screen-pick"
-version = "1.0.2"
+version = "1.1.0"
 description = "ゲームスクリーンショットから品質・多様性を考慮して最適な画像を自動選択するAIツール"
 authors = [
     {name = "みず", email = "mizu.copo@gmail.com"}
