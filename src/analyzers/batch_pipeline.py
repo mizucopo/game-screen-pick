@@ -138,7 +138,7 @@ class BatchPipeline:
         results: list[AnalyzedImage | None] = [None] * len(paths)
         chunk_boundaries = self._compute_chunk_boundaries(
             paths,
-            self.config.max_memory_mb,
+            self.config.max_memory_gb,
             self.config.min_chunk_size,
             self.config.max_dim,
         )
@@ -190,25 +190,29 @@ class BatchPipeline:
             for offset, chunk_result in enumerate(chunk_results):
                 results[chunk_start + offset] = chunk_result
 
+            # チャンク完了時の進捗ログ
+            if show_progress:
+                logger.info(f"処理済み: {chunk_end}/{len(paths)}")
+
         return results
 
     @staticmethod
     def _compute_chunk_boundaries(
         paths: list[str],
-        max_memory_mb: int,
+        max_memory_gb: int,
         min_chunk_size: int,
         max_dim: int | None = None,
     ) -> list[tuple[int, int]]:
         """メモリ予算に基づいてチャンク境界を計算する.
 
         画像解像度から概算メモリ使用量を見積もり、
-        `max_memory_mb` を超えない範囲でチャンクを切り出す。
+        `max_memory_gb` を超えない範囲でチャンクを切り出す。
         `max_dim` が設定されている場合は、リサイズ後の想定解像度を使って
         見積もるため、実行時のメモリ挙動に近い境界を得られる。
 
         Args:
             paths: 入力画像パスのリスト。
-            max_memory_mb: 1チャンクあたりに使ってよい最大メモリ量。
+            max_memory_gb: 1チャンクあたりに使ってよい最大メモリ量。
             min_chunk_size: 分割しすぎを避けるための最小チャンクサイズ。
             max_dim: 長辺の最大ピクセル数。 `None` の場合は縮小を考慮しない。
 
@@ -219,7 +223,7 @@ class BatchPipeline:
         safety_factor = 3.0
         default_memory = 1024 * 1024
 
-        max_memory_bytes = max_memory_mb * 1024 * 1024
+        max_memory_bytes = max_memory_gb * 1024 * 1024 * 1024
         chunks: list[tuple[int, int]] = []
         current_start = 0
         current_memory = 0

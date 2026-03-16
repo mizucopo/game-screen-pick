@@ -3,7 +3,6 @@ from typing import cast
 from src.analyzers.metric_calculator import MetricCalculator
 from src.models.analyzed_image import AnalyzedImage
 from src.models.analyzer_config import AnalyzerConfig
-from tests.dummy_model_manager import DummyModelManager
 
 
 class FakeAnalyzer:
@@ -16,7 +15,6 @@ class FakeAnalyzer:
     def __init__(self, analyzed_images: list[AnalyzedImage]) -> None:
         self._analyzed_images = analyzed_images
         self.metric_calculator = MetricCalculator(AnalyzerConfig())
-        self.model_manager = DummyModelManager()
 
     def analyze_batch(
         self,

@@ -1,6 +1,5 @@
 """ゲーム画面ピッカーの統合オーケストレーション."""
 
-import random
 import re
 from pathlib import Path
 
@@ -30,19 +29,15 @@ class GameScreenPicker:
         self,
         analyzer: AnalyzerLike,
         config: SelectionConfig | None = None,
-        rng: random.Random | None = None,
     ):
         """ピッカーを初期化する.
 
         Args:
             analyzer: 中立解析結果を返すAnalyzer実装。
             config: scene mix、類似度しきい値、profile指定を含む選択設定。
-            rng: 入力順のバイアスを避けるために使う乱数生成器。
-                未指定時は内部で `random.Random()` を生成する。
         """
         self.analyzer = analyzer
         self.config = config or SelectionConfig()
-        self._rng = rng or random.Random()
         self._scene_scorer = SceneScorer()
         self._profile_resolver = ProfileResolver()
         self._candidate_scorer = CandidateScorer(self.analyzer.metric_calculator)
@@ -50,7 +45,10 @@ class GameScreenPicker:
         self._content_filter = ContentFilter(WholeInputProfiler())
 
     @staticmethod
-    def load_image_files(folder: str, recursive: bool) -> list[Path]:
+    def load_image_files(
+        folder: str,
+        recursive: bool,
+    ) -> list[Path]:
         """フォルダから画像ファイルを取得する.
 
         Args:
@@ -67,13 +65,14 @@ class GameScreenPicker:
             for path in (path_obj.rglob("*") if recursive else path_obj.glob("*"))
             if path.suffix.lower() in extensions
         ]
-        return sorted(
+        files = sorted(
             files,
             key=lambda path: [
                 int(chunk) if chunk.isdigit() else chunk.lower()
                 for chunk in re.split(r"(\d+)", path.relative_to(path_obj).as_posix())
             ],
         )
+        return files
 
     def _analyze_images(
         self,

@@ -92,6 +92,17 @@ class ReportWriter:
             return None
         return {
             "brightness": ReportWriter._serialize_distribution(profile.brightness),
+            "contrast": ReportWriter._serialize_distribution(profile.contrast),
+            "edge_density": ReportWriter._serialize_distribution(profile.edge_density),
+            "action_intensity": ReportWriter._serialize_distribution(
+                profile.action_intensity
+            ),
+            "luminance_entropy": ReportWriter._serialize_distribution(
+                profile.luminance_entropy
+            ),
+            "luminance_range": ReportWriter._serialize_distribution(
+                profile.luminance_range
+            ),
             "near_black_ratio": ReportWriter._serialize_distribution(
                 profile.near_black_ratio
             ),
@@ -100,8 +111,5 @@ class ReportWriter:
             ),
             "dominant_tone_ratio": ReportWriter._serialize_distribution(
                 profile.dominant_tone_ratio
-            ),
-            "luminance_range": ReportWriter._serialize_distribution(
-                profile.luminance_range
             ),
         }

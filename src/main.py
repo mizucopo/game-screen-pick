@@ -1,7 +1,6 @@
 """game-screen-pick のCLIエントリポイント."""
 
 import logging
-import random
 import sys
 from pathlib import Path
 
@@ -254,12 +253,6 @@ class Main:
         help="scene別に play0001.ext / event0001.ext 形式で出力ファイル名を付け直す",
     )
     @click.option(
-        "--seed",
-        type=int,
-        default=None,
-        help="乱数シード（再現可能な結果を得るために指定）",
-    )
-    @click.option(
         "--batch-size",
         type=int,
         callback=lambda _ctx, _param, x: Main.validate_positive_int(x),
@@ -281,11 +274,11 @@ class Main:
         help="画像リサイズ時の長辺の最大ピクセル数",
     )
     @click.option(
-        "--max-memory-mb",
+        "--max-memory-gb",
         type=int,
         callback=lambda _ctx, _param, x: Main.validate_positive_int(x),
-        default=512,
-        help="チャンク処理時のメモリ予算（MB）",
+        default=1,
+        help="チャンク処理時のメモリ予算（GB）",
     )
     @click.option("--debug", is_flag=True, help="デバッグログを有効化")
     @click.argument(
@@ -305,11 +298,10 @@ class Main:
         scene_mix: SceneMix | None,
         report_json: str | None,
         rename: bool,
-        seed: int | None,
         batch_size: int | None,
         result_max_workers: int | None,
         max_dim: int,
-        max_memory_mb: int,
+        max_memory_gb: int,
         debug: bool,
         input: str,
         output: str,
@@ -337,11 +329,10 @@ class Main:
             scene_mix: CLIから上書きする画面種別比率。
             report_json: JSONレポートの出力先パス。
             rename: scene別の連番ファイル名で出力するかどうか。
-            seed: シャッフル順を固定するための乱数シード。
             batch_size: CLIP推論のバッチサイズ上書き。
             result_max_workers: 結果構築に使う並列ワーカー数。
             max_dim: 入力画像の長辺最大サイズ。
-            max_memory_mb: チャンク処理のメモリ予算。
+            max_memory_gb: チャンク処理のメモリ予算。
             debug: デバッグログを有効化するかどうか。
             input: 入力画像フォルダ。
             output: 選択画像のコピー先フォルダ。
@@ -367,7 +358,7 @@ class Main:
             analyzer_config = AnalyzerConfig.from_cli_args(
                 result_max_workers=result_max_workers,
                 max_dim=max_dim,
-                max_memory_mb=max_memory_mb,
+                max_memory_gb=max_memory_gb,
             )
             selection_config = Main.build_selection_config(
                 config_path=config_path,
@@ -377,31 +368,30 @@ class Main:
                 batch_size=batch_size,
             )
 
-            analyzer = ImageQualityAnalyzer(config=analyzer_config)
-            rng = random.Random(seed) if seed is not None else None
-            picker = GameScreenPicker(analyzer, config=selection_config, rng=rng)
-            logger.info("画像処理を開始します...")
+            with ImageQualityAnalyzer(config=analyzer_config) as analyzer:
+                picker = GameScreenPicker(analyzer, config=selection_config)
+                logger.info("画像処理を開始します...")
 
-            selected, rejected, stats = picker.select(
-                folder=str(input_path),
-                num=num,
-                recursive=recursive,
-            )
-            copied_paths_by_candidate_id = FileUtils.copy_selected_items(
-                selected,
-                output,
-                rename=rename,
-                requested_num=num,
-            )
-            ResultFormatter.display_results(selected, stats)
-            if report_json is not None:
-                ReportWriter.write(
-                    report_json,
-                    selected,
-                    rejected,
-                    stats,
-                    output_paths_by_candidate_id=copied_paths_by_candidate_id,
+                selected, rejected, stats = picker.select(
+                    folder=str(input_path),
+                    num=num,
+                    recursive=recursive,
                 )
+                copied_paths_by_candidate_id = FileUtils.copy_selected_items(
+                    selected,
+                    output,
+                    rename=rename,
+                    requested_num=num,
+                )
+                ResultFormatter.display_results(selected, stats)
+                if report_json is not None:
+                    ReportWriter.write(
+                        report_json,
+                        selected,
+                        rejected,
+                        stats,
+                        output_paths_by_candidate_id=copied_paths_by_candidate_id,
+                    )
 
         except click.ClickException:
             raise

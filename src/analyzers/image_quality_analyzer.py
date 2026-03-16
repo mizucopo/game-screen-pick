@@ -54,15 +54,6 @@ class ImageQualityAnalyzer:
             self.config,
         )
 
-    @property
-    def model_manager(self) -> CLIPModelManager:
-        """CLIPモデルマネージャーを返す.
-
-        Returns:
-            scene判定用テキスト埋め込みの取得にも使う `CLIPModelManager` 。
-        """
-        return self._model_manager
-
     def analyze(self, path: str) -> AnalyzedImage | None:
         """画像を解析して中立な特徴を計算する.
 
@@ -128,3 +119,19 @@ class ImageQualityAnalyzer:
             解析結果のリスト（失敗した画像はNone）
         """
         return self.batch_pipeline.process_batch(paths, batch_size, show_progress)
+
+    def close(self) -> None:
+        """保持中のリソースを明示的に解放する.
+
+        内部の BatchPipeline が管理するスレッドプールを
+        安全に停止し、再利用可能な状態へ戻す。
+        """
+        self.batch_pipeline.close()
+
+    def __enter__(self) -> "ImageQualityAnalyzer":
+        """コンテキストマネージャーに入る."""
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        """コンテキストマネージャーを抜ける."""
+        self.close()

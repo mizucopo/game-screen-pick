@@ -1,5 +1,7 @@
 """GameScreenPickerの単体テスト."""
 
+from pathlib import Path
+
 import numpy as np
 
 from src.models.scene_mix import SceneMix
@@ -173,3 +175,25 @@ def test_select_from_analyzed_spreads_score_bands_and_rejects_duplicates() -> No
     assert stats.rejected_by_similarity >= 1
     assert len({candidate.score_band for candidate in selected}) >= 2
     assert all(candidate.score_band is not None for candidate in selected)
+
+
+def test_load_image_files_returns_natural_order(tmp_path: Path) -> None:
+    """自然順で返されること.
+
+    Given:
+        - 辞書順とは異なる自然順を持つ複数の画像ファイルがある
+    When:
+        - load_image_filesを実行する
+    Then:
+        - 自然順ソートされた結果が返されること
+    """
+    # Arrange
+    for name in ["file10.jpg", "file1.jpg", "file2.jpg"]:
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+
+    # Act
+    result = GameScreenPicker.load_image_files(str(tmp_path), recursive=False)
+
+    # Assert
+    names = [p.name for p in result]
+    assert names == ["file1.jpg", "file2.jpg", "file10.jpg"]
