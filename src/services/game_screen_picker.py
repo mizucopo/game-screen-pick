@@ -5,7 +5,6 @@ import re
 from pathlib import Path
 
 from ..constants.selection_profiles import PROFILE_REGISTRY
-from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.picker_statistics import PickerStatistics
 from ..models.scored_candidate import ScoredCandidate
@@ -43,7 +42,7 @@ class GameScreenPicker:
         self.analyzer = analyzer
         self.config = config or SelectionConfig()
         self._rng = rng or random.Random()
-        self._scene_scorer = SceneScorer(self.analyzer.model_manager)
+        self._scene_scorer = SceneScorer()
         self._profile_resolver = ProfileResolver()
         self._candidate_scorer = CandidateScorer(self.analyzer.metric_calculator)
         self._scene_mix_selector = SceneMixSelector(self.config)
@@ -104,19 +103,16 @@ class GameScreenPicker:
     def _score_candidates(
         self,
         analyzed_images: list[AnalyzedImage],
-        adaptive_scores_by_image_id: dict[int, AdaptiveScores],
-        whole_input_profile,
     ) -> tuple[list[ScoredCandidate], str, dict[str, int], dict[str, float]]:
         """scene評価とprofile解決を行い、最終候補を作る.
 
         各画像へ `SceneScorer` で画面種別スコアを付与し、
         `ProfileResolver` で `auto` を `active` / `static` へ解決したうえで、
-        `CandidateScorer` により品質・活動量・最終選定スコアを計算する。
+        `CandidateScorer` により品質・最終選定スコアを計算する。
         あわせて、レポート用のscene分布も集計する。
 
         Args:
             analyzed_images: scene判定前の中立解析結果。
-            adaptive_scores_by_image_id: 入力全体適応スコア。
 
         Returns:
             1. 最終スコア付き候補のリスト
@@ -124,18 +120,13 @@ class GameScreenPicker:
             3. scene labelごとの件数分布
             4. profile解決時に使ったスコア内訳
         """
-        assessments = [
-            self._scene_scorer.assess(
-                image,
-                adaptive_scores_by_image_id[id(image)],
-                whole_input_profile,
-            )
-            for image in analyzed_images
-        ]
+        assessments = self._scene_scorer.assess_batch(
+            analyzed_images,
+            self.config.scene_mix,
+        )
         resolved_profile, profile_scores = self._profile_resolver.resolve(
             self.config.profile,
             analyzed_images,
-            assessments,
         )
         profile = PROFILE_REGISTRY[resolved_profile]
 
@@ -144,26 +135,19 @@ class GameScreenPicker:
                 image,
                 assessment,
                 profile,
-                adaptive_scores_by_image_id[id(image)].information_score,
-                adaptive_scores_by_image_id[id(image)].distinctiveness_score,
             )
             for image, assessment in zip(analyzed_images, assessments, strict=True)
         ]
         scene_distribution = {
-            "gameplay": sum(
+            "play": sum(
                 1
                 for candidate in candidates
-                if candidate.scene_assessment.scene_label.value == "gameplay"
+                if candidate.scene_assessment.scene_label.value == "play"
             ),
             "event": sum(
                 1
                 for candidate in candidates
                 if candidate.scene_assessment.scene_label.value == "event"
-            ),
-            "other": sum(
-                1
-                for candidate in candidates
-                if candidate.scene_assessment.scene_label.value == "other"
             ),
         }
         return candidates, resolved_profile, scene_distribution, profile_scores
@@ -232,18 +216,11 @@ class GameScreenPicker:
         """
         content_filter_result = self._content_filter.filter(analyzed_images)
         filtered_images = content_filter_result.kept_images
-        adaptive_scores_by_image_id = content_filter_result.adaptive_scores_by_image_id
-        whole_input_profile = content_filter_result.whole_input_profile
         candidates, resolved_profile, scene_distribution, _profile_scores = (
-            self._score_candidates(
-                filtered_images,
-                adaptive_scores_by_image_id,
-                whole_input_profile,
-            )
+            self._score_candidates(filtered_images)
         )
-        profile = PROFILE_REGISTRY[resolved_profile]
         selected, rejected_by_similarity, scene_mix_target, scene_mix_actual = (
-            self._scene_mix_selector.select(candidates, num, profile)
+            self._scene_mix_selector.select(candidates, num)
         )
         selected_ids = {id(candidate) for candidate in selected}
         rejected = sorted(
@@ -273,6 +250,6 @@ class GameScreenPicker:
                 self.config.similarity_threshold
             ),
             content_filter_breakdown=content_filter_result.content_filter_breakdown,
-            whole_input_profile=whole_input_profile,
+            whole_input_profile=content_filter_result.whole_input_profile,
         )
         return selected, rejected, stats

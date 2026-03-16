@@ -9,16 +9,8 @@ from ..constants.scene_label import SceneLabel
 class SceneAssessment:
     """画面種別の評価結果."""
 
-    gameplay_score: float
+    play_score: float
     event_score: float
-    other_score: float
+    density_score: float
     scene_label: SceneLabel
     scene_confidence: float
-    transition_risk_score: float
-    bright_washout_score: float
-    veiled_transition_score: float
-    relative_bright_transition_score: float
-    relative_dark_transition_score: float
-    relative_transition_score: float
-    relative_transition_polarity: str
-    transition_suppressed_event: bool

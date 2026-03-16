@@ -168,36 +168,28 @@ def build_whole_input_profile(*images: AnalyzedImage) -> WholeInputProfile:
 
 def create_scored_candidate(
     path: str,
-    scene_label: SceneLabel = SceneLabel.GAMEPLAY,
-    gameplay_score: float = 0.8,
+    scene_label: SceneLabel = SceneLabel.PLAY,
+    play_score: float = 0.8,
     event_score: float = 0.3,
-    other_score: float = 0.1,
+    density_score: float = 0.8,
     scene_confidence: float = 0.5,
-    transition_risk_score: float = 0.0,
-    bright_washout_score: float = 0.0,
-    veiled_transition_score: float = 0.0,
-    relative_bright_transition_score: float = 0.0,
-    relative_dark_transition_score: float = 0.0,
-    relative_transition_score: float = 0.0,
-    relative_transition_polarity: str = "bright",
-    transition_suppressed_event: bool = False,
     quality_score: float = 0.6,
-    activity_score: float = 0.5,
-    selection_score: float = 60.0,
+    selection_score: float = 0.6,
     resolved_profile: str = "active",
     combined_features: np.ndarray[Any, Any] | None = None,
+    score_band: str | None = None,
+    outlier_rejected: bool = False,
 ) -> ScoredCandidate:
     """`ScoredCandidate` を作成する共通ヘルパー.
 
     Args:
         path: 候補画像のパス。
         scene_label: 最終的に属する scene label 。
-        gameplay_score: gameplay 向けスコア。
+        play_score: play 向けスコア。
         event_score: event 向けスコア。
-        other_score: other 向けスコア。
+        density_score: 類似度密度スコア。
         scene_confidence: scene判定の信頼度。
         quality_score: 画質スコア。
-        activity_score: 活動量スコア。
         selection_score: 最終選定スコア。
         resolved_profile: 解決済みプロファイル名。
         combined_features: 類似度判定用の結合特徴。
@@ -210,27 +202,20 @@ def create_scored_candidate(
         combined_features=combined_features,
     )
     assessment = SceneAssessment(
-        gameplay_score=gameplay_score,
+        play_score=play_score,
         event_score=event_score,
-        other_score=other_score,
+        density_score=density_score,
         scene_label=scene_label,
         scene_confidence=scene_confidence,
-        transition_risk_score=transition_risk_score,
-        bright_washout_score=bright_washout_score,
-        veiled_transition_score=veiled_transition_score,
-        relative_bright_transition_score=relative_bright_transition_score,
-        relative_dark_transition_score=relative_dark_transition_score,
-        relative_transition_score=relative_transition_score,
-        relative_transition_polarity=relative_transition_polarity,
-        transition_suppressed_event=transition_suppressed_event,
     )
     return ScoredCandidate(
         analyzed_image=analyzed,
         scene_assessment=assessment,
         resolved_profile=resolved_profile,
         quality_score=quality_score,
-        activity_score=activity_score,
         selection_score=selection_score,
+        score_band=score_band,
+        outlier_rejected=outlier_rejected,
     )
 
 
@@ -240,7 +225,7 @@ def create_sample_candidates(
 ) -> list[ScoredCandidate]:
     """テスト用のサンプル候補を作成する.
 
-    gameplay / event / other を順番に巡回させながら候補を作り、
+    play / event を順番に巡回させながら候補を作り、
     scene mix や類似度選定のテストで使える入力集合を返す。
 
     Args:
@@ -251,7 +236,7 @@ def create_sample_candidates(
         `ScoredCandidate` のリスト。
     """
     candidates = []
-    scene_cycle = [SceneLabel.GAMEPLAY, SceneLabel.EVENT, SceneLabel.OTHER]
+    scene_cycle = [SceneLabel.PLAY, SceneLabel.EVENT]
     for index in range(count):
         np.random.seed(index)
         combined_features = np.random.rand(576)
@@ -260,12 +245,11 @@ def create_sample_candidates(
             create_scored_candidate(
                 path=f"{base_path}/image{index}.jpg",
                 scene_label=label,
-                gameplay_score=0.8 if label == SceneLabel.GAMEPLAY else 0.2,
+                play_score=0.8 if label == SceneLabel.PLAY else 0.2,
                 event_score=0.8 if label == SceneLabel.EVENT else 0.2,
-                other_score=0.8 if label == SceneLabel.OTHER else 0.2,
+                density_score=0.8 if label == SceneLabel.PLAY else 0.2,
                 quality_score=0.6 - index * 0.01,
-                activity_score=0.4 + (index % 3) * 0.1,
-                selection_score=70.0 - index,
+                selection_score=0.8 if label == SceneLabel.PLAY else 0.2,
                 combined_features=combined_features,
             )
         )

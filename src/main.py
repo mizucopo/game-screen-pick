@@ -126,8 +126,8 @@ class Main:
     def parse_scene_mix(value: str | None) -> SceneMix | None:
         """scene mix文字列を `SceneMix` へ変換する.
 
-        受け付ける形式は `gameplay=0.5,event=0.4,other=0.1` のみで、
-        3要素が揃っていることを前提とする。合計値の検証は
+        受け付ける形式は `play=0.7,event=0.3` のみで、
+        2要素が揃っていることを前提とする。合計値の検証は
         `SceneMix` モデルのバリデーションへ委ねる。
 
         Args:
@@ -148,8 +148,7 @@ class Main:
             key, separator, raw_score = item.strip().partition("=")
             if separator != "=" or not key:
                 raise click.BadParameter(
-                    "scene-mixは "
-                    "gameplay=0.5,event=0.4,other=0.1 形式で指定してください"
+                    "scene-mixは play=0.7,event=0.3 形式で指定してください"
                 )
             try:
                 pairs[key] = float(raw_score)
@@ -158,15 +157,14 @@ class Main:
                     f"scene-mixの値は数値である必要があります: {item}"
                 ) from error
 
-        expected_keys = {"gameplay", "event", "other"}
+        expected_keys = {"play", "event"}
         if set(pairs) != expected_keys:
             raise click.BadParameter(
-                "scene-mixには gameplay,event,other の3要素が必要です"
+                "scene-mixには play,event の2要素が必要です"
             )
         return SceneMix(
-            gameplay=pairs["gameplay"],
+            play=pairs["play"],
             event=pairs["event"],
-            other=pairs["other"],
         )
 
     @staticmethod
@@ -242,7 +240,7 @@ class Main:
         "--scene-mix",
         callback=lambda _ctx, _param, x: Main.parse_scene_mix(x),
         default=None,
-        help="画面種別比率。例: gameplay=0.5,event=0.4,other=0.1",
+        help="画面種別比率。例: play=0.7,event=0.3",
     )
     @click.option(
         "--report-json",
@@ -253,7 +251,7 @@ class Main:
     @click.option(
         "--rename",
         is_flag=True,
-        help="scene別に gameplay0001.ext 形式で出力ファイル名を付け直す",
+        help="scene別に play0001.ext / event0001.ext 形式で出力ファイル名を付け直す",
     )
     @click.option(
         "--seed",
@@ -328,7 +326,7 @@ class Main:
         使用例:
           game-screen-pick -n 15 ./screenshots ./output
           game-screen-pick --rename ./screenshots ./output
-          game-screen-pick --scene-mix gameplay=0.6,event=0.3,other=0.1 ./in ./out
+          game-screen-pick --scene-mix play=0.7,event=0.3 ./in ./out
 
         Args:
             num: 選択枚数。

@@ -1,5 +1,7 @@
 """scene mix と全体多様性を両立する選定ロジック."""
 
+from collections import deque
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -7,68 +9,55 @@ import numpy as np
 from ..constants.scene_label import SceneLabel
 from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_config import SelectionConfig
-from ..models.selection_profile import SelectionProfile
 from ..utils.vector_utils import VectorUtils
 
 
+@dataclass
+class BucketPlan:
+    """カテゴリ別の選定準備結果."""
+
+    ordered_candidates: list[ScoredCandidate]
+    leftovers: list[ScoredCandidate]
+
+
 class SceneMixSelector:
-    """画面種別ミックスを維持しつつ全体で多様な候補を選ぶ.
+    """画面種別ミックスを維持しつつ全体で多様な候補を選ぶ."""
 
-    まず gameplay / event / other の比率を優先し、
-    その後で不足枠を scene をまたいで再配分する。
-    類似度判定は最終選択結果全体に対して適用する。
-    """
-
-    SCENE_ORDER = (SceneLabel.GAMEPLAY, SceneLabel.EVENT, SceneLabel.OTHER)
+    SCENE_ORDER = (SceneLabel.PLAY, SceneLabel.EVENT)
+    BAND_LABELS = {
+        1: ("mid",),
+        2: ("low", "high"),
+        3: ("low", "mid", "high"),
+        4: ("low", "mid_low", "mid_high", "high"),
+        5: ("low", "mid_low", "mid", "mid_high", "high"),
+    }
+    MIN_OUTLIER_SAMPLES = 4
 
     def __init__(self, config: SelectionConfig):
-        """SceneMixSelectorを初期化する.
-
-        Args:
-            config: 類似度しきい値、scene mix比率などを含む選択設定。
-        """
+        """SceneMixSelectorを初期化する."""
         self.config = config
 
     def select(
         self,
         candidates: list[ScoredCandidate],
         num: int,
-        profile: SelectionProfile,
     ) -> tuple[list[ScoredCandidate], int, dict[str, int], dict[str, int]]:
-        """比率に従って候補を選択する.
-
-        処理順は以下の通り。
-        1. `selection_score` 順に並べた候補を scene label ごとに分桶する
-        2. scene mix比率から目標枚数を求める
-        3. 各bucket内で、全体選択済み候補も加味した類似度フィルタを通す
-        4. 多様プール内で activity mix を適用し、低・中・高活動量の偏りを減らす
-        5. 不足枠があれば scene を無視して全体の高得点候補から再配分する
-
-        Args:
-            candidates: 画面種別と選定スコアが付与済みの候補。
-            num: 最終的に選びたい枚数。
-            profile: activity mix比率を持つ解決済みプロファイル。
-
-        Returns:
-            1. 選択された候補
-            2. 類似度フィルタで落ちた件数
-            3. scene labelごとの目標枚数
-            4. 実際に選ばれたscene labelごとの枚数
-        """
+        """比率に従って候補を選択する."""
         if num <= 0 or not candidates:
             empty_counts = {label.value: 0 for label in self.SCENE_ORDER}
             return [], 0, empty_counts, empty_counts
 
-        sorted_candidates = sorted(
-            candidates, key=lambda item: item.selection_score, reverse=True
-        )
         targets = self._calculate_targets(num)
         scene_buckets = {
             label: [
                 candidate
-                for candidate in sorted_candidates
+                for candidate in candidates
                 if candidate.scene_assessment.scene_label == label
             ]
+            for label in self.SCENE_ORDER
+        }
+        bucket_plans = {
+            label: self._prepare_bucket(scene_buckets[label], targets[label])
             for label in self.SCENE_ORDER
         }
 
@@ -78,13 +67,13 @@ class SceneMixSelector:
         rejected_by_similarity_ids: set[int] = set()
 
         for label in self.SCENE_ORDER:
-            bucket_selected, bucket_rejected_ids = self._select_scene_bucket(
-                candidates=scene_buckets[label],
+            bucket_selected, bucket_rejected_ids, leftovers = self._select_from_stream(
+                ordered_candidates=bucket_plans[label].ordered_candidates,
                 target=targets[label],
-                profile=profile,
                 selected_ids=selected_ids,
                 selected_features=selected_features,
             )
+            bucket_plans[label].leftovers = leftovers + bucket_plans[label].leftovers
             self._extend_selection(
                 selected=selected,
                 selected_ids=selected_ids,
@@ -95,11 +84,11 @@ class SceneMixSelector:
 
         remaining_slots = num - len(selected)
         if remaining_slots > 0:
-            (
-                redistributed,
-                redistributed_rejected_ids,
-            ) = self._select_remaining_candidates(
-                candidates=sorted_candidates,
+            fallback_stream = self._build_fallback_stream(
+                [bucket_plans[label].leftovers for label in self.SCENE_ORDER]
+            )
+            fallback_selected, fallback_rejected_ids, _ = self._select_from_stream(
+                ordered_candidates=fallback_stream,
                 target=remaining_slots,
                 selected_ids=selected_ids,
                 selected_features=selected_features,
@@ -108,11 +97,10 @@ class SceneMixSelector:
                 selected=selected,
                 selected_ids=selected_ids,
                 selected_features=selected_features,
-                additions=redistributed,
+                additions=fallback_selected,
             )
-            rejected_by_similarity_ids.update(redistributed_rejected_ids)
+            rejected_by_similarity_ids.update(fallback_rejected_ids)
 
-        selected.sort(key=lambda item: item.selection_score, reverse=True)
         actuals = {
             label.value: sum(
                 1
@@ -126,124 +114,164 @@ class SceneMixSelector:
         return selected[:num], rejected_by_similarity, target_map, actuals
 
     def _calculate_targets(self, num: int) -> dict[SceneLabel, int]:
-        """scene mix 比率から目標枚数を計算する.
-
-        小数点以下はまず切り捨て、余りは端数の大きいbucketから順に配る。
-        これにより合計枚数を保ったまま比率へ最も近い整数配分を作る。
-
-        Args:
-            num: 選択したい総枚数。
-
-        Returns:
-            scene labelごとの目標枚数。
-        """
-        ratios = {
-            SceneLabel.GAMEPLAY: self.config.scene_mix.gameplay,
-            SceneLabel.EVENT: self.config.scene_mix.event,
-            SceneLabel.OTHER: self.config.scene_mix.other,
+        """scene mix 比率から目標枚数を計算する."""
+        raw_play = num * self.config.scene_mix.play
+        raw_event = num * self.config.scene_mix.event
+        play_target = int(raw_play)
+        event_target = int(raw_event)
+        remainder = num - (play_target + event_target)
+        if remainder > 0 and raw_play - play_target >= raw_event - event_target:
+            play_target += 1
+        elif remainder > 0:
+            event_target += 1
+        return {
+            SceneLabel.PLAY: play_target,
+            SceneLabel.EVENT: event_target,
         }
-        raw_targets = {label: num * ratio for label, ratio in ratios.items()}
-        base_targets = {label: int(value) for label, value in raw_targets.items()}
-        remainder = num - sum(base_targets.values())
-        remainders = sorted(
-            raw_targets.items(),
-            key=lambda item: item[1] - int(item[1]),
-            reverse=True,
-        )
-        for index, (label, _) in enumerate(remainders):
-            if index < remainder:
-                base_targets[label] += 1
-        return base_targets
 
-    def _select_scene_bucket(
+    def _prepare_bucket(
         self,
         candidates: list[ScoredCandidate],
         target: int,
-        profile: SelectionProfile,
-        selected_ids: set[int],
-        selected_features: list[np.ndarray[Any, Any]],
-    ) -> tuple[list[ScoredCandidate], set[int]]:
-        """単一scene bucketから候補を選択する.
+    ) -> BucketPlan:
+        """カテゴリ別の候補を band 分散選定向けに並べ替える."""
+        if not candidates:
+            return BucketPlan([], [])
 
-        まず未選択候補だけに絞り、全体で既に選ばれた画像との
-        類似度も含めて多様プールを作る。その後、同じscene bucket内で
-        `activity_mix` を適用して活動量の偏りを抑えながら最終採用数を決める。
+        for candidate in candidates:
+            candidate.outlier_rejected = False
+            candidate.score_band = None
 
-        Args:
-            candidates: ひとつのscene labelに属する候補群。
-            target: このbucketから確保したい枚数。
-            profile: 活動量配分を決める解決済みプロファイル。
-            selected_ids: 他bucketで既に選ばれた候補のID集合。
-            selected_features: 全体で既に採用済み候補の特徴ベクトル。
+        eligible_candidates = self._exclude_outliers(candidates)
+        band_count = min(max(target, 1), 5)
+        band_queues = self._build_band_queues(eligible_candidates, band_count)
+        ordered_candidates = self._round_robin_bands(band_queues)
+        return BucketPlan(ordered_candidates, [])
 
-        Returns:
-            1. このbucketから選ばれた候補
-            2. 類似度フィルタで除外された候補ID集合
-        """
-        if target <= 0 or not candidates:
-            return [], set()
-
-        unselected_candidates = [
-            candidate for candidate in candidates if id(candidate) not in selected_ids
-        ]
-        if not unselected_candidates:
-            return [], set()
-
-        pool_size = min(len(unselected_candidates), max(target * 3, target))
-        selected_indices, rejected_indices = VectorUtils.filter_by_similarity(
-            candidates=[
-                candidate.combined_features for candidate in unselected_candidates
-            ],
-            num=pool_size,
-            similarity_threshold=self.config.similarity_threshold,
-            compute_threshold_steps=self.config.compute_threshold_steps,
-            seed_features=selected_features,
-        )
-        diverse_pool = [unselected_candidates[idx] for idx in selected_indices]
-        rejected_by_similarity_ids = {
-            id(unselected_candidates[idx]) for idx in rejected_indices
-        }
-        if not diverse_pool:
-            return [], rejected_by_similarity_ids
-
-        selected = self._select_with_activity_mix(
-            diverse_pool,
-            min(target, len(diverse_pool)),
-            profile,
-        )
-        return selected, rejected_by_similarity_ids
-
-    def _select_remaining_candidates(
+    def _exclude_outliers(
         self,
         candidates: list[ScoredCandidate],
+    ) -> list[ScoredCandidate]:
+        """selection_score の外れ値を除外する."""
+        if len(candidates) < self.MIN_OUTLIER_SAMPLES:
+            return list(candidates)
+
+        scores = np.asarray(
+            [candidate.selection_score for candidate in candidates],
+            dtype=np.float32,
+        )
+        q1, q3 = np.percentile(scores, [25, 75])
+        iqr = q3 - q1
+        if np.isclose(iqr, 0.0):
+            return list(candidates)
+
+        lower = float(q1 - 1.5 * iqr)
+        upper = float(q3 + 1.5 * iqr)
+        eligible_candidates: list[ScoredCandidate] = []
+        for candidate in candidates:
+            score = candidate.selection_score
+            if lower <= score <= upper:
+                eligible_candidates.append(candidate)
+            else:
+                candidate.outlier_rejected = True
+                candidate.score_band = "outlier"
+        return eligible_candidates
+
+    def _build_band_queues(
+        self,
+        candidates: list[ScoredCandidate],
+        band_count: int,
+    ) -> list[deque[ScoredCandidate]]:
+        """候補を score band ごとのキューに分ける."""
+        if not candidates:
+            return []
+
+        ordered = sorted(candidates, key=lambda item: item.selection_score)
+        groups = np.array_split(np.asarray(ordered, dtype=object), band_count)
+        band_names = self.BAND_LABELS[band_count]
+        band_queues: list[deque[ScoredCandidate]] = []
+        for band_name, group in zip(band_names, groups, strict=True):
+            group_candidates = [candidate for candidate in group.tolist() if candidate is not None]
+            if not group_candidates:
+                continue
+            band_center = float(
+                np.mean([candidate.selection_score for candidate in group_candidates])
+            )
+            ordered_band = sorted(
+                group_candidates,
+                key=lambda candidate: (
+                    -candidate.quality_score,
+                    abs(candidate.selection_score - band_center),
+                    candidate.path,
+                ),
+            )
+            for candidate in ordered_band:
+                candidate.score_band = band_name
+            band_queues.append(deque(ordered_band))
+        return band_queues
+
+    @staticmethod
+    def _round_robin_bands(
+        band_queues: list[deque[ScoredCandidate]],
+    ) -> list[ScoredCandidate]:
+        """低 band から高 band へ均等に辿る順序を作る."""
+        if not band_queues:
+            return []
+
+        ordered: list[ScoredCandidate] = []
+        queues = [deque(queue) for queue in band_queues]
+        while any(queues):
+            for queue in queues:
+                if queue:
+                    ordered.append(queue.popleft())
+        return ordered
+
+    def _build_fallback_stream(
+        self,
+        leftovers_by_label: list[list[ScoredCandidate]],
+    ) -> list[ScoredCandidate]:
+        """不足分を補うための共通ストリームを組み立てる."""
+        streams = [deque(candidates) for candidates in leftovers_by_label if candidates]
+        ordered: list[ScoredCandidate] = []
+        while any(streams):
+            for stream in streams:
+                if stream:
+                    ordered.append(stream.popleft())
+        return ordered
+
+    def _select_from_stream(
+        self,
+        ordered_candidates: list[ScoredCandidate],
         target: int,
         selected_ids: set[int],
         selected_features: list[np.ndarray[Any, Any]],
-    ) -> tuple[list[ScoredCandidate], set[int]]:
-        """scene target 充足後の残枠を全体候補から再配分する."""
-        if target <= 0:
-            return [], set()
+    ) -> tuple[list[ScoredCandidate], set[int], list[ScoredCandidate]]:
+        """順序付け済みストリームから類似度を見ながら採用する."""
+        if target <= 0 or not ordered_candidates:
+            return [], set(), list(ordered_candidates)
 
-        remaining_candidates = [
-            candidate for candidate in candidates if id(candidate) not in selected_ids
+        selectable_candidates = [
+            candidate for candidate in ordered_candidates if id(candidate) not in selected_ids
         ]
-        if not remaining_candidates:
-            return [], set()
+        if not selectable_candidates:
+            return [], set(), []
 
         selected_indices, rejected_indices = VectorUtils.filter_by_similarity(
-            candidates=[
-                candidate.combined_features for candidate in remaining_candidates
-            ],
+            candidates=[candidate.combined_features for candidate in selectable_candidates],
             num=target,
             similarity_threshold=self.config.similarity_threshold,
             compute_threshold_steps=self.config.compute_threshold_steps,
             seed_features=selected_features,
         )
-        selected = [remaining_candidates[idx] for idx in selected_indices]
+        selected = [selectable_candidates[index] for index in selected_indices]
         rejected_by_similarity_ids = {
-            id(remaining_candidates[idx]) for idx in rejected_indices
+            id(selectable_candidates[index]) for index in rejected_indices
         }
-        return selected, rejected_by_similarity_ids
+        leftover_indices = (
+            set(range(len(selectable_candidates))) - set(selected_indices) - rejected_indices
+        )
+        leftovers = [selectable_candidates[index] for index in sorted(leftover_indices)]
+        return selected, rejected_by_similarity_ids, leftovers
 
     @staticmethod
     def _extend_selection(
@@ -256,78 +284,3 @@ class SceneMixSelector:
         selected.extend(additions)
         selected_ids.update(id(candidate) for candidate in additions)
         selected_features.extend(candidate.combined_features for candidate in additions)
-
-    @staticmethod
-    def _select_with_activity_mix(
-        candidates: list[ScoredCandidate],
-        target: int,
-        profile: SelectionProfile,
-    ) -> list[ScoredCandidate]:
-        """activity mix を使って偏りを減らす.
-
-        候補を `activity_score` 順に並べて低・中・高の3帯域へ分け、
-        プロファイルで定義された比率に従って採用数を割り当てる。
-        各帯域で枠が余った場合は、残り候補を `selection_score` 順で補充する。
-
-        Args:
-            candidates: 類似度フィルタ後の多様プール。
-            target: このscene bucketから最終的に取りたい枚数。
-            profile: 帯域ごとの活動量比率を持つプロファイル。
-
-        Returns:
-            活動量バランスを取った候補リスト。
-        """
-        if len(candidates) <= target:
-            return sorted(
-                candidates, key=lambda item: item.selection_score, reverse=True
-            )
-
-        ranked = sorted(candidates, key=lambda item: item.activity_score)
-        low_end = len(ranked) // 3
-        high_end = (len(ranked) * 2) // 3
-        buckets = {
-            "low": ranked[:low_end],
-            "mid": ranked[low_end:high_end],
-            "high": ranked[high_end:],
-        }
-        ratios = {
-            "low": profile.activity_mix_ratio[0],
-            "mid": profile.activity_mix_ratio[1],
-            "high": profile.activity_mix_ratio[2],
-        }
-        raw_targets = {name: target * ratio for name, ratio in ratios.items()}
-        bucket_targets = {name: int(value) for name, value in raw_targets.items()}
-        remainder = target - sum(bucket_targets.values())
-        ordered_remainders = sorted(
-            raw_targets.items(),
-            key=lambda item: item[1] - int(item[1]),
-            reverse=True,
-        )
-        for index, (name, _) in enumerate(ordered_remainders):
-            if index < remainder:
-                bucket_targets[name] += 1
-
-        selected: list[ScoredCandidate] = []
-        for name in ("low", "mid", "high"):
-            bucket_candidates = sorted(
-                buckets[name],
-                key=lambda item: item.selection_score,
-                reverse=True,
-            )
-            selected.extend(bucket_candidates[: bucket_targets[name]])
-
-        if len(selected) < target:
-            selected_ids = {id(candidate) for candidate in selected}
-            leftovers = sorted(
-                [
-                    candidate
-                    for candidate in candidates
-                    if id(candidate) not in selected_ids
-                ],
-                key=lambda item: item.selection_score,
-                reverse=True,
-            )
-            selected.extend(leftovers[: target - len(selected)])
-
-        selected.sort(key=lambda item: item.selection_score, reverse=True)
-        return selected[:target]

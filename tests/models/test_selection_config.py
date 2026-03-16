@@ -27,7 +27,7 @@ def test_selection_config_has_sensible_defaults() -> None:
     assert config.batch_size == 32
     assert config.profile == "auto"
     assert config.similarity_threshold == 0.72
-    assert config.scene_mix == SceneMix(gameplay=0.5, event=0.4, other=0.1)
+    assert config.scene_mix == SceneMix(play=0.7, event=0.3)
     assert config.max_threshold == 0.98
 
 
@@ -67,7 +67,7 @@ def test_threshold_steps_computed_correctly(
         ({"similarity_threshold": 1.1}, ValueError, "0以上1以下"),
         ({"max_threshold": -0.1}, ValueError, "0以上1以下"),
         (
-            {"scene_mix": SceneMix(gameplay=1.0, event=0.0, other=0.0)},
+            {"scene_mix": SceneMix(play=1.0, event=0.0)},
             None,
             None,
         ),
@@ -109,4 +109,4 @@ def test_scene_mix_validation_rejects_invalid_total() -> None:
     """
     # Arrange / Act / Assert
     with pytest.raises(ValueError, match="scene_mixの合計"):
-        SceneMix(gameplay=0.6, event=0.3, other=0.3)
+        SceneMix(play=0.6, event=0.3)

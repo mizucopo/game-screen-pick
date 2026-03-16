@@ -6,6 +6,5 @@ from enum import StrEnum
 class SceneLabel(StrEnum):
     """選定時に扱う画面種別."""
 
-    GAMEPLAY = "gameplay"
+    PLAY = "play"
     EVENT = "event"
-    OTHER = "other"

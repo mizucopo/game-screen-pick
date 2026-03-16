@@ -1,7 +1,4 @@
-"""結果フォーマットユーティリティクラス.
-
-選択結果と統計情報をコンソールに出力する機能を提供する。
-"""
+"""結果フォーマットユーティリティクラス."""
 
 import logging
 from pathlib import Path
@@ -13,27 +10,22 @@ logger = logging.getLogger(__name__)
 
 
 class ResultFormatter:
-    """結果フォーマットユーティリティクラス.
-
-    選択結果と統計情報をコンソールに出力する機能を提供する。
-    """
+    """選択結果と統計情報をコンソールに出力する."""
 
     @staticmethod
     def display_results(
         selected: list["ScoredCandidate"], stats: "PickerStatistics"
     ) -> None:
-        """選択結果を表示する.
-
-        Args:
-            selected: 選択された候補のリスト
-            stats: 統計情報
-        """
+        """選択結果を表示する."""
         logger.info("--- 選択された画像一覧 ---")
         for i, res in enumerate(selected):
             logger.info(
                 f"[{i + 1}] {Path(res.path).name} "
-                f"(画面種別: {res.scene_assessment.scene_label.value}, "
-                f"スコア: {res.selection_score:.2f})"
+                f"(カテゴリ: {res.scene_assessment.scene_label.value}, "
+                f"band: {res.score_band}, "
+                f"play: {res.scene_assessment.play_score:.3f}, "
+                f"event: {res.scene_assessment.event_score:.3f}, "
+                f"density: {res.scene_assessment.density_score:.3f})"
             )
 
         logger.info("--- 統計情報 ---")

@@ -56,7 +56,7 @@ class FileUtils:
         """scene名と連番から出力ファイル名を構築する.
 
         Args:
-            scene_name: `gameplay` / `event` / `other` の接頭辞
+            scene_name: `play` / `event` の接頭辞
             index: sceneごとの連番（1始まり）
             suffix: 元ファイルの拡張子
             requested_num: CLIで要求された出力枚数

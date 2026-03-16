@@ -57,9 +57,9 @@ def test_get_unique_destination_generates_unique_filename(
 @pytest.mark.parametrize(
     "scene_name,index,suffix,requested_num,expected",
     [
-        ("gameplay", 1, ".jpg", 3, "gameplay0001.jpg"),
+        ("play", 1, ".jpg", 3, "play0001.jpg"),
         ("event", 12, ".png", 9999, "event0012.png"),
-        ("other", 1, ".bmp", 10000, "other00001.bmp"),
+        ("play", 1, ".bmp", 10000, "play00001.bmp"),
     ],
 )
 def test_build_renamed_filename_uses_scene_prefix_and_padding(
@@ -97,8 +97,8 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
     """scene別連番で出力しつつ既存ファイルとの衝突を回避できること.
 
     Given:
-        - 出力ディレクトリに既存ファイル（gameplay0001.jpg）がある
-        - gameplay 2件、event 1件の選択画像がある
+        - 出力ディレクトリに既存ファイル（play0001.jpg）がある
+        - play 2件、event 1件の選択画像がある
     When:
         - rename=Trueでcopy_selected_itemsを実行する
     Then:
@@ -108,10 +108,10 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
     # Arrange
     output_dir = tmp_path / "output"
     output_dir.mkdir()
-    (output_dir / "gameplay0001.jpg").write_bytes(b"existing")
+    (output_dir / "play0001.jpg").write_bytes(b"existing")
 
-    gameplay1 = tmp_path / "gameplay1.jpg"
-    gameplay2 = tmp_path / "gameplay2.jpg"
+    gameplay1 = tmp_path / "play1.jpg"
+    gameplay2 = tmp_path / "play2.jpg"
     event1 = tmp_path / "event1.jpg"
     for path in (gameplay1, gameplay2, event1):
         path.write_bytes(b"fake_image_data")
@@ -119,7 +119,7 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
     selected = [
         create_scored_candidate(
             path=str(gameplay1),
-            scene_label=SceneLabel.GAMEPLAY,
+            scene_label=SceneLabel.PLAY,
         ),
         create_scored_candidate(
             path=str(event1),
@@ -127,7 +127,7 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
         ),
         create_scored_candidate(
             path=str(gameplay2),
-            scene_label=SceneLabel.GAMEPLAY,
+            scene_label=SceneLabel.PLAY,
         ),
     ]
 
@@ -140,13 +140,13 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
     )
 
     # Assert
-    assert (output_dir / "gameplay0001_1.jpg").exists()
+    assert (output_dir / "play0001_1.jpg").exists()
     assert (output_dir / "event0001.jpg").exists()
-    assert (output_dir / "gameplay0002.jpg").exists()
+    assert (output_dir / "play0002.jpg").exists()
     assert copied_paths[id(selected[0])] == str(
-        (output_dir / "gameplay0001_1.jpg").resolve()
+        (output_dir / "play0001_1.jpg").resolve()
     )
     assert copied_paths[id(selected[1])] == str((output_dir / "event0001.jpg").resolve())
     assert copied_paths[id(selected[2])] == str(
-        (output_dir / "gameplay0002.jpg").resolve()
+        (output_dir / "play0002.jpg").resolve()
     )

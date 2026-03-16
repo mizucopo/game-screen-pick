@@ -1,1103 +1,122 @@
-"""GameScreenPickerの単体テスト.
-
-scene mix ベースへ再設計されたピッカーについて、
-解析済み入力からの選定とフォルダ起点の統計集計を公開API経由で確認する。
-"""
-
-import tempfile
-from pathlib import Path
+"""GameScreenPickerの単体テスト."""
 
 import numpy as np
-import torch
 
-from src.models.analyzed_image import AnalyzedImage
 from src.models.scene_mix import SceneMix
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
-from src.services.whole_input_profiler import WholeInputProfiler
 from tests.conftest import create_analyzed_image
 from tests.fake_analyzer import FakeAnalyzer
 
 
-def _make_feature(index: int) -> torch.Tensor:
-    """類似度判定用の one-hot 特徴を作る."""
-    feature = torch.zeros(576)
+def _feature(index: int) -> np.ndarray:
+    feature = np.zeros(576, dtype=np.float32)
     feature[index] = 1.0
     return feature
 
 
-def _make_near_duplicate(base: torch.Tensor, index: int) -> torch.Tensor:
-    """base に非常に近い特徴を作る."""
-    feature = base.clone()
+def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
+    feature = base.copy()
     feature[index] = 0.01
     return feature
 
 
-def _make_analyzed_images() -> list[AnalyzedImage]:
-    """scene mix テスト用の解析済み画像群を作成する.
-
-    Returns:
-        gameplay 5件、event 4件、other 1件の `AnalyzedImage` 一覧。
-    """
-    images = []
-    for idx in range(5):
-        features = torch.tensor([1.0, 0.0, 0.0]).numpy()
-        combined = torch.zeros(576)
-        combined[idx] = 1.0
-        images.append(
-            create_analyzed_image(
-                path=f"/tmp/gameplay_{idx}.jpg",
-                clip_features=features,
-                combined_features=combined.numpy(),
-                normalized_metrics_dict={"action_intensity": 0.6, "ui_density": 0.5},
-            )
-        )
-    for idx in range(4):
-        features = torch.tensor([0.0, 1.0, 0.0]).numpy()
-        combined = torch.zeros(576)
-        combined[100 + idx] = 1.0
-        images.append(
-            create_analyzed_image(
-                path=f"/tmp/event_{idx}.jpg",
-                clip_features=features,
-                combined_features=combined.numpy(),
-                normalized_metrics_dict={"action_intensity": 0.4, "ui_density": 0.4},
-                layout_dict={"dialogue_overlay_score": 0.5},
-            )
-        )
-    features = torch.tensor([0.0, 0.0, 1.0]).numpy()
-    combined = torch.zeros(576)
-    combined[200] = 1.0
-    images.append(
-        create_analyzed_image(
-            path="/tmp/other_0.jpg",
-            clip_features=features,
-            combined_features=combined.numpy(),
-            normalized_metrics_dict={"action_intensity": 0.2, "ui_density": 0.7},
-            layout_dict={"menu_layout_score": 0.6, "title_layout_score": 0.4},
-        )
+def test_select_from_analyzed_filters_content_before_play_event_assignment() -> None:
+    """content filter の除外が先に適用されること."""
+    dark = create_analyzed_image(
+        path="/tmp/dark.jpg",
+        raw_metrics_dict={
+            "near_black_ratio": 0.98,
+            "luminance_entropy": 0.2,
+            "luminance_range": 10.0,
+        },
+        combined_features=_feature(0),
     )
-    return images
+    play = create_analyzed_image(
+        path="/tmp/play.jpg",
+        combined_features=_feature(1),
+    )
+    event = create_analyzed_image(
+        path="/tmp/event.jpg",
+        combined_features=_feature(100),
+    )
+    analyzed_images = [dark, play, event]
+    picker = GameScreenPicker(
+        analyzer=FakeAnalyzer(analyzed_images),
+        config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
+    )
+
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=2)
+
+    assert {candidate.path for candidate in selected} == {"/tmp/play.jpg", "/tmp/event.jpg"}
+    assert rejected == []
+    assert stats.rejected_by_content_filter == 1
+    assert stats.content_filter_breakdown["blackout"] == 1
+    assert stats.scene_mix_actual == {"play": 1, "event": 1}
 
 
-def _make_homogeneous_scene_mix_images() -> list[AnalyzedImage]:
-    """多様性不足を再現する解析済み画像群を作成する."""
-    gameplay_base = _make_feature(0)
-    event_base = _make_feature(100)
-    return [
+def test_select_from_analyzed_assigns_dense_candidates_to_play() -> None:
+    """密度の高いクラスタが play へ寄ること."""
+    base = _feature(0)
+    analyzed_images = [
         create_analyzed_image(
-            path="/tmp/gameplay_0.jpg",
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=gameplay_base.numpy(),
-            normalized_metrics_dict={"action_intensity": 0.6, "ui_density": 0.5},
+            path="/tmp/play_0.jpg",
+            combined_features=base,
         ),
         create_analyzed_image(
-            path="/tmp/gameplay_1.jpg",
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=_make_near_duplicate(gameplay_base, 1).numpy(),
-            normalized_metrics_dict={"action_intensity": 0.6, "ui_density": 0.5},
+            path="/tmp/play_1.jpg",
+            combined_features=_near_duplicate(base, 1),
+        ),
+        create_analyzed_image(
+            path="/tmp/play_2.jpg",
+            combined_features=_near_duplicate(base, 2),
         ),
         create_analyzed_image(
             path="/tmp/event_0.jpg",
-            clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
-            combined_features=event_base.numpy(),
-            normalized_metrics_dict={"action_intensity": 0.4, "ui_density": 0.4},
-            layout_dict={"dialogue_overlay_score": 0.5},
+            combined_features=_feature(100),
         ),
         create_analyzed_image(
             path="/tmp/event_1.jpg",
-            clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
-            combined_features=_make_near_duplicate(event_base, 101).numpy(),
-            normalized_metrics_dict={"action_intensity": 0.4, "ui_density": 0.4},
-            layout_dict={"dialogue_overlay_score": 0.5},
+            combined_features=_feature(200),
         ),
     ]
-
-
-def test_select_from_analyzed_returns_scene_mix() -> None:
-    """解析済み画像から50/40/10のscene mixで選ばれること.
-
-    Given:
-        - gameplay / event / other が既定比率ぶん揃った解析済み画像群がある
-    When:
-        - `select_from_analyzed` で10件を選択する
-    Then:
-        - 既定の 50 / 40 / 10 に一致する目標値と実績が返ること
-    """
-    # Arrange
-    analyzed_images = _make_analyzed_images()
-    analyzer = FakeAnalyzer(analyzed_images)
-    picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
-
-    # Act
-    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=10)
-
-    # Assert
-    assert len(selected) == 10
-    assert len(rejected) == 0
-    assert stats.scene_mix_target == {"gameplay": 5, "event": 4, "other": 1}
-    assert stats.scene_mix_actual == {"gameplay": 5, "event": 4, "other": 1}
-    assert stats.selected_count == 10
-    assert stats.whole_input_profile is not None
-
-
-def test_score_candidates_uses_frequency_based_gameplay_scene_distribution() -> None:
-    """頻出する主画面群がgameplayへ、稀な演出と補助UIが別sceneへ分かれること.
-
-    Given:
-        - 同種のgameplay画像が複数ある（頻出クラスタ）
-        - boss_introやworld_mapのような稀な画像がある
-    When:
-        - 候補スコアリングとscene分類を実行する
-    Then:
-        - 頻出gameplay群がgameplay sceneへ分類されること
-        - boss_introがeventへ、world_mapがotherへ分類されること
-    """
-
-    # Arrange
-    def feature(
-        index: int,
-        delta_index: int | None = None,
-        delta: float = 0.0,
-    ) -> np.ndarray:
-        vector = np.zeros(101, dtype=np.float32)
-        vector[index] = 1.0
-        if delta_index is not None:
-            vector[delta_index] = delta
-        return vector
-
-    gameplay_variants = [
-        feature(0, 1, 0.01),
-        feature(0, 2, 0.01),
-        feature(0, 3, 0.01),
-        feature(0, 4, 0.01),
-    ]
-    boss_intro_feature = feature(50)
-    world_map_feature = feature(70)
-    analyzed_images = [
-        create_analyzed_image(
-            path=f"/tmp/gameplay_{index}.jpg",
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(content_feature, (0, 475)),
-            content_features=content_feature,
-            normalized_metrics_dict={"action_intensity": 0.7, "ui_density": 0.5},
-        )
-        for index, content_feature in enumerate(gameplay_variants)
-    ]
-    analyzed_images.extend(
-        [
-            create_analyzed_image(
-                path="/tmp/boss_intro.jpg",
-                clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
-                combined_features=np.pad(boss_intro_feature, (0, 475)),
-                content_features=boss_intro_feature,
-                normalized_metrics_dict={
-                    "action_intensity": 0.2,
-                    "ui_density": 0.2,
-                    "dramatic_score": 0.9,
-                    "color_richness": 0.7,
-                },
-                layout_dict={"dialogue_overlay_score": 0.0, "menu_layout_score": 0.0},
-            ),
-            create_analyzed_image(
-                path="/tmp/world_map.jpg",
-                clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
-                combined_features=np.pad(world_map_feature, (0, 475)),
-                content_features=world_map_feature,
-                normalized_metrics_dict={"action_intensity": 0.1, "ui_density": 0.9},
-                layout_dict={"menu_layout_score": 0.6},
-            ),
-        ]
-    )
-    analyzer = FakeAnalyzer(analyzed_images)
-    picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
-    adaptive_scores = WholeInputProfiler().score_images(analyzed_images)
-    whole_input_profile = WholeInputProfiler().build_profile(analyzed_images)
-
-    # Act
-    candidates, _resolved_profile, scene_distribution, _profile_scores = (
-        picker._score_candidates(
-            analyzed_images,
-            adaptive_scores,
-            whole_input_profile,
-        )
+    picker = GameScreenPicker(
+        analyzer=FakeAnalyzer(analyzed_images),
+        config=SelectionConfig(scene_mix=SceneMix(play=0.7, event=0.3)),
     )
 
-    # Assert
-    labels_by_path = {
-        candidate.analyzed_image.path: candidate.scene_assessment.scene_label.value
-        for candidate in candidates
-    }
-    assert scene_distribution == {"gameplay": 4, "event": 1, "other": 1}
-    assert labels_by_path["/tmp/gameplay_0.jpg"] == "gameplay"
-    assert labels_by_path["/tmp/gameplay_1.jpg"] == "gameplay"
-    assert labels_by_path["/tmp/gameplay_2.jpg"] == "gameplay"
-    assert labels_by_path["/tmp/gameplay_3.jpg"] == "gameplay"
-    assert labels_by_path["/tmp/boss_intro.jpg"] == "event"
-    assert labels_by_path["/tmp/world_map.jpg"] == "other"
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=5)
 
-
-def test_score_candidates_retains_multiple_event_candidates_after_recall_tuning() -> None:
-    """複数の event 画面が候補分布で event に残ること."""
-
-    def feature(index: int) -> np.ndarray:
-        vector = np.zeros(301, dtype=np.float32)
-        vector[index] = 1.0
-        return vector
-
-    analyzed_images = [
-        create_analyzed_image(
-            path=f"/tmp/gameplay_{index}.jpg",
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(index), (0, 475)),
-            content_features=feature(index),
-            normalized_metrics_dict={"action_intensity": 0.65, "ui_density": 0.55},
-        )
-        for index in range(4)
-    ]
-    analyzed_images.extend(
-        [
-            create_analyzed_image(
-                path=f"/tmp/event_{index}.jpg",
-                clip_features=torch.tensor([0.05, 0.92, 0.02]).numpy(),
-                combined_features=np.pad(feature(100 + index), (0, 475)),
-                content_features=feature(100 + index),
-                normalized_metrics_dict={
-                    "action_intensity": 0.20,
-                    "ui_density": 0.18,
-                    "dramatic_score": 0.80,
-                    "color_richness": 0.72,
-                },
-                layout_dict={"dialogue_overlay_score": 0.55},
-            )
-            for index in range(3)
-        ]
-    )
-    analyzed_images.append(
-        create_analyzed_image(
-            path="/tmp/other_0.jpg",
-            clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
-            combined_features=np.pad(feature(200), (0, 475)),
-            content_features=feature(200),
-            normalized_metrics_dict={"action_intensity": 0.12, "ui_density": 0.85},
-            layout_dict={"menu_layout_score": 0.55},
-        )
-    )
-    analyzed_images.append(
-        create_analyzed_image(
-            path="/tmp/bright_transition.jpg",
-            raw_metrics_dict={
-                "brightness": 222.0,
-                "contrast": 4.0,
-                "edge_density": 0.02,
-                "action_intensity": 2.0,
-                "luminance_entropy": 0.55,
-                "luminance_range": 8.0,
-                "near_white_ratio": 0.52,
-                "dominant_tone_ratio": 0.88,
-            },
-            clip_features=torch.tensor([0.08, 0.86, 0.04]).numpy(),
-            combined_features=np.pad(feature(250), (0, 475)),
-            content_features=feature(250),
-            layout_dict={"dialogue_overlay_score": 0.35},
-        )
-    )
-
-    analyzer = FakeAnalyzer(analyzed_images)
-    picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
-
-    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=8)
-
-    assert len(selected) == 8
-    assert rejected == []
-    assert (
-        stats.content_filter_breakdown["whiteout"]
-        + stats.content_filter_breakdown["fade_transition"]
-        == 1
-    )
-    assert stats.scene_distribution == {"gameplay": 4, "event": 3, "other": 1}
-    assert stats.scene_mix_actual == {"gameplay": 4, "event": 3, "other": 1}
-
-
-def test_select_from_analyzed_excludes_named_transition_outputs_from_selected() -> None:
-    """指定された event00xx 系の bad case が selected に残らないこと."""
-
-    def feature(index: int) -> np.ndarray:
-        vector = np.zeros(401, dtype=np.float32)
-        vector[index] = 1.0
-        return vector
-
-    good_events = [
-        create_analyzed_image(
-            path=f"/tmp/good_event_{index}.jpg",
-            clip_features=torch.tensor([0.08, 0.90, 0.02]).numpy(),
-            combined_features=np.pad(feature(index), (0, 475)),
-            content_features=feature(index),
-            normalized_metrics_dict={
-                "action_intensity": 0.18,
-                "ui_density": 0.16,
-                "dramatic_score": 0.82,
-                "color_richness": 0.78,
-            },
-            layout_dict={"dialogue_overlay_score": 0.52},
-        )
-        for index in range(8)
-    ]
-    good_gameplay = [
-        create_analyzed_image(
-            path=f"/tmp/good_gameplay_{index}.jpg",
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(100 + index), (0, 475)),
-            content_features=feature(100 + index),
-            normalized_metrics_dict={"action_intensity": 0.62, "ui_density": 0.48},
-        )
-        for index in range(10)
-    ]
-    good_other = [
-        create_analyzed_image(
-            path=f"/tmp/good_other_{index}.jpg",
-            clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
-            combined_features=np.pad(feature(200 + index), (0, 475)),
-            content_features=feature(200 + index),
-            normalized_metrics_dict={"action_intensity": 0.12, "ui_density": 0.84},
-            layout_dict={"menu_layout_score": 0.58},
-        )
-        for index in range(4)
-    ]
-    bad_transitions = [
-        create_analyzed_image(
-            path=f"/tmp/{name}",
-            raw_metrics_dict=raw_metrics,
-            clip_features=torch.tensor([0.18, 0.34, 0.30]).numpy(),
-            combined_features=np.pad(feature(300 + index), (0, 475)),
-            content_features=feature(300 + index),
-            normalized_metrics_dict=normalized_metrics,
-            layout_dict=layout_dict,
-        )
-        for index, (name, raw_metrics, normalized_metrics, layout_dict) in enumerate(
-            [
-                (
-                    "event0026.jpg",
-                    {
-                        "brightness": 78.0,
-                        "contrast": 6.0,
-                        "edge_density": 0.035,
-                        "luminance_entropy": 0.84,
-                        "luminance_range": 12.0,
-                        "near_black_ratio": 0.08,
-                        "near_white_ratio": 0.04,
-                        "dominant_tone_ratio": 0.80,
-                    },
-                    {"action_intensity": 0.08, "ui_density": 0.40},
-                    {"menu_layout_score": 0.32, "title_layout_score": 0.36},
-                ),
-                (
-                    "event0028.jpg",
-                    {
-                        "brightness": 214.0,
-                        "contrast": 6.0,
-                        "edge_density": 0.025,
-                        "luminance_entropy": 0.72,
-                        "luminance_range": 11.0,
-                        "near_white_ratio": 0.34,
-                        "dominant_tone_ratio": 0.84,
-                    },
-                    {"action_intensity": 0.10, "ui_density": 0.30},
-                    {"dialogue_overlay_score": 0.15},
-                ),
-                (
-                    "event0031.jpg",
-                    {
-                        "brightness": 46.0,
-                        "contrast": 5.5,
-                        "edge_density": 0.03,
-                        "luminance_entropy": 0.70,
-                        "luminance_range": 10.0,
-                        "near_black_ratio": 0.30,
-                        "dominant_tone_ratio": 0.80,
-                    },
-                    {"action_intensity": 0.10, "ui_density": 0.28},
-                    {},
-                ),
-                (
-                    "event0032.jpg",
-                    {
-                        "brightness": 210.0,
-                        "contrast": 5.5,
-                        "edge_density": 0.024,
-                        "luminance_entropy": 0.70,
-                        "luminance_range": 10.0,
-                        "near_white_ratio": 0.32,
-                        "dominant_tone_ratio": 0.83,
-                    },
-                    {"action_intensity": 0.12, "ui_density": 0.30},
-                    {"dialogue_overlay_score": 0.12},
-                ),
-                (
-                    "event0036.jpg",
-                    {
-                        "brightness": 208.0,
-                        "contrast": 5.0,
-                        "edge_density": 0.022,
-                        "luminance_entropy": 0.68,
-                        "luminance_range": 10.0,
-                        "near_white_ratio": 0.30,
-                        "dominant_tone_ratio": 0.82,
-                    },
-                    {"action_intensity": 0.10, "ui_density": 0.26},
-                    {"dialogue_overlay_score": 0.10},
-                ),
-                (
-                    "event0037.jpg",
-                    {
-                        "brightness": 207.0,
-                        "contrast": 5.0,
-                        "edge_density": 0.022,
-                        "luminance_entropy": 0.68,
-                        "luminance_range": 10.0,
-                        "near_white_ratio": 0.29,
-                        "dominant_tone_ratio": 0.82,
-                    },
-                    {"action_intensity": 0.10, "ui_density": 0.26},
-                    {"dialogue_overlay_score": 0.10},
-                ),
-                (
-                    "event0039.jpg",
-                    {
-                        "brightness": 238.0,
-                        "contrast": 3.5,
-                        "edge_density": 0.015,
-                        "luminance_entropy": 0.52,
-                        "luminance_range": 7.0,
-                        "near_white_ratio": 0.56,
-                        "dominant_tone_ratio": 0.90,
-                    },
-                    {"action_intensity": 0.06, "ui_density": 0.08},
-                    {"dialogue_overlay_score": 0.08},
-                ),
-                (
-                    "event0042.jpg",
-                    {
-                        "brightness": 204.0,
-                        "contrast": 5.0,
-                        "edge_density": 0.022,
-                        "luminance_entropy": 0.68,
-                        "luminance_range": 10.0,
-                        "near_white_ratio": 0.28,
-                        "dominant_tone_ratio": 0.82,
-                    },
-                    {"action_intensity": 0.10, "ui_density": 0.28},
-                    {"dialogue_overlay_score": 0.10},
-                ),
-            ]
-        )
-    ]
-
-    analyzed_images = [*good_gameplay, *good_events, *good_other, *bad_transitions]
-    analyzer = FakeAnalyzer(analyzed_images)
-    picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
-
-    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=18)
-
-    selected_basenames = {Path(candidate.path).name for candidate in selected}
-    rejected_basenames = {Path(candidate.path).name for candidate in rejected}
-
-    assert {
-        "event0026.jpg",
-        "event0028.jpg",
-        "event0031.jpg",
-        "event0032.jpg",
-        "event0036.jpg",
-        "event0037.jpg",
-        "event0039.jpg",
-        "event0042.jpg",
-    }.isdisjoint(selected_basenames)
-    assert stats.content_filter_breakdown["fade_transition"] >= 1
+    assert len(selected) >= 2
+    assert all(candidate.scene_assessment.scene_label.value in {"play", "event"} for candidate in selected)
+    assert len(rejected) >= 1
+    assert stats.scene_distribution == {"play": 4, "event": 1}
+    assert stats.scene_mix_target == {"play": 4, "event": 1}
+    assert stats.scene_mix_actual["play"] >= 1
     assert stats.scene_mix_actual["event"] >= 1
-    assert rejected_basenames or stats.rejected_by_content_filter > 0
 
 
-def test_select_from_analyzed_excludes_relative_brightness_outliers_from_selected() -> None:
-    """入力全体の明暗分布から外れた遷移フレームが selected に残らないこと."""
-
-    def feature(index: int) -> np.ndarray:
-        vector = np.zeros(501, dtype=np.float32)
-        vector[index] = 1.0
-        return vector
-
-    good_gameplay = [
+def test_select_from_analyzed_spreads_score_bands_and_rejects_duplicates() -> None:
+    """band 分散と global 類似度除外が同時に働くこと."""
+    base = _feature(0)
+    analyzed_images = [
+        create_analyzed_image(path="/tmp/play_low.jpg", combined_features=_feature(10)),
+        create_analyzed_image(path="/tmp/play_mid.jpg", combined_features=_feature(11)),
+        create_analyzed_image(path="/tmp/play_high.jpg", combined_features=base),
         create_analyzed_image(
-            path=f"/tmp/good_gameplay_{index}.jpg",
-            raw_metrics_dict={
-                "brightness": 104.0 + index * 4.0,
-                "contrast": 16.0,
-                "edge_density": 0.18,
-                "luminance_entropy": 1.1,
-                "luminance_range": 32.0,
-                "near_black_ratio": 0.06,
-                "near_white_ratio": 0.04,
-                "dominant_tone_ratio": 0.58,
-            },
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(index), (0, 475)),
-            content_features=feature(index),
-            normalized_metrics_dict={"action_intensity": 0.62, "ui_density": 0.46},
-        )
-        for index in range(10)
-    ]
-    good_events = [
-        create_analyzed_image(
-            path=f"/tmp/good_event_{index}.jpg",
-            raw_metrics_dict={
-                "brightness": 112.0 + index * 3.0,
-                "contrast": 17.0,
-                "edge_density": 0.17,
-                "luminance_entropy": 1.25,
-                "luminance_range": 35.0,
-                "near_black_ratio": 0.04,
-                "near_white_ratio": 0.06,
-                "dominant_tone_ratio": 0.58,
-            },
-            clip_features=torch.tensor([0.08, 0.90, 0.02]).numpy(),
-            combined_features=np.pad(feature(100 + index), (0, 475)),
-            content_features=feature(100 + index),
-            normalized_metrics_dict={
-                "action_intensity": 0.18,
-                "ui_density": 0.16,
-                "dramatic_score": 0.82,
-                "color_richness": 0.76,
-            },
-            layout_dict={"dialogue_overlay_score": 0.52},
-        )
-        for index in range(7)
-    ]
-    good_other = [
-        create_analyzed_image(
-            path=f"/tmp/good_other_{index}.jpg",
-            raw_metrics_dict={
-                "brightness": 116.0 + index * 2.0,
-                "contrast": 15.0,
-                "edge_density": 0.15,
-                "luminance_entropy": 1.0,
-                "luminance_range": 30.0,
-                "near_black_ratio": 0.05,
-                "near_white_ratio": 0.06,
-                "dominant_tone_ratio": 0.60,
-            },
-            clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
-            combined_features=np.pad(feature(200 + index), (0, 475)),
-            content_features=feature(200 + index),
-            normalized_metrics_dict={"action_intensity": 0.12, "ui_density": 0.84},
-            layout_dict={"menu_layout_score": 0.58},
-        )
-        for index in range(5)
-    ]
-    bad_cases = [
-        create_analyzed_image(
-            path="/tmp/other0051.jpg",
-            raw_metrics_dict={
-                "brightness": 212.0,
-                "contrast": 4.5,
-                "edge_density": 0.03,
-                "luminance_entropy": 0.70,
-                "luminance_range": 10.0,
-                "near_white_ratio": 0.34,
-                "dominant_tone_ratio": 0.86,
-            },
-            clip_features=torch.tensor([0.10, 0.24, 0.46]).numpy(),
-            combined_features=np.pad(feature(300), (0, 475)),
-            content_features=feature(300),
-            normalized_metrics_dict={"action_intensity": 0.08, "ui_density": 0.32},
-            layout_dict={"menu_layout_score": 0.16},
+            path="/tmp/event_dup.jpg",
+            combined_features=_near_duplicate(base, 1),
         ),
-        create_analyzed_image(
-            path="/tmp/other0052.jpg",
-            raw_metrics_dict={
-                "brightness": 222.0,
-                "contrast": 5.0,
-                "edge_density": 0.025,
-                "luminance_entropy": 0.66,
-                "luminance_range": 9.0,
-                "near_white_ratio": 0.38,
-                "dominant_tone_ratio": 0.88,
-            },
-            clip_features=torch.tensor([0.08, 0.20, 0.40]).numpy(),
-            combined_features=np.pad(feature(301), (0, 475)),
-            content_features=feature(301),
-            normalized_metrics_dict={"action_intensity": 0.08, "ui_density": 0.30},
-            layout_dict={"menu_layout_score": 0.10},
-        ),
-        create_analyzed_image(
-            path="/tmp/event0005.jpg",
-            raw_metrics_dict={
-                "brightness": 52.0,
-                "contrast": 5.5,
-                "edge_density": 0.03,
-                "luminance_entropy": 0.76,
-                "luminance_range": 11.0,
-                "near_black_ratio": 0.22,
-                "near_white_ratio": 0.02,
-                "dominant_tone_ratio": 0.82,
-            },
-            clip_features=torch.tensor([0.16, 0.44, 0.24]).numpy(),
-            combined_features=np.pad(feature(302), (0, 475)),
-            content_features=feature(302),
-            normalized_metrics_dict={
-                "action_intensity": 0.10,
-                "ui_density": 0.24,
-                "dramatic_score": 0.24,
-                "color_richness": 0.18,
-            },
-            layout_dict={"dialogue_overlay_score": 0.18},
-        ),
+        create_analyzed_image(path="/tmp/event_far.jpg", combined_features=_feature(100)),
+        create_analyzed_image(path="/tmp/event_far2.jpg", combined_features=_feature(200)),
     ]
-
-    analyzed_images = [*good_gameplay, *good_events, *good_other, *bad_cases]
-    analyzer = FakeAnalyzer(analyzed_images)
-    picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
-
-    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=18)
-
-    selected_basenames = {Path(candidate.path).name for candidate in selected}
-    rejected_basenames = {Path(candidate.path).name for candidate in rejected}
-
-    assert {"other0051.jpg", "other0052.jpg", "event0005.jpg"}.isdisjoint(
-        selected_basenames
-    )
-    assert stats.whole_input_profile is not None
-    assert (
-        stats.content_filter_breakdown["whiteout"]
-        + stats.content_filter_breakdown["fade_transition"]
-        >= 1
-    )
-    assert (
-        {"other0051.jpg", "other0052.jpg", "event0005.jpg"} & rejected_basenames
-    ) or stats.rejected_by_content_filter > 0
-
-
-def test_select_from_analyzed_allows_short_result() -> None:
-    """多様性不足なら要求枚数未満でも正常に返すこと.
-
-    Given:
-        - 各scene内で候補が互いに非常に似ている画像群がある
-        - gameplay/event 50%ずつの設定で選択が行われる
-    When:
-        - 4件の選択が要求される
-    Then:
-        - 多様性判定により各scene 1件ずつ計2件のみ選択されること
-        - 残り2件が除外としてカウントされること
-    """
-    # Arrange
-    analyzed_images = _make_homogeneous_scene_mix_images()
-    analyzer = FakeAnalyzer(analyzed_images)
     picker = GameScreenPicker(
-        analyzer=analyzer,
-        config=SelectionConfig(scene_mix=SceneMix(gameplay=0.5, event=0.5, other=0.0)),
+        analyzer=FakeAnalyzer(analyzed_images),
+        config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
     )
 
-    # Act
-    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=4)
+    selected, _rejected, stats = picker.select_from_analyzed(analyzed_images, num=4)
 
-    # Assert
-    assert len(selected) == 2
-    assert len(rejected) == 2
-    assert stats.selected_count == 2
-    assert stats.scene_mix_target == {"gameplay": 2, "event": 2, "other": 0}
-    assert stats.scene_mix_actual == {"gameplay": 1, "event": 1, "other": 0}
-
-
-def test_select_from_folder_processes_images_and_handles_failures() -> None:
-    """フォルダ選択時に統計情報が正しく計算されること.
-
-    Given:
-        - 入力フォルダには5件の画像パスがある
-        - Analyzer はそのうち先頭3件分だけ解析結果を返す
-    When:
-        - `select` でフォルダ起点の選定を行う
-    Then:
-        - 選択結果は3件となり、未解析2件が失敗数として集計されること
-    """
-    # Arrange
-    analyzed_images = _make_analyzed_images()[:3]
-    analyzer = FakeAnalyzer(analyzed_images)
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        for idx in range(5):
-            Path(temp_dir, f"image{idx}.jpg").touch()
-
-        picker = GameScreenPicker(analyzer=analyzer, config=SelectionConfig())
-
-        # Act
-        selected, _rejected, stats = picker.select(
-            folder=temp_dir,
-            num=5,
-            recursive=False,
-            show_progress=False,
-        )
-
-        # Assert
-        assert len(selected) == 3
-        assert stats.total_files == 5
-        assert stats.analyzed_ok == 3
-        assert stats.analyzed_fail == 2
-
-
-def test_select_from_analyzed_filters_content_before_scene_mix() -> None:
-    """content filter通過後の候補だけでscene mixが適用されること.
-
-    Given:
-        - blackout、whiteout、単色、フェード遷移などの低情報量フレームを含む画像群がある
-        - 高情報量の暗いgameplay/eventフレームもある
-        - gameplay/event 50%ずつのscene mix設定がある
-    When:
-        - select_from_analyzedで選択する
-    Then:
-        - content filterで低情報量フレームが除外されること
-        - 残った候補に対してscene mixが適用されること
-    """
-
-    # Arrange
-    def feature(
-        index: int,
-        delta_index: int | None = None,
-        delta: float = 0.0,
-    ) -> np.ndarray:
-        vector = np.zeros(101, dtype=np.float32)
-        vector[index] = 1.0
-        if delta_index is not None:
-            vector[delta_index] = delta
-        return vector
-
-    analyzed_images = [
-        create_analyzed_image(
-            path="/tmp/dark_gameplay.jpg",
-            raw_metrics_dict={
-                "brightness": 28.0,
-                "contrast": 22.0,
-                "edge_density": 0.34,
-                "action_intensity": 24.0,
-                "luminance_entropy": 1.5,
-                "luminance_range": 48.0,
-                "near_black_ratio": 0.12,
-                "dominant_tone_ratio": 0.62,
-            },
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(0), (0, 475)),
-            content_features=feature(0),
-        ),
-        create_analyzed_image(
-            path="/tmp/dark_event.jpg",
-            raw_metrics_dict={
-                "brightness": 26.0,
-                "contrast": 18.0,
-                "edge_density": 0.28,
-                "action_intensity": 20.0,
-                "luminance_entropy": 1.2,
-                "luminance_range": 40.0,
-                "near_black_ratio": 0.18,
-                "dominant_tone_ratio": 0.67,
-            },
-            clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(1), (0, 475)),
-            content_features=feature(1),
-            layout_dict={"dialogue_overlay_score": 0.6},
-        ),
-        create_analyzed_image(
-            path="/tmp/blackout.jpg",
-            raw_metrics_dict={
-                "brightness": 1.0,
-                "contrast": 0.2,
-                "edge_density": 0.001,
-                "action_intensity": 0.1,
-                "luminance_entropy": 0.05,
-                "luminance_range": 1.0,
-                "near_black_ratio": 0.99,
-                "dominant_tone_ratio": 1.0,
-            },
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(2), (0, 475)),
-            content_features=feature(2),
-        ),
-        create_analyzed_image(
-            path="/tmp/whiteout.jpg",
-            raw_metrics_dict={
-                "brightness": 250.0,
-                "contrast": 0.3,
-                "edge_density": 0.001,
-                "action_intensity": 0.1,
-                "luminance_entropy": 0.05,
-                "luminance_range": 1.0,
-                "near_white_ratio": 0.99,
-                "dominant_tone_ratio": 1.0,
-            },
-            clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
-            combined_features=np.pad(feature(2, 3, 0.01), (0, 475)),
-            content_features=feature(2, 3, 0.01),
-        ),
-        create_analyzed_image(
-            path="/tmp/single_tone.jpg",
-            raw_metrics_dict={
-                "brightness": 120.0,
-                "contrast": 0.2,
-                "edge_density": 0.001,
-                "action_intensity": 0.1,
-                "luminance_entropy": 0.08,
-                "luminance_range": 3.0,
-                "dominant_tone_ratio": 0.96,
-            },
-            clip_features=torch.tensor([0.0, 0.0, 1.0]).numpy(),
-            combined_features=np.pad(feature(2, 4, 0.02), (0, 475)),
-            content_features=feature(2, 4, 0.02),
-        ),
-        create_analyzed_image(
-            path="/tmp/fade_transition.jpg",
-            raw_metrics_dict={
-                "brightness": 12.0,
-                "contrast": 0.0,
-                "edge_density": 0.0,
-                "action_intensity": 0.0,
-                "luminance_entropy": 0.0,
-                "luminance_range": 0.0,
-                "near_black_ratio": 0.85,
-                "dominant_tone_ratio": 0.90,
-            },
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(2, 5, 0.005), (0, 475)),
-            content_features=feature(2, 5, 0.005),
-        ),
-    ]
-    analyzer = FakeAnalyzer(analyzed_images)
-    picker = GameScreenPicker(
-        analyzer=analyzer,
-        config=SelectionConfig(scene_mix=SceneMix(gameplay=0.5, event=0.5, other=0.0)),
-    )
-
-    # Act
-    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=4)
-
-    # Assert
-    assert len(selected) == 2
-    assert len(rejected) == 0
-    assert {candidate.path for candidate in selected} == {
-        "/tmp/dark_gameplay.jpg",
-        "/tmp/dark_event.jpg",
-    }
-    assert stats.rejected_by_content_filter == 4
-    assert stats.content_filter_breakdown == {
-        "blackout": 1,
-        "whiteout": 1,
-        "single_tone": 1,
-        "fade_transition": 1,
-        "temporal_transition": 0,
-    }
-    assert stats.scene_distribution == {"gameplay": 1, "event": 1, "other": 0}
-    assert stats.scene_mix_actual == {"gameplay": 1, "event": 1, "other": 0}
-
-
-def test_select_from_analyzed_rejects_mid_fade_regression() -> None:
-    """従来残っていた fade70 が候補から外れること.
-
-    Given:
-        - 通常フレームと70%以上の暗転途中フレームを含む画像群がある
-        - gameplay/event 75/25 のscene mix設定がある
-    When:
-        - select_from_analyzedで選択する
-    Then:
-        - fade70、fade75、fade82がfade_transitionとして除外されること
-        - 通常フレームのみが選択されること
-    """
-
-    # Arrange
-    def feature(index: int) -> np.ndarray:
-        vector = np.zeros(101, dtype=np.float32)
-        vector[index] = 1.0
-        return vector
-
-    analyzed_images = [
-        create_analyzed_image(
-            path="/tmp/good1.jpg",
-            raw_metrics_dict={
-                "contrast": 18.0,
-                "edge_density": 0.28,
-                "action_intensity": 20.0,
-                "luminance_entropy": 1.2,
-                "luminance_range": 40.0,
-                "near_black_ratio": 0.18,
-                "dominant_tone_ratio": 0.67,
-            },
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(0), (0, 475)),
-            content_features=feature(0),
-        ),
-        create_analyzed_image(
-            path="/tmp/good2.jpg",
-            raw_metrics_dict={
-                "contrast": 16.0,
-                "edge_density": 0.22,
-                "action_intensity": 17.0,
-                "luminance_entropy": 1.0,
-                "luminance_range": 34.0,
-                "near_black_ratio": 0.22,
-                "dominant_tone_ratio": 0.70,
-            },
-            clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(1), (0, 475)),
-            content_features=feature(1),
-            layout_dict={"dialogue_overlay_score": 0.5},
-        ),
-        create_analyzed_image(
-            path="/tmp/fade70.jpg",
-            raw_metrics_dict={
-                "contrast": 3.5,
-                "edge_density": 0.015,
-                "action_intensity": 1.2,
-                "luminance_entropy": 0.42,
-                "luminance_range": 9.0,
-                "near_black_ratio": 0.70,
-                "dominant_tone_ratio": 0.88,
-            },
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(2), (0, 475)),
-            content_features=feature(2),
-        ),
-        create_analyzed_image(
-            path="/tmp/fade75.jpg",
-            raw_metrics_dict={
-                "contrast": 2.5,
-                "edge_density": 0.010,
-                "action_intensity": 0.8,
-                "luminance_entropy": 0.36,
-                "luminance_range": 8.0,
-                "near_black_ratio": 0.75,
-                "dominant_tone_ratio": 0.89,
-            },
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(3), (0, 475)),
-            content_features=feature(3),
-        ),
-        create_analyzed_image(
-            path="/tmp/fade82.jpg",
-            raw_metrics_dict={
-                "contrast": 2.0,
-                "edge_density": 0.008,
-                "action_intensity": 0.4,
-                "luminance_entropy": 0.32,
-                "luminance_range": 6.0,
-                "near_black_ratio": 0.82,
-                "dominant_tone_ratio": 0.90,
-            },
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(4), (0, 475)),
-            content_features=feature(4),
-        ),
-    ]
-    analyzer = FakeAnalyzer(analyzed_images)
-    config = SelectionConfig(scene_mix=SceneMix(gameplay=0.75, event=0.25, other=0.0))
-    picker = GameScreenPicker(analyzer=analyzer, config=config)
-
-    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=3)
-
-    assert [candidate.path for candidate in selected] == [
-        "/tmp/good1.jpg",
-        "/tmp/good2.jpg",
-    ]
-    assert rejected == []
-    assert stats.rejected_by_content_filter == 3
-    assert stats.content_filter_breakdown["fade_transition"] == 3
-
-
-def test_select_from_analyzed_excludes_bright_and_dim_transition_frames() -> None:
-    """明転途中・暗転途中の event 風フレームが候補に残らないこと."""
-
-    def feature(index: int) -> np.ndarray:
-        vector = np.zeros(101, dtype=np.float32)
-        vector[index] = 1.0
-        return vector
-
-    analyzed_images = [
-        create_analyzed_image(
-            path="/tmp/good_gameplay.jpg",
-            raw_metrics_dict={
-                "brightness": 96.0,
-                "contrast": 18.0,
-                "edge_density": 0.20,
-                "action_intensity": 18.0,
-                "luminance_entropy": 1.3,
-                "luminance_range": 36.0,
-                "near_black_ratio": 0.12,
-                "dominant_tone_ratio": 0.60,
-            },
-            clip_features=torch.tensor([1.0, 0.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(0), (0, 475)),
-            content_features=feature(0),
-        ),
-        create_analyzed_image(
-            path="/tmp/good_event.jpg",
-            raw_metrics_dict={
-                "brightness": 145.0,
-                "contrast": 20.0,
-                "edge_density": 0.18,
-                "action_intensity": 12.0,
-                "luminance_entropy": 1.4,
-                "luminance_range": 38.0,
-                "near_white_ratio": 0.10,
-                "dominant_tone_ratio": 0.58,
-            },
-            clip_features=torch.tensor([0.0, 1.0, 0.0]).numpy(),
-            combined_features=np.pad(feature(1), (0, 475)),
-            content_features=feature(1),
-            layout_dict={"dialogue_overlay_score": 0.55},
-        ),
-        create_analyzed_image(
-            path="/tmp/bright_transition.jpg",
-            raw_metrics_dict={
-                "brightness": 222.0,
-                "contrast": 4.0,
-                "edge_density": 0.02,
-                "action_intensity": 2.0,
-                "luminance_entropy": 0.55,
-                "luminance_range": 8.0,
-                "near_white_ratio": 0.52,
-                "dominant_tone_ratio": 0.88,
-            },
-            clip_features=torch.tensor([0.10, 0.85, 0.02]).numpy(),
-            combined_features=np.pad(feature(2), (0, 475)),
-            content_features=feature(2),
-            layout_dict={"dialogue_overlay_score": 0.35},
-        ),
-        create_analyzed_image(
-            path="/tmp/dim_transition.jpg",
-            raw_metrics_dict={
-                "brightness": 36.0,
-                "contrast": 3.5,
-                "edge_density": 0.02,
-                "action_intensity": 1.8,
-                "luminance_entropy": 0.55,
-                "luminance_range": 8.0,
-                "near_black_ratio": 0.55,
-                "dominant_tone_ratio": 0.85,
-            },
-            clip_features=torch.tensor([0.10, 0.82, 0.03]).numpy(),
-            combined_features=np.pad(feature(3), (0, 475)),
-            content_features=feature(3),
-            layout_dict={"dialogue_overlay_score": 0.30},
-        ),
-    ]
-    analyzer = FakeAnalyzer(analyzed_images)
-    config = SelectionConfig(scene_mix=SceneMix(gameplay=0.5, event=0.5, other=0.0))
-    picker = GameScreenPicker(analyzer=analyzer, config=config)
-
-    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=4)
-
-    assert rejected == []
-    assert {candidate.path for candidate in selected} == {
-        "/tmp/good_gameplay.jpg",
-        "/tmp/good_event.jpg",
-    }
-    assert stats.rejected_by_content_filter == 2
-    assert (
-        stats.content_filter_breakdown["whiteout"]
-        + stats.content_filter_breakdown["fade_transition"]
-        == 2
-    )
-    assert stats.scene_mix_actual == {"gameplay": 1, "event": 1, "other": 0}
+    assert stats.rejected_by_similarity >= 1
+    assert len({candidate.score_band for candidate in selected}) >= 2
+    assert all(candidate.score_band is not None for candidate in selected)

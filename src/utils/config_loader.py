@@ -44,9 +44,8 @@ class ConfigLoader:
         scene_mix = raw_data.get("scene_mix", {})
         if scene_mix:
             result["scene_mix"] = SceneMix(
-                gameplay=float(scene_mix.get("gameplay", 0.5)),
-                event=float(scene_mix.get("event", 0.4)),
-                other=float(scene_mix.get("other", 0.1)),
+                play=float(scene_mix.get("play", 0.7)),
+                event=float(scene_mix.get("event", 0.3)),
             )
 
         thresholds = raw_data.get("thresholds", {})

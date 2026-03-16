@@ -1,359 +1,94 @@
-"""画面種別判定器.
-
-CLIPのゼロショット類似度とレイアウトヒューリスティクスを組み合わせ、
-画像を gameplay / event / other の3系統へ寄せて評価する。
-"""
-
-from typing import Any
+"""入力集合内の類似度密度から play / event を割り当てる."""
 
 import numpy as np
 
 from ..constants.scene_label import SceneLabel
-from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.scene_assessment import SceneAssessment
-from ..models.whole_input_profile import WholeInputProfile
-from ..protocols.text_embedding_provider import TextEmbeddingProvider
-from ..utils.transition_metrics import (
-    calculate_bright_washout_score,
-    calculate_relative_transition_scores,
-    calculate_support_ui_score,
-    calculate_system_ui_signal,
-    calculate_veiled_transition_score,
-)
+from ..models.scene_mix import SceneMix
+from ..utils.vector_utils import VectorUtils
 
 
 class SceneScorer:
-    """画像を gameplay / event / other に分類する.
+    """画像集合を play / event に分類する."""
 
-    タイトル固有の知識は使わず、複数プロンプトのCLIP類似度と
-    UI量・会話オーバーレイ・メニューらしさなどの
-    汎用ヒューリスティクスだけで画面種別を推定する。
-    """
+    TOP_K_NEIGHBORS = 5
 
-    AMBIGUITY_MARGIN = 0.05
-    EVENT_PROMOTION_MARGIN = 0.01
-    EVENT_PROMOTION_MIN_SCORE = 0.40
-    EVENT_PROMOTION_MIN_SIGNAL = 0.50
-    EVENT_PROMOTION_MIN_DISTINCTIVENESS = 0.60
-    EVENT_PROMOTION_MAX_ACTION = 0.45
-    EVENT_PROMOTION_MAX_UI = 0.45
-    EVENT_PROMOTION_MAX_SUPPORT_UI = 0.55
-    EVENT_PROMOTION_MIN_OTHER_GAP = 0.01
-    TRANSITION_RISK_EVENT_PENALTY = 0.06
-    BRIGHT_WASHOUT_EVENT_PENALTY = 0.12
-    VEILED_TRANSITION_EVENT_PENALTY = 0.18
-    VEILED_SUPPRESS_MIN_SCORE = 0.34
-    VEILED_SUPPRESS_MAX_MARGIN = 0.09
-    VEILED_SUPPRESS_MAX_OTHER_GAP = 0.12
-    SYSTEM_UI_SUPPRESS_MIN_SIGNAL = 0.30
-    SYSTEM_UI_SUPPRESS_MAX_VISIBILITY = 0.50
-    SYSTEM_UI_SUPPRESS_MAX_MARGIN = 0.12
-    BRIGHT_WASHOUT_SUPPRESS_MIN_SCORE = 0.52
-    BRIGHT_WASHOUT_SUPPRESS_MAX_MARGIN = 0.10
-    TRANSITION_RISK_LUMINANCE_RANGE_SCALE = 48.0
-    PROMPT_GROUPS: dict[str, tuple[str, ...]] = {
-        "gameplay": (
-            "video game gameplay screenshot with heads-up display",
-            "player controlling a character during combat gameplay",
-            "in-game exploration screen with interface elements",
-            "gameplay action scene with status bars and HUD",
-        ),
-        "event": (
-            "video game dialogue event scene",
-            "story cutscene from a video game",
-            "in-engine cinematic scene from a video game",
-            "boss introduction cutscene from a video game",
-            "scripted dramatic event in a video game",
-            "stage intro cinematic from a video game",
-            "character close-up event scene in a video game",
-            "story scene with character portraits in a video game",
-            "villain introduction scene from a video game",
-            "special scripted sequence in a video game",
-            "conversation scene with subtitles in a video game",
-        ),
-        "other": (
-            "video game main menu screen",
-            "game title screen",
-            "game over screen",
-            "full-screen world map from a video game",
-            "inventory or equipment menu from a video game",
-            "skill tree or upgrade menu from a video game",
-            "shop or merchant screen from a video game",
-            "pause or settings menu from a video game",
-            "video game result or reward screen",
-            "loading screen from a video game",
-        ),
-    }
-
-    def __init__(self, model_manager: TextEmbeddingProvider):
-        """SceneScorerを初期化する.
-
-        Args:
-            model_manager: テキスト埋め込みを取得できるモデル管理器。
-                起動時にプロンプト埋め込みをまとめてキャッシュする。
-        """
-        self._prompt_embeddings = self._build_prompt_embeddings(model_manager)
-
-    @classmethod
-    def _build_prompt_embeddings(
-        cls,
-        model_manager: TextEmbeddingProvider,
-    ) -> dict[str, np.ndarray[Any, Any]]:
-        """各プロンプト群のテキスト埋め込みをキャッシュする.
-
-        scene labelごとに複数のゼロショットプロンプトを用意し、
-        初期化時にまとめてベクトル化して再利用する。
-
-        Args:
-            model_manager: テキスト埋め込みを返すオブジェクト。
-
-        Returns:
-            scene labelごとの埋め込み行列。
-        """
-        result: dict[str, np.ndarray[Any, Any]] = {}
-        for label, prompts in cls.PROMPT_GROUPS.items():
-            embeddings = model_manager.get_text_embeddings(prompts).cpu().numpy()
-            result[label] = embeddings
-        return result
-
-    @staticmethod
-    def _mean_top_two(scores: np.ndarray[Any, Any]) -> float:
-        """上位2件の平均値を返す.
-
-        単一プロンプトの偶然の当たりに引っ張られすぎないよう、
-        各グループで最も強い2件の平均を代表値として使う。
-
-        Args:
-            scores: 1次元の類似度配列。
-
-        Returns:
-            上位2件の平均値。要素数が1以下の場合は利用可能な値だけで返す。
-        """
-        if scores.size == 0:
-            return 0.0
-        if scores.size == 1:
-            return float(scores[0])
-        top_two = np.partition(scores, -2)[-2:]
-        return float(np.mean(top_two))
-
-    @staticmethod
-    def _clamp(value: float) -> float:
-        """0..1にクリップする.
-
-        Args:
-            value: 補正後スコア。
-
-        Returns:
-            0.0以上1.0以下へ丸めた値。
-        """
-        return max(0.0, min(1.0, value))
-
-    def assess(
+    def assess_batch(
         self,
-        analyzed_image: AnalyzedImage,
-        adaptive_scores: AdaptiveScores,
-        whole_input_profile: WholeInputProfile,
-    ) -> SceneAssessment:
-        """単一画像の画面種別を評価する.
+        analyzed_images: list[AnalyzedImage],
+        scene_mix: SceneMix,
+    ) -> list[SceneAssessment]:
+        """画像集合をまとめて評価する."""
+        if not analyzed_images:
+            return []
 
-        まずCLIP特徴と各プロンプト群の内積から
-        gameplay / event / other の基礎スコアを作り、
-        その後で入力全体に対する頻出度、可視性、情報量、UI量、会話オーバーレイ、
-        メニュー配置、タイトル画面らしさ、ゲームオーバー画面らしさを
-        加減算して補正する。
-        最終的な `scene_label` は最大スコアを基本にしつつ、
-        gameplay と other が僅差なら other へ倒し、
-        低可視性の遷移フレームらしい raw event は event から外す。
-        `scene_confidence` は採用ラベルと次点候補の差分で表す。
+        density_scores = self._calculate_density_scores(analyzed_images)
+        play_target = self._calculate_play_target(len(analyzed_images), scene_mix)
+        ordered_indices = sorted(
+            range(len(analyzed_images)),
+            key=lambda index: density_scores[index],
+            reverse=True,
+        )
+        play_indices = set(ordered_indices[:play_target])
 
-        Args:
-            analyzed_image: scene判定前の中立解析結果。
-            adaptive_scores: 入力全体に対する相対情報量・差分量・可視性スコア。
-
-        Returns:
-            3系統のスコア、最終ラベル、信頼度を持つ `SceneAssessment` 。
-        """
-        clip_features = analyzed_image.clip_features
-        raw = analyzed_image.raw_metrics
-        heuristics = analyzed_image.layout_heuristics
-        norm = analyzed_image.normalized_metrics
-        distinctiveness_score = adaptive_scores.distinctiveness_score
-        information_score = adaptive_scores.information_score
-        visibility_score = adaptive_scores.visibility_score
-        gameplay_typicality = self._clamp(1.0 - distinctiveness_score)
-        support_ui_score = calculate_support_ui_score(norm)
-        system_ui_signal = calculate_system_ui_signal(heuristics)
-        rare_cinematic_score = self._clamp(
-            0.55 * distinctiveness_score
-            + 0.30 * norm.dramatic_score
-            + 0.15 * (1.0 - support_ui_score)
-            - 0.20
-        )
-        transition_risk_score = self._calculate_transition_risk(raw, adaptive_scores)
-        bright_washout_score = calculate_bright_washout_score(raw)
-        veiled_transition_score = calculate_veiled_transition_score(
-            raw,
-            adaptive_scores,
-            heuristics,
-            norm,
-        )
-        (
-            relative_bright_transition_score,
-            relative_dark_transition_score,
-            relative_transition_score,
-            relative_transition_polarity,
-        ) = calculate_relative_transition_scores(
-            raw,
-            adaptive_scores,
-            heuristics,
-            norm,
-            whole_input_profile,
-        )
-
-        gameplay_base = self._mean_top_two(
-            self._prompt_embeddings["gameplay"] @ clip_features
-        )
-        event_base = self._mean_top_two(
-            self._prompt_embeddings["event"] @ clip_features
-        )
-        other_base = self._mean_top_two(
-            self._prompt_embeddings["other"] @ clip_features
-        )
-
-        gameplay_score = self._clamp(
-            gameplay_base
-            + 0.18 * gameplay_typicality
-            + 0.10 * norm.ui_density
-            + 0.08 * norm.action_intensity
-            - 0.10 * support_ui_score
-            - 0.10 * rare_cinematic_score
-            - 0.08 * heuristics.menu_layout_score
-            - 0.06 * heuristics.title_layout_score
-            - 0.06 * heuristics.game_over_layout_score
-            - 0.05 * heuristics.dialogue_overlay_score
-            - 0.04 * relative_transition_score
-        )
-        event_score = self._clamp(
-            1.18 * event_base
-            + 0.14 * heuristics.dialogue_overlay_score
-            + 0.28 * rare_cinematic_score
-            + 0.10 * distinctiveness_score
-            + 0.06 * norm.color_richness
-            - 0.02 * heuristics.menu_layout_score
-            - 0.04 * support_ui_score
-            - self.TRANSITION_RISK_EVENT_PENALTY * transition_risk_score
-            - self.BRIGHT_WASHOUT_EVENT_PENALTY * bright_washout_score
-            - self.VEILED_TRANSITION_EVENT_PENALTY * veiled_transition_score
-            - 0.08 * relative_transition_score
-        )
-        other_score = self._clamp(
-            other_base
-            + 0.18 * support_ui_score
-            + 0.14 * heuristics.menu_layout_score
-            + 0.12 * heuristics.title_layout_score
-            + 0.12 * heuristics.game_over_layout_score
-            + 0.06 * distinctiveness_score
-            - 0.06 * gameplay_typicality
-            - 0.04 * relative_transition_score
-        )
-
-        label_scores = {
-            SceneLabel.GAMEPLAY: gameplay_score,
-            SceneLabel.EVENT: event_score,
-            SceneLabel.OTHER: other_score,
-        }
-        ordered_scores = sorted(
-            label_scores.items(), key=lambda item: item[1], reverse=True
-        )
-        argmax_scene_label, argmax_score = ordered_scores[0]
-        second_score = ordered_scores[1][1] if len(ordered_scores) > 1 else 0.0
-        argmax_margin = argmax_score - second_score
-        scene_label = argmax_scene_label
-        transition_suppressed_event = False
-        veiled_transition_suppressed = (
-            argmax_scene_label == SceneLabel.EVENT
-            and (
-                (
-                    veiled_transition_score >= self.VEILED_SUPPRESS_MIN_SCORE
-                    and argmax_margin <= self.VEILED_SUPPRESS_MAX_MARGIN
-                    and other_score >= event_score - self.VEILED_SUPPRESS_MAX_OTHER_GAP
-                )
-                or (
-                    system_ui_signal >= self.SYSTEM_UI_SUPPRESS_MIN_SIGNAL
-                    and visibility_score <= self.SYSTEM_UI_SUPPRESS_MAX_VISIBILITY
-                    and argmax_margin <= self.SYSTEM_UI_SUPPRESS_MAX_MARGIN
-                )
-                or (
-                    bright_washout_score >= self.BRIGHT_WASHOUT_SUPPRESS_MIN_SCORE
-                    and argmax_margin <= self.BRIGHT_WASHOUT_SUPPRESS_MAX_MARGIN
-                )
-            )
-        )
-        if veiled_transition_suppressed:
+        assessments: list[SceneAssessment] = []
+        for index, density_score in enumerate(density_scores):
+            play_score = density_score
+            event_score = 1.0 - density_score
             scene_label = (
-                SceneLabel.OTHER if other_score >= gameplay_score else SceneLabel.GAMEPLAY
+                SceneLabel.PLAY if index in play_indices else SceneLabel.EVENT
             )
-            transition_suppressed_event = True
-        elif (
-            argmax_scene_label == SceneLabel.GAMEPLAY
-            and argmax_margin <= self.AMBIGUITY_MARGIN
-            and other_score >= argmax_score - self.AMBIGUITY_MARGIN
-        ):
-            scene_label = SceneLabel.OTHER
-        elif (
-            argmax_scene_label == SceneLabel.GAMEPLAY
-            and event_score >= gameplay_score - self.EVENT_PROMOTION_MARGIN
-            and event_score >= self.EVENT_PROMOTION_MIN_SCORE
-            and rare_cinematic_score >= self.EVENT_PROMOTION_MIN_SIGNAL
-            and distinctiveness_score >= self.EVENT_PROMOTION_MIN_DISTINCTIVENESS
-            and norm.action_intensity <= self.EVENT_PROMOTION_MAX_ACTION
-            and norm.ui_density <= self.EVENT_PROMOTION_MAX_UI
-            and support_ui_score <= self.EVENT_PROMOTION_MAX_SUPPORT_UI
-            and event_score >= other_score + self.EVENT_PROMOTION_MIN_OTHER_GAP
-        ):
-            scene_label = SceneLabel.EVENT
-
-        chosen_score = label_scores[scene_label]
-        unchosen_scores = [
-            score for label, score in label_scores.items() if label != scene_label
-        ]
-        scene_confidence = self._clamp(chosen_score - max(unchosen_scores, default=0.0))
-
-        return SceneAssessment(
-            gameplay_score=gameplay_score,
-            event_score=event_score,
-            other_score=other_score,
-            scene_label=scene_label,
-            scene_confidence=scene_confidence,
-            transition_risk_score=transition_risk_score,
-            bright_washout_score=bright_washout_score,
-            veiled_transition_score=veiled_transition_score,
-            relative_bright_transition_score=relative_bright_transition_score,
-            relative_dark_transition_score=relative_dark_transition_score,
-            relative_transition_score=relative_transition_score,
-            relative_transition_polarity=relative_transition_polarity,
-            transition_suppressed_event=transition_suppressed_event,
-        )
+            assessments.append(
+                SceneAssessment(
+                    play_score=play_score,
+                    event_score=event_score,
+                    density_score=density_score,
+                    scene_label=scene_label,
+                    scene_confidence=abs(play_score - event_score),
+                )
+            )
+        return assessments
 
     @classmethod
-    def _calculate_transition_risk(
+    def _calculate_density_scores(
         cls,
-        raw_metrics: Any,
-        adaptive_scores: AdaptiveScores,
-    ) -> float:
-        """暗転・明転・露出過多/不足の遷移フレームらしさを返す."""
-        exposure_extreme = max(
-            raw_metrics.near_black_ratio, raw_metrics.near_white_ratio
+        analyzed_images: list[AnalyzedImage],
+    ) -> list[float]:
+        """各画像の近傍密度を 0..1 に正規化して返す."""
+        if len(analyzed_images) == 1:
+            return [1.0]
+
+        normalized_features = np.asarray(
+            VectorUtils.normalize_feature_vectors(
+                [candidate.combined_features for candidate in analyzed_images]
+            ),
+            dtype=np.float32,
         )
-        compressed_range = 1.0 - min(
-            1.0,
-            raw_metrics.luminance_range / cls.TRANSITION_RISK_LUMINANCE_RANGE_SCALE,
-        )
-        return cls._clamp(
-            0.35 * (1.0 - adaptive_scores.visibility_score)
-            + 0.25 * (1.0 - adaptive_scores.information_score)
-            + 0.15 * exposure_extreme
-            + 0.15 * raw_metrics.dominant_tone_ratio
-            + 0.10 * compressed_range
-        )
+        neighbor_count = min(cls.TOP_K_NEIGHBORS, len(analyzed_images) - 1)
+        raw_scores = np.zeros(len(analyzed_images), dtype=np.float32)
+
+        for index, feature in enumerate(normalized_features):
+            similarities = normalized_features @ feature
+            similarities[index] = -np.inf
+            nearest = np.partition(similarities, -neighbor_count)[-neighbor_count:]
+            raw_scores[index] = float(np.mean(nearest))
+
+        min_score = float(raw_scores.min())
+        max_score = float(raw_scores.max())
+        if np.isclose(min_score, max_score):
+            return [0.5 for _ in analyzed_images]
+        normalized_scores = (raw_scores - min_score) / (max_score - min_score)
+        return [float(score) for score in normalized_scores]
+
+    @staticmethod
+    def _calculate_play_target(total: int, scene_mix: SceneMix) -> int:
+        """play 枚数の目標値を返す."""
+        raw_play = total * scene_mix.play
+        raw_event = total * scene_mix.event
+        base_play = int(raw_play)
+        base_event = int(raw_event)
+        remainder = total - (base_play + base_event)
+        if remainder <= 0:
+            return base_play
+        return base_play + int(raw_play - base_play >= raw_event - base_event)

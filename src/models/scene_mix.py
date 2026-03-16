@@ -7,13 +7,12 @@ from dataclasses import dataclass
 class SceneMix:
     """画面種別ごとの選択比率."""
 
-    gameplay: float = 0.5
-    event: float = 0.4
-    other: float = 0.1
+    play: float = 0.7
+    event: float = 0.3
 
     def __post_init__(self) -> None:
         """比率の妥当性を検証する."""
-        values = (self.gameplay, self.event, self.other)
+        values = (self.play, self.event)
         if not all(0.0 <= value <= 1.0 for value in values):
             msg = f"scene_mixの各要素は0以上1以下である必要があります: {values}"
             raise ValueError(msg)
@@ -28,7 +27,6 @@ class SceneMix:
     def as_dict(self) -> dict[str, float]:
         """辞書形式で返す."""
         return {
-            "gameplay": self.gameplay,
+            "play": self.play,
             "event": self.event,
-            "other": self.other,
         }

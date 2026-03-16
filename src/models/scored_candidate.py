@@ -9,7 +9,7 @@ from .analyzed_image import AnalyzedImage
 from .scene_assessment import SceneAssessment
 
 
-@dataclass(frozen=True)
+@dataclass
 class ScoredCandidate:
     """最終選定に使うスコア付き候補."""
 
@@ -17,8 +17,9 @@ class ScoredCandidate:
     scene_assessment: SceneAssessment
     resolved_profile: str
     quality_score: float
-    activity_score: float
     selection_score: float
+    score_band: str | None = None
+    outlier_rejected: bool = False
 
     @property
     def path(self) -> str:
