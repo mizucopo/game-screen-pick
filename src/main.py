@@ -1,7 +1,6 @@
 """game-screen-pick のCLIエントリポイント."""
 
 import logging
-import random
 import sys
 from pathlib import Path
 
@@ -254,12 +253,6 @@ class Main:
         help="scene別に play0001.ext / event0001.ext 形式で出力ファイル名を付け直す",
     )
     @click.option(
-        "--seed",
-        type=int,
-        default=None,
-        help="乱数シード（再現可能な結果を得るために指定）",
-    )
-    @click.option(
         "--batch-size",
         type=int,
         callback=lambda _ctx, _param, x: Main.validate_positive_int(x),
@@ -305,7 +298,6 @@ class Main:
         scene_mix: SceneMix | None,
         report_json: str | None,
         rename: bool,
-        seed: int | None,
         batch_size: int | None,
         result_max_workers: int | None,
         max_dim: int,
@@ -337,7 +329,6 @@ class Main:
             scene_mix: CLIから上書きする画面種別比率。
             report_json: JSONレポートの出力先パス。
             rename: scene別の連番ファイル名で出力するかどうか。
-            seed: シャッフル順を固定するための乱数シード。
             batch_size: CLIP推論のバッチサイズ上書き。
             result_max_workers: 結果構築に使う並列ワーカー数。
             max_dim: 入力画像の長辺最大サイズ。
@@ -378,8 +369,7 @@ class Main:
             )
 
             with ImageQualityAnalyzer(config=analyzer_config) as analyzer:
-                rng = random.Random(seed) if seed is not None else None
-                picker = GameScreenPicker(analyzer, config=selection_config, rng=rng)
+                picker = GameScreenPicker(analyzer, config=selection_config)
                 logger.info("画像処理を開始します...")
 
                 selected, rejected, stats = picker.select(
