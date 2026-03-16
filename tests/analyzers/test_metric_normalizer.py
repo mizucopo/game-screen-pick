@@ -77,6 +77,11 @@ def test_normalize_all_returns_expected_values() -> None:
         visual_balance=80.0,  # 80 / 100 = 0.8
         action_intensity=30.0,  # center=30 → 約0.5
         ui_density=10.0,  # center=10 → 約0.5
+        luminance_entropy=1.0,
+        luminance_range=50.0,
+        near_black_ratio=0.0,
+        near_white_ratio=0.0,
+        dominant_tone_ratio=0.5,
     )
 
     # Act

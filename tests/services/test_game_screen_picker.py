@@ -1,133 +1,175 @@
-"""GameScreenPickerの単体テスト.
-
-このテストモジュールは以下のベストプラクティスに従っています：
-1. 「What」（観察可能な挙動）をテスト
-2. モック使用を最小限に抑える - 外部依存関係のみモックを使用
-   （ファイルシステム、重いMLモデル）
-3. テスト可能性を高めるためにドメインロジックをIO操作から分離
-4. 明確なコメント付きのAAAパターン（Arrange, Act, Assert）を使用
-5. パブリックメソッドを通じてプライベートメソッドを間接的にテスト
-"""
-
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock
+"""GameScreenPickerの単体テスト."""
 
 import numpy as np
-import pytest
 
-from src.models.image_metrics import ImageMetrics
+from src.models.scene_mix import SceneMix
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
-from tests.conftest import create_image_metrics, create_sample_metrics
+from tests.conftest import create_analyzed_image
+from tests.fake_analyzer import FakeAnalyzer
 
 
-@pytest.fixture
-def mock_analyzer() -> MagicMock:
-    """ImageQualityAnalyzerのモック."""
-    from src.analyzers.image_quality_analyzer import ImageQualityAnalyzer
-
-    return MagicMock(spec=ImageQualityAnalyzer)
+def _feature(index: int) -> np.ndarray:
+    feature = np.zeros(576, dtype=np.float32)
+    feature[index] = 1.0
+    return feature
 
 
-def test_select_from_analyzed_returns_diverse_images(
-    mock_analyzer: MagicMock,
-) -> None:
-    """分析済み画像から多様な画像が正しく選択されること.
+def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
+    feature = base.copy()
+    feature[index] = 0.01
+    return feature
+
+
+def test_select_from_analyzed_filters_content_before_play_event_assignment() -> None:
+    """content filter の除外が先に適用されること.
 
     Given:
-        - 様々なスコアを持つ5つの分析済み画像
+        - blackout判定される暗い画像がある
+        - 正常なplay画像とevent画像がある
+        - scene_mix比率が50/50に設定されている
     When:
-        - 3つの画像を選択
+        - 2件を選択する
     Then:
-        - 要求された数の画像が返されること
-        - 統計情報が正しく記録されていること
+        - play画像とevent画像が選ばれること
+        - blackout画像がcontent_filterで除外されること
     """
     # Arrange
-    sample_metrics = create_sample_metrics(5)
-    num_to_select = 3
-    similarity_threshold = 0.9
-    config = SelectionConfig()
-    picker = GameScreenPicker(analyzer=mock_analyzer, config=config)
-
-    # Act
-    result, stats = picker.select_from_analyzed(
-        sample_metrics,
-        num_to_select,
-        similarity_threshold,
+    dark = create_analyzed_image(
+        path="/tmp/dark.jpg",
+        raw_metrics_dict={
+            "near_black_ratio": 0.98,
+            "luminance_entropy": 0.2,
+            "luminance_range": 10.0,
+        },
+        combined_features=_feature(0),
+    )
+    play = create_analyzed_image(
+        path="/tmp/play.jpg",
+        combined_features=_feature(1),
+    )
+    event = create_analyzed_image(
+        path="/tmp/event.jpg",
+        combined_features=_feature(100),
+    )
+    analyzed_images = [dark, play, event]
+    picker = GameScreenPicker(
+        analyzer=FakeAnalyzer(analyzed_images),
+        config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
     )
 
+    # Act
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=2)
+
     # Assert
-    assert len(result) == 3
-    assert stats.total_files == 5
-    assert stats.analyzed_ok == 5
-    assert stats.selected_count == 3
+    assert {candidate.path for candidate in selected} == {
+        "/tmp/play.jpg",
+        "/tmp/event.jpg",
+    }
+    assert rejected == []
+    assert stats.rejected_by_content_filter == 1
+    assert stats.content_filter_breakdown["blackout"] == 1
+    assert stats.scene_mix_actual == {"play": 1, "event": 1}
 
 
-def test_select_from_folder_processes_images_and_handles_failures(
-    mock_analyzer: MagicMock,
-) -> None:
-    """フォルダから画像をロード・分析し、失敗時も適切に処理すること.
+def test_select_from_analyzed_assigns_dense_candidates_to_play() -> None:
+    """密度の高いクラスタが play へ寄ること.
 
     Given:
-        - 5つの画像ファイルを持つフォルダ
-        - アナライザは一部のファイルに対してNoneを返す
+        - 互いに似た3件の画像（高密度クラスタ）がある
+        - 孤立した2件の画像（低密度）がある
+        - scene_mix比率が70/30に設定されている
     When:
-        - 画像を選択
+        - 5件を選択する
     Then:
-        - 処理が継続され、有効な画像のみが返されること
-        - 統計情報が正しく記録されていること
+        - 高密度クラスタがplayに割り当てられること
+        - 低密度画像の一部がeventに割り当てられること
     """
-
     # Arrange
-    def mock_analyze_batch(
-        paths: list[str],
-        batch_size: int = 32,  # noqa: ARG001
-        show_progress: bool = False,  # noqa: ARG001
-    ) -> list[ImageMetrics | None]:
-        results: list[ImageMetrics | None] = []
-        for path in paths:
-            try:
-                idx = int(path.split("image")[-1].split(".")[0])
-            except (ValueError, IndexError):
-                idx = 0
-            # 偶数インデックスは失敗とする
-            if idx % 2 == 0:
-                results.append(None)
-            else:
-                np.random.seed(idx)
-                results.append(
-                    create_image_metrics(
-                        path=path,
-                        raw_metrics_dict={"blur_score": 100 - idx * 10},
-                        normalized_metrics_dict={"blur_score": 1.0 - idx * 0.1},
-                        semantic_score=0.8,
-                        total_score=100 - idx * 10,
-                        features=np.random.rand(128),
-                    )
-                )
-        return results
+    base = _feature(0)
+    analyzed_images = [
+        create_analyzed_image(
+            path="/tmp/play_0.jpg",
+            combined_features=base,
+        ),
+        create_analyzed_image(
+            path="/tmp/play_1.jpg",
+            combined_features=_near_duplicate(base, 1),
+        ),
+        create_analyzed_image(
+            path="/tmp/play_2.jpg",
+            combined_features=_near_duplicate(base, 2),
+        ),
+        create_analyzed_image(
+            path="/tmp/event_0.jpg",
+            combined_features=_feature(100),
+        ),
+        create_analyzed_image(
+            path="/tmp/event_1.jpg",
+            combined_features=_feature(200),
+        ),
+    ]
+    picker = GameScreenPicker(
+        analyzer=FakeAnalyzer(analyzed_images),
+        config=SelectionConfig(scene_mix=SceneMix(play=0.7, event=0.3)),
+    )
 
-    mock_analyzer.analyze_batch = mock_analyze_batch
+    # Act
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=5)
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        for i in range(5):
-            Path(temp_dir, f"image{i}.jpg").touch()
+    # Assert
+    assert len(selected) >= 2
+    assert all(
+        candidate.scene_assessment.scene_label.value in {"play", "event"}
+        for candidate in selected
+    )
+    assert len(rejected) >= 1
+    assert stats.scene_distribution == {"play": 4, "event": 1}
+    assert stats.scene_mix_target == {"play": 4, "event": 1}
+    assert stats.scene_mix_actual["play"] >= 1
+    assert stats.scene_mix_actual["event"] >= 1
 
-        picker = GameScreenPicker(mock_analyzer)
 
-        # Act
-        result, stats = picker.select(
-            folder=temp_dir,
-            num=5,
-            similarity_threshold=0.8,
-            recursive=False,
-            show_progress=False,
-        )
+def test_select_from_analyzed_spreads_score_bands_and_rejects_duplicates() -> None:
+    """band 分散と global 類似度除外が同時に働くこと.
 
-        # Assert
-        assert len(result) <= 2  # 奇数インデックスのみ有効
-        assert stats.total_files == 5
-        assert stats.analyzed_ok == 2
-        assert stats.analyzed_fail == 3
-        assert stats.selected_count == len(result)
+    Given:
+        - 異なるスコア帯のplay画像がある
+        - play画像と類似するevent画像がある
+        - 類似しないevent画像がある
+        - scene_mix比率が50/50に設定されている
+    When:
+        - 4件を選択する
+    Then:
+        - 類似画像が類似度除外されること
+        - 選択候補に複数のscore_bandが含まれること
+    """
+    # Arrange
+    base = _feature(0)
+    analyzed_images = [
+        create_analyzed_image(path="/tmp/play_low.jpg", combined_features=_feature(10)),
+        create_analyzed_image(path="/tmp/play_mid.jpg", combined_features=_feature(11)),
+        create_analyzed_image(path="/tmp/play_high.jpg", combined_features=base),
+        create_analyzed_image(
+            path="/tmp/event_dup.jpg",
+            combined_features=_near_duplicate(base, 1),
+        ),
+        create_analyzed_image(
+            path="/tmp/event_far.jpg", combined_features=_feature(100)
+        ),
+        create_analyzed_image(
+            path="/tmp/event_far2.jpg", combined_features=_feature(200)
+        ),
+    ]
+    picker = GameScreenPicker(
+        analyzer=FakeAnalyzer(analyzed_images),
+        config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
+    )
+
+    # Act
+    selected, _rejected, stats = picker.select_from_analyzed(analyzed_images, num=4)
+
+    # Assert
+    assert stats.rejected_by_similarity >= 1
+    assert len({candidate.score_band for candidate in selected}) >= 2
+    assert all(candidate.score_band is not None for candidate in selected)

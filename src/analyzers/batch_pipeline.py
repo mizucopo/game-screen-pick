@@ -1,4 +1,8 @@
-"""バッチ処理パイプライン - 複数画像のバッチ処理をオーケストレーションする."""
+"""バッチ処理パイプライン.
+
+中立解析に必要なI/O、CLIP推論前後のデータ変換、結果構築を
+チャンク単位で制御し、メモリ予算内で大量画像を処理する。
+"""
 
 import concurrent.futures
 import logging
@@ -12,24 +16,29 @@ import numpy as np
 import torch
 from PIL import Image
 
+from ..models.analyzed_image import AnalyzedImage
 from ..models.analyzer_config import AnalyzerConfig
-from ..models.image_metrics import ImageMetrics
 from ..utils.exception_handler import ExceptionHandler
 from ..utils.image_utils import ImageUtils
 from .feature_extractor import FeatureExtractor
+from .layout_analyzer import LayoutAnalyzer
 from .metric_calculator import MetricCalculator
 
 logger = logging.getLogger(__name__)
 
+type PilImagesFuture = concurrent.futures.Future[list[Image.Image | None]]
+type TaskData = tuple[str, Image.Image, np.ndarray, int] | None
+type TaskTuple = tuple[int, TaskData]
+
 
 class BatchPipeline:
-    """バッチ処理パイプライン.
+    """複数画像の中立解析をオーケストレーションする.
 
-    複数の画像をバッチ処理で解析するオーケストレーションを行う。
-    チャンク分割とlookaheadプリロードによるメモリ効率化を実現する。
+    チャンク分割とlookaheadプリロードを組み合わせ、
+    画像読み込み、CLIP特徴抽出、特徴変換、結果構築を
+    一貫した順序で流す役割を持つ。
     """
 
-    # 進捗表示の間隔
     PROGRESS_REPORT_INTERVAL: int = 500
 
     def __init__(
@@ -41,61 +50,61 @@ class BatchPipeline:
         """バッチ処理パイプラインを初期化する.
 
         Args:
-            feature_extractor: 特徴抽出器
-            metric_calculator: メトリクス計算器
-            config: アナライザー設定
+            feature_extractor: CLIP特徴と結合特徴を抽出するコンポーネント。
+            metric_calculator: 生メトリクスと正規化メトリクスを計算する器。
+            config: チャンクサイズ、リサイズ、並列数などを含む設定。
         """
         self.feature_extractor = feature_extractor
         self.metric_calculator = metric_calculator
         self.config = config
-        # OpenCVのスレッド数を1に設定し、ThreadPoolExecutorとの競合を回避
         cv2.setNumThreads(1)
-        # 結果構築の並列処理ワーカー数を決定（デフォルトはmin(8, cpu_count-1)）
         if config.result_max_workers is None:
             cpu_count = os.cpu_count() or 1
             self._result_max_workers = min(8, max(1, cpu_count - 1))
         else:
             self._result_max_workers = config.result_max_workers
 
-        # 共有Executor（チャンク間で再利用）
         self._executor: ThreadPoolExecutor | None = None
-        # プリロード用Executor（io_max_workersベース、load_and_preprocess_images専用）
         self._preload_executor: ThreadPoolExecutor | None = None
-        # 内部処理用Executor（load_and_preprocess_images内部のmap用）
-        # io_max_workers=1でデッドロックを回避するため、別poolを使用
         self._io_executor: ThreadPoolExecutor | None = None
 
     @staticmethod
     def _convert_batch_features_to_numpy(
         clip_features_list: list[torch.Tensor | None],
-        batch_features: torch.Tensor | None,
-        valid_indices: list[int],
     ) -> list[np.ndarray | None]:
-        """セマンティック計算済みのバッチTensorを再利用してCPUに転送.
+        """CLIP特徴をCPU上のNumPy配列へ変換する.
 
-        二重stackを回避するため、calculate_semantic_score_batchで
-        既にstackされたバッチTensorを再利用する。
+        バッチ推論の結果は失敗要素を `None` として含むため、
+        有効なTensorだけをまとめて `torch.stack` し、
+        CPUへ転送した後で元のインデックス順に戻す。
+        後段の特徴結合や類似度計算がNumPy前提のため、
+        ここで一括変換しておく。
 
         Args:
-            clip_features_list: 元のCLIP特徴リスト（Noneを含む場合あり）
-            batch_features: セマンティック計算済みのGPU上のバッチTensor
-            valid_indices: 有効な特徴のインデックスリスト
+            clip_features_list: バッチ推論から得たCLIP特徴のリスト。
+                推論に失敗した要素は `None` を取る。
 
         Returns:
-            CPU上のNumPy配列リスト（元のNoneは保持）
+            元の順序を維持したNumPy配列のリスト。
+            失敗した要素は `None` のまま残す。
         """
         results: list[np.ndarray | None] = [None] * len(clip_features_list)
-
-        if batch_features is None or not valid_indices:
+        valid_indices = [
+            idx
+            for idx, features in enumerate(clip_features_list)
+            if features is not None
+        ]
+        if not valid_indices:
             return results
 
-        with torch.inference_mode():
-            batch_cpu = batch_features.cpu()
-            batch_np = batch_cpu.numpy()
-
-        for j, idx in enumerate(valid_indices):
-            results[idx] = batch_np[j]
-
+        valid_tensors: list[torch.Tensor] = []
+        for idx in valid_indices:
+            tensor = clip_features_list[idx]
+            if tensor is not None:
+                valid_tensors.append(tensor)
+        batch_np = torch.stack(valid_tensors).cpu().numpy()
+        for array_index, result_index in enumerate(valid_indices):
+            results[result_index] = batch_np[array_index]
         return results
 
     def process_batch(
@@ -103,35 +112,30 @@ class BatchPipeline:
         paths: list[str],
         batch_size: int = 32,
         show_progress: bool = False,
-    ) -> list[ImageMetrics | None]:
+    ) -> list[AnalyzedImage | None]:
         """複数の画像をバッチ処理で解析する.
 
-        パイプライン構成（各チャンク内で4ステージを並列実行）:
-        1. ステージ1: Lookaheadプリロード（I/O+CV前処理）
-        2. ステージ2: バッチCLIP推論
-        3. ステージ3: バッチセマンティックスコア計算
-        4. ステージ4: 並列結果構築（raw metric + feature結合）
+        現在のパイプラインはチャンク単位で以下を行う。
+        1. lookahead付きで画像をプリロードする
+        2. CLIP特徴をバッチ推論する
+        3. 特徴をCPU上のNumPy配列へまとめて変換する
+        4. 生メトリクス、正規化メトリクス、結合特徴、レイアウト推定を
+           並列に組み立てて `AnalyzedImage` にまとめる
 
-        メモリ効率化のためチャンク単位でストリーミング処理:
-        - メモリ予算に基づいて動的にチャンクサイズを決定
-        - チャンク単位で「前処理→CLIP→結果確定→解放」を実行
-        - 大規模画像時のスワップ回避で速度安定化
-
-        パフォーマンス最適化:
-        - GPU→CPU転送をチャンク単位でまとめて実行
-        - 先読み（lookahead）でI/OとCLIP推論をオーバーラップ
+        チャンク境界はメモリ予算から動的に決まり、
+        大量画像でもスワップを起こしにくいサイズへ分割される。
+        また、次チャンクを先読みすることでI/Oと推論の待ち時間を重ねる。
 
         Args:
-            paths: 画像ファイルパスのリスト
-            batch_size: CLIP推論のバッチサイズ（デフォルト32）
-            show_progress: 進捗表示をするかどうか
+            paths: 解析対象の画像ファイルパス一覧。
+            batch_size: CLIP推論時に使う初期バッチサイズ。
+            show_progress: 一定間隔で進捗ログを出すかどうか。
 
         Returns:
-            解析結果のリスト（失敗した画像はNone）
+            入力順に対応した解析結果のリスト。
+            読み込みや解析に失敗した画像は `None` になる。
         """
-        results: list[ImageMetrics | None] = [None] * len(paths)
-
-        # メモリ予算に基づいてチャンク境界を計算
+        results: list[AnalyzedImage | None] = [None] * len(paths)
         chunk_boundaries = self._compute_chunk_boundaries(
             paths,
             self.config.max_memory_mb,
@@ -139,17 +143,14 @@ class BatchPipeline:
             self.config.max_dim,
         )
 
-        # 先読み用のスレッドプール（インスタンスで再利用）
         preload_executor = self._get_preload_executor()
-        PilImagesFuture = concurrent.futures.Future[list[Image.Image | None]]
         preload_futures: dict[int, PilImagesFuture] = {}
 
-        # 最初のチャンクをプリロード（lookahead=2）
         lookahead = 2
-        for i in range(min(lookahead, len(chunk_boundaries))):
-            chunk_start, chunk_end = chunk_boundaries[i]
+        for chunk_idx in range(min(lookahead, len(chunk_boundaries))):
+            chunk_start, chunk_end = chunk_boundaries[chunk_idx]
             chunk_paths = paths[chunk_start:chunk_end]
-            preload_futures[i] = preload_executor.submit(
+            preload_futures[chunk_idx] = preload_executor.submit(
                 self.load_and_preprocess_images,
                 chunk_paths,
                 self.config.max_dim,
@@ -157,19 +158,9 @@ class BatchPipeline:
 
         for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_boundaries):
             chunk_paths = paths[chunk_start:chunk_end]
-            logger.debug(
-                f"チャンク処理開始: {chunk_idx + 1}/{len(chunk_boundaries)} "
-                f"({chunk_start}-{chunk_end}, {len(chunk_paths)}枚)"
-            )
-
-            # プリロードされた画像を取得
-            logger.debug(f"プリロード画像を取得中: チャンク{chunk_idx}")
             pil_images = preload_futures[chunk_idx].result()
-            valid_count = len([p for p in pil_images if p is not None])
-            logger.debug(f"プリロード完了: {valid_count}枚有効")
             del preload_futures[chunk_idx]
 
-            # 次のチャンクをプリロード
             next_idx = chunk_idx + lookahead
             if next_idx < len(chunk_boundaries) and next_idx not in preload_futures:
                 next_start, next_end = chunk_boundaries[next_idx]
@@ -179,49 +170,25 @@ class BatchPipeline:
                     next_paths,
                     self.config.max_dim,
                 )
-                logger.debug(f"次チャンクのプリロード開始: チャンク{next_idx}")
 
-            # ステージ2: チャンク単位でバッチCLIP推論を実行
-            logger.debug(f"CLIP推論開始: {len(pil_images)}枚")
             clip_features_list = self.feature_extractor.extract_clip_features_batch(
-                pil_images, initial_batch_size=batch_size
+                pil_images,
+                initial_batch_size=batch_size,
             )
-            logger.debug(
-                f"CLIP推論完了: "
-                f"{len([f for f in clip_features_list if f is not None])}枚成功"
-            )
-
-            # ステージ3: セマンティックスコアをバッチ計算（バッチTensorを再利用）
-            logger.debug("セマンティックスコア計算開始")
-            semantic_scores, batch_features, valid_indices = (
-                self.metric_calculator.calculate_semantic_score_batch(
-                    clip_features_list
-                )
-            )
-            logger.debug(f"セマンティックスコア計算完了: {len(valid_indices)}枚有効")
-
-            # ステージ3.5: バッチTensorを再利用してGPU→CPU転送
             clip_features_np_list = self._convert_batch_features_to_numpy(
-                clip_features_list, batch_features, valid_indices
+                clip_features_list
             )
 
-            # ステージ4: チャンク単位で結果を構築（並列化）
             chunk_results = self._process_result_parallel(
                 chunk_paths=chunk_paths,
                 pil_images=pil_images,
                 clip_features_list=clip_features_np_list,
-                semantic_scores=semantic_scores,
                 chunk_start=chunk_start,
                 total_paths=len(paths),
                 show_progress=show_progress,
             )
-
-            # 結果を正しい位置にマッピング
-            for i, chunk_result in enumerate(chunk_results):
-                results[chunk_start + i] = chunk_result
-
-            # チャンク処理完了後にメモリを解放
-            del pil_images, clip_features_list, clip_features_np_list
+            for offset, chunk_result in enumerate(chunk_results):
+                results[chunk_start + offset] = chunk_result
 
         return results
 
@@ -234,66 +201,57 @@ class BatchPipeline:
     ) -> list[tuple[int, int]]:
         """メモリ予算に基づいてチャンク境界を計算する.
 
-        画像解像度ベースでメモリ使用量を見積もり、max_dimで縮小後の
-        サイズを考慮してチャンクを分割する。
-
-        見積もり式:
-        - 1ピクセルあたり約4バイト（RGBA + PILオーバーヘッド）
-        - PIL Image: width × height × 4 bytes
-        - CLIP Tensor: 追加で同等程度
-        - 安全係数: 3.0
+        画像解像度から概算メモリ使用量を見積もり、
+        `max_memory_mb` を超えない範囲でチャンクを切り出す。
+        `max_dim` が設定されている場合は、リサイズ後の想定解像度を使って
+        見積もるため、実行時のメモリ挙動に近い境界を得られる。
 
         Args:
-            paths: 画像ファイルパスのリスト
-            max_memory_mb: チャンクあたりの最大メモリ予算（MB）
-            min_chunk_size: 最低限確保するチャンクサイズ
-            max_dim: 長辺の最大ピクセル数（Noneの場合は縮小しない）
+            paths: 入力画像パスのリスト。
+            max_memory_mb: 1チャンクあたりに使ってよい最大メモリ量。
+            min_chunk_size: 分割しすぎを避けるための最小チャンクサイズ。
+            max_dim: 長辺の最大ピクセル数。 `None` の場合は縮小を考慮しない。
 
         Returns:
-            (start_index, end_index) のタプルリスト
+            `(start_index, end_index)` 形式のチャンク境界リスト。
         """
-        BYTES_PER_PIXEL = 4  # RGBA
-        SAFETY_FACTOR = 3.0  # CLIP Tensor等を考慮した安全係数
-        DEFAULT_MEMORY = 1024 * 1024  # 読み込み失敗時のデフォルト値（1MB相当）
+        bytes_per_pixel = 4
+        safety_factor = 3.0
+        default_memory = 1024 * 1024
 
         max_memory_bytes = max_memory_mb * 1024 * 1024
-        chunks = []
+        chunks: list[tuple[int, int]] = []
         current_start = 0
         current_memory = 0
         current_count = 0
 
-        for i, path in enumerate(paths):
-            # 画像の解像度からメモリを見積もる
+        for idx, path in enumerate(paths):
             try:
                 with Image.open(path) as img:
                     width, height = img.size
-                    # max_dimで縮小後のサイズを計算
                     if max_dim is not None:
                         scale = min(max_dim / max(width, height), 1.0)
                         width = int(width * scale)
                         height = int(height * scale)
                     estimated_memory = int(
-                        width * height * BYTES_PER_PIXEL * SAFETY_FACTOR
+                        width * height * bytes_per_pixel * safety_factor
                     )
             except Exception:
-                # 読み込み失敗時はデフォルト値（1MB相当）
-                estimated_memory = DEFAULT_MEMORY
+                estimated_memory = default_memory
 
-            # チャンク追加でメモリ予算を超える場合は新規チャンクを検討
             would_exceed = current_memory + estimated_memory > max_memory_bytes
             has_min_images = current_count >= min_chunk_size
-            can_split = i > 0
+            can_split = idx > 0
 
             if would_exceed and has_min_images and can_split:
-                chunks.append((current_start, i))
-                current_start = i
+                chunks.append((current_start, idx))
+                current_start = idx
                 current_memory = estimated_memory
                 current_count = 1
             else:
                 current_memory += estimated_memory
                 current_count += 1
 
-        # 最後のチャンクを追加
         if current_start < len(paths):
             final_chunk = (current_start, len(paths))
             if chunks and final_chunk[1] - final_chunk[0] < min_chunk_size:
@@ -309,71 +267,77 @@ class BatchPipeline:
         paths: list[str],
         max_dim: int | None = None,
     ) -> list[Image.Image | None]:
-        """複数のパスからPIL画像を読み込み、前処理まで並列実行する.
+        """複数画像を並列に読み込み、前処理済みPIL画像へ揃える.
 
-        I/O（画像読み込み）とCPU-bound処理（RGB変換・縮小）をThreadPoolExecutorで並列化.
-        内部処理用io_executorを使用し、プリロード用executorとの競合を回避する。
+        読み込みとRGB変換、必要に応じたリサイズをI/O向けExecutorで処理する。
+        プリロード用Executorとは分離し、`io_max_workers=1` のときでも
+        デッドロックしにくい構成を保つ。
 
         Args:
-            paths: 画像ファイルパスのリスト
-            max_dim: 長辺の最大ピクセル数（Noneの場合は縮小しない）
+            paths: 読み込む画像パスのリスト。
+            max_dim: 長辺の最大ピクセル数。指定時は縮小版を返す。
 
         Returns:
-            PIL画像のリスト（失敗したパスはNone）
+            PIL画像のリスト。読み込みに失敗した要素は `None` になる。
         """
         if max_dim is not None:
             load_func: Callable[[str], Image.Image | None] = partial(
-                ImageUtils.load_as_rgb_resized, max_dim=max_dim
+                ImageUtils.load_as_rgb_resized,
+                max_dim=max_dim,
             )
         else:
             load_func = ImageUtils.load_as_rgb
 
-        # io_executorを使用（preload_executorとのデッドロック回避）
         executor = self._get_io_executor()
-        results = list(executor.map(load_func, paths))
-
-        return results
+        return list(executor.map(load_func, paths))
 
     def _process_single_result(
         self,
         path: str,
         pil_img: Image.Image,
         clip_features: np.ndarray,
-        semantic: float,
-    ) -> ImageMetrics | None:
-        """結果構築の単一画像処理.
+    ) -> AnalyzedImage | None:
+        """単一画像の解析結果を構築する.
 
-        raw metric計算、feature結合、総合スコア計算を行う。
+        OpenCV形式への変換後に、画質メトリクス、結合特徴、
+        レイアウトヒューリスティクスを計算し、
+        scene判定前の中立データモデル `AnalyzedImage` にまとめる。
 
         Args:
-            path: 画像ファイルパス
-            pil_img: PIL画像（既にmax_dim以下に縮小済み）
-            clip_features: CLIP特徴（np.ndarray、CPU上）
-            semantic: セマンティックスコア
+            path: 元画像のパス。
+            pil_img: 読み込みと前処理が済んだPIL画像。
+            clip_features: CPU上へ移したCLIP特徴ベクトル。
 
         Returns:
-            ImageMetricsオブジェクト（処理失敗時はNone）
+            構築済みの `AnalyzedImage` 。想定内の画像エラー時は `None` 。
         """
         try:
-            # pil_imgは既にload_and_preprocess_imagesで縮小済み
             img = ImageUtils.pil_to_cv2(pil_img)
-
-            # 生メトリクスと正規化メトリクスのみ計算
-            # （セマンティックスコアはバッチ計算済みの値を使用）
-            raw, norm = self.metric_calculator.calculate_raw_norm_metrics(img)
-            # バッチ計算したセマンティックスコアを使用して総合スコアを計算
-            total = self.metric_calculator.calculate_total_score(raw, norm, semantic)
-
-            # HSV特徴とCLIP特徴を結合
-            features = self.feature_extractor.extract_combined_features(
+            raw_metrics, normalized_metrics = (
+                self.metric_calculator.calculate_all_metrics(img)
+            )
+            combined_features = self.feature_extractor.extract_combined_features(
                 img,
                 clip_features,
             )
-
-            return ImageMetrics(path, raw, norm, semantic, total, features)
-        except ExceptionHandler.get_expected_image_errors() as e:
+            content_features = self.feature_extractor.extract_content_features(
+                img,
+                raw_metrics,
+            )
+            layout_heuristics = LayoutAnalyzer.analyze(img)
+            return AnalyzedImage(
+                path=path,
+                raw_metrics=raw_metrics,
+                normalized_metrics=normalized_metrics,
+                clip_features=clip_features,
+                combined_features=combined_features,
+                content_features=content_features,
+                layout_heuristics=layout_heuristics,
+            )
+        except ExceptionHandler.get_expected_image_errors() as error:
             logger.warning(
-                f"画像分析をスキップしました: {path}, 理由: {type(e).__name__}: {e}"
+                "画像分析をスキップしました: "
+                f"{path}, 理由: {type(error).__name__}: {error}"
             )
             return None
 
@@ -382,99 +346,80 @@ class BatchPipeline:
         chunk_paths: list[str],
         pil_images: list[Image.Image | None],
         clip_features_list: list[np.ndarray | None],
-        semantic_scores: list[float | None],
         chunk_start: int,
         total_paths: int,
         show_progress: bool,
-    ) -> list[ImageMetrics | None]:
-        """結果構築（raw metric + feature結合）を並列処理.
+    ) -> list[AnalyzedImage | None]:
+        """結果構築を並列処理する.
 
-        ThreadPoolExecutorを使用してチャンク内の画像処理を並列化する。
+        1チャンク分のPIL画像とCLIP特徴を受け取り、
+        `AnalyzedImage` の生成だけをスレッドプールで並列化する。
+        ローカルインデックスを保持しているため、並列化しても
+        返却順序は入力順のまま維持される。
 
         Args:
-            chunk_paths: チャンク内の画像パスリスト
-            pil_images: PIL画像リスト
-            clip_features_list: CLIP特徴リスト（np.ndarray、CPU上）
-            semantic_scores: セマンティックスコアリスト
-            chunk_start: チャンクの開始インデックス
-            total_paths: 総画像数
-            show_progress: 進捗表示フラグ
+            chunk_paths: 現在処理中チャンクの画像パス。
+            pil_images: 事前読み込み済みのPIL画像。
+            clip_features_list: CPU上へ変換済みのCLIP特徴。
+            chunk_start: 全体入力におけるチャンク開始位置。
+            total_paths: 進捗表示に使う総画像数。
+            show_progress: 一定件数ごとにログを出すかどうか。
 
         Returns:
-            ImageMetricsオブジェクトのリスト（失敗時はNone）
+            チャンク内入力順に対応した解析結果リスト。
         """
-        # タスクの型エイリアス
-        # TaskData: (path, pil_img, clip_features, semantic, global_idx) または None
-        # TaskTuple: (local_idx, TaskData) - local_idxで結果の順序を維持
-        TaskData = tuple[str, Image.Image, np.ndarray, float, int] | None
-        TaskTuple = tuple[int, TaskData]
-
-        # 並列処理するタスクを準備
         tasks: list[TaskTuple] = []
-        zipped = zip(
-            chunk_paths,
-            pil_images,
-            clip_features_list,
-            semantic_scores,
-            strict=True,
-        )
-        for i, (path, pil_img, clip_features, semantic) in enumerate(zipped):
-            if pil_img is None or clip_features is None or semantic is None:
-                tasks.append((i, None))  # Noneは処理スキップを示す
+        zipped = zip(chunk_paths, pil_images, clip_features_list, strict=True)
+        for local_index, (path, pil_img, clip_features) in enumerate(zipped):
+            if pil_img is None or clip_features is None:
+                tasks.append((local_index, None))
             else:
-                # タスクを保存（インデックス付きで順序維持）
-                global_idx = chunk_start + i
-                tasks.append((i, (path, pil_img, clip_features, semantic, global_idx)))
+                global_index = chunk_start + local_index
+                tasks.append(
+                    (local_index, (path, pil_img, clip_features, global_index))
+                )
 
-        # 並列処理関数
-        def process_task(task_info: TaskTuple) -> tuple[int, ImageMetrics | None]:
-            """単一タスクを処理する."""
-            idx, data = task_info
+        def process_task(task_info: TaskTuple) -> tuple[int, AnalyzedImage | None]:
+            index, data = task_info
             if data is None:
-                return idx, None
-            path, pil_img, clip_features, semantic, global_idx = data
-            interval = BatchPipeline.PROGRESS_REPORT_INTERVAL
-            if show_progress and global_idx % interval == 0:
-                logger.info(f"解析済み: {global_idx}/{total_paths}")
-            result = self._process_single_result(path, pil_img, clip_features, semantic)
-            return idx, result
+                return index, None
+            path, pil_img, clip_features, global_index = data
+            if show_progress and global_index % self.PROGRESS_REPORT_INTERVAL == 0:
+                logger.info(f"解析済み: {global_index}/{total_paths}")
+            return index, self._process_single_result(path, pil_img, clip_features)
 
-        # 共有Executorを使用
         executor = self._get_executor()
         executor_results = list(executor.map(process_task, tasks))
 
-        # 結果を配置
-        results: list[ImageMetrics | None] = [None] * len(tasks)
-        for idx, result in executor_results:
-            results[idx] = result
-
+        results: list[AnalyzedImage | None] = [None] * len(tasks)
+        for index, result in executor_results:
+            results[index] = result
         return results
 
     def _get_executor(self) -> ThreadPoolExecutor:
-        """スレッドプールを取得または作成.
+        """結果構築用スレッドプールを取得する.
+
+        チャンクごとに作り直さずインスタンス内で再利用し、
+        解析結果構築のオーバーヘッドを抑える。
 
         Returns:
-            ThreadPoolExecutorインスタンス
+            結果構築用の `ThreadPoolExecutor` 。
         """
         if self._executor is None:
-            # ThreadPoolExecutor(max_workers=0) は ValueError になるため
-            # 0 の場合は 1 (シングルスレッド) に変換
             workers = self._result_max_workers if self._result_max_workers > 0 else 1
             self._executor = ThreadPoolExecutor(max_workers=workers)
         return self._executor
 
     def _get_preload_executor(self) -> ThreadPoolExecutor:
-        """プリロード用スレッドプールを取得または作成.
+        """プリロード用スレッドプールを取得する.
 
-        load_and_preprocess_images の実行専用プール。
-        io_max_workers=1 でのデッドロック回避のため、_get_io_executor とは
-        別々のインスタンスを使用する。
+        lookahead読み込み専用のExecutorで、結果構築用と分離して保持する。
+        最低2ワーカーを確保し、次チャンクの先読みを進めやすくする。
 
         Returns:
-            ThreadPoolExecutorインスタンス
+            プリロード処理用の `ThreadPoolExecutor` 。
         """
         if self._preload_executor is None:
-            # プリロードは並行度を必要とするため、io_max_workersが1の場合は2を確保
             max_workers = self.config.io_max_workers or 1
             if max_workers < 2:
                 max_workers = 2
@@ -482,13 +427,13 @@ class BatchPipeline:
         return self._preload_executor
 
     def _get_io_executor(self) -> ThreadPoolExecutor:
-        """内部I/O処理用スレッドプールを取得または作成.
+        """内部I/O用スレッドプールを取得する.
 
-        load_and_preprocess_images 内部の map 処理用。
-        プリロードexecutor とは分離し、io_max_workers=1 でのデッドロックを回避。
+        `load_and_preprocess_images` の内部でのみ使うExecutorを返し、
+        preload側とI/O処理の待ち合わせが競合しないようにする。
 
         Returns:
-            ThreadPoolExecutorインスタンス
+            画像読み込み専用の `ThreadPoolExecutor` 。
         """
         if self._io_executor is None:
             max_workers = self.config.io_max_workers or 1
@@ -496,7 +441,11 @@ class BatchPipeline:
         return self._io_executor
 
     def close(self) -> None:
-        """スレッドプールをクリーンアップ."""
+        """保持中のスレッドプールを明示的に破棄する.
+
+        再利用していた各Executorを安全に停止し、
+        再度使う場合は次回アクセス時に作り直せる状態へ戻す。
+        """
         if self._executor is not None:
             self._executor.shutdown(wait=True)
             self._executor = None
@@ -508,17 +457,18 @@ class BatchPipeline:
             self._io_executor = None
 
     def __enter__(self) -> "BatchPipeline":
-        """コンテキストマネージャーのエントリー.
+        """コンテキストマネージャーに入る.
 
         Returns:
-            自分自身
+            この `BatchPipeline` インスタンス自身。
         """
         return self
 
     def __exit__(self, *args: object) -> None:
-        """コンテキストマネージーの exit.
+        """コンテキストマネージャーを抜ける.
 
         Args:
-            *args: 例外情報（unused）
+            *args: コンテキストマネージャープロトコルが渡す例外情報。
+                値にかかわらず内部Executorの解放を行う。
         """
         self.close()

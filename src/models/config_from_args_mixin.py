@@ -1,15 +1,13 @@
 """設定クラス用の共通メソッド."""
 
-from typing import Any, TypeVar
-
-T = TypeVar("T")
+from typing import Any
 
 
 class ConfigFromArgsMixin:
     """CLI引数から設定を作成するためのミックスイン."""
 
     @classmethod
-    def from_cli_args(cls: type[T], **kwargs: Any) -> T:
+    def from_cli_args[T](cls: type[T], **kwargs: Any) -> T:
         """CLI引数から設定を作成する.
 
         Args:

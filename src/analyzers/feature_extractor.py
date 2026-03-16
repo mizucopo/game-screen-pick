@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from ..models.raw_metrics import RawMetrics
 from .clip_model_manager import CLIPModelManager
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,27 @@ class FeatureExtractor:
         hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
         hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256])
         return cv2.normalize(hist, hist).flatten()
+
+    @staticmethod
+    def extract_content_features(
+        img: np.ndarray, raw_metrics: RawMetrics
+    ) -> np.ndarray:
+        """入力全体適応用の内容特徴を抽出する."""
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
+        gray_hist = cv2.normalize(gray_hist, gray_hist).flatten()
+        hsv_hist = FeatureExtractor.extract_hsv_features(img)
+        metric_features = np.array(
+            [
+                raw_metrics.luminance_entropy / 8.0,
+                raw_metrics.luminance_range / 255.0,
+                raw_metrics.near_black_ratio,
+                raw_metrics.near_white_ratio,
+                raw_metrics.dominant_tone_ratio,
+            ],
+            dtype=np.float32,
+        )
+        return np.concatenate([gray_hist, hsv_hist, metric_features]).astype(np.float32)
 
     def extract_clip_features(self, pil_img: Image.Image) -> np.ndarray:
         """CLIP画像埋め込みを抽出する.
