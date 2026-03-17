@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 
+from src.models.content_filter_result import ContentFilterResult
 from src.services.content_filter import ContentFilter
 from src.services.whole_input_profiler import WholeInputProfiler
 from tests.conftest import create_analyzed_image
@@ -32,7 +33,7 @@ def _filter_two_images(
     rejected_normalized_metrics: dict[str, float] | None = None,
     kept_layout_dict: dict[str, float] | None = None,
     rejected_layout_dict: dict[str, float] | None = None,
-):
+) -> ContentFilterResult:
     """正常フレームと除外対象フレームの最小セットで filter を実行する."""
     images = [
         create_analyzed_image(
