@@ -8,7 +8,6 @@ from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.metric_distribution import MetricDistribution
 from ..models.whole_input_profile import WholeInputProfile
-from ..utils.vector_utils import VectorUtils
 
 
 class WholeInputProfiler:
@@ -21,7 +20,6 @@ class WholeInputProfiler:
         "luminance_entropy": 0.20,
         "luminance_range": 0.20,
     }
-    DISTINCTIVENESS_NEIGHBORS = 3
     VISIBILITY_RANGE_SCALE = 32.0
     VISIBILITY_ENTROPY_SCALE = 1.5
     VISIBILITY_EDGE_SCALE = 0.08
@@ -82,12 +80,10 @@ class WholeInputProfiler:
             return {}
 
         information_scores = self._calculate_information_scores(images)
-        distinctiveness_scores = self._calculate_distinctiveness_scores(images)
         visibility_scores = self._calculate_visibility_scores(images)
         return {
             id(image): AdaptiveScores(
                 information_score=information_scores[id(image)],
-                distinctiveness_score=distinctiveness_scores[id(image)],
                 visibility_score=visibility_scores[id(image)],
             )
             for image in images
@@ -133,51 +129,6 @@ class WholeInputProfiler:
                 )
             information_scores[id(image)] = float(score)
         return information_scores
-
-    def _calculate_distinctiveness_scores(
-        self,
-        images: list[AnalyzedImage],
-    ) -> dict[int, float]:
-        """内容特徴の近傍距離から差分量スコアを作る."""
-        if len(images) <= 1:
-            return {id(image): 0.0 for image in images}
-
-        normalized_features = np.asarray(
-            [
-                VectorUtils.safe_l2_normalize(
-                    np.asarray(image.content_features, dtype=np.float32)
-                )
-                for image in images
-            ],
-            dtype=np.float32,
-        )
-        neighbor_count = min(self.DISTINCTIVENESS_NEIGHBORS, len(images) - 1)
-        mean_nearest_distances = np.zeros(len(images), dtype=np.float32)
-
-        # 一度の行列乗算で全類似度を計算し、O(n²)を最適化
-        similarities_matrix = normalized_features @ normalized_features.T
-        np.fill_diagonal(similarities_matrix, -np.inf)
-        for index in range(len(images)):
-            similarities = similarities_matrix[index]
-            nearest_similarities = np.partition(similarities, -neighbor_count)[
-                -neighbor_count:
-            ]
-            clipped_similarities = np.clip(nearest_similarities, -1.0, 1.0)
-            mean_nearest_distances[index] = float(1.0 - np.mean(clipped_similarities))
-
-        min_distance = float(mean_nearest_distances.min())
-        max_distance = float(mean_nearest_distances.max())
-        if np.isclose(min_distance, max_distance):
-            normalized_distances = np.zeros(len(images), dtype=np.float32)
-        else:
-            normalized_distances = (mean_nearest_distances - min_distance) / (
-                max_distance - min_distance
-            )
-
-        return {
-            id(image): float(normalized_distances[index])
-            for index, image in enumerate(images)
-        }
 
     def _calculate_visibility_scores(
         self,
