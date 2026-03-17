@@ -62,13 +62,16 @@ class ImageQualityAnalyzer:
         この段階ではscene labelや選定スコアは付与せず、
         後段の `SceneScorer` と `CandidateScorer` が扱う素材だけを返す。
 
+        画像は config.max_dim 以下にリサイズされて処理される。
+        analyze_batch() と一貫した動作を保証する。
+
         Args:
             path: 解析対象画像のファイルパス。
 
         Returns:
             中立解析結果 `AnalyzedImage` 。読み込み失敗時は `None` 。
         """
-        pil_img_copy = ImageUtils.load_as_rgb(path)
+        pil_img_copy = ImageUtils.load_as_rgb_resized(path, max_dim=self.config.max_dim)
         if pil_img_copy is None:
             logger.warning(f"画像の読み込みに失敗しました: {path}")
             return None
