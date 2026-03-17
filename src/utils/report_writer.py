@@ -26,7 +26,7 @@ class ReportWriter:
             "scene_distribution": stats.scene_distribution,
             "scene_mix_target": stats.scene_mix_target,
             "scene_mix_actual": stats.scene_mix_actual,
-            "threshold_relaxation_used": stats.threshold_relaxation_used,
+            "threshold_relaxation_steps": stats.threshold_relaxation_steps,
             "rejected_by_content_filter": stats.rejected_by_content_filter,
             "content_filter_breakdown": stats.content_filter_breakdown,
             "whole_input_profile": ReportWriter._serialize_whole_input_profile(stats),

@@ -8,11 +8,9 @@ import logging
 
 from ..models.analyzed_image import AnalyzedImage
 from ..models.analyzer_config import AnalyzerConfig
-from ..utils.image_utils import ImageUtils
 from .batch_pipeline import BatchPipeline
 from .clip_model_manager import CLIPModelManager
 from .feature_extractor import FeatureExtractor
-from .layout_analyzer import LayoutAnalyzer
 from .metric_calculator import MetricCalculator
 
 logger = logging.getLogger(__name__)
@@ -52,50 +50,6 @@ class ImageQualityAnalyzer:
             self.feature_extractor,
             self.metric_calculator,
             self.config,
-        )
-
-    def analyze(self, path: str) -> AnalyzedImage | None:
-        """画像を解析して中立な特徴を計算する.
-
-        単一画像向けの同期APIで、CLIP特徴、結合特徴、画質メトリクス、
-        レイアウトヒューリスティクスを一度に計算する。
-        この段階ではscene labelや選定スコアは付与せず、
-        後段の `SceneScorer` と `CandidateScorer` が扱う素材だけを返す。
-
-        Args:
-            path: 解析対象画像のファイルパス。
-
-        Returns:
-            中立解析結果 `AnalyzedImage` 。読み込み失敗時は `None` 。
-        """
-        pil_img_copy = ImageUtils.load_as_rgb(path)
-        if pil_img_copy is None:
-            logger.warning(f"画像の読み込みに失敗しました: {path}")
-            return None
-
-        # OpenCV形式（BGR）に変換
-        img = ImageUtils.pil_to_cv2(pil_img_copy)
-
-        # CLIP特徴を抽出
-        clip_features = self.feature_extractor.extract_clip_features(pil_img_copy)
-
-        # すべてのメトリクスを一括計算
-        raw, norm = self.metric_calculator.calculate_all_metrics(img)
-        combined_features = self.feature_extractor.extract_combined_features(
-            img,
-            clip_features,
-        )
-        content_features = self.feature_extractor.extract_content_features(img, raw)
-        layout_heuristics = LayoutAnalyzer.analyze(img)
-
-        return AnalyzedImage(
-            path=path,
-            raw_metrics=raw,
-            normalized_metrics=norm,
-            clip_features=clip_features,
-            combined_features=combined_features,
-            content_features=content_features,
-            layout_heuristics=layout_heuristics,
         )
 
     def analyze_batch(

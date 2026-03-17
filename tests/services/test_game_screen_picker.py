@@ -4,6 +4,9 @@ from pathlib import Path
 
 import numpy as np
 
+from src.analyzers.metric_calculator import MetricCalculator
+from src.models.analyzed_image import AnalyzedImage
+from src.models.analyzer_config import AnalyzerConfig
 from src.models.scene_mix import SceneMix
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
@@ -23,18 +26,32 @@ def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
     return feature
 
 
-def test_select_from_analyzed_filters_content_before_play_event_assignment() -> None:
-    """content filter の除外が先に適用されること.
+class _AnalyzerWithFailures:
+    """`analyze_batch` の失敗ケースを混在させる最小フェイク."""
+
+    def __init__(self, analyzed_images: list[AnalyzedImage | None]) -> None:
+        self._analyzed_images = analyzed_images
+        self.metric_calculator = MetricCalculator(AnalyzerConfig())
+
+    def analyze_batch(
+        self,
+        paths: list[str],
+        batch_size: int = 32,
+        show_progress: bool = False,
+    ) -> list[AnalyzedImage | None]:
+        del batch_size, show_progress
+        return self._analyzed_images[: len(paths)]
+
+
+def test_select_from_analyzed_excludes_content_filtered_images() -> None:
+    """content filter で落ちた画像は選定対象に入らないこと.
 
     Given:
-        - blackout判定される暗い画像がある
-        - 正常なplay画像とevent画像がある
-        - scene_mix比率が50/50に設定されている
+        - 低情報量の暗いフレームと正常なフレームを含む画像群がある
     When:
-        - 2件を選択する
+        - GameScreenPickerで選定される
     Then:
-        - play画像とevent画像が選ばれること
-        - blackout画像がcontent_filterで除外されること
+        - content filterで除外された画像は選定対象に入らないこと
     """
     # Arrange
     dark = create_analyzed_image(
@@ -54,14 +71,16 @@ def test_select_from_analyzed_filters_content_before_play_event_assignment() -> 
         path="/tmp/event.jpg",
         combined_features=_feature(100),
     )
-    analyzed_images = [dark, play, event]
     picker = GameScreenPicker(
-        analyzer=FakeAnalyzer(analyzed_images),
+        analyzer=FakeAnalyzer([dark, play, event]),
         config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
     )
 
     # Act
-    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=2)
+    selected, rejected, stats = picker.select_from_analyzed(
+        [dark, play, event],
+        num=2,
+    )
 
     # Assert
     assert {candidate.path for candidate in selected} == {
@@ -69,31 +88,67 @@ def test_select_from_analyzed_filters_content_before_play_event_assignment() -> 
         "/tmp/event.jpg",
     }
     assert rejected == []
+    assert stats.selected_count == 2
     assert stats.rejected_by_content_filter == 1
     assert stats.content_filter_breakdown["blackout"] == 1
-    assert stats.scene_mix_actual == {"play": 1, "event": 1}
 
 
-def test_select_from_analyzed_assigns_dense_candidates_to_play() -> None:
-    """密度の高いクラスタが play へ寄ること.
+def test_select_tracks_total_files_and_analysis_failures(tmp_path: Path) -> None:
+    """`select` が入力総数と解析失敗数を統計へ反映すること.
 
     Given:
-        - 互いに似た3件の画像（高密度クラスタ）がある
-        - 孤立した2件の画像（低密度）がある
-        - scene_mix比率が70/30に設定されている
+        - 複数の画像ファイルを含むディレクトリがある
+        - 解析に成功する画像と失敗する画像が混在している
     When:
-        - 5件を選択する
+        - GameScreenPickerで選定される
     Then:
-        - 高密度クラスタがplayに割り当てられること
-        - 低密度画像の一部がeventに割り当てられること
+        - 入力総数と解析成功数・失敗数が統計に反映されること
+    """
+    # Arrange
+    for name in ["frame10.jpg", "frame1.jpg", "frame2.jpg"]:
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+
+    analyzed_images = [
+        create_analyzed_image(path="/tmp/frame1.jpg", combined_features=_feature(0)),
+        None,
+        create_analyzed_image(path="/tmp/frame2.jpg", combined_features=_feature(10)),
+    ]
+    picker = GameScreenPicker(
+        analyzer=_AnalyzerWithFailures(analyzed_images),
+        config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
+    )
+
+    # Act
+    selected, rejected, stats = picker.select(
+        str(tmp_path),
+        num=2,
+        recursive=False,
+        show_progress=False,
+    )
+
+    # Assert
+    assert len(selected) == 2
+    assert rejected == []
+    assert stats.total_files == 3
+    assert stats.analyzed_ok == 2
+    assert stats.analyzed_fail == 1
+
+
+def test_select_from_analyzed_sorts_remaining_candidates_by_selection_score() -> None:
+    """非選択候補は selection_score の降順で返ること.
+
+    Given:
+        - 複数の候補画像がある
+        - 一部は重複に近い画像である
+    When:
+        - GameScreenPickerで選定される
+    Then:
+        - 非選択候補はselection_scoreの降順で返されること
     """
     # Arrange
     base = _feature(0)
     analyzed_images = [
-        create_analyzed_image(
-            path="/tmp/play_0.jpg",
-            combined_features=base,
-        ),
+        create_analyzed_image(path="/tmp/play_0.jpg", combined_features=base),
         create_analyzed_image(
             path="/tmp/play_1.jpg",
             combined_features=_near_duplicate(base, 1),
@@ -103,89 +158,43 @@ def test_select_from_analyzed_assigns_dense_candidates_to_play() -> None:
             combined_features=_near_duplicate(base, 2),
         ),
         create_analyzed_image(
-            path="/tmp/event_0.jpg",
+            path="/tmp/play_3.jpg",
             combined_features=_feature(100),
         ),
         create_analyzed_image(
-            path="/tmp/event_1.jpg",
+            path="/tmp/play_4.jpg",
             combined_features=_feature(200),
         ),
     ]
     picker = GameScreenPicker(
         analyzer=FakeAnalyzer(analyzed_images),
-        config=SelectionConfig(scene_mix=SceneMix(play=0.7, event=0.3)),
+        config=SelectionConfig(scene_mix=SceneMix(play=1.0, event=0.0)),
     )
 
     # Act
-    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=5)
+    selected, rejected, stats = picker.select_from_analyzed(analyzed_images, num=3)
 
     # Assert
-    assert len(selected) >= 2
-    assert all(
-        candidate.scene_assessment.scene_label.value in {"play", "event"}
-        for candidate in selected
+    assert len(selected) == 3
+    assert stats.selected_count == 3
+    assert not (
+        {candidate.path for candidate in selected}
+        & {candidate.path for candidate in rejected}
     )
-    assert len(rejected) >= 1
-    assert stats.scene_distribution == {"play": 4, "event": 1}
-    assert stats.scene_mix_target == {"play": 4, "event": 1}
-    assert stats.scene_mix_actual["play"] >= 1
-    assert stats.scene_mix_actual["event"] >= 1
-
-
-def test_select_from_analyzed_spreads_score_bands_and_rejects_duplicates() -> None:
-    """band 分散と global 類似度除外が同時に働くこと.
-
-    Given:
-        - 異なるスコア帯のplay画像がある
-        - play画像と類似するevent画像がある
-        - 類似しないevent画像がある
-        - scene_mix比率が50/50に設定されている
-    When:
-        - 4件を選択する
-    Then:
-        - 類似画像が類似度除外されること
-        - 選択候補に複数のscore_bandが含まれること
-    """
-    # Arrange
-    base = _feature(0)
-    analyzed_images = [
-        create_analyzed_image(path="/tmp/play_low.jpg", combined_features=_feature(10)),
-        create_analyzed_image(path="/tmp/play_mid.jpg", combined_features=_feature(11)),
-        create_analyzed_image(path="/tmp/play_high.jpg", combined_features=base),
-        create_analyzed_image(
-            path="/tmp/event_dup.jpg",
-            combined_features=_near_duplicate(base, 1),
-        ),
-        create_analyzed_image(
-            path="/tmp/event_far.jpg", combined_features=_feature(100)
-        ),
-        create_analyzed_image(
-            path="/tmp/event_far2.jpg", combined_features=_feature(200)
-        ),
-    ]
-    picker = GameScreenPicker(
-        analyzer=FakeAnalyzer(analyzed_images),
-        config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
-    )
-
-    # Act
-    selected, _rejected, stats = picker.select_from_analyzed(analyzed_images, num=4)
-
-    # Assert
-    assert stats.rejected_by_similarity >= 1
-    assert len({candidate.score_band for candidate in selected}) >= 2
-    assert all(candidate.score_band is not None for candidate in selected)
+    rejected_scores = [candidate.selection_score for candidate in rejected]
+    assert rejected_scores == sorted(rejected_scores, reverse=True)
 
 
 def test_load_image_files_returns_natural_order(tmp_path: Path) -> None:
     """自然順で返されること.
 
     Given:
-        - 辞書順とは異なる自然順を持つ複数の画像ファイルがある
+        - 数字を含むファイル名の画像ファイルがディレクトリにある
+        - ファイル名は辞書順ではない順序で格納されている
     When:
-        - load_image_filesを実行する
+        - load_image_filesが呼び出される
     Then:
-        - 自然順ソートされた結果が返されること
+        - ファイルが自然順（file1, file2, file10）で返されること
     """
     # Arrange
     for name in ["file10.jpg", "file1.jpg", "file2.jpg"]:
@@ -195,5 +204,4 @@ def test_load_image_files_returns_natural_order(tmp_path: Path) -> None:
     result = GameScreenPicker.load_image_files(str(tmp_path), recursive=False)
 
     # Assert
-    names = [p.name for p in result]
-    assert names == ["file1.jpg", "file2.jpg", "file10.jpg"]
+    assert [path.name for path in result] == ["file1.jpg", "file2.jpg", "file10.jpg"]

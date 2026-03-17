@@ -1,10 +1,4 @@
-"""MetricNormalizerの単体テスト.
-
-このテストモジュールは以下のベストプラクティスに従っています：
-1. 「What」（観察可能な挙動）をテスト
-2. モックなし - 予測可能な入出力を持つ純粋な関数テスト
-3. 明確なコメント付きのAAAパターン（Arrange, Act, Assert）を使用
-"""
+"""MetricNormalizerの単体テスト."""
 
 import pytest
 

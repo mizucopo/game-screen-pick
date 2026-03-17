@@ -246,7 +246,7 @@ class GameScreenPicker:
             scene_distribution=scene_distribution,
             scene_mix_target=scene_mix_target,
             scene_mix_actual=scene_mix_actual,
-            threshold_relaxation_used=self.config.compute_threshold_steps(
+            threshold_relaxation_steps=self.config.compute_threshold_steps(
                 self.config.similarity_threshold
             ),
             content_filter_breakdown=content_filter_result.content_filter_breakdown,

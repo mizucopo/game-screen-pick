@@ -55,7 +55,7 @@ def _build_stats() -> PickerStatistics:
         scene_distribution={"play": 2, "event": 2},
         scene_mix_target={"play": 1, "event": 1},
         scene_mix_actual={"play": 1, "event": 1},
-        threshold_relaxation_used=[0.72],
+        threshold_relaxation_steps=[0.72],
         content_filter_breakdown={
             "blackout": 0,
             "whiteout": 0,

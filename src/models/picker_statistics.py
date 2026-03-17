@@ -20,7 +20,7 @@ class PickerStatistics:
         scene_distribution: 解析済み候補全体の画面種別分布
         scene_mix_target: 目標の画面種別配分
         scene_mix_actual: 実際の画面種別配分
-        threshold_relaxation_used: 類似度しきい値緩和ステップ
+        threshold_relaxation_steps: 類似度しきい値緩和ステップ
         content_filter_breakdown: content filter 除外理由ごとの件数
         whole_input_profile: 入力全体の明暗傾向プロフィール
     """
@@ -35,6 +35,6 @@ class PickerStatistics:
     scene_distribution: dict[str, int]
     scene_mix_target: dict[str, int]
     scene_mix_actual: dict[str, int]
-    threshold_relaxation_used: list[float]
+    threshold_relaxation_steps: list[float]
     content_filter_breakdown: dict[str, int]
     whole_input_profile: WholeInputProfile | None = None
