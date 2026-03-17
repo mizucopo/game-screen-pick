@@ -28,7 +28,7 @@ def mock_game_screen_picker() -> Generator[MagicMock, None, None]:
         scene_distribution={"play": 0, "event": 0},
         scene_mix_target={"play": 0, "event": 0},
         scene_mix_actual={"play": 0, "event": 0},
-        threshold_relaxation_used=[0.72],
+        threshold_relaxation_steps=[0.72],
         content_filter_breakdown={
             "blackout": 0,
             "whiteout": 0,
@@ -86,7 +86,7 @@ def test_cli_selects_and_copies_images(
         scene_distribution={"play": 3, "event": 2},
         scene_mix_target={"play": 2, "event": 1},
         scene_mix_actual={"play": 2, "event": 1},
-        threshold_relaxation_used=[0.72, 0.75],
+        threshold_relaxation_steps=[0.72, 0.75],
         content_filter_breakdown={
             "blackout": 0,
             "whiteout": 0,
@@ -160,7 +160,7 @@ def test_cli_writes_report_json_with_new_fields(
         scene_distribution={"play": 1, "event": 0},
         scene_mix_target={"play": 1, "event": 0},
         scene_mix_actual={"play": 1, "event": 0},
-        threshold_relaxation_used=[0.72],
+        threshold_relaxation_steps=[0.72],
         content_filter_breakdown={
             "blackout": 0,
             "whiteout": 0,
@@ -253,7 +253,7 @@ def test_cli_renames_outputs_by_scene(
         scene_distribution={"play": 2, "event": 1},
         scene_mix_target={"play": 2, "event": 1},
         scene_mix_actual={"play": 2, "event": 1},
-        threshold_relaxation_used=[0.72],
+        threshold_relaxation_steps=[0.72],
         content_filter_breakdown={
             "blackout": 0,
             "whiteout": 0,
