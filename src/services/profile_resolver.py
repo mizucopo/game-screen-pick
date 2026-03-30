@@ -1,5 +1,6 @@
 """解析済み画像群から選定プロファイルを解決する."""
 
+from ..constants.profile_weights import ProfileWeights
 from ..models.analyzed_image import AnalyzedImage
 
 
@@ -28,9 +29,15 @@ class ProfileResolver:
             image.normalized_metrics.ui_density for image in analyzed_images
         ) / len(analyzed_images)
 
-        active_score = 0.45 * avg_action + 0.35 * avg_edge + 0.20 * (1.0 - avg_ui)
+        active_score = (
+            ProfileWeights.ACTION * avg_action
+            + ProfileWeights.EDGE * avg_edge
+            + ProfileWeights.UI_INVERSE * (1.0 - avg_ui)
+        )
         static_score = (
-            0.50 * avg_ui + 0.25 * (1.0 - avg_action) + 0.25 * (1.0 - avg_edge)
+            ProfileWeights.UI * avg_ui
+            + ProfileWeights.ACTION_INVERSE * (1.0 - avg_action)
+            + ProfileWeights.EDGE_INVERSE * (1.0 - avg_edge)
         )
 
         resolved = "active" if active_score >= static_score else "static"
