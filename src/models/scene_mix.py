@@ -39,7 +39,8 @@ class SceneMix:
             ValueError: totalが負の値の場合。
         """
         if total < 0:
-            raise ValueError("total must be non-negative")
+            msg = f"totalは0以上の値である必要があります: {total}"
+            raise ValueError(msg)
         raw_play = total * self.play
         raw_event = total * self.event
         play_target = int(raw_play)
