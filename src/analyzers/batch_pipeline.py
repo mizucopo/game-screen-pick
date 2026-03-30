@@ -7,6 +7,7 @@
 import concurrent.futures
 import logging
 import os
+import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -67,6 +68,9 @@ class BatchPipeline:
         self._executor: ThreadPoolExecutor | None = None
         self._preload_executor: ThreadPoolExecutor | None = None
         self._io_executor: ThreadPoolExecutor | None = None
+        self._executor_lock = threading.Lock()
+        self._preload_lock = threading.Lock()
+        self._io_lock = threading.Lock()
 
     @staticmethod
     def _convert_batch_features_to_numpy(
@@ -240,7 +244,7 @@ class BatchPipeline:
                     estimated_memory = int(
                         width * height * bytes_per_pixel * safety_factor
                     )
-            except Exception:
+            except OSError:
                 estimated_memory = default_memory
 
             would_exceed = current_memory + estimated_memory > max_memory_bytes
@@ -401,47 +405,32 @@ class BatchPipeline:
         return results
 
     def _get_executor(self) -> ThreadPoolExecutor:
-        """結果構築用スレッドプールを取得する.
-
-        チャンクごとに作り直さずインスタンス内で再利用し、
-        解析結果構築のオーバーヘッドを抑える。
-
-        Returns:
-            結果構築用の `ThreadPoolExecutor` 。
-        """
+        """結果構築用スレッドプールを取得する."""
         if self._executor is None:
-            workers = self._result_max_workers if self._result_max_workers > 0 else 1
-            self._executor = ThreadPoolExecutor(max_workers=workers)
+            with self._executor_lock:
+                if self._executor is None:
+                    workers = self._result_max_workers if self._result_max_workers > 0 else 1
+                    self._executor = ThreadPoolExecutor(max_workers=workers)
         return self._executor
 
     def _get_preload_executor(self) -> ThreadPoolExecutor:
-        """プリロード用スレッドプールを取得する.
-
-        lookahead読み込み専用のExecutorで、結果構築用と分離して保持する。
-        最低2ワーカーを確保し、次チャンクの先読みを進めやすくする。
-
-        Returns:
-            プリロード処理用の `ThreadPoolExecutor` 。
-        """
+        """プリロード用スレッドプールを取得する."""
         if self._preload_executor is None:
-            max_workers = self.config.io_max_workers or 1
-            if max_workers < 2:
-                max_workers = 2
-            self._preload_executor = ThreadPoolExecutor(max_workers=max_workers)
+            with self._preload_lock:
+                if self._preload_executor is None:
+                    max_workers = self.config.io_max_workers or 1
+                    if max_workers < 2:
+                        max_workers = 2
+                    self._preload_executor = ThreadPoolExecutor(max_workers=max_workers)
         return self._preload_executor
 
     def _get_io_executor(self) -> ThreadPoolExecutor:
-        """内部I/O用スレッドプールを取得する.
-
-        `load_and_preprocess_images` の内部でのみ使うExecutorを返し、
-        preload側とI/O処理の待ち合わせが競合しないようにする。
-
-        Returns:
-            画像読み込み専用の `ThreadPoolExecutor` 。
-        """
+        """内部I/O用スレッドプールを取得する."""
         if self._io_executor is None:
-            max_workers = self.config.io_max_workers or 1
-            self._io_executor = ThreadPoolExecutor(max_workers=max_workers)
+            with self._io_lock:
+                if self._io_executor is None:
+                    max_workers = self.config.io_max_workers or 1
+                    self._io_executor = ThreadPoolExecutor(max_workers=max_workers)
         return self._io_executor
 
     def close(self) -> None:
