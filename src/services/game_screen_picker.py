@@ -18,6 +18,9 @@ from ..services.scene_scorer import SceneScorer
 from ..services.whole_input_profiler import WholeInputProfiler
 
 
+SUPPORTED_IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".bmp"})
+
+
 class GameScreenPicker:
     """画像解析と選定を統合する.
 
@@ -59,11 +62,10 @@ class GameScreenPicker:
             対応拡張子を持つ画像パスの一覧。
         """
         path_obj = Path(folder)
-        extensions = {".jpg", ".jpeg", ".png", ".bmp"}
         files = [
             path
             for path in (path_obj.rglob("*") if recursive else path_obj.glob("*"))
-            if path.suffix.lower() in extensions
+            if path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
         ]
         files = sorted(
             files,

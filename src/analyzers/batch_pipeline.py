@@ -165,15 +165,7 @@ class BatchPipeline:
             pil_images = preload_futures[chunk_idx].result()
             del preload_futures[chunk_idx]
 
-            next_idx = chunk_idx + lookahead
-            if next_idx < len(chunk_boundaries) and next_idx not in preload_futures:
-                next_start, next_end = chunk_boundaries[next_idx]
-                next_paths = paths[next_start:next_end]
-                preload_futures[next_idx] = preload_executor.submit(
-                    self.load_and_preprocess_images,
-                    next_paths,
-                    self.config.max_dim,
-                )
+            self._preload_next_chunks(paths, chunk_boundaries, chunk_idx, lookahead, preload_futures)
 
             clip_features_list = self.feature_extractor.extract_clip_features_batch(
                 pil_images,
@@ -199,6 +191,25 @@ class BatchPipeline:
                 logger.info(f"処理済み: {chunk_end}/{len(paths)}")
 
         return results
+
+    def _preload_next_chunks(
+        self,
+        paths: list[str],
+        chunk_boundaries: list[tuple[int, int]],
+        chunk_idx: int,
+        lookahead: int,
+        preload_futures: dict[int, PilImagesFuture],
+    ) -> None:
+        """先読みチャンクをプリロードExecutorに投入する."""
+        next_idx = chunk_idx + lookahead
+        if next_idx < len(chunk_boundaries) and next_idx not in preload_futures:
+            next_start, next_end = chunk_boundaries[next_idx]
+            next_paths = paths[next_start:next_end]
+            preload_futures[next_idx] = self._get_preload_executor().submit(
+                self.load_and_preprocess_images,
+                next_paths,
+                self.config.max_dim,
+            )
 
     @staticmethod
     def _compute_chunk_boundaries(
