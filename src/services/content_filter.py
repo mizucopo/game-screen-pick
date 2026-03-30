@@ -95,9 +95,6 @@ class ContentFilter:
             _relative_transition_polarity,
         ) = calculate_relative_transition_scores(
             raw,
-            adaptive_scores,
-            image.layout_heuristics,
-            image.normalized_metrics,
             profile,
         )
 
