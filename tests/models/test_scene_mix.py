@@ -137,3 +137,22 @@ def test_calculate_allocation_parameterized(
     assert result[SceneLabel.PLAY] == expected_play
     assert result[SceneLabel.EVENT] == expected_event
     assert sum(result.values()) == total
+
+
+def test_calculate_allocation_raises_on_negative_total() -> None:
+    """totalが負の値の場合にValueErrorが送出されること。
+
+    Given:
+        - play=0.7, event=0.3の比率が設定される
+        - total=-1が設定される
+    When:
+        - calculate_allocationが実行される
+    Then:
+        - ValueErrorが送出されること
+    """
+    # Arrange
+    scene_mix = SceneMix(play=0.7, event=0.3)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="totalは0以上"):
+        scene_mix.calculate_allocation(-1)
