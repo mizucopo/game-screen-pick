@@ -167,6 +167,32 @@ class Main:
             raise click.BadParameter(str(error)) from error
 
     @staticmethod
+    def _resolve_configs(
+        config_path: str | None,
+        profile: str | None,
+        scene_mix: SceneMix | None,
+        similarity: float | None,
+        batch_size: int | None,
+        result_max_workers: int | None,
+        max_dim: int,
+        max_memory_gb: int,
+    ) -> tuple[AnalyzerConfig, SelectionConfig]:
+        """解析設定と選択設定を構築する."""
+        analyzer_config = AnalyzerConfig.from_cli_args(
+            result_max_workers=result_max_workers,
+            max_dim=max_dim,
+            max_memory_gb=max_memory_gb,
+        )
+        selection_config = Main.build_selection_config(
+            config_path=config_path,
+            profile=profile,
+            scene_mix=scene_mix,
+            similarity=similarity,
+            batch_size=batch_size,
+        )
+        return analyzer_config, selection_config
+
+    @staticmethod
     def build_selection_config(
         *,
         config_path: str | None,
@@ -355,17 +381,15 @@ class Main:
                     param_hint="input",
                 )
 
-            analyzer_config = AnalyzerConfig.from_cli_args(
-                result_max_workers=result_max_workers,
-                max_dim=max_dim,
-                max_memory_gb=max_memory_gb,
-            )
-            selection_config = Main.build_selection_config(
+            analyzer_config, selection_config = Main._resolve_configs(
                 config_path=config_path,
                 profile=profile,
                 scene_mix=scene_mix,
                 similarity=similarity,
                 batch_size=batch_size,
+                result_max_workers=result_max_workers,
+                max_dim=max_dim,
+                max_memory_gb=max_memory_gb,
             )
 
             with ImageQualityAnalyzer(config=analyzer_config) as analyzer:

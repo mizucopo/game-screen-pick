@@ -25,6 +25,10 @@ class GameScreenPicker:
     scene mix 選定、統計生成までをひとつの入り口として提供する。
     """
 
+    SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
+        {".jpg", ".jpeg", ".png", ".bmp"},
+    )
+
     def __init__(
         self,
         analyzer: AnalyzerLike,
@@ -59,11 +63,10 @@ class GameScreenPicker:
             対応拡張子を持つ画像パスの一覧。
         """
         path_obj = Path(folder)
-        extensions = {".jpg", ".jpeg", ".png", ".bmp"}
         files = [
             path
             for path in (path_obj.rglob("*") if recursive else path_obj.glob("*"))
-            if path.suffix.lower() in extensions
+            if path.suffix.lower() in GameScreenPicker.SUPPORTED_EXTENSIONS
         ]
         files = sorted(
             files,

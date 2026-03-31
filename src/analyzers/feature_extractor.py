@@ -205,6 +205,9 @@ class FeatureExtractor:
                 )
 
                 if is_oom:
+                    # GPU メモリを解放してからリトライに備える
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                     # バッチサイズを半分にしてリトライ
                     new_batch_size = current_batch_size // 2
                     device_name = self.model_manager.device.upper()

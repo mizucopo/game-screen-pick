@@ -34,7 +34,13 @@ class SceneMix:
 
         Returns:
             SceneLabelごとの配分数。
+
+        Raises:
+            ValueError: totalが負の値の場合。
         """
+        if total < 0:
+            msg = f"totalは0以上の値である必要があります: {total}"
+            raise ValueError(msg)
         raw_play = total * self.play
         raw_event = total * self.event
         play_target = int(raw_play)

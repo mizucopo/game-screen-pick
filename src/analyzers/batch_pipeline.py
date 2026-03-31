@@ -7,6 +7,7 @@
 import concurrent.futures
 import logging
 import os
+import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -67,6 +68,9 @@ class BatchPipeline:
         self._executor: ThreadPoolExecutor | None = None
         self._preload_executor: ThreadPoolExecutor | None = None
         self._io_executor: ThreadPoolExecutor | None = None
+        self._executor_lock = threading.Lock()
+        self._preload_lock = threading.Lock()
+        self._io_lock = threading.Lock()
 
     @staticmethod
     def _convert_batch_features_to_numpy(
@@ -161,15 +165,9 @@ class BatchPipeline:
             pil_images = preload_futures[chunk_idx].result()
             del preload_futures[chunk_idx]
 
-            next_idx = chunk_idx + lookahead
-            if next_idx < len(chunk_boundaries) and next_idx not in preload_futures:
-                next_start, next_end = chunk_boundaries[next_idx]
-                next_paths = paths[next_start:next_end]
-                preload_futures[next_idx] = preload_executor.submit(
-                    self.load_and_preprocess_images,
-                    next_paths,
-                    self.config.max_dim,
-                )
+            self._preload_next_chunks(
+                paths, chunk_boundaries, chunk_idx, lookahead, preload_futures
+            )
 
             clip_features_list = self.feature_extractor.extract_clip_features_batch(
                 pil_images,
@@ -195,6 +193,25 @@ class BatchPipeline:
                 logger.info(f"処理済み: {chunk_end}/{len(paths)}")
 
         return results
+
+    def _preload_next_chunks(
+        self,
+        paths: list[str],
+        chunk_boundaries: list[tuple[int, int]],
+        chunk_idx: int,
+        lookahead: int,
+        preload_futures: dict[int, PilImagesFuture],
+    ) -> None:
+        """先読みチャンクをプリロードExecutorに投入する."""
+        next_idx = chunk_idx + lookahead
+        if next_idx < len(chunk_boundaries) and next_idx not in preload_futures:
+            next_start, next_end = chunk_boundaries[next_idx]
+            next_paths = paths[next_start:next_end]
+            preload_futures[next_idx] = self._get_preload_executor().submit(
+                self.load_and_preprocess_images,
+                next_paths,
+                self.config.max_dim,
+            )
 
     @staticmethod
     def _compute_chunk_boundaries(
@@ -410,8 +427,12 @@ class BatchPipeline:
             結果構築用の `ThreadPoolExecutor` 。
         """
         if self._executor is None:
-            workers = self._result_max_workers if self._result_max_workers > 0 else 1
-            self._executor = ThreadPoolExecutor(max_workers=workers)
+            with self._executor_lock:
+                if self._executor is None:
+                    workers = (
+                        self._result_max_workers if self._result_max_workers > 0 else 1
+                    )
+                    self._executor = ThreadPoolExecutor(max_workers=workers)
         return self._executor
 
     def _get_preload_executor(self) -> ThreadPoolExecutor:
@@ -424,10 +445,12 @@ class BatchPipeline:
             プリロード処理用の `ThreadPoolExecutor` 。
         """
         if self._preload_executor is None:
-            max_workers = self.config.io_max_workers or 1
-            if max_workers < 2:
-                max_workers = 2
-            self._preload_executor = ThreadPoolExecutor(max_workers=max_workers)
+            with self._preload_lock:
+                if self._preload_executor is None:
+                    max_workers = self.config.io_max_workers or 1
+                    if max_workers < 2:
+                        max_workers = 2
+                    self._preload_executor = ThreadPoolExecutor(max_workers=max_workers)
         return self._preload_executor
 
     def _get_io_executor(self) -> ThreadPoolExecutor:
@@ -440,8 +463,10 @@ class BatchPipeline:
             画像読み込み専用の `ThreadPoolExecutor` 。
         """
         if self._io_executor is None:
-            max_workers = self.config.io_max_workers or 1
-            self._io_executor = ThreadPoolExecutor(max_workers=max_workers)
+            with self._io_lock:
+                if self._io_executor is None:
+                    max_workers = self.config.io_max_workers or 1
+                    self._io_executor = ThreadPoolExecutor(max_workers=max_workers)
         return self._io_executor
 
     def close(self) -> None:
