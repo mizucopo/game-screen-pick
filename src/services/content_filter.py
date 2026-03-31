@@ -88,7 +88,6 @@ class ContentFilter:
         profile: WholeInputProfile,
         adaptive_scores: AdaptiveScores,
         bright_washout_score: float,
-        p25_range: float,
     ) -> str | None:
         """ホワイトアウトを検出する（3条件）."""
         t = ContentFilterThresholds
@@ -96,7 +95,8 @@ class ContentFilter:
         if (
             raw.near_white_ratio >= t.WHITEOUT_NEAR_WHITE_THRESHOLD
             and raw.luminance_entropy <= t.WHITEOUT_LUMINANCE_ENTROPY_THRESHOLD
-            and raw.luminance_range <= p25_range
+            and raw.luminance_range
+            <= max(t.WHITEOUT_LUMINANCE_RANGE_MIN, profile.luminance_range.p25)
         ):
             return "whiteout"
 
@@ -219,7 +219,7 @@ class ContentFilter:
             return reason
         if (
             reason := ContentFilter._detect_whiteout(
-                raw, profile, adaptive_scores, bright_washout_score, p25_range
+                raw, profile, adaptive_scores, bright_washout_score
             )
         ) is not None:
             return reason
