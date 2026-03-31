@@ -17,8 +17,9 @@ from ..services.scene_mix_selector import SceneMixSelector
 from ..services.scene_scorer import SceneScorer
 from ..services.whole_input_profiler import WholeInputProfiler
 
-
-SUPPORTED_IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".bmp"})
+SUPPORTED_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {".jpg", ".jpeg", ".png", ".bmp"},
+)
 
 
 class GameScreenPicker:

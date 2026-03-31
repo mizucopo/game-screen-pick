@@ -103,7 +103,8 @@ class ContentFilter:
         if (
             raw.brightness >= t.WHITEOUT_BRIGHTNESS_THRESHOLD
             and raw.contrast <= max(t.WHITEOUT_MAX_CONTRAST, profile.contrast.p10)
-            and raw.edge_density <= max(t.WHITEOUT_MAX_EDGE_DENSITY, profile.edge_density.p10)
+            and raw.edge_density
+            <= max(t.WHITEOUT_MAX_EDGE_DENSITY, profile.edge_density.p10)
             and raw.dominant_tone_ratio >= t.WHITEOUT_MIN_DOMINANT_TONE_RATIO
         ):
             return "whiteout"
@@ -111,8 +112,10 @@ class ContentFilter:
         if (
             bright_washout_score >= t.WHITEOUT_BRIGHT_WASHOUT_THRESHOLD
             and raw.brightness >= t.WHITEOUT_RELAXED_MIN_BRIGHTNESS
-            and raw.contrast <= max(t.WHITEOUT_RELAXED_MAX_CONTRAST, profile.contrast.p25)
-            and raw.edge_density <= max(t.WHITEOUT_RELAXED_MAX_EDGE_DENSITY, profile.edge_density.p25)
+            and raw.contrast
+            <= max(t.WHITEOUT_RELAXED_MAX_CONTRAST, profile.contrast.p25)
+            and raw.edge_density
+            <= max(t.WHITEOUT_RELAXED_MAX_EDGE_DENSITY, profile.edge_density.p25)
             and adaptive_scores.visibility_score <= t.WHITEOUT_RELAXED_MAX_VISIBILITY
         ):
             return "whiteout"
@@ -150,7 +153,8 @@ class ContentFilter:
             relative_bright_transition_score >= t.RELATIVE_BRIGHT_TRANSITION_THRESHOLD
             and (
                 adaptive_scores.visibility_score <= t.RELATIVE_BRIGHT_VISIBILITY_MAX
-                or adaptive_scores.information_score <= t.RELATIVE_BRIGHT_INFORMATION_MAX
+                or adaptive_scores.information_score
+                <= t.RELATIVE_BRIGHT_INFORMATION_MAX
             )
             and (
                 raw.near_white_ratio >= profile.near_white_ratio.p90
@@ -213,13 +217,31 @@ class ContentFilter:
 
         if (reason := ContentFilter._detect_blackout(raw, p10_range)) is not None:
             return reason
-        if (reason := ContentFilter._detect_whiteout(raw, profile, adaptive_scores, bright_washout_score, p25_range)) is not None:
+        if (
+            reason := ContentFilter._detect_whiteout(
+                raw, profile, adaptive_scores, bright_washout_score, p25_range
+            )
+        ) is not None:
             return reason
-        if (reason := ContentFilter._detect_single_tone(raw, profile, p10_range)) is not None:
+        if (
+            reason := ContentFilter._detect_single_tone(raw, profile, p10_range)
+        ) is not None:
             return reason
-        if (reason := ContentFilter._detect_bright_transition(raw, profile, adaptive_scores, bright_washout_score, relative_bright_transition_score)) is not None:
+        if (
+            reason := ContentFilter._detect_bright_transition(
+                raw,
+                profile,
+                adaptive_scores,
+                bright_washout_score,
+                relative_bright_transition_score,
+            )
+        ) is not None:
             return reason
-        if (reason := ContentFilter._detect_dark_transition(raw, adaptive_scores, profile, relative_dark_transition_score)) is not None:
+        if (
+            reason := ContentFilter._detect_dark_transition(
+                raw, adaptive_scores, profile, relative_dark_transition_score
+            )
+        ) is not None:
             return reason
         if ContentFilter._is_fade_transition(
             raw,
@@ -246,62 +268,68 @@ class ContentFilter:
         system_ui_signal: float,
     ) -> bool:
         """暗転・明転・露出過多/不足の遷移フレームかどうかを返す."""
+        t = ContentFilterThresholds
         obvious_fade = (
-            (raw.near_black_ratio >= ContentFilterThresholds.OBVIOUS_FADE_EXTREME_RATIO or raw.near_white_ratio >= ContentFilterThresholds.OBVIOUS_FADE_EXTREME_RATIO)
-            and adaptive_scores.visibility_score < ContentFilterThresholds.FADE_VISIBILITY_THRESHOLD
+            (
+                raw.near_black_ratio >= t.OBVIOUS_FADE_EXTREME_RATIO
+                or raw.near_white_ratio >= t.OBVIOUS_FADE_EXTREME_RATIO
+            )
+            and adaptive_scores.visibility_score < t.FADE_VISIBILITY_THRESHOLD
             and (
                 raw.luminance_range <= p25_range
-                or adaptive_scores.information_score < ContentFilterThresholds.FADE_INFORMATION_THRESHOLD
+                or adaptive_scores.information_score < t.FADE_INFORMATION_THRESHOLD
             )
         )
         if obvious_fade:
             return True
 
         bright_washout_fade = (
-            bright_washout_score >= ContentFilterThresholds.BRIGHT_WASHOUT_FADE_THRESHOLD
+            bright_washout_score >= t.BRIGHT_WASHOUT_FADE_THRESHOLD
             and (
-                raw.brightness >= ContentFilterThresholds.BRIGHT_WASHOUT_FADE_MIN_BRIGHTNESS
-                or raw.near_white_ratio >= ContentFilterThresholds.BRIGHT_WASHOUT_FADE_MIN_NEAR_WHITE_RATIO
+                raw.brightness >= t.BRIGHT_WASHOUT_FADE_MIN_BRIGHTNESS
+                or raw.near_white_ratio >= t.BRIGHT_WASHOUT_FADE_MIN_NEAR_WHITE_RATIO
             )
             and (
-                adaptive_scores.visibility_score
-                <= ContentFilterThresholds.BRIGHT_WASHOUT_FADE_MAX_VISIBILITY
+                adaptive_scores.visibility_score <= t.BRIGHT_WASHOUT_FADE_MAX_VISIBILITY
                 or adaptive_scores.information_score
-                <= ContentFilterThresholds.BRIGHT_WASHOUT_FADE_MAX_INFORMATION
+                <= t.BRIGHT_WASHOUT_FADE_MAX_INFORMATION
             )
         )
         if bright_washout_fade:
             return True
 
-        veiled_fade = veiled_transition_score >= ContentFilterThresholds.VEILED_FADE_THRESHOLD and (
-            bright_washout_score >= ContentFilterThresholds.VEILED_FADE_MIN_BRIGHT_WASHOUT
-            or raw.near_white_ratio >= ContentFilterThresholds.VEILED_FADE_MIN_EXTREME_RATIO
-            or raw.near_black_ratio >= ContentFilterThresholds.VEILED_FADE_MIN_EXTREME_RATIO
-            or system_ui_signal >= ContentFilterThresholds.VEILED_FADE_MIN_SYSTEM_UI
+        veiled_fade = veiled_transition_score >= t.VEILED_FADE_THRESHOLD and (
+            bright_washout_score >= t.VEILED_FADE_MIN_BRIGHT_WASHOUT
+            or raw.near_white_ratio >= t.VEILED_FADE_MIN_EXTREME_RATIO
+            or raw.near_black_ratio >= t.VEILED_FADE_MIN_EXTREME_RATIO
+            or system_ui_signal >= t.VEILED_FADE_MIN_SYSTEM_UI
         )
         if veiled_fade:
             return True
 
         bright_fade = (
-            raw.near_white_ratio >= ContentFilterThresholds.DIRECT_FADE_NEAR_WHITE_THRESHOLD
+            raw.near_white_ratio >= t.DIRECT_FADE_NEAR_WHITE_THRESHOLD
             or raw.brightness
-            >= max(ContentFilterThresholds.DIRECT_FADE_BRIGHTNESS_THRESHOLD, profile.brightness.p90)
+            >= max(t.DIRECT_FADE_BRIGHTNESS_THRESHOLD, profile.brightness.p90)
         )
         dark_fade = (
-            raw.near_black_ratio >= ContentFilterThresholds.DIRECT_FADE_NEAR_BLACK_THRESHOLD
+            raw.near_black_ratio >= t.DIRECT_FADE_NEAR_BLACK_THRESHOLD
             or raw.brightness
-            <= min(ContentFilterThresholds.DIRECT_FADE_DARKNESS_THRESHOLD, profile.brightness.p10)
+            <= min(t.DIRECT_FADE_DARKNESS_THRESHOLD, profile.brightness.p10)
         )
         weak_structure = (
-            raw.dominant_tone_ratio >= ContentFilterThresholds.DIRECT_FADE_MIN_DOMINANT_TONE_RATIO
+            raw.dominant_tone_ratio >= t.DIRECT_FADE_MIN_DOMINANT_TONE_RATIO
             or raw.luminance_range
-            <= max(ContentFilterThresholds.DIRECT_FADE_MIN_LUMINANCE_RANGE, profile.luminance_range.p25)
+            <= max(
+                t.DIRECT_FADE_MIN_LUMINANCE_RANGE,
+                profile.luminance_range.p25,
+            )
         )
         return (
             (bright_fade or dark_fade)
-            and raw.contrast <= max(ContentFilterThresholds.DIRECT_FADE_MAX_CONTRAST, profile.contrast.p25)
+            and raw.contrast <= max(t.DIRECT_FADE_MAX_CONTRAST, profile.contrast.p25)
             and raw.edge_density
-            <= max(ContentFilterThresholds.DIRECT_FADE_MAX_EDGE_DENSITY, profile.edge_density.p25)
+            <= max(t.DIRECT_FADE_MAX_EDGE_DENSITY, profile.edge_density.p25)
             and weak_structure
         )
 
@@ -336,14 +364,18 @@ class ContentFilter:
             prev_next_similarity = float(
                 np.clip(prev_feature @ next_feature, -1.0, 1.0)
             )
-            if prev_next_similarity < ContentFilterThresholds.TEMPORAL_SIMILARITY_THRESHOLD:
+            if (
+                prev_next_similarity
+                < ContentFilterThresholds.TEMPORAL_SIMILARITY_THRESHOLD
+            ):
                 continue
 
             current_visibility = adaptive_scores[id(images[index])].visibility_score
             prev_visibility = adaptive_scores[id(images[index - 1])].visibility_score
             next_visibility = adaptive_scores[id(images[index + 1])].visibility_score
-            if current_visibility + ContentFilterThresholds.TEMPORAL_VISIBILITY_MARGIN < min(
-                prev_visibility, next_visibility
+            if (
+                current_visibility + ContentFilterThresholds.TEMPORAL_VISIBILITY_MARGIN
+                < min(prev_visibility, next_visibility)
             ):
                 rejected_indices.add(index)
 

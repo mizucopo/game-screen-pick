@@ -165,7 +165,9 @@ class BatchPipeline:
             pil_images = preload_futures[chunk_idx].result()
             del preload_futures[chunk_idx]
 
-            self._preload_next_chunks(paths, chunk_boundaries, chunk_idx, lookahead, preload_futures)
+            self._preload_next_chunks(
+                paths, chunk_boundaries, chunk_idx, lookahead, preload_futures
+            )
 
             clip_features_list = self.feature_extractor.extract_clip_features_batch(
                 pil_images,
@@ -420,7 +422,9 @@ class BatchPipeline:
         if self._executor is None:
             with self._executor_lock:
                 if self._executor is None:
-                    workers = self._result_max_workers if self._result_max_workers > 0 else 1
+                    workers = (
+                        self._result_max_workers if self._result_max_workers > 0 else 1
+                    )
                     self._executor = ThreadPoolExecutor(max_workers=workers)
         return self._executor
 

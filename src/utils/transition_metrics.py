@@ -25,9 +25,7 @@ def calculate_bright_washout_score(raw_metrics: "RawMetrics") -> float:
     contrast_penalty = 1.0 - clamp01(
         raw_metrics.contrast / t.BRIGHT_WASHOUT_CONTRAST_SCALE
     )
-    edge_penalty = 1.0 - clamp01(
-        raw_metrics.edge_density / t.BRIGHT_WASHOUT_EDGE_SCALE
-    )
+    edge_penalty = 1.0 - clamp01(raw_metrics.edge_density / t.BRIGHT_WASHOUT_EDGE_SCALE)
     range_penalty = 1.0 - clamp01(
         raw_metrics.luminance_range / t.BRIGHT_WASHOUT_RANGE_SCALE
     )
@@ -75,9 +73,7 @@ def calculate_veiled_transition_score(
     contrast_penalty = clamp01(
         1.0 - raw_metrics.contrast / t.BRIGHT_WASHOUT_CONTRAST_SCALE
     )
-    edge_penalty = clamp01(
-        1.0 - raw_metrics.edge_density / t.BRIGHT_WASHOUT_EDGE_SCALE
-    )
+    edge_penalty = clamp01(1.0 - raw_metrics.edge_density / t.BRIGHT_WASHOUT_EDGE_SCALE)
     bright_washout_score = calculate_bright_washout_score(raw_metrics)
     system_ui_signal = calculate_system_ui_signal(heuristics)
     support_ui_score = calculate_support_ui_score(normalized_metrics)
@@ -114,8 +110,7 @@ def calculate_relative_transition_scores(
         / bright_tail_width
     )
     dark_outlier = clamp01(
-        (whole_input_profile.brightness.p10 - raw_metrics.brightness)
-        / dark_tail_width
+        (whole_input_profile.brightness.p10 - raw_metrics.brightness) / dark_tail_width
     )
     near_white_outlier = clamp01(
         (
@@ -150,9 +145,7 @@ def calculate_relative_transition_scores(
     contrast_penalty = clamp01(
         1.0 - raw_metrics.contrast / t.BRIGHT_WASHOUT_CONTRAST_SCALE
     )
-    edge_penalty = clamp01(
-        1.0 - raw_metrics.edge_density / t.BRIGHT_WASHOUT_EDGE_SCALE
-    )
+    edge_penalty = clamp01(1.0 - raw_metrics.edge_density / t.BRIGHT_WASHOUT_EDGE_SCALE)
     range_penalty = clamp01(
         1.0 - raw_metrics.luminance_range / t.BRIGHT_WASHOUT_RANGE_SCALE
     )
