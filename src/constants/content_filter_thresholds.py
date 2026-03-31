@@ -15,6 +15,7 @@ class ContentFilterThresholds:
     WHITEOUT_RELAXED_MIN_BRIGHTNESS: float = 200.0
     WHITEOUT_RELAXED_MAX_CONTRAST: float = 8.0
     WHITEOUT_RELAXED_MAX_EDGE_DENSITY: float = 0.05
+    WHITEOUT_LUMINANCE_RANGE_MIN: float = 12.0
     WHITEOUT_RELAXED_MAX_VISIBILITY: float = 0.76
 
     # --- ブラックアウト判定 ---
