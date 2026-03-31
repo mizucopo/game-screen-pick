@@ -418,7 +418,14 @@ class BatchPipeline:
         return results
 
     def _get_executor(self) -> ThreadPoolExecutor:
-        """結果構築用スレッドプールを取得する."""
+        """結果構築用スレッドプールを取得する.
+
+        チャンクごとに作り直さずインスタンス内で再利用し、
+        解析結果構築のオーバーヘッドを抑える。
+
+        Returns:
+            結果構築用の `ThreadPoolExecutor` 。
+        """
         if self._executor is None:
             with self._executor_lock:
                 if self._executor is None:
@@ -429,7 +436,14 @@ class BatchPipeline:
         return self._executor
 
     def _get_preload_executor(self) -> ThreadPoolExecutor:
-        """プリロード用スレッドプールを取得する."""
+        """プリロード用スレッドプールを取得する.
+
+        lookahead読み込み専用のExecutorで、結果構築用と分離して保持する。
+        最低2ワーカーを確保し、次チャンクの先読みを進めやすくする。
+
+        Returns:
+            プリロード処理用の `ThreadPoolExecutor` 。
+        """
         if self._preload_executor is None:
             with self._preload_lock:
                 if self._preload_executor is None:
@@ -440,7 +454,14 @@ class BatchPipeline:
         return self._preload_executor
 
     def _get_io_executor(self) -> ThreadPoolExecutor:
-        """内部I/O用スレッドプールを取得する."""
+        """内部I/O用スレッドプールを取得する.
+
+        `load_and_preprocess_images` の内部でのみ使うExecutorを返し、
+        preload側とI/O処理の待ち合わせが競合しないようにする。
+
+        Returns:
+            画像読み込み専用の `ThreadPoolExecutor` 。
+        """
         if self._io_executor is None:
             with self._io_lock:
                 if self._io_executor is None:
