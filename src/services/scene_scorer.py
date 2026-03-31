@@ -13,6 +13,7 @@ class SceneScorer:
     """画像集合を play / event に分類する."""
 
     TOP_K_NEIGHBORS = 5
+    DENSITY_CHUNK_SIZE = 512
 
     def assess_batch(
         self,
@@ -66,14 +67,16 @@ class SceneScorer:
         )
         neighbor_count = min(cls.TOP_K_NEIGHBORS, len(analyzed_images) - 1)
         raw_scores = np.zeros(len(analyzed_images), dtype=np.float32)
+        n = len(analyzed_images)
 
-        # 一度の行列乗算で全類似度を計算し、O(n²)を最適化
-        similarities_matrix = normalized_features @ normalized_features.T
-        np.fill_diagonal(similarities_matrix, -np.inf)
-        for index in range(len(analyzed_images)):
-            similarities = similarities_matrix[index]
-            nearest = np.partition(similarities, -neighbor_count)[-neighbor_count:]
-            raw_scores[index] = float(np.mean(nearest))
+        # チャンク分割で行方向に処理し、メモリ消費を O(n²) → O(n) に抑える
+        for start in range(0, n, cls.DENSITY_CHUNK_SIZE):
+            end = min(start + cls.DENSITY_CHUNK_SIZE, n)
+            chunk_sims = normalized_features[start:end] @ normalized_features.T
+            for i in range(end - start):
+                chunk_sims[i, start + i] = -np.inf
+                nearest = np.partition(chunk_sims[i], -neighbor_count)[-neighbor_count:]
+                raw_scores[start + i] = float(np.mean(nearest))
 
         min_score = float(raw_scores.min())
         max_score = float(raw_scores.max())
