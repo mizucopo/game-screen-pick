@@ -17,10 +17,6 @@ from ..services.scene_mix_selector import SceneMixSelector
 from ..services.scene_scorer import SceneScorer
 from ..services.whole_input_profiler import WholeInputProfiler
 
-SUPPORTED_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
-    {".jpg", ".jpeg", ".png", ".bmp"},
-)
-
 
 class GameScreenPicker:
     """画像解析と選定を統合する.
@@ -28,6 +24,10 @@ class GameScreenPicker:
     フォルダ走査、解析、scene評価、profile解決、候補採点、
     scene mix 選定、統計生成までをひとつの入り口として提供する。
     """
+
+    SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
+        {".jpg", ".jpeg", ".png", ".bmp"},
+    )
 
     def __init__(
         self,
@@ -66,7 +66,7 @@ class GameScreenPicker:
         files = [
             path
             for path in (path_obj.rglob("*") if recursive else path_obj.glob("*"))
-            if path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
+            if path.suffix.lower() in GameScreenPicker.SUPPORTED_EXTENSIONS
         ]
         files = sorted(
             files,
