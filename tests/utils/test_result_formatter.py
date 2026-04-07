@@ -10,6 +10,7 @@ from tests.conftest import create_scored_candidate
 
 def test_display_results_runs_without_error() -> None:
     """display_results がエラーなく実行されること."""
+    # Arrange
     candidate = create_scored_candidate(path="/tmp/test_image.jpg")
 
     stats = PickerStatistics(
@@ -28,6 +29,7 @@ def test_display_results_runs_without_error() -> None:
         whole_input_profile=None,
     )
 
+    # Act & Assert
     # 標準出力をキャプチャしてエラーなく完了することを確認
     with patch("sys.stdout", new_callable=StringIO):
         ResultFormatter.display_results([candidate], stats)

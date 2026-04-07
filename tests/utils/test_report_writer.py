@@ -172,6 +172,7 @@ def test_report_writer_keeps_whole_input_profile(tmp_path: Path) -> None:
 
 def test_write_creates_json_file(tmp_path: Path) -> None:
     """JSON レポートファイルが作成されること."""
+    # Arrange
     report_path = tmp_path / "report.json"
     candidate = create_scored_candidate(path="/tmp/selected.jpg")
     profile = build_whole_input_profile(
@@ -207,6 +208,7 @@ def test_write_creates_json_file(tmp_path: Path) -> None:
         whole_input_profile=profile,
     )
 
+    # Act
     ReportWriter.write(
         str(report_path),
         [candidate],
@@ -215,6 +217,7 @@ def test_write_creates_json_file(tmp_path: Path) -> None:
         output_paths_by_candidate_id={candidate.path: "/output/test.png"},
     )
 
+    # Assert
     assert report_path.exists()
     data = json.loads(report_path.read_text())
     assert "selected" in data
@@ -224,6 +227,7 @@ def test_write_creates_json_file(tmp_path: Path) -> None:
 
 def test_write_handles_empty_selected(tmp_path: Path) -> None:
     """選択結果が空でもJSONが正しく出力されること."""
+    # Arrange
     report_path = tmp_path / "report.json"
 
     stats = PickerStatistics(
@@ -242,8 +246,10 @@ def test_write_handles_empty_selected(tmp_path: Path) -> None:
         whole_input_profile=None,
     )
 
+    # Act
     ReportWriter.write(str(report_path), [], [], stats)
 
+    # Assert
     data = json.loads(report_path.read_text())
     assert data["selected"] == []
     assert data["whole_input_profile"] is None

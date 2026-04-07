@@ -156,6 +156,7 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
 
 def test_copy_selected_items_copies_files(tmp_path: Path) -> None:
     """選択されたアイテムがコピー先にコピーされること."""
+    # Arrange
     src_file = tmp_path / "source" / "test.png"
     src_file.parent.mkdir()
     src_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -163,14 +164,17 @@ def test_copy_selected_items_copies_files(tmp_path: Path) -> None:
     dest_dir = tmp_path / "output"
     candidate = create_scored_candidate(path=str(src_file))
 
+    # Act
     result = FileUtils.copy_selected_items([candidate], str(dest_dir))
 
+    # Assert
     assert len(result) == 1
     assert (dest_dir / "test.png").exists()
 
 
 def test_copy_selected_items_returns_path_mapping(tmp_path: Path) -> None:
     """戻り値が path → コピー先パス の対応表であること."""
+    # Arrange
     src_file = tmp_path / "source" / "test.png"
     src_file.parent.mkdir()
     src_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -178,14 +182,17 @@ def test_copy_selected_items_returns_path_mapping(tmp_path: Path) -> None:
     dest_dir = tmp_path / "output"
     candidate = create_scored_candidate(path=str(src_file))
 
+    # Act
     result = FileUtils.copy_selected_items([candidate], str(dest_dir))
 
+    # Assert
     assert candidate.path in result
     assert result[candidate.path].endswith("test.png")
 
 
 def test_copy_selected_items_renames_by_scene(tmp_path: Path) -> None:
     """rename=True の場合、scene別連番ファイル名が付けられること."""
+    # Arrange
     for name in ["a.png", "b.jpg"]:
         src_file = tmp_path / "source" / name
         src_file.parent.mkdir(parents=True, exist_ok=True)
@@ -197,10 +204,12 @@ def test_copy_selected_items_renames_by_scene(tmp_path: Path) -> None:
         create_scored_candidate(path=str(tmp_path / "source" / "b.jpg")),
     ]
 
+    # Act
     result = FileUtils.copy_selected_items(
         candidates, str(dest_dir), rename=True, requested_num=2
     )
 
+    # Assert
     assert len(result) == 2
     files = sorted(dest_dir.iterdir())
     assert files[0].name == "play0001.png"
@@ -211,6 +220,7 @@ def test_copy_selected_items_raises_when_rename_without_requested_num(
     tmp_path: Path,
 ) -> None:
     """rename=True で requested_num=None の場合、ValueError が送出されること."""
+    # Arrange
     src_file = tmp_path / "source" / "test.png"
     src_file.parent.mkdir()
     src_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -218,12 +228,14 @@ def test_copy_selected_items_raises_when_rename_without_requested_num(
     dest_dir = tmp_path / "output"
     candidate = create_scored_candidate(path=str(src_file))
 
+    # Act & Assert
     with pytest.raises(ValueError, match="requested_num"):
         FileUtils.copy_selected_items([candidate], str(dest_dir), rename=True)
 
 
 def test_copy_selected_items_handles_duplicate_filenames(tmp_path: Path) -> None:
     """同名ファイルがある場合、ユニークな名前が生成されること."""
+    # Arrange
     for i, name in enumerate(["test.png", "test.png"]):
         src_dir = tmp_path / f"source{i}"
         src_dir.mkdir()
@@ -236,8 +248,10 @@ def test_copy_selected_items_handles_duplicate_filenames(tmp_path: Path) -> None
         create_scored_candidate(path=str(tmp_path / "source1" / "test.png")),
     ]
 
+    # Act
     result = FileUtils.copy_selected_items(candidates, str(dest_dir))
 
+    # Assert
     assert len(result) == 2
     copied_files = list(dest_dir.iterdir())
     assert len(copied_files) == 2
