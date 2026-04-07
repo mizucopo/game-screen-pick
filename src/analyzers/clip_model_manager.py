@@ -2,7 +2,6 @@
 
 import logging
 import os
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -21,7 +20,7 @@ class CLIPModelManager:
     def __init__(
         self,
         model_name: str = "openai/clip-vit-base-patch32",
-        device: Optional[str] = None,
+        device: str | None = None,
     ):
         """CLIPモデルマネージャーを初期化する.
 

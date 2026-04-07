@@ -62,7 +62,7 @@ def test_quality_score_uses_weights(metric_calculator: MetricCalculator) -> None
         - 0.0 以上 1.0 以下のスコアとして返ること
     """
     # Arrange
-    _, norm = metric_calculator.calculate_raw_norm_metrics(
+    _, norm = metric_calculator.calculate_all_metrics(
         np.full((32, 32, 3), 180, dtype=np.uint8)
     )
     weights = {
