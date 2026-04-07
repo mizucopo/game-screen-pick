@@ -1,24 +1,10 @@
 """SceneMixSelectorの単体テスト."""
 
-import numpy as np
-
 from src.constants.scene_label import SceneLabel
 from src.models.scene_mix import SceneMix
 from src.models.selection_config import SelectionConfig
 from src.services.scene_mix_selector import SceneMixSelector
-from tests.conftest import create_scored_candidate
-
-
-def _feature(index: int) -> np.ndarray:
-    feature = np.zeros(576, dtype=np.float32)
-    feature[index] = 1.0
-    return feature
-
-
-def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
-    feature = base.copy()
-    feature[index] = 0.01
-    return feature
+from tests.conftest import _feature, _near_duplicate, create_scored_candidate
 
 
 def test_scene_mix_selector_respects_play_event_ratio() -> None:

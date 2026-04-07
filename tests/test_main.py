@@ -322,8 +322,11 @@ def test_build_selection_config_prefers_cli_over_config(tmp_path: Path) -> None:
     "args,error_pattern",
     [
         (["-n", "-1"], "正の整数"),
-        (["--similarity", "1.5"], "0.0~1.0"),
+        (["-n", "0"], "正の整数"),
+        (["--similarity", "0.0"], "0.0~1.0"),
+        (["--similarity", "1.0"], "0.0~1.0"),
         (["--scene-mix", "play=0.7,event=0.4"], "scene_mixの合計"),
+        (["--scene-mix", "play=0.7"], "2要素が必要です"),
     ],
 )
 def test_cli_validates_inputs(

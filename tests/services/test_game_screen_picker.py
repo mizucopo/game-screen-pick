@@ -2,28 +2,14 @@
 
 from pathlib import Path
 
-import numpy as np
-
 from src.analyzers.metric_calculator import MetricCalculator
 from src.models.analyzed_image import AnalyzedImage
 from src.models.analyzer_config import AnalyzerConfig
 from src.models.scene_mix import SceneMix
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
-from tests.conftest import create_analyzed_image
+from tests.conftest import _feature, _near_duplicate, create_analyzed_image
 from tests.fake_analyzer import FakeAnalyzer
-
-
-def _feature(index: int) -> np.ndarray:
-    feature = np.zeros(576, dtype=np.float32)
-    feature[index] = 1.0
-    return feature
-
-
-def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
-    feature = base.copy()
-    feature[index] = 0.01
-    return feature
 
 
 class _AnalyzerWithFailures:

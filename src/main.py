@@ -115,7 +115,7 @@ class Main:
             float_value = float(value)
         except ValueError as error:
             raise click.BadParameter(f"'{value}' は数値ではありません") from error
-        if not 0.0 <= float_value <= 1.0:
+        if not 0.0 < float_value < 1.0:
             raise click.BadParameter(
                 f"0.0~1.0の範囲で指定してください（実際の値: {float_value}）"
             )

@@ -1,23 +1,9 @@
 """SceneScorer の単体テスト."""
 
-import numpy as np
-
 from src.constants.scene_label import SceneLabel
 from src.models.scene_mix import SceneMix
 from src.services.scene_scorer import SceneScorer
-from tests.conftest import create_analyzed_image
-
-
-def _feature(index: int) -> np.ndarray:
-    vector = np.zeros(576, dtype=np.float32)
-    vector[index] = 1.0
-    return vector
-
-
-def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
-    feature = base.copy()
-    feature[index] = 0.01
-    return feature
+from tests.conftest import _feature, _near_duplicate, create_analyzed_image
 
 
 def test_scene_scorer_assigns_dense_cluster_to_play() -> None:
