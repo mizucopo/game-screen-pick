@@ -101,6 +101,7 @@ def calculate_veiled_transition_score(
     adaptive_scores: "AdaptiveScores",
     heuristics: "LayoutHeuristics",
     normalized_metrics: "NormalizedMetrics",
+    bright_washout_score: float | None = None,
 ) -> float:
     """明転・暗転・veiled UI を含む遷移途中らしさを返す."""
     exposure_extreme = max(raw_metrics.near_black_ratio, raw_metrics.near_white_ratio)
@@ -111,7 +112,11 @@ def calculate_veiled_transition_score(
         1.0 - raw_metrics.contrast / BRIGHT_WASHOUT_CONTRAST_SCALE
     )
     edge_penalty = clamp01(1.0 - raw_metrics.edge_density / BRIGHT_WASHOUT_EDGE_SCALE)
-    bright_washout_score = calculate_bright_washout_score(raw_metrics)
+    _bright_washout_score = (
+        bright_washout_score
+        if bright_washout_score is not None
+        else calculate_bright_washout_score(raw_metrics)
+    )
     system_ui_signal = calculate_system_ui_signal(heuristics)
     support_ui_score = calculate_support_ui_score(normalized_metrics)
     return clamp01(
@@ -121,7 +126,7 @@ def calculate_veiled_transition_score(
         + VEILED_RANGE_PENALTY_WEIGHT * range_penalty
         + VEILED_CONTRAST_PENALTY_WEIGHT * contrast_penalty
         + VEILED_EDGE_PENALTY_WEIGHT * edge_penalty
-        + VEILED_BRIGHT_WASHOUT_WEIGHT * bright_washout_score
+        + VEILED_BRIGHT_WASHOUT_WEIGHT * _bright_washout_score
         + VEILED_SYSTEM_UI_WEIGHT * system_ui_signal
         + VEILED_SUPPORT_UI_WEIGHT * support_ui_score
     )

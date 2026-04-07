@@ -237,14 +237,9 @@ class ContentFilter:
         raw = image.raw_metrics
         p10_range = max(LUMINANCE_RANGE_P10_MIN, profile.luminance_range.p10)
         p25_range = max(LUMINANCE_RANGE_P25_MIN, profile.luminance_range.p25)
+
+        # Computed for all paths
         bright_washout_score = calculate_bright_washout_score(raw)
-        system_ui_signal = calculate_system_ui_signal(image.layout_heuristics)
-        veiled_transition_score = calculate_veiled_transition_score(
-            raw,
-            adaptive_scores,
-            image.layout_heuristics,
-            image.normalized_metrics,
-        )
         (
             relative_bright_transition_score,
             relative_dark_transition_score,
@@ -283,6 +278,16 @@ class ContentFilter:
             )
         ) is not None:
             return reason
+
+        # Only computed when reaching _is_fade_transition
+        system_ui_signal = calculate_system_ui_signal(image.layout_heuristics)
+        veiled_transition_score = calculate_veiled_transition_score(
+            raw,
+            adaptive_scores,
+            image.layout_heuristics,
+            image.normalized_metrics,
+            bright_washout_score=bright_washout_score,
+        )
         if ContentFilter._is_fade_transition(
             raw,
             profile,
