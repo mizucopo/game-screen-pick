@@ -114,7 +114,7 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
         rejected=rejected,
         stats=_build_stats(),
         output_paths_by_candidate_id={
-            id(selected[0]): "/tmp/output/play0001.jpg",
+            selected[0].path: "/tmp/output/play0001.jpg",
         },
     )
 

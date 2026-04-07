@@ -401,7 +401,7 @@ class Main:
                     num=num,
                     recursive=recursive,
                 )
-                copied_paths_by_candidate_id = FileUtils.copy_selected_items(
+                copied_paths_by_path = FileUtils.copy_selected_items(
                     selected,
                     output_dir,
                     rename=rename,
@@ -414,7 +414,7 @@ class Main:
                         selected,
                         rejected,
                         stats,
-                        output_paths_by_candidate_id=copied_paths_by_candidate_id,
+                        output_paths_by_candidate_id=copied_paths_by_path,
                     )
 
         except click.ClickException:

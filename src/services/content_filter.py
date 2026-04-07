@@ -90,7 +90,7 @@ class ContentFilter:
             index: self._classify_static_rejection_reason(
                 image=image,
                 profile=profile,
-                adaptive_scores=adaptive_scores[id(image)],
+                adaptive_scores=adaptive_scores[image.path],
             )
             for index, image in enumerate(images)
         }
@@ -112,7 +112,7 @@ class ContentFilter:
 
         return ContentFilterResult(
             kept_images=kept_images,
-            adaptive_scores_by_image_id=adaptive_scores,
+            adaptive_scores_by_path=adaptive_scores,
             rejected_by_content_filter=sum(breakdown.values()),
             content_filter_breakdown=breakdown,
             whole_input_profile=profile,
@@ -375,7 +375,7 @@ class ContentFilter:
     def _find_temporal_rejections(
         self,
         images: list[AnalyzedImage],
-        adaptive_scores: dict[int, AdaptiveScores],
+        adaptive_scores: dict[str, AdaptiveScores],
         static_reasons_by_index: dict[int, str | None],
     ) -> set[int]:
         """前後関係から暗転途中フレームを検出する."""
@@ -406,9 +406,9 @@ class ContentFilter:
             if prev_next_similarity < TEMPORAL_SIMILARITY_THRESHOLD:
                 continue
 
-            current_visibility = adaptive_scores[id(images[index])].visibility_score
-            prev_visibility = adaptive_scores[id(images[index - 1])].visibility_score
-            next_visibility = adaptive_scores[id(images[index + 1])].visibility_score
+            current_visibility = adaptive_scores[images[index].path].visibility_score
+            prev_visibility = adaptive_scores[images[index - 1].path].visibility_score
+            next_visibility = adaptive_scores[images[index + 1].path].visibility_score
             if current_visibility + TEMPORAL_VISIBILITY_MARGIN < min(
                 prev_visibility, next_visibility
             ):

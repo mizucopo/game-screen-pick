@@ -225,12 +225,12 @@ class GameScreenPicker:
         selected, rejected_by_similarity, scene_mix_target, scene_mix_actual = (
             self._scene_mix_selector.select(candidates, num)
         )
-        selected_ids = {id(candidate) for candidate in selected}
+        selected_paths = {candidate.path for candidate in selected}
         rejected = sorted(
             [
                 candidate
                 for candidate in candidates
-                if id(candidate) not in selected_ids
+                if candidate.path not in selected_paths
             ],
             key=lambda item: item.selection_score,
             reverse=True,

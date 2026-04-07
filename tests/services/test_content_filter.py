@@ -195,12 +195,12 @@ def test_content_filter_rejects_flat_frames_and_keeps_informative_dark_frames() 
     assert result.whole_input_profile.brightness.p50 > 0.0
     assert result.whole_input_profile.near_white_ratio.p90 >= 0.0
     assert (
-        result.adaptive_scores_by_image_id[id(dark_gameplay)].information_score
-        > result.adaptive_scores_by_image_id[id(fade_transition)].information_score
+        result.adaptive_scores_by_path[dark_gameplay.path].information_score
+        > result.adaptive_scores_by_path[fade_transition.path].information_score
     )
     assert (
-        result.adaptive_scores_by_image_id[id(dark_gameplay)].visibility_score
-        > result.adaptive_scores_by_image_id[id(fade_transition)].visibility_score
+        result.adaptive_scores_by_path[dark_gameplay.path].visibility_score
+        > result.adaptive_scores_by_path[fade_transition.path].visibility_score
     )
 
 

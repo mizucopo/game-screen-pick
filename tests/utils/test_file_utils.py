@@ -143,10 +143,12 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
     assert (output_dir / "play0001_1.jpg").exists()
     assert (output_dir / "event0001.jpg").exists()
     assert (output_dir / "play0002.jpg").exists()
-    assert copied_paths[id(selected[0])] == str(
+    assert copied_paths[selected[0].path] == str(
         (output_dir / "play0001_1.jpg").resolve()
     )
-    assert copied_paths[id(selected[1])] == str(
+    assert copied_paths[selected[1].path] == str(
         (output_dir / "event0001.jpg").resolve()
     )
-    assert copied_paths[id(selected[2])] == str((output_dir / "play0002.jpg").resolve())
+    assert copied_paths[selected[2].path] == str(
+        (output_dir / "play0002.jpg").resolve()
+    )
