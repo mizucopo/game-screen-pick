@@ -169,13 +169,17 @@ class SceneMixSelector:
             return []
 
         ordered = sorted(candidates, key=lambda item: item.selection_score)
-        groups = np.array_split(np.asarray(ordered, dtype=object), band_count)
+        groups: list[list[ScoredCandidate]] = []
+        base_size, remainder = divmod(len(ordered), band_count)
+        start = 0
+        for band_index in range(band_count):
+            size = base_size + (1 if band_index < remainder else 0)
+            groups.append(ordered[start : start + size])
+            start += size
         band_names = self.BAND_LABELS[band_count]
         band_queues: list[deque[ScoredCandidate]] = []
         for band_name, group in zip(band_names, groups, strict=True):
-            group_candidates = [
-                candidate for candidate in group.tolist() if candidate is not None
-            ]
+            group_candidates = list(group)
             if not group_candidates:
                 continue
             band_center = float(

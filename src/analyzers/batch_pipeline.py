@@ -12,7 +12,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -58,7 +57,6 @@ class BatchPipeline:
         self.feature_extractor = feature_extractor
         self.metric_calculator = metric_calculator
         self.config = config
-        cv2.setNumThreads(1)
         if config.result_max_workers is None:
             cpu_count = os.cpu_count() or 1
             self._result_max_workers = min(8, max(1, cpu_count - 1))

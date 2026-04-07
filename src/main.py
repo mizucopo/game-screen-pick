@@ -373,6 +373,10 @@ class Main:
         if debug:
             logging.getLogger().setLevel(logging.DEBUG)
 
+        import cv2 as _cv2
+
+        _cv2.setNumThreads(1)  # OpenCVが独自スレッドプールを作成しないよう制御
+
         try:
             input_path = Path(input_dir)
             if not input_path.is_dir():

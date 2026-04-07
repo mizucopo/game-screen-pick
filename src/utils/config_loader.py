@@ -1,10 +1,13 @@
 """CLI実行時に使うTOML設定ローダー."""
 
+import logging
 import tomllib
 from pathlib import Path
 from typing import Any
 
 from ..models.scene_mix import SceneMix
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigLoader:
@@ -36,8 +39,17 @@ class ConfigLoader:
         with config_path.open("rb") as file:
             raw_data = tomllib.load(file)
 
+        KNOWN_SECTIONS = {"selection", "scene_mix", "thresholds"}
+        for section_name in raw_data:
+            if section_name not in KNOWN_SECTIONS:
+                logger.warning(f"未知のセクションを無視しました: [{section_name}]")
+
         result: dict[str, Any] = {}
         selection = raw_data.get("selection", {})
+        KNOWN_SELECTION_KEYS = {"profile"}
+        for key in selection:
+            if key not in KNOWN_SELECTION_KEYS:
+                logger.warning(f"未知のキーを無視しました: [selection] {key}")
         if "profile" in selection:
             result["profile"] = selection["profile"]
 
