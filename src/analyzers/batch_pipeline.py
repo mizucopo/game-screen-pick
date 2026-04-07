@@ -337,13 +337,16 @@ class BatchPipeline:
             raw_metrics, normalized_metrics = (
                 self.metric_calculator.calculate_all_metrics(img)
             )
+            hsv_features = self.feature_extractor.extract_hsv_features(img)
             combined_features = self.feature_extractor.extract_combined_features(
                 img,
                 clip_features,
+                hsv_features=hsv_features,
             )
             content_features = self.feature_extractor.extract_content_features(
                 img,
                 raw_metrics,
+                hsv_features=hsv_features,
             )
             layout_heuristics = LayoutAnalyzer.analyze(img)
             return AnalyzedImage(
