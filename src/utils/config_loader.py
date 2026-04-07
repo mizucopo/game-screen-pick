@@ -24,7 +24,7 @@ class ConfigLoader:
 
         `[selection]`, `[scene_mix]`, `[thresholds]` のうち、
         実行時に必要な項目だけを抽出して返す。
-        優先順位の解決自体は行わず、後段の `Main.build_selection_config`
+        優先順位の解決自体は行わず、後段の `build_selection_config`
         で CLI override と合成する前提の補助メソッドである。
 
         Args:

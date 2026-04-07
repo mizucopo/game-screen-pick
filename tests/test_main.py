@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.constants.scene_label import SceneLabel
-from src.main import Main
+from src.main import build_selection_config, run
 from src.models.picker_statistics import PickerStatistics
 from src.services.game_screen_picker import GameScreenPicker
 from tests.conftest import create_scored_candidate
@@ -107,7 +107,7 @@ def test_cli_selects_and_copies_images(
     )
 
     # Act
-    Main(args=["-n", "3", str(test_dir), str(output_dir)]).run()
+    run(["-n", "3", str(test_dir), str(output_dir)])
 
     # Assert
     assert (output_dir / "image0.jpg").exists()
@@ -180,14 +180,14 @@ def test_cli_writes_report_json_with_new_fields(
     )
 
     # Act
-    Main(
-        args=[
+    run(
+        [
             "--report-json",
             str(report_path),
             str(test_dir),
             str(output_dir),
         ]
-    ).run()
+    )
 
     # Assert
     payload = json.loads(report_path.read_text(encoding="utf-8"))
@@ -273,7 +273,7 @@ def test_cli_renames_outputs_by_scene(
     )
 
     # Act
-    Main(args=["-n", "3", "--rename", str(test_dir), str(output_dir)]).run()
+    run(["-n", "3", "--rename", str(test_dir), str(output_dir)])
 
     # Assert
     assert (output_dir / "play0001.png").exists()
@@ -304,7 +304,7 @@ def test_build_selection_config_prefers_cli_over_config(tmp_path: Path) -> None:
     )
 
     # Act
-    config = Main.build_selection_config(
+    config = build_selection_config(
         config_path=str(config_path),
         profile="active",
         scene_mix=None,
@@ -362,6 +362,6 @@ def test_cli_validates_inputs(
 
     # Act / Assert
     with pytest.raises(SystemExit):
-        Main(args=[*args, str(input_path), str(output_path)]).run()
+        run([*args, str(input_path), str(output_path)])
     captured = capsys.readouterr()
     assert error_pattern in captured.err
