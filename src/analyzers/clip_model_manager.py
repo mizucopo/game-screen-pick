@@ -2,6 +2,7 @@
 
 import logging
 import os
+import threading
 
 import torch
 import torch.nn.functional as F
@@ -36,6 +37,7 @@ class CLIPModelManager:
         # モデルとプロセッサは遅延初期化（実際に使用されるまでロードしない）
         self._model: CLIPModel | None = None
         self._processor: CLIPProcessor | None = None
+        self._lock = threading.Lock()
 
     @property
     def model(self) -> CLIPModel:
@@ -55,23 +57,24 @@ class CLIPModelManager:
         """モデルが未ロードならロードする."""
         if self._model is not None:
             return
+        with self._lock:
+            if self._model is not None:
+                return
+            logger.info(f"CLIPモデルをロードしています ({self.model_name})...")
+            self._model = CLIPModel.from_pretrained(self.model_name)
+            self._processor = CLIPProcessor.from_pretrained(self.model_name)
 
-        logger.info(f"CLIPモデルをロードしています ({self.model_name})...")
-        self._model = CLIPModel.from_pretrained(self.model_name)
-        self._processor = CLIPProcessor.from_pretrained(self.model_name)
+            # デバイスにモデルを転送
+            logger.info(f"モデルをデバイスに転送しています ({self.device})...")
+            self._model.to(torch.device(self.device))  # type: ignore[arg-type]
+            self._model.eval()
 
-        # デバイスにモデルを転送
-        logger.info(f"モデルをデバイスに転送しています ({self.device})...")
-        assert self._model is not None  # 型チェッカー用
-        self._model.to(torch.device(self.device))  # type: ignore[arg-type]
-        self._model.eval()
-
-        # GPU最適化: TF32を許可
-        # 理由: Ampere GPU以上ではTF32演算を使用することで、
-        #       精度をほぼ維持したまま行列演算を高速化できる
-        if self.device == "cuda":
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
+            # GPU最適化: TF32を許可
+            # 理由: Ampere GPU以上ではTF32演算を使用することで、
+            #       精度をほぼ維持したまま行列演算を高速化できる
+            if self.device == "cuda":
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
 
     @staticmethod
     def _detect_device() -> str:
@@ -121,7 +124,14 @@ class CLIPModelManager:
         Returns:
             L2正規化済みのCLIP画像特徴テンソル（1次元の512要素）
         """
-        with torch.inference_mode():
+        import contextlib
+
+        autocast_ctx = (
+            torch.autocast(device_type=self.device, dtype=torch.float16)
+            if self.device in ("cuda", "mps")
+            else contextlib.nullcontext()
+        )
+        with autocast_ctx, torch.inference_mode():
             inputs = self.processor(
                 images=pil_image,
                 return_tensors="pt",

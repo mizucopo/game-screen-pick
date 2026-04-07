@@ -257,7 +257,7 @@ class BatchPipeline:
                     estimated_memory = int(
                         width * height * bytes_per_pixel * safety_factor
                     )
-            except Exception:
+            except ExceptionHandler.get_expected_image_errors():
                 estimated_memory = default_memory
 
             would_exceed = current_memory + estimated_memory > max_memory_bytes
