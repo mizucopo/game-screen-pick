@@ -28,12 +28,12 @@ def test_calculate_metrics_returns_valid_values(
 ) -> None:
     """画像から有効なメトリクスが計算されること.
 
-    Given:
+    Arrange:
         - メトリクス計算器がある
         - 読み込み可能なテスト画像がある
-    When:
+    Act:
         - 生メトリクスを計算する
-    Then:
+    Assert:
         - 主要メトリクスが期待範囲の値として返ること
     """
     # Arrange
@@ -53,12 +53,12 @@ def test_calculate_metrics_returns_valid_values(
 def test_quality_score_uses_weights(metric_calculator: MetricCalculator) -> None:
     """quality_scoreが指定重みで計算されること.
 
-    Given:
+    Arrange:
         - 正規化メトリクスを計算できる画像がある
         - 一部の項目だけに重みを持つ quality weight がある
-    When:
+    Act:
         - quality score を計算する
-    Then:
+    Assert:
         - 0.0 以上 1.0 以下のスコアとして返ること
     """
     # Arrange
@@ -88,11 +88,11 @@ def test_calculate_metrics_distinguishes_flat_and_textured_frames(
 ) -> None:
     """black/white/single-tone と暗い高情報量画像が分離されること.
 
-    Given:
+    Arrange:
         - 真っ黒、真っ白、単色、暗いが情報量のある画像がある
-    When:
+    Act:
         - 生メトリクスを計算する
-    Then:
+    Assert:
         - 平坦な画像群では分布メトリクスが低くなり
         - 暗いが情報量のある画像では entropy/range/edge が高くなること
     """

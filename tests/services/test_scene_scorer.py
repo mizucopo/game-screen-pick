@@ -9,13 +9,13 @@ from tests.conftest import _feature, _near_duplicate, create_analyzed_image
 def test_scene_scorer_assigns_dense_cluster_to_play() -> None:
     """近傍密度が高い候補群が play へ割り当てられること.
 
-    Given:
+    Arrange:
         - 互いに似た特徴を持つ画像群（高密度クラスタ）がある
         - 孤立した特徴を持つ画像群（低密度）がある
         - scene_mix比率が70/30に設定されている
-    When:
+    Act:
         - SceneScorerでscene評価を行う
-    Then:
+    Assert:
         - 高密度クラスタの画像がplayに割り当てられること
         - 低密度の画像の一部がeventに割り当てられること
     """
@@ -63,12 +63,12 @@ def test_scene_scorer_assigns_dense_cluster_to_play() -> None:
 def test_scene_scorer_normalizes_density_scores() -> None:
     """density_score が 0..1 に正規化されること.
 
-    Given:
+    Arrange:
         - 異なる特徴を持つ2つの画像がある
         - scene_mix比率が50/50に設定されている
-    When:
+    Act:
         - SceneScorerでscene評価を行う
-    Then:
+    Assert:
         - すべてのdensity_scoreが0.0〜1.0の範囲になること
         - play/event両方のラベルが割り当てられること
     """

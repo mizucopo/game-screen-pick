@@ -19,11 +19,11 @@ def test_safe_l2_normalize_handles_various_vectors(
 ) -> None:
     """様々な種類のベクトルが正しく正規化されること.
 
-    Given:
+    Arrange:
         - ゼロベクトル、微小ベクトル、または通常ベクトルがある
-    When:
+    Act:
         - VectorUtils.safe_l2_normalizeで正規化される
-    Then:
+    Assert:
         - ゼロ/微小ベクトルはゼロベクトルが返されること
         - 通常ベクトルはL2ノルムが1になること
     """
@@ -42,11 +42,11 @@ def test_safe_l2_normalize_handles_various_vectors(
 def test_select_diverse_indices_handles_empty_and_identical_vectors() -> None:
     """エッジケース（空リスト・同一ベクトル）で正しく動作すること.
 
-    Given:
+    Arrange:
         - 空または同一の特徴ベクトルリストがある
-    When:
+    Act:
         - select_diverse_indicesを実行する
-    Then:
+    Assert:
         - 最初の1件のみ選択され、残りは類似度で除外されること
     """
     # Arrange & Act: 空リスト
@@ -74,12 +74,12 @@ def test_select_diverse_indices_handles_empty_and_identical_vectors() -> None:
 def test_filter_by_similarity_checks_against_seed_features() -> None:
     """既選択特徴をseedとして類似候補を除外できること.
 
-    Given:
+    Arrange:
         - seed特徴として1件のベクトルが指定されている
         - 候補にseedと同一のベクトルと異なるベクトルが含まれている
-    When:
+    Act:
         - filter_by_similarityが実行される
-    Then:
+    Assert:
         - seedと同一の候補は除外され、異なる候補のみが選択されること
     """
     # Arrange

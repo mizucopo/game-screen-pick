@@ -10,12 +10,12 @@ from tests.conftest import _feature, _near_duplicate, create_scored_candidate
 def test_scene_mix_selector_respects_play_event_ratio() -> None:
     """既定の 70/30 比率で選ばれること.
 
-    Given:
+    Arrange:
         - play候補7件、event候補3件がある
         - scene_mix比率が70/30に設定されている
-    When:
+    Act:
         - 10件を選択する
-    Then:
+    Assert:
         - playが7件、eventが3件選ばれること
         - targetsとactualsが一致すること
     """
@@ -62,13 +62,13 @@ def test_scene_mix_selector_respects_play_event_ratio() -> None:
 def test_scene_mix_selector_keeps_similar_candidates_out_globally() -> None:
     """カテゴリをまたいでも類似画像を戻さないこと.
 
-    Given:
+    Arrange:
         - play候補と、それに類似するevent候補がある
         - 類似しない別のevent候補がある
         - scene_mix比率が50/50に設定されている
-    When:
+    Act:
         - 2件を選択する
-    Then:
+    Assert:
         - play候補と、類似しないevent候補が選ばれること
         - 類似候補が除外されること
     """
@@ -113,12 +113,12 @@ def test_scene_mix_selector_keeps_similar_candidates_out_globally() -> None:
 def test_scene_mix_selector_assigns_score_bands() -> None:
     """選択候補へ score_band が設定されること.
 
-    Given:
+    Arrange:
         - 異なるselection_scoreを持つ5件のplay候補がある
         - scene_mix比率が100/0に設定されている
-    When:
+    Act:
         - 5件を選択する
-    Then:
+    Assert:
         - 各候補にlow/mid_low/mid/mid_high/highのscore_bandが設定されること
     """
     # Arrange
@@ -154,13 +154,13 @@ def test_scene_mix_selector_assigns_score_bands() -> None:
 def test_scene_mix_selector_fallback_includes_outliers() -> None:
     """外れ値除外された候補が fallback で選ばれること.
 
-    Given:
+    Arrange:
         - 4件のplay候補がある
         - selection_score=[0.1, 0.2, 0.3, 100.0] で100.0が外れ値
         - scene_mix比率が100/0に設定されている
-    When:
+    Act:
         - 4件を選択する
-    Then:
+    Assert:
         - 4件全てが選ばれること
         - targetsとactualsが一致すること
         - 外れ値が最後に選ばれること

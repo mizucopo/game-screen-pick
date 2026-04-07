@@ -36,11 +36,11 @@ def test_get_unique_destination_generates_unique_filename(
 ) -> None:
     """既存ファイルに基づいて一意なファイル名が生成されること.
 
-    Given:
+    Arrange:
         - 出力ディレクトリに既存ファイルが存在する（または空である）
-    When:
+    Act:
         - get_unique_destinationが実行される
-    Then:
+    Assert:
         - 適切なサフィックス付きのファイル名が返されること
     """
     # Arrange
@@ -71,11 +71,11 @@ def test_build_renamed_filename_uses_scene_prefix_and_padding(
 ) -> None:
     """scene名と要求枚数に応じたファイル名が生成されること.
 
-    Given:
+    Arrange:
         - scene名、連番index、拡張子、要求枚数がある
-    When:
+    Act:
         - build_renamed_filenameを呼び出す
-    Then:
+    Assert:
         - scene名 + ゼロ埋め連番 + 拡張子の形式で返されること
         - 要求枚数が4桁以下なら4桁、それ以上なら要求枚数の桁数でゼロ埋めされること
     """
@@ -96,12 +96,12 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
 ) -> None:
     """scene別連番で出力しつつ既存ファイルとの衝突を回避できること.
 
-    Given:
+    Arrange:
         - 出力ディレクトリに既存ファイル（play0001.jpg）がある
         - play 2件、event 1件の選択画像がある
-    When:
+    Act:
         - rename=Trueでcopy_selected_itemsを実行する
-    Then:
+    Assert:
         - 既存ファイルとの衝突を回避してサフィックス付きで出力されること
         - scene別に連番が振られること
     """

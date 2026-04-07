@@ -57,13 +57,13 @@ def test_cli_selects_and_copies_images(
 ) -> None:
     """CLIが画像を選択してコピーすること.
 
-    Given:
+    Arrange:
         - 入力ディレクトリに5件の画像がある
         - GameScreenPickerが3件を選択して返す
         - モックされたpicker/analyzerが設定されている
-    When:
+    Act:
         - CLIで -n 3 を指定して実行する
-    Then:
+    Assert:
         - 出力ディレクトリに3件の画像がコピーされること
     """
     # Arrange
@@ -122,13 +122,13 @@ def test_cli_writes_report_json_with_new_fields(
 ) -> None:
     """CLIが新しいフィールドを含むJSONレポートを出力すること.
 
-    Given:
+    Arrange:
         - 入力ディレクトリに1件の画像がある
         - 選択結果にplay_score/event_score/density_score/score_bandが含まれる
         - --report-jsonオプションが指定されている
-    When:
+    Act:
         - CLIを実行する
-    Then:
+    Assert:
         - JSONレポートに各スコアフィールドが出力されること
         - output_pathが正しく記録されること
     """
@@ -207,13 +207,13 @@ def test_cli_renames_outputs_by_scene(
 ) -> None:
     """CLIがscene別にファイル名を変更すること.
 
-    Given:
+    Arrange:
         - 入力ディレクトリにplay画像2件、event画像1件がある
         - --renameオプションが指定されている
         - 拡張子が混在している（png/jpg）
-    When:
+    Act:
         - CLIを実行する
-    Then:
+    Assert:
         - play画像がplay0001/play0002にリネームされること
         - event画像がevent0001にリネームされること
         - 元の拡張子が保持されること
@@ -284,12 +284,12 @@ def test_cli_renames_outputs_by_scene(
 def test_build_selection_config_prefers_cli_over_config(tmp_path: Path) -> None:
     """CLIオプションが設定ファイルより優先されること.
 
-    Given:
+    Arrange:
         - 設定ファイルにprofile=static/similarity=0.66が書かれている
         - CLIオプションでprofile=active/similarity=0.8が指定されている
-    When:
+    Act:
         - build_selection_configを呼び出す
-    Then:
+    Assert:
         - profileはCLIのactiveが優先されること
         - similarityはCLIの0.8が優先されること
         - scene_mixは設定ファイルの値が使用されること
@@ -339,11 +339,11 @@ def test_cli_validates_inputs(
 ) -> None:
     """CLIが無効な入力をバリデーションすること.
 
-    Given:
+    Arrange:
         - 無効な入力値が指定されている（負の数、範囲外の値など）
-    When:
+    Act:
         - CLIを実行する
-    Then:
+    Assert:
         - 適切なエラーメッセージが表示され、SystemExitで終了すること
     """
     # Arrange
