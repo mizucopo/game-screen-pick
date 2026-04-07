@@ -168,3 +168,82 @@ def test_report_writer_keeps_whole_input_profile(tmp_path: Path) -> None:
     assert "luminance_entropy" in profile
     assert "scene_diagnostics_summary" not in payload
     assert "score_band" in payload["selected"][0]
+
+
+def test_write_creates_json_file(tmp_path: Path) -> None:
+    """JSON レポートファイルが作成されること."""
+    report_path = tmp_path / "report.json"
+    candidate = create_scored_candidate(path="/tmp/selected.jpg")
+    profile = build_whole_input_profile(
+        create_analyzed_image(
+            path="/tmp/profile.jpg",
+            raw_metrics_dict={
+                "brightness": 100.0,
+                "contrast": 0.5,
+                "edge_density": 0.1,
+                "action_intensity": 0.1,
+                "luminance_entropy": 5.0,
+                "near_black_ratio": 0.05,
+                "near_white_ratio": 0.05,
+                "dominant_tone_ratio": 0.5,
+                "luminance_range": 40.0,
+            },
+        ),
+    )
+
+    stats = PickerStatistics(
+        total_files=1,
+        analyzed_ok=1,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        rejected_by_content_filter=0,
+        selected_count=1,
+        resolved_profile="active",
+        scene_distribution={"play": 1, "event": 0},
+        scene_mix_target={"play": 1, "event": 0},
+        scene_mix_actual={"play": 1, "event": 0},
+        threshold_relaxation_steps=[0.7, 0.75, 0.8],
+        content_filter_breakdown={"blackout": 0},
+        whole_input_profile=profile,
+    )
+
+    ReportWriter.write(
+        str(report_path),
+        [candidate],
+        [],
+        stats,
+        output_paths_by_candidate_id={candidate.path: "/output/test.png"},
+    )
+
+    assert report_path.exists()
+    data = json.loads(report_path.read_text())
+    assert "selected" in data
+    assert len(data["selected"]) == 1
+    assert data["selected"][0]["output_path"] == "/output/test.png"
+
+
+def test_write_handles_empty_selected(tmp_path: Path) -> None:
+    """選択結果が空でもJSONが正しく出力されること."""
+    report_path = tmp_path / "report.json"
+
+    stats = PickerStatistics(
+        total_files=0,
+        analyzed_ok=0,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        rejected_by_content_filter=0,
+        selected_count=0,
+        resolved_profile="active",
+        scene_distribution={"play": 0, "event": 0},
+        scene_mix_target={"play": 0, "event": 0},
+        scene_mix_actual={"play": 0, "event": 0},
+        threshold_relaxation_steps=[0.7],
+        content_filter_breakdown={},
+        whole_input_profile=None,
+    )
+
+    ReportWriter.write(str(report_path), [], [], stats)
+
+    data = json.loads(report_path.read_text())
+    assert data["selected"] == []
+    assert data["whole_input_profile"] is None
