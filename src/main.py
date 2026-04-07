@@ -308,11 +308,11 @@ class Main:
     )
     @click.option("--debug", is_flag=True, help="デバッグログを有効化")
     @click.argument(
-        "input",
+        "input_dir",
         type=click.Path(exists=True, file_okay=False, dir_okay=True),
     )
     @click.argument(
-        "output",
+        "output_dir",
         type=click.Path(file_okay=False, dir_okay=True),
     )
     def _execute(
@@ -329,8 +329,8 @@ class Main:
         max_dim: int,
         max_memory_gb: int,
         debug: bool,
-        input: str,
-        output: str,
+        input_dir: str,
+        output_dir: str,
     ) -> None:
         """ゲーム画面からscene mixを保って画像を選択する.
 
@@ -360,8 +360,8 @@ class Main:
             max_dim: 入力画像の長辺最大サイズ。
             max_memory_gb: チャンク処理のメモリ予算。
             debug: デバッグログを有効化するかどうか。
-            input: 入力画像フォルダ。
-            output: 選択画像のコピー先フォルダ。
+            input_dir: 入力画像フォルダ。
+            output_dir: 選択画像のコピー先フォルダ。
 
         Returns:
             なし。
@@ -374,11 +374,11 @@ class Main:
             logging.getLogger().setLevel(logging.DEBUG)
 
         try:
-            input_path = Path(input)
+            input_path = Path(input_dir)
             if not input_path.is_dir():
                 raise click.BadParameter(
-                    f"指定パスはフォルダではありません: {input}",
-                    param_hint="input",
+                    f"指定パスはフォルダではありません: {input_dir}",
+                    param_hint="input_dir",
                 )
 
             analyzer_config, selection_config = Main._resolve_configs(
@@ -403,7 +403,7 @@ class Main:
                 )
                 copied_paths_by_candidate_id = FileUtils.copy_selected_items(
                     selected,
-                    output,
+                    output_dir,
                     rename=rename,
                     requested_num=num,
                 )
