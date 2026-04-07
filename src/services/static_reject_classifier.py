@@ -53,12 +53,7 @@ from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.raw_metrics import RawMetrics
 from ..models.whole_input_profile import WholeInputProfile
-from ..utils.transition_metrics import (
-    calculate_bright_washout_score,
-    calculate_relative_transition_scores,
-    calculate_system_ui_signal,
-    calculate_veiled_transition_score,
-)
+from ..utils.transition_metrics import TransitionMetrics
 
 
 class StaticRejectClassifier:
@@ -76,13 +71,13 @@ class StaticRejectClassifier:
         p25_range = max(LUMINANCE_RANGE_P25_MIN, profile.luminance_range.p25)
 
         # Computed for all paths
-        bright_washout_score = calculate_bright_washout_score(raw)
+        bright_washout_score = TransitionMetrics.calculate_bright_washout_score(raw)
         (
             relative_bright_transition_score,
             relative_dark_transition_score,
             _relative_transition_score,
             _relative_transition_polarity,
-        ) = calculate_relative_transition_scores(
+        ) = TransitionMetrics.calculate_relative_transition_scores(
             raw,
             profile,
         )
@@ -121,8 +116,10 @@ class StaticRejectClassifier:
             return reason
 
         # Only computed when reaching _is_fade_transition
-        system_ui_signal = calculate_system_ui_signal(image.layout_heuristics)
-        veiled_transition_score = calculate_veiled_transition_score(
+        system_ui_signal = TransitionMetrics.calculate_system_ui_signal(
+            image.layout_heuristics
+        )
+        veiled_transition_score = TransitionMetrics.calculate_veiled_transition_score(
             raw,
             adaptive_scores,
             image.layout_heuristics,
