@@ -27,6 +27,7 @@ def test_safe_l2_normalize_handles_various_vectors(
         - ゼロ/微小ベクトルはゼロベクトルが返されること
         - 通常ベクトルはL2ノルムが1になること
     """
+    # Arrange — パラメタライズド引数から各種ベクトルと期待値を設定
     # Act
     result = VectorUtils.safe_l2_normalize(vec)
 

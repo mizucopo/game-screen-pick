@@ -1,11 +1,4 @@
-"""image_utils.pyの単体テスト.
-
-このテストモジュールは以下のベストプラクティスに従っています：
-1. 純粋関数としての動作を検証
-2. AAAパターン（Arrange, Act, Assert）を使用
-3. 明確な日本語コメントでテスト意図を説明
-4. エッジケース、境界値を網羅
-"""
+"""image_utils.pyの単体テスト."""
 
 from pathlib import Path
 

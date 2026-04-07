@@ -1,11 +1,4 @@
-"""file_utils.pyの単体テスト.
-
-このテストモジュールは以下のベストプラクティスに従っています：
-1. 純粋関数としての動作を検証（ファイルシステム操作なしでテスト可能）
-2. AAAパターン（Arrange, Act, Assert）を使用
-3. 明確な日本語コメントでテスト意図を説明
-4. 拡張子維持、エッジケース、特殊文字、境界値を網羅
-"""
+"""file_utils.pyの単体テスト."""
 
 from pathlib import Path
 
@@ -79,6 +72,7 @@ def test_build_renamed_filename_uses_scene_prefix_and_padding(
         - scene名 + ゼロ埋め連番 + 拡張子の形式で返されること
         - 要求枚数が4桁以下なら4桁、それ以上なら要求枚数の桁数でゼロ埋めされること
     """
+    # Arrange — パラメタライズド引数からscene名、連番、拡張子、要求枚数を設定
     # Act
     result = FileUtils.build_renamed_filename(
         scene_name=scene_name,
@@ -155,7 +149,18 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
 
 
 def test_copy_selected_items_copies_files(tmp_path: Path) -> None:
-    """選択されたアイテムがコピー先にコピーされること."""
+    """選択されたアイテムがコピー先にコピーされること.
+
+    Arrange:
+        - ソース画像ファイルを作成する
+        - コピー先ディレクトリを用意する
+        - 候補画像を1件作成する
+    Act:
+        - copy_selected_itemsを呼び出す
+    Assert:
+        - 戻り値の件数が1件であること
+        - コピー先にファイルが存在すること
+    """
     # Arrange
     src_file = tmp_path / "source" / "test.png"
     src_file.parent.mkdir()
@@ -173,7 +178,18 @@ def test_copy_selected_items_copies_files(tmp_path: Path) -> None:
 
 
 def test_copy_selected_items_returns_path_mapping(tmp_path: Path) -> None:
-    """戻り値が path → コピー先パス の対応表であること."""
+    """戻り値が path → コピー先パス の対応表であること.
+
+    Arrange:
+        - ソース画像ファイルを作成する
+        - コピー先ディレクトリを用意する
+        - 候補画像を1件作成する
+    Act:
+        - copy_selected_itemsを呼び出す
+    Assert:
+        - 戻り値に元パスがキーとして含まれること
+        - 値がコピー先パスで元ファイル名で終わること
+    """
     # Arrange
     src_file = tmp_path / "source" / "test.png"
     src_file.parent.mkdir()
@@ -191,7 +207,18 @@ def test_copy_selected_items_returns_path_mapping(tmp_path: Path) -> None:
 
 
 def test_copy_selected_items_renames_by_scene(tmp_path: Path) -> None:
-    """rename=True の場合、scene別連番ファイル名が付けられること."""
+    """rename=True の場合、scene別連番ファイル名が付けられること.
+
+    Arrange:
+        - 異なる拡張子の画像ファイルを2件作成する
+        - コピー先ディレクトリを用意する
+        - 候補画像を2件作成する
+    Act:
+        - rename=True, requested_num=2 でcopy_selected_itemsを呼び出す
+    Assert:
+        - 戻り値が2件であること
+        - コピー先にplay0001.png, play0002.jpgが生成されること
+    """
     # Arrange
     for name in ["a.png", "b.jpg"]:
         src_file = tmp_path / "source" / name
@@ -219,7 +246,17 @@ def test_copy_selected_items_renames_by_scene(tmp_path: Path) -> None:
 def test_copy_selected_items_raises_when_rename_without_requested_num(
     tmp_path: Path,
 ) -> None:
-    """rename=True で requested_num=None の場合、ValueError が送出されること."""
+    """rename=True で requested_num=None の場合、ValueError が送出されること.
+
+    Arrange:
+        - ソース画像ファイルを作成する
+        - コピー先ディレクトリを用意する
+        - 候補画像を1件作成する
+    Act:
+        - rename=True, requested_num指定なしでcopy_selected_itemsを呼び出す
+    Assert:
+        - ValueErrorが送出されること
+    """
     # Arrange
     src_file = tmp_path / "source" / "test.png"
     src_file.parent.mkdir()
@@ -234,7 +271,19 @@ def test_copy_selected_items_raises_when_rename_without_requested_num(
 
 
 def test_copy_selected_items_handles_duplicate_filenames(tmp_path: Path) -> None:
-    """同名ファイルがある場合、ユニークな名前が生成されること."""
+    """同名ファイルがある場合、ユニークな名前が生成されること.
+
+    Arrange:
+        - 異なるディレクトリに同名の画像ファイルを2件作成する
+        - コピー先ディレクトリを用意する
+        - 候補画像を2件作成する
+    Act:
+        - copy_selected_itemsを呼び出す
+    Assert:
+        - 戻り値が2件であること
+        - コピー先に2ファイルが存在すること
+        - 一方がtest.png、他方がtest_1.pngであること
+    """
     # Arrange
     for i, name in enumerate(["test.png", "test.png"]):
         src_dir = tmp_path / f"source{i}"

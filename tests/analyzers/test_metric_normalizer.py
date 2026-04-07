@@ -81,7 +81,7 @@ def test_normalize_all_returns_expected_values() -> None:
     # Act
     result = MetricNormalizer.normalize_all(raw)
 
-    # Assert - 範囲チェックと具体値での検証を統合
+    # Assert
     assert isinstance(result, NormalizedMetrics)
     assert 0.0 <= result.blur_score <= 1.0
     assert result.blur_score == pytest.approx(0.5, abs=0.01)

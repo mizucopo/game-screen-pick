@@ -353,6 +353,7 @@ def test_content_filter_rejects_whiteout_variants(
     Assert:
         - 白飛びフレームがwhiteoutとして除外されること
     """
+    # Arrange — パラメタライズド引数から正常フレームと白飛びフレームを構築
     # Act
     result = _filter_two_images(
         kept_path="/tmp/good_event.jpg",
@@ -485,6 +486,7 @@ def test_content_filter_rejects_static_fade_variants(
     Assert:
         - 静的な遷移フレームがfade_transitionとして除外されること
     """
+    # Arrange — パラメタライズド引数から正常フレームと遷移フレームを構築
     # Act
     result = _filter_two_images(
         kept_path=kept_path,
