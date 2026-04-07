@@ -102,3 +102,32 @@ def test_filter_by_similarity_checks_against_seed_features() -> None:
     # Assert
     assert selected == [1]
     assert rejected == {0}
+
+
+def test_select_diverse_indices_reconsiders_at_relaxed_threshold() -> None:
+    """厳しい閾値で拒否された候補が、緩和された閾値で選択されること.
+
+    Arrange:
+        - 2つの候補ベクトルがあり、互いの類似度が中間程度である
+        - 閾値ステップが [厳しい, 緩い] の順に指定されている
+    Act:
+        - select_diverse_indicesを呼び出す
+    Assert:
+        - 厳しい閾値では1件目のみ選択される
+        - 緩い閾値で2件目も選択されること
+    """
+    # Arrange
+    vec_a = np.array([1.0, 0.0, 0.0])
+    vec_b = np.array([0.8, 0.6, 0.0])  # cos_sim ≈ 0.8
+    features = [vec_a, vec_b]
+
+    # Act
+    selected, rejected = VectorUtils.select_diverse_indices(
+        normalized_features=features,
+        num=2,
+        threshold_steps=[0.9, 0.7],
+    )
+
+    # Assert
+    assert selected == [0, 1]
+    assert len(rejected) == 0

@@ -1,5 +1,7 @@
 """SceneScorer の単体テスト."""
 
+import numpy as np
+
 from src.constants.scene_label import SceneLabel
 from src.models.scene_mix import SceneMix
 from src.services.scene_scorer import SceneScorer
@@ -88,3 +90,35 @@ def test_scene_scorer_normalizes_density_scores() -> None:
         SceneLabel.PLAY,
         SceneLabel.EVENT,
     }
+
+
+def test_scene_scorer_handles_zero_norm_features() -> None:
+    """ゼロベクトルを含む画像群でもdensity_scoreが0.0〜1.0に収まること.
+
+    Arrange:
+        - ゼロベクトルの特徴を持つ画像が含まれている
+        - 有効な特徴を持つ画像も含まれている
+    Act:
+        - SceneScorerでscene評価を行う
+    Assert:
+        - すべてのdensity_scoreが0.0〜1.0の範囲になること
+        - NaNが含まれないこと
+    """
+    # Arrange
+    scorer = SceneScorer()
+    images = [
+        create_analyzed_image(
+            path="/tmp/zero.jpg",
+            combined_features=np.zeros(576, dtype=np.float32),
+        ),
+        create_analyzed_image(path="/tmp/a.jpg", combined_features=_feature(0)),
+        create_analyzed_image(path="/tmp/b.jpg", combined_features=_feature(1)),
+    ]
+
+    # Act
+    assessments = scorer.assess_batch(images, SceneMix(play=0.7, event=0.3))
+
+    # Assert
+    for assessment in assessments:
+        assert 0.0 <= assessment.density_score <= 1.0
+        assert not np.isnan(assessment.density_score)

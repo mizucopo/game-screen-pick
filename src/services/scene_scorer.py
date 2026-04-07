@@ -82,9 +82,16 @@ class SceneScorer:
                 nearest = np.partition(chunk_sims[i], -neighbor_count)[-neighbor_count:]
                 raw_scores[start + i] = float(np.mean(nearest))
 
-        min_score = float(raw_scores.min())
-        max_score = float(raw_scores.max())
+        valid_mask = np.isfinite(raw_scores)
+        if not np.any(valid_mask):
+            return [0.5 for _ in analyzed_images]
+        min_score = float(raw_scores[valid_mask].min())
+        max_score = float(raw_scores[valid_mask].max())
         if np.isclose(min_score, max_score):
             return [0.5 for _ in analyzed_images]
-        normalized_scores = (raw_scores - min_score) / (max_score - min_score)
+        normalized_scores = np.where(
+            valid_mask,
+            (raw_scores - min_score) / (max_score - min_score),
+            0.0,
+        )
         return [float(score) for score in normalized_scores]

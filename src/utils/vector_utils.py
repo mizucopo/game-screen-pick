@@ -103,8 +103,6 @@ class VectorUtils:
             for idx, candidate_feat in enumerate(normalized_features):
                 if idx in selected_index_set:
                     continue
-                if idx in rejected_by_similarity_set:
-                    continue
 
                 if len(selected_indices) >= target_count:
                     break
