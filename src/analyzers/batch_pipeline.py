@@ -4,12 +4,11 @@
 チャンク単位で制御し、メモリ予算内で大量画像を処理する。
 """
 
-import concurrent.futures
 import logging
 import os
 import threading
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 
 import numpy as np
@@ -26,10 +25,6 @@ from .metric_calculator import MetricCalculator
 
 logger = logging.getLogger(__name__)
 
-type PilImagesFuture = concurrent.futures.Future[list[Image.Image | None]]
-type TaskData = tuple[str, Image.Image, np.ndarray, int] | None
-type TaskTuple = tuple[int, TaskData]
-
 
 class BatchPipeline:
     """複数画像の中立解析をオーケストレーションする.
@@ -38,6 +33,10 @@ class BatchPipeline:
     画像読み込み、CLIP特徴抽出、特徴変換、結果構築を
     一貫した順序で流す役割を持つ。
     """
+
+    type _PilImagesFuture = Future[list[Image.Image | None]]
+    type _TaskData = tuple[str, Image.Image, np.ndarray, int] | None
+    type _TaskTuple = tuple[int, _TaskData]
 
     PROGRESS_REPORT_INTERVAL: int = 500
 
@@ -146,7 +145,7 @@ class BatchPipeline:
         )
 
         preload_executor = self._get_preload_executor()
-        preload_futures: dict[int, PilImagesFuture] = {}
+        preload_futures: dict[int, "BatchPipeline._PilImagesFuture"] = {}
 
         lookahead = 2
         for chunk_idx in range(min(lookahead, len(chunk_boundaries))):
@@ -198,7 +197,7 @@ class BatchPipeline:
         chunk_boundaries: list[tuple[int, int]],
         chunk_idx: int,
         lookahead: int,
-        preload_futures: dict[int, PilImagesFuture],
+        preload_futures: dict[int, "BatchPipeline._PilImagesFuture"],
     ) -> None:
         """先読みチャンクをプリロードExecutorに投入する."""
         next_idx = chunk_idx + lookahead
@@ -390,7 +389,7 @@ class BatchPipeline:
         Returns:
             チャンク内入力順に対応した解析結果リスト。
         """
-        tasks: list[TaskTuple] = []
+        tasks: list["BatchPipeline._TaskTuple"] = []
         zipped = zip(chunk_paths, pil_images, clip_features_list, strict=True)
         for local_index, (path, pil_img, clip_features) in enumerate(zipped):
             if pil_img is None or clip_features is None:
@@ -401,7 +400,9 @@ class BatchPipeline:
                     (local_index, (path, pil_img, clip_features, global_index))
                 )
 
-        def process_task(task_info: TaskTuple) -> tuple[int, AnalyzedImage | None]:
+        def process_task(
+            task_info: "BatchPipeline._TaskTuple",
+        ) -> tuple[int, AnalyzedImage | None]:
             index, data = task_info
             if data is None:
                 return index, None
