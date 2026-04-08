@@ -30,11 +30,11 @@ def test_sigmoid_returns_correct_values(
 ) -> None:
     """シグモイド関数が正しい値を返すこと.
 
-    Given:
+    Arrange:
         - 様々な入力値とcenter値
-    When:
+    Act:
         - sigmoidが呼び出される
-    Then:
+    Assert:
         - 期待値に近い値が返されること
         - center値では0.5になること
         - オーバーフロー時は境界値0.0または1.0が返されること
@@ -52,11 +52,11 @@ def test_sigmoid_returns_correct_values(
 def test_normalize_all_returns_expected_values() -> None:
     """正規化が期待通りにスコアを返すこと.
 
-    Given:
+    Arrange:
         - center値や境界値に設定された生メトリクスがある
-    When:
+    Act:
         - normalize_allが呼び出される
-    Then:
+    Assert:
         - シグモイド正規化フィールドはcenter値で約0.5になること
         - 線形正規化フィールドは期待値になること
     """
@@ -81,7 +81,7 @@ def test_normalize_all_returns_expected_values() -> None:
     # Act
     result = MetricNormalizer.normalize_all(raw)
 
-    # Assert - 範囲チェックと具体値での検証を統合
+    # Assert
     assert isinstance(result, NormalizedMetrics)
     assert 0.0 <= result.blur_score <= 1.0
     assert result.blur_score == pytest.approx(0.5, abs=0.01)

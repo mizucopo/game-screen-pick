@@ -17,7 +17,7 @@ class ReportWriter:
         selected: list[ScoredCandidate],
         rejected: list[ScoredCandidate],
         stats: PickerStatistics,
-        output_paths_by_candidate_id: dict[int, str] | None = None,
+        output_paths_by_candidate_id: dict[str, str] | None = None,
     ) -> None:
         """JSONレポートを書き出す."""
         output_paths_by_candidate_id = output_paths_by_candidate_id or {}
@@ -33,7 +33,7 @@ class ReportWriter:
             "selected": [
                 ReportWriter._serialize_candidate(
                     candidate,
-                    output_paths_by_candidate_id.get(id(candidate)),
+                    output_paths_by_candidate_id.get(candidate.path),
                 )
                 for candidate in selected
             ],

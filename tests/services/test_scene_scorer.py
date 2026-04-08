@@ -5,31 +5,19 @@ import numpy as np
 from src.constants.scene_label import SceneLabel
 from src.models.scene_mix import SceneMix
 from src.services.scene_scorer import SceneScorer
-from tests.conftest import create_analyzed_image
-
-
-def _feature(index: int) -> np.ndarray:
-    vector = np.zeros(576, dtype=np.float32)
-    vector[index] = 1.0
-    return vector
-
-
-def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
-    feature = base.copy()
-    feature[index] = 0.01
-    return feature
+from tests.conftest import _feature, _near_duplicate, create_analyzed_image
 
 
 def test_scene_scorer_assigns_dense_cluster_to_play() -> None:
     """近傍密度が高い候補群が play へ割り当てられること.
 
-    Given:
+    Arrange:
         - 互いに似た特徴を持つ画像群（高密度クラスタ）がある
         - 孤立した特徴を持つ画像群（低密度）がある
         - scene_mix比率が70/30に設定されている
-    When:
+    Act:
         - SceneScorerでscene評価を行う
-    Then:
+    Assert:
         - 高密度クラスタの画像がplayに割り当てられること
         - 低密度の画像の一部がeventに割り当てられること
     """
@@ -77,12 +65,12 @@ def test_scene_scorer_assigns_dense_cluster_to_play() -> None:
 def test_scene_scorer_normalizes_density_scores() -> None:
     """density_score が 0..1 に正規化されること.
 
-    Given:
+    Arrange:
         - 異なる特徴を持つ2つの画像がある
         - scene_mix比率が50/50に設定されている
-    When:
+    Act:
         - SceneScorerでscene評価を行う
-    Then:
+    Assert:
         - すべてのdensity_scoreが0.0〜1.0の範囲になること
         - play/event両方のラベルが割り当てられること
     """
@@ -102,3 +90,35 @@ def test_scene_scorer_normalizes_density_scores() -> None:
         SceneLabel.PLAY,
         SceneLabel.EVENT,
     }
+
+
+def test_scene_scorer_handles_zero_norm_features() -> None:
+    """ゼロベクトルを含む画像群でもdensity_scoreが0.0〜1.0に収まること.
+
+    Arrange:
+        - ゼロベクトルの特徴を持つ画像が含まれている
+        - 有効な特徴を持つ画像も含まれている
+    Act:
+        - SceneScorerでscene評価を行う
+    Assert:
+        - すべてのdensity_scoreが0.0〜1.0の範囲になること
+        - NaNが含まれないこと
+    """
+    # Arrange
+    scorer = SceneScorer()
+    images = [
+        create_analyzed_image(
+            path="/tmp/zero.jpg",
+            combined_features=np.zeros(576, dtype=np.float32),
+        ),
+        create_analyzed_image(path="/tmp/a.jpg", combined_features=_feature(0)),
+        create_analyzed_image(path="/tmp/b.jpg", combined_features=_feature(1)),
+    ]
+
+    # Act
+    assessments = scorer.assess_batch(images, SceneMix(play=0.7, event=0.3))
+
+    # Assert
+    for assessment in assessments:
+        assert 0.0 <= assessment.density_score <= 1.0
+        assert not np.isnan(assessment.density_score)

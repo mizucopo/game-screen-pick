@@ -70,13 +70,13 @@ def _build_stats() -> PickerStatistics:
 def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
     """play/eventフィールドが正しくシリアライズされること.
 
-    Given:
+    Arrange:
         - play候補にplay_score/event_score/density_score/score_bandが設定されている
         - event候補にoutlier_rejectedがTrueで設定されている
         - 統計情報にscene_distribution/scene_mix_targetがある
-    When:
+    Act:
         - ReportWriterでJSONレポートを出力する
-    Then:
+    Assert:
         - 各スコアフィールドが正しく出力されること
         - output_pathが正しく記録されること
         - outlier_rejectedがTrueで出力されること
@@ -114,7 +114,7 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
         rejected=rejected,
         stats=_build_stats(),
         output_paths_by_candidate_id={
-            id(selected[0]): "/tmp/output/play0001.jpg",
+            selected[0].path: "/tmp/output/play0001.jpg",
         },
     )
 
@@ -133,13 +133,13 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
 def test_report_writer_keeps_whole_input_profile(tmp_path: Path) -> None:
     """whole_input_profileが保持されること.
 
-    Given:
+    Arrange:
         - 統計情報にwhole_input_profileが含まれている
         - content_filter_breakdownにfade_transition=2がある
         - rejected_by_content_filter=2がある
-    When:
+    Act:
         - ReportWriterでJSONレポートを出力する
-    Then:
+    Assert:
         - whole_input_profileが出力されること
         - content_filter_breakdownが正しく出力されること
         - scene_diagnostics_summaryが含まれないこと
@@ -168,3 +168,88 @@ def test_report_writer_keeps_whole_input_profile(tmp_path: Path) -> None:
     assert "luminance_entropy" in profile
     assert "scene_diagnostics_summary" not in payload
     assert "score_band" in payload["selected"][0]
+
+
+def test_write_creates_json_file(tmp_path: Path) -> None:
+    """JSON レポートファイルが作成されること."""
+    # Arrange
+    report_path = tmp_path / "report.json"
+    candidate = create_scored_candidate(path="/tmp/selected.jpg")
+    profile = build_whole_input_profile(
+        create_analyzed_image(
+            path="/tmp/profile.jpg",
+            raw_metrics_dict={
+                "brightness": 100.0,
+                "contrast": 0.5,
+                "edge_density": 0.1,
+                "action_intensity": 0.1,
+                "luminance_entropy": 5.0,
+                "near_black_ratio": 0.05,
+                "near_white_ratio": 0.05,
+                "dominant_tone_ratio": 0.5,
+                "luminance_range": 40.0,
+            },
+        ),
+    )
+
+    stats = PickerStatistics(
+        total_files=1,
+        analyzed_ok=1,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        rejected_by_content_filter=0,
+        selected_count=1,
+        resolved_profile="active",
+        scene_distribution={"play": 1, "event": 0},
+        scene_mix_target={"play": 1, "event": 0},
+        scene_mix_actual={"play": 1, "event": 0},
+        threshold_relaxation_steps=[0.7, 0.75, 0.8],
+        content_filter_breakdown={"blackout": 0},
+        whole_input_profile=profile,
+    )
+
+    # Act
+    ReportWriter.write(
+        str(report_path),
+        [candidate],
+        [],
+        stats,
+        output_paths_by_candidate_id={candidate.path: "/output/test.png"},
+    )
+
+    # Assert
+    assert report_path.exists()
+    data = json.loads(report_path.read_text())
+    assert "selected" in data
+    assert len(data["selected"]) == 1
+    assert data["selected"][0]["output_path"] == "/output/test.png"
+
+
+def test_write_handles_empty_selected(tmp_path: Path) -> None:
+    """選択結果が空でもJSONが正しく出力されること."""
+    # Arrange
+    report_path = tmp_path / "report.json"
+
+    stats = PickerStatistics(
+        total_files=0,
+        analyzed_ok=0,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        rejected_by_content_filter=0,
+        selected_count=0,
+        resolved_profile="active",
+        scene_distribution={"play": 0, "event": 0},
+        scene_mix_target={"play": 0, "event": 0},
+        scene_mix_actual={"play": 0, "event": 0},
+        threshold_relaxation_steps=[0.7],
+        content_filter_breakdown={},
+        whole_input_profile=None,
+    )
+
+    # Act
+    ReportWriter.write(str(report_path), [], [], stats)
+
+    # Assert
+    data = json.loads(report_path.read_text())
+    assert data["selected"] == []
+    assert data["whole_input_profile"] is None

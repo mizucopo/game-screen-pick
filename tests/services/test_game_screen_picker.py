@@ -2,28 +2,14 @@
 
 from pathlib import Path
 
-import numpy as np
-
 from src.analyzers.metric_calculator import MetricCalculator
 from src.models.analyzed_image import AnalyzedImage
 from src.models.analyzer_config import AnalyzerConfig
 from src.models.scene_mix import SceneMix
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
-from tests.conftest import create_analyzed_image
+from tests.conftest import _feature, _near_duplicate, create_analyzed_image
 from tests.fake_analyzer import FakeAnalyzer
-
-
-def _feature(index: int) -> np.ndarray:
-    feature = np.zeros(576, dtype=np.float32)
-    feature[index] = 1.0
-    return feature
-
-
-def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
-    feature = base.copy()
-    feature[index] = 0.01
-    return feature
 
 
 class _AnalyzerWithFailures:
@@ -46,11 +32,11 @@ class _AnalyzerWithFailures:
 def test_select_from_analyzed_excludes_content_filtered_images() -> None:
     """content filter で落ちた画像は選定対象に入らないこと.
 
-    Given:
+    Arrange:
         - 低情報量の暗いフレームと正常なフレームを含む画像群がある
-    When:
+    Act:
         - GameScreenPickerで選定される
-    Then:
+    Assert:
         - content filterで除外された画像は選定対象に入らないこと
     """
     # Arrange
@@ -96,12 +82,12 @@ def test_select_from_analyzed_excludes_content_filtered_images() -> None:
 def test_select_tracks_total_files_and_analysis_failures(tmp_path: Path) -> None:
     """`select` が入力総数と解析失敗数を統計へ反映すること.
 
-    Given:
+    Arrange:
         - 複数の画像ファイルを含むディレクトリがある
         - 解析に成功する画像と失敗する画像が混在している
-    When:
+    Act:
         - GameScreenPickerで選定される
-    Then:
+    Assert:
         - 入力総数と解析成功数・失敗数が統計に反映されること
     """
     # Arrange
@@ -137,12 +123,12 @@ def test_select_tracks_total_files_and_analysis_failures(tmp_path: Path) -> None
 def test_select_from_analyzed_sorts_remaining_candidates_by_selection_score() -> None:
     """非選択候補は selection_score の降順で返ること.
 
-    Given:
+    Arrange:
         - 複数の候補画像がある
         - 一部は重複に近い画像である
-    When:
+    Act:
         - GameScreenPickerで選定される
-    Then:
+    Assert:
         - 非選択候補はselection_scoreの降順で返されること
     """
     # Arrange
@@ -188,12 +174,12 @@ def test_select_from_analyzed_sorts_remaining_candidates_by_selection_score() ->
 def test_load_image_files_returns_natural_order(tmp_path: Path) -> None:
     """自然順で返されること.
 
-    Given:
+    Arrange:
         - 数字を含むファイル名の画像ファイルがディレクトリにある
         - ファイル名は辞書順ではない順序で格納されている
-    When:
+    Act:
         - load_image_filesが呼び出される
-    Then:
+    Assert:
         - ファイルが自然順（file1, file2, file10）で返されること
     """
     # Arrange

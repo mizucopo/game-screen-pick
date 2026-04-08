@@ -106,7 +106,7 @@ class GameScreenPicker:
     def _score_candidates(
         self,
         analyzed_images: list[AnalyzedImage],
-    ) -> tuple[list[ScoredCandidate], str, dict[str, int], dict[str, float]]:
+    ) -> tuple[list[ScoredCandidate], str, dict[str, int]]:
         """scene評価とprofile解決を行い、最終候補を作る.
 
         各画像へ `SceneScorer` で画面種別スコアを付与し、
@@ -121,13 +121,12 @@ class GameScreenPicker:
             1. 最終スコア付き候補のリスト
             2. 解決済みプロファイル名
             3. scene labelごとの件数分布
-            4. profile解決時に使ったスコア内訳
         """
         assessments = self._scene_scorer.assess_batch(
             analyzed_images,
             self.config.scene_mix,
         )
-        resolved_profile, profile_scores = self._profile_resolver.resolve(
+        resolved_profile, _profile_scores = self._profile_resolver.resolve(
             self.config.profile,
             analyzed_images,
         )
@@ -153,7 +152,7 @@ class GameScreenPicker:
                 if candidate.scene_assessment.scene_label == SceneLabel.EVENT
             ),
         }
-        return candidates, resolved_profile, scene_distribution, profile_scores
+        return candidates, resolved_profile, scene_distribution
 
     def select(
         self,
@@ -219,18 +218,18 @@ class GameScreenPicker:
         """
         content_filter_result = self._content_filter.filter(analyzed_images)
         filtered_images = content_filter_result.kept_images
-        candidates, resolved_profile, scene_distribution, _profile_scores = (
-            self._score_candidates(filtered_images)
+        candidates, resolved_profile, scene_distribution = self._score_candidates(
+            filtered_images
         )
         selected, rejected_by_similarity, scene_mix_target, scene_mix_actual = (
             self._scene_mix_selector.select(candidates, num)
         )
-        selected_ids = {id(candidate) for candidate in selected}
+        selected_paths = {candidate.path for candidate in selected}
         rejected = sorted(
             [
                 candidate
                 for candidate in candidates
-                if id(candidate) not in selected_ids
+                if candidate.path not in selected_paths
             ],
             key=lambda item: item.selection_score,
             reverse=True,
