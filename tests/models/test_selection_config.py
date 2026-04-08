@@ -13,11 +13,11 @@ from src.models.selection_config import SelectionConfig
 def test_selection_config_has_sensible_defaults() -> None:
     """SelectionConfigが合理的なデフォルト値を持つこと.
 
-    Given:
+    Arrange:
         - 引数なしで `SelectionConfig` を構築する
-    When:
+    Act:
         - デフォルト設定を参照する
-    Then:
+    Assert:
         - profile、similarity、scene mix を含む既定値が入っていること
     """
     # Arrange
@@ -48,11 +48,11 @@ def test_threshold_steps_computed_correctly(
 ) -> None:
     """しきい値ステップが正しく計算されること.
 
-    Given:
+    Arrange:
         - ベースしきい値と上限値がある
-    When:
+    Act:
         - 緩和ステップを計算する
-    Then:
+    Assert:
         - 上限を超えない段階的なしきい値列が返ること
     """
     # Arrange
@@ -86,11 +86,11 @@ def test_config_validation(
 ) -> None:
     """設定値のバリデーションが正しく動作すること.
 
-    Given:
+    Arrange:
         - 有効または無効な設定引数がある
-    When:
+    Act:
         - `SelectionConfig` を構築する
-    Then:
+    Assert:
         - 無効値では例外、有効値ではそのまま保持されること
     """
     # Arrange
@@ -109,11 +109,11 @@ def test_config_validation(
 def test_scene_mix_validation_rejects_invalid_total() -> None:
     """scene_mixの合計が1.0でない場合は失敗すること.
 
-    Given:
+    Arrange:
         - 合計が1.0にならない scene mix 比率がある
-    When:
+    Act:
         - `SceneMix` を構築する
-    Then:
+    Assert:
         - 合計値バリデーションで失敗すること
     """
     # Arrange

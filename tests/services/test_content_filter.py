@@ -59,12 +59,12 @@ def _filter_two_images(
 def test_content_filter_rejects_flat_frames_and_keeps_informative_dark_frames() -> None:
     """暗いタイトル群でも高情報量フレームだけが残ること.
 
-    Given:
+    Arrange:
         - blackout、whiteout、単色、フェード遷移などの低情報量フレームを含む画像群がある
         - 高情報量の暗いgameplay/eventフレームもある
-    When:
+    Act:
         - ContentFilterでフィルタリングされる
-    Then:
+    Assert:
         - 低情報量フレームが除外され、高情報量フレームのみ残ること
     """
     # Arrange
@@ -195,24 +195,24 @@ def test_content_filter_rejects_flat_frames_and_keeps_informative_dark_frames() 
     assert result.whole_input_profile.brightness.p50 > 0.0
     assert result.whole_input_profile.near_white_ratio.p90 >= 0.0
     assert (
-        result.adaptive_scores_by_image_id[id(dark_gameplay)].information_score
-        > result.adaptive_scores_by_image_id[id(fade_transition)].information_score
+        result.adaptive_scores_by_path[dark_gameplay.path].information_score
+        > result.adaptive_scores_by_path[fade_transition.path].information_score
     )
     assert (
-        result.adaptive_scores_by_image_id[id(dark_gameplay)].visibility_score
-        > result.adaptive_scores_by_image_id[id(fade_transition)].visibility_score
+        result.adaptive_scores_by_path[dark_gameplay.path].visibility_score
+        > result.adaptive_scores_by_path[fade_transition.path].visibility_score
     )
 
 
 def test_content_filter_rejects_mid_fade_frames_with_70_percent_dark_ratio() -> None:
     """70〜75% 暗転途中フレームが static fade 判定で落ちること.
 
-    Given:
+    Arrange:
         - 70%と75%の暗転途中フレームを含む画像群がある
         - 通常の高情報量フレームもある
-    When:
+    Act:
         - ContentFilterでフィルタリングされる
-    Then:
+    Assert:
         - 暗転途中フレームがfade_transitionとして除外されること
     """
     # Arrange
@@ -346,13 +346,14 @@ def test_content_filter_rejects_whiteout_variants(
 ) -> None:
     """白飛びの主要パターンは whiteout として除外されること.
 
-    Given:
+    Arrange:
         - 正常なフレームと白飛びフレームを含む画像群がある
-    When:
+    Act:
         - ContentFilterでフィルタリングされる
-    Then:
+    Assert:
         - 白飛びフレームがwhiteoutとして除外されること
     """
+    # Arrange — パラメタライズド引数から正常フレームと白飛びフレームを構築
     # Act
     result = _filter_two_images(
         kept_path="/tmp/good_event.jpg",
@@ -478,13 +479,14 @@ def test_content_filter_rejects_static_fade_variants(
 ) -> None:
     """静的な遷移フレームの主要パターンは fade_transition で落ちること.
 
-    Given:
+    Arrange:
         - 正常なフレームと静的な遷移フレームを含む画像群がある
-    When:
+    Act:
         - ContentFilterでフィルタリングされる
-    Then:
+    Assert:
         - 静的な遷移フレームがfade_transitionとして除外されること
     """
+    # Arrange — パラメタライズド引数から正常フレームと遷移フレームを構築
     # Act
     result = _filter_two_images(
         kept_path=kept_path,
@@ -503,13 +505,13 @@ def test_content_filter_rejects_static_fade_variants(
 def test_relative_transition_uses_whole_input_brightness_tendency() -> None:
     """入力全体の通常明度帯から外れた bright/dark outlier を落とすこと.
 
-    Given:
+    Arrange:
         - 通常明度帯（102〜132）の正常な画像が6枚ある
         - 明るいoutlierフレームがある
         - 暗いoutlierフレームがある
-    When:
+    Act:
         - ContentFilterでフィルタリングされる
-    Then:
+    Assert:
         - 明るいoutlierと暗いoutlierが除外されること
     """
     # Arrange
@@ -584,12 +586,12 @@ def test_relative_transition_uses_whole_input_brightness_tendency() -> None:
 def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> None:
     """通常 -> 暗転途中 -> 通常 の中央だけが temporal 判定で落ちること.
 
-    Given:
+    Arrange:
         - 通常フレーム、遷移途中フレーム、通常フレームの順序で画像群がある
         - 前後フレームは互いに似ている
-    When:
+    Act:
         - ContentFilterでフィルタリングされる
-    Then:
+    Assert:
         - 中央の遷移途中フレームだけがtemporal_transitionとして除外されること
     """
     # Arrange
@@ -657,12 +659,12 @@ def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> N
 def test_temporal_transition_not_triggered_for_dissimilar_neighbors() -> None:
     """前後フレームが似ていなければ temporal 判定は発火しないこと.
 
-    Given:
+    Arrange:
         - 前後フレームが互いに似ていない画像群がある
         - 中央のフレームは遷移途中のような特徴を持つ
-    When:
+    Act:
         - ContentFilterでフィルタリングされる
-    Then:
+    Assert:
         - すべてのフレームが保持されること
         - temporal_transitionによる除外が発生しないこと
     """

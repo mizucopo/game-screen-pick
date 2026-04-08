@@ -31,40 +31,33 @@ class AnalyzerConfig(ConfigFromArgsMixin):
     result_max_workers: int | None = None
     io_max_workers: int | None = None
 
+    @staticmethod
+    def _validate_positive(name: str, value: int | float) -> None:
+        if value < 1:
+            msg = f"{name}は1以上の値を指定してください: {value}"
+            raise ValueError(msg)
+
+    @staticmethod
+    def _validate_non_negative(name: str, value: int | float) -> None:
+        if value < 0:
+            msg = f"{name}は0以上の値を指定してください: {value}"
+            raise ValueError(msg)
+
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""
-        if self.max_dim <= 0:
-            msg = f"max_dimは正の整数である必要があります: {self.max_dim}"
-            raise ValueError(msg)
-        if self.max_memory_gb <= 0:
-            msg = f"max_memory_gbは正の整数である必要があります: {self.max_memory_gb}"
-            raise ValueError(msg)
-        if self.min_chunk_size <= 0:
-            msg = f"min_chunk_sizeは正の整数である必要があります: {self.min_chunk_size}"
-            raise ValueError(msg)
-        if self.brightness_penalty_threshold < 0:
-            msg = (
-                "brightness_penalty_thresholdは非負の値である必要があります: "
-                f"{self.brightness_penalty_threshold}"
-            )
-            raise ValueError(msg)
-        if self.brightness_penalty_value < 0:
-            msg = (
-                "brightness_penalty_valueは非負の値である必要があります: "
-                f"{self.brightness_penalty_value}"
-            )
-            raise ValueError(msg)
-        if self.score_multiplier <= 0:
-            msg = (
-                f"score_multiplierは正の値である必要があります: {self.score_multiplier}"
-            )
-            raise ValueError(msg)
-        if self.result_max_workers is not None and self.result_max_workers < 0:
-            msg = (
-                f"result_max_workersは非負の値である必要があります: "
-                f"{self.result_max_workers}"
-            )
-            raise ValueError(msg)
-        if self.io_max_workers is not None and self.io_max_workers < 0:
-            msg = f"io_max_workersは非負の値である必要があります: {self.io_max_workers}"
-            raise ValueError(msg)
+        self._validate_positive("max_dim", self.max_dim)
+        self._validate_positive("max_memory_gb", self.max_memory_gb)
+        self._validate_positive("min_chunk_size", self.min_chunk_size)
+        self._validate_non_negative(
+            "brightness_penalty_threshold",
+            self.brightness_penalty_threshold,
+        )
+        self._validate_non_negative(
+            "brightness_penalty_value",
+            self.brightness_penalty_value,
+        )
+        self._validate_positive("score_multiplier", self.score_multiplier)
+        if self.result_max_workers is not None:
+            self._validate_non_negative("result_max_workers", self.result_max_workers)
+        if self.io_max_workers is not None:
+            self._validate_non_negative("io_max_workers", self.io_max_workers)

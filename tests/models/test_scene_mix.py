@@ -9,12 +9,12 @@ from src.models.scene_mix import SceneMix
 def test_positive_remainder_sum_matches_total() -> None:
     """正の剰余がある場合、配分の合計がtotalと一致されること。
 
-    Given:
+    Arrange:
         - play=0.7, event=0.3の比率が設定される
         - total=11が設定される
-    When:
+    Act:
         - calculate_allocationが実行される
-    Then:
+    Assert:
         - 配分の合計がtotalと一致されること
     """
     # Arrange
@@ -31,12 +31,12 @@ def test_positive_remainder_sum_matches_total() -> None:
 def test_negative_remainder_sum_matches_total() -> None:
     """負の剰余がある場合、配分の合計がtotalと一致されること。
 
-    Given:
+    Arrange:
         - play=0.80, event=0.21の比率が設定される
         - total=200が設定される
-    When:
+    Act:
         - calculate_allocationが実行される
-    Then:
+    Assert:
         - 配分の合計がtotalと一致されること
     """
     # Arrange
@@ -53,12 +53,12 @@ def test_negative_remainder_sum_matches_total() -> None:
 def test_negative_remainder_subtracts_from_smallest_fraction() -> None:
     """負の剰余がある場合、小数部が小さい方から減算されること。
 
-    Given:
+    Arrange:
         - play=0.80, event=0.21の比率が設定される
         - total=200が設定される
-    When:
+    Act:
         - calculate_allocationが実行される
-    Then:
+    Assert:
         - 小数部が小さいplayから減算されること
     """
     # Arrange
@@ -77,12 +77,12 @@ def test_negative_remainder_subtracts_from_smallest_fraction() -> None:
 def test_zero_remainder_returns_floor_values() -> None:
     """剰余がゼロの場合、配分が変更されないこと。
 
-    Given:
+    Arrange:
         - play=0.7, event=0.3の比率が設定される
         - total=10が設定される
-    When:
+    Act:
         - calculate_allocationが実行される
-    Then:
+    Assert:
         - 整数切り捨ての結果がそのまま返されること
     """
     # Arrange
@@ -120,11 +120,11 @@ def test_calculate_allocation_parameterized(
 ) -> None:
     """各種入力値で配分が正しく計算されること。
 
-    Given:
+    Arrange:
         - 様々な比率と総数が設定される
-    When:
+    Act:
         - calculate_allocationが実行される
-    Then:
+    Assert:
         - 配分の合計がtotalと一致し、期待値が返されること
     """
     # Arrange
@@ -142,12 +142,12 @@ def test_calculate_allocation_parameterized(
 def test_calculate_allocation_raises_on_negative_total() -> None:
     """totalが負の値の場合にValueErrorが送出されること。
 
-    Given:
+    Arrange:
         - play=0.7, event=0.3の比率が設定される
         - total=-1が設定される
-    When:
+    Act:
         - calculate_allocationが実行される
-    Then:
+    Assert:
         - ValueErrorが送出されること
     """
     # Arrange

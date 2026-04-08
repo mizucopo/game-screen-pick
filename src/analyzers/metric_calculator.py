@@ -137,21 +137,6 @@ class MetricCalculator:
             )
         )
 
-    def calculate_raw_norm_metrics(
-        self, img: np.ndarray
-    ) -> tuple[RawMetrics, NormalizedMetrics]:
-        """生メトリクスと正規化メトリクスのみ計算する.
-
-        Args:
-            img: OpenCV画像（BGR形式）
-
-        Returns:
-            (RawMetrics, NormalizedMetrics)のタプル
-        """
-        raw = self.calculate_raw_metrics(img)
-        norm = MetricNormalizer.normalize_all(raw)
-        return raw, norm
-
     def calculate_all_metrics(
         self, img: np.ndarray
     ) -> tuple[RawMetrics, NormalizedMetrics]:

@@ -74,7 +74,7 @@ class WholeInputProfiler:
     def score_images(
         self,
         images: list[AnalyzedImage],
-    ) -> dict[int, AdaptiveScores]:
+    ) -> dict[str, AdaptiveScores]:
         """入力全体を見た相対情報量と差分量を返す."""
         if not images:
             return {}
@@ -82,9 +82,9 @@ class WholeInputProfiler:
         information_scores = self._calculate_information_scores(images)
         visibility_scores = self._calculate_visibility_scores(images)
         return {
-            id(image): AdaptiveScores(
-                information_score=information_scores[id(image)],
-                visibility_score=visibility_scores[id(image)],
+            image.path: AdaptiveScores(
+                information_score=information_scores[image.path],
+                visibility_score=visibility_scores[image.path],
             )
             for image in images
         }
@@ -107,7 +107,7 @@ class WholeInputProfiler:
     def _calculate_information_scores(
         self,
         images: list[AnalyzedImage],
-    ) -> dict[int, float]:
+    ) -> dict[str, float]:
         """入力分布に対する相対的な情報量スコアを返す."""
         metric_values = {
             metric_name: np.sort(
@@ -119,7 +119,7 @@ class WholeInputProfiler:
             for metric_name in self.INFORMATION_WEIGHTS
         }
 
-        information_scores: dict[int, float] = {}
+        information_scores: dict[str, float] = {}
         for image in images:
             score = 0.0
             for metric_name, weight in self.INFORMATION_WEIGHTS.items():
@@ -127,18 +127,18 @@ class WholeInputProfiler:
                 score += weight * self._percentile_rank(
                     value, metric_values[metric_name]
                 )
-            information_scores[id(image)] = float(score)
+            information_scores[image.path] = float(score)
         return information_scores
 
     def _calculate_visibility_scores(
         self,
         images: list[AnalyzedImage],
-    ) -> dict[int, float]:
+    ) -> dict[str, float]:
         """絶対的な見えやすさスコアを返す."""
-        visibility_scores: dict[int, float] = {}
+        visibility_scores: dict[str, float] = {}
         for image in images:
             raw = image.raw_metrics
-            visibility_scores[id(image)] = float(
+            visibility_scores[image.path] = float(
                 0.30 * min(1.0, raw.luminance_range / self.VISIBILITY_RANGE_SCALE)
                 + 0.25 * min(1.0, raw.luminance_entropy / self.VISIBILITY_ENTROPY_SCALE)
                 + 0.20 * min(1.0, raw.edge_density / self.VISIBILITY_EDGE_SCALE)

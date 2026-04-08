@@ -179,6 +179,8 @@ def create_scored_candidate(
         selection_score: 最終選定スコア。
         resolved_profile: 解決済みプロファイル名。
         combined_features: 類似度判定用の結合特徴。
+        score_band: スコアバンド。
+        outlier_rejected: 外れ値除外フラグ。
 
     Returns:
         scene 判定とスコアが付与済みの `ScoredCandidate` 。
@@ -203,3 +205,17 @@ def create_scored_candidate(
         score_band=score_band,
         outlier_rejected=outlier_rejected,
     )
+
+
+def _feature(index: int, dim: int = 576) -> np.ndarray:
+    """テスト用特徴ベクトルを生成する."""
+    feature = np.zeros(dim, dtype=np.float32)
+    feature[index] = 1.0
+    return feature
+
+
+def _near_duplicate(base: np.ndarray, index: int) -> np.ndarray:
+    """ベース特徴ベクトルの指定位置を微小値に変更したニアデュープリケートを生成する."""
+    feature = base.copy()
+    feature[index] = 0.01
+    return feature

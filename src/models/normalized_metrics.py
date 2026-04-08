@@ -26,3 +26,20 @@ class NormalizedMetrics:
     visual_balance: float
     action_intensity: float
     ui_density: float
+
+    def __post_init__(self) -> None:
+        """全フィールドが0.0〜1.0の範囲内であることを検証する."""
+        for field_name in (
+            "blur_score",
+            "contrast",
+            "color_richness",
+            "edge_density",
+            "dramatic_score",
+            "visual_balance",
+            "action_intensity",
+            "ui_density",
+        ):
+            value = getattr(self, field_name)
+            if not (0.0 <= value <= 1.0):
+                msg = f"{field_name}は0.0〜1.0の範囲である必要があります: {value}"
+                raise ValueError(msg)

@@ -74,13 +74,24 @@ class SceneScorer:
             end = min(start + cls.DENSITY_CHUNK_SIZE, n)
             chunk_sims = normalized_features[start:end] @ normalized_features.T
             for i in range(end - start):
+                feature_norm = float(np.linalg.norm(normalized_features[start + i]))
+                if feature_norm < 1e-8:
+                    raw_scores[start + i] = float("-inf")
+                    continue
                 chunk_sims[i, start + i] = -np.inf
                 nearest = np.partition(chunk_sims[i], -neighbor_count)[-neighbor_count:]
                 raw_scores[start + i] = float(np.mean(nearest))
 
-        min_score = float(raw_scores.min())
-        max_score = float(raw_scores.max())
+        valid_mask = np.isfinite(raw_scores)
+        if not np.any(valid_mask):
+            return [0.5 for _ in analyzed_images]
+        min_score = float(raw_scores[valid_mask].min())
+        max_score = float(raw_scores[valid_mask].max())
         if np.isclose(min_score, max_score):
             return [0.5 for _ in analyzed_images]
-        normalized_scores = (raw_scores - min_score) / (max_score - min_score)
+        normalized_scores = np.where(
+            valid_mask,
+            (raw_scores - min_score) / (max_score - min_score),
+            0.0,
+        )
         return [float(score) for score in normalized_scores]

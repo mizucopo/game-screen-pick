@@ -52,13 +52,19 @@ class FeatureExtractor:
 
     @staticmethod
     def extract_content_features(
-        img: np.ndarray, raw_metrics: RawMetrics
+        img: np.ndarray,
+        raw_metrics: RawMetrics,
+        hsv_features: np.ndarray | None = None,
     ) -> np.ndarray:
         """入力全体適応用の内容特徴を抽出する."""
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         gray_hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
         gray_hist = cv2.normalize(gray_hist, gray_hist).flatten()
-        hsv_hist = FeatureExtractor.extract_hsv_features(img)
+        _hsv_features = (
+            hsv_features
+            if hsv_features is not None
+            else FeatureExtractor.extract_hsv_features(img)
+        )
         metric_features = np.array(
             [
                 raw_metrics.luminance_entropy / 8.0,
@@ -69,7 +75,8 @@ class FeatureExtractor:
             ],
             dtype=np.float32,
         )
-        return np.concatenate([gray_hist, hsv_hist, metric_features]).astype(np.float32)
+        features = np.concatenate([gray_hist, _hsv_features, metric_features])
+        return features.astype(np.float32)
 
     def extract_clip_features(self, pil_img: Image.Image) -> np.ndarray:
         """CLIP画像埋め込みを抽出する.
@@ -92,6 +99,7 @@ class FeatureExtractor:
         self,
         img: np.ndarray,
         clip_features: np.ndarray,
+        hsv_features: np.ndarray | None = None,
     ) -> np.ndarray:
         """HSV特徴とCLIP特徴を統合する.
 
@@ -101,15 +109,20 @@ class FeatureExtractor:
         Args:
             img: OpenCV画像（BGR形式、既に縮小されている）
             clip_features: CLIP画像埋め込み（512次元、正規化済み、np.ndarray）
+            hsv_features: 事前計算されたHSV特徴（64次元、省略時は計算）
 
         Returns:
             統合された特徴ベクトル（576次元、np.ndarray）
         """
-        hsv_features = FeatureExtractor.extract_hsv_features(img)
+        _hsv_features = (
+            hsv_features
+            if hsv_features is not None
+            else FeatureExtractor.extract_hsv_features(img)
+        )
         # cv2.normalizeで既に正規化済み
 
         # 統合
-        return np.concatenate([hsv_features, clip_features])
+        return np.concatenate([_hsv_features, clip_features])
 
     def extract_clip_features_batch(
         self,

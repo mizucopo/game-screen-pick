@@ -1,11 +1,4 @@
-"""image_utils.pyの単体テスト.
-
-このテストモジュールは以下のベストプラクティスに従っています：
-1. 純粋関数としての動作を検証
-2. AAAパターン（Arrange, Act, Assert）を使用
-3. 明確な日本語コメントでテスト意図を説明
-4. エッジケース、境界値を網羅
-"""
+"""image_utils.pyの単体テスト."""
 
 from pathlib import Path
 
@@ -35,11 +28,11 @@ def test_load_as_rgb_resized(
 ) -> None:
     """画像が正しくRGB形式でリサイズされて読み込まれること.
 
-    Given:
+    Arrange:
         - 指定されたサイズの画像がある
-    When:
+    Act:
         - load_as_rgb_resizedで読み込む
-    Then:
+    Assert:
         - RGB形式の画像が返されること
         - 長辺がmax_dim以下であること
     """
@@ -72,11 +65,11 @@ def test_load_as_rgb_resized(
 def test_load_as_rgb_resized_returns_none_for_invalid_path() -> None:
     """無効なパスでNoneが返されること.
 
-    Given:
+    Arrange:
         - 存在しないファイルパスが指定されている
-    When:
+    Act:
         - load_as_rgb_resizedが実行される
-    Then:
+    Assert:
         - Noneが返されること
     """
     # Arrange
