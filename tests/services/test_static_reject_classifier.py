@@ -3,8 +3,24 @@
 import numpy as np
 
 from src.models.adaptive_scores import AdaptiveScores
+from src.models.analyzed_image import AnalyzedImage
 from src.services.static_reject_classifier import StaticRejectClassifier
 from tests.conftest import build_whole_input_profile, create_analyzed_image
+
+
+def _create_frame(
+    path: str,
+    raw_metrics: dict[str, float],
+    content_features: list[float],
+    normalized_metrics: dict[str, float] | None = None,
+) -> AnalyzedImage:
+    """静的リジェクト分類用の解析済み画像を作成する."""
+    return create_analyzed_image(
+        path=path,
+        raw_metrics_dict=raw_metrics,
+        normalized_metrics_dict=normalized_metrics,
+        content_features=np.array(content_features, dtype=np.float32),
+    )
 
 
 def test_static_reject_classifier_classifies_low_information_frames() -> None:
@@ -20,9 +36,9 @@ def test_static_reject_classifier_classifies_low_information_frames() -> None:
         - 通常フレームは除外理由なしとして扱われること
     """
     # Arrange
-    informative = create_analyzed_image(
-        path="/tmp/informative.jpg",
-        raw_metrics_dict={
+    informative = _create_frame(
+        "/tmp/informative.jpg",
+        {
             "brightness": 120.0,
             "contrast": 55.0,
             "edge_density": 0.35,
@@ -33,16 +49,16 @@ def test_static_reject_classifier_classifies_low_information_frames() -> None:
             "near_white_ratio": 0.01,
             "dominant_tone_ratio": 0.35,
         },
-        normalized_metrics_dict={
+        [1.0, 0.0, 0.0],
+        {
             "contrast": 0.8,
             "edge_density": 0.8,
             "action_intensity": 0.8,
         },
-        content_features=np.array([1.0, 0.0, 0.0], dtype=np.float32),
     )
-    blackout = create_analyzed_image(
-        path="/tmp/blackout.jpg",
-        raw_metrics_dict={
+    blackout = _create_frame(
+        "/tmp/blackout.jpg",
+        {
             "brightness": 1.0,
             "contrast": 0.2,
             "edge_density": 0.001,
@@ -53,11 +69,11 @@ def test_static_reject_classifier_classifies_low_information_frames() -> None:
             "near_white_ratio": 0.0,
             "dominant_tone_ratio": 1.0,
         },
-        content_features=np.array([0.0, 1.0, 0.0], dtype=np.float32),
+        [0.0, 1.0, 0.0],
     )
-    whiteout = create_analyzed_image(
-        path="/tmp/whiteout.jpg",
-        raw_metrics_dict={
+    whiteout = _create_frame(
+        "/tmp/whiteout.jpg",
+        {
             "brightness": 250.0,
             "contrast": 0.3,
             "edge_density": 0.001,
@@ -68,11 +84,11 @@ def test_static_reject_classifier_classifies_low_information_frames() -> None:
             "near_white_ratio": 0.99,
             "dominant_tone_ratio": 1.0,
         },
-        content_features=np.array([0.0, 0.0, 1.0], dtype=np.float32),
+        [0.0, 0.0, 1.0],
     )
-    single_tone = create_analyzed_image(
-        path="/tmp/single_tone.jpg",
-        raw_metrics_dict={
+    single_tone = _create_frame(
+        "/tmp/single_tone.jpg",
+        {
             "brightness": 120.0,
             "contrast": 0.2,
             "edge_density": 0.001,
@@ -83,11 +99,11 @@ def test_static_reject_classifier_classifies_low_information_frames() -> None:
             "near_white_ratio": 0.0,
             "dominant_tone_ratio": 0.96,
         },
-        content_features=np.array([0.1, 0.0, 1.0], dtype=np.float32),
+        [0.1, 0.0, 1.0],
     )
-    fade_transition = create_analyzed_image(
-        path="/tmp/fade_transition.jpg",
-        raw_metrics_dict={
+    fade_transition = _create_frame(
+        "/tmp/fade_transition.jpg",
+        {
             "brightness": 12.0,
             "contrast": 0.0,
             "edge_density": 0.0,
@@ -98,7 +114,7 @@ def test_static_reject_classifier_classifies_low_information_frames() -> None:
             "near_white_ratio": 0.0,
             "dominant_tone_ratio": 0.90,
         },
-        content_features=np.array([0.2, 0.0, 1.0], dtype=np.float32),
+        [0.2, 0.0, 1.0],
     )
     profile = build_whole_input_profile(
         informative,
