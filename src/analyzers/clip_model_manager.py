@@ -1,5 +1,6 @@
 """CLIPモデルのライフサイクルを管理するマネージャー."""
 
+import contextlib
 import logging
 import os
 import threading
@@ -124,8 +125,6 @@ class CLIPModelManager:
         Returns:
             L2正規化済みのCLIP画像特徴テンソル（1次元の512要素）
         """
-        import contextlib
-
         autocast_ctx = (
             torch.autocast(device_type=self.device, dtype=torch.float16)
             if self.device in ("cuda", "mps")

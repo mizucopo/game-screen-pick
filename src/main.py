@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import click
+import cv2
 
 from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from .models.analyzer_config import AnalyzerConfig
@@ -80,7 +81,7 @@ def validate_positive_int_or_zero(value: str | None) -> int | None:
     return integer_value if integer_value > 0 else 1
 
 
-def validate_similarity_range(value: str | None) -> float | None:
+def validate_similarity_range(value: float | str | None) -> float | None:
     """類似度しきい値をバリデーションする.
 
     Args:
@@ -99,7 +100,7 @@ def validate_similarity_range(value: str | None) -> float | None:
         float_value = float(value)
     except ValueError as error:
         raise click.BadParameter(f"'{value}' は数値ではありません") from error
-    if not 0.0 < float_value < 1.0:
+    if not 0.0 <= float_value <= 1.0:
         raise click.BadParameter(
             f"0.0~1.0の範囲で指定してください（実際の値: {float_value}）"
         )
@@ -358,9 +359,7 @@ def execute(
     if debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    import cv2 as _cv2
-
-    _cv2.setNumThreads(1)  # OpenCVが独自スレッドプールを作成しないよう制御
+    cv2.setNumThreads(1)  # OpenCVが独自スレッドプールを作成しないよう制御
 
     try:
         input_path = Path(input_dir)
