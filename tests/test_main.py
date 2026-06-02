@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.constants.scene_label import SceneLabel
-from src.main import build_selection_config, run
+from src.main import build_selection_config, run, validate_similarity_range
 from src.models.picker_statistics import PickerStatistics
 from src.services.game_screen_picker import GameScreenPicker
 from tests.conftest import create_scored_candidate
@@ -323,8 +323,8 @@ def test_build_selection_config_prefers_cli_over_config(tmp_path: Path) -> None:
     [
         (["-n", "-1"], "正の整数"),
         (["-n", "0"], "正の整数"),
-        (["--similarity", "0.0"], "0.0~1.0"),
-        (["--similarity", "1.0"], "0.0~1.0"),
+        (["--similarity", "-0.1"], "0.0~1.0"),
+        (["--similarity", "1.1"], "0.0~1.0"),
         (["--scene-mix", "play=0.7,event=0.4"], "scene_mixの合計"),
         (["--scene-mix", "play=0.7"], "2要素が必要です"),
     ],
@@ -365,3 +365,23 @@ def test_cli_validates_inputs(
         run([*args, str(input_path), str(output_path)])
     captured = capsys.readouterr()
     assert error_pattern in captured.err
+
+
+@pytest.mark.parametrize("value", ["0.0", "1.0", 0.0, 1.0])
+def test_validate_similarity_range_accepts_inclusive_boundaries(
+    value: float | str,
+) -> None:
+    """類似度しきい値の境界値が受け入れられること.
+
+    Arrange:
+        - 0.0または1.0の境界値がある
+    Act:
+        - 類似度しきい値として検証される
+    Assert:
+        - 浮動小数点値として返されること
+    """
+    # Arrange / Act
+    result = validate_similarity_range(value)
+
+    # Assert
+    assert result == float(value)
