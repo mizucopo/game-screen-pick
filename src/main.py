@@ -9,6 +9,7 @@ import cv2
 
 from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from .models.analyzer_config import AnalyzerConfig
+from .models.output_record import OutputRecord
 from .models.scene_mix import SceneMix
 from .models.selection_config import SelectionConfig
 from .services.game_screen_picker import GameScreenPicker
@@ -389,20 +390,18 @@ def execute(
                 num=num,
                 recursive=recursive,
             )
-            copied_paths_by_path = FileUtils.copy_selected_items(
-                selected,
+            output_record = OutputRecord.from_selection(selected, rejected, stats)
+            output_record = FileUtils.copy_selected_items(
+                output_record,
                 output_dir,
                 rename=rename,
                 requested_num=num,
             )
-            ResultFormatter.display_results(selected, stats)
+            ResultFormatter.display_results(output_record)
             if report_json is not None:
                 ReportWriter.write(
                     report_json,
-                    selected,
-                    rejected,
-                    stats,
-                    output_paths_by_candidate_id=copied_paths_by_path,
+                    output_record,
                 )
 
     except click.ClickException:

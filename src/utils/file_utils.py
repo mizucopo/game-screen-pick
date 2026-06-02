@@ -5,7 +5,7 @@ import shutil
 from collections import defaultdict
 from pathlib import Path
 
-from ..models.scored_candidate import ScoredCandidate
+from ..models.output_record import OutputRecord
 
 logger = logging.getLogger(__name__)
 
@@ -75,43 +75,45 @@ class FileUtils:
 
     @staticmethod
     def copy_selected_items(
-        selected: list["ScoredCandidate"],
+        output_record: OutputRecord,
         dest_dir: str,
         rename: bool = False,
         requested_num: int | None = None,
-    ) -> dict[str, str]:
+    ) -> OutputRecord:
         """選択されたアイテムを出力ディレクトリにコピーする.
 
         Args:
-            selected: 選択された候補のリスト
+            output_record: 出力候補を含むrecord
             dest_dir: 出力先ディレクトリのパス
             rename: scene別の連番ファイル名で出力するかどうか
             requested_num: CLIで要求された出力枚数
 
         Returns:
-            candidate path から実際にコピーした絶対パスへの対応表
+            コピー先パスを反映した出力record
         """
         out = Path(dest_dir)
         out.mkdir(parents=True, exist_ok=True)
+        if rename and requested_num is None:
+            msg = "rename=True の場合は requested_num の指定が必要です"
+            raise ValueError(msg)
+
         scene_counters: dict[str, int] = defaultdict(int)
         copied_paths_by_path: dict[str, str] = {}
-        for res in selected:
+        for result in output_record.selected:
             if rename:
-                if requested_num is None:
-                    msg = "rename=True の場合は requested_num の指定が必要です"
-                    raise ValueError(msg)
-                scene_name = res.scene_assessment.scene_label.value
+                assert requested_num is not None
+                scene_name = result.scene_label
                 scene_counters[scene_name] += 1
                 filename = FileUtils.build_renamed_filename(
                     scene_name=scene_name,
                     index=scene_counters[scene_name],
-                    suffix=Path(res.path).suffix,
+                    suffix=result.suffix,
                     requested_num=requested_num,
                 )
             else:
-                filename = Path(res.path).name
+                filename = result.filename
             unique_dest = FileUtils.get_unique_destination(out, filename)
-            shutil.copy2(res.path, unique_dest)
-            copied_paths_by_path[res.path] = str(unique_dest.resolve())
-        logger.info(f"{len(selected)} 件を {dest_dir} に保存しました。")
-        return copied_paths_by_path
+            shutil.copy2(result.source_path, unique_dest)
+            copied_paths_by_path[result.source_path] = str(unique_dest.resolve())
+        logger.info(f"{len(output_record.selected)} 件を {dest_dir} に保存しました。")
+        return output_record.with_selected_output_paths(copied_paths_by_path)

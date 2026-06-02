@@ -4,9 +4,57 @@ from pathlib import Path
 
 import pytest
 
-from src.constants.scene_label import SceneLabel
+from src.models.output_candidate_record import OutputCandidateRecord
+from src.models.output_record import OutputRecord
 from src.utils.file_utils import FileUtils
-from tests.conftest import create_scored_candidate
+
+
+def _build_candidate(
+    source_path: str,
+    scene_label: str = "play",
+) -> OutputCandidateRecord:
+    path = Path(source_path)
+    return OutputCandidateRecord(
+        source_path=source_path,
+        filename=path.name,
+        suffix=path.suffix,
+        scene_label=scene_label,
+        play_score=0.8,
+        event_score=0.3,
+        density_score=0.7,
+        scene_confidence=0.5,
+        quality_score=0.6,
+        selection_score=0.6,
+        score_band="high",
+        outlier_rejected=False,
+    )
+
+
+def _build_output_record(
+    source_paths: list[str],
+    scene_labels: list[str] | None = None,
+) -> OutputRecord:
+    scene_labels = scene_labels or ["play"] * len(source_paths)
+    return OutputRecord(
+        selected=[
+            _build_candidate(source_path, scene_label)
+            for source_path, scene_label in zip(source_paths, scene_labels, strict=True)
+        ],
+        rejected=[],
+        total_files=len(source_paths),
+        analyzed_ok=len(source_paths),
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        rejected_by_content_filter=0,
+        selected_count=len(source_paths),
+        resolved_profile="active",
+        scene_distribution={"play": len(source_paths), "event": 0},
+        scene_mix_target={"play": len(source_paths), "event": 0},
+        scene_mix_actual={"play": len(source_paths), "event": 0},
+        threshold_relaxation_steps=[0.72],
+        content_filter_breakdown={},
+        whole_input_profile=None,
+    )
 
 
 @pytest.mark.parametrize(
@@ -14,9 +62,7 @@ from tests.conftest import create_scored_candidate
     [
         ([], "image.jpg", "image.jpg"),
         (["image.jpg"], "image.jpg", "image_1.jpg"),
-        # 飛び番号がある場合の最小値取得
         (["image.jpg", "image_1.jpg", "image_3.jpg"], "image.jpg", "image_2.jpg"),
-        # 複数拡張子と特殊文字
         (["archive.tar.gz"], "archive.tar.gz", "archive.tar_1.gz"),
         (["画像ファイル.jpg"], "画像ファイル.jpg", "画像ファイル_1.jpg"),
     ],
@@ -37,8 +83,8 @@ def test_get_unique_destination_generates_unique_filename(
         - 適切なサフィックス付きのファイル名が返されること
     """
     # Arrange
-    for f in existing_files:
-        (tmp_path / f).touch()
+    for file_name in existing_files:
+        (tmp_path / file_name).touch()
 
     # Act
     result = FileUtils.get_unique_destination(tmp_path, filename)
@@ -72,7 +118,7 @@ def test_build_renamed_filename_uses_scene_prefix_and_padding(
         - scene名 + ゼロ埋め連番 + 拡張子の形式で返されること
         - 要求枚数が4桁以下なら4桁、それ以上なら要求枚数の桁数でゼロ埋めされること
     """
-    # Arrange — パラメタライズド引数からscene名、連番、拡張子、要求枚数を設定
+    # Arrange - パラメタライズド引数からscene名、連番、拡張子、要求枚数を設定
     # Act
     result = FileUtils.build_renamed_filename(
         scene_name=scene_name,
@@ -83,6 +129,37 @@ def test_build_renamed_filename_uses_scene_prefix_and_padding(
 
     # Assert
     assert result == expected
+
+
+def test_copy_selected_items_returns_output_record_with_copied_paths(
+    tmp_path: Path,
+) -> None:
+    """output recordの選択候補がコピーされ出力パスが反映されること.
+
+    Arrange:
+        - ソース画像ファイルを持つoutput recordがある
+        - コピー先ディレクトリを用意する
+    Act:
+        - copy_selected_itemsが実行される
+    Assert:
+        - ファイルがコピーされること
+        - 戻り値のoutput recordにコピー先パスが設定されること
+    """
+    # Arrange
+    src_file = tmp_path / "source" / "test.png"
+    src_file.parent.mkdir()
+    src_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+    dest_dir = tmp_path / "output"
+
+    # Act
+    result = FileUtils.copy_selected_items(
+        _build_output_record([str(src_file)]),
+        str(dest_dir),
+    )
+
+    # Assert
+    assert (dest_dir / "test.png").exists()
+    assert result.selected[0].output_path == str((dest_dir / "test.png").resolve())
 
 
 def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
@@ -110,24 +187,14 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
     for path in (gameplay1, gameplay2, event1):
         path.write_bytes(b"fake_image_data")
 
-    selected = [
-        create_scored_candidate(
-            path=str(gameplay1),
-            scene_label=SceneLabel.PLAY,
-        ),
-        create_scored_candidate(
-            path=str(event1),
-            scene_label=SceneLabel.EVENT,
-        ),
-        create_scored_candidate(
-            path=str(gameplay2),
-            scene_label=SceneLabel.PLAY,
-        ),
-    ]
+    record = _build_output_record(
+        [str(gameplay1), str(event1), str(gameplay2)],
+        ["play", "event", "play"],
+    )
 
     # Act
-    copied_paths = FileUtils.copy_selected_items(
-        selected,
+    result = FileUtils.copy_selected_items(
+        record,
         str(output_dir),
         rename=True,
         requested_num=3,
@@ -137,13 +204,13 @@ def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
     assert (output_dir / "play0001_1.jpg").exists()
     assert (output_dir / "event0001.jpg").exists()
     assert (output_dir / "play0002.jpg").exists()
-    assert copied_paths[selected[0].path] == str(
+    assert result.selected[0].output_path == str(
         (output_dir / "play0001_1.jpg").resolve()
     )
-    assert copied_paths[selected[1].path] == str(
+    assert result.selected[1].output_path == str(
         (output_dir / "event0001.jpg").resolve()
     )
-    assert copied_paths[selected[2].path] == str(
+    assert result.selected[2].output_path == str(
         (output_dir / "play0002.jpg").resolve()
     )
 
@@ -154,67 +221,39 @@ def test_copy_selected_items_copies_files(tmp_path: Path) -> None:
     Arrange:
         - ソース画像ファイルを作成する
         - コピー先ディレクトリを用意する
-        - 候補画像を1件作成する
+        - output recordを作成する
     Act:
         - copy_selected_itemsを呼び出す
     Assert:
-        - 戻り値の件数が1件であること
+        - 戻り値の選択候補が1件であること
         - コピー先にファイルが存在すること
     """
     # Arrange
     src_file = tmp_path / "source" / "test.png"
     src_file.parent.mkdir()
     src_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
-
     dest_dir = tmp_path / "output"
-    candidate = create_scored_candidate(path=str(src_file))
 
     # Act
-    result = FileUtils.copy_selected_items([candidate], str(dest_dir))
+    result = FileUtils.copy_selected_items(
+        _build_output_record([str(src_file)]),
+        str(dest_dir),
+    )
 
     # Assert
-    assert len(result) == 1
+    assert len(result.selected) == 1
     assert (dest_dir / "test.png").exists()
 
 
-def test_copy_selected_items_returns_path_mapping(tmp_path: Path) -> None:
-    """戻り値が path → コピー先パス の対応表であること.
-
-    Arrange:
-        - ソース画像ファイルを作成する
-        - コピー先ディレクトリを用意する
-        - 候補画像を1件作成する
-    Act:
-        - copy_selected_itemsを呼び出す
-    Assert:
-        - 戻り値に元パスがキーとして含まれること
-        - 値がコピー先パスで元ファイル名で終わること
-    """
-    # Arrange
-    src_file = tmp_path / "source" / "test.png"
-    src_file.parent.mkdir()
-    src_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
-
-    dest_dir = tmp_path / "output"
-    candidate = create_scored_candidate(path=str(src_file))
-
-    # Act
-    result = FileUtils.copy_selected_items([candidate], str(dest_dir))
-
-    # Assert
-    assert candidate.path in result
-    assert result[candidate.path].endswith("test.png")
-
-
 def test_copy_selected_items_renames_by_scene(tmp_path: Path) -> None:
-    """rename=True の場合、scene別連番ファイル名が付けられること.
+    """rename=Trueの場合、scene別連番ファイル名が付けられること.
 
     Arrange:
         - 異なる拡張子の画像ファイルを2件作成する
         - コピー先ディレクトリを用意する
-        - 候補画像を2件作成する
+        - output recordを作成する
     Act:
-        - rename=True, requested_num=2 でcopy_selected_itemsを呼び出す
+        - rename=True, requested_num=2でcopy_selected_itemsを呼び出す
     Assert:
         - 戻り値が2件であること
         - コピー先にplay0001.png, play0002.jpgが生成されること
@@ -226,18 +265,23 @@ def test_copy_selected_items_renames_by_scene(tmp_path: Path) -> None:
         src_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
     dest_dir = tmp_path / "output"
-    candidates = [
-        create_scored_candidate(path=str(tmp_path / "source" / "a.png")),
-        create_scored_candidate(path=str(tmp_path / "source" / "b.jpg")),
-    ]
+    record = _build_output_record(
+        [
+            str(tmp_path / "source" / "a.png"),
+            str(tmp_path / "source" / "b.jpg"),
+        ]
+    )
 
     # Act
     result = FileUtils.copy_selected_items(
-        candidates, str(dest_dir), rename=True, requested_num=2
+        record,
+        str(dest_dir),
+        rename=True,
+        requested_num=2,
     )
 
     # Assert
-    assert len(result) == 2
+    assert len(result.selected) == 2
     files = sorted(dest_dir.iterdir())
     assert files[0].name == "play0001.png"
     assert files[1].name == "play0002.jpg"
@@ -246,12 +290,12 @@ def test_copy_selected_items_renames_by_scene(tmp_path: Path) -> None:
 def test_copy_selected_items_raises_when_rename_without_requested_num(
     tmp_path: Path,
 ) -> None:
-    """rename=True で requested_num=None の場合、ValueError が送出されること.
+    """rename=Trueでrequested_num=Noneの場合、ValueErrorが送出されること.
 
     Arrange:
         - ソース画像ファイルを作成する
         - コピー先ディレクトリを用意する
-        - 候補画像を1件作成する
+        - output recordを作成する
     Act:
         - rename=True, requested_num指定なしでcopy_selected_itemsを呼び出す
     Assert:
@@ -261,13 +305,15 @@ def test_copy_selected_items_raises_when_rename_without_requested_num(
     src_file = tmp_path / "source" / "test.png"
     src_file.parent.mkdir()
     src_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
-
     dest_dir = tmp_path / "output"
-    candidate = create_scored_candidate(path=str(src_file))
 
     # Act & Assert
     with pytest.raises(ValueError, match="requested_num"):
-        FileUtils.copy_selected_items([candidate], str(dest_dir), rename=True)
+        FileUtils.copy_selected_items(
+            _build_output_record([str(src_file)]),
+            str(dest_dir),
+            rename=True,
+        )
 
 
 def test_copy_selected_items_handles_duplicate_filenames(tmp_path: Path) -> None:
@@ -276,7 +322,7 @@ def test_copy_selected_items_handles_duplicate_filenames(tmp_path: Path) -> None
     Arrange:
         - 異なるディレクトリに同名の画像ファイルを2件作成する
         - コピー先ディレクトリを用意する
-        - 候補画像を2件作成する
+        - output recordを作成する
     Act:
         - copy_selected_itemsを呼び出す
     Assert:
@@ -285,25 +331,27 @@ def test_copy_selected_items_handles_duplicate_filenames(tmp_path: Path) -> None
         - 一方がtest.png、他方がtest_1.pngであること
     """
     # Arrange
-    for i, name in enumerate(["test.png", "test.png"]):
-        src_dir = tmp_path / f"source{i}"
+    for index, name in enumerate(["test.png", "test.png"]):
+        src_dir = tmp_path / f"source{index}"
         src_dir.mkdir()
         src_file = src_dir / name
         src_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
     dest_dir = tmp_path / "output"
-    candidates = [
-        create_scored_candidate(path=str(tmp_path / "source0" / "test.png")),
-        create_scored_candidate(path=str(tmp_path / "source1" / "test.png")),
-    ]
+    record = _build_output_record(
+        [
+            str(tmp_path / "source0" / "test.png"),
+            str(tmp_path / "source1" / "test.png"),
+        ]
+    )
 
     # Act
-    result = FileUtils.copy_selected_items(candidates, str(dest_dir))
+    result = FileUtils.copy_selected_items(record, str(dest_dir))
 
     # Assert
-    assert len(result) == 2
+    assert len(result.selected) == 2
     copied_files = list(dest_dir.iterdir())
     assert len(copied_files) == 2
-    names = {f.name for f in copied_files}
+    names = {file.name for file in copied_files}
     assert "test.png" in names
     assert "test_1.png" in names
