@@ -1,5 +1,7 @@
 """SceneMixSelectorの単体テスト."""
 
+from types import SimpleNamespace
+
 from src.constants.scene_label import SceneLabel
 from src.models.scene_mix import SceneMix
 from src.models.selection_config import SelectionConfig
@@ -57,6 +59,54 @@ def test_scene_mix_selector_respects_play_event_ratio() -> None:
     assert len(result.selected) == 10
     assert result.target_counts == {"play": 7, "event": 3}
     assert result.actual_counts == {"play": 7, "event": 3}
+
+
+def test_scene_mix_selector_accepts_scene_mix_candidate_seam() -> None:
+    """scene mix選定に必要な候補情報だけで選定されること.
+
+    Arrange:
+        - full domain graphを持たないplay候補とevent候補がある
+        - scene_mix比率が50/50に設定されている
+    Act:
+        - 2件を選択する
+    Assert:
+        - playとeventが1件ずつ選ばれること
+        - score_band注釈が返されること
+    """
+    # Arrange
+    selector = SceneMixSelector(
+        SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5))
+    )
+    candidates = [
+        SimpleNamespace(
+            path="/tmp/play_seam.jpg",
+            scene_label=SceneLabel.PLAY,
+            quality_score=0.9,
+            selection_score=0.2,
+            combined_features=_feature(0),
+        ),
+        SimpleNamespace(
+            path="/tmp/event_seam.jpg",
+            scene_label=SceneLabel.EVENT,
+            quality_score=0.8,
+            selection_score=0.7,
+            combined_features=_feature(1),
+        ),
+    ]
+
+    # Act
+    result = selector.select(candidates, 2)
+
+    # Assert
+    assert [candidate.path for candidate in result.selected] == [
+        "/tmp/play_seam.jpg",
+        "/tmp/event_seam.jpg",
+    ]
+    assert result.target_counts == {"play": 1, "event": 1}
+    assert result.actual_counts == {"play": 1, "event": 1}
+    assert {
+        result.annotation_for(candidate).score_band for candidate in result.selected
+    } == {"mid"}
 
 
 def test_scene_mix_selector_keeps_similar_candidates_out_globally() -> None:
