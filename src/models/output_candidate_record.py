@@ -34,15 +34,16 @@ class OutputCandidateRecord:
         """選定内部候補を出力用recordへ射影する."""
         annotation = selection_annotation or SelectionAnnotation()
         path = Path(candidate.path)
+        assessment = candidate.scene_assessment
         return cls(
             source_path=candidate.path,
             filename=path.name,
             suffix=path.suffix,
-            scene_label=candidate.scene_assessment.scene_label.value,
-            play_score=round(candidate.scene_assessment.play_score, 4),
-            event_score=round(candidate.scene_assessment.event_score, 4),
-            density_score=round(candidate.scene_assessment.density_score, 4),
-            scene_confidence=round(candidate.scene_assessment.scene_confidence, 4),
+            scene_label=assessment.scene_label.value,
+            play_score=round(assessment.play_score, 4),
+            event_score=round(assessment.event_score, 4),
+            density_score=round(assessment.density_score, 4),
+            scene_confidence=round(assessment.scene_confidence, 4),
             quality_score=round(candidate.quality_score, 4),
             selection_score=round(candidate.selection_score, 4),
             score_band=annotation.score_band,

@@ -93,13 +93,15 @@ class FileUtils:
         """
         out = Path(dest_dir)
         out.mkdir(parents=True, exist_ok=True)
+        if rename and requested_num is None:
+            msg = "rename=True の場合は requested_num の指定が必要です"
+            raise ValueError(msg)
+
         scene_counters: dict[str, int] = defaultdict(int)
         copied_paths_by_path: dict[str, str] = {}
         for result in output_record.selected:
             if rename:
-                if requested_num is None:
-                    msg = "rename=True の場合は requested_num の指定が必要です"
-                    raise ValueError(msg)
+                assert requested_num is not None
                 scene_name = result.scene_label
                 scene_counters[scene_name] += 1
                 filename = FileUtils.build_renamed_filename(

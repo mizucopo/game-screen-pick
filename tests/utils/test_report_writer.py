@@ -11,12 +11,12 @@ from src.utils.report_writer import ReportWriter
 def _build_candidate(
     *,
     source_path: str = "/tmp/play.jpg",
-    filename: str = "play.jpg",
     scene_label: str = "play",
     score_band: str | None = "high",
     outlier_rejected: bool = False,
     output_path: str | None = None,
 ) -> OutputCandidateRecord:
+    filename = Path(source_path).name
     return OutputCandidateRecord(
         source_path=source_path,
         filename=filename,
@@ -80,14 +80,12 @@ def test_report_writer_serializes_output_record_fields(tmp_path: Path) -> None:
     selected = [
         _build_candidate(
             source_path="/tmp/play.jpg",
-            filename="play.jpg",
             output_path="/tmp/output/play0001.jpg",
         )
     ]
     rejected = [
         _build_candidate(
             source_path="/tmp/event.jpg",
-            filename="event.jpg",
             scene_label="event",
             score_band="low",
             outlier_rejected=True,
