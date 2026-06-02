@@ -6,6 +6,7 @@ from pathlib import Path
 from ..models.metric_distribution import MetricDistribution
 from ..models.picker_statistics import PickerStatistics
 from ..models.scored_candidate import ScoredCandidate
+from ..models.selection_annotation import SelectionAnnotation
 
 
 class ReportWriter:
@@ -34,11 +35,18 @@ class ReportWriter:
                 ReportWriter._serialize_candidate(
                     candidate,
                     output_paths_by_candidate_id.get(candidate.path),
+                    stats.selection_annotations_by_path.get(candidate.path),
                 )
                 for candidate in selected
             ],
             "rejected": [
-                ReportWriter._serialize_candidate(candidate) for candidate in rejected
+                ReportWriter._serialize_candidate(
+                    candidate,
+                    selection_annotation=stats.selection_annotations_by_path.get(
+                        candidate.path
+                    ),
+                )
+                for candidate in rejected
             ],
         }
         report_path = Path(path)
@@ -52,8 +60,10 @@ class ReportWriter:
     def _serialize_candidate(
         candidate: ScoredCandidate,
         output_path: str | None = None,
+        selection_annotation: SelectionAnnotation | None = None,
     ) -> dict[str, object]:
         """候補1件を辞書へ変換する."""
+        annotation = selection_annotation or SelectionAnnotation()
         payload: dict[str, object] = {
             "path": candidate.path,
             "scene_label": candidate.scene_assessment.scene_label.value,
@@ -63,8 +73,8 @@ class ReportWriter:
             "scene_confidence": round(candidate.scene_assessment.scene_confidence, 4),
             "quality_score": round(candidate.quality_score, 4),
             "selection_score": round(candidate.selection_score, 4),
-            "score_band": candidate.score_band,
-            "outlier_rejected": candidate.outlier_rejected,
+            "score_band": annotation.score_band,
+            "outlier_rejected": annotation.outlier_rejected,
         }
         if output_path is not None:
             payload["output_path"] = output_path

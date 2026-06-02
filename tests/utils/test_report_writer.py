@@ -5,6 +5,7 @@ from pathlib import Path
 
 from src.constants.scene_label import SceneLabel
 from src.models.picker_statistics import PickerStatistics
+from src.models.selection_annotation import SelectionAnnotation
 from src.utils.report_writer import ReportWriter
 from tests.conftest import (
     build_whole_input_profile,
@@ -71,8 +72,8 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
     """play/eventフィールドが正しくシリアライズされること.
 
     Arrange:
-        - play候補にplay_score/event_score/density_score/score_bandが設定されている
-        - event候補にoutlier_rejectedがTrueで設定されている
+        - play候補にplay_score/event_score/density_scoreが設定されている
+        - 統計情報にscore_band/outlier_rejectedの選定注釈がある
         - 統計情報にscene_distribution/scene_mix_targetがある
     Act:
         - ReportWriterでJSONレポートを出力する
@@ -91,7 +92,6 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
             event_score=0.2,
             density_score=0.8,
             selection_score=0.8,
-            score_band="high",
         )
     ]
     rejected = [
@@ -102,17 +102,23 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
             event_score=0.8,
             density_score=0.2,
             selection_score=0.8,
-            score_band="low",
-            outlier_rejected=True,
         )
     ]
+    stats = _build_stats()
+    stats.selection_annotations_by_path = {
+        selected[0].path: SelectionAnnotation(score_band="high"),
+        rejected[0].path: SelectionAnnotation(
+            score_band="low",
+            outlier_rejected=True,
+        ),
+    }
 
     # Act
     ReportWriter.write(
         path=str(report_path),
         selected=selected,
         rejected=rejected,
-        stats=_build_stats(),
+        stats=stats,
         output_paths_by_candidate_id={
             selected[0].path: "/tmp/output/play0001.jpg",
         },
@@ -127,6 +133,48 @@ def test_report_writer_serializes_play_event_fields(tmp_path: Path) -> None:
     assert payload["selected"][0]["density_score"] == 0.8
     assert payload["selected"][0]["score_band"] == "high"
     assert payload["selected"][0]["output_path"] == "/tmp/output/play0001.jpg"
+    assert payload["rejected"][0]["outlier_rejected"] is True
+
+
+def test_report_writer_serializes_selection_annotations_from_stats(
+    tmp_path: Path,
+) -> None:
+    """選定注釈が統計情報からJSONへ出力されること.
+
+    Arrange:
+        - 候補にはscore_band/outlier_rejectedが設定されていない
+        - 統計情報に候補パスごとの選定注釈がある
+    Act:
+        - ReportWriterでJSONレポートを出力する
+    Assert:
+        - score_bandとoutlier_rejectedが選定注釈から出力されること
+    """
+    # Arrange
+    report_path = tmp_path / "report.json"
+    selected = [create_scored_candidate(path="/tmp/annotated_play.jpg")]
+    rejected = [create_scored_candidate(path="/tmp/annotated_event.jpg")]
+    stats = _build_stats()
+    stats.selection_annotations_by_path = {
+        "/tmp/annotated_play.jpg": SelectionAnnotation(score_band="high"),
+        "/tmp/annotated_event.jpg": SelectionAnnotation(
+            score_band="outlier",
+            outlier_rejected=True,
+        ),
+    }
+
+    # Act
+    ReportWriter.write(
+        path=str(report_path),
+        selected=selected,
+        rejected=rejected,
+        stats=stats,
+    )
+
+    # Assert
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["selected"][0]["score_band"] == "high"
+    assert payload["selected"][0]["outlier_rejected"] is False
+    assert payload["rejected"][0]["score_band"] == "outlier"
     assert payload["rejected"][0]["outlier_rejected"] is True
 
 

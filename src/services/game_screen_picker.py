@@ -221,9 +221,8 @@ class GameScreenPicker:
         candidates, resolved_profile, scene_distribution = self._score_candidates(
             filtered_images
         )
-        selected, rejected_by_similarity, scene_mix_target, scene_mix_actual = (
-            self._scene_mix_selector.select(candidates, num)
-        )
+        selection_result = self._scene_mix_selector.select(candidates, num)
+        selected = selection_result.selected
         selected_paths = {candidate.path for candidate in selected}
         rejected = sorted(
             [
@@ -241,17 +240,18 @@ class GameScreenPicker:
             else len(analyzed_images),
             analyzed_ok=len(analyzed_images),
             analyzed_fail=analyzed_fail,
-            rejected_by_similarity=rejected_by_similarity,
+            rejected_by_similarity=selection_result.rejected_by_similarity,
             rejected_by_content_filter=content_filter_result.rejected_by_content_filter,
             selected_count=len(selected),
             resolved_profile=resolved_profile,
             scene_distribution=scene_distribution,
-            scene_mix_target=scene_mix_target,
-            scene_mix_actual=scene_mix_actual,
+            scene_mix_target=selection_result.target_counts,
+            scene_mix_actual=selection_result.actual_counts,
             threshold_relaxation_steps=self.config.compute_threshold_steps(
                 self.config.similarity_threshold
             ),
             content_filter_breakdown=content_filter_result.content_filter_breakdown,
             whole_input_profile=content_filter_result.whole_input_profile,
+            selection_annotations_by_path=selection_result.annotations_by_path,
         )
         return selected, rejected, stats

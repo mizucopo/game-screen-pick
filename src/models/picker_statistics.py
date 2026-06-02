@@ -1,7 +1,8 @@
 """ゲーム画面ピッカーの統計情報。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from .selection_annotation import SelectionAnnotation
 from .whole_input_profile import WholeInputProfile
 
 
@@ -23,6 +24,7 @@ class PickerStatistics:
         threshold_relaxation_steps: 類似度しきい値緩和ステップ
         content_filter_breakdown: content filter 除外理由ごとの件数
         whole_input_profile: 入力全体の明暗傾向プロフィール
+        selection_annotations_by_path: 候補パスごとのscene mix選定注釈
     """
 
     total_files: int
@@ -38,3 +40,6 @@ class PickerStatistics:
     threshold_relaxation_steps: list[float]
     content_filter_breakdown: dict[str, int]
     whole_input_profile: WholeInputProfile | None = None
+    selection_annotations_by_path: dict[str, SelectionAnnotation] = field(
+        default_factory=dict
+    )
