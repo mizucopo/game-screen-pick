@@ -10,6 +10,7 @@ import pytest
 from src.constants.scene_label import SceneLabel
 from src.main import build_selection_config, run, validate_similarity_range
 from src.models.picker_statistics import PickerStatistics
+from src.models.selection_annotation import SelectionAnnotation
 from src.services.game_screen_picker import GameScreenPicker
 from tests.conftest import create_scored_candidate
 
@@ -124,7 +125,8 @@ def test_cli_writes_report_json_with_new_fields(
 
     Arrange:
         - 入力ディレクトリに1件の画像がある
-        - 選択結果にplay_score/event_score/density_score/score_bandが含まれる
+        - 選択結果にplay_score/event_score/density_scoreが含まれる
+        - 統計情報にscore_bandの選定注釈が含まれる
         - --report-jsonオプションが指定されている
     Act:
         - CLIを実行する
@@ -146,7 +148,6 @@ def test_cli_writes_report_json_with_new_fields(
             event_score=0.2,
             density_score=0.8,
             selection_score=0.8,
-            score_band="high",
         )
     ]
     stats = PickerStatistics(
@@ -167,6 +168,9 @@ def test_cli_writes_report_json_with_new_fields(
             "single_tone": 0,
             "fade_transition": 0,
             "temporal_transition": 0,
+        },
+        selection_annotations_by_path={
+            str(source): SelectionAnnotation(score_band="high")
         },
     )
     mock_game_screen_picker.select.return_value = (results, [], stats)

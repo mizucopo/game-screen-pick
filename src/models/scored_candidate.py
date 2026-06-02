@@ -18,8 +18,6 @@ class ScoredCandidate:
     resolved_profile: str
     quality_score: float
     selection_score: float
-    score_band: str | None = None
-    outlier_rejected: bool = False
 
     @property
     def path(self) -> str:

@@ -19,10 +19,12 @@ class ResultFormatter:
         """選択結果を表示する."""
         logger.info("--- 選択された画像一覧 ---")
         for i, res in enumerate(selected):
+            annotation = stats.selection_annotations_by_path.get(res.path)
+            score_band = annotation.score_band if annotation is not None else None
             logger.info(
                 f"[{i + 1}] {Path(res.path).name} "
                 f"(カテゴリ: {res.scene_assessment.scene_label.value}, "
-                f"band: {res.score_band}, "
+                f"band: {score_band}, "
                 f"play: {res.scene_assessment.play_score:.3f}, "
                 f"event: {res.scene_assessment.event_score:.3f}, "
                 f"density: {res.scene_assessment.density_score:.3f})"

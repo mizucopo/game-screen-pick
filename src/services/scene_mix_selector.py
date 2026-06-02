@@ -8,7 +8,9 @@ import numpy as np
 from ..constants.scene_label import SceneLabel
 from ..models.bucket_plan import BucketPlan
 from ..models.scored_candidate import ScoredCandidate
+from ..models.selection_annotation import SelectionAnnotation
 from ..models.selection_config import SelectionConfig
+from ..models.selection_result import SelectionResult
 from ..utils.vector_utils import VectorUtils
 
 
@@ -33,13 +35,14 @@ class SceneMixSelector:
         self,
         candidates: list[ScoredCandidate],
         num: int,
-    ) -> tuple[list[ScoredCandidate], int, dict[str, int], dict[str, int]]:
+    ) -> SelectionResult:
         """比率に従って候補を選択する."""
         if num <= 0 or not candidates:
             empty_counts = {label.value: 0 for label in self.SCENE_ORDER}
-            return [], 0, empty_counts, empty_counts
+            return SelectionResult([], 0, empty_counts, empty_counts)
 
         targets = self._calculate_targets(num)
+        annotations_by_path: dict[str, SelectionAnnotation] = {}
         scene_buckets = {
             label: [
                 candidate
@@ -49,7 +52,11 @@ class SceneMixSelector:
             for label in self.SCENE_ORDER
         }
         bucket_plans = {
-            label: self._prepare_bucket(scene_buckets[label], targets[label])
+            label: self._prepare_bucket(
+                scene_buckets[label],
+                targets[label],
+                annotations_by_path,
+            )
             for label in self.SCENE_ORDER
         }
 
@@ -103,7 +110,13 @@ class SceneMixSelector:
         }
         target_map = {label.value: targets[label] for label in self.SCENE_ORDER}
         rejected_by_similarity = len(rejected_by_similarity_ids - selected_ids)
-        return selected[:num], rejected_by_similarity, target_map, actuals
+        return SelectionResult(
+            selected=selected[:num],
+            rejected_by_similarity=rejected_by_similarity,
+            target_counts=target_map,
+            actual_counts=actuals,
+            annotations_by_path=annotations_by_path,
+        )
 
     def _calculate_targets(self, num: int) -> dict[SceneLabel, int]:
         """scene mix 比率から目標枚数を計算する."""
@@ -113,24 +126,29 @@ class SceneMixSelector:
         self,
         candidates: list[ScoredCandidate],
         target: int,
+        annotations_by_path: dict[str, SelectionAnnotation],
     ) -> BucketPlan:
         """カテゴリ別の候補を band 分散選定向けに並べ替える."""
         if not candidates:
             return BucketPlan([], [])
 
-        for candidate in candidates:
-            candidate.outlier_rejected = False
-            candidate.score_band = None
-
-        eligible_candidates, outlier_candidates = self._exclude_outliers(candidates)
+        eligible_candidates, outlier_candidates = self._exclude_outliers(
+            candidates,
+            annotations_by_path,
+        )
         band_count = min(max(target, 1), 5)
-        band_queues = self._build_band_queues(eligible_candidates, band_count)
+        band_queues = self._build_band_queues(
+            eligible_candidates,
+            band_count,
+            annotations_by_path,
+        )
         ordered_candidates = self._round_robin_bands(band_queues)
         return BucketPlan(ordered_candidates, outlier_candidates)
 
     def _exclude_outliers(
         self,
         candidates: list[ScoredCandidate],
+        annotations_by_path: dict[str, SelectionAnnotation],
     ) -> tuple[list[ScoredCandidate], list[ScoredCandidate]]:
         """selection_score の外れ値を除外し、(適格候補, 外れ値候補) を返す."""
         if len(candidates) < self.MIN_OUTLIER_SAMPLES:
@@ -154,8 +172,10 @@ class SceneMixSelector:
             if lower <= score <= upper:
                 eligible_candidates.append(candidate)
             else:
-                candidate.outlier_rejected = True
-                candidate.score_band = "outlier"
+                annotations_by_path[candidate.path] = SelectionAnnotation(
+                    score_band="outlier",
+                    outlier_rejected=True,
+                )
                 outlier_candidates.append(candidate)
         return eligible_candidates, outlier_candidates
 
@@ -163,6 +183,7 @@ class SceneMixSelector:
         self,
         candidates: list[ScoredCandidate],
         band_count: int,
+        annotations_by_path: dict[str, SelectionAnnotation],
     ) -> list[deque[ScoredCandidate]]:
         """候補を score band ごとのキューに分ける."""
         if not candidates:
@@ -194,7 +215,10 @@ class SceneMixSelector:
                 ),
             )
             for candidate in ordered_band:
-                candidate.score_band = band_name
+                annotations_by_path[candidate.path] = SelectionAnnotation(
+                    score_band=band_name,
+                    outlier_rejected=False,
+                )
             band_queues.append(deque(ordered_band))
         return band_queues
 
