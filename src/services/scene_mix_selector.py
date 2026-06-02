@@ -1,13 +1,14 @@
 """scene mix と全体多様性を両立する選定ロジック."""
 
 from collections import deque
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
 
 from ..constants.scene_label import SceneLabel
 from ..models.bucket_plan import BucketPlan
-from ..models.scored_candidate import ScoredCandidate
+from ..models.scene_mix_candidate import SceneMixCandidateT
 from ..models.selection_annotation import SelectionAnnotation
 from ..models.selection_config import SelectionConfig
 from ..models.selection_result import SelectionResult
@@ -33,21 +34,21 @@ class SceneMixSelector:
 
     def select(
         self,
-        candidates: list[ScoredCandidate],
+        candidates: Sequence[SceneMixCandidateT],
         num: int,
-    ) -> SelectionResult:
+    ) -> SelectionResult[SceneMixCandidateT]:
         """比率に従って候補を選択する."""
         if num <= 0 or not candidates:
             empty_counts = {label.value: 0 for label in self.SCENE_ORDER}
-            return SelectionResult([], 0, empty_counts, empty_counts)
+            return SelectionResult[SceneMixCandidateT](
+                [], 0, empty_counts, empty_counts
+            )
 
         targets = self._calculate_targets(num)
         annotations_by_path: dict[str, SelectionAnnotation] = {}
         scene_buckets = {
             label: [
-                candidate
-                for candidate in candidates
-                if candidate.scene_assessment.scene_label == label
+                candidate for candidate in candidates if candidate.scene_label == label
             ]
             for label in self.SCENE_ORDER
         }
@@ -60,7 +61,7 @@ class SceneMixSelector:
             for label in self.SCENE_ORDER
         }
 
-        selected: list[ScoredCandidate] = []
+        selected: list[SceneMixCandidateT] = []
         selected_ids: set[int] = set()
         selected_features: list[np.ndarray[Any, Any]] = []
         rejected_by_similarity_ids: set[int] = set()
@@ -102,9 +103,7 @@ class SceneMixSelector:
 
         actuals = {
             label.value: sum(
-                1
-                for candidate in selected
-                if candidate.scene_assessment.scene_label == label
+                1 for candidate in selected if candidate.scene_label == label
             )
             for label in self.SCENE_ORDER
         }
@@ -124,13 +123,13 @@ class SceneMixSelector:
 
     def _prepare_bucket(
         self,
-        candidates: list[ScoredCandidate],
+        candidates: list[SceneMixCandidateT],
         target: int,
         annotations_by_path: dict[str, SelectionAnnotation],
-    ) -> BucketPlan:
+    ) -> BucketPlan[SceneMixCandidateT]:
         """カテゴリ別の候補を band 分散選定向けに並べ替える."""
         if not candidates:
-            return BucketPlan([], [])
+            return BucketPlan[SceneMixCandidateT]([], [])
 
         eligible_candidates, outlier_candidates = self._exclude_outliers(
             candidates,
@@ -147,9 +146,9 @@ class SceneMixSelector:
 
     def _exclude_outliers(
         self,
-        candidates: list[ScoredCandidate],
+        candidates: list[SceneMixCandidateT],
         annotations_by_path: dict[str, SelectionAnnotation],
-    ) -> tuple[list[ScoredCandidate], list[ScoredCandidate]]:
+    ) -> tuple[list[SceneMixCandidateT], list[SceneMixCandidateT]]:
         """selection_score の外れ値を除外し、(適格候補, 外れ値候補) を返す."""
         if len(candidates) < self.MIN_OUTLIER_SAMPLES:
             return list(candidates), []
@@ -165,8 +164,8 @@ class SceneMixSelector:
 
         lower = float(q1 - 1.5 * iqr)
         upper = float(q3 + 1.5 * iqr)
-        eligible_candidates: list[ScoredCandidate] = []
-        outlier_candidates: list[ScoredCandidate] = []
+        eligible_candidates: list[SceneMixCandidateT] = []
+        outlier_candidates: list[SceneMixCandidateT] = []
         for candidate in candidates:
             score = candidate.selection_score
             if lower <= score <= upper:
@@ -181,16 +180,16 @@ class SceneMixSelector:
 
     def _build_band_queues(
         self,
-        candidates: list[ScoredCandidate],
+        candidates: list[SceneMixCandidateT],
         band_count: int,
         annotations_by_path: dict[str, SelectionAnnotation],
-    ) -> list[deque[ScoredCandidate]]:
+    ) -> list[deque[SceneMixCandidateT]]:
         """候補を score band ごとのキューに分ける."""
         if not candidates:
             return []
 
         ordered = sorted(candidates, key=lambda item: item.selection_score)
-        groups: list[list[ScoredCandidate]] = []
+        groups: list[list[SceneMixCandidateT]] = []
         base_size, remainder = divmod(len(ordered), band_count)
         start = 0
         for band_index in range(band_count):
@@ -198,16 +197,15 @@ class SceneMixSelector:
             groups.append(ordered[start : start + size])
             start += size
         band_names = self.BAND_LABELS[band_count]
-        band_queues: list[deque[ScoredCandidate]] = []
+        band_queues: list[deque[SceneMixCandidateT]] = []
         for band_name, group in zip(band_names, groups, strict=True):
-            group_candidates = list(group)
-            if not group_candidates:
+            if not group:
                 continue
             band_center = float(
-                np.mean([candidate.selection_score for candidate in group_candidates])
+                np.mean([candidate.selection_score for candidate in group])
             )
             ordered_band = sorted(
-                group_candidates,
+                group,
                 key=lambda candidate: (
                     -candidate.quality_score,
                     abs(candidate.selection_score - band_center),
@@ -224,13 +222,13 @@ class SceneMixSelector:
 
     @staticmethod
     def _round_robin_bands(
-        band_queues: list[deque[ScoredCandidate]],
-    ) -> list[ScoredCandidate]:
+        band_queues: list[deque[SceneMixCandidateT]],
+    ) -> list[SceneMixCandidateT]:
         """低 band から高 band へ均等に辿る順序を作る."""
         if not band_queues:
             return []
 
-        ordered: list[ScoredCandidate] = []
+        ordered: list[SceneMixCandidateT] = []
         queues = [deque(queue) for queue in band_queues]
         while any(queues):
             for queue in queues:
@@ -240,11 +238,11 @@ class SceneMixSelector:
 
     def _build_fallback_stream(
         self,
-        leftovers_by_label: list[list[ScoredCandidate]],
-    ) -> list[ScoredCandidate]:
+        leftovers_by_label: list[list[SceneMixCandidateT]],
+    ) -> list[SceneMixCandidateT]:
         """不足分を補うための共通ストリームを組み立てる."""
         streams = [deque(candidates) for candidates in leftovers_by_label if candidates]
-        ordered: list[ScoredCandidate] = []
+        ordered: list[SceneMixCandidateT] = []
         while any(streams):
             for stream in streams:
                 if stream:
@@ -253,11 +251,11 @@ class SceneMixSelector:
 
     def _select_from_stream(
         self,
-        ordered_candidates: list[ScoredCandidate],
+        ordered_candidates: list[SceneMixCandidateT],
         target: int,
         selected_ids: set[int],
         selected_features: list[np.ndarray[Any, Any]],
-    ) -> tuple[list[ScoredCandidate], set[int], list[ScoredCandidate]]:
+    ) -> tuple[list[SceneMixCandidateT], set[int], list[SceneMixCandidateT]]:
         """順序付け済みストリームから類似度を見ながら採用する."""
         if target <= 0 or not ordered_candidates:
             return [], set(), list(ordered_candidates)
@@ -293,10 +291,10 @@ class SceneMixSelector:
 
     @staticmethod
     def _extend_selection(
-        selected: list[ScoredCandidate],
+        selected: list[SceneMixCandidateT],
         selected_ids: set[int],
         selected_features: list[np.ndarray[Any, Any]],
-        additions: list[ScoredCandidate],
+        additions: list[SceneMixCandidateT],
     ) -> None:
         """選択結果と全体類似度チェック用の状態をまとめて更新する."""
         selected.extend(additions)
