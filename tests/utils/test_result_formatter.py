@@ -1,86 +1,87 @@
-"""ResultFormatter のテスト."""
+"""result_formatter.py の単体テスト."""
 
-from io import StringIO
 from unittest.mock import patch
 
-from src.models.picker_statistics import PickerStatistics
-from src.models.selection_annotation import SelectionAnnotation
+from src.models.output_candidate_record import OutputCandidateRecord
+from src.models.output_record import OutputRecord
 from src.utils.result_formatter import ResultFormatter
-from tests.conftest import create_scored_candidate
+
+
+def _build_output_record() -> OutputRecord:
+    return OutputRecord(
+        selected=[
+            OutputCandidateRecord(
+                source_path="/tmp/test_image.jpg",
+                filename="test_image.jpg",
+                suffix=".jpg",
+                scene_label="play",
+                play_score=0.8,
+                event_score=0.3,
+                density_score=0.7,
+                scene_confidence=0.5,
+                quality_score=0.6,
+                selection_score=0.6,
+                score_band="high",
+                outlier_rejected=False,
+            )
+        ],
+        rejected=[],
+        total_files=1,
+        analyzed_ok=1,
+        analyzed_fail=0,
+        rejected_by_similarity=0,
+        rejected_by_content_filter=0,
+        selected_count=1,
+        resolved_profile="active",
+        scene_distribution={"play": 1, "event": 0},
+        scene_mix_target={"play": 1, "event": 0},
+        scene_mix_actual={"play": 1, "event": 0},
+        threshold_relaxation_steps=[0.7],
+        content_filter_breakdown={},
+        whole_input_profile=None,
+    )
 
 
 def test_display_results_runs_without_error() -> None:
-    """display_results がエラーなく実行されること.
+    """display_resultsがエラーなく実行されること.
 
     Arrange:
-        - 候補画像と統計情報を用意する
+        - 候補画像と統計情報を持つoutput recordを用意する
     Act:
-        - display_results を呼び出す
+        - display_resultsを呼び出す
     Assert:
         - 例外が発生せずに完了されること
     """
     # Arrange
-    candidate = create_scored_candidate(path="/tmp/test_image.jpg")
-
-    stats = PickerStatistics(
-        total_files=1,
-        analyzed_ok=1,
-        analyzed_fail=0,
-        rejected_by_similarity=0,
-        rejected_by_content_filter=0,
-        selected_count=1,
-        resolved_profile="active",
-        scene_distribution={"play": 1, "event": 0},
-        scene_mix_target={"play": 1, "event": 0},
-        scene_mix_actual={"play": 1, "event": 0},
-        threshold_relaxation_steps=[0.7],
-        content_filter_breakdown={},
-        whole_input_profile=None,
-    )
+    record = _build_output_record()
 
     # Act
-    with patch("sys.stdout", new_callable=StringIO):
-        ResultFormatter.display_results([candidate], stats)
+    ResultFormatter.display_results(record)
 
-    # Assert — 例外なく完了すればOK
+    # Assert - 例外なく完了すればOK
 
 
-def test_display_results_uses_selection_annotations_from_stats() -> None:
-    """選定注釈のscore_bandが表示に使われること.
+def test_display_results_uses_output_record() -> None:
+    """output recordから既存の表示内容が出力されること.
 
     Arrange:
-        - 候補にはscore_bandが設定されていない
-        - 統計情報に候補パスごとの選定注釈がある
+        - 選択候補と統計値を持つoutput recordがある
     Act:
         - display_resultsが実行される
     Assert:
-        - 表示ログに選定注釈のscore_bandが含まれること
+        - 候補情報と統計情報がログへ出力されること
     """
     # Arrange
-    candidate = create_scored_candidate(path="/tmp/test_image.jpg")
-    stats = PickerStatistics(
-        total_files=1,
-        analyzed_ok=1,
-        analyzed_fail=0,
-        rejected_by_similarity=0,
-        rejected_by_content_filter=0,
-        selected_count=1,
-        resolved_profile="active",
-        scene_distribution={"play": 1, "event": 0},
-        scene_mix_target={"play": 1, "event": 0},
-        scene_mix_actual={"play": 1, "event": 0},
-        threshold_relaxation_steps=[0.7],
-        content_filter_breakdown={},
-        whole_input_profile=None,
-        selection_annotations_by_path={
-            candidate.path: SelectionAnnotation(score_band="high")
-        },
-    )
+    record = _build_output_record()
 
     # Act
     with patch("src.utils.result_formatter.logger") as logger:
-        ResultFormatter.display_results([candidate], stats)
+        ResultFormatter.display_results(record)
 
     # Assert
     messages = [call.args[0] for call in logger.info.call_args_list]
+    assert any("[1] test_image.jpg" in message for message in messages)
     assert any("band: high" in message for message in messages)
+    assert "総ファイル数: 1" in messages
+    assert "解析成功: 1" in messages
+    assert "プロファイル: active" in messages

@@ -56,7 +56,8 @@ uv run game-screen-pick --config ./picker.toml --report-json ./report.json ./scr
 4. `density_score` が高い側を `play`、低い側を `event` として既定で 70/30 に割り当てる
 5. `play` / `event` ごとに外れ値を除外し、低スコア帯から高スコア帯まで均等に候補順を組む
 6. その順序を保ったまま、全カテゴリ横断で類似画像を除外しながら最終出力を決める
-7. 選ばれた画像を単一の出力フォルダへコピーする
+7. 選定結果を copy / console / JSON report 共通の出力recordへ変換する
+8. 選ばれた画像を単一の出力フォルダへコピーし、同じrecordから表示とJSONレポートを生成する
 
 ### `play` / `event` の意味
 
