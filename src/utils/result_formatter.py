@@ -14,7 +14,7 @@ class ResultFormatter:
 
     @staticmethod
     def display_results(
-        selected: list["ScoredCandidate"], stats: "PickerStatistics"
+        selected: list[ScoredCandidate], stats: PickerStatistics
     ) -> None:
         """選択結果を表示する."""
         logger.info("--- 選択された画像一覧 ---")

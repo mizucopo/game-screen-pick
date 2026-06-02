@@ -63,16 +63,7 @@ class ReportWriter:
         selection_annotation: SelectionAnnotation | None = None,
     ) -> dict[str, object]:
         """候補1件を辞書へ変換する."""
-        score_band = (
-            selection_annotation.score_band
-            if selection_annotation is not None
-            else None
-        )
-        outlier_rejected = (
-            selection_annotation.outlier_rejected
-            if selection_annotation is not None
-            else False
-        )
+        annotation = selection_annotation or SelectionAnnotation()
         payload: dict[str, object] = {
             "path": candidate.path,
             "scene_label": candidate.scene_assessment.scene_label.value,
@@ -82,8 +73,8 @@ class ReportWriter:
             "scene_confidence": round(candidate.scene_assessment.scene_confidence, 4),
             "quality_score": round(candidate.quality_score, 4),
             "selection_score": round(candidate.selection_score, 4),
-            "score_band": score_band,
-            "outlier_rejected": outlier_rejected,
+            "score_band": annotation.score_band,
+            "outlier_rejected": annotation.outlier_rejected,
         }
         if output_path is not None:
             payload["output_path"] = output_path
