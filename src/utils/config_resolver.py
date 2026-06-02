@@ -1,7 +1,5 @@
 """実行時設定の解決."""
 
-from typing import Any
-
 from ..models.analyzer_config import AnalyzerConfig
 from ..models.scene_mix import SceneMix
 from ..models.selection_config import SelectionConfig
@@ -49,14 +47,14 @@ class ConfigResolver:
     ) -> SelectionConfig:
         """設定ファイル値とCLI上書き値から選択設定を構築する."""
         config_values = ConfigLoader.load(config_path)
-        cli_overrides: dict[str, Any] = {
+        cli_overrides = {
             "profile": profile,
             "scene_mix": scene_mix,
             "similarity_threshold": similarity,
             "batch_size": batch_size,
         }
-        merged = {
-            **config_values,
-            **{key: value for key, value in cli_overrides.items() if value is not None},
-        }
+        merged = dict(config_values)
+        for key, value in cli_overrides.items():
+            if value is not None:
+                merged[key] = value
         return SelectionConfig.from_cli_args(**merged)
