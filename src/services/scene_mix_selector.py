@@ -2,19 +2,17 @@
 
 from collections import deque
 from collections.abc import Sequence
-from typing import Any, TypeVar
+from typing import Any
 
 import numpy as np
 
 from ..constants.scene_label import SceneLabel
 from ..models.bucket_plan import BucketPlan
-from ..models.scene_mix_candidate import SceneMixCandidate
+from ..models.scene_mix_candidate import SceneMixCandidateT
 from ..models.selection_annotation import SelectionAnnotation
 from ..models.selection_config import SelectionConfig
 from ..models.selection_result import SelectionResult
 from ..utils.vector_utils import VectorUtils
-
-SceneMixCandidateT = TypeVar("SceneMixCandidateT", bound=SceneMixCandidate)
 
 
 class SceneMixSelector:
@@ -201,14 +199,13 @@ class SceneMixSelector:
         band_names = self.BAND_LABELS[band_count]
         band_queues: list[deque[SceneMixCandidateT]] = []
         for band_name, group in zip(band_names, groups, strict=True):
-            group_candidates = list(group)
-            if not group_candidates:
+            if not group:
                 continue
             band_center = float(
-                np.mean([candidate.selection_score for candidate in group_candidates])
+                np.mean([candidate.selection_score for candidate in group])
             )
             ordered_band = sorted(
-                group_candidates,
+                group,
                 key=lambda candidate: (
                     -candidate.quality_score,
                     abs(candidate.selection_score - band_center),

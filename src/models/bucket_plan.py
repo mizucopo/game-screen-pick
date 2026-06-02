@@ -1,11 +1,9 @@
 """カテゴリ別の選定準備結果."""
 
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic
 
-from .scene_mix_candidate import SceneMixCandidate
-
-SceneMixCandidateT = TypeVar("SceneMixCandidateT", bound=SceneMixCandidate)
+from .scene_mix_candidate import SceneMixCandidateT
 
 
 @dataclass

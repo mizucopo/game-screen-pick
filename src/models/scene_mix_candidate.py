@@ -1,6 +1,6 @@
 """scene mix 選定が参照する候補インターフェース。"""
 
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 import numpy as np
 
@@ -34,3 +34,6 @@ class SceneMixCandidate(Protocol):
     def combined_features(self) -> np.ndarray[Any, Any]:
         """類似度判定に使う結合特徴を返す."""
         ...
+
+
+SceneMixCandidateT = TypeVar("SceneMixCandidateT", bound=SceneMixCandidate)

@@ -1,12 +1,10 @@
 """scene mix 選定結果。"""
 
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from typing import Generic
 
-from .scene_mix_candidate import SceneMixCandidate
+from .scene_mix_candidate import SceneMixCandidate, SceneMixCandidateT
 from .selection_annotation import SelectionAnnotation
-
-SceneMixCandidateT = TypeVar("SceneMixCandidateT", bound=SceneMixCandidate)
 
 
 @dataclass(frozen=True)
