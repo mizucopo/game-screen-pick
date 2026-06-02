@@ -8,12 +8,10 @@ import click
 import cv2
 
 from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
-from .models.analyzer_config import AnalyzerConfig
 from .models.output_record import OutputRecord
 from .models.scene_mix import SceneMix
-from .models.selection_config import SelectionConfig
 from .services.game_screen_picker import GameScreenPicker
-from .utils.config_loader import ConfigLoader
+from .utils.config_resolver import ConfigResolver
 from .utils.file_utils import FileUtils
 from .utils.report_writer import ReportWriter
 from .utils.result_formatter import ResultFormatter
@@ -153,70 +151,6 @@ def parse_scene_mix(value: str | None) -> SceneMix | None:
         raise click.BadParameter(str(error)) from error
 
 
-def _resolve_configs(
-    config_path: str | None,
-    profile: str | None,
-    scene_mix: SceneMix | None,
-    similarity: float | None,
-    batch_size: int | None,
-    result_max_workers: int | None,
-    max_dim: int,
-    max_memory_gb: int,
-) -> tuple[AnalyzerConfig, SelectionConfig]:
-    """解析設定と選択設定を構築する."""
-    analyzer_config = AnalyzerConfig.from_cli_args(
-        result_max_workers=result_max_workers,
-        max_dim=max_dim,
-        max_memory_gb=max_memory_gb,
-    )
-    selection_config = build_selection_config(
-        config_path=config_path,
-        profile=profile,
-        scene_mix=scene_mix,
-        similarity=similarity,
-        batch_size=batch_size,
-    )
-    return analyzer_config, selection_config
-
-
-def build_selection_config(
-    *,
-    config_path: str | None,
-    profile: str | None,
-    scene_mix: SceneMix | None,
-    similarity: float | None,
-    batch_size: int | None,
-) -> SelectionConfig:
-    """設定ファイルとCLI引数から `SelectionConfig` を作成する.
-
-    優先順位は `CLI override > config file > built-in default` とする。
-    このメソッドは設定ファイルを部分的な辞書へ変換したうえで、
-    CLIで明示指定された値だけを上書きし、最終的な設定モデルを組み立てる。
-
-    Args:
-        config_path: TOML設定ファイルへのパス。
-        profile: CLIから明示指定された実行プロファイル。
-        scene_mix: CLIから明示指定されたscene mix比率。
-        similarity: CLIから明示指定された類似度しきい値。
-        batch_size: CLIから明示指定されたCLIPバッチサイズ。
-
-    Returns:
-        実行時にそのまま使える `SelectionConfig` 。
-    """
-    config_values = ConfigLoader.load(config_path)
-    cli_overrides = {
-        "profile": profile,
-        "scene_mix": scene_mix,
-        "similarity_threshold": similarity,
-        "batch_size": batch_size,
-    }
-    merged = {
-        **config_values,
-        **{key: value for key, value in cli_overrides.items() if value is not None},
-    }
-    return SelectionConfig.from_cli_args(**merged)
-
-
 @click.command()
 @click.option(
     "-n",
@@ -324,8 +258,8 @@ def execute(
     入力パスの検証、Analyzer / Picker の初期化、画像選定、
     出力フォルダへのコピー、標準出力への集計表示、
     必要に応じたJSONレポート出力までを一括で行う。
-    選択設定は `build_selection_config` を経由して解決されるため、
-    優先順位は常に `CLI > config file > built-in default` になる。
+    実行時設定は config resolver を経由して解決されるため、
+    CLIはオプション変換と入力検証に集中する。
 
     \b
     使用例:
@@ -370,7 +304,7 @@ def execute(
                 param_hint="input_dir",
             )
 
-        analyzer_config, selection_config = _resolve_configs(
+        analyzer_config, selection_config = ConfigResolver.resolve_configs(
             config_path=config_path,
             profile=profile,
             scene_mix=scene_mix,

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.constants.scene_label import SceneLabel
-from src.main import build_selection_config, run, validate_similarity_range
+from src.main import run, validate_similarity_range
 from src.models.picker_statistics import PickerStatistics
 from src.models.selection_annotation import SelectionAnnotation
 from src.services.game_screen_picker import GameScreenPicker
@@ -283,43 +283,6 @@ def test_cli_renames_outputs_by_scene(
     assert (output_dir / "play0001.png").exists()
     assert (output_dir / "event0001.jpg").exists()
     assert (output_dir / "play0002.jpg").exists()
-
-
-def test_build_selection_config_prefers_cli_over_config(tmp_path: Path) -> None:
-    """CLIオプションが設定ファイルより優先されること.
-
-    Arrange:
-        - 設定ファイルにprofile=static/similarity=0.66が書かれている
-        - CLIオプションでprofile=active/similarity=0.8が指定されている
-    Act:
-        - build_selection_configを呼び出す
-    Assert:
-        - profileはCLIのactiveが優先されること
-        - similarityはCLIの0.8が優先されること
-        - scene_mixは設定ファイルの値が使用されること
-    """
-    # Arrange
-    config_path = tmp_path / "picker.toml"
-    config_path.write_text(
-        '[selection]\nprofile = "static"\n'
-        "[scene_mix]\nplay = 0.6\nevent = 0.4\n"
-        "[thresholds]\nsimilarity = 0.66\n",
-        encoding="utf-8",
-    )
-
-    # Act
-    config = build_selection_config(
-        config_path=str(config_path),
-        profile="active",
-        scene_mix=None,
-        similarity=0.8,
-        batch_size=None,
-    )
-
-    # Assert
-    assert config.profile == "active"
-    assert config.similarity_threshold == 0.8
-    assert config.scene_mix.play == 0.6
 
 
 @pytest.mark.parametrize(
