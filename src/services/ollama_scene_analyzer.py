@@ -38,18 +38,12 @@ class OllamaSceneAnalyzer:
     ) -> SceneClassification | None:
         """画像をscene catalogのsceneへ分類する."""
         cache_key = self._build_cache_key(image_path, catalog)
-        if self.config.cache_enabled:
-            cached = self._read_classification_cache(image_path).get(cache_key)
-            if isinstance(cached, dict):
-                try:
-                    return SceneClassification(
-                        scene_slug=str(cached["scene_slug"]),
-                        scene_display_name=str(cached["scene_display_name"]),
-                        scene_description=str(cached["scene_description"]),
-                        confidence=float(cached["confidence"]),
-                    )
-                except (KeyError, TypeError, ValueError):
-                    pass
+        cached_classification = self._get_cached_classification(
+            image_path,
+            cache_key,
+        )
+        if cached_classification is not None:
+            return cached_classification
 
         prompt = self._build_classification_prompt(catalog, retry=False)
         retry_prompt = self._build_classification_prompt(catalog, retry=True)
@@ -109,6 +103,37 @@ class OllamaSceneAnalyzer:
         with open(path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode("ascii")
 
+    def _get_cached_classification(
+        self,
+        image_path: str,
+        cache_key: str,
+    ) -> SceneClassification | None:
+        """cache済み分類結果を返す."""
+        if not self.config.cache_enabled:
+            return None
+        cached = self._read_classification_cache(image_path).get(cache_key)
+        if not isinstance(cached, dict):
+            return None
+        return self._classification_from_cache(cached)
+
+    @staticmethod
+    def _classification_from_cache(
+        cached: dict[object, object],
+    ) -> SceneClassification | None:
+        """cache payloadを分類結果へ変換する."""
+        try:
+            confidence = cached["confidence"]
+            if not isinstance(confidence, int | float | str):
+                return None
+            return SceneClassification(
+                scene_slug=str(cached["scene_slug"]),
+                scene_display_name=str(cached["scene_display_name"]),
+                scene_description=str(cached["scene_description"]),
+                confidence=float(confidence),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
     def _build_cache_key(
         self,
         image_path: str,
@@ -160,17 +185,24 @@ class OllamaSceneAnalyzer:
         """分類cacheを書き込む."""
         cache_path = self._cache_path_for_image(image_path)
         cache = self._read_classification_cache(image_path)
-        cache[cache_key] = {
-            "scene_slug": classification.scene_slug,
-            "scene_display_name": classification.scene_display_name,
-            "scene_description": classification.scene_description,
-            "confidence": classification.confidence,
-        }
+        cache[cache_key] = self._classification_to_cache(classification)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(
             json.dumps({"classifications": cache}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    @staticmethod
+    def _classification_to_cache(
+        classification: SceneClassification,
+    ) -> dict[str, str | float]:
+        """分類結果をcache payloadへ変換する."""
+        return {
+            "scene_slug": classification.scene_slug,
+            "scene_display_name": classification.scene_display_name,
+            "scene_description": classification.scene_description,
+            "confidence": classification.confidence,
+        }
 
     @staticmethod
     def _build_catalog_prompt(scene_hint: str | None) -> str:

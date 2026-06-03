@@ -6,8 +6,8 @@ from ..models.analyzed_image import AnalyzedImage
 from ..models.content_filter_result import ContentFilterResult
 from ..models.picker_statistics import PickerStatistics
 from ..models.scene_assessment import SceneAssessment
-from ..models.scene_catalog_entry import SceneCatalogEntry
 from ..models.scored_candidate import ScoredCandidate
+from ..models.scored_scene_candidates import ScoredSceneCandidates
 from ..models.selection_config import SelectionConfig
 from ..models.selection_result import SelectionResult
 from ..protocols.scene_analyzer_like import SceneAnalyzerLike
@@ -49,17 +49,10 @@ class AnalyzedImageSelector:
     ) -> tuple[list[ScoredCandidate], list[ScoredCandidate], PickerStatistics]:
         """解析済み画像から候補を選択する."""
         content_filter_result = self._content_filter.filter(analyzed_images)
-        (
-            candidates,
-            resolved_profile,
-            scene_distribution,
-            scene_catalog,
-            classification_failed,
-            classification_failure_rate,
-        ) = self._score_candidates(content_filter_result.kept_images)
-        selection_result = self._scene_selector.select(candidates, num)
+        scored = self._score_candidates(content_filter_result.kept_images)
+        selection_result = self._scene_selector.select(scored.candidates, num)
         selected = selection_result.selected
-        rejected = self._build_rejected_candidates(candidates, selected)
+        rejected = self._build_rejected_candidates(scored.candidates, selected)
 
         stats = self._build_statistics(
             analyzed_images=analyzed_images,
@@ -68,11 +61,7 @@ class AnalyzedImageSelector:
             content_filter_result=content_filter_result,
             selection_result=selection_result,
             selected_count=len(selected),
-            resolved_profile=resolved_profile,
-            scene_distribution=scene_distribution,
-            scene_catalog=scene_catalog,
-            ollama_classification_failed=classification_failed,
-            ollama_classification_failure_rate=classification_failure_rate,
+            scored=scored,
         )
         return selected, rejected, stats
 
@@ -101,11 +90,7 @@ class AnalyzedImageSelector:
         content_filter_result: ContentFilterResult,
         selection_result: SelectionResult[ScoredCandidate],
         selected_count: int,
-        resolved_profile: str,
-        scene_distribution: dict[str, int],
-        scene_catalog: list[SceneCatalogEntry],
-        ollama_classification_failed: int,
-        ollama_classification_failure_rate: float,
+        scored: ScoredSceneCandidates,
     ) -> PickerStatistics:
         """選定処理で得た中間結果から統計を組み立てる."""
         input_total = total_files if total_files is not None else len(analyzed_images)
@@ -116,8 +101,8 @@ class AnalyzedImageSelector:
             rejected_by_similarity=selection_result.rejected_by_similarity,
             rejected_by_content_filter=content_filter_result.rejected_by_content_filter,
             selected_count=selected_count,
-            resolved_profile=resolved_profile,
-            scene_distribution=scene_distribution,
+            resolved_profile=scored.resolved_profile,
+            scene_distribution=scored.scene_distribution,
             scene_mix_target=selection_result.target_counts,
             scene_mix_actual=selection_result.actual_counts,
             threshold_relaxation_steps=self.config.compute_threshold_steps(
@@ -126,38 +111,31 @@ class AnalyzedImageSelector:
             content_filter_breakdown=content_filter_result.content_filter_breakdown,
             whole_input_profile=content_filter_result.whole_input_profile,
             selection_annotations_by_path=selection_result.annotations_by_path,
-            scene_catalog=scene_catalog,
-            ollama_classification_failed=ollama_classification_failed,
-            ollama_classification_failure_rate=ollama_classification_failure_rate,
+            scene_catalog=scored.scene_catalog,
+            ollama_classification_failed=scored.classification_failed,
+            ollama_classification_failure_rate=scored.classification_failure_rate,
         )
 
     def _score_candidates(
         self,
         analyzed_images: list[AnalyzedImage],
-    ) -> tuple[
-        list[ScoredCandidate],
-        str,
-        dict[str, int],
-        list[SceneCatalogEntry],
-        int,
-        float,
-    ]:
+    ) -> ScoredSceneCandidates:
         """Ollama scene評価とprofile解決を行い、最終候補を作る."""
         if not analyzed_images:
             resolved_profile, _profile_scores = self._profile_resolver.resolve(
                 self.config.profile,
                 analyzed_images,
             )
-            return [], resolved_profile, {}, [], 0, 0.0
+            return ScoredSceneCandidates(
+                candidates=[],
+                resolved_profile=resolved_profile,
+                scene_distribution={},
+                scene_catalog=[],
+                classification_failed=0,
+                classification_failure_rate=0.0,
+            )
 
-        representative_paths = [
-            image.path
-            for image in sorted(
-                analyzed_images,
-                key=lambda image: image.raw_metrics.blur_score,
-                reverse=True,
-            )[: self.CATALOG_SAMPLE_LIMIT]
-        ]
+        representative_paths = self._build_representative_paths(analyzed_images)
         scene_catalog = self._scene_analyzer.generate_scene_catalog(
             representative_paths,
             self.config.scene_hint,
@@ -193,14 +171,27 @@ class AnalyzedImageSelector:
             )
         scene_distribution = self._build_scene_distribution(candidates)
         failure_rate = classification_failed / len(analyzed_images)
-        return (
-            candidates,
-            resolved_profile,
-            scene_distribution,
-            scene_catalog,
-            classification_failed,
-            failure_rate,
+        return ScoredSceneCandidates(
+            candidates=candidates,
+            resolved_profile=resolved_profile,
+            scene_distribution=scene_distribution,
+            scene_catalog=scene_catalog,
+            classification_failed=classification_failed,
+            classification_failure_rate=failure_rate,
         )
+
+    @classmethod
+    def _build_representative_paths(
+        cls,
+        analyzed_images: list[AnalyzedImage],
+    ) -> list[str]:
+        """scene catalog用の代表画像pathを返す."""
+        ordered_images = sorted(
+            analyzed_images,
+            key=lambda image: image.raw_metrics.blur_score,
+            reverse=True,
+        )
+        return [image.path for image in ordered_images[: cls.CATALOG_SAMPLE_LIMIT]]
 
     @staticmethod
     def _build_scene_distribution(
