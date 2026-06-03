@@ -162,6 +162,36 @@ def test_copy_selected_items_returns_output_record_with_copied_paths(
     assert result.selected[0].output_path == str((dest_dir / "test.png").resolve())
 
 
+def test_copy_planned_outputs_creates_output_parent_directories(
+    tmp_path: Path,
+) -> None:
+    """計画済みcopy adapterが出力先親ディレクトリを作成すること.
+
+    Arrange:
+        - ソース画像ファイルを持つoutput recordがある
+        - 存在しない出力ディレクトリへのoutput_pathが計画されている
+    Act:
+        - copy_planned_outputsが実行される
+    Assert:
+        - 出力先親ディレクトリが作成されること
+        - 計画済みの出力パスへファイルがコピーされること
+    """
+    # Arrange
+    src_file = tmp_path / "source" / "test.png"
+    src_file.parent.mkdir()
+    src_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+    dest_dir = tmp_path / "missing" / "output"
+    output_record = _build_output_record([str(src_file)]).with_selected_output_paths(
+        {str(src_file): str((dest_dir / "test.png").resolve())}
+    )
+
+    # Act
+    FileUtils.copy_planned_outputs(output_record)
+
+    # Assert
+    assert (dest_dir / "test.png").exists()
+
+
 def test_copy_selected_items_rename_avoids_collision_and_counts_per_scene(
     tmp_path: Path,
 ) -> None:
