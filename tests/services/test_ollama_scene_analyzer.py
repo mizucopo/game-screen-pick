@@ -283,6 +283,60 @@ def test_classify_image_cache_key_includes_catalog_metadata(
     assert called_count == 2
 
 
+def test_classify_image_returns_result_when_cache_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """cache書き込みに失敗しても分類結果が返されること.
+
+    Arrange:
+        - 分類応答は正常に返る
+        - cache directoryを作れない入力ディレクトリがある
+    Act:
+        - 画像が分類される
+    Assert:
+        - cache失敗で再試行せず、正常なclassificationが返されること
+    """
+    # Arrange
+    image_path = tmp_path / "screen.png"
+    image_path.write_bytes(b"image-bytes")
+    (tmp_path / ".game-screen-pick").write_text("not a directory", encoding="utf-8")
+    called_count = 0
+
+    def fake_urlopen(_request: Request, timeout: float) -> Any:
+        nonlocal called_count
+        assert timeout == 60.0
+        called_count += 1
+        return _FakeResponse(
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "scene_slug": "battle",
+                            "confidence": 0.9,
+                            "description": "敵との戦闘場面",
+                        }
+                    )
+                }
+            }
+        )
+
+    monkeypatch.setattr("src.services.ollama_scene_analyzer.urlopen", fake_urlopen)
+    analyzer = OllamaSceneAnalyzer(OllamaConfig(model="gemma4"))
+    catalog = [
+        SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
+        SceneCatalogEntry("other", "その他", "分類しにくい場面"),
+    ]
+
+    # Act
+    result = analyzer.classify_image(str(image_path), catalog)
+
+    # Assert
+    assert result is not None
+    assert result.scene_slug == "battle"
+    assert called_count == 1
+
+
 def test_classify_image_preserves_parallel_cache_entries(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

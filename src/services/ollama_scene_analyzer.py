@@ -60,7 +60,7 @@ class OllamaSceneAnalyzer:
                     catalog,
                 )
                 if self.config.cache_enabled:
-                    self._write_classification_cache(
+                    self._try_write_classification_cache(
                         image_path,
                         cache_key,
                         classification,
@@ -69,6 +69,18 @@ class OllamaSceneAnalyzer:
             except (OSError, ValueError):
                 continue
         return None
+
+    def _try_write_classification_cache(
+        self,
+        image_path: str,
+        cache_key: str,
+        classification: SceneClassification,
+    ) -> None:
+        """可能なら分類cacheを書き込む."""
+        try:
+            self._write_classification_cache(image_path, cache_key, classification)
+        except OSError:
+            return
 
     def _post_chat(self, prompt: str, image_paths: list[str]) -> str:
         """Ollama chat APIへJSON requestを送信する."""
