@@ -1,7 +1,6 @@
 """application実行 orchestration."""
 
 import logging
-import sys
 from pathlib import Path
 
 import click
@@ -15,13 +14,6 @@ from ..utils.config_resolver import ConfigResolver
 from ..utils.file_utils import FileUtils
 from ..utils.report_writer import ReportWriter
 from ..utils.result_formatter import ResultFormatter
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s",
-    stream=sys.stdout,
-    force=True,
-)
 
 logger = logging.getLogger(__name__)
 
