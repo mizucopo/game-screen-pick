@@ -3,26 +3,19 @@
 import re
 from pathlib import Path
 
-from ..constants.scene_label import SceneLabel
-from ..constants.selection_profiles import PROFILE_REGISTRY
 from ..models.analyzed_image import AnalyzedImage
 from ..models.picker_statistics import PickerStatistics
 from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_config import SelectionConfig
 from ..protocols.analyzer_like import AnalyzerLike
-from ..services.candidate_scorer import CandidateScorer
-from ..services.content_filter import ContentFilter
-from ..services.profile_resolver import ProfileResolver
-from ..services.scene_mix_selector import SceneMixSelector
-from ..services.scene_scorer import SceneScorer
-from ..services.whole_input_profiler import WholeInputProfiler
+from .analyzed_image_selector import AnalyzedImageSelector
 
 
 class GameScreenPicker:
     """画像解析と選定を統合する.
 
-    フォルダ走査、解析、scene評価、profile解決、候補採点、
-    scene mix 選定、統計生成までをひとつの入り口として提供する。
+    フォルダ走査、Analyzer実行、解析済み画像選定moduleへの委譲を
+    ひとつの入り口として提供する。
     """
 
     SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
@@ -42,11 +35,10 @@ class GameScreenPicker:
         """
         self.analyzer = analyzer
         self.config = config or SelectionConfig()
-        self._scene_scorer = SceneScorer()
-        self._profile_resolver = ProfileResolver()
-        self._candidate_scorer = CandidateScorer(self.analyzer.metric_calculator)
-        self._scene_mix_selector = SceneMixSelector(self.config)
-        self._content_filter = ContentFilter(WholeInputProfiler())
+        self._analyzed_image_selector = AnalyzedImageSelector(
+            config=self.config,
+            metric_calculator=self.analyzer.metric_calculator,
+        )
 
     @staticmethod
     def load_image_files(
@@ -103,57 +95,6 @@ class GameScreenPicker:
         )
         return [result for result in results if result is not None]
 
-    def _score_candidates(
-        self,
-        analyzed_images: list[AnalyzedImage],
-    ) -> tuple[list[ScoredCandidate], str, dict[str, int]]:
-        """scene評価とprofile解決を行い、最終候補を作る.
-
-        各画像へ `SceneScorer` で画面種別スコアを付与し、
-        `ProfileResolver` で `auto` を `active` / `static` へ解決したうえで、
-        `CandidateScorer` により品質・最終選定スコアを計算する。
-        あわせて、レポート用のscene分布も集計する。
-
-        Args:
-            analyzed_images: scene判定前の中立解析結果。
-
-        Returns:
-            1. 最終スコア付き候補のリスト
-            2. 解決済みプロファイル名
-            3. scene labelごとの件数分布
-        """
-        assessments = self._scene_scorer.assess_batch(
-            analyzed_images,
-            self.config.scene_mix,
-        )
-        resolved_profile, _profile_scores = self._profile_resolver.resolve(
-            self.config.profile,
-            analyzed_images,
-        )
-        profile = PROFILE_REGISTRY[resolved_profile]
-
-        candidates = [
-            self._candidate_scorer.score(
-                image,
-                assessment,
-                profile,
-            )
-            for image, assessment in zip(analyzed_images, assessments, strict=True)
-        ]
-        scene_distribution: dict[str, int] = {
-            SceneLabel.PLAY.value: sum(
-                1
-                for candidate in candidates
-                if candidate.scene_assessment.scene_label == SceneLabel.PLAY
-            ),
-            SceneLabel.EVENT.value: sum(
-                1
-                for candidate in candidates
-                if candidate.scene_assessment.scene_label == SceneLabel.EVENT
-            ),
-        }
-        return candidates, resolved_profile, scene_distribution
-
     def select(
         self,
         folder: str,
@@ -182,13 +123,11 @@ class GameScreenPicker:
         total_files = len(files)
 
         analyzed_images = self._analyze_images(files, show_progress)
-        analyzed_ok = len(analyzed_images)
-        analyzed_fail = total_files - analyzed_ok
 
         return self.select_from_analyzed(
             analyzed_images=analyzed_images,
             total_files=total_files,
-            analyzed_fail=analyzed_fail,
+            analyzed_fail=total_files - len(analyzed_images),
             num=num,
         )
 
@@ -202,8 +141,8 @@ class GameScreenPicker:
         """解析済み画像から候補を選択する.
 
         このメソッドはファイルI/Oを行わず、ドメインロジックだけを扱う。
-        scene判定、profile解決、候補採点、scene mix選定、統計生成を
-        純粋に組み合わせるため、単体テストや再選定処理の入り口として使える。
+        scene判定、profile解決、候補採点、scene mix選定、統計生成は
+        解析済み画像選定moduleへ委譲される。
 
         Args:
             analyzed_images: 解析済みの中立画像データ。
@@ -216,42 +155,9 @@ class GameScreenPicker:
             2. 非選択候補を選定スコア順に並べたリスト
             3. scene mix目標値と実績を含む `PickerStatistics`
         """
-        content_filter_result = self._content_filter.filter(analyzed_images)
-        filtered_images = content_filter_result.kept_images
-        candidates, resolved_profile, scene_distribution = self._score_candidates(
-            filtered_images
-        )
-        selection_result = self._scene_mix_selector.select(candidates, num)
-        selected = selection_result.selected
-        selected_paths = {candidate.path for candidate in selected}
-        rejected = sorted(
-            [
-                candidate
-                for candidate in candidates
-                if candidate.path not in selected_paths
-            ],
-            key=lambda item: item.selection_score,
-            reverse=True,
-        )
-
-        stats = PickerStatistics(
-            total_files=total_files
-            if total_files is not None
-            else len(analyzed_images),
-            analyzed_ok=len(analyzed_images),
+        return self._analyzed_image_selector.select(
+            analyzed_images=analyzed_images,
+            num=num,
+            total_files=total_files,
             analyzed_fail=analyzed_fail,
-            rejected_by_similarity=selection_result.rejected_by_similarity,
-            rejected_by_content_filter=content_filter_result.rejected_by_content_filter,
-            selected_count=len(selected),
-            resolved_profile=resolved_profile,
-            scene_distribution=scene_distribution,
-            scene_mix_target=selection_result.target_counts,
-            scene_mix_actual=selection_result.actual_counts,
-            threshold_relaxation_steps=self.config.compute_threshold_steps(
-                self.config.similarity_threshold
-            ),
-            content_filter_breakdown=content_filter_result.content_filter_breakdown,
-            whole_input_profile=content_filter_result.whole_input_profile,
-            selection_annotations_by_path=selection_result.annotations_by_path,
         )
-        return selected, rejected, stats
