@@ -102,17 +102,7 @@ def test_classify_image_retries_once_when_response_is_invalid(
     image_path.write_bytes(b"image-bytes")
     responses = [
         {"message": {"content": "not json"}},
-        {
-            "message": {
-                "content": json.dumps(
-                    {
-                        "scene_slug": "battle",
-                        "confidence": 0.9,
-                        "description": "敵との戦闘場面",
-                    }
-                )
-            }
-        },
+        _classification_chat_payload(),
     ]
 
     def fake_urlopen(_request: Request, timeout: float) -> Any:
@@ -193,19 +183,7 @@ def test_classify_image_uses_file_cache(
         nonlocal called_count
         assert timeout == 60.0
         called_count += 1
-        return _FakeResponse(
-            {
-                "message": {
-                    "content": json.dumps(
-                        {
-                            "scene_slug": "battle",
-                            "confidence": 0.9,
-                            "description": "敵との戦闘場面",
-                        }
-                    )
-                }
-            }
-        )
+        return _FakeResponse(_classification_chat_payload())
 
     monkeypatch.setattr("src.services.ollama_scene_analyzer.urlopen", fake_urlopen)
     analyzer = OllamaSceneAnalyzer(OllamaConfig(model="gemma4"))
@@ -247,17 +225,7 @@ def test_classify_image_cache_key_includes_catalog_metadata(
         assert timeout == 60.0
         called_count += 1
         return _FakeResponse(
-            {
-                "message": {
-                    "content": json.dumps(
-                        {
-                            "scene_slug": "battle",
-                            "confidence": 0.9,
-                            "description": f"分類結果{called_count}",
-                        }
-                    )
-                }
-            }
+            _classification_chat_payload(description=f"分類結果{called_count}")
         )
 
     monkeypatch.setattr("src.services.ollama_scene_analyzer.urlopen", fake_urlopen)
@@ -307,19 +275,7 @@ def test_classify_image_returns_result_when_cache_write_fails(
         nonlocal called_count
         assert timeout == 60.0
         called_count += 1
-        return _FakeResponse(
-            {
-                "message": {
-                    "content": json.dumps(
-                        {
-                            "scene_slug": "battle",
-                            "confidence": 0.9,
-                            "description": "敵との戦闘場面",
-                        }
-                    )
-                }
-            }
-        )
+        return _FakeResponse(_classification_chat_payload())
 
     monkeypatch.setattr("src.services.ollama_scene_analyzer.urlopen", fake_urlopen)
     analyzer = OllamaSceneAnalyzer(OllamaConfig(model="gemma4"))
@@ -360,19 +316,7 @@ def test_classify_image_preserves_parallel_cache_entries(
     def fake_urlopen(_request: Request, timeout: float) -> Any:
         assert timeout == 60.0
         barrier.wait(timeout=2.0)
-        return _FakeResponse(
-            {
-                "message": {
-                    "content": json.dumps(
-                        {
-                            "scene_slug": "battle",
-                            "confidence": 0.9,
-                            "description": "敵との戦闘場面",
-                        }
-                    )
-                }
-            }
-        )
+        return _FakeResponse(_classification_chat_payload())
 
     monkeypatch.setattr("src.services.ollama_scene_analyzer.urlopen", fake_urlopen)
     analyzer = OllamaSceneAnalyzer(OllamaConfig(model="gemma4"))
@@ -414,3 +358,20 @@ class _FakeResponse:
     def read(self) -> bytes:
         """JSON bytesを返す."""
         return json.dumps(self._payload).encode("utf-8")
+
+
+def _classification_chat_payload(
+    description: str = "敵との戦闘場面",
+) -> dict[str, object]:
+    """正常なclassification chat応答payloadを返す."""
+    return {
+        "message": {
+            "content": json.dumps(
+                {
+                    "scene_slug": "battle",
+                    "confidence": 0.9,
+                    "description": description,
+                }
+            )
+        }
+    }
