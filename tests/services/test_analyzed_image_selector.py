@@ -1,5 +1,8 @@
 """AnalyzedImageSelector の単体テスト."""
 
+import threading
+import time
+
 from src.analyzers.metric_calculator import MetricCalculator
 from src.models.analyzer_config import AnalyzerConfig
 from src.models.ollama_config import OllamaConfig
@@ -98,6 +101,50 @@ def test_select_classifies_blog_candidates_and_reports_ollama_failures() -> None
     assert stats.resolved_profile == "active"
 
 
+def test_select_classifies_images_with_configured_ollama_workers() -> None:
+    """設定されたOllama worker数で画像分類が並列実行されること.
+
+    Arrange:
+        - ollama.max_workersが2に設定されている
+        - 複数の選定対象画像がある
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - 同時分類数が2以上になること
+    """
+    # Arrange
+    first = create_analyzed_image(
+        path="/tmp/first.jpg",
+        combined_features=_feature(1),
+    )
+    second = create_analyzed_image(
+        path="/tmp/second.jpg",
+        combined_features=_feature(100),
+    )
+    third = create_analyzed_image(
+        path="/tmp/third.jpg",
+        combined_features=_feature(200),
+    )
+    scene_analyzer = _ConcurrentSceneAnalyzer()
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            profile="active",
+            ollama=OllamaConfig(model="gemma4", max_workers=2),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    selector.select(
+        analyzed_images=[first, second, third],
+        num=2,
+    )
+
+    # Assert
+    assert scene_analyzer.max_active >= 2
+
+
 class _FakeSceneAnalyzer:
     """テスト用のscene analyzer."""
 
@@ -131,3 +178,50 @@ class _FakeSceneAnalyzer:
         """事前設定した分類結果を返す."""
         assert catalog == self.catalog
         return self.classifications_by_path.get(image_path)
+
+
+class _ConcurrentSceneAnalyzer:
+    """並列実行を観測するscene analyzer."""
+
+    def __init__(self) -> None:
+        """fake analyzerを初期化する."""
+        self.catalog = [
+            SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
+            SceneCatalogEntry("other", "その他", "分類しにくい場面"),
+            SceneCatalogEntry("conversation", "会話", "人物同士の会話場面"),
+        ]
+        self._lock = threading.Lock()
+        self._active = 0
+        self.max_active = 0
+
+    def generate_scene_catalog(
+        self,
+        representative_paths: list[str],
+        scene_hint: str | None,
+    ) -> list[SceneCatalogEntry]:
+        """scene catalogを返す."""
+        assert representative_paths
+        assert scene_hint is None
+        return self.catalog
+
+    def classify_image(
+        self,
+        image_path: str,
+        catalog: list[SceneCatalogEntry],
+    ) -> SceneClassification | None:
+        """同時実行数を記録して分類結果を返す."""
+        assert catalog == self.catalog
+        with self._lock:
+            self._active += 1
+            self.max_active = max(self.max_active, self._active)
+        try:
+            time.sleep(0.05)
+            return SceneClassification(
+                scene_slug="battle",
+                scene_display_name="戦闘",
+                scene_description=f"{image_path}の戦闘場面",
+                confidence=0.9,
+            )
+        finally:
+            with self._lock:
+                self._active -= 1

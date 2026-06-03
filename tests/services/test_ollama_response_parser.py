@@ -42,6 +42,36 @@ def test_parse_catalog_response_returns_scene_catalog() -> None:
     ]
 
 
+def test_parse_catalog_response_rejects_path_like_scene_slug() -> None:
+    """pathとして危険なscene slugが拒否されること.
+
+    Arrange:
+        - path separatorを含むscene slugを返すJSON応答がある
+    Act:
+        - catalog応答が解析される
+    Assert:
+        - 不正なslugとして失敗すること
+    """
+    # Arrange
+    content = """
+    {
+      "scenes": [
+        {"slug": "../battle", "display_name": "戦闘", "description": "敵と戦う場面"},
+        {
+          "slug": "conversation",
+          "display_name": "会話",
+          "description": "人物同士の会話"
+        },
+        {"slug": "other", "display_name": "その他", "description": "分類しにくい場面"}
+      ]
+    }
+    """
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="scene slug"):
+        OllamaResponseParser.parse_catalog_response(content)
+
+
 def test_parse_classification_response_uses_catalog_display_name() -> None:
     """classification応答がcatalogの表示名と対応付けられること.
 
@@ -91,4 +121,34 @@ def test_parse_classification_response_rejects_unknown_scene() -> None:
 
     # Act / Assert
     with pytest.raises(ValueError, match="catalog"):
+        OllamaResponseParser.parse_classification_response(content, catalog)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"scene_slug": "battle", "description": "戦闘"}',
+        '{"scene_slug": "battle", "confidence": null, "description": "戦闘"}',
+    ],
+)
+def test_parse_classification_response_rejects_missing_confidence(
+    content: str,
+) -> None:
+    """classification応答でconfidence欠落が不正応答として扱われること.
+
+    Arrange:
+        - confidenceが欠落またはnullのJSON応答がある
+    Act:
+        - classification応答が解析される
+    Assert:
+        - ValueErrorとして失敗すること
+    """
+    # Arrange
+    catalog = [
+        SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
+        SceneCatalogEntry("other", "その他", "分類しにくい場面"),
+    ]
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="confidence"):
         OllamaResponseParser.parse_classification_response(content, catalog)

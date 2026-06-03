@@ -57,7 +57,7 @@ class OllamaResponseParser:
             scene_description=OllamaResponseParser._required_string(
                 payload, "description"
             ),
-            confidence=float(payload["confidence"]),
+            confidence=OllamaResponseParser._required_float(payload, "confidence"),
         )
 
     @staticmethod
@@ -84,3 +84,16 @@ class OllamaResponseParser:
             msg = f"{key}は必須です"
             raise ValueError(msg)
         return value.strip()
+
+    @staticmethod
+    def _required_float(payload: dict[str, Any], key: str) -> float:
+        """必須数値を取り出す."""
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, int | float | str):
+            msg = f"{key}は数値である必要があります"
+            raise ValueError(msg)
+        try:
+            return float(value)
+        except ValueError as exc:
+            msg = f"{key}は数値である必要があります"
+            raise ValueError(msg) from exc

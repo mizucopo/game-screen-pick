@@ -1,11 +1,15 @@
 """解析済み画像から最終候補を選定する domain module."""
 
+from concurrent.futures import ThreadPoolExecutor
+
 from ..analyzers.metric_calculator import MetricCalculator
 from ..constants.selection_profiles import PROFILE_REGISTRY
 from ..models.analyzed_image import AnalyzedImage
 from ..models.content_filter_result import ContentFilterResult
 from ..models.picker_statistics import PickerStatistics
 from ..models.scene_assessment import SceneAssessment
+from ..models.scene_catalog_entry import SceneCatalogEntry
+from ..models.scene_classification import SceneClassification
 from ..models.scored_candidate import ScoredCandidate
 from ..models.scored_scene_candidates import ScoredSceneCandidates
 from ..models.selection_config import SelectionConfig
@@ -148,11 +152,8 @@ class AnalyzedImageSelector:
 
         candidates: list[ScoredCandidate] = []
         classification_failed = 0
-        for image in analyzed_images:
-            classification = self._scene_analyzer.classify_image(
-                image.path,
-                scene_catalog,
-            )
+        classifications = self._classify_images(analyzed_images, scene_catalog)
+        for image, classification in zip(analyzed_images, classifications, strict=True):
             if classification is None:
                 classification_failed += 1
                 continue
@@ -179,6 +180,29 @@ class AnalyzedImageSelector:
             classification_failed=classification_failed,
             classification_failure_rate=failure_rate,
         )
+
+    def _classify_images(
+        self,
+        analyzed_images: list[AnalyzedImage],
+        scene_catalog: list[SceneCatalogEntry],
+    ) -> list[SceneClassification | None]:
+        """画像ごとのscene分類を実行する."""
+        max_workers = self.config.ollama.max_workers if self.config.ollama else 1
+        if max_workers == 1 or len(analyzed_images) <= 1:
+            return [
+                self._scene_analyzer.classify_image(image.path, scene_catalog)
+                for image in analyzed_images
+            ]
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            return list(
+                executor.map(
+                    lambda image: self._scene_analyzer.classify_image(
+                        image.path,
+                        scene_catalog,
+                    ),
+                    analyzed_images,
+                )
+            )
 
     @classmethod
     def _build_representative_paths(

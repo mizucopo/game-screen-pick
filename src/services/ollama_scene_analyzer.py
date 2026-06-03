@@ -142,7 +142,20 @@ class OllamaSceneAnalyzer:
         """分類cache keyを作る."""
         path = Path(image_path)
         stat = path.stat()
-        catalog_key = ",".join(scene.slug for scene in catalog)
+        catalog_payload = [
+            {
+                "slug": scene.slug,
+                "display_name": scene.display_name,
+                "description": scene.description,
+            }
+            for scene in catalog
+        ]
+        catalog_key = json.dumps(
+            catalog_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
         raw_key = (
             f"{self.config.model}|{path.resolve()}|{stat.st_mtime_ns}|"
             f"{stat.st_size}|{catalog_key}"
