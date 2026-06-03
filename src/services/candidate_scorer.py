@@ -6,6 +6,9 @@ from ..models.analyzed_image import AnalyzedImage
 from ..models.scene_assessment import SceneAssessment
 from ..models.scored_candidate import ScoredCandidate
 
+QUALITY_SCORE_WEIGHT = 0.7
+SCENE_CONFIDENCE_WEIGHT = 0.3
+
 
 class CandidateScorer:
     """品質・選定スコアを計算する."""
@@ -24,7 +27,10 @@ class CandidateScorer:
             analyzed_image.normalized_metrics,
             DEFAULT_QUALITY_WEIGHTS,
         )
-        selection_score = (quality_score * 0.7) + (assessment.scene_confidence * 0.3)
+        selection_score = (
+            quality_score * QUALITY_SCORE_WEIGHT
+            + assessment.scene_confidence * SCENE_CONFIDENCE_WEIGHT
+        )
         return ScoredCandidate(
             analyzed_image=analyzed_image,
             scene_assessment=assessment,

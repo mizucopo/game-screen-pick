@@ -16,6 +16,10 @@ class ConfigLoader:
     部分辞書へ変換する責務だけを持つ。
     """
 
+    KNOWN_SECTIONS = {"selection", "thresholds", "ollama"}
+    KNOWN_SELECTION_KEYS: set[str] = set()
+    KNOWN_OLLAMA_KEYS = {"model", "host", "timeout", "max_workers"}
+
     @staticmethod
     def load(path: str | None) -> dict[str, Any]:
         """TOML設定を辞書で返す.
@@ -37,27 +41,25 @@ class ConfigLoader:
         with config_path.open("rb") as file:
             raw_data = tomllib.load(file)
 
-        KNOWN_SECTIONS = {"selection", "thresholds", "ollama"}
-        for section_name in raw_data:
-            if section_name not in KNOWN_SECTIONS:
-                logger.warning(f"未知のセクションを無視しました: [{section_name}]")
+        ConfigLoader._warn_unknown_sections(raw_data)
 
         result: dict[str, Any] = {}
-        selection = raw_data.get("selection", {})
-        KNOWN_SELECTION_KEYS: set[str] = set()
-        for key in selection:
-            if key not in KNOWN_SELECTION_KEYS:
-                logger.warning(f"未知のキーを無視しました: [selection] {key}")
+        ConfigLoader._warn_unknown_keys(
+            section_name="selection",
+            values=raw_data.get("selection", {}),
+            known_keys=ConfigLoader.KNOWN_SELECTION_KEYS,
+        )
 
         thresholds = raw_data.get("thresholds", {})
         if "similarity" in thresholds:
             result["similarity_threshold"] = float(thresholds["similarity"])
 
         ollama = raw_data.get("ollama", {})
-        KNOWN_OLLAMA_KEYS = {"model", "host", "timeout", "max_workers"}
-        for key in ollama:
-            if key not in KNOWN_OLLAMA_KEYS:
-                logger.warning(f"未知のキーを無視しました: [ollama] {key}")
+        ConfigLoader._warn_unknown_keys(
+            section_name="ollama",
+            values=ollama,
+            known_keys=ConfigLoader.KNOWN_OLLAMA_KEYS,
+        )
         if "model" in ollama:
             result["ollama_model"] = str(ollama["model"])
         if "host" in ollama:
@@ -68,3 +70,22 @@ class ConfigLoader:
             result["ollama_max_workers"] = int(ollama["max_workers"])
 
         return result
+
+    @staticmethod
+    def _warn_unknown_sections(raw_data: dict[str, Any]) -> None:
+        """未対応セクションを警告する."""
+        for section_name in raw_data:
+            if section_name not in ConfigLoader.KNOWN_SECTIONS:
+                logger.warning(f"未知のセクションを無視しました: [{section_name}]")
+
+    @staticmethod
+    def _warn_unknown_keys(
+        *,
+        section_name: str,
+        values: dict[str, Any],
+        known_keys: set[str],
+    ) -> None:
+        """未対応キーを警告する."""
+        for key in values:
+            if key not in known_keys:
+                logger.warning(f"未知のキーを無視しました: [{section_name}] {key}")
