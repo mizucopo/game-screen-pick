@@ -1,6 +1,7 @@
 """解析済み画像から最終候補を選定する domain module."""
 
 from concurrent.futures import ThreadPoolExecutor
+from itertools import repeat
 
 from ..analyzers.metric_calculator import MetricCalculator
 from ..constants.selection_profiles import PROFILE_REGISTRY
@@ -188,21 +189,28 @@ class AnalyzedImageSelector:
     ) -> list[SceneClassification | None]:
         """画像ごとのscene分類を実行する."""
         max_workers = self.config.ollama.max_workers if self.config.ollama else 1
+        image_paths = [image.path for image in analyzed_images]
         if max_workers == 1 or len(analyzed_images) <= 1:
             return [
-                self._scene_analyzer.classify_image(image.path, scene_catalog)
-                for image in analyzed_images
+                self._classify_image_path(image_path, scene_catalog)
+                for image_path in image_paths
             ]
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             return list(
                 executor.map(
-                    lambda image: self._scene_analyzer.classify_image(
-                        image.path,
-                        scene_catalog,
-                    ),
-                    analyzed_images,
+                    self._classify_image_path,
+                    image_paths,
+                    repeat(scene_catalog),
                 )
             )
+
+    def _classify_image_path(
+        self,
+        image_path: str,
+        scene_catalog: list[SceneCatalogEntry],
+    ) -> SceneClassification | None:
+        """1画像をscene分類する."""
+        return self._scene_analyzer.classify_image(image_path, scene_catalog)
 
     @classmethod
     def _build_representative_paths(

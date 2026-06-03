@@ -142,16 +142,8 @@ class OllamaSceneAnalyzer:
         """分類cache keyを作る."""
         path = Path(image_path)
         stat = path.stat()
-        catalog_payload = [
-            {
-                "slug": scene.slug,
-                "display_name": scene.display_name,
-                "description": scene.description,
-            }
-            for scene in catalog
-        ]
         catalog_key = json.dumps(
-            catalog_payload,
+            self._catalog_to_cache_key_payload(catalog),
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
@@ -161,6 +153,20 @@ class OllamaSceneAnalyzer:
             f"{stat.st_size}|{catalog_key}"
         )
         return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _catalog_to_cache_key_payload(
+        catalog: list[SceneCatalogEntry],
+    ) -> list[dict[str, str]]:
+        """分類cache keyへ含めるcatalog情報を返す."""
+        return [
+            {
+                "slug": scene.slug,
+                "display_name": scene.display_name,
+                "description": scene.description,
+            }
+            for scene in catalog
+        ]
 
     @staticmethod
     def _cache_path_for_image(image_path: str) -> Path:
