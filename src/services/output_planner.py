@@ -38,7 +38,7 @@ class OutputPlanner:
             rename,
             requested_num,
         )
-        reserved_filename_keys = OutputPlanner._build_reserved_filename_keys(
+        reserved_collision_keys = OutputPlanner._build_reserved_collision_keys(
             existing_filenames
         )
         scene_counters: dict[str, int] = defaultdict(int)
@@ -56,11 +56,11 @@ class OutputPlanner:
             else:
                 filename = candidate.filename
 
-            unique_filename = OutputPlanner._get_unique_filename_from_reserved_keys(
+            unique_filename = OutputPlanner._get_unique_filename_from_collision_keys(
                 filename,
-                reserved_filename_keys,
+                reserved_collision_keys,
             )
-            reserved_filename_keys.add(
+            reserved_collision_keys.add(
                 OutputPlanner._build_collision_key(unique_filename)
             )
             planned_paths_by_source_path[candidate.source_path] = str(
@@ -102,18 +102,18 @@ class OutputPlanner:
         reserved_filenames: Iterable[str],
     ) -> str:
         """予約済みファイル名と衝突しないファイル名を生成する."""
-        return OutputPlanner._get_unique_filename_from_reserved_keys(
+        return OutputPlanner._get_unique_filename_from_collision_keys(
             filename,
-            OutputPlanner._build_reserved_filename_keys(reserved_filenames),
+            OutputPlanner._build_reserved_collision_keys(reserved_filenames),
         )
 
     @staticmethod
-    def _get_unique_filename_from_reserved_keys(
+    def _get_unique_filename_from_collision_keys(
         filename: str,
-        reserved_filename_keys: set[str],
+        reserved_collision_keys: set[str],
     ) -> str:
-        """予約済みファイル名keyから衝突しないファイル名を生成する."""
-        if OutputPlanner._build_collision_key(filename) not in reserved_filename_keys:
+        """予約済み衝突keyから衝突しないファイル名を生成する."""
+        if OutputPlanner._build_collision_key(filename) not in reserved_collision_keys:
             return filename
 
         dest_path = Path(filename)
@@ -125,13 +125,13 @@ class OutputPlanner:
             new_filename = f"{stem}_{counter}{suffix}"
             if (
                 OutputPlanner._build_collision_key(new_filename)
-                not in reserved_filename_keys
+                not in reserved_collision_keys
             ):
                 return new_filename
             counter += 1
 
     @staticmethod
-    def _build_reserved_filename_keys(filenames: Iterable[str]) -> set[str]:
+    def _build_reserved_collision_keys(filenames: Iterable[str]) -> set[str]:
         """予約済みファイル名を衝突判定用keyへ変換する."""
         return {OutputPlanner._build_collision_key(filename) for filename in filenames}
 
