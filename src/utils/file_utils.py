@@ -80,8 +80,9 @@ class FileUtils:
             if result.output_path is None:
                 msg = "コピー対象の output_path が設定されていません"
                 raise ValueError(msg)
-            Path(result.output_path).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(result.source_path, result.output_path)
+            output_path = Path(result.output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(result.source_path, output_path)
 
     @staticmethod
     def copy_selected_items(
