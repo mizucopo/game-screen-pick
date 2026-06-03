@@ -1,288 +1,91 @@
-"""main.py CLIの単体テスト."""
+"""main.py CLI adapterの単体テスト."""
 
-import json
 from pathlib import Path
-from typing import Generator
-from unittest.mock import MagicMock
 
 import pytest
 
-from src.constants.scene_label import SceneLabel
 from src.main import run, validate_similarity_range
-from src.models.picker_statistics import PickerStatistics
-from src.models.selection_annotation import SelectionAnnotation
-from src.services.game_screen_picker import GameScreenPicker
-from tests.conftest import create_scored_candidate
+from src.models.application_run_request import ApplicationRunRequest
 
 
-@pytest.fixture
-def mock_game_screen_picker() -> Generator[MagicMock, None, None]:
-    picker = MagicMock(spec=GameScreenPicker)
-    empty_stats = PickerStatistics(
-        total_files=0,
-        analyzed_ok=0,
-        analyzed_fail=0,
-        rejected_by_similarity=0,
-        rejected_by_content_filter=0,
-        selected_count=0,
-        resolved_profile="active",
-        scene_distribution={"play": 0, "event": 0},
-        scene_mix_target={"play": 0, "event": 0},
-        scene_mix_actual={"play": 0, "event": 0},
-        threshold_relaxation_steps=[0.72],
-        content_filter_breakdown={
-            "blackout": 0,
-            "whiteout": 0,
-            "single_tone": 0,
-            "fade_transition": 0,
-            "temporal_transition": 0,
-        },
-    )
-    picker.select.return_value = ([], [], empty_stats)
-    yield picker
+def test_cli_translates_options_to_application_run_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """CLIオプションがapplication実行リクエストへ変換されること.
 
-
-@pytest.fixture
-def setup_test_dirs(tmp_path: Path) -> tuple[Path, Path]:
-    test_dir = tmp_path / "test_images"
-    test_dir.mkdir()
+    Arrange:
+        - 有効な入力ディレクトリと設定ファイルがある
+        - CLIオプションが一通り指定されている
+    Act:
+        - CLIが実行される
+    Assert:
+        - application実行層へ変換済みリクエストが渡されること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
-    output_dir.mkdir()
-    return test_dir, output_dir
+    config_path = tmp_path / "picker.toml"
+    report_path = tmp_path / "report.json"
+    input_dir.mkdir()
+    config_path.write_text('[selection]\nprofile = "static"\n', encoding="utf-8")
+    captured_requests: list[ApplicationRunRequest] = []
 
+    def capture_request(request: ApplicationRunRequest) -> None:
+        captured_requests.append(request)
 
-def test_cli_selects_and_copies_images(
-    monkeypatch: pytest.MonkeyPatch,
-    mock_game_screen_picker: MagicMock,
-    setup_test_dirs: tuple[Path, Path],
-) -> None:
-    """CLIが画像を選択してコピーすること.
-
-    Arrange:
-        - 入力ディレクトリに5件の画像がある
-        - GameScreenPickerが3件を選択して返す
-        - モックされたpicker/analyzerが設定されている
-    Act:
-        - CLIで -n 3 を指定して実行する
-    Assert:
-        - 出力ディレクトリに3件の画像がコピーされること
-    """
-    # Arrange
-    test_dir, output_dir = setup_test_dirs
-    for index in range(5):
-        (test_dir / f"image{index}.jpg").write_bytes(b"fake_image_data")
-
-    results = [
-        create_scored_candidate(path=str(test_dir / f"image{index}.jpg"))
-        for index in range(3)
-    ]
-    stats = PickerStatistics(
-        total_files=5,
-        analyzed_ok=5,
-        analyzed_fail=0,
-        rejected_by_similarity=2,
-        rejected_by_content_filter=0,
-        selected_count=3,
-        resolved_profile="active",
-        scene_distribution={"play": 3, "event": 2},
-        scene_mix_target={"play": 2, "event": 1},
-        scene_mix_actual={"play": 2, "event": 1},
-        threshold_relaxation_steps=[0.72, 0.75],
-        content_filter_breakdown={
-            "blackout": 0,
-            "whiteout": 0,
-            "single_tone": 0,
-            "fade_transition": 0,
-            "temporal_transition": 0,
-        },
-    )
-    mock_game_screen_picker.select.return_value = (results, [], stats)
-
-    monkeypatch.setattr(
-        "src.main.GameScreenPicker",
-        lambda *_args, **_kwargs: mock_game_screen_picker,
-    )
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer",
-        lambda *_args, **_kwargs: MagicMock(),
-    )
-
-    # Act
-    run(["-n", "3", str(test_dir), str(output_dir)])
-
-    # Assert
-    assert (output_dir / "image0.jpg").exists()
-    assert (output_dir / "image1.jpg").exists()
-    assert (output_dir / "image2.jpg").exists()
-
-
-def test_cli_writes_report_json_with_new_fields(
-    monkeypatch: pytest.MonkeyPatch,
-    mock_game_screen_picker: MagicMock,
-    setup_test_dirs: tuple[Path, Path],
-) -> None:
-    """CLIが新しいフィールドを含むJSONレポートを出力すること.
-
-    Arrange:
-        - 入力ディレクトリに1件の画像がある
-        - 選択結果にplay_score/event_score/density_scoreが含まれる
-        - 統計情報にscore_bandの選定注釈が含まれる
-        - --report-jsonオプションが指定されている
-    Act:
-        - CLIを実行する
-    Assert:
-        - JSONレポートに各スコアフィールドが出力されること
-        - output_pathが正しく記録されること
-    """
-    # Arrange
-    test_dir, output_dir = setup_test_dirs
-    report_path = output_dir / "report.json"
-    source = test_dir / "image0.jpg"
-    source.write_bytes(b"fake_image_data")
-
-    results = [
-        create_scored_candidate(
-            path=str(source),
-            scene_label=SceneLabel.PLAY,
-            play_score=0.8,
-            event_score=0.2,
-            density_score=0.8,
-            selection_score=0.8,
-        )
-    ]
-    stats = PickerStatistics(
-        total_files=1,
-        analyzed_ok=1,
-        analyzed_fail=0,
-        rejected_by_similarity=0,
-        rejected_by_content_filter=0,
-        selected_count=1,
-        resolved_profile="static",
-        scene_distribution={"play": 1, "event": 0},
-        scene_mix_target={"play": 1, "event": 0},
-        scene_mix_actual={"play": 1, "event": 0},
-        threshold_relaxation_steps=[0.72],
-        content_filter_breakdown={
-            "blackout": 0,
-            "whiteout": 0,
-            "single_tone": 0,
-            "fade_transition": 0,
-            "temporal_transition": 0,
-        },
-        selection_annotations_by_path={
-            str(source): SelectionAnnotation(score_band="high")
-        },
-    )
-    mock_game_screen_picker.select.return_value = (results, [], stats)
-    monkeypatch.setattr(
-        "src.main.GameScreenPicker",
-        lambda *_args, **_kwargs: mock_game_screen_picker,
-    )
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer",
-        lambda *_args, **_kwargs: MagicMock(),
-    )
+    monkeypatch.setattr("src.main.run_application", capture_request)
 
     # Act
     run(
         [
+            "-n",
+            "3",
+            "--similarity",
+            "0.8",
+            "--recursive",
+            "--profile",
+            "active",
+            "--config",
+            str(config_path),
+            "--scene-mix",
+            "play=0.6,event=0.4",
             "--report-json",
             str(report_path),
-            str(test_dir),
+            "--rename",
+            "--batch-size",
+            "64",
+            "--result-max-workers",
+            "0",
+            "--max-dim",
+            "1080",
+            "--max-memory-gb",
+            "4",
+            "--debug",
+            str(input_dir),
             str(output_dir),
         ]
     )
 
     # Assert
-    payload = json.loads(report_path.read_text(encoding="utf-8"))
-    assert payload["selected"][0]["path"] == str(source)
-    assert payload["selected"][0]["output_path"] == str(
-        (output_dir / "image0.jpg").resolve()
-    )
-    assert payload["selected"][0]["play_score"] == 0.8
-    assert payload["selected"][0]["event_score"] == 0.2
-    assert payload["selected"][0]["score_band"] == "high"
-
-
-def test_cli_renames_outputs_by_scene(
-    monkeypatch: pytest.MonkeyPatch,
-    mock_game_screen_picker: MagicMock,
-    setup_test_dirs: tuple[Path, Path],
-) -> None:
-    """CLIがscene別にファイル名を変更すること.
-
-    Arrange:
-        - 入力ディレクトリにplay画像2件、event画像1件がある
-        - --renameオプションが指定されている
-        - 拡張子が混在している（png/jpg）
-    Act:
-        - CLIを実行する
-    Assert:
-        - play画像がplay0001/play0002にリネームされること
-        - event画像がevent0001にリネームされること
-        - 元の拡張子が保持されること
-    """
-    # Arrange
-    test_dir, output_dir = setup_test_dirs
-    sources = {
-        "play_png": test_dir / "source_play.png",
-        "event_jpg": test_dir / "source_event.jpg",
-        "play_jpg": test_dir / "source_play2.jpg",
-    }
-    for path in sources.values():
-        path.write_bytes(b"fake_image_data")
-
-    results = [
-        create_scored_candidate(
-            path=str(sources["play_png"]),
-            scene_label=SceneLabel.PLAY,
-        ),
-        create_scored_candidate(
-            path=str(sources["event_jpg"]),
-            scene_label=SceneLabel.EVENT,
-        ),
-        create_scored_candidate(
-            path=str(sources["play_jpg"]),
-            scene_label=SceneLabel.PLAY,
-        ),
-    ]
-    stats = PickerStatistics(
-        total_files=3,
-        analyzed_ok=3,
-        analyzed_fail=0,
-        rejected_by_similarity=0,
-        rejected_by_content_filter=0,
-        selected_count=3,
-        resolved_profile="active",
-        scene_distribution={"play": 2, "event": 1},
-        scene_mix_target={"play": 2, "event": 1},
-        scene_mix_actual={"play": 2, "event": 1},
-        threshold_relaxation_steps=[0.72],
-        content_filter_breakdown={
-            "blackout": 0,
-            "whiteout": 0,
-            "single_tone": 0,
-            "fade_transition": 0,
-            "temporal_transition": 0,
-        },
-    )
-    mock_game_screen_picker.select.return_value = (results, [], stats)
-    monkeypatch.setattr(
-        "src.main.GameScreenPicker",
-        lambda *_args, **_kwargs: mock_game_screen_picker,
-    )
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer",
-        lambda *_args, **_kwargs: MagicMock(),
-    )
-
-    # Act
-    run(["-n", "3", "--rename", str(test_dir), str(output_dir)])
-
-    # Assert
-    assert (output_dir / "play0001.png").exists()
-    assert (output_dir / "event0001.jpg").exists()
-    assert (output_dir / "play0002.jpg").exists()
+    request = captured_requests[0]
+    assert request.num == 3
+    assert request.similarity == 0.8
+    assert request.recursive is True
+    assert request.profile == "active"
+    assert request.config_path == str(config_path)
+    assert request.scene_mix is not None
+    assert request.scene_mix.play == 0.6
+    assert request.scene_mix.event == 0.4
+    assert request.report_json == str(report_path)
+    assert request.rename is True
+    assert request.batch_size == 64
+    assert request.result_max_workers == 1
+    assert request.max_dim == 1080
+    assert request.max_memory_gb == 4
+    assert request.debug is True
+    assert request.input_dir == str(input_dir)
+    assert request.output_dir == str(output_dir)
 
 
 @pytest.mark.parametrize(
@@ -298,20 +101,19 @@ def test_cli_renames_outputs_by_scene(
 )
 def test_cli_validates_inputs(
     monkeypatch: pytest.MonkeyPatch,
-    mock_game_screen_picker: MagicMock,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     args: list[str],
     error_pattern: str,
 ) -> None:
-    """CLIが無効な入力をバリデーションすること.
+    """CLIの不正な入力が実行層へ渡される前に拒否されること.
 
     Arrange:
-        - 無効な入力値が指定されている（負の数、範囲外の値など）
+        - 無効な入力値が指定されている
     Act:
-        - CLIを実行する
+        - CLIが実行される
     Assert:
-        - 適切なエラーメッセージが表示され、SystemExitで終了すること
+        - 適切なエラーメッセージが表示され、application実行層が呼ばれないこと
     """
     # Arrange
     input_path = tmp_path / "input"
@@ -319,12 +121,8 @@ def test_cli_validates_inputs(
     input_path.mkdir()
     output_path.mkdir()
     monkeypatch.setattr(
-        "src.main.GameScreenPicker",
-        lambda *_args, **_kwargs: mock_game_screen_picker,
-    )
-    monkeypatch.setattr(
-        "src.main.ImageQualityAnalyzer",
-        lambda *_args, **_kwargs: MagicMock(),
+        "src.main.run_application",
+        lambda _request: pytest.fail("application実行層は呼ばれないこと"),
     )
 
     # Act / Assert

@@ -2,19 +2,12 @@
 
 import logging
 import sys
-from pathlib import Path
 
 import click
-import cv2
 
-from .analyzers.image_quality_analyzer import ImageQualityAnalyzer
-from .models.output_record import OutputRecord
+from .application.run import run_application
+from .models.application_run_request import ApplicationRunRequest
 from .models.scene_mix import SceneMix
-from .services.game_screen_picker import GameScreenPicker
-from .utils.config_resolver import ConfigResolver
-from .utils.file_utils import FileUtils
-from .utils.report_writer import ReportWriter
-from .utils.result_formatter import ResultFormatter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,8 +15,6 @@ logging.basicConfig(
     stream=sys.stdout,
     force=True,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def validate_positive_int(value: str | None) -> int | None:
@@ -255,11 +246,8 @@ def execute(
 ) -> None:
     """ゲーム画面からscene mixを保って画像を選択する.
 
-    入力パスの検証、Analyzer / Picker の初期化、画像選定、
-    出力フォルダへのコピー、標準出力への集計表示、
-    必要に応じたJSONレポート出力までを一括で行う。
-    実行時設定は config resolver を経由して解決されるため、
-    CLIはオプション変換と入力検証に集中する。
+    CLIはオプション変換と入力検証に集中し、application実行層へ
+    リクエストを渡す。
 
     \b
     使用例:
@@ -291,58 +279,25 @@ def execute(
         click.BadParameter: 入力値または入力パスが不正な場合。
         SystemExit: 想定外の実行時エラーをCLI終了コードへ変換する場合。
     """
-    if debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-
-    cv2.setNumThreads(1)  # OpenCVが独自スレッドプールを作成しないよう制御
-
-    try:
-        input_path = Path(input_dir)
-        if not input_path.is_dir():
-            raise click.BadParameter(
-                f"指定パスはフォルダではありません: {input_dir}",
-                param_hint="input_dir",
-            )
-
-        analyzer_config, selection_config = ConfigResolver.resolve_configs(
-            config_path=config_path,
-            profile=profile,
-            scene_mix=scene_mix,
+    run_application(
+        ApplicationRunRequest(
+            num=num,
             similarity=similarity,
+            recursive=recursive,
+            profile=profile,
+            config_path=config_path,
+            scene_mix=scene_mix,
+            report_json=report_json,
+            rename=rename,
             batch_size=batch_size,
             result_max_workers=result_max_workers,
             max_dim=max_dim,
             max_memory_gb=max_memory_gb,
+            debug=debug,
+            input_dir=input_dir,
+            output_dir=output_dir,
         )
-
-        with ImageQualityAnalyzer(config=analyzer_config) as analyzer:
-            picker = GameScreenPicker(analyzer, config=selection_config)
-            logger.info("画像処理を開始します...")
-
-            selected, rejected, stats = picker.select(
-                folder=str(input_path),
-                num=num,
-                recursive=recursive,
-            )
-            output_record = OutputRecord.from_selection(selected, rejected, stats)
-            output_record = FileUtils.copy_selected_items(
-                output_record,
-                output_dir,
-                rename=rename,
-                requested_num=num,
-            )
-            ResultFormatter.display_results(output_record)
-            if report_json is not None:
-                ReportWriter.write(
-                    report_json,
-                    output_record,
-                )
-
-    except click.ClickException:
-        raise
-    except Exception as error:
-        logger.error(f"予期しないエラーが発生しました: {type(error).__name__}: {error}")
-        raise SystemExit(1) from error
+    )
 
 
 def run(args: list[str]) -> None:
