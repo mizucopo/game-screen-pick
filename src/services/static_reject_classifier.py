@@ -51,6 +51,7 @@ from ..constants.content_filter_thresholds import (
 )
 from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
+from ..models.content_reject_reason import ContentRejectReason
 from ..models.raw_metrics import RawMetrics
 from ..models.whole_input_profile import WholeInputProfile
 from ..utils.transition_metrics import TransitionMetrics
@@ -64,7 +65,7 @@ class StaticRejectClassifier:
         image: AnalyzedImage,
         profile: WholeInputProfile,
         adaptive_scores: AdaptiveScores,
-    ) -> str | None:
+    ) -> ContentRejectReason | None:
         """固定条件に従って hard reject 理由を返す."""
         raw = image.raw_metrics
         p10_range = max(LUMINANCE_RANGE_P10_MIN, profile.luminance_range.p10)
@@ -135,19 +136,22 @@ class StaticRejectClassifier:
             veiled_transition_score,
             system_ui_signal,
         ):
-            return "fade_transition"
+            return ContentRejectReason.FADE_TRANSITION
 
         return None
 
     @staticmethod
-    def _detect_blackout(raw: RawMetrics, p10_range: float) -> str | None:
+    def _detect_blackout(
+        raw: RawMetrics,
+        p10_range: float,
+    ) -> ContentRejectReason | None:
         """ブラックアウトを検出する."""
         if (
             raw.near_black_ratio >= BLACKOUT_NEAR_BLACK_RATIO
             and raw.luminance_entropy <= BLACKOUT_LUMINANCE_ENTROPY_MAX
             and raw.luminance_range <= p10_range
         ):
-            return "blackout"
+            return ContentRejectReason.BLACKOUT
         return None
 
     @staticmethod
@@ -156,7 +160,7 @@ class StaticRejectClassifier:
         profile: WholeInputProfile,
         adaptive_scores: AdaptiveScores,
         bright_washout_score: float,
-    ) -> str | None:
+    ) -> ContentRejectReason | None:
         """ホワイトアウトを検出する（3条件）."""
 
         if (
@@ -165,7 +169,7 @@ class StaticRejectClassifier:
             and raw.luminance_range
             <= max(WHITEOUT_LUMINANCE_RANGE_MIN, profile.luminance_range.p25)
         ):
-            return "whiteout"
+            return ContentRejectReason.WHITEOUT
 
         if (
             raw.brightness >= WHITEOUT_BRIGHTNESS_THRESHOLD
@@ -174,7 +178,7 @@ class StaticRejectClassifier:
             <= max(WHITEOUT_MAX_EDGE_DENSITY, profile.edge_density.p10)
             and raw.dominant_tone_ratio >= WHITEOUT_MIN_DOMINANT_TONE_RATIO
         ):
-            return "whiteout"
+            return ContentRejectReason.WHITEOUT
 
         if (
             bright_washout_score >= WHITEOUT_BRIGHT_WASHOUT_THRESHOLD
@@ -184,7 +188,7 @@ class StaticRejectClassifier:
             <= max(WHITEOUT_RELAXED_MAX_EDGE_DENSITY, profile.edge_density.p25)
             and adaptive_scores.visibility_score <= WHITEOUT_RELAXED_MAX_VISIBILITY
         ):
-            return "whiteout"
+            return ContentRejectReason.WHITEOUT
 
         return None
 
@@ -193,7 +197,7 @@ class StaticRejectClassifier:
         raw: RawMetrics,
         profile: WholeInputProfile,
         p10_range: float,
-    ) -> str | None:
+    ) -> ContentRejectReason | None:
         """単色画像を検出する."""
         if (
             raw.dominant_tone_ratio >= SINGLE_TONE_DOMINANT_RATIO
@@ -201,7 +205,7 @@ class StaticRejectClassifier:
             and raw.contrast <= profile.contrast.p25
             and raw.edge_density <= profile.edge_density.p25
         ):
-            return "single_tone"
+            return ContentRejectReason.SINGLE_TONE
         return None
 
     @staticmethod
@@ -211,7 +215,7 @@ class StaticRejectClassifier:
         adaptive_scores: AdaptiveScores,
         bright_washout_score: float,
         relative_bright_transition_score: float,
-    ) -> str | None:
+    ) -> ContentRejectReason | None:
         """相対的な明転遷移を検出する."""
         if (
             relative_bright_transition_score >= RELATIVE_BRIGHT_TRANSITION_THRESHOLD
@@ -228,8 +232,8 @@ class StaticRejectClassifier:
                 relative_bright_transition_score >= RELATIVE_BRIGHT_EXTREME_TRANSITION
                 or raw.near_white_ratio >= RELATIVE_BRIGHT_EXTREME_THRESHOLD
             ):
-                return "whiteout"
-            return "fade_transition"
+                return ContentRejectReason.WHITEOUT
+            return ContentRejectReason.FADE_TRANSITION
         return None
 
     @staticmethod
@@ -238,14 +242,14 @@ class StaticRejectClassifier:
         adaptive_scores: AdaptiveScores,
         profile: WholeInputProfile,
         relative_dark_transition_score: float,
-    ) -> str | None:
+    ) -> ContentRejectReason | None:
         """相対的な暗転遷移を検出する."""
         if (
             relative_dark_transition_score >= RELATIVE_DARK_TRANSITION_THRESHOLD
             and adaptive_scores.visibility_score <= RELATIVE_DARK_VISIBILITY_MAX
             and raw.brightness <= profile.brightness.p25
         ):
-            return "fade_transition"
+            return ContentRejectReason.FADE_TRANSITION
         return None
 
     @classmethod
