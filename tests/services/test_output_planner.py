@@ -138,3 +138,36 @@ def test_output_planner_plans_duplicate_filenames_without_rename(
         (output_dir / "screen_1.png").resolve()
     )
     assert not output_dir.exists()
+
+
+def test_output_planner_avoids_case_insensitive_filename_collision(
+    tmp_path: Path,
+) -> None:
+    """大文字小文字だけが異なる既存ファイルとの衝突が回避されること.
+
+    Arrange:
+        - 出力先には既存のScreen.pngがあるものとして扱われる
+        - 選択候補のファイル名はscreen.pngである
+    Act:
+        - rename=Falseで出力計画が作成される
+    Assert:
+        - 大文字小文字を区別しないfilesystemで上書きされない出力パスに計画されること
+        - filesystem copyが実行されないこと
+    """
+    # Arrange
+    source_path = str(tmp_path / "source" / "screen.png")
+    record = _build_output_record([source_path], ["play"])
+    output_dir = tmp_path / "output"
+
+    # Act
+    result = OutputPlanner.plan_selected_outputs(
+        record,
+        str(output_dir),
+        existing_filenames=["Screen.png"],
+    )
+
+    # Assert
+    assert result.selected[0].output_path == str(
+        (output_dir / "screen_1.png").resolve()
+    )
+    assert not output_dir.exists()

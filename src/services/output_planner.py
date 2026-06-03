@@ -1,7 +1,7 @@
 """出力先計画を純粋に決定する."""
 
 from collections import defaultdict
-from collections.abc import Collection, Iterable
+from collections.abc import Iterable
 from pathlib import Path
 
 from ..models.output_record import OutputRecord
@@ -38,7 +38,9 @@ class OutputPlanner:
             rename,
             requested_num,
         )
-        reserved_filenames = set(existing_filenames)
+        reserved_filename_keys = OutputPlanner._build_reserved_filename_keys(
+            existing_filenames
+        )
         scene_counters: dict[str, int] = defaultdict(int)
         planned_paths_by_source_path: dict[str, str] = {}
 
@@ -54,11 +56,13 @@ class OutputPlanner:
             else:
                 filename = candidate.filename
 
-            unique_filename = OutputPlanner._get_unique_filename_from_reserved(
+            unique_filename = OutputPlanner._get_unique_filename_from_reserved_keys(
                 filename,
-                reserved_filenames,
+                reserved_filename_keys,
             )
-            reserved_filenames.add(unique_filename)
+            reserved_filename_keys.add(
+                OutputPlanner._build_collision_key(unique_filename)
+            )
             planned_paths_by_source_path[candidate.source_path] = str(
                 (out / unique_filename).resolve()
             )
@@ -98,18 +102,18 @@ class OutputPlanner:
         reserved_filenames: Iterable[str],
     ) -> str:
         """予約済みファイル名と衝突しないファイル名を生成する."""
-        return OutputPlanner._get_unique_filename_from_reserved(
+        return OutputPlanner._get_unique_filename_from_reserved_keys(
             filename,
-            set(reserved_filenames),
+            OutputPlanner._build_reserved_filename_keys(reserved_filenames),
         )
 
     @staticmethod
-    def _get_unique_filename_from_reserved(
+    def _get_unique_filename_from_reserved_keys(
         filename: str,
-        reserved_filenames: Collection[str],
+        reserved_filename_keys: set[str],
     ) -> str:
-        """予約済みファイル名collectionから衝突しないファイル名を生成する."""
-        if filename not in reserved_filenames:
+        """予約済みファイル名keyから衝突しないファイル名を生成する."""
+        if OutputPlanner._build_collision_key(filename) not in reserved_filename_keys:
             return filename
 
         dest_path = Path(filename)
@@ -119,6 +123,19 @@ class OutputPlanner:
         counter = 1
         while True:
             new_filename = f"{stem}_{counter}{suffix}"
-            if new_filename not in reserved_filenames:
+            if (
+                OutputPlanner._build_collision_key(new_filename)
+                not in reserved_filename_keys
+            ):
                 return new_filename
             counter += 1
+
+    @staticmethod
+    def _build_reserved_filename_keys(filenames: Iterable[str]) -> set[str]:
+        """予約済みファイル名を衝突判定用keyへ変換する."""
+        return {OutputPlanner._build_collision_key(filename) for filename in filenames}
+
+    @staticmethod
+    def _build_collision_key(filename: str) -> str:
+        """filesystem上の大小文字差による衝突を避けるkeyを生成する."""
+        return filename.casefold()
