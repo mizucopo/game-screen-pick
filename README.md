@@ -51,7 +51,7 @@ uv run game-screen-pick --config ./picker.toml --report-json ./report.json ./scr
 現在の実装は次の流れです。
 
 1. 入力画像をすべて解析し、CLIP特徴・結合特徴・画質メトリクスを作る
-2. 解析結果をもとに `content filter` を実施し、暗転・白飛び・単色・遷移フレームを除外する
+2. 解析結果をもとに `content filter` を実施し、暗転・白飛び・単色・遷移フレームを明示的な reject reason 付きで除外する
 3. 残った画像について、画像全体の中でどれだけ近傍類似画像が多いかを `density_score` として計算する
 4. `density_score` が高い側を `play`、低い側を `event` として既定で 70/30 に割り当てる
 5. `play` / `event` ごとに外れ値を除外し、低スコア帯から高スコア帯まで均等に候補順を組む

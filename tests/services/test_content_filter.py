@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from src.models.content_filter_result import ContentFilterResult
+from src.models.content_reject_reason import ContentRejectReason
 from src.services.content_filter import ContentFilter
 from src.services.whole_input_profiler import WholeInputProfiler
 from tests.conftest import create_analyzed_image
@@ -202,6 +203,52 @@ def test_content_filter_rejects_flat_frames_and_keeps_informative_dark_frames() 
         result.adaptive_scores_by_path[dark_gameplay.path].visibility_score
         > result.adaptive_scores_by_path[fade_transition.path].visibility_score
     )
+
+
+def test_content_filter_result_exposes_rejected_reasons_by_path() -> None:
+    """除外された画像の理由が結果から明示的に参照されること.
+
+    Arrange:
+        - 正常フレームとブラックアウトフレームがある
+    Act:
+        - ContentFilterでフィルタリングされる
+    Assert:
+        - 除外された画像のpathとreasonが結果から取得されること
+        - 既存のbreakdownも同じ理由で集計されること
+    """
+    # Arrange
+    # Act
+    result = _filter_two_images(
+        kept_path="/tmp/good_gameplay.jpg",
+        kept_raw_metrics={
+            "brightness": 110.0,
+            "contrast": 18.0,
+            "edge_density": 0.20,
+            "action_intensity": 14.0,
+            "luminance_entropy": 1.3,
+            "luminance_range": 36.0,
+            "near_black_ratio": 0.12,
+            "dominant_tone_ratio": 0.60,
+        },
+        rejected_path="/tmp/blackout.jpg",
+        rejected_raw_metrics={
+            "brightness": 1.0,
+            "contrast": 0.2,
+            "edge_density": 0.001,
+            "action_intensity": 0.1,
+            "luminance_entropy": 0.05,
+            "luminance_range": 1.0,
+            "near_black_ratio": 0.99,
+            "near_white_ratio": 0.0,
+            "dominant_tone_ratio": 1.0,
+        },
+    )
+
+    # Assert
+    assert result.rejected_reason_by_path == {
+        "/tmp/blackout.jpg": ContentRejectReason.BLACKOUT
+    }
+    assert result.content_filter_breakdown["blackout"] == 1
 
 
 def test_content_filter_rejects_mid_fade_frames_with_70_percent_dark_ratio() -> None:
@@ -612,14 +659,14 @@ def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> N
     mid_transition = create_analyzed_image(
         path="/tmp/frame_002.jpg",
         raw_metrics_dict={
-            "brightness": 38.0,
-            "contrast": 9.5,
-            "edge_density": 0.08,
-            "action_intensity": 4.5,
-            "luminance_entropy": 0.8,
-            "luminance_range": 28.0,
-            "near_black_ratio": 0.18,
-            "dominant_tone_ratio": 0.62,
+            "brightness": 100.0,
+            "contrast": 8.0,
+            "edge_density": 0.04,
+            "action_intensity": 3.0,
+            "luminance_entropy": 0.6,
+            "luminance_range": 15.0,
+            "near_black_ratio": 0.10,
+            "dominant_tone_ratio": 0.58,
         },
         content_features=_feature(11),
         combined_features=np.pad(_feature(11), (0, 475)),
@@ -649,11 +696,10 @@ def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> N
         "/tmp/frame_001.jpg",
         "/tmp/frame_003.jpg",
     }
-    assert (
-        result.content_filter_breakdown["fade_transition"]
-        + result.content_filter_breakdown["temporal_transition"]
-        == 1
-    )
+    assert result.rejected_reason_by_path == {
+        "/tmp/frame_002.jpg": ContentRejectReason.TEMPORAL_TRANSITION
+    }
+    assert result.content_filter_breakdown["temporal_transition"] == 1
 
 
 def test_temporal_transition_not_triggered_for_dissimilar_neighbors() -> None:

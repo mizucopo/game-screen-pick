@@ -9,6 +9,7 @@ from ..constants.content_filter_thresholds import (
 from ..models.adaptive_scores import AdaptiveScores
 from ..models.analyzed_image import AnalyzedImage
 from ..models.content_filter_result import ContentFilterResult
+from ..models.content_reject_reason import ContentRejectReason
 from ..utils.vector_utils import VectorUtils
 from .static_reject_classifier import StaticRejectClassifier
 from .whole_input_profiler import WholeInputProfiler
@@ -16,14 +17,6 @@ from .whole_input_profiler import WholeInputProfiler
 
 class ContentFilter:
     """真っ暗・真っ白・単色・暗転途中を hard reject する."""
-
-    REJECTION_REASONS = (
-        "blackout",
-        "whiteout",
-        "single_tone",
-        "fade_transition",
-        "temporal_transition",
-    )
 
     def __init__(self, profiler: WholeInputProfiler):
         """ContentFilterを初期化する."""
@@ -34,7 +27,7 @@ class ContentFilter:
         """入力全体の分布を使って hard reject を適用する."""
         profile = self.profiler.build_profile(images)
         adaptive_scores = self.profiler.score_images(images)
-        breakdown = dict.fromkeys(self.REJECTION_REASONS, 0)
+        breakdown = ContentRejectReason.empty_breakdown()
         rejected_reasons_by_index = {
             index: self._static_classifier.classify(
                 image=image,
@@ -49,21 +42,24 @@ class ContentFilter:
             rejected_reasons_by_index,
         )
         kept_images: list[AnalyzedImage] = []
+        rejected_reason_by_path: dict[str, ContentRejectReason] = {}
 
         for index, image in enumerate(images):
             reason = rejected_reasons_by_index[index]
             if reason is None and index in temporal_rejected_indices:
-                reason = "temporal_transition"
+                reason = ContentRejectReason.TEMPORAL_TRANSITION
             if reason is None:
                 kept_images.append(image)
                 continue
-            breakdown[reason] += 1
+            breakdown[reason.value] += 1
+            rejected_reason_by_path[image.path] = reason
 
         return ContentFilterResult(
             kept_images=kept_images,
             adaptive_scores_by_path=adaptive_scores,
             rejected_by_content_filter=sum(breakdown.values()),
             content_filter_breakdown=breakdown,
+            rejected_reason_by_path=rejected_reason_by_path,
             whole_input_profile=profile,
         )
 
@@ -71,7 +67,7 @@ class ContentFilter:
         self,
         images: list[AnalyzedImage],
         adaptive_scores: dict[str, AdaptiveScores],
-        static_reasons_by_index: dict[int, str | None],
+        static_reasons_by_index: dict[int, ContentRejectReason | None],
     ) -> set[int]:
         """前後関係から暗転途中フレームを検出する."""
         if len(images) < 3:
