@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+from threading import RLock
 from urllib.request import Request, urlopen
 
 from ..models.ollama_config import OllamaConfig
@@ -18,6 +19,7 @@ class OllamaSceneAnalyzer:
     def __init__(self, config: OllamaConfig) -> None:
         """analyzerを初期化する."""
         self.config = config
+        self._cache_lock = RLock()
 
     def generate_scene_catalog(
         self,
@@ -48,11 +50,11 @@ class OllamaSceneAnalyzer:
         prompt = self._build_classification_prompt(catalog, retry=False)
         retry_prompt = self._build_classification_prompt(catalog, retry=True)
         for current_prompt in (prompt, retry_prompt):
-            content = self._post_chat(
-                prompt=current_prompt,
-                image_paths=[image_path],
-            )
             try:
+                content = self._post_chat(
+                    prompt=current_prompt,
+                    image_paths=[image_path],
+                )
                 classification = OllamaResponseParser.parse_classification_response(
                     content,
                     catalog,
@@ -64,7 +66,7 @@ class OllamaSceneAnalyzer:
                         classification,
                     )
                 return classification
-            except (ValueError, json.JSONDecodeError):
+            except (OSError, TimeoutError, ValueError, json.JSONDecodeError):
                 continue
         return None
 
@@ -111,7 +113,8 @@ class OllamaSceneAnalyzer:
         """cache済み分類結果を返す."""
         if not self.config.cache_enabled:
             return None
-        cached = self._read_classification_cache(image_path).get(cache_key)
+        with self._cache_lock:
+            cached = self._read_classification_cache(image_path).get(cache_key)
         if not isinstance(cached, dict):
             return None
         return self._classification_from_cache(cached)
@@ -203,13 +206,14 @@ class OllamaSceneAnalyzer:
     ) -> None:
         """分類cacheを書き込む."""
         cache_path = self._cache_path_for_image(image_path)
-        cache = self._read_classification_cache(image_path)
-        cache[cache_key] = self._classification_to_cache(classification)
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(
-            json.dumps({"classifications": cache}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        with self._cache_lock:
+            cache = self._read_classification_cache(image_path)
+            cache[cache_key] = self._classification_to_cache(classification)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"classifications": cache}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     @staticmethod
     def _classification_to_cache(

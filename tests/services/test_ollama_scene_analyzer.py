@@ -1,6 +1,8 @@
 """OllamaSceneAnalyzerの単体テスト."""
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from urllib.request import Request
@@ -133,6 +135,41 @@ def test_classify_image_retries_once_when_response_is_invalid(
     assert len(responses) == 0
 
 
+def test_classify_image_returns_none_when_ollama_call_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """画像ごとのOllama呼び出し失敗が分類失敗として扱われること.
+
+    Arrange:
+        - Ollama API呼び出しがtimeout相当の例外を返す
+    Act:
+        - 画像が分類される
+    Assert:
+        - 例外を送出せずNoneが返されること
+    """
+    # Arrange
+    image_path = tmp_path / "screen.png"
+    image_path.write_bytes(b"image-bytes")
+
+    def fake_urlopen(_request: Request, timeout: float) -> Any:
+        assert timeout == 60.0
+        raise TimeoutError
+
+    monkeypatch.setattr("src.services.ollama_scene_analyzer.urlopen", fake_urlopen)
+    analyzer = OllamaSceneAnalyzer(OllamaConfig(model="gemma4"))
+    catalog = [
+        SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
+        SceneCatalogEntry("other", "その他", "分類しにくい場面"),
+    ]
+
+    # Act
+    result = analyzer.classify_image(str(image_path), catalog)
+
+    # Assert
+    assert result is None
+
+
 def test_classify_image_uses_file_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -244,6 +281,66 @@ def test_classify_image_cache_key_includes_catalog_metadata(
     assert first.scene_display_name == "戦闘"
     assert second.scene_display_name == "バトル"
     assert called_count == 2
+
+
+def test_classify_image_preserves_parallel_cache_entries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """並列分類で同じcache fileへ書き込んでも全entryが保持されること.
+
+    Arrange:
+        - 同じディレクトリにある複数画像が並列分類される
+    Act:
+        - それぞれの画像分類が同時に完了する
+    Assert:
+        - cache fileに全画像分の分類entryが残ること
+    """
+    # Arrange
+    image_paths = [tmp_path / f"screen_{index}.png" for index in range(6)]
+    for image_path in image_paths:
+        image_path.write_bytes(f"image-{image_path.name}".encode("utf-8"))
+
+    barrier = threading.Barrier(len(image_paths))
+
+    def fake_urlopen(_request: Request, timeout: float) -> Any:
+        assert timeout == 60.0
+        barrier.wait(timeout=2.0)
+        return _FakeResponse(
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "scene_slug": "battle",
+                            "confidence": 0.9,
+                            "description": "敵との戦闘場面",
+                        }
+                    )
+                }
+            }
+        )
+
+    monkeypatch.setattr("src.services.ollama_scene_analyzer.urlopen", fake_urlopen)
+    analyzer = OllamaSceneAnalyzer(OllamaConfig(model="gemma4"))
+    catalog = [
+        SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
+        SceneCatalogEntry("other", "その他", "分類しにくい場面"),
+    ]
+
+    # Act
+    with ThreadPoolExecutor(max_workers=len(image_paths)) as executor:
+        results = list(
+            executor.map(
+                lambda image_path: analyzer.classify_image(str(image_path), catalog),
+                image_paths,
+            )
+        )
+
+    # Assert
+    assert all(result is not None for result in results)
+    cache_path = tmp_path / ".game-screen-pick" / "cache" / "ollama-scenes.json"
+    cache_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert len(cache_payload["classifications"]) == len(image_paths)
 
 
 class _FakeResponse:

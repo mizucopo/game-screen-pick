@@ -84,11 +84,16 @@ class DynamicSceneSelector:
             scene: sum(1 for candidate in candidates if candidate.scene_slug == scene)
             for scene in scene_order
         }
+        allocation_order = DynamicSceneSelector._target_allocation_order(
+            scene_order,
+            num,
+            candidates,
+        )
         remaining = min(num, len(candidates))
         targets = dict.fromkeys(scene_order, 0)
         while remaining > 0:
             progressed = False
-            for scene in scene_order:
+            for scene in allocation_order:
                 if targets[scene] < scene_counts[scene]:
                     targets[scene] += 1
                     remaining -= 1
@@ -98,6 +103,37 @@ class DynamicSceneSelector:
             if not progressed:
                 break
         return targets
+
+    @staticmethod
+    def _target_allocation_order(
+        scene_order: list[str],
+        num: int,
+        candidates: Sequence[ScoredCandidate],
+    ) -> list[str]:
+        """枠がscene数より少ない場合はsceneの最高score順で割り当てる."""
+        if num >= len(scene_order):
+            return scene_order
+
+        scene_index = {scene: index for index, scene in enumerate(scene_order)}
+        best_score_by_scene = {
+            scene: max(
+                (
+                    (candidate.selection_score, candidate.quality_score)
+                    for candidate in candidates
+                    if candidate.scene_slug == scene
+                ),
+                default=(0.0, 0.0),
+            )
+            for scene in scene_order
+        }
+        return sorted(
+            scene_order,
+            key=lambda scene: (
+                -best_score_by_scene[scene][0],
+                -best_score_by_scene[scene][1],
+                scene_index[scene],
+            ),
+        )
 
     @staticmethod
     def _build_scene_streams(

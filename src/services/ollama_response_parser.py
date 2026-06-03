@@ -33,6 +33,10 @@ class OllamaResponseParser:
         if not 3 <= len(scenes) <= 8:
             msg = "scene catalogは3から8個のsceneである必要があります"
             raise ValueError(msg)
+        scene_slugs = [scene.slug for scene in scenes]
+        if len(scene_slugs) != len(set(scene_slugs)):
+            msg = "scene catalogのslugが重複しています"
+            raise ValueError(msg)
         if "other" not in {scene.slug for scene in scenes}:
             msg = "scene catalogにはotherが必要です"
             raise ValueError(msg)

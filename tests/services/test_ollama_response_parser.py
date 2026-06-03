@@ -72,6 +72,33 @@ def test_parse_catalog_response_rejects_path_like_scene_slug() -> None:
         OllamaResponseParser.parse_catalog_response(content)
 
 
+def test_parse_catalog_response_rejects_duplicate_scene_slug() -> None:
+    """重複したscene slugが拒否されること.
+
+    Arrange:
+        - 同じslugを持つ複数sceneを返すJSON応答がある
+    Act:
+        - catalog応答が解析される
+    Assert:
+        - 重複slugとして失敗すること
+    """
+    # Arrange
+    content = """
+    {
+      "scenes": [
+        {"slug": "battle", "display_name": "戦闘", "description": "敵と戦う場面"},
+        {"slug": "battle", "display_name": "バトル", "description": "派手な戦闘"},
+        {"slug": "conversation", "display_name": "会話", "description": "人物の会話"},
+        {"slug": "other", "display_name": "その他", "description": "分類しにくい場面"}
+      ]
+    }
+    """
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="重複"):
+        OllamaResponseParser.parse_catalog_response(content)
+
+
 def test_parse_classification_response_uses_catalog_display_name() -> None:
     """classification応答がcatalogの表示名と対応付けられること.
 

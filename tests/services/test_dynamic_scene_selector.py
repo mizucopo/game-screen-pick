@@ -86,6 +86,44 @@ def test_select_uses_second_variant_when_slots_cannot_be_filled_otherwise() -> N
     ]
 
 
+def test_select_allocates_scarce_scene_slots_by_best_score() -> None:
+    """scene数が要求枚数を超える場合は高score sceneに枠が割り当てられること.
+
+    Arrange:
+        - 3つのsceneに候補があり、要求枚数は2枚である
+        - 入力順の最後のsceneが最も高いscoreを持つ
+    Act:
+        - 動的scene選定が実行される
+    Assert:
+        - 入力順ではなくscore上位のsceneから選ばれること
+    """
+    # Arrange
+    candidates = [
+        build_dynamic_candidate("/tmp/battle.jpg", "battle", _feature(1), 0.2),
+        build_dynamic_candidate("/tmp/menu.jpg", "menu", _feature(40), 0.6),
+        build_dynamic_candidate("/tmp/climax.jpg", "climax", _feature(80), 0.9),
+    ]
+    selector = DynamicSceneSelector(
+        similarity_threshold=1.0,
+        threshold_steps=[1.0],
+        variant_similarity_threshold=0.95,
+    )
+
+    # Act
+    result = selector.select(candidates, num=2)
+
+    # Assert
+    assert {candidate.path for candidate in result.selected} == {
+        "/tmp/menu.jpg",
+        "/tmp/climax.jpg",
+    }
+    assert result.target_counts == {
+        "battle": 0,
+        "menu": 1,
+        "climax": 1,
+    }
+
+
 def build_dynamic_candidate(
     path: str,
     scene_slug: str,
