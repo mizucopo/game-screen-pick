@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 
+from .scene_catalog_entry import SceneCatalogEntry
 from .selection_annotation import SelectionAnnotation
 from .whole_input_profile import WholeInputProfile
 
@@ -25,6 +26,9 @@ class PickerStatistics:
         content_filter_breakdown: content filter 除外理由ごとの件数
         whole_input_profile: 入力全体の明暗傾向プロフィール
         selection_annotations_by_path: 候補パスごとのscene mix選定注釈
+        scene_catalog: 実行で使われたscene catalog
+        ollama_classification_failed: Ollama分類に失敗したblog candidate数
+        ollama_classification_failure_rate: Ollama分類失敗率
     """
 
     total_files: int
@@ -43,3 +47,6 @@ class PickerStatistics:
     selection_annotations_by_path: dict[str, SelectionAnnotation] = field(
         default_factory=dict
     )
+    scene_catalog: list[SceneCatalogEntry] = field(default_factory=list)
+    ollama_classification_failed: int = 0
+    ollama_classification_failure_rate: float = 0.0

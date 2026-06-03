@@ -2,9 +2,8 @@
 
 from dataclasses import dataclass, field
 
-from ..constants.selection_profiles import DEFAULT_SCENE_MIX
 from .config_from_args_mixin import ConfigFromArgsMixin
-from .scene_mix import SceneMix
+from .ollama_config import OllamaConfig
 
 
 @dataclass
@@ -15,7 +14,8 @@ class SelectionConfig(ConfigFromArgsMixin):
         batch_size: CLIP推論のバッチサイズ
         profile: 実行プロファイル（auto / active / static）
         similarity_threshold: 類似度しきい値
-        scene_mix: 画面種別ごとの選択比率
+        ollama: Ollama scene分類の接続設定。Noneの場合は未解決状態
+        scene_hint: scene catalog作成時に渡す任意ヒント
         threshold_relaxation_steps: 類似度しきい値の段階的緩和ステップ
             （ベースしきい値に加算される値のリスト）
         max_threshold: 類似度しきい値の上限
@@ -24,7 +24,8 @@ class SelectionConfig(ConfigFromArgsMixin):
     batch_size: int = 32
     profile: str = "auto"
     similarity_threshold: float = 0.72
-    scene_mix: SceneMix = field(default_factory=lambda: DEFAULT_SCENE_MIX)
+    ollama: OllamaConfig | None = None
+    scene_hint: str | None = None
     threshold_relaxation_steps: list[float] = field(
         default_factory=lambda: [0.03, 0.06, 0.10, 0.15]
     )

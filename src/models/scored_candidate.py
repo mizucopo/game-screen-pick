@@ -5,7 +5,6 @@ from typing import Any
 
 import numpy as np
 
-from ..constants.scene_label import SceneLabel
 from .analyzed_image import AnalyzedImage
 from .scene_assessment import SceneAssessment
 
@@ -26,9 +25,24 @@ class ScoredCandidate:
         return self.analyzed_image.path
 
     @property
-    def scene_label(self) -> SceneLabel:
-        """scene mix 選定に使う画面種別を返す."""
-        return self.scene_assessment.scene_label
+    def scene_label(self) -> str:
+        """選定に使うscene slugを返す."""
+        return self.scene_assessment.scene_slug
+
+    @property
+    def scene_slug(self) -> str:
+        """scene slugを返す."""
+        return self.scene_assessment.scene_slug
+
+    @property
+    def scene_display_name(self) -> str:
+        """scene display nameを返す."""
+        return self.scene_assessment.scene_display_name
+
+    @property
+    def scene_description(self) -> str:
+        """scene descriptionを返す."""
+        return self.scene_assessment.scene_description
 
     @property
     def combined_features(self) -> np.ndarray[Any, Any]:

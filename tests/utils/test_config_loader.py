@@ -46,27 +46,31 @@ def test_load_reads_profile_from_selection_section(tmp_path: Path) -> None:
     assert result["profile"] == "active"
 
 
-def test_load_reads_scene_mix(tmp_path: Path) -> None:
-    """scene_mix セクションから SceneMix が生成されること.
+def test_load_reads_ollama_section(tmp_path: Path) -> None:
+    """ollama セクションから接続設定が読み込まれること.
 
     Arrange:
-        - TOMLファイルに scene_mix.play=0.8, event=0.2 を書き込む
+        - TOMLファイルに ollama 設定を書き込む
     Act:
         - ConfigLoader.loadを呼び出す
     Assert:
-        - scene_mix.playが0.8であること
-        - scene_mix.eventが0.2であること
+        - Ollama 接続設定が部分辞書に変換されること
     """
     # Arrange
     config_file = tmp_path / "test.toml"
-    config_file.write_text("[scene_mix]\nplay = 0.8\nevent = 0.2\n")
+    config_file.write_text(
+        '[ollama]\nmodel = "gemma4"\nhost = "http://localhost:11435"\n'
+        "timeout = 30\nmax_workers = 2\n"
+    )
 
     # Act
     result = ConfigLoader.load(str(config_file))
 
     # Assert
-    assert result["scene_mix"].play == 0.8
-    assert result["scene_mix"].event == 0.2
+    assert result["ollama_model"] == "gemma4"
+    assert result["ollama_host"] == "http://localhost:11435"
+    assert result["ollama_timeout"] == 30.0
+    assert result["ollama_max_workers"] == 2
 
 
 def test_load_reads_similarity_threshold(tmp_path: Path) -> None:

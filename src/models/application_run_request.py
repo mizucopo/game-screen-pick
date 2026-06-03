@@ -2,8 +2,6 @@
 
 from dataclasses import dataclass
 
-from .scene_mix import SceneMix
-
 
 @dataclass(frozen=True)
 class ApplicationRunRequest:
@@ -14,7 +12,12 @@ class ApplicationRunRequest:
     recursive: bool
     profile: str | None
     config_path: str | None
-    scene_mix: SceneMix | None
+    ollama_model: str | None
+    ollama_host: str | None
+    ollama_timeout: float | None
+    ollama_max_workers: int | None
+    ollama_cache_enabled: bool
+    scene_hint: str | None
     report_json: str | None
     rename: bool
     batch_size: int | None

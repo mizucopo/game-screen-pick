@@ -1,36 +1,48 @@
 """解析済み画像から最終候補を選定する domain module."""
 
+from concurrent.futures import ThreadPoolExecutor
+from itertools import repeat
+
 from ..analyzers.metric_calculator import MetricCalculator
-from ..constants.scene_label import SceneLabel
 from ..constants.selection_profiles import PROFILE_REGISTRY
 from ..models.analyzed_image import AnalyzedImage
 from ..models.content_filter_result import ContentFilterResult
 from ..models.picker_statistics import PickerStatistics
+from ..models.scene_assessment import SceneAssessment
+from ..models.scene_catalog_entry import SceneCatalogEntry
+from ..models.scene_classification import SceneClassification
 from ..models.scored_candidate import ScoredCandidate
+from ..models.scored_scene_candidates import ScoredSceneCandidates
 from ..models.selection_config import SelectionConfig
 from ..models.selection_result import SelectionResult
+from ..protocols.scene_analyzer_like import SceneAnalyzerLike
 from .candidate_scorer import CandidateScorer
 from .content_filter import ContentFilter
+from .dynamic_scene_selector import DynamicSceneSelector
 from .profile_resolver import ProfileResolver
-from .scene_mix_selector import SceneMixSelector
-from .scene_scorer import SceneScorer
 from .whole_input_profiler import WholeInputProfiler
 
 
 class AnalyzedImageSelector:
-    """解析済み画像から play / event の最終選定結果を作る."""
+    """解析済み画像からblog用sceneの最終選定結果を作る."""
+
+    CATALOG_SAMPLE_LIMIT = 24
 
     def __init__(
         self,
         config: SelectionConfig,
         metric_calculator: MetricCalculator,
+        scene_analyzer: SceneAnalyzerLike,
     ) -> None:
         """selectorを初期化する."""
         self.config = config
-        self._scene_scorer = SceneScorer()
+        self._scene_analyzer = scene_analyzer
         self._profile_resolver = ProfileResolver()
         self._candidate_scorer = CandidateScorer(metric_calculator)
-        self._scene_mix_selector = SceneMixSelector(config)
+        self._scene_selector = DynamicSceneSelector(
+            similarity_threshold=config.similarity_threshold,
+            threshold_steps=config.compute_threshold_steps(config.similarity_threshold),
+        )
         self._content_filter = ContentFilter(WholeInputProfiler())
 
     def select(
@@ -42,12 +54,10 @@ class AnalyzedImageSelector:
     ) -> tuple[list[ScoredCandidate], list[ScoredCandidate], PickerStatistics]:
         """解析済み画像から候補を選択する."""
         content_filter_result = self._content_filter.filter(analyzed_images)
-        candidates, resolved_profile, scene_distribution = self._score_candidates(
-            content_filter_result.kept_images
-        )
-        selection_result = self._scene_mix_selector.select(candidates, num)
+        scored = self._score_candidates(content_filter_result.kept_images)
+        selection_result = self._scene_selector.select(scored.candidates, num)
         selected = selection_result.selected
-        rejected = self._build_rejected_candidates(candidates, selected)
+        rejected = self._build_rejected_candidates(scored.candidates, selected)
 
         stats = self._build_statistics(
             analyzed_images=analyzed_images,
@@ -56,8 +66,7 @@ class AnalyzedImageSelector:
             content_filter_result=content_filter_result,
             selection_result=selection_result,
             selected_count=len(selected),
-            resolved_profile=resolved_profile,
-            scene_distribution=scene_distribution,
+            scored=scored,
         )
         return selected, rejected, stats
 
@@ -86,8 +95,7 @@ class AnalyzedImageSelector:
         content_filter_result: ContentFilterResult,
         selection_result: SelectionResult[ScoredCandidate],
         selected_count: int,
-        resolved_profile: str,
-        scene_distribution: dict[str, int],
+        scored: ScoredSceneCandidates,
     ) -> PickerStatistics:
         """選定処理で得た中間結果から統計を組み立てる."""
         input_total = total_files if total_files is not None else len(analyzed_images)
@@ -98,8 +106,8 @@ class AnalyzedImageSelector:
             rejected_by_similarity=selection_result.rejected_by_similarity,
             rejected_by_content_filter=content_filter_result.rejected_by_content_filter,
             selected_count=selected_count,
-            resolved_profile=resolved_profile,
-            scene_distribution=scene_distribution,
+            resolved_profile=scored.resolved_profile,
+            scene_distribution=scored.scene_distribution,
             scene_mix_target=selection_result.target_counts,
             scene_mix_actual=selection_result.actual_counts,
             threshold_relaxation_steps=self.config.compute_threshold_steps(
@@ -108,16 +116,34 @@ class AnalyzedImageSelector:
             content_filter_breakdown=content_filter_result.content_filter_breakdown,
             whole_input_profile=content_filter_result.whole_input_profile,
             selection_annotations_by_path=selection_result.annotations_by_path,
+            scene_catalog=scored.scene_catalog,
+            ollama_classification_failed=scored.classification_failed,
+            ollama_classification_failure_rate=scored.classification_failure_rate,
         )
 
     def _score_candidates(
         self,
         analyzed_images: list[AnalyzedImage],
-    ) -> tuple[list[ScoredCandidate], str, dict[str, int]]:
-        """scene評価とprofile解決を行い、最終候補を作る."""
-        assessments = self._scene_scorer.assess_batch(
-            analyzed_images,
-            self.config.scene_mix,
+    ) -> ScoredSceneCandidates:
+        """Ollama scene評価とprofile解決を行い、最終候補を作る."""
+        if not analyzed_images:
+            resolved_profile, _profile_scores = self._profile_resolver.resolve(
+                self.config.profile,
+                analyzed_images,
+            )
+            return ScoredSceneCandidates(
+                candidates=[],
+                resolved_profile=resolved_profile,
+                scene_distribution={},
+                scene_catalog=[],
+                classification_failed=0,
+                classification_failure_rate=0.0,
+            )
+
+        representative_paths = self._build_representative_paths(analyzed_images)
+        scene_catalog = self._scene_analyzer.generate_scene_catalog(
+            representative_paths,
+            self.config.scene_hint,
         )
         resolved_profile, _profile_scores = self._profile_resolver.resolve(
             self.config.profile,
@@ -125,24 +151,88 @@ class AnalyzedImageSelector:
         )
         profile = PROFILE_REGISTRY[resolved_profile]
 
-        candidates = [
-            self._candidate_scorer.score(
-                image,
-                assessment,
-                profile,
+        candidates: list[ScoredCandidate] = []
+        classification_failed = 0
+        classifications = self._classify_images(analyzed_images, scene_catalog)
+        for image, classification in zip(analyzed_images, classifications, strict=True):
+            if classification is None:
+                classification_failed += 1
+                continue
+            assessment = SceneAssessment(
+                scene_slug=classification.scene_slug,
+                scene_display_name=classification.scene_display_name,
+                scene_description=classification.scene_description,
+                scene_confidence=classification.confidence,
             )
-            for image, assessment in zip(analyzed_images, assessments, strict=True)
-        ]
-        scene_distribution: dict[str, int] = {
-            SceneLabel.PLAY.value: sum(
-                1
-                for candidate in candidates
-                if candidate.scene_assessment.scene_label == SceneLabel.PLAY
-            ),
-            SceneLabel.EVENT.value: sum(
-                1
-                for candidate in candidates
-                if candidate.scene_assessment.scene_label == SceneLabel.EVENT
-            ),
-        }
-        return candidates, resolved_profile, scene_distribution
+            candidates.append(
+                self._candidate_scorer.score(
+                    image,
+                    assessment,
+                    profile,
+                )
+            )
+        scene_distribution = self._build_scene_distribution(candidates)
+        failure_rate = classification_failed / len(analyzed_images)
+        return ScoredSceneCandidates(
+            candidates=candidates,
+            resolved_profile=resolved_profile,
+            scene_distribution=scene_distribution,
+            scene_catalog=scene_catalog,
+            classification_failed=classification_failed,
+            classification_failure_rate=failure_rate,
+        )
+
+    def _classify_images(
+        self,
+        analyzed_images: list[AnalyzedImage],
+        scene_catalog: list[SceneCatalogEntry],
+    ) -> list[SceneClassification | None]:
+        """画像ごとのscene分類を実行する."""
+        max_workers = self.config.ollama.max_workers if self.config.ollama else 1
+        image_paths = [image.path for image in analyzed_images]
+        if max_workers == 1 or len(analyzed_images) <= 1:
+            return [
+                self._classify_image_path(image_path, scene_catalog)
+                for image_path in image_paths
+            ]
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            return list(
+                executor.map(
+                    self._classify_image_path,
+                    image_paths,
+                    repeat(scene_catalog),
+                )
+            )
+
+    def _classify_image_path(
+        self,
+        image_path: str,
+        scene_catalog: list[SceneCatalogEntry],
+    ) -> SceneClassification | None:
+        """1画像をscene分類する."""
+        return self._scene_analyzer.classify_image(image_path, scene_catalog)
+
+    @classmethod
+    def _build_representative_paths(
+        cls,
+        analyzed_images: list[AnalyzedImage],
+    ) -> list[str]:
+        """scene catalog用の代表画像pathを返す."""
+        ordered_images = sorted(
+            analyzed_images,
+            key=lambda image: image.raw_metrics.blur_score,
+            reverse=True,
+        )
+        return [image.path for image in ordered_images[: cls.CATALOG_SAMPLE_LIMIT]]
+
+    @staticmethod
+    def _build_scene_distribution(
+        candidates: list[ScoredCandidate],
+    ) -> dict[str, int]:
+        """分類済み候補のscene分布を返す."""
+        distribution: dict[str, int] = {}
+        for candidate in candidates:
+            distribution[candidate.scene_slug] = (
+                distribution.get(candidate.scene_slug, 0) + 1
+            )
+        return distribution

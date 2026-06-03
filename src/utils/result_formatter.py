@@ -17,11 +17,10 @@ class ResultFormatter:
         for i, result in enumerate(output_record.selected):
             logger.info(
                 f"[{i + 1}] {result.filename} "
-                f"(カテゴリ: {result.scene_label}, "
+                f"(scene: {result.scene_display_name}/{result.scene_slug}, "
                 f"band: {result.score_band}, "
-                f"play: {result.play_score:.3f}, "
-                f"event: {result.event_score:.3f}, "
-                f"density: {result.density_score:.3f})"
+                f"variant: {result.variant_group}, "
+                f"confidence: {result.scene_confidence:.3f})"
             )
 
         logger.info("--- 統計情報 ---")
@@ -40,3 +39,8 @@ class ResultFormatter:
         logger.info(f"画面分布(候補): {output_record.scene_distribution}")
         logger.info(f"画面分布(目標): {output_record.scene_mix_target}")
         logger.info(f"画面分布(実績): {output_record.scene_mix_actual}")
+        logger.info(f"Ollama分類失敗: {output_record.ollama_classification_failed}")
+        logger.info(
+            "Ollama分類失敗率: "
+            f"{output_record.ollama_classification_failure_rate * 100:.2f}%"
+        )

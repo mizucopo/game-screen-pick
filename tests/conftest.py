@@ -11,7 +11,6 @@ import cv2
 import numpy as np
 import pytest
 
-from src.constants.scene_label import SceneLabel
 from src.models.analyzed_image import AnalyzedImage
 from src.models.layout_heuristics import LayoutHeuristics
 from src.models.normalized_metrics import NormalizedMetrics
@@ -154,10 +153,9 @@ def build_whole_input_profile(*images: AnalyzedImage) -> WholeInputProfile:
 
 def create_scored_candidate(
     path: str,
-    scene_label: SceneLabel = SceneLabel.PLAY,
-    play_score: float = 0.8,
-    event_score: float = 0.3,
-    density_score: float = 0.8,
+    scene_slug: str = "battle",
+    scene_display_name: str | None = None,
+    scene_description: str | None = None,
     scene_confidence: float = 0.5,
     quality_score: float = 0.6,
     selection_score: float = 0.6,
@@ -168,10 +166,9 @@ def create_scored_candidate(
 
     Args:
         path: 候補画像のパス。
-        scene_label: 最終的に属する scene label 。
-        play_score: play 向けスコア。
-        event_score: event 向けスコア。
-        density_score: 類似度密度スコア。
+        scene_slug: 最終的に属する scene slug。
+        scene_display_name: scene の日本語表示名。
+        scene_description: scene の説明。
         scene_confidence: scene判定の信頼度。
         quality_score: 画質スコア。
         selection_score: 最終選定スコア。
@@ -185,10 +182,9 @@ def create_scored_candidate(
         combined_features=combined_features,
     )
     assessment = SceneAssessment(
-        play_score=play_score,
-        event_score=event_score,
-        density_score=density_score,
-        scene_label=scene_label,
+        scene_slug=scene_slug,
+        scene_display_name=scene_display_name or scene_slug,
+        scene_description=scene_description or scene_slug,
         scene_confidence=scene_confidence,
     )
     return ScoredCandidate(

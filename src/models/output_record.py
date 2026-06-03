@@ -28,6 +28,9 @@ class OutputRecord:
     threshold_relaxation_steps: list[float]
     content_filter_breakdown: dict[str, int]
     whole_input_profile: dict[str, dict[str, float]] | None
+    scene_catalog: list[dict[str, str]]
+    ollama_classification_failed: int
+    ollama_classification_failure_rate: float
 
     @classmethod
     def from_selection(
@@ -66,6 +69,19 @@ class OutputRecord:
             content_filter_breakdown=dict(stats.content_filter_breakdown),
             whole_input_profile=cls._serialize_whole_input_profile(
                 stats.whole_input_profile
+            ),
+            scene_catalog=[
+                {
+                    "slug": scene.slug,
+                    "display_name": scene.display_name,
+                    "description": scene.description,
+                }
+                for scene in stats.scene_catalog
+            ],
+            ollama_classification_failed=stats.ollama_classification_failed,
+            ollama_classification_failure_rate=round(
+                stats.ollama_classification_failure_rate,
+                4,
             ),
         )
 
