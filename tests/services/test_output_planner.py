@@ -32,6 +32,10 @@ def _build_output_record(
     source_paths: list[str],
     scene_labels: list[str],
 ) -> OutputRecord:
+    play_count = scene_labels.count("play")
+    event_count = scene_labels.count("event")
+    scene_counts = {"play": play_count, "event": event_count}
+
     return OutputRecord(
         selected=[
             _build_candidate(source_path, scene_label)
@@ -45,9 +49,9 @@ def _build_output_record(
         rejected_by_content_filter=0,
         selected_count=len(source_paths),
         resolved_profile="active",
-        scene_distribution={"play": 2, "event": 1},
-        scene_mix_target={"play": 2, "event": 1},
-        scene_mix_actual={"play": 2, "event": 1},
+        scene_distribution=dict(scene_counts),
+        scene_mix_target=dict(scene_counts),
+        scene_mix_actual=dict(scene_counts),
         threshold_relaxation_steps=[0.72],
         content_filter_breakdown={},
         whole_input_profile=None,
