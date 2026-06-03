@@ -65,7 +65,6 @@ def test_select_classifies_blog_candidates_and_reports_ollama_failures() -> None
     )
     selector = AnalyzedImageSelector(
         config=SelectionConfig(
-            profile="active",
             ollama=OllamaConfig(model="gemma4"),
         ),
         metric_calculator=MetricCalculator(AnalyzerConfig()),
@@ -98,7 +97,6 @@ def test_select_classifies_blog_candidates_and_reports_ollama_failures() -> None
     assert stats.ollama_classification_failed == 1
     assert stats.ollama_classification_failure_rate == 1 / 3
     assert stats.scene_catalog[0].slug == "battle"
-    assert stats.resolved_profile == "active"
 
 
 def test_select_classifies_images_with_configured_ollama_workers() -> None:
@@ -128,7 +126,6 @@ def test_select_classifies_images_with_configured_ollama_workers() -> None:
     scene_analyzer = _ConcurrentSceneAnalyzer()
     selector = AnalyzedImageSelector(
         config=SelectionConfig(
-            profile="active",
             ollama=OllamaConfig(model="gemma4", max_workers=2),
         ),
         metric_calculator=MetricCalculator(AnalyzerConfig()),

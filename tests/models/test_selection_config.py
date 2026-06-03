@@ -14,7 +14,7 @@ def test_selection_config_has_sensible_defaults() -> None:
     Act:
         - デフォルト設定を参照する
     Assert:
-        - profile、similarity、Ollama関連を含む既定値が入っていること
+        - similarity、Ollama関連を含む既定値が入っていること
     """
     # Arrange
     # (引数なしでデフォルト設定を使用)
@@ -24,7 +24,6 @@ def test_selection_config_has_sensible_defaults() -> None:
 
     # Assert
     assert config.batch_size == 32
-    assert config.profile == "auto"
     assert config.similarity_threshold == 0.72
     assert config.ollama is None
     assert config.scene_hint is None
@@ -66,7 +65,6 @@ def test_threshold_steps_computed_correctly(
     "kwargs,expected_error,match_pattern",
     [
         ({"batch_size": 0}, ValueError, "正の整数"),
-        ({"profile": "unknown"}, ValueError, "profile"),
         ({"similarity_threshold": 1.1}, ValueError, "0以上1以下"),
         ({"max_threshold": -0.1}, ValueError, "0以上1以下"),
         (

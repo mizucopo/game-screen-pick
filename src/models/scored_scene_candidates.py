@@ -11,7 +11,6 @@ class ScoredSceneCandidates:
     """scene分類と候補採点で得られる中間結果."""
 
     candidates: list[ScoredCandidate]
-    resolved_profile: str
     scene_distribution: dict[str, int]
     scene_catalog: list[SceneCatalogEntry]
     classification_failed: int

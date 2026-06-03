@@ -52,7 +52,6 @@ def _build_output_record(
         rejected_by_similarity=1,
         rejected_by_content_filter=2,
         selected_count=2,
-        resolved_profile="static",
         scene_distribution={"battle": 2, "conversation": 2},
         scene_mix_target={"battle": 1, "conversation": 1},
         scene_mix_actual={"battle": 1, "conversation": 1},
@@ -125,7 +124,7 @@ def test_report_writer_serializes_output_record_fields(tmp_path: Path) -> None:
 
     # Assert
     payload = json.loads(report_path.read_text(encoding="utf-8"))
-    assert payload["resolved_profile"] == "static"
+    assert "resolved_profile" not in payload
     assert payload["scene_distribution"] == {"battle": 2, "conversation": 2}
     assert payload["scene_mix_target"] == {"battle": 1, "conversation": 1}
     assert payload["scene_catalog"][0]["display_name"] == "戦闘"

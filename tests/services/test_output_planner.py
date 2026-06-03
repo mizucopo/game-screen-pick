@@ -48,7 +48,6 @@ def _build_output_record(
         rejected_by_similarity=0,
         rejected_by_content_filter=0,
         selected_count=len(source_paths),
-        resolved_profile="active",
         scene_distribution=dict(scene_counts),
         scene_mix_target=dict(scene_counts),
         scene_mix_actual=dict(scene_counts),

@@ -32,7 +32,6 @@ def _build_output_record() -> OutputRecord:
         rejected_by_similarity=0,
         rejected_by_content_filter=0,
         selected_count=1,
-        resolved_profile="active",
         scene_distribution={"battle": 1},
         scene_mix_target={"battle": 1},
         scene_mix_actual={"battle": 1},
@@ -96,4 +95,4 @@ def test_display_results_uses_output_record() -> None:
     assert "解析成功: 1" in messages
     assert "Ollama分類失敗: 1" in messages
     assert "Ollama分類失敗率: 25.00%" in messages
-    assert "プロファイル: active" in messages
+    assert not any("プロファイル:" in message for message in messages)

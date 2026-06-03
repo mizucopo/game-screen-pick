@@ -15,7 +15,6 @@ class ScoredCandidate:
 
     analyzed_image: AnalyzedImage
     scene_assessment: SceneAssessment
-    resolved_profile: str
     quality_score: float
     selection_score: float
 

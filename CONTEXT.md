@@ -28,6 +28,10 @@ _Avoid_: internal reasoning, model trace
 scene catalog を作るときに、ユーザーがゲームジャンルやブログ画像選択の意図を補足する短い説明。
 _Avoid_: fixed scene list, selection rule
 
+**Quality Score**:
+blog candidate がブログ画像としてどれだけ使いやすいかを表す評価値。scene の種類やゲームジャンルの指示ではなく、画像そのものの見やすさを表す。
+_Avoid_: scene hint, user-facing mode, selection profile
+
 **Blog Candidate**:
 ブログ画像として選択する余地があるスクリーンショット。明らかな暗転、白飛び、単色画面、遷移フレームは含まない。
 _Avoid_: all input images

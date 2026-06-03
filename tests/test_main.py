@@ -28,7 +28,7 @@ def test_cli_translates_options_to_application_run_request(
     config_path = tmp_path / "picker.toml"
     report_path = tmp_path / "report.json"
     input_dir.mkdir()
-    config_path.write_text('[selection]\nprofile = "static"\n', encoding="utf-8")
+    config_path.write_text("[thresholds]\nsimilarity = 0.7\n", encoding="utf-8")
     captured_requests: list[ApplicationRunRequest] = []
 
     def capture_request(request: ApplicationRunRequest) -> None:
@@ -44,8 +44,6 @@ def test_cli_translates_options_to_application_run_request(
             "--similarity",
             "0.8",
             "--recursive",
-            "--profile",
-            "active",
             "--config",
             str(config_path),
             "--ollama-model",
@@ -81,7 +79,6 @@ def test_cli_translates_options_to_application_run_request(
     assert request.num == 3
     assert request.similarity == 0.8
     assert request.recursive is True
-    assert request.profile == "active"
     assert request.config_path == str(config_path)
     assert request.ollama_model == "gemma4"
     assert request.ollama_host == "http://localhost:11435"
@@ -109,6 +106,7 @@ def test_cli_translates_options_to_application_run_request(
         (["--similarity", "1.1"], "0.0~1.0"),
         (["--ollama-timeout", "0"], "正の数"),
         (["--ollama-max-workers", "0"], "正の整数"),
+        (["--profile", "active"], "No such option"),
         (["--scene-mix", "play=0.7,event=0.3"], "No such option"),
     ],
 )

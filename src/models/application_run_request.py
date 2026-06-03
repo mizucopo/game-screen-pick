@@ -10,7 +10,6 @@ class ApplicationRunRequest:
     num: int
     similarity: float | None
     recursive: bool
-    profile: str | None
     config_path: str | None
     ollama_model: str | None
     ollama_host: str | None

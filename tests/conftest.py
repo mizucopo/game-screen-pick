@@ -159,7 +159,6 @@ def create_scored_candidate(
     scene_confidence: float = 0.5,
     quality_score: float = 0.6,
     selection_score: float = 0.6,
-    resolved_profile: str = "active",
     combined_features: np.ndarray[Any, Any] | None = None,
 ) -> ScoredCandidate:
     """`ScoredCandidate` を作成する共通ヘルパー.
@@ -172,7 +171,6 @@ def create_scored_candidate(
         scene_confidence: scene判定の信頼度。
         quality_score: 画質スコア。
         selection_score: 最終選定スコア。
-        resolved_profile: 解決済みプロファイル名。
         combined_features: 類似度判定用の結合特徴。
     Returns:
         scene 判定とスコアが付与済みの `ScoredCandidate` 。
@@ -190,7 +188,6 @@ def create_scored_candidate(
     return ScoredCandidate(
         analyzed_image=analyzed,
         scene_assessment=assessment,
-        resolved_profile=resolved_profile,
         quality_score=quality_score,
         selection_score=selection_score,
     )

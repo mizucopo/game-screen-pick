@@ -1,14 +1,14 @@
 """中立解析結果を最終候補へ変換する採点器."""
 
 from ..analyzers.metric_calculator import MetricCalculator
+from ..constants.selection_quality_weights import DEFAULT_QUALITY_WEIGHTS
 from ..models.analyzed_image import AnalyzedImage
 from ..models.scene_assessment import SceneAssessment
 from ..models.scored_candidate import ScoredCandidate
-from ..models.selection_profile import SelectionProfile
 
 
 class CandidateScorer:
-    """プロファイル別の品質・選定スコアを計算する."""
+    """品質・選定スコアを計算する."""
 
     def __init__(self, metric_calculator: MetricCalculator):
         """CandidateScorerを初期化する."""
@@ -18,18 +18,16 @@ class CandidateScorer:
         self,
         analyzed_image: AnalyzedImage,
         assessment: SceneAssessment,
-        profile: SelectionProfile,
     ) -> ScoredCandidate:
         """中立解析結果を最終候補に変換する."""
         quality_score = self.metric_calculator.calculate_quality_score(
             analyzed_image.normalized_metrics,
-            profile.quality_weights,
+            DEFAULT_QUALITY_WEIGHTS,
         )
         selection_score = (quality_score * 0.7) + (assessment.scene_confidence * 0.3)
         return ScoredCandidate(
             analyzed_image=analyzed_image,
             scene_assessment=assessment,
-            resolved_profile=profile.name,
             quality_score=quality_score,
             selection_score=selection_score,
         )

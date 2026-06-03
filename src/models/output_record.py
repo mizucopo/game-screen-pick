@@ -21,7 +21,6 @@ class OutputRecord:
     rejected_by_similarity: int
     rejected_by_content_filter: int
     selected_count: int
-    resolved_profile: str
     scene_distribution: dict[str, int]
     scene_mix_target: dict[str, int]
     scene_mix_actual: dict[str, int]
@@ -61,7 +60,6 @@ class OutputRecord:
             rejected_by_similarity=stats.rejected_by_similarity,
             rejected_by_content_filter=stats.rejected_by_content_filter,
             selected_count=stats.selected_count,
-            resolved_profile=stats.resolved_profile,
             scene_distribution=dict(stats.scene_distribution),
             scene_mix_target=dict(stats.scene_mix_target),
             scene_mix_actual=dict(stats.scene_mix_actual),

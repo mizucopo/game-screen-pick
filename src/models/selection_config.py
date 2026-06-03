@@ -12,7 +12,6 @@ class SelectionConfig(ConfigFromArgsMixin):
 
     Attributes:
         batch_size: CLIP推論のバッチサイズ
-        profile: 実行プロファイル（auto / active / static）
         similarity_threshold: 類似度しきい値
         ollama: Ollama scene分類の接続設定。Noneの場合は未解決状態
         scene_hint: scene catalog作成時に渡す任意ヒント
@@ -22,7 +21,6 @@ class SelectionConfig(ConfigFromArgsMixin):
     """
 
     batch_size: int = 32
-    profile: str = "auto"
     similarity_threshold: float = 0.72
     ollama: OllamaConfig | None = None
     scene_hint: str | None = None
@@ -35,13 +33,6 @@ class SelectionConfig(ConfigFromArgsMixin):
         """設定値の妥当性を検証する."""
         if self.batch_size <= 0:
             msg = f"batch_sizeは正の整数である必要があります: {self.batch_size}"
-            raise ValueError(msg)
-
-        if self.profile not in {"auto", "active", "static"}:
-            msg = (
-                "profileは'auto', 'active', 'static'のいずれかである必要があります: "
-                f"{self.profile}"
-            )
             raise ValueError(msg)
 
         if not (0 <= self.similarity_threshold <= 1):

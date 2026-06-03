@@ -140,7 +140,6 @@ def build_dynamic_candidate(
             scene_description=scene_slug,
             scene_confidence=selection_score,
         ),
-        resolved_profile="active",
         quality_score=selection_score,
         selection_score=selection_score,
     )

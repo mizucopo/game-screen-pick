@@ -44,12 +44,10 @@ class ConfigLoader:
 
         result: dict[str, Any] = {}
         selection = raw_data.get("selection", {})
-        KNOWN_SELECTION_KEYS = {"profile"}
+        KNOWN_SELECTION_KEYS: set[str] = set()
         for key in selection:
             if key not in KNOWN_SELECTION_KEYS:
                 logger.warning(f"未知のキーを無視しました: [selection] {key}")
-        if "profile" in selection:
-            result["profile"] = selection["profile"]
 
         thresholds = raw_data.get("thresholds", {})
         if "similarity" in thresholds:
