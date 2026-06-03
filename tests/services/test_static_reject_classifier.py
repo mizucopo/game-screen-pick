@@ -4,6 +4,7 @@ import numpy as np
 
 from src.models.adaptive_scores import AdaptiveScores
 from src.models.analyzed_image import AnalyzedImage
+from src.models.content_reject_reason import ContentRejectReason
 from src.services.static_reject_classifier import StaticRejectClassifier
 from tests.conftest import build_whole_input_profile, create_analyzed_image
 
@@ -143,8 +144,8 @@ def test_static_reject_classifier_classifies_low_information_frames() -> None:
     # Assert
     assert reasons == {
         "/tmp/informative.jpg": None,
-        "/tmp/blackout.jpg": "blackout",
-        "/tmp/whiteout.jpg": "whiteout",
-        "/tmp/single_tone.jpg": "single_tone",
-        "/tmp/fade_transition.jpg": "fade_transition",
+        "/tmp/blackout.jpg": ContentRejectReason.BLACKOUT,
+        "/tmp/whiteout.jpg": ContentRejectReason.WHITEOUT,
+        "/tmp/single_tone.jpg": ContentRejectReason.SINGLE_TONE,
+        "/tmp/fade_transition.jpg": ContentRejectReason.FADE_TRANSITION,
     }
