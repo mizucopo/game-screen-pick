@@ -123,13 +123,11 @@ class GameScreenPicker:
         total_files = len(files)
 
         analyzed_images = self._analyze_images(files, show_progress)
-        analyzed_ok = len(analyzed_images)
-        analyzed_fail = total_files - analyzed_ok
 
         return self.select_from_analyzed(
             analyzed_images=analyzed_images,
             total_files=total_files,
-            analyzed_fail=analyzed_fail,
+            analyzed_fail=total_files - len(analyzed_images),
             num=num,
         )
 

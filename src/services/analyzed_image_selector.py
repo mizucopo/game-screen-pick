@@ -4,9 +4,11 @@ from ..analyzers.metric_calculator import MetricCalculator
 from ..constants.scene_label import SceneLabel
 from ..constants.selection_profiles import PROFILE_REGISTRY
 from ..models.analyzed_image import AnalyzedImage
+from ..models.content_filter_result import ContentFilterResult
 from ..models.picker_statistics import PickerStatistics
 from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_config import SelectionConfig
+from ..models.selection_result import SelectionResult
 from .candidate_scorer import CandidateScorer
 from .content_filter import ContentFilter
 from .profile_resolver import ProfileResolver
@@ -40,14 +42,33 @@ class AnalyzedImageSelector:
     ) -> tuple[list[ScoredCandidate], list[ScoredCandidate], PickerStatistics]:
         """解析済み画像から候補を選択する."""
         content_filter_result = self._content_filter.filter(analyzed_images)
-        filtered_images = content_filter_result.kept_images
         candidates, resolved_profile, scene_distribution = self._score_candidates(
-            filtered_images
+            content_filter_result.kept_images
         )
         selection_result = self._scene_mix_selector.select(candidates, num)
         selected = selection_result.selected
+        rejected = self._build_rejected_candidates(candidates, selected)
+
+        stats = self._build_statistics(
+            analyzed_images=analyzed_images,
+            total_files=total_files,
+            analyzed_fail=analyzed_fail,
+            content_filter_result=content_filter_result,
+            selection_result=selection_result,
+            selected_count=len(selected),
+            resolved_profile=resolved_profile,
+            scene_distribution=scene_distribution,
+        )
+        return selected, rejected, stats
+
+    @staticmethod
+    def _build_rejected_candidates(
+        candidates: list[ScoredCandidate],
+        selected: list[ScoredCandidate],
+    ) -> list[ScoredCandidate]:
+        """非選択候補を選定スコア順に並べる."""
         selected_paths = {candidate.path for candidate in selected}
-        rejected = sorted(
+        return sorted(
             [
                 candidate
                 for candidate in candidates
@@ -57,15 +78,26 @@ class AnalyzedImageSelector:
             reverse=True,
         )
 
-        stats = PickerStatistics(
-            total_files=total_files
-            if total_files is not None
-            else len(analyzed_images),
+    def _build_statistics(
+        self,
+        analyzed_images: list[AnalyzedImage],
+        total_files: int | None,
+        analyzed_fail: int,
+        content_filter_result: ContentFilterResult,
+        selection_result: SelectionResult[ScoredCandidate],
+        selected_count: int,
+        resolved_profile: str,
+        scene_distribution: dict[str, int],
+    ) -> PickerStatistics:
+        """選定処理で得た中間結果から統計を組み立てる."""
+        input_total = total_files if total_files is not None else len(analyzed_images)
+        return PickerStatistics(
+            total_files=input_total,
             analyzed_ok=len(analyzed_images),
             analyzed_fail=analyzed_fail,
             rejected_by_similarity=selection_result.rejected_by_similarity,
             rejected_by_content_filter=content_filter_result.rejected_by_content_filter,
-            selected_count=len(selected),
+            selected_count=selected_count,
             resolved_profile=resolved_profile,
             scene_distribution=scene_distribution,
             scene_mix_target=selection_result.target_counts,
@@ -77,7 +109,6 @@ class AnalyzedImageSelector:
             whole_input_profile=content_filter_result.whole_input_profile,
             selection_annotations_by_path=selection_result.annotations_by_path,
         )
-        return selected, rejected, stats
 
     def _score_candidates(
         self,
