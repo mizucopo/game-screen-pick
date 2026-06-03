@@ -28,7 +28,12 @@ def run_application(request: ApplicationRunRequest) -> None:
     try:
         input_path = _resolve_input_path(request.input_dir)
         output_record = _select_output_record(request, input_path)
-        output_record = _copy_selected_outputs(request, output_record)
+        output_record = FileUtils.copy_selected_items(
+            output_record,
+            request.output_dir,
+            rename=request.rename,
+            requested_num=request.num,
+        )
 
         ResultFormatter.display_results(output_record)
         if request.report_json is not None:
@@ -78,16 +83,3 @@ def _select_output_record(
             recursive=request.recursive,
         )
         return OutputRecord.from_selection(selected, rejected, stats)
-
-
-def _copy_selected_outputs(
-    request: ApplicationRunRequest,
-    output_record: OutputRecord,
-) -> OutputRecord:
-    """選択済みrecordを計画済み出力先へコピーする."""
-    return FileUtils.copy_selected_items(
-        output_record,
-        request.output_dir,
-        rename=request.rename,
-        requested_num=request.num,
-    )
