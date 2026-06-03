@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 from pathlib import Path
-from threading import RLock
+from threading import Lock
 from urllib.request import Request, urlopen
 
 from ..models.ollama_config import OllamaConfig
@@ -19,7 +19,7 @@ class OllamaSceneAnalyzer:
     def __init__(self, config: OllamaConfig) -> None:
         """analyzerを初期化する."""
         self.config = config
-        self._cache_lock = RLock()
+        self._cache_lock = Lock()
 
     def generate_scene_catalog(
         self,
@@ -66,7 +66,7 @@ class OllamaSceneAnalyzer:
                         classification,
                     )
                 return classification
-            except (OSError, TimeoutError, ValueError, json.JSONDecodeError):
+            except (OSError, ValueError):
                 continue
         return None
 

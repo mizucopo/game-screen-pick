@@ -115,17 +115,13 @@ class DynamicSceneSelector:
             return scene_order
 
         scene_index = {scene: index for index, scene in enumerate(scene_order)}
-        best_score_by_scene = {
-            scene: max(
-                (
-                    (candidate.selection_score, candidate.quality_score)
-                    for candidate in candidates
-                    if candidate.scene_slug == scene
-                ),
-                default=(0.0, 0.0),
-            )
-            for scene in scene_order
-        }
+        best_score_by_scene = DynamicSceneSelector._best_score_by_scene(scene_order)
+        for candidate in candidates:
+            candidate_score = (candidate.selection_score, candidate.quality_score)
+            current_score = best_score_by_scene[candidate.scene_slug]
+            if candidate_score > current_score:
+                best_score_by_scene[candidate.scene_slug] = candidate_score
+
         return sorted(
             scene_order,
             key=lambda scene: (
@@ -134,6 +130,11 @@ class DynamicSceneSelector:
                 scene_index[scene],
             ),
         )
+
+    @staticmethod
+    def _best_score_by_scene(scene_order: list[str]) -> dict[str, tuple[float, float]]:
+        """sceneごとの最高score初期値を返す."""
+        return dict.fromkeys(scene_order, (0.0, 0.0))
 
     @staticmethod
     def _build_scene_streams(
