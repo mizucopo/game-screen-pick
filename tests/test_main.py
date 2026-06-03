@@ -48,8 +48,17 @@ def test_cli_translates_options_to_application_run_request(
             "active",
             "--config",
             str(config_path),
-            "--scene-mix",
-            "play=0.6,event=0.4",
+            "--ollama-model",
+            "gemma4",
+            "--ollama-host",
+            "http://localhost:11435",
+            "--ollama-timeout",
+            "30",
+            "--ollama-max-workers",
+            "2",
+            "--no-ollama-cache",
+            "--scene-hint",
+            "アドベンチャーゲーム。会話差分が多い",
             "--report-json",
             str(report_path),
             "--rename",
@@ -74,9 +83,12 @@ def test_cli_translates_options_to_application_run_request(
     assert request.recursive is True
     assert request.profile == "active"
     assert request.config_path == str(config_path)
-    assert request.scene_mix is not None
-    assert request.scene_mix.play == 0.6
-    assert request.scene_mix.event == 0.4
+    assert request.ollama_model == "gemma4"
+    assert request.ollama_host == "http://localhost:11435"
+    assert request.ollama_timeout == 30.0
+    assert request.ollama_max_workers == 2
+    assert request.ollama_cache_enabled is False
+    assert request.scene_hint == "アドベンチャーゲーム。会話差分が多い"
     assert request.report_json == str(report_path)
     assert request.rename is True
     assert request.batch_size == 64
@@ -95,8 +107,9 @@ def test_cli_translates_options_to_application_run_request(
         (["-n", "0"], "正の整数"),
         (["--similarity", "-0.1"], "0.0~1.0"),
         (["--similarity", "1.1"], "0.0~1.0"),
-        (["--scene-mix", "play=0.7,event=0.4"], "scene_mixの合計"),
-        (["--scene-mix", "play=0.7"], "2要素が必要です"),
+        (["--ollama-timeout", "0"], "正の数"),
+        (["--ollama-max-workers", "0"], "正の整数"),
+        (["--scene-mix", "play=0.7,event=0.3"], "No such option"),
     ],
 )
 def test_cli_validates_inputs(

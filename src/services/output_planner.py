@@ -46,10 +46,10 @@ class OutputPlanner:
 
         for candidate in output_record.selected:
             if rename:
-                scene_counters[candidate.scene_label] += 1
+                scene_counters[candidate.scene_slug] += 1
                 filename = OutputPlanner.build_renamed_filename(
-                    scene_name=candidate.scene_label,
-                    index=scene_counters[candidate.scene_label],
+                    scene_name=candidate.scene_slug,
+                    index=scene_counters[candidate.scene_slug],
                     suffix=candidate.suffix,
                     requested_num=rename_requested_num,
                 )

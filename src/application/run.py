@@ -10,6 +10,7 @@ from ..analyzers.image_quality_analyzer import ImageQualityAnalyzer
 from ..models.application_run_request import ApplicationRunRequest
 from ..models.output_record import OutputRecord
 from ..services.game_screen_picker import GameScreenPicker
+from ..services.ollama_scene_analyzer import OllamaSceneAnalyzer
 from ..utils.config_resolver import ConfigResolver
 from ..utils.file_utils import FileUtils
 from ..utils.report_writer import ReportWriter
@@ -65,16 +66,29 @@ def _select_output_record(
     analyzer_config, selection_config = ConfigResolver.resolve_configs(
         config_path=request.config_path,
         profile=request.profile,
-        scene_mix=request.scene_mix,
         similarity=request.similarity,
         batch_size=request.batch_size,
         result_max_workers=request.result_max_workers,
         max_dim=request.max_dim,
         max_memory_gb=request.max_memory_gb,
+        ollama_model=request.ollama_model,
+        ollama_host=request.ollama_host,
+        ollama_timeout=request.ollama_timeout,
+        ollama_max_workers=request.ollama_max_workers,
+        ollama_cache_enabled=request.ollama_cache_enabled,
+        scene_hint=request.scene_hint,
     )
 
     with ImageQualityAnalyzer(config=analyzer_config) as analyzer:
-        picker = GameScreenPicker(analyzer, config=selection_config)
+        if selection_config.ollama is None:
+            msg = "Ollama設定が解決されていません"
+            raise ValueError(msg)
+        scene_analyzer = OllamaSceneAnalyzer(selection_config.ollama)
+        picker = GameScreenPicker(
+            analyzer,
+            scene_analyzer=scene_analyzer,
+            config=selection_config,
+        )
         logger.info("画像処理を開始します...")
 
         selected, rejected, stats = picker.select(

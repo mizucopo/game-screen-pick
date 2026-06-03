@@ -16,14 +16,14 @@ def _build_candidate(
         source_path=source_path,
         filename=path.name,
         suffix=path.suffix,
-        scene_label=scene_label,
-        play_score=0.8,
-        event_score=0.3,
-        density_score=0.7,
+        scene_slug=scene_label,
+        scene_display_name=scene_label,
+        scene_description=scene_label,
         scene_confidence=0.5,
         quality_score=0.6,
         selection_score=0.6,
         score_band="high",
+        variant_group=f"{scene_label}_001",
         outlier_rejected=False,
     )
 
@@ -55,6 +55,9 @@ def _build_output_record(
         threshold_relaxation_steps=[0.72],
         content_filter_breakdown={},
         whole_input_profile=None,
+        scene_catalog=[],
+        ollama_classification_failed=0,
+        ollama_classification_failure_rate=0.0,
     )
 
 

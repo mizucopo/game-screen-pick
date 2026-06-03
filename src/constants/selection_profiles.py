@@ -1,9 +1,6 @@
 """組み込み選定プロファイルとデフォルト値。"""
 
-from ..models.scene_mix import SceneMix
 from ..models.selection_profile import SelectionProfile
-
-DEFAULT_SCENE_MIX = SceneMix(play=0.7, event=0.3)
 
 ACTIVE_PROFILE = SelectionProfile(
     name="active",

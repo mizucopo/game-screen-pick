@@ -10,9 +10,9 @@ import click
 import pytest
 
 from src.application.run import run_application
-from src.constants.scene_label import SceneLabel
 from src.models.analyzer_config import AnalyzerConfig
 from src.models.application_run_request import ApplicationRunRequest
+from src.models.ollama_config import OllamaConfig
 from src.models.picker_statistics import PickerStatistics
 from src.models.scored_candidate import ScoredCandidate
 from src.models.selection_annotation import SelectionAnnotation
@@ -34,7 +34,12 @@ def _build_request(
         recursive=False,
         profile=None,
         config_path=None,
-        scene_mix=None,
+        ollama_model="gemma4",
+        ollama_host=None,
+        ollama_timeout=None,
+        ollama_max_workers=None,
+        ollama_cache_enabled=True,
+        scene_hint=None,
         report_json=report_json,
         rename=rename,
         batch_size=None,
@@ -61,9 +66,9 @@ def _build_stats(
         rejected_by_content_filter=0,
         selected_count=selected_count,
         resolved_profile="active",
-        scene_distribution={"play": selected_count, "event": 0},
-        scene_mix_target={"play": selected_count, "event": 0},
-        scene_mix_actual={"play": selected_count, "event": 0},
+        scene_distribution={"battle": selected_count},
+        scene_mix_target={"battle": selected_count},
+        scene_mix_actual={"battle": selected_count},
         threshold_relaxation_steps=[0.72],
         content_filter_breakdown={
             "blackout": 0,
@@ -92,6 +97,10 @@ def _arrange_picker(
     monkeypatch.setattr(
         "src.application.run.GameScreenPicker",
         lambda *_args, **_kwargs: picker,
+    )
+    monkeypatch.setattr(
+        "src.application.run.OllamaSceneAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
     )
 
 
@@ -141,7 +150,7 @@ def test_run_application_writes_report_json_with_output_paths(
     """application実行でJSONレポートが出力されること.
 
     Arrange:
-        - 選択結果にplay_score/event_score/density_scoreが含まれる
+        - 選択結果にscene slug/display nameが含まれる
         - 統計情報にscore_bandの選定注釈が含まれる
         - report_jsonが指定されている
     Act:
@@ -159,10 +168,9 @@ def test_run_application_writes_report_json_with_output_paths(
     selected = [
         create_scored_candidate(
             path=str(source),
-            scene_label=SceneLabel.PLAY,
-            play_score=0.8,
-            event_score=0.2,
-            density_score=0.8,
+            scene_slug="battle",
+            scene_display_name="戦闘",
+            scene_description="敵との戦闘場面",
             selection_score=0.8,
         )
     ]
@@ -193,8 +201,8 @@ def test_run_application_writes_report_json_with_output_paths(
     assert payload["selected"][0]["output_path"] == str(
         (output_dir / "image0.jpg").resolve()
     )
-    assert payload["selected"][0]["play_score"] == 0.8
-    assert payload["selected"][0]["event_score"] == 0.2
+    assert payload["selected"][0]["scene_slug"] == "battle"
+    assert payload["selected"][0]["scene_display_name"] == "戦闘"
     assert payload["selected"][0]["score_band"] == "high"
 
 
@@ -226,15 +234,21 @@ def test_run_application_renames_outputs_by_scene(
     selected = [
         create_scored_candidate(
             path=str(sources["play_png"]),
-            scene_label=SceneLabel.PLAY,
+            scene_slug="battle",
+            scene_display_name="戦闘",
+            scene_description="敵との戦闘場面",
         ),
         create_scored_candidate(
             path=str(sources["event_jpg"]),
-            scene_label=SceneLabel.EVENT,
+            scene_slug="conversation",
+            scene_display_name="会話",
+            scene_description="人物同士の会話場面",
         ),
         create_scored_candidate(
             path=str(sources["play_jpg"]),
-            scene_label=SceneLabel.PLAY,
+            scene_slug="battle",
+            scene_display_name="戦闘",
+            scene_description="敵との戦闘場面",
         ),
     ]
     _arrange_picker(
@@ -247,9 +261,9 @@ def test_run_application_renames_outputs_by_scene(
     run_application(_build_request(input_dir, output_dir, num=3, rename=True))
 
     # Assert
-    assert (output_dir / "play0001.png").exists()
-    assert (output_dir / "event0001.jpg").exists()
-    assert (output_dir / "play0002.jpg").exists()
+    assert (output_dir / "battle0001.png").exists()
+    assert (output_dir / "conversation0001.jpg").exists()
+    assert (output_dir / "battle0002.jpg").exists()
 
 
 def test_run_application_resolves_configs_and_constructs_picker(
@@ -277,6 +291,7 @@ def test_run_application_resolves_configs_and_constructs_picker(
     )
     analyzer_configs: list[AnalyzerConfig] = []
     selection_configs: list[SelectionConfig] = []
+    ollama_configs: list[OllamaConfig] = []
     picker = MagicMock()
     picker.select.return_value = (
         [],
@@ -292,6 +307,10 @@ def test_run_application_resolves_configs_and_constructs_picker(
         result_max_workers=2,
         max_dim=1080,
         max_memory_gb=4,
+        ollama_model="cli-model",
+        ollama_host="http://cli:11434",
+        ollama_timeout=30.0,
+        ollama_max_workers=2,
     )
 
     def capture_analyzer_config(
@@ -304,9 +323,15 @@ def test_run_application_resolves_configs_and_constructs_picker(
     def capture_selection_config(
         *_args: object,
         config: SelectionConfig,
+        scene_analyzer: object,
     ) -> MagicMock:
+        del scene_analyzer
         selection_configs.append(config)
         return picker
+
+    def capture_ollama_config(config: OllamaConfig) -> MagicMock:
+        ollama_configs.append(config)
+        return MagicMock()
 
     monkeypatch.setattr(
         "src.application.run.ImageQualityAnalyzer",
@@ -315,6 +340,10 @@ def test_run_application_resolves_configs_and_constructs_picker(
     monkeypatch.setattr(
         "src.application.run.GameScreenPicker",
         capture_selection_config,
+    )
+    monkeypatch.setattr(
+        "src.application.run.OllamaSceneAnalyzer",
+        capture_ollama_config,
     )
 
     # Act
@@ -327,6 +356,10 @@ def test_run_application_resolves_configs_and_constructs_picker(
     assert selection_configs[0].profile == "active"
     assert selection_configs[0].similarity_threshold == 0.8
     assert selection_configs[0].batch_size == 64
+    assert selection_configs[0].ollama is not None
+    assert selection_configs[0].ollama.model == "cli-model"
+    assert ollama_configs[0].host == "http://cli:11434"
+    assert ollama_configs[0].timeout == 30.0
 
 
 def test_run_application_converts_unexpected_errors_to_system_exit(

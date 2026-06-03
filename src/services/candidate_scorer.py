@@ -1,7 +1,6 @@
 """中立解析結果を最終候補へ変換する採点器."""
 
 from ..analyzers.metric_calculator import MetricCalculator
-from ..constants.scene_label import SceneLabel
 from ..models.analyzed_image import AnalyzedImage
 from ..models.scene_assessment import SceneAssessment
 from ..models.scored_candidate import ScoredCandidate
@@ -26,11 +25,7 @@ class CandidateScorer:
             analyzed_image.normalized_metrics,
             profile.quality_weights,
         )
-        selection_score = (
-            assessment.play_score
-            if assessment.scene_label == SceneLabel.PLAY
-            else assessment.event_score
-        )
+        selection_score = (quality_score * 0.7) + (assessment.scene_confidence * 0.3)
         return ScoredCandidate(
             analyzed_image=analyzed_image,
             scene_assessment=assessment,

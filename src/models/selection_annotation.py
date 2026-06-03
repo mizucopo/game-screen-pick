@@ -9,3 +9,4 @@ class SelectionAnnotation:
 
     score_band: str | None = None
     outlier_rejected: bool = False
+    variant_group: str | None = None

@@ -8,6 +8,7 @@ from ..models.picker_statistics import PickerStatistics
 from ..models.scored_candidate import ScoredCandidate
 from ..models.selection_config import SelectionConfig
 from ..protocols.analyzer_like import AnalyzerLike
+from ..protocols.scene_analyzer_like import SceneAnalyzerLike
 from .analyzed_image_selector import AnalyzedImageSelector
 
 
@@ -25,6 +26,7 @@ class GameScreenPicker:
     def __init__(
         self,
         analyzer: AnalyzerLike,
+        scene_analyzer: SceneAnalyzerLike,
         config: SelectionConfig | None = None,
     ):
         """ピッカーを初期化する.
@@ -34,10 +36,12 @@ class GameScreenPicker:
             config: scene mix、類似度しきい値、profile指定を含む選択設定。
         """
         self.analyzer = analyzer
+        self.scene_analyzer = scene_analyzer
         self.config = config or SelectionConfig()
         self._analyzed_image_selector = AnalyzedImageSelector(
             config=self.config,
             metric_calculator=self.analyzer.metric_calculator,
+            scene_analyzer=self.scene_analyzer,
         )
 
     @staticmethod

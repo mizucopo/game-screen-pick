@@ -7,7 +7,6 @@ import click
 
 from .application.run import run_application
 from .models.application_run_request import ApplicationRunRequest
-from .models.scene_mix import SceneMix
 
 logging.basicConfig(
     level=logging.INFO,
@@ -97,49 +96,17 @@ def validate_similarity_range(value: float | str | None) -> float | None:
     return float_value
 
 
-def parse_scene_mix(value: str | None) -> SceneMix | None:
-    """scene mix文字列を `SceneMix` へ変換する.
-
-    受け付ける形式は `play=0.7,event=0.3` のみで、
-    2要素が揃っていることを前提とする。合計値の検証は
-    `SceneMix` モデルのバリデーションへ委ねる。
-
-    Args:
-        value: CLIで指定されたscene mix文字列。
-
-    Returns:
-        解析済みの `SceneMix` 。未指定時は `None` を返す。
-
-    Raises:
-        click.BadParameter: 形式不正、要素不足、数値変換失敗、整合性検証失敗時。
-    """
+def validate_positive_float(value: float | str | None) -> float | None:
+    """正の浮動小数点数をバリデーションする."""
     if value is None:
         return None
-
-    pairs = {}
-    for item in value.split(","):
-        key, separator, raw_score = item.strip().partition("=")
-        if separator != "=" or not key:
-            raise click.BadParameter(
-                "scene-mixは play=0.7,event=0.3 形式で指定してください"
-            )
-        try:
-            pairs[key] = float(raw_score)
-        except ValueError as error:
-            raise click.BadParameter(
-                f"scene-mixの値は数値である必要があります: {item}"
-            ) from error
-
-    expected_keys = {"play", "event"}
-    if set(pairs) != expected_keys:
-        raise click.BadParameter("scene-mixには play,event の2要素が必要です")
     try:
-        return SceneMix(
-            play=pairs["play"],
-            event=pairs["event"],
-        )
+        float_value = float(value)
     except ValueError as error:
-        raise click.BadParameter(str(error)) from error
+        raise click.BadParameter(f"'{value}' は数値ではありません") from error
+    if float_value <= 0:
+        raise click.BadParameter(f"正の数を指定してください（実際の値: {float_value}）")
+    return float_value
 
 
 @click.command()
@@ -174,10 +141,43 @@ def parse_scene_mix(value: str | None) -> SceneMix | None:
     help="TOML設定ファイル",
 )
 @click.option(
-    "--scene-mix",
-    callback=lambda _ctx, _param, x: parse_scene_mix(x),
+    "--ollama-model",
     default=None,
-    help="画面種別比率。例: play=0.7,event=0.3",
+    type=str,
+    help="Ollamaの画像分類モデル名",
+)
+@click.option(
+    "--ollama-host",
+    default=None,
+    type=str,
+    help="OllamaホストURL（OLLAMA_HOSTより優先）",
+)
+@click.option(
+    "--ollama-timeout",
+    type=float,
+    callback=lambda _ctx, _param, x: validate_positive_float(x),
+    default=None,
+    help="Ollama APIタイムアウト秒数",
+)
+@click.option(
+    "--ollama-max-workers",
+    type=int,
+    callback=lambda _ctx, _param, x: validate_positive_int(x),
+    default=None,
+    help="Ollama分類の並列ワーカー数",
+)
+@click.option(
+    "--no-ollama-cache",
+    "ollama_cache_enabled",
+    flag_value=False,
+    default=True,
+    help="Ollama分類キャッシュを使わない",
+)
+@click.option(
+    "--scene-hint",
+    default=None,
+    type=str,
+    help="scene catalog作成に渡す任意ヒント",
 )
 @click.option(
     "--report-json",
@@ -233,7 +233,12 @@ def execute(
     recursive: bool,
     profile: str | None,
     config_path: str | None,
-    scene_mix: SceneMix | None,
+    ollama_model: str | None,
+    ollama_host: str | None,
+    ollama_timeout: float | None,
+    ollama_max_workers: int | None,
+    ollama_cache_enabled: bool,
+    scene_hint: str | None,
     report_json: str | None,
     rename: bool,
     batch_size: int | None,
@@ -253,7 +258,7 @@ def execute(
     使用例:
       game-screen-pick -n 15 ./screenshots ./output
       game-screen-pick --rename ./screenshots ./output
-      game-screen-pick --scene-mix play=0.7,event=0.3 ./in ./out
+      game-screen-pick --ollama-model gemma4 --scene-hint "RPG" ./in ./out
 
     Args:
         num: 選択枚数。
@@ -261,7 +266,12 @@ def execute(
         recursive: サブフォルダを再帰的に探索するかどうか。
         profile: 選定プロファイル。 `auto` / `active` / `static` 。
         config_path: TOML設定ファイルのパス。
-        scene_mix: CLIから上書きする画面種別比率。
+        ollama_model: Ollamaの画像分類モデル名。
+        ollama_host: OllamaホストURL。
+        ollama_timeout: Ollama APIタイムアウト秒数。
+        ollama_max_workers: Ollama分類の並列ワーカー数。
+        ollama_cache_enabled: Ollama分類キャッシュを使うかどうか。
+        scene_hint: scene catalog作成に渡す任意ヒント。
         report_json: JSONレポートの出力先パス。
         rename: scene別の連番ファイル名で出力するかどうか。
         batch_size: CLIP推論のバッチサイズ上書き。
@@ -286,7 +296,12 @@ def execute(
             recursive=recursive,
             profile=profile,
             config_path=config_path,
-            scene_mix=scene_mix,
+            ollama_model=ollama_model,
+            ollama_host=ollama_host,
+            ollama_timeout=ollama_timeout,
+            ollama_max_workers=ollama_max_workers,
+            ollama_cache_enabled=ollama_cache_enabled,
+            scene_hint=scene_hint,
             report_json=report_json,
             rename=rename,
             batch_size=batch_size,

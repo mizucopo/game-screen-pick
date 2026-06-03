@@ -62,7 +62,7 @@ def test_content_filter_rejects_flat_frames_and_keeps_informative_dark_frames() 
 
     Arrange:
         - blackout、whiteout、単色、フェード遷移などの低情報量フレームを含む画像群がある
-        - 高情報量の暗いgameplay/eventフレームもある
+        - 高情報量の暗いフレームもある
     Act:
         - ContentFilterでフィルタリングされる
     Assert:

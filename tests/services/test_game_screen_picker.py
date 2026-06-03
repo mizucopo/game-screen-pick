@@ -5,11 +5,11 @@ from pathlib import Path
 from src.analyzers.metric_calculator import MetricCalculator
 from src.models.analyzed_image import AnalyzedImage
 from src.models.analyzer_config import AnalyzerConfig
-from src.models.scene_mix import SceneMix
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
 from tests.conftest import _feature, _near_duplicate, create_analyzed_image
 from tests.fake_analyzer import FakeAnalyzer
+from tests.fake_scene_analyzer import FakeSceneAnalyzer
 
 
 class _AnalyzerWithFailures:
@@ -59,7 +59,8 @@ def test_select_from_analyzed_excludes_content_filtered_images() -> None:
     )
     picker = GameScreenPicker(
         analyzer=FakeAnalyzer([dark, play, event]),
-        config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
     )
 
     # Act
@@ -101,7 +102,8 @@ def test_select_tracks_total_files_and_analysis_failures(tmp_path: Path) -> None
     ]
     picker = GameScreenPicker(
         analyzer=_AnalyzerWithFailures(analyzed_images),
-        config=SelectionConfig(scene_mix=SceneMix(play=0.5, event=0.5)),
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
     )
 
     # Act
@@ -154,7 +156,8 @@ def test_select_from_analyzed_sorts_remaining_candidates_by_selection_score() ->
     ]
     picker = GameScreenPicker(
         analyzer=FakeAnalyzer(analyzed_images),
-        config=SelectionConfig(scene_mix=SceneMix(play=1.0, event=0.0)),
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
     )
 
     # Act

@@ -5,8 +5,6 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from ..models.scene_mix import SceneMix
-
 logger = logging.getLogger(__name__)
 
 
@@ -22,7 +20,7 @@ class ConfigLoader:
     def load(path: str | None) -> dict[str, Any]:
         """TOML設定を辞書で返す.
 
-        `[selection]`, `[scene_mix]`, `[thresholds]` のうち、
+        `[selection]`, `[thresholds]`, `[ollama]` のうち、
         実行時に必要な項目だけを抽出して返す。
         優先順位の解決自体は行わず、後段の `ConfigResolver`
         で CLI override と合成する前提の補助メソッドである。
@@ -39,7 +37,7 @@ class ConfigLoader:
         with config_path.open("rb") as file:
             raw_data = tomllib.load(file)
 
-        KNOWN_SECTIONS = {"selection", "scene_mix", "thresholds"}
+        KNOWN_SECTIONS = {"selection", "thresholds", "ollama"}
         for section_name in raw_data:
             if section_name not in KNOWN_SECTIONS:
                 logger.warning(f"未知のセクションを無視しました: [{section_name}]")
@@ -53,15 +51,22 @@ class ConfigLoader:
         if "profile" in selection:
             result["profile"] = selection["profile"]
 
-        scene_mix = raw_data.get("scene_mix", {})
-        if scene_mix:
-            result["scene_mix"] = SceneMix(
-                play=float(scene_mix.get("play", 0.7)),
-                event=float(scene_mix.get("event", 0.3)),
-            )
-
         thresholds = raw_data.get("thresholds", {})
         if "similarity" in thresholds:
             result["similarity_threshold"] = float(thresholds["similarity"])
+
+        ollama = raw_data.get("ollama", {})
+        KNOWN_OLLAMA_KEYS = {"model", "host", "timeout", "max_workers"}
+        for key in ollama:
+            if key not in KNOWN_OLLAMA_KEYS:
+                logger.warning(f"未知のキーを無視しました: [ollama] {key}")
+        if "model" in ollama:
+            result["ollama_model"] = str(ollama["model"])
+        if "host" in ollama:
+            result["ollama_host"] = str(ollama["host"])
+        if "timeout" in ollama:
+            result["ollama_timeout"] = float(ollama["timeout"])
+        if "max_workers" in ollama:
+            result["ollama_max_workers"] = int(ollama["max_workers"])
 
         return result
