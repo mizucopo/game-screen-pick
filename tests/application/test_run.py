@@ -4,7 +4,6 @@ import json
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
 from unittest.mock import MagicMock
 
 import click
@@ -81,7 +80,7 @@ def _arrange_picker(
     monkeypatch: pytest.MonkeyPatch,
     selected: list[ScoredCandidate],
     stats: PickerStatistics,
-) -> MagicMock:
+) -> None:
     picker = MagicMock()
     picker.select.return_value = (selected, [], stats)
     analyzer = MagicMock()
@@ -94,7 +93,6 @@ def _arrange_picker(
         "src.application.run.GameScreenPicker",
         lambda *_args, **_kwargs: picker,
     )
-    return picker
 
 
 def test_run_application_selects_and_copies_images(
@@ -296,12 +294,18 @@ def test_run_application_resolves_configs_and_constructs_picker(
         max_memory_gb=4,
     )
 
-    def capture_analyzer_config(*_args: object, **kwargs: object) -> object:
-        analyzer_configs.append(cast(AnalyzerConfig, kwargs["config"]))
+    def capture_analyzer_config(
+        *_args: object,
+        config: AnalyzerConfig,
+    ) -> object:
+        analyzer_configs.append(config)
         return nullcontext(MagicMock())
 
-    def capture_selection_config(*_args: object, **kwargs: object) -> MagicMock:
-        selection_configs.append(cast(SelectionConfig, kwargs["config"]))
+    def capture_selection_config(
+        *_args: object,
+        config: SelectionConfig,
+    ) -> MagicMock:
+        selection_configs.append(config)
         return picker
 
     monkeypatch.setattr(
