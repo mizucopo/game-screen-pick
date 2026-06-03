@@ -47,7 +47,6 @@ def _build_output_record(
         rejected_by_similarity=0,
         rejected_by_content_filter=0,
         selected_count=len(source_paths),
-        resolved_profile="active",
         scene_distribution={"play": len(source_paths), "event": 0},
         scene_mix_target={"play": len(source_paths), "event": 0},
         scene_mix_actual={"play": len(source_paths), "event": 0},

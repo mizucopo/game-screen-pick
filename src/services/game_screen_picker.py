@@ -33,7 +33,7 @@ class GameScreenPicker:
 
         Args:
             analyzer: 中立解析結果を返すAnalyzer実装。
-            config: scene mix、類似度しきい値、profile指定を含む選択設定。
+            config: scene mix と類似度しきい値を含む選択設定。
         """
         self.analyzer = analyzer
         self.scene_analyzer = scene_analyzer
@@ -145,7 +145,7 @@ class GameScreenPicker:
         """解析済み画像から候補を選択する.
 
         このメソッドはファイルI/Oを行わず、ドメインロジックだけを扱う。
-        scene判定、profile解決、候補採点、scene mix選定、統計生成は
+        scene判定、候補採点、scene mix選定、統計生成は
         解析済み画像選定moduleへ委譲される。
 
         Args:

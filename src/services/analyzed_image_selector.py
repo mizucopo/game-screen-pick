@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from itertools import repeat
 
 from ..analyzers.metric_calculator import MetricCalculator
-from ..constants.selection_profiles import PROFILE_REGISTRY
 from ..models.analyzed_image import AnalyzedImage
 from ..models.content_filter_result import ContentFilterResult
 from ..models.picker_statistics import PickerStatistics
@@ -19,7 +18,6 @@ from ..protocols.scene_analyzer_like import SceneAnalyzerLike
 from .candidate_scorer import CandidateScorer
 from .content_filter import ContentFilter
 from .dynamic_scene_selector import DynamicSceneSelector
-from .profile_resolver import ProfileResolver
 from .whole_input_profiler import WholeInputProfiler
 
 
@@ -37,7 +35,6 @@ class AnalyzedImageSelector:
         """selectorを初期化する."""
         self.config = config
         self._scene_analyzer = scene_analyzer
-        self._profile_resolver = ProfileResolver()
         self._candidate_scorer = CandidateScorer(metric_calculator)
         self._scene_selector = DynamicSceneSelector(
             similarity_threshold=config.similarity_threshold,
@@ -106,7 +103,6 @@ class AnalyzedImageSelector:
             rejected_by_similarity=selection_result.rejected_by_similarity,
             rejected_by_content_filter=content_filter_result.rejected_by_content_filter,
             selected_count=selected_count,
-            resolved_profile=scored.resolved_profile,
             scene_distribution=scored.scene_distribution,
             scene_mix_target=selection_result.target_counts,
             scene_mix_actual=selection_result.actual_counts,
@@ -125,15 +121,10 @@ class AnalyzedImageSelector:
         self,
         analyzed_images: list[AnalyzedImage],
     ) -> ScoredSceneCandidates:
-        """Ollama scene評価とprofile解決を行い、最終候補を作る."""
+        """Ollama scene評価を行い、最終候補を作る."""
         if not analyzed_images:
-            resolved_profile, _profile_scores = self._profile_resolver.resolve(
-                self.config.profile,
-                analyzed_images,
-            )
             return ScoredSceneCandidates(
                 candidates=[],
-                resolved_profile=resolved_profile,
                 scene_distribution={},
                 scene_catalog=[],
                 classification_failed=0,
@@ -145,11 +136,6 @@ class AnalyzedImageSelector:
             representative_paths,
             self.config.scene_hint,
         )
-        resolved_profile, _profile_scores = self._profile_resolver.resolve(
-            self.config.profile,
-            analyzed_images,
-        )
-        profile = PROFILE_REGISTRY[resolved_profile]
 
         candidates: list[ScoredCandidate] = []
         classification_failed = 0
@@ -168,14 +154,12 @@ class AnalyzedImageSelector:
                 self._candidate_scorer.score(
                     image,
                     assessment,
-                    profile,
                 )
             )
         scene_distribution = self._build_scene_distribution(candidates)
         failure_rate = classification_failed / len(analyzed_images)
         return ScoredSceneCandidates(
             candidates=candidates,
-            resolved_profile=resolved_profile,
             scene_distribution=scene_distribution,
             scene_catalog=scene_catalog,
             classification_failed=classification_failed,

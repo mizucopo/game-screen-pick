@@ -17,7 +17,6 @@ class ReportWriter:
     ) -> None:
         """JSONレポートを書き出す."""
         payload = {
-            "resolved_profile": output_record.resolved_profile,
             "scene_distribution": output_record.scene_distribution,
             "scene_mix_target": output_record.scene_mix_target,
             "scene_mix_actual": output_record.scene_mix_actual,

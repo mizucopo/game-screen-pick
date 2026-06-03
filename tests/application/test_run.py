@@ -32,7 +32,6 @@ def _build_request(
         num=num,
         similarity=None,
         recursive=False,
-        profile=None,
         config_path=None,
         ollama_model="gemma4",
         ollama_host=None,
@@ -65,7 +64,6 @@ def _build_stats(
         rejected_by_similarity=0,
         rejected_by_content_filter=0,
         selected_count=selected_count,
-        resolved_profile="active",
         scene_distribution={"battle": selected_count},
         scene_mix_target={"battle": selected_count},
         scene_mix_actual={"battle": selected_count},
@@ -286,7 +284,7 @@ def test_run_application_resolves_configs_and_constructs_picker(
     config_path = tmp_path / "picker.toml"
     input_dir.mkdir()
     config_path.write_text(
-        '[selection]\nprofile = "static"\n[thresholds]\nsimilarity = 0.66\n',
+        "[thresholds]\nsimilarity = 0.66\n",
         encoding="utf-8",
     )
     analyzer_configs: list[AnalyzerConfig] = []
@@ -301,7 +299,6 @@ def test_run_application_resolves_configs_and_constructs_picker(
     request = replace(
         _build_request(input_dir, output_dir),
         config_path=str(config_path),
-        profile="active",
         similarity=0.8,
         batch_size=64,
         result_max_workers=2,
@@ -353,7 +350,6 @@ def test_run_application_resolves_configs_and_constructs_picker(
     assert analyzer_configs[0].result_max_workers == 2
     assert analyzer_configs[0].max_dim == 1080
     assert analyzer_configs[0].max_memory_gb == 4
-    assert selection_configs[0].profile == "active"
     assert selection_configs[0].similarity_threshold == 0.8
     assert selection_configs[0].batch_size == 64
     assert selection_configs[0].ollama is not None

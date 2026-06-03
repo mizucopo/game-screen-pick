@@ -25,15 +25,15 @@ def test_load_returns_empty_dict_when_path_is_none() -> None:
     assert result == {}
 
 
-def test_load_reads_profile_from_selection_section(tmp_path: Path) -> None:
-    """selection.profile キーが正しく読み込まれること.
+def test_load_ignores_profile_from_selection_section(tmp_path: Path) -> None:
+    """selection.profile キーが読み込まれないこと.
 
     Arrange:
         - TOMLファイルに selection.profile = "active" を書き込む
     Act:
         - ConfigLoader.loadを呼び出す
     Assert:
-        - result["profile"]が "active" であること
+        - result に profile が含まれないこと
     """
     # Arrange
     config_file = tmp_path / "test.toml"
@@ -43,7 +43,7 @@ def test_load_reads_profile_from_selection_section(tmp_path: Path) -> None:
     result = ConfigLoader.load(str(config_file))
 
     # Assert
-    assert result["profile"] == "active"
+    assert "profile" not in result
 
 
 def test_load_reads_ollama_section(tmp_path: Path) -> None:

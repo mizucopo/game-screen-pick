@@ -15,7 +15,6 @@ class ConfigResolver:
     def resolve_configs(
         *,
         config_path: str | None,
-        profile: str | None,
         similarity: float | None,
         batch_size: int | None,
         result_max_workers: int | None,
@@ -36,7 +35,6 @@ class ConfigResolver:
         )
         selection_config = ConfigResolver.resolve_selection_config(
             config_path=config_path,
-            profile=profile,
             similarity=similarity,
             batch_size=batch_size,
             ollama_model=ollama_model,
@@ -52,7 +50,6 @@ class ConfigResolver:
     def resolve_selection_config(
         *,
         config_path: str | None,
-        profile: str | None,
         similarity: float | None,
         batch_size: int | None,
         ollama_model: str | None,
@@ -73,7 +70,6 @@ class ConfigResolver:
             ollama_cache_enabled=ollama_cache_enabled,
         )
         cli_overrides = {
-            "profile": profile,
             "similarity_threshold": similarity,
             "batch_size": batch_size,
             "scene_hint": scene_hint,

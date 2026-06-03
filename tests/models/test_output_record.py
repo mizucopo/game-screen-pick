@@ -46,7 +46,6 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
         rejected_by_similarity=1,
         rejected_by_content_filter=0,
         selected_count=1,
-        resolved_profile="active",
         scene_distribution={"battle": 1, "conversation": 1},
         scene_mix_target={"battle": 1, "conversation": 0},
         scene_mix_actual={"battle": 1, "conversation": 0},
@@ -80,7 +79,6 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
     )
 
     # Assert
-    assert record.resolved_profile == "active"
     assert record.scene_distribution == {"battle": 1, "conversation": 1}
     assert record.scene_catalog[0]["slug"] == "battle"
     assert record.ollama_classification_failed == 1

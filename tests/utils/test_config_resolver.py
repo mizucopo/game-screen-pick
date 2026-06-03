@@ -13,8 +13,8 @@ def test_resolve_selection_config_prefers_cli_over_config_file(
     """CLI上書き値が設定ファイル値より優先されること.
 
     Arrange:
-        - 設定ファイルに selection / thresholds / ollama が設定されている
-        - CLI上書き値に profile / similarity / ollama が指定されている
+        - 設定ファイルに thresholds / ollama が設定されている
+        - CLI上書き値に similarity / ollama が指定されている
     Act:
         - SelectionConfig が解決される
     Assert:
@@ -23,7 +23,6 @@ def test_resolve_selection_config_prefers_cli_over_config_file(
     # Arrange
     config_path = tmp_path / "picker.toml"
     config_path.write_text(
-        '[selection]\nprofile = "static"\n'
         "[thresholds]\nsimilarity = 0.66\n"
         '[ollama]\nmodel = "config-model"\nhost = "http://config:11434"\n'
         "timeout = 90\nmax_workers = 3\n",
@@ -33,7 +32,6 @@ def test_resolve_selection_config_prefers_cli_over_config_file(
     # Act
     config = ConfigResolver.resolve_selection_config(
         config_path=str(config_path),
-        profile="active",
         similarity=0.8,
         batch_size=None,
         ollama_model="cli-model",
@@ -45,7 +43,6 @@ def test_resolve_selection_config_prefers_cli_over_config_file(
     )
 
     # Assert
-    assert config.profile == "active"
     assert config.similarity_threshold == 0.8
     assert config.ollama is not None
     assert config.ollama.model == "cli-model"
@@ -73,7 +70,6 @@ def test_resolve_selection_config_requires_ollama_model() -> None:
     with pytest.raises(ValueError, match="ollama_model"):
         ConfigResolver.resolve_selection_config(
             config_path=config_path,
-            profile=None,
             similarity=None,
             batch_size=None,
             ollama_model=None,
@@ -110,7 +106,6 @@ def test_resolve_selection_config_prefers_environment_host(
     # Act
     config = ConfigResolver.resolve_selection_config(
         config_path=str(config_path),
-        profile=None,
         similarity=None,
         batch_size=None,
         ollama_model=None,
@@ -132,7 +127,7 @@ def test_resolve_configs_returns_analyzer_and_selection_configs_from_cli_values(
     """AnalyzerConfig と SelectionConfig がCLI値から解決されること.
 
     Arrange:
-        - 設定ファイルに selection 設定が指定されている
+        - 設定ファイルに thresholds 設定が指定されている
         - CLI上書き値に analyzer 設定と selection 設定が指定されている
     Act:
         - 実行時設定がまとめて解決される
@@ -143,16 +138,13 @@ def test_resolve_configs_returns_analyzer_and_selection_configs_from_cli_values(
     # Arrange
     config_path = tmp_path / "picker.toml"
     config_path.write_text(
-        '[selection]\nprofile = "static"\n'
-        "[thresholds]\nsimilarity = 0.66\n"
-        '[ollama]\nmodel = "config-model"\n',
+        '[thresholds]\nsimilarity = 0.66\n[ollama]\nmodel = "config-model"\n',
         encoding="utf-8",
     )
 
     # Act
     analyzer_config, selection_config = ConfigResolver.resolve_configs(
         config_path=str(config_path),
-        profile=None,
         similarity=None,
         batch_size=64,
         result_max_workers=2,
@@ -170,7 +162,6 @@ def test_resolve_configs_returns_analyzer_and_selection_configs_from_cli_values(
     assert analyzer_config.result_max_workers == 2
     assert analyzer_config.max_dim == 1080
     assert analyzer_config.max_memory_gb == 4
-    assert selection_config.profile == "static"
     assert selection_config.similarity_threshold == 0.66
     assert selection_config.batch_size == 64
     assert selection_config.ollama is not None

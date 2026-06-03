@@ -128,12 +128,6 @@ def validate_positive_float(value: float | str | None) -> float | None:
 )
 @click.option("-r", "--recursive", is_flag=True, help="サブフォルダも検索")
 @click.option(
-    "--profile",
-    type=click.Choice(["auto", "active", "static"]),
-    default=None,
-    help="選定プロファイル",
-)
-@click.option(
     "--config",
     "config_path",
     type=click.Path(exists=True, dir_okay=False, path_type=str),
@@ -231,7 +225,6 @@ def execute(
     num: int,
     similarity: float | None,
     recursive: bool,
-    profile: str | None,
     config_path: str | None,
     ollama_model: str | None,
     ollama_host: str | None,
@@ -264,7 +257,6 @@ def execute(
         num: 選択枚数。
         similarity: 類似度しきい値。未指定時は設定ファイルまたは既定値を使う。
         recursive: サブフォルダを再帰的に探索するかどうか。
-        profile: 選定プロファイル。 `auto` / `active` / `static` 。
         config_path: TOML設定ファイルのパス。
         ollama_model: Ollamaの画像分類モデル名。
         ollama_host: OllamaホストURL。
@@ -294,7 +286,6 @@ def execute(
             num=num,
             similarity=similarity,
             recursive=recursive,
-            profile=profile,
             config_path=config_path,
             ollama_model=ollama_model,
             ollama_host=ollama_host,

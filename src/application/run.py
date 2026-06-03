@@ -65,7 +65,6 @@ def _select_output_record(
     """画像選定を実行して出力recordへ変換する."""
     analyzer_config, selection_config = ConfigResolver.resolve_configs(
         config_path=request.config_path,
-        profile=request.profile,
         similarity=request.similarity,
         batch_size=request.batch_size,
         result_max_workers=request.result_max_workers,
