@@ -217,31 +217,34 @@ def test_content_filter_result_exposes_rejected_reasons_by_path() -> None:
         - 既存のbreakdownも同じ理由で集計されること
     """
     # Arrange
+    kept_raw_metrics = {
+        "brightness": 110.0,
+        "contrast": 18.0,
+        "edge_density": 0.20,
+        "action_intensity": 14.0,
+        "luminance_entropy": 1.3,
+        "luminance_range": 36.0,
+        "near_black_ratio": 0.12,
+        "dominant_tone_ratio": 0.60,
+    }
+    rejected_raw_metrics = {
+        "brightness": 1.0,
+        "contrast": 0.2,
+        "edge_density": 0.001,
+        "action_intensity": 0.1,
+        "luminance_entropy": 0.05,
+        "luminance_range": 1.0,
+        "near_black_ratio": 0.99,
+        "near_white_ratio": 0.0,
+        "dominant_tone_ratio": 1.0,
+    }
+
     # Act
     result = _filter_two_images(
         kept_path="/tmp/good_gameplay.jpg",
-        kept_raw_metrics={
-            "brightness": 110.0,
-            "contrast": 18.0,
-            "edge_density": 0.20,
-            "action_intensity": 14.0,
-            "luminance_entropy": 1.3,
-            "luminance_range": 36.0,
-            "near_black_ratio": 0.12,
-            "dominant_tone_ratio": 0.60,
-        },
+        kept_raw_metrics=kept_raw_metrics,
         rejected_path="/tmp/blackout.jpg",
-        rejected_raw_metrics={
-            "brightness": 1.0,
-            "contrast": 0.2,
-            "edge_density": 0.001,
-            "action_intensity": 0.1,
-            "luminance_entropy": 0.05,
-            "luminance_range": 1.0,
-            "near_black_ratio": 0.99,
-            "near_white_ratio": 0.0,
-            "dominant_tone_ratio": 1.0,
-        },
+        rejected_raw_metrics=rejected_raw_metrics,
     )
 
     # Assert
@@ -631,7 +634,7 @@ def test_relative_transition_uses_whole_input_brightness_tendency() -> None:
 
 
 def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> None:
-    """通常 -> 暗転途中 -> 通常 の中央だけが temporal 判定で落ちること.
+    """通常 -> 低視認フレーム -> 通常 の中央だけが temporal 判定で落ちること.
 
     Arrange:
         - 通常フレーム、遷移途中フレーム、通常フレームの順序で画像群がある
