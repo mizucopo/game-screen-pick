@@ -32,6 +32,7 @@ from ..constants.content_filter_thresholds import (
     RELATIVE_DARK_TRANSITION_THRESHOLD,
     RELATIVE_DARK_VISIBILITY_MAX,
     SINGLE_TONE_DOMINANT_RATIO,
+    SINGLE_TONE_MAX_EXTREME_RATIO,
     VEILED_FADE_MIN_BRIGHT_WASHOUT,
     VEILED_FADE_MIN_EXTREME_RATIO,
     VEILED_FADE_MIN_SYSTEM_UI,
@@ -199,8 +200,10 @@ class StaticRejectClassifier:
         p10_range: float,
     ) -> ContentRejectReason | None:
         """単色画像を検出する."""
+        extreme_exposure_ratio = max(raw.near_black_ratio, raw.near_white_ratio)
         if (
             raw.dominant_tone_ratio >= SINGLE_TONE_DOMINANT_RATIO
+            and extreme_exposure_ratio <= SINGLE_TONE_MAX_EXTREME_RATIO
             and raw.luminance_range <= p10_range
             and raw.contrast <= profile.contrast.p25
             and raw.edge_density <= profile.edge_density.p25

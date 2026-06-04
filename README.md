@@ -67,7 +67,7 @@ uv run game-screen-pick --ollama-model gemma4 \
 現在の実装は次の流れです。
 
 1. 入力画像をすべて解析し、CLIP特徴・結合特徴・画質メトリクスを作る
-2. 解析結果をもとに `content filter` を実施し、暗転・白飛び・単色・遷移フレームを明示的な reject reason 付きで除外する
+2. 解析結果をもとに `content filter` を実施し、暗転・白飛び・単色・遷移フレームを厳格に明示的な reject reason 付きで除外する
 3. 残った blog candidate から代表画像を最大24枚選び、Ollamaでその実行用の scene catalog を作る
 4. scene catalog は3〜8個の scene で構成され、必ず `other` を含む
 5. 各 blog candidate を scene catalog のいずれかへ分類し、分類失敗した画像は最終選択対象から外す
