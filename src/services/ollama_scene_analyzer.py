@@ -40,7 +40,6 @@ class OllamaSceneAnalyzer:
                 raise
             except ValueError as error:
                 last_error = error
-                continue
         if last_error is not None:
             raise last_error
         msg = "scene catalog用の代表画像がありません"
@@ -269,11 +268,9 @@ class OllamaSceneAnalyzer:
     @staticmethod
     def _catalog_retry_image_sets(representative_paths: list[str]) -> list[list[str]]:
         """catalog作成の再試行で使う代表画像setsを返す."""
-        if not representative_paths:
-            return []
         image_sets: list[list[str]] = []
         count = len(representative_paths)
-        while count >= 1:
+        while count:
             image_sets.append(representative_paths[:count])
             if count == 1:
                 break

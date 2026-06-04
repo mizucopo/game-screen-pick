@@ -148,7 +148,7 @@ class AnalyzedImageSelector:
             )
             scene_catalog = self._fallback_scene_catalog()
             classifications: Sequence[SceneClassification | None] = (
-                self._fallback_classifications(analyzed_images)
+                self._fallback_classifications(analyzed_images, scene_catalog[0])
             )
             return self._score_classifications(
                 analyzed_images,
@@ -209,13 +209,12 @@ class AnalyzedImageSelector:
             )
         ]
 
-    @classmethod
+    @staticmethod
     def _fallback_classifications(
-        cls,
         analyzed_images: list[AnalyzedImage],
+        fallback_scene: SceneCatalogEntry,
     ) -> list[SceneClassification]:
         """全候補をfallback sceneへ分類する."""
-        fallback_scene = cls._fallback_scene_catalog()[0]
         return [
             SceneClassification(
                 scene_slug=fallback_scene.slug,
