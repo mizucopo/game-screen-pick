@@ -651,7 +651,7 @@ def test_content_filter_rejects_stricter_low_value_frames(
     Assert:
         - 境界寄りの低価値フレームがcontent filterで除外されること
     """
-    # Arrange
+    # Arrange — パラメタライズド引数から正常フレームと境界寄りフレームを構築
     # Act
     result = _filter_two_images(
         kept_path="/tmp/good_frame.jpg",
