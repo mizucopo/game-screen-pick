@@ -117,6 +117,8 @@ class AnalyzedImageSelector:
             whole_input_profile=content_filter_result.whole_input_profile,
             selection_annotations_by_path=selection_result.annotations_by_path,
             scene_catalog=scored.scene_catalog,
+            ollama_catalog_fallback_used=scored.catalog_fallback_used,
+            ollama_catalog_fallback_reason=scored.catalog_fallback_reason,
             ollama_classification_failed=scored.classification_failed,
             ollama_classification_failure_rate=scored.classification_failure_rate,
         )
@@ -142,9 +144,10 @@ class AnalyzedImageSelector:
                 self.config.scene_hint,
             )
         except (OSError, ValueError) as error:
+            fallback_reason = self._format_exception(error)
             logger.debug(
                 "Ollama scene catalog作成に失敗したためfallback sceneで選定します: "
-                f"{type(error).__name__}: {error}"
+                f"{fallback_reason}"
             )
             scene_catalog = self._fallback_scene_catalog()
             classifications: Sequence[SceneClassification | None] = (
@@ -154,6 +157,8 @@ class AnalyzedImageSelector:
                 analyzed_images,
                 scene_catalog,
                 classifications,
+                catalog_fallback_used=True,
+                catalog_fallback_reason=fallback_reason,
             )
 
         classifications = self._classify_images(analyzed_images, scene_catalog)
@@ -168,6 +173,8 @@ class AnalyzedImageSelector:
         analyzed_images: list[AnalyzedImage],
         scene_catalog: list[SceneCatalogEntry],
         classifications: Sequence[SceneClassification | None],
+        catalog_fallback_used: bool = False,
+        catalog_fallback_reason: str | None = None,
     ) -> ScoredSceneCandidates:
         """scene分類結果から候補scoreと統計を作る."""
         candidates: list[ScoredCandidate] = []
@@ -196,7 +203,14 @@ class AnalyzedImageSelector:
             scene_catalog=scene_catalog,
             classification_failed=classification_failed,
             classification_failure_rate=failure_rate,
+            catalog_fallback_used=catalog_fallback_used,
+            catalog_fallback_reason=catalog_fallback_reason,
         )
+
+    @staticmethod
+    def _format_exception(error: Exception) -> str:
+        """統計表示用に例外を短い文字列へ変換する."""
+        return f"{type(error).__name__}: {error}"
 
     @staticmethod
     def _fallback_scene_catalog() -> list[SceneCatalogEntry]:

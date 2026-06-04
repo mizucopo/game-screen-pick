@@ -15,3 +15,5 @@ class ScoredSceneCandidates:
     scene_catalog: list[SceneCatalogEntry]
     classification_failed: int
     classification_failure_rate: float
+    catalog_fallback_used: bool = False
+    catalog_fallback_reason: str | None = None

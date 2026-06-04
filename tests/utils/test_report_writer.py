@@ -83,6 +83,8 @@ def _build_output_record(
         ],
         ollama_classification_failed=1,
         ollama_classification_failure_rate=0.25,
+        ollama_catalog_fallback_used=True,
+        ollama_catalog_fallback_reason="OSError: timed out",
     )
 
 
@@ -130,6 +132,8 @@ def test_report_writer_serializes_output_record_fields(tmp_path: Path) -> None:
     assert payload["scene_catalog"][0]["display_name"] == "戦闘"
     assert payload["ollama_classification_failed"] == 1
     assert payload["ollama_classification_failure_rate"] == 0.25
+    assert payload["ollama_catalog_fallback_used"] is True
+    assert payload["ollama_catalog_fallback_reason"] == "OSError: timed out"
     assert payload["threshold_relaxation_steps"] == [0.72]
     assert payload["rejected_by_content_filter"] == 2
     assert payload["content_filter_breakdown"]["fade_transition"] == 2

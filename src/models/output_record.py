@@ -28,6 +28,8 @@ class OutputRecord:
     content_filter_breakdown: dict[str, int]
     whole_input_profile: dict[str, dict[str, float]] | None
     scene_catalog: list[dict[str, str]]
+    ollama_catalog_fallback_used: bool
+    ollama_catalog_fallback_reason: str | None
     ollama_classification_failed: int
     ollama_classification_failure_rate: float
 
@@ -76,6 +78,8 @@ class OutputRecord:
                 }
                 for scene in stats.scene_catalog
             ],
+            ollama_catalog_fallback_used=stats.ollama_catalog_fallback_used,
+            ollama_catalog_fallback_reason=stats.ollama_catalog_fallback_reason,
             ollama_classification_failed=stats.ollama_classification_failed,
             ollama_classification_failure_rate=round(
                 stats.ollama_classification_failure_rate,
