@@ -117,8 +117,8 @@ class AnalyzedImageSelector:
             whole_input_profile=content_filter_result.whole_input_profile,
             selection_annotations_by_path=selection_result.annotations_by_path,
             scene_catalog=scored.scene_catalog,
-            ollama_catalog_fallback_used=scored.catalog_fallback_used,
-            ollama_catalog_fallback_reason=scored.catalog_fallback_reason,
+            ollama_catalog_fallback_used=scored.ollama_catalog_fallback_used,
+            ollama_catalog_fallback_reason=scored.ollama_catalog_fallback_reason,
             ollama_classification_failed=scored.classification_failed,
             ollama_classification_failure_rate=scored.classification_failure_rate,
         )
@@ -144,7 +144,7 @@ class AnalyzedImageSelector:
                 self.config.scene_hint,
             )
         except (OSError, ValueError) as error:
-            fallback_reason = self._format_exception(error)
+            fallback_reason = f"{type(error).__name__}: {error}"
             logger.debug(
                 "Ollama scene catalog作成に失敗したためfallback sceneで選定します: "
                 f"{fallback_reason}"
@@ -203,14 +203,9 @@ class AnalyzedImageSelector:
             scene_catalog=scene_catalog,
             classification_failed=classification_failed,
             classification_failure_rate=failure_rate,
-            catalog_fallback_used=catalog_fallback_used,
-            catalog_fallback_reason=catalog_fallback_reason,
+            ollama_catalog_fallback_used=catalog_fallback_used,
+            ollama_catalog_fallback_reason=catalog_fallback_reason,
         )
-
-    @staticmethod
-    def _format_exception(error: Exception) -> str:
-        """統計表示用に例外を短い文字列へ変換する."""
-        return f"{type(error).__name__}: {error}"
 
     @staticmethod
     def _fallback_scene_catalog() -> list[SceneCatalogEntry]:
