@@ -114,3 +114,32 @@ def test_ollama_config_validation_rejects_empty_model() -> None:
     # Act / Assert
     with pytest.raises(ValueError, match="ollama_model"):
         OllamaConfig(model="")
+
+
+@pytest.mark.parametrize(
+    "input_host,expected_host",
+    [
+        ("192.168.1.31", "http://192.168.1.31:11434"),
+        ("192.168.1.31:11435", "http://192.168.1.31:11435"),
+        ("http://ollama", "http://ollama"),
+        ("http://ollama:11435", "http://ollama:11435"),
+    ],
+)
+def test_ollama_config_normalizes_scheme_less_host(
+    input_host: str,
+    expected_host: str,
+) -> None:
+    """schemeなしのOllama hostにHTTP schemeと既定portが補完されること.
+
+    Arrange:
+        - Ollama hostの入力値がある
+    Act:
+        - `OllamaConfig` が構築される
+    Assert:
+        - schemeなしhostにはHTTP schemeと必要な場合だけ既定portが補完されること
+    """
+    # Act
+    config = OllamaConfig(model="gemma4", host=input_host)
+
+    # Assert
+    assert config.host == expected_host

@@ -11,6 +11,7 @@ class FakeSceneAnalyzer:
         self,
         classifications_by_path: dict[str, SceneClassification] | None = None,
         default_scene_slug: str = "battle",
+        catalog_error: OSError | ValueError | None = None,
     ) -> None:
         """fake scene analyzerを初期化する."""
         self.catalog = [
@@ -20,6 +21,7 @@ class FakeSceneAnalyzer:
         ]
         self.classifications_by_path = classifications_by_path or {}
         self.default_scene_slug = default_scene_slug
+        self._catalog_error = catalog_error
 
     def generate_scene_catalog(
         self,
@@ -28,6 +30,8 @@ class FakeSceneAnalyzer:
     ) -> list[SceneCatalogEntry]:
         """scene catalogを返す."""
         del representative_paths, scene_hint
+        if self._catalog_error is not None:
+            raise self._catalog_error
         return self.catalog
 
     def classify_image(

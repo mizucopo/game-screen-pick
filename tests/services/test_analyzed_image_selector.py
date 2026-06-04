@@ -11,6 +11,7 @@ from src.models.scene_classification import SceneClassification
 from src.models.selection_config import SelectionConfig
 from src.services.analyzed_image_selector import AnalyzedImageSelector
 from tests.conftest import _feature, create_analyzed_image
+from tests.fake_scene_analyzer import FakeSceneAnalyzer
 
 
 def test_select_classifies_blog_candidates_and_reports_ollama_failures() -> None:
@@ -140,6 +141,52 @@ def test_select_classifies_images_with_configured_ollama_workers() -> None:
 
     # Assert
     assert scene_analyzer.max_active >= 2
+
+
+def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:
+    """catalog作成失敗時にfallback sceneで候補が選定されること.
+
+    Arrange:
+        - 選定対象画像とcatalog作成に失敗するscene analyzerがある
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - 例外を送出せずfallback sceneで候補が選定されること
+    """
+    # Arrange
+    first = create_analyzed_image(
+        path="/tmp/first.jpg",
+        combined_features=_feature(1),
+    )
+    second = create_analyzed_image(
+        path="/tmp/second.jpg",
+        combined_features=_feature(100),
+    )
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4"),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=FakeSceneAnalyzer(catalog_error=OSError("timed out")),
+    )
+
+    # Act
+    selected, rejected, stats = selector.select(
+        analyzed_images=[first, second],
+        num=2,
+    )
+
+    # Assert
+    assert {candidate.path for candidate in selected} == {
+        "/tmp/first.jpg",
+        "/tmp/second.jpg",
+    }
+    assert rejected == []
+    assert stats.selected_count == 2
+    assert stats.ollama_classification_failed == 0
+    assert stats.ollama_classification_failure_rate == 0.0
+    assert stats.scene_catalog[0].slug == "fallback"
+    assert stats.scene_distribution == {"fallback": 2}
 
 
 class _FakeSceneAnalyzer:
