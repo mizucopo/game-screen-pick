@@ -11,6 +11,7 @@ from src.models.scene_classification import SceneClassification
 from src.models.selection_config import SelectionConfig
 from src.services.analyzed_image_selector import AnalyzedImageSelector
 from tests.conftest import _feature, create_analyzed_image
+from tests.fake_scene_analyzer import FakeSceneAnalyzer
 
 
 def test_select_classifies_blog_candidates_and_reports_ollama_failures() -> None:
@@ -166,7 +167,7 @@ def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:
             ollama=OllamaConfig(model="gemma4"),
         ),
         metric_calculator=MetricCalculator(AnalyzerConfig()),
-        scene_analyzer=_CatalogFailureSceneAnalyzer(),
+        scene_analyzer=FakeSceneAnalyzer(catalog_error=OSError("timed out")),
     )
 
     # Act
@@ -268,25 +269,3 @@ class _ConcurrentSceneAnalyzer:
         finally:
             with self._lock:
                 self._active -= 1
-
-
-class _CatalogFailureSceneAnalyzer:
-    """catalog作成失敗用のscene analyzer."""
-
-    def generate_scene_catalog(
-        self,
-        representative_paths: list[str],
-        scene_hint: str | None,
-    ) -> list[SceneCatalogEntry]:
-        """catalog作成失敗を送出する."""
-        assert representative_paths
-        assert scene_hint is None
-        raise OSError("timed out")
-
-    def classify_image(
-        self,
-        _image_path: str,
-        _catalog: list[SceneCatalogEntry],
-    ) -> SceneClassification | None:
-        """catalog作成失敗時は呼ばれない."""
-        raise AssertionError("classify_image should not be called")
