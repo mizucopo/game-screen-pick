@@ -97,7 +97,8 @@ uv run game-screen-pick --ollama-model gemma4 \
 - キャッシュキーには画像パス、更新時刻、サイズ、モデル名、scene catalog が含まれます
 - キャッシュを使わない場合は `--no-ollama-cache` を指定します
 - scene catalog 応答が不正な場合は、代表画像数を減らして再試行します
-- scene catalog 作成が最終的に失敗した場合は、`fallback` sceneで選定を継続します
+- scene catalog 作成が最終的に失敗した場合は、`fallback` sceneで選定を継続し、console / JSON report に `ollama_catalog_fallback_used` と `ollama_catalog_fallback_reason` を出力します
+- `ollama_classification_failed` は、scene catalog 作成後に個別画像を catalog 内の scene へ分類できなかった件数です。catalog 作成失敗による `fallback` とは別に集計されます
 
 ## 設定ファイル
 

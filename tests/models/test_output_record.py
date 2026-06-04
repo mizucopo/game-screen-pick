@@ -83,6 +83,8 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
     assert record.scene_catalog[0]["slug"] == "battle"
     assert record.ollama_classification_failed == 1
     assert record.ollama_classification_failure_rate == 0.25
+    assert record.ollama_catalog_fallback_used is False
+    assert record.ollama_catalog_fallback_reason is None
     assert record.total_files == 2
     assert record.selected[0].source_path == "/tmp/battle.jpg"
     assert record.selected[0].filename == "battle.jpg"

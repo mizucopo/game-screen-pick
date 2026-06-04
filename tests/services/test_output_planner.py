@@ -55,6 +55,8 @@ def _build_output_record(
         content_filter_breakdown={},
         whole_input_profile=None,
         scene_catalog=[],
+        ollama_catalog_fallback_used=False,
+        ollama_catalog_fallback_reason=None,
         ollama_classification_failed=0,
         ollama_classification_failure_rate=0.0,
     )

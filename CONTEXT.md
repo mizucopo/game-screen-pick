@@ -47,3 +47,7 @@ _Avoid_: scene, duplicate file
 **Ollama Classification Failure**:
 blog candidate を scene catalog の scene に分類できなかった状態。other に分類された画像とは区別され、最終選択の対象にはならない。
 _Avoid_: other scene, rejected by content filter
+
+**Ollama Catalog Fallback**:
+scene catalog を作成できないときに、処理継続のため全 blog candidate を fallback scene に割り当てる代替状態。Ollama Classification Failure とは区別される。
+_Avoid_: per-image classification failure, other scene

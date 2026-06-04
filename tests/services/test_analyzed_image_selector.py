@@ -152,6 +152,7 @@ def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:
         - AnalyzedImageSelectorで選定される
     Assert:
         - 例外を送出せずfallback sceneで候補が選定されること
+        - catalog fallbackの発生理由が統計に記録されること
     """
     # Arrange
     first = create_analyzed_image(
@@ -185,6 +186,8 @@ def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:
     assert stats.selected_count == 2
     assert stats.ollama_classification_failed == 0
     assert stats.ollama_classification_failure_rate == 0.0
+    assert stats.ollama_catalog_fallback_used is True
+    assert stats.ollama_catalog_fallback_reason == "OSError: timed out"
     assert stats.scene_catalog[0].slug == "fallback"
     assert stats.scene_distribution == {"fallback": 2}
 

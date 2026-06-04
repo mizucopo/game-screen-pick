@@ -21,9 +21,11 @@ class ReportWriter:
             "scene_mix_target": output_record.scene_mix_target,
             "scene_mix_actual": output_record.scene_mix_actual,
             "scene_catalog": output_record.scene_catalog,
-            "ollama_classification_failed": (
-                output_record.ollama_classification_failed
+            "ollama_catalog_fallback_used": output_record.ollama_catalog_fallback_used,
+            "ollama_catalog_fallback_reason": (
+                output_record.ollama_catalog_fallback_reason
             ),
+            "ollama_classification_failed": output_record.ollama_classification_failed,
             "ollama_classification_failure_rate": (
                 output_record.ollama_classification_failure_rate
             ),

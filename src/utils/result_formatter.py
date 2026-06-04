@@ -38,6 +38,15 @@ class ResultFormatter:
         logger.info(f"画面分布(候補): {output_record.scene_distribution}")
         logger.info(f"画面分布(目標): {output_record.scene_mix_target}")
         logger.info(f"画面分布(実績): {output_record.scene_mix_actual}")
+        logger.info(
+            "Ollama catalog fallback: "
+            f"{'あり' if output_record.ollama_catalog_fallback_used else 'なし'}"
+        )
+        if output_record.ollama_catalog_fallback_reason is not None:
+            logger.info(
+                "Ollama catalog fallback理由: "
+                f"{output_record.ollama_catalog_fallback_reason}"
+            )
         logger.info(f"Ollama分類失敗: {output_record.ollama_classification_failed}")
         logger.info(
             "Ollama分類失敗率: "

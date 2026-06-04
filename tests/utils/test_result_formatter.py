@@ -47,6 +47,8 @@ def _build_output_record() -> OutputRecord:
         ],
         ollama_classification_failed=1,
         ollama_classification_failure_rate=0.25,
+        ollama_catalog_fallback_used=True,
+        ollama_catalog_fallback_reason="OSError: timed out",
     )
 
 
@@ -93,6 +95,8 @@ def test_display_results_uses_output_record() -> None:
     assert any("band: high" in message for message in messages)
     assert "総ファイル数: 1" in messages
     assert "解析成功: 1" in messages
+    assert "Ollama catalog fallback: あり" in messages
+    assert "Ollama catalog fallback理由: OSError: timed out" in messages
     assert "Ollama分類失敗: 1" in messages
     assert "Ollama分類失敗率: 25.00%" in messages
     assert not any("プロファイル:" in message for message in messages)

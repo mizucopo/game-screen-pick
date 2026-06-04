@@ -26,6 +26,8 @@ class PickerStatistics:
         whole_input_profile: 入力全体の明暗傾向プロフィール
         selection_annotations_by_path: 候補パスごとのscene mix選定注釈
         scene_catalog: 実行で使われたscene catalog
+        ollama_catalog_fallback_used: Ollama scene catalog fallbackが使われたか
+        ollama_catalog_fallback_reason: fallbackが使われた理由
         ollama_classification_failed: Ollama分類に失敗したblog candidate数
         ollama_classification_failure_rate: Ollama分類失敗率
     """
@@ -46,5 +48,7 @@ class PickerStatistics:
         default_factory=dict
     )
     scene_catalog: list[SceneCatalogEntry] = field(default_factory=list)
+    ollama_catalog_fallback_used: bool = False
+    ollama_catalog_fallback_reason: str | None = None
     ollama_classification_failed: int = 0
     ollama_classification_failure_rate: float = 0.0
