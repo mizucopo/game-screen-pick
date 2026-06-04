@@ -143,7 +143,7 @@ def test_generate_scene_catalog_accepts_host_without_url_scheme(
     )
 
     # Assert
-    assert captured_requests[0].full_url == "http://192.168.1.31/api/chat"
+    assert captured_requests[0].full_url == "http://192.168.1.31:11434/api/chat"
     assert result[0].slug == "conversation"
 
 
