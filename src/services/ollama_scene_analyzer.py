@@ -27,11 +27,24 @@ class OllamaSceneAnalyzer:
         scene_hint: str | None,
     ) -> list[SceneCatalogEntry]:
         """代表画像からscene catalogを作成する."""
-        content = self._post_chat(
-            prompt=self._build_catalog_prompt(scene_hint),
-            image_paths=representative_paths,
-        )
-        return OllamaResponseParser.parse_catalog_response(content)
+        prompt = self._build_catalog_prompt(scene_hint)
+        last_error: ValueError | None = None
+        for image_paths in self._catalog_retry_image_sets(representative_paths):
+            try:
+                content = self._post_chat(
+                    prompt=prompt,
+                    image_paths=image_paths,
+                )
+                return OllamaResponseParser.parse_catalog_response(content)
+            except OSError:
+                raise
+            except ValueError as error:
+                last_error = error
+                continue
+        if last_error is not None:
+            raise last_error
+        msg = "scene catalog用の代表画像がありません"
+        raise ValueError(msg)
 
     def classify_image(
         self,
@@ -252,6 +265,20 @@ class OllamaSceneAnalyzer:
             '\n形式: {"scenes":[{"slug":"battle","display_name":"戦闘",'
             '"description":"敵と戦う場面"}]}'
         )
+
+    @staticmethod
+    def _catalog_retry_image_sets(representative_paths: list[str]) -> list[list[str]]:
+        """catalog作成の再試行で使う代表画像setsを返す."""
+        if not representative_paths:
+            return []
+        image_sets: list[list[str]] = []
+        count = len(representative_paths)
+        while count >= 1:
+            image_sets.append(representative_paths[:count])
+            if count == 1:
+                break
+            count = max(1, count // 2)
+        return image_sets
 
     @staticmethod
     def _build_classification_prompt(

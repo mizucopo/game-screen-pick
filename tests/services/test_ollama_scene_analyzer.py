@@ -84,6 +84,110 @@ def test_generate_scene_catalog_posts_images_to_chat_api(
     assert result[0].slug == "battle"
 
 
+def test_generate_scene_catalog_accepts_host_without_url_scheme(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """schemeなしのOllama hostでもHTTPリクエストが生成されること.
+
+    Arrange:
+        - schemeなしのOllama hostと入力画像がある
+    Act:
+        - scene catalogが作成される
+    Assert:
+        - http schemeが補完されたOllama chat APIへ送信されること
+    """
+    # Arrange
+    image_path = tmp_path / "screen.png"
+    image_path.write_bytes(b"image-bytes")
+    captured_requests: list[Request] = []
+
+    def fake_urlopen(request: Request, timeout: float) -> Any:
+        captured_requests.append(request)
+        assert timeout == 60.0
+        return _FakeResponse(
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "scenes": [
+                                {
+                                    "slug": "conversation",
+                                    "display_name": "会話",
+                                    "description": "人物同士の会話",
+                                },
+                                {
+                                    "slug": "background",
+                                    "display_name": "背景",
+                                    "description": "場所や背景が分かる場面",
+                                },
+                                {
+                                    "slug": "other",
+                                    "display_name": "その他",
+                                    "description": "分類しにくい場面",
+                                },
+                            ]
+                        }
+                    )
+                }
+            }
+        )
+
+    monkeypatch.setattr("src.services.ollama_scene_analyzer.urlopen", fake_urlopen)
+    analyzer = OllamaSceneAnalyzer(OllamaConfig(model="gemma4", host="192.168.1.31"))
+
+    # Act
+    result = analyzer.generate_scene_catalog(
+        representative_paths=[str(image_path)],
+        scene_hint=None,
+    )
+
+    # Assert
+    assert captured_requests[0].full_url == "http://192.168.1.31/api/chat"
+    assert result[0].slug == "conversation"
+
+
+def test_generate_scene_catalog_retries_with_fewer_images_when_response_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """catalog応答が不正な場合に画像数を減らして再試行されること.
+
+    Arrange:
+        - 複数の代表画像と1回目だけ不正応答するfake urlopenがある
+    Act:
+        - scene catalogが作成される
+    Assert:
+        - 2回目のリクエストは画像数が減り、catalogが返されること
+    """
+    # Arrange
+    image_paths = [tmp_path / f"screen_{index}.png" for index in range(4)]
+    for image_path in image_paths:
+        image_path.write_bytes(f"image-{image_path.name}".encode("utf-8"))
+    image_counts: list[int] = []
+
+    def fake_urlopen(request: Request, timeout: float) -> Any:
+        assert timeout == 60.0
+        payload = json.loads(request.data.decode("utf-8"))  # type: ignore[union-attr]
+        image_counts.append(len(payload["messages"][0]["images"]))
+        if len(image_counts) == 1:
+            return _FakeResponse({"message": {"content": "not json"}})
+        return _FakeResponse(_catalog_chat_payload())
+
+    monkeypatch.setattr("src.services.ollama_scene_analyzer.urlopen", fake_urlopen)
+    analyzer = OllamaSceneAnalyzer(OllamaConfig(model="gemma4"))
+
+    # Act
+    result = analyzer.generate_scene_catalog(
+        representative_paths=[str(image_path) for image_path in image_paths],
+        scene_hint=None,
+    )
+
+    # Assert
+    assert image_counts == [4, 2]
+    assert result[0].slug == "battle"
+
+
 def test_classify_image_retries_once_when_response_is_invalid(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -358,6 +462,35 @@ class _FakeResponse:
     def read(self) -> bytes:
         """JSON bytesを返す."""
         return json.dumps(self._payload).encode("utf-8")
+
+
+def _catalog_chat_payload() -> dict[str, object]:
+    """正常なcatalog chat応答payloadを返す."""
+    return {
+        "message": {
+            "content": json.dumps(
+                {
+                    "scenes": [
+                        {
+                            "slug": "battle",
+                            "display_name": "戦闘",
+                            "description": "敵と戦う場面",
+                        },
+                        {
+                            "slug": "conversation",
+                            "display_name": "会話",
+                            "description": "人物同士の会話",
+                        },
+                        {
+                            "slug": "other",
+                            "display_name": "その他",
+                            "description": "分類しにくい場面",
+                        },
+                    ]
+                }
+            )
+        }
+    }
 
 
 def _classification_chat_payload(

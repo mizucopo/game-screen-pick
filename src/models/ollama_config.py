@@ -15,12 +15,14 @@ class OllamaConfig:
 
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""
+        normalized_host = self._normalize_host(self.host)
         if not self.model.strip():
             msg = "ollama_modelは必須です"
             raise ValueError(msg)
-        if not self.host.strip():
+        if not normalized_host:
             msg = "ollama_hostは必須です"
             raise ValueError(msg)
+        object.__setattr__(self, "host", normalized_host)
         if self.timeout <= 0:
             msg = f"ollama_timeoutは正の数である必要があります: {self.timeout}"
             raise ValueError(msg)
@@ -29,3 +31,11 @@ class OllamaConfig:
                 f"ollama_max_workersは正の整数である必要があります: {self.max_workers}"
             )
             raise ValueError(msg)
+
+    @staticmethod
+    def _normalize_host(host: str) -> str:
+        """schemeなしのhostへHTTP schemeを補完する."""
+        stripped_host = host.strip()
+        if not stripped_host or "://" in stripped_host:
+            return stripped_host
+        return f"http://{stripped_host}"

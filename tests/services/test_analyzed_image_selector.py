@@ -142,6 +142,52 @@ def test_select_classifies_images_with_configured_ollama_workers() -> None:
     assert scene_analyzer.max_active >= 2
 
 
+def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:
+    """catalog作成失敗時にfallback sceneで候補が選定されること.
+
+    Arrange:
+        - 選定対象画像とcatalog作成に失敗するscene analyzerがある
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - 例外を送出せずfallback sceneで候補が選定されること
+    """
+    # Arrange
+    first = create_analyzed_image(
+        path="/tmp/first.jpg",
+        combined_features=_feature(1),
+    )
+    second = create_analyzed_image(
+        path="/tmp/second.jpg",
+        combined_features=_feature(100),
+    )
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4"),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=_CatalogFailureSceneAnalyzer(),
+    )
+
+    # Act
+    selected, rejected, stats = selector.select(
+        analyzed_images=[first, second],
+        num=2,
+    )
+
+    # Assert
+    assert {candidate.path for candidate in selected} == {
+        "/tmp/first.jpg",
+        "/tmp/second.jpg",
+    }
+    assert rejected == []
+    assert stats.selected_count == 2
+    assert stats.ollama_classification_failed == 0
+    assert stats.ollama_classification_failure_rate == 0.0
+    assert stats.scene_catalog[0].slug == "fallback"
+    assert stats.scene_distribution == {"fallback": 2}
+
+
 class _FakeSceneAnalyzer:
     """テスト用のscene analyzer."""
 
@@ -222,3 +268,25 @@ class _ConcurrentSceneAnalyzer:
         finally:
             with self._lock:
                 self._active -= 1
+
+
+class _CatalogFailureSceneAnalyzer:
+    """catalog作成失敗用のscene analyzer."""
+
+    def generate_scene_catalog(
+        self,
+        representative_paths: list[str],
+        scene_hint: str | None,
+    ) -> list[SceneCatalogEntry]:
+        """catalog作成失敗を送出する."""
+        assert representative_paths
+        assert scene_hint is None
+        raise OSError("timed out")
+
+    def classify_image(
+        self,
+        _image_path: str,
+        _catalog: list[SceneCatalogEntry],
+    ) -> SceneClassification | None:
+        """catalog作成失敗時は呼ばれない."""
+        raise AssertionError("classify_image should not be called")

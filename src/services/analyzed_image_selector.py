@@ -1,5 +1,7 @@
 """解析済み画像から最終候補を選定する domain module."""
 
+import logging
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from itertools import repeat
 
@@ -19,6 +21,8 @@ from .candidate_scorer import CandidateScorer
 from .content_filter import ContentFilter
 from .dynamic_scene_selector import DynamicSceneSelector
 from .whole_input_profiler import WholeInputProfiler
+
+logger = logging.getLogger(__name__)
 
 
 class AnalyzedImageSelector:
@@ -132,14 +136,42 @@ class AnalyzedImageSelector:
             )
 
         representative_paths = self._build_representative_paths(analyzed_images)
-        scene_catalog = self._scene_analyzer.generate_scene_catalog(
-            representative_paths,
-            self.config.scene_hint,
+        try:
+            scene_catalog = self._scene_analyzer.generate_scene_catalog(
+                representative_paths,
+                self.config.scene_hint,
+            )
+        except (OSError, ValueError) as error:
+            logger.debug(
+                "Ollama scene catalog作成に失敗したためfallback sceneで選定します: "
+                f"{type(error).__name__}: {error}"
+            )
+            scene_catalog = self._fallback_scene_catalog()
+            classifications: Sequence[SceneClassification | None] = (
+                self._fallback_classifications(analyzed_images)
+            )
+            return self._score_classifications(
+                analyzed_images,
+                scene_catalog,
+                classifications,
+            )
+
+        classifications = self._classify_images(analyzed_images, scene_catalog)
+        return self._score_classifications(
+            analyzed_images,
+            scene_catalog,
+            classifications,
         )
 
+    def _score_classifications(
+        self,
+        analyzed_images: list[AnalyzedImage],
+        scene_catalog: list[SceneCatalogEntry],
+        classifications: Sequence[SceneClassification | None],
+    ) -> ScoredSceneCandidates:
+        """scene分類結果から候補scoreと統計を作る."""
         candidates: list[ScoredCandidate] = []
         classification_failed = 0
-        classifications = self._classify_images(analyzed_images, scene_catalog)
         for image, classification in zip(analyzed_images, classifications, strict=True):
             if classification is None:
                 classification_failed += 1
@@ -165,6 +197,34 @@ class AnalyzedImageSelector:
             classification_failed=classification_failed,
             classification_failure_rate=failure_rate,
         )
+
+    @staticmethod
+    def _fallback_scene_catalog() -> list[SceneCatalogEntry]:
+        """Ollama不可時に使うfallback scene catalogを返す."""
+        return [
+            SceneCatalogEntry(
+                slug="fallback",
+                display_name="未分類",
+                description="Ollamaで分類できない場合の代替scene",
+            )
+        ]
+
+    @classmethod
+    def _fallback_classifications(
+        cls,
+        analyzed_images: list[AnalyzedImage],
+    ) -> list[SceneClassification]:
+        """全候補をfallback sceneへ分類する."""
+        fallback_scene = cls._fallback_scene_catalog()[0]
+        return [
+            SceneClassification(
+                scene_slug=fallback_scene.slug,
+                scene_display_name=fallback_scene.display_name,
+                scene_description=fallback_scene.description,
+                confidence=0.0,
+            )
+            for _image in analyzed_images
+        ]
 
     def _classify_images(
         self,
