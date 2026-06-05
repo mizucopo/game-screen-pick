@@ -37,8 +37,7 @@ def _build_request(
         ollama_host=None,
         ollama_timeout=None,
         ollama_max_workers=None,
-        ollama_cache_enabled=True,
-        resume_cache_enabled=True,
+        reset_cache=False,
         scene_hint=None,
         report_json=report_json,
         rename=rename,
@@ -78,6 +77,14 @@ def _build_stats(
         },
         selection_annotations_by_path=selection_annotations_by_path or {},
     )
+
+
+def _write_ollama_cache_file(folder: Path) -> Path:
+    """Ollama分類cache fileを作成する."""
+    cache_file = folder / ".game-screen-pick" / "cache" / "ollama-scenes.json"
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("cached", encoding="utf-8")
+    return cache_file
 
 
 def _arrange_picker(
@@ -341,9 +348,8 @@ def test_run_application_resolves_configs_and_constructs_picker(
         *_args: object,
         config: SelectionConfig,
         scene_analyzer: object,
-        resume_cache_enabled: bool,
     ) -> MagicMock:
-        del scene_analyzer, resume_cache_enabled
+        del scene_analyzer
         selection_configs.append(config)
         return picker
 
@@ -441,15 +447,15 @@ def test_run_application_reports_keyboard_interrupt_as_resumable_run(
     assert "再実行するとcacheから再開します" in caplog.text
 
 
-def test_run_application_does_not_promise_resume_when_resume_cache_is_disabled(
+def test_run_application_does_not_report_resume_after_reset_cache_interrupt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """再開cache無効時のCtrl+C中断では再開案内が出力されないこと.
+    """reset cache指定時のCtrl+C中断では再開案内が出力されないこと.
 
     Arrange:
-        - 再開cacheが無効化されている
+        - reset cacheが指定されている
         - 画像選定中にKeyboardInterruptが発生する
     Act:
         - applicationが実行される
@@ -468,12 +474,97 @@ def test_run_application_does_not_promise_resume_when_resume_cache_is_disabled(
         run_application(
             replace(
                 _build_request(input_dir, output_dir),
-                resume_cache_enabled=False,
+                reset_cache=True,
             )
         )
     assert exc_info.value.code == 130
     assert "中断されました" in caplog.text
     assert "再実行するとcacheから再開します" not in caplog.text
+
+
+def test_run_application_keeps_cache_when_config_resolution_fails_after_reset_request(
+    tmp_path: Path,
+) -> None:
+    """reset cache指定時も設定解決に失敗した場合はcacheが削除されないこと.
+
+    Arrange:
+        - 入力ディレクトリに既存cache fileがある
+        - reset cacheが指定されている
+        - Ollama modelが未指定で設定解決に失敗する
+    Act:
+        - applicationが実行される
+    Assert:
+        - 終了コード1で終了し、既存cache fileが残ること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    cache_file = _write_ollama_cache_file(input_dir)
+
+    # Act / Assert
+    with pytest.raises(SystemExit) as exc_info:
+        run_application(
+            replace(
+                _build_request(input_dir, output_dir),
+                ollama_model=None,
+                reset_cache=True,
+            )
+        )
+    assert exc_info.value.code == 1
+    assert cache_file.exists()
+
+
+def test_run_application_resets_cache_before_selecting_images(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """reset cache指定時は画像選定前にcache directoryが削除されること.
+
+    Arrange:
+        - 入力ディレクトリに既存cache fileがある
+        - reset cacheが指定されている
+    Act:
+        - applicationが実行される
+    Assert:
+        - picker実行時点で既存cache fileが削除されていること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    root_cache_file = _write_ollama_cache_file(input_dir)
+    nested_cache_file = _write_ollama_cache_file(input_dir / "chapter1")
+    observed_cache_exists: list[tuple[bool, bool]] = []
+    picker = MagicMock()
+    picker.select.return_value = ([], [], _build_stats(total_files=0, selected_count=0))
+
+    def capture_picker(
+        *_args: object,
+        **_kwargs: object,
+    ) -> MagicMock:
+        observed_cache_exists.append(
+            (root_cache_file.exists(), nested_cache_file.exists())
+        )
+        return picker
+
+    monkeypatch.setattr(
+        "src.application.run.ImageQualityAnalyzer",
+        lambda *_args, **_kwargs: nullcontext(MagicMock()),
+    )
+    monkeypatch.setattr("src.application.run.GameScreenPicker", capture_picker)
+    monkeypatch.setattr(
+        "src.application.run.OllamaSceneAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
+    )
+
+    # Act
+    run_application(replace(_build_request(input_dir, output_dir), reset_cache=True))
+
+    # Assert
+    assert observed_cache_exists == [(False, False)]
+    assert not root_cache_file.exists()
+    assert not nested_cache_file.exists()
 
 
 def test_run_application_keeps_click_exceptions(

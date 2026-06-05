@@ -1,6 +1,7 @@
 """application実行 orchestration."""
 
 import logging
+import shutil
 from pathlib import Path
 
 import click
@@ -52,10 +53,23 @@ def run_application(request: ApplicationRunRequest) -> None:
 
 def _log_keyboard_interrupt(request: ApplicationRunRequest) -> None:
     """Ctrl+C中断時の案内を出力する."""
-    if request.resume_cache_enabled:
-        logger.info("中断されました。再実行するとcacheから再開します。")
-    else:
+    if request.reset_cache:
         logger.info("中断されました。")
+    else:
+        logger.info("中断されました。再実行するとcacheから再開します。")
+
+
+def _reset_cache_if_requested(
+    request: ApplicationRunRequest,
+    input_path: Path,
+) -> None:
+    """指定されている場合は入力フォルダ配下のcacheを削除する."""
+    if not request.reset_cache:
+        return
+    game_screen_pick_dirs = input_path.rglob(".game-screen-pick")
+    for cache_dir in (path / "cache" for path in game_screen_pick_dirs):
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
 
 
 def _resolve_input_path(input_dir: str) -> Path:
@@ -85,9 +99,9 @@ def _select_output_record(
         ollama_host=request.ollama_host,
         ollama_timeout=request.ollama_timeout,
         ollama_max_workers=request.ollama_max_workers,
-        ollama_cache_enabled=request.ollama_cache_enabled,
         scene_hint=request.scene_hint,
     )
+    _reset_cache_if_requested(request, input_path)
 
     with ImageQualityAnalyzer(config=analyzer_config) as analyzer:
         if selection_config.ollama is None:
@@ -98,7 +112,6 @@ def _select_output_record(
             analyzer,
             scene_analyzer=scene_analyzer,
             config=selection_config,
-            resume_cache_enabled=request.resume_cache_enabled,
         )
         logger.info("画像処理を開始します...")
 

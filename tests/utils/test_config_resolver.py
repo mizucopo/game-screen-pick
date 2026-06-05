@@ -38,7 +38,6 @@ def test_resolve_selection_config_prefers_cli_over_config_file(
         ollama_host="http://cli:11434",
         ollama_timeout=30.0,
         ollama_max_workers=2,
-        ollama_cache_enabled=False,
         scene_hint="RPG。戦闘と探索が混在している",
     )
 
@@ -49,7 +48,6 @@ def test_resolve_selection_config_prefers_cli_over_config_file(
     assert config.ollama.host == "http://cli:11434"
     assert config.ollama.timeout == 30.0
     assert config.ollama.max_workers == 2
-    assert config.ollama.cache_enabled is False
     assert config.scene_hint == "RPG。戦闘と探索が混在している"
 
 
@@ -76,7 +74,6 @@ def test_resolve_selection_config_requires_ollama_model() -> None:
             ollama_host=None,
             ollama_timeout=None,
             ollama_max_workers=None,
-            ollama_cache_enabled=True,
             scene_hint=None,
         )
 
@@ -112,7 +109,6 @@ def test_resolve_selection_config_prefers_environment_host(
         ollama_host=None,
         ollama_timeout=None,
         ollama_max_workers=None,
-        ollama_cache_enabled=True,
         scene_hint=None,
     )
 
@@ -154,7 +150,6 @@ def test_resolve_configs_returns_analyzer_and_selection_configs_from_cli_values(
         ollama_host=None,
         ollama_timeout=None,
         ollama_max_workers=None,
-        ollama_cache_enabled=True,
         scene_hint=None,
     )
 

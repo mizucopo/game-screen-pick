@@ -264,44 +264,6 @@ def test_select_skips_cache_write_when_image_changes_during_analysis(
     assert len(second_analyzer.requested_paths) == 1
 
 
-def test_select_ignores_neutral_analysis_cache_when_resume_cache_is_disabled(
-    tmp_path: Path,
-) -> None:
-    """再開cache無効時は中立解析が実行されること.
-
-    Arrange:
-        - 初回実行で中立解析cacheが作成されている
-        - 後続実行では再開cacheが無効化されている
-    Act:
-        - 同じ入力フォルダが再び選定される
-    Assert:
-        - 後続実行でも中立解析が呼び出されること
-    """
-    # Arrange
-    for name in ["frame1.jpg", "frame2.jpg"]:
-        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
-
-    first_picker = GameScreenPicker(
-        analyzer=FakeCountingAnalyzer(),
-        config=SelectionConfig(),
-        scene_analyzer=FakeSceneAnalyzer(),
-    )
-    second_analyzer = FakeCountingAnalyzer()
-    second_picker = GameScreenPicker(
-        analyzer=second_analyzer,
-        config=SelectionConfig(),
-        scene_analyzer=FakeSceneAnalyzer(),
-        resume_cache_enabled=False,
-    )
-
-    # Act
-    first_picker.select(str(tmp_path), num=2, recursive=False, show_progress=False)
-    second_picker.select(str(tmp_path), num=2, recursive=False, show_progress=False)
-
-    # Assert
-    assert len(second_analyzer.requested_paths) == 1
-
-
 def test_select_from_analyzed_sorts_remaining_candidates_by_selection_score() -> None:
     """非選択候補は selection_score の降順で返ること.
 

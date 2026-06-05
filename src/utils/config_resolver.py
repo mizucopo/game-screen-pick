@@ -24,7 +24,6 @@ class ConfigResolver:
         ollama_host: str | None,
         ollama_timeout: float | None,
         ollama_max_workers: int | None,
-        ollama_cache_enabled: bool,
         scene_hint: str | None,
     ) -> tuple[AnalyzerConfig, SelectionConfig]:
         """解析設定と選択設定を構築する."""
@@ -41,7 +40,6 @@ class ConfigResolver:
             ollama_host=ollama_host,
             ollama_timeout=ollama_timeout,
             ollama_max_workers=ollama_max_workers,
-            ollama_cache_enabled=ollama_cache_enabled,
             scene_hint=scene_hint,
         )
         return analyzer_config, selection_config
@@ -56,7 +54,6 @@ class ConfigResolver:
         ollama_host: str | None,
         ollama_timeout: float | None,
         ollama_max_workers: int | None,
-        ollama_cache_enabled: bool,
         scene_hint: str | None,
     ) -> SelectionConfig:
         """設定ファイル値とCLI上書き値から選択設定を構築する."""
@@ -67,7 +64,6 @@ class ConfigResolver:
             ollama_host=ollama_host,
             ollama_timeout=ollama_timeout,
             ollama_max_workers=ollama_max_workers,
-            ollama_cache_enabled=ollama_cache_enabled,
         )
         cli_overrides = {
             "similarity_threshold": similarity,
@@ -96,7 +92,6 @@ class ConfigResolver:
         ollama_host: str | None,
         ollama_timeout: float | None,
         ollama_max_workers: int | None,
-        ollama_cache_enabled: bool,
     ) -> OllamaConfig:
         """Ollama設定を優先順位に従って解決する."""
         model = ollama_model or ConfigResolver._string_config_value(
@@ -135,7 +130,6 @@ class ConfigResolver:
             host=host,
             timeout=timeout,
             max_workers=max_workers,
-            cache_enabled=ollama_cache_enabled,
         )
 
     @staticmethod
