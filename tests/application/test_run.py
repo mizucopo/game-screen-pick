@@ -25,7 +25,6 @@ def _build_request(
     output_dir: Path,
     *,
     num: int = 100,
-    report_json: str | None = None,
     rename: bool = False,
 ) -> ApplicationRunRequest:
     return ApplicationRunRequest(
@@ -39,7 +38,6 @@ def _build_request(
         ollama_max_workers=None,
         reset_cache=False,
         scene_hint=None,
-        report_json=report_json,
         rename=rename,
         batch_size=None,
         result_max_workers=None,
@@ -168,25 +166,24 @@ def test_run_application_selects_and_copies_images(
     assert (output_dir / "image2.jpg").exists()
 
 
-def test_run_application_writes_report_json_with_output_paths(
+def test_run_application_always_writes_report_json_to_output_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """application実行でJSONレポートが出力されること.
+    """application実行で出力フォルダにJSONレポートが常に出力されること.
 
     Arrange:
         - 選択結果にscene slug/display nameが含まれる
         - 統計情報にscore_bandの選定注釈が含まれる
-        - report_jsonが指定されている
     Act:
         - applicationが実行される
     Assert:
-        - JSONレポートに各スコアとoutput_pathが出力されること
+        - 出力フォルダのJSONレポートに各スコアとoutput_pathが出力されること
     """
     # Arrange
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
-    report_path = tmp_path / "report.json"
+    report_path = output_dir / "report.json"
     input_dir.mkdir()
     source = input_dir / "image0.jpg"
     source.write_bytes(b"fake_image_data")
@@ -212,13 +209,7 @@ def test_run_application_writes_report_json_with_output_paths(
     )
 
     # Act
-    run_application(
-        _build_request(
-            input_dir,
-            output_dir,
-            report_json=str(report_path),
-        )
-    )
+    run_application(_build_request(input_dir, output_dir))
 
     # Assert
     payload = json.loads(report_path.read_text(encoding="utf-8"))

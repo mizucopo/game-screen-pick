@@ -173,12 +173,6 @@ def validate_positive_float(value: float | str | None) -> float | None:
     help="Ollama scene catalog作成に渡す任意ヒント",
 )
 @click.option(
-    "--report-json",
-    type=click.Path(dir_okay=False, path_type=str),
-    default=None,
-    help="JSONレポートの出力先",
-)
-@click.option(
     "--rename",
     is_flag=True,
     help="scene別に play0001.ext / event0001.ext 形式で出力ファイル名を付け直す",
@@ -231,7 +225,6 @@ def execute(
     ollama_max_workers: int | None,
     reset_cache: bool,
     scene_hint: str | None,
-    report_json: str | None,
     rename: bool,
     batch_size: int | None,
     result_max_workers: int | None,
@@ -263,7 +256,6 @@ def execute(
         ollama_max_workers: Ollama分類の並列ワーカー数。
         reset_cache: 既存キャッシュを削除してから実行するかどうか。
         scene_hint: Ollama scene catalog作成に渡す任意ヒント。
-        report_json: JSONレポートの出力先パス。
         rename: scene別の連番ファイル名で出力するかどうか。
         batch_size: CLIP推論のバッチサイズ上書き。
         result_max_workers: 結果構築に使う並列ワーカー数。
@@ -292,7 +284,6 @@ def execute(
             ollama_max_workers=ollama_max_workers,
             reset_cache=reset_cache,
             scene_hint=scene_hint,
-            report_json=report_json,
             rename=rename,
             batch_size=batch_size,
             result_max_workers=result_max_workers,

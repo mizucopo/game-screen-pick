@@ -26,7 +26,6 @@ def test_cli_translates_options_to_application_run_request(
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     config_path = tmp_path / "picker.toml"
-    report_path = tmp_path / "report.json"
     input_dir.mkdir()
     config_path.write_text("[thresholds]\nsimilarity = 0.7\n", encoding="utf-8")
     captured_requests: list[ApplicationRunRequest] = []
@@ -57,8 +56,6 @@ def test_cli_translates_options_to_application_run_request(
             "--reset-cache",
             "--ollama-scene-hint",
             "アドベンチャーゲーム。会話差分が多い",
-            "--report-json",
-            str(report_path),
             "--rename",
             "--batch-size",
             "64",
@@ -86,7 +83,6 @@ def test_cli_translates_options_to_application_run_request(
     assert request.ollama_max_workers == 2
     assert request.reset_cache is True
     assert request.scene_hint == "アドベンチャーゲーム。会話差分が多い"
-    assert request.report_json == str(report_path)
     assert request.rename is True
     assert request.batch_size == 64
     assert request.result_max_workers == 1
@@ -108,6 +104,7 @@ def test_cli_translates_options_to_application_run_request(
         (["--ollama-max-workers", "0"], "正の整数"),
         (["--no-ollama-cache"], "No such option"),
         (["--no-resume-cache"], "No such option"),
+        (["--report-json", "report.json"], "No such option"),
         (["--profile", "active"], "No such option"),
         (["--scene-mix", "play=0.7,event=0.3"], "No such option"),
         (["--scene-hint", "RPG"], "No such option"),
