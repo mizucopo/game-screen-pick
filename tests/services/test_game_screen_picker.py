@@ -167,7 +167,6 @@ def test_select_logs_neutral_cache_check_progress_during_scan(
         GameScreenPicker,
         "CACHE_CHECK_PROGRESS_INTERVAL",
         2,
-        raising=False,
     )
     picker = GameScreenPicker(
         analyzer=FakeCountingAnalyzer(),
