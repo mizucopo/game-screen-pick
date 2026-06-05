@@ -42,25 +42,27 @@ class _AnalyzerWithFailures:
         return results
 
 
+class _ModelManagerWithName:
+    """CLIP model名を持つ最小model manager."""
+
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+
+
+class _FeatureExtractorWithModelName:
+    """CLIP model名を持つ最小feature extractor."""
+
+    def __init__(self, model_name: str) -> None:
+        self.model_manager = _ModelManagerWithName(model_name)
+
+
 class _CountingAnalyzer:
     """解析呼び出しを記録する最小フェイク."""
-
-    class _FeatureExtractor:
-        """CLIP model名を持つ最小feature extractor."""
-
-        class _ModelManager:
-            """CLIP model名を持つ最小model manager."""
-
-            def __init__(self, model_name: str) -> None:
-                self.model_name = model_name
-
-        def __init__(self, model_name: str) -> None:
-            self.model_manager = self._ModelManager(model_name)
 
     def __init__(self, model_name: str = "clip-a") -> None:
         self.metric_calculator = MetricCalculator(AnalyzerConfig())
         self.config = AnalyzerConfig()
-        self.feature_extractor = self._FeatureExtractor(model_name)
+        self.feature_extractor = _FeatureExtractorWithModelName(model_name)
         self.requested_paths: list[list[str]] = []
 
     def analyze_batch(

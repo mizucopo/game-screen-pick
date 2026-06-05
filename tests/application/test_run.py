@@ -103,6 +103,25 @@ def _arrange_picker(
     )
 
 
+def _arrange_keyboard_interrupt_picker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """画像選定中にKeyboardInterruptを送出するpickerを設定する."""
+    picker = MagicMock()
+    picker.select.side_effect = KeyboardInterrupt
+    analyzer = MagicMock()
+    monkeypatch.setattr(
+        "src.application.run.ImageQualityAnalyzer",
+        lambda *_args, **_kwargs: nullcontext(analyzer),
+    )
+    monkeypatch.setattr(
+        "src.application.run.GameScreenPicker",
+        lambda *_args, **_kwargs: picker,
+    )
+    monkeypatch.setattr(
+        "src.application.run.OllamaSceneAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
+    )
+
+
 def test_run_application_selects_and_copies_images(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -411,21 +430,7 @@ def test_run_application_reports_keyboard_interrupt_as_resumable_run(
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     input_dir.mkdir()
-    picker = MagicMock()
-    picker.select.side_effect = KeyboardInterrupt
-    analyzer = MagicMock()
-    monkeypatch.setattr(
-        "src.application.run.ImageQualityAnalyzer",
-        lambda *_args, **_kwargs: nullcontext(analyzer),
-    )
-    monkeypatch.setattr(
-        "src.application.run.GameScreenPicker",
-        lambda *_args, **_kwargs: picker,
-    )
-    monkeypatch.setattr(
-        "src.application.run.OllamaSceneAnalyzer",
-        lambda *_args, **_kwargs: MagicMock(),
-    )
+    _arrange_keyboard_interrupt_picker(monkeypatch)
     caplog.set_level("INFO")
 
     # Act / Assert
@@ -455,21 +460,7 @@ def test_run_application_does_not_promise_resume_when_resume_cache_is_disabled(
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     input_dir.mkdir()
-    picker = MagicMock()
-    picker.select.side_effect = KeyboardInterrupt
-    analyzer = MagicMock()
-    monkeypatch.setattr(
-        "src.application.run.ImageQualityAnalyzer",
-        lambda *_args, **_kwargs: nullcontext(analyzer),
-    )
-    monkeypatch.setattr(
-        "src.application.run.GameScreenPicker",
-        lambda *_args, **_kwargs: picker,
-    )
-    monkeypatch.setattr(
-        "src.application.run.OllamaSceneAnalyzer",
-        lambda *_args, **_kwargs: MagicMock(),
-    )
+    _arrange_keyboard_interrupt_picker(monkeypatch)
     caplog.set_level("INFO")
 
     # Act / Assert

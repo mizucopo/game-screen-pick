@@ -43,14 +43,19 @@ def run_application(request: ApplicationRunRequest) -> None:
     except click.ClickException:
         raise
     except KeyboardInterrupt as error:
-        if request.resume_cache_enabled:
-            logger.info("中断されました。再実行するとcacheから再開します。")
-        else:
-            logger.info("中断されました。")
+        _log_keyboard_interrupt(request)
         raise SystemExit(130) from error
     except Exception as error:
         logger.error(f"予期しないエラーが発生しました: {type(error).__name__}: {error}")
         raise SystemExit(1) from error
+
+
+def _log_keyboard_interrupt(request: ApplicationRunRequest) -> None:
+    """Ctrl+C中断時の案内を出力する."""
+    if request.resume_cache_enabled:
+        logger.info("中断されました。再実行するとcacheから再開します。")
+    else:
+        logger.info("中断されました。")
 
 
 def _resolve_input_path(input_dir: str) -> Path:
