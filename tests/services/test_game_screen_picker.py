@@ -13,6 +13,15 @@ from tests.fake_analyzer import FakeAnalyzer
 from tests.fake_scene_analyzer import FakeSceneAnalyzer
 
 
+def _notify_chunk_processed(
+    callback: Callable[[list[AnalyzedImage | None]], None] | None,
+    results: list[AnalyzedImage | None],
+) -> None:
+    """chunk処理callbackがある場合だけ通知する."""
+    if callback is not None:
+        callback(results)
+
+
 class _AnalyzerWithFailures:
     """`analyze_batch` の失敗ケースを混在させる最小フェイク."""
 
@@ -29,8 +38,7 @@ class _AnalyzerWithFailures:
     ) -> list[AnalyzedImage | None]:
         del batch_size, show_progress
         results = self._analyzed_images[: len(paths)]
-        if on_chunk_processed is not None:
-            on_chunk_processed(results)
+        _notify_chunk_processed(on_chunk_processed, results)
         return results
 
 
@@ -55,8 +63,7 @@ class _CountingAnalyzer:
             create_analyzed_image(path=path, combined_features=_feature(index))
             for index, path in enumerate(paths)
         ]
-        if on_chunk_processed is not None:
-            on_chunk_processed(results)
+        _notify_chunk_processed(on_chunk_processed, results)
         return results
 
 
