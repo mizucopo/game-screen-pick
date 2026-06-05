@@ -38,8 +38,11 @@ def run_application(request: ApplicationRunRequest) -> None:
         )
 
         ResultFormatter.display_results(output_record)
-        if request.report_json is not None:
-            ReportWriter.write(request.report_json, output_record)
+        report_path = Path(request.output_dir) / "report.json"
+        ReportWriter.write(
+            str(report_path),
+            output_record,
+        )
 
     except click.ClickException:
         raise
