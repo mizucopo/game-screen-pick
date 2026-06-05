@@ -79,6 +79,11 @@ uv run game-screen-pick --ollama-model gemma4 --reset-cache ./screenshots ./outp
 JSONレポートは常に `<出力フォルダ>/report.json` へ出力されます。
 選択画像は常に `battle0001.ext` や `conversation0001.ext` のように、scene slug と scene 内連番で出力されます。
 
+### コンソールログ
+
+通常実行では、入力画像の検索件数、中立解析キャッシュのhit/miss件数、未cache画像の解析開始、解析チャンク数、画像読み込み、CLIP特徴抽出の開始・完了がコンソールに出力されます。
+CLIPモデルの初回ロード前にも、画像読み込みやチャンク準備の進捗が出るため、処理が進んでいるかを確認できます。
+
 ### scene の意味
 
 - `scene_slug`: `battle`、`conversation`、`menu` など、ファイル名やJSONキーに使う英語slug

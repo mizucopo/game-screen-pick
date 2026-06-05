@@ -1,6 +1,9 @@
 """GameScreenPickerの単体テスト."""
 
+import logging
 from pathlib import Path
+
+import pytest
 
 from src.models.analyzer_config import AnalyzerConfig
 from src.models.selection_config import SelectionConfig
@@ -103,6 +106,43 @@ def test_select_tracks_total_files_and_analysis_failures(tmp_path: Path) -> None
     assert stats.total_files == 3
     assert stats.analyzed_ok == 2
     assert stats.analyzed_fail == 1
+
+
+def test_select_logs_file_count_and_neutral_cache_summary(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """入力件数と中立解析cache状況が進捗ログに出力されること.
+
+    Arrange:
+        - 複数の画像ファイルを含むディレクトリがある
+        - 進捗表示が有効である
+    Act:
+        - GameScreenPickerで選定される
+    Assert:
+        - 入力画像件数と中立解析cacheのhit/miss件数がログ出力されること
+    """
+    # Arrange
+    for name in ["frame1.jpg", "frame2.jpg"]:
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+    analyzed_images = [
+        create_analyzed_image(path=str(tmp_path / "frame1.jpg")),
+        create_analyzed_image(path=str(tmp_path / "frame2.jpg")),
+    ]
+    picker = GameScreenPicker(
+        analyzer=FakeAnalyzer(analyzed_images),
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
+    )
+    caplog.set_level(logging.INFO)
+
+    # Act
+    picker.select(str(tmp_path), num=2, recursive=False, show_progress=True)
+
+    # Assert
+    assert "入力画像: 2件" in caplog.text
+    assert "中立解析cache: hit=0件, miss=2件" in caplog.text
+    assert "未cache画像の中立解析を開始します: 2件" in caplog.text
 
 
 def test_select_reuses_neutral_analysis_cache_on_later_run(tmp_path: Path) -> None:
