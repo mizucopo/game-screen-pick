@@ -145,6 +145,44 @@ def test_select_logs_file_count_and_neutral_cache_summary(
     assert "未cache画像の中立解析を開始します: 2件" in caplog.text
 
 
+def test_select_logs_neutral_cache_check_progress_during_scan(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """中立解析cache確認中の進捗が定期的に出力されること.
+
+    Arrange:
+        - 複数の画像ファイルを含むディレクトリがある
+        - cache確認進捗の出力間隔が2件に設定されている
+    Act:
+        - GameScreenPickerで選定される
+    Assert:
+        - cache確認ループ中の処理件数がログ出力されること
+    """
+    # Arrange
+    for name in ["frame1.jpg", "frame2.jpg", "frame3.jpg"]:
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+    monkeypatch.setattr(
+        GameScreenPicker,
+        "CACHE_CHECK_PROGRESS_INTERVAL",
+        2,
+        raising=False,
+    )
+    picker = GameScreenPicker(
+        analyzer=FakeCountingAnalyzer(),
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
+    )
+    caplog.set_level(logging.INFO)
+
+    # Act
+    picker.select(str(tmp_path), num=2, recursive=False, show_progress=True)
+
+    # Assert
+    assert "中立解析cache確認中: 2/3件" in caplog.text
+
+
 def test_select_reuses_neutral_analysis_cache_on_later_run(tmp_path: Path) -> None:
     """同じ入力画像の中立解析結果が後続実行で再利用されること.
 

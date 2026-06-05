@@ -26,6 +26,7 @@ class GameScreenPicker:
     SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
         {".jpg", ".jpeg", ".png", ".bmp"},
     )
+    CACHE_CHECK_PROGRESS_INTERVAL: int = 500
 
     def __init__(
         self,
@@ -112,6 +113,17 @@ class GameScreenPicker:
                 miss_indices.append(index)
             else:
                 results[index] = cached
+            checked_count = index + 1
+            if (
+                show_progress
+                and checked_count % self.CACHE_CHECK_PROGRESS_INTERVAL == 0
+            ):
+                cache_hits_so_far = checked_count - len(misses)
+                logger.info(
+                    "中立解析cache確認中: "
+                    f"{checked_count}/{len(files)}件 "
+                    f"(hit={cache_hits_so_far}件, miss={len(misses)}件)"
+                )
 
         if show_progress:
             cache_hits = len(files) - len(misses)
