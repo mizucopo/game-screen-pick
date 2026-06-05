@@ -2,8 +2,7 @@
 
 import logging
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
-from itertools import repeat
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..analyzers.metric_calculator import MetricCalculator
 from ..models.analyzed_image import AnalyzedImage
@@ -139,10 +138,14 @@ class AnalyzedImageSelector:
 
         representative_paths = self._build_representative_paths(analyzed_images)
         try:
+            logger.info(
+                f"Ollama scene catalog作成中: 代表画像 {len(representative_paths)} 件"
+            )
             scene_catalog = self._scene_analyzer.generate_scene_catalog(
                 representative_paths,
                 self.config.scene_hint,
             )
+            logger.info(f"Ollama scene catalog作成完了: scene {len(scene_catalog)} 件")
         except (OSError, ValueError) as error:
             fallback_reason = f"{type(error).__name__}: {error}"
             logger.debug(
@@ -162,6 +165,13 @@ class AnalyzedImageSelector:
             )
 
         classifications = self._classify_images(analyzed_images, scene_catalog)
+        failed_count = sum(
+            1 for classification in classifications if classification is None
+        )
+        logger.info(
+            "Ollama画像分類完了: "
+            f"成功 {len(classifications) - failed_count} 件, 失敗 {failed_count} 件"
+        )
         return self._score_classifications(
             analyzed_images,
             scene_catalog,
@@ -242,19 +252,31 @@ class AnalyzedImageSelector:
         """画像ごとのscene分類を実行する."""
         max_workers = self.config.ollama.max_workers if self.config.ollama else 1
         image_paths = [image.path for image in analyzed_images]
+        logger.info(
+            f"Ollama画像分類開始: 対象 {len(image_paths)} 件, worker {max_workers}"
+        )
         if max_workers == 1 or len(analyzed_images) <= 1:
-            return [
-                self._classify_image_path(image_path, scene_catalog)
-                for image_path in image_paths
-            ]
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            return list(
-                executor.map(
-                    self._classify_image_path,
-                    image_paths,
-                    repeat(scene_catalog),
+            classifications: list[SceneClassification | None] = []
+            for completed_count, image_path in enumerate(image_paths, start=1):
+                classifications.append(
+                    self._classify_image_path(image_path, scene_catalog)
                 )
-            )
+                logger.info(f"Ollama画像分類進捗: {completed_count}/{len(image_paths)}")
+            return classifications
+        classifications = [None] * len(image_paths)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._classify_image_path,
+                    image_path,
+                    scene_catalog,
+                ): index
+                for index, image_path in enumerate(image_paths)
+            }
+            for completed_count, future in enumerate(as_completed(futures), start=1):
+                classifications[futures[future]] = future.result()
+                logger.info(f"Ollama画像分類進捗: {completed_count}/{len(image_paths)}")
+        return classifications
 
     def _classify_image_path(
         self,

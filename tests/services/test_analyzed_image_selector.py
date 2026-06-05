@@ -2,6 +2,7 @@
 
 import threading
 import time
+from unittest.mock import patch
 
 from src.analyzers.metric_calculator import MetricCalculator
 from src.models.analyzer_config import AnalyzerConfig
@@ -141,6 +142,67 @@ def test_select_classifies_images_with_configured_ollama_workers() -> None:
 
     # Assert
     assert scene_analyzer.max_active >= 2
+
+
+def test_select_logs_ollama_progress() -> None:
+    """Ollamaによるcatalog作成と画像分類の進捗が出力されること.
+
+    Arrange:
+        - 複数の選定対象画像がある
+        - fake scene analyzer が全画像を分類する
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - catalog作成と画像分類の進捗ログが出力されること
+    """
+    # Arrange
+    first = create_analyzed_image(
+        path="/tmp/first.jpg",
+        combined_features=_feature(1),
+    )
+    second = create_analyzed_image(
+        path="/tmp/second.jpg",
+        combined_features=_feature(100),
+    )
+    scene_analyzer = _FakeSceneAnalyzer(
+        classifications_by_path={
+            "/tmp/first.jpg": SceneClassification(
+                scene_slug="battle",
+                scene_display_name="戦闘",
+                scene_description="敵との戦闘場面",
+                confidence=0.9,
+            ),
+            "/tmp/second.jpg": SceneClassification(
+                scene_slug="conversation",
+                scene_display_name="会話",
+                scene_description="人物同士の会話場面",
+                confidence=0.8,
+            ),
+        }
+    )
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4", max_workers=2),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    with patch("src.services.analyzed_image_selector.logger") as logger:
+        selector.select(
+            analyzed_images=[first, second],
+            num=2,
+        )
+
+    # Assert
+    messages = [call.args[0] for call in logger.info.call_args_list]
+    assert "Ollama scene catalog作成中: 代表画像 2 件" in messages
+    assert "Ollama scene catalog作成完了: scene 3 件" in messages
+    assert "Ollama画像分類開始: 対象 2 件, worker 2" in messages
+    assert "Ollama画像分類進捗: 1/2" in messages
+    assert "Ollama画像分類進捗: 2/2" in messages
+    assert "Ollama画像分類完了: 成功 2 件, 失敗 0 件" in messages
 
 
 def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:
