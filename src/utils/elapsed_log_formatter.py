@@ -2,7 +2,7 @@
 
 import logging
 
-LOG_FORMAT = "%(asctime)s.%(msecs)03d +%(elapsed_seconds).3fs %(message)s"
+LOG_FORMAT = "%(asctime)s.%(msecs)03d (+%(elapsed_seconds).3fs): %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 

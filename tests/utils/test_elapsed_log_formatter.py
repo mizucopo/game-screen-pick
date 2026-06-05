@@ -47,5 +47,5 @@ def test_format_adds_timestamp_and_elapsed_seconds() -> None:
     second_line = formatter.format(second_record)
 
     # Assert
-    assert first_line == "2026-08-06 13:00:00.123 +0.000s 開始"
-    assert second_line == "2026-08-06 13:00:02.623 +2.500s 完了"
+    assert first_line == "2026-08-06 13:00:00.123 (+0.000s): 開始"
+    assert second_line == "2026-08-06 13:00:02.623 (+2.500s): 完了"
