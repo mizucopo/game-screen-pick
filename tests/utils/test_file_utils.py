@@ -123,19 +123,19 @@ def test_copy_planned_outputs_creates_output_parent_directories(
     assert (dest_dir / "test.png").exists()
 
 
-def test_copy_selected_items_avoids_collision_and_counts_per_scene(
+def test_copy_selected_items_rejects_non_empty_output_dir(
     tmp_path: Path,
 ) -> None:
-    """scene別連番で出力しつつ既存ファイルとの衝突を回避できること.
+    """出力ディレクトリが空でない場合はコピーされないこと.
 
     Arrange:
         - 出力ディレクトリに既存ファイル（play0001.jpg）がある
-        - play 2件、event 1件の選択画像がある
+        - 選択画像がある
     Act:
         - copy_selected_itemsを実行する
     Assert:
-        - 既存ファイルとの衝突を回避してサフィックス付きで出力されること
-        - scene別に連番が振られること
+        - ValueErrorが送出されること
+        - 既存ファイル以外はコピーされないこと
     """
     # Arrange
     output_dir = tmp_path / "output"
@@ -143,36 +143,18 @@ def test_copy_selected_items_avoids_collision_and_counts_per_scene(
     (output_dir / "play0001.jpg").write_bytes(b"existing")
 
     gameplay1 = tmp_path / "play1.jpg"
-    gameplay2 = tmp_path / "play2.jpg"
-    event1 = tmp_path / "event1.jpg"
-    for path in (gameplay1, gameplay2, event1):
-        path.write_bytes(b"fake_image_data")
+    gameplay1.write_bytes(b"fake_image_data")
 
-    record = _build_output_record(
-        [str(gameplay1), str(event1), str(gameplay2)],
-        ["play", "event", "play"],
-    )
+    record = _build_output_record([str(gameplay1)], ["play"])
 
-    # Act
-    result = FileUtils.copy_selected_items(
-        record,
-        str(output_dir),
-        requested_num=3,
-    )
-
-    # Assert
-    assert (output_dir / "play0001_1.jpg").exists()
-    assert (output_dir / "event0001.jpg").exists()
-    assert (output_dir / "play0002.jpg").exists()
-    assert result.selected[0].output_path == str(
-        (output_dir / "play0001_1.jpg").resolve()
-    )
-    assert result.selected[1].output_path == str(
-        (output_dir / "event0001.jpg").resolve()
-    )
-    assert result.selected[2].output_path == str(
-        (output_dir / "play0002.jpg").resolve()
-    )
+    # Act & Assert
+    with pytest.raises(ValueError, match="出力フォルダは空である必要があります"):
+        FileUtils.copy_selected_items(
+            record,
+            str(output_dir),
+            requested_num=1,
+        )
+    assert sorted(path.name for path in output_dir.iterdir()) == ["play0001.jpg"]
 
 
 def test_copy_selected_items_copies_files(tmp_path: Path) -> None:
