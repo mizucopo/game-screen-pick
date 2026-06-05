@@ -7,13 +7,11 @@ import click
 
 from .application.run import run_application
 from .models.application_run_request import ApplicationRunRequest
+from .utils.elapsed_log_formatter import ElapsedLogFormatter
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s",
-    stream=sys.stdout,
-    force=True,
-)
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(ElapsedLogFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[console_handler], force=True)
 
 
 def validate_positive_int(value: str | None) -> int | None:
