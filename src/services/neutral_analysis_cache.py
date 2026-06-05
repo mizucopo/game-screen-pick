@@ -36,18 +36,7 @@ class NeutralAnalysisCache:
             return None
         try:
             with np.load(cache_path, allow_pickle=False) as cached:
-                payload = json.loads(str(cached["metadata"].item()))
-                restored = AnalyzedImage(
-                    path=str(payload["path"]),
-                    raw_metrics=RawMetrics(**payload["raw_metrics"]),
-                    normalized_metrics=NormalizedMetrics(
-                        **payload["normalized_metrics"],
-                    ),
-                    clip_features=cached["clip_features"],
-                    combined_features=cached["combined_features"],
-                    content_features=cached["content_features"],
-                    layout_heuristics=LayoutHeuristics(**payload["layout_heuristics"]),
-                )
+                restored = self._restore_analyzed_image(cached)
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             return None
         if restored.path != str(image_path):
@@ -108,6 +97,22 @@ class NeutralAnalysisCache:
         }
         raw_key = repr(sorted(payload.items()))
         return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _restore_analyzed_image(cached: np.lib.npyio.NpzFile) -> AnalyzedImage:
+        """npz cache payloadから中立解析結果を復元する."""
+        payload = json.loads(str(cached["metadata"].item()))
+        return AnalyzedImage(
+            path=str(payload["path"]),
+            raw_metrics=RawMetrics(**payload["raw_metrics"]),
+            normalized_metrics=NormalizedMetrics(
+                **payload["normalized_metrics"],
+            ),
+            clip_features=cached["clip_features"],
+            combined_features=cached["combined_features"],
+            content_features=cached["content_features"],
+            layout_heuristics=LayoutHeuristics(**payload["layout_heuristics"]),
+        )
 
     @staticmethod
     def _metadata_payload(analyzed_image: AnalyzedImage) -> dict[str, object]:
