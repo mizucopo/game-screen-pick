@@ -161,18 +161,9 @@ def validate_positive_float(value: float | str | None) -> float | None:
     help="Ollama分類の並列ワーカー数",
 )
 @click.option(
-    "--no-ollama-cache",
-    "ollama_cache_enabled",
-    flag_value=False,
-    default=True,
-    help="Ollama分類キャッシュを使わない",
-)
-@click.option(
-    "--no-resume-cache",
-    "resume_cache_enabled",
-    flag_value=False,
-    default=True,
-    help="中立解析の再開キャッシュを使わない",
+    "--reset-cache",
+    is_flag=True,
+    help="既存キャッシュを削除してから実行する",
 )
 @click.option(
     "--scene-hint",
@@ -237,8 +228,7 @@ def execute(
     ollama_host: str | None,
     ollama_timeout: float | None,
     ollama_max_workers: int | None,
-    ollama_cache_enabled: bool,
-    resume_cache_enabled: bool,
+    reset_cache: bool,
     scene_hint: str | None,
     report_json: str | None,
     rename: bool,
@@ -270,8 +260,7 @@ def execute(
         ollama_host: OllamaホストURL。
         ollama_timeout: Ollama APIタイムアウト秒数。
         ollama_max_workers: Ollama分類の並列ワーカー数。
-        ollama_cache_enabled: Ollama分類キャッシュを使うかどうか。
-        resume_cache_enabled: 中立解析の再開キャッシュを使うかどうか。
+        reset_cache: 既存キャッシュを削除してから実行するかどうか。
         scene_hint: scene catalog作成に渡す任意ヒント。
         report_json: JSONレポートの出力先パス。
         rename: scene別の連番ファイル名で出力するかどうか。
@@ -300,8 +289,7 @@ def execute(
             ollama_host=ollama_host,
             ollama_timeout=ollama_timeout,
             ollama_max_workers=ollama_max_workers,
-            ollama_cache_enabled=ollama_cache_enabled,
-            resume_cache_enabled=resume_cache_enabled,
+            reset_cache=reset_cache,
             scene_hint=scene_hint,
             report_json=report_json,
             rename=rename,

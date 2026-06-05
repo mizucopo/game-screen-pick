@@ -29,7 +29,6 @@ class GameScreenPicker:
         analyzer: AnalyzerLike,
         scene_analyzer: SceneAnalyzerLike,
         config: SelectionConfig | None = None,
-        resume_cache_enabled: bool = True,
     ):
         """ピッカーを初期化する.
 
@@ -40,7 +39,6 @@ class GameScreenPicker:
         self.analyzer = analyzer
         self.scene_analyzer = scene_analyzer
         self.config = config or SelectionConfig()
-        self.resume_cache_enabled = resume_cache_enabled
         self._analyzed_image_selector = AnalyzedImageSelector(
             config=self.config,
             metric_calculator=self.analyzer.metric_calculator,
@@ -95,10 +93,6 @@ class GameScreenPicker:
         Returns:
             正常に解析できた `AnalyzedImage` のみを含むリスト。
         """
-        if not self.resume_cache_enabled:
-            analyzed_results = self._analyze_image_paths(files, show_progress)
-            return [result for result in analyzed_results if result is not None]
-
         cache = NeutralAnalysisCache(
             input_folder=input_folder,
             analyzer_fingerprint=self._analyzer_fingerprint(),

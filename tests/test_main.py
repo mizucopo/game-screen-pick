@@ -54,8 +54,7 @@ def test_cli_translates_options_to_application_run_request(
             "30",
             "--ollama-max-workers",
             "2",
-            "--no-ollama-cache",
-            "--no-resume-cache",
+            "--reset-cache",
             "--scene-hint",
             "アドベンチャーゲーム。会話差分が多い",
             "--report-json",
@@ -85,8 +84,7 @@ def test_cli_translates_options_to_application_run_request(
     assert request.ollama_host == "http://localhost:11435"
     assert request.ollama_timeout == 30.0
     assert request.ollama_max_workers == 2
-    assert request.ollama_cache_enabled is False
-    assert request.resume_cache_enabled is False
+    assert request.reset_cache is True
     assert request.scene_hint == "アドベンチャーゲーム。会話差分が多い"
     assert request.report_json == str(report_path)
     assert request.rename is True
@@ -108,6 +106,8 @@ def test_cli_translates_options_to_application_run_request(
         (["--similarity", "1.1"], "0.0~1.0"),
         (["--ollama-timeout", "0"], "正の数"),
         (["--ollama-max-workers", "0"], "正の整数"),
+        (["--no-ollama-cache"], "No such option"),
+        (["--no-resume-cache"], "No such option"),
         (["--profile", "active"], "No such option"),
         (["--scene-mix", "play=0.7,event=0.3"], "No such option"),
     ],

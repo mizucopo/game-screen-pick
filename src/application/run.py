@@ -1,6 +1,7 @@
 """application実行 orchestration."""
 
 import logging
+import shutil
 from pathlib import Path
 
 import click
@@ -28,6 +29,7 @@ def run_application(request: ApplicationRunRequest) -> None:
 
     try:
         input_path = _resolve_input_path(request.input_dir)
+        _reset_cache_if_requested(request, input_path)
         output_record = _select_output_record(request, input_path)
         output_record = FileUtils.copy_selected_items(
             output_record,
@@ -43,19 +45,30 @@ def run_application(request: ApplicationRunRequest) -> None:
     except click.ClickException:
         raise
     except KeyboardInterrupt as error:
-        _log_keyboard_interrupt(request)
+        _log_keyboard_interrupt()
         raise SystemExit(130) from error
     except Exception as error:
         logger.error(f"予期しないエラーが発生しました: {type(error).__name__}: {error}")
         raise SystemExit(1) from error
 
 
-def _log_keyboard_interrupt(request: ApplicationRunRequest) -> None:
+def _log_keyboard_interrupt() -> None:
     """Ctrl+C中断時の案内を出力する."""
-    if request.resume_cache_enabled:
-        logger.info("中断されました。再実行するとcacheから再開します。")
-    else:
-        logger.info("中断されました。")
+    logger.info("中断されました。再実行するとcacheから再開します。")
+
+
+def _reset_cache_if_requested(
+    request: ApplicationRunRequest,
+    input_path: Path,
+) -> None:
+    """指定されている場合は入力フォルダ配下のcacheを削除する."""
+    if not request.reset_cache:
+        return
+    cache_dirs = [input_path / ".game-screen-pick" / "cache"]
+    cache_dirs.extend(input_path.rglob(".game-screen-pick/cache"))
+    for cache_dir in cache_dirs:
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
 
 
 def _resolve_input_path(input_dir: str) -> Path:
@@ -85,7 +98,6 @@ def _select_output_record(
         ollama_host=request.ollama_host,
         ollama_timeout=request.ollama_timeout,
         ollama_max_workers=request.ollama_max_workers,
-        ollama_cache_enabled=request.ollama_cache_enabled,
         scene_hint=request.scene_hint,
     )
 
@@ -98,7 +110,6 @@ def _select_output_record(
             analyzer,
             scene_analyzer=scene_analyzer,
             config=selection_config,
-            resume_cache_enabled=request.resume_cache_enabled,
         )
         logger.info("画像処理を開始します...")
 

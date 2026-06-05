@@ -13,7 +13,6 @@ class OllamaConfig:
     host: str = "http://localhost:11434"
     timeout: float = 60.0
     max_workers: int = 1
-    cache_enabled: bool = True
 
     def __post_init__(self) -> None:
         """設定値の妥当性を検証する."""

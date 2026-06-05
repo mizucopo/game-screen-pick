@@ -71,12 +71,11 @@ class OllamaSceneAnalyzer:
                     content,
                     catalog,
                 )
-                if self.config.cache_enabled:
-                    self._try_write_classification_cache(
-                        image_path,
-                        cache_key,
-                        classification,
-                    )
+                self._try_write_classification_cache(
+                    image_path,
+                    cache_key,
+                    classification,
+                )
                 return classification
             except (OSError, ValueError):
                 continue
@@ -135,8 +134,6 @@ class OllamaSceneAnalyzer:
         cache_key: str,
     ) -> SceneClassification | None:
         """cache済み分類結果を返す."""
-        if not self.config.cache_enabled:
-            return None
         with self._cache_lock:
             cached = self._read_classification_cache(image_path).get(cache_key)
         if not isinstance(cached, dict):
