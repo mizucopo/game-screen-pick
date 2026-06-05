@@ -1,12 +1,18 @@
 """中立画像解析結果の再開cache."""
 
 import hashlib
-import pickle
+import json
+from dataclasses import asdict
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+import numpy as np
+
 from ..models.analyzed_image import AnalyzedImage
+from ..models.layout_heuristics import LayoutHeuristics
+from ..models.normalized_metrics import NormalizedMetrics
+from ..models.raw_metrics import RawMetrics
 
 
 class NeutralAnalysisCache:
@@ -23,19 +29,30 @@ class NeutralAnalysisCache:
 
     def read(self, image_path: Path) -> AnalyzedImage | None:
         """画像pathに対応するcache済み解析結果を返す."""
-        cache_path = self._cache_path(image_path)
+        cache_path = self._try_cache_path(image_path)
+        if cache_path is None:
+            return None
         if not cache_path.exists():
             return None
         try:
-            with cache_path.open("rb") as cache_file:
-                cached = pickle.load(cache_file)
-        except (OSError, pickle.PickleError, EOFError, AttributeError, ValueError):
+            with np.load(cache_path, allow_pickle=False) as cached:
+                payload = json.loads(str(cached["metadata"].item()))
+                restored = AnalyzedImage(
+                    path=str(payload["path"]),
+                    raw_metrics=RawMetrics(**payload["raw_metrics"]),
+                    normalized_metrics=NormalizedMetrics(
+                        **payload["normalized_metrics"],
+                    ),
+                    clip_features=cached["clip_features"],
+                    combined_features=cached["combined_features"],
+                    content_features=cached["content_features"],
+                    layout_heuristics=LayoutHeuristics(**payload["layout_heuristics"]),
+                )
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             return None
-        if not isinstance(cached, AnalyzedImage):
+        if restored.path != str(image_path):
             return None
-        if cached.path != str(image_path):
-            return None
-        return cached
+        return restored
 
     def write_many(self, analyzed_images: list[AnalyzedImage]) -> None:
         """複数の解析結果をcacheへ保存する."""
@@ -53,7 +70,16 @@ class NeutralAnalysisCache:
                 dir=cache_path.parent,
                 delete=False,
             ) as cache_file:
-                pickle.dump(analyzed_image, cache_file)
+                np.savez_compressed(
+                    cache_file,
+                    metadata=json.dumps(
+                        self._metadata_payload(analyzed_image),
+                        ensure_ascii=False,
+                    ),
+                    clip_features=analyzed_image.clip_features,
+                    combined_features=analyzed_image.combined_features,
+                    content_features=analyzed_image.content_features,
+                )
                 temp_path = Path(cache_file.name)
             temp_path.replace(cache_path)
         except OSError:
@@ -61,7 +87,14 @@ class NeutralAnalysisCache:
 
     def _cache_path(self, image_path: Path) -> Path:
         """画像pathからcache file pathを返す."""
-        return self._cache_dir / f"{self._cache_key(image_path)}.pickle"
+        return self._cache_dir / f"{self._cache_key(image_path)}.npz"
+
+    def _try_cache_path(self, image_path: Path) -> Path | None:
+        """cache file pathを返し、path情報を読めない場合はNoneを返す."""
+        try:
+            return self._cache_path(image_path)
+        except OSError:
+            return None
 
     def _cache_key(self, image_path: Path) -> str:
         """画像pathと解析設定からcache keyを作る."""
@@ -75,3 +108,13 @@ class NeutralAnalysisCache:
         }
         raw_key = repr(sorted(payload.items()))
         return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _metadata_payload(analyzed_image: AnalyzedImage) -> dict[str, object]:
+        """配列以外の解析結果をJSON保存用payloadへ変換する."""
+        return {
+            "path": analyzed_image.path,
+            "raw_metrics": asdict(analyzed_image.raw_metrics),
+            "normalized_metrics": asdict(analyzed_image.normalized_metrics),
+            "layout_heuristics": asdict(analyzed_image.layout_heuristics),
+        }
