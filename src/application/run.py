@@ -29,7 +29,6 @@ def run_application(request: ApplicationRunRequest) -> None:
 
     try:
         input_path = _resolve_input_path(request.input_dir)
-        _reset_cache_if_requested(request, input_path)
         output_record = _select_output_record(request, input_path)
         output_record = FileUtils.copy_selected_items(
             output_record,
@@ -45,16 +44,19 @@ def run_application(request: ApplicationRunRequest) -> None:
     except click.ClickException:
         raise
     except KeyboardInterrupt as error:
-        _log_keyboard_interrupt()
+        _log_keyboard_interrupt(request)
         raise SystemExit(130) from error
     except Exception as error:
         logger.error(f"予期しないエラーが発生しました: {type(error).__name__}: {error}")
         raise SystemExit(1) from error
 
 
-def _log_keyboard_interrupt() -> None:
+def _log_keyboard_interrupt(request: ApplicationRunRequest) -> None:
     """Ctrl+C中断時の案内を出力する."""
-    logger.info("中断されました。再実行するとcacheから再開します。")
+    if request.reset_cache:
+        logger.info("中断されました。")
+    else:
+        logger.info("中断されました。再実行するとcacheから再開します。")
 
 
 def _reset_cache_if_requested(
@@ -99,6 +101,7 @@ def _select_output_record(
         ollama_max_workers=request.ollama_max_workers,
         scene_hint=request.scene_hint,
     )
+    _reset_cache_if_requested(request, input_path)
 
     with ImageQualityAnalyzer(config=analyzer_config) as analyzer:
         if selection_config.ollama is None:

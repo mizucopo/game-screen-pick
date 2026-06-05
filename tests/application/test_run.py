@@ -439,6 +439,76 @@ def test_run_application_reports_keyboard_interrupt_as_resumable_run(
     assert "再実行するとcacheから再開します" in caplog.text
 
 
+def test_run_application_does_not_report_resume_after_reset_cache_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """reset cache指定時のCtrl+C中断では再開案内が出力されないこと.
+
+    Arrange:
+        - reset cacheが指定されている
+        - 画像選定中にKeyboardInterruptが発生する
+    Act:
+        - applicationが実行される
+    Assert:
+        - 終了コード130で終了し、cache再開の案内は出力されないこと
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    _arrange_keyboard_interrupt_picker(monkeypatch)
+    caplog.set_level("INFO")
+
+    # Act / Assert
+    with pytest.raises(SystemExit) as exc_info:
+        run_application(
+            replace(
+                _build_request(input_dir, output_dir),
+                reset_cache=True,
+            )
+        )
+    assert exc_info.value.code == 130
+    assert "中断されました" in caplog.text
+    assert "再実行するとcacheから再開します" not in caplog.text
+
+
+def test_run_application_keeps_cache_when_config_resolution_fails_after_reset_request(
+    tmp_path: Path,
+) -> None:
+    """reset cache指定時も設定解決に失敗した場合はcacheが削除されないこと.
+
+    Arrange:
+        - 入力ディレクトリに既存cache fileがある
+        - reset cacheが指定されている
+        - Ollama modelが未指定で設定解決に失敗する
+    Act:
+        - applicationが実行される
+    Assert:
+        - 終了コード1で終了し、既存cache fileが残ること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    cache_file = input_dir / ".game-screen-pick" / "cache" / "ollama-scenes.json"
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("cached", encoding="utf-8")
+
+    # Act / Assert
+    with pytest.raises(SystemExit) as exc_info:
+        run_application(
+            replace(
+                _build_request(input_dir, output_dir),
+                ollama_model=None,
+                reset_cache=True,
+            )
+        )
+    assert exc_info.value.code == 1
+    assert cache_file.exists()
+
+
 def test_run_application_resets_cache_before_selecting_images(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
