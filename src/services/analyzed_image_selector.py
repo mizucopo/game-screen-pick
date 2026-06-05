@@ -252,18 +252,36 @@ class AnalyzedImageSelector:
         """画像ごとのscene分類を実行する."""
         max_workers = self.config.ollama.max_workers if self.config.ollama else 1
         image_paths = [image.path for image in analyzed_images]
-        logger.info(
-            f"Ollama画像分類開始: 対象 {len(image_paths)} 件, worker {max_workers}"
+        total_count = len(image_paths)
+        logger.info(f"Ollama画像分類開始: 対象 {total_count} 件, worker {max_workers}")
+        if max_workers == 1 or total_count <= 1:
+            return self._classify_images_sequentially(image_paths, scene_catalog)
+        return self._classify_images_concurrently(
+            image_paths,
+            scene_catalog,
+            max_workers,
         )
-        if max_workers == 1 or len(analyzed_images) <= 1:
-            classifications: list[SceneClassification | None] = []
-            for completed_count, image_path in enumerate(image_paths, start=1):
-                classifications.append(
-                    self._classify_image_path(image_path, scene_catalog)
-                )
-                logger.info(f"Ollama画像分類進捗: {completed_count}/{len(image_paths)}")
-            return classifications
-        classifications = [None] * len(image_paths)
+
+    def _classify_images_sequentially(
+        self,
+        image_paths: list[str],
+        scene_catalog: list[SceneCatalogEntry],
+    ) -> list[SceneClassification | None]:
+        """画像を1件ずつscene分類する."""
+        classifications: list[SceneClassification | None] = []
+        for completed_count, image_path in enumerate(image_paths, start=1):
+            classifications.append(self._classify_image_path(image_path, scene_catalog))
+            self._log_classification_progress(completed_count, len(image_paths))
+        return classifications
+
+    def _classify_images_concurrently(
+        self,
+        image_paths: list[str],
+        scene_catalog: list[SceneCatalogEntry],
+        max_workers: int,
+    ) -> list[SceneClassification | None]:
+        """画像を並列にscene分類する."""
+        classifications: list[SceneClassification | None] = [None] * len(image_paths)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(
@@ -275,8 +293,13 @@ class AnalyzedImageSelector:
             }
             for completed_count, future in enumerate(as_completed(futures), start=1):
                 classifications[futures[future]] = future.result()
-                logger.info(f"Ollama画像分類進捗: {completed_count}/{len(image_paths)}")
+                self._log_classification_progress(completed_count, len(image_paths))
         return classifications
+
+    @staticmethod
+    def _log_classification_progress(completed_count: int, total_count: int) -> None:
+        """Ollama画像分類の進捗を出力する."""
+        logger.info(f"Ollama画像分類進捗: {completed_count}/{total_count}")
 
     def _classify_image_path(
         self,
