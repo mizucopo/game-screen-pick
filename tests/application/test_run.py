@@ -79,6 +79,14 @@ def _build_stats(
     )
 
 
+def _write_ollama_cache_file(folder: Path) -> Path:
+    """Ollama分類cache fileを作成する."""
+    cache_file = folder / ".game-screen-pick" / "cache" / "ollama-scenes.json"
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("cached", encoding="utf-8")
+    return cache_file
+
+
 def _arrange_picker(
     monkeypatch: pytest.MonkeyPatch,
     selected: list[ScoredCandidate],
@@ -492,9 +500,7 @@ def test_run_application_keeps_cache_when_config_resolution_fails_after_reset_re
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     input_dir.mkdir()
-    cache_file = input_dir / ".game-screen-pick" / "cache" / "ollama-scenes.json"
-    cache_file.parent.mkdir(parents=True)
-    cache_file.write_text("cached", encoding="utf-8")
+    cache_file = _write_ollama_cache_file(input_dir)
 
     # Act / Assert
     with pytest.raises(SystemExit) as exc_info:
@@ -527,13 +533,8 @@ def test_run_application_resets_cache_before_selecting_images(
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     input_dir.mkdir()
-    root_cache_file = input_dir / ".game-screen-pick" / "cache" / "ollama-scenes.json"
-    nested_cache_file = (
-        input_dir / "chapter1" / ".game-screen-pick" / "cache" / "ollama-scenes.json"
-    )
-    for cache_file in (root_cache_file, nested_cache_file):
-        cache_file.parent.mkdir(parents=True)
-        cache_file.write_text("cached", encoding="utf-8")
+    root_cache_file = _write_ollama_cache_file(input_dir)
+    nested_cache_file = _write_ollama_cache_file(input_dir / "chapter1")
     observed_cache_exists: list[tuple[bool, bool]] = []
     picker = MagicMock()
     picker.select.return_value = ([], [], _build_stats(total_files=0, selected_count=0))
