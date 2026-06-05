@@ -36,7 +36,7 @@ class FileUtils:
 
     @staticmethod
     def ensure_output_dir_is_empty(dest_dir: str) -> None:
-        """出力ディレクトリが存在する場合は空であることを検証する.
+        """出力先が存在する場合は空のディレクトリであることを検証する.
 
         Args:
             dest_dir: 出力先ディレクトリのパス
@@ -44,13 +44,13 @@ class FileUtils:
         Raises:
             ValueError: 出力先がファイル、または空でないディレクトリの場合
         """
-        out = Path(dest_dir)
-        if not out.exists():
+        output_dir = Path(dest_dir)
+        if not output_dir.exists():
             return
-        if not out.is_dir():
+        if not output_dir.is_dir():
             msg = f"出力先はフォルダである必要があります: {dest_dir}"
             raise ValueError(msg)
-        if any(out.iterdir()):
+        if any(output_dir.iterdir()):
             msg = f"出力フォルダは空である必要があります: {dest_dir}"
             raise ValueError(msg)
 
@@ -70,9 +70,9 @@ class FileUtils:
         Returns:
             コピー先パスを反映した出力record
         """
-        out = Path(dest_dir)
         FileUtils.ensure_output_dir_is_empty(dest_dir)
-        out.mkdir(parents=True, exist_ok=True)
+        output_dir = Path(dest_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
         planned_output_record = OutputPlanner.plan_selected_outputs(
             output_record,
             dest_dir,
