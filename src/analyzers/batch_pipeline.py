@@ -40,6 +40,11 @@ class BatchPipeline:
 
     PROGRESS_REPORT_INTERVAL: int = 500
 
+    @staticmethod
+    def _chunk_label(chunk_idx: int, total_chunks: int) -> str:
+        """ログ表示用のチャンク位置を返す."""
+        return f"chunk {chunk_idx + 1}/{total_chunks}"
+
     def __init__(
         self,
         feature_extractor: "FeatureExtractor",
@@ -164,9 +169,9 @@ class BatchPipeline:
             chunk_start, chunk_end = chunk_boundaries[chunk_idx]
             chunk_paths = paths[chunk_start:chunk_end]
             if show_progress:
+                chunk_label = self._chunk_label(chunk_idx, total_chunks)
                 logger.info(
-                    "画像読み込みを開始します: "
-                    f"chunk {chunk_idx + 1}/{total_chunks} ({len(chunk_paths)}件)"
+                    f"画像読み込みを開始します: {chunk_label} ({len(chunk_paths)}件)"
                 )
             preload_futures[chunk_idx] = preload_executor.submit(
                 self.load_and_preprocess_images,
@@ -177,11 +182,9 @@ class BatchPipeline:
         for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_boundaries):
             chunk_paths = paths[chunk_start:chunk_end]
             pil_images = preload_futures[chunk_idx].result()
+            chunk_label = self._chunk_label(chunk_idx, total_chunks)
             if show_progress:
-                logger.info(
-                    "画像読み込み完了: "
-                    f"chunk {chunk_idx + 1}/{total_chunks} ({len(chunk_paths)}件)"
-                )
+                logger.info(f"画像読み込み完了: {chunk_label} ({len(chunk_paths)}件)")
             del preload_futures[chunk_idx]
 
             self._preload_next_chunks(
@@ -190,6 +193,7 @@ class BatchPipeline:
                 chunk_idx,
                 lookahead,
                 preload_futures,
+                total_chunks,
                 show_progress,
             )
 
@@ -197,15 +201,14 @@ class BatchPipeline:
                 valid_image_count = sum(image is not None for image in pil_images)
                 logger.info(
                     "CLIP特徴抽出を開始します: "
-                    f"chunk {chunk_idx + 1}/{total_chunks} "
-                    f"({valid_image_count}/{len(chunk_paths)}件)"
+                    f"{chunk_label} ({valid_image_count}/{len(chunk_paths)}件)"
                 )
             clip_features_list = self.feature_extractor.extract_clip_features_batch(
                 pil_images,
                 initial_batch_size=batch_size,
             )
             if show_progress:
-                logger.info(f"CLIP特徴抽出完了: chunk {chunk_idx + 1}/{total_chunks}")
+                logger.info(f"CLIP特徴抽出完了: {chunk_label}")
             clip_features_np_list = self._convert_batch_features_to_numpy(
                 clip_features_list
             )
@@ -236,6 +239,7 @@ class BatchPipeline:
         chunk_idx: int,
         lookahead: int,
         preload_futures: dict[int, "BatchPipeline._PilImagesFuture"],
+        total_chunks: int,
         show_progress: bool = False,
     ) -> None:
         """先読みチャンクをプリロードExecutorに投入する."""
@@ -244,10 +248,9 @@ class BatchPipeline:
             next_start, next_end = chunk_boundaries[next_idx]
             next_paths = paths[next_start:next_end]
             if show_progress:
+                chunk_label = self._chunk_label(next_idx, total_chunks)
                 logger.info(
-                    "画像読み込みを開始します: "
-                    f"chunk {next_idx + 1}/{len(chunk_boundaries)} "
-                    f"({len(next_paths)}件)"
+                    f"画像読み込みを開始します: {chunk_label} ({len(next_paths)}件)"
                 )
             preload_futures[next_idx] = self._get_preload_executor().submit(
                 self.load_and_preprocess_images,

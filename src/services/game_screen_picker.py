@@ -127,21 +127,6 @@ class GameScreenPicker:
             results[index] = analyzed_image
         return [result for result in results if result is not None]
 
-    def _analyze_image_paths(
-        self,
-        files: list[Path],
-        show_progress: bool,
-    ) -> list[AnalyzedImage | None]:
-        """画像path群をAnalyzerへ渡す."""
-        if not files:
-            return []
-        paths = [str(file_path) for file_path in files]
-        return self.analyzer.analyze_batch(
-            paths,
-            batch_size=self.config.batch_size,
-            show_progress=show_progress,
-        )
-
     def _analyze_image_paths_with_cache(
         self,
         files: list[Path],

@@ -1,7 +1,5 @@
 """BatchPipelineテスト用feature extractor."""
 
-from typing import Any
-
 import numpy as np
 import torch
 from PIL import Image
@@ -9,6 +7,12 @@ from PIL import Image
 
 class FakeFeatureExtractor:
     """BatchPipeline向けの軽量特徴抽出器."""
+
+    @staticmethod
+    def _hsv_features_or_default(hsv_features: np.ndarray | None) -> np.ndarray:
+        if hsv_features is not None:
+            return hsv_features
+        return np.ones(64, dtype=np.float32)
 
     @staticmethod
     def extract_clip_features_batch(
@@ -33,15 +37,15 @@ class FakeFeatureExtractor:
         hsv_features: np.ndarray | None = None,
     ) -> np.ndarray:
         del img
-        features = hsv_features if hsv_features is not None else np.ones(64)
+        features = FakeFeatureExtractor._hsv_features_or_default(hsv_features)
         return np.concatenate([features, clip_features])
 
     @staticmethod
     def extract_content_features(
         img: np.ndarray,
-        raw_metrics: Any,
+        raw_metrics: object,
         hsv_features: np.ndarray | None = None,
     ) -> np.ndarray:
         del img, raw_metrics
-        features = hsv_features if hsv_features is not None else np.ones(64)
+        features = FakeFeatureExtractor._hsv_features_or_default(hsv_features)
         return np.concatenate([features, np.ones(37, dtype=np.float32)])
