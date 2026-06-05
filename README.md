@@ -72,11 +72,12 @@ uv run game-screen-pick --ollama-model gemma4 --reset-cache ./screenshots ./outp
 6. 同じ scene 内で見た目や構図が近い画像を variant group にまとめ、原則として各 group から代表画像を1枚だけ選ぶ
 7. scene ごとの自動均等配分、画質、分類信頼度、類似度除外を組み合わせて最終出力を決める
 8. 選定結果を copy / console / JSON report 共通の出力recordへ変換する
-9. `OutputPlanner` が scene slug別連番、同名衝突回避、report用 `output_path` をcopyなしで計画する
+9. `OutputPlanner` が scene slug別連番とreport用 `output_path` をcopyなしで計画する
 10. 計画済みの出力先へ画像をコピーし、同じrecordから表示と `<出力フォルダ>/report.json` のJSONレポートを生成する
 
-JSONレポートは常に `<出力フォルダ>/report.json` へ出力され、既存ファイルがある場合は上書きされます。
-選択画像は常に `battle0001.ext` や `conversation0001.ext` のように、scene slug と scene 内連番で出力されます。既存画像ファイルと同名になる場合は上書きせず、`battle0001_1.ext` のように衝突回避名で保存されます。
+出力フォルダが存在する場合は、処理開始前に空である必要があります。既存ファイル、既存フォルダ、`report.json` などが1件でもある場合は失敗します。
+JSONレポートは常に `<出力フォルダ>/report.json` へ出力されます。
+選択画像は常に `battle0001.ext` や `conversation0001.ext` のように、scene slug と scene 内連番で出力されます。
 
 ### scene の意味
 

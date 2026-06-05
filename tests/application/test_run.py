@@ -279,6 +279,44 @@ def test_run_application_writes_scene_numbered_outputs(
     assert (output_dir / "battle0002.jpg").exists()
 
 
+def test_run_application_rejects_non_empty_output_dir_before_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """出力フォルダが空でない場合は画像選定前に失敗されること.
+
+    Arrange:
+        - 入力ディレクトリが存在する
+        - 出力フォルダに既存ファイルがある
+    Act:
+        - applicationが実行される
+    Assert:
+        - click.ClickExceptionが送出されること
+        - 画像選定処理が開始されないこと
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    (output_dir / "report.json").write_text("existing", encoding="utf-8")
+
+    def fail_if_analyzer_is_created(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("画像選定処理が開始されました")
+
+    monkeypatch.setattr(
+        "src.application.run.ImageQualityAnalyzer",
+        fail_if_analyzer_is_created,
+    )
+
+    # Act & Assert
+    with pytest.raises(
+        click.ClickException,
+        match="出力フォルダは空である必要があります",
+    ):
+        run_application(_build_request(input_dir, output_dir))
+
+
 def test_run_application_resolves_configs_and_constructs_picker(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

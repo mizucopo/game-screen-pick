@@ -35,6 +35,26 @@ class FileUtils:
             shutil.copy2(result.source_path, output_path)
 
     @staticmethod
+    def ensure_output_dir_is_empty(dest_dir: str) -> None:
+        """出力ディレクトリが存在する場合は空であることを検証する.
+
+        Args:
+            dest_dir: 出力先ディレクトリのパス
+
+        Raises:
+            ValueError: 出力先がファイル、または空でないディレクトリの場合
+        """
+        out = Path(dest_dir)
+        if not out.exists():
+            return
+        if not out.is_dir():
+            msg = f"出力先はフォルダである必要があります: {dest_dir}"
+            raise ValueError(msg)
+        if any(out.iterdir()):
+            msg = f"出力フォルダは空である必要があります: {dest_dir}"
+            raise ValueError(msg)
+
+    @staticmethod
     def copy_selected_items(
         output_record: OutputRecord,
         dest_dir: str,
@@ -51,12 +71,13 @@ class FileUtils:
             コピー先パスを反映した出力record
         """
         out = Path(dest_dir)
+        FileUtils.ensure_output_dir_is_empty(dest_dir)
         out.mkdir(parents=True, exist_ok=True)
         planned_output_record = OutputPlanner.plan_selected_outputs(
             output_record,
             dest_dir,
             requested_num=requested_num,
-            existing_filenames=[path.name for path in out.iterdir()],
+            existing_filenames=[],
         )
         FileUtils.copy_planned_outputs(planned_output_record)
         logger.info(f"{len(output_record.selected)} 件を {dest_dir} に保存しました。")

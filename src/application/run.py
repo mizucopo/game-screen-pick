@@ -29,6 +29,7 @@ def run_application(request: ApplicationRunRequest) -> None:
 
     try:
         input_path = _resolve_input_path(request.input_dir)
+        _ensure_output_dir_is_empty(request.output_dir)
         output_record = _select_output_record(request, input_path)
         output_record = FileUtils.copy_selected_items(
             output_record,
@@ -83,6 +84,14 @@ def _resolve_input_path(input_dir: str) -> Path:
             param_hint="input_dir",
         )
     return input_path
+
+
+def _ensure_output_dir_is_empty(output_dir: str) -> None:
+    """出力ディレクトリが存在する場合は空であることを検証する."""
+    try:
+        FileUtils.ensure_output_dir_is_empty(output_dir)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
 
 
 def _select_output_record(

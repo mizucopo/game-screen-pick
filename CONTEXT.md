@@ -16,6 +16,10 @@ _Avoid_: localized category name
 選択された画像に付ける標準の出力ファイル名。scene slug と scene 内の連番で構成される。
 _Avoid_: original filename output, optional rename mode
 
+**Output Folder**:
+選択された画像とレポートを書き出す実行ごとの保存先。処理開始前に空である必要がある。
+_Avoid_: append destination, overwrite target, resumable output
+
 **Scene Display Name**:
 scene を人が読みやすいように表す日本語名。ブログ用の画像選択やレポート表示で使われる。
 _Avoid_: filename prefix, report key
