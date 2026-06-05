@@ -5,7 +5,6 @@ import json
 from dataclasses import asdict, replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
 
 import numpy as np
 
@@ -80,7 +79,7 @@ class NeutralAnalysisCache:
             current_version = self._file_version(image_path)
             if expected_version is not None and current_version != expected_version:
                 return
-            cache_path = self._cache_path(image_path)
+            cache_path = self._cache_path_from_version(current_version)
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             with NamedTemporaryFile(
                 "wb",
@@ -104,7 +103,11 @@ class NeutralAnalysisCache:
 
     def _cache_path(self, image_path: Path) -> Path:
         """画像pathからcache file pathを返す."""
-        return self._cache_dir / f"{self._cache_key(image_path)}.npz"
+        return self._cache_path_from_version(self._file_version(image_path))
+
+    def _cache_path_from_version(self, file_version: _FileVersion) -> Path:
+        """file versionからcache file pathを返す."""
+        return self._cache_dir / f"{self._cache_key_from_version(file_version)}.npz"
 
     def _try_cache_path(self, image_path: Path) -> Path | None:
         """cache file pathを返し、path情報を読めない場合はNoneを返す."""
@@ -113,15 +116,10 @@ class NeutralAnalysisCache:
         except OSError:
             return None
 
-    def _cache_key(self, image_path: Path) -> str:
-        """画像pathと解析設定からcache keyを作る."""
-        file_version = self._file_version(image_path)
-        return self._cache_key_from_version(file_version)
-
     def _cache_key_from_version(self, file_version: _FileVersion) -> str:
         """file versionと解析設定からcache keyを作る."""
         resolved_path, mtime_ns, size = file_version
-        payload: dict[str, Any] = {
+        payload: dict[str, object] = {
             "version": self.VERSION,
             "path": resolved_path,
             "mtime_ns": mtime_ns,
@@ -135,7 +133,11 @@ class NeutralAnalysisCache:
     def _file_version(image_path: Path) -> _FileVersion:
         """cache keyに使う画像file versionを返す."""
         stat = image_path.stat()
-        return (str(image_path.resolve()), stat.st_mtime_ns, stat.st_size)
+        return (
+            NeutralAnalysisCache._resolved_path(image_path),
+            stat.st_mtime_ns,
+            stat.st_size,
+        )
 
     @staticmethod
     def _resolved_path(path: str | Path) -> str:
@@ -168,7 +170,7 @@ class NeutralAnalysisCache:
         """配列以外の解析結果をJSON保存用payloadへ変換する."""
         return {
             "path": analyzed_image.path,
-            "resolved_path": str(Path(analyzed_image.path).resolve()),
+            "resolved_path": NeutralAnalysisCache._resolved_path(analyzed_image.path),
             "raw_metrics": asdict(analyzed_image.raw_metrics),
             "normalized_metrics": asdict(analyzed_image.normalized_metrics),
             "layout_heuristics": asdict(analyzed_image.layout_heuristics),
