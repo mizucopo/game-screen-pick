@@ -64,9 +64,8 @@ def _reset_cache_if_requested(
     """指定されている場合は入力フォルダ配下のcacheを削除する."""
     if not request.reset_cache:
         return
-    cache_dirs = [input_path / ".game-screen-pick" / "cache"]
-    cache_dirs.extend(input_path.rglob(".game-screen-pick/cache"))
-    for cache_dir in cache_dirs:
+    game_screen_pick_dirs = input_path.rglob(".game-screen-pick")
+    for cache_dir in (path / "cache" for path in game_screen_pick_dirs):
         if cache_dir.exists():
             shutil.rmtree(cache_dir)
 
