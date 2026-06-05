@@ -2,8 +2,7 @@
 
 import logging
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
-from itertools import repeat
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..analyzers.metric_calculator import MetricCalculator
 from ..models.analyzed_image import AnalyzedImage
@@ -139,10 +138,14 @@ class AnalyzedImageSelector:
 
         representative_paths = self._build_representative_paths(analyzed_images)
         try:
+            logger.info(
+                f"Ollama scene catalog作成中: 代表画像 {len(representative_paths)} 件"
+            )
             scene_catalog = self._scene_analyzer.generate_scene_catalog(
                 representative_paths,
                 self.config.scene_hint,
             )
+            logger.info(f"Ollama scene catalog作成完了: scene {len(scene_catalog)} 件")
         except (OSError, ValueError) as error:
             fallback_reason = f"{type(error).__name__}: {error}"
             logger.debug(
@@ -162,6 +165,13 @@ class AnalyzedImageSelector:
             )
 
         classifications = self._classify_images(analyzed_images, scene_catalog)
+        failed_count = sum(
+            1 for classification in classifications if classification is None
+        )
+        logger.info(
+            "Ollama画像分類完了: "
+            f"成功 {len(classifications) - failed_count} 件, 失敗 {failed_count} 件"
+        )
         return self._score_classifications(
             analyzed_images,
             scene_catalog,
@@ -242,19 +252,54 @@ class AnalyzedImageSelector:
         """画像ごとのscene分類を実行する."""
         max_workers = self.config.ollama.max_workers if self.config.ollama else 1
         image_paths = [image.path for image in analyzed_images]
-        if max_workers == 1 or len(analyzed_images) <= 1:
-            return [
-                self._classify_image_path(image_path, scene_catalog)
-                for image_path in image_paths
-            ]
+        total_count = len(image_paths)
+        logger.info(f"Ollama画像分類開始: 対象 {total_count} 件, worker {max_workers}")
+        if max_workers == 1 or total_count <= 1:
+            return self._classify_images_sequentially(image_paths, scene_catalog)
+        return self._classify_images_concurrently(
+            image_paths,
+            scene_catalog,
+            max_workers,
+        )
+
+    def _classify_images_sequentially(
+        self,
+        image_paths: list[str],
+        scene_catalog: list[SceneCatalogEntry],
+    ) -> list[SceneClassification | None]:
+        """画像を1件ずつscene分類する."""
+        classifications: list[SceneClassification | None] = []
+        for completed_count, image_path in enumerate(image_paths, start=1):
+            classifications.append(self._classify_image_path(image_path, scene_catalog))
+            self._log_classification_progress(completed_count, len(image_paths))
+        return classifications
+
+    def _classify_images_concurrently(
+        self,
+        image_paths: list[str],
+        scene_catalog: list[SceneCatalogEntry],
+        max_workers: int,
+    ) -> list[SceneClassification | None]:
+        """画像を並列にscene分類する."""
+        classifications: list[SceneClassification | None] = [None] * len(image_paths)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            return list(
-                executor.map(
+            futures = {
+                executor.submit(
                     self._classify_image_path,
-                    image_paths,
-                    repeat(scene_catalog),
-                )
-            )
+                    image_path,
+                    scene_catalog,
+                ): index
+                for index, image_path in enumerate(image_paths)
+            }
+            for completed_count, future in enumerate(as_completed(futures), start=1):
+                classifications[futures[future]] = future.result()
+                self._log_classification_progress(completed_count, len(image_paths))
+        return classifications
+
+    @staticmethod
+    def _log_classification_progress(completed_count: int, total_count: int) -> None:
+        """Ollama画像分類の進捗を出力する."""
+        logger.info(f"Ollama画像分類進捗: {completed_count}/{total_count}")
 
     def _classify_image_path(
         self,

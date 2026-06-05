@@ -96,6 +96,7 @@ uv run game-screen-pick --ollama-model gemma4 \
 - 分類結果は入力画像のあるフォルダ配下の `.game-screen-pick/cache/ollama-scenes.json` に保存されます
 - キャッシュキーには画像パス、更新時刻、サイズ、モデル名、scene catalog が含まれます
 - キャッシュを使わない場合は `--no-ollama-cache` を指定します
+- コンソールには scene catalog 作成開始・完了、画像分類の対象件数、分類済み件数、成功・失敗件数が出力されます
 - scene catalog 応答が不正な場合は、代表画像数を減らして再試行します
 - scene catalog 作成が最終的に失敗した場合は、`fallback` sceneで選定を継続し、console / JSON report に `ollama_catalog_fallback_used` と `ollama_catalog_fallback_reason` を出力します
 - `ollama_classification_failed` は、scene catalog 作成後に個別画像を catalog 内の scene へ分類できなかった件数です。catalog 作成失敗による `fallback` とは別に集計されます
