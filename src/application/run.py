@@ -43,7 +43,10 @@ def run_application(request: ApplicationRunRequest) -> None:
     except click.ClickException:
         raise
     except KeyboardInterrupt as error:
-        logger.info("中断されました。再実行するとcacheから再開します。")
+        if request.resume_cache_enabled:
+            logger.info("中断されました。再実行するとcacheから再開します。")
+        else:
+            logger.info("中断されました。")
         raise SystemExit(130) from error
     except Exception as error:
         logger.error(f"予期しないエラーが発生しました: {type(error).__name__}: {error}")

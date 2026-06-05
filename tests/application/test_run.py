@@ -436,6 +436,55 @@ def test_run_application_reports_keyboard_interrupt_as_resumable_run(
     assert "再実行するとcacheから再開します" in caplog.text
 
 
+def test_run_application_does_not_promise_resume_when_resume_cache_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """再開cache無効時のCtrl+C中断では再開案内が出力されないこと.
+
+    Arrange:
+        - 再開cacheが無効化されている
+        - 画像選定中にKeyboardInterruptが発生する
+    Act:
+        - applicationが実行される
+    Assert:
+        - 終了コード130で終了し、cache再開の案内は出力されないこと
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    picker = MagicMock()
+    picker.select.side_effect = KeyboardInterrupt
+    analyzer = MagicMock()
+    monkeypatch.setattr(
+        "src.application.run.ImageQualityAnalyzer",
+        lambda *_args, **_kwargs: nullcontext(analyzer),
+    )
+    monkeypatch.setattr(
+        "src.application.run.GameScreenPicker",
+        lambda *_args, **_kwargs: picker,
+    )
+    monkeypatch.setattr(
+        "src.application.run.OllamaSceneAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
+    )
+    caplog.set_level("INFO")
+
+    # Act / Assert
+    with pytest.raises(SystemExit) as exc_info:
+        run_application(
+            replace(
+                _build_request(input_dir, output_dir),
+                resume_cache_enabled=False,
+            )
+        )
+    assert exc_info.value.code == 130
+    assert "中断されました" in caplog.text
+    assert "再実行するとcacheから再開します" not in caplog.text
+
+
 def test_run_application_keeps_click_exceptions(
     tmp_path: Path,
 ) -> None:

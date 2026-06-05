@@ -45,9 +45,22 @@ class _AnalyzerWithFailures:
 class _CountingAnalyzer:
     """解析呼び出しを記録する最小フェイク."""
 
-    def __init__(self) -> None:
+    class _FeatureExtractor:
+        """CLIP model名を持つ最小feature extractor."""
+
+        class _ModelManager:
+            """CLIP model名を持つ最小model manager."""
+
+            def __init__(self, model_name: str) -> None:
+                self.model_name = model_name
+
+        def __init__(self, model_name: str) -> None:
+            self.model_manager = self._ModelManager(model_name)
+
+    def __init__(self, model_name: str = "clip-a") -> None:
         self.metric_calculator = MetricCalculator(AnalyzerConfig())
         self.config = AnalyzerConfig()
+        self.feature_extractor = self._FeatureExtractor(model_name)
         self.requested_paths: list[list[str]] = []
 
     def analyze_batch(
@@ -203,6 +216,41 @@ def test_select_reuses_neutral_analysis_cache_on_later_run(tmp_path: Path) -> No
     assert len(selected) == 2
     assert rejected == []
     assert stats.analyzed_ok == 2
+
+
+def test_select_reanalyzes_when_clip_model_changes(tmp_path: Path) -> None:
+    """CLIP modelが変わった場合は中立解析cacheが再利用されないこと.
+
+    Arrange:
+        - 初回実行でCLIP model Aの中立解析cacheが作成されている
+        - 後続実行ではCLIP model Bが使われている
+    Act:
+        - 同じ入力フォルダが再び選定される
+    Assert:
+        - 後続実行でも中立解析が呼び出されること
+    """
+    # Arrange
+    for name in ["frame1.jpg", "frame2.jpg"]:
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+
+    first_picker = GameScreenPicker(
+        analyzer=_CountingAnalyzer(model_name="clip-a"),
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
+    )
+    second_analyzer = _CountingAnalyzer(model_name="clip-b")
+    second_picker = GameScreenPicker(
+        analyzer=second_analyzer,
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
+    )
+
+    # Act
+    first_picker.select(str(tmp_path), num=2, recursive=False, show_progress=False)
+    second_picker.select(str(tmp_path), num=2, recursive=False, show_progress=False)
+
+    # Assert
+    assert len(second_analyzer.requested_paths) == 1
 
 
 def test_select_ignores_neutral_analysis_cache_when_resume_cache_is_disabled(

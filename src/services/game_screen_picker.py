@@ -165,7 +165,7 @@ class GameScreenPicker:
         """中立解析cache用のAnalyzer識別子を返す."""
         analyzer_config = getattr(self.analyzer, "config", None)
         feature_extractor = getattr(self.analyzer, "feature_extractor", None)
-        model_manager = getattr(feature_extractor, "_model_manager", None)
+        model_manager = getattr(feature_extractor, "model_manager", None)
         model_name = getattr(model_manager, "model_name", "unknown")
         return repr(
             {
