@@ -173,11 +173,6 @@ def validate_positive_float(value: float | str | None) -> float | None:
     help="Ollama scene catalog作成に渡す任意ヒント",
 )
 @click.option(
-    "--rename",
-    is_flag=True,
-    help="scene別に play0001.ext / event0001.ext 形式で出力ファイル名を付け直す",
-)
-@click.option(
     "--batch-size",
     type=int,
     callback=lambda _ctx, _param, x: validate_positive_int(x),
@@ -225,7 +220,6 @@ def execute(
     ollama_max_workers: int | None,
     reset_cache: bool,
     scene_hint: str | None,
-    rename: bool,
     batch_size: int | None,
     result_max_workers: int | None,
     max_dim: int,
@@ -242,7 +236,6 @@ def execute(
     \b
     使用例:
       game-screen-pick -n 15 ./screenshots ./output
-      game-screen-pick --rename ./screenshots ./output
       game-screen-pick --ollama-model gemma4 --ollama-scene-hint "RPG" ./in ./out
 
     Args:
@@ -256,7 +249,6 @@ def execute(
         ollama_max_workers: Ollama分類の並列ワーカー数。
         reset_cache: 既存キャッシュを削除してから実行するかどうか。
         scene_hint: Ollama scene catalog作成に渡す任意ヒント。
-        rename: scene別の連番ファイル名で出力するかどうか。
         batch_size: CLIP推論のバッチサイズ上書き。
         result_max_workers: 結果構築に使う並列ワーカー数。
         max_dim: 入力画像の長辺最大サイズ。
@@ -284,7 +276,6 @@ def execute(
             ollama_max_workers=ollama_max_workers,
             reset_cache=reset_cache,
             scene_hint=scene_hint,
-            rename=rename,
             batch_size=batch_size,
             result_max_workers=result_max_workers,
             max_dim=max_dim,

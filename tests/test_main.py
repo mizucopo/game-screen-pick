@@ -56,7 +56,6 @@ def test_cli_translates_options_to_application_run_request(
             "--reset-cache",
             "--ollama-scene-hint",
             "アドベンチャーゲーム。会話差分が多い",
-            "--rename",
             "--batch-size",
             "64",
             "--result-max-workers",
@@ -83,7 +82,6 @@ def test_cli_translates_options_to_application_run_request(
     assert request.ollama_max_workers == 2
     assert request.reset_cache is True
     assert request.scene_hint == "アドベンチャーゲーム。会話差分が多い"
-    assert request.rename is True
     assert request.batch_size == 64
     assert request.result_max_workers == 1
     assert request.max_dim == 1080
@@ -108,6 +106,7 @@ def test_cli_translates_options_to_application_run_request(
         (["--profile", "active"], "No such option"),
         (["--scene-mix", "play=0.7,event=0.3"], "No such option"),
         (["--scene-hint", "RPG"], "No such option"),
+        (["--rename"], "No such option"),
     ],
 )
 def test_cli_validates_inputs(

@@ -17,7 +17,6 @@ class ApplicationRunRequest:
     ollama_max_workers: int | None
     reset_cache: bool
     scene_hint: str | None
-    rename: bool
     batch_size: int | None
     result_max_workers: int | None
     max_dim: int

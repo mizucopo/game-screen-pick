@@ -12,6 +12,10 @@ _Avoid_: play/event density bucket, fixed category
 scene を表す小文字英数字の安定名。出力ファイル名、レポート、カテゴリ集計に使われる。
 _Avoid_: localized category name
 
+**Scene-numbered Output Name**:
+選択された画像に付ける標準の出力ファイル名。scene slug と scene 内の連番で構成される。
+_Avoid_: original filename output, optional rename mode
+
 **Scene Display Name**:
 scene を人が読みやすいように表す日本語名。ブログ用の画像選択やレポート表示で使われる。
 _Avoid_: filename prefix, report key

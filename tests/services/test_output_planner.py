@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from src.models.output_candidate_record import OutputCandidateRecord
 from src.models.output_record import OutputRecord
 from src.services.output_planner import OutputPlanner
@@ -62,7 +64,45 @@ def _build_output_record(
     )
 
 
-def test_output_planner_plans_renamed_paths_without_copying_files(
+@pytest.mark.parametrize(
+    "scene_name,index,suffix,requested_num,expected",
+    [
+        ("play", 1, ".jpg", 3, "play0001.jpg"),
+        ("event", 12, ".png", 9999, "event0012.png"),
+        ("play", 1, ".bmp", 10000, "play00001.bmp"),
+    ],
+)
+def test_build_scene_numbered_filename_uses_scene_prefix_and_padding(
+    scene_name: str,
+    index: int,
+    suffix: str,
+    requested_num: int,
+    expected: str,
+) -> None:
+    """scene名と要求枚数に応じたファイル名が生成されること.
+
+    Arrange:
+        - scene名、連番index、拡張子、要求枚数がある
+    Act:
+        - build_scene_numbered_filenameが実行される
+    Assert:
+        - scene名 + ゼロ埋め連番 + 拡張子の形式で返されること
+        - 要求枚数が4桁以下なら4桁、それ以上なら要求枚数の桁数でゼロ埋めされること
+    """
+    # Arrange - パラメタライズド引数からscene名、連番、拡張子、要求枚数を設定
+    # Act
+    result = OutputPlanner.build_scene_numbered_filename(
+        scene_name=scene_name,
+        index=index,
+        suffix=suffix,
+        requested_num=requested_num,
+    )
+
+    # Assert
+    assert result == expected
+
+
+def test_output_planner_plans_scene_numbered_paths_without_copying_files(
     tmp_path: Path,
 ) -> None:
     """コピーなしでscene別連番と衝突回避済み出力パスが計画されること.
@@ -71,7 +111,7 @@ def test_output_planner_plans_renamed_paths_without_copying_files(
         - play 2件、event 1件のoutput recordがある
         - 出力先には既存のplay0001.jpgがあるものとして扱われる
     Act:
-        - rename=Trueで出力計画が作成される
+        - 出力計画が作成される
     Assert:
         - scene別連番の出力パスが選択候補に反映されること
         - 既存ファイル名との衝突が回避されること
@@ -90,7 +130,6 @@ def test_output_planner_plans_renamed_paths_without_copying_files(
     result = OutputPlanner.plan_selected_outputs(
         record,
         str(output_dir),
-        rename=True,
         requested_num=3,
         existing_filenames=["play0001.jpg"],
     )
@@ -108,40 +147,30 @@ def test_output_planner_plans_renamed_paths_without_copying_files(
     assert not output_dir.exists()
 
 
-def test_output_planner_plans_duplicate_filenames_without_rename(
+def test_output_planner_rejects_missing_requested_num(
     tmp_path: Path,
 ) -> None:
-    """通常出力で同名ファイルが衝突しない出力パスに計画されること.
+    """要求枚数なしではscene別連番の出力計画が作成されないこと.
 
     Arrange:
-        - 異なるsource_pathに同じfilenameを持つoutput recordがある
+        - output recordがある
     Act:
-        - rename=Falseで出力計画が作成される
+        - requested_numなしで出力計画が作成される
     Assert:
-        - 1件目は元のファイル名で計画されること
-        - 2件目はサフィックス付きのファイル名で計画されること
-        - filesystem copyが実行されないこと
+        - ValueErrorが送出されること
     """
     # Arrange
-    source_paths = [
-        str(tmp_path / "source1" / "screen.png"),
-        str(tmp_path / "source2" / "screen.png"),
-    ]
-    record = _build_output_record(source_paths, ["play", "event"])
+    source_path = str(tmp_path / "source" / "screen.png")
+    record = _build_output_record([source_path], ["play"])
     output_dir = tmp_path / "output"
 
-    # Act
-    result = OutputPlanner.plan_selected_outputs(
-        record,
-        str(output_dir),
-    )
-
-    # Assert
-    assert result.selected[0].output_path == str((output_dir / "screen.png").resolve())
-    assert result.selected[1].output_path == str(
-        (output_dir / "screen_1.png").resolve()
-    )
-    assert not output_dir.exists()
+    # Act / Assert
+    with pytest.raises(ValueError, match="requested_num"):
+        OutputPlanner.plan_selected_outputs(
+            record,
+            str(output_dir),
+            requested_num=None,
+        )
 
 
 def test_output_planner_avoids_case_insensitive_filename_collision(
@@ -151,9 +180,9 @@ def test_output_planner_avoids_case_insensitive_filename_collision(
 
     Arrange:
         - 出力先には既存のScreen.pngがあるものとして扱われる
-        - 選択候補のファイル名はscreen.pngである
+        - 選択候補のscene slugはplayである
     Act:
-        - rename=Falseで出力計画が作成される
+        - 出力計画が作成される
     Assert:
         - 大文字小文字を区別しないfilesystemで上書きされない出力パスに計画されること
         - filesystem copyが実行されないこと
@@ -167,11 +196,12 @@ def test_output_planner_avoids_case_insensitive_filename_collision(
     result = OutputPlanner.plan_selected_outputs(
         record,
         str(output_dir),
-        existing_filenames=["Screen.png"],
+        requested_num=1,
+        existing_filenames=["Play0001.png"],
     )
 
     # Assert
     assert result.selected[0].output_path == str(
-        (output_dir / "screen_1.png").resolve()
+        (output_dir / "play0001_1.png").resolve()
     )
     assert not output_dir.exists()

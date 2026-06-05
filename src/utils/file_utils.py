@@ -13,58 +13,8 @@ logger = logging.getLogger(__name__)
 class FileUtils:
     """ファイル操作ユーティリティクラス.
 
-    出力ディレクトリ内で一意なファイルパスを生成する機能と、
-    選択されたアイテムをコピーする機能を提供する。
+    scene別連番の出力計画に従って、選択されたアイテムをコピーする機能を提供する。
     """
-
-    @staticmethod
-    def get_unique_destination(dest_dir: Path, filename: str) -> Path:
-        """出力ディレクトリ内で一意なファイルパスを生成する.
-
-        同名のファイルが存在する場合は連番サフィックスを付与する。
-
-        Args:
-            dest_dir: 出力先ディレクトリのパス
-            filename: 元のファイル名
-
-        Returns:
-            出力ディレクトリ内で一意なファイルパス
-        """
-        existing_filenames = (
-            [path.name for path in dest_dir.iterdir()] if dest_dir.exists() else []
-        )
-        return dest_dir / OutputPlanner.get_unique_filename(
-            filename,
-            existing_filenames,
-        )
-
-    @staticmethod
-    def build_renamed_filename(
-        scene_name: str,
-        index: int,
-        suffix: str,
-        requested_num: int,
-    ) -> str:
-        """scene名と連番から出力ファイル名を構築する.
-
-        Args:
-            scene_name: `play` / `event` の接頭辞
-            index: sceneごとの連番（1始まり）
-            suffix: 元ファイルの拡張子
-            requested_num: CLIで要求された出力枚数
-
-        Returns:
-            リネーム済みのファイル名
-
-        Raises:
-            ValueError: requested_num が1未満の場合
-        """
-        return OutputPlanner.build_renamed_filename(
-            scene_name=scene_name,
-            index=index,
-            suffix=suffix,
-            requested_num=requested_num,
-        )
 
     @staticmethod
     def copy_planned_outputs(output_record: OutputRecord) -> None:
@@ -88,7 +38,6 @@ class FileUtils:
     def copy_selected_items(
         output_record: OutputRecord,
         dest_dir: str,
-        rename: bool = False,
         requested_num: int | None = None,
     ) -> OutputRecord:
         """選択されたアイテムを出力ディレクトリにコピーする.
@@ -96,7 +45,6 @@ class FileUtils:
         Args:
             output_record: 出力候補を含むrecord
             dest_dir: 出力先ディレクトリのパス
-            rename: scene別の連番ファイル名で出力するかどうか
             requested_num: CLIで要求された出力枚数
 
         Returns:
@@ -107,7 +55,6 @@ class FileUtils:
         planned_output_record = OutputPlanner.plan_selected_outputs(
             output_record,
             dest_dir,
-            rename=rename,
             requested_num=requested_num,
             existing_filenames=[path.name for path in out.iterdir()],
         )
