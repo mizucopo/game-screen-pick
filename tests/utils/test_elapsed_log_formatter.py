@@ -17,10 +17,7 @@ def test_format_adds_timestamp_and_elapsed_seconds() -> None:
         - 日時と経過秒がログ行の先頭に出力されること
     """
     # Arrange
-    formatter = ElapsedLogFormatter(
-        fmt="%(asctime)s.%(msecs)03d +%(elapsed_seconds).3fs %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    formatter = ElapsedLogFormatter()
     first_record = logging.LogRecord(
         name="test",
         level=logging.INFO,

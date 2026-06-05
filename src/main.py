@@ -10,12 +10,7 @@ from .models.application_run_request import ApplicationRunRequest
 from .utils.elapsed_log_formatter import ElapsedLogFormatter
 
 console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setFormatter(
-    ElapsedLogFormatter(
-        fmt="%(asctime)s.%(msecs)03d +%(elapsed_seconds).3fs %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-)
+console_handler.setFormatter(ElapsedLogFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[console_handler], force=True)
 
 

@@ -2,12 +2,15 @@
 
 import logging
 
+LOG_FORMAT = "%(asctime)s.%(msecs)03d +%(elapsed_seconds).3fs %(message)s"
+DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
 
 class ElapsedLogFormatter(logging.Formatter):
     """ログ行ごとに直前ログからの経過秒を出力するformatter."""
 
-    def __init__(self, fmt: str, datefmt: str | None = None) -> None:
-        super().__init__(fmt=fmt, datefmt=datefmt)
+    def __init__(self) -> None:
+        super().__init__(fmt=LOG_FORMAT, datefmt=DATE_FORMAT)
         self._previous_created_at: float | None = None
 
     def format(self, record: logging.LogRecord) -> str:
