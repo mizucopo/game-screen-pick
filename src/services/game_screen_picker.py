@@ -1,5 +1,6 @@
 """ゲーム画面ピッカーの統合オーケストレーション."""
 
+import logging
 import re
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from ..protocols.analyzer_like import AnalyzerLike
 from ..protocols.scene_analyzer_like import SceneAnalyzerLike
 from .analyzed_image_selector import AnalyzedImageSelector
 from .neutral_analysis_cache import NeutralAnalysisCache
+
+logger = logging.getLogger(__name__)
 
 
 class GameScreenPicker:
@@ -100,6 +103,8 @@ class GameScreenPicker:
         results: list[AnalyzedImage | None] = [None] * len(files)
         misses: list[Path] = []
         miss_indices: list[int] = []
+        if show_progress:
+            logger.info("中立解析cacheを確認しています...")
         for index, file_path in enumerate(files):
             cached = cache.read(file_path)
             if cached is None:
@@ -107,6 +112,10 @@ class GameScreenPicker:
                 miss_indices.append(index)
             else:
                 results[index] = cached
+
+        if show_progress:
+            cache_hits = len(files) - len(misses)
+            logger.info(f"中立解析cache: hit={cache_hits}件, miss={len(misses)}件")
 
         analyzed_misses = self._analyze_image_paths_with_cache(
             misses,
@@ -118,21 +127,6 @@ class GameScreenPicker:
             results[index] = analyzed_image
         return [result for result in results if result is not None]
 
-    def _analyze_image_paths(
-        self,
-        files: list[Path],
-        show_progress: bool,
-    ) -> list[AnalyzedImage | None]:
-        """画像path群をAnalyzerへ渡す."""
-        if not files:
-            return []
-        paths = [str(file_path) for file_path in files]
-        return self.analyzer.analyze_batch(
-            paths,
-            batch_size=self.config.batch_size,
-            show_progress=show_progress,
-        )
-
     def _analyze_image_paths_with_cache(
         self,
         files: list[Path],
@@ -142,8 +136,12 @@ class GameScreenPicker:
     ) -> list[AnalyzedImage | None]:
         """画像path群を解析し、チャンク完了ごとにcacheへ保存する."""
         if not files:
+            if show_progress:
+                logger.info("未cache画像はありません。中立解析をスキップします。")
             return []
         paths = [str(file_path) for file_path in files]
+        if show_progress:
+            logger.info(f"未cache画像の中立解析を開始します: {len(paths)}件")
 
         def write_completed_chunk(
             chunk_results: list[AnalyzedImage | None],
@@ -206,8 +204,12 @@ class GameScreenPicker:
             2. 非選択になった候補
             3. 実行統計をまとめた `PickerStatistics`
         """
+        if show_progress:
+            logger.info("入力画像を検索しています...")
         files = GameScreenPicker.load_image_files(folder, recursive)
         total_files = len(files)
+        if show_progress:
+            logger.info(f"入力画像: {total_files}件")
 
         input_path = Path(folder)
         analyzed_images = self._analyze_images(files, input_path, show_progress)
