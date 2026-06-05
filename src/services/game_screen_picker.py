@@ -118,6 +118,7 @@ class GameScreenPicker:
             misses,
             show_progress,
             cache,
+            cache.capture_versions(misses),
         )
         for index, analyzed_image in zip(miss_indices, analyzed_misses, strict=True):
             results[index] = analyzed_image
@@ -143,6 +144,7 @@ class GameScreenPicker:
         files: list[Path],
         show_progress: bool,
         cache: NeutralAnalysisCache,
+        expected_versions: dict[str, tuple[str, int, int]],
     ) -> list[AnalyzedImage | None]:
         """画像path群を解析し、チャンク完了ごとにcacheへ保存する."""
         if not files:
@@ -152,7 +154,10 @@ class GameScreenPicker:
         def write_completed_chunk(
             chunk_results: list[AnalyzedImage | None],
         ) -> None:
-            cache.write_many([result for result in chunk_results if result is not None])
+            cache.write_many(
+                [result for result in chunk_results if result is not None],
+                expected_versions=expected_versions,
+            )
 
         return self.analyzer.analyze_batch(
             paths,
@@ -169,10 +174,19 @@ class GameScreenPicker:
         model_name = getattr(model_manager, "model_name", "unknown")
         return repr(
             {
-                "analyzer_config": analyzer_config,
+                "analyzer_config": self._cache_relevant_analyzer_config(
+                    analyzer_config,
+                ),
                 "clip_model": model_name,
             }
         )
+
+    @staticmethod
+    def _cache_relevant_analyzer_config(analyzer_config: object) -> dict[str, object]:
+        """中立解析結果に影響するAnalyzer設定だけを返す."""
+        return {
+            "max_dim": getattr(analyzer_config, "max_dim", None),
+        }
 
     def select(
         self,

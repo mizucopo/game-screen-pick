@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from src.models.analyzed_image import AnalyzedImage
 from src.services.neutral_analysis_cache import NeutralAnalysisCache
@@ -72,3 +73,38 @@ def test_write_many_stores_cache_without_pickle_payload(tmp_path: Path) -> None:
     assert any(path.suffix == ".npz" for path in cache_files)
     assert not any(path.suffix == ".pickle" for path in cache_files)
     _assert_restored_image_matches(restored, analyzed_image)
+
+
+def test_read_reuses_cache_when_same_path_is_spelled_differently(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """同じ画像pathの表記が変わってもcacheが再利用されること.
+
+    Arrange:
+        - 相対pathで保存された中立解析cacheがある
+    Act:
+        - 同じ画像が絶対pathで読み込まれる
+    Assert:
+        - cacheが返され、復元後のpathは現在の指定pathになること
+    """
+    # Arrange
+    monkeypatch.chdir(tmp_path)
+    input_dir = Path("input")
+    input_dir.mkdir()
+    image_path = input_dir / "frame.jpg"
+    image_path.write_bytes(b"\xff\xd8\xff")
+    analyzed_image = create_analyzed_image(path=str(image_path))
+    cache = NeutralAnalysisCache(input_dir, analyzer_fingerprint="test")
+    cache.write_many([analyzed_image])
+
+    # Act
+    restored = NeutralAnalysisCache(
+        input_dir.resolve(),
+        analyzer_fingerprint="test",
+    ).read(image_path.resolve())
+
+    # Assert
+    assert restored is not None
+    assert restored.path == str(image_path.resolve())
+    assert restored.raw_metrics == analyzed_image.raw_metrics

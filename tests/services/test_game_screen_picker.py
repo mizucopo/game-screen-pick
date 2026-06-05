@@ -59,9 +59,13 @@ class _FeatureExtractorWithModelName:
 class _CountingAnalyzer:
     """解析呼び出しを記録する最小フェイク."""
 
-    def __init__(self, model_name: str = "clip-a") -> None:
+    def __init__(
+        self,
+        model_name: str = "clip-a",
+        config: AnalyzerConfig | None = None,
+    ) -> None:
         self.metric_calculator = MetricCalculator(AnalyzerConfig())
-        self.config = AnalyzerConfig()
+        self.config = config or AnalyzerConfig()
         self.feature_extractor = _FeatureExtractorWithModelName(model_name)
         self.requested_paths: list[list[str]] = []
 
@@ -78,6 +82,28 @@ class _CountingAnalyzer:
             create_analyzed_image(path=path, combined_features=_feature(index))
             for index, path in enumerate(paths)
         ]
+        _notify_chunk_processed(on_chunk_processed, results)
+        return results
+
+
+class _MutatingAnalyzer(_CountingAnalyzer):
+    """解析完了直後に入力画像を書き換えるフェイク."""
+
+    def analyze_batch(
+        self,
+        paths: list[str],
+        batch_size: int = 32,
+        show_progress: bool = False,
+        on_chunk_processed: Callable[[list[AnalyzedImage | None]], None] | None = None,
+    ) -> list[AnalyzedImage | None]:
+        del batch_size, show_progress
+        self.requested_paths.append(paths)
+        results: list[AnalyzedImage | None] = [
+            create_analyzed_image(path=path, combined_features=_feature(index))
+            for index, path in enumerate(paths)
+        ]
+        for path in paths:
+            Path(path).write_bytes(b"replaced-image")
         _notify_chunk_processed(on_chunk_processed, results)
         return results
 
@@ -241,6 +267,85 @@ def test_select_reanalyzes_when_clip_model_changes(tmp_path: Path) -> None:
         scene_analyzer=FakeSceneAnalyzer(),
     )
     second_analyzer = _CountingAnalyzer(model_name="clip-b")
+    second_picker = GameScreenPicker(
+        analyzer=second_analyzer,
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
+    )
+
+    # Act
+    first_picker.select(str(tmp_path), num=2, recursive=False, show_progress=False)
+    second_picker.select(str(tmp_path), num=2, recursive=False, show_progress=False)
+
+    # Assert
+    assert len(second_analyzer.requested_paths) == 1
+
+
+def test_select_reuses_cache_when_runtime_only_analyzer_settings_change(
+    tmp_path: Path,
+) -> None:
+    """実行時リソース設定だけが変わった場合は中立解析cacheが再利用されること.
+
+    Arrange:
+        - 初回実行で中立解析cacheが作成されている
+        - 後続実行ではメモリ予算と結果構築worker数だけが変わっている
+    Act:
+        - 同じ入力フォルダが再び選定される
+    Assert:
+        - 後続実行では中立解析が呼び出されないこと
+    """
+    # Arrange
+    for name in ["frame1.jpg", "frame2.jpg"]:
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+
+    first_analyzer = _CountingAnalyzer(
+        config=AnalyzerConfig(max_memory_gb=1, result_max_workers=1),
+    )
+    first_picker = GameScreenPicker(
+        analyzer=first_analyzer,
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
+    )
+    second_analyzer = _CountingAnalyzer(
+        config=AnalyzerConfig(max_memory_gb=2, result_max_workers=2),
+    )
+    second_picker = GameScreenPicker(
+        analyzer=second_analyzer,
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
+    )
+
+    # Act
+    first_picker.select(str(tmp_path), num=2, recursive=False, show_progress=False)
+    second_picker.select(str(tmp_path), num=2, recursive=False, show_progress=False)
+
+    # Assert
+    assert len(first_analyzer.requested_paths) == 1
+    assert second_analyzer.requested_paths == []
+
+
+def test_select_skips_cache_write_when_image_changes_during_analysis(
+    tmp_path: Path,
+) -> None:
+    """解析中に画像が差し替わった場合は中立解析cacheへ保存されないこと.
+
+    Arrange:
+        - 解析完了直後に入力画像を書き換えるAnalyzerがある
+    Act:
+        - 同じ入力フォルダが再び選定される
+    Assert:
+        - 後続実行では中立解析が呼び出されること
+    """
+    # Arrange
+    for name in ["frame1.jpg", "frame2.jpg"]:
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+
+    first_picker = GameScreenPicker(
+        analyzer=_MutatingAnalyzer(),
+        config=SelectionConfig(),
+        scene_analyzer=FakeSceneAnalyzer(),
+    )
+    second_analyzer = _CountingAnalyzer()
     second_picker = GameScreenPicker(
         analyzer=second_analyzer,
         config=SelectionConfig(),
