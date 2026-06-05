@@ -28,6 +28,10 @@ _Avoid_: internal reasoning, model trace
 scene catalog を作るときに、ユーザーがゲームジャンルやブログ画像選択の意図を補足する短い説明。
 _Avoid_: fixed scene list, selection rule
 
+**Selection Intent**:
+ブログ画像として何を重視して選ぶかを表す実行ごとの意図。scene hint は selection intent を補足する入力であり、変わると scene catalog や画像分類も変わり得る。
+_Avoid_: image analysis setting, cache option
+
 **Quality Score**:
 blog candidate がブログ画像としてどれだけ使いやすいかを表す評価値。scene の種類やゲームジャンルの指示ではなく、画像そのものの見やすさを表す。
 _Avoid_: scene hint, user-facing mode, selection profile
@@ -35,6 +39,10 @@ _Avoid_: scene hint, user-facing mode, selection profile
 **Blog Candidate**:
 ブログ画像として選択する余地があるスクリーンショット。明らかな暗転、白飛び、単色画面、遷移フレームは含まない。
 _Avoid_: all input images
+
+**Neutral Image Analysis**:
+scene や selection intent に依存せず、画像そのものから得られる特徴と品質評価。画像の内容分類ではなく、blog candidate 判定や類似度判定の土台になる。
+_Avoid_: scene classification, selection intent
 
 **Transition Frame**:
 シーン移動や画面切り替えの途中に現れる、ブログ画像として説明価値が低い一時的な画面。
@@ -51,3 +59,7 @@ _Avoid_: other scene, rejected by content filter
 **Ollama Catalog Fallback**:
 scene catalog を作成できないときに、処理継続のため全 blog candidate を fallback scene に割り当てる代替状態。Ollama Classification Failure とは区別される。
 _Avoid_: per-image classification failure, other scene
+
+**Resumable Run**:
+中断された画像選択を、同じ入力画像群と同じ選択意図で後から続ける実行。すでに得られた画像解析やscene分類の結果を再利用し、未処理の画像だけを進める。
+_Avoid_: fresh run, output overwrite

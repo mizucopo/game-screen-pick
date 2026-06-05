@@ -168,6 +168,13 @@ def validate_positive_float(value: float | str | None) -> float | None:
     help="Ollama分類キャッシュを使わない",
 )
 @click.option(
+    "--no-resume-cache",
+    "resume_cache_enabled",
+    flag_value=False,
+    default=True,
+    help="中立解析の再開キャッシュを使わない",
+)
+@click.option(
     "--scene-hint",
     default=None,
     type=str,
@@ -231,6 +238,7 @@ def execute(
     ollama_timeout: float | None,
     ollama_max_workers: int | None,
     ollama_cache_enabled: bool,
+    resume_cache_enabled: bool,
     scene_hint: str | None,
     report_json: str | None,
     rename: bool,
@@ -263,6 +271,7 @@ def execute(
         ollama_timeout: Ollama APIタイムアウト秒数。
         ollama_max_workers: Ollama分類の並列ワーカー数。
         ollama_cache_enabled: Ollama分類キャッシュを使うかどうか。
+        resume_cache_enabled: 中立解析の再開キャッシュを使うかどうか。
         scene_hint: scene catalog作成に渡す任意ヒント。
         report_json: JSONレポートの出力先パス。
         rename: scene別の連番ファイル名で出力するかどうか。
@@ -292,6 +301,7 @@ def execute(
             ollama_timeout=ollama_timeout,
             ollama_max_workers=ollama_max_workers,
             ollama_cache_enabled=ollama_cache_enabled,
+            resume_cache_enabled=resume_cache_enabled,
             scene_hint=scene_hint,
             report_json=report_json,
             rename=rename,

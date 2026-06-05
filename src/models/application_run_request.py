@@ -16,6 +16,7 @@ class ApplicationRunRequest:
     ollama_timeout: float | None
     ollama_max_workers: int | None
     ollama_cache_enabled: bool
+    resume_cache_enabled: bool
     scene_hint: str | None
     report_json: str | None
     rename: bool

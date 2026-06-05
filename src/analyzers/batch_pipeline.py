@@ -113,6 +113,7 @@ class BatchPipeline:
         paths: list[str],
         batch_size: int = 32,
         show_progress: bool = False,
+        on_chunk_processed: Callable[[list[AnalyzedImage | None]], None] | None = None,
     ) -> list[AnalyzedImage | None]:
         """複数の画像をバッチ処理で解析する.
 
@@ -131,6 +132,7 @@ class BatchPipeline:
             paths: 解析対象の画像ファイルパス一覧。
             batch_size: CLIP推論時に使う初期バッチサイズ。
             show_progress: 一定間隔で進捗ログを出すかどうか。
+            on_chunk_processed: チャンク完了時に解析結果を受け取るcallback。
 
         Returns:
             入力順に対応した解析結果のリスト。
@@ -184,6 +186,8 @@ class BatchPipeline:
             )
             for offset, chunk_result in enumerate(chunk_results):
                 results[chunk_start + offset] = chunk_result
+            if on_chunk_processed is not None:
+                on_chunk_processed(chunk_results)
 
             # チャンク完了時の進捗ログ
             if show_progress:

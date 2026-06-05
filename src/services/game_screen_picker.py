@@ -10,6 +10,7 @@ from ..models.selection_config import SelectionConfig
 from ..protocols.analyzer_like import AnalyzerLike
 from ..protocols.scene_analyzer_like import SceneAnalyzerLike
 from .analyzed_image_selector import AnalyzedImageSelector
+from .neutral_analysis_cache import NeutralAnalysisCache
 
 
 class GameScreenPicker:
@@ -28,6 +29,7 @@ class GameScreenPicker:
         analyzer: AnalyzerLike,
         scene_analyzer: SceneAnalyzerLike,
         config: SelectionConfig | None = None,
+        resume_cache_enabled: bool = True,
     ):
         """ピッカーを初期化する.
 
@@ -38,6 +40,7 @@ class GameScreenPicker:
         self.analyzer = analyzer
         self.scene_analyzer = scene_analyzer
         self.config = config or SelectionConfig()
+        self.resume_cache_enabled = resume_cache_enabled
         self._analyzed_image_selector = AnalyzedImageSelector(
             config=self.config,
             metric_calculator=self.analyzer.metric_calculator,
@@ -76,6 +79,7 @@ class GameScreenPicker:
     def _analyze_images(
         self,
         files: list[Path],
+        input_folder: Path,
         show_progress: bool = False,
     ) -> list[AnalyzedImage]:
         """画像を解析して中立特徴を取得する.
@@ -91,13 +95,98 @@ class GameScreenPicker:
         Returns:
             正常に解析できた `AnalyzedImage` のみを含むリスト。
         """
+        if not self.resume_cache_enabled:
+            analyzed_results = self._analyze_image_paths(files, show_progress)
+            return [result for result in analyzed_results if result is not None]
+
+        cache = NeutralAnalysisCache(
+            input_folder=input_folder,
+            analyzer_fingerprint=self._analyzer_fingerprint(),
+        )
+        results: list[AnalyzedImage | None] = [None] * len(files)
+        misses: list[Path] = []
+        miss_indices: list[int] = []
+        for index, file_path in enumerate(files):
+            cached = cache.read(file_path)
+            if cached is None:
+                misses.append(file_path)
+                miss_indices.append(index)
+            else:
+                results[index] = cached
+
+        analyzed_misses = self._analyze_image_paths_with_cache(
+            misses,
+            show_progress,
+            cache,
+            cache.capture_versions(misses),
+        )
+        for index, analyzed_image in zip(miss_indices, analyzed_misses, strict=True):
+            results[index] = analyzed_image
+        return [result for result in results if result is not None]
+
+    def _analyze_image_paths(
+        self,
+        files: list[Path],
+        show_progress: bool,
+    ) -> list[AnalyzedImage | None]:
+        """画像path群をAnalyzerへ渡す."""
+        if not files:
+            return []
         paths = [str(file_path) for file_path in files]
-        results = self.analyzer.analyze_batch(
+        return self.analyzer.analyze_batch(
             paths,
             batch_size=self.config.batch_size,
             show_progress=show_progress,
         )
-        return [result for result in results if result is not None]
+
+    def _analyze_image_paths_with_cache(
+        self,
+        files: list[Path],
+        show_progress: bool,
+        cache: NeutralAnalysisCache,
+        expected_versions: dict[str, tuple[str, int, int]],
+    ) -> list[AnalyzedImage | None]:
+        """画像path群を解析し、チャンク完了ごとにcacheへ保存する."""
+        if not files:
+            return []
+        paths = [str(file_path) for file_path in files]
+
+        def write_completed_chunk(
+            chunk_results: list[AnalyzedImage | None],
+        ) -> None:
+            cache.write_many(
+                [result for result in chunk_results if result is not None],
+                expected_versions=expected_versions,
+            )
+
+        return self.analyzer.analyze_batch(
+            paths,
+            batch_size=self.config.batch_size,
+            show_progress=show_progress,
+            on_chunk_processed=write_completed_chunk,
+        )
+
+    def _analyzer_fingerprint(self) -> str:
+        """中立解析cache用のAnalyzer識別子を返す."""
+        analyzer_config = getattr(self.analyzer, "config", None)
+        feature_extractor = getattr(self.analyzer, "feature_extractor", None)
+        model_manager = getattr(feature_extractor, "model_manager", None)
+        model_name = getattr(model_manager, "model_name", "unknown")
+        return repr(
+            {
+                "analyzer_config": self._cache_relevant_analyzer_config(
+                    analyzer_config,
+                ),
+                "clip_model": model_name,
+            }
+        )
+
+    @staticmethod
+    def _cache_relevant_analyzer_config(analyzer_config: object) -> dict[str, object]:
+        """中立解析結果に影響するAnalyzer設定だけを返す."""
+        return {
+            "max_dim": getattr(analyzer_config, "max_dim", None),
+        }
 
     def select(
         self,
@@ -126,7 +215,8 @@ class GameScreenPicker:
         files = GameScreenPicker.load_image_files(folder, recursive)
         total_files = len(files)
 
-        analyzed_images = self._analyze_images(files, show_progress)
+        input_path = Path(folder)
+        analyzed_images = self._analyze_images(files, input_path, show_progress)
 
         return self.select_from_analyzed(
             analyzed_images=analyzed_images,
