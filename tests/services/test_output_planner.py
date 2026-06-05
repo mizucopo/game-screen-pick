@@ -64,6 +64,44 @@ def _build_output_record(
     )
 
 
+@pytest.mark.parametrize(
+    "scene_name,index,suffix,requested_num,expected",
+    [
+        ("play", 1, ".jpg", 3, "play0001.jpg"),
+        ("event", 12, ".png", 9999, "event0012.png"),
+        ("play", 1, ".bmp", 10000, "play00001.bmp"),
+    ],
+)
+def test_build_scene_numbered_filename_uses_scene_prefix_and_padding(
+    scene_name: str,
+    index: int,
+    suffix: str,
+    requested_num: int,
+    expected: str,
+) -> None:
+    """scene名と要求枚数に応じたファイル名が生成されること.
+
+    Arrange:
+        - scene名、連番index、拡張子、要求枚数がある
+    Act:
+        - build_scene_numbered_filenameが実行される
+    Assert:
+        - scene名 + ゼロ埋め連番 + 拡張子の形式で返されること
+        - 要求枚数が4桁以下なら4桁、それ以上なら要求枚数の桁数でゼロ埋めされること
+    """
+    # Arrange - パラメタライズド引数からscene名、連番、拡張子、要求枚数を設定
+    # Act
+    result = OutputPlanner.build_scene_numbered_filename(
+        scene_name=scene_name,
+        index=index,
+        suffix=suffix,
+        requested_num=requested_num,
+    )
+
+    # Assert
+    assert result == expected
+
+
 def test_output_planner_plans_scene_numbered_paths_without_copying_files(
     tmp_path: Path,
 ) -> None:

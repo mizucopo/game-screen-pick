@@ -17,34 +17,6 @@ class FileUtils:
     """
 
     @staticmethod
-    def build_scene_numbered_filename(
-        scene_name: str,
-        index: int,
-        suffix: str,
-        requested_num: int,
-    ) -> str:
-        """scene名と連番から出力ファイル名を構築する.
-
-        Args:
-            scene_name: scene slug
-            index: sceneごとの連番（1始まり）
-            suffix: 元ファイルの拡張子
-            requested_num: CLIで要求された出力枚数
-
-        Returns:
-            scene別連番のファイル名
-
-        Raises:
-            ValueError: requested_num が1未満の場合
-        """
-        return OutputPlanner.build_scene_numbered_filename(
-            scene_name=scene_name,
-            index=index,
-            suffix=suffix,
-            requested_num=requested_num,
-        )
-
-    @staticmethod
     def copy_planned_outputs(output_record: OutputRecord) -> None:
         """計画済みの出力パスへ選択候補をコピーする.
 
