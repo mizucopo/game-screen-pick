@@ -38,8 +38,9 @@ def run_application(request: ApplicationRunRequest) -> None:
         )
 
         ResultFormatter.display_results(output_record)
+        report_path = Path(request.output_dir) / "report.json"
         ReportWriter.write(
-            str(Path(request.output_dir) / "report.json"),
+            str(report_path),
             output_record,
         )
 
