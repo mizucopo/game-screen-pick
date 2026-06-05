@@ -38,6 +38,7 @@ def _build_request(
         ollama_timeout=None,
         ollama_max_workers=None,
         ollama_cache_enabled=True,
+        resume_cache_enabled=True,
         scene_hint=None,
         report_json=report_json,
         rename=rename,
@@ -321,8 +322,9 @@ def test_run_application_resolves_configs_and_constructs_picker(
         *_args: object,
         config: SelectionConfig,
         scene_analyzer: object,
+        resume_cache_enabled: bool,
     ) -> MagicMock:
-        del scene_analyzer
+        del scene_analyzer, resume_cache_enabled
         selection_configs.append(config)
         return picker
 
@@ -389,6 +391,49 @@ def test_run_application_converts_unexpected_errors_to_system_exit(
     with pytest.raises(SystemExit) as exc_info:
         run_application(_build_request(input_dir, output_dir))
     assert exc_info.value.code == 1
+
+
+def test_run_application_reports_keyboard_interrupt_as_resumable_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Ctrl+C中断時に再実行で再開できることが案内されること.
+
+    Arrange:
+        - 画像選定中にKeyboardInterruptが発生する
+    Act:
+        - applicationが実行される
+    Assert:
+        - 終了コード130で終了し、再開案内が出力されること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    picker = MagicMock()
+    picker.select.side_effect = KeyboardInterrupt
+    analyzer = MagicMock()
+    monkeypatch.setattr(
+        "src.application.run.ImageQualityAnalyzer",
+        lambda *_args, **_kwargs: nullcontext(analyzer),
+    )
+    monkeypatch.setattr(
+        "src.application.run.GameScreenPicker",
+        lambda *_args, **_kwargs: picker,
+    )
+    monkeypatch.setattr(
+        "src.application.run.OllamaSceneAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
+    )
+    caplog.set_level("INFO")
+
+    # Act / Assert
+    with pytest.raises(SystemExit) as exc_info:
+        run_application(_build_request(input_dir, output_dir))
+    assert exc_info.value.code == 130
+    assert "中断されました" in caplog.text
+    assert "再実行するとcacheから再開します" in caplog.text
 
 
 def test_run_application_keeps_click_exceptions(

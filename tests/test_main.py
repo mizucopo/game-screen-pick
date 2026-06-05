@@ -55,6 +55,7 @@ def test_cli_translates_options_to_application_run_request(
             "--ollama-max-workers",
             "2",
             "--no-ollama-cache",
+            "--no-resume-cache",
             "--scene-hint",
             "アドベンチャーゲーム。会話差分が多い",
             "--report-json",
@@ -85,6 +86,7 @@ def test_cli_translates_options_to_application_run_request(
     assert request.ollama_timeout == 30.0
     assert request.ollama_max_workers == 2
     assert request.ollama_cache_enabled is False
+    assert request.resume_cache_enabled is False
     assert request.scene_hint == "アドベンチャーゲーム。会話差分が多い"
     assert request.report_json == str(report_path)
     assert request.rename is True

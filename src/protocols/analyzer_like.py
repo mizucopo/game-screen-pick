@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Protocol
 
 from ..analyzers.metric_calculator import MetricCalculator
@@ -16,5 +17,6 @@ class AnalyzerLike(Protocol):
         paths: list[str],
         batch_size: int = 32,
         show_progress: bool = False,
+        on_chunk_processed: Callable[[list[AnalyzedImage | None]], None] | None = None,
     ) -> list[AnalyzedImage | None]:
         """画像をバッチ解析する."""
