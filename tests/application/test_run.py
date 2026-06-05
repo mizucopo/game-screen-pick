@@ -25,7 +25,6 @@ def _build_request(
     output_dir: Path,
     *,
     num: int = 100,
-    rename: bool = False,
 ) -> ApplicationRunRequest:
     return ApplicationRunRequest(
         num=num,
@@ -38,7 +37,6 @@ def _build_request(
         ollama_max_workers=None,
         reset_cache=False,
         scene_hint=None,
-        rename=rename,
         batch_size=None,
         result_max_workers=None,
         max_dim=720,
@@ -161,9 +159,9 @@ def test_run_application_selects_and_copies_images(
     run_application(_build_request(input_dir, output_dir, num=3))
 
     # Assert
-    assert (output_dir / "image0.jpg").exists()
-    assert (output_dir / "image1.jpg").exists()
-    assert (output_dir / "image2.jpg").exists()
+    assert (output_dir / "battle0001.jpg").exists()
+    assert (output_dir / "battle0002.jpg").exists()
+    assert (output_dir / "battle0003.jpg").exists()
 
 
 def test_run_application_always_writes_report_json_to_output_dir(
@@ -215,22 +213,21 @@ def test_run_application_always_writes_report_json_to_output_dir(
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["selected"][0]["path"] == str(source)
     assert payload["selected"][0]["output_path"] == str(
-        (output_dir / "image0.jpg").resolve()
+        (output_dir / "battle0001.jpg").resolve()
     )
     assert payload["selected"][0]["scene_slug"] == "battle"
     assert payload["selected"][0]["scene_display_name"] == "戦闘"
     assert payload["selected"][0]["score_band"] == "high"
 
 
-def test_run_application_renames_outputs_by_scene(
+def test_run_application_writes_scene_numbered_outputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """application実行でscene別ファイル名へ変更されること.
+    """application実行でscene別連番ファイル名へ変更されること.
 
     Arrange:
         - play画像2件、event画像1件が選択される
-        - renameが指定されている
     Act:
         - applicationが実行される
     Assert:
@@ -274,7 +271,7 @@ def test_run_application_renames_outputs_by_scene(
     )
 
     # Act
-    run_application(_build_request(input_dir, output_dir, num=3, rename=True))
+    run_application(_build_request(input_dir, output_dir, num=3))
 
     # Assert
     assert (output_dir / "battle0001.png").exists()

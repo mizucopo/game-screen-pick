@@ -14,7 +14,6 @@ class OutputPlanner:
     def plan_selected_outputs(
         output_record: OutputRecord,
         dest_dir: str,
-        rename: bool = False,
         requested_num: int | None = None,
         existing_filenames: Iterable[str] = (),
     ) -> OutputRecord:
@@ -23,7 +22,6 @@ class OutputPlanner:
         Args:
             output_record: 出力候補を含むrecord。
             dest_dir: 出力先ディレクトリのパス。
-            rename: scene別の連番ファイル名で出力するかどうか。
             requested_num: CLIで要求された出力枚数。
             existing_filenames: 出力先に既に存在するファイル名。
 
@@ -31,13 +29,10 @@ class OutputPlanner:
             出力先パスを反映したrecord。
 
         Raises:
-            ValueError: rename=True かつ requested_num が未指定の場合。
+            ValueError: requested_num が未指定の場合。
         """
         out = Path(dest_dir)
-        rename_requested_num = OutputPlanner._resolve_rename_requested_num(
-            rename,
-            requested_num,
-        )
+        resolved_requested_num = OutputPlanner._resolve_requested_num(requested_num)
         reserved_collision_keys = OutputPlanner._build_reserved_collision_keys(
             existing_filenames
         )
@@ -45,17 +40,13 @@ class OutputPlanner:
         planned_paths_by_source_path: dict[str, str] = {}
 
         for candidate in output_record.selected:
-            if rename:
-                scene_counters[candidate.scene_slug] += 1
-                filename = OutputPlanner.build_renamed_filename(
-                    scene_name=candidate.scene_slug,
-                    index=scene_counters[candidate.scene_slug],
-                    suffix=candidate.suffix,
-                    requested_num=rename_requested_num,
-                )
-            else:
-                filename = candidate.filename
-
+            scene_counters[candidate.scene_slug] += 1
+            filename = OutputPlanner.build_scene_numbered_filename(
+                scene_name=candidate.scene_slug,
+                index=scene_counters[candidate.scene_slug],
+                suffix=candidate.suffix,
+                requested_num=resolved_requested_num,
+            )
             unique_filename = OutputPlanner._get_unique_filename_from_collision_keys(
                 filename,
                 reserved_collision_keys,
@@ -70,20 +61,17 @@ class OutputPlanner:
         return output_record.with_selected_output_paths(planned_paths_by_source_path)
 
     @staticmethod
-    def _resolve_rename_requested_num(
-        rename: bool,
+    def _resolve_requested_num(
         requested_num: int | None,
     ) -> int:
-        """rename時に必要な要求枚数を解決する."""
+        """scene別連番に必要な要求枚数を解決する."""
         if requested_num is None:
-            if rename:
-                msg = "rename=True の場合は requested_num の指定が必要です"
-                raise ValueError(msg)
-            return 0
+            msg = "scene別連番出力の場合は requested_num の指定が必要です"
+            raise ValueError(msg)
         return requested_num
 
     @staticmethod
-    def build_renamed_filename(
+    def build_scene_numbered_filename(
         scene_name: str,
         index: int,
         suffix: str,
@@ -95,17 +83,6 @@ class OutputPlanner:
             raise ValueError(msg)
         width = max(4, len(str(requested_num)))
         return f"{scene_name}{index:0{width}d}{suffix}"
-
-    @staticmethod
-    def get_unique_filename(
-        filename: str,
-        reserved_filenames: Iterable[str],
-    ) -> str:
-        """予約済みファイル名と衝突しないファイル名を生成する."""
-        return OutputPlanner._get_unique_filename_from_collision_keys(
-            filename,
-            OutputPlanner._build_reserved_collision_keys(reserved_filenames),
-        )
 
     @staticmethod
     def _get_unique_filename_from_collision_keys(

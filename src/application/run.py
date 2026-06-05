@@ -33,7 +33,6 @@ def run_application(request: ApplicationRunRequest) -> None:
         output_record = FileUtils.copy_selected_items(
             output_record,
             request.output_dir,
-            rename=request.rename,
             requested_num=request.num,
         )
 
