@@ -166,10 +166,11 @@ def validate_positive_float(value: float | str | None) -> float | None:
     help="既存キャッシュを削除してから実行する",
 )
 @click.option(
-    "--scene-hint",
+    "--ollama-scene-hint",
+    "scene_hint",
     default=None,
     type=str,
-    help="scene catalog作成に渡す任意ヒント",
+    help="Ollama scene catalog作成に渡す任意ヒント",
 )
 @click.option(
     "--report-json",
@@ -249,7 +250,7 @@ def execute(
     使用例:
       game-screen-pick -n 15 ./screenshots ./output
       game-screen-pick --rename ./screenshots ./output
-      game-screen-pick --ollama-model gemma4 --scene-hint "RPG" ./in ./out
+      game-screen-pick --ollama-model gemma4 --ollama-scene-hint "RPG" ./in ./out
 
     Args:
         num: 選択枚数。
@@ -261,7 +262,7 @@ def execute(
         ollama_timeout: Ollama APIタイムアウト秒数。
         ollama_max_workers: Ollama分類の並列ワーカー数。
         reset_cache: 既存キャッシュを削除してから実行するかどうか。
-        scene_hint: scene catalog作成に渡す任意ヒント。
+        scene_hint: Ollama scene catalog作成に渡す任意ヒント。
         report_json: JSONレポートの出力先パス。
         rename: scene別の連番ファイル名で出力するかどうか。
         batch_size: CLIP推論のバッチサイズ上書き。

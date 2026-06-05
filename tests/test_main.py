@@ -55,7 +55,7 @@ def test_cli_translates_options_to_application_run_request(
             "--ollama-max-workers",
             "2",
             "--reset-cache",
-            "--scene-hint",
+            "--ollama-scene-hint",
             "アドベンチャーゲーム。会話差分が多い",
             "--report-json",
             str(report_path),
@@ -110,6 +110,7 @@ def test_cli_translates_options_to_application_run_request(
         (["--no-resume-cache"], "No such option"),
         (["--profile", "active"], "No such option"),
         (["--scene-mix", "play=0.7,event=0.3"], "No such option"),
+        (["--scene-hint", "RPG"], "No such option"),
     ],
 )
 def test_cli_validates_inputs(
