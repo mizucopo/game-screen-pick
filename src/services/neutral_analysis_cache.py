@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import zipfile
 from dataclasses import asdict, replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -38,7 +39,14 @@ class NeutralAnalysisCache:
         try:
             with np.load(cache_path, allow_pickle=False) as cached:
                 restored, stored_resolved_path = self._restore_analyzed_image(cached)
-        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        except (
+            OSError,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            zipfile.BadZipFile,
+        ):
             return None
         if stored_resolved_path != self._resolved_path(image_path):
             return None

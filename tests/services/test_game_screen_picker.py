@@ -1,111 +1,15 @@
 """GameScreenPickerの単体テスト."""
 
-from collections.abc import Callable
 from pathlib import Path
 
-from src.analyzers.metric_calculator import MetricCalculator
-from src.models.analyzed_image import AnalyzedImage
 from src.models.analyzer_config import AnalyzerConfig
 from src.models.selection_config import SelectionConfig
 from src.services.game_screen_picker import GameScreenPicker
 from tests.conftest import _feature, _near_duplicate, create_analyzed_image
 from tests.fake_analyzer import FakeAnalyzer
+from tests.fake_counting_analyzer import FakeCountingAnalyzer
+from tests.fake_mutating_analyzer import FakeMutatingAnalyzer
 from tests.fake_scene_analyzer import FakeSceneAnalyzer
-
-
-def _notify_chunk_processed(
-    callback: Callable[[list[AnalyzedImage | None]], None] | None,
-    results: list[AnalyzedImage | None],
-) -> None:
-    """chunk処理callbackがある場合だけ通知する."""
-    if callback is not None:
-        callback(results)
-
-
-class _AnalyzerWithFailures:
-    """`analyze_batch` の失敗ケースを混在させる最小フェイク."""
-
-    def __init__(self, analyzed_images: list[AnalyzedImage | None]) -> None:
-        self._analyzed_images = analyzed_images
-        self.metric_calculator = MetricCalculator(AnalyzerConfig())
-
-    def analyze_batch(
-        self,
-        paths: list[str],
-        batch_size: int = 32,
-        show_progress: bool = False,
-        on_chunk_processed: Callable[[list[AnalyzedImage | None]], None] | None = None,
-    ) -> list[AnalyzedImage | None]:
-        del batch_size, show_progress
-        results = self._analyzed_images[: len(paths)]
-        _notify_chunk_processed(on_chunk_processed, results)
-        return results
-
-
-class _ModelManagerWithName:
-    """CLIP model名を持つ最小model manager."""
-
-    def __init__(self, model_name: str) -> None:
-        self.model_name = model_name
-
-
-class _FeatureExtractorWithModelName:
-    """CLIP model名を持つ最小feature extractor."""
-
-    def __init__(self, model_name: str) -> None:
-        self.model_manager = _ModelManagerWithName(model_name)
-
-
-class _CountingAnalyzer:
-    """解析呼び出しを記録する最小フェイク."""
-
-    def __init__(
-        self,
-        model_name: str = "clip-a",
-        config: AnalyzerConfig | None = None,
-    ) -> None:
-        self.metric_calculator = MetricCalculator(AnalyzerConfig())
-        self.config = config or AnalyzerConfig()
-        self.feature_extractor = _FeatureExtractorWithModelName(model_name)
-        self.requested_paths: list[list[str]] = []
-
-    def analyze_batch(
-        self,
-        paths: list[str],
-        batch_size: int = 32,
-        show_progress: bool = False,
-        on_chunk_processed: Callable[[list[AnalyzedImage | None]], None] | None = None,
-    ) -> list[AnalyzedImage | None]:
-        del batch_size, show_progress
-        self.requested_paths.append(paths)
-        results: list[AnalyzedImage | None] = [
-            create_analyzed_image(path=path, combined_features=_feature(index))
-            for index, path in enumerate(paths)
-        ]
-        _notify_chunk_processed(on_chunk_processed, results)
-        return results
-
-
-class _MutatingAnalyzer(_CountingAnalyzer):
-    """解析完了直後に入力画像を書き換えるフェイク."""
-
-    def analyze_batch(
-        self,
-        paths: list[str],
-        batch_size: int = 32,
-        show_progress: bool = False,
-        on_chunk_processed: Callable[[list[AnalyzedImage | None]], None] | None = None,
-    ) -> list[AnalyzedImage | None]:
-        del batch_size, show_progress
-        self.requested_paths.append(paths)
-        results: list[AnalyzedImage | None] = [
-            create_analyzed_image(path=path, combined_features=_feature(index))
-            for index, path in enumerate(paths)
-        ]
-        for path in paths:
-            Path(path).write_bytes(b"replaced-image")
-        _notify_chunk_processed(on_chunk_processed, results)
-        return results
 
 
 def test_select_from_analyzed_excludes_content_filtered_images() -> None:
@@ -180,7 +84,7 @@ def test_select_tracks_total_files_and_analysis_failures(tmp_path: Path) -> None
         create_analyzed_image(path="/tmp/frame2.jpg", combined_features=_feature(10)),
     ]
     picker = GameScreenPicker(
-        analyzer=_AnalyzerWithFailures(analyzed_images),
+        analyzer=FakeAnalyzer(analyzed_images),
         config=SelectionConfig(),
         scene_analyzer=FakeSceneAnalyzer(),
     )
@@ -216,13 +120,13 @@ def test_select_reuses_neutral_analysis_cache_on_later_run(tmp_path: Path) -> No
     for name in ["frame1.jpg", "frame2.jpg"]:
         (tmp_path / name).write_bytes(b"\xff\xd8\xff")
 
-    first_analyzer = _CountingAnalyzer()
+    first_analyzer = FakeCountingAnalyzer()
     first_picker = GameScreenPicker(
         analyzer=first_analyzer,
         config=SelectionConfig(scene_hint="RPG"),
         scene_analyzer=FakeSceneAnalyzer(),
     )
-    second_analyzer = _CountingAnalyzer()
+    second_analyzer = FakeCountingAnalyzer()
     second_picker = GameScreenPicker(
         analyzer=second_analyzer,
         config=SelectionConfig(scene_hint="ADV"),
@@ -262,11 +166,11 @@ def test_select_reanalyzes_when_clip_model_changes(tmp_path: Path) -> None:
         (tmp_path / name).write_bytes(b"\xff\xd8\xff")
 
     first_picker = GameScreenPicker(
-        analyzer=_CountingAnalyzer(model_name="clip-a"),
+        analyzer=FakeCountingAnalyzer(model_name="clip-a"),
         config=SelectionConfig(),
         scene_analyzer=FakeSceneAnalyzer(),
     )
-    second_analyzer = _CountingAnalyzer(model_name="clip-b")
+    second_analyzer = FakeCountingAnalyzer(model_name="clip-b")
     second_picker = GameScreenPicker(
         analyzer=second_analyzer,
         config=SelectionConfig(),
@@ -298,7 +202,7 @@ def test_select_reuses_cache_when_runtime_only_analyzer_settings_change(
     for name in ["frame1.jpg", "frame2.jpg"]:
         (tmp_path / name).write_bytes(b"\xff\xd8\xff")
 
-    first_analyzer = _CountingAnalyzer(
+    first_analyzer = FakeCountingAnalyzer(
         config=AnalyzerConfig(max_memory_gb=1, result_max_workers=1),
     )
     first_picker = GameScreenPicker(
@@ -306,7 +210,7 @@ def test_select_reuses_cache_when_runtime_only_analyzer_settings_change(
         config=SelectionConfig(),
         scene_analyzer=FakeSceneAnalyzer(),
     )
-    second_analyzer = _CountingAnalyzer(
+    second_analyzer = FakeCountingAnalyzer(
         config=AnalyzerConfig(max_memory_gb=2, result_max_workers=2),
     )
     second_picker = GameScreenPicker(
@@ -341,11 +245,11 @@ def test_select_skips_cache_write_when_image_changes_during_analysis(
         (tmp_path / name).write_bytes(b"\xff\xd8\xff")
 
     first_picker = GameScreenPicker(
-        analyzer=_MutatingAnalyzer(),
+        analyzer=FakeMutatingAnalyzer(),
         config=SelectionConfig(),
         scene_analyzer=FakeSceneAnalyzer(),
     )
-    second_analyzer = _CountingAnalyzer()
+    second_analyzer = FakeCountingAnalyzer()
     second_picker = GameScreenPicker(
         analyzer=second_analyzer,
         config=SelectionConfig(),
@@ -378,11 +282,11 @@ def test_select_ignores_neutral_analysis_cache_when_resume_cache_is_disabled(
         (tmp_path / name).write_bytes(b"\xff\xd8\xff")
 
     first_picker = GameScreenPicker(
-        analyzer=_CountingAnalyzer(),
+        analyzer=FakeCountingAnalyzer(),
         config=SelectionConfig(),
         scene_analyzer=FakeSceneAnalyzer(),
     )
-    second_analyzer = _CountingAnalyzer()
+    second_analyzer = FakeCountingAnalyzer()
     second_picker = GameScreenPicker(
         analyzer=second_analyzer,
         config=SelectionConfig(),

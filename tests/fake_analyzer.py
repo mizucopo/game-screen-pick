@@ -1,5 +1,4 @@
-from collections.abc import Callable
-from typing import cast
+from collections.abc import Callable, Sequence
 
 from src.analyzers.metric_calculator import MetricCalculator
 from src.models.analyzed_image import AnalyzedImage
@@ -13,8 +12,8 @@ class FakeAnalyzer:
     実ファイル解析なしでピッカーのドメインロジックだけをテストする。
     """
 
-    def __init__(self, analyzed_images: list[AnalyzedImage]) -> None:
-        self._analyzed_images = analyzed_images
+    def __init__(self, analyzed_images: Sequence[AnalyzedImage | None]) -> None:
+        self._analyzed_images = list(analyzed_images)
         self.metric_calculator = MetricCalculator(AnalyzerConfig())
 
     def analyze_batch(
@@ -25,7 +24,7 @@ class FakeAnalyzer:
         on_chunk_processed: Callable[[list[AnalyzedImage | None]], None] | None = None,
     ) -> list[AnalyzedImage | None]:
         del batch_size, show_progress
-        results = cast(list[AnalyzedImage | None], self._analyzed_images[: len(paths)])
+        results = self._analyzed_images[: len(paths)]
         if on_chunk_processed is not None:
             on_chunk_processed(results)
         return results

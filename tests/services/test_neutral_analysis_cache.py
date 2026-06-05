@@ -75,6 +75,33 @@ def test_write_many_stores_cache_without_pickle_payload(tmp_path: Path) -> None:
     _assert_restored_image_matches(restored, analyzed_image)
 
 
+def test_read_returns_none_when_cache_archive_is_invalid(tmp_path: Path) -> None:
+    """破損したcache archiveはcache missとして扱われること.
+
+    Arrange:
+        - 保存済みの中立解析cache fileが破損している
+    Act:
+        - cacheが読み込まれる
+    Assert:
+        - 例外ではなくNoneが返されること
+    """
+    # Arrange
+    image_path = tmp_path / "frame.jpg"
+    image_path.write_bytes(b"\xff\xd8\xff")
+    analyzed_image = create_analyzed_image(path=str(image_path))
+    cache = NeutralAnalysisCache(tmp_path, analyzer_fingerprint="test")
+    cache.write_many([analyzed_image])
+    cache_file = next((tmp_path / ".game-screen-pick").rglob("*.npz"))
+    valid_payload = cache_file.read_bytes()
+    cache_file.write_bytes(valid_payload[: len(valid_payload) // 2])
+
+    # Act
+    result = cache.read(image_path)
+
+    # Assert
+    assert result is None
+
+
 def test_read_reuses_cache_when_same_path_is_spelled_differently(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
