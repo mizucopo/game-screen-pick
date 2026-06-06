@@ -99,6 +99,7 @@ class OllamaSceneAnalyzer:
             "model": self.config.model,
             "stream": False,
             "format": "json",
+            "think": False,
             "messages": [
                 {
                     "role": "user",
