@@ -34,7 +34,6 @@ class AnalyzedImageSelector:
     SELECTION_SHORTLIST_MIN_SIZE = 500
     SELECTION_SHORTLIST_MAX_SIZE = 2000
     SELECTION_SHORTLIST_RESERVE_DIVISOR = 10
-    SELECTION_SHORTLIST_SIMILARITY_THRESHOLD = 0.95
 
     def __init__(
         self,
@@ -112,6 +111,7 @@ class AnalyzedImageSelector:
             analyzed_fail=analyzed_fail,
             rejected_by_similarity=selection_result.rejected_by_similarity,
             rejected_by_content_filter=content_filter_result.rejected_by_content_filter,
+            rejected_by_selection_shortlist=scored.rejected_by_selection_shortlist,
             selected_count=selected_count,
             scene_distribution=scored.scene_distribution,
             scene_mix_target=selection_result.target_counts,
@@ -138,7 +138,10 @@ class AnalyzedImageSelector:
         if not analyzed_images:
             return self._empty_scored_scene_candidates()
 
-        selection_shortlist = self._build_selection_shortlist(analyzed_images, num)
+        selection_shortlist, remaining_images = self._build_selection_shortlist_pool(
+            analyzed_images,
+            num,
+        )
         if not selection_shortlist:
             return self._empty_scored_scene_candidates()
         if len(selection_shortlist) < len(analyzed_images):
@@ -171,11 +174,21 @@ class AnalyzedImageSelector:
                 selection_shortlist,
                 scene_catalog,
                 classifications,
+                rejected_by_selection_shortlist=len(remaining_images),
                 catalog_fallback_used=True,
                 catalog_fallback_reason=fallback_reason,
             )
 
         classifications = self._classify_images(selection_shortlist, scene_catalog)
+        classified_images = list(selection_shortlist)
+        classifications = list(classifications)
+        self._refill_classifications_until_enough(
+            classified_images=classified_images,
+            classifications=classifications,
+            remaining_images=remaining_images,
+            scene_catalog=scene_catalog,
+            num=num,
+        )
         failed_count = sum(
             1 for classification in classifications if classification is None
         )
@@ -184,22 +197,24 @@ class AnalyzedImageSelector:
             f"成功 {len(classifications) - failed_count} 件, 失敗 {failed_count} 件"
         )
         return self._score_classifications(
-            selection_shortlist,
+            classified_images,
             scene_catalog,
             classifications,
+            rejected_by_selection_shortlist=len(analyzed_images)
+            - len(classified_images),
         )
 
-    def _build_selection_shortlist(
+    def _build_selection_shortlist_pool(
         self,
         analyzed_images: list[AnalyzedImage],
         num: int,
-    ) -> list[AnalyzedImage]:
-        """Ollama分類へ進めるSelection Shortlistを作る."""
+    ) -> tuple[list[AnalyzedImage], list[AnalyzedImage]]:
+        """Ollama分類へ進めるSelection Shortlistと未分類候補を作る."""
         shortlist_size = self._selection_shortlist_size(num, len(analyzed_images))
         if shortlist_size <= 0:
-            return []
+            return [], analyzed_images
         if len(analyzed_images) <= shortlist_size:
-            return analyzed_images
+            return analyzed_images, []
 
         ordered_images = sorted(
             analyzed_images,
@@ -211,8 +226,8 @@ class AnalyzedImageSelector:
         selected_indices, _rejected_indices = VectorUtils.filter_by_similarity(
             candidates=[image.combined_features for image in ordered_images],
             num=shortlist_size,
-            similarity_threshold=self.SELECTION_SHORTLIST_SIMILARITY_THRESHOLD,
-            compute_threshold_steps=lambda threshold: [threshold],
+            similarity_threshold=self.config.similarity_threshold,
+            compute_threshold_steps=self.config.compute_threshold_steps,
         )
         selected_index_set = set(selected_indices)
         shortlist = [ordered_images[index] for index in selected_indices]
@@ -221,7 +236,57 @@ class AnalyzedImageSelector:
                 break
             if index not in selected_index_set:
                 shortlist.append(image)
-        return shortlist
+        shortlist_paths = {image.path for image in shortlist}
+        remaining_images = [
+            image for image in ordered_images if image.path not in shortlist_paths
+        ]
+        return shortlist, remaining_images
+
+    def _refill_classifications_until_enough(
+        self,
+        classified_images: list[AnalyzedImage],
+        classifications: list[SceneClassification | None],
+        remaining_images: list[AnalyzedImage],
+        scene_catalog: list[SceneCatalogEntry],
+        num: int,
+    ) -> None:
+        """分類成功数が不足する場合に未分類候補から補充する."""
+        remaining_start = 0
+        while self._classification_success_count(classifications) < num:
+            if remaining_start >= len(remaining_images):
+                return
+            successful_count = self._classification_success_count(classifications)
+            missing_count = num - successful_count
+            refill_count = max(
+                missing_count,
+                self._selection_refill_size(num),
+            )
+            refill_images = remaining_images[
+                remaining_start : remaining_start + refill_count
+            ]
+            if not refill_images:
+                return
+            refill_classifications = self._classify_images(
+                refill_images,
+                scene_catalog,
+            )
+            classified_images.extend(refill_images)
+            classifications.extend(refill_classifications)
+            remaining_start += len(refill_images)
+
+    @classmethod
+    def _selection_refill_size(cls, num: int) -> int:
+        """分類失敗補充で一度に追加する候補数を返す."""
+        return max(num // cls.SELECTION_SHORTLIST_RESERVE_DIVISOR, 1)
+
+    @staticmethod
+    def _classification_success_count(
+        classifications: Sequence[SceneClassification | None],
+    ) -> int:
+        """成功したOllama分類数を返す."""
+        return sum(
+            1 for classification in classifications if classification is not None
+        )
 
     @classmethod
     def _selection_shortlist_size(cls, num: int, total_count: int) -> int:
@@ -264,6 +329,7 @@ class AnalyzedImageSelector:
         analyzed_images: list[AnalyzedImage],
         scene_catalog: list[SceneCatalogEntry],
         classifications: Sequence[SceneClassification | None],
+        rejected_by_selection_shortlist: int = 0,
         catalog_fallback_used: bool = False,
         catalog_fallback_reason: str | None = None,
     ) -> ScoredSceneCandidates:
@@ -294,6 +360,7 @@ class AnalyzedImageSelector:
             scene_catalog=scene_catalog,
             classification_failed=classification_failed,
             classification_failure_rate=failure_rate,
+            rejected_by_selection_shortlist=rejected_by_selection_shortlist,
             ollama_catalog_fallback_used=catalog_fallback_used,
             ollama_catalog_fallback_reason=catalog_fallback_reason,
         )

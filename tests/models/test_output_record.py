@@ -45,6 +45,7 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
         analyzed_fail=0,
         rejected_by_similarity=1,
         rejected_by_content_filter=0,
+        rejected_by_selection_shortlist=2,
         selected_count=1,
         scene_distribution={"battle": 1, "conversation": 1},
         scene_mix_target={"battle": 1, "conversation": 0},
@@ -86,6 +87,7 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
     assert record.ollama_catalog_fallback_used is False
     assert record.ollama_catalog_fallback_reason is None
     assert record.total_files == 2
+    assert record.rejected_by_selection_shortlist == 2
     assert record.selected[0].source_path == "/tmp/battle.jpg"
     assert record.selected[0].filename == "battle.jpg"
     assert record.selected[0].scene_slug == "battle"

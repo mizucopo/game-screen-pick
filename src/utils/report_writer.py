@@ -31,6 +31,9 @@ class ReportWriter:
             ),
             "threshold_relaxation_steps": output_record.threshold_relaxation_steps,
             "rejected_by_content_filter": output_record.rejected_by_content_filter,
+            "rejected_by_selection_shortlist": (
+                output_record.rejected_by_selection_shortlist
+            ),
             "content_filter_breakdown": output_record.content_filter_breakdown,
             "whole_input_profile": output_record.whole_input_profile,
             "selected": [

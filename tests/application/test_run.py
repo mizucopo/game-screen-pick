@@ -59,6 +59,7 @@ def _build_stats(
         analyzed_fail=0,
         rejected_by_similarity=0,
         rejected_by_content_filter=0,
+        rejected_by_selection_shortlist=0,
         selected_count=selected_count,
         scene_distribution={"battle": selected_count},
         scene_mix_target={"battle": selected_count},

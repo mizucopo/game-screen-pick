@@ -31,6 +31,7 @@ def _build_output_record() -> OutputRecord:
         analyzed_fail=0,
         rejected_by_similarity=0,
         rejected_by_content_filter=0,
+        rejected_by_selection_shortlist=0,
         selected_count=1,
         scene_distribution={"battle": 1},
         scene_mix_target={"battle": 1},

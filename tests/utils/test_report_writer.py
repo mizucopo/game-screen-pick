@@ -51,6 +51,7 @@ def _build_output_record(
         analyzed_fail=0,
         rejected_by_similarity=1,
         rejected_by_content_filter=2,
+        rejected_by_selection_shortlist=3,
         selected_count=2,
         scene_distribution={"battle": 2, "conversation": 2},
         scene_mix_target={"battle": 1, "conversation": 1},
@@ -136,6 +137,7 @@ def test_report_writer_serializes_output_record_fields(tmp_path: Path) -> None:
     assert payload["ollama_catalog_fallback_reason"] == "OSError: timed out"
     assert payload["threshold_relaxation_steps"] == [0.72]
     assert payload["rejected_by_content_filter"] == 2
+    assert payload["rejected_by_selection_shortlist"] == 3
     assert payload["content_filter_breakdown"]["fade_transition"] == 2
     assert payload["selected"][0]["path"] == "/tmp/battle.jpg"
     assert payload["selected"][0]["scene_slug"] == "battle"
