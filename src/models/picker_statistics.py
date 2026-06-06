@@ -17,6 +17,7 @@ class PickerStatistics:
         analyzed_fail: 画像解析に失敗したファイル数
         rejected_by_similarity: 類似度フィルタで除外された数
         rejected_by_content_filter: content filter で hard reject された数
+        rejected_by_selection_shortlist: Selection Shortlist外になった数
         selected_count: 最終的に選択された画像数
         scene_distribution: 解析済み候補全体の画面種別分布
         scene_mix_target: 目標の画面種別配分
@@ -37,6 +38,7 @@ class PickerStatistics:
     analyzed_fail: int
     rejected_by_similarity: int
     rejected_by_content_filter: int
+    rejected_by_selection_shortlist: int
     selected_count: int
     scene_distribution: dict[str, int]
     scene_mix_target: dict[str, int]

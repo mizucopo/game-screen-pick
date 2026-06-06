@@ -15,5 +15,6 @@ class ScoredSceneCandidates:
     scene_catalog: list[SceneCatalogEntry]
     classification_failed: int
     classification_failure_rate: float
+    rejected_by_selection_shortlist: int = 0
     ollama_catalog_fallback_used: bool = False
     ollama_catalog_fallback_reason: str | None = None

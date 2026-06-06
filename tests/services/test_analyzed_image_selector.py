@@ -4,6 +4,8 @@ import threading
 import time
 from unittest.mock import patch
 
+import numpy as np
+
 from src.analyzers.metric_calculator import MetricCalculator
 from src.models.analyzer_config import AnalyzerConfig
 from src.models.ollama_config import OllamaConfig
@@ -12,7 +14,23 @@ from src.models.scene_classification import SceneClassification
 from src.models.selection_config import SelectionConfig
 from src.services.analyzed_image_selector import AnalyzedImageSelector
 from tests.conftest import _feature, create_analyzed_image
+from tests.counting_scene_analyzer import CountingSceneAnalyzer
 from tests.fake_scene_analyzer import FakeSceneAnalyzer
+
+
+def _similar_feature(
+    *,
+    common_index: int,
+    unique_index: int,
+    dim: int,
+    common_value: float,
+    unique_value: float,
+) -> np.ndarray:
+    """共通成分を持つ類似特徴ベクトルを生成する."""
+    feature = np.zeros(dim, dtype=np.float32)
+    feature[common_index] = common_value
+    feature[unique_index] = unique_value
+    return feature
 
 
 def test_select_classifies_blog_candidates_and_reports_ollama_failures() -> None:
@@ -203,6 +221,229 @@ def test_select_logs_ollama_progress() -> None:
     assert "Ollama画像分類進捗: 1/2" in messages
     assert "Ollama画像分類進捗: 2/2" in messages
     assert "Ollama画像分類完了: 成功 2 件, 失敗 0 件" in messages
+
+
+def test_select_classifies_selection_shortlist_instead_of_all_blog_candidates() -> None:
+    """Selection ShortlistだけがOllama分類へ進められること.
+
+    Arrange:
+        - 500件を超えるblog candidateがある
+        - すべての画像が分類可能である
+    Act:
+        - AnalyzedImageSelectorで少数枚が選定される
+    Assert:
+        - 全blog candidateではなくSelection Shortlistだけが分類されること
+        - scene catalogもSelection Shortlistから作成されること
+    """
+    # Arrange
+    images = [
+        create_analyzed_image(
+            path=f"/tmp/frame-{index:04d}.jpg",
+            combined_features=_feature(index),
+        )
+        for index in range(550)
+    ]
+    scene_analyzer = CountingSceneAnalyzer()
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4", max_workers=4),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    _selected, _rejected, stats = selector.select(
+        analyzed_images=images,
+        num=10,
+    )
+
+    # Assert
+    assert len(scene_analyzer.classified_paths) == 500
+    assert "/tmp/frame-0499.jpg" in scene_analyzer.classified_paths
+    assert "/tmp/frame-0500.jpg" not in scene_analyzer.classified_paths
+    assert len(scene_analyzer.representative_paths) == 24
+    assert set(scene_analyzer.representative_paths).issubset(
+        set(scene_analyzer.classified_paths)
+    )
+    assert stats.rejected_by_selection_shortlist == 50
+
+
+def test_select_keeps_selection_shortlist_at_least_requested_count() -> None:
+    """選択要求枚数以上のSelection Shortlistが分類されること.
+
+    Arrange:
+        - 2000件を超える選択枚数が要求される
+        - 要求枚数より多いblog candidateがある
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - Selection Shortlistが要求枚数未満に制限されないこと
+    """
+    # Arrange
+    images = [
+        create_analyzed_image(
+            path=f"/tmp/large-frame-{index:04d}.jpg",
+            combined_features=_feature(0, dim=2),
+        )
+        for index in range(2600)
+    ]
+    scene_analyzer = CountingSceneAnalyzer()
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4", max_workers=4),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    selector.select(
+        analyzed_images=images,
+        num=2500,
+    )
+
+    # Assert
+    assert len(scene_analyzer.classified_paths) >= 2500
+
+
+def test_select_uses_reserve_candidates_when_large_shortlist_has_failure() -> None:
+    """大きなSelection Shortlistで分類失敗時も要求枚数が選定されること.
+
+    Arrange:
+        - 2000件を超える選択枚数が要求される
+        - 要求枚数より多いblog candidateがある
+        - Selection Shortlist内の1枚がOllama分類に失敗する
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - reserve候補から補われ、要求枚数が選定されること
+    """
+    # Arrange
+    failed_path = "/tmp/reserve-frame-0000.jpg"
+    images = [
+        create_analyzed_image(
+            path=f"/tmp/reserve-frame-{index:04d}.jpg",
+            combined_features=_feature(index, dim=2600),
+        )
+        for index in range(2600)
+    ]
+    scene_analyzer = CountingSceneAnalyzer(failed_paths={failed_path})
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4", max_workers=4),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    selected, _rejected, stats = selector.select(
+        analyzed_images=images,
+        num=2500,
+    )
+
+    # Assert
+    assert len(scene_analyzer.classified_paths) > 2500
+    assert len(selected) == 2500
+    assert stats.selected_count == 2500
+    assert stats.ollama_classification_failed == 1
+
+
+def test_select_refills_classification_after_shortlist_failures() -> None:
+    """分類失敗が多い場合に未分類候補から補充されること.
+
+    Arrange:
+        - Selection Shortlistの通常上限に近い選択枚数が要求される
+        - 初期Selection Shortlist内で多数のOllama分類失敗が発生する
+        - 未分類のblog candidateが残っている
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - 未分類候補が追加分類され、要求枚数が選定されること
+    """
+    # Arrange
+    failed_paths = {f"/tmp/refill-frame-{index:04d}.jpg" for index in range(101)}
+    images = [
+        create_analyzed_image(
+            path=f"/tmp/refill-frame-{index:04d}.jpg",
+            combined_features=_feature(index, dim=2105),
+        )
+        for index in range(2105)
+    ]
+    scene_analyzer = CountingSceneAnalyzer(failed_paths=failed_paths)
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4", max_workers=4),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    selected, _rejected, stats = selector.select(
+        analyzed_images=images,
+        num=1900,
+    )
+
+    # Assert
+    assert len(scene_analyzer.classified_paths) > 2000
+    assert len(selected) == 1900
+    assert stats.selected_count == 1900
+    assert stats.ollama_classification_failed == 101
+
+
+def test_select_builds_shortlist_with_final_similarity_threshold() -> None:
+    """最終選定の類似度しきい値でSelection Shortlistが多様化されること.
+
+    Arrange:
+        - 上位500件が最終選定では近すぎる画像である
+        - 501件目に多様な画像がある
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - 低順位でも多様な画像がOllama分類へ進められること
+    """
+    # Arrange
+    feature_dim = 502
+    common_value = float(np.sqrt(0.9))
+    unique_value = float(np.sqrt(0.1))
+    images = [
+        create_analyzed_image(
+            path=f"/tmp/diverse-frame-{index:04d}.jpg",
+            combined_features=_similar_feature(
+                common_index=0,
+                unique_index=index + 1,
+                dim=feature_dim,
+                common_value=common_value,
+                unique_value=unique_value,
+            ),
+        )
+        for index in range(500)
+    ]
+    images.append(
+        create_analyzed_image(
+            path="/tmp/diverse-frame-0500.jpg",
+            combined_features=_feature(501, dim=feature_dim),
+        )
+    )
+    scene_analyzer = CountingSceneAnalyzer()
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4", max_workers=4),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    selector.select(
+        analyzed_images=images,
+        num=2,
+    )
+
+    # Assert
+    assert "/tmp/diverse-frame-0500.jpg" in scene_analyzer.classified_paths
 
 
 def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:

@@ -20,6 +20,7 @@ class OutputRecord:
     analyzed_fail: int
     rejected_by_similarity: int
     rejected_by_content_filter: int
+    rejected_by_selection_shortlist: int
     selected_count: int
     scene_distribution: dict[str, int]
     scene_mix_target: dict[str, int]
@@ -61,6 +62,7 @@ class OutputRecord:
             analyzed_fail=stats.analyzed_fail,
             rejected_by_similarity=stats.rejected_by_similarity,
             rejected_by_content_filter=stats.rejected_by_content_filter,
+            rejected_by_selection_shortlist=stats.rejected_by_selection_shortlist,
             selected_count=stats.selected_count,
             scene_distribution=dict(stats.scene_distribution),
             scene_mix_target=dict(stats.scene_mix_target),

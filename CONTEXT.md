@@ -48,6 +48,10 @@ _Avoid_: scene hint, user-facing mode, selection profile
 ブログ画像として選択する余地があるスクリーンショット。明らかな暗転、白飛び、単色画面、遷移フレームは含まない。
 _Avoid_: all input images
 
+**Selection Shortlist**:
+blog candidate のうち、ブログに採用される可能性が高く、最終選別のためにscene分類へ進める画像群。
+_Avoid_: all blog candidates, selected output
+
 **Neutral Image Analysis**:
 scene や selection intent に依存せず、画像そのものから得られる特徴と品質評価。画像の内容分類ではなく、blog candidate 判定や類似度判定の土台になる。
 _Avoid_: scene classification, selection intent
