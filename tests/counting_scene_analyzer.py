@@ -17,7 +17,7 @@ class CountingSceneAnalyzer:
         ]
         self.representative_paths: list[str] = []
         self.classified_paths: list[str] = []
-        self.failed_paths = failed_paths or set()
+        self._failed_paths = failed_paths or set()
         self._lock = threading.Lock()
 
     def generate_scene_catalog(
@@ -39,7 +39,7 @@ class CountingSceneAnalyzer:
         assert catalog == self.catalog
         with self._lock:
             self.classified_paths.append(image_path)
-        if image_path in self.failed_paths:
+        if image_path in self._failed_paths:
             return None
         return SceneClassification(
             scene_slug="battle",
