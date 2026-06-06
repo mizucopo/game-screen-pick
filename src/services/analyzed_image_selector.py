@@ -135,23 +135,11 @@ class AnalyzedImageSelector:
     ) -> ScoredSceneCandidates:
         """Ollama scene評価を行い、最終候補を作る."""
         if not analyzed_images:
-            return ScoredSceneCandidates(
-                candidates=[],
-                scene_distribution={},
-                scene_catalog=[],
-                classification_failed=0,
-                classification_failure_rate=0.0,
-            )
+            return self._empty_scored_scene_candidates()
 
         selection_shortlist = self._build_selection_shortlist(analyzed_images, num)
         if not selection_shortlist:
-            return ScoredSceneCandidates(
-                candidates=[],
-                scene_distribution={},
-                scene_catalog=[],
-                classification_failed=0,
-                classification_failure_rate=0.0,
-            )
+            return self._empty_scored_scene_candidates()
         if len(selection_shortlist) < len(analyzed_images):
             logger.info(
                 "Selection Shortlist作成: "
@@ -227,13 +215,11 @@ class AnalyzedImageSelector:
         )
         selected_index_set = set(selected_indices)
         shortlist = [ordered_images[index] for index in selected_indices]
-        if len(shortlist) < shortlist_size:
-            for index, image in enumerate(ordered_images):
-                if index in selected_index_set:
-                    continue
+        for index, image in enumerate(ordered_images):
+            if len(shortlist) >= shortlist_size:
+                break
+            if index not in selected_index_set:
                 shortlist.append(image)
-                if len(shortlist) >= shortlist_size:
-                    break
         return shortlist
 
     @classmethod
@@ -248,6 +234,17 @@ class AnalyzedImageSelector:
         return self._candidate_scorer.metric_calculator.calculate_quality_score(
             image.normalized_metrics,
             DEFAULT_QUALITY_WEIGHTS,
+        )
+
+    @staticmethod
+    def _empty_scored_scene_candidates() -> ScoredSceneCandidates:
+        """分類対象がない場合の空のscore結果を返す."""
+        return ScoredSceneCandidates(
+            candidates=[],
+            scene_distribution={},
+            scene_catalog=[],
+            classification_failed=0,
+            classification_failure_rate=0.0,
         )
 
     def _score_classifications(
