@@ -252,10 +252,10 @@ class AnalyzedImageSelector:
     ) -> None:
         """分類成功数が不足する場合に未分類候補から補充する."""
         remaining_start = 0
-        while self._classification_success_count(classifications) < num:
+        successful_count = self._classification_success_count(classifications)
+        while successful_count < num:
             if remaining_start >= len(remaining_images):
                 return
-            successful_count = self._classification_success_count(classifications)
             missing_count = num - successful_count
             refill_count = max(
                 missing_count,
@@ -273,6 +273,7 @@ class AnalyzedImageSelector:
             classified_images.extend(refill_images)
             classifications.extend(refill_classifications)
             remaining_start += len(refill_images)
+            successful_count = self._classification_success_count(classifications)
 
     @classmethod
     def _selection_refill_size(cls, num: int) -> int:
