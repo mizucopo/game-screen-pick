@@ -205,6 +205,51 @@ def test_select_logs_ollama_progress() -> None:
     assert "Ollama画像分類完了: 成功 2 件, 失敗 0 件" in messages
 
 
+def test_select_classifies_selection_shortlist_instead_of_all_blog_candidates() -> None:
+    """Selection ShortlistだけがOllama分類へ進められること.
+
+    Arrange:
+        - 500件を超えるblog candidateがある
+        - すべての画像が分類可能である
+    Act:
+        - AnalyzedImageSelectorで少数枚が選定される
+    Assert:
+        - 全blog candidateではなくSelection Shortlistだけが分類されること
+        - scene catalogもSelection Shortlistから作成されること
+    """
+    # Arrange
+    images = [
+        create_analyzed_image(
+            path=f"/tmp/frame-{index:04d}.jpg",
+            combined_features=_feature(index),
+        )
+        for index in range(550)
+    ]
+    scene_analyzer = _CountingSceneAnalyzer()
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4", max_workers=4),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    selector.select(
+        analyzed_images=images,
+        num=10,
+    )
+
+    # Assert
+    assert len(scene_analyzer.classified_paths) == 500
+    assert "/tmp/frame-0499.jpg" in scene_analyzer.classified_paths
+    assert "/tmp/frame-0500.jpg" not in scene_analyzer.classified_paths
+    assert len(scene_analyzer.representative_paths) == 24
+    assert set(scene_analyzer.representative_paths).issubset(
+        set(scene_analyzer.classified_paths)
+    )
+
+
 def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:
     """catalog作成失敗時にfallback sceneで候補が選定されること.
 
@@ -334,3 +379,43 @@ class _ConcurrentSceneAnalyzer:
         finally:
             with self._lock:
                 self._active -= 1
+
+
+class _CountingSceneAnalyzer:
+    """分類対象pathを記録するscene analyzer."""
+
+    def __init__(self) -> None:
+        """fake analyzerを初期化する."""
+        self.catalog = [
+            SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
+            SceneCatalogEntry("other", "その他", "分類しにくい場面"),
+        ]
+        self.representative_paths: list[str] = []
+        self.classified_paths: list[str] = []
+        self._lock = threading.Lock()
+
+    def generate_scene_catalog(
+        self,
+        representative_paths: list[str],
+        scene_hint: str | None,
+    ) -> list[SceneCatalogEntry]:
+        """scene catalogを返す."""
+        assert scene_hint is None
+        self.representative_paths = representative_paths
+        return self.catalog
+
+    def classify_image(
+        self,
+        image_path: str,
+        catalog: list[SceneCatalogEntry],
+    ) -> SceneClassification | None:
+        """分類対象pathを記録して分類結果を返す."""
+        assert catalog == self.catalog
+        with self._lock:
+            self.classified_paths.append(image_path)
+        return SceneClassification(
+            scene_slug="battle",
+            scene_display_name="戦闘",
+            scene_description="敵との戦闘場面",
+            confidence=0.9,
+        )

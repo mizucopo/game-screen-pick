@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..analyzers.metric_calculator import MetricCalculator
+from ..constants.selection_quality_weights import DEFAULT_QUALITY_WEIGHTS
 from ..models.analyzed_image import AnalyzedImage
 from ..models.content_filter_result import ContentFilterResult
 from ..models.picker_statistics import PickerStatistics
@@ -16,6 +17,7 @@ from ..models.scored_scene_candidates import ScoredSceneCandidates
 from ..models.selection_config import SelectionConfig
 from ..models.selection_result import SelectionResult
 from ..protocols.scene_analyzer_like import SceneAnalyzerLike
+from ..utils.vector_utils import VectorUtils
 from .candidate_scorer import CandidateScorer
 from .content_filter import ContentFilter
 from .dynamic_scene_selector import DynamicSceneSelector
@@ -28,6 +30,10 @@ class AnalyzedImageSelector:
     """解析済み画像からblog用sceneの最終選定結果を作る."""
 
     CATALOG_SAMPLE_LIMIT = 24
+    SELECTION_SHORTLIST_SIZE_MULTIPLIER = 10
+    SELECTION_SHORTLIST_MIN_SIZE = 500
+    SELECTION_SHORTLIST_MAX_SIZE = 2000
+    SELECTION_SHORTLIST_SIMILARITY_THRESHOLD = 0.95
 
     def __init__(
         self,
@@ -54,7 +60,7 @@ class AnalyzedImageSelector:
     ) -> tuple[list[ScoredCandidate], list[ScoredCandidate], PickerStatistics]:
         """解析済み画像から候補を選択する."""
         content_filter_result = self._content_filter.filter(analyzed_images)
-        scored = self._score_candidates(content_filter_result.kept_images)
+        scored = self._score_candidates(content_filter_result.kept_images, num)
         selection_result = self._scene_selector.select(scored.candidates, num)
         selected = selection_result.selected
         rejected = self._build_rejected_candidates(scored.candidates, selected)
@@ -125,6 +131,7 @@ class AnalyzedImageSelector:
     def _score_candidates(
         self,
         analyzed_images: list[AnalyzedImage],
+        num: int,
     ) -> ScoredSceneCandidates:
         """Ollama scene評価を行い、最終候補を作る."""
         if not analyzed_images:
@@ -136,7 +143,22 @@ class AnalyzedImageSelector:
                 classification_failure_rate=0.0,
             )
 
-        representative_paths = self._build_representative_paths(analyzed_images)
+        selection_shortlist = self._build_selection_shortlist(analyzed_images, num)
+        if not selection_shortlist:
+            return ScoredSceneCandidates(
+                candidates=[],
+                scene_distribution={},
+                scene_catalog=[],
+                classification_failed=0,
+                classification_failure_rate=0.0,
+            )
+        if len(selection_shortlist) < len(analyzed_images):
+            logger.info(
+                "Selection Shortlist作成: "
+                f"{len(selection_shortlist)}/{len(analyzed_images)}件"
+            )
+
+        representative_paths = self._build_representative_paths(selection_shortlist)
         try:
             logger.info(
                 f"Ollama scene catalog作成中: 代表画像 {len(representative_paths)} 件"
@@ -154,17 +176,17 @@ class AnalyzedImageSelector:
             )
             scene_catalog = self._fallback_scene_catalog()
             classifications: Sequence[SceneClassification | None] = (
-                self._fallback_classifications(analyzed_images, scene_catalog[0])
+                self._fallback_classifications(selection_shortlist, scene_catalog[0])
             )
             return self._score_classifications(
-                analyzed_images,
+                selection_shortlist,
                 scene_catalog,
                 classifications,
                 catalog_fallback_used=True,
                 catalog_fallback_reason=fallback_reason,
             )
 
-        classifications = self._classify_images(analyzed_images, scene_catalog)
+        classifications = self._classify_images(selection_shortlist, scene_catalog)
         failed_count = sum(
             1 for classification in classifications if classification is None
         )
@@ -173,9 +195,59 @@ class AnalyzedImageSelector:
             f"成功 {len(classifications) - failed_count} 件, 失敗 {failed_count} 件"
         )
         return self._score_classifications(
-            analyzed_images,
+            selection_shortlist,
             scene_catalog,
             classifications,
+        )
+
+    def _build_selection_shortlist(
+        self,
+        analyzed_images: list[AnalyzedImage],
+        num: int,
+    ) -> list[AnalyzedImage]:
+        """Ollama分類へ進めるSelection Shortlistを作る."""
+        shortlist_size = self._selection_shortlist_size(num, len(analyzed_images))
+        if shortlist_size <= 0:
+            return []
+        if len(analyzed_images) <= shortlist_size:
+            return analyzed_images
+
+        ordered_images = sorted(
+            analyzed_images,
+            key=lambda image: (
+                -self._neutral_quality_score(image),
+                image.path,
+            ),
+        )
+        selected_indices, _rejected_indices = VectorUtils.filter_by_similarity(
+            candidates=[image.combined_features for image in ordered_images],
+            num=shortlist_size,
+            similarity_threshold=self.SELECTION_SHORTLIST_SIMILARITY_THRESHOLD,
+            compute_threshold_steps=lambda threshold: [threshold],
+        )
+        selected_index_set = set(selected_indices)
+        shortlist = [ordered_images[index] for index in selected_indices]
+        if len(shortlist) < shortlist_size:
+            for index, image in enumerate(ordered_images):
+                if index in selected_index_set:
+                    continue
+                shortlist.append(image)
+                if len(shortlist) >= shortlist_size:
+                    break
+        return shortlist
+
+    @classmethod
+    def _selection_shortlist_size(cls, num: int, total_count: int) -> int:
+        """選定枚数からSelection Shortlistの上限件数を返す."""
+        requested_size = max(num * cls.SELECTION_SHORTLIST_SIZE_MULTIPLIER, 0)
+        target_size = max(requested_size, cls.SELECTION_SHORTLIST_MIN_SIZE)
+        return min(total_count, target_size, cls.SELECTION_SHORTLIST_MAX_SIZE)
+
+    def _neutral_quality_score(self, image: AnalyzedImage) -> float:
+        """scene分類前に使える品質スコアを返す."""
+        return self._candidate_scorer.metric_calculator.calculate_quality_score(
+            image.normalized_metrics,
+            DEFAULT_QUALITY_WEIGHTS,
         )
 
     def _score_classifications(

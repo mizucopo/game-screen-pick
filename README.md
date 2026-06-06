@@ -66,14 +66,15 @@ uv run game-screen-pick --ollama-model gemma4 --reset-cache ./screenshots ./outp
 
 1. 入力画像をすべて解析し、CLIP特徴・結合特徴・画質メトリクスを作る
 2. 解析結果をもとに `content filter` を実施し、暗転・白飛び・単色・遷移フレームを厳格に明示的な reject reason 付きで除外する
-3. 残った blog candidate から代表画像を最大24枚選び、Ollamaでその実行用の scene catalog を作る
-4. scene catalog は3〜8個の scene で構成され、必ず `other` を含む
-5. 各 blog candidate を scene catalog のいずれかへ分類し、分類失敗した画像は最終選択対象から外す
-6. 同じ scene 内で見た目や構図が近い画像を variant group にまとめ、原則として各 group から代表画像を1枚だけ選ぶ
-7. scene ごとの自動均等配分、画質、分類信頼度、類似度除外を組み合わせて最終出力を決める
-8. 選定結果を copy / console / JSON report 共通の出力recordへ変換する
-9. `OutputPlanner` が scene slug別連番とreport用 `output_path` をcopyなしで計画する
-10. 計画済みの出力先へ画像をコピーし、同じrecordから表示と `<出力フォルダ>/report.json` のJSONレポートを生成する
+3. 残った blog candidate から画質と見た目の多様性で Selection Shortlist を作る
+4. Selection Shortlist から代表画像を最大24枚選び、Ollamaでその実行用の scene catalog を作る
+5. scene catalog は3〜8個の scene で構成され、必ず `other` を含む
+6. Selection Shortlist の各画像を scene catalog のいずれかへ分類し、分類失敗した画像は最終選択対象から外す
+7. 同じ scene 内で見た目や構図が近い画像を variant group にまとめ、原則として各 group から代表画像を1枚だけ選ぶ
+8. scene ごとの自動均等配分、画質、分類信頼度、類似度除外を組み合わせて最終出力を決める
+9. 選定結果を copy / console / JSON report 共通の出力recordへ変換する
+10. `OutputPlanner` が scene slug別連番とreport用 `output_path` をcopyなしで計画する
+11. 計画済みの出力先へ画像をコピーし、同じrecordから表示と `<出力フォルダ>/report.json` のJSONレポートを生成する
 
 出力フォルダが存在する場合は、処理開始前に空である必要があります。既存ファイル、既存フォルダ、`report.json` などが1件でもある場合は失敗します。
 JSONレポートは常に `<出力フォルダ>/report.json` へ出力されます。
@@ -138,4 +139,5 @@ Ollama host の優先順位は `--ollama-host`、`OLLAMA_HOST`、`[ollama].host`
 - `--max-memory-gb`: 大きいほどチャンクサイズが増え、GPU利用率が上がりやすくなります
 - `--batch-size`: 大きいほど高速ですが、VRAM消費量が増えます
 - `--result-max-workers`: CPU並列度を調整します
+- Ollama分類は全blog candidateではなく、画質と見た目の多様性で絞った Selection Shortlist にだけ実行されます。Selection Shortlist は選択枚数の10倍または500件の大きい方を基本に、最大2000件まで自動調整されます
 - Ollamaの `/api/chat` には常に `think=false` を送信します。scene分類では最終JSONだけを使うため、thinking対応モデルでは推論trace生成を抑えて速度を優先します
