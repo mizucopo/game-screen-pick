@@ -33,6 +33,7 @@ class AnalyzedImageSelector:
     SELECTION_SHORTLIST_SIZE_MULTIPLIER = 10
     SELECTION_SHORTLIST_MIN_SIZE = 500
     SELECTION_SHORTLIST_MAX_SIZE = 2000
+    SELECTION_SHORTLIST_RESERVE_DIVISOR = 10
     SELECTION_SHORTLIST_SIMILARITY_THRESHOLD = 0.95
 
     def __init__(
@@ -231,7 +232,14 @@ class AnalyzedImageSelector:
             cls.SELECTION_SHORTLIST_MIN_SIZE,
         )
         capped_size = min(target_size, cls.SELECTION_SHORTLIST_MAX_SIZE)
-        return min(total_count, max(requested_count, capped_size))
+        if requested_count <= capped_size:
+            return min(total_count, capped_size)
+
+        reserve_size = max(
+            requested_count // cls.SELECTION_SHORTLIST_RESERVE_DIVISOR,
+            1,
+        )
+        return min(total_count, requested_count + reserve_size)
 
     def _neutral_quality_score(self, image: AnalyzedImage) -> float:
         """scene分類前に使える品質スコアを返す."""

@@ -9,7 +9,7 @@ from src.models.scene_classification import SceneClassification
 class CountingSceneAnalyzer:
     """分類対象pathを記録するscene analyzer."""
 
-    def __init__(self) -> None:
+    def __init__(self, failed_paths: set[str] | None = None) -> None:
         """fake analyzerを初期化する."""
         self.catalog = [
             SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
@@ -17,6 +17,7 @@ class CountingSceneAnalyzer:
         ]
         self.representative_paths: list[str] = []
         self.classified_paths: list[str] = []
+        self.failed_paths = failed_paths or set()
         self._lock = threading.Lock()
 
     def generate_scene_catalog(
@@ -38,6 +39,8 @@ class CountingSceneAnalyzer:
         assert catalog == self.catalog
         with self._lock:
             self.classified_paths.append(image_path)
+        if image_path in self.failed_paths:
+            return None
         return SceneClassification(
             scene_slug="battle",
             scene_display_name="戦闘",

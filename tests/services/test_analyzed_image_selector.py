@@ -286,7 +286,50 @@ def test_select_keeps_selection_shortlist_at_least_requested_count() -> None:
     )
 
     # Assert
-    assert len(scene_analyzer.classified_paths) == 2500
+    assert len(scene_analyzer.classified_paths) >= 2500
+
+
+def test_select_uses_reserve_candidates_when_large_shortlist_has_failure() -> None:
+    """大きなSelection Shortlistで分類失敗時も要求枚数が選定されること.
+
+    Arrange:
+        - 2000件を超える選択枚数が要求される
+        - 要求枚数より多いblog candidateがある
+        - Selection Shortlist内の1枚がOllama分類に失敗する
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - reserve候補から補われ、要求枚数が選定されること
+    """
+    # Arrange
+    failed_path = "/tmp/reserve-frame-0000.jpg"
+    images = [
+        create_analyzed_image(
+            path=f"/tmp/reserve-frame-{index:04d}.jpg",
+            combined_features=_feature(index, dim=2600),
+        )
+        for index in range(2600)
+    ]
+    scene_analyzer = CountingSceneAnalyzer(failed_paths={failed_path})
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4", max_workers=4),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    selected, _rejected, stats = selector.select(
+        analyzed_images=images,
+        num=2500,
+    )
+
+    # Assert
+    assert len(scene_analyzer.classified_paths) > 2500
+    assert len(selected) == 2500
+    assert stats.selected_count == 2500
+    assert stats.ollama_classification_failed == 1
 
 
 def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:

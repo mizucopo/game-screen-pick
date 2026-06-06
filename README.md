@@ -139,7 +139,7 @@ Ollama host の優先順位は `--ollama-host`、`OLLAMA_HOST`、`[ollama].host`
 - `--max-memory-gb`: 大きいほどチャンクサイズが増え、GPU利用率が上がりやすくなります
 - `--batch-size`: 大きいほど高速ですが、VRAM消費量が増えます
 - `--result-max-workers`: CPU並列度を調整します
-- Ollama分類は全blog candidateではなく、画質と見た目の多様性で絞った Selection Shortlist にだけ実行されます。Selection Shortlist は選択枚数の10倍または500件の大きい方を基本に、通常は最大2000件まで自動調整されます。ただし、選択枚数が2000件を超える場合は要求枚数を下回らないように調整されます
+- Ollama分類は全blog candidateではなく、画質と見た目の多様性で絞った Selection Shortlist にだけ実行されます。Selection Shortlist は選択枚数の10倍または500件の大きい方を基本に、通常は最大2000件まで自動調整されます。ただし、選択枚数が2000件を超える場合は、Ollama分類失敗に備えて要求枚数より少し多めに確保されます
 - Ollamaの `/api/chat` には常に `think=false` を送信します。scene分類では最終JSONだけを使うため、thinking対応モデルでは推論trace生成を抑えて速度を優先します
 
 ## 関連ドキュメント
