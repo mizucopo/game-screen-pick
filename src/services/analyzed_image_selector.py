@@ -225,9 +225,13 @@ class AnalyzedImageSelector:
     @classmethod
     def _selection_shortlist_size(cls, num: int, total_count: int) -> int:
         """選定枚数からSelection Shortlistの上限件数を返す."""
-        requested_size = max(num * cls.SELECTION_SHORTLIST_SIZE_MULTIPLIER, 0)
-        target_size = max(requested_size, cls.SELECTION_SHORTLIST_MIN_SIZE)
-        return min(total_count, target_size, cls.SELECTION_SHORTLIST_MAX_SIZE)
+        requested_count = max(num, 0)
+        target_size = max(
+            requested_count * cls.SELECTION_SHORTLIST_SIZE_MULTIPLIER,
+            cls.SELECTION_SHORTLIST_MIN_SIZE,
+        )
+        capped_size = min(target_size, cls.SELECTION_SHORTLIST_MAX_SIZE)
+        return min(total_count, max(requested_count, capped_size))
 
     def _neutral_quality_score(self, image: AnalyzedImage) -> float:
         """scene分類前に使える品質スコアを返す."""

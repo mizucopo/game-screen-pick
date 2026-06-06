@@ -12,6 +12,7 @@ from src.models.scene_classification import SceneClassification
 from src.models.selection_config import SelectionConfig
 from src.services.analyzed_image_selector import AnalyzedImageSelector
 from tests.conftest import _feature, create_analyzed_image
+from tests.counting_scene_analyzer import CountingSceneAnalyzer
 from tests.fake_scene_analyzer import FakeSceneAnalyzer
 
 
@@ -225,7 +226,7 @@ def test_select_classifies_selection_shortlist_instead_of_all_blog_candidates() 
         )
         for index in range(550)
     ]
-    scene_analyzer = _CountingSceneAnalyzer()
+    scene_analyzer = CountingSceneAnalyzer()
     selector = AnalyzedImageSelector(
         config=SelectionConfig(
             ollama=OllamaConfig(model="gemma4", max_workers=4),
@@ -248,6 +249,44 @@ def test_select_classifies_selection_shortlist_instead_of_all_blog_candidates() 
     assert set(scene_analyzer.representative_paths).issubset(
         set(scene_analyzer.classified_paths)
     )
+
+
+def test_select_keeps_selection_shortlist_at_least_requested_count() -> None:
+    """選択要求枚数以上のSelection Shortlistが分類されること.
+
+    Arrange:
+        - 2000件を超える選択枚数が要求される
+        - 要求枚数より多いblog candidateがある
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - Selection Shortlistが要求枚数未満に制限されないこと
+    """
+    # Arrange
+    images = [
+        create_analyzed_image(
+            path=f"/tmp/large-frame-{index:04d}.jpg",
+            combined_features=_feature(0, dim=2),
+        )
+        for index in range(2600)
+    ]
+    scene_analyzer = CountingSceneAnalyzer()
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4", max_workers=4),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    selector.select(
+        analyzed_images=images,
+        num=2500,
+    )
+
+    # Assert
+    assert len(scene_analyzer.classified_paths) == 2500
 
 
 def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:
@@ -379,43 +418,3 @@ class _ConcurrentSceneAnalyzer:
         finally:
             with self._lock:
                 self._active -= 1
-
-
-class _CountingSceneAnalyzer:
-    """分類対象pathを記録するscene analyzer."""
-
-    def __init__(self) -> None:
-        """fake analyzerを初期化する."""
-        self.catalog = [
-            SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
-            SceneCatalogEntry("other", "その他", "分類しにくい場面"),
-        ]
-        self.representative_paths: list[str] = []
-        self.classified_paths: list[str] = []
-        self._lock = threading.Lock()
-
-    def generate_scene_catalog(
-        self,
-        representative_paths: list[str],
-        scene_hint: str | None,
-    ) -> list[SceneCatalogEntry]:
-        """scene catalogを返す."""
-        assert scene_hint is None
-        self.representative_paths = representative_paths
-        return self.catalog
-
-    def classify_image(
-        self,
-        image_path: str,
-        catalog: list[SceneCatalogEntry],
-    ) -> SceneClassification | None:
-        """分類対象pathを記録して分類結果を返す."""
-        assert catalog == self.catalog
-        with self._lock:
-            self.classified_paths.append(image_path)
-        return SceneClassification(
-            scene_slug="battle",
-            scene_display_name="戦闘",
-            scene_description="敵との戦闘場面",
-            confidence=0.9,
-        )
