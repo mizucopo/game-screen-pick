@@ -1,8 +1,8 @@
 """output_record.py の単体テスト."""
 
-from src.constants.scene_label import SceneLabel
 from src.models.output_record import OutputRecord
 from src.models.picker_statistics import PickerStatistics
+from src.models.scene_catalog_entry import SceneCatalogEntry
 from src.models.selection_annotation import SelectionAnnotation
 from tests.conftest import create_scored_candidate
 
@@ -23,21 +23,19 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
     # Arrange
     selected = [
         create_scored_candidate(
-            path="/tmp/play.jpg",
-            scene_label=SceneLabel.PLAY,
-            play_score=0.81234,
-            event_score=0.12345,
-            density_score=0.73456,
+            path="/tmp/battle.jpg",
+            scene_slug="battle",
+            scene_display_name="戦闘",
+            scene_description="敵との戦闘場面",
             selection_score=0.65432,
         )
     ]
     rejected = [
         create_scored_candidate(
-            path="/tmp/event.jpg",
-            scene_label=SceneLabel.EVENT,
-            play_score=0.23456,
-            event_score=0.87654,
-            density_score=0.12345,
+            path="/tmp/conversation.jpg",
+            scene_slug="conversation",
+            scene_display_name="会話",
+            scene_description="人物同士の会話場面",
             selection_score=0.54321,
         )
     ]
@@ -47,39 +45,56 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
         analyzed_fail=0,
         rejected_by_similarity=1,
         rejected_by_content_filter=0,
+        rejected_by_selection_shortlist=2,
         selected_count=1,
-        resolved_profile="active",
-        scene_distribution={"play": 1, "event": 1},
-        scene_mix_target={"play": 1, "event": 0},
-        scene_mix_actual={"play": 1, "event": 0},
+        scene_distribution={"battle": 1, "conversation": 1},
+        scene_mix_target={"battle": 1, "conversation": 0},
+        scene_mix_actual={"battle": 1, "conversation": 0},
         threshold_relaxation_steps=[0.72],
         content_filter_breakdown={"blackout": 0},
         whole_input_profile=None,
         selection_annotations_by_path={
-            "/tmp/play.jpg": SelectionAnnotation(score_band="high"),
-            "/tmp/event.jpg": SelectionAnnotation(
+            "/tmp/battle.jpg": SelectionAnnotation(
+                score_band="high",
+                variant_group="battle_001",
+            ),
+            "/tmp/conversation.jpg": SelectionAnnotation(
                 score_band="outlier",
                 outlier_rejected=True,
+                variant_group="conversation_001",
             ),
         },
+        scene_catalog=[
+            SceneCatalogEntry("battle", "戦闘", "敵との戦闘場面"),
+            SceneCatalogEntry("conversation", "会話", "人物同士の会話場面"),
+            SceneCatalogEntry("other", "その他", "分類しにくい場面"),
+        ],
+        ollama_classification_failed=1,
+        ollama_classification_failure_rate=0.25,
     )
 
     # Act
     record = OutputRecord.from_selection(selected, rejected, stats)
     record_with_paths = record.with_selected_output_paths(
-        {"/tmp/play.jpg": "/tmp/output/play0001.jpg"}
+        {"/tmp/battle.jpg": "/tmp/output/battle0001.jpg"}
     )
 
     # Assert
-    assert record.resolved_profile == "active"
-    assert record.scene_distribution == {"play": 1, "event": 1}
+    assert record.scene_distribution == {"battle": 1, "conversation": 1}
+    assert record.scene_catalog[0]["slug"] == "battle"
+    assert record.ollama_classification_failed == 1
+    assert record.ollama_classification_failure_rate == 0.25
+    assert record.ollama_catalog_fallback_used is False
+    assert record.ollama_catalog_fallback_reason is None
     assert record.total_files == 2
-    assert record.selected[0].source_path == "/tmp/play.jpg"
-    assert record.selected[0].filename == "play.jpg"
-    assert record.selected[0].scene_label == "play"
-    assert record.selected[0].play_score == 0.8123
+    assert record.rejected_by_selection_shortlist == 2
+    assert record.selected[0].source_path == "/tmp/battle.jpg"
+    assert record.selected[0].filename == "battle.jpg"
+    assert record.selected[0].scene_slug == "battle"
+    assert record.selected[0].scene_display_name == "戦闘"
+    assert record.selected[0].variant_group == "battle_001"
     assert record.selected[0].score_band == "high"
-    assert record.rejected[0].scene_label == "event"
+    assert record.rejected[0].scene_slug == "conversation"
     assert record.rejected[0].outlier_rejected is True
-    assert record_with_paths.selected[0].output_path == "/tmp/output/play0001.jpg"
+    assert record_with_paths.selected[0].output_path == "/tmp/output/battle0001.jpg"
     assert record.selected[0].output_path is None

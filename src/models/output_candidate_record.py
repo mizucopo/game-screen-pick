@@ -14,14 +14,14 @@ class OutputCandidateRecord:
     source_path: str
     filename: str
     suffix: str
-    scene_label: str
-    play_score: float
-    event_score: float
-    density_score: float
+    scene_slug: str
+    scene_display_name: str
+    scene_description: str
     scene_confidence: float
     quality_score: float
     selection_score: float
     score_band: str | None
+    variant_group: str | None
     outlier_rejected: bool
     output_path: str | None = None
 
@@ -39,14 +39,14 @@ class OutputCandidateRecord:
             source_path=candidate.path,
             filename=path.name,
             suffix=path.suffix,
-            scene_label=assessment.scene_label.value,
-            play_score=round(assessment.play_score, 4),
-            event_score=round(assessment.event_score, 4),
-            density_score=round(assessment.density_score, 4),
+            scene_slug=assessment.scene_slug,
+            scene_display_name=assessment.scene_display_name,
+            scene_description=assessment.scene_description,
             scene_confidence=round(assessment.scene_confidence, 4),
             quality_score=round(candidate.quality_score, 4),
             selection_score=round(candidate.selection_score, 4),
             score_band=annotation.score_band,
+            variant_group=annotation.variant_group,
             outlier_rejected=annotation.outlier_rejected,
         )
 

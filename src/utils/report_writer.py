@@ -17,12 +17,23 @@ class ReportWriter:
     ) -> None:
         """JSONレポートを書き出す."""
         payload = {
-            "resolved_profile": output_record.resolved_profile,
             "scene_distribution": output_record.scene_distribution,
             "scene_mix_target": output_record.scene_mix_target,
             "scene_mix_actual": output_record.scene_mix_actual,
+            "scene_catalog": output_record.scene_catalog,
+            "ollama_catalog_fallback_used": output_record.ollama_catalog_fallback_used,
+            "ollama_catalog_fallback_reason": (
+                output_record.ollama_catalog_fallback_reason
+            ),
+            "ollama_classification_failed": output_record.ollama_classification_failed,
+            "ollama_classification_failure_rate": (
+                output_record.ollama_classification_failure_rate
+            ),
             "threshold_relaxation_steps": output_record.threshold_relaxation_steps,
             "rejected_by_content_filter": output_record.rejected_by_content_filter,
+            "rejected_by_selection_shortlist": (
+                output_record.rejected_by_selection_shortlist
+            ),
             "content_filter_breakdown": output_record.content_filter_breakdown,
             "whole_input_profile": output_record.whole_input_profile,
             "selected": [
@@ -48,14 +59,14 @@ class ReportWriter:
         """候補1件を辞書へ変換する."""
         payload: dict[str, object] = {
             "path": candidate.source_path,
-            "scene_label": candidate.scene_label,
-            "play_score": candidate.play_score,
-            "event_score": candidate.event_score,
-            "density_score": candidate.density_score,
+            "scene_slug": candidate.scene_slug,
+            "scene_display_name": candidate.scene_display_name,
+            "scene_description": candidate.scene_description,
             "scene_confidence": candidate.scene_confidence,
             "quality_score": candidate.quality_score,
             "selection_score": candidate.selection_score,
             "score_band": candidate.score_band,
+            "variant_group": candidate.variant_group,
             "outlier_rejected": candidate.outlier_rejected,
         }
         if candidate.output_path is not None:

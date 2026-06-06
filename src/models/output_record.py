@@ -20,14 +20,19 @@ class OutputRecord:
     analyzed_fail: int
     rejected_by_similarity: int
     rejected_by_content_filter: int
+    rejected_by_selection_shortlist: int
     selected_count: int
-    resolved_profile: str
     scene_distribution: dict[str, int]
     scene_mix_target: dict[str, int]
     scene_mix_actual: dict[str, int]
     threshold_relaxation_steps: list[float]
     content_filter_breakdown: dict[str, int]
     whole_input_profile: dict[str, dict[str, float]] | None
+    scene_catalog: list[dict[str, str]]
+    ollama_catalog_fallback_used: bool
+    ollama_catalog_fallback_reason: str | None
+    ollama_classification_failed: int
+    ollama_classification_failure_rate: float
 
     @classmethod
     def from_selection(
@@ -57,8 +62,8 @@ class OutputRecord:
             analyzed_fail=stats.analyzed_fail,
             rejected_by_similarity=stats.rejected_by_similarity,
             rejected_by_content_filter=stats.rejected_by_content_filter,
+            rejected_by_selection_shortlist=stats.rejected_by_selection_shortlist,
             selected_count=stats.selected_count,
-            resolved_profile=stats.resolved_profile,
             scene_distribution=dict(stats.scene_distribution),
             scene_mix_target=dict(stats.scene_mix_target),
             scene_mix_actual=dict(stats.scene_mix_actual),
@@ -66,6 +71,21 @@ class OutputRecord:
             content_filter_breakdown=dict(stats.content_filter_breakdown),
             whole_input_profile=cls._serialize_whole_input_profile(
                 stats.whole_input_profile
+            ),
+            scene_catalog=[
+                {
+                    "slug": scene.slug,
+                    "display_name": scene.display_name,
+                    "description": scene.description,
+                }
+                for scene in stats.scene_catalog
+            ],
+            ollama_catalog_fallback_used=stats.ollama_catalog_fallback_used,
+            ollama_catalog_fallback_reason=stats.ollama_catalog_fallback_reason,
+            ollama_classification_failed=stats.ollama_classification_failed,
+            ollama_classification_failure_rate=round(
+                stats.ollama_classification_failure_rate,
+                4,
             ),
         )
 

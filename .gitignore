@@ -24,6 +24,9 @@ env/
 .coverage
 htmlcov/
 
+# game-screen-pick cache
+.game-screen-pick/
+
 # Distribution
 build/
 dist/

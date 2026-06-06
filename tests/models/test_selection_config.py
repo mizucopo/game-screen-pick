@@ -1,12 +1,8 @@
-"""SelectionConfigの単体テスト.
-
-scene mix 導入後の設定モデルについて、
-デフォルト値、しきい値緩和、入力バリデーションの公開挙動を確認する。
-"""
+"""SelectionConfigの単体テスト."""
 
 import pytest
 
-from src.models.scene_mix import SceneMix
+from src.models.ollama_config import OllamaConfig
 from src.models.selection_config import SelectionConfig
 
 
@@ -18,7 +14,7 @@ def test_selection_config_has_sensible_defaults() -> None:
     Act:
         - デフォルト設定を参照する
     Assert:
-        - profile、similarity、scene mix を含む既定値が入っていること
+        - similarity、Ollama関連を含む既定値が入っていること
     """
     # Arrange
     # (引数なしでデフォルト設定を使用)
@@ -28,9 +24,9 @@ def test_selection_config_has_sensible_defaults() -> None:
 
     # Assert
     assert config.batch_size == 32
-    assert config.profile == "auto"
     assert config.similarity_threshold == 0.72
-    assert config.scene_mix == SceneMix(play=0.7, event=0.3)
+    assert config.ollama is None
+    assert config.scene_hint is None
     assert config.max_threshold == 0.98
 
 
@@ -69,11 +65,10 @@ def test_threshold_steps_computed_correctly(
     "kwargs,expected_error,match_pattern",
     [
         ({"batch_size": 0}, ValueError, "正の整数"),
-        ({"profile": "unknown"}, ValueError, "profile"),
         ({"similarity_threshold": 1.1}, ValueError, "0以上1以下"),
         ({"max_threshold": -0.1}, ValueError, "0以上1以下"),
         (
-            {"scene_mix": SceneMix(play=1.0, event=0.0)},
+            {"ollama": OllamaConfig(model="gemma4")},
             None,
             None,
         ),
@@ -106,19 +101,45 @@ def test_config_validation(
             assert getattr(config, key) == value
 
 
-def test_scene_mix_validation_rejects_invalid_total() -> None:
-    """scene_mixの合計が1.0でない場合は失敗すること.
+def test_ollama_config_validation_rejects_empty_model() -> None:
+    """Ollamaモデル名が空の場合は失敗すること.
 
     Arrange:
-        - 合計が1.0にならない scene mix 比率がある
+        - 空のモデル名がある
     Act:
-        - `SceneMix` を構築する
+        - `OllamaConfig` を構築する
     Assert:
-        - 合計値バリデーションで失敗すること
+        - モデル名必須のバリデーションで失敗すること
     """
-    # Arrange
-    # (無効な比率を使用)
-
     # Act / Assert
-    with pytest.raises(ValueError, match="scene_mixの合計"):
-        SceneMix(play=0.6, event=0.3)
+    with pytest.raises(ValueError, match="ollama_model"):
+        OllamaConfig(model="")
+
+
+@pytest.mark.parametrize(
+    "input_host,expected_host",
+    [
+        ("192.168.1.31", "http://192.168.1.31:11434"),
+        ("192.168.1.31:11435", "http://192.168.1.31:11435"),
+        ("http://ollama", "http://ollama"),
+        ("http://ollama:11435", "http://ollama:11435"),
+    ],
+)
+def test_ollama_config_normalizes_scheme_less_host(
+    input_host: str,
+    expected_host: str,
+) -> None:
+    """schemeなしのOllama hostにHTTP schemeと既定portが補完されること.
+
+    Arrange:
+        - Ollama hostの入力値がある
+    Act:
+        - `OllamaConfig` が構築される
+    Assert:
+        - schemeなしhostにはHTTP schemeと必要な場合だけ既定portが補完されること
+    """
+    # Act
+    config = OllamaConfig(model="gemma4", host=input_host)
+
+    # Assert
+    assert config.host == expected_host

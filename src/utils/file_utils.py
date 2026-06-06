@@ -13,58 +13,8 @@ logger = logging.getLogger(__name__)
 class FileUtils:
     """ファイル操作ユーティリティクラス.
 
-    出力ディレクトリ内で一意なファイルパスを生成する機能と、
-    選択されたアイテムをコピーする機能を提供する。
+    scene別連番の出力計画に従って、選択されたアイテムをコピーする機能を提供する。
     """
-
-    @staticmethod
-    def get_unique_destination(dest_dir: Path, filename: str) -> Path:
-        """出力ディレクトリ内で一意なファイルパスを生成する.
-
-        同名のファイルが存在する場合は連番サフィックスを付与する。
-
-        Args:
-            dest_dir: 出力先ディレクトリのパス
-            filename: 元のファイル名
-
-        Returns:
-            出力ディレクトリ内で一意なファイルパス
-        """
-        existing_filenames = (
-            [path.name for path in dest_dir.iterdir()] if dest_dir.exists() else []
-        )
-        return dest_dir / OutputPlanner.get_unique_filename(
-            filename,
-            existing_filenames,
-        )
-
-    @staticmethod
-    def build_renamed_filename(
-        scene_name: str,
-        index: int,
-        suffix: str,
-        requested_num: int,
-    ) -> str:
-        """scene名と連番から出力ファイル名を構築する.
-
-        Args:
-            scene_name: `play` / `event` の接頭辞
-            index: sceneごとの連番（1始まり）
-            suffix: 元ファイルの拡張子
-            requested_num: CLIで要求された出力枚数
-
-        Returns:
-            リネーム済みのファイル名
-
-        Raises:
-            ValueError: requested_num が1未満の場合
-        """
-        return OutputPlanner.build_renamed_filename(
-            scene_name=scene_name,
-            index=index,
-            suffix=suffix,
-            requested_num=requested_num,
-        )
 
     @staticmethod
     def copy_planned_outputs(output_record: OutputRecord) -> None:
@@ -85,10 +35,29 @@ class FileUtils:
             shutil.copy2(result.source_path, output_path)
 
     @staticmethod
+    def ensure_output_dir_is_empty(dest_dir: str) -> None:
+        """出力先が存在する場合は空のディレクトリであることを検証する.
+
+        Args:
+            dest_dir: 出力先ディレクトリのパス
+
+        Raises:
+            ValueError: 出力先がファイル、または空でないディレクトリの場合
+        """
+        output_dir = Path(dest_dir)
+        if not output_dir.exists():
+            return
+        if not output_dir.is_dir():
+            msg = f"出力先はフォルダである必要があります: {dest_dir}"
+            raise ValueError(msg)
+        if any(output_dir.iterdir()):
+            msg = f"出力フォルダは空である必要があります: {dest_dir}"
+            raise ValueError(msg)
+
+    @staticmethod
     def copy_selected_items(
         output_record: OutputRecord,
         dest_dir: str,
-        rename: bool = False,
         requested_num: int | None = None,
     ) -> OutputRecord:
         """選択されたアイテムを出力ディレクトリにコピーする.
@@ -96,20 +65,19 @@ class FileUtils:
         Args:
             output_record: 出力候補を含むrecord
             dest_dir: 出力先ディレクトリのパス
-            rename: scene別の連番ファイル名で出力するかどうか
             requested_num: CLIで要求された出力枚数
 
         Returns:
             コピー先パスを反映した出力record
         """
-        out = Path(dest_dir)
-        out.mkdir(parents=True, exist_ok=True)
+        FileUtils.ensure_output_dir_is_empty(dest_dir)
+        output_dir = Path(dest_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
         planned_output_record = OutputPlanner.plan_selected_outputs(
             output_record,
             dest_dir,
-            rename=rename,
             requested_num=requested_num,
-            existing_filenames=[path.name for path in out.iterdir()],
+            existing_filenames=[],
         )
         FileUtils.copy_planned_outputs(planned_output_record)
         logger.info(f"{len(output_record.selected)} 件を {dest_dir} に保存しました。")

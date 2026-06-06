@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 
+from .scene_catalog_entry import SceneCatalogEntry
 from .selection_annotation import SelectionAnnotation
 from .whole_input_profile import WholeInputProfile
 
@@ -16,8 +17,8 @@ class PickerStatistics:
         analyzed_fail: 画像解析に失敗したファイル数
         rejected_by_similarity: 類似度フィルタで除外された数
         rejected_by_content_filter: content filter で hard reject された数
+        rejected_by_selection_shortlist: Selection Shortlist外になった数
         selected_count: 最終的に選択された画像数
-        resolved_profile: 実行されたプロファイル
         scene_distribution: 解析済み候補全体の画面種別分布
         scene_mix_target: 目標の画面種別配分
         scene_mix_actual: 実際の画面種別配分
@@ -25,6 +26,11 @@ class PickerStatistics:
         content_filter_breakdown: content filter 除外理由ごとの件数
         whole_input_profile: 入力全体の明暗傾向プロフィール
         selection_annotations_by_path: 候補パスごとのscene mix選定注釈
+        scene_catalog: 実行で使われたscene catalog
+        ollama_catalog_fallback_used: Ollama scene catalog fallbackが使われたか
+        ollama_catalog_fallback_reason: fallbackが使われた理由
+        ollama_classification_failed: Ollama分類に失敗したblog candidate数
+        ollama_classification_failure_rate: Ollama分類失敗率
     """
 
     total_files: int
@@ -32,8 +38,8 @@ class PickerStatistics:
     analyzed_fail: int
     rejected_by_similarity: int
     rejected_by_content_filter: int
+    rejected_by_selection_shortlist: int
     selected_count: int
-    resolved_profile: str
     scene_distribution: dict[str, int]
     scene_mix_target: dict[str, int]
     scene_mix_actual: dict[str, int]
@@ -43,3 +49,8 @@ class PickerStatistics:
     selection_annotations_by_path: dict[str, SelectionAnnotation] = field(
         default_factory=dict
     )
+    scene_catalog: list[SceneCatalogEntry] = field(default_factory=list)
+    ollama_catalog_fallback_used: bool = False
+    ollama_catalog_fallback_reason: str | None = None
+    ollama_classification_failed: int = 0
+    ollama_classification_failure_rate: float = 0.0

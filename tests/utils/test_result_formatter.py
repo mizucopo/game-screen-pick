@@ -14,14 +14,14 @@ def _build_output_record() -> OutputRecord:
                 source_path="/tmp/test_image.jpg",
                 filename="test_image.jpg",
                 suffix=".jpg",
-                scene_label="play",
-                play_score=0.8,
-                event_score=0.3,
-                density_score=0.7,
+                scene_slug="battle",
+                scene_display_name="戦闘",
+                scene_description="敵との戦闘場面",
                 scene_confidence=0.5,
                 quality_score=0.6,
                 selection_score=0.6,
                 score_band="high",
+                variant_group="battle_001",
                 outlier_rejected=False,
             )
         ],
@@ -31,14 +31,25 @@ def _build_output_record() -> OutputRecord:
         analyzed_fail=0,
         rejected_by_similarity=0,
         rejected_by_content_filter=0,
+        rejected_by_selection_shortlist=0,
         selected_count=1,
-        resolved_profile="active",
-        scene_distribution={"play": 1, "event": 0},
-        scene_mix_target={"play": 1, "event": 0},
-        scene_mix_actual={"play": 1, "event": 0},
+        scene_distribution={"battle": 1},
+        scene_mix_target={"battle": 1},
+        scene_mix_actual={"battle": 1},
         threshold_relaxation_steps=[0.7],
         content_filter_breakdown={},
         whole_input_profile=None,
+        scene_catalog=[
+            {
+                "slug": "battle",
+                "display_name": "戦闘",
+                "description": "敵との戦闘場面",
+            }
+        ],
+        ollama_classification_failed=1,
+        ollama_classification_failure_rate=0.25,
+        ollama_catalog_fallback_used=True,
+        ollama_catalog_fallback_reason="OSError: timed out",
     )
 
 
@@ -81,7 +92,12 @@ def test_display_results_uses_output_record() -> None:
     # Assert
     messages = [call.args[0] for call in logger.info.call_args_list]
     assert any("[1] test_image.jpg" in message for message in messages)
+    assert any("戦闘" in message for message in messages)
     assert any("band: high" in message for message in messages)
     assert "総ファイル数: 1" in messages
     assert "解析成功: 1" in messages
-    assert "プロファイル: active" in messages
+    assert "Ollama catalog fallback: あり" in messages
+    assert "Ollama catalog fallback理由: OSError: timed out" in messages
+    assert "Ollama分類失敗: 1" in messages
+    assert "Ollama分類失敗率: 25.00%" in messages
+    assert not any("プロファイル:" in message for message in messages)

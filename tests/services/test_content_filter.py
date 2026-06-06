@@ -62,7 +62,7 @@ def test_content_filter_rejects_flat_frames_and_keeps_informative_dark_frames() 
 
     Arrange:
         - blackout、whiteout、単色、フェード遷移などの低情報量フレームを含む画像群がある
-        - 高情報量の暗いgameplay/eventフレームもある
+        - 高情報量の暗いフレームもある
     Act:
         - ContentFilterでフィルタリングされる
     Assert:
@@ -552,6 +552,119 @@ def test_content_filter_rejects_static_fade_variants(
     assert result.content_filter_breakdown["fade_transition"] == 1
 
 
+@pytest.mark.parametrize(
+    (
+        "kept_raw_metrics",
+        "rejected_path",
+        "rejected_raw_metrics",
+        "expected_reason",
+    ),
+    [
+        (
+            {
+                "brightness": 118.0,
+                "contrast": 16.0,
+                "edge_density": 0.18,
+                "action_intensity": 14.0,
+                "luminance_entropy": 1.2,
+                "luminance_range": 34.0,
+                "near_black_ratio": 0.08,
+                "dominant_tone_ratio": 0.58,
+            },
+            "/tmp/partial_dark_fade.jpg",
+            {
+                "brightness": 58.0,
+                "contrast": 8.0,
+                "edge_density": 0.055,
+                "action_intensity": 2.0,
+                "luminance_entropy": 0.78,
+                "luminance_range": 18.0,
+                "near_black_ratio": 0.30,
+                "near_white_ratio": 0.0,
+                "dominant_tone_ratio": 0.76,
+            },
+            ContentRejectReason.FADE_TRANSITION,
+        ),
+        (
+            {
+                "brightness": 145.0,
+                "contrast": 17.0,
+                "edge_density": 0.19,
+                "action_intensity": 12.0,
+                "luminance_entropy": 1.25,
+                "luminance_range": 35.0,
+                "near_white_ratio": 0.08,
+                "dominant_tone_ratio": 0.60,
+            },
+            "/tmp/soft_whiteout.jpg",
+            {
+                "brightness": 198.0,
+                "contrast": 7.0,
+                "edge_density": 0.045,
+                "action_intensity": 1.5,
+                "luminance_entropy": 0.68,
+                "luminance_range": 15.0,
+                "near_white_ratio": 0.30,
+                "dominant_tone_ratio": 0.84,
+            },
+            ContentRejectReason.FADE_TRANSITION,
+        ),
+        (
+            {
+                "brightness": 112.0,
+                "contrast": 15.0,
+                "edge_density": 0.16,
+                "action_intensity": 11.0,
+                "luminance_entropy": 1.1,
+                "luminance_range": 32.0,
+                "near_white_ratio": 0.02,
+                "dominant_tone_ratio": 0.58,
+            },
+            "/tmp/muted_single_tone.jpg",
+            {
+                "brightness": 96.0,
+                "contrast": 2.5,
+                "edge_density": 0.018,
+                "action_intensity": 0.8,
+                "luminance_entropy": 0.32,
+                "luminance_range": 9.0,
+                "near_white_ratio": 0.0,
+                "dominant_tone_ratio": 0.89,
+            },
+            ContentRejectReason.SINGLE_TONE,
+        ),
+    ],
+    ids=["partial_dark_fade", "soft_whiteout", "muted_single_tone"],
+)
+def test_content_filter_rejects_stricter_low_value_frames(
+    kept_raw_metrics: dict[str, float],
+    rejected_path: str,
+    rejected_raw_metrics: dict[str, float],
+    expected_reason: ContentRejectReason,
+) -> None:
+    """弱めの暗転・白飛び・単色フレームも除外されること.
+
+    Arrange:
+        - 正常なフレームと境界寄りの低価値フレームを含む画像群がある
+    Act:
+        - ContentFilterでフィルタリングされる
+    Assert:
+        - 境界寄りの低価値フレームがcontent filterで除外されること
+    """
+    # Arrange — パラメタライズド引数から正常フレームと境界寄りフレームを構築
+    # Act
+    result = _filter_two_images(
+        kept_path="/tmp/good_frame.jpg",
+        kept_raw_metrics=kept_raw_metrics,
+        rejected_path=rejected_path,
+        rejected_raw_metrics=rejected_raw_metrics,
+    )
+
+    # Assert
+    assert {image.path for image in result.kept_images} == {"/tmp/good_frame.jpg"}
+    assert result.rejected_reason_by_path == {rejected_path: expected_reason}
+
+
 def test_relative_transition_uses_whole_input_brightness_tendency() -> None:
     """入力全体の通常明度帯から外れた bright/dark outlier を落とすこと.
 
@@ -703,6 +816,77 @@ def test_content_filter_rejects_temporal_transition_only_for_middle_frame() -> N
         "/tmp/frame_002.jpg": ContentRejectReason.TEMPORAL_TRANSITION
     }
     assert result.content_filter_breakdown["temporal_transition"] == 1
+
+
+def test_temporal_transition_rejects_slightly_less_similar_neighbors() -> None:
+    """前後フレームがやや似ている中央の低視認フレームも除外されること.
+
+    Arrange:
+        - 前後フレームが同一シーンとしてやや似ている画像群がある
+        - 中央のフレームは前後より視認性が低い
+    Act:
+        - ContentFilterでフィルタリングされる
+    Assert:
+        - 中央の低視認フレームだけがtemporal_transitionで除外されること
+    """
+    # Arrange
+    prev_frame = create_analyzed_image(
+        path="/tmp/near_prev.jpg",
+        raw_metrics_dict={
+            "contrast": 18.0,
+            "edge_density": 0.18,
+            "action_intensity": 10.0,
+            "luminance_entropy": 1.3,
+            "luminance_range": 38.0,
+            "near_black_ratio": 0.12,
+            "dominant_tone_ratio": 0.62,
+        },
+        content_features=_feature(40),
+        combined_features=np.pad(_feature(40), (0, 475)),
+    )
+    mid_transition = create_analyzed_image(
+        path="/tmp/near_mid.jpg",
+        raw_metrics_dict={
+            "brightness": 82.0,
+            "contrast": 9.0,
+            "edge_density": 0.065,
+            "action_intensity": 4.0,
+            "luminance_entropy": 0.72,
+            "luminance_range": 19.0,
+            "near_black_ratio": 0.16,
+            "dominant_tone_ratio": 0.60,
+        },
+        content_features=_feature(41),
+        combined_features=np.pad(_feature(41), (0, 475)),
+    )
+    next_frame = create_analyzed_image(
+        path="/tmp/near_next.jpg",
+        raw_metrics_dict={
+            "contrast": 17.0,
+            "edge_density": 0.17,
+            "action_intensity": 9.0,
+            "luminance_entropy": 1.25,
+            "luminance_range": 37.0,
+            "near_black_ratio": 0.14,
+            "dominant_tone_ratio": 0.63,
+        },
+        content_features=_feature(40, 42, 0.5),
+        combined_features=np.pad(_feature(40, 42, 0.5), (0, 475)),
+    )
+
+    # Act
+    result = ContentFilter(WholeInputProfiler()).filter(
+        [prev_frame, mid_transition, next_frame]
+    )
+
+    # Assert
+    assert {image.path for image in result.kept_images} == {
+        "/tmp/near_prev.jpg",
+        "/tmp/near_next.jpg",
+    }
+    assert result.rejected_reason_by_path == {
+        "/tmp/near_mid.jpg": ContentRejectReason.TEMPORAL_TRANSITION
+    }
 
 
 def test_temporal_transition_not_triggered_for_dissimilar_neighbors() -> None:

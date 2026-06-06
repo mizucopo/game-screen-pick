@@ -26,9 +26,8 @@ def test_cli_translates_options_to_application_run_request(
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     config_path = tmp_path / "picker.toml"
-    report_path = tmp_path / "report.json"
     input_dir.mkdir()
-    config_path.write_text('[selection]\nprofile = "static"\n', encoding="utf-8")
+    config_path.write_text("[thresholds]\nsimilarity = 0.7\n", encoding="utf-8")
     captured_requests: list[ApplicationRunRequest] = []
 
     def capture_request(request: ApplicationRunRequest) -> None:
@@ -44,15 +43,19 @@ def test_cli_translates_options_to_application_run_request(
             "--similarity",
             "0.8",
             "--recursive",
-            "--profile",
-            "active",
             "--config",
             str(config_path),
-            "--scene-mix",
-            "play=0.6,event=0.4",
-            "--report-json",
-            str(report_path),
-            "--rename",
+            "--ollama-model",
+            "gemma4",
+            "--ollama-host",
+            "http://localhost:11435",
+            "--ollama-timeout",
+            "30",
+            "--ollama-max-workers",
+            "2",
+            "--reset-cache",
+            "--ollama-scene-hint",
+            "アドベンチャーゲーム。会話差分が多い",
             "--batch-size",
             "64",
             "--result-max-workers",
@@ -72,13 +75,13 @@ def test_cli_translates_options_to_application_run_request(
     assert request.num == 3
     assert request.similarity == 0.8
     assert request.recursive is True
-    assert request.profile == "active"
     assert request.config_path == str(config_path)
-    assert request.scene_mix is not None
-    assert request.scene_mix.play == 0.6
-    assert request.scene_mix.event == 0.4
-    assert request.report_json == str(report_path)
-    assert request.rename is True
+    assert request.ollama_model == "gemma4"
+    assert request.ollama_host == "http://localhost:11435"
+    assert request.ollama_timeout == 30.0
+    assert request.ollama_max_workers == 2
+    assert request.reset_cache is True
+    assert request.scene_hint == "アドベンチャーゲーム。会話差分が多い"
     assert request.batch_size == 64
     assert request.result_max_workers == 1
     assert request.max_dim == 1080
@@ -95,8 +98,15 @@ def test_cli_translates_options_to_application_run_request(
         (["-n", "0"], "正の整数"),
         (["--similarity", "-0.1"], "0.0~1.0"),
         (["--similarity", "1.1"], "0.0~1.0"),
-        (["--scene-mix", "play=0.7,event=0.4"], "scene_mixの合計"),
-        (["--scene-mix", "play=0.7"], "2要素が必要です"),
+        (["--ollama-timeout", "0"], "正の数"),
+        (["--ollama-max-workers", "0"], "正の整数"),
+        (["--no-ollama-cache"], "No such option"),
+        (["--no-resume-cache"], "No such option"),
+        (["--report-json", "report.json"], "No such option"),
+        (["--profile", "active"], "No such option"),
+        (["--scene-mix", "play=0.7,event=0.3"], "No such option"),
+        (["--scene-hint", "RPG"], "No such option"),
+        (["--rename"], "No such option"),
     ],
 )
 def test_cli_validates_inputs(

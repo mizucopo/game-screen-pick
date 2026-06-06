@@ -10,9 +10,9 @@ import click
 import pytest
 
 from src.application.run import run_application
-from src.constants.scene_label import SceneLabel
 from src.models.analyzer_config import AnalyzerConfig
 from src.models.application_run_request import ApplicationRunRequest
+from src.models.ollama_config import OllamaConfig
 from src.models.picker_statistics import PickerStatistics
 from src.models.scored_candidate import ScoredCandidate
 from src.models.selection_annotation import SelectionAnnotation
@@ -25,18 +25,18 @@ def _build_request(
     output_dir: Path,
     *,
     num: int = 100,
-    report_json: str | None = None,
-    rename: bool = False,
 ) -> ApplicationRunRequest:
     return ApplicationRunRequest(
         num=num,
         similarity=None,
         recursive=False,
-        profile=None,
         config_path=None,
-        scene_mix=None,
-        report_json=report_json,
-        rename=rename,
+        ollama_model="gemma4",
+        ollama_host=None,
+        ollama_timeout=None,
+        ollama_max_workers=None,
+        reset_cache=False,
+        scene_hint=None,
         batch_size=None,
         result_max_workers=None,
         max_dim=720,
@@ -59,11 +59,11 @@ def _build_stats(
         analyzed_fail=0,
         rejected_by_similarity=0,
         rejected_by_content_filter=0,
+        rejected_by_selection_shortlist=0,
         selected_count=selected_count,
-        resolved_profile="active",
-        scene_distribution={"play": selected_count, "event": 0},
-        scene_mix_target={"play": selected_count, "event": 0},
-        scene_mix_actual={"play": selected_count, "event": 0},
+        scene_distribution={"battle": selected_count},
+        scene_mix_target={"battle": selected_count},
+        scene_mix_actual={"battle": selected_count},
         threshold_relaxation_steps=[0.72],
         content_filter_breakdown={
             "blackout": 0,
@@ -74,6 +74,14 @@ def _build_stats(
         },
         selection_annotations_by_path=selection_annotations_by_path or {},
     )
+
+
+def _write_ollama_cache_file(folder: Path) -> Path:
+    """Ollama分類cache fileを作成する."""
+    cache_file = folder / ".game-screen-pick" / "cache" / "ollama-scenes.json"
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("cached", encoding="utf-8")
+    return cache_file
 
 
 def _arrange_picker(
@@ -92,6 +100,29 @@ def _arrange_picker(
     monkeypatch.setattr(
         "src.application.run.GameScreenPicker",
         lambda *_args, **_kwargs: picker,
+    )
+    monkeypatch.setattr(
+        "src.application.run.OllamaSceneAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
+    )
+
+
+def _arrange_keyboard_interrupt_picker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """画像選定中にKeyboardInterruptを送出するpickerを設定する."""
+    picker = MagicMock()
+    picker.select.side_effect = KeyboardInterrupt
+    analyzer = MagicMock()
+    monkeypatch.setattr(
+        "src.application.run.ImageQualityAnalyzer",
+        lambda *_args, **_kwargs: nullcontext(analyzer),
+    )
+    monkeypatch.setattr(
+        "src.application.run.GameScreenPicker",
+        lambda *_args, **_kwargs: picker,
+    )
+    monkeypatch.setattr(
+        "src.application.run.OllamaSceneAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
     )
 
 
@@ -129,40 +160,38 @@ def test_run_application_selects_and_copies_images(
     run_application(_build_request(input_dir, output_dir, num=3))
 
     # Assert
-    assert (output_dir / "image0.jpg").exists()
-    assert (output_dir / "image1.jpg").exists()
-    assert (output_dir / "image2.jpg").exists()
+    assert (output_dir / "battle0001.jpg").exists()
+    assert (output_dir / "battle0002.jpg").exists()
+    assert (output_dir / "battle0003.jpg").exists()
 
 
-def test_run_application_writes_report_json_with_output_paths(
+def test_run_application_always_writes_report_json_to_output_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """application実行でJSONレポートが出力されること.
+    """application実行で出力フォルダにJSONレポートが常に出力されること.
 
     Arrange:
-        - 選択結果にplay_score/event_score/density_scoreが含まれる
+        - 選択結果にscene slug/display nameが含まれる
         - 統計情報にscore_bandの選定注釈が含まれる
-        - report_jsonが指定されている
     Act:
         - applicationが実行される
     Assert:
-        - JSONレポートに各スコアとoutput_pathが出力されること
+        - 出力フォルダのJSONレポートに各スコアとoutput_pathが出力されること
     """
     # Arrange
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
-    report_path = tmp_path / "report.json"
+    report_path = output_dir / "report.json"
     input_dir.mkdir()
     source = input_dir / "image0.jpg"
     source.write_bytes(b"fake_image_data")
     selected = [
         create_scored_candidate(
             path=str(source),
-            scene_label=SceneLabel.PLAY,
-            play_score=0.8,
-            event_score=0.2,
-            density_score=0.8,
+            scene_slug="battle",
+            scene_display_name="戦闘",
+            scene_description="敵との戦闘場面",
             selection_score=0.8,
         )
     ]
@@ -179,34 +208,27 @@ def test_run_application_writes_report_json_with_output_paths(
     )
 
     # Act
-    run_application(
-        _build_request(
-            input_dir,
-            output_dir,
-            report_json=str(report_path),
-        )
-    )
+    run_application(_build_request(input_dir, output_dir))
 
     # Assert
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["selected"][0]["path"] == str(source)
     assert payload["selected"][0]["output_path"] == str(
-        (output_dir / "image0.jpg").resolve()
+        (output_dir / "battle0001.jpg").resolve()
     )
-    assert payload["selected"][0]["play_score"] == 0.8
-    assert payload["selected"][0]["event_score"] == 0.2
+    assert payload["selected"][0]["scene_slug"] == "battle"
+    assert payload["selected"][0]["scene_display_name"] == "戦闘"
     assert payload["selected"][0]["score_band"] == "high"
 
 
-def test_run_application_renames_outputs_by_scene(
+def test_run_application_writes_scene_numbered_outputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """application実行でscene別ファイル名へ変更されること.
+    """application実行でscene別連番ファイル名へ変更されること.
 
     Arrange:
         - play画像2件、event画像1件が選択される
-        - renameが指定されている
     Act:
         - applicationが実行される
     Assert:
@@ -226,15 +248,21 @@ def test_run_application_renames_outputs_by_scene(
     selected = [
         create_scored_candidate(
             path=str(sources["play_png"]),
-            scene_label=SceneLabel.PLAY,
+            scene_slug="battle",
+            scene_display_name="戦闘",
+            scene_description="敵との戦闘場面",
         ),
         create_scored_candidate(
             path=str(sources["event_jpg"]),
-            scene_label=SceneLabel.EVENT,
+            scene_slug="conversation",
+            scene_display_name="会話",
+            scene_description="人物同士の会話場面",
         ),
         create_scored_candidate(
             path=str(sources["play_jpg"]),
-            scene_label=SceneLabel.PLAY,
+            scene_slug="battle",
+            scene_display_name="戦闘",
+            scene_description="敵との戦闘場面",
         ),
     ]
     _arrange_picker(
@@ -244,12 +272,50 @@ def test_run_application_renames_outputs_by_scene(
     )
 
     # Act
-    run_application(_build_request(input_dir, output_dir, num=3, rename=True))
+    run_application(_build_request(input_dir, output_dir, num=3))
 
     # Assert
-    assert (output_dir / "play0001.png").exists()
-    assert (output_dir / "event0001.jpg").exists()
-    assert (output_dir / "play0002.jpg").exists()
+    assert (output_dir / "battle0001.png").exists()
+    assert (output_dir / "conversation0001.jpg").exists()
+    assert (output_dir / "battle0002.jpg").exists()
+
+
+def test_run_application_rejects_non_empty_output_dir_before_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """出力フォルダが空でない場合は画像選定前に失敗されること.
+
+    Arrange:
+        - 入力ディレクトリが存在する
+        - 出力フォルダに既存ファイルがある
+    Act:
+        - applicationが実行される
+    Assert:
+        - click.ClickExceptionが送出されること
+        - 画像選定処理が開始されないこと
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    (output_dir / "report.json").write_text("existing", encoding="utf-8")
+
+    def fail_if_analyzer_is_created(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("画像選定処理が開始されました")
+
+    monkeypatch.setattr(
+        "src.application.run.ImageQualityAnalyzer",
+        fail_if_analyzer_is_created,
+    )
+
+    # Act & Assert
+    with pytest.raises(
+        click.ClickException,
+        match="出力フォルダは空である必要があります",
+    ):
+        run_application(_build_request(input_dir, output_dir))
 
 
 def test_run_application_resolves_configs_and_constructs_picker(
@@ -272,11 +338,12 @@ def test_run_application_resolves_configs_and_constructs_picker(
     config_path = tmp_path / "picker.toml"
     input_dir.mkdir()
     config_path.write_text(
-        '[selection]\nprofile = "static"\n[thresholds]\nsimilarity = 0.66\n',
+        "[thresholds]\nsimilarity = 0.66\n",
         encoding="utf-8",
     )
     analyzer_configs: list[AnalyzerConfig] = []
     selection_configs: list[SelectionConfig] = []
+    ollama_configs: list[OllamaConfig] = []
     picker = MagicMock()
     picker.select.return_value = (
         [],
@@ -286,12 +353,15 @@ def test_run_application_resolves_configs_and_constructs_picker(
     request = replace(
         _build_request(input_dir, output_dir),
         config_path=str(config_path),
-        profile="active",
         similarity=0.8,
         batch_size=64,
         result_max_workers=2,
         max_dim=1080,
         max_memory_gb=4,
+        ollama_model="cli-model",
+        ollama_host="http://cli:11434",
+        ollama_timeout=30.0,
+        ollama_max_workers=2,
     )
 
     def capture_analyzer_config(
@@ -304,9 +374,15 @@ def test_run_application_resolves_configs_and_constructs_picker(
     def capture_selection_config(
         *_args: object,
         config: SelectionConfig,
+        scene_analyzer: object,
     ) -> MagicMock:
+        del scene_analyzer
         selection_configs.append(config)
         return picker
+
+    def capture_ollama_config(config: OllamaConfig) -> MagicMock:
+        ollama_configs.append(config)
+        return MagicMock()
 
     monkeypatch.setattr(
         "src.application.run.ImageQualityAnalyzer",
@@ -316,6 +392,10 @@ def test_run_application_resolves_configs_and_constructs_picker(
         "src.application.run.GameScreenPicker",
         capture_selection_config,
     )
+    monkeypatch.setattr(
+        "src.application.run.OllamaSceneAnalyzer",
+        capture_ollama_config,
+    )
 
     # Act
     run_application(request)
@@ -324,9 +404,12 @@ def test_run_application_resolves_configs_and_constructs_picker(
     assert analyzer_configs[0].result_max_workers == 2
     assert analyzer_configs[0].max_dim == 1080
     assert analyzer_configs[0].max_memory_gb == 4
-    assert selection_configs[0].profile == "active"
     assert selection_configs[0].similarity_threshold == 0.8
     assert selection_configs[0].batch_size == 64
+    assert selection_configs[0].ollama is not None
+    assert selection_configs[0].ollama.model == "cli-model"
+    assert ollama_configs[0].host == "http://cli:11434"
+    assert ollama_configs[0].timeout == 30.0
 
 
 def test_run_application_converts_unexpected_errors_to_system_exit(
@@ -360,6 +443,155 @@ def test_run_application_converts_unexpected_errors_to_system_exit(
     with pytest.raises(SystemExit) as exc_info:
         run_application(_build_request(input_dir, output_dir))
     assert exc_info.value.code == 1
+
+
+def test_run_application_reports_keyboard_interrupt_as_resumable_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Ctrl+C中断時に再実行で再開できることが案内されること.
+
+    Arrange:
+        - 画像選定中にKeyboardInterruptが発生する
+    Act:
+        - applicationが実行される
+    Assert:
+        - 終了コード130で終了し、再開案内が出力されること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    _arrange_keyboard_interrupt_picker(monkeypatch)
+    caplog.set_level("INFO")
+
+    # Act / Assert
+    with pytest.raises(SystemExit) as exc_info:
+        run_application(_build_request(input_dir, output_dir))
+    assert exc_info.value.code == 130
+    assert "中断されました" in caplog.text
+    assert "再実行するとcacheから再開します" in caplog.text
+
+
+def test_run_application_does_not_report_resume_after_reset_cache_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """reset cache指定時のCtrl+C中断では再開案内が出力されないこと.
+
+    Arrange:
+        - reset cacheが指定されている
+        - 画像選定中にKeyboardInterruptが発生する
+    Act:
+        - applicationが実行される
+    Assert:
+        - 終了コード130で終了し、cache再開の案内は出力されないこと
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    _arrange_keyboard_interrupt_picker(monkeypatch)
+    caplog.set_level("INFO")
+
+    # Act / Assert
+    with pytest.raises(SystemExit) as exc_info:
+        run_application(
+            replace(
+                _build_request(input_dir, output_dir),
+                reset_cache=True,
+            )
+        )
+    assert exc_info.value.code == 130
+    assert "中断されました" in caplog.text
+    assert "再実行するとcacheから再開します" not in caplog.text
+
+
+def test_run_application_keeps_cache_when_config_resolution_fails_after_reset_request(
+    tmp_path: Path,
+) -> None:
+    """reset cache指定時も設定解決に失敗した場合はcacheが削除されないこと.
+
+    Arrange:
+        - 入力ディレクトリに既存cache fileがある
+        - reset cacheが指定されている
+        - Ollama modelが未指定で設定解決に失敗する
+    Act:
+        - applicationが実行される
+    Assert:
+        - 終了コード1で終了し、既存cache fileが残ること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    cache_file = _write_ollama_cache_file(input_dir)
+
+    # Act / Assert
+    with pytest.raises(SystemExit) as exc_info:
+        run_application(
+            replace(
+                _build_request(input_dir, output_dir),
+                ollama_model=None,
+                reset_cache=True,
+            )
+        )
+    assert exc_info.value.code == 1
+    assert cache_file.exists()
+
+
+def test_run_application_resets_cache_before_selecting_images(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """reset cache指定時は画像選定前にcache directoryが削除されること.
+
+    Arrange:
+        - 入力ディレクトリに既存cache fileがある
+        - reset cacheが指定されている
+    Act:
+        - applicationが実行される
+    Assert:
+        - picker実行時点で既存cache fileが削除されていること
+    """
+    # Arrange
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    root_cache_file = _write_ollama_cache_file(input_dir)
+    nested_cache_file = _write_ollama_cache_file(input_dir / "chapter1")
+    observed_cache_exists: list[tuple[bool, bool]] = []
+    picker = MagicMock()
+    picker.select.return_value = ([], [], _build_stats(total_files=0, selected_count=0))
+
+    def capture_picker(
+        *_args: object,
+        **_kwargs: object,
+    ) -> MagicMock:
+        observed_cache_exists.append(
+            (root_cache_file.exists(), nested_cache_file.exists())
+        )
+        return picker
+
+    monkeypatch.setattr(
+        "src.application.run.ImageQualityAnalyzer",
+        lambda *_args, **_kwargs: nullcontext(MagicMock()),
+    )
+    monkeypatch.setattr("src.application.run.GameScreenPicker", capture_picker)
+    monkeypatch.setattr(
+        "src.application.run.OllamaSceneAnalyzer",
+        lambda *_args, **_kwargs: MagicMock(),
+    )
+
+    # Act
+    run_application(replace(_build_request(input_dir, output_dir), reset_cache=True))
+
+    # Assert
+    assert observed_cache_exists == [(False, False)]
+    assert not root_cache_file.exists()
+    assert not nested_cache_file.exists()
 
 
 def test_run_application_keeps_click_exceptions(
