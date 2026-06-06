@@ -25,7 +25,7 @@ def test_generate_scene_catalog_posts_images_to_chat_api(
     Act:
         - scene catalogを作成する
     Assert:
-        - Ollama chat APIへモデル名、ヒント、base64画像が送信されること
+        - Ollama chat APIへモデル名、thinking無効、ヒント、base64画像が送信されること
     """
     # Arrange
     image_path = tmp_path / "screen.png"
@@ -79,6 +79,7 @@ def test_generate_scene_catalog_posts_images_to_chat_api(
     assert request.full_url == "http://ollama:11434/api/chat"
     payload = json.loads(request.data.decode("utf-8"))  # type: ignore[union-attr]
     assert payload["model"] == "gemma4"
+    assert payload["think"] is False
     assert "RPG" in payload["messages"][0]["content"]
     assert payload["messages"][0]["images"] == ["aW1hZ2UtYnl0ZXM="]
     assert result[0].slug == "battle"

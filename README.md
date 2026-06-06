@@ -138,3 +138,4 @@ Ollama host の優先順位は `--ollama-host`、`OLLAMA_HOST`、`[ollama].host`
 - `--max-memory-gb`: 大きいほどチャンクサイズが増え、GPU利用率が上がりやすくなります
 - `--batch-size`: 大きいほど高速ですが、VRAM消費量が増えます
 - `--result-max-workers`: CPU並列度を調整します
+- Ollamaの `/api/chat` には常に `think=false` を送信します。scene分類では最終JSONだけを使うため、thinking対応モデルでは推論trace生成を抑えて速度を優先します
