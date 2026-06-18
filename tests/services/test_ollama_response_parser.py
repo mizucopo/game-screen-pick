@@ -21,11 +21,17 @@ def test_parse_catalog_response_returns_scene_catalog() -> None:
     content = """
     {
       "scenes": [
-        {"slug": "battle", "display_name": "戦闘", "description": "敵と戦う場面"},
+        {
+          "slug": "battle",
+          "display_name": "戦闘",
+          "description": "敵と戦う場面",
+          "selection_role": "ordinary"
+        },
         {
           "slug": "conversation",
           "display_name": "会話",
-          "description": "人物同士の会話"
+          "description": "人物同士の会話",
+          "selection_role": "ordinary"
         },
         {"slug": "other", "display_name": "その他", "description": "分類しにくい場面"}
       ]
@@ -92,6 +98,37 @@ def test_parse_catalog_response_assigns_scene_selection_roles() -> None:
     ]
 
 
+def test_parse_catalog_response_rejects_missing_scene_selection_role() -> None:
+    """other以外のsceneでselection role欠落が不正応答として扱われること.
+
+    Arrange:
+        - other以外のsceneにselection_roleがないcatalog応答がある
+    Act:
+        - catalog応答が解析される
+    Assert:
+        - selection_role欠落として失敗すること
+    """
+    # Arrange
+    content = """
+    {
+      "scenes": [
+        {"slug": "battle", "display_name": "戦闘", "description": "敵と戦う場面"},
+        {
+          "slug": "event",
+          "display_name": "イベント",
+          "description": "演出中心の場面",
+          "selection_role": "cinematic"
+        },
+        {"slug": "other", "display_name": "その他", "description": "分類しにくい場面"}
+      ]
+    }
+    """
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="selection_role"):
+        OllamaResponseParser.parse_catalog_response(content)
+
+
 def test_parse_catalog_response_rejects_path_like_scene_slug() -> None:
     """pathとして危険なscene slugが拒否されること.
 
@@ -106,11 +143,17 @@ def test_parse_catalog_response_rejects_path_like_scene_slug() -> None:
     content = """
     {
       "scenes": [
-        {"slug": "../battle", "display_name": "戦闘", "description": "敵と戦う場面"},
+        {
+          "slug": "../battle",
+          "display_name": "戦闘",
+          "description": "敵と戦う場面",
+          "selection_role": "ordinary"
+        },
         {
           "slug": "conversation",
           "display_name": "会話",
-          "description": "人物同士の会話"
+          "description": "人物同士の会話",
+          "selection_role": "ordinary"
         },
         {"slug": "other", "display_name": "その他", "description": "分類しにくい場面"}
       ]
@@ -136,9 +179,24 @@ def test_parse_catalog_response_rejects_duplicate_scene_slug() -> None:
     content = """
     {
       "scenes": [
-        {"slug": "battle", "display_name": "戦闘", "description": "敵と戦う場面"},
-        {"slug": "battle", "display_name": "バトル", "description": "派手な戦闘"},
-        {"slug": "conversation", "display_name": "会話", "description": "人物の会話"},
+        {
+          "slug": "battle",
+          "display_name": "戦闘",
+          "description": "敵と戦う場面",
+          "selection_role": "ordinary"
+        },
+        {
+          "slug": "battle",
+          "display_name": "バトル",
+          "description": "派手な戦闘",
+          "selection_role": "ordinary"
+        },
+        {
+          "slug": "conversation",
+          "display_name": "会話",
+          "description": "人物の会話",
+          "selection_role": "ordinary"
+        },
         {"slug": "other", "display_name": "その他", "description": "分類しにくい場面"}
       ]
     }

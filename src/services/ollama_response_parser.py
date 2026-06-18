@@ -116,6 +116,18 @@ class OllamaResponseParser:
         """catalog payloadからselection roleを取り出す."""
         if slug == "other":
             return SceneSelectionRole.ORDINARY
-        return SceneSelectionRole.from_value(
-            payload.get("selection_role", payload.get("scene_selection_role"))
-        )
+        value = payload.get("selection_role")
+        if value is None:
+            value = payload.get("scene_selection_role")
+        if isinstance(value, SceneSelectionRole):
+            return value
+        if not isinstance(value, str) or not value.strip():
+            msg = "selection_roleは必須です"
+            raise ValueError(msg)
+        try:
+            return SceneSelectionRole(value.strip())
+        except ValueError as exc:
+            msg = (
+                "selection_roleはordinary、cinematic、recurring_gameplayのいずれかです"
+            )
+            raise ValueError(msg) from exc

@@ -46,11 +46,13 @@ def test_generate_scene_catalog_posts_images_to_chat_api(
                                     "slug": "battle",
                                     "display_name": "戦闘",
                                     "description": "敵と戦う場面",
+                                    "selection_role": "recurring_gameplay",
                                 },
                                 {
                                     "slug": "conversation",
                                     "display_name": "会話",
                                     "description": "人物同士の会話",
+                                    "selection_role": "cinematic",
                                 },
                                 {
                                     "slug": "other",
@@ -121,11 +123,13 @@ def test_generate_scene_catalog_accepts_host_without_url_scheme(
                                     "slug": "conversation",
                                     "display_name": "会話",
                                     "description": "人物同士の会話",
+                                    "selection_role": "cinematic",
                                 },
                                 {
                                     "slug": "background",
                                     "display_name": "背景",
                                     "description": "場所や背景が分かる場面",
+                                    "selection_role": "ordinary",
                                 },
                                 {
                                     "slug": "other",
@@ -533,11 +537,13 @@ def _catalog_chat_payload() -> dict[str, object]:
                             "slug": "battle",
                             "display_name": "戦闘",
                             "description": "敵と戦う場面",
+                            "selection_role": "recurring_gameplay",
                         },
                         {
                             "slug": "conversation",
                             "display_name": "会話",
                             "description": "人物同士の会話",
+                            "selection_role": "cinematic",
                         },
                         {
                             "slug": "other",

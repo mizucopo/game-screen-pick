@@ -186,6 +186,75 @@ def test_select_caps_cinematic_targets_and_redistributes_slots() -> None:
     assert result.actual_counts["event"] == 1
 
 
+def test_select_uses_non_cinematic_backfill_before_cinematic_overflow() -> None:
+    """通常候補で補える場合はcinematicのcap超過候補より優先されること.
+
+    Arrange:
+        - cinematic sceneが入力順で先にあり、soft capを超える候補を持つ
+        - ordinary sceneの目標枠候補の1枚が類似度で除外される
+        - ordinary sceneには補充できる多様な候補が残っている
+    Act:
+        - 動的scene選定が実行される
+    Assert:
+        - cinematic候補のcap超過分よりordinaryの補充候補が選ばれること
+    """
+    # Arrange
+    field_duplicate = np.array(
+        [0.0, np.sqrt(0.9), np.sqrt(0.1), 0.0],
+        dtype=np.float32,
+    )
+    candidates = [
+        build_dynamic_candidate(
+            "/tmp/event_intro.jpg",
+            "event",
+            np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            0.9,
+            SceneSelectionRole.CINEMATIC,
+        ),
+        build_dynamic_candidate(
+            "/tmp/event_extra.jpg",
+            "event",
+            np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32),
+            0.8,
+            SceneSelectionRole.CINEMATIC,
+        ),
+        build_dynamic_candidate(
+            "/tmp/field_base.jpg",
+            "field",
+            np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32),
+            0.9,
+        ),
+        build_dynamic_candidate(
+            "/tmp/field_duplicate.jpg",
+            "field",
+            field_duplicate,
+            0.8,
+        ),
+        build_dynamic_candidate(
+            "/tmp/field_replacement.jpg",
+            "field",
+            np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+            0.7,
+        ),
+    ]
+    selector = DynamicSceneSelector(
+        similarity_threshold=0.8,
+        threshold_steps=[0.8],
+        variant_similarity_threshold=0.95,
+    )
+
+    # Act
+    result = selector.select(candidates, num=3)
+
+    # Assert
+    assert [candidate.path for candidate in result.selected] == [
+        "/tmp/event_intro.jpg",
+        "/tmp/field_base.jpg",
+        "/tmp/field_replacement.jpg",
+    ]
+    assert result.actual_counts["event"] == 1
+
+
 def test_select_relaxes_similarity_for_recurring_gameplay_variants() -> None:
     """recurring gameplayでは類似する状態差画像も選ばれること.
 

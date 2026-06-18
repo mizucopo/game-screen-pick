@@ -3,7 +3,6 @@
 import math
 from collections import defaultdict, deque
 from collections.abc import Sequence
-from typing import Any
 
 import numpy as np
 
@@ -41,7 +40,8 @@ class DynamicSceneSelector:
             return SelectionResult([], 0, {}, {})
 
         scene_order = self._scene_order(candidates)
-        targets = self._calculate_targets(scene_order, num, candidates)
+        scene_roles = self._scene_roles(scene_order, candidates)
+        targets = self._calculate_targets(scene_order, num, candidates, scene_roles)
         annotations_by_path: dict[str, SelectionAnnotation] = {}
         variant_groups_by_path = self._variant_group_assigner.assign(candidates)
         streams = self._build_scene_streams(
@@ -50,7 +50,11 @@ class DynamicSceneSelector:
             annotations_by_path,
             variant_groups_by_path,
         )
-        ordered_candidates = self._round_robin_scene_streams(streams, targets)
+        ordered_candidates = self._round_robin_scene_streams(
+            streams,
+            targets,
+            scene_roles,
+        )
         selected, rejected_by_similarity = self._select_with_similarity(
             ordered_candidates,
             num,
@@ -83,6 +87,7 @@ class DynamicSceneSelector:
         scene_order: list[str],
         num: int,
         candidates: Sequence[ScoredCandidate],
+        scene_roles: dict[str, SceneSelectionRole],
     ) -> dict[str, int]:
         """sceneごとの自動均等目標枚数を計算する."""
         scene_counts = {
@@ -95,7 +100,6 @@ class DynamicSceneSelector:
             candidates,
         )
         remaining = min(num, len(candidates))
-        scene_roles = DynamicSceneSelector._scene_roles(scene_order, candidates)
         cinematic_limit = DynamicSceneSelector._cinematic_target_limit(
             requested_count=remaining,
             scene_counts=scene_counts,
@@ -251,6 +255,7 @@ class DynamicSceneSelector:
     def _round_robin_scene_streams(
         streams: dict[str, deque[ScoredCandidate]],
         targets: dict[str, int],
+        scene_roles: dict[str, SceneSelectionRole],
     ) -> list[ScoredCandidate]:
         """scene streamを目標枚数までround-robinで並べる."""
         selected_order: list[ScoredCandidate] = []
@@ -266,10 +271,28 @@ class DynamicSceneSelector:
                 used[scene] += 1
                 progressed = True
             if not progressed:
-                for stream in streams.values():
-                    selected_order.extend(stream)
-                    stream.clear()
+                DynamicSceneSelector._append_remaining_streams(
+                    selected_order,
+                    streams,
+                    scene_roles,
+                )
         return selected_order
+
+    @staticmethod
+    def _append_remaining_streams(
+        selected_order: list[ScoredCandidate],
+        streams: dict[str, deque[ScoredCandidate]],
+        scene_roles: dict[str, SceneSelectionRole],
+    ) -> None:
+        """目標超過候補をnon-cinematic優先で末尾に追加する."""
+        for cinematic_phase in (False, True):
+            for scene, stream in streams.items():
+                if (
+                    scene_roles[scene] == SceneSelectionRole.CINEMATIC
+                ) != cinematic_phase:
+                    continue
+                selected_order.extend(stream)
+                stream.clear()
 
     def _select_with_similarity(
         self,
@@ -297,11 +320,16 @@ class DynamicSceneSelector:
             [candidate.combined_features for candidate in ordered_candidates]
         )
         target_count = min(num, len(ordered_candidates))
+        feature_dim = len(normalized_features[0])
+        selected_features_matrix = np.zeros(
+            (target_count, feature_dim),
+            dtype=np.float32,
+        )
         selected_indices: list[int] = []
         selected_index_set: set[int] = set()
-        selected_features: list[np.ndarray[Any, Any]] = []
         rejected_by_similarity_set: set[int] = set()
         recurring_gameplay_threshold = self._recurring_gameplay_similarity_threshold()
+        selected_count = 0
 
         for threshold in self.threshold_steps:
             for index, candidate in enumerate(ordered_candidates):
@@ -316,17 +344,16 @@ class DynamicSceneSelector:
                     threshold,
                     recurring_gameplay_threshold,
                 )
-                is_similar = any(
-                    float(selected_feature @ feature) > candidate_threshold
-                    for selected_feature in selected_features
-                )
+                similarities = selected_features_matrix[:selected_count] @ feature
+                is_similar = bool(np.any(similarities > candidate_threshold))
                 if is_similar:
                     rejected_by_similarity_set.add(index)
                     continue
 
                 selected_indices.append(index)
                 selected_index_set.add(index)
-                selected_features.append(feature)
+                selected_features_matrix[selected_count] = feature
+                selected_count += 1
 
             if len(selected_indices) >= target_count:
                 break
