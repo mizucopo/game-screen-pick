@@ -45,9 +45,12 @@ Follow single responsibility principle to minimize scope of changes.
 - **Scope**: Never test private methods directly. Cover them indirectly via public interfaces
 
 ### HOW
-- Structure with **AAA Pattern** (Arrange, Act, Assert) and explicit comments in Japanese
-- **Naming**: Describe business requirements (e.g., `sum_of_two_numbers_returns_total_value`)
+- Structure with **AAA Pattern** (Arrange, Act, Assert) with explicit sections in both docstrings and code comments, written in Japanese
+  - **Docstring**: Include `Arrange:`, `Act:`, `Assert:` lines describing each step
+  - **Code comments**: Insert `# Arrange`, `# Act`, `# Assert` as section dividers in the test function body
+- **Naming**: Use English for test function names, describing business requirements
 - **File placement**: Mirror source module structure in `tests/` directory
+- **Docstring**: Describe a summary of what is being tested (in Japanese)
 - **Docstring style**: Use passive voice ("〜こと" form) consistently
   - Title: "〜を検証" → "〜されること", "〜が〜されること"
   - When: "〜を選択", "〜を実行" → "〜が選択され", "〜が実行される"
