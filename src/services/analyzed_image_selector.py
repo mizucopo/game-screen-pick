@@ -3,6 +3,9 @@
 import logging
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
+
+import numpy as np
 
 from ..analyzers.metric_calculator import MetricCalculator
 from ..constants.selection_quality_weights import DEFAULT_QUALITY_WEIGHTS
@@ -12,6 +15,7 @@ from ..models.picker_statistics import PickerStatistics
 from ..models.scene_assessment import SceneAssessment
 from ..models.scene_catalog_entry import SceneCatalogEntry
 from ..models.scene_classification import SceneClassification
+from ..models.scene_selection_role import SceneSelectionRole
 from ..models.scored_candidate import ScoredCandidate
 from ..models.scored_scene_candidates import ScoredSceneCandidates
 from ..models.selection_config import SelectionConfig
@@ -30,6 +34,9 @@ class AnalyzedImageSelector:
     """解析済み画像からblog用sceneの最終選定結果を作る."""
 
     CATALOG_SAMPLE_LIMIT = 24
+    CATALOG_QUALITY_SAMPLE_DIVISOR = 3
+    CATALOG_FREQUENT_PATTERN_SIMILARITY = 0.85
+    CATALOG_DIVERSITY_SIMILARITY = 0.8
     SELECTION_SHORTLIST_SIZE_MULTIPLIER = 10
     SELECTION_SHORTLIST_MIN_SIZE = 500
     SELECTION_SHORTLIST_MAX_SIZE = 2000
@@ -337,6 +344,9 @@ class AnalyzedImageSelector:
         """scene分類結果から候補scoreと統計を作る."""
         candidates: list[ScoredCandidate] = []
         classification_failed = 0
+        scene_roles_by_slug = {
+            scene.slug: scene.selection_role for scene in scene_catalog
+        }
         for image, classification in zip(analyzed_images, classifications, strict=True):
             if classification is None:
                 classification_failed += 1
@@ -345,6 +355,10 @@ class AnalyzedImageSelector:
                 scene_slug=classification.scene_slug,
                 scene_display_name=classification.scene_display_name,
                 scene_description=classification.scene_description,
+                scene_selection_role=scene_roles_by_slug.get(
+                    classification.scene_slug,
+                    SceneSelectionRole.ORDINARY,
+                ),
                 scene_confidence=classification.confidence,
             )
             candidates.append(
@@ -464,12 +478,110 @@ class AnalyzedImageSelector:
         analyzed_images: list[AnalyzedImage],
     ) -> list[str]:
         """scene catalog用の代表画像pathを返す."""
-        ordered_images = sorted(
-            analyzed_images,
-            key=lambda image: image.raw_metrics.blur_score,
-            reverse=True,
+        if len(analyzed_images) <= cls.CATALOG_SAMPLE_LIMIT:
+            return [
+                image.path for image in cls._order_by_catalog_quality(analyzed_images)
+            ]
+
+        selected: list[AnalyzedImage] = []
+        selected_paths: set[str] = set()
+
+        quality_limit = max(
+            cls.CATALOG_SAMPLE_LIMIT // cls.CATALOG_QUALITY_SAMPLE_DIVISOR,
+            1,
         )
-        return [image.path for image in ordered_images[: cls.CATALOG_SAMPLE_LIMIT]]
+        for image in cls._order_by_catalog_quality(analyzed_images)[:quality_limit]:
+            cls._append_representative(image, selected, selected_paths)
+
+        for image in cls._frequent_pattern_representatives(analyzed_images):
+            cls._append_representative(image, selected, selected_paths)
+            if len(selected) >= cls.CATALOG_SAMPLE_LIMIT:
+                break
+
+        ordered_images = cls._order_by_catalog_quality(analyzed_images)
+        diverse_indices, _rejected_indices = VectorUtils.filter_by_similarity(
+            candidates=[image.combined_features for image in ordered_images],
+            num=cls.CATALOG_SAMPLE_LIMIT,
+            similarity_threshold=cls.CATALOG_DIVERSITY_SIMILARITY,
+            compute_threshold_steps=lambda threshold: [threshold],
+        )
+        for index in diverse_indices:
+            cls._append_representative(
+                ordered_images[index],
+                selected,
+                selected_paths,
+            )
+            if len(selected) >= cls.CATALOG_SAMPLE_LIMIT:
+                break
+
+        for image in ordered_images:
+            cls._append_representative(image, selected, selected_paths)
+            if len(selected) >= cls.CATALOG_SAMPLE_LIMIT:
+                break
+
+        return [image.path for image in selected[: cls.CATALOG_SAMPLE_LIMIT]]
+
+    @staticmethod
+    def _order_by_catalog_quality(
+        analyzed_images: list[AnalyzedImage],
+    ) -> list[AnalyzedImage]:
+        """catalog代表候補を画質順で返す."""
+        return sorted(
+            analyzed_images,
+            key=lambda image: (-image.raw_metrics.blur_score, image.path),
+        )
+
+    @classmethod
+    def _frequent_pattern_representatives(
+        cls,
+        analyzed_images: list[AnalyzedImage],
+    ) -> list[AnalyzedImage]:
+        """頻出する見た目patternの代表画像を返す."""
+        representatives: list[tuple[AnalyzedImage, np.ndarray[Any, Any]]] = []
+        groups: list[list[AnalyzedImage]] = []
+        for image in cls._order_by_catalog_quality(analyzed_images):
+            feature = VectorUtils.safe_l2_normalize(image.combined_features)
+            group_index = cls._find_frequent_pattern_group(feature, representatives)
+            if group_index is None:
+                representatives.append((image, feature))
+                groups.append([image])
+                continue
+            groups[group_index].append(image)
+
+        repeated_groups = [group for group in groups if len(group) > 1]
+        repeated_groups.sort(
+            key=lambda group: (
+                -len(group),
+                -max(image.raw_metrics.blur_score for image in group),
+                group[0].path,
+            )
+        )
+        return [cls._order_by_catalog_quality(group)[0] for group in repeated_groups]
+
+    @classmethod
+    def _find_frequent_pattern_group(
+        cls,
+        feature: np.ndarray[Any, Any],
+        representatives: list[tuple[AnalyzedImage, np.ndarray[Any, Any]]],
+    ) -> int | None:
+        """近い代表画像のgroup indexを返す."""
+        for index, (_image, representative) in enumerate(representatives):
+            similarity = float(representative @ feature)
+            if similarity >= cls.CATALOG_FREQUENT_PATTERN_SIMILARITY:
+                return index
+        return None
+
+    @staticmethod
+    def _append_representative(
+        image: AnalyzedImage,
+        selected: list[AnalyzedImage],
+        selected_paths: set[str],
+    ) -> None:
+        """未選択なら代表画像として追加する."""
+        if image.path in selected_paths:
+            return
+        selected.append(image)
+        selected_paths.add(image.path)
 
     @staticmethod
     def _build_scene_distribution(

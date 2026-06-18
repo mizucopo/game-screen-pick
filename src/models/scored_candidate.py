@@ -7,6 +7,7 @@ import numpy as np
 
 from .analyzed_image import AnalyzedImage
 from .scene_assessment import SceneAssessment
+from .scene_selection_role import SceneSelectionRole
 
 
 @dataclass
@@ -42,6 +43,11 @@ class ScoredCandidate:
     def scene_description(self) -> str:
         """scene descriptionを返す."""
         return self.scene_assessment.scene_description
+
+    @property
+    def scene_selection_role(self) -> SceneSelectionRole:
+        """scene selection roleを返す."""
+        return self.scene_assessment.scene_selection_role
 
     @property
     def combined_features(self) -> np.ndarray[Any, Any]:

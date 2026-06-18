@@ -16,6 +16,7 @@ from src.models.layout_heuristics import LayoutHeuristics
 from src.models.normalized_metrics import NormalizedMetrics
 from src.models.raw_metrics import RawMetrics
 from src.models.scene_assessment import SceneAssessment
+from src.models.scene_selection_role import SceneSelectionRole
 from src.models.scored_candidate import ScoredCandidate
 from src.models.whole_input_profile import WholeInputProfile
 from src.services.whole_input_profiler import WholeInputProfiler
@@ -156,6 +157,7 @@ def create_scored_candidate(
     scene_slug: str = "battle",
     scene_display_name: str | None = None,
     scene_description: str | None = None,
+    scene_selection_role: SceneSelectionRole = SceneSelectionRole.ORDINARY,
     scene_confidence: float = 0.5,
     quality_score: float = 0.6,
     selection_score: float = 0.6,
@@ -168,6 +170,7 @@ def create_scored_candidate(
         scene_slug: 最終的に属する scene slug。
         scene_display_name: scene の日本語表示名。
         scene_description: scene の説明。
+        scene_selection_role: scene の選定上の扱い。
         scene_confidence: scene判定の信頼度。
         quality_score: 画質スコア。
         selection_score: 最終選定スコア。
@@ -183,6 +186,7 @@ def create_scored_candidate(
         scene_slug=scene_slug,
         scene_display_name=scene_display_name or scene_slug,
         scene_description=scene_description or scene_slug,
+        scene_selection_role=scene_selection_role,
         scene_confidence=scene_confidence,
     )
     return ScoredCandidate(

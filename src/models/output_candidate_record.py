@@ -23,6 +23,7 @@ class OutputCandidateRecord:
     score_band: str | None
     variant_group: str | None
     outlier_rejected: bool
+    scene_selection_role: str = "ordinary"
     output_path: str | None = None
 
     @classmethod
@@ -42,6 +43,7 @@ class OutputCandidateRecord:
             scene_slug=assessment.scene_slug,
             scene_display_name=assessment.scene_display_name,
             scene_description=assessment.scene_description,
+            scene_selection_role=assessment.scene_selection_role.value,
             scene_confidence=round(assessment.scene_confidence, 4),
             quality_score=round(candidate.quality_score, 4),
             selection_score=round(candidate.selection_score, 4),

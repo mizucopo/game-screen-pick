@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from .scene_selection_role import SceneSelectionRole
+
 
 @dataclass(frozen=True)
 class SceneAssessment:
@@ -10,6 +12,7 @@ class SceneAssessment:
     scene_slug: str = ""
     scene_display_name: str = ""
     scene_description: str = ""
+    scene_selection_role: SceneSelectionRole = SceneSelectionRole.ORDINARY
     scene_confidence: float = 0.0
 
     def __post_init__(self) -> None:

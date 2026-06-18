@@ -77,6 +77,7 @@ class OutputRecord:
                     "slug": scene.slug,
                     "display_name": scene.display_name,
                     "description": scene.description,
+                    "selection_role": scene.selection_role.value,
                 }
                 for scene in stats.scene_catalog
             ],

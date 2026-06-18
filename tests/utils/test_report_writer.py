@@ -14,6 +14,7 @@ def _build_candidate(
     scene_slug: str = "battle",
     scene_display_name: str = "戦闘",
     scene_description: str = "敵との戦闘場面",
+    scene_selection_role: str = "recurring_gameplay",
     variant_group: str | None = "battle_001",
     score_band: str | None = "high",
     outlier_rejected: bool = False,
@@ -27,6 +28,7 @@ def _build_candidate(
         scene_slug=scene_slug,
         scene_display_name=scene_display_name,
         scene_description=scene_description,
+        scene_selection_role=scene_selection_role,
         scene_confidence=0.5,
         quality_score=0.6,
         selection_score=0.8,
@@ -70,16 +72,19 @@ def _build_output_record(
                 "slug": "battle",
                 "display_name": "戦闘",
                 "description": "敵との戦闘場面",
+                "selection_role": "recurring_gameplay",
             },
             {
                 "slug": "conversation",
                 "display_name": "会話",
                 "description": "人物同士の会話場面",
+                "selection_role": "cinematic",
             },
             {
                 "slug": "other",
                 "display_name": "その他",
                 "description": "分類しにくい場面",
+                "selection_role": "ordinary",
             },
         ],
         ollama_classification_failed=1,
@@ -113,6 +118,7 @@ def test_report_writer_serializes_output_record_fields(tmp_path: Path) -> None:
             scene_slug="conversation",
             scene_display_name="会話",
             scene_description="人物同士の会話場面",
+            scene_selection_role="cinematic",
             variant_group="conversation_001",
             score_band="low",
             outlier_rejected=True,
@@ -131,6 +137,7 @@ def test_report_writer_serializes_output_record_fields(tmp_path: Path) -> None:
     assert payload["scene_distribution"] == {"battle": 2, "conversation": 2}
     assert payload["scene_mix_target"] == {"battle": 1, "conversation": 1}
     assert payload["scene_catalog"][0]["display_name"] == "戦闘"
+    assert payload["scene_catalog"][0]["selection_role"] == "recurring_gameplay"
     assert payload["ollama_classification_failed"] == 1
     assert payload["ollama_classification_failure_rate"] == 0.25
     assert payload["ollama_catalog_fallback_used"] is True
@@ -143,9 +150,11 @@ def test_report_writer_serializes_output_record_fields(tmp_path: Path) -> None:
     assert payload["selected"][0]["scene_slug"] == "battle"
     assert payload["selected"][0]["scene_display_name"] == "戦闘"
     assert payload["selected"][0]["scene_description"] == "敵との戦闘場面"
+    assert payload["selected"][0]["scene_selection_role"] == "recurring_gameplay"
     assert payload["selected"][0]["variant_group"] == "battle_001"
     assert payload["selected"][0]["score_band"] == "high"
     assert payload["selected"][0]["output_path"] == "/tmp/output/battle0001.jpg"
+    assert payload["rejected"][0]["scene_selection_role"] == "cinematic"
     assert payload["rejected"][0]["outlier_rejected"] is True
 
 

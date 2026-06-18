@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 
 from src.models.scene_assessment import SceneAssessment
+from src.models.scene_selection_role import SceneSelectionRole
 from src.models.scored_candidate import ScoredCandidate
 from src.services.dynamic_scene_selector import DynamicSceneSelector
 from tests.conftest import _feature, _near_duplicate, create_analyzed_image
@@ -124,11 +125,119 @@ def test_select_allocates_scarce_scene_slots_by_best_score() -> None:
     }
 
 
+def test_select_caps_cinematic_targets_and_redistributes_slots() -> None:
+    """cinematic sceneの目標枚数が合計soft cap内に抑えられること.
+
+    Arrange:
+        - cinematic、ordinary、recurring gameplayのsceneに十分な候補がある
+        - 要求枚数が10枚である
+    Act:
+        - 動的scene選定が実行される
+    Assert:
+        - cinematic sceneの目標枚数が1枚に抑えられること
+        - 空いた枠がnon-cinematic sceneへ再配分されること
+    """
+    # Arrange
+    candidates = [
+        build_dynamic_candidate(
+            f"/tmp/event_{index}.jpg",
+            "event",
+            _feature(index),
+            0.9,
+            SceneSelectionRole.CINEMATIC,
+        )
+        for index in range(10)
+    ]
+    candidates.extend(
+        build_dynamic_candidate(
+            f"/tmp/battle_{index}.jpg",
+            "battle",
+            _feature(20 + index),
+            0.8,
+            SceneSelectionRole.ORDINARY,
+        )
+        for index in range(10)
+    )
+    candidates.extend(
+        build_dynamic_candidate(
+            f"/tmp/puzzle_{index}.jpg",
+            "puzzle",
+            _feature(40 + index),
+            0.7,
+            SceneSelectionRole.RECURRING_GAMEPLAY,
+        )
+        for index in range(10)
+    )
+    selector = DynamicSceneSelector(
+        similarity_threshold=1.0,
+        threshold_steps=[1.0],
+        variant_similarity_threshold=0.95,
+    )
+
+    # Act
+    result = selector.select(candidates, num=10)
+
+    # Assert
+    assert result.target_counts == {
+        "event": 1,
+        "battle": 5,
+        "puzzle": 4,
+    }
+    assert result.actual_counts["event"] == 1
+
+
+def test_select_relaxes_similarity_for_recurring_gameplay_variants() -> None:
+    """recurring gameplayでは類似する状態差画像も選ばれること.
+
+    Arrange:
+        - recurring gameplay sceneに類似度0.9程度の候補が2枚ある
+        - 通常の類似度しきい値は0.72である
+    Act:
+        - 2枚の選定が要求される
+    Assert:
+        - 類似する2枚がどちらも選ばれること
+    """
+    # Arrange
+    first_feature = np.array([np.sqrt(0.9), np.sqrt(0.1), 0.0], dtype=np.float32)
+    second_feature = np.array([np.sqrt(0.9), 0.0, np.sqrt(0.1)], dtype=np.float32)
+    candidates = [
+        build_dynamic_candidate(
+            "/tmp/battle_state_a.jpg",
+            "battle",
+            first_feature,
+            0.9,
+            SceneSelectionRole.RECURRING_GAMEPLAY,
+        ),
+        build_dynamic_candidate(
+            "/tmp/battle_state_b.jpg",
+            "battle",
+            second_feature,
+            0.8,
+            SceneSelectionRole.RECURRING_GAMEPLAY,
+        ),
+    ]
+    selector = DynamicSceneSelector(
+        similarity_threshold=0.72,
+        threshold_steps=[0.72],
+        variant_similarity_threshold=0.85,
+    )
+
+    # Act
+    result = selector.select(candidates, num=2)
+
+    # Assert
+    assert [candidate.path for candidate in result.selected] == [
+        "/tmp/battle_state_a.jpg",
+        "/tmp/battle_state_b.jpg",
+    ]
+
+
 def build_dynamic_candidate(
     path: str,
     scene_slug: str,
     combined_features: np.ndarray[Any, Any],
     selection_score: float = 0.8,
+    scene_selection_role: SceneSelectionRole = SceneSelectionRole.ORDINARY,
 ) -> ScoredCandidate:
     """動的scene候補を作る."""
     analyzed = create_analyzed_image(path=path, combined_features=combined_features)
@@ -138,6 +247,7 @@ def build_dynamic_candidate(
             scene_slug=scene_slug,
             scene_display_name=scene_slug,
             scene_description=scene_slug,
+            scene_selection_role=scene_selection_role,
             scene_confidence=selection_score,
         ),
         quality_score=selection_score,

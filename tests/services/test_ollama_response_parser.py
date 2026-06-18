@@ -3,6 +3,7 @@
 import pytest
 
 from src.models.scene_catalog_entry import SceneCatalogEntry
+from src.models.scene_selection_role import SceneSelectionRole
 from src.services.ollama_response_parser import OllamaResponseParser
 
 
@@ -39,6 +40,55 @@ def test_parse_catalog_response_returns_scene_catalog() -> None:
         SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
         SceneCatalogEntry("conversation", "会話", "人物同士の会話"),
         SceneCatalogEntry("other", "その他", "分類しにくい場面"),
+    ]
+
+
+def test_parse_catalog_response_assigns_scene_selection_roles() -> None:
+    """catalog応答のselection roleがsceneへ反映されること.
+
+    Arrange:
+        - recurring gameplay、cinematic、otherを含むcatalog応答がある
+        - otherにはcinematic roleが返されている
+    Act:
+        - catalog応答が解析される
+    Assert:
+        - roleがscene catalog entryへ反映されること
+        - other sceneはordinaryへ正規化されること
+    """
+    # Arrange
+    content = """
+    {
+      "scenes": [
+        {
+          "slug": "battle",
+          "display_name": "戦闘",
+          "description": "敵と戦う場面",
+          "selection_role": "recurring_gameplay"
+        },
+        {
+          "slug": "event",
+          "display_name": "イベント",
+          "description": "演出中心の場面",
+          "selection_role": "cinematic"
+        },
+        {
+          "slug": "other",
+          "display_name": "その他",
+          "description": "分類しにくい場面",
+          "selection_role": "cinematic"
+        }
+      ]
+    }
+    """
+
+    # Act
+    result = OllamaResponseParser.parse_catalog_response(content)
+
+    # Assert
+    assert [scene.selection_role for scene in result] == [
+        SceneSelectionRole.RECURRING_GAMEPLAY,
+        SceneSelectionRole.CINEMATIC,
+        SceneSelectionRole.ORDINARY,
     ]
 
 
