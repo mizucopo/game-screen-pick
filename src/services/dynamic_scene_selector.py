@@ -301,6 +301,7 @@ class DynamicSceneSelector:
         selected_index_set: set[int] = set()
         selected_features: list[np.ndarray[Any, Any]] = []
         rejected_by_similarity_set: set[int] = set()
+        recurring_gameplay_threshold = self._recurring_gameplay_similarity_threshold()
 
         for threshold in self.threshold_steps:
             for index, candidate in enumerate(ordered_candidates):
@@ -313,6 +314,7 @@ class DynamicSceneSelector:
                 candidate_threshold = self._candidate_similarity_threshold(
                     candidate,
                     threshold,
+                    recurring_gameplay_threshold,
                 )
                 is_similar = any(
                     float(selected_feature @ feature) > candidate_threshold
@@ -331,15 +333,16 @@ class DynamicSceneSelector:
 
         return selected_indices, rejected_by_similarity_set - selected_index_set
 
+    @staticmethod
     def _candidate_similarity_threshold(
-        self,
         candidate: ScoredCandidate,
         threshold: float,
+        recurring_gameplay_threshold: float,
     ) -> float:
         """候補roleに応じた類似度しきい値を返す."""
         if candidate.scene_selection_role != SceneSelectionRole.RECURRING_GAMEPLAY:
             return threshold
-        return max(threshold, self._recurring_gameplay_similarity_threshold())
+        return max(threshold, recurring_gameplay_threshold)
 
     def _recurring_gameplay_similarity_threshold(self) -> float:
         """recurring gameplay向けの緩和済み類似度しきい値を返す."""
