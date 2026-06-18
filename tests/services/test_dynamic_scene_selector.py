@@ -255,6 +255,68 @@ def test_select_uses_non_cinematic_backfill_before_cinematic_overflow() -> None:
     assert result.actual_counts["event"] == 1
 
 
+def test_select_relaxes_non_cinematic_before_cinematic_overflow() -> None:
+    """通常候補の類似度緩和が尽きるまでcinematic超過候補が使われないこと.
+
+    Arrange:
+        - cinematic sceneにsoft capを超える候補がある
+        - ordinary sceneに厳しいしきい値では類似、緩いしきい値では採用できる候補がある
+    Act:
+        - 複数の類似度しきい値stepで動的scene選定が実行される
+    Assert:
+        - cinematic超過候補より、緩和後に採用できるordinary候補が選ばれること
+    """
+    # Arrange
+    field_relaxed = np.array(
+        [0.0, np.sqrt(0.9), np.sqrt(0.1)],
+        dtype=np.float32,
+    )
+    candidates = [
+        build_dynamic_candidate(
+            "/tmp/event_intro.jpg",
+            "event",
+            np.array([1.0, 0.0, 0.0], dtype=np.float32),
+            0.9,
+            SceneSelectionRole.CINEMATIC,
+        ),
+        build_dynamic_candidate(
+            "/tmp/event_extra.jpg",
+            "event",
+            np.array([0.0, 0.0, 1.0], dtype=np.float32),
+            0.8,
+            SceneSelectionRole.CINEMATIC,
+        ),
+        build_dynamic_candidate(
+            "/tmp/field_base.jpg",
+            "field",
+            np.array([0.0, 1.0, 0.0], dtype=np.float32),
+            0.9,
+        ),
+        build_dynamic_candidate(
+            "/tmp/field_relaxed.jpg",
+            "field",
+            field_relaxed,
+            0.8,
+        ),
+    ]
+    selector = DynamicSceneSelector(
+        similarity_threshold=0.8,
+        threshold_steps=[0.8, 0.95],
+        variant_similarity_threshold=0.95,
+    )
+
+    # Act
+    result = selector.select(candidates, num=3)
+
+    # Assert
+    assert [candidate.path for candidate in result.selected] == [
+        "/tmp/event_intro.jpg",
+        "/tmp/field_base.jpg",
+        "/tmp/field_relaxed.jpg",
+    ]
+    assert result.actual_counts["event"] == 1
+
+
 def test_select_relaxes_similarity_for_recurring_gameplay_variants() -> None:
     """recurring gameplayでは類似する状態差画像も選ばれること.
 

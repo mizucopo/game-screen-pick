@@ -129,6 +129,45 @@ def test_parse_catalog_response_rejects_missing_scene_selection_role() -> None:
         OllamaResponseParser.parse_catalog_response(content)
 
 
+def test_parse_catalog_response_normalizes_unknown_scene_selection_role() -> None:
+    """未知のselection roleがordinaryとして扱われること.
+
+    Arrange:
+        - other以外のsceneに未知のselection_roleを含むcatalog応答がある
+    Act:
+        - catalog応答が解析される
+    Assert:
+        - 未知のroleがordinaryへ正規化されること
+    """
+    # Arrange
+    content = """
+    {
+      "scenes": [
+        {
+          "slug": "battle",
+          "display_name": "戦闘",
+          "description": "敵と戦う場面",
+          "selection_role": "gameplay"
+        },
+        {
+          "slug": "event",
+          "display_name": "イベント",
+          "description": "演出中心の場面",
+          "selection_role": "cinematic"
+        },
+        {"slug": "other", "display_name": "その他", "description": "分類しにくい場面"}
+      ]
+    }
+    """
+
+    # Act
+    result = OllamaResponseParser.parse_catalog_response(content)
+
+    # Assert
+    assert result[0].selection_role == SceneSelectionRole.ORDINARY
+    assert result[1].selection_role == SceneSelectionRole.CINEMATIC
+
+
 def test_parse_catalog_response_rejects_path_like_scene_slug() -> None:
     """pathとして危険なscene slugが拒否されること.
 

@@ -50,7 +50,7 @@ class DynamicSceneSelector:
             annotations_by_path,
             variant_groups_by_path,
         )
-        ordered_candidates = self._round_robin_scene_streams(
+        ordered_candidates, cinematic_overflow_start = self._round_robin_scene_streams(
             streams,
             targets,
             scene_roles,
@@ -58,6 +58,7 @@ class DynamicSceneSelector:
         selected, rejected_by_similarity = self._select_with_similarity(
             ordered_candidates,
             num,
+            cinematic_overflow_start,
         )
         actuals = {
             scene: sum(1 for candidate in selected if candidate.scene_slug == scene)
@@ -256,9 +257,10 @@ class DynamicSceneSelector:
         streams: dict[str, deque[ScoredCandidate]],
         targets: dict[str, int],
         scene_roles: dict[str, SceneSelectionRole],
-    ) -> list[ScoredCandidate]:
+    ) -> tuple[list[ScoredCandidate], int]:
         """scene streamを目標枚数までround-robinで並べる."""
         selected_order: list[ScoredCandidate] = []
+        cinematic_overflow_start: int | None = None
         used = dict.fromkeys(targets, 0)
         while any(streams.values()):
             progressed = False
@@ -271,39 +273,63 @@ class DynamicSceneSelector:
                 used[scene] += 1
                 progressed = True
             if not progressed:
-                DynamicSceneSelector._append_remaining_streams(
-                    selected_order,
-                    streams,
-                    scene_roles,
+                cinematic_overflow_start = (
+                    DynamicSceneSelector._append_remaining_streams(
+                        selected_order,
+                        streams,
+                        scene_roles,
+                    )
                 )
-        return selected_order
+        if cinematic_overflow_start is None:
+            cinematic_overflow_start = len(selected_order)
+        return selected_order, cinematic_overflow_start
 
     @staticmethod
     def _append_remaining_streams(
         selected_order: list[ScoredCandidate],
         streams: dict[str, deque[ScoredCandidate]],
         scene_roles: dict[str, SceneSelectionRole],
-    ) -> None:
+    ) -> int:
         """目標超過候補をnon-cinematic優先で末尾に追加する."""
-        for cinematic_phase in (False, True):
-            for scene, stream in streams.items():
-                if (
-                    scene_roles[scene] == SceneSelectionRole.CINEMATIC
-                ) != cinematic_phase:
-                    continue
-                selected_order.extend(stream)
-                stream.clear()
+        for scene, stream in streams.items():
+            if scene_roles[scene] == SceneSelectionRole.CINEMATIC:
+                continue
+            selected_order.extend(stream)
+            stream.clear()
+        cinematic_overflow_start = len(selected_order)
+        for scene, stream in streams.items():
+            if scene_roles[scene] != SceneSelectionRole.CINEMATIC:
+                continue
+            selected_order.extend(stream)
+            stream.clear()
+        return cinematic_overflow_start
 
     def _select_with_similarity(
         self,
         ordered_candidates: list[ScoredCandidate],
         num: int,
+        cinematic_overflow_start: int,
     ) -> tuple[list[ScoredCandidate], int]:
         """類似度を見ながら候補を採用する."""
+        target_count = min(num, len(ordered_candidates))
         selected_indices, rejected_indices = self._select_indices_with_role_similarity(
             ordered_candidates,
-            num,
+            target_count,
+            candidate_indices=range(cinematic_overflow_start),
         )
+        if len(selected_indices) < target_count:
+            selected_indices, overflow_rejected_indices = (
+                self._select_indices_with_role_similarity(
+                    ordered_candidates,
+                    target_count,
+                    candidate_indices=range(
+                        cinematic_overflow_start,
+                        len(ordered_candidates),
+                    ),
+                    seed_indices=selected_indices,
+                )
+            )
+            rejected_indices |= overflow_rejected_indices
         selected = [ordered_candidates[index] for index in selected_indices]
         return selected, len(rejected_indices)
 
@@ -311,11 +337,17 @@ class DynamicSceneSelector:
         self,
         ordered_candidates: list[ScoredCandidate],
         num: int,
+        candidate_indices: Sequence[int] | None = None,
+        seed_indices: Sequence[int] | None = None,
     ) -> tuple[list[int], set[int]]:
         """roleに応じた類似度しきい値で候補indexを選ぶ."""
         if num <= 0 or not ordered_candidates:
             return [], set()
 
+        if candidate_indices is None:
+            candidate_indices = range(len(ordered_candidates))
+        if seed_indices is None:
+            seed_indices = []
         normalized_features = VectorUtils.normalize_feature_vectors(
             [candidate.combined_features for candidate in ordered_candidates]
         )
@@ -325,19 +357,23 @@ class DynamicSceneSelector:
             (target_count, feature_dim),
             dtype=np.float32,
         )
-        selected_indices: list[int] = []
-        selected_index_set: set[int] = set()
+        selected_indices = list(seed_indices)
+        selected_index_set = set(selected_indices)
         rejected_by_similarity_set: set[int] = set()
         recurring_gameplay_threshold = self._recurring_gameplay_similarity_threshold()
         selected_count = 0
+        for seed_index in selected_indices:
+            selected_features_matrix[selected_count] = normalized_features[seed_index]
+            selected_count += 1
 
         for threshold in self.threshold_steps:
-            for index, candidate in enumerate(ordered_candidates):
+            for index in candidate_indices:
                 if index in selected_index_set:
                     continue
                 if len(selected_indices) >= target_count:
                     break
 
+                candidate = ordered_candidates[index]
                 feature = normalized_features[index]
                 candidate_threshold = self._candidate_similarity_threshold(
                     candidate,

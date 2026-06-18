@@ -124,10 +124,4 @@ class OllamaResponseParser:
         if not isinstance(value, str) or not value.strip():
             msg = "selection_roleは必須です"
             raise ValueError(msg)
-        try:
-            return SceneSelectionRole(value.strip())
-        except ValueError as exc:
-            msg = (
-                "selection_roleはordinary、cinematic、recurring_gameplayのいずれかです"
-            )
-            raise ValueError(msg) from exc
+        return SceneSelectionRole.from_value(value)
