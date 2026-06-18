@@ -6,6 +6,7 @@ from typing import Any
 
 from ..models.scene_catalog_entry import SceneCatalogEntry
 from ..models.scene_classification import SceneClassification
+from ..models.scene_selection_role import SceneSelectionRole
 
 
 class OllamaResponseParser:
@@ -26,6 +27,10 @@ class OllamaResponseParser:
                     item, "display_name"
                 ),
                 description=OllamaResponseParser._required_string(item, "description"),
+                selection_role=OllamaResponseParser._selection_role(
+                    slug=OllamaResponseParser._required_string(item, "slug"),
+                    payload=item,
+                ),
             )
             for item in raw_scenes
             if isinstance(item, dict)
@@ -101,3 +106,22 @@ class OllamaResponseParser:
         except ValueError as exc:
             msg = f"{key}は数値である必要があります"
             raise ValueError(msg) from exc
+
+    @staticmethod
+    def _selection_role(
+        *,
+        slug: str,
+        payload: dict[str, Any],
+    ) -> SceneSelectionRole:
+        """catalog payloadからselection roleを取り出す."""
+        if slug == "other":
+            return SceneSelectionRole.ORDINARY
+        value = payload.get("selection_role")
+        if value is None:
+            value = payload.get("scene_selection_role")
+        if isinstance(value, SceneSelectionRole):
+            return value
+        if not isinstance(value, str) or not value.strip():
+            msg = "selection_roleは必須です"
+            raise ValueError(msg)
+        return SceneSelectionRole.from_value(value)

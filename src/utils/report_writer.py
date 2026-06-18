@@ -62,6 +62,7 @@ class ReportWriter:
             "scene_slug": candidate.scene_slug,
             "scene_display_name": candidate.scene_display_name,
             "scene_description": candidate.scene_description,
+            "scene_selection_role": candidate.scene_selection_role,
             "scene_confidence": candidate.scene_confidence,
             "quality_score": candidate.quality_score,
             "selection_score": candidate.selection_score,

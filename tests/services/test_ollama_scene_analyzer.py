@@ -11,6 +11,7 @@ import pytest
 
 from src.models.ollama_config import OllamaConfig
 from src.models.scene_catalog_entry import SceneCatalogEntry
+from src.models.scene_selection_role import SceneSelectionRole
 from src.services.ollama_scene_analyzer import OllamaSceneAnalyzer
 
 
@@ -45,11 +46,13 @@ def test_generate_scene_catalog_posts_images_to_chat_api(
                                     "slug": "battle",
                                     "display_name": "戦闘",
                                     "description": "敵と戦う場面",
+                                    "selection_role": "recurring_gameplay",
                                 },
                                 {
                                     "slug": "conversation",
                                     "display_name": "会話",
                                     "description": "人物同士の会話",
+                                    "selection_role": "cinematic",
                                 },
                                 {
                                     "slug": "other",
@@ -81,6 +84,10 @@ def test_generate_scene_catalog_posts_images_to_chat_api(
     assert payload["model"] == "gemma4"
     assert payload["think"] is False
     assert "RPG" in payload["messages"][0]["content"]
+    assert "selection_role" in payload["messages"][0]["content"]
+    assert "ordinary" in payload["messages"][0]["content"]
+    assert "cinematic" in payload["messages"][0]["content"]
+    assert "recurring_gameplay" in payload["messages"][0]["content"]
     assert payload["messages"][0]["images"] == ["aW1hZ2UtYnl0ZXM="]
     assert result[0].slug == "battle"
 
@@ -116,11 +123,13 @@ def test_generate_scene_catalog_accepts_host_without_url_scheme(
                                     "slug": "conversation",
                                     "display_name": "会話",
                                     "description": "人物同士の会話",
+                                    "selection_role": "cinematic",
                                 },
                                 {
                                     "slug": "background",
                                     "display_name": "背景",
                                     "description": "場所や背景が分かる場面",
+                                    "selection_role": "ordinary",
                                 },
                                 {
                                     "slug": "other",
@@ -356,6 +365,58 @@ def test_classify_image_cache_key_includes_catalog_metadata(
     assert called_count == 2
 
 
+def test_classify_image_cache_key_includes_scene_selection_role(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """scene selection roleが異なるcatalogは別cacheとして扱われること.
+
+    Arrange:
+        - 同じ画像と同じscene内容でroleだけが異なる2つのcatalogがある
+    Act:
+        - それぞれのcatalogで画像が分類される
+    Assert:
+        - 2回ともOllama APIが呼ばれ、cacheが混同されないこと
+    """
+    # Arrange
+    image_path = tmp_path / "screen.png"
+    image_path.write_bytes(b"image-bytes")
+    called_count = 0
+
+    def fake_urlopen(_request: Request, timeout: float) -> Any:
+        nonlocal called_count
+        assert timeout == 60.0
+        called_count += 1
+        return _FakeResponse(
+            _classification_chat_payload(description=f"分類結果{called_count}")
+        )
+
+    monkeypatch.setattr("src.services.ollama_scene_analyzer.urlopen", fake_urlopen)
+    analyzer = OllamaSceneAnalyzer(OllamaConfig(model="gemma4"))
+    ordinary_catalog = [
+        SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
+        SceneCatalogEntry("other", "その他", "分類しにくい場面"),
+    ]
+    recurring_catalog = [
+        SceneCatalogEntry(
+            "battle",
+            "戦闘",
+            "敵と戦う場面",
+            SceneSelectionRole.RECURRING_GAMEPLAY,
+        ),
+        SceneCatalogEntry("other", "その他", "分類しにくい場面"),
+    ]
+
+    # Act
+    first = analyzer.classify_image(str(image_path), ordinary_catalog)
+    second = analyzer.classify_image(str(image_path), recurring_catalog)
+
+    # Assert
+    assert first is not None
+    assert second is not None
+    assert called_count == 2
+
+
 def test_classify_image_returns_result_when_cache_write_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -476,11 +537,13 @@ def _catalog_chat_payload() -> dict[str, object]:
                             "slug": "battle",
                             "display_name": "戦闘",
                             "description": "敵と戦う場面",
+                            "selection_role": "recurring_gameplay",
                         },
                         {
                             "slug": "conversation",
                             "display_name": "会話",
                             "description": "人物同士の会話",
+                            "selection_role": "cinematic",
                         },
                         {
                             "slug": "other",

@@ -11,6 +11,7 @@ from src.models.analyzer_config import AnalyzerConfig
 from src.models.ollama_config import OllamaConfig
 from src.models.scene_catalog_entry import SceneCatalogEntry
 from src.models.scene_classification import SceneClassification
+from src.models.scene_selection_role import SceneSelectionRole
 from src.models.selection_config import SelectionConfig
 from src.services.analyzed_image_selector import AnalyzedImageSelector
 from tests.conftest import _feature, create_analyzed_image
@@ -103,6 +104,13 @@ def test_select_classifies_blog_candidates_and_reports_ollama_failures() -> None
     assert {candidate.path for candidate in selected} == {
         "/tmp/battle.jpg",
         "/tmp/conversation.jpg",
+    }
+    roles_by_path = {
+        candidate.path: candidate.scene_selection_role for candidate in selected
+    }
+    assert roles_by_path == {
+        "/tmp/battle.jpg": SceneSelectionRole.RECURRING_GAMEPLAY,
+        "/tmp/conversation.jpg": SceneSelectionRole.CINEMATIC,
     }
     assert rejected == []
     assert stats.total_files == 5
@@ -446,6 +454,63 @@ def test_select_builds_shortlist_with_final_similarity_threshold() -> None:
     assert "/tmp/diverse-frame-0500.jpg" in scene_analyzer.classified_paths
 
 
+def test_select_includes_frequent_patterns_in_scene_catalog_representatives() -> None:
+    """頻出する見た目のpatternがscene catalog代表画像に含まれること.
+
+    Arrange:
+        - blur scoreが高い単発画像が24枚ある
+        - blur scoreは低いが互いに似た頻出pattern画像が5枚ある
+    Act:
+        - AnalyzedImageSelectorで選定される
+    Assert:
+        - 代表画像24枚の中に頻出pattern画像が含まれること
+    """
+    # Arrange
+    high_quality_images = [
+        create_analyzed_image(
+            path=f"/tmp/high-quality-{index:04d}.jpg",
+            raw_metrics_dict={"blur_score": 200.0 - index},
+            combined_features=_feature(index, dim=80),
+        )
+        for index in range(24)
+    ]
+    frequent_images = [
+        create_analyzed_image(
+            path=f"/tmp/frequent-pattern-{index:04d}.jpg",
+            raw_metrics_dict={"blur_score": 80.0 - index},
+            combined_features=_similar_feature(
+                common_index=70,
+                unique_index=71 + index,
+                dim=80,
+                common_value=float(np.sqrt(0.9)),
+                unique_value=float(np.sqrt(0.1)),
+            ),
+        )
+        for index in range(5)
+    ]
+    scene_analyzer = CountingSceneAnalyzer()
+    selector = AnalyzedImageSelector(
+        config=SelectionConfig(
+            ollama=OllamaConfig(model="gemma4", max_workers=4),
+        ),
+        metric_calculator=MetricCalculator(AnalyzerConfig()),
+        scene_analyzer=scene_analyzer,
+    )
+
+    # Act
+    selector.select(
+        analyzed_images=high_quality_images + frequent_images,
+        num=10,
+    )
+
+    # Assert
+    assert len(scene_analyzer.representative_paths) == 24
+    assert any(
+        path.startswith("/tmp/frequent-pattern-")
+        for path in scene_analyzer.representative_paths
+    )
+
+
 def test_select_uses_fallback_scene_when_catalog_generation_fails() -> None:
     """catalog作成失敗時にfallback sceneで候補が選定されること.
 
@@ -505,8 +570,18 @@ class _FakeSceneAnalyzer:
         """fake analyzerを初期化する."""
         self.classifications_by_path = classifications_by_path
         self.catalog = [
-            SceneCatalogEntry("battle", "戦闘", "敵と戦う場面"),
-            SceneCatalogEntry("conversation", "会話", "人物同士の会話場面"),
+            SceneCatalogEntry(
+                "battle",
+                "戦闘",
+                "敵と戦う場面",
+                SceneSelectionRole.RECURRING_GAMEPLAY,
+            ),
+            SceneCatalogEntry(
+                "conversation",
+                "会話",
+                "人物同士の会話場面",
+                SceneSelectionRole.CINEMATIC,
+            ),
             SceneCatalogEntry("other", "その他", "分類しにくい場面"),
         ]
 

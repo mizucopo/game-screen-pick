@@ -189,6 +189,7 @@ class OllamaSceneAnalyzer:
                 "slug": scene.slug,
                 "display_name": scene.display_name,
                 "description": scene.description,
+                "selection_role": scene.selection_role.value,
             }
             for scene in catalog
         ]
@@ -257,10 +258,12 @@ class OllamaSceneAnalyzer:
             "ゲームスクリーンショット群から、ブログ画像選択に役立つscene catalogを"
             "3から8個作ってください。必ずotherを含めてください。"
             "各sceneは英語のslug、日本語display_name、日本語descriptionを持ち、"
+            "selection_roleはordinary、cinematic、recurring_gameplayのいずれかにしてください。"
+            "otherのselection_roleはordinaryにしてください。"
             "JSONのみで返してください。"
             f"\nヒント: {hint}"
             '\n形式: {"scenes":[{"slug":"battle","display_name":"戦闘",'
-            '"description":"敵と戦う場面"}]}'
+            '"description":"敵と戦う場面","selection_role":"recurring_gameplay"}]}'
         )
 
     @staticmethod

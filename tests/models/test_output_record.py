@@ -3,6 +3,7 @@
 from src.models.output_record import OutputRecord
 from src.models.picker_statistics import PickerStatistics
 from src.models.scene_catalog_entry import SceneCatalogEntry
+from src.models.scene_selection_role import SceneSelectionRole
 from src.models.selection_annotation import SelectionAnnotation
 from tests.conftest import create_scored_candidate
 
@@ -27,6 +28,7 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
             scene_slug="battle",
             scene_display_name="戦闘",
             scene_description="敵との戦闘場面",
+            scene_selection_role=SceneSelectionRole.RECURRING_GAMEPLAY,
             selection_score=0.65432,
         )
     ]
@@ -36,6 +38,7 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
             scene_slug="conversation",
             scene_display_name="会話",
             scene_description="人物同士の会話場面",
+            scene_selection_role=SceneSelectionRole.CINEMATIC,
             selection_score=0.54321,
         )
     ]
@@ -65,8 +68,18 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
             ),
         },
         scene_catalog=[
-            SceneCatalogEntry("battle", "戦闘", "敵との戦闘場面"),
-            SceneCatalogEntry("conversation", "会話", "人物同士の会話場面"),
+            SceneCatalogEntry(
+                "battle",
+                "戦闘",
+                "敵との戦闘場面",
+                SceneSelectionRole.RECURRING_GAMEPLAY,
+            ),
+            SceneCatalogEntry(
+                "conversation",
+                "会話",
+                "人物同士の会話場面",
+                SceneSelectionRole.CINEMATIC,
+            ),
             SceneCatalogEntry("other", "その他", "分類しにくい場面"),
         ],
         ollama_classification_failed=1,
@@ -82,6 +95,7 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
     # Assert
     assert record.scene_distribution == {"battle": 1, "conversation": 1}
     assert record.scene_catalog[0]["slug"] == "battle"
+    assert record.scene_catalog[0]["selection_role"] == "recurring_gameplay"
     assert record.ollama_classification_failed == 1
     assert record.ollama_classification_failure_rate == 0.25
     assert record.ollama_catalog_fallback_used is False
@@ -92,9 +106,11 @@ def test_output_record_projects_selection_for_output_adapters() -> None:
     assert record.selected[0].filename == "battle.jpg"
     assert record.selected[0].scene_slug == "battle"
     assert record.selected[0].scene_display_name == "戦闘"
+    assert record.selected[0].scene_selection_role == "recurring_gameplay"
     assert record.selected[0].variant_group == "battle_001"
     assert record.selected[0].score_band == "high"
     assert record.rejected[0].scene_slug == "conversation"
+    assert record.rejected[0].scene_selection_role == "cinematic"
     assert record.rejected[0].outlier_rejected is True
     assert record_with_paths.selected[0].output_path == "/tmp/output/battle0001.jpg"
     assert record.selected[0].output_path is None
