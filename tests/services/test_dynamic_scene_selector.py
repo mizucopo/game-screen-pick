@@ -363,6 +363,101 @@ def test_select_relaxes_similarity_for_recurring_gameplay_variants() -> None:
     ]
 
 
+def test_select_expands_default_recurring_gameplay_variant_group() -> None:
+    """recurring gameplayで既定variant group内の状態差画像が選ばれること.
+
+    Arrange:
+        - recurring gameplay sceneに類似度0.96の候補が2枚ある
+        - 既定のvariant groupしきい値で同じgroupに割り当てられる
+    Act:
+        - 2枚の選定が要求される
+    Assert:
+        - 同じvariant group内の状態差画像がどちらも選ばれること
+    """
+    # Arrange
+    first_feature = np.array([np.sqrt(0.96), np.sqrt(0.04), 0.0], dtype=np.float32)
+    second_feature = np.array([np.sqrt(0.96), 0.0, np.sqrt(0.04)], dtype=np.float32)
+    candidates = [
+        build_dynamic_candidate(
+            "/tmp/battle_phase_a.jpg",
+            "battle",
+            first_feature,
+            0.9,
+            SceneSelectionRole.RECURRING_GAMEPLAY,
+        ),
+        build_dynamic_candidate(
+            "/tmp/battle_phase_b.jpg",
+            "battle",
+            second_feature,
+            0.8,
+            SceneSelectionRole.RECURRING_GAMEPLAY,
+        ),
+    ]
+    selector = DynamicSceneSelector(
+        similarity_threshold=0.72,
+        threshold_steps=[0.72],
+    )
+
+    # Act
+    result = selector.select(candidates, num=2)
+
+    # Assert
+    assert [candidate.path for candidate in result.selected] == [
+        "/tmp/battle_phase_a.jpg",
+        "/tmp/battle_phase_b.jpg",
+    ]
+    assert result.annotations_by_path["/tmp/battle_phase_a.jpg"].variant_group == (
+        "battle_001"
+    )
+    assert result.annotations_by_path["/tmp/battle_phase_b.jpg"].variant_group == (
+        "battle_001"
+    )
+
+
+def test_select_rejects_near_identical_recurring_gameplay_frame() -> None:
+    """recurring gameplayでもほぼ同一の連番フレームが除外されること.
+
+    Arrange:
+        - recurring gameplay sceneに類似度0.99の候補が2枚ある
+        - 2枚とも同じvariant groupに割り当てられる
+    Act:
+        - 2枚の選定が要求される
+    Assert:
+        - ほぼ同一の2枚目は選ばれないこと
+    """
+    # Arrange
+    first_feature = np.array([np.sqrt(0.99), np.sqrt(0.01), 0.0], dtype=np.float32)
+    second_feature = np.array([np.sqrt(0.99), 0.0, np.sqrt(0.01)], dtype=np.float32)
+    candidates = [
+        build_dynamic_candidate(
+            "/tmp/battle_frame_a.jpg",
+            "battle",
+            first_feature,
+            0.9,
+            SceneSelectionRole.RECURRING_GAMEPLAY,
+        ),
+        build_dynamic_candidate(
+            "/tmp/battle_frame_b.jpg",
+            "battle",
+            second_feature,
+            0.8,
+            SceneSelectionRole.RECURRING_GAMEPLAY,
+        ),
+    ]
+    selector = DynamicSceneSelector(
+        similarity_threshold=0.72,
+        threshold_steps=[0.72],
+    )
+
+    # Act
+    result = selector.select(candidates, num=2)
+
+    # Assert
+    assert [candidate.path for candidate in result.selected] == [
+        "/tmp/battle_frame_a.jpg",
+    ]
+
+
 def build_dynamic_candidate(
     path: str,
     scene_slug: str,
