@@ -107,6 +107,7 @@ jobs:
             } else if (!tagCheckCompleted) {
               checkTitle = "Version tag check could not complete";
             } else if (tagExists) {
+              checkConclusion = "failure";
               checkTitle = "Version tag already exists";
             }
 
@@ -122,3 +123,7 @@ jobs:
                 summary: process.env.SUMMARY,
               },
             });
+
+      - name: Fail if tag exists
+        if: steps.tag.outputs.exists == 'true'
+        run: exit 1
