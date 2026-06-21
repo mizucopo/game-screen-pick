@@ -17,6 +17,8 @@ from .variant_group_assigner import VariantGroupAssigner
 class DynamicSceneSelector:
     """動的sceneを均等に扱いながら候補を選ぶ."""
 
+    RECURRING_GAMEPLAY_SIMILARITY_THRESHOLD = 0.98
+
     def __init__(
         self,
         similarity_threshold: float,
@@ -409,11 +411,4 @@ class DynamicSceneSelector:
 
     def _recurring_gameplay_similarity_threshold(self) -> float:
         """recurring gameplay向けの緩和済み類似度しきい値を返す."""
-        return min(
-            0.95,
-            max(
-                0.92,
-                self.similarity_threshold + 0.2,
-                max(self.threshold_steps, default=self.similarity_threshold),
-            ),
-        )
+        return self.RECURRING_GAMEPLAY_SIMILARITY_THRESHOLD
