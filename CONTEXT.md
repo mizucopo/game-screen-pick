@@ -72,6 +72,10 @@ _Avoid_: overlapping window, scene, refinement window
 一つのVideo Source内で、ブログに有用なframeがanchor Video Timeの周辺に存在すると判断された時間上の候補。複数の検出根拠をまとめ、refinement後に有効なFrame Candidateがない状態も保持する。
 _Avoid_: extracted image, Frame Candidate, scene event
 
+**Context Cue**:
+一つのVideo SourceのVideo Time区間に対応付けられた、内蔵text subtitleまたは音声の文字起こしから得る文脈テキスト。視覚的なCandidate Momentへの加点根拠に限り、単独ではCandidate Momentを生成せずframeの採否も決めない。
+_Avoid_: external subtitle, raw ASR segment, independent candidate, prompt text
+
 **Candidate Moment Density**:
 Video Durationに比例して、一つのVideo Sourceが保持できるCandidate Moment数を定める上限率。上限は採用ノルマではなく、適格なCandidate Momentがなければ0件になり得る。
 _Avoid_: fixed per-video count, per-video selection quota, requested-output multiplier
