@@ -1,6 +1,15 @@
+## Issue-First Branch Workflow
+
+### WHAT
+
+- Never make changes directly on `main`.
+- Before starting work, create a GitHub Issue that describes the work.
+- Perform the work on a non-`main` branch associated with that Issue.
+
 ## Documentation
 
 ### HOW
+
 - Update related documentation when code changes affect users
 - Document usage for new features in README
 - Update relevant docs when interfaces change
@@ -10,6 +19,7 @@
 ## File Operations
 
 ### HOW
+
 ```bash
 # File operations
 git mv <old-path> <new-path>  # Move files
@@ -19,16 +29,19 @@ git rm <path>                  # Delete files
 ## Code Organization Rules
 
 ### WHY
+
 Maintain consistent structure to ensure readability, maintainability, and testability.
 Follow single responsibility principle to minimize scope of changes.
 
 ### WHAT
+
 - One class per file
 - One test file per class
 - Keep `__init__.py` files empty
 - Never modify pyproject.toml when fixing linting errors
 
 ### HOW
+
 - Create a new file when adding a new class
 - Name test files as `test_<filename>.py`
 - Fix lint errors in code, never relax configuration
@@ -37,6 +50,7 @@ Follow single responsibility principle to minimize scope of changes.
 ## Testing Guidelines
 
 ### WHAT
+
 - **Framework**: Use function-based tests (pytest), not class-based
 - **Language**: Write test comments (especially AAA steps) and docstrings in Japanese to clarify intent
 - **Strategy**: Test "What" (observable behavior/results), not "How" (implementation details)
@@ -45,6 +59,7 @@ Follow single responsibility principle to minimize scope of changes.
 - **Scope**: Never test private methods directly. Cover them indirectly via public interfaces
 
 ### HOW
+
 - Structure with **AAA Pattern** (Arrange, Act, Assert) with explicit sections in both docstrings and code comments, written in Japanese
   - **Docstring**: Include `Arrange:`, `Act:`, `Assert:` lines describing each step
   - **Code comments**: Insert `# Arrange`, `# Act`, `# Assert` as section dividers in the test function body
@@ -59,7 +74,7 @@ Follow single responsibility principle to minimize scope of changes.
 ## Quality Check
 
 ### HOW
+
 ```bash
 uv run task test
 ```
-

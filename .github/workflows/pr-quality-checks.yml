@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   quality-checks:
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -19,7 +20,7 @@ jobs:
         id: setup-python
         uses: actions/setup-python@v5
         with:
-          python-version-file: '.python-version'
+          python-version-file: ".python-version"
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -118,8 +119,8 @@ jobs:
             ];
             const allPassed = results.every((result) => result?.includes("成功"));
 
-            let checkConclusion = "neutral";
-            let checkTitle = "Quality checks need attention";
+            let checkConclusion = "failure";
+            let checkTitle = "❌ Quality checks failed";
             if (allPassed) {
               checkConclusion = "success";
               checkTitle = "All quality checks passed";

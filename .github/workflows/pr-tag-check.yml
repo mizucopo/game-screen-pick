@@ -46,11 +46,16 @@ jobs:
         if: always()
         run: |
           TAG_CHECK_COMPLETED="false"
+          VERSION_SOURCE_VALIDATION_FAILED="false"
           if [ "${{ steps.version.outcome }}" != "success" ]; then
-            cat > tag_report.md <<'EOF'
+            VERSION_ERROR="The version could not be read, so tag availability was not checked."
+            if [ -f version_check_error.txt ]; then
+              VERSION_ERROR="$(< version_check_error.txt)"
+            fi
+            cat > tag_report.md <<EOF
           ## Version Tag Check ⚠️
 
-          The version could not be read, so tag availability was not checked.
+          ${VERSION_ERROR}
           EOF
           elif [ "${{ steps.tag.outcome }}" != "success" ] || [ -z "${{ steps.tag.outputs.exists }}" ]; then
             cat > tag_report.md <<'EOF'
@@ -85,6 +90,7 @@ jobs:
             cat tag_report.md
             echo "EOF"
             echo "tag_check_completed=$TAG_CHECK_COMPLETED"
+            echo "version_source_validation_failed=$VERSION_SOURCE_VALIDATION_FAILED"
           } >> "$GITHUB_OUTPUT"
 
       - name: Publish version tag check
@@ -95,14 +101,20 @@ jobs:
           SUMMARY: ${{ steps.tag-report.outputs.summary }}
           TAG_EXISTS: ${{ steps.tag.outputs.exists }}
           TAG_CHECK_COMPLETED: ${{ steps.tag-report.outputs.tag_check_completed }}
+          VERSION_SOURCE_VALIDATION_FAILED: ${{ steps.tag-report.outputs.version_source_validation_failed }}
         with:
           script: |
             const tagExists = process.env.TAG_EXISTS === "true";
             const tagCheckCompleted = process.env.TAG_CHECK_COMPLETED === "true";
+            const versionSourceValidationFailed =
+              process.env.VERSION_SOURCE_VALIDATION_FAILED === "true";
 
             let checkConclusion = "neutral";
             let checkTitle = "Version tag is available";
-            if (tagCheckCompleted && !tagExists) {
+            if (versionSourceValidationFailed) {
+              checkConclusion = "failure";
+              checkTitle = "Chrome extension version source validation failed";
+            } else if (tagCheckCompleted && !tagExists) {
               checkConclusion = "success";
             } else if (!tagCheckCompleted) {
               checkTitle = "Version tag check could not complete";

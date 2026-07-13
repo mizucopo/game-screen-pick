@@ -1,10 +1,13 @@
-_commit: 88e3afd
+_commit: d5da11d
 _src_path: git@github.com:mizucopo/repo-template.git
 author_email: mizu.copo@gmail.com
 author_name: みず
 python_version: '3.13'
+use_chrome_extension: false
 use_docker: false
 use_gh_actions_pr_tag_check: true
 use_gh_actions_release: true
 use_mit_license: true
 use_python: true
+use_rust: false
+use_tauri: false
