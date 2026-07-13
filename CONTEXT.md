@@ -4,6 +4,54 @@
 
 ## Language
 
+**Video Set**:
+1回のブログ画像選定でまとめて扱う、1本以上の順序を持つ入力動画の集合。実行中は構成・順序・各Videoの内容が変わらないsnapshotとして扱い、保存場所である input folderや選定設定とは区別する。
+_Avoid_: input folder, video folder, run, file list
+
+**Video Input Folder**:
+Video Setを発見し、そのcacheを保持するためにユーザーが指定するルートフォルダ。Video Setそのもののidentityではない。
+_Avoid_: Video Set, Output Folder, cache key
+
+**Video Set Fingerprint**:
+Video Setの構成とVideo Orderをcacheやreportで参照するための、順序付きVideo Fingerprint列から導出される安定した識別子。
+_Avoid_: input path hash, unordered file set, global setting hash
+
+**Video Order**:
+Video Set 内のゲーム進行順。入力ルートからの相対パスの自然順で決まり、更新日時やファイル列挙順には依存しない。
+_Avoid_: filesystem order, mtime order, discovery order
+
+**Video Identity**:
+動画内容によって決まる、個々の Video の安定した同一性。ファイル名、配置、更新日時が変わっても内容が同じなら維持され、内容が変われば新しい identity になる。
+_Avoid_: file path, filename, mtime, Video Order
+
+**Duplicate Video**:
+一つのVideo Set内で、複数のpathが同じVideo Identityを指している入力不整合。
+_Avoid_: similar video, repeated scene, same filename
+
+**Video Fingerprint**:
+Video Identity をcacheやreportで参照するための、動画内容から導出される安定した識別子。
+_Avoid_: path hash, file stat, stage setting hash
+
+**Processing Stage**:
+再開可能な画像選定を構成する、入力と再利用可能な成果物の境界が明示された処理単位。
+_Avoid_: arbitrary function, progress message, whole run
+
+**Stage Fingerprint**:
+Processing Stage の成果物に影響する上流成果物と、そのStage固有の設定・versionだけから導出される識別子。
+_Avoid_: global config hash, Video Fingerprint, unrelated downstream setting
+
+**Completed Stage**:
+成果物と完了manifestがatomicに確定し、再利用できる Processing Stage。完了manifestのない部分成果物は含まない。
+_Avoid_: partial cache, in-progress stage, progress checkpoint
+
+**Video Stage**:
+一つの Video Identity を対象とし、Video Set の構成やVideo Orderから独立して再利用できる Processing Stage。
+_Avoid_: Video Set Stage, whole-run stage
+
+**Video Set Stage**:
+順序付きのVideo Setと各Video Stageの成果物を入力にして、動画横断の判断を行う Processing Stage。
+_Avoid_: Video Stage, per-video processing
+
 **Scene**:
 ブログ用の画像選択で使う、画像内容を表すカテゴリ。ゲームジャンルや入力画像群に応じて決まる。
 _Avoid_: play/event density bucket, fixed category
@@ -17,7 +65,7 @@ _Avoid_: localized category name
 _Avoid_: original filename output, optional rename mode
 
 **Output Folder**:
-選択された画像とレポートを書き出す実行ごとの保存先。処理開始前に空である必要がある。
+選択された画像とレポートを書き出す実行ごとの保存先。処理開始前に空であり、input folderと同一または相互の配下であってはならない。
 _Avoid_: append destination, overwrite target, resumable output
 
 **Scene Display Name**:
@@ -93,5 +141,5 @@ scene catalog を作成できないときに、処理継続のため全 blog can
 _Avoid_: per-image classification failure, other scene
 
 **Resumable Run**:
-中断された画像選択を、同じ入力画像群と同じ選択意図で後から続ける実行。すでに得られた画像解析やscene分類の結果を再利用し、未処理の画像だけを進める。
+中断された画像選択を、再利用可能なCompleted Stageから後で続ける実行。Video Setや設定が変わった場合は、一致するStage Fingerprintの成果物だけを再利用する。
 _Avoid_: fresh run, output overwrite
