@@ -31,6 +31,20 @@ htmlcov/
 build/
 dist/
 
+# Rust
+target/
+src-tauri/gen/schemas/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Coverage
+coverage/
+
 # macOS
 .DS_Store
 
