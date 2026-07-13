@@ -1,6 +1,6 @@
 # Game Screen Pick
 
-ゲームスクリーンショットから、ブログで使いやすい画像を選び出すための文脈。
+ゲーム動画から、ブログで使いやすい画像を選び出すための文脈。
 
 ## Language
 
@@ -19,6 +19,10 @@ _Avoid_: input path hash, unordered file set, global setting hash
 **Video Order**:
 Video Set 内のゲーム進行順。入力ルートからの相対パスの自然順で決まり、更新日時やファイル列挙順には依存しない。
 _Avoid_: filesystem order, mtime order, discovery order
+
+**Video Source**:
+Video Fingerprintで識別される、一つのVideo Identityとその有効なpresentation timelineの組。Video Input Folder内のpathやVideo Orderとは独立する。
+_Avoid_: input file path, ordered Video Set member, path-based identity
 
 **Video Identity**:
 動画内容によって決まる、個々の Video の安定した同一性。ファイル名、配置、更新日時が変わっても内容が同じなら維持され、内容が変われば新しい identity になる。
@@ -45,12 +49,40 @@ _Avoid_: global config hash, Video Fingerprint, unrelated downstream setting
 _Avoid_: partial cache, in-progress stage, progress checkpoint
 
 **Video Stage**:
-一つの Video Identity を対象とし、Video Set の構成やVideo Orderから独立して再利用できる Processing Stage。
-_Avoid_: Video Set Stage, whole-run stage
+一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysisを所有する。
+_Avoid_: Video Set Stage, cross-video selection, whole-run stage
 
 **Video Set Stage**:
-順序付きのVideo Setと各Video Stageの成果物を入力にして、動画横断の判断を行う Processing Stage。
-_Avoid_: Video Stage, per-video processing
+順序付きのVideo Setと各Video Stageの成果物を入力にして、Scene Catalog、動画横断の比較と多様性、最終選定を所有する Processing Stage。各Video Sourceからの最低採用数は持たない。
+_Avoid_: Video Stage, per-video processing, per-video selection quota
+
+**Video Time**:
+一つのVideo Sourceのpresentation timeline上の正確な位置。source PTSとtime baseから最初の表示可能frameを0として導出され、float秒やframe indexとは区別する。
+_Avoid_: frame index, float timestamp, wall-clock time
+
+**Video Duration**:
+一つのVideo Sourceの有効なpresentation timelineが持つ、0から終端までの正確で正の時間長。
+_Avoid_: container duration, last frame index, wall-clock duration
+
+**Timeline Segment**:
+一つのVideo Sourceのtimeline全体をgapや重複なく覆う、順序付きの半開区間。各Candidate Momentはanchor時刻によって必ず一つのTimeline Segmentに属する。
+_Avoid_: overlapping window, scene, refinement window
+
+**Candidate Moment**:
+一つのVideo Source内で、ブログに有用なframeがanchor Video Timeの周辺に存在すると判断された時間上の候補。複数の検出根拠をまとめ、refinement後に有効なFrame Candidateがない状態も保持する。
+_Avoid_: extracted image, Frame Candidate, scene event
+
+**Candidate Moment Density**:
+Video Durationに比例して、一つのVideo Sourceが保持できるCandidate Moment数を定める上限率。上限は採用ノルマではなく、適格なCandidate Momentがなければ0件になり得る。
+_Avoid_: fixed per-video count, per-video selection quota, requested-output multiplier
+
+**Frame Candidate**:
+Candidate Moment周辺のrefinementで有効と判断された、一つのVideo Source上の正確なsource frame。同じframeを複数のCandidate Momentが参照でき、proxy画像や出力画像とは区別する。
+_Avoid_: Candidate Moment, cached proxy, output image
+
+**Cross-Video Diversity**:
+Video Set全体で、視覚的に重複するframeや進行上の一部へ偏ったframeを最終選定から抑える性質。特定のVideo Sourceへ採用枠を保証するものではない。
+_Avoid_: per-video quota, source-local deduplication, equal allocation
 
 **Scene**:
 ブログ用の画像選択で使う、画像内容を表すカテゴリ。ゲームジャンルや入力画像群に応じて決まる。
@@ -73,8 +105,8 @@ scene を人が読みやすいように表す日本語名。ブログ用の画�
 _Avoid_: filename prefix, report key
 
 **Scene Catalog**:
-入力画像群から見つけた、その実行で使う scene と scene selection role の一覧。3から8個の scene で構成され、分類の逃げ先として other を含む。各画像は scene catalog のいずれかの scene に分類される。
-_Avoid_: fixed scene list, free-form per-image labels
+一つのVideo Setを横断して共有する、その選定で使う scene と scene selection role の一覧。3から8個の scene と分類の逃げ先である other で構成され、Videoごとには分割しない。
+_Avoid_: fixed scene list, free-form per-image labels, per-video catalog
 
 **Scene Description**:
 画像がその scene に分類された理由を、ブログ用の画像選択に役立つように短く説明する文章。
@@ -105,7 +137,7 @@ blog candidate のうち、ブログに採用される可能性が高く、最�
 _Avoid_: all blog candidates, selected output
 
 **Neutral Image Analysis**:
-scene や selection intent に依存せず、画像そのものから得られる特徴と品質評価。画像の内容分類ではなく、blog candidate 判定や類似度判定の土台になる。
+scene や selection intent に依存せず、Frame Candidateそのものから得られる特徴と品質評価。画像の内容分類ではなく、blog candidate 判定や動画横断の類似度判定の土台になる。
 _Avoid_: scene classification, selection intent
 
 **Transition Frame**:
