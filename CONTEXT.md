@@ -76,6 +76,10 @@ _Avoid_: extracted image, Frame Candidate, scene event
 一つのVideo SourceのVideo Time区間に対応付けられた、内蔵text subtitleまたは音声の文字起こしから得る文脈テキスト。視覚的なCandidate Momentへの加点根拠に限り、単独ではCandidate Momentを生成せずframeの採否も決めない。
 _Avoid_: external subtitle, raw ASR segment, independent candidate, prompt text
 
+**Report Context Evidence**:
+Context Cueが選定へどう関係したかを公開成果物で追跡する、Cue ID、source kind、正確なVideo Time範囲、reliability、Context Cue Relevanceの組。Context Cue本文は処理cacheだけに保持し、Human Selection Report、machine-readable report、採用理由、要約では引用しない。
+_Avoid_: subtitle quotation, ASR transcript, raw Context Cue text, model reasoning trace
+
 **Candidate Moment Density**:
 Video Durationに比例して、一つのVideo Sourceが保持できるCandidate Moment数を定める上限率。既定値は毎分2件で、上限は採用ノルマではなく、適格なCandidate Momentがなければ0件になり得る。
 _Avoid_: fixed per-video count, per-video selection quota, requested-output multiplier
@@ -83,6 +87,10 @@ _Avoid_: fixed per-video count, per-video selection quota, requested-output mult
 **Frame Candidate**:
 Candidate Moment周辺のrefinementで有効と判断された、一つのVideo Source上の正確なsource frame。同じframeを複数のCandidate Momentが参照でき、proxy画像や出力画像とは区別する。
 _Avoid_: Candidate Moment, cached proxy, output image
+
+**Frame Candidate ID**:
+Video Fingerprintとframe自身の正確なVideo Timeからversion付きSHA-256 derivationで作る、`frm_`と64桁digestからなる安定識別子。出力先や選択順が変わっても同じFrame Candidateを指す。
+_Avoid_: output filename, selection index, source path
 
 **Representative Frame**:
 Selection Shortlist内の一つのCandidate Momentが参照する1から3件のFrame Candidateから、Candidate Annotationがブログ上の意味を最も表すものとして選んだframe。画像品質の再評価や最終採用を意味しない。
@@ -117,12 +125,68 @@ scene を表す小文字英数字の安定名。出力ファイル名、レポ�
 _Avoid_: localized category name
 
 **Scene-numbered Output Name**:
-選択された画像に付ける標準の出力ファイル名。scene slug と scene 内の連番で構成される。
-_Avoid_: original filename output, optional rename mode
+既存の画像入力selectorが選択画像に付ける、scene slugとscene内連番からなる出力ファイル名。Video Set selectorではSelected Image Output Nameに置き換える。
+_Avoid_: Video Set output name, stable image identity, original filename
+
+**Selected Image Output Name**:
+Video Set selectorが選択画像に付ける、最低4桁へzero-padした全体選択順、scene slug、Frame Candidate IDのdigest部分先頭12文字からなる名前。短縮digestが同一run内で衝突する場合だけ64文字まで延長し、安定identity自体はFrame Candidate IDが担う。
+_Avoid_: stable image identity, scene-local index, source filename
+
+**Selected Image Encoding**:
+Video Set selectorが選択画像へ固定で使う、元frameの解像度を維持した非可逆WebP quality 95。埋め込みmetadataは除去し、v1では利用者設定による形式やqualityの変更を許可しない。
+_Avoid_: PNG default, configurable image format, resized thumbnail, source metadata copy
+
+**Report Source Path**:
+Human Selection Reportとmachine-readable reportが元動画を追跡するために示す、Video Input Folderを基準に`/`区切りへ正規化した相対path。`..`を含めず、Video OrderとVideo Source IDを併記し、Video Identityには使わない。
+_Avoid_: absolute path, basename-only path, Video Fingerprint, path-based identity
+
+**Report Video Time**:
+Human Selection Reportでは24時間で折り返さない`HH:MM:SS.mmm`をhalf-upで丸めて示し、machine-readable reportでは`source_pts`、`origin_pts`、time base、既約分数の`offset_seconds`を正本として保持するVideo Time表現。frame indexとfloat秒は公開契約に含めない。
+_Avoid_: float timestamp, frame index, wrapped clock time, display string as identity
+
+**Report Video Fingerprint**:
+machine-readable reportが処理した動画内容を厳密に示す、algorithm名を伴う64桁の動画全体SHA-256。Human Selection Reportでは公開せず、短いVideo Source ID、Video Order、Report Source Pathだけを表示する。
+_Avoid_: truncated digest in report.json, report.md fingerprint, file stat, path hash
 
 **Output Folder**:
-選択された画像とレポートを書き出す実行ごとの保存先。処理開始前に空であり、input folderと同一または相互の配下であってはならない。
+選択画像を`images/`、Human Selection Reportを`report.md`、machine-readable reportを`report.json`へ書き出す実行ごとの保存先。処理開始前に空であり、input folderと同一または相互の配下であってはならない。
 _Avoid_: append destination, overwrite target, resumable output
+
+**Atomic Output Publication**:
+存在しないOutput Folderと同じ親filesystem上の隠しstaging Folderへ全画像、machine-readable report、Human Selection Reportを生成・検証・flushした後、directory renameを1回だけ行う公開境界。既存の空Output Folderは事前検証後に取り除き、fatal errorではOutput Folderを公開しない。Selection Shortfallはwarning付き正常成果物として公開し、atomic rename非対応時は処理前に失敗する。
+_Avoid_: file-by-file publication, completion marker fallback, partially visible output, cross-filesystem staging
+
+**Human Selection Report**:
+選択画像と採用理由をgallery-firstで確認でき、末尾のappendixからshortfall、near miss、score内訳、Stage provenanceを追える`report.md`。source videoとVideo Timeは各画像に示すが、動画別の長大なtimelineを主構造にはしない。
+_Avoid_: machine-readable report, raw diagnostic dump, full Video Set timeline
+
+**Report Image Embed**:
+Human Selection Reportが実際の選択WebPを相対pathでinline表示し、同じ画像へのlinkで原寸を開けるgallery要素。別thumbnailを生成せず、alt textには選択順とScene Display Nameだけを使い、Spoiler Evidenceを含めない。
+_Avoid_: link-only gallery, generated thumbnail, absolute image URL, spoiler evidence in alt text
+
+**Canonical Selection Report**:
+1回のrunに対して構築・schema検証され、`report.json`へserializeされる唯一のmachine-readable report object。Human Selection Reportはこの検証済みobjectだけから決定的に生成し、cacheやmodelを再参照しない。JSON key順は契約に含めず、画像ID・path・件数・理由のprojection不一致はfatalとする。
+_Avoid_: independent Markdown data source, cache-backed rendering, model-backed rendering, JSON key order contract
+
+**Report Selection Explanation**:
+選択画像ごとに、Candidate Annotation由来の画像要約とRepresentative Frame理由、reason codeとscore内訳からlocal rendererが作るselector採用理由を出所別に示す説明。machine-readable reportでは`annotation`と`selection`を分離し、単一のmodel生成reason、model confidence、内部推論を採用理由にしない。
+_Avoid_: blended reason, model-selected final result, confidence score, reasoning trace
+
+**Report Spoiler Disclosure**:
+全選択画像のSpoiler RiskをHuman Selection Reportとmachine-readable reportへ常時示し、`none`以外のCandidate Annotation由来evidence summaryだけをMarkdownの閉じた`details`に置く公開形式。画面内文章やContext Cueを引用せず、selector由来Spoiler Penaltyとは別fieldで扱う。
+_Avoid_: expanded spoiler text, dialogue quotation, hidden risk level, blended model evidence and selector penalty
+
+**Report Stage Provenance**:
+machine-readable reportで各Processing Stageのstatus、完全なStage Fingerprintと上流fingerprint、cache結果、再計算件数、duration、attempt、validation、token、結果に影響する正規化設定、tool・runtime・model digest、prompt・schema・policy versionを示す再現情報。Human Selection Reportは短縮fingerprintと主要件数・時間だけを要約する。path、環境変数、credential、prompt本文、raw response、stack traceは含めない。
+_Avoid_: host path dump, secret-bearing config, raw prompt, raw response, stack trace
+
+**Report Schema Version**:
+machine-readable reportの`game-screen-pick/report`契約を表すSemantic Version。初版は`1.0.0`とし、breaking changeはmajor、optional fieldまたはenum値の追加はminor、構造を変えない修正はpatchにする。同じmajorのreaderは未知fieldと未知enum値で失敗せず、未知majorだけを拒否する。過去schemaと既存reportは書き換えない。
+_Avoid_: unversioned JSON, Markdown parser contract, automatic report migration, breaking minor change
+
+**Report Near Miss Set**:
+全未採用Blog Candidateの理由別件数を集計したうえで、各理由の代表を最低1件含め、残りを反実仮想Marginal Selection Utilityの高い順に選ぶ公開診断集合。`report.json`は`min(未採用総数, 100, max(20, 要求枚数×2))`件、Human Selection Reportはその先頭最大10件までとし、全候補詳細は処理cacheに保持する。
+_Avoid_: unbounded rejection ledger, random rejection sample, full cache dump
 
 **Scene Display Name**:
 scene を人が読みやすいように表す日本語名。ブログ用の画像選択やレポート表示で使われる。

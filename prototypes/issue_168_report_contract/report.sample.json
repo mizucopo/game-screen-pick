@@ -1,0 +1,985 @@
+{
+  "schema": {
+    "name": "game-screen-pick/report",
+    "version": "1.0.0"
+  },
+  "run": {
+    "id": "run_20260714T093214Z_7f3a2c",
+    "status": "completed_with_warnings",
+    "started_at": "2026-07-14T09:32:14.102Z",
+    "completed_at": "2026-07-14T09:32:29.207Z",
+    "requested_image_count": 6,
+    "selected_image_count": 5,
+    "warnings": [
+      {
+        "code": "selection_shortfall",
+        "message": "要求6枚に対して5枚を選択しました。",
+        "details": {
+          "visual_near_duplicate": 1,
+          "similarity_ceiling": 1,
+          "title_limit": 1
+        }
+      }
+    ]
+  },
+  "artifacts": {
+    "report_json": "report.json",
+    "report_markdown": "report.md",
+    "image_directory": "images",
+    "image_contract": {
+      "frame_candidate_id_algorithm": "video-fingerprint-video-time-sha256-v1",
+      "frame_candidate_id_format": "frm_<64-lowercase-hex>",
+      "filename_pattern": "<selection-index-min-width-4>_<scene-slug>_<frame-digest-prefix-12-or-full>.webp",
+      "format": "webp",
+      "encoding": "lossy",
+      "quality": 95,
+      "color_space": "srgb",
+      "metadata": "stripped",
+      "size_policy": "source_dimensions",
+      "configurable": false,
+      "status": "fixed_for_v1"
+    },
+    "publication_contract": {
+      "mode": "atomic_directory_rename",
+      "staging": "hidden_sibling_same_filesystem",
+      "validated_before_publish": true,
+      "non_atomic_fallback": false
+    },
+    "projection_contract": {
+      "canonical_machine_report": "report.json",
+      "markdown_source": "validated_canonical_report_object",
+      "cache_or_model_reread": false,
+      "json_key_order_significant": false,
+      "cross_artifact_mismatch": "fatal",
+      "selected_image_rendering": "clickable_inline_original",
+      "thumbnail_artifacts": false,
+      "alt_text": "selection_index_and_scene_display_name"
+    }
+  },
+  "video_set": {
+    "id": "vset_59ac118e7c9b",
+    "fingerprint_algorithm": "ordered-video-sha256-v1",
+    "time_contract": {
+      "authoritative_value": "offset_seconds_rational",
+      "display_format": "unbounded_hours_HH:MM:SS.mmm",
+      "display_rounding": "half_up",
+      "frame_index": "omitted"
+    },
+    "source_path_policy": {
+      "base": "video_input_folder",
+      "separator": "/",
+      "parent_segments": "forbidden",
+      "absolute_paths": "omitted"
+    },
+    "duration": {
+      "exact_seconds": "13458.420",
+      "display": "03:44:18.420"
+    },
+    "sources": [
+      {
+        "id": "vid_a1e9c4a7019d",
+        "order": 1,
+        "relative_path": "01-opening.mp4",
+        "fingerprint": {
+          "algorithm": "sha256-whole-file",
+          "value": "a1e9c4a7019d73a71d4aa46367807673ea455f245b632a239e134e75adac3811"
+        },
+        "duration": {
+          "source_pts": 313587000,
+          "origin_pts": 9000,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "exact_seconds": "3484.200",
+          "display": "00:58:04.200"
+        }
+      },
+      {
+        "id": "vid_c7bd10eb3220",
+        "order": 2,
+        "relative_path": "02-forest.mp4",
+        "fingerprint": {
+          "algorithm": "sha256-whole-file",
+          "value": "c7bd10eb32206d83e9fc9d457cd977814a70cdcc1f661a40deeeaa380f07ab44"
+        },
+        "duration": {
+          "source_pts": 508653000,
+          "origin_pts": 0,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "exact_seconds": "5651.700",
+          "display": "01:34:11.700"
+        }
+      },
+      {
+        "id": "vid_f4c22385e80e",
+        "order": 3,
+        "relative_path": "03-citadel.mp4",
+        "fingerprint": {
+          "algorithm": "sha256-whole-file",
+          "value": "f4c22385e80ef9e245ae744160014b4f282b491fc4a30c5d43fdf6596f3bde02"
+        },
+        "duration": {
+          "source_pts": 389026800,
+          "origin_pts": 0,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "exact_seconds": "4322.520",
+          "display": "01:12:02.520"
+        }
+      }
+    ]
+  },
+  "selection_summary": {
+    "candidate_moments": 52,
+    "moments_without_valid_frame": 10,
+    "candidate_annotations": 42,
+    "candidate_annotation_failures": 0,
+    "selected": 5,
+    "not_selected": 37,
+    "final_similarity_ceiling": 0.98,
+    "shortfall": {
+      "requested": 6,
+      "selected": 5,
+      "all_candidate_moments_exhausted": true
+    },
+    "blog_image_type": {
+      "normal_gameplay": {
+        "target": 4,
+        "actual": 2
+      },
+      "event": {
+        "target": 2,
+        "actual": 1
+      },
+      "menu": {
+        "target": 0,
+        "actual": 1
+      },
+      "title": {
+        "target": 0,
+        "actual": 1
+      },
+      "other": {
+        "target": 0,
+        "actual": 0
+      }
+    }
+  },
+  "rejection_summary": {
+    "total": 37,
+    "by_reason": {
+      "visual_near_duplicate": 34,
+      "similarity_ceiling": 1,
+      "title_limit": 2
+    }
+  },
+  "selected": [
+    {
+      "image_id": "frm_38f1a9c2e642361a62726d6e407eb8fa60ed441afb6c38d80cd9bb229103bf0f",
+      "selection_index": 1,
+      "output": {
+        "relative_path": "images/0001_opening_38f1a9c2e642.webp",
+        "sha256": "77266401193ea7693902ea76fb6a1b60a5e43f826124378dc9f4aab172daef88",
+        "width": 3840,
+        "height": 2160,
+        "bytes": 836410
+      },
+      "source": {
+        "video_id": "vid_a1e9c4a7019d",
+        "candidate_moment_id": "mom_03b01435fd4a",
+        "timeline_segment_id": "seg_c9dc0dfca9bb",
+        "video_time": {
+          "source_pts": 189900,
+          "origin_pts": 9000,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "offset_seconds": {
+            "numerator": 201,
+            "denominator": 100
+          },
+          "display": "00:00:02.010"
+        },
+        "video_set_progress": 0.000149
+      },
+      "classification": {
+        "scene_slug": "opening",
+        "scene_display_name": "オープニング",
+        "scene_selection_role": "ordinary",
+        "blog_image_type": "title",
+        "explanation_value": "medium",
+        "screen_text_kind": "title",
+        "spoiler_risk": "none",
+        "spoiler_evidence": null
+      },
+      "annotation": {
+        "summary": "作品名と旅立ちの雰囲気を示すタイトル画面。",
+        "representative_frame_reason": "logoと背景が同時に読みやすいframe。",
+        "context_cue_relevance": "unavailable",
+        "supporting_context_cue_ids": []
+      },
+      "selection": {
+        "base_utility": 0.785,
+        "spoiler_penalty": 0.0,
+        "coverage_bonus": 0.05,
+        "temporal_diversity_penalty": 0.0,
+        "marginal_utility": 0.835,
+        "similarity_pass": 0.72,
+        "nearest_selected_similarity": null,
+        "reason_codes": [
+          "best_title_candidate",
+          "title_first_image_bonus"
+        ],
+        "decision_explanation": {
+          "renderer": "selection-explanation-ja-v1",
+          "text": "作品を識別できるtitle候補のうち最も品質が高く、title未採用bonusを得た。"
+        }
+      }
+    },
+    {
+      "image_id": "frm_6a4d812e6241e0ced78984e7b3c60856c4c4401c8247237e93c9f498a2b0dd8b",
+      "selection_index": 2,
+      "output": {
+        "relative_path": "images/0002_exploration_6a4d812e6241.webp",
+        "sha256": "f1eb32e6124e22570651e71bde274cf88d1c2cc79e837be39ad80c0c94d5251f",
+        "width": 3840,
+        "height": 2160,
+        "bytes": 924188
+      },
+      "source": {
+        "video_id": "vid_a1e9c4a7019d",
+        "candidate_moment_id": "mom_75c18a43d08e",
+        "timeline_segment_id": "seg_665c074e6011",
+        "video_time": {
+          "source_pts": 67920030,
+          "origin_pts": 9000,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "offset_seconds": {
+            "numerator": 754567,
+            "denominator": 1000
+          },
+          "display": "00:12:34.567"
+        },
+        "video_set_progress": 0.056067
+      },
+      "classification": {
+        "scene_slug": "exploration",
+        "scene_display_name": "探索",
+        "scene_selection_role": "recurring_gameplay",
+        "blog_image_type": "normal_gameplay",
+        "explanation_value": "high",
+        "screen_text_kind": "hud",
+        "spoiler_risk": "none",
+        "spoiler_evidence": null
+      },
+      "annotation": {
+        "summary": "遺跡の広さと探索中のHUDが分かる通常play。",
+        "representative_frame_reason": "遺跡の構造とplayer位置が最も明瞭なframe。",
+        "context_cue_relevance": "weak",
+        "supporting_context_cue_ids": [
+          "cue_0124d3"
+        ]
+      },
+      "selection": {
+        "base_utility": 0.815,
+        "spoiler_penalty": 0.0,
+        "coverage_bonus": 0.1,
+        "temporal_diversity_penalty": 0.0,
+        "marginal_utility": 0.915,
+        "similarity_pass": 0.72,
+        "nearest_selected_similarity": 0.411,
+        "reason_codes": [
+          "high_quality",
+          "high_explanation_value",
+          "normal_gameplay_coverage"
+        ],
+        "decision_explanation": {
+          "renderer": "selection-explanation-ja-v1",
+          "text": "高い画質と説明価値を持ち、normal_gameplayのcoverageを満たす。"
+        }
+      }
+    },
+    {
+      "image_id": "frm_b7206e55f3aad73c133be980b70815895bbc4b29a36199f49af3408cb7c29c1c",
+      "selection_index": 3,
+      "output": {
+        "relative_path": "images/0003_conversation_b7206e55f3aa.webp",
+        "sha256": "04bf745bda603901b78d5e13e09cf02a150bdd7df097e1283e89579130001550",
+        "width": 3840,
+        "height": 2160,
+        "bytes": 861029
+      },
+      "source": {
+        "video_id": "vid_c7bd10eb3220",
+        "candidate_moment_id": "mom_251aa57349ac",
+        "timeline_segment_id": "seg_293ba3a55990",
+        "video_time": {
+          "source_pts": 243910800,
+          "origin_pts": 0,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "offset_seconds": {
+            "numerator": 67753,
+            "denominator": 25
+          },
+          "display": "00:45:10.120"
+        },
+        "video_set_progress": 0.460247
+      },
+      "classification": {
+        "scene_slug": "conversation",
+        "scene_display_name": "会話",
+        "scene_selection_role": "cinematic",
+        "blog_image_type": "event",
+        "explanation_value": "high",
+        "screen_text_kind": "dialogue",
+        "spoiler_risk": "low",
+        "spoiler_evidence": {
+          "source": "candidate_annotation",
+          "summary": "次の目的地を示す軽微な進行情報。"
+        }
+      },
+      "annotation": {
+        "summary": "仲間との会話で次の目的地が示されるevent。",
+        "representative_frame_reason": "話者と目的地の背景が同時に分かるframe。",
+        "context_cue_relevance": "strong",
+        "supporting_context_cue_ids": [
+          "cue_44a901",
+          "cue_44a902"
+        ]
+      },
+      "selection": {
+        "base_utility": 0.791,
+        "spoiler_penalty": 0.01,
+        "coverage_bonus": 0.1,
+        "temporal_diversity_penalty": 0.0,
+        "marginal_utility": 0.881,
+        "similarity_pass": 0.72,
+        "nearest_selected_similarity": 0.534,
+        "reason_codes": [
+          "high_explanation_value",
+          "strong_context_relevance",
+          "event_coverage",
+          "low_spoiler_penalty_applied"
+        ],
+        "decision_explanation": {
+          "renderer": "selection-explanation-ja-v1",
+          "text": "説明価値highと強いContext Cue relevanceがevent coverageに寄与した。"
+        }
+      }
+    },
+    {
+      "image_id": "frm_18d0ab449cc7750818e53380e267744cb7127ceb7e470d1cbc7b7b078aa47fe5",
+      "selection_index": 4,
+      "output": {
+        "relative_path": "images/0004_equipment_18d0ab449cc7.webp",
+        "sha256": "2743aa373ee706c4d5c97a5a74b1b6cacbd9358e7170df3d51a63000224ce9d3",
+        "width": 3840,
+        "height": 2160,
+        "bytes": 745388
+      },
+      "source": {
+        "video_id": "vid_c7bd10eb3220",
+        "candidate_moment_id": "mom_5d0603f6287b",
+        "timeline_segment_id": "seg_a9aa8f903011",
+        "video_time": {
+          "source_pts": 383609970,
+          "origin_pts": 0,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "offset_seconds": {
+            "numerator": 4262333,
+            "denominator": 1000
+          },
+          "display": "01:11:02.333"
+        },
+        "video_set_progress": 0.575582
+      },
+      "classification": {
+        "scene_slug": "equipment",
+        "scene_display_name": "装備",
+        "scene_selection_role": "ordinary",
+        "blog_image_type": "menu",
+        "explanation_value": "medium",
+        "screen_text_kind": "menu",
+        "spoiler_risk": "none",
+        "spoiler_evidence": null
+      },
+      "annotation": {
+        "summary": "装備の種類と構成が読み取れるmenu。",
+        "representative_frame_reason": "項目とcharacter previewが明瞭なframe。",
+        "context_cue_relevance": "none",
+        "supporting_context_cue_ids": []
+      },
+      "selection": {
+        "base_utility": 0.71,
+        "spoiler_penalty": 0.0,
+        "coverage_bonus": 0.1,
+        "temporal_diversity_penalty": 0.018,
+        "marginal_utility": 0.792,
+        "similarity_pass": 0.72,
+        "nearest_selected_similarity": 0.468,
+        "reason_codes": [
+          "menu_coverage",
+          "visual_diversity"
+        ],
+        "decision_explanation": {
+          "renderer": "selection-explanation-ja-v1",
+          "text": "menuのsoft coverageを満たし、既選択画像との視覚重複が小さい。"
+        }
+      }
+    },
+    {
+      "image_id": "frm_d9c3f271dd1230c7d05860095fd5d5573682aed3e04ef9178d9e6420ed9bcfeb",
+      "selection_index": 5,
+      "output": {
+        "relative_path": "images/0005_battle_d9c3f271dd12.webp",
+        "sha256": "6a6269af95b30346f59c976a1a85a7bea69a58c622b9390e36ff52dd7ef7156d",
+        "width": 3840,
+        "height": 2160,
+        "bytes": 1014619
+      },
+      "source": {
+        "video_id": "vid_f4c22385e80e",
+        "candidate_moment_id": "mom_bf282e1b78b1",
+        "timeline_segment_id": "seg_f079ef7335f8",
+        "video_time": {
+          "source_pts": 101061000,
+          "origin_pts": 0,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "offset_seconds": {
+            "numerator": 11229,
+            "denominator": 10
+          },
+          "display": "00:18:42.900"
+        },
+        "video_set_progress": 0.916984
+      },
+      "classification": {
+        "scene_slug": "battle",
+        "scene_display_name": "戦闘",
+        "scene_selection_role": "recurring_gameplay",
+        "blog_image_type": "normal_gameplay",
+        "explanation_value": "high",
+        "screen_text_kind": "hud",
+        "spoiler_risk": "medium",
+        "spoiler_evidence": {
+          "source": "candidate_annotation",
+          "summary": "固有bossと終盤固有areaが表示される。"
+        }
+      },
+      "annotation": {
+        "summary": "終盤areaで固有bossと戦う通常play。",
+        "representative_frame_reason": "boss、player、battle HUDが同時に明瞭なframe。",
+        "context_cue_relevance": "strong",
+        "supporting_context_cue_ids": [
+          "cue_9bc1aa"
+        ]
+      },
+      "selection": {
+        "base_utility": 0.803,
+        "spoiler_penalty": 0.04,
+        "coverage_bonus": 0.1,
+        "temporal_diversity_penalty": 0.0,
+        "marginal_utility": 0.863,
+        "similarity_pass": 0.98,
+        "nearest_selected_similarity": 0.952,
+        "reason_codes": [
+          "high_quality",
+          "high_explanation_value",
+          "recurring_gameplay_variant",
+          "medium_spoiler_penalty_applied"
+        ],
+        "decision_explanation": {
+          "renderer": "selection-explanation-ja-v1",
+          "text": "後半位置自体は減点せず、medium spoiler penalty後も高い品質と説明価値が残った。"
+        }
+      }
+    }
+  ],
+  "near_miss_publication": {
+    "json_limit_formula": "min(total_rejected, 100, max(20, requested_image_count * 2))",
+    "json_limit_for_this_run": 20,
+    "markdown_limit": 10,
+    "coverage": "at_least_one_per_rejection_reason",
+    "fill_order": "counterfactual_marginal_utility_desc_then_selection_tie_break"
+  },
+  "near_misses": [
+    {
+      "image_id": "frm_10a83f099e21eef2ad0f7d437391be4351061460e79495e1dc5c888a71956b41",
+      "source": {
+        "video_id": "vid_a1e9c4a7019d",
+        "candidate_moment_id": "mom_64d4a4a830bc",
+        "timeline_segment_id": "seg_c9dc0dfca9bb",
+        "video_time": {
+          "source_pts": 372870,
+          "origin_pts": 9000,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "offset_seconds": {
+            "numerator": 4043,
+            "denominator": 1000
+          },
+          "display": "00:00:04.043"
+        }
+      },
+      "classification": {
+        "scene_slug": "opening",
+        "scene_display_name": "オープニング",
+        "scene_selection_role": "ordinary",
+        "blog_image_type": "title",
+        "spoiler_risk": "none",
+        "spoiler_evidence": null
+      },
+      "counterfactual_selection": {
+        "base_utility": 0.774,
+        "spoiler_penalty": 0.0,
+        "coverage_bonus": 0.05,
+        "temporal_diversity_penalty": 0.0,
+        "marginal_utility": 0.824
+      },
+      "rejection": {
+        "reason_code": "title_limit",
+        "blocked_by_image_id": "frm_38f1a9c2e642361a62726d6e407eb8fa60ed441afb6c38d80cd9bb229103bf0f"
+      }
+    },
+    {
+      "image_id": "frm_74e2150bfbb389069ae743fa145b77080c256d227237eb2429efdc601f9127d2",
+      "source": {
+        "video_id": "vid_a1e9c4a7019d",
+        "candidate_moment_id": "mom_332cd8d322d1",
+        "timeline_segment_id": "seg_665c074e6011",
+        "video_time": {
+          "source_pts": 67961970,
+          "origin_pts": 9000,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "offset_seconds": {
+            "numerator": 755033,
+            "denominator": 1000
+          },
+          "display": "00:12:35.033"
+        },
+        "video_set_progress": 0.056102
+      },
+      "classification": {
+        "scene_slug": "exploration",
+        "scene_display_name": "探索",
+        "scene_selection_role": "recurring_gameplay",
+        "blog_image_type": "normal_gameplay",
+        "spoiler_risk": "none",
+        "spoiler_evidence": null
+      },
+      "counterfactual_selection": {
+        "base_utility": 0.802,
+        "spoiler_penalty": 0.0,
+        "coverage_bonus": 0.1,
+        "temporal_diversity_penalty": 0.0,
+        "marginal_utility": 0.902
+      },
+      "rejection": {
+        "reason_code": "visual_near_duplicate",
+        "nearest_selected_image_id": "frm_6a4d812e6241e0ced78984e7b3c60856c4c4401c8247237e93c9f498a2b0dd8b",
+        "similarity": 0.997
+      }
+    },
+    {
+      "image_id": "frm_885c4d13a36a9a6993f29bb66b938d1d22a5e08a249c4fc9db9562125718f064",
+      "source": {
+        "video_id": "vid_f4c22385e80e",
+        "candidate_moment_id": "mom_38308db454f8",
+        "timeline_segment_id": "seg_f079ef7335f8",
+        "video_time": {
+          "source_pts": 101103030,
+          "origin_pts": 0,
+          "time_base": {
+            "numerator": 1,
+            "denominator": 90000
+          },
+          "offset_seconds": {
+            "numerator": 1123367,
+            "denominator": 1000
+          },
+          "display": "00:18:43.367"
+        },
+        "video_set_progress": 0.917019
+      },
+      "classification": {
+        "scene_slug": "battle",
+        "scene_display_name": "戦闘",
+        "scene_selection_role": "recurring_gameplay",
+        "blog_image_type": "normal_gameplay",
+        "spoiler_risk": "medium",
+        "spoiler_evidence": {
+          "source": "candidate_annotation",
+          "summary": "同じ固有bossと終盤固有areaが表示される。"
+        }
+      },
+      "counterfactual_selection": {
+        "base_utility": 0.798,
+        "spoiler_penalty": 0.04,
+        "coverage_bonus": 0.1,
+        "temporal_diversity_penalty": 0.0,
+        "marginal_utility": 0.858
+      },
+      "rejection": {
+        "reason_code": "similarity_ceiling",
+        "nearest_selected_image_id": "frm_d9c3f271dd1230c7d05860095fd5d5573682aed3e04ef9178d9e6420ed9bcfeb",
+        "similarity": 0.985,
+        "final_similarity_ceiling": 0.98
+      }
+    }
+  ],
+  "context_cues": [
+    {
+      "id": "cue_0124d3",
+      "video_id": "vid_a1e9c4a7019d",
+      "source_kind": "embedded_subtitle",
+      "stream_index": 3,
+      "language": {
+        "value": "ja",
+        "origin": "stream_metadata"
+      },
+      "timestamp_basis": "source_pts",
+      "start": {
+        "source_pts": 67725000,
+        "origin_pts": 9000,
+        "time_base": {
+          "numerator": 1,
+          "denominator": 90000
+        },
+        "offset_seconds": {
+          "numerator": 3762,
+          "denominator": 5
+        },
+        "display": "00:12:32.400"
+      },
+      "end": {
+        "source_pts": 68121000,
+        "origin_pts": 9000,
+        "time_base": {
+          "numerator": 1,
+          "denominator": 90000
+        },
+        "offset_seconds": {
+          "numerator": 3784,
+          "denominator": 5
+        },
+        "display": "00:12:36.800"
+      },
+      "reliability": {
+        "policy": "usable"
+      },
+      "text_included": false
+    },
+    {
+      "id": "cue_44a901",
+      "video_id": "vid_c7bd10eb3220",
+      "source_kind": "speech_to_text",
+      "stream_index": 1,
+      "language": {
+        "value": "ja",
+        "origin": "configured"
+      },
+      "timestamp_basis": "asr_sample_grid_estimate",
+      "start": {
+        "sample_index": 43324864,
+        "sample_rate_hz": 16000,
+        "exact_seconds": "2707.804",
+        "display": "00:45:07.804"
+      },
+      "end": {
+        "sample_index": 43374496,
+        "sample_rate_hz": 16000,
+        "exact_seconds": "2710.906",
+        "display": "00:45:10.906"
+      },
+      "reliability": {
+        "avg_logprob": -0.31,
+        "policy": "usable"
+      },
+      "text_included": false
+    },
+    {
+      "id": "cue_44a902",
+      "video_id": "vid_c7bd10eb3220",
+      "source_kind": "speech_to_text",
+      "stream_index": 1,
+      "language": {
+        "value": "ja",
+        "origin": "configured"
+      },
+      "timestamp_basis": "asr_sample_grid_estimate",
+      "start": {
+        "sample_index": 43377648,
+        "sample_rate_hz": 16000,
+        "exact_seconds": "2711.103",
+        "display": "00:45:11.103"
+      },
+      "end": {
+        "sample_index": 43417408,
+        "sample_rate_hz": 16000,
+        "exact_seconds": "2713.588",
+        "display": "00:45:13.588"
+      },
+      "reliability": {
+        "avg_logprob": -0.27,
+        "policy": "usable"
+      },
+      "text_included": false
+    },
+    {
+      "id": "cue_9bc1aa",
+      "video_id": "vid_f4c22385e80e",
+      "source_kind": "speech_to_text",
+      "stream_index": 1,
+      "language": {
+        "value": "ja",
+        "origin": "configured"
+      },
+      "timestamp_basis": "asr_sample_grid_estimate",
+      "start": {
+        "sample_index": 17928000,
+        "sample_rate_hz": 16000,
+        "exact_seconds": "1120.500",
+        "display": "00:18:40.500"
+      },
+      "end": {
+        "sample_index": 17987200,
+        "sample_rate_hz": 16000,
+        "exact_seconds": "1124.200",
+        "display": "00:18:44.200"
+      },
+      "reliability": {
+        "avg_logprob": -0.22,
+        "policy": "usable"
+      },
+      "text_included": false
+    }
+  ],
+  "provenance": {
+    "selection": {
+      "policy_version": "video-set-selection-v1",
+      "spoiler_sensitivity": "medium",
+      "blog_image_type_target": {
+        "normal_gameplay": 0.7,
+        "event": 0.25,
+        "menu": 0.05
+      },
+      "similarity_base": 0.72,
+      "similarity_final": 0.98
+    },
+    "runtime": {
+      "os": "linux",
+      "environment": "wsl2",
+      "python": "3.13",
+      "compute_device": "cuda",
+      "gpu_model": "NVIDIA GeForce RTX 5090"
+    },
+    "tools": {
+      "ffmpeg": "6.1.1",
+      "ffprobe": "6.1.1",
+      "ollama": "0.31.2",
+      "faster_whisper": "1.2.1",
+      "ctranslate2": "4.8.1"
+    },
+    "models": {
+      "scene_catalog": {
+        "name": "qwen3-vl:8b-instruct",
+        "digest": "sha256:7b8f0bf040fe50b53c013a9dd2e84b7f6f6288dcdde09505a97ca1648da2b83a"
+      },
+      "candidate_annotation": {
+        "name": "qwen3-vl:8b-instruct",
+        "digest": "sha256:7b8f0bf040fe50b53c013a9dd2e84b7f6f6288dcdde09505a97ca1648da2b83a"
+      },
+      "speech_to_text": {
+        "name": "faster-whisper-large-v3-turbo",
+        "snapshot": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
+      }
+    },
+    "contracts": {
+      "video_scan_policy": "v1",
+      "scene_catalog_prompt": "v1",
+      "scene_catalog_schema": "v1",
+      "candidate_annotation_prompt": "v1",
+      "candidate_annotation_schema": "v1",
+      "context_cue_policy": "v1",
+      "video_set_selection_policy": "v1",
+      "report_schema": "1.0.0"
+    },
+    "stages": [
+      {
+        "name": "video_scan",
+        "status": "completed",
+        "fingerprint": "stg_4118e2ad79faebd1de0f3c7cc1547646bf417774c726f6e1f8c4aa406d1f9899",
+        "upstream_fingerprints": [],
+        "cache_hits": 3,
+        "cache_misses": 0,
+        "recomputed_items": 0,
+        "attempt_count": 0,
+        "validation_failures": 0,
+        "effective_settings": {
+          "recursive": true,
+          "video_order": "relative_path_natural_order",
+          "video_fingerprint": "sha256_whole_file"
+        },
+        "tool_refs": [
+          "ffmpeg",
+          "ffprobe"
+        ],
+        "contract_refs": [
+          "video_scan_policy"
+        ],
+        "duration_ms": 420
+      },
+      {
+        "name": "context_cues",
+        "status": "completed",
+        "fingerprint": "stg_dccce319a84d5c97fae9484b9d564c3edef5920172e87ead823f23c1c1cffd78",
+        "upstream_fingerprints": [
+          "stg_4118e2ad79faebd1de0f3c7cc1547646bf417774c726f6e1f8c4aa406d1f9899"
+        ],
+        "cache_hits": 2,
+        "cache_misses": 1,
+        "recomputed_items": 1,
+        "attempt_count": 1,
+        "validation_failures": 0,
+        "effective_settings": {
+          "pcm_sample_rate_hz": 16000,
+          "chunk_seconds": 600,
+          "overlap_seconds": 5,
+          "configured_language": "ja"
+        },
+        "tool_refs": [
+          "ffmpeg",
+          "faster_whisper",
+          "ctranslate2"
+        ],
+        "model_refs": [
+          "speech_to_text"
+        ],
+        "contract_refs": [
+          "context_cue_policy"
+        ],
+        "duration_ms": 4810
+      },
+      {
+        "name": "scene_catalog",
+        "status": "completed",
+        "fingerprint": "stg_3112ab366411a14decba23533505cd81345ac85ece487270959b96077324c962",
+        "upstream_fingerprints": [
+          "stg_4118e2ad79faebd1de0f3c7cc1547646bf417774c726f6e1f8c4aa406d1f9899"
+        ],
+        "cache_hits": 1,
+        "cache_misses": 0,
+        "recomputed_items": 0,
+        "attempt_count": 0,
+        "validation_failures": 0,
+        "effective_settings": {
+          "representative_frame_limit": 24,
+          "scene_limit_min": 3,
+          "scene_limit_max": 8
+        },
+        "tool_refs": [
+          "ollama"
+        ],
+        "model_refs": [
+          "scene_catalog"
+        ],
+        "contract_refs": [
+          "scene_catalog_prompt",
+          "scene_catalog_schema"
+        ],
+        "duration_ms": 30
+      },
+      {
+        "name": "candidate_annotation",
+        "status": "completed",
+        "fingerprint": "stg_76241b7e37409b8dbcc3b9b9fbf8e1af62ceea1a9010c2ca038b7407b6cbd4cc",
+        "upstream_fingerprints": [
+          "stg_dccce319a84d5c97fae9484b9d564c3edef5920172e87ead823f23c1c1cffd78",
+          "stg_3112ab366411a14decba23533505cd81345ac85ece487270959b96077324c962"
+        ],
+        "cache_hits": 38,
+        "cache_misses": 4,
+        "recomputed_items": 4,
+        "attempt_count": 4,
+        "validation_failures": 0,
+        "effective_settings": {
+          "maximum_frame_candidates": 3,
+          "context_cue_policy": "nearest_usable_v1"
+        },
+        "tool_refs": [
+          "ollama"
+        ],
+        "model_refs": [
+          "candidate_annotation"
+        ],
+        "contract_refs": [
+          "candidate_annotation_prompt",
+          "candidate_annotation_schema",
+          "context_cue_policy"
+        ],
+        "prompt_eval_tokens": 19120,
+        "eval_tokens": 1129,
+        "duration_ms": 9310
+      },
+      {
+        "name": "final_selection",
+        "status": "completed",
+        "fingerprint": "stg_d973b5775c4bd7b87d74f8b524282808c0c702ce729841aee16cb6d35638e7cc",
+        "upstream_fingerprints": [
+          "stg_76241b7e37409b8dbcc3b9b9fbf8e1af62ceea1a9010c2ca038b7407b6cbd4cc"
+        ],
+        "cache_hits": 0,
+        "cache_misses": 1,
+        "recomputed_items": 1,
+        "attempt_count": 1,
+        "validation_failures": 0,
+        "effective_settings": {
+          "requested_image_count": 6,
+          "spoiler_sensitivity": "medium",
+          "similarity_base": 0.72,
+          "similarity_final": 0.98
+        },
+        "contract_refs": [
+          "video_set_selection_policy"
+        ],
+        "duration_ms": 80
+      }
+    ]
+  },
+  "privacy": {
+    "absolute_paths": "omitted",
+    "model_reasoning_trace": "omitted",
+    "raw_model_responses": "omitted",
+    "generated_screen_text_quotations": "omitted",
+    "raw_context_cue_text": "processing_cache_only",
+    "relative_source_paths": "included",
+    "environment_variables": "omitted",
+    "credentials": "omitted",
+    "prompt_bodies": "omitted",
+    "stack_traces": "omitted"
+  }
+}
