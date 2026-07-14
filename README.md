@@ -19,6 +19,7 @@ game-screen-pick \
 - [TOML、優先順位、model更新](docs/configuration.md)
 - [runtime、cache、進捗、エラー、WSL2運用](docs/operations.md)
 - [選択画像とreport](docs/report.md)
+- [移行、統合検証、性能受け入れ](docs/migration-acceptance.md)
 - [完全な設定例](docs/examples/video-selection.toml)
 
 ## 現在の実装について
@@ -173,8 +174,8 @@ Ollama host の優先順位は `--ollama-host`、`OLLAMA_HOST`、`[ollama].host`
 
 ## 関連ドキュメント
 
-- [ADR 0002: Classify Selection Shortlist With Ollama](docs/adr/0002-classify-selection-shortlist-with-ollama.md)
-- [ADR 0003: Derive Selection Roles From Scene Catalog](docs/adr/0003-derive-selection-roles-from-scene-catalog.md)
+- [ADR index](docs/adr/README.md)
 - [ADR 0004: Select Video Set Blog Images Deterministically](docs/adr/0004-select-video-set-blog-images-deterministically.md)（動画入力向け設計、未実装）
 - [ADR 0005: Publish Video Selection Artifacts Atomically](docs/adr/0005-publish-video-selection-artifacts-atomically.md)（動画入力向け設計、未実装）
 - [ADR 0006: Expose Video Selection Through CLI and Versioned Config](docs/adr/0006-expose-video-selection-through-cli-and-versioned-config.md)（動画入力向け設計、未実装）
+- [ADR 0007: Migrate to the Video Set Selector Through a Gated Cutover](docs/adr/0007-migrate-to-video-set-selector-through-gated-cutover.md)（動画入力向け移行設計、未実装）

@@ -40,6 +40,26 @@ _Avoid_: path hash, file stat, stage setting hash
 再開可能な画像選定を構成する、入力と再利用可能な成果物の境界が明示された処理単位。
 _Avoid_: arbitrary function, progress message, whole run
 
+**Migration Gate**:
+Video Set selectorのpublic cutoverに必要な実装PR、test、target性能、human quality、traceabilityの全証拠を一つの判定として扱う境界。不足時はscreenshot CLI、package version、legacy codeの公開状態を一切変えない。
+_Avoid_: feature flag, partial rollout, runtime timeout, individual PR check
+
+**Public Cutover**:
+Migration Gate通過後の一つのPRで、public CLIをVideo Set入力へ切り替え、packageを2.0.0にし、screenshot固有codeを削除するatomicな公開変更。
+_Avoid_: internal adapter, preview mode, compatibility period, Processing Stage
+
+**Acceptance Profile**:
+supported target上の実videoからrelease suiteとfull-scale suiteの対象を指定するtarget-onlyのuntracked設定。repositoryにはschema templateだけを置き、実pathやvideo名を記録しない。
+_Avoid_: public TOML, Effective Configuration, committed fixture, production default
+
+**Acceptance Record**:
+一回のtarget acceptanceで得たcommit、runtime/model identity、pathなしのVideo Set fingerprint、Stage時間、resource、cache、quality判定をversioned JSONとして保存する証拠。media、absolute path、raw text、prompt、model responseを含めない。
+_Avoid_: Canonical Selection Report, runtime log, baseline snapshot, raw benchmark output
+
+**Legacy Cache**:
+旧screenshot selectorが作成した認識可能なprocessing cache entry。cache lock取得後に自動削除し、変換・保持・互換利用は行わない。新しい`videos/`と`video-sets/`は含まない。
+_Avoid_: old model store, old Stage Fingerprint, user output, unknown directory
+
 **Stage Fingerprint**:
 Processing Stage の成果物に影響する上流成果物と、そのStage固有の設定・versionだけから導出される識別子。
 _Avoid_: global config hash, Video Fingerprint, unrelated downstream setting
