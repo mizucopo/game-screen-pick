@@ -53,7 +53,7 @@ _Avoid_: partial cache, in-progress stage, progress checkpoint
 _Avoid_: Video Set Stage, cross-video selection, whole-run stage
 
 **Video Set Stage**:
-順序付きのVideo Setと各Video Stageの成果物を入力にして、Scene Catalog、動画横断の比較と多様性、最終選定を所有する Processing Stage。各Video Sourceからの最低採用数は持たない。
+順序付きのVideo Setと各Video Stageの成果物を入力にして、Scene Catalog、Candidate Annotation、動画横断の比較と多様性、最終選定を所有する Processing Stage。各Video Sourceからの最低採用数は持たない。
 _Avoid_: Video Stage, per-video processing, per-video selection quota
 
 **Video Time**:
@@ -77,16 +77,28 @@ _Avoid_: extracted image, Frame Candidate, scene event
 _Avoid_: external subtitle, raw ASR segment, independent candidate, prompt text
 
 **Candidate Moment Density**:
-Video Durationに比例して、一つのVideo Sourceが保持できるCandidate Moment数を定める上限率。上限は採用ノルマではなく、適格なCandidate Momentがなければ0件になり得る。
+Video Durationに比例して、一つのVideo Sourceが保持できるCandidate Moment数を定める上限率。既定値は毎分2件で、上限は採用ノルマではなく、適格なCandidate Momentがなければ0件になり得る。
 _Avoid_: fixed per-video count, per-video selection quota, requested-output multiplier
 
 **Frame Candidate**:
 Candidate Moment周辺のrefinementで有効と判断された、一つのVideo Source上の正確なsource frame。同じframeを複数のCandidate Momentが参照でき、proxy画像や出力画像とは区別する。
 _Avoid_: Candidate Moment, cached proxy, output image
 
+**Representative Frame**:
+Selection Shortlist内の一つのCandidate Momentが参照する1から3件のFrame Candidateから、Candidate Annotationがブログ上の意味を最も表すものとして選んだframe。画像品質の再評価や最終採用を意味しない。
+_Avoid_: highest Quality Score, selected output, Frame Refinement
+
 **Cross-Video Diversity**:
 Video Set全体で、視覚的に重複するframeや進行上の一部へ偏ったframeを最終選定から抑える性質。特定のVideo Sourceへ採用枠を保証するものではない。
 _Avoid_: per-video quota, source-local deduplication, equal allocation
+
+**Scene Catalog Representative Set**:
+Video Set全体のNeutral Image Analysisから、品質、見た目の多様性、頻出patternを表すFrame Candidateを最大24件選んだScene Catalog専用の入力集合。Selection Shortlistと要求出力枚数から独立し、要求枚数の変更だけではScene Catalogを変えない。
+_Avoid_: Selection Shortlist, selected output, per-video representatives
+
+**Candidate Annotation**:
+Selection Shortlist内の一つのCandidate Momentについて、1から3件の有効なFrame Candidate、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、Representative Frameと意味情報を構造化して返すVideo Set StageのOllama評価。画像品質、最終score、soft coverage、最終採否は決めない。
+_Avoid_: Candidate Scoring, Frame Refinement, Neutral Image Analysis, final selection
 
 **Scene**:
 ブログ用の画像選択で使う、画像内容を表すカテゴリ。ゲームジャンルや入力画像群に応じて決まる。
@@ -109,7 +121,7 @@ scene を人が読みやすいように表す日本語名。ブログ用の画�
 _Avoid_: filename prefix, report key
 
 **Scene Catalog**:
-一つのVideo Setを横断して共有する、その選定で使う scene と scene selection role の一覧。3から8個の scene と分類の逃げ先である other で構成され、Videoごとには分割しない。
+Scene Catalog Representative Setから作る、一つのVideo Setを横断して共有するsceneとScene Selection Roleの一覧。3から8個のsceneと分類の逃げ先である`other`で構成され、Videoごとには分割しない。
 _Avoid_: fixed scene list, free-form per-image labels, per-video catalog
 
 **Scene Description**:
@@ -128,17 +140,37 @@ _Avoid_: fixed scene list, selection rule
 ブログ画像として何を重視して選ぶかを表す実行ごとの意図。scene hint は selection intent を補足する入力であり、変わると scene catalog や画像分類も変わり得る。
 _Avoid_: image analysis setting, cache option
 
+**Blog Image Type**:
+Representative Frameがブログ内で果たす大分類。値は`normal_gameplay`、`event`、`menu`、`title`、`other`で、Candidate Annotationが付与し、最終的なsoft coverageは決定的なVideo Set selectorが扱う。
+_Avoid_: Scene, Scene Selection Role, hard quota, final selection
+
+**Explanation Value**:
+Representative FrameとそのCandidate Momentがブログ本文でplayや出来事を説明できる度合い。値は`none`、`low`、`medium`、`high`で、Candidate Annotationが意味評価として付与するが、最終scoreや採否そのものではない。
+_Avoid_: Quality Score, model confidence, final selection score
+
+**Screen Text Kind**:
+Representative Frame内で意味を持つ画面内テキストの役割。値は`none`、`dialogue`、`menu`、`title`、`hud`、`other`で、生成された逐語転記は含めない。
+_Avoid_: Context Cue, OCR transcript, generated quotation, Blog Image Type
+
+**Context Cue Relevance**:
+Candidate Annotationへ渡したContext Cueが、Representative FrameとCandidate Momentの説明をどれだけ補強するかを表す`unavailable`、`none`、`weak`、`strong`の評価。補強に使ったContext Cue IDを伴うが、単独でframeを適格にしない。
+_Avoid_: Context Cue reliability, frame acceptance, independent candidate score
+
+**Spoiler Risk**:
+Representative FrameとCandidate Momentが物語上の重要情報を明かす可能性を表す`none`、`low`、`medium`、`high`の意味評価。Candidate Annotationが付与し、利用者設定に応じた減点は決定的なVideo Set selectorが扱う。
+_Avoid_: spoiler sensitivity, spoiler penalty, late-video hard reject
+
 **Quality Score**:
 blog candidate がブログ画像としてどれだけ使いやすいかを表す評価値。scene の種類やゲームジャンルの指示ではなく、画像そのものの見やすさを表す。
 _Avoid_: scene hint, user-facing mode, selection profile
 
 **Blog Candidate**:
-ブログ画像として選択する余地があるスクリーンショット。明らかな暗転、白飛び、単色画面、遷移フレームは含まない。
-_Avoid_: all input images
+Candidate Annotationが完了し、Representative Frameと最終選定に必要な意味情報を持つCandidate Moment。明らかな暗転、白飛び、単色画面、遷移フレームはVideo Stageで既に除外されている。
+_Avoid_: all Candidate Moments, Selection Shortlist, selected output
 
 **Selection Shortlist**:
-blog candidate のうち、ブログに採用される可能性が高く、最終選別のためにscene分類へ進める画像群。
-_Avoid_: all blog candidates, selected output
+有効なFrame Candidateを持つCandidate Momentのうち、Neutral Image Analysisによる品質と見た目の多様性から、Candidate Annotationへ進めるものをVideo Set全体でlocalに絞った集合。
+_Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
 
 **Neutral Image Analysis**:
 scene や selection intent に依存せず、Frame Candidateそのものから得られる特徴と品質評価。画像の内容分類ではなく、blog candidate 判定や動画横断の類似度判定の土台になる。
@@ -168,13 +200,9 @@ _Avoid_: duplicate flooding, one-representative-only selection, manual expansion
 同じ scene の中で、見た目や構図が近くブログ上の役割が重複する画像のまとまり。最終選択では原則として各 variant group から代表画像を1枚だけ選ぶが、recurring gameplay pattern では variant expansion の対象になる。
 _Avoid_: scene, duplicate file
 
-**Ollama Classification Failure**:
-blog candidate を scene catalog の scene に分類できなかった状態。other に分類された画像とは区別され、最終選択の対象にはならない。
-_Avoid_: other scene, rejected by content filter
-
-**Ollama Catalog Fallback**:
-scene catalog を作成できないときに、処理継続のため全 blog candidate を fallback scene に割り当てる代替状態。Ollama Classification Failure とは区別される。
-_Avoid_: per-image classification failure, other scene
+**Ollama Stage Failure**:
+Scene CatalogまたはCandidate Annotationが、同じsemantic入力による初回と1回の再試行後もtransport、schema、domain validationを完了できなかった状態。`other`への分類とは区別し、fallbackや失敗Candidateの除外で処理を継続せず、最終選定とoutput公開を中止する。
+_Avoid_: other scene, silent exclusion, catalog fallback, partial output
 
 **Resumable Run**:
 中断された画像選択を、再利用可能なCompleted Stageから後で続ける実行。Video Setや設定が変わった場合は、一致するStage Fingerprintの成果物だけを再利用する。
