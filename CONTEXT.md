@@ -44,6 +44,18 @@ _Avoid_: arbitrary function, progress message, whole run
 Processing Stage の成果物に影響する上流成果物と、そのStage固有の設定・versionだけから導出される識別子。
 _Avoid_: global config hash, Video Fingerprint, unrelated downstream setting
 
+**Effective Configuration**:
+明示CLI、明示TOML、公開環境変数、組み込み既定値の順で項目ごとに解決し、型・範囲・相互制約を検証した1回の実行設定。設定sourceはprovenanceに残すが、無関係な全項目を一つのStage Fingerprintへ混ぜない。
+_Avoid_: raw TOML, environment dump, global config hash, CLI defaults applied before precedence
+
+**Resolved Model Identity**:
+configured model名から実行時に解決し、完全性とload能力を検証して1 run内でfreezeする、Ollamaの完全manifest digestまたはHugging Faceの完全commit SHA。model依存Stageのfingerprintとprovenanceへ保持し、TOMLへ手入力するhashとはしない。
+_Avoid_: model tag, configured model name, truncated report value, expected digest
+
+**Model Upgrade Policy**:
+全model roleへ適用する`auto_upgrade`設定とbootstrap規則。既定では処理前に更新を試み、更新不能でも完全でload可能なlocal modelがあればwarning付きで使い、別modelへのfallbackやpartial downloadの利用は行わない。実際のcache互換性は設定値でなくResolved Model Identityが決める。
+_Avoid_: model fallback, cache reset, model identity, notification-only update check
+
 **Completed Stage**:
 成果物と完了manifestがatomicに確定し、再利用できる Processing Stage。完了manifestのない部分成果物は含まない。
 _Avoid_: partial cache, in-progress stage, progress checkpoint
