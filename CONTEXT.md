@@ -92,6 +92,14 @@ _Avoid_: highest Quality Score, selected output, Frame Refinement
 Video Set全体で、視覚的に重複するframeや進行上の一部へ偏ったframeを最終選定から抑える性質。特定のVideo Sourceへ採用枠を保証するものではない。
 _Avoid_: per-video quota, source-local deduplication, equal allocation
 
+**Video Set Progress**:
+Video Orderに従って各Video Durationを連結したVideo Set全体におけるCandidate Momentの進行位置。先行するVideo Durationの合計と現在のVideo TimeをVideo Set全体の長さで正規化した0以上1未満の値で、単独では候補の有用性やSpoiler Riskを表さない。
+_Avoid_: per-video position, story importance, spoiler score, selection quota
+
+**Temporal Diversity Penalty**:
+要求枚数を`N`としたとき、選択済み候補との最短Video Set Progress距離が`1/N`未満の候補へ最大0.08を線形に適用するsoft penalty。進行位置そのものへの減点や時間帯ごとの採用枠ではない。
+_Avoid_: late-video penalty, timeline bucket quota, per-video quota
+
 **Scene Catalog Representative Set**:
 Video Set全体のNeutral Image Analysisから、品質、見た目の多様性、頻出patternを表すFrame Candidateを最大24件選んだScene Catalog専用の入力集合。Selection Shortlistと要求出力枚数から独立し、要求枚数の変更だけではScene Catalogを変えない。
 _Avoid_: Selection Shortlist, selected output, per-video representatives
@@ -141,8 +149,16 @@ _Avoid_: fixed scene list, selection rule
 _Avoid_: image analysis setting, cache option
 
 **Blog Image Type**:
-Representative Frameがブログ内で果たす大分類。値は`normal_gameplay`、`event`、`menu`、`title`、`other`で、Candidate Annotationが付与し、最終的なsoft coverageは決定的なVideo Set selectorが扱う。
+Representative Frameがブログ内で主に果たす説明上の役割。値は`normal_gameplay`、`event`、`menu`、`title`、`other`で、操作可否ではなく画面とCandidate Momentの主目的からCandidate Annotationが付与する。探索や戦闘に短い台詞・HUD表示が重なったものは`normal_gameplay`、会話や演出そのものが主体なら`event`として扱い、最終的なsoft coverageは決定的なVideo Set selectorが扱う。
 _Avoid_: Scene, Scene Selection Role, hard quota, final selection
+
+**Blog Image Type Soft Coverage**:
+最終選定が通常時に目指すBlog Image Typeの構成。`normal_gameplay` 70%、`event` 25%、`menu` 5%を目安とし、`other`と`title`には予約枠を設けない。候補の有用性や不足に応じて構成比の超過を許すため固定quotaではなく、`title`だけは有用な候補を最大1枚まで選べる。
+_Avoid_: hard quota, per-video quota, Cinematic Soft Cap, guaranteed title image
+
+**Blog Image Type Coverage Bonus**:
+最大剰余法で丸めたBlog Image Type Soft Coverageの目標枚数へ未達の`normal_gameplay`、`event`、`menu`候補に0.10、まだtitleを選んでいないときの`title`候補に0.05を加えるsoft bonus。目標到達後はbonusを外すだけで、type超過へのpenaltyや`other`の予約枠は設けない。
+_Avoid_: hard quota, overflow penalty, guaranteed title image
 
 **Explanation Value**:
 Representative FrameとそのCandidate Momentがブログ本文でplayや出来事を説明できる度合い。値は`none`、`low`、`medium`、`high`で、Candidate Annotationが意味評価として付与するが、最終scoreや採否そのものではない。
@@ -157,12 +173,32 @@ Candidate Annotationへ渡したContext Cueが、Representative FrameとCandidat
 _Avoid_: Context Cue reliability, frame acceptance, independent candidate score
 
 **Spoiler Risk**:
-Representative FrameとCandidate Momentが物語上の重要情報を明かす可能性を表す`none`、`low`、`medium`、`high`の意味評価。Candidate Annotationが付与し、利用者設定に応じた減点は決定的なVideo Set selectorが扱う。
+Representative FrameとCandidate Momentが物語上の重要情報を明かす可能性を表す`none`、`low`、`medium`、`high`の意味評価。汎用的な探索・戦闘は`none`、軽微な進行情報は`low`、固有ボスや終盤固有エリアなどは`medium`、Major Spoiler Signalの具体的な意味証拠があるものは`high`とし、Candidate Annotationが付与する。利用者設定に応じた減点は決定的なVideo Set selectorが扱う。
 _Avoid_: spoiler sensitivity, spoiler penalty, late-video hard reject
+
+**Major Spoiler Signal**:
+エンディング、最終ボスの正体・形態、主要人物の生死、裏切り・犯人・真の正体、物語の中心的な種明かしを画像、画面内テキスト、Context Cueが具体的に示すこと。Video Set内の進行位置だけではMajor Spoiler Signalにならない。
+_Avoid_: late-video position, generic battle, ordinary progression detail
+
+**Spoiler Sensitivity**:
+Spoiler Riskを最終選定でどれだけ避けるかを表す実行ごとの`low`、`medium`、`high`設定。既定値は`medium`で、値を高くしても候補を除外するhard policyにはしない。
+_Avoid_: Spoiler Risk, story progress, hard reject
+
+**Spoiler Penalty**:
+Spoiler SensitivityとSpoiler Riskの組み合わせから、0から1の選定utilityに適用する決定的な減点。`low`ではriskが`medium`、`high`のとき0.02、0.05、`medium`では`low`、`medium`、`high`のとき0.01、0.04、0.10、`high`では0.02、0.08、0.18とし、riskが`none`なら常に0とする。
+_Avoid_: hard reject, late-video penalty, model confidence
 
 **Quality Score**:
 blog candidate がブログ画像としてどれだけ使いやすいかを表す評価値。scene の種類やゲームジャンルの指示ではなく、画像そのものの見やすさを表す。
 _Avoid_: scene hint, user-facing mode, selection profile
+
+**Selection Base Utility**:
+Blog Candidate単体の有用性を0から1で表す決定的な値。Quality Scoreを70%、Explanation Valueを25%、Context Cue Relevanceを5%として合成し、動画内位置、Blog Image Typeの構成、視覚・時間的多様性、Spoiler Penaltyは含めない。
+_Avoid_: final selection score, model confidence, diversity bonus, spoiler-adjusted utility
+
+**Marginal Selection Utility**:
+greedyなVideo Set selectorが次の1枚を選ぶたびに再計算する値。Selection Base UtilityからSpoiler PenaltyとTemporal Diversity Penaltyを引き、Blog Image Type Coverage Bonusを加える。視覚類似度はutilityではなく適格条件として扱い、同点はSpoiler Penalty、Quality Score、選択済み画像との最大視覚類似度、Video Order、Video Time、Frame Candidate IDの順で解消する。
+_Avoid_: static candidate score, Ollama output, global optimization result
 
 **Blog Candidate**:
 Candidate Annotationが完了し、Representative Frameと最終選定に必要な意味情報を持つCandidate Moment。明らかな暗転、白飛び、単色画面、遷移フレームはVideo Stageで既に除外されている。
@@ -171,6 +207,10 @@ _Avoid_: all Candidate Moments, Selection Shortlist, selected output
 **Selection Shortlist**:
 有効なFrame Candidateを持つCandidate Momentのうち、Neutral Image Analysisによる品質と見た目の多様性から、Candidate Annotationへ進めるものをVideo Set全体でlocalに絞った集合。
 _Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
+
+**Selection Shortfall**:
+有効な未注釈Candidate Momentを決定的なshortlist順で追加し、許可された視覚類似度緩和をすべて適用しても、適格なBlog Candidateが要求枚数に満たない状態。選べた画像とshortfall理由をreportへ出してwarning付きで正常終了し、Ollama Stage Failureとは区別する。
+_Avoid_: Candidate Annotation failure, silent omission, fabricated output, invalid-frame fallback
 
 **Neutral Image Analysis**:
 scene や selection intent に依存せず、Frame Candidateそのものから得られる特徴と品質評価。画像の内容分類ではなく、blog candidate 判定や動画横断の類似度判定の土台になる。
@@ -185,8 +225,8 @@ _Avoid_: event scene, cutscene
 _Avoid_: transition frame, hard reject, movie frame
 
 **Cinematic Soft Cap**:
-すべての cinematic scene の合計選択枚数を通常は少量に抑えつつ、他の有用候補が足りない場合だけ超過を許す上限。重要な見せ場を残しながら、入力全体が cinematic に偏ることを防ぐ。
-_Avoid_: per-scene cinematic quota, hard reject, fixed exclusion, exact quota
+既存の画像入力selectorで、すべてのcinematic sceneの合計選択枚数を通常は少量に抑えつつ、他の有用候補が足りない場合だけ超過を許す上限。Video Set selectorではBlog Image Type Soft Coverageに置き換え、併用しない。
+_Avoid_: Video Set selection rule, per-scene cinematic quota, hard reject, exact quota
 
 **Recurring Gameplay Pattern**:
 戦闘UI、探索画面、パズル盤面など、ゲーム中に頻繁に表示される通常playの画面構造。同じ構図でも状態や進行の違いがブログ上の説明価値になるため、複数のvariantを選ぶ余地がある。
@@ -195,6 +235,10 @@ _Avoid_: duplicate image, cinematic scene, static menu
 **Variant Expansion**:
 recurring gameplay pattern で、同じ variant group から複数の画像を選ぶこと。要求選択枚数が多いほど強まり、同じ画面構造の中にある状態差や進行差を拾うために使う。
 _Avoid_: duplicate flooding, one-representative-only selection, manual expansion mode
+
+**Visual Near-Duplicate**:
+Video Set selectorで使う正規化済み視覚特徴のcosine similarityが0.995を超えるRepresentative Frameの組。要求枚数が不足しても同時には選択しない。
+_Avoid_: recurring gameplay variant, same scene, temporal neighbor
 
 **Variant Group**:
 同じ scene の中で、見た目や構図が近くブログ上の役割が重複する画像のまとまり。最終選択では原則として各 variant group から代表画像を1枚だけ選ぶが、recurring gameplay pattern では variant expansion の対象になる。

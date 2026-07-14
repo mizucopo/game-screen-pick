@@ -151,3 +151,4 @@ Ollama host の優先順位は `--ollama-host`、`OLLAMA_HOST`、`[ollama].host`
 
 - [ADR 0002: Classify Selection Shortlist With Ollama](docs/adr/0002-classify-selection-shortlist-with-ollama.md)
 - [ADR 0003: Derive Selection Roles From Scene Catalog](docs/adr/0003-derive-selection-roles-from-scene-catalog.md)
+- [ADR 0004: Select Video Set Blog Images Deterministically](docs/adr/0004-select-video-set-blog-images-deterministically.md)（動画入力向け設計、未実装）

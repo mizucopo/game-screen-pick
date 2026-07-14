@@ -1,0 +1,157 @@
+# Select Video Set Blog Images Deterministically
+
+## Context
+
+The video-input design produces annotated Blog Candidates across an ordered Video Set. Candidate Annotation owns semantic judgments, but it deliberately does not decide quality, a final score, soft coverage, diversity, or selection. The final selector therefore needs one deterministic policy that preserves useful late-game images, applies spoiler preferences softly, maintains a practical blog-image mix, avoids visual and temporal repetition, and explains why each candidate won or lost.
+
+This ADR defines that policy. It applies to the future Video Set selector and does not implement or change the existing screenshot-input flow.
+
+## Semantic boundaries
+
+Blog Image Type describes the candidate's primary explanatory role in a blog, not whether the player can currently provide input:
+
+- `normal_gameplay`: exploration, combat, puzzles, or other play remains primary; short dialogue or HUD text may be overlaid.
+- `event`: conversation, a cutscene, or a scripted presentation is itself the primary subject.
+- `menu`: an inventory, equipment, map, settings, shop, or similar interface is primary.
+- `title`: a title, logo, or landing screen is primary.
+- `other`: a valid candidate whose primary role is none of the above.
+
+Scene Selection Role remains separate. `recurring_gameplay` controls variant expansion, while `ordinary` and `cinematic` use normal visual-diversity behavior. The Video Set selector does not apply ADR 0003's Cinematic Soft Cap because Blog Image Type soft coverage replaces it.
+
+## Base utility
+
+Quality remains the primary signal. Candidate Annotation's ordinal values are converted as follows:
+
+| Value | Explanation Value | Context Cue Relevance |
+|---|---:|---:|
+| unavailable | - | 0 |
+| none | 0 | 0 |
+| low / weak | 1/3 | 0.5 |
+| medium | 2/3 | - |
+| high / strong | 1 | 1 |
+
+For Quality Score `Q`, converted Explanation Value `E`, and converted Context Cue Relevance `C`:
+
+```text
+Selection Base Utility = 0.70 * Q + 0.25 * E + 0.05 * C
+```
+
+Context Cue can therefore add at most 0.05. Video position, Blog Image Type, diversity, and spoiler handling are not part of this candidate-local value.
+
+## Spoiler handling
+
+Spoiler Sensitivity is a run setting with `low`, `medium`, and `high`; the default is `medium`. The selector subtracts the following Spoiler Penalty from utility:
+
+| Spoiler Risk | low | medium | high |
+|---|---:|---:|---:|
+| `none` | 0 | 0 | 0 |
+| `low` | 0 | 0.01 | 0.02 |
+| `medium` | 0.02 | 0.04 | 0.08 |
+| `high` | 0.05 | 0.10 | 0.18 |
+
+All values are soft penalties. No sensitivity level rejects a candidate.
+
+Risk boundaries are:
+
+- `none`: generic exploration, combat, and ordinary UI.
+- `low`: minor progression facts such as an ordinary place, item, or quest.
+- `medium`: a named boss, unique late-game area, important quest outcome, or new form.
+- `high`: an ending, final-boss identity or form, major-character fate, betrayal, culprit or true identity, or central story reveal.
+
+`high` requires concrete semantic evidence from the image, screen-text role, or Context Cue. Video Order and late Video Set Progress alone never raise risk.
+
+## Blog Image Type soft coverage
+
+For requested output count `N`, normal targets are:
+
+| Blog Image Type | Target share |
+|---|---:|
+| `normal_gameplay` | 70% |
+| `event` | 25% |
+| `menu` | 5% |
+| `title` | no reserved target |
+| `other` | no reserved target |
+
+Fractional targets use the largest-remainder method. Equal remainders are resolved in `normal_gameplay`, `event`, `menu` order. Examples are 7/3/0 for `N=10`, 22/8/2 for `N=32`, and 70/25/5 for `N=100`.
+
+An eligible `normal_gameplay`, `event`, or `menu` candidate receives a `+0.10` Blog Image Type Coverage Bonus while the selected count for its type is below target. The bonus becomes zero at target; exceeding a target has no penalty. `other` never receives a coverage bonus. `title` receives `+0.05` until one title is selected, after which every further title candidate is ineligible. This is a hard maximum of one title, not a guaranteed title slot.
+
+## Temporal and visual diversity
+
+Video Set Progress concatenates Video Durations in Video Order and normalizes a Candidate Moment's cumulative time to `[0, 1)`. It is used only for temporal diversity, not as quality or spoiler evidence.
+
+For requested count `N`, let `d` be the nearest absolute Video Set Progress distance to a selected candidate. With no selected candidate, the penalty is zero. Otherwise:
+
+```text
+Temporal Diversity Penalty = 0.08 * max(0, 1 - d / (1 / N))
+```
+
+There are no chronological buckets and no per-video minimums.
+
+Visual similarity is an eligibility rule rather than another numeric penalty:
+
+- Normal selection begins at the configured similarity ceiling, whose default is 0.72.
+- If the current annotated pool cannot fill the request, the ceiling is relaxed through deterministic configured steps and ends at 0.98.
+- A `recurring_gameplay` scene may use a ceiling of 0.98 after eligible Variant Groups have each had their first opportunity, allowing state variants without immediately expanding one group.
+- A pair with cosine similarity greater than 0.995 is a Visual Near-Duplicate and can never be selected together.
+
+The selector-level normal ceiling never exceeds 0.98. The user-facing configuration and validation contract belongs to the CLI/config design.
+
+## Greedy selection
+
+At each selection step, every currently eligible unselected candidate receives:
+
+```text
+Marginal Selection Utility =
+    Selection Base Utility
+  - Spoiler Penalty
+  + Blog Image Type Coverage Bonus
+  - Temporal Diversity Penalty
+```
+
+The selector chooses the highest value and recomputes all coverage and temporal terms before choosing the next image. Ties are resolved by:
+
+1. lower Spoiler Penalty;
+2. higher Quality Score;
+3. lower maximum visual similarity to the selected set;
+4. Video Order, Video Time, and Frame Candidate ID.
+
+The last keys provide stable ordering only for exact ties and do not add a preference for earlier progress.
+
+Selection starts at the normal similarity ceiling and preserves selected images while moving through relaxation steps. If the Selection Shortlist grows, selection is recomputed from an empty selected set at the base ceiling against the expanded annotated pool so a previously relaxed choice cannot lock out a newly annotated diverse candidate.
+
+## Shortfall and failure
+
+If the current annotated Selection Shortlist cannot produce `N` images even at similarity 0.98, the Video Set Stage extends it in deterministic local shortlist order, completes Candidate Annotation for the added Candidate Moments, and recomputes selection. Batch sizing and operational limits belong to the runtime-capacity design.
+
+After all valid Candidate Moments are exhausted, selecting fewer than `N` images is a Selection Shortfall. The run publishes the selected images, completes successfully with a warning, and reports requested count, selected count, the final similarity pass, and reason counts. It never fills a shortfall with:
+
+- an invalid Frame Candidate;
+- an incomplete Candidate Annotation;
+- a second `title` image;
+- a Visual Near-Duplicate.
+
+Candidate Annotation failure is not a shortfall. The failure contract from Issue 165 remains fatal, and no output is published until the failed annotation succeeds on a later run.
+
+## Ranking examples
+
+With `N=10`, default Spoiler Sensitivity `medium`, no selected images, and all candidates visually eligible:
+
+| Candidate | Description | Base | Coverage | Spoiler | Marginal |
+|---|---|---:|---:|---:|---:|
+| B | useful late normal gameplay | 0.916 | +0.10 | 0 | **1.016** |
+| D | explanatory mid-game event | 0.821 | +0.10 | 0 | **0.921** |
+| C | late major-spoiler event | 0.902 | +0.10 | -0.10 | **0.902** |
+| A | ordinary early gameplay | 0.741 | +0.10 | 0 | **0.841** |
+
+The first-step order is B, D, C, A. Late position does not lower B, while C's soft spoiler penalty does not force it below an ordinary early image. After choosing B at progress 0.82, C at progress 0.84 receives a 0.064 temporal penalty, so the next order becomes D at 0.921, A at 0.841, then C at 0.838.
+
+If seven gameplay and one event image have already been selected for `N=10`, a gameplay candidate at 0.86 remains 0.86, an event candidate at 0.79 becomes 0.89 from coverage, and a gameplay candidate at 0.92 remains 0.92. Coverage helps the under-target event without overruling a clearly stronger gameplay image.
+
+## Consequences and diagnostics
+
+Changing requested count, Spoiler Sensitivity, penalty weights, or coverage targets can reuse Candidate Annotation because these inputs affect only deterministic final selection. The selection-policy version must still be part of the final selection stage fingerprint.
+
+The report must retain enough diagnostic data to reproduce each decision: utility components, type targets and actuals, spoiler setting and penalty, progress distance and temporal penalty, visual threshold/pass, nearest selected similarity, Variant Group behavior, tie-break use, and Selection Shortfall reasons. The exact public report schema is decided with the CLI/config/report contract.
+
+Greedy selection is intentionally preferred over a global optimizer: it is deterministic, incremental, and reportable, while still allowing coverage and temporal effects to react after each selected image.
