@@ -1,7 +1,9 @@
 """Completed Stage writerのconcurrency test。"""
 
+import hashlib
 import json
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,7 @@ def test_same_fingerprint_writes_are_serialized(
     """
     # Arrange
     cache_folder = tmp_path / "cache"
+    subject_fingerprint = "a" * 64
     stage = ProcessingStage.DISCOVER_VIDEO_SET
     semantic_input = {"videos": ["video.mp4"]}
     fingerprint = build_stage_fingerprint(stage, (), semantic_input)
@@ -54,10 +57,15 @@ def test_same_fingerprint_writes_are_serialized(
 
     def write_artifact(value: str, finished: threading.Event | None = None) -> None:
         try:
-            CompletedStageWriter(cache_folder).write(
+            CompletedStageWriter(
+                cache_folder,
+                subject_namespace="video-sets",
+                subject_fingerprint=subject_fingerprint,
+            ).write(
                 stage,
                 fingerprint,
                 (),
+                semantic_input,
                 {"value": value},
             )
         except BaseException as error:
@@ -95,9 +103,265 @@ def test_same_fingerprint_writes_are_serialized(
     assert errors == []
     artifact_path = (
         cache_folder
-        / "walking-skeleton"
+        / "video-sets"
+        / subject_fingerprint
         / stage.value
         / fingerprint.value
         / "artifact.json"
     )
     assert json.loads(artifact_path.read_text(encoding="utf-8")) == {"value": "first"}
+
+
+def test_completed_manifest_describes_content_addressed_artifact(
+    tmp_path: Path,
+) -> None:
+    """Completed Stage manifestに再利用検証情報だけが記録されること。
+
+    Arrange:
+        - Video fingerprint、Stage fingerprint、semantic inputが用意される
+    Act:
+        - videos namespaceへStage artifactが確定される
+    Assert:
+        - subject、上流、version、相対path、size、hash、完了日時が記録されること
+        - absolute cache pathがmanifestへ含まれないこと
+    """
+    # Arrange
+    cache_folder = tmp_path / "private-cache"
+    subject_fingerprint = "b" * 64
+    stage = ProcessingStage.DISCOVER_VIDEO_SET
+    semantic_input = {"decode_backend": "cpu"}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+    artifact: dict[str, object] = {"value": "artifact"}
+    writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="videos",
+        subject_fingerprint=subject_fingerprint,
+    )
+
+    # Act
+    writer.write(stage, fingerprint, (), semantic_input, artifact)
+
+    # Assert
+    stage_folder = (
+        cache_folder / "videos" / subject_fingerprint / stage.value / fingerprint.value
+    )
+    artifact_bytes = (stage_folder / "artifact.json").read_bytes()
+    manifest_text = (stage_folder / "manifest.json").read_text(encoding="utf-8")
+    manifest = json.loads(manifest_text)
+    assert set(manifest) == {
+        "schema",
+        "status",
+        "stage",
+        "stage_version",
+        "stage_fingerprint",
+        "subject",
+        "upstream_stage_fingerprints",
+        "semantic_input",
+        "artifacts",
+        "completed_at",
+    }
+    assert manifest["schema"] == "game-screen-pick/completed-stage@1.0.0"
+    assert manifest["status"] == "completed"
+    assert manifest["stage"] == stage.value
+    assert manifest["stage_version"] == "walking-skeleton-0"
+    assert manifest["stage_fingerprint"] == fingerprint.value
+    assert manifest["subject"] == {
+        "namespace": "videos",
+        "fingerprint": subject_fingerprint,
+    }
+    assert manifest["upstream_stage_fingerprints"] == []
+    assert manifest["semantic_input"] == semantic_input
+    assert manifest["artifacts"] == [
+        {
+            "path": "artifact.json",
+            "size_bytes": len(artifact_bytes),
+            "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+        }
+    ]
+    assert datetime.fromisoformat(manifest["completed_at"]).tzinfo is not None
+    assert str(cache_folder) not in manifest_text
+
+
+@pytest.mark.parametrize(
+    "checkpoint",
+    ["before-manifest", "after-manifest", "before-rename"],
+)
+def test_fault_before_atomic_commit_leaves_no_completed_stage(
+    tmp_path: Path,
+    checkpoint: str,
+) -> None:
+    """atomic commit前のfaultでCompleted Stageが観測されないこと。
+
+    Arrange:
+        - manifestとrenameのcommit pointへfault injectorが設定される
+    Act:
+        - Stage artifactの確定が試行される
+    Assert:
+        - faultが返されfinal entryとtemporary entryが残らないこと
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "c" * 64
+    stage = ProcessingStage.DISCOVER_VIDEO_SET
+    semantic_input = {"value": checkpoint}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+
+    def inject_fault(actual_checkpoint: str) -> None:
+        if actual_checkpoint == checkpoint:
+            raise OSError(f"injected {checkpoint}")
+
+    writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+        fault_injector=inject_fault,
+    )
+
+    # Act / Assert
+    with pytest.raises(OSError, match=f"injected {checkpoint}"):
+        writer.write(stage, fingerprint, (), semantic_input, {"value": "fresh"})
+    stage_root = cache_folder / "video-sets" / subject_fingerprint / stage.value
+    assert not (stage_root / fingerprint.value).exists()
+    assert tuple(stage_root.glob("*.tmp")) == ()
+
+
+def test_fault_after_rename_keeps_reusable_completed_stage(tmp_path: Path) -> None:
+    """rename後のfaultでもatomicに確定済みのStageが再利用されること。
+
+    Arrange:
+        - after-rename checkpointだけで失敗するwriterが用意される
+    Act:
+        - Stage writeがrename後に失敗し通常writerからreadされる
+    Assert:
+        - 完全なartifactがCompleted Stageとして再利用されること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "d" * 64
+    stage = ProcessingStage.DISCOVER_VIDEO_SET
+    semantic_input = {"value": "after-rename"}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+
+    def inject_fault(checkpoint: str) -> None:
+        if checkpoint == "after-rename":
+            raise OSError("injected after-rename")
+
+    failing_writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+        fault_injector=inject_fault,
+    )
+
+    # Act
+    with pytest.raises(OSError, match="injected after-rename"):
+        failing_writer.write(
+            stage,
+            fingerprint,
+            (),
+            semantic_input,
+            {"value": "committed"},
+        )
+    restored = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+    ).read(stage, fingerprint, (), semantic_input)
+
+    # Assert
+    assert restored == {"value": "committed"}
+
+
+def test_rename_failure_leaves_no_partial_completed_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """filesystem rename失敗時にpartial Completed Stageが残らないこと。
+
+    Arrange:
+        - temporary Stage directoryのrenameがdisk errorになる
+    Act:
+        - Stage writeが実行される
+    Assert:
+        - errorが返されfinal entryとtemporary entryが残らないこと
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "e" * 64
+    stage = ProcessingStage.DISCOVER_VIDEO_SET
+    semantic_input = {"value": "rename"}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+    original_replace = Path.replace
+
+    def fail_temporary_replace(path: Path, target: Path) -> Path:
+        if path.name.endswith(".tmp"):
+            raise OSError("injected rename failure")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_temporary_replace)
+    writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+    )
+
+    # Act / Assert
+    with pytest.raises(OSError, match="injected rename failure"):
+        writer.write(stage, fingerprint, (), semantic_input, {"value": "fresh"})
+    stage_root = cache_folder / "video-sets" / subject_fingerprint / stage.value
+    assert not (stage_root / fingerprint.value).exists()
+    assert tuple(stage_root.glob("*.tmp")) == ()
+
+
+@pytest.mark.parametrize(
+    ("target_name", "failure"),
+    [
+        pytest.param("artifact.json", OSError("disk full"), id="disk-full"),
+        pytest.param(
+            "manifest.json",
+            PermissionError("permission denied"),
+            id="permission-denied",
+        ),
+    ],
+)
+def test_artifact_or_manifest_write_failure_is_not_reusable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_name: str,
+    failure: OSError,
+) -> None:
+    """artifactまたはmanifest書込失敗が再利用可能entryを残さないこと。
+
+    Arrange:
+        - artifactにdisk failureまたはmanifestにpermission failureが注入される
+    Act:
+        - Stage writeが実行される
+    Assert:
+        - filesystem errorが返されCompleted Stageが存在しないこと
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "f" * 64
+    stage = ProcessingStage.DISCOVER_VIDEO_SET
+    semantic_input = {"target": target_name}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+    original_write_bytes = Path.write_bytes
+
+    def fail_target_write(path: Path, data: bytes) -> int:
+        if path.name == target_name:
+            raise failure
+        return original_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", fail_target_write)
+    writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="videos",
+        subject_fingerprint=subject_fingerprint,
+    )
+
+    # Act / Assert
+    with pytest.raises(type(failure), match=str(failure)):
+        writer.write(stage, fingerprint, (), semantic_input, {"value": "fresh"})
+    stage_root = cache_folder / "videos" / subject_fingerprint / stage.value
+    assert not (stage_root / fingerprint.value).exists()
+    assert tuple(stage_root.glob("*.tmp")) == ()

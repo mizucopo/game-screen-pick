@@ -9,7 +9,11 @@ from ..models.processing_stage import ProcessingStage
 from ..models.stage_fingerprint import StageFingerprint
 from ..protocols.run_observer import RunObserver
 from .build_stage_fingerprint import build_stage_fingerprint
-from .completed_stage_writer import CompletedStageWriter
+from .completed_stage_writer import (
+    CacheNamespace,
+    CompletedStageWriter,
+    FaultInjector,
+)
 
 StageResult = TypeVar("StageResult")
 
@@ -17,9 +21,24 @@ StageResult = TypeVar("StageResult")
 class ProcessingStageRunner:
     """Stage順序、fingerprint、manifest確定、通知を一つに保つ。"""
 
-    def __init__(self, cache_folder: Path, observer: RunObserver) -> None:
-        self._writer = CompletedStageWriter(cache_folder)
+    def __init__(
+        self,
+        cache_folder: Path,
+        observer: RunObserver,
+        *,
+        subject_namespace: CacheNamespace,
+        subject_fingerprint: str,
+        before_stage: Callable[[], None] | None = None,
+        fault_injector: FaultInjector | None = None,
+    ) -> None:
+        self._writer = CompletedStageWriter(
+            cache_folder,
+            subject_namespace=subject_namespace,
+            subject_fingerprint=subject_fingerprint,
+            fault_injector=fault_injector,
+        )
         self._observer = observer
+        self._before_stage = before_stage or _skip_before_stage
         self._completed_stages: list[CompletedStage] = []
 
     @property
@@ -39,6 +58,7 @@ class ProcessingStageRunner:
             stage,
             fingerprint,
             upstream_fingerprints,
+            semantic_input,
             artifact,
         )
         self._record_completion(completed_stage)
@@ -52,7 +72,12 @@ class ProcessingStageRunner:
     ) -> StageResult | None:
         """検証済みCompleted Stageがあれば復元して完了扱いにする。"""
         upstream_fingerprints, fingerprint = self._prepare_stage(stage, semantic_input)
-        artifact = self._writer.read(stage, fingerprint, upstream_fingerprints)
+        artifact = self._writer.read(
+            stage,
+            fingerprint,
+            upstream_fingerprints,
+            semantic_input,
+        )
         if artifact is None:
             return None
         restored = restore(artifact)
@@ -74,6 +99,7 @@ class ProcessingStageRunner:
         if stage is not expected_stage:
             msg = f"expected={expected_stage.value}, actual={stage.value}"
             raise ValueError(msg)
+        self._before_stage()
         upstream_fingerprints = tuple(
             item.fingerprint for item in self._completed_stages
         )
@@ -87,3 +113,7 @@ class ProcessingStageRunner:
         """Stage完了をrun stateへ追加して通知する。"""
         self._completed_stages.append(completed_stage)
         self._observer.stage_completed(completed_stage)
+
+
+def _skip_before_stage() -> None:
+    return

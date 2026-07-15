@@ -6,6 +6,7 @@ from ..models.effective_configuration import EffectiveConfiguration
 from ..models.processing_stage import ProcessingStage
 from ..models.run_outcome import RunOutcome
 from ..models.run_status import RunStatus
+from ..models.video_set import VideoSet
 from ..protocols.media_runtime import MediaRuntime
 from ..protocols.model_runtime import ModelRuntime
 from ..protocols.run_observer import RunObserver
@@ -18,11 +19,14 @@ from ..services.candidate_annotation_artifact import (
     restore_candidate_annotations,
 )
 from ..services.discover_video_set import discover_video_set
+from ..services.input_folder_lock import InputFolderLock
+from ..services.prepare_processing_cache import prepare_processing_cache
 from ..services.processing_stage_runner import ProcessingStageRunner
 from ..services.select_images import select_images
 from ..services.snapshot_frame_candidates import snapshot_frame_candidates
 from ..services.snapshot_video_set import snapshot_video_set
 from ..services.validate_output_folder import validate_output_folder
+from ..services.validate_video_set_snapshot import validate_video_set_snapshot
 
 
 class VideoSelectionApplication:
@@ -49,18 +53,46 @@ class VideoSelectionApplication:
             configuration.output_folder,
         )
 
-        video_set = discover_video_set(configuration.video_input_folder)
+        video_set = discover_video_set(
+            configuration.video_input_folder,
+            recursive=configuration.recursive,
+        )
+        with InputFolderLock(configuration.video_input_folder) as input_lock:
+            validate_video_set_snapshot(video_set)
+            diagnostic = prepare_processing_cache(
+                configuration.processing_cache_folder,
+                input_lock=input_lock,
+                reset_cache=configuration.reset_cache,
+            )
+            self._observer.legacy_cache_cleaned(diagnostic)
+            return self._run_locked(configuration, video_set)
+
+    def _run_locked(
+        self,
+        configuration: EffectiveConfiguration,
+        video_set: VideoSet,
+    ) -> RunOutcome:
+        """Input Lockを保持したまま全Processing Stageを実行する。"""
         video_set_snapshot = snapshot_video_set(video_set)
         with suppress(FileNotFoundError):
             configuration.output_folder.rmdir()
         stage_runner = ProcessingStageRunner(
             configuration.processing_cache_folder,
             self._observer,
+            subject_namespace="video-sets",
+            subject_fingerprint=video_set.fingerprint,
+            before_stage=lambda: validate_video_set_snapshot(video_set),
         )
         stage_runner.complete(
             ProcessingStage.DISCOVER_VIDEO_SET,
-            {"videos": list(video_set_snapshot)},
-            {"videos": list(video_set_snapshot)},
+            {
+                "video_set_fingerprint": video_set.fingerprint,
+                "videos": list(video_set_snapshot),
+            },
+            {
+                "video_set_fingerprint": video_set.fingerprint,
+                "videos": list(video_set_snapshot),
+            },
         )
 
         frame_candidates = self._media_runtime.extract_candidates(video_set)
@@ -138,6 +170,7 @@ class VideoSelectionApplication:
             configuration.image_count,
             run_status,
         )
+        validate_video_set_snapshot(video_set)
         prepared_output.publish()
         return RunOutcome(
             output_folder=configuration.output_folder,

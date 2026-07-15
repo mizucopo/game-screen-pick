@@ -12,14 +12,46 @@ from src.video_selection.models.candidate_annotation import CandidateAnnotation
 from src.video_selection.models.context_cue import ContextCue
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.frame_candidate import FrameCandidate
+from src.video_selection.models.legacy_cache_cleanup_diagnostic import (
+    LegacyCacheCleanupDiagnostic,
+)
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.resolved_model_identity import ResolvedModelIdentity
+from src.video_selection.services.input_folder_lock import InputFolderLock
 from tests.video_selection.fakes.failing_vision_runtime import FailingVisionRuntime
 from tests.video_selection.fakes.fake_media_runtime import FakeMediaRuntime
 from tests.video_selection.fakes.fake_model_runtime import FakeModelRuntime
 from tests.video_selection.fakes.fake_speech_runtime import FakeSpeechRuntime
 from tests.video_selection.fakes.fake_vision_runtime import FakeVisionRuntime
 from tests.video_selection.fakes.recording_run_observer import RecordingRunObserver
+
+
+def _video_set_stage_manifests(
+    input_folder: Path,
+    stage: ProcessingStage,
+) -> tuple[Path, ...]:
+    return tuple(
+        (input_folder / ".game-screen-pick" / "cache" / "video-sets").glob(
+            f"*/{stage.value}/*/manifest.json"
+        )
+    )
+
+
+def _successful_application(
+    observer: RecordingRunObserver,
+) -> VideoSelectionApplication:
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    return VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeSpeechRuntime(()),
+        model_runtime=FakeModelRuntime(
+            ResolvedModelIdentity(identifier="model-sha-001")
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=observer,
+    )
 
 
 def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None:
@@ -107,11 +139,161 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
         ProcessingStage
     )
     manifests = tuple(
-        (input_folder / ".game-screen-pick" / "cache" / "walking-skeleton").glob(
-            "*/*/manifest.json"
+        (input_folder / ".game-screen-pick" / "cache" / "video-sets").glob(
+            "*/*/*/manifest.json"
         )
     )
     assert len(manifests) == len(ProcessingStage)
+
+
+def test_run_removes_recognized_legacy_cache_and_reports_diagnostic(
+    tmp_path: Path,
+) -> None:
+    """認識済みLegacy Cacheだけが削除され診断が通知されること。
+
+    Arrange:
+        - valid Video Setと二種類の認識済みLegacy Cacheが用意される
+        - 新cache namespaceに保護対象のmarkerが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - Legacy Cacheだけが削除されること
+        - 削除entry数とbyte数がobserverへ通知されること
+        - 新cache namespaceが保持されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    cache_folder = input_folder / ".game-screen-pick" / "cache"
+    neutral_analysis = cache_folder / "neutral-analysis"
+    protected_marker = cache_folder / "videos" / "keep.txt"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    neutral_analysis.mkdir(parents=True)
+    legacy_analysis_bytes = b"legacy-analysis"
+    legacy_scene_bytes = b'{"legacy": true}'
+    (neutral_analysis / "result.json").write_bytes(legacy_analysis_bytes)
+    (cache_folder / "ollama-scenes.json").write_bytes(legacy_scene_bytes)
+    protected_marker.parent.mkdir()
+    protected_marker.write_text("keep", encoding="utf-8")
+    observer = RecordingRunObserver()
+
+    # Act
+    _successful_application(observer).run(
+        EffectiveConfiguration(
+            video_input_folder=input_folder,
+            output_folder=output_folder,
+            image_count=1,
+        )
+    )
+
+    # Assert
+    assert not neutral_analysis.exists()
+    assert not (cache_folder / "ollama-scenes.json").exists()
+    assert protected_marker.read_text(encoding="utf-8") == "keep"
+    assert observer.legacy_cache_diagnostics == [
+        LegacyCacheCleanupDiagnostic(
+            removed_entry_count=2,
+            removed_bytes=len(legacy_analysis_bytes) + len(legacy_scene_bytes),
+        )
+    ]
+
+
+def test_input_lock_failure_preserves_cache_and_output(
+    tmp_path: Path,
+) -> None:
+    """Input Lock取得失敗時にcacheとOutput Folderが変更されないこと。
+
+    Arrange:
+        - valid Video Setと認識済みLegacy Cacheが用意される
+        - 同じVideo Input FolderのInput Lockが既に保持される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - 非待機の実行中errorが返されること
+        - Legacy CacheとOutput Folderが変更されないこと
+        - cleanup diagnosticが通知されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    legacy_folder = input_folder / ".game-screen-pick" / "cache" / "neutral-analysis"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    legacy_folder.mkdir(parents=True)
+    legacy_marker = legacy_folder / "result.json"
+    legacy_marker.write_text("legacy", encoding="utf-8")
+    observer = RecordingRunObserver()
+
+    # Act
+    with (
+        InputFolderLock(input_folder),
+        pytest.raises(RuntimeError, match="既に実行中"),
+    ):
+        _successful_application(observer).run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=output_folder,
+                image_count=1,
+            )
+        )
+
+    # Assert
+    assert legacy_marker.read_text(encoding="utf-8") == "legacy"
+    assert not output_folder.exists()
+    assert observer.legacy_cache_diagnostics == []
+
+
+def test_reset_cache_removes_entire_processing_cache_before_run(
+    tmp_path: Path,
+) -> None:
+    """reset_cacheでprocessing cache全体が削除後に再構築されること。
+
+    Arrange:
+        - valid Video Setと未知のprocessing cache entryが用意される
+    Act:
+        - reset_cacheを有効にしてapplicationが実行される
+    Assert:
+        - 既存entryが削除されること
+        - 新しいVideo Set Stage cacheとOutput Folderが作成されること
+        - Legacy Cache削除件数はゼロとして通知されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    cache_folder = input_folder / ".game-screen-pick" / "cache"
+    stale_marker = cache_folder / "unknown" / "keep-unless-reset.txt"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    stale_marker.parent.mkdir(parents=True)
+    stale_marker.write_text("stale", encoding="utf-8")
+    observer = RecordingRunObserver()
+
+    # Act
+    _successful_application(observer).run(
+        EffectiveConfiguration(
+            video_input_folder=input_folder,
+            output_folder=output_folder,
+            image_count=1,
+            reset_cache=True,
+        )
+    )
+
+    # Assert
+    assert not stale_marker.exists()
+    assert (
+        len(
+            _video_set_stage_manifests(
+                input_folder,
+                ProcessingStage.DISCOVER_VIDEO_SET,
+            )
+        )
+        == 1
+    )
+    assert (output_folder / "report.json").is_file()
+    assert observer.legacy_cache_diagnostics == [
+        LegacyCacheCleanupDiagnostic(removed_entry_count=0, removed_bytes=0)
+    ]
 
 
 def test_stage_failure_leaves_output_unpublished(tmp_path: Path) -> None:
@@ -304,14 +486,10 @@ def test_resolved_model_identity_changes_model_stage_fingerprint(
         )
 
     # Assert
-    model_stage_folder = (
-        input_folder
-        / ".game-screen-pick"
-        / "cache"
-        / "walking-skeleton"
-        / ProcessingStage.RESOLVE_MODELS.value
+    assert (
+        len(_video_set_stage_manifests(input_folder, ProcessingStage.RESOLVE_MODELS))
+        == 2
     )
-    assert len(tuple(model_stage_folder.iterdir())) == 2
 
 
 def test_video_content_change_changes_discovery_stage_fingerprint(
@@ -356,14 +534,15 @@ def test_video_content_change_changes_discovery_stage_fingerprint(
         )
 
     # Assert
-    discovery_stage_folder = (
-        input_folder
-        / ".game-screen-pick"
-        / "cache"
-        / "walking-skeleton"
-        / ProcessingStage.DISCOVER_VIDEO_SET.value
+    assert (
+        len(
+            _video_set_stage_manifests(
+                input_folder,
+                ProcessingStage.DISCOVER_VIDEO_SET,
+            )
+        )
+        == 2
     )
-    assert len(tuple(discovery_stage_folder.iterdir())) == 2
 
 
 def test_warm_run_reuses_cached_candidate_annotations(tmp_path: Path) -> None:
@@ -537,14 +716,15 @@ def test_candidate_identity_changes_extraction_stage_fingerprint(
         )
 
     # Assert
-    extraction_stage_folder = (
-        input_folder
-        / ".game-screen-pick"
-        / "cache"
-        / "walking-skeleton"
-        / ProcessingStage.EXTRACT_FRAME_CANDIDATES.value
+    assert (
+        len(
+            _video_set_stage_manifests(
+                input_folder,
+                ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+            )
+        )
+        == 2
     )
-    assert len(tuple(extraction_stage_folder.iterdir())) == 2
 
 
 def test_context_identity_changes_context_stage_fingerprint(tmp_path: Path) -> None:
@@ -587,14 +767,10 @@ def test_context_identity_changes_context_stage_fingerprint(tmp_path: Path) -> N
         )
 
     # Assert
-    context_stage_folder = (
-        input_folder
-        / ".game-screen-pick"
-        / "cache"
-        / "walking-skeleton"
-        / ProcessingStage.COLLECT_CONTEXT.value
+    assert (
+        len(_video_set_stage_manifests(input_folder, ProcessingStage.COLLECT_CONTEXT))
+        == 2
     )
-    assert len(tuple(context_stage_folder.iterdir())) == 2
 
 
 def test_duplicate_video_content_is_rejected_before_cache_side_effects(
@@ -630,7 +806,7 @@ def test_duplicate_video_content_is_rejected_before_cache_side_effects(
     )
 
     # Act
-    with pytest.raises(ValueError, match="同一内容の重複video"):
+    with pytest.raises(ValueError, match="Duplicate Video"):
         application.run(
             EffectiveConfiguration(
                 video_input_folder=input_folder,
@@ -679,7 +855,7 @@ def test_existing_empty_output_folder_is_preserved_when_input_preflight_fails(
     )
 
     # Act
-    with pytest.raises(ValueError, match="同一内容の重複video"):
+    with pytest.raises(ValueError, match="Duplicate Video"):
         application.run(
             EffectiveConfiguration(
                 video_input_folder=input_folder,
@@ -829,14 +1005,15 @@ def test_changed_candidate_content_changes_extraction_stage_fingerprint(
         )
 
     # Assert
-    extraction_stage_folder = (
-        input_folder
-        / ".game-screen-pick"
-        / "cache"
-        / "walking-skeleton"
-        / ProcessingStage.EXTRACT_FRAME_CANDIDATES.value
+    assert (
+        len(
+            _video_set_stage_manifests(
+                input_folder,
+                ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+            )
+        )
+        == 2
     )
-    assert len(tuple(extraction_stage_folder.iterdir())) == 2
 
 
 def test_duplicate_candidate_ids_are_rejected_before_candidate_cache(
@@ -885,14 +1062,10 @@ def test_duplicate_candidate_ids_are_rejected_before_candidate_cache(
         )
 
     # Assert
-    extraction_stage_folder = (
-        input_folder
-        / ".game-screen-pick"
-        / "cache"
-        / "walking-skeleton"
-        / ProcessingStage.EXTRACT_FRAME_CANDIDATES.value
+    assert not _video_set_stage_manifests(
+        input_folder,
+        ProcessingStage.EXTRACT_FRAME_CANDIDATES,
     )
-    assert not extraction_stage_folder.exists()
     assert not output_folder.exists()
 
 
@@ -938,14 +1111,10 @@ def test_unsafe_candidate_id_is_rejected_before_candidate_cache(
         )
 
     # Assert
-    extraction_stage_folder = (
-        input_folder
-        / ".game-screen-pick"
-        / "cache"
-        / "walking-skeleton"
-        / ProcessingStage.EXTRACT_FRAME_CANDIDATES.value
+    assert not _video_set_stage_manifests(
+        input_folder,
+        ProcessingStage.EXTRACT_FRAME_CANDIDATES,
     )
-    assert not extraction_stage_folder.exists()
     assert not output_folder.exists()
 
 
@@ -998,14 +1167,10 @@ def test_foreign_candidate_annotation_is_rejected_before_caching(
         )
 
     # Assert
-    annotation_stage_folder = (
-        input_folder
-        / ".game-screen-pick"
-        / "cache"
-        / "walking-skeleton"
-        / ProcessingStage.ANNOTATE_CANDIDATES.value
+    assert not _video_set_stage_manifests(
+        input_folder,
+        ProcessingStage.ANNOTATE_CANDIDATES,
     )
-    assert not annotation_stage_folder.exists()
     assert not output_folder.exists()
 
 
@@ -1159,12 +1324,8 @@ def test_incomplete_candidate_annotations_are_rejected_before_caching(
         )
 
     # Assert
-    annotation_stage_folder = (
-        input_folder
-        / ".game-screen-pick"
-        / "cache"
-        / "walking-skeleton"
-        / ProcessingStage.ANNOTATE_CANDIDATES.value
+    assert not _video_set_stage_manifests(
+        input_folder,
+        ProcessingStage.ANNOTATE_CANDIDATES,
     )
-    assert not annotation_stage_folder.exists()
     assert not output_folder.exists()

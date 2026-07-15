@@ -28,7 +28,12 @@ def test_processing_stage_cannot_complete_out_of_order(tmp_path: Path) -> None:
     # Arrange
     cache_folder = tmp_path / "cache"
     observer = RecordingRunObserver()
-    runner = ProcessingStageRunner(cache_folder, observer)
+    runner = ProcessingStageRunner(
+        cache_folder,
+        observer,
+        subject_namespace="video-sets",
+        subject_fingerprint="a" * 64,
+    )
 
     # Act / Assert
     with pytest.raises(
@@ -57,6 +62,7 @@ def test_partial_stage_artifact_is_replaced_before_completion(tmp_path: Path) ->
     """
     # Arrange
     cache_folder = tmp_path / "cache"
+    subject_fingerprint = "b" * 64
     observer = RecordingRunObserver()
     semantic_input = {"videos": ["fresh.mp4"]}
     fingerprint = build_stage_fingerprint(
@@ -66,14 +72,20 @@ def test_partial_stage_artifact_is_replaced_before_completion(tmp_path: Path) ->
     )
     stage_folder = (
         cache_folder
-        / "walking-skeleton"
+        / "video-sets"
+        / subject_fingerprint
         / ProcessingStage.DISCOVER_VIDEO_SET.value
         / fingerprint.value
     )
     stage_folder.mkdir(parents=True)
     artifact_path = stage_folder / "artifact.json"
     artifact_path.write_text('{"videos": ["poison.mp4"]}\n', encoding="utf-8")
-    runner = ProcessingStageRunner(cache_folder, observer)
+    runner = ProcessingStageRunner(
+        cache_folder,
+        observer,
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+    )
 
     # Act
     runner.complete(
@@ -88,7 +100,7 @@ def test_partial_stage_artifact_is_replaced_before_completion(tmp_path: Path) ->
     }
     manifest = json.loads((stage_folder / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "completed"
-    assert manifest["fingerprint"] == fingerprint.value
+    assert manifest["stage_fingerprint"] == fingerprint.value
 
 
 def test_completed_stage_artifact_is_immutable_for_same_fingerprint(
@@ -105,8 +117,14 @@ def test_completed_stage_artifact_is_immutable_for_same_fingerprint(
     """
     # Arrange
     cache_folder = tmp_path / "cache"
+    subject_fingerprint = "c" * 64
     semantic_input = {"videos": [{"path": "video.mp4", "sha256": "digest"}]}
-    first_runner = ProcessingStageRunner(cache_folder, RecordingRunObserver())
+    first_runner = ProcessingStageRunner(
+        cache_folder,
+        RecordingRunObserver(),
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+    )
     completed_stage = first_runner.complete(
         ProcessingStage.DISCOVER_VIDEO_SET,
         semantic_input=semantic_input,
@@ -114,7 +132,12 @@ def test_completed_stage_artifact_is_immutable_for_same_fingerprint(
     )
 
     # Act
-    ProcessingStageRunner(cache_folder, RecordingRunObserver()).complete(
+    ProcessingStageRunner(
+        cache_folder,
+        RecordingRunObserver(),
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+    ).complete(
         ProcessingStage.DISCOVER_VIDEO_SET,
         semantic_input=semantic_input,
         artifact={"value": "second"},
@@ -123,9 +146,49 @@ def test_completed_stage_artifact_is_immutable_for_same_fingerprint(
     # Assert
     artifact_path = (
         cache_folder
-        / "walking-skeleton"
+        / "video-sets"
+        / subject_fingerprint
         / ProcessingStage.DISCOVER_VIDEO_SET.value
         / completed_stage.fingerprint.value
         / "artifact.json"
     )
     assert json.loads(artifact_path.read_text(encoding="utf-8")) == {"value": "first"}
+
+
+def test_snapshot_validation_failure_prevents_stage_cache_mutation(
+    tmp_path: Path,
+) -> None:
+    """Stage直前のsnapshot validation失敗でcacheが変更されないこと。
+
+    Arrange:
+        - snapshot変更errorを返すbefore-stage callbackが用意される
+    Act:
+        - 最初のProcessing Stage completionが試行される
+    Assert:
+        - errorが返されsubject cacheとobserverが未変更であること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    observer = RecordingRunObserver()
+
+    def reject_changed_snapshot() -> None:
+        msg = "Video Set snapshotが変更されました"
+        raise ValueError(msg)
+
+    runner = ProcessingStageRunner(
+        cache_folder,
+        observer,
+        subject_namespace="video-sets",
+        subject_fingerprint="d" * 64,
+        before_stage=reject_changed_snapshot,
+    )
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
+        runner.complete(
+            ProcessingStage.DISCOVER_VIDEO_SET,
+            semantic_input={"videos": []},
+            artifact={"videos": []},
+        )
+    assert observer.completed_stages == []
+    assert not (cache_folder / "video-sets").exists()

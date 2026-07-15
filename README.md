@@ -1,9 +1,9 @@
 # game-screen-pick
 ゲームスクリーンショットから、ブログで使いやすい画像をOllamaの画像分類で選択するAIツールです。
 
-## 動画入力版の設計（未実装）
+## 動画入力版の設計と内部実装（公開前）
 
-複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。現時点では契約のみが確定しており、このcommandはまだ実行できません。
+複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cacheなどの内部基盤は実装済みですが、public CLIの切り替えはIssue #190で行うため、このcommandはまだ実行できません。
 
 ```bash
 game-screen-pick \
@@ -175,7 +175,7 @@ Ollama host の優先順位は `--ollama-host`、`OLLAMA_HOST`、`[ollama].host`
 ## 関連ドキュメント
 
 - [ADR index](docs/adr/README.md)
-- [ADR 0004: Select Video Set Blog Images Deterministically](docs/adr/0004-select-video-set-blog-images-deterministically.md)（動画入力向け設計、未実装）
-- [ADR 0005: Publish Video Selection Artifacts Atomically](docs/adr/0005-publish-video-selection-artifacts-atomically.md)（動画入力向け設計、未実装）
-- [ADR 0006: Expose Video Selection Through CLI and Versioned Config](docs/adr/0006-expose-video-selection-through-cli-and-versioned-config.md)（動画入力向け設計、未実装）
-- [ADR 0007: Migrate to the Video Set Selector Through a Gated Cutover](docs/adr/0007-migrate-to-video-set-selector-through-gated-cutover.md)（動画入力向け移行設計、未実装）
+- [ADR 0004: Select Video Set Blog Images Deterministically](docs/adr/0004-select-video-set-blog-images-deterministically.md)（動画入力向け設計、内部移行中）
+- [ADR 0005: Publish Video Selection Artifacts Atomically](docs/adr/0005-publish-video-selection-artifacts-atomically.md)（動画入力向け設計、内部移行中）
+- [ADR 0006: Expose Video Selection Through CLI and Versioned Config](docs/adr/0006-expose-video-selection-through-cli-and-versioned-config.md)（動画入力向け設計、内部移行中）
+- [ADR 0007: Migrate to the Video Set Selector Through a Gated Cutover](docs/adr/0007-migrate-to-video-set-selector-through-gated-cutover.md)（動画入力向け移行設計、内部移行中）

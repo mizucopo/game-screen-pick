@@ -1,7 +1,7 @@
 # 動画入力の運用
 
 > [!IMPORTANT]
-> この文書は将来のVideo Set selectorの確定済み契約です。現在のscreenshot入力実装にはまだ適用されません。
+> Video Set探索・identity、Input Lock、Completed Stage cache、Legacy Cache削除の内部基盤は実装済みです。外部runtime、進捗表示、public CLIは後続Issueで接続し、installed CLIはIssue #190までscreenshot入力のままです。
 
 ## 最低runtime
 
@@ -20,6 +20,22 @@
 処理前に、CLI/TOML、入力・出力path、Video Set snapshot、cache書き込み、同一inputの非待機lock、外部tool、stream、model解決と能力を検査します。異常時はcache処理やOutput Folder公開を始めません。
 
 `--reset-cache`は上記の安全なpreflightとlock取得が成功した後に、`<VIDEO_INPUT_FOLDER>/.game-screen-pick/cache/`全体だけを削除します。Output Folder、Ollama model store、Hugging Face model cacheには触れません。Stage単位またはVideo単位の手動reset、自動削除、保持期限、容量上限はv1に含めません。
+
+## processing cache基盤
+
+Input Lockは`<VIDEO_INPUT_FOLDER>/.game-screen-pick/input.lock`でVideo Input Folder単位に取得します。待機queueは作らず、同じinputの別runが保持中なら即時に失敗します。lockはVideo Set snapshotの非破壊検査後から、cache準備、全Processing Stage、Output Folder公開の終了まで保持します。各Stageの前と公開直前にもsnapshotを再検査し、入力が変化したrunを確定しません。
+
+processing cacheはcontent-addressedな次のnamespaceを使います。
+
+```text
+<VIDEO_INPUT_FOLDER>/.game-screen-pick/cache/
+├── videos/<VIDEO_FINGERPRINT>/<STAGE>/<STAGE_FINGERPRINT>/
+└── video-sets/<VIDEO_SET_FINGERPRINT>/<STAGE>/<STAGE_FINGERPRINT>/
+```
+
+各Stage folderには`artifact.json`と`manifest.json`を置きます。manifestはschema、Stageとsubjectの完全fingerprint、上流fingerprint、Stage固有の正規化済み入力、artifactの相対path・byte数・SHA-256、timezone付き完了日時を保持し、absolute pathを含みません。artifactを書いた後にmanifestを作り、temporary directoryをrenameして一括公開します。manifestまたはartifactが欠ける、hashやmetadataが一致しない、symlinkであるなどのpartial・破損Stageはcache hitにせず再計算します。
+
+通常実行ではcacheの書込検査とInput Lock取得後に、認識済みLegacy Cacheの`neutral-analysis/`と`ollama-scenes.json`だけを自動削除します。削除件数と内容byte数をstructured diagnosticへ記録し、削除失敗はfatalです。新しい`videos/`、`video-sets/`、未知のentry、Output Folder、model storeは保持します。Legacy Cacheを変換または再利用する互換layerはありません。
 
 ## 自動再開
 

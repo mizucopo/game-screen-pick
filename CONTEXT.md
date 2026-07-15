@@ -12,6 +12,10 @@ _Avoid_: input folder, video folder, run, file list
 Video Setを発見し、そのcacheを保持するためにユーザーが指定するルートフォルダ。Video Setそのもののidentityではない。
 _Avoid_: Video Set, Output Folder, cache key
 
+**Input Lock**:
+一つのVideo Input Folderに対する同時実行を即時拒否し、非破壊validation完了後からprocessing cacheの変更とrun終了までを保護する非待機排他境界。異なるVideo Input Folderの実行は互いに妨げない。
+_Avoid_: Stage lock, waiting queue, global lock, cache artifact
+
 **Video Set Fingerprint**:
 Video Setの構成とVideo Orderをcacheやreportで参照するための、順序付きVideo Fingerprint列から導出される安定した識別子。
 _Avoid_: input path hash, unordered file set, global setting hash
