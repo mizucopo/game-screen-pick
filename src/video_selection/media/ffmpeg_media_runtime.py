@@ -44,6 +44,12 @@ _REQUIRED_FILTERS = frozenset(
         "showinfo",
     }
 )
+_DECODE_ERRORS = (
+    OSError,
+    subprocess.CalledProcessError,
+    EOFError,
+    ValueError,
+)
 
 
 class FfmpegMediaRuntime:
@@ -127,47 +133,14 @@ class FfmpegMediaRuntime:
         if max_dimension < 1:
             msg = "max_dimensionは正の整数である必要があります"
             raise ValueError(msg)
-        scale_filter = (
-            f"scale=w=min(iw\\,{max_dimension}):h=min(ih\\,{max_dimension}):"
-            "force_original_aspect_ratio=decrease:force_divisible_by=2,"
-            "format=rgb24,showinfo"
+        command = self._video_decode_command(
+            media_path,
+            stream_index,
+            _scale_filter(max_dimension),
         )
-        command = [
-            self._ffmpeg_executable,
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel",
-            "info",
-            "-nostats",
-            "-xerror",
-            "-err_detect",
-            "explode",
-            "-copyts",
-            "-i",
-            str(media_path),
-            "-map",
-            f"0:{stream_index}",
-            "-an",
-            "-sn",
-            "-dn",
-            "-vf",
-            scale_filter,
-            "-fps_mode",
-            "passthrough",
-            "-f",
-            "image2pipe",
-            "-c:v",
-            "ppm",
-            "pipe:1",
-        ]
         try:
             yield from iter_decoded_video_frames(command, stream_index)
-        except (
-            OSError,
-            subprocess.CalledProcessError,
-            EOFError,
-            ValueError,
-        ) as error:
+        except _DECODE_ERRORS as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.DECODER_FAILURE,
                 "video streamをdecodeできませんでした",
@@ -184,50 +157,16 @@ class FfmpegMediaRuntime:
         if max_dimension < 1:
             msg = "max_dimensionは正の整数である必要があります"
             raise ValueError(msg)
-        frame_filter = (
-            f"select=eq(pts\\,{pts}),"
-            f"scale=w=min(iw\\,{max_dimension}):h=min(ih\\,{max_dimension}):"
-            "force_original_aspect_ratio=decrease:force_divisible_by=2,"
-            "format=rgb24,showinfo"
-        )
-        command = [
-            self._ffmpeg_executable,
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel",
-            "info",
-            "-nostats",
-            "-xerror",
-            "-err_detect",
-            "explode",
-            "-copyts",
-            "-i",
-            str(media_path),
-            "-map",
-            f"0:{stream_index}",
-            "-an",
-            "-sn",
-            "-dn",
-            "-vf",
+        frame_filter = f"select=eq(pts\\,{pts})," + _scale_filter(max_dimension)
+        command = self._video_decode_command(
+            media_path,
+            stream_index,
             frame_filter,
-            "-frames:v",
-            "1",
-            "-fps_mode",
-            "passthrough",
-            "-f",
-            "image2pipe",
-            "-c:v",
-            "ppm",
-            "pipe:1",
-        ]
+            frame_limit=1,
+        )
         try:
             frames = tuple(iter_decoded_video_frames(command, stream_index))
-        except (
-            OSError,
-            subprocess.CalledProcessError,
-            EOFError,
-            ValueError,
-        ) as error:
+        except _DECODE_ERRORS as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
                 "指定されたvideo frameを抽出できませんでした",
@@ -255,44 +194,28 @@ class FfmpegMediaRuntime:
             "aformat=sample_fmts=s16:channel_layouts=mono,"
             f"asetnsamples=n={frame_sample_count}:p=0,ashowinfo"
         )
-        command = [
-            self._ffmpeg_executable,
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel",
-            "info",
-            "-nostats",
-            "-xerror",
-            "-err_detect",
-            "explode",
-            "-copyts",
-            "-i",
-            str(media_path),
-            "-map",
-            f"0:{stream_index}",
-            "-vn",
-            "-sn",
-            "-dn",
-            "-af",
-            audio_filter,
-            "-f",
-            "s16le",
-            "-acodec",
-            "pcm_s16le",
-            "pipe:1",
-        ]
+        command = self._decode_command_prefix(media_path, stream_index)
+        command.extend(
+            [
+                "-vn",
+                "-sn",
+                "-dn",
+                "-af",
+                audio_filter,
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "pipe:1",
+            ]
+        )
         try:
             yield from iter_pcm_audio_chunks(
                 command,
                 stream_index,
                 sample_rate,
             )
-        except (
-            OSError,
-            subprocess.CalledProcessError,
-            EOFError,
-            ValueError,
-        ) as error:
+        except _DECODE_ERRORS as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED,
                 "audio streamをPCMへdecodeできませんでした",
@@ -332,6 +255,52 @@ class FfmpegMediaRuntime:
                 MediaRuntimeFailureReason.SUBTITLE_EXTRACTION_FAILED,
                 "embedded text subtitleを抽出できませんでした",
             ) from error
+
+    def _video_decode_command(
+        self,
+        media_path: Path,
+        stream_index: int,
+        frame_filter: str,
+        frame_limit: int | None = None,
+    ) -> list[str]:
+        command = self._decode_command_prefix(media_path, stream_index)
+        command.extend(["-an", "-sn", "-dn", "-vf", frame_filter])
+        if frame_limit is not None:
+            command.extend(["-frames:v", str(frame_limit)])
+        command.extend(
+            [
+                "-fps_mode",
+                "passthrough",
+                "-f",
+                "image2pipe",
+                "-c:v",
+                "ppm",
+                "pipe:1",
+            ]
+        )
+        return command
+
+    def _decode_command_prefix(
+        self,
+        media_path: Path,
+        stream_index: int,
+    ) -> list[str]:
+        return [
+            self._ffmpeg_executable,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "info",
+            "-nostats",
+            "-xerror",
+            "-err_detect",
+            "explode",
+            "-copyts",
+            "-i",
+            str(media_path),
+            "-map",
+            f"0:{stream_index}",
+        ]
 
     @staticmethod
     def _read_identity(
@@ -428,3 +397,11 @@ class FfmpegMediaRuntime:
         if error is None:
             raise failure
         raise failure from error
+
+
+def _scale_filter(max_dimension: int) -> str:
+    return (
+        f"scale=w=min(iw\\,{max_dimension}):h=min(ih\\,{max_dimension}):"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        "format=rgb24,showinfo"
+    )
