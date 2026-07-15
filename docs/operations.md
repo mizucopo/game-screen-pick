@@ -1,7 +1,7 @@
 # 動画入力の運用
 
 > [!IMPORTANT]
-> Video Set探索・identity、Input Lock、Completed Stage cache、Legacy Cache削除の内部基盤は実装済みです。外部runtime、進捗表示、public CLIは後続Issueで接続し、installed CLIはIssue #190までscreenshot入力のままです。
+> Video Set探索・identity、Input Lock、Completed Stage cache、Legacy Cache削除とFFmpeg MediaRuntimeの内部基盤は実装済みです。MediaRuntimeを使うVideo Stage、進捗表示、public CLIは後続Issueで接続し、installed CLIはIssue #190までscreenshot入力のままです。
 
 ## 最低runtime
 
@@ -14,6 +14,26 @@
 | CTranslate2 | 4.8.1 | configured device / compute typeの初期化 |
 
 新しいversionは許可しますが、実際のtool/runtime versionは関係するStage Fingerprintとprovenanceへ記録します。version番号だけで能力を推測せず、処理開始前に必要なoperationを検査します。
+
+## FFmpeg MediaRuntime
+
+MediaRuntimeはPATH上のsystem `ffmpeg` / `ffprobe`だけを使い、binaryをbundleしません。preflightでは両toolが6.1.1以上かつ同一buildであることに加え、Matroska/MP4 demux、AV1/AAC/text subtitle decode、frame/audio filter、ffprobe JSON出力の能力を検査します。tool不在、最低version未満、build不一致、能力不足はそれぞれstable reason codeへ変換されます。
+
+後段のVideo Stageへはsubprocess command、終了code、stderrではなく、次の意味結果だけを返します。
+
+- containerとordered stream metadataのprobe
+- source PTS/time base付きのstreaming RGB24 frame scan
+- 指定source PTSの単一frame artifact
+- source PTSと連続sample位置を持つmono signed 16-bit PCM
+- 元packet PTS/time baseと本文を持つembedded text subtitle
+
+real-runtime testは実行時に`lavfi`、synthetic tone、repository所有の短い字幕だけからCFR、VFR、multiple stream、破損packet fixtureを生成します。binary mediaはrepositoryへ保存しません。通常suiteはFFmpegを起動せず、real suiteだけを次で実行します。
+
+```bash
+uv run task test-ffmpeg
+```
+
+PRでは通常quality checkと別のUbuntu 24.04 jobとして実行されます。
 
 ## preflightとcache reset
 

@@ -65,11 +65,12 @@ convention = "google"
 [tool.mypy]
 strict = true
 python_version = "3.13"
-files = ["src", "tests"]
+files = ["src", "tests", "tests_ffmpeg"]
 mypy_path = "src:stubs"
 
 [tool.taskipy.tasks]
-test = "ruff check --fix src tests stubs && ruff format src tests stubs && mypy && pytest"
+test = "ruff check --fix src tests tests_ffmpeg stubs && ruff format src tests tests_ffmpeg stubs && mypy && pytest"
+test-ffmpeg = "pytest tests_ffmpeg"
 prototype-issue-170 = "python prototypes/issue_170_migration_acceptance/prototype.py"
 
 [tool.uv]
