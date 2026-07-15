@@ -1,6 +1,7 @@
 """Video Stage processor test用MediaRuntime fake。"""
 
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from fractions import Fraction
 from pathlib import Path
 
@@ -18,14 +19,38 @@ from src.video_selection.models.scanned_video_frame import ScannedVideoFrame
 class FakeVideoStageMediaRuntime:
     """決定的なscanとnative frameを返し呼び出し順を記録するfake。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        runtime_identity: MediaRuntimeIdentity | None = None,
+        on_preflight: Callable[[], None] | None = None,
+        distant_moments: bool = False,
+        require_streaming_refinement: bool = False,
+        cpu_burn_seconds: float = 0.0,
+        reported_scan_wall_seconds: float = 0.1,
+        reported_scan_cpu_seconds: float = 0.05,
+    ) -> None:
         self.scan_calls: list[Path] = []
         self.range_calls: list[Path] = []
         self.call_order: list[tuple[str, str]] = []
+        self._runtime_identity = runtime_identity or MediaRuntimeIdentity(
+            "6.1.1-test",
+            "6.1.1-test",
+            "0" * 64,
+        )
+        self._on_preflight = on_preflight
+        self._distant_moments = distant_moments
+        self._require_streaming_refinement = require_streaming_refinement
+        self._cpu_burn_seconds = cpu_burn_seconds
+        self._reported_scan_wall_seconds = reported_scan_wall_seconds
+        self._reported_scan_cpu_seconds = reported_scan_cpu_seconds
+        self._candidate_proxy_write_count = 0
 
     def preflight(self) -> MediaRuntimeIdentity:
         """固定runtime identityを返す。"""
-        return MediaRuntimeIdentity("6.1.1-test", "6.1.1-test")
+        if self._on_preflight is not None:
+            self._on_preflight()
+        return self._runtime_identity
 
     def probe(self, media_path: Path) -> MediaProbe:
         """一つのdefault video streamを返す。"""
@@ -72,25 +97,35 @@ class FakeVideoStageMediaRuntime:
         )
         self.scan_calls.append(media_path)
         self.call_order.append(("scan", media_path.name))
+        self._burn_cpu()
         heartbeat_folder = artifact_folder / "heartbeats"
         scene_folder = artifact_folder / ".scene-proxies"
         heartbeat_folder.mkdir(parents=True)
         scene_folder.mkdir()
+        heartbeat_pts = (0, 400) if self._distant_moments else (0, 10)
+        last_frame_pts = 490 if self._distant_moments else 10
+        last_frame_duration_ts = 10
         heartbeats = tuple(
             self._write_scan_frame(heartbeat_folder / f"{pts:012d}.jpg", pts)
-            for pts in (0, 10)
+            for pts in heartbeat_pts
         )
-        scenes = (self._write_scan_frame(scene_folder / "000000000010.jpg", 10),)
+        scene_pts = heartbeat_pts[-1]
+        scenes = (
+            self._write_scan_frame(
+                scene_folder / f"{scene_pts:012d}.jpg",
+                scene_pts,
+            ),
+        )
         return NativeVideoScan(
             stream_index=stream.index,
             origin_pts=0,
-            last_frame_pts=10,
-            last_frame_duration_ts=10,
+            last_frame_pts=last_frame_pts,
+            last_frame_duration_ts=last_frame_duration_ts,
             time_base=Fraction(1, 10),
             heartbeats=heartbeats,
             scene_frames=scenes,
-            wall_seconds=0.1,
-            cpu_seconds=0.05,
+            wall_seconds=self._reported_scan_wall_seconds,
+            cpu_seconds=self._reported_scan_cpu_seconds,
             decode_pass_count=1,
         )
 
@@ -105,8 +140,17 @@ class FakeVideoStageMediaRuntime:
         del max_dimension
         self.range_calls.append(media_path)
         self.call_order.append(("refine", media_path.name))
-        for pts in (0, 5, 10, 15):
+        self._burn_cpu()
+        frame_pts = (0, 5, 395, 400, 405) if self._distant_moments else (0, 5, 10, 15)
+        for pts in frame_pts:
             if any(start <= pts < end for start, end in pts_ranges):
+                if (
+                    self._require_streaming_refinement
+                    and pts == 400
+                    and self._candidate_proxy_write_count == 0
+                ):
+                    msg = "次のrefinement groupより前にproxyが書かれていません"
+                    raise AssertionError(msg)
                 yield self._decoded_frame(stream_index, pts)
 
     def write_mjpeg_proxy(
@@ -128,6 +172,14 @@ class FakeVideoStageMediaRuntime:
             raise RuntimeError("test JPEG encode failed")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(encoded.tobytes())
+        if "candidates" in output_path.parts:
+            self._candidate_proxy_write_count += 1
+
+    def _burn_cpu(self) -> None:
+        """Stage resource metric test用にcurrent processのCPUを消費する。"""
+        started_at = time.process_time()
+        while time.process_time() - started_at < self._cpu_burn_seconds:
+            pass
 
     def _write_scan_frame(self, path: Path, pts: int) -> ScannedVideoFrame:
         frame = self._decoded_frame(0, pts)

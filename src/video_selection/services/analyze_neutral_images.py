@@ -11,7 +11,7 @@ from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.neutral_image_analysis import NeutralImageAnalysis
 from ..models.neutral_image_metrics import NeutralImageMetrics
 
-NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v1"
+NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v2"
 BLUR_REJECT_VARIANCE_MIN = 12.0
 _QUALITY_WEIGHTS = {
     "blur_score": 0.165,
@@ -51,7 +51,7 @@ def analyze_neutral_images(
             zip(frames, raw_rows, strict=True)
         )
     ]
-    _apply_temporal_rejections(analyses)
+    _apply_temporal_rejections(analyses, frames)
     _apply_relative_fade_rejections(analyses)
     return tuple(analyses)
 
@@ -220,8 +220,16 @@ def _absolute_reject_reason(
     return None
 
 
-def _apply_temporal_rejections(analyses: list[NeutralImageAnalysis]) -> None:
+def _apply_temporal_rejections(
+    analyses: list[NeutralImageAnalysis],
+    frames: tuple[DecodedVideoFrame, ...],
+) -> None:
     for index in range(1, len(analyses) - 1):
+        if not (
+            _are_adjacent(frames[index - 1], frames[index])
+            and _are_adjacent(frames[index], frames[index + 1])
+        ):
+            continue
         previous = analyses[index - 1]
         current = analyses[index]
         following = analyses[index + 1]
@@ -244,6 +252,19 @@ def _apply_temporal_rejections(analyses: list[NeutralImageAnalysis]) -> None:
                 current,
                 reject_reason=ContentRejectReason.TEMPORAL_TRANSITION,
             )
+
+
+def _are_adjacent(
+    previous: DecodedVideoFrame,
+    following: DecodedVideoFrame,
+) -> bool:
+    return (
+        previous.stream_index == following.stream_index
+        and previous.time_base == following.time_base
+        and previous.duration_ts is not None
+        and previous.duration_ts > 0
+        and previous.pts + previous.duration_ts == following.pts
+    )
 
 
 def _apply_relative_fade_rejections(analyses: list[NeutralImageAnalysis]) -> None:

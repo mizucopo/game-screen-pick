@@ -146,6 +146,48 @@ def test_preflight_accepts_ffmpeg_6_1_capability_flags(tmp_path: Path) -> None:
     assert identity.ffprobe_version == "6.1.1"
 
 
+def test_preflight_distinguishes_same_version_runtime_builds(tmp_path: Path) -> None:
+    """同じversionの異なるbuildが別Media Runtime Identityになること。
+
+    Arrange:
+        - versionが同じでbuild markerが異なる2組の対応tool pairが用意される
+    Act:
+        - 各runtimeのpreflightが実行される
+    Assert:
+        - buildとcapabilityから導出されたidentityが異なること
+    """
+    # Arrange
+    first_folder = tmp_path / "first"
+    second_folder = tmp_path / "second"
+    first_folder.mkdir()
+    second_folder.mkdir()
+    first_ffmpeg = first_folder / "ffmpeg"
+    first_ffprobe = first_folder / "ffprobe"
+    second_ffmpeg = second_folder / "ffmpeg"
+    second_ffprobe = second_folder / "ffprobe"
+    _write_capable_tool(first_ffmpeg, "ffmpeg", "first")
+    _write_capable_tool(first_ffprobe, "ffprobe", "first")
+    _write_capable_tool(second_ffmpeg, "ffmpeg", "second")
+    _write_capable_tool(second_ffprobe, "ffprobe", "second")
+    first_runtime = FfmpegMediaRuntime(
+        ffmpeg_executable=str(first_ffmpeg),
+        ffprobe_executable=str(first_ffprobe),
+    )
+    second_runtime = FfmpegMediaRuntime(
+        ffmpeg_executable=str(second_ffmpeg),
+        ffprobe_executable=str(second_ffprobe),
+    )
+
+    # Act
+    first_identity = first_runtime.preflight()
+    second_identity = second_runtime.preflight()
+
+    # Assert
+    assert first_identity.ffmpeg_version == second_identity.ffmpeg_version
+    assert first_identity.ffprobe_version == second_identity.ffprobe_version
+    assert first_identity != second_identity
+
+
 @pytest.mark.parametrize(
     "omitted_capability_option",
     ["-encoders", "-muxers"],

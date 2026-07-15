@@ -16,6 +16,10 @@ _Avoid_: Video Set, Output Folder, cache key
 一つのVideo Input Folderに対する同時実行を即時拒否し、非破壊validation完了後からprocessing cacheの変更とrun終了までを保護する非待機排他境界。異なるVideo Input Folderの実行は互いに妨げない。
 _Avoid_: Stage lock, waiting queue, global lock, cache artifact
 
+**Video Set Snapshot Validation**:
+Input Lock取得直後とOutput Folder公開直前にはVideo Set全体のpath、stat、内容を、各Video Stage直前にはVideo Set全体のpath、statと対象Video Sourceの内容を発見時snapshotへ照合する不変性検査。Stageごとに全動画を再hashする検査とは区別する。
+_Avoid_: cache artifact validation, full-set hash per Video Stage, Input Lock
+
 **Video Set Fingerprint**:
 Video Setの構成とVideo Orderをcacheやreportで参照するための、順序付きVideo Fingerprint列から導出される安定した識別子。
 _Avoid_: input path hash, unordered file set, global setting hash
@@ -43,6 +47,10 @@ _Avoid_: path hash, file stat, stage setting hash
 **Processing Stage**:
 再開可能な画像選定を構成する、入力と再利用可能な成果物の境界が明示された処理単位。
 _Avoid_: arbitrary function, progress message, whole run
+
+**Stage Resource Metric**:
+Completed Stageを初回計算するときの処理開始からartifact構築までを対象にしたwall時間とCPU時間。CPU時間はcurrent processとchild processの合計で、cache再利用時は初回に保存された値を復元する。
+_Avoid_: FFmpeg-only metric, cache lookup duration, current-run reuse overhead
 
 **Migration Gate**:
 Video Set selectorのpublic cutoverに必要な実装PR、test、target性能、human quality、traceabilityの全証拠を一つの判定として扱う境界。不足時はscreenshot CLI、package version、legacy codeの公開状態を一切変えない。
@@ -75,6 +83,10 @@ _Avoid_: raw TOML, environment dump, global config hash, CLI defaults applied be
 **Resolved Model Identity**:
 configured model名から実行時に解決し、完全性とload能力を検証して1 run内でfreezeする、Ollamaの完全manifest digestまたはHugging Faceの完全commit SHA。model依存Stageのfingerprintとprovenanceへ保持し、TOMLへ手入力するhashとはしない。
 _Avoid_: model tag, configured model name, truncated report value, expected digest
+
+**Media Runtime Identity**:
+system FFmpegとffprobeのversion、および正規化したbuild情報と検証済みcapability一覧から実行時に導出する完全SHA-256の組。raw build文字列やTOMLへ手入力するhashではなく、同じversionでもbuildまたはcapabilityが変われば別identityになる。
+_Avoid_: version-only identity, raw version output, configured runtime hash
 
 **Model Upgrade Policy**:
 全model roleへ適用する`auto_upgrade`設定とbootstrap規則。既定では処理前に更新を試み、更新不能でも完全でload可能なlocal modelがあればwarning付きで使い、別modelへのfallbackやpartial downloadの利用は行わない。実際のcache互換性は設定値でなくResolved Model Identityが決める。
@@ -157,8 +169,12 @@ Candidate Annotationとcache再利用のためにFrame Candidateごとに永続�
 _Avoid_: Heartbeat Proxy, original-resolution frame, selected output
 
 **Frame Refinement**:
-Candidate Momentのanchor前後にあるnative frameを対象に、Content Reject Reason判定、Source-Local Frame Deduplication、最大Frame Candidate数への選抜を行うVideo Stage処理。最初に最もQuality Scoreが高いframeを選び、残りは選択済みframeとの最小視覚距離、Quality Score、anchorへの近さ、早いVideo Timeの順で最大件数まで選ぶ。Candidate Momentから参照する最終順序はVideo Time順とする。
+Candidate Momentのanchor前後にあるnative frameを対象に、Content Reject Reason判定、Source-Local Frame Deduplication、最大Frame Candidate数への選抜を行うVideo Stage処理。重なるrefinement windowは一つのRefinement Window Groupとして扱い、最初に最もQuality Scoreが高いframeを選び、残りは選択済みframeとの最小視覚距離、Quality Score、anchorへの近さ、早いVideo Timeの順で最大件数まで選ぶ。Candidate Momentから参照する最終順序はVideo Time順とする。
 _Avoid_: fixed-fps conversion, Candidate Annotation, Representative Frame selection
+
+**Refinement Window Group**:
+一つのVideo Source内で互いに重なるCandidate Momentのrefinement windowから作る最大の連続時間範囲。Neutral Image Analysisの相対分布と前後関係はこの範囲内だけで共有し、離れた範囲のsampleを隣接frameとして扱わない。
+_Avoid_: whole-video refinement, Timeline Segment, density window, arbitrary frame batch
 
 **Source-Local Frame Deduplication**:
 一つのCandidate Momentのrefinement内で、知覚的に同じnative frameを一つへまとめるVideo Stageの処理。Quality Score順に64×36 grayscale署名を比較し、すでに残したframeとの平均絶対画素差が2.0以下なら除外する。閾値は設定値でなくversioned algorithm contractとする。同一PTSのFrame CandidateはVideo Source内で一つだけ作って複数Momentから共有するが、離れたMoment間の似たframeは削除しない。動画全体・動画横断の視覚的重複抑制とは区別する。
@@ -353,7 +369,7 @@ _Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
 _Avoid_: Candidate Annotation failure, silent omission, fabricated output, invalid-frame fallback
 
 **Neutral Image Analysis**:
-sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。画像の内容分類ではなく、blog candidate判定や動画横断のcosine similarity判定の土台になる。明確な無効frameには絶対条件、暗いgameなど入力特性とTransition Frameには動画内分布と前後関係を使う。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
+sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。画像の内容分類ではなく、blog candidate判定や動画横断のcosine similarity判定の土台になる。明確な無効frameには絶対条件、暗いgameなど入力特性にはRefinement Window Group内の分布、Transition Frameには同一streamとtime baseでdurationどおりに連続するnative frameだけの前後関係を使う。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
 _Avoid_: scene classification, selection intent, CLIP embedding, model-dependent feature
 
 **Content Reject Reason**:

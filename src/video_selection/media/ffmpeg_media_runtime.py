@@ -1,5 +1,6 @@
 """system FFmpeg/ffprobeをsemantic media operationへ閉じ込めるruntime。"""
 
+import hashlib
 import json
 import re
 import resource
@@ -9,6 +10,7 @@ from collections import deque
 from collections.abc import Iterator
 from fractions import Fraction
 from pathlib import Path
+from typing import NoReturn
 
 from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.embedded_subtitle import EmbeddedSubtitle
@@ -102,10 +104,17 @@ class FfmpegMediaRuntime:
                 MediaRuntimeFailureReason.FFMPEG_FFPROBE_VERSION_MISMATCH,
                 "FFmpegとffprobeは同一buildである必要があります",
             )
-        self._verify_capabilities()
+        capabilities = self._verify_capabilities()
         return MediaRuntimeIdentity(
             ffmpeg_version=ffmpeg_version,
             ffprobe_version=ffprobe_version,
+            build_capability_sha256=self._build_capability_sha256(
+                ffmpeg_version,
+                ffprobe_version,
+                ffmpeg_build,
+                ffprobe_build,
+                capabilities,
+            ),
         )
 
     def probe(self, media_path: Path) -> MediaProbe:
@@ -669,7 +678,7 @@ class FfmpegMediaRuntime:
             int(patch) if patch is not None else 0,
         )
 
-    def _verify_capabilities(self) -> None:
+    def _verify_capabilities(self) -> dict[str, object]:
         try:
             demuxers = self._read_capability_names("-demuxers")
             decoders = self._read_capability_names("-decoders")
@@ -692,16 +701,49 @@ class FfmpegMediaRuntime:
             probe_document = json.loads(probe.stdout)
         except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
             self._raise_missing_capability(error)
+        if not isinstance(probe_document, dict):
+            self._raise_missing_capability()
+        program_version = probe_document.get("program_version")
         if (
             not _REQUIRED_DEMUXERS.issubset(demuxers)
             or not _REQUIRED_DECODERS.issubset(decoders)
             or not _REQUIRED_ENCODERS.issubset(encoders)
             or not _REQUIRED_MUXERS.issubset(muxers)
             or not _REQUIRED_FILTERS.issubset(filters)
-            or not isinstance(probe_document, dict)
-            or not isinstance(probe_document.get("program_version"), dict)
+            or not isinstance(program_version, dict)
         ):
             self._raise_missing_capability()
+        return {
+            "demuxers": sorted(demuxers),
+            "decoders": sorted(decoders),
+            "encoders": sorted(encoders),
+            "muxers": sorted(muxers),
+            "filters": sorted(filters),
+            "ffprobe_program_version": program_version,
+        }
+
+    @staticmethod
+    def _build_capability_sha256(
+        ffmpeg_version: str,
+        ffprobe_version: str,
+        ffmpeg_build: tuple[str, ...],
+        ffprobe_build: tuple[str, ...],
+        capabilities: dict[str, object],
+    ) -> str:
+        """raw build文字列を残さずcanonical identity digestを導出する。"""
+        canonical = json.dumps(
+            {
+                "ffmpeg_version": ffmpeg_version,
+                "ffprobe_version": ffprobe_version,
+                "ffmpeg_build": list(ffmpeg_build),
+                "ffprobe_build": list(ffprobe_build),
+                "capabilities": capabilities,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
 
     def _read_capability_names(self, option: str) -> frozenset[str]:
         completed = subprocess.run(
@@ -722,7 +764,7 @@ class FfmpegMediaRuntime:
         return frozenset(names)
 
     @staticmethod
-    def _raise_missing_capability(error: BaseException | None = None) -> None:
+    def _raise_missing_capability(error: BaseException | None = None) -> NoReturn:
         failure = MediaRuntimeError(
             MediaRuntimeFailureReason.MISSING_REQUIRED_DEMUXER_OR_DECODER,
             "必要なFFmpeg/ffprobe media能力がありません",

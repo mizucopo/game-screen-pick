@@ -1,9 +1,13 @@
 """Video Stage processorの統合style test。"""
 
+import os
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
+from src.video_selection.models.media_runtime_identity import MediaRuntimeIdentity
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.services.discover_video_set import discover_video_set
 from src.video_selection.services.video_stage_processor import VideoStageProcessor
@@ -162,3 +166,166 @@ def test_corrupt_candidate_proxy_recomputes_only_candidate_stage(
     repaired_proxy_path = repaired_result.extraction.candidates[0].proxy_path
     assert repaired_proxy_path is not None
     assert repaired_proxy_path.read_bytes() != b"corrupt-proxy"
+
+
+def test_same_stat_change_is_checked_when_affected_source_reaches_video_stage(
+    tmp_path: Path,
+) -> None:
+    """対象外sourceの同一stat変更が、そのsourceのStage直前に検知されること。
+
+    Arrange:
+        - 異なる内容を持つ2動画の発見済みVideo Setが用意される
+        - initial validation後に2本目だけが同一statの別内容へ変更される
+    Act:
+        - Video Stage処理がVideo Order順に実行される
+    Assert:
+        - 1本目の両Stageは完了し、2本目のscan直前で変更が拒否されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    first_path = input_folder / "01-first.mp4"
+    second_path = input_folder / "02-second.mp4"
+    first_path.write_bytes(b"first-video")
+    second_path.write_bytes(b"second-video")
+    configuration = _configuration(input_folder, tmp_path / "output")
+    video_set = discover_video_set(input_folder)
+    original_stat = second_path.stat()
+
+    def rewrite_second_source() -> None:
+        second_path.write_bytes(b"x" * original_stat.st_size)
+        os.utime(
+            second_path,
+            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+        )
+
+    runtime = FakeVideoStageMediaRuntime(on_preflight=rewrite_second_source)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
+        VideoStageProcessor(runtime, RecordingRunObserver()).process(
+            video_set,
+            configuration,
+        )
+    assert runtime.call_order == [
+        ("probe", "01-first.mp4"),
+        ("scan", "01-first.mp4"),
+        ("refine", "01-first.mp4"),
+        ("probe", "02-second.mp4"),
+    ]
+
+
+def test_refinement_is_streamed_between_distant_moment_groups(
+    tmp_path: Path,
+) -> None:
+    """離れたMoment groupの全RGB frameが同時に保持されないこと。
+
+    Arrange:
+        - 離れた2つのCandidate Momentとstreaming検査付きruntimeが用意される
+    Act:
+        - 一つのrange scanからFrame Candidateが抽出される
+    Assert:
+        - 後側groupのdecode継続前に前側groupのproxyが書かれること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    configuration = _configuration(input_folder, tmp_path / "output")
+    runtime = FakeVideoStageMediaRuntime(
+        distant_moments=True,
+        require_streaming_refinement=True,
+    )
+
+    # Act
+    result = VideoStageProcessor(runtime, RecordingRunObserver()).process(
+        discover_video_set(input_folder),
+        configuration,
+    )[0]
+
+    # Assert
+    assert len(result.extraction.moments) == 2
+    assert all(moment.frame_candidate_ids for moment in result.extraction.moments)
+
+
+def test_runtime_build_identity_change_recomputes_scan_stage(tmp_path: Path) -> None:
+    """同じversionでもbuild identity変更時にscan cacheが再計算されること。
+
+    Arrange:
+        - 同じVideo Identityとversionで異なるbuild digestを返すruntimeが用意される
+    Act:
+        - 最初のruntimeでcache確定後、別buildのruntimeで再実行される
+    Assert:
+        - scan-videoと下流candidate抽出が再計算されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    video_path = input_folder / "video.mp4"
+    video_path.write_bytes(b"video-content")
+    configuration = _configuration(input_folder, tmp_path / "output")
+    video_set = discover_video_set(input_folder)
+    first_runtime = FakeVideoStageMediaRuntime(
+        runtime_identity=MediaRuntimeIdentity(
+            "6.1.1-test",
+            "6.1.1-test",
+            "a" * 64,
+        )
+    )
+    VideoStageProcessor(first_runtime, RecordingRunObserver()).process(
+        video_set,
+        configuration,
+    )
+    changed_runtime = FakeVideoStageMediaRuntime(
+        runtime_identity=MediaRuntimeIdentity(
+            "6.1.1-test",
+            "6.1.1-test",
+            "b" * 64,
+        )
+    )
+
+    # Act
+    VideoStageProcessor(changed_runtime, RecordingRunObserver()).process(
+        video_set,
+        configuration,
+    )
+
+    # Assert
+    assert changed_runtime.scan_calls == [video_path]
+    assert changed_runtime.range_calls == [video_path]
+
+
+def test_stage_metrics_include_current_process_and_full_stage_time(
+    tmp_path: Path,
+) -> None:
+    """Video Stage metricにcurrent processを含む全Stage costが記録されること。
+
+    Arrange:
+        - native metricを0で返しscanとrefinement中にCPUを消費するruntimeが用意される
+    Act:
+        - Video Stageが初回計算される
+    Assert:
+        - scanとcandidate抽出のwall時間とCPU時間が正であること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    configuration = _configuration(input_folder, tmp_path / "output")
+    runtime = FakeVideoStageMediaRuntime(
+        cpu_burn_seconds=0.02,
+        reported_scan_wall_seconds=0.0,
+        reported_scan_cpu_seconds=0.0,
+    )
+
+    # Act
+    result = VideoStageProcessor(runtime, RecordingRunObserver()).process(
+        discover_video_set(input_folder),
+        configuration,
+    )[0]
+
+    # Assert
+    assert result.scan.metrics.wall_seconds >= 0.01
+    assert result.scan.metrics.cpu_seconds >= 0.01
+    assert result.extraction_metrics.wall_seconds >= 0.01
+    assert result.extraction_metrics.cpu_seconds >= 0.01

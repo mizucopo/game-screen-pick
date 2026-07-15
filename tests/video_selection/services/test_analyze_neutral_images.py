@@ -128,3 +128,29 @@ def test_visual_feature_is_l2_normalized_and_temporal_transition_is_rejected() -
     assert analyses[2].reject_reason is None
     assert np.linalg.norm(analyses[0].visual_feature) == pytest.approx(1.0)
     assert analyses[1].reject_reason is ContentRejectReason.TEMPORAL_TRANSITION
+
+
+def test_temporal_transition_requires_exact_native_frame_adjacency() -> None:
+    """離れたsampleがtemporal transitionの前後frameにされないこと。
+
+    Arrange:
+        - 同じ高情報frameの間に暗いoverlayが離れたPTSで用意される
+    Act:
+        - Neutral Image Analysisが実行される
+    Assert:
+        - 中央sampleがtemporal transitionとして除外されないこと
+    """
+    # Arrange
+    detailed = _checkerboard()
+    dark_overlay = (detailed.astype(np.float32) * 0.22 + 12).astype(np.uint8)
+    frames = (
+        _frame(0, detailed),
+        _frame(10, dark_overlay),
+        _frame(20, detailed),
+    )
+
+    # Act
+    analyses = analyze_neutral_images(frames)
+
+    # Assert
+    assert analyses[1].reject_reason is not ContentRejectReason.TEMPORAL_TRANSITION

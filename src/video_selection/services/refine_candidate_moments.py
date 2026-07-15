@@ -1,6 +1,7 @@
 """Candidate Moment周辺のnative frameを選抜する。"""
 
 import math
+from collections.abc import Iterable, Iterator
 from dataclasses import replace
 from fractions import Fraction
 
@@ -14,6 +15,7 @@ from ..models.frame_candidate_extraction import FrameCandidateExtraction
 from ..models.neutral_image_analysis import NeutralImageAnalysis
 from ..models.video_timeline import VideoTimeline
 from .analyze_neutral_images import analyze_neutral_images
+from .build_refinement_pts_ranges import build_refinement_pts_ranges
 from .build_video_entity_id import build_video_entity_id
 
 _FRAME_ID_ALGORITHM = "frame-candidate-id-v1"
@@ -30,13 +32,146 @@ def refine_candidate_moments(
     max_frame_candidates: int,
 ) -> FrameCandidateExtraction:
     """無効frame除外、Moment内dedupe、多様性選抜を適用する。"""
+    groups = tuple(
+        iter_refined_candidate_groups(
+            video_fingerprint=video_fingerprint,
+            timeline=timeline,
+            moments=moments,
+            frames=frames,
+            refinement_radius_seconds=refinement_radius_seconds,
+            max_frame_candidates=max_frame_candidates,
+        )
+    )
+    return combine_refined_candidate_groups(moments, groups)
+
+
+def iter_refined_candidate_groups(
+    *,
+    video_fingerprint: str,
+    timeline: VideoTimeline,
+    moments: tuple[CandidateMoment, ...],
+    frames: Iterable[DecodedVideoFrame],
+    refinement_radius_seconds: float,
+    max_frame_candidates: int,
+) -> Iterator[FrameCandidateExtraction]:
+    """一回のframe streamを連続Refinement Window Groupごとに解析する。"""
+    _validate_refinement_arguments(
+        refinement_radius_seconds,
+        max_frame_candidates,
+    )
+    pts_ranges = build_refinement_pts_ranges(
+        timeline,
+        moments,
+        refinement_radius_seconds,
+    )
+    frame_iterator = iter(frames)
+    pending: DecodedVideoFrame | None = None
+    radius = Fraction(str(refinement_radius_seconds))
+    for start_pts, end_pts in pts_ranges:
+        group_frames: list[DecodedVideoFrame] = []
+        while True:
+            if pending is None:
+                try:
+                    frame = next(frame_iterator)
+                except StopIteration:
+                    break
+            else:
+                frame = pending
+                pending = None
+            if frame.pts < start_pts:
+                msg = "refinement frameが要求PTS range外です"
+                raise ValueError(msg)
+            if frame.pts >= end_pts:
+                pending = frame
+                break
+            group_frames.append(frame)
+        group_moments = tuple(
+            moment for moment in moments if start_pts <= moment.source_pts < end_pts
+        )
+        yield _refine_candidate_group(
+            video_fingerprint=video_fingerprint,
+            timeline=timeline,
+            moments=group_moments,
+            frames=tuple(group_frames),
+            radius=radius,
+            max_frame_candidates=max_frame_candidates,
+        )
+    if pending is not None:
+        msg = "refinement frameが要求PTS range外です"
+        raise ValueError(msg)
+    try:
+        next(frame_iterator)
+    except StopIteration:
+        return
+    msg = "refinement frameが要求PTS range外です"
+    raise ValueError(msg)
+
+
+def combine_refined_candidate_groups(
+    moments: tuple[CandidateMoment, ...],
+    groups: tuple[FrameCandidateExtraction, ...],
+) -> FrameCandidateExtraction:
+    """順次確定したgroupを一つのVideo Source抽出結果へ統合する。"""
+    refined_by_id = {
+        moment.identifier: moment for group in groups for moment in group.moments
+    }
+    refined_moments = tuple(
+        refined_by_id.get(moment.identifier, replace(moment, frame_candidate_ids=()))
+        for moment in moments
+    )
+    candidate_by_id = {
+        candidate.identifier: candidate
+        for group in groups
+        for candidate in group.candidates
+    }
+    candidates = tuple(
+        sorted(
+            candidate_by_id.values(),
+            key=lambda candidate: (
+                Fraction(0) if candidate.video_time is None else candidate.video_time
+            ),
+        )
+    )
+    reject_breakdown = ContentRejectReason.empty_breakdown()
+    for group in groups:
+        for reason, count in group.reject_breakdown.items():
+            reject_breakdown[reason] += count
+    return FrameCandidateExtraction(
+        moments=refined_moments,
+        candidates=candidates,
+        native_frame_count=sum(group.native_frame_count for group in groups),
+        reject_breakdown=reject_breakdown,
+        deduplicated_frame_count=sum(
+            group.deduplicated_frame_count for group in groups
+        ),
+        zero_frame_moment_count=sum(
+            not moment.frame_candidate_ids for moment in refined_moments
+        ),
+    )
+
+
+def _validate_refinement_arguments(
+    refinement_radius_seconds: float,
+    max_frame_candidates: int,
+) -> None:
     if not math.isfinite(refinement_radius_seconds) or refinement_radius_seconds < 0:
         msg = "Frame Refinement半径は0以上の有限値である必要があります"
         raise ValueError(msg)
     if not 1 <= max_frame_candidates <= 3:
         msg = "最大Frame Candidate数は1以上3以下である必要があります"
         raise ValueError(msg)
-    radius = Fraction(str(refinement_radius_seconds))
+
+
+def _refine_candidate_group(
+    *,
+    video_fingerprint: str,
+    timeline: VideoTimeline,
+    moments: tuple[CandidateMoment, ...],
+    frames: tuple[DecodedVideoFrame, ...],
+    radius: Fraction,
+    max_frame_candidates: int,
+) -> FrameCandidateExtraction:
+    """一つの連続Refinement Window Groupを解析して選抜する。"""
     unique_frames = {
         frame.pts: frame
         for frame in frames

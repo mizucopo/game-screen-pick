@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ..models.candidate_moment import CandidateMoment
 from ..models.effective_configuration import EffectiveConfiguration
+from ..models.frame_candidate_extraction import FrameCandidateExtraction
 from ..models.frame_candidate_extraction_metrics import (
     FrameCandidateExtractionMetrics,
 )
@@ -29,9 +30,15 @@ from .build_refinement_pts_ranges import build_refinement_pts_ranges
 from .build_video_scan_result import build_video_scan_result
 from .discover_candidate_moments import discover_candidate_moments
 from .processing_stage_runner import ProcessingStageRunner
-from .refine_candidate_moments import refine_candidate_moments
+from .refine_candidate_moments import (
+    combine_refined_candidate_groups,
+    iter_refined_candidate_groups,
+)
 from .select_primary_video_stream import select_primary_video_stream
-from .validate_video_set_snapshot import validate_video_set_snapshot
+from .validate_video_set_snapshot import (
+    validate_video_set_snapshot,
+    validate_video_source_snapshot,
+)
 from .video_stage_artifacts import (
     restore_frame_candidate_extraction,
     restore_video_scan,
@@ -39,12 +46,12 @@ from .video_stage_artifacts import (
     serialize_video_scan,
 )
 
-_SCAN_ALGORITHM_VERSION = "video-scan-v1"
+_SCAN_ALGORITHM_VERSION = "video-scan-v2"
 _TIMELINE_ALGORITHM_VERSION = "exact-timeline-v1"
 _SCAN_PROXY_ANALYSIS_VERSION = "scan-proxy-analysis-v1"
 _HEARTBEAT_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
-_CANDIDATE_EXTRACTION_VERSION = "frame-candidate-extraction-v1"
-_CONTENT_REJECT_VERSION = "content-reject-v1"
+_CANDIDATE_EXTRACTION_VERSION = "frame-candidate-extraction-v2"
+_CONTENT_REJECT_VERSION = "content-reject-v2"
 _DEDUPE_VERSION = "grayscale-64x36-mad-2-v1"
 _ENTITY_ID_VERSION = "video-entity-id-v1"
 _CANDIDATE_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
@@ -89,7 +96,6 @@ class VideoStageProcessor:
         runtime_identity: MediaRuntimeIdentity,
     ) -> VideoStageResult:
         """一つのVideo Sourceの2 Stageを確定または再利用する。"""
-        validate_video_set_snapshot(video_set)
         primary_stream = select_primary_video_stream(
             self._media_runtime.probe(source.path)
         )
@@ -98,7 +104,7 @@ class VideoStageProcessor:
             self._observer,
             subject_namespace="videos",
             subject_fingerprint=source.fingerprint,
-            before_stage=lambda: validate_video_set_snapshot(video_set),
+            before_stage=lambda: validate_video_source_snapshot(video_set, source),
             stage_order=VIDEO_STAGE_ORDER,
         )
         scan_input = _scan_semantic_input(
@@ -171,6 +177,8 @@ class VideoStageProcessor:
         stage_root: Path,
     ) -> dict[str, object]:
         """single-decode scanを実行しscene一時画像を除去する。"""
+        cpu_before = _stage_cpu_seconds()
+        started_at = time.monotonic()
         native_scan = self._media_runtime.scan_video(
             source.path,
             primary_stream,
@@ -187,9 +195,20 @@ class VideoStageProcessor:
                 video_fingerprint=source.fingerprint,
                 decode_backend=configuration.decode_backend,
             )
-            return serialize_video_scan(scan, stage_root)
+            artifact = serialize_video_scan(scan, stage_root)
         finally:
             shutil.rmtree(stage_root / ".scene-proxies", ignore_errors=True)
+        wall_seconds = time.monotonic() - started_at
+        cpu_seconds = _stage_cpu_seconds() - cpu_before
+        metrics = _artifact_metrics(artifact)
+        metrics["wall_seconds"] = wall_seconds
+        metrics["cpu_seconds"] = cpu_seconds
+        metrics["input_seconds_per_wall_second"] = (
+            float(scan.timeline.duration.seconds) / wall_seconds
+            if wall_seconds > 0
+            else 0.0
+        )
+        return artifact
 
     def _produce_extraction_artifact(
         self,
@@ -201,7 +220,7 @@ class VideoStageProcessor:
         stage_root: Path,
     ) -> dict[str, object]:
         """native refinementとcandidate proxy確定を実行する。"""
-        usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        cpu_before = _stage_cpu_seconds()
         started_at = time.monotonic()
         pts_ranges = build_refinement_pts_ranges(
             scan.timeline,
@@ -209,18 +228,16 @@ class VideoStageProcessor:
             configuration.refinement_radius_seconds,
         )
         frames = (
-            tuple(
-                self._media_runtime.scan_video_frame_ranges(
-                    source.path,
-                    scan.primary_stream.index,
-                    pts_ranges,
-                    960,
-                )
+            self._media_runtime.scan_video_frame_ranges(
+                source.path,
+                scan.primary_stream.index,
+                pts_ranges,
+                960,
             )
             if pts_ranges
-            else ()
+            else iter(())
         )
-        extraction = refine_candidate_moments(
+        groups = iter_refined_candidate_groups(
             video_fingerprint=source.fingerprint,
             timeline=scan.timeline,
             moments=moments,
@@ -228,8 +245,42 @@ class VideoStageProcessor:
             refinement_radius_seconds=configuration.refinement_radius_seconds,
             max_frame_candidates=configuration.max_frame_candidates,
         )
+        encoded_groups: list[FrameCandidateExtraction] = []
+        for group in groups:
+            encoded_groups.append(self._encode_candidate_group(group, stage_root))
+            # 次groupのdecode前に選抜前RGBへの最後の参照を解放する。
+            del group
+        extraction = combine_refined_candidate_groups(moments, tuple(encoded_groups))
+        metrics = FrameCandidateExtractionMetrics(
+            wall_seconds=0.0,
+            cpu_seconds=0.0,
+            density_cap=density_cap,
+            actual_moment_count=len(extraction.moments),
+            native_frame_count=extraction.native_frame_count,
+            reject_breakdown=extraction.reject_breakdown,
+            deduplicated_frame_count=extraction.deduplicated_frame_count,
+            zero_frame_moment_count=extraction.zero_frame_moment_count,
+            frame_candidate_count=len(extraction.candidates),
+            frame_candidate_bytes=sum(
+                len(candidate.image_bytes) for candidate in extraction.candidates
+            ),
+        )
+        artifact = serialize_frame_candidate_extraction(extraction, metrics, stage_root)
+        wall_seconds = time.monotonic() - started_at
+        cpu_seconds = _stage_cpu_seconds() - cpu_before
+        artifact_metrics = _artifact_metrics(artifact)
+        artifact_metrics["wall_seconds"] = wall_seconds
+        artifact_metrics["cpu_seconds"] = cpu_seconds
+        return artifact
+
+    def _encode_candidate_group(
+        self,
+        group: FrameCandidateExtraction,
+        stage_root: Path,
+    ) -> FrameCandidateExtraction:
+        """一つのrefinement groupのproxyを書きRGB artifactを解放する。"""
         encoded_candidates = []
-        for candidate in extraction.candidates:
+        for candidate in group.candidates:
             if candidate.decoded_frame is None:
                 msg = "Frame Candidate Proxy用のnative frameがありません"
                 raise ValueError(msg)
@@ -247,30 +298,7 @@ class VideoStageProcessor:
                     decoded_frame=None,
                 )
             )
-        extraction = replace(extraction, candidates=tuple(encoded_candidates))
-        wall_seconds = time.monotonic() - started_at
-        usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
-        cpu_seconds = (
-            usage_after.ru_utime
-            - usage_before.ru_utime
-            + usage_after.ru_stime
-            - usage_before.ru_stime
-        )
-        metrics = FrameCandidateExtractionMetrics(
-            wall_seconds=wall_seconds,
-            cpu_seconds=cpu_seconds,
-            density_cap=density_cap,
-            actual_moment_count=len(extraction.moments),
-            native_frame_count=extraction.native_frame_count,
-            reject_breakdown=extraction.reject_breakdown,
-            deduplicated_frame_count=extraction.deduplicated_frame_count,
-            zero_frame_moment_count=extraction.zero_frame_moment_count,
-            frame_candidate_count=len(extraction.candidates),
-            frame_candidate_bytes=sum(
-                len(candidate.image_bytes) for candidate in extraction.candidates
-            ),
-        )
-        return serialize_frame_candidate_extraction(extraction, metrics, stage_root)
+        return replace(group, candidates=tuple(encoded_candidates))
 
 
 def _scan_semantic_input(
@@ -291,6 +319,7 @@ def _scan_semantic_input(
         "media_runtime_identity": {
             "ffmpeg_version": runtime_identity.ffmpeg_version,
             "ffprobe_version": runtime_identity.ffprobe_version,
+            "build_capability_sha256": runtime_identity.build_capability_sha256,
         },
         "decode_backend": configuration.decode_backend,
         "heartbeat_interval_seconds": configuration.heartbeat_interval_seconds,
@@ -328,3 +357,22 @@ def _fraction_value(value: Fraction | None) -> dict[str, int] | None:
     if value is None:
         return None
     return {"numerator": value.numerator, "denominator": value.denominator}
+
+
+def _stage_cpu_seconds() -> float:
+    self_usage = resource.getrusage(resource.RUSAGE_SELF)
+    child_usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return (
+        self_usage.ru_utime
+        + self_usage.ru_stime
+        + child_usage.ru_utime
+        + child_usage.ru_stime
+    )
+
+
+def _artifact_metrics(artifact: dict[str, object]) -> dict[str, object]:
+    metrics = artifact.get("metrics")
+    if not isinstance(metrics, dict):
+        msg = "Video Stage artifactにmetric objectがありません"
+        raise ValueError(msg)
+    return metrics
