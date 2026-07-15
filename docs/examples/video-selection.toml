@@ -1,0 +1,54 @@
+# Future Video Set selector configuration contract (not implemented yet).
+config_version = "1.0.0"
+
+[input]
+recursive = false
+
+[selection]
+image_count = 100
+spoiler_sensitivity = "medium"
+similarity_threshold = 0.72
+# scene_hint = "RPG。戦闘、探索、会話、メニューが混在している"
+
+[frame_extraction]
+heartbeat_interval_seconds = 1.0
+scene_change_threshold = 0.25
+scene_min_interval_seconds = 0.5
+decode_backend = "cpu"
+refinement_radius_seconds = 1.0
+max_frame_candidates = 3
+
+[candidate_moments]
+density_per_minute = 2.0
+
+[context]
+language = "ja"
+# subtitle_stream_index = 2
+# audio_stream_index = 1
+
+[ollama]
+host = "http://localhost:11434"
+timeout_seconds = 60
+max_parallel_requests = 1
+
+[models]
+auto_upgrade = true
+
+[models.scene_catalog]
+name = "qwen3-vl:8b-instruct"
+num_ctx = 32768
+
+[models.candidate_annotation]
+name = "qwen3-vl:8b-instruct"
+num_ctx = 32768
+
+[models.speech_to_text]
+name = "dropbox-dash/faster-whisper-large-v3-turbo"
+device = "cuda"
+compute_type = "float16"
+beam_size = 5
+
+[speech_to_text]
+vad_filter = true
+chunk_seconds = 600
+overlap_seconds = 5

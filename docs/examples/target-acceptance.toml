@@ -1,0 +1,36 @@
+# Target-onlyのuntracked profileを作るためのschema template。
+# 実在するpath、動画名、区間へ置き換えたcopyはrepositoryへcommitしない。
+
+profile_version = "1.0.0"
+input_root = "<absolute-path-on-supported-target>"
+
+[release_suite]
+expected_total_duration = "PT30M"
+
+[[release_suite.intervals]]
+relative_video_path = "<relative-video-path>"
+start = "PT0S"
+end = "PT10M"
+scenario_role = "representative-gameplay"
+
+[[release_suite.intervals]]
+relative_video_path = "<relative-video-path>"
+start = "PT10M"
+end = "PT20M"
+scenario_role = "dialogue-or-event"
+
+[[release_suite.intervals]]
+relative_video_path = "<relative-video-path>"
+start = "PT20M"
+end = "PT30M"
+scenario_role = "late-game-spoiler-check"
+
+[full_scale_suite]
+expected_video_count = 12
+expected_total_duration = "PT50H40M"
+
+[privacy]
+retain_temporary_clips = false
+record_absolute_paths = false
+record_media_or_raw_text = false
+

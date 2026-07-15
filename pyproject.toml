@@ -70,6 +70,7 @@ mypy_path = "src:stubs"
 
 [tool.taskipy.tasks]
 test = "ruff check --fix src tests stubs && ruff format src tests stubs && mypy && pytest"
+prototype-issue-170 = "python prototypes/issue_170_migration_acceptance/prototype.py"
 
 [tool.uv]
 package = true
