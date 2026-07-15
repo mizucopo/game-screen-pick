@@ -530,6 +530,56 @@ def test_duplicate_video_content_is_rejected_before_cache_side_effects(
     assert not output_folder.exists()
 
 
+def test_existing_empty_output_folder_is_preserved_when_input_preflight_fails(
+    tmp_path: Path,
+) -> None:
+    """入力preflight失敗時に既存の空Output Folderが保持されること。
+
+    Arrange:
+        - 既存の空Output Folderと同一内容の重複videoが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - duplicate video errorが返されること
+        - Output Folderが空directoryのまま保持されること
+        - processing cacheが作成されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    input_folder.mkdir()
+    output_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"same-video")
+    (input_folder / "chapter-02.mp4").write_bytes(b"same-video")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeSpeechRuntime(()),
+        model_runtime=FakeModelRuntime(
+            ResolvedModelIdentity(identifier="model-sha-001")
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=RecordingRunObserver(),
+    )
+
+    # Act
+    with pytest.raises(ValueError, match="同一内容の重複video"):
+        application.run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=output_folder,
+                image_count=1,
+            )
+        )
+
+    # Assert
+    assert output_folder.is_dir()
+    assert tuple(output_folder.iterdir()) == ()
+    assert not (input_folder / ".game-screen-pick").exists()
+
+
 def test_output_nested_in_input_is_rejected_before_cache_side_effects(
     tmp_path: Path,
 ) -> None:

@@ -23,8 +23,11 @@ class AtomicOutputPublisher:
         run_status: RunStatus,
     ) -> PreparedOutput:
         """画像、JSON、Markdownを公開直前までstagingする。"""
-        if output_folder.exists():
-            msg = f"Output Folderは存在しない必要があります: {output_folder}"
+        if output_folder.is_symlink() or (
+            output_folder.exists()
+            and (not output_folder.is_dir() or any(output_folder.iterdir()))
+        ):
+            msg = f"Output Folderは存在しないか空である必要があります: {output_folder}"
             raise ValueError(msg)
         output_folder.parent.mkdir(parents=True, exist_ok=True)
         staging_folder = Path(

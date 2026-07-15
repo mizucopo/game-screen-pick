@@ -24,7 +24,6 @@ def validate_output_folder(input_folder: Path, output_folder: Path) -> None:
     if not output_folder.is_dir() or any(output_folder.iterdir()):
         msg = f"Output Folderは存在しないか空である必要があります: {output_folder}"
         raise ValueError(msg)
-    output_folder.rmdir()
 
 
 def _validate_output_parent(output_folder: Path) -> None:
