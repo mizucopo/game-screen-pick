@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,13 +25,23 @@ class CompletedStageWriter:
         artifact: dict[str, object],
     ) -> CompletedStage:
         """Stage artifactと完了manifestを保存する。"""
-        stage_folder = self._root / stage.value / fingerprint.value
-        stage_folder.mkdir(parents=True, exist_ok=True)
+        stage_root = self._root / stage.value
+        stage_root.mkdir(parents=True, exist_ok=True)
+        stage_folder = stage_root / fingerprint.value
+        if self._is_completed(
+            stage_folder,
+            stage,
+            fingerprint,
+            upstream_fingerprints,
+        ):
+            return CompletedStage(stage=stage, fingerprint=fingerprint)
+
+        temporary_folder = stage_root / f".{fingerprint.value}.{uuid4().hex}.tmp"
+        temporary_folder.mkdir()
         artifact_bytes = (
             json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         ).encode()
-        artifact_path = stage_folder / "artifact.json"
-        self._replace_bytes(artifact_path, artifact_bytes)
+        (temporary_folder / "artifact.json").write_bytes(artifact_bytes)
         manifest = {
             "schema": "game-screen-pick/completed-stage@0",
             "status": "completed",
@@ -43,15 +54,44 @@ class CompletedStageWriter:
         manifest_bytes = (
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         ).encode()
-        self._replace_bytes(stage_folder / "manifest.json", manifest_bytes)
+        (temporary_folder / "manifest.json").write_bytes(manifest_bytes)
+        try:
+            self._remove_partial_stage(stage_folder)
+            temporary_folder.replace(stage_folder)
+        finally:
+            shutil.rmtree(temporary_folder, ignore_errors=True)
         return CompletedStage(stage=stage, fingerprint=fingerprint)
 
     @staticmethod
-    def _replace_bytes(path: Path, content: bytes) -> None:
-        """同じdirectory内のtemporary fileから一度で置換する。"""
-        temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    def _is_completed(
+        stage_folder: Path,
+        stage: ProcessingStage,
+        fingerprint: StageFingerprint,
+        upstream_fingerprints: tuple[StageFingerprint, ...],
+    ) -> bool:
+        """既存folderが再利用可能なCompleted Stageかを返す。"""
         try:
-            temporary_path.write_bytes(content)
-            temporary_path.replace(path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
+            artifact_bytes = (stage_folder / "artifact.json").read_bytes()
+            json.loads(artifact_bytes)
+            manifest: object = json.loads(
+                (stage_folder / "manifest.json").read_text(encoding="utf-8")
+            )
+        except (OSError, TypeError, ValueError):
+            return False
+        return manifest == {
+            "schema": "game-screen-pick/completed-stage@0",
+            "status": "completed",
+            "stage": stage.value,
+            "fingerprint": fingerprint.value,
+            "upstream_fingerprints": [item.value for item in upstream_fingerprints],
+            "artifact": "artifact.json",
+            "artifact_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+        }
+
+    @staticmethod
+    def _remove_partial_stage(stage_folder: Path) -> None:
+        """同じfingerprint位置にあるpartial entryだけを取り除く。"""
+        if stage_folder.is_symlink() or stage_folder.is_file():
+            stage_folder.unlink()
+        elif stage_folder.exists():
+            shutil.rmtree(stage_folder)

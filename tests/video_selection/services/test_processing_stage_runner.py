@@ -89,3 +89,43 @@ def test_partial_stage_artifact_is_replaced_before_completion(tmp_path: Path) ->
     manifest = json.loads((stage_folder / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "completed"
     assert manifest["fingerprint"] == fingerprint.value
+
+
+def test_completed_stage_artifact_is_immutable_for_same_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """同じStage FingerprintのCompleted Stageが上書きされないこと。
+
+    Arrange:
+        - first artifactを持つCompleted Stageが確定済みである
+    Act:
+        - 別内容のartifactで同じStage Fingerprintが再度完了される
+    Assert:
+        - 最初に確定したartifactとmanifestがそのまま保持されること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    semantic_input = {"videos": [{"path": "video.mp4", "sha256": "digest"}]}
+    first_runner = ProcessingStageRunner(cache_folder, RecordingRunObserver())
+    completed_stage = first_runner.complete(
+        ProcessingStage.DISCOVER_VIDEO_SET,
+        semantic_input=semantic_input,
+        artifact={"value": "first"},
+    )
+
+    # Act
+    ProcessingStageRunner(cache_folder, RecordingRunObserver()).complete(
+        ProcessingStage.DISCOVER_VIDEO_SET,
+        semantic_input=semantic_input,
+        artifact={"value": "second"},
+    )
+
+    # Assert
+    artifact_path = (
+        cache_folder
+        / "walking-skeleton"
+        / ProcessingStage.DISCOVER_VIDEO_SET.value
+        / completed_stage.fingerprint.value
+        / "artifact.json"
+    )
+    assert json.loads(artifact_path.read_text(encoding="utf-8")) == {"value": "first"}

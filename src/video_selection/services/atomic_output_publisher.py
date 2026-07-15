@@ -7,18 +7,19 @@ from pathlib import Path
 
 from ..models.selected_image import SelectedImage
 from ..models.video_set import VideoSet
+from .prepared_output import PreparedOutput
 
 
 class AtomicOutputPublisher:
     """同一filesystemのstaging directoryからOutput Folderを公開する。"""
 
-    def publish(
+    def prepare(
         self,
         output_folder: Path,
         video_set: VideoSet,
         selected_images: tuple[SelectedImage, ...],
-    ) -> dict[str, object]:
-        """画像、JSON、Markdownを一回のdirectory renameで公開する。"""
+    ) -> PreparedOutput:
+        """画像、JSON、Markdownを公開直前までstagingする。"""
         if output_folder.exists():
             msg = f"Output Folderは存在しない必要があります: {output_folder}"
             raise ValueError(msg)
@@ -36,11 +37,10 @@ class AtomicOutputPublisher:
                 video_set,
                 selected_images,
             )
-            staging_folder.replace(output_folder)
         except BaseException:
             shutil.rmtree(staging_folder, ignore_errors=True)
             raise
-        return report
+        return PreparedOutput(staging_folder, output_folder, report)
 
     @staticmethod
     def _write_staged_artifacts(

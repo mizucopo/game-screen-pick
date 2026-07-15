@@ -14,6 +14,9 @@ from src.video_selection.models.effective_configuration import EffectiveConfigur
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.resolved_model_identity import ResolvedModelIdentity
+from tests.video_selection.fakes.blocking_publication_observer import (
+    BlockingPublicationObserver,
+)
 from tests.video_selection.fakes.failing_vision_runtime import FailingVisionRuntime
 from tests.video_selection.fakes.fake_media_runtime import FakeMediaRuntime
 from tests.video_selection.fakes.fake_model_runtime import FakeModelRuntime
@@ -154,3 +157,206 @@ def test_stage_failure_leaves_output_unpublished(tmp_path: Path) -> None:
         ProcessingStage.COLLECT_CONTEXT,
         ProcessingStage.RESOLVE_MODELS,
     )
+
+
+def test_publication_manifest_failure_leaves_output_unpublished(
+    tmp_path: Path,
+) -> None:
+    """Publish Output manifest失敗時にOutput Folderが公開されないこと。
+
+    Arrange:
+        - Select Images完了後にPublish Output cache pathを塞ぐobserverが用意される
+        - 公開可能なfake selected imageが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - manifest確定失敗が返され、Output Folderが存在しないこと
+        - staging directoryが残らないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(
+        identifier="frame-001",
+        image_bytes=b"fake-webp-image",
+    )
+    annotation = CandidateAnnotation(candidate=candidate, summary="summary")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=output_folder,
+        image_count=1,
+    )
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeSpeechRuntime(()),
+        model_runtime=FakeModelRuntime(
+            ResolvedModelIdentity(identifier="model-sha-001")
+        ),
+        vision_runtime=FakeVisionRuntime((annotation,)),
+        observer=BlockingPublicationObserver(configuration.processing_cache_folder),
+    )
+
+    # Act / Assert
+    with pytest.raises(FileExistsError):
+        application.run(configuration)
+    assert not output_folder.exists()
+    assert tuple(tmp_path.glob(".output.*.staging")) == ()
+
+
+def test_invalid_output_folder_is_rejected_before_cache_side_effects(
+    tmp_path: Path,
+) -> None:
+    """利用できないOutput FolderがStage開始前に拒否されること。
+
+    Arrange:
+        - 既存fileを持つOutput Folderが指定される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - Output Folder validation errorが返されること
+        - processing cacheが作成されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    input_folder.mkdir()
+    output_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    existing_output = output_folder / "keep.txt"
+    existing_output.write_text("keep", encoding="utf-8")
+    candidate = FrameCandidate(
+        identifier="frame-001",
+        image_bytes=b"fake-webp-image",
+    )
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeSpeechRuntime(()),
+        model_runtime=FakeModelRuntime(
+            ResolvedModelIdentity(identifier="model-sha-001")
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=RecordingRunObserver(),
+    )
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Output Folderは存在しない必要があります"):
+        application.run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=output_folder,
+                image_count=1,
+            )
+        )
+    assert existing_output.read_text(encoding="utf-8") == "keep"
+    assert not (input_folder / ".game-screen-pick").exists()
+
+
+def test_resolved_model_identity_changes_model_stage_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """Resolved Model Identity変更時にmodel Stageが共存されること。
+
+    Arrange:
+        - 同じVideo Setに対して異なるmodel identityを返す2実行がある
+    Act:
+        - それぞれ別のOutput Folderへ選定結果が公開される
+    Assert:
+        - Resolved Model Stageに異なるfingerprint artifactが保存されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(
+        identifier="frame-001",
+        image_bytes=b"fake-webp-image",
+    )
+    annotation = CandidateAnnotation(candidate=candidate, summary="summary")
+
+    # Act
+    for run_index, model_identity in enumerate(
+        ("model-sha-001", "model-sha-002"),
+        start=1,
+    ):
+        application = VideoSelectionApplication(
+            media_runtime=FakeMediaRuntime((candidate,)),
+            speech_runtime=FakeSpeechRuntime(()),
+            model_runtime=FakeModelRuntime(
+                ResolvedModelIdentity(identifier=model_identity)
+            ),
+            vision_runtime=FakeVisionRuntime((annotation,)),
+            observer=RecordingRunObserver(),
+        )
+        application.run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=tmp_path / f"output-{run_index}",
+                image_count=1,
+            )
+        )
+
+    # Assert
+    model_stage_folder = (
+        input_folder
+        / ".game-screen-pick"
+        / "cache"
+        / "walking-skeleton"
+        / ProcessingStage.RESOLVE_MODELS.value
+    )
+    assert len(tuple(model_stage_folder.iterdir())) == 2
+
+
+def test_video_content_change_changes_discovery_stage_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """同じpathのvideo内容変更時にVideo Set snapshotが変更されること。
+
+    Arrange:
+        - 同じrelative pathへ異なる内容が順番に保存される
+    Act:
+        - 各内容で別のOutput Folderへ選定結果が公開される
+    Assert:
+        - discovery Stageに異なるfingerprint artifactが保存されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    video_path = input_folder / "chapter-01.mp4"
+    candidate = FrameCandidate(
+        identifier="frame-001",
+        image_bytes=b"fake-webp-image",
+    )
+    annotation = CandidateAnnotation(candidate=candidate, summary="summary")
+
+    # Act
+    for run_index, video_content in enumerate((b"video-01", b"video-02"), start=1):
+        video_path.write_bytes(video_content)
+        VideoSelectionApplication(
+            media_runtime=FakeMediaRuntime((candidate,)),
+            speech_runtime=FakeSpeechRuntime(()),
+            model_runtime=FakeModelRuntime(
+                ResolvedModelIdentity(identifier="model-sha-001")
+            ),
+            vision_runtime=FakeVisionRuntime((annotation,)),
+            observer=RecordingRunObserver(),
+        ).run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=tmp_path / f"output-{run_index}",
+                image_count=1,
+            )
+        )
+
+    # Assert
+    discovery_stage_folder = (
+        input_folder
+        / ".game-screen-pick"
+        / "cache"
+        / "walking-skeleton"
+        / ProcessingStage.DISCOVER_VIDEO_SET.value
+    )
+    assert len(tuple(discovery_stage_folder.iterdir())) == 2

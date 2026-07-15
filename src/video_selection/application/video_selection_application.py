@@ -12,6 +12,8 @@ from ..services.atomic_output_publisher import AtomicOutputPublisher
 from ..services.discover_video_set import discover_video_set
 from ..services.processing_stage_runner import ProcessingStageRunner
 from ..services.select_images import select_images
+from ..services.snapshot_video_set import snapshot_video_set
+from ..services.validate_output_folder import validate_output_folder
 
 
 class VideoSelectionApplication:
@@ -33,16 +35,18 @@ class VideoSelectionApplication:
 
     def run(self, configuration: EffectiveConfiguration) -> RunOutcome:
         """内部Video Set選定を実行してRunOutcomeを返す。"""
+        validate_output_folder(configuration.output_folder)
         stage_runner = ProcessingStageRunner(
             configuration.processing_cache_folder,
             self._observer,
         )
 
         video_set = discover_video_set(configuration.video_input_folder)
+        video_set_snapshot = snapshot_video_set(video_set)
         stage_runner.complete(
             ProcessingStage.DISCOVER_VIDEO_SET,
-            {"videos": list(video_set.relative_paths)},
-            {"videos": list(video_set.relative_paths)},
+            {"videos": list(video_set_snapshot)},
+            {"videos": list(video_set_snapshot)},
         )
 
         frame_candidates = self._media_runtime.extract_candidates(video_set)
@@ -62,7 +66,7 @@ class VideoSelectionApplication:
         model_identity = self._model_runtime.resolve_models()
         stage_runner.complete(
             ProcessingStage.RESOLVE_MODELS,
-            {},
+            {"resolved_model_identity": model_identity.identifier},
             {"model_identity": model_identity.identifier},
         )
 
@@ -89,16 +93,21 @@ class VideoSelectionApplication:
         )
 
         publisher = AtomicOutputPublisher()
-        report = publisher.publish(
+        prepared_output = publisher.prepare(
             configuration.output_folder,
             video_set,
             selected_images,
         )
-        stage_runner.complete(
-            ProcessingStage.PUBLISH_OUTPUT,
-            {"selected_count": len(selected_images)},
-            {"report": report},
-        )
+        try:
+            stage_runner.complete(
+                ProcessingStage.PUBLISH_OUTPUT,
+                {"selected_count": len(selected_images)},
+                {"report": prepared_output.report},
+            )
+            prepared_output.publish()
+        except BaseException:
+            prepared_output.discard()
+            raise
         return RunOutcome(
             output_folder=configuration.output_folder,
             selected_count=len(selected_images),
