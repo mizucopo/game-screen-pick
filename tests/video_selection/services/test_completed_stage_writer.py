@@ -365,3 +365,67 @@ def test_artifact_or_manifest_write_failure_is_not_reusable(
     stage_root = cache_folder / "videos" / subject_fingerprint / stage.value
     assert not (stage_root / fingerprint.value).exists()
     assert tuple(stage_root.glob("*.tmp")) == ()
+
+
+def test_multi_artifact_stage_requires_every_artifact_to_be_intact(
+    tmp_path: Path,
+) -> None:
+    """複数artifactがすべて健全な場合だけCompleted Stageが復元されること。
+
+    Arrange:
+        - JSON artifactと2件のproxy画像を生成するproducerが用意される
+    Act:
+        - Stageが確定され、片方のproxyが後から破損される
+    Assert:
+        - 確定直後はartifactとStage rootが復元されること
+        - 1件でも破損した後はStage全体が再利用されないこと
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "1" * 64
+    stage = ProcessingStage.EXTRACT_FRAME_CANDIDATES
+    semantic_input = {"algorithm": "candidate-v1"}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+    writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="videos",
+        subject_fingerprint=subject_fingerprint,
+    )
+
+    def produce_artifacts(stage_folder: Path) -> dict[str, object]:
+        proxy_folder = stage_folder / "candidates"
+        proxy_folder.mkdir()
+        (proxy_folder / "first.jpg").write_bytes(b"first-proxy")
+        (proxy_folder / "second.jpg").write_bytes(b"second-proxy")
+        return {
+            "candidate_proxy_paths": [
+                "candidates/first.jpg",
+                "candidates/second.jpg",
+            ]
+        }
+
+    # Act
+    writer.write_artifacts(
+        stage,
+        fingerprint,
+        (),
+        semantic_input,
+        produce_artifacts,
+    )
+    restored = writer.read_bundle(stage, fingerprint, (), semantic_input)
+
+    # Assert
+    assert restored is not None
+    assert restored.artifact == {
+        "candidate_proxy_paths": [
+            "candidates/first.jpg",
+            "candidates/second.jpg",
+        ]
+    }
+    assert restored.root.joinpath("candidates/first.jpg").read_bytes() == b"first-proxy"
+
+    # Act
+    restored.root.joinpath("candidates/second.jpg").write_bytes(b"corrupt")
+
+    # Assert
+    assert writer.read_bundle(stage, fingerprint, (), semantic_input) is None

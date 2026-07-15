@@ -7,8 +7,24 @@ class ProcessingStage(StrEnum):
     """walking skeletonを構成する順序付きProcessing Stage。"""
 
     DISCOVER_VIDEO_SET = "discover-video-set"
+    SCAN_VIDEO = "scan-video"
     EXTRACT_FRAME_CANDIDATES = "extract-frame-candidates"
     COLLECT_CONTEXT = "collect-context"
     RESOLVE_MODELS = "resolve-models"
     ANNOTATE_CANDIDATES = "annotate-candidates"
     SELECT_IMAGES = "select-images"
+
+
+VIDEO_SET_STAGE_ORDER = (
+    ProcessingStage.DISCOVER_VIDEO_SET,
+    ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+    ProcessingStage.COLLECT_CONTEXT,
+    ProcessingStage.RESOLVE_MODELS,
+    ProcessingStage.ANNOTATE_CANDIDATES,
+    ProcessingStage.SELECT_IMAGES,
+)
+
+VIDEO_STAGE_ORDER = (
+    ProcessingStage.SCAN_VIDEO,
+    ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+)

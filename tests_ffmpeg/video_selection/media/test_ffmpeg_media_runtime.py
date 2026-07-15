@@ -7,16 +7,22 @@ from fractions import Fraction
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from src.video_selection.media.ffmpeg_media_runtime import FfmpegMediaRuntime
+from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.media_runtime_error import MediaRuntimeError
 from src.video_selection.models.media_runtime_failure_reason import (
     MediaRuntimeFailureReason,
 )
+from src.video_selection.services.discover_video_set import discover_video_set
+from src.video_selection.services.video_stage_processor import VideoStageProcessor
+from tests.video_selection.fakes.recording_run_observer import RecordingRunObserver
 from tests_ffmpeg.support.ffmpeg_fixture_factory import (
     generate_av1_aac_video,
     generate_cfr_video,
     generate_corrupt_video,
+    generate_scene_change_video,
     generate_stream_matrix_video,
     generate_vfr_video,
 )
@@ -63,11 +69,13 @@ elif "-decoders" in arguments:
     print(" S..... subrip")
 elif "-encoders" in arguments:
     if {omitted_capability_option!r} != "-encoders":
+        print(" V....D mjpeg")
         print(" V....D ppm")
         print(" A....D pcm_s16le")
         print(" S..... srt")
 elif "-muxers" in arguments:
     if {omitted_capability_option!r} != "-muxers":
+        print(" E image2")
         print(" E image2pipe")
         print(" E s16le")
         print(" E srt")
@@ -77,9 +85,11 @@ elif "-filters" in arguments:
     print("T.C asetnsamples")
     print(" ... ashowinfo")
     print(" ... format")
+    print(" ... nullsink")
     print("..C scale")
     print(" ... select")
     print(" ... showinfo")
+    print(" ... split")
 else:
     print({probe_document!r})
 """
@@ -134,6 +144,48 @@ def test_preflight_accepts_ffmpeg_6_1_capability_flags(tmp_path: Path) -> None:
     # Assert
     assert identity.ffmpeg_version == "6.1.1"
     assert identity.ffprobe_version == "6.1.1"
+
+
+def test_preflight_distinguishes_same_version_runtime_builds(tmp_path: Path) -> None:
+    """同じversionの異なるbuildが別Media Runtime Identityになること。
+
+    Arrange:
+        - versionが同じでbuild markerが異なる2組の対応tool pairが用意される
+    Act:
+        - 各runtimeのpreflightが実行される
+    Assert:
+        - buildとcapabilityから導出されたidentityが異なること
+    """
+    # Arrange
+    first_folder = tmp_path / "first"
+    second_folder = tmp_path / "second"
+    first_folder.mkdir()
+    second_folder.mkdir()
+    first_ffmpeg = first_folder / "ffmpeg"
+    first_ffprobe = first_folder / "ffprobe"
+    second_ffmpeg = second_folder / "ffmpeg"
+    second_ffprobe = second_folder / "ffprobe"
+    _write_capable_tool(first_ffmpeg, "ffmpeg", "first")
+    _write_capable_tool(first_ffprobe, "ffprobe", "first")
+    _write_capable_tool(second_ffmpeg, "ffmpeg", "second")
+    _write_capable_tool(second_ffprobe, "ffprobe", "second")
+    first_runtime = FfmpegMediaRuntime(
+        ffmpeg_executable=str(first_ffmpeg),
+        ffprobe_executable=str(first_ffprobe),
+    )
+    second_runtime = FfmpegMediaRuntime(
+        ffmpeg_executable=str(second_ffmpeg),
+        ffprobe_executable=str(second_ffprobe),
+    )
+
+    # Act
+    first_identity = first_runtime.preflight()
+    second_identity = second_runtime.preflight()
+
+    # Assert
+    assert first_identity.ffmpeg_version == second_identity.ffmpeg_version
+    assert first_identity.ffprobe_version == second_identity.ffprobe_version
+    assert first_identity != second_identity
 
 
 @pytest.mark.parametrize(
@@ -504,6 +556,61 @@ def test_scan_video_frames_preserves_vfr_source_timing(tmp_path: Path) -> None:
     ]
 
 
+def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
+    tmp_path: Path,
+) -> None:
+    """一回のdecodeからheartbeat proxyとscene signalが生成されること。
+
+    Arrange:
+        - 1秒ごとに内容が変わる3秒の実FFmpeg fixtureが用意される
+    Act:
+        - composite Video Scanが実行される
+    Assert:
+        - exactなorigin、最終frame終端、1秒heartbeatが返されること
+        - scene signalが320px以下の一時画像とともに返されること
+        - Heartbeat Proxyが960px以下のmetadataなしMJPEGとして保存されること
+        - decode passが1回として記録されること
+    """
+    # Arrange
+    video_path = generate_scene_change_video(tmp_path / "scenes.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+    artifact_folder = tmp_path / "scan-artifacts"
+
+    # Act
+    scan = runtime.scan_video(
+        video_path,
+        stream,
+        artifact_folder,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert scan.decode_pass_count == 1
+    assert scan.origin_pts == 0
+    assert scan.last_frame_duration_ts is not None
+    assert stream.time_base is not None
+    end_pts = scan.last_frame_pts + scan.last_frame_duration_ts
+    assert Fraction(end_pts) * stream.time_base == 3
+    assert [Fraction(item.source_pts) * item.time_base for item in scan.heartbeats] == [
+        Fraction(0),
+        Fraction(1),
+        Fraction(2),
+    ]
+    assert scan.scene_frames
+    assert all(max(item.width, item.height) <= 320 for item in scan.scene_frames)
+    assert all(item.image_path.exists() for item in scan.scene_frames)
+    assert all(max(item.width, item.height) <= 960 for item in scan.heartbeats)
+    assert all(item.image_path.suffix == ".jpg" for item in scan.heartbeats)
+    for heartbeat in scan.heartbeats:
+        with Image.open(heartbeat.image_path) as proxy:
+            assert proxy.format == "JPEG"
+            assert len(proxy.getexif()) == 0
+
+
 def test_extract_video_frame_returns_exact_requested_pts(tmp_path: Path) -> None:
     """指定されたsource PTSの一つのframe artifactが返されること。
 
@@ -534,6 +641,118 @@ def test_extract_video_frame_returns_exact_requested_pts(tmp_path: Path) -> None
     assert Fraction(frame.pts) * frame.time_base == Fraction(1, 2)
     assert (frame.width, frame.height, frame.pixel_format) == (64, 48, "rgb24")
     assert len(frame.pixels) == 64 * 48 * 3
+
+
+def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
+    tmp_path: Path,
+) -> None:
+    """複数の半開PTS range内だけからnative VFR frameが返されること。
+
+    Arrange:
+        - 0、0.25、0.75、1.0秒にframeを持つVFR fixtureが用意される
+    Act:
+        - firstとmiddle-lastを覆う複数PTS rangeが一回でscanされる
+    Assert:
+        - range外frameや固定fps slotが追加されずexact PTSが返されること
+    """
+    # Arrange
+    video_path = generate_vfr_video(tmp_path / "vfr-ranges.mkv")
+    runtime = FfmpegMediaRuntime()
+
+    # Act
+    frames = tuple(
+        runtime.scan_video_frame_ranges(
+            video_path,
+            stream_index=0,
+            pts_ranges=((0, 1), (750, 1001)),
+            max_dimension=64,
+        )
+    )
+
+    # Assert
+    assert [frame.pts for frame in frames] == [0, 750, 1000]
+
+
+def test_write_mjpeg_proxy_encodes_selected_rgb_frame_without_source_metadata(
+    tmp_path: Path,
+) -> None:
+    """選抜済みRGB frameがmetadataなしMJPEG proxyへ保存されること。
+
+    Arrange:
+        - CFR fixtureからexact PTSで抽出されたRGB frameが用意される
+    Act:
+        - FFmpeg MJPEG q:v=3でcandidate proxyが保存される
+    Assert:
+        - JPEGが元frame寸法で読めEXIF metadataを持たないこと
+    """
+    # Arrange
+    video_path = generate_cfr_video(tmp_path / "proxy-source.mkv")
+    runtime = FfmpegMediaRuntime()
+    frame = runtime.extract_video_frame(video_path, 0, 0, 64)
+    proxy_path = tmp_path / "candidate.jpg"
+
+    # Act
+    runtime.write_mjpeg_proxy(frame, proxy_path, quality=3)
+
+    # Assert
+    with Image.open(proxy_path) as proxy:
+        assert proxy.format == "JPEG"
+        assert proxy.size == (64, 48)
+        assert len(proxy.getexif()) == 0
+
+
+def test_real_cfr_vfr_video_stage_preserves_exact_timeline_and_scene_boundaries(
+    tmp_path: Path,
+) -> None:
+    """実FFmpegのCFR/VFRがVideo Stageのexact成果物へ確定されること。
+
+    Arrange:
+        - VFR fixtureと明確なscene changeを持つCFR fixtureが用意される
+    Act:
+        - 両動画がVideo Order順にVideo Stage processorへ通される
+    Assert:
+        - VFR durationが5/4秒として保持されること
+        - scene境界を持つsegmentがgapとoverlapなく3秒を覆うこと
+        - Candidate ProxyだけがCompleted Stageに残りscene画像が残らないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    generate_vfr_video(input_folder / "01-vfr.mkv")
+    generate_scene_change_video(input_folder / "02-scenes.mkv")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+    )
+    video_set = discover_video_set(input_folder)
+
+    # Act
+    results = VideoStageProcessor(
+        FfmpegMediaRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)
+
+    # Assert
+    assert results[0].scan.timeline.duration.seconds == Fraction(5, 4)
+    scene_timeline = results[1].scan.timeline
+    assert scene_timeline.duration.seconds == Fraction(3)
+    assert len(scene_timeline.segments) >= 2
+    assert scene_timeline.segments[0].start == 0
+    assert scene_timeline.segments[-1].end == 3
+    assert all(
+        left.end == right.start
+        for left, right in zip(
+            scene_timeline.segments,
+            scene_timeline.segments[1:],
+            strict=False,
+        )
+    )
+    assert not tuple(configuration.processing_cache_folder.rglob(".scene-proxies"))
+    assert all(
+        candidate.proxy_path is not None and candidate.proxy_path.suffix == ".jpg"
+        for result in results
+        for candidate in result.extraction.candidates
+    )
 
 
 def test_probe_reports_audio_and_embedded_subtitle_streams(

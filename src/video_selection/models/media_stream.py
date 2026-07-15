@@ -24,3 +24,4 @@ class MediaStream:
     language: str | None
     is_default: bool
     is_forced: bool
+    is_attached_picture: bool = False

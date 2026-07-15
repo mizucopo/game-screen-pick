@@ -1,10 +1,16 @@
 """system FFmpeg/ffprobeをsemantic media operationへ閉じ込めるruntime。"""
 
+import hashlib
 import json
 import re
+import resource
 import subprocess
+import time
+from collections import deque
 from collections.abc import Iterator
+from fractions import Fraction
 from pathlib import Path
+from typing import NoReturn
 
 from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.embedded_subtitle import EmbeddedSubtitle
@@ -12,7 +18,10 @@ from ..models.media_probe import MediaProbe
 from ..models.media_runtime_error import MediaRuntimeError
 from ..models.media_runtime_failure_reason import MediaRuntimeFailureReason
 from ..models.media_runtime_identity import MediaRuntimeIdentity
+from ..models.media_stream import MediaStream
+from ..models.native_video_scan import NativeVideoScan
 from ..models.pcm_audio_chunk import PcmAudioChunk
+from ..models.scanned_video_frame import ScannedVideoFrame
 from .ffmpeg_pcm_reader import iter_pcm_audio_chunks
 from .ffmpeg_subtitle_reader import read_embedded_subtitle_events
 from .ffmpeg_video_reader import iter_decoded_video_frames
@@ -33,8 +42,8 @@ _BUILD_SIGNATURE_PREFIXES = (
 )
 _REQUIRED_DEMUXERS = frozenset({"matroska", "mov"})
 _REQUIRED_DECODERS = frozenset({"aac", "libdav1d", "subrip"})
-_REQUIRED_ENCODERS = frozenset({"pcm_s16le", "ppm", "srt"})
-_REQUIRED_MUXERS = frozenset({"image2pipe", "s16le", "srt"})
+_REQUIRED_ENCODERS = frozenset({"mjpeg", "pcm_s16le", "ppm", "srt"})
+_REQUIRED_MUXERS = frozenset({"image2", "image2pipe", "s16le", "srt"})
 _REQUIRED_FILTERS = frozenset(
     {
         "aformat",
@@ -42,9 +51,11 @@ _REQUIRED_FILTERS = frozenset(
         "asetnsamples",
         "ashowinfo",
         "format",
+        "nullsink",
         "scale",
         "select",
         "showinfo",
+        "split",
     }
 )
 _DECODE_ERRORS = (
@@ -53,6 +64,10 @@ _DECODE_ERRORS = (
     EOFError,
     ValueError,
 )
+_SHOWINFO_BRANCH_PATTERN = re.compile(r"showinfo@(?P<branch>timeline|heartbeat|scene)")
+_SHOWINFO_PTS_PATTERN = re.compile(r"\bpts:\s*(-?\d+)")
+_SHOWINFO_DURATION_PATTERN = re.compile(r"\bduration:\s*(-?\d+)")
+_SHOWINFO_SIZE_PATTERN = re.compile(r"\bs:(\d+)x(\d+)")
 
 
 class FfmpegMediaRuntime:
@@ -89,10 +104,17 @@ class FfmpegMediaRuntime:
                 MediaRuntimeFailureReason.FFMPEG_FFPROBE_VERSION_MISMATCH,
                 "FFmpegとffprobeは同一buildである必要があります",
             )
-        self._verify_capabilities()
+        capabilities = self._verify_capabilities()
         return MediaRuntimeIdentity(
             ffmpeg_version=ffmpeg_version,
             ffprobe_version=ffprobe_version,
+            build_capability_sha256=self._build_capability_sha256(
+                ffmpeg_version,
+                ffprobe_version,
+                ffmpeg_build,
+                ffprobe_build,
+                capabilities,
+            ),
         )
 
     def probe(self, media_path: Path) -> MediaProbe:
@@ -149,6 +171,172 @@ class FfmpegMediaRuntime:
                 "video streamをdecodeできませんでした",
             ) from error
 
+    def scan_video(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        artifact_folder: Path,
+        *,
+        heartbeat_interval_seconds: float,
+        scene_change_threshold: float,
+        scene_min_interval_seconds: float,
+        decode_backend: str,
+    ) -> NativeVideoScan:
+        """一回のdecodeをheartbeat、scene、timeline timingへ分岐する。"""
+        _validate_scan_configuration(
+            heartbeat_interval_seconds,
+            scene_change_threshold,
+            scene_min_interval_seconds,
+            decode_backend,
+        )
+        if stream.kind != "video" or stream.time_base is None:
+            msg = "Video Scanにはexact time baseを持つvideo streamが必要です"
+            raise ValueError(msg)
+        heartbeat_folder = artifact_folder / "heartbeats"
+        scene_folder = artifact_folder / ".scene-proxies"
+        heartbeat_folder.mkdir(parents=True)
+        scene_folder.mkdir()
+        command = self._composite_scan_command(
+            media_path,
+            stream,
+            heartbeat_folder,
+            scene_folder,
+            heartbeat_interval_seconds,
+            scene_change_threshold,
+            scene_min_interval_seconds,
+            decode_backend,
+        )
+        usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        started_at = time.monotonic()
+        timeline_first: tuple[int, int | None, int, int] | None = None
+        timeline_last: tuple[int, int | None, int, int] | None = None
+        heartbeat_metadata: list[tuple[int, int | None, int, int]] = []
+        scene_metadata: list[tuple[int, int | None, int, int]] = []
+        stderr_tail: deque[str] = deque(maxlen=80)
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if process.stderr is None:
+                msg = "FFmpeg scan stderrを開始できません"
+                raise RuntimeError(msg)
+            for line in process.stderr:
+                stderr_tail.append(line.rstrip())
+                parsed = _parse_named_showinfo(line)
+                if parsed is None:
+                    continue
+                branch, metadata = parsed
+                if branch == "timeline":
+                    if timeline_first is None:
+                        timeline_first = metadata
+                    timeline_last = metadata
+                elif branch == "heartbeat":
+                    heartbeat_metadata.append(metadata)
+                else:
+                    scene_metadata.append(metadata)
+            return_code = process.wait()
+        except OSError as error:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.DECODER_FAILURE,
+                "Video ScanのFFmpeg processを開始できませんでした",
+            ) from error
+        wall_seconds = time.monotonic() - started_at
+        usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        cpu_seconds = (
+            usage_after.ru_utime
+            - usage_before.ru_utime
+            + usage_after.ru_stime
+            - usage_before.ru_stime
+        )
+        if return_code != 0:
+            detail = "\n".join(stderr_tail)
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.DECODER_FAILURE,
+                f"Video ScanのFFmpeg decodeに失敗しました\n{detail}",
+            )
+        if timeline_first is None or timeline_last is None:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.DECODER_FAILURE,
+                "Video Scanに表示可能frameがありません",
+            )
+        heartbeat_files = tuple(sorted(heartbeat_folder.glob("*.jpg")))
+        scene_files = tuple(sorted(scene_folder.glob("*.jpg")))
+        if len(heartbeat_files) != len(heartbeat_metadata) or len(scene_files) != len(
+            scene_metadata
+        ):
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.DECODER_FAILURE,
+                "Video Scanのproxyとexact timingの件数が一致しません",
+            )
+        heartbeats = _scanned_frames(
+            heartbeat_metadata,
+            heartbeat_files,
+            stream.time_base,
+        )
+        scenes_with_dummy = _scanned_frames(
+            scene_metadata,
+            scene_files,
+            stream.time_base,
+        )
+        if not scenes_with_dummy:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.DECODER_FAILURE,
+                "Video Scanのscene分析枝を初期化できませんでした",
+            )
+        scenes_with_dummy[0].image_path.unlink()
+        scene_frames = tuple(scenes_with_dummy[1:])
+        origin_pts, _origin_duration, _origin_width, _origin_height = timeline_first
+        last_pts, last_duration, _last_width, _last_height = timeline_last
+        return NativeVideoScan(
+            stream_index=stream.index,
+            origin_pts=origin_pts,
+            last_frame_pts=last_pts,
+            last_frame_duration_ts=last_duration,
+            time_base=stream.time_base,
+            heartbeats=tuple(heartbeats),
+            scene_frames=scene_frames,
+            wall_seconds=wall_seconds,
+            cpu_seconds=cpu_seconds,
+            decode_pass_count=1,
+        )
+
+    def scan_video_frame_ranges(
+        self,
+        media_path: Path,
+        stream_index: int,
+        pts_ranges: tuple[tuple[int, int], ...],
+        max_dimension: int,
+    ) -> Iterator[DecodedVideoFrame]:
+        """半開PTS rangeの和集合にあるnative RGB24 frameだけを返す。"""
+        if (
+            max_dimension < 1
+            or not pts_ranges
+            or any(start >= end for start, end in pts_ranges)
+        ):
+            msg = "PTS rangeとmax_dimensionが不正です"
+            raise ValueError(msg)
+        expressions = [
+            f"gte(pts\\,{start})*lt(pts\\,{end})" for start, end in pts_ranges
+        ]
+        frame_filter = f"select='{'+'.join(expressions)}'," + _scale_filter(
+            max_dimension
+        )
+        command = self._video_decode_command(
+            media_path,
+            stream_index,
+            frame_filter,
+        )
+        try:
+            yield from iter_decoded_video_frames(command, stream_index)
+        except _DECODE_ERRORS as error:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
+                "指定されたPTS rangeのnative frameを抽出できませんでした",
+            ) from error
+
     def extract_video_frame(
         self,
         media_path: Path,
@@ -180,6 +368,60 @@ class FfmpegMediaRuntime:
                 "指定されたsource PTSのvideo frameがありません",
             )
         return frames[0]
+
+    def write_mjpeg_proxy(
+        self,
+        frame: DecodedVideoFrame,
+        output_path: Path,
+        *,
+        quality: int,
+    ) -> None:
+        """RGB24 artifactをFFmpeg MJPEGへmetadataなしで保存する。"""
+        if not 1 <= quality <= 31:
+            msg = "FFmpeg MJPEG qualityは1以上31以下である必要があります"
+            raise ValueError(msg)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            self._ffmpeg_executable,
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pixel_format",
+            frame.pixel_format,
+            "-video_size",
+            f"{frame.width}x{frame.height}",
+            "-framerate",
+            "1",
+            "-i",
+            "pipe:0",
+            "-frames:v",
+            "1",
+            "-map_metadata",
+            "-1",
+            "-c:v",
+            "mjpeg",
+            "-q:v",
+            str(quality),
+            "-pix_fmt",
+            "yuvj420p",
+            str(output_path),
+        ]
+        try:
+            subprocess.run(
+                command,
+                input=frame.pixels,
+                check=True,
+                capture_output=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
+                "Frame Candidate ProxyをMJPEGへencodeできませんでした",
+            ) from error
 
     def scan_pcm_audio(
         self,
@@ -283,6 +525,87 @@ class FfmpegMediaRuntime:
         )
         return command
 
+    def _composite_scan_command(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        heartbeat_folder: Path,
+        scene_folder: Path,
+        heartbeat_interval_seconds: float,
+        scene_change_threshold: float,
+        scene_min_interval_seconds: float,
+        decode_backend: str,
+    ) -> list[str]:
+        command = [
+            self._ffmpeg_executable,
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "info",
+            "-nostats",
+            "-xerror",
+            "-err_detect",
+            "explode",
+            "-copyts",
+        ]
+        if decode_backend == "nvdec":
+            command.extend(["-hwaccel", "cuda"])
+        elif stream.codec_name == "av1":
+            command.extend(["-c:v", "libdav1d"])
+        command.extend(["-i", str(media_path)])
+        heartbeat_interval = _ffmpeg_number(heartbeat_interval_seconds)
+        scene_threshold = _ffmpeg_number(scene_change_threshold)
+        scene_interval = _ffmpeg_number(scene_min_interval_seconds)
+        graph = ";".join(
+            (
+                f"[0:{stream.index}]split=3[timeline_source]"
+                "[heartbeat_source][scene_source]",
+                "[timeline_source]showinfo@timeline,nullsink",
+                (
+                    "[heartbeat_source]"
+                    "select='isnan(prev_selected_t)+"
+                    f"gte(t-prev_selected_t,{heartbeat_interval})',"
+                    f"{_bounded_scale_filter(960)},"
+                    "format=yuvj420p,showinfo@heartbeat[heartbeat_output]"
+                ),
+                (
+                    "[scene_source]"
+                    f"{_bounded_scale_filter(320)},"
+                    "select='eq(n,0)+gte(n,1)*"
+                    f"gt(scene,{scene_threshold})*"
+                    "(isnan(prev_selected_t)+"
+                    f"gte(t-prev_selected_t,{scene_interval}))',"
+                    "format=yuvj420p,showinfo@scene[scene_output]"
+                ),
+            )
+        )
+        command.extend(
+            [
+                "-filter_complex",
+                graph,
+                "-map",
+                "[heartbeat_output]",
+                "-fps_mode",
+                "passthrough",
+                "-map_metadata",
+                "-1",
+                "-q:v",
+                "3",
+                str(heartbeat_folder / "%012d.jpg"),
+                "-map",
+                "[scene_output]",
+                "-fps_mode",
+                "passthrough",
+                "-map_metadata",
+                "-1",
+                "-q:v",
+                "3",
+                str(scene_folder / "%012d.jpg"),
+            ]
+        )
+        return command
+
     def _decode_command_prefix(
         self,
         media_path: Path,
@@ -355,7 +678,7 @@ class FfmpegMediaRuntime:
             int(patch) if patch is not None else 0,
         )
 
-    def _verify_capabilities(self) -> None:
+    def _verify_capabilities(self) -> dict[str, object]:
         try:
             demuxers = self._read_capability_names("-demuxers")
             decoders = self._read_capability_names("-decoders")
@@ -378,16 +701,49 @@ class FfmpegMediaRuntime:
             probe_document = json.loads(probe.stdout)
         except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
             self._raise_missing_capability(error)
+        if not isinstance(probe_document, dict):
+            self._raise_missing_capability()
+        program_version = probe_document.get("program_version")
         if (
             not _REQUIRED_DEMUXERS.issubset(demuxers)
             or not _REQUIRED_DECODERS.issubset(decoders)
             or not _REQUIRED_ENCODERS.issubset(encoders)
             or not _REQUIRED_MUXERS.issubset(muxers)
             or not _REQUIRED_FILTERS.issubset(filters)
-            or not isinstance(probe_document, dict)
-            or not isinstance(probe_document.get("program_version"), dict)
+            or not isinstance(program_version, dict)
         ):
             self._raise_missing_capability()
+        return {
+            "demuxers": sorted(demuxers),
+            "decoders": sorted(decoders),
+            "encoders": sorted(encoders),
+            "muxers": sorted(muxers),
+            "filters": sorted(filters),
+            "ffprobe_program_version": program_version,
+        }
+
+    @staticmethod
+    def _build_capability_sha256(
+        ffmpeg_version: str,
+        ffprobe_version: str,
+        ffmpeg_build: tuple[str, ...],
+        ffprobe_build: tuple[str, ...],
+        capabilities: dict[str, object],
+    ) -> str:
+        """raw build文字列を残さずcanonical identity digestを導出する。"""
+        canonical = json.dumps(
+            {
+                "ffmpeg_version": ffmpeg_version,
+                "ffprobe_version": ffprobe_version,
+                "ffmpeg_build": list(ffmpeg_build),
+                "ffprobe_build": list(ffprobe_build),
+                "capabilities": capabilities,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
 
     def _read_capability_names(self, option: str) -> frozenset[str]:
         completed = subprocess.run(
@@ -408,7 +764,7 @@ class FfmpegMediaRuntime:
         return frozenset(names)
 
     @staticmethod
-    def _raise_missing_capability(error: BaseException | None = None) -> None:
+    def _raise_missing_capability(error: BaseException | None = None) -> NoReturn:
         failure = MediaRuntimeError(
             MediaRuntimeFailureReason.MISSING_REQUIRED_DEMUXER_OR_DECODER,
             "必要なFFmpeg/ffprobe media能力がありません",
@@ -424,3 +780,82 @@ def _scale_filter(max_dimension: int) -> str:
         "force_original_aspect_ratio=decrease:force_divisible_by=2,"
         "format=rgb24,showinfo"
     )
+
+
+def _bounded_scale_filter(max_dimension: int) -> str:
+    return (
+        f"scale=w='min(iw,{max_dimension})':h='min(ih,{max_dimension})':"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2"
+    )
+
+
+def _ffmpeg_number(value: float) -> str:
+    return format(value, ".15g")
+
+
+def _validate_scan_configuration(
+    heartbeat_interval_seconds: float,
+    scene_change_threshold: float,
+    scene_min_interval_seconds: float,
+    decode_backend: str,
+) -> None:
+    values = (
+        heartbeat_interval_seconds,
+        scene_change_threshold,
+        scene_min_interval_seconds,
+    )
+    if (
+        any(not isinstance(value, int | float) for value in values)
+        or any(not float("-inf") < value < float("inf") for value in values)
+        or heartbeat_interval_seconds <= 0
+        or not 0 <= scene_change_threshold <= 1
+        or scene_min_interval_seconds <= 0
+        or decode_backend not in {"cpu", "nvdec"}
+    ):
+        msg = "Video Scan設定が不正です"
+        raise ValueError(msg)
+
+
+def _parse_named_showinfo(
+    line: str,
+) -> tuple[str, tuple[int, int | None, int, int]] | None:
+    if " n:" not in line:
+        return None
+    branch_match = _SHOWINFO_BRANCH_PATTERN.search(line)
+    pts_match = _SHOWINFO_PTS_PATTERN.search(line)
+    size_match = _SHOWINFO_SIZE_PATTERN.search(line)
+    if branch_match is None or pts_match is None or size_match is None:
+        return None
+    duration_match = _SHOWINFO_DURATION_PATTERN.search(line)
+    duration = int(duration_match.group(1)) if duration_match is not None else None
+    return (
+        branch_match.group("branch"),
+        (
+            int(pts_match.group(1)),
+            duration,
+            int(size_match.group(1)),
+            int(size_match.group(2)),
+        ),
+    )
+
+
+def _scanned_frames(
+    metadata: list[tuple[int, int | None, int, int]],
+    paths: tuple[Path, ...],
+    time_base: Fraction,
+) -> list[ScannedVideoFrame]:
+    return [
+        ScannedVideoFrame(
+            source_pts=pts,
+            duration_ts=duration,
+            time_base=time_base,
+            width=width,
+            height=height,
+            image_path=path,
+        )
+        for (pts, duration, width, height), path in zip(
+            metadata,
+            paths,
+            strict=True,
+        )
+    ]

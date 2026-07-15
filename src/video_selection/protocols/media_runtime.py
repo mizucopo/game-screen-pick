@@ -8,6 +8,8 @@ from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.embedded_subtitle import EmbeddedSubtitle
 from ..models.media_probe import MediaProbe
 from ..models.media_runtime_identity import MediaRuntimeIdentity
+from ..models.media_stream import MediaStream
+from ..models.native_video_scan import NativeVideoScan
 from ..models.pcm_audio_chunk import PcmAudioChunk
 
 
@@ -29,6 +31,28 @@ class MediaRuntime(Protocol):
     ) -> Iterator[DecodedVideoFrame]:
         """一回のdecodeからnative PTS順にproxy frameを返す。"""
 
+    def scan_video_frame_ranges(
+        self,
+        media_path: Path,
+        stream_index: int,
+        pts_ranges: tuple[tuple[int, int], ...],
+        max_dimension: int,
+    ) -> Iterator[DecodedVideoFrame]:
+        """複数の半開PTS range内にあるnative frameを一回で返す。"""
+
+    def scan_video(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        artifact_folder: Path,
+        *,
+        heartbeat_interval_seconds: float,
+        scene_change_threshold: float,
+        scene_min_interval_seconds: float,
+        decode_backend: str,
+    ) -> NativeVideoScan:
+        """一回のdecodeからheartbeat、scene、timeline端点を返す。"""
+
     def extract_video_frame(
         self,
         media_path: Path,
@@ -37,6 +61,15 @@ class MediaRuntime(Protocol):
         max_dimension: int,
     ) -> DecodedVideoFrame:
         """指定source PTSの一つのframeを返す。"""
+
+    def write_mjpeg_proxy(
+        self,
+        frame: DecodedVideoFrame,
+        output_path: Path,
+        *,
+        quality: int,
+    ) -> None:
+        """RGB frameをmetadataなしMJPEG proxyへ保存する。"""
 
     def scan_pcm_audio(
         self,

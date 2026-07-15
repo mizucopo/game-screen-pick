@@ -65,6 +65,7 @@ def _parse_stream(raw_stream: object) -> MediaStream:
         language=language,
         is_default=disposition.get("default") == 1,
         is_forced=disposition.get("forced") == 1,
+        is_attached_picture=disposition.get("attached_pic") == 1,
     )
 
 

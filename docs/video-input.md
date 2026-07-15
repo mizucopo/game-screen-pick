@@ -41,7 +41,7 @@ game-screen-pick [OPTIONS] <VIDEO_INPUT_FOLDER> <OUTPUT_FOLDER>
 - Video Identityはfile全体のSHA-256で決まります。renameやmtime変更では変わらず、内容変更時だけ変わります。
 - Video Set FingerprintはVideo OrderどおりのVideo Fingerprint列から決まり、input rootや設定値を含みません。
 - 対応動画0本、壊れた動画、同一内容の重複動画は、cacheやoutputを作る前に実行全体を失敗させます。
-- 発見後にpath、内容、size、mtime、inodeが変化した場合はsnapshot不一致としてrunを中止します。
+- 発見後にpath、内容、size、mtime、inodeが変化した場合はsnapshot不一致としてrunを中止します。全体内容はInput Lock取得直後と公開直前、対象動画の内容はmedia probe前と各Video Stage直前に検査します。
 
 入力と出力は同一pathにも相互の親子にもできません。`OUTPUT_FOLDER`は存在しないか空である必要があり、途中処理や再開には使いません。
 
