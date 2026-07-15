@@ -1,7 +1,9 @@
 # 動画入力設定
 
 > [!IMPORTANT]
-> この文書は将来のVideo Set selectorの確定済み契約です。現在のscreenshot入力実装にはまだ適用されません。
+> v1 schemaとEffective Configuration resolverは内部実装済みです。installed public CLIはIssue #190までscreenshot入力のままであり、現在の`--config`にはこのschemaを使用できません。
+
+内部・test用adapterは、設定解決が成功した後だけ`run(EffectiveConfiguration) -> RunOutcome`境界を呼び出します。これにより、public cutover前もstrict schemaと優先順位を副作用なしで検証できます。
 
 ## 読み込みと優先順位
 
