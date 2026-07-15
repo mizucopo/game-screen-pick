@@ -12,40 +12,6 @@ from .configuration_error import ConfigurationError
 
 CONFIG_VERSION = "1.0.0"
 
-CONFIG_KEYS = (
-    "config_version",
-    "input.recursive",
-    "selection.image_count",
-    "selection.scene_hint",
-    "selection.spoiler_sensitivity",
-    "selection.similarity_threshold",
-    "frame_extraction.heartbeat_interval_seconds",
-    "frame_extraction.scene_change_threshold",
-    "frame_extraction.scene_min_interval_seconds",
-    "frame_extraction.decode_backend",
-    "frame_extraction.refinement_radius_seconds",
-    "frame_extraction.max_frame_candidates",
-    "candidate_moments.density_per_minute",
-    "context.language",
-    "context.subtitle_stream_index",
-    "context.audio_stream_index",
-    "ollama.host",
-    "ollama.timeout_seconds",
-    "ollama.max_parallel_requests",
-    "models.auto_upgrade",
-    "models.scene_catalog.name",
-    "models.scene_catalog.num_ctx",
-    "models.candidate_annotation.name",
-    "models.candidate_annotation.num_ctx",
-    "models.speech_to_text.name",
-    "models.speech_to_text.device",
-    "models.speech_to_text.compute_type",
-    "models.speech_to_text.beam_size",
-    "speech_to_text.vad_filter",
-    "speech_to_text.chunk_seconds",
-    "speech_to_text.overlap_seconds",
-)
-
 DEFAULT_VALUES: dict[str, object] = {
     "config_version": CONFIG_VERSION,
     "input.recursive": False,
@@ -79,6 +45,7 @@ DEFAULT_VALUES: dict[str, object] = {
     "speech_to_text.chunk_seconds": 600.0,
     "speech_to_text.overlap_seconds": 5.0,
 }
+CONFIG_KEYS = tuple(DEFAULT_VALUES)
 
 _SECTION_KEYS = {
     "input": frozenset({"recursive"}),
@@ -110,6 +77,11 @@ _MODEL_KEYS = frozenset(
 )
 _OLLAMA_MODEL_KEYS = frozenset({"name", "num_ctx"})
 _SPEECH_MODEL_KEYS = frozenset({"name", "device", "compute_type", "beam_size"})
+_MODEL_ROLE_KEYS = {
+    "scene_catalog": _OLLAMA_MODEL_KEYS,
+    "candidate_annotation": _OLLAMA_MODEL_KEYS,
+    "speech_to_text": _SPEECH_MODEL_KEYS,
+}
 _BOOL_KEYS = frozenset(
     {
         "input.recursive",
@@ -344,12 +316,7 @@ def _validate_models(raw_models: object) -> dict[str, object]:
             models["auto_upgrade"],
         )
 
-    role_keys = {
-        "scene_catalog": _OLLAMA_MODEL_KEYS,
-        "candidate_annotation": _OLLAMA_MODEL_KEYS,
-        "speech_to_text": _SPEECH_MODEL_KEYS,
-    }
-    for role, known_keys in role_keys.items():
+    for role, known_keys in _MODEL_ROLE_KEYS.items():
         if role not in models:
             continue
         table_name = f"models.{role}"
