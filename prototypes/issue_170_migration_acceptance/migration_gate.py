@@ -2,33 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from enum import StrEnum
+from dataclasses import replace
 
-
-@dataclass(frozen=True)
-class Milestone:
-    """一つのimplementation Issueを表す。"""
-
-    number: int
-    title: str
-
-
-class Evidence(StrEnum):
-    """public cutover前に必要なacceptance evidence。"""
-
-    FAKE_E2E = "fake E2E"
-    FFMPEG_INTEGRATION = "FFmpeg integration"
-    INTERRUPTION_MATRIX = "interruption matrix"
-    TRACEABILITY = "traceability matrix"
-    TARGET_COLD = "30-minute cold <= 20m"
-    TARGET_WARM = "30-minute warm <= 3m"
-    FULL_COLD = "full-scale cold <= 24h"
-    FULL_WARM = "full-scale warm <= 30m"
-    CACHE_BUDGET = "cache <= 64/96 GiB"
-    GPU_BUDGET = "GPU <= 18/8 GiB"
-    HUMAN_QUALITY = "human quality gate"
-
+from evidence import Evidence
+from migration_state import MigrationState
+from milestone import Milestone
+from transition import Transition
 
 MILESTONES = (
     Milestone(1, "fake walking skeleton"),
@@ -53,29 +32,6 @@ ISSUE_EVIDENCE = {
     11: frozenset({Evidence.INTERRUPTION_MATRIX}),
     12: frozenset(CUTOVER_EVIDENCE),
 }
-
-
-@dataclass(frozen=True)
-class MigrationState:
-    """migrationとpublic interfaceの全関連state。"""
-
-    completed_issues: frozenset[int] = frozenset()
-    passed_pr_gates: frozenset[int] = frozenset()
-    evidence: frozenset[Evidence] = frozenset()
-    public_cli: str = "screenshot"
-    package_version: str = "1.5.2"
-    legacy_code_present: bool = True
-    legacy_adrs_active: bool = True
-
-
-@dataclass(frozen=True)
-class Transition:
-    """state transitionの結果。"""
-
-    state: MigrationState
-    accepted: bool
-    message: str
-    blockers: tuple[str, ...] = ()
 
 
 def next_milestone(state: MigrationState) -> Milestone | None:

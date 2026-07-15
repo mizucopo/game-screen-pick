@@ -8,8 +8,6 @@ import sys
 from migration_gate import (
     CUTOVER_EVIDENCE,
     MILESTONES,
-    MigrationState,
-    Transition,
     attempt_cutover,
     complete_next_issue,
     next_milestone,
@@ -17,6 +15,8 @@ from migration_gate import (
     record_next_evidence,
     validate_state,
 )
+from migration_state import MigrationState
+from transition import Transition
 
 BOLD = "\033[1m"
 DIM = "\033[2m"

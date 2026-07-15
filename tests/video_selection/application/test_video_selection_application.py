@@ -848,3 +848,106 @@ def test_selection_shortfall_is_published_with_warning(tmp_path: Path) -> None:
     assert "Selection Shortfall: requested=2, selected=1" in (
         output_folder / "report.md"
     ).read_text(encoding="utf-8")
+
+
+def test_invalid_output_parent_is_rejected_before_cache_side_effects(
+    tmp_path: Path,
+) -> None:
+    """directoryでないOutput親pathがcache作成前に拒否されること。
+
+    Arrange:
+        - Output Folderの親componentにregular fileが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - invalid output parent errorが返されること
+        - processing cacheとOutput Folderが作成されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    blocked_parent = tmp_path / "blocked-parent"
+    output_folder = blocked_parent / "output"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    blocked_parent.write_text("blocked", encoding="utf-8")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeSpeechRuntime(()),
+        model_runtime=FakeModelRuntime(
+            ResolvedModelIdentity(identifier="model-sha-001")
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=RecordingRunObserver(),
+    )
+
+    # Act
+    with pytest.raises(ValueError, match="Output Folderの親path"):
+        application.run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=output_folder,
+                image_count=1,
+            )
+        )
+
+    # Assert
+    assert blocked_parent.read_text(encoding="utf-8") == "blocked"
+    assert not (input_folder / ".game-screen-pick").exists()
+    assert not output_folder.exists()
+
+
+def test_incomplete_candidate_annotations_are_rejected_before_caching(
+    tmp_path: Path,
+) -> None:
+    """抽出候補を欠落したCandidate Annotation集合がcache前に拒否されること。
+
+    Arrange:
+        - 2つのFrame Candidateに対して1件だけannotationが返される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - incomplete Candidate Annotation errorが返されること
+        - annotation Stage cacheとOutput Folderが作成されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    first_candidate = FrameCandidate(identifier="frame-001", image_bytes=b"first")
+    second_candidate = FrameCandidate(identifier="frame-002", image_bytes=b"second")
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((first_candidate, second_candidate)),
+        speech_runtime=FakeSpeechRuntime(()),
+        model_runtime=FakeModelRuntime(
+            ResolvedModelIdentity(identifier="model-sha-001")
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=first_candidate, summary="first"),)
+        ),
+        observer=RecordingRunObserver(),
+    )
+
+    # Act
+    with pytest.raises(ValueError, match="Candidate Annotationが不足"):
+        application.run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=output_folder,
+                image_count=2,
+            )
+        )
+
+    # Assert
+    annotation_stage_folder = (
+        input_folder
+        / ".game-screen-pick"
+        / "cache"
+        / "walking-skeleton"
+        / ProcessingStage.ANNOTATE_CANDIDATES.value
+    )
+    assert not annotation_stage_folder.exists()
+    assert not output_folder.exists()

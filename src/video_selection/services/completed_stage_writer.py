@@ -1,5 +1,6 @@
 """Completed Stage artifactとmanifestを確定する。"""
 
+import fcntl
 import hashlib
 import json
 import shutil
@@ -28,6 +29,31 @@ class CompletedStageWriter:
         """Stage artifactと完了manifestを保存する。"""
         stage_root = self._root / stage.value
         stage_root.mkdir(parents=True, exist_ok=True)
+        lock_root = self._root / ".locks" / stage.value
+        lock_root.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_root / f"{fingerprint.value}.lock"
+        with lock_path.open("a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                return self._write_locked(
+                    stage,
+                    fingerprint,
+                    upstream_fingerprints,
+                    artifact,
+                    stage_root,
+                )
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _write_locked(
+        self,
+        stage: ProcessingStage,
+        fingerprint: StageFingerprint,
+        upstream_fingerprints: tuple[StageFingerprint, ...],
+        artifact: dict[str, object],
+        stage_root: Path,
+    ) -> CompletedStage:
+        """fingerprint lockの内側でStageを一度だけ確定する。"""
         stage_folder = stage_root / fingerprint.value
         if (
             self.read(

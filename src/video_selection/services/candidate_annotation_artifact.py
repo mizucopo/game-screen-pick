@@ -22,6 +22,10 @@ def build_candidate_annotation_artifact(
     if len(set(annotation_ids)) != len(annotation_ids):
         msg = "Candidate AnnotationのFrame Candidate IDが重複しています"
         raise ValueError(msg)
+    missing_candidate_ids = set(candidates_by_id) - set(annotation_ids)
+    if missing_candidate_ids:
+        msg = f"Candidate Annotationが不足しています: {sorted(missing_candidate_ids)}"
+        raise ValueError(msg)
     return {
         "annotations": [
             {
@@ -44,6 +48,7 @@ def restore_candidate_annotations(
         raise ValueError(msg)
     candidates_by_id = {candidate.identifier: candidate for candidate in candidates}
     restored: list[CandidateAnnotation] = []
+    restored_ids: list[str] = []
     for record in records:
         if not isinstance(record, dict):
             msg = "Candidate Annotation artifactのrecordが不正です"
@@ -61,4 +66,15 @@ def restore_candidate_annotations(
             )
             raise ValueError(msg)
         restored.append(CandidateAnnotation(candidate=candidate, summary=summary))
+        restored_ids.append(candidate_id)
+    if len(set(restored_ids)) != len(restored_ids):
+        msg = "Candidate Annotation artifactのCandidate IDが重複しています"
+        raise ValueError(msg)
+    missing_candidate_ids = set(candidates_by_id) - set(restored_ids)
+    if missing_candidate_ids:
+        msg = (
+            "Candidate Annotation artifactが不足しています: "
+            f"{sorted(missing_candidate_ids)}"
+        )
+        raise ValueError(msg)
     return tuple(restored)
