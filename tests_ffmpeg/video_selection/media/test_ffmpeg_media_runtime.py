@@ -29,7 +29,20 @@ def _write_version_tool(path: Path, tool: str, version: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def _write_capable_tool(path: Path, tool: str, build_marker: str) -> None:
+def _write_failing_tool(path: Path) -> None:
+    path.write_text(
+        f"#!{sys.executable}\nraise SystemExit(7)\n",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _write_capable_tool(
+    path: Path,
+    tool: str,
+    build_marker: str,
+    probe_document: str = '{"program_version": {}}',
+) -> None:
     script = f"""#!{sys.executable}
 import sys
 
@@ -47,13 +60,16 @@ elif "-decoders" in arguments:
     print(" V..... libdav1d")
     print(" S..... subrip")
 elif "-filters" in arguments:
+    print(" ... aformat")
     print(" ... aresample")
+    print(" ... asetnsamples")
     print(" ... ashowinfo")
+    print(" ... format")
     print(" ... scale")
     print(" ... select")
     print(" ... showinfo")
 else:
-    print('{{"program_version": {{}}}}')
+    print({probe_document!r})
 """
     path.write_text(script, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -103,6 +119,31 @@ def test_preflight_reports_missing_ffmpeg_with_stable_reason() -> None:
     assert captured.value.reason is MediaRuntimeFailureReason.FFMPEG_NOT_FOUND
 
 
+def test_preflight_reports_unexecutable_ffmpeg_with_stable_reason(
+    tmp_path: Path,
+) -> None:
+    """version probeを実行できないFFmpegがstable reasonへ変換されること。
+
+    Arrange:
+        - version commandが非zero終了するfake FFmpegが用意される
+    Act:
+        - runtime preflightが実行される
+    Assert:
+        - ffmpeg_not_foundとして失敗すること
+    """
+    # Arrange
+    fake_ffmpeg = tmp_path / "ffmpeg"
+    _write_failing_tool(fake_ffmpeg)
+    runtime = FfmpegMediaRuntime(ffmpeg_executable=str(fake_ffmpeg))
+
+    # Act
+    with pytest.raises(MediaRuntimeError) as captured:
+        runtime.preflight()
+
+    # Assert
+    assert captured.value.reason is MediaRuntimeFailureReason.FFMPEG_NOT_FOUND
+
+
 def test_preflight_rejects_ffmpeg_below_version_floor(tmp_path: Path) -> None:
     """6.1.1未満のFFmpegがstable reasonで拒否されること。
 
@@ -116,6 +157,31 @@ def test_preflight_rejects_ffmpeg_below_version_floor(tmp_path: Path) -> None:
     # Arrange
     fake_ffmpeg = tmp_path / "ffmpeg"
     _write_version_tool(fake_ffmpeg, "ffmpeg", "6.0.0")
+    runtime = FfmpegMediaRuntime(ffmpeg_executable=str(fake_ffmpeg))
+
+    # Act
+    with pytest.raises(MediaRuntimeError) as captured:
+        runtime.preflight()
+
+    # Assert
+    assert captured.value.reason is MediaRuntimeFailureReason.UNSUPPORTED_FFMPEG_VERSION
+
+
+def test_preflight_reports_malformed_version_with_stable_reason(
+    tmp_path: Path,
+) -> None:
+    """解釈不能なversion outputがstable reasonへ変換されること。
+
+    Arrange:
+        - FFmpeg形式ではないversion行を返すfake toolが用意される
+    Act:
+        - runtime preflightが実行される
+    Assert:
+        - unsupported_ffmpeg_versionとして失敗すること
+    """
+    # Arrange
+    fake_ffmpeg = tmp_path / "ffmpeg"
+    _write_version_tool(fake_ffmpeg, "unexpected-tool", "6.1.1")
     runtime = FfmpegMediaRuntime(ffmpeg_executable=str(fake_ffmpeg))
 
     # Act
@@ -209,6 +275,39 @@ def test_preflight_rejects_missing_required_media_capability(
     fake_ffprobe = tmp_path / "ffprobe"
     _write_version_tool(fake_ffmpeg, "ffmpeg", "6.1.1")
     _write_version_tool(fake_ffprobe, "ffprobe", "6.1.1")
+    runtime = FfmpegMediaRuntime(
+        ffmpeg_executable=str(fake_ffmpeg),
+        ffprobe_executable=str(fake_ffprobe),
+    )
+
+    # Act
+    with pytest.raises(MediaRuntimeError) as captured:
+        runtime.preflight()
+
+    # Assert
+    assert (
+        captured.value.reason
+        is MediaRuntimeFailureReason.MISSING_REQUIRED_DEMUXER_OR_DECODER
+    )
+
+
+def test_preflight_reports_invalid_probe_capability_with_stable_reason(
+    tmp_path: Path,
+) -> None:
+    """不正なffprobe JSON能力応答がstable reasonへ変換されること。
+
+    Arrange:
+        - 必要FFmpeg能力とobjectでないffprobe JSONを返すfake pairが用意される
+    Act:
+        - runtime preflightが実行される
+    Assert:
+        - missing_required_demuxer_or_decoderとして失敗すること
+    """
+    # Arrange
+    fake_ffmpeg = tmp_path / "ffmpeg"
+    fake_ffprobe = tmp_path / "ffprobe"
+    _write_capable_tool(fake_ffmpeg, "ffmpeg", "same")
+    _write_capable_tool(fake_ffprobe, "ffprobe", "same", probe_document="[]")
     runtime = FfmpegMediaRuntime(
         ffmpeg_executable=str(fake_ffmpeg),
         ffprobe_executable=str(fake_ffprobe),

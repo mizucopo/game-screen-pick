@@ -314,17 +314,25 @@ class FfmpegMediaRuntime:
                 capture_output=True,
                 text=True,
             )
-        except OSError as error:
+        except (OSError, subprocess.CalledProcessError) as error:
             msg = f"{missing_reason.value}"
             raise MediaRuntimeError(missing_reason, msg) from error
-        first_line = completed.stdout.splitlines()[0]
+        output_lines = completed.stdout.splitlines()
+        if not output_lines:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.UNSUPPORTED_FFMPEG_VERSION,
+                "FFmpeg toolのversion outputがありません",
+            )
+        first_line = output_lines[0]
         match = _VERSION_PATTERN.match(first_line)
         if match is None:
-            msg = "FFmpeg toolのversionを解決できません"
-            raise RuntimeError(msg)
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.UNSUPPORTED_FFMPEG_VERSION,
+                "FFmpeg toolのversionを解決できません",
+            )
         build_signature = tuple(
             line.strip()
-            for line in completed.stdout.splitlines()[1:]
+            for line in output_lines[1:]
             if line.strip().startswith(_BUILD_SIGNATURE_PREFIXES)
         )
         return match.group("version"), build_signature
@@ -369,6 +377,7 @@ class FfmpegMediaRuntime:
             not _REQUIRED_DEMUXERS.issubset(demuxers)
             or not _REQUIRED_DECODERS.issubset(decoders)
             or not _REQUIRED_FILTERS.issubset(filters)
+            or not isinstance(probe_document, dict)
             or not isinstance(probe_document.get("program_version"), dict)
         ):
             self._raise_missing_capability()
