@@ -3,6 +3,7 @@
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.processing_stage import ProcessingStage
 from ..models.run_outcome import RunOutcome
+from ..models.run_status import RunStatus
 from ..protocols.media_runtime import MediaRuntime
 from ..protocols.model_runtime import ModelRuntime
 from ..protocols.run_observer import RunObserver
@@ -16,6 +17,7 @@ from ..services.candidate_annotation_artifact import (
 from ..services.discover_video_set import discover_video_set
 from ..services.processing_stage_runner import ProcessingStageRunner
 from ..services.select_images import select_images
+from ..services.snapshot_frame_candidates import snapshot_frame_candidates
 from ..services.snapshot_video_set import snapshot_video_set
 from ..services.validate_output_folder import validate_output_folder
 
@@ -57,11 +59,11 @@ class VideoSelectionApplication:
         )
 
         frame_candidates = self._media_runtime.extract_candidates(video_set)
-        candidate_ids = [item.identifier for item in frame_candidates]
+        candidate_snapshot = snapshot_frame_candidates(frame_candidates)
         stage_runner.complete(
             ProcessingStage.EXTRACT_FRAME_CANDIDATES,
-            {"candidate_ids": candidate_ids},
-            {"candidate_ids": candidate_ids},
+            {"candidates": list(candidate_snapshot)},
+            {"candidates": list(candidate_snapshot)},
         )
 
         context_cues = self._speech_runtime.collect_context(video_set)
@@ -80,7 +82,7 @@ class VideoSelectionApplication:
         )
 
         annotation_semantic_input = {
-            "candidate_ids": candidate_ids,
+            "candidates": list(candidate_snapshot),
             "context_cue_ids": context_cue_ids,
             "resolved_model_identity": model_identity.identifier,
         }
@@ -101,10 +103,15 @@ class VideoSelectionApplication:
             stage_runner.complete(
                 ProcessingStage.ANNOTATE_CANDIDATES,
                 annotation_semantic_input,
-                build_candidate_annotation_artifact(annotations),
+                build_candidate_annotation_artifact(annotations, frame_candidates),
             )
 
         selected_images = select_images(annotations, configuration.image_count)
+        selected_count = len(selected_images)
+        run_status = RunStatus.from_selection_counts(
+            configuration.image_count,
+            selected_count,
+        )
         stage_runner.complete(
             ProcessingStage.SELECT_IMAGES,
             {"image_count": configuration.image_count},
@@ -120,10 +127,14 @@ class VideoSelectionApplication:
             configuration.output_folder,
             video_set,
             selected_images,
+            configuration.image_count,
+            run_status,
         )
         prepared_output.publish()
         return RunOutcome(
             output_folder=configuration.output_folder,
-            selected_count=len(selected_images),
+            status=run_status,
+            requested_count=configuration.image_count,
+            selected_count=selected_count,
             completed_stages=stage_runner.completed_stages,
         )

@@ -6,8 +6,22 @@ from ..models.frame_candidate import FrameCandidate
 
 def build_candidate_annotation_artifact(
     annotations: tuple[CandidateAnnotation, ...],
+    candidates: tuple[FrameCandidate, ...],
 ) -> dict[str, object]:
-    """Candidate AnnotationをJSON互換artifactへ変換する。"""
+    """抽出候補に属するCandidate Annotationをartifactへ変換する。"""
+    candidates_by_id = {candidate.identifier: candidate for candidate in candidates}
+    annotation_ids: list[str] = []
+    for annotation in annotations:
+        candidate_id = annotation.candidate.identifier
+        if candidates_by_id.get(candidate_id) != annotation.candidate:
+            msg = (
+                f"Candidate Annotationに未知のFrame Candidateがあります: {candidate_id}"
+            )
+            raise ValueError(msg)
+        annotation_ids.append(candidate_id)
+    if len(set(annotation_ids)) != len(annotation_ids):
+        msg = "Candidate AnnotationのFrame Candidate IDが重複しています"
+        raise ValueError(msg)
     return {
         "annotations": [
             {

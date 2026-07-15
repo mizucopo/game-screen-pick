@@ -5,6 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from ..models.run_status import RunStatus
 from ..models.selected_image import SelectedImage
 from ..models.video_set import VideoSet
 from .prepared_output import PreparedOutput
@@ -18,6 +19,8 @@ class AtomicOutputPublisher:
         output_folder: Path,
         video_set: VideoSet,
         selected_images: tuple[SelectedImage, ...],
+        requested_count: int,
+        run_status: RunStatus,
     ) -> PreparedOutput:
         """画像、JSON、Markdownを公開直前までstagingする。"""
         if output_folder.exists():
@@ -36,6 +39,8 @@ class AtomicOutputPublisher:
                 staging_folder,
                 video_set,
                 selected_images,
+                requested_count,
+                run_status,
             )
         except BaseException:
             shutil.rmtree(staging_folder, ignore_errors=True)
@@ -47,19 +52,40 @@ class AtomicOutputPublisher:
         staging_folder: Path,
         video_set: VideoSet,
         selected_images: tuple[SelectedImage, ...],
+        requested_count: int,
+        run_status: RunStatus,
     ) -> dict[str, object]:
         """staging directoryへ全artifactを書き出す。"""
         images_folder = staging_folder / "images"
         images_folder.mkdir()
         selected_records: list[dict[str, object]] = []
+        selected_count = len(selected_images)
+        warnings: list[dict[str, object]] = []
+        if run_status is RunStatus.COMPLETED_WITH_WARNINGS:
+            warnings.append(
+                {
+                    "code": "selection_shortfall",
+                    "requested_count": requested_count,
+                    "selected_count": selected_count,
+                }
+            )
         markdown_lines = [
             "# Video Selection Report",
             "",
-            "Status: completed",
-            "",
-            "## Selected images",
+            f"Status: {run_status.value}",
+            f"Requested images: {requested_count}",
+            f"Selected images: {selected_count}",
             "",
         ]
+        if warnings:
+            markdown_lines.extend(
+                (
+                    "Selection Shortfall: "
+                    f"requested={requested_count}, selected={selected_count}",
+                    "",
+                )
+            )
+        markdown_lines.extend(("## Selected images", ""))
         for index, selected_image in enumerate(selected_images, start=1):
             annotation = selected_image.annotation
             candidate = annotation.candidate
@@ -79,7 +105,10 @@ class AtomicOutputPublisher:
             )
         report: dict[str, object] = {
             "schema": "game-screen-pick/walking-skeleton@0",
-            "status": "completed",
+            "status": run_status.value,
+            "requested_count": requested_count,
+            "selected_count": selected_count,
+            "warnings": warnings,
             "video_set": {"videos": list(video_set.relative_paths)},
             "selected": selected_records,
         }

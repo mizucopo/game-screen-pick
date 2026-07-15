@@ -69,6 +69,8 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
 
     # Assert
     assert outcome.selected_count == 1
+    assert outcome.requested_count == 1
+    assert outcome.status == "completed"
     assert outcome.output_folder == output_folder
     assert (output_folder / "images" / "0001_frame-001.webp").read_bytes() == (
         b"fake-webp-image"
@@ -77,6 +79,9 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
     assert report == {
         "schema": "game-screen-pick/walking-skeleton@0",
         "status": "completed",
+        "requested_count": 1,
+        "selected_count": 1,
+        "warnings": [],
         "video_set": {
             "videos": ["chapter-01.mp4", "chapter-02.mp4"],
         },
@@ -91,7 +96,9 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
     }
     assert (output_folder / "report.md").read_text(encoding="utf-8") == (
         "# Video Selection Report\n\n"
-        "Status: completed\n\n"
+        "Status: completed\n"
+        "Requested images: 1\n"
+        "Selected images: 1\n\n"
         "## Selected images\n\n"
         "1. [frame-001](images/0001_frame-001.webp) — "
         "主人公が草原を進んでいる\n"
@@ -614,3 +621,230 @@ def test_existing_empty_output_folder_is_accepted(tmp_path: Path) -> None:
         ]
         == "completed"
     )
+
+
+def test_changed_candidate_content_changes_extraction_stage_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """同じCandidate IDの画像内容変更時に抽出Stageが共存されること。
+
+    Arrange:
+        - 同じVideo SetとCandidate IDに対して異なるimage bytesを返す2実行がある
+    Act:
+        - それぞれ別のOutput Folderへ選定結果が公開される
+    Assert:
+        - Frame Candidate抽出Stageに異なるfingerprintが保存されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+
+    # Act
+    for run_index, image_bytes in enumerate((b"image-1", b"image-2"), start=1):
+        candidate = FrameCandidate(
+            identifier="frame-001",
+            image_bytes=image_bytes,
+        )
+        VideoSelectionApplication(
+            media_runtime=FakeMediaRuntime((candidate,)),
+            speech_runtime=FakeSpeechRuntime(()),
+            model_runtime=FakeModelRuntime(
+                ResolvedModelIdentity(identifier="model-sha-001")
+            ),
+            vision_runtime=FakeVisionRuntime(
+                (CandidateAnnotation(candidate=candidate, summary="summary"),)
+            ),
+            observer=RecordingRunObserver(),
+        ).run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=tmp_path / f"output-{run_index}",
+                image_count=1,
+            )
+        )
+
+    # Assert
+    extraction_stage_folder = (
+        input_folder
+        / ".game-screen-pick"
+        / "cache"
+        / "walking-skeleton"
+        / ProcessingStage.EXTRACT_FRAME_CANDIDATES.value
+    )
+    assert len(tuple(extraction_stage_folder.iterdir())) == 2
+
+
+def test_duplicate_candidate_ids_are_rejected_before_candidate_cache(
+    tmp_path: Path,
+) -> None:
+    """重複Frame Candidate IDが抽出Stage確定前に拒否されること。
+
+    Arrange:
+        - 同じidentifierを持つ2つのFrame Candidateが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - duplicate Candidate ID errorが返されること
+        - 抽出Stage cacheとOutput Folderが作成されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    first_candidate = FrameCandidate(identifier="frame-001", image_bytes=b"first")
+    second_candidate = FrameCandidate(identifier="frame-001", image_bytes=b"second")
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((first_candidate, second_candidate)),
+        speech_runtime=FakeSpeechRuntime(()),
+        model_runtime=FakeModelRuntime(
+            ResolvedModelIdentity(identifier="model-sha-001")
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (
+                CandidateAnnotation(candidate=first_candidate, summary="first"),
+                CandidateAnnotation(candidate=second_candidate, summary="second"),
+            )
+        ),
+        observer=RecordingRunObserver(),
+    )
+
+    # Act
+    with pytest.raises(ValueError, match="Frame Candidate IDが重複"):
+        application.run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=output_folder,
+                image_count=2,
+            )
+        )
+
+    # Assert
+    extraction_stage_folder = (
+        input_folder
+        / ".game-screen-pick"
+        / "cache"
+        / "walking-skeleton"
+        / ProcessingStage.EXTRACT_FRAME_CANDIDATES.value
+    )
+    assert not extraction_stage_folder.exists()
+    assert not output_folder.exists()
+
+
+def test_foreign_candidate_annotation_is_rejected_before_caching(
+    tmp_path: Path,
+) -> None:
+    """抽出結果に属さないCandidate Annotationがcache前に拒否されること。
+
+    Arrange:
+        - MediaRuntimeの抽出結果と異なるcandidateを返すVisionRuntimeが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - foreign Candidate Annotation errorが返されること
+        - annotation Stage cacheとOutput Folderが作成されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    extracted_candidate = FrameCandidate(
+        identifier="frame-001",
+        image_bytes=b"extracted",
+    )
+    foreign_candidate = FrameCandidate(
+        identifier="frame-foreign",
+        image_bytes=b"foreign",
+    )
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((extracted_candidate,)),
+        speech_runtime=FakeSpeechRuntime(()),
+        model_runtime=FakeModelRuntime(
+            ResolvedModelIdentity(identifier="model-sha-001")
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=foreign_candidate, summary="foreign"),)
+        ),
+        observer=RecordingRunObserver(),
+    )
+
+    # Act
+    with pytest.raises(ValueError, match="未知のFrame Candidate"):
+        application.run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=output_folder,
+                image_count=1,
+            )
+        )
+
+    # Assert
+    annotation_stage_folder = (
+        input_folder
+        / ".game-screen-pick"
+        / "cache"
+        / "walking-skeleton"
+        / ProcessingStage.ANNOTATE_CANDIDATES.value
+    )
+    assert not annotation_stage_folder.exists()
+    assert not output_folder.exists()
+
+
+def test_selection_shortfall_is_published_with_warning(tmp_path: Path) -> None:
+    """要求枚数未満の選定結果がwarning付き成功として公開されること。
+
+    Arrange:
+        - 要求2枚に対して1件のCandidate Annotationが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - outcomeとreportがcompleted_with_warningsになること
+        - requested countとselected countを持つshortfall warningが公開されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeSpeechRuntime(()),
+        model_runtime=FakeModelRuntime(
+            ResolvedModelIdentity(identifier="model-sha-001")
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=RecordingRunObserver(),
+    )
+
+    # Act
+    outcome = application.run(
+        EffectiveConfiguration(
+            video_input_folder=input_folder,
+            output_folder=output_folder,
+            image_count=2,
+        )
+    )
+
+    # Assert
+    assert outcome.status == "completed_with_warnings"
+    assert outcome.requested_count == 2
+    assert outcome.selected_count == 1
+    report = json.loads((output_folder / "report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "completed_with_warnings"
+    assert report["requested_count"] == 2
+    assert report["selected_count"] == 1
+    assert report["warnings"] == [
+        {
+            "code": "selection_shortfall",
+            "requested_count": 2,
+            "selected_count": 1,
+        }
+    ]
+    assert "Selection Shortfall: requested=2, selected=1" in (
+        output_folder / "report.md"
+    ).read_text(encoding="utf-8")
