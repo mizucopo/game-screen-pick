@@ -1,7 +1,7 @@
 # 動画入力
 
 > [!IMPORTANT]
-> Effective Configurationと内部adapterは実装済みですが、installed public CLIはIssue #190までscreenshot入力のままです。現在のconsole commandではまだ動画入力を実行できません。
+> Effective Configuration、動画探索・identity、Input Lock、Completed Stage cacheの内部基盤は実装済みですが、installed public CLIはIssue #190までscreenshot入力のままです。現在のconsole commandではまだ動画入力を実行できません。
 
 ## 実行単位
 
@@ -38,7 +38,10 @@ game-screen-pick [OPTIONS] <VIDEO_INPUT_FOLDER> <OUTPUT_FOLDER>
 - 既定ではroot直下だけを探索し、recursive時だけ子directoryを探索します。
 - directory symlinkは辿りません。対応拡張子を持つfile symlinkは許可し、link先の内容を処理します。
 - Video Orderは入力rootからの正規化済み相対pathの自然順です。mtimeやfilesystem列挙順は使いません。
+- Video Identityはfile全体のSHA-256で決まります。renameやmtime変更では変わらず、内容変更時だけ変わります。
+- Video Set FingerprintはVideo OrderどおりのVideo Fingerprint列から決まり、input rootや設定値を含みません。
 - 対応動画0本、壊れた動画、同一内容の重複動画は、cacheやoutputを作る前に実行全体を失敗させます。
+- 発見後にpath、内容、size、mtime、inodeが変化した場合はsnapshot不一致としてrunを中止します。
 
 入力と出力は同一pathにも相互の親子にもできません。`OUTPUT_FOLDER`は存在しないか空である必要があり、途中処理や再開には使いません。
 
