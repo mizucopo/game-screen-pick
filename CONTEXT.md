@@ -85,8 +85,24 @@ _Avoid_: model fallback, cache reset, model identity, notification-only update c
 _Avoid_: partial cache, in-progress stage, progress checkpoint
 
 **Video Stage**:
-一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysisを所有する。
+一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysisを所有する。複数VideoはVideo Order順に各Videoのscanからcandidate extractionまでを直列実行し、Video Orderは実行順にだけ使ってfingerprintへ含めない。
 _Avoid_: Video Set Stage, cross-video selection, whole-run stage
+
+**Video Scan Stage**:
+一つのVideo Sourceを一度decodeして、heartbeat proxy、scene signal metadata、exact timeline、scan metricをCompleted Stageとして確定するVideo Stage。FingerprintにはVideo Fingerprint、選択video stream、Media Runtime Identity、decode backend、heartbeat/scene設定、proxy contract、scan/timeline algorithm versionだけを含める。metricにはexact duration、wall/CPU時間、処理速度、decode backend、heartbeat件数/bytes/gap、scene signal件数、Timeline Segment数を残すがfingerprintへ含めない。後続の密度、refinement、最大Frame Candidate数、Neutral Image Analysisだけが変わった場合も再利用できる。
+_Avoid_: Frame Refinement, Candidate Annotation, Video Set Stage
+
+**Primary Video Stream**:
+Video SourceからVideo Scan Stageが選ぶ一つの表示映像stream。`attached_pic`など静止coverを除外し、default dispositionを優先して、同順位は最小stream indexで決める。stream選択をpublic configにせず、選択結果のindex、codec、time base、寸法をscan fingerprintへ残す。
+_Avoid_: audio stream, cover art, user-selected stream index
+
+**Heartbeat Proxy**:
+Video Scan Stageがnative heartbeatごとに永続化する、長辺960px、FFmpeg MJPEG `q:v=3`、metadataなしのcache画像。scene signal用の一時320px画像、Frame Candidate Proxy、公開画像とは区別し、pathをidentityにしない。
+_Avoid_: scene signal image, Frame Candidate, selected output
+
+**Frame Candidate Extraction Stage**:
+Video Scan Stageを上流にして、Candidate Moment Density、Frame Refinement、Neutral Image AnalysisをCompleted Stageとして確定するVideo Stage。FingerprintにはVideo Fingerprint、上流Stage Fingerprint、density、refinement半径、最大Frame Candidate数、Neutral Analysis/reject/dedupe/ID/proxyのalgorithm versionだけを含める。metricにはwall/CPU時間、density上限/実Moment数、refinement frame数、reason別reject、dedupe、0-frame Moment、Frame Candidate件数/bytesを残すがfingerprintへ含めない。heartbeat/scene設定やdecode結果を独自に作り直さない。
+_Avoid_: full video scan, Context Cue extraction, final selection
 
 **Video Set Stage**:
 順序付きのVideo Setと各Video Stageの成果物を入力にして、Scene Catalog、Candidate Annotation、動画横断の比較と多様性、最終選定を所有する Processing Stage。各Video Sourceからの最低採用数は持たない。
@@ -97,16 +113,24 @@ _Avoid_: Video Stage, per-video processing, per-video selection quota
 _Avoid_: frame index, float timestamp, wall-clock time
 
 **Video Duration**:
-一つのVideo Sourceの有効なpresentation timelineが持つ、0から終端までの正確で正の時間長。
-_Avoid_: container duration, last frame index, wall-clock duration
+一つのVideo Sourceの有効なpresentation timelineが持つ、0から終端までの正確で正の時間長。終端は最終表示frameの`PTS + duration_ts`を優先し、取得できない場合だけvideo streamの`start_pts + duration_ts`を使って、最初の表示frame PTSからの有理数として導出する。frame間隔、平均fps、containerのfloat秒からは推測せず、正確な終端を得られなければfail-fastする。
+_Avoid_: container float duration, inferred frame duration, last frame index, wall-clock duration
 
 **Timeline Segment**:
-一つのVideo Sourceのtimeline全体をgapや重複なく覆う、順序付きの半開区間。各Candidate Momentはanchor時刻によって必ず一つのTimeline Segmentに属する。
+一つのVideo Sourceのtimeline全体をgapや重複なく覆う、順序付きの半開区間。境界は0、scene signalの正確なVideo Time、Video Durationから作り、scene signal時刻は後側segmentの開始点とする。heartbeatはsegmentを分割しない。各Candidate Momentはanchor時刻によって必ず一つのTimeline Segmentに属する。
 _Avoid_: overlapping window, scene, refinement window
+
+**Timeline Segment ID**:
+algorithm名、Video Fingerprint、開始・終了Video Timeの既約分数をcanonical JSONにしてSHA-256化した、`seg_`と64桁digestからなる安定識別子。pathやVideo Orderを含めず、表示時だけ短縮できる。
+_Avoid_: segment index, display ID, source path
 
 **Candidate Moment**:
 一つのVideo Source内で、ブログに有用なframeがanchor Video Timeの周辺に存在すると判断された時間上の候補。複数の検出根拠をまとめ、refinement後に有効なFrame Candidateがない状態も保持する。
 _Avoid_: extracted image, Frame Candidate, scene event
+
+**Candidate Moment ID**:
+algorithm名、Video Fingerprint、anchor Video Timeの既約分数をcanonical JSONにしてSHA-256化した、`mom_`と64桁digestからなる安定識別子。path、Video Order、検出根拠を含めず、表示時だけ短縮できる。
+_Avoid_: candidate index, evidence hash, display ID
 
 **Context Cue**:
 一つのVideo SourceのVideo Time区間に対応付けられた、内蔵text subtitleまたは音声の文字起こしから得る文脈テキスト。視覚的なCandidate Momentへの加点根拠に限り、単独ではCandidate Momentを生成せずframeの採否も決めない。
@@ -117,15 +141,31 @@ Context Cueが選定へどう関係したかを公開成果物で追跡する、
 _Avoid_: subtitle quotation, ASR transcript, raw Context Cue text, model reasoning trace
 
 **Candidate Moment Density**:
-Video Durationに比例して、一つのVideo Sourceが保持できるCandidate Moment数を定める上限率。既定値は毎分2件で、上限は採用ノルマではなく、適格なCandidate Momentがなければ0件になり得る。
+Video Durationに比例して、一つのVideo Sourceが保持できるCandidate Moment数を定める上限率。`60秒 / density_per_minute`幅の半開区間ごとに最大1件を残し、既定値は毎分2件、つまり30秒ごとに最大1件とする。この密度区間はTimeline Segmentや最終選定の時間quotaではない。heartbeat proxyとscene signalから得たanchorをScan Proxy Analysisによってrefinement前に絞り、同点はscene signalの有無、区間中央への近さ、早いVideo Timeの順で解消する。scene signal自体は画質への加点や予約枠にしない。適格なanchorがない区間は0件とし、refinement後に有効なFrame CandidateがなかったCandidate Momentも診断対象として保持する。
 _Avoid_: fixed per-video count, per-video selection quota, requested-output multiplier
+
+**Scan Proxy Analysis**:
+Candidate Momentの密度選抜だけに使う一時的な中立画質評価。heartbeat anchorは自身のproxy、scene signal anchorは一時320px画像とrefinement範囲内のheartbeat proxyにある有効画像のうち最高画質を使う。これにより短い画面と、白飛びなど無効なscene signal瞬間の前後を拾う。永続的なFrame Candidate評価であるNeutral Image Analysisとは区別する。
+_Avoid_: Neutral Image Analysis, Candidate Annotation, scene importance
 
 **Frame Candidate**:
 Candidate Moment周辺のrefinementで有効と判断された、一つのVideo Source上の正確なsource frame。同じframeを複数のCandidate Momentが参照でき、proxy画像や出力画像とは区別する。
 _Avoid_: Candidate Moment, cached proxy, output image
 
+**Frame Candidate Proxy**:
+Candidate Annotationとcache再利用のためにFrame Candidateごとに永続化する、長辺960px、FFmpeg MJPEG `q:v=3`、metadataなしの画像。公開時には#187が同じexact PTSから元解像度frameを再抽出してWebP quality 95を作る。
+_Avoid_: Heartbeat Proxy, original-resolution frame, selected output
+
+**Frame Refinement**:
+Candidate Momentのanchor前後にあるnative frameを対象に、Content Reject Reason判定、Source-Local Frame Deduplication、最大Frame Candidate数への選抜を行うVideo Stage処理。最初に最もQuality Scoreが高いframeを選び、残りは選択済みframeとの最小視覚距離、Quality Score、anchorへの近さ、早いVideo Timeの順で最大件数まで選ぶ。Candidate Momentから参照する最終順序はVideo Time順とする。
+_Avoid_: fixed-fps conversion, Candidate Annotation, Representative Frame selection
+
+**Source-Local Frame Deduplication**:
+一つのCandidate Momentのrefinement内で、知覚的に同じnative frameを一つへまとめるVideo Stageの処理。Quality Score順に64×36 grayscale署名を比較し、すでに残したframeとの平均絶対画素差が2.0以下なら除外する。閾値は設定値でなくversioned algorithm contractとする。同一PTSのFrame CandidateはVideo Source内で一つだけ作って複数Momentから共有するが、離れたMoment間の似たframeは削除しない。動画全体・動画横断の視覚的重複抑制とは区別する。
+_Avoid_: cross-video diversity, global near-duplicate removal, exact-frame duplication
+
 **Frame Candidate ID**:
-Video Fingerprintとframe自身の正確なVideo Timeからversion付きSHA-256 derivationで作る、`frm_`と64桁digestからなる安定識別子。出力先や選択順が変わっても同じFrame Candidateを指す。
+algorithm名、Video Fingerprint、frame自身のVideo Timeの既約分数をcanonical JSONにしてversion付きSHA-256 derivationで作る、`frm_`と64桁digestからなる安定識別子。出力先や選択順が変わっても同じFrame Candidateを指し、表示時だけ短縮できる。
 _Avoid_: output filename, selection index, source path
 
 **Representative Frame**:
@@ -313,8 +353,12 @@ _Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
 _Avoid_: Candidate Annotation failure, silent omission, fabricated output, invalid-frame fallback
 
 **Neutral Image Analysis**:
-scene や selection intent に依存せず、Frame Candidateそのものから得られる特徴と品質評価。画像の内容分類ではなく、blog candidate 判定や動画横断の類似度判定の土台になる。
-_Avoid_: scene classification, selection intent
+sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。画像の内容分類ではなく、blog candidate判定や動画横断のcosine similarity判定の土台になる。明確な無効frameには絶対条件、暗いgameなど入力特性とTransition Frameには動画内分布と前後関係を使う。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
+_Avoid_: scene classification, selection intent, CLIP embedding, model-dependent feature
+
+**Content Reject Reason**:
+refinement frameを有効なFrame Candidateにしなかった理由を表す安定enum。`blackout`、`whiteout`、`single_tone`、`blur`、`fade_transition`、`temporal_transition`を持ち、free textだけの除外理由にはしない。
+_Avoid_: model classification, selection rejection, free-form reason
 
 **Transition Frame**:
 シーン移動や画面切り替えの途中に現れる、ブログ画像として説明価値が低い一時的な画面。

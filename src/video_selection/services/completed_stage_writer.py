@@ -11,11 +11,14 @@ from typing import Literal, cast
 from uuid import uuid4
 
 from ..models.completed_stage import CompletedStage
+from ..models.completed_stage_bundle import CompletedStageBundle
 from ..models.processing_stage import ProcessingStage
 from ..models.stage_fingerprint import StageFingerprint
+from .stage_version import stage_version
 
 CacheNamespace = Literal["videos", "video-sets"]
 FaultInjector = Callable[[str], None]
+ArtifactProducer = Callable[[Path], dict[str, object]]
 
 
 class CompletedStageWriter:
@@ -49,6 +52,23 @@ class CompletedStageWriter:
         artifact: dict[str, object],
     ) -> CompletedStage:
         """Stage artifactと完了manifestを保存する。"""
+        return self.write_artifacts(
+            stage,
+            fingerprint,
+            upstream_fingerprints,
+            semantic_input,
+            lambda _stage_folder: artifact,
+        )
+
+    def write_artifacts(
+        self,
+        stage: ProcessingStage,
+        fingerprint: StageFingerprint,
+        upstream_fingerprints: tuple[StageFingerprint, ...],
+        semantic_input: Mapping[str, object],
+        produce_artifacts: ArtifactProducer,
+    ) -> CompletedStage:
+        """複数artifactを生成して完了manifestとatomicに保存する。"""
         stage_root = self._root / stage.value
         stage_root.mkdir(parents=True, exist_ok=True)
         lock_root = (
@@ -68,7 +88,7 @@ class CompletedStageWriter:
                     fingerprint,
                     upstream_fingerprints,
                     semantic_input,
-                    artifact,
+                    produce_artifacts,
                     stage_root,
                 )
             finally:
@@ -80,13 +100,13 @@ class CompletedStageWriter:
         fingerprint: StageFingerprint,
         upstream_fingerprints: tuple[StageFingerprint, ...],
         semantic_input: Mapping[str, object],
-        artifact: dict[str, object],
+        produce_artifacts: ArtifactProducer,
         stage_root: Path,
     ) -> CompletedStage:
         """fingerprint lockの内側でStageを一度だけ確定する。"""
         stage_folder = stage_root / fingerprint.value
         if (
-            self.read(
+            self.read_bundle(
                 stage,
                 fingerprint,
                 upstream_fingerprints,
@@ -99,17 +119,29 @@ class CompletedStageWriter:
         temporary_folder = stage_root / f".{fingerprint.value}.{uuid4().hex}.tmp"
         temporary_folder.mkdir()
         try:
+            artifact = produce_artifacts(temporary_folder)
+            if not isinstance(artifact, dict) or not all(
+                isinstance(key, str) for key in artifact
+            ):
+                msg = "Completed Stage producerはJSON objectを返す必要があります"
+                raise TypeError(msg)
+            if (temporary_folder / "artifact.json").exists() or (
+                temporary_folder / "manifest.json"
+            ).exists():
+                msg = "producerは予約済みartifact名を作成できません"
+                raise ValueError(msg)
             artifact_bytes = (
                 json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True)
                 + "\n"
             ).encode()
             (temporary_folder / "artifact.json").write_bytes(artifact_bytes)
             self._fault_injector("before-manifest")
+            artifact_records = _artifact_records(temporary_folder)
             manifest = {
                 "schema": "game-screen-pick/completed-stage@1.0.0",
                 "status": "completed",
                 "stage": stage.value,
-                "stage_version": "walking-skeleton-0",
+                "stage_version": stage_version(stage),
                 "stage_fingerprint": fingerprint.value,
                 "subject": {
                     "namespace": self._subject_namespace,
@@ -119,13 +151,7 @@ class CompletedStageWriter:
                     item.value for item in upstream_fingerprints
                 ],
                 "semantic_input": _normalize_json_mapping(semantic_input),
-                "artifacts": [
-                    {
-                        "path": "artifact.json",
-                        "size_bytes": len(artifact_bytes),
-                        "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
-                    }
-                ],
+                "artifacts": artifact_records,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }
             manifest_bytes = (
@@ -150,6 +176,22 @@ class CompletedStageWriter:
         semantic_input: Mapping[str, object],
     ) -> dict[str, object] | None:
         """検証済みCompleted Stage artifactを返す。"""
+        bundle = self.read_bundle(
+            stage,
+            fingerprint,
+            upstream_fingerprints,
+            semantic_input,
+        )
+        return None if bundle is None else bundle.artifact
+
+    def read_bundle(
+        self,
+        stage: ProcessingStage,
+        fingerprint: StageFingerprint,
+        upstream_fingerprints: tuple[StageFingerprint, ...],
+        semantic_input: Mapping[str, object],
+    ) -> CompletedStageBundle | None:
+        """検証済みJSON artifactとStage rootを返す。"""
         stage_folder = self._root / stage.value / fingerprint.value
         artifact_path = stage_folder / "artifact.json"
         manifest_path = stage_folder / "manifest.json"
@@ -175,11 +217,15 @@ class CompletedStageWriter:
         completed_at = manifest.get("completed_at")
         if not _is_timezone_aware_iso_datetime(completed_at):
             return None
+        try:
+            artifact_records = _artifact_records(stage_folder)
+        except OSError:
+            return None
         expected_manifest = {
             "schema": "game-screen-pick/completed-stage@1.0.0",
             "status": "completed",
             "stage": stage.value,
-            "stage_version": "walking-skeleton-0",
+            "stage_version": stage_version(stage),
             "stage_fingerprint": fingerprint.value,
             "subject": {
                 "namespace": self._subject_namespace,
@@ -189,13 +235,7 @@ class CompletedStageWriter:
                 item.value for item in upstream_fingerprints
             ],
             "semantic_input": _normalize_json_mapping(semantic_input),
-            "artifacts": [
-                {
-                    "path": "artifact.json",
-                    "size_bytes": len(artifact_bytes),
-                    "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
-                }
-            ],
+            "artifacts": artifact_records,
             "completed_at": completed_at,
         }
         if manifest != expected_manifest:
@@ -204,7 +244,10 @@ class CompletedStageWriter:
             isinstance(key, str) for key in artifact_value
         ):
             return None
-        return cast(dict[str, object], artifact_value)
+        return CompletedStageBundle(
+            artifact=cast(dict[str, object], artifact_value),
+            root=stage_folder,
+        )
 
     @staticmethod
     def _remove_partial_stage(stage_folder: Path) -> None:
@@ -244,3 +287,29 @@ def _is_timezone_aware_iso_datetime(value: object) -> bool:
 
 def _ignore_fault_checkpoint(_checkpoint: str) -> None:
     return
+
+
+def _artifact_records(stage_folder: Path) -> list[dict[str, object]]:
+    """manifest以外の通常fileを相対path順でhash化する。"""
+    records: list[dict[str, object]] = []
+    for path in sorted(stage_folder.rglob("*")):
+        if path.name == "manifest.json" and path.parent == stage_folder:
+            continue
+        if path.is_symlink():
+            msg = "Completed Stage artifactにsymbolic linkは使えません"
+            raise OSError(msg)
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            msg = "Completed Stage artifactは通常fileである必要があります"
+            raise OSError(msg)
+        relative_path = path.relative_to(stage_folder).as_posix()
+        content = path.read_bytes()
+        records.append(
+            {
+                "path": relative_path,
+                "size_bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    return records

@@ -192,3 +192,57 @@ def test_snapshot_validation_failure_prevents_stage_cache_mutation(
         )
     assert observer.completed_stages == []
     assert not (cache_folder / "video-sets").exists()
+
+
+def test_video_stage_runner_completes_scan_before_candidate_extraction(
+    tmp_path: Path,
+) -> None:
+    """動画単位のStageがscanからcandidate抽出の順で確定されること。
+
+    Arrange:
+        - Video Stage専用の順序を持つrunnerが用意される
+    Act:
+        - scanの複数artifactとcandidate抽出artifactが順番に確定される
+    Assert:
+        - 2つのCompleted Stageが動画用順序で通知されること
+        - scanのproxy artifactが検証済みbundleから参照されること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    observer = RecordingRunObserver()
+    runner = ProcessingStageRunner(
+        cache_folder,
+        observer,
+        subject_namespace="videos",
+        subject_fingerprint="2" * 64,
+        stage_order=(
+            ProcessingStage.SCAN_VIDEO,
+            ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+        ),
+    )
+
+    def produce_scan(stage_folder: Path) -> dict[str, object]:
+        heartbeat_folder = stage_folder / "heartbeats"
+        heartbeat_folder.mkdir()
+        (heartbeat_folder / "000.jpg").write_bytes(b"heartbeat")
+        return {"heartbeat_proxy_paths": ["heartbeats/000.jpg"]}
+
+    # Act
+    scan_bundle = runner.complete_artifacts(
+        ProcessingStage.SCAN_VIDEO,
+        {"scan_algorithm": "v1"},
+        produce_scan,
+    )
+    runner.complete(
+        ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+        {"candidate_algorithm": "v1"},
+        {"candidate_ids": []},
+    )
+
+    # Assert
+    assert [item.stage for item in runner.completed_stages] == [
+        ProcessingStage.SCAN_VIDEO,
+        ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+    ]
+    assert observer.completed_stages == list(runner.completed_stages)
+    assert scan_bundle.root.joinpath("heartbeats/000.jpg").read_bytes() == b"heartbeat"

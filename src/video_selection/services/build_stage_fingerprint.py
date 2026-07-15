@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 
 from ..models.processing_stage import ProcessingStage
 from ..models.stage_fingerprint import StageFingerprint
+from .stage_version import stage_version
 
 
 def build_stage_fingerprint(
@@ -17,7 +18,7 @@ def build_stage_fingerprint(
     normalized = json.dumps(
         {
             "stage": stage.value,
-            "stage_version": "walking-skeleton-0",
+            "stage_version": stage_version(stage),
             "upstream": [item.value for item in upstream_fingerprints],
             "input": semantic_input,
         },

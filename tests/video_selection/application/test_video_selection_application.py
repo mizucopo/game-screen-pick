@@ -15,7 +15,10 @@ from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.legacy_cache_cleanup_diagnostic import (
     LegacyCacheCleanupDiagnostic,
 )
-from src.video_selection.models.processing_stage import ProcessingStage
+from src.video_selection.models.processing_stage import (
+    VIDEO_SET_STAGE_ORDER,
+    ProcessingStage,
+)
 from src.video_selection.models.resolved_model_identity import ResolvedModelIdentity
 from src.video_selection.models.run_status import RunStatus
 from src.video_selection.models.selected_image import SelectedImage
@@ -140,15 +143,16 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
         "1. [frame-001](images/0001_frame-001.webp) — "
         "主人公が草原を進んでいる\n"
     )
-    assert tuple(stage.stage for stage in observer.completed_stages) == tuple(
-        ProcessingStage
+    assert (
+        tuple(stage.stage for stage in observer.completed_stages)
+        == VIDEO_SET_STAGE_ORDER
     )
     manifests = tuple(
         (input_folder / ".game-screen-pick" / "cache" / "video-sets").glob(
             "*/*/*/manifest.json"
         )
     )
-    assert len(manifests) == len(ProcessingStage)
+    assert len(manifests) == len(VIDEO_SET_STAGE_ORDER)
 
 
 def test_final_snapshot_failure_discards_staged_output(

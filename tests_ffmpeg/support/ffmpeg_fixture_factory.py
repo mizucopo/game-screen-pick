@@ -62,6 +62,43 @@ def generate_vfr_video(output_path: Path) -> Path:
     return output_path
 
 
+def generate_scene_change_video(output_path: Path) -> Path:
+    """1秒ごとに明確なscene changeを持つ3秒fixtureを生成する。"""
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=red:size=64x48:rate=4:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x48:rate=4:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=blue:size=64x48:rate=4:duration=1",
+            "-filter_complex",
+            "[0:v][1:v][2:v]concat=n=3:v=1:a=0[video]",
+            "-map",
+            "[video]",
+            "-c:v",
+            "ffv1",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ],
+        check=True,
+    )
+    return output_path
+
+
 def generate_av1_aac_video(output_path: Path) -> Path:
     """AV1 videoとAAC audioを持つ短いfixtureを生成する。"""
     subprocess.run(
