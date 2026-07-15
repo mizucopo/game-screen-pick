@@ -14,6 +14,7 @@ from src.video_selection.models.media_runtime_failure_reason import (
     MediaRuntimeFailureReason,
 )
 from tests_ffmpeg.support.ffmpeg_fixture_factory import (
+    generate_av1_aac_video,
     generate_cfr_video,
     generate_corrupt_video,
     generate_stream_matrix_video,
@@ -42,6 +43,7 @@ def _write_capable_tool(
     tool: str,
     build_marker: str,
     probe_document: str = '{"program_version": {}}',
+    omitted_capability_option: str | None = None,
 ) -> None:
     script = f"""#!{sys.executable}
 import sys
@@ -59,6 +61,16 @@ elif "-decoders" in arguments:
     print(" A....D aac")
     print(" V..... libdav1d")
     print(" S..... subrip")
+elif "-encoders" in arguments:
+    if {omitted_capability_option!r} != "-encoders":
+        print(" V....D ppm")
+        print(" A....D pcm_s16le")
+        print(" S..... srt")
+elif "-muxers" in arguments:
+    if {omitted_capability_option!r} != "-muxers":
+        print(" E image2pipe")
+        print(" E s16le")
+        print(" E srt")
 elif "-filters" in arguments:
     print(" ... aformat")
     print(" ... aresample")
@@ -122,6 +134,49 @@ def test_preflight_accepts_ffmpeg_6_1_capability_flags(tmp_path: Path) -> None:
     # Assert
     assert identity.ffmpeg_version == "6.1.1"
     assert identity.ffprobe_version == "6.1.1"
+
+
+@pytest.mark.parametrize(
+    "omitted_capability_option",
+    ["-encoders", "-muxers"],
+)
+def test_preflight_rejects_missing_required_output_capability(
+    tmp_path: Path,
+    omitted_capability_option: str,
+) -> None:
+    """必要なencoderまたはmuxerがないtool pairが拒否されること。
+
+    Arrange:
+        - 必要なencoderまたはmuxerだけを欠く同一buildのfake tool pairが用意される
+    Act:
+        - runtime preflightが実行される
+    Assert:
+        - missing_required_demuxer_or_decoderとして失敗すること
+    """
+    # Arrange
+    fake_ffmpeg = tmp_path / "ffmpeg"
+    fake_ffprobe = tmp_path / "ffprobe"
+    _write_capable_tool(
+        fake_ffmpeg,
+        "ffmpeg",
+        "same",
+        omitted_capability_option=omitted_capability_option,
+    )
+    _write_capable_tool(fake_ffprobe, "ffprobe", "same")
+    runtime = FfmpegMediaRuntime(
+        ffmpeg_executable=str(fake_ffmpeg),
+        ffprobe_executable=str(fake_ffprobe),
+    )
+
+    # Act
+    with pytest.raises(MediaRuntimeError) as captured:
+        runtime.preflight()
+
+    # Assert
+    assert (
+        captured.value.reason
+        is MediaRuntimeFailureReason.MISSING_REQUIRED_DEMUXER_OR_DECODER
+    )
 
 
 def test_preflight_reports_missing_ffmpeg_with_stable_reason() -> None:
@@ -518,6 +573,49 @@ def test_probe_reports_audio_and_embedded_subtitle_streams(
         ("jpn", True, False),
         ("eng", False, True),
     ]
+
+
+def test_required_av1_and_aac_streams_are_decoded(tmp_path: Path) -> None:
+    """required AV1 videoとAAC audioがsemantic artifactへdecodeされること。
+
+    Arrange:
+        - AV1 videoとAAC audioを持つ専用fixtureが用意される
+    Act:
+        - video frameとPCM audioが既存のscan経路でdecodeされる
+    Assert:
+        - AV1/AAC codecと非空のframe・PCM artifactが返されること
+    """
+    # Arrange
+    video_path = generate_av1_aac_video(tmp_path / "av1-aac.mkv")
+    runtime = FfmpegMediaRuntime()
+    streams = runtime.probe(video_path).streams
+
+    # Act
+    frames = tuple(
+        runtime.scan_video_frames(
+            video_path,
+            stream_index=0,
+            max_dimension=64,
+        )
+    )
+    chunks = tuple(
+        runtime.scan_pcm_audio(
+            video_path,
+            stream_index=1,
+            sample_rate=16_000,
+            frame_sample_count=4_000,
+        )
+    )
+
+    # Assert
+    assert [(stream.kind, stream.codec_name) for stream in streams[:2]] == [
+        ("video", "av1"),
+        ("audio", "aac"),
+    ]
+    assert frames
+    assert all(frame.pixels for frame in frames)
+    assert chunks
+    assert all(chunk.pcm_bytes for chunk in chunks)
 
 
 def test_scan_pcm_audio_returns_contiguous_sample_grid(tmp_path: Path) -> None:

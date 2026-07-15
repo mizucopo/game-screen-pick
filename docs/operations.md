@@ -8,7 +8,7 @@
 | Component | Project floor | 追加検査 |
 |---|---:|---|
 | Python | 3.13 | project dependencyのimport |
-| FFmpeg / ffprobe | 6.1.1、同一build | 対象demuxer・decoder・filter、JSON probe、実動画stream |
+| FFmpeg / ffprobe | 6.1.1、同一build | 対象demuxer・decoder・encoder・muxer・filter、JSON probe、実動画stream |
 | Ollama server | 0.31.2 | version、vision、context、structured output、model load |
 | faster-whisper | 1.2.1 | configured modelのload |
 | CTranslate2 | 4.8.1 | configured device / compute typeの初期化 |
@@ -17,7 +17,7 @@
 
 ## FFmpeg MediaRuntime
 
-MediaRuntimeはPATH上のsystem `ffmpeg` / `ffprobe`だけを使い、binaryをbundleしません。preflightでは両toolが6.1.1以上かつ同一buildであることに加え、Matroska/MP4 demux、AV1/AAC/text subtitle decode、frame/audio filter、ffprobe JSON出力の能力を検査します。tool不在、最低version未満、build不一致、能力不足はそれぞれstable reason codeへ変換されます。
+MediaRuntimeはPATH上のsystem `ffmpeg` / `ffprobe`だけを使い、binaryをbundleしません。preflightでは両toolが6.1.1以上かつ同一buildであることに加え、Matroska/MP4 demux、AV1/AAC/text subtitle decode、PPM/PCM/SRT encode・mux、frame/audio filter、ffprobe JSON出力の能力を検査します。tool不在、最低version未満、build不一致、能力不足はそれぞれstable reason codeへ変換されます。
 
 後段のVideo Stageへはsubprocess command、終了code、stderrではなく、次の意味結果だけを返します。
 
@@ -27,7 +27,7 @@ MediaRuntimeはPATH上のsystem `ffmpeg` / `ffprobe`だけを使い、binaryをb
 - source PTSと連続sample位置を持つmono signed 16-bit PCM
 - 元packet PTS/time baseと本文を持つembedded text subtitle
 
-real-runtime testは実行時に`lavfi`、synthetic tone、repository所有の短い字幕だけからCFR、VFR、multiple stream、破損packet fixtureを生成します。binary mediaはrepositoryへ保存しません。通常suiteはFFmpegを起動せず、real suiteだけを次で実行します。
+real-runtime testは実行時に`lavfi`、synthetic tone、repository所有の短い字幕だけからCFR、VFR、AV1/AAC、multiple stream、破損packet fixtureを生成します。binary mediaはrepositoryへ保存しません。通常suiteはFFmpegを起動せず、real suiteだけを次で実行します。
 
 ```bash
 uv run task test-ffmpeg

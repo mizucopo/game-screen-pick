@@ -33,6 +33,8 @@ _BUILD_SIGNATURE_PREFIXES = (
 )
 _REQUIRED_DEMUXERS = frozenset({"matroska", "mov"})
 _REQUIRED_DECODERS = frozenset({"aac", "libdav1d", "subrip"})
+_REQUIRED_ENCODERS = frozenset({"pcm_s16le", "ppm", "srt"})
+_REQUIRED_MUXERS = frozenset({"image2pipe", "s16le", "srt"})
 _REQUIRED_FILTERS = frozenset(
     {
         "aformat",
@@ -357,6 +359,8 @@ class FfmpegMediaRuntime:
         try:
             demuxers = self._read_capability_names("-demuxers")
             decoders = self._read_capability_names("-decoders")
+            encoders = self._read_capability_names("-encoders")
+            muxers = self._read_capability_names("-muxers")
             filters = self._read_capability_names("-filters")
             probe = subprocess.run(
                 [
@@ -377,6 +381,8 @@ class FfmpegMediaRuntime:
         if (
             not _REQUIRED_DEMUXERS.issubset(demuxers)
             or not _REQUIRED_DECODERS.issubset(decoders)
+            or not _REQUIRED_ENCODERS.issubset(encoders)
+            or not _REQUIRED_MUXERS.issubset(muxers)
             or not _REQUIRED_FILTERS.issubset(filters)
             or not isinstance(probe_document, dict)
             or not isinstance(probe_document.get("program_version"), dict)

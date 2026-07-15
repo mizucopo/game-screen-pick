@@ -62,6 +62,48 @@ def generate_vfr_video(output_path: Path) -> Path:
     return output_path
 
 
+def generate_av1_aac_video(output_path: Path) -> Path:
+    """AV1 videoとAAC audioを持つ短いfixtureを生成する。"""
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x64:rate=2:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=1",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "libsvtav1",
+            "-preset",
+            "11",
+            "-crf",
+            "40",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "64k",
+            "-shortest",
+            str(output_path),
+        ],
+        check=True,
+    )
+    return output_path
+
+
 def generate_stream_matrix_video(output_path: Path) -> Path:
     """video、multiple audio、embedded subtitleを持つfixtureを生成する。"""
     subprocess.run(
