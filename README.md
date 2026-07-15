@@ -3,7 +3,7 @@
 
 ## 動画入力版の設計と内部実装（公開前）
 
-複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cacheなどの内部基盤は実装済みですが、public CLIの切り替えはIssue #190で行うため、このcommandはまだ実行できません。
+複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cacheに加え、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeと生成fixture CIまで実装済みです。frame抽出・timeline・Context CueなどのVideo Stage接続とpublic CLIの切り替えは後続Issueで行うため、このcommandはまだ実行できません。
 
 ```bash
 game-screen-pick \

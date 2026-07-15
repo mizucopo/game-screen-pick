@@ -96,3 +96,29 @@ jobs:
         run: |
           echo "::error::One or more quality checks failed or were skipped."
           exit 1
+
+  ffmpeg-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run FFmpeg integration suite
+        run: uv run task test-ffmpeg

@@ -7,7 +7,7 @@ from ..models.processing_stage import ProcessingStage
 from ..models.run_outcome import RunOutcome
 from ..models.run_status import RunStatus
 from ..models.video_set import VideoSet
-from ..protocols.media_runtime import MediaRuntime
+from ..protocols.frame_candidate_extractor import FrameCandidateExtractor
 from ..protocols.model_runtime import ModelRuntime
 from ..protocols.run_observer import RunObserver
 from ..protocols.speech_runtime import SpeechRuntime
@@ -34,7 +34,7 @@ class VideoSelectionApplication:
 
     def __init__(
         self,
-        media_runtime: MediaRuntime,
+        media_runtime: FrameCandidateExtractor,
         speech_runtime: SpeechRuntime,
         model_runtime: ModelRuntime,
         vision_runtime: VisionRuntime,
