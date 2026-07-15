@@ -17,7 +17,12 @@ from src.video_selection.models.legacy_cache_cleanup_diagnostic import (
 )
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.resolved_model_identity import ResolvedModelIdentity
+from src.video_selection.models.run_status import RunStatus
+from src.video_selection.models.selected_image import SelectedImage
+from src.video_selection.models.video_set import VideoSet
+from src.video_selection.services.atomic_output_publisher import AtomicOutputPublisher
 from src.video_selection.services.input_folder_lock import InputFolderLock
+from src.video_selection.services.prepared_output import PreparedOutput
 from tests.video_selection.fakes.failing_vision_runtime import FailingVisionRuntime
 from tests.video_selection.fakes.fake_media_runtime import FakeMediaRuntime
 from tests.video_selection.fakes.fake_model_runtime import FakeModelRuntime
@@ -144,6 +149,62 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
         )
     )
     assert len(manifests) == len(ProcessingStage)
+
+
+def test_final_snapshot_failure_discards_staged_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """最終snapshot検査失敗時にstaging outputが破棄されること。
+
+    Arrange:
+        - Output artifact準備直後に入力videoが変更される境界が用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - snapshot変更errorが返されること
+        - Output Folderとhidden staging directoryが残らないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    input_folder.mkdir()
+    video_path = input_folder / "chapter-01.mp4"
+    video_path.write_bytes(b"video-01")
+    original_prepare = AtomicOutputPublisher.prepare
+
+    def prepare_then_change_input(
+        publisher: AtomicOutputPublisher,
+        prepared_output_folder: Path,
+        video_set: VideoSet,
+        selected_images: tuple[SelectedImage, ...],
+        requested_count: int,
+        run_status: RunStatus,
+    ) -> PreparedOutput:
+        prepared_output = original_prepare(
+            publisher,
+            prepared_output_folder,
+            video_set,
+            selected_images,
+            requested_count,
+            run_status,
+        )
+        video_path.write_bytes(b"changed-video")
+        return prepared_output
+
+    monkeypatch.setattr(AtomicOutputPublisher, "prepare", prepare_then_change_input)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
+        _successful_application(RecordingRunObserver()).run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=output_folder,
+                image_count=1,
+            )
+        )
+    assert not output_folder.exists()
+    assert tuple(tmp_path.glob(".output.*.staging")) == ()
 
 
 def test_run_removes_recognized_legacy_cache_and_reports_diagnostic(

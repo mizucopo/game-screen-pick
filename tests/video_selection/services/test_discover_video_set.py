@@ -242,3 +242,40 @@ def test_snapshot_validation_rejects_video_changes_before_cache_commit(
     # Act / Assert
     with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
         validate_video_set_snapshot(video_set)
+
+
+def test_snapshot_validation_rejects_same_stat_content_rewrite(
+    tmp_path: Path,
+) -> None:
+    """stat signatureが維持された内容変更もsnapshot不一致になること。
+
+    Arrange:
+        - 発見済みvideoと同じsize・inode・mtimeを保つ別内容が用意される
+    Act:
+        - Video Set snapshot validationが実行される
+    Assert:
+        - content fingerprint不一致として変更errorが返されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    video_path = input_folder / "chapter.mp4"
+    video_path.write_bytes(b"before")
+    video_set = discover_video_set(input_folder)
+    original_stat = video_path.stat()
+    video_path.write_bytes(b"after!")
+    os.utime(
+        video_path,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    rewritten_stat = video_path.stat()
+    assert (
+        rewritten_stat.st_dev,
+        rewritten_stat.st_ino,
+        rewritten_stat.st_size,
+        rewritten_stat.st_mtime_ns,
+    ) == video_set.sources[0].stat_signature
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
+        validate_video_set_snapshot(video_set)

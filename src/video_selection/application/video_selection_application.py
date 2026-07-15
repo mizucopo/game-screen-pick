@@ -170,7 +170,11 @@ class VideoSelectionApplication:
             configuration.image_count,
             run_status,
         )
-        validate_video_set_snapshot(video_set)
+        try:
+            validate_video_set_snapshot(video_set)
+        except BaseException:
+            prepared_output.discard()
+            raise
         prepared_output.publish()
         return RunOutcome(
             output_folder=configuration.output_folder,
