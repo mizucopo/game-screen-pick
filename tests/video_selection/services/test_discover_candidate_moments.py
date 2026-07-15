@@ -1,7 +1,9 @@
 """Candidate Moment discoveryのtest。"""
 
+from collections.abc import Iterator
 from fractions import Fraction
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from src.video_selection.models.heartbeat_proxy import HeartbeatProxy
 from src.video_selection.models.scene_signal import SceneSignal
@@ -111,3 +113,44 @@ def test_same_exact_anchor_merges_heartbeat_and_scene_evidence() -> None:
     assert moment.evidence == ("heartbeat", "scene")
     assert moment.identifier.startswith("mom_")
     assert len(moment.identifier) == 68
+
+
+def test_scene_quality_lookup_does_not_rescan_all_heartbeats() -> None:
+    """scene品質参照でheartbeat全体がsceneごとに再走査されないこと。
+
+    Arrange:
+        - timeline順のheartbeatと多数のscene signalが用意される
+        - heartbeat iterableの走査回数が記録される
+    Act:
+        - 各scene周辺の品質を使ってCandidate Momentが発見される
+    Assert:
+        - heartbeat iterableの全走査が定数回に抑えられること
+    """
+    # Arrange
+    heartbeat_values = tuple(_heartbeat(second, 0.70) for second in range(50))
+    scenes = tuple(
+        SceneSignal(second, Fraction(second), 0.80, True) for second in range(50)
+    )
+    heartbeat_iteration_count = 0
+
+    def iterate_heartbeats() -> Iterator[HeartbeatProxy]:
+        nonlocal heartbeat_iteration_count
+        heartbeat_iteration_count += 1
+        return iter(heartbeat_values)
+
+    heartbeats = MagicMock()
+    heartbeats.__iter__.side_effect = iterate_heartbeats
+
+    # Act
+    discovery = discover_candidate_moments(
+        video_fingerprint="c" * 64,
+        timeline=_timeline(),
+        heartbeats=heartbeats,
+        scene_signals=scenes,
+        density_per_minute=60.0,
+        refinement_radius_seconds=1.0,
+    )
+
+    # Assert
+    assert discovery.moments
+    assert heartbeat_iteration_count <= 2

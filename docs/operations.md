@@ -43,7 +43,7 @@ PRでは通常quality checkと別のUbuntu 24.04 jobとして実行されます�
 
 ## processing cache基盤
 
-Input Lockは`<VIDEO_INPUT_FOLDER>/.game-screen-pick/input.lock`でVideo Input Folder単位に取得します。待機queueは作らず、同じinputの別runが保持中なら即時に失敗します。lockはVideo Set snapshotの非破壊検査後から、cache準備、全Processing Stage、Output Folder公開の終了まで保持します。lock取得直後と公開直前はVideo Set全体のpath・stat・内容を検査し、各Video Stage直前は全体のpath・statと対象Video Sourceの内容を検査します。これにより入力変更を拒否しつつ、Stageごとに全動画を再hashする二乗I/Oを避けます。
+Input Lockは`<VIDEO_INPUT_FOLDER>/.game-screen-pick/input.lock`でVideo Input Folder単位に取得します。待機queueは作らず、同じinputの別runが保持中なら即時に失敗します。lockはVideo Set snapshotの非破壊検査後から、cache準備、全Processing Stage、Output Folder公開の終了まで保持します。lock取得直後と公開直前はVideo Set全体のpath・stat・内容を検査し、各Video Sourceのmedia probe前と各Video Stage直前は全体のpath・statと対象Video Sourceの内容を検査します。これにより変更済み動画をprobeせず拒否しつつ、Stageごとに全動画を再hashする二乗I/Oを避けます。
 
 processing cacheはcontent-addressedな次のnamespaceを使います。
 

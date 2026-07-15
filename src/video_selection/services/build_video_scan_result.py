@@ -34,15 +34,10 @@ def build_video_scan_result(
         scene_pts=tuple(item.source_pts for item in native_scan.scene_frames),
     )
     heartbeat_analyses = analyze_neutral_images(
-        tuple(
-            _decode_proxy(item, primary_stream.index) for item in native_scan.heartbeats
-        )
+        _decode_proxy(item, primary_stream.index) for item in native_scan.heartbeats
     )
     scene_analyses = analyze_neutral_images(
-        tuple(
-            _decode_proxy(item, primary_stream.index)
-            for item in native_scan.scene_frames
-        )
+        _decode_proxy(item, primary_stream.index) for item in native_scan.scene_frames
     )
     heartbeats = tuple(
         HeartbeatProxy(

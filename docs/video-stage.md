@@ -4,14 +4,15 @@
 
 ## Processing Stage
 
-Video Set内の動画はVideo Order順に直列処理されます。各Video Identityには、次の2つのCompleted Stageが作られます。
+Video Set内の動画はVideo Order順に直列処理されます。各sourceはmedia probeより前にsnapshotが検査され、各Video Identityには次の2つのCompleted Stageが作られます。
 
 1. `scan-video`
    - `attached_pic`を除外し、default disposition、stream indexの順でPrimary Video Streamを決めます。
    - 一回のnative decodeを、1秒heartbeat、320px scene signal、全frame timingへ分岐します。
+   - heartbeat/scene proxyは1件ずつRGB decode・測定して解放し、全proxyのRGBを同時保持しません。
    - Heartbeat Proxy、scene signalの時刻、exact timeline、scan metricをatomicに確定します。
 2. `extract-frame-candidates`
-   - density windowごとに最大1件のCandidate Momentを発見します。
+   - timeline順の単調windowでscene近傍のheartbeat品質を参照し、density windowごとに最大1件のCandidate Momentを発見します。
    - Moment前後のnative frameだけを一回のrange scanで取り出します。
    - 重なるMoment windowを一つのRefinement Window Groupとして順次処理し、選抜proxyを書いた時点でそのgroupのRGB frameを解放します。
    - group内でmodel-free Neutral Image Analysis、無効frame除外、Moment内deduplication、多様性選抜を行います。

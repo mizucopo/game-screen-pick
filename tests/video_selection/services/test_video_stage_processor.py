@@ -171,7 +171,7 @@ def test_corrupt_candidate_proxy_recomputes_only_candidate_stage(
 def test_same_stat_change_is_checked_when_affected_source_reaches_video_stage(
     tmp_path: Path,
 ) -> None:
-    """対象外sourceの同一stat変更が、そのsourceのStage直前に検知されること。
+    """対象外sourceの同一stat変更が、そのsourceのprobe前に検知されること。
 
     Arrange:
         - 異なる内容を持つ2動画の発見済みVideo Setが用意される
@@ -179,7 +179,7 @@ def test_same_stat_change_is_checked_when_affected_source_reaches_video_stage(
     Act:
         - Video Stage処理がVideo Order順に実行される
     Assert:
-        - 1本目の両Stageは完了し、2本目のscan直前で変更が拒否されること
+        - 1本目の両Stageは完了し、2本目のprobe前で変更が拒否されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
@@ -211,7 +211,6 @@ def test_same_stat_change_is_checked_when_affected_source_reaches_video_stage(
         ("probe", "01-first.mp4"),
         ("scan", "01-first.mp4"),
         ("refine", "01-first.mp4"),
-        ("probe", "02-second.mp4"),
     ]
 
 

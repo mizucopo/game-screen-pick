@@ -1,6 +1,7 @@
 """scan signalからdensity制限済みCandidate Momentを発見する。"""
 
 import math
+from collections import deque
 from fractions import Fraction
 from typing import cast
 
@@ -34,10 +35,12 @@ def discover_candidate_moments(
     radius = Fraction(str(refinement_radius_seconds))
     density_cap = math.ceil(timeline.duration.seconds / window_width)
     anchors: dict[Fraction, tuple[int, set[MomentEvidence], float]] = {}
+    eligible_heartbeats: list[HeartbeatProxy] = []
 
     for heartbeat in heartbeats:
         if not heartbeat.eligible or heartbeat.video_time >= timeline.duration.seconds:
             continue
+        eligible_heartbeats.append(heartbeat)
         _merge_anchor(
             anchors,
             heartbeat.video_time,
@@ -46,25 +49,57 @@ def discover_candidate_moments(
             heartbeat.quality_score,
         )
 
-    for scene in scene_signals:
-        if scene.video_time >= timeline.duration.seconds:
-            continue
-        quality_candidates = [
-            heartbeat.quality_score
-            for heartbeat in heartbeats
-            if heartbeat.eligible
-            and abs(heartbeat.video_time - scene.video_time) <= radius
-        ]
-        if scene.eligible:
-            quality_candidates.append(scene.quality_score)
-        if not quality_candidates:
+    eligible_heartbeats.sort(key=lambda item: (item.video_time, item.source_pts))
+    ordered_scenes = sorted(
+        (
+            scene
+            for scene in scene_signals
+            if scene.video_time < timeline.duration.seconds
+        ),
+        key=lambda item: (item.video_time, item.source_pts),
+    )
+    quality_window: deque[int] = deque()
+    left_index = 0
+    right_index = 0
+    for scene in ordered_scenes:
+        lower_bound = scene.video_time - radius
+        upper_bound = scene.video_time + radius
+        while (
+            right_index < len(eligible_heartbeats)
+            and eligible_heartbeats[right_index].video_time <= upper_bound
+        ):
+            while quality_window and (
+                eligible_heartbeats[quality_window[-1]].quality_score
+                <= eligible_heartbeats[right_index].quality_score
+            ):
+                quality_window.pop()
+            quality_window.append(right_index)
+            right_index += 1
+        while (
+            left_index < right_index
+            and eligible_heartbeats[left_index].video_time < lower_bound
+        ):
+            if quality_window and quality_window[0] == left_index:
+                quality_window.popleft()
+            left_index += 1
+        heartbeat_quality = (
+            eligible_heartbeats[quality_window[0]].quality_score
+            if quality_window
+            else None
+        )
+        quality_score = heartbeat_quality
+        if scene.eligible and (
+            quality_score is None or scene.quality_score > quality_score
+        ):
+            quality_score = scene.quality_score
+        if quality_score is None:
             continue
         _merge_anchor(
             anchors,
             scene.video_time,
             scene.source_pts,
             "scene",
-            max(quality_candidates),
+            quality_score,
         )
 
     windows: dict[int, list[tuple[Fraction, int, set[MomentEvidence], float]]] = {}

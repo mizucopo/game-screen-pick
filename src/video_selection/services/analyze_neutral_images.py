@@ -1,7 +1,9 @@
 """native RGB frameをmodel-freeに一括解析する。"""
 
 import math
+from collections.abc import Iterable
 from dataclasses import replace
+from fractions import Fraction
 
 import cv2
 import numpy as np
@@ -24,19 +26,32 @@ _QUALITY_WEIGHTS = {
     "dramatic_score": 0.05,
 }
 
+_FrameTiming = tuple[int, int, int | None, Fraction]
+
 
 def analyze_neutral_images(
-    frames: tuple[DecodedVideoFrame, ...],
+    frames: Iterable[DecodedVideoFrame],
 ) -> tuple[NeutralImageAnalysis, ...]:
     """動画内分布と前後関係を使いnative frameを解析する。"""
-    if not frames:
+    frame_timings: list[_FrameTiming] = []
+    raw_rows: list[tuple[dict[str, float], np.ndarray, bytes]] = []
+    for frame in frames:
+        frame_timings.append(
+            (
+                frame.stream_index,
+                frame.pts,
+                frame.duration_ts,
+                frame.time_base,
+            )
+        )
+        raw_rows.append(_measure_frame(frame))
+    if not raw_rows:
         return ()
-    raw_rows = [_measure_frame(frame) for frame in frames]
     information_scores = _information_scores(raw_rows)
     visibility_scores = [_visibility_score(row) for row in raw_rows]
     analyses = [
         NeutralImageAnalysis(
-            source_pts=frame.pts,
+            source_pts=frame_timings[index][1],
             metrics=_build_metrics(
                 raw,
                 information_scores[index],
@@ -47,11 +62,9 @@ def analyze_neutral_images(
             grayscale_signature=signature,
             reject_reason=_absolute_reject_reason(raw),
         )
-        for index, (frame, (raw, feature, signature)) in enumerate(
-            zip(frames, raw_rows, strict=True)
-        )
+        for index, (raw, feature, signature) in enumerate(raw_rows)
     ]
-    _apply_temporal_rejections(analyses, frames)
+    _apply_temporal_rejections(analyses, frame_timings)
     _apply_relative_fade_rejections(analyses)
     return tuple(analyses)
 
@@ -222,12 +235,12 @@ def _absolute_reject_reason(
 
 def _apply_temporal_rejections(
     analyses: list[NeutralImageAnalysis],
-    frames: tuple[DecodedVideoFrame, ...],
+    frame_timings: list[_FrameTiming],
 ) -> None:
     for index in range(1, len(analyses) - 1):
         if not (
-            _are_adjacent(frames[index - 1], frames[index])
-            and _are_adjacent(frames[index], frames[index + 1])
+            _are_adjacent(frame_timings[index - 1], frame_timings[index])
+            and _are_adjacent(frame_timings[index], frame_timings[index + 1])
         ):
             continue
         previous = analyses[index - 1]
@@ -255,15 +268,19 @@ def _apply_temporal_rejections(
 
 
 def _are_adjacent(
-    previous: DecodedVideoFrame,
-    following: DecodedVideoFrame,
+    previous: _FrameTiming,
+    following: _FrameTiming,
 ) -> bool:
+    previous_stream, previous_pts, previous_duration, previous_time_base = previous
+    following_stream, following_pts, _following_duration, following_time_base = (
+        following
+    )
     return (
-        previous.stream_index == following.stream_index
-        and previous.time_base == following.time_base
-        and previous.duration_ts is not None
-        and previous.duration_ts > 0
-        and previous.pts + previous.duration_ts == following.pts
+        previous_stream == following_stream
+        and previous_time_base == following_time_base
+        and previous_duration is not None
+        and previous_duration > 0
+        and previous_pts + previous_duration == following_pts
     )
 
 

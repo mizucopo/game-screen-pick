@@ -96,6 +96,7 @@ class VideoStageProcessor:
         runtime_identity: MediaRuntimeIdentity,
     ) -> VideoStageResult:
         """一つのVideo Sourceの2 Stageを確定または再利用する。"""
+        validate_video_source_snapshot(video_set, source)
         primary_stream = select_primary_video_stream(
             self._media_runtime.probe(source.path)
         )

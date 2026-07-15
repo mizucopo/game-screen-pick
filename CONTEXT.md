@@ -17,7 +17,7 @@ _Avoid_: Video Set, Output Folder, cache key
 _Avoid_: Stage lock, waiting queue, global lock, cache artifact
 
 **Video Set Snapshot Validation**:
-Input Lock取得直後とOutput Folder公開直前にはVideo Set全体のpath、stat、内容を、各Video Stage直前にはVideo Set全体のpath、statと対象Video Sourceの内容を発見時snapshotへ照合する不変性検査。Stageごとに全動画を再hashする検査とは区別する。
+Input Lock取得直後とOutput Folder公開直前にはVideo Set全体のpath、stat、内容を、各Video Sourceのmedia probe前と各Video Stage直前にはVideo Set全体のpath、statと対象Video Sourceの内容を発見時snapshotへ照合する不変性検査。変更済みsourceからstream metadataを取得せず、Stageごとに全動画を再hashする検査とは区別する。
 _Avoid_: cache artifact validation, full-set hash per Video Stage, Input Lock
 
 **Video Set Fingerprint**:
@@ -109,7 +109,7 @@ Video SourceからVideo Scan Stageが選ぶ一つの表示映像stream。`attach
 _Avoid_: audio stream, cover art, user-selected stream index
 
 **Heartbeat Proxy**:
-Video Scan Stageがnative heartbeatごとに永続化する、長辺960px、FFmpeg MJPEG `q:v=3`、metadataなしのcache画像。scene signal用の一時320px画像、Frame Candidate Proxy、公開画像とは区別し、pathをidentityにしない。
+Video Scan Stageがnative heartbeatごとに永続化する、長辺960px、FFmpeg MJPEG `q:v=3`、metadataなしのcache画像。Scan Proxy Analysisでは1件ずつRGB decode・測定して解放し、全proxyのdecoded RGBを同時保持しない。scene signal用の一時320px画像、Frame Candidate Proxy、公開画像とは区別し、pathをidentityにしない。
 _Avoid_: scene signal image, Frame Candidate, selected output
 
 **Frame Candidate Extraction Stage**:
@@ -157,7 +157,7 @@ Video Durationに比例して、一つのVideo Sourceが保持できるCandidate
 _Avoid_: fixed per-video count, per-video selection quota, requested-output multiplier
 
 **Scan Proxy Analysis**:
-Candidate Momentの密度選抜だけに使う一時的な中立画質評価。heartbeat anchorは自身のproxy、scene signal anchorは一時320px画像とrefinement範囲内のheartbeat proxyにある有効画像のうち最高画質を使う。これにより短い画面と、白飛びなど無効なscene signal瞬間の前後を拾う。永続的なFrame Candidate評価であるNeutral Image Analysisとは区別する。
+Candidate Momentの密度選抜だけに使う一時的な中立画質評価。heartbeat anchorは自身のproxy、scene signal anchorは一時320px画像とrefinement範囲内のheartbeat proxyにある有効画像のうち最高画質を使う。scene近傍のheartbeat品質はtimeline順の単調windowで参照し、sceneごとに全heartbeatを再走査しない。これにより短い画面と、白飛びなど無効なscene signal瞬間の前後を拾う。永続的なFrame Candidate評価であるNeutral Image Analysisとは区別する。
 _Avoid_: Neutral Image Analysis, Candidate Annotation, scene importance
 
 **Frame Candidate**:
