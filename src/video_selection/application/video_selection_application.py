@@ -1,5 +1,7 @@
 """Video Set選定walking skeletonのapplication orchestration。"""
 
+from contextlib import suppress
+
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.processing_stage import ProcessingStage
 from ..models.run_outcome import RunOutcome
@@ -12,6 +14,7 @@ from ..protocols.vision_runtime import VisionRuntime
 from ..services.atomic_output_publisher import AtomicOutputPublisher
 from ..services.candidate_annotation_artifact import (
     build_candidate_annotation_artifact,
+    normalize_candidate_annotations,
     restore_candidate_annotations,
 )
 from ..services.discover_video_set import discover_video_set
@@ -45,13 +48,15 @@ class VideoSelectionApplication:
             configuration.video_input_folder,
             configuration.output_folder,
         )
+
+        video_set = discover_video_set(configuration.video_input_folder)
+        video_set_snapshot = snapshot_video_set(video_set)
+        with suppress(FileNotFoundError):
+            configuration.output_folder.rmdir()
         stage_runner = ProcessingStageRunner(
             configuration.processing_cache_folder,
             self._observer,
         )
-
-        video_set = discover_video_set(configuration.video_input_folder)
-        video_set_snapshot = snapshot_video_set(video_set)
         stage_runner.complete(
             ProcessingStage.DISCOVER_VIDEO_SET,
             {"videos": list(video_set_snapshot)},
@@ -95,10 +100,13 @@ class VideoSelectionApplication:
             ),
         )
         if annotations is None:
-            annotations = self._vision_runtime.annotate_candidates(
+            annotations = normalize_candidate_annotations(
+                self._vision_runtime.annotate_candidates(
+                    frame_candidates,
+                    context_cues,
+                    model_identity,
+                ),
                 frame_candidates,
-                context_cues,
-                model_identity,
             )
             stage_runner.complete(
                 ProcessingStage.ANNOTATE_CANDIDATES,

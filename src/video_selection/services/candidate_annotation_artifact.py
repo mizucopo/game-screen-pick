@@ -9,8 +9,25 @@ def build_candidate_annotation_artifact(
     candidates: tuple[FrameCandidate, ...],
 ) -> dict[str, object]:
     """抽出候補に属するCandidate Annotationをartifactへ変換する。"""
+    normalized_annotations = normalize_candidate_annotations(annotations, candidates)
+    return {
+        "annotations": [
+            {
+                "candidate_id": annotation.candidate.identifier,
+                "summary": annotation.summary,
+            }
+            for annotation in normalized_annotations
+        ]
+    }
+
+
+def normalize_candidate_annotations(
+    annotations: tuple[CandidateAnnotation, ...],
+    candidates: tuple[FrameCandidate, ...],
+) -> tuple[CandidateAnnotation, ...]:
+    """Annotationを検証してFrame Candidate順へ正規化する。"""
     candidates_by_id = {candidate.identifier: candidate for candidate in candidates}
-    annotation_ids: list[str] = []
+    annotations_by_id: dict[str, CandidateAnnotation] = {}
     for annotation in annotations:
         candidate_id = annotation.candidate.identifier
         if candidates_by_id.get(candidate_id) != annotation.candidate:
@@ -18,23 +35,15 @@ def build_candidate_annotation_artifact(
                 f"Candidate Annotationに未知のFrame Candidateがあります: {candidate_id}"
             )
             raise ValueError(msg)
-        annotation_ids.append(candidate_id)
-    if len(set(annotation_ids)) != len(annotation_ids):
-        msg = "Candidate AnnotationのFrame Candidate IDが重複しています"
-        raise ValueError(msg)
-    missing_candidate_ids = set(candidates_by_id) - set(annotation_ids)
+        if candidate_id in annotations_by_id:
+            msg = "Candidate AnnotationのFrame Candidate IDが重複しています"
+            raise ValueError(msg)
+        annotations_by_id[candidate_id] = annotation
+    missing_candidate_ids = set(candidates_by_id) - set(annotations_by_id)
     if missing_candidate_ids:
         msg = f"Candidate Annotationが不足しています: {sorted(missing_candidate_ids)}"
         raise ValueError(msg)
-    return {
-        "annotations": [
-            {
-                "candidate_id": annotation.candidate.identifier,
-                "summary": annotation.summary,
-            }
-            for annotation in annotations
-        ]
-    }
+    return tuple(annotations_by_id[candidate.identifier] for candidate in candidates)
 
 
 def restore_candidate_annotations(
@@ -48,7 +57,6 @@ def restore_candidate_annotations(
         raise ValueError(msg)
     candidates_by_id = {candidate.identifier: candidate for candidate in candidates}
     restored: list[CandidateAnnotation] = []
-    restored_ids: list[str] = []
     for record in records:
         if not isinstance(record, dict):
             msg = "Candidate Annotation artifactのrecordが不正です"
@@ -66,15 +74,4 @@ def restore_candidate_annotations(
             )
             raise ValueError(msg)
         restored.append(CandidateAnnotation(candidate=candidate, summary=summary))
-        restored_ids.append(candidate_id)
-    if len(set(restored_ids)) != len(restored_ids):
-        msg = "Candidate Annotation artifactのCandidate IDが重複しています"
-        raise ValueError(msg)
-    missing_candidate_ids = set(candidates_by_id) - set(restored_ids)
-    if missing_candidate_ids:
-        msg = (
-            "Candidate Annotation artifactが不足しています: "
-            f"{sorted(missing_candidate_ids)}"
-        )
-        raise ValueError(msg)
-    return tuple(restored)
+    return normalize_candidate_annotations(tuple(restored), candidates)
