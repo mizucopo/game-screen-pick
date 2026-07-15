@@ -9,6 +9,10 @@ from ..protocols.run_observer import RunObserver
 from ..protocols.speech_runtime import SpeechRuntime
 from ..protocols.vision_runtime import VisionRuntime
 from ..services.atomic_output_publisher import AtomicOutputPublisher
+from ..services.candidate_annotation_artifact import (
+    build_candidate_annotation_artifact,
+    restore_candidate_annotations,
+)
 from ..services.discover_video_set import discover_video_set
 from ..services.processing_stage_runner import ProcessingStageRunner
 from ..services.select_images import select_images
@@ -35,7 +39,10 @@ class VideoSelectionApplication:
 
     def run(self, configuration: EffectiveConfiguration) -> RunOutcome:
         """内部Video Set選定を実行してRunOutcomeを返す。"""
-        validate_output_folder(configuration.output_folder)
+        validate_output_folder(
+            configuration.video_input_folder,
+            configuration.output_folder,
+        )
         stage_runner = ProcessingStageRunner(
             configuration.processing_cache_folder,
             self._observer,
@@ -50,17 +57,19 @@ class VideoSelectionApplication:
         )
 
         frame_candidates = self._media_runtime.extract_candidates(video_set)
+        candidate_ids = [item.identifier for item in frame_candidates]
         stage_runner.complete(
             ProcessingStage.EXTRACT_FRAME_CANDIDATES,
-            {"video_count": len(video_set.videos)},
-            {"candidate_ids": [item.identifier for item in frame_candidates]},
+            {"candidate_ids": candidate_ids},
+            {"candidate_ids": candidate_ids},
         )
 
         context_cues = self._speech_runtime.collect_context(video_set)
+        context_cue_ids = [item.identifier for item in context_cues]
         stage_runner.complete(
             ProcessingStage.COLLECT_CONTEXT,
-            {"video_count": len(video_set.videos)},
-            {"context_cue_ids": [item.identifier for item in context_cues]},
+            {"context_cue_ids": context_cue_ids},
+            {"context_cue_ids": context_cue_ids},
         )
 
         model_identity = self._model_runtime.resolve_models()
@@ -70,16 +79,30 @@ class VideoSelectionApplication:
             {"model_identity": model_identity.identifier},
         )
 
-        annotations = self._vision_runtime.annotate_candidates(
-            frame_candidates,
-            context_cues,
-            model_identity,
-        )
-        stage_runner.complete(
+        annotation_semantic_input = {
+            "candidate_ids": candidate_ids,
+            "context_cue_ids": context_cue_ids,
+            "resolved_model_identity": model_identity.identifier,
+        }
+        annotations = stage_runner.reuse(
             ProcessingStage.ANNOTATE_CANDIDATES,
-            {"candidate_count": len(frame_candidates)},
-            {"candidate_ids": [item.candidate.identifier for item in annotations]},
+            annotation_semantic_input,
+            lambda artifact: restore_candidate_annotations(
+                artifact,
+                frame_candidates,
+            ),
         )
+        if annotations is None:
+            annotations = self._vision_runtime.annotate_candidates(
+                frame_candidates,
+                context_cues,
+                model_identity,
+            )
+            stage_runner.complete(
+                ProcessingStage.ANNOTATE_CANDIDATES,
+                annotation_semantic_input,
+                build_candidate_annotation_artifact(annotations),
+            )
 
         selected_images = select_images(annotations, configuration.image_count)
         stage_runner.complete(
@@ -98,16 +121,7 @@ class VideoSelectionApplication:
             video_set,
             selected_images,
         )
-        try:
-            stage_runner.complete(
-                ProcessingStage.PUBLISH_OUTPUT,
-                {"selected_count": len(selected_images)},
-                {"report": prepared_output.report},
-            )
-            prepared_output.publish()
-        except BaseException:
-            prepared_output.discard()
-            raise
+        prepared_output.publish()
         return RunOutcome(
             output_folder=configuration.output_folder,
             selected_count=len(selected_images),

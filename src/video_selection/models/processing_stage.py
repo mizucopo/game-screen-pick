@@ -12,4 +12,3 @@ class ProcessingStage(StrEnum):
     RESOLVE_MODELS = "resolve-models"
     ANNOTATE_CANDIDATES = "annotate-candidates"
     SELECT_IMAGES = "select-images"
-    PUBLISH_OUTPUT = "publish-output"

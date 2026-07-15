@@ -8,7 +8,7 @@ from ..models.video_set import VideoSet
 
 def snapshot_video_set(video_set: VideoSet) -> tuple[dict[str, str], ...]:
     """Video Orderを保ったrelative pathとcontent digestを返す。"""
-    return tuple(
+    snapshot = tuple(
         {
             "path": relative_path,
             "sha256": _file_sha256(video_path),
@@ -19,6 +19,11 @@ def snapshot_video_set(video_set: VideoSet) -> tuple[dict[str, str], ...]:
             strict=True,
         )
     )
+    digests = tuple(item["sha256"] for item in snapshot)
+    if len(set(digests)) != len(digests):
+        msg = "Video Input Folderに同一内容の重複videoがあります"
+        raise ValueError(msg)
+    return snapshot
 
 
 def _file_sha256(video_path: Path) -> str:

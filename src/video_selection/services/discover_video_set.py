@@ -29,9 +29,12 @@ def discover_video_set(input_folder: Path) -> VideoSet:
     return VideoSet(input_folder=input_folder, videos=videos)
 
 
-def _natural_path_key(path: Path) -> tuple[str | int, ...]:
+def _natural_path_key(path: Path) -> tuple[tuple[str | int, ...], str]:
     """path名を数値部分込みの自然順keyへ変換する。"""
-    return tuple(
-        int(part) if part.isdigit() else part.casefold()
-        for part in re.split(r"(\d+)", path.name)
+    return (
+        tuple(
+            int(part) if part.isdigit() else part.casefold()
+            for part in re.split(r"(\d+)", path.name)
+        ),
+        path.name,
     )
