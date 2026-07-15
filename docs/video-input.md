@@ -1,7 +1,7 @@
 # 動画入力
 
 > [!IMPORTANT]
-> この文書は将来のVideo Set selectorの確定済み契約です。現在のscreenshot入力実装ではまだ実行できません。
+> Effective Configurationと内部adapterは実装済みですが、installed public CLIはIssue #190までscreenshot入力のままです。現在のconsole commandではまだ動画入力を実行できません。
 
 ## 実行単位
 

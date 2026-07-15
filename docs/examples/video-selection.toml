@@ -1,4 +1,4 @@
-# Future Video Set selector configuration contract (not implemented yet).
+# Video Set selector v1 config. Public CLI cutover remains pending Issue #190.
 config_version = "1.0.0"
 
 [input]
