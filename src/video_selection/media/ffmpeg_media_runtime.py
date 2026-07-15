@@ -22,6 +22,7 @@ _VERSION_PATTERN = re.compile(r"^(?:ffmpeg|ffprobe) version (?P<version>\S+)")
 _SEMANTIC_VERSION_PATTERN = re.compile(
     r"(?P<major>\d+)\.(?P<minor>\d+)(?:\.(?P<patch>\d+))?"
 )
+_CAPABILITY_FLAGS_PATTERN = re.compile(r"[A-Z.]+")
 _MINIMUM_VERSION = (6, 1, 1)
 _BUILD_SIGNATURE_PREFIXES = (
     "built with ",
@@ -392,7 +393,10 @@ class FfmpegMediaRuntime:
         names: set[str] = set()
         for line in completed.stdout.splitlines():
             fields = line.split()
-            if len(fields) < 2 or not set(fields[0]) <= set(".ADEILNPRSTV"):
+            if (
+                len(fields) < 2
+                or _CAPABILITY_FLAGS_PATTERN.fullmatch(fields[0]) is None
+            ):
                 continue
             names.update(fields[1].split(","))
         return frozenset(names)

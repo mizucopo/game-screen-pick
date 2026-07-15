@@ -62,10 +62,10 @@ elif "-decoders" in arguments:
 elif "-filters" in arguments:
     print(" ... aformat")
     print(" ... aresample")
-    print(" ... asetnsamples")
+    print("T.C asetnsamples")
     print(" ... ashowinfo")
     print(" ... format")
-    print(" ... scale")
+    print("..C scale")
     print(" ... select")
     print(" ... showinfo")
 else:
@@ -94,6 +94,34 @@ def test_preflight_accepts_supported_same_build_runtime() -> None:
     # Assert
     assert identity.ffmpeg_version == identity.ffprobe_version
     assert identity.ffmpeg_version
+
+
+def test_preflight_accepts_ffmpeg_6_1_capability_flags(tmp_path: Path) -> None:
+    """FFmpeg 6.1形式のfilter flagを持つ対応tool pairが受理されること。
+
+    Arrange:
+        - T.Cと..Cのfilter flagを返す同一buildのfake tool pairが用意される
+    Act:
+        - runtime preflightが実行される
+    Assert:
+        - 両toolの同じbuild versionが返されること
+    """
+    # Arrange
+    fake_ffmpeg = tmp_path / "ffmpeg"
+    fake_ffprobe = tmp_path / "ffprobe"
+    _write_capable_tool(fake_ffmpeg, "ffmpeg", "same")
+    _write_capable_tool(fake_ffprobe, "ffprobe", "same")
+    runtime = FfmpegMediaRuntime(
+        ffmpeg_executable=str(fake_ffmpeg),
+        ffprobe_executable=str(fake_ffprobe),
+    )
+
+    # Act
+    identity = runtime.preflight()
+
+    # Assert
+    assert identity.ffmpeg_version == "6.1.1"
+    assert identity.ffprobe_version == "6.1.1"
 
 
 def test_preflight_reports_missing_ffmpeg_with_stable_reason() -> None:
