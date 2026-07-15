@@ -43,8 +43,7 @@ def assert_video_time(value: dict[str, Any]) -> None:
     time_base = value["time_base"]
     offset = value["offset_seconds"]
     actual = Fraction(
-        (value["source_pts"] - value["origin_pts"])
-        * time_base["numerator"],
+        (value["source_pts"] - value["origin_pts"]) * time_base["numerator"],
         time_base["denominator"],
     )
     expected = Fraction(offset["numerator"], offset["denominator"])
@@ -66,8 +65,7 @@ def assert_video_set(report: dict[str, Any]) -> None:
         duration = source["duration"]
         time_base = duration["time_base"]
         actual = Fraction(
-            (duration["source_pts"] - duration["origin_pts"])
-            * time_base["numerator"],
+            (duration["source_pts"] - duration["origin_pts"]) * time_base["numerator"],
             time_base["denominator"],
         )
         expected = Fraction(duration["exact_seconds"])
@@ -191,9 +189,7 @@ def assert_provenance(report: dict[str, Any]) -> None:
         assert set(stage["upstream_fingerprints"]) <= fingerprints
         assert set(stage.get("tool_refs", ())) <= set(provenance["tools"])
         assert set(stage.get("model_refs", ())) <= set(provenance["models"])
-        assert set(stage.get("contract_refs", ())) <= set(
-            provenance["contracts"]
-        )
+        assert set(stage.get("contract_refs", ())) <= set(provenance["contracts"])
 
 
 def assert_context_cues(report: dict[str, Any]) -> None:
