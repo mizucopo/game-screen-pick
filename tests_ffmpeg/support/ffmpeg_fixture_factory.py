@@ -33,6 +33,33 @@ def generate_cfr_video(output_path: Path) -> Path:
     return output_path
 
 
+def generate_odd_dimension_video(output_path: Path) -> Path:
+    """奇数の幅と高さを持つsource frameを生成する。"""
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=65x49:rate=1:duration=1",
+            "-map",
+            "0:v:0",
+            "-c:v",
+            "ffv1",
+            "-pix_fmt",
+            "yuv444p",
+            str(output_path),
+        ],
+        check=True,
+    )
+    return output_path
+
+
 def generate_vfr_video(output_path: Path) -> Path:
     """不均一なsource PTSを持つVFR test patternを生成する。"""
     subprocess.run(

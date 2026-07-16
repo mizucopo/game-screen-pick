@@ -1,0 +1,624 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-screen-pick.local/schemas/report-1.0.0.schema.json",
+  "title": "game-screen-pick Canonical Selection Report 1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run",
+    "artifacts",
+    "video_set",
+    "selection_summary",
+    "rejection_summary",
+    "selected",
+    "near_miss_publication",
+    "near_misses",
+    "context_cues",
+    "provenance",
+    "privacy"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"const": "game-screen-pick/report"},
+        "version": {"const": "1.0.0"}
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "started_at",
+        "completed_at",
+        "requested_image_count",
+        "selected_image_count",
+        "warnings"
+      ],
+      "properties": {
+        "id": {"type": "string", "pattern": "^run_[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$"},
+        "status": {"enum": ["completed", "completed_with_warnings"]},
+        "started_at": {"type": "string", "pattern": "Z$"},
+        "completed_at": {"type": "string", "pattern": "Z$"},
+        "requested_image_count": {"type": "integer", "minimum": 1},
+        "selected_image_count": {"type": "integer", "minimum": 0},
+        "warnings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/warning"}
+        }
+      }
+    },
+    "artifacts": {"$ref": "#/$defs/artifacts"},
+    "video_set": {"$ref": "#/$defs/videoSet"},
+    "selection_summary": {"$ref": "#/$defs/selectionSummary"},
+    "rejection_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "by_reason"],
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "by_reason": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "selected": {"type": "array", "items": {"$ref": "#/$defs/selected"}},
+    "near_miss_publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "json_limit_formula",
+        "json_limit_for_this_run",
+        "markdown_limit",
+        "coverage",
+        "fill_order"
+      ],
+      "properties": {
+        "json_limit_formula": {"type": "string"},
+        "json_limit_for_this_run": {"type": "integer", "minimum": 0, "maximum": 100},
+        "markdown_limit": {"const": 10},
+        "coverage": {"const": "at_least_one_per_rejection_reason"},
+        "fill_order": {"const": "counterfactual_marginal_utility_desc_then_selection_tie_break"}
+      }
+    },
+    "near_misses": {"type": "array", "items": {"$ref": "#/$defs/nearMiss"}},
+    "context_cues": {"type": "array", "items": {"$ref": "#/$defs/contextCue"}},
+    "provenance": {"$ref": "#/$defs/provenance"},
+    "privacy": {"$ref": "#/$defs/privacy"}
+  },
+  "$defs": {
+    "warning": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message", "details"],
+          "properties": {
+            "code": {"const": "selection_shortfall"},
+            "message": {"type": "string", "minLength": 1},
+            "details": {
+              "type": "object",
+              "additionalProperties": {"type": "integer", "minimum": 0}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message", "details"],
+          "properties": {
+            "code": {"const": "model_update_unavailable"},
+            "message": {"type": "string", "minLength": 1},
+            "details": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["roles"],
+              "properties": {
+                "roles": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {"enum": ["candidate_annotation", "scene_catalog", "speech_to_text"]}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {"type": "integer"},
+        "denominator": {"type": "integer", "minimum": 1}
+      }
+    },
+    "videoTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_pts", "origin_pts", "time_base", "offset_seconds", "display"],
+      "properties": {
+        "source_pts": {"type": "integer"},
+        "origin_pts": {"type": "integer"},
+        "time_base": {"$ref": "#/$defs/rational"},
+        "offset_seconds": {"$ref": "#/$defs/rational"},
+        "display": {"type": "string", "pattern": "^[0-9]{2,}:[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}$"}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["report_json", "report_markdown", "image_directory", "image_contract", "publication_contract", "projection_contract"],
+      "properties": {
+        "report_json": {"const": "report.json"},
+        "report_markdown": {"const": "report.md"},
+        "image_directory": {"const": "images"},
+        "image_contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["frame_candidate_id_algorithm", "frame_candidate_id_format", "filename_pattern", "format", "encoding", "quality", "color_space", "metadata", "size_policy", "configurable", "status"],
+          "properties": {
+            "frame_candidate_id_algorithm": {"const": "video-fingerprint-video-time-sha256-v1"},
+            "frame_candidate_id_format": {"const": "frm_<64-lowercase-hex>"},
+            "filename_pattern": {"type": "string"},
+            "format": {"const": "webp"},
+            "encoding": {"const": "lossy"},
+            "quality": {"const": 95},
+            "color_space": {"const": "srgb"},
+            "metadata": {"const": "stripped"},
+            "size_policy": {"const": "source_dimensions"},
+            "configurable": {"const": false},
+            "status": {"const": "fixed_for_v1"}
+          }
+        },
+        "publication_contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "staging", "validated_before_publish", "non_atomic_fallback"],
+          "properties": {
+            "mode": {"const": "atomic_directory_rename"},
+            "staging": {"const": "hidden_sibling_same_filesystem"},
+            "validated_before_publish": {"const": true},
+            "non_atomic_fallback": {"const": false}
+          }
+        },
+        "projection_contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["canonical_machine_report", "markdown_source", "cache_or_model_reread", "json_key_order_significant", "cross_artifact_mismatch", "selected_image_rendering", "thumbnail_artifacts", "alt_text"],
+          "properties": {
+            "canonical_machine_report": {"const": "report.json"},
+            "markdown_source": {"const": "validated_canonical_report_object"},
+            "cache_or_model_reread": {"const": false},
+            "json_key_order_significant": {"const": false},
+            "cross_artifact_mismatch": {"const": "fatal"},
+            "selected_image_rendering": {"const": "clickable_inline_original"},
+            "thumbnail_artifacts": {"const": false},
+            "alt_text": {"const": "selection_index_and_scene_display_name"}
+          }
+        }
+      }
+    },
+    "videoSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "fingerprint_algorithm", "time_contract", "source_path_policy", "duration", "sources"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^vset_[0-9a-f]{12}$"},
+        "fingerprint_algorithm": {"const": "ordered-video-sha256-v1"},
+        "time_contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["authoritative_value", "display_format", "display_rounding", "frame_index"],
+          "properties": {
+            "authoritative_value": {"const": "offset_seconds_rational"},
+            "display_format": {"const": "unbounded_hours_HH:MM:SS.mmm"},
+            "display_rounding": {"const": "half_up"},
+            "frame_index": {"const": "omitted"}
+          }
+        },
+        "source_path_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["base", "separator", "parent_segments", "absolute_paths"],
+          "properties": {
+            "base": {"const": "video_input_folder"},
+            "separator": {"const": "/"},
+            "parent_segments": {"const": "forbidden"},
+            "absolute_paths": {"const": "omitted"}
+          }
+        },
+        "duration": {"$ref": "#/$defs/duration"},
+        "sources": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/videoSource"}}
+      }
+    },
+    "duration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exact_seconds", "display"],
+      "properties": {
+        "exact_seconds": {"type": "string", "minLength": 1},
+        "display": {"type": "string", "pattern": "^[0-9]{2,}:[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}$"}
+      }
+    },
+    "videoSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "order", "relative_path", "fingerprint", "duration"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^vid_(?:[0-9a-f]{12}|[0-9a-f]{64})$"},
+        "order": {"type": "integer", "minimum": 1},
+        "relative_path": {"type": "string", "minLength": 1},
+        "fingerprint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "value"],
+          "properties": {
+            "algorithm": {"const": "sha256-whole-file"},
+            "value": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        },
+        "duration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source_pts", "origin_pts", "time_base", "exact_seconds", "display"],
+          "properties": {
+            "source_pts": {"type": "integer"},
+            "origin_pts": {"type": "integer"},
+            "time_base": {"$ref": "#/$defs/rational"},
+            "exact_seconds": {"type": "string", "minLength": 1},
+            "display": {"type": "string", "pattern": "^[0-9]{2,}:[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}$"}
+          }
+        }
+      }
+    },
+    "selectionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_moments", "moments_without_valid_frame", "candidate_annotations", "candidate_annotation_failures", "selected", "not_selected", "final_similarity_ceiling", "shortlist_expansion_count", "shortfall", "blog_image_type"],
+      "properties": {
+        "candidate_moments": {"type": "integer", "minimum": 0},
+        "moments_without_valid_frame": {"type": "integer", "minimum": 0},
+        "candidate_annotations": {"type": "integer", "minimum": 0},
+        "candidate_annotation_failures": {"type": "integer", "minimum": 0},
+        "selected": {"type": "integer", "minimum": 0},
+        "not_selected": {"type": "integer", "minimum": 0},
+        "final_similarity_ceiling": {"type": "number", "minimum": 0, "maximum": 1},
+        "shortlist_expansion_count": {"type": "integer", "minimum": 0},
+        "shortfall": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requested", "selected", "all_candidate_moments_exhausted"],
+          "properties": {
+            "requested": {"type": "integer", "minimum": 1},
+            "selected": {"type": "integer", "minimum": 0},
+            "all_candidate_moments_exhausted": {"type": "boolean"}
+          }
+        },
+        "blog_image_type": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["normal_gameplay", "event", "menu", "title", "other"],
+          "properties": {
+            "normal_gameplay": {"$ref": "#/$defs/targetActual"},
+            "event": {"$ref": "#/$defs/targetActual"},
+            "menu": {"$ref": "#/$defs/targetActual"},
+            "title": {"$ref": "#/$defs/targetActual"},
+            "other": {"$ref": "#/$defs/targetActual"}
+          }
+        }
+      }
+    },
+    "targetActual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "actual"],
+      "properties": {
+        "target": {"type": "integer", "minimum": 0},
+        "actual": {"type": "integer", "minimum": 0}
+      }
+    },
+    "candidateSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["video_id", "candidate_moment_id", "timeline_segment_id", "video_time", "video_set_progress"],
+      "properties": {
+        "video_id": {"type": "string", "pattern": "^vid_(?:[0-9a-f]{12}|[0-9a-f]{64})$"},
+        "candidate_moment_id": {"type": "string", "pattern": "^mom_[0-9a-f]{64}$"},
+        "timeline_segment_id": {"type": "string", "pattern": "^seg_[0-9a-f]{64}$"},
+        "video_time": {"$ref": "#/$defs/videoTime"},
+        "video_set_progress": {"type": "number", "minimum": 0, "exclusiveMaximum": 1}
+      }
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scene_slug", "scene_display_name", "scene_selection_role", "blog_image_type", "explanation_value", "screen_text_kind", "spoiler_risk", "spoiler_evidence"],
+      "properties": {
+        "scene_slug": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "scene_display_name": {"type": "string", "minLength": 1},
+        "scene_selection_role": {"enum": ["ordinary", "cinematic", "recurring_gameplay"]},
+        "blog_image_type": {"enum": ["normal_gameplay", "event", "menu", "title", "other"]},
+        "explanation_value": {"enum": ["none", "low", "medium", "high"]},
+        "screen_text_kind": {"enum": ["none", "dialogue", "menu", "title", "hud", "other"]},
+        "spoiler_risk": {"enum": ["none", "low", "medium", "high"]},
+        "spoiler_evidence": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source", "summary"],
+              "properties": {
+                "source": {"const": "candidate_annotation"},
+                "summary": {"type": "string", "minLength": 1}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "representative_frame_reason", "context_cue_relevance", "supporting_context_cue_ids"],
+      "properties": {
+        "summary": {"type": "string", "minLength": 1},
+        "representative_frame_reason": {"type": "string", "minLength": 1},
+        "context_cue_relevance": {"enum": ["unavailable", "none", "weak", "strong"]},
+        "supporting_context_cue_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^cue_[0-9a-f]{64}$"}}
+      }
+    },
+    "score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_utility", "spoiler_penalty", "coverage_bonus", "temporal_diversity_penalty", "marginal_utility", "similarity_pass", "nearest_selected_similarity"],
+      "properties": {
+        "base_utility": {"type": "number"},
+        "spoiler_penalty": {"type": "number"},
+        "coverage_bonus": {"type": "number"},
+        "temporal_diversity_penalty": {"type": "number"},
+        "marginal_utility": {"type": "number"},
+        "similarity_pass": {"type": "number", "minimum": 0, "maximum": 1},
+        "nearest_selected_similarity": {"type": ["number", "null"]}
+      }
+    },
+    "selectedScore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_utility", "spoiler_penalty", "coverage_bonus", "temporal_diversity_penalty", "marginal_utility", "similarity_pass", "nearest_selected_similarity", "reason_codes", "decision_explanation", "variant_group_id", "tie_break_applied"],
+      "properties": {
+        "base_utility": {"type": "number"},
+        "spoiler_penalty": {"type": "number"},
+        "coverage_bonus": {"type": "number"},
+        "temporal_diversity_penalty": {"type": "number"},
+        "marginal_utility": {"type": "number"},
+        "similarity_pass": {"type": "number", "minimum": 0, "maximum": 1},
+        "nearest_selected_similarity": {"type": ["number", "null"]},
+        "reason_codes": {"type": "array", "items": {"type": "string"}},
+        "decision_explanation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["renderer", "text"],
+          "properties": {
+            "renderer": {"const": "selection-explanation-ja-v1"},
+            "text": {"type": "string", "minLength": 1}
+          }
+        },
+        "variant_group_id": {"type": "string", "pattern": "^variant_[0-9a-f]{64}$"},
+        "tie_break_applied": {"type": "boolean"}
+      }
+    },
+    "selected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image_id", "selection_index", "output", "source", "classification", "annotation", "selection"],
+      "properties": {
+        "image_id": {"type": "string", "pattern": "^frm_[0-9a-f]{64}$"},
+        "selection_index": {"type": "integer", "minimum": 1},
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["relative_path", "sha256", "width", "height", "bytes"],
+          "properties": {
+            "relative_path": {"type": "string", "pattern": "^images/[a-z0-9_.-]+\\.webp$"},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "width": {"type": "integer", "minimum": 1},
+            "height": {"type": "integer", "minimum": 1},
+            "bytes": {"type": "integer", "minimum": 1}
+          }
+        },
+        "source": {"$ref": "#/$defs/candidateSource"},
+        "classification": {"$ref": "#/$defs/classification"},
+        "annotation": {"$ref": "#/$defs/annotation"},
+        "selection": {"$ref": "#/$defs/selectedScore"}
+      }
+    },
+    "nearMiss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image_id", "source", "classification", "annotation", "counterfactual_selection", "rejection", "variant_group_id"],
+      "properties": {
+        "image_id": {"type": "string", "pattern": "^frm_[0-9a-f]{64}$"},
+        "source": {"$ref": "#/$defs/candidateSource"},
+        "classification": {"$ref": "#/$defs/classification"},
+        "annotation": {"$ref": "#/$defs/annotation"},
+        "counterfactual_selection": {"$ref": "#/$defs/score"},
+        "rejection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason_code"],
+          "properties": {
+            "reason_code": {"enum": ["title_limit", "visual_near_duplicate", "similarity_ceiling", "spoiler_monotonicity_guard", "lower_marginal_utility"]},
+            "blocked_by_image_id": {"type": "string", "pattern": "^frm_[0-9a-f]{64}$"},
+            "nearest_selected_image_id": {"type": "string", "pattern": "^frm_[0-9a-f]{64}$"},
+            "similarity": {"type": "number", "minimum": -1, "maximum": 1}
+          }
+        },
+        "variant_group_id": {"type": "string", "pattern": "^variant_[0-9a-f]{64}$"}
+      }
+    },
+    "contextCue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "video_id", "source_kind", "stream_index", "language", "timestamp_basis", "start", "end", "reliability", "text_included"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^cue_[0-9a-f]{64}$"},
+        "video_id": {"type": "string", "pattern": "^vid_(?:[0-9a-f]{12}|[0-9a-f]{64})$"},
+        "source_kind": {"enum": ["embedded_subtitle", "speech_to_text"]},
+        "stream_index": {"type": "integer", "minimum": 0},
+        "language": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "origin"],
+          "properties": {
+            "value": {"type": ["string", "null"]},
+            "origin": {"enum": ["stream_metadata", "speech_recognition"]}
+          }
+        },
+        "timestamp_basis": {"enum": ["source_pts", "container_text_ms", "asr_sample_grid_estimate"]},
+        "start": {"$ref": "#/$defs/contextTime"},
+        "end": {"$ref": "#/$defs/contextTime"},
+        "reliability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy"],
+          "properties": {
+            "policy": {"const": "usable"},
+            "average_log_probability": {"type": "number"}
+          }
+        },
+        "text_included": {"const": false}
+      }
+    },
+    "contextTime": {
+      "oneOf": [
+        {"$ref": "#/$defs/videoTime"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sample_index", "sample_rate_hz", "exact_seconds", "display"],
+          "properties": {
+            "sample_index": {"type": "integer", "minimum": 0},
+            "sample_rate_hz": {"type": "integer", "minimum": 1},
+            "exact_seconds": {"type": "string", "minLength": 1},
+            "display": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["offset_seconds", "display"],
+          "properties": {
+            "offset_seconds": {"$ref": "#/$defs/rational"},
+            "display": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selection", "runtime", "tools", "models", "contracts", "stages"],
+      "properties": {
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy_version", "spoiler_sensitivity", "blog_image_type_target", "similarity_base", "similarity_final"],
+          "properties": {
+            "policy_version": {"const": "video-set-selection-v1"},
+            "spoiler_sensitivity": {"enum": ["low", "medium", "high"]},
+            "blog_image_type_target": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["normal_gameplay", "event", "menu"],
+              "properties": {
+                "normal_gameplay": {"const": 0.7},
+                "event": {"const": 0.25},
+                "menu": {"const": 0.05}
+              }
+            },
+            "similarity_base": {"type": "number", "minimum": 0, "maximum": 1},
+            "similarity_final": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        },
+        "runtime": {"type": "object"},
+        "tools": {"type": "object", "additionalProperties": {"type": "string"}},
+        "models": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scene_catalog", "candidate_annotation", "speech_to_text"],
+          "properties": {
+            "scene_catalog": {"$ref": "#/$defs/model"},
+            "candidate_annotation": {"$ref": "#/$defs/model"},
+            "speech_to_text": {"$ref": "#/$defs/model"}
+          }
+        },
+        "contracts": {"type": "object", "additionalProperties": {"type": "string"}},
+        "stages": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/stage"}}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["store", "configured_name", "canonical_name", "local_identity_before_update", "update_status", "execution_identity", "runtime_identity"],
+      "properties": {
+        "store": {"enum": ["ollama", "hugging_face"]},
+        "configured_name": {"type": "string", "minLength": 1},
+        "canonical_name": {"type": "string", "minLength": 1},
+        "local_identity_before_update": {"type": ["string", "null"]},
+        "update_status": {"enum": ["not_requested", "unchanged", "updated", "bootstrapped", "unavailable"]},
+        "execution_identity": {"type": "string", "minLength": 1},
+        "runtime_identity": {"type": "string", "minLength": 1}
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status", "fingerprint", "upstream_fingerprints", "cache_hits", "cache_misses", "recomputed_items", "attempt_count", "validation_failures", "effective_settings", "tool_refs", "model_refs", "contract_refs", "duration_ms"],
+      "properties": {
+        "name": {"type": "string"},
+        "status": {"const": "completed"},
+        "fingerprint": {"type": "string", "pattern": "^stg_[0-9a-f]{64}$"},
+        "upstream_fingerprints": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^stg_[0-9a-f]{64}$"}},
+        "cache_hits": {"type": "integer", "minimum": 0},
+        "cache_misses": {"type": "integer", "minimum": 0},
+        "recomputed_items": {"type": "integer", "minimum": 0},
+        "attempt_count": {"type": "integer", "minimum": 0},
+        "validation_failures": {"type": "integer", "minimum": 0},
+        "effective_settings": {"type": "object"},
+        "tool_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "model_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "contract_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "prompt_eval_tokens": {"type": "integer", "minimum": 0},
+        "eval_tokens": {"type": "integer", "minimum": 0}
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["absolute_paths", "model_reasoning_trace", "raw_model_responses", "generated_screen_text_quotations", "raw_context_cue_text", "relative_source_paths", "environment_variables", "credentials", "prompt_bodies", "stack_traces"],
+      "properties": {
+        "absolute_paths": {"const": "omitted"},
+        "model_reasoning_trace": {"const": "omitted"},
+        "raw_model_responses": {"const": "omitted"},
+        "generated_screen_text_quotations": {"const": "omitted"},
+        "raw_context_cue_text": {"const": "processing_cache_only"},
+        "relative_source_paths": {"const": "included"},
+        "environment_variables": {"const": "omitted"},
+        "credentials": {"const": "omitted"},
+        "prompt_bodies": {"const": "omitted"},
+        "stack_traces": {"const": "omitted"}
+      }
+    }
+  }
+}

@@ -1,0 +1,412 @@
+{
+  "artifacts": {
+    "image_contract": {
+      "color_space": "srgb",
+      "configurable": false,
+      "encoding": "lossy",
+      "filename_pattern": "<selection-index-min-width-4>_<scene-slug>_<frame-digest-prefix-12-or-full>.webp",
+      "format": "webp",
+      "frame_candidate_id_algorithm": "video-fingerprint-video-time-sha256-v1",
+      "frame_candidate_id_format": "frm_<64-lowercase-hex>",
+      "metadata": "stripped",
+      "quality": 95,
+      "size_policy": "source_dimensions",
+      "status": "fixed_for_v1"
+    },
+    "image_directory": "images",
+    "projection_contract": {
+      "alt_text": "selection_index_and_scene_display_name",
+      "cache_or_model_reread": false,
+      "canonical_machine_report": "report.json",
+      "cross_artifact_mismatch": "fatal",
+      "json_key_order_significant": false,
+      "markdown_source": "validated_canonical_report_object",
+      "selected_image_rendering": "clickable_inline_original",
+      "thumbnail_artifacts": false
+    },
+    "publication_contract": {
+      "mode": "atomic_directory_rename",
+      "non_atomic_fallback": false,
+      "staging": "hidden_sibling_same_filesystem",
+      "validated_before_publish": true
+    },
+    "report_json": "report.json",
+    "report_markdown": "report.md"
+  },
+  "context_cues": [
+    {
+      "end": {
+        "display": "00:00:02.000",
+        "offset_seconds": {
+          "denominator": 1,
+          "numerator": 2
+        },
+        "origin_pts": 0,
+        "source_pts": 2000,
+        "time_base": {
+          "denominator": 1000,
+          "numerator": 1
+        }
+      },
+      "id": "cue_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "language": {
+        "origin": "stream_metadata",
+        "value": "ja"
+      },
+      "reliability": {
+        "policy": "usable"
+      },
+      "source_kind": "embedded_subtitle",
+      "start": {
+        "display": "00:00:01.000",
+        "offset_seconds": {
+          "denominator": 1,
+          "numerator": 1
+        },
+        "origin_pts": 0,
+        "source_pts": 1000,
+        "time_base": {
+          "denominator": 1000,
+          "numerator": 1
+        }
+      },
+      "stream_index": 1,
+      "text_included": false,
+      "timestamp_basis": "source_pts",
+      "video_id": "vid_9b84276662ce"
+    }
+  ],
+  "near_miss_publication": {
+    "coverage": "at_least_one_per_rejection_reason",
+    "fill_order": "counterfactual_marginal_utility_desc_then_selection_tie_break",
+    "json_limit_for_this_run": 1,
+    "json_limit_formula": "min(total_rejected, 100, max(20, requested_image_count * 2))",
+    "markdown_limit": 10
+  },
+  "near_misses": [
+    {
+      "annotation": {
+        "context_cue_relevance": "none",
+        "representative_frame_reason": "構図と情報量が最も明瞭なframe。",
+        "summary": "似た構図の遺跡探索frame。",
+        "supporting_context_cue_ids": []
+      },
+      "classification": {
+        "blog_image_type": "normal_gameplay",
+        "explanation_value": "high",
+        "scene_display_name": "探索",
+        "scene_selection_role": "recurring_gameplay",
+        "scene_slug": "test-scene",
+        "screen_text_kind": "hud",
+        "spoiler_evidence": null,
+        "spoiler_risk": "none"
+      },
+      "counterfactual_selection": {
+        "base_utility": 0.72,
+        "coverage_bonus": 0.1,
+        "marginal_utility": 0.82,
+        "nearest_selected_similarity": null,
+        "similarity_pass": 0.72,
+        "spoiler_penalty": 0.0,
+        "temporal_diversity_penalty": 0.0
+      },
+      "image_id": "frm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "rejection": {
+        "nearest_selected_image_id": "frm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason_code": "similarity_ceiling",
+        "similarity": 0.985
+      },
+      "source": {
+        "candidate_moment_id": "mom_2222222222222222222222222222222222222222222222222222222222222222",
+        "timeline_segment_id": "seg_9999999999999999999999999999999999999999999999999999999999999999",
+        "video_id": "vid_9b84276662ce",
+        "video_set_progress": 0.3,
+        "video_time": {
+          "display": "00:00:03.000",
+          "offset_seconds": {
+            "denominator": 1,
+            "numerator": 3
+          },
+          "origin_pts": 0,
+          "source_pts": 30,
+          "time_base": {
+            "denominator": 10,
+            "numerator": 1
+          }
+        }
+      },
+      "variant_group_id": "variant_2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
+  "privacy": {
+    "absolute_paths": "omitted",
+    "credentials": "omitted",
+    "environment_variables": "omitted",
+    "generated_screen_text_quotations": "omitted",
+    "model_reasoning_trace": "omitted",
+    "prompt_bodies": "omitted",
+    "raw_context_cue_text": "processing_cache_only",
+    "raw_model_responses": "omitted",
+    "relative_source_paths": "included",
+    "stack_traces": "omitted"
+  },
+  "provenance": {
+    "contracts": {
+      "report_schema": "1.0.0",
+      "video_set_selection_policy": "video-set-selection-v1"
+    },
+    "models": {
+      "candidate_annotation": {
+        "canonical_name": "qwen3-vl:8b-instruct",
+        "configured_name": "qwen3-vl:8b-instruct",
+        "execution_identity": "ollama:sha256:81bf08a74b5dfcaa88b7b62cdf0b1505d798fcdfdee9edd0875b9b3282382b63",
+        "local_identity_before_update": "ollama:sha256:81bf08a74b5dfcaa88b7b62cdf0b1505d798fcdfdee9edd0875b9b3282382b63",
+        "runtime_identity": "ollama:fake-1",
+        "store": "ollama",
+        "update_status": "not_requested"
+      },
+      "scene_catalog": {
+        "canonical_name": "qwen3-vl:8b-instruct",
+        "configured_name": "qwen3-vl:8b-instruct",
+        "execution_identity": "ollama:sha256:81bf08a74b5dfcaa88b7b62cdf0b1505d798fcdfdee9edd0875b9b3282382b63",
+        "local_identity_before_update": "ollama:sha256:81bf08a74b5dfcaa88b7b62cdf0b1505d798fcdfdee9edd0875b9b3282382b63",
+        "runtime_identity": "ollama:fake-1",
+        "store": "ollama",
+        "update_status": "not_requested"
+      },
+      "speech_to_text": {
+        "canonical_name": "dropbox-dash/faster-whisper-large-v3-turbo",
+        "configured_name": "dropbox-dash/faster-whisper-large-v3-turbo",
+        "execution_identity": "hf:b866f3b8500eb446ba51f478bcf02f490da29c3e",
+        "local_identity_before_update": "hf:b866f3b8500eb446ba51f478bcf02f490da29c3e",
+        "runtime_identity": "huggingface-hub:fake-1",
+        "store": "hugging_face",
+        "update_status": "not_requested"
+      }
+    },
+    "runtime": {
+      "compute_device": "cuda",
+      "environment": "wsl2",
+      "gpu_model": "NVIDIA GeForce RTX 5090",
+      "os": "linux",
+      "python": "3.13"
+    },
+    "selection": {
+      "blog_image_type_target": {
+        "event": 0.25,
+        "menu": 0.05,
+        "normal_gameplay": 0.7
+      },
+      "policy_version": "video-set-selection-v1",
+      "similarity_base": 0.72,
+      "similarity_final": 0.98,
+      "spoiler_sensitivity": "medium"
+    },
+    "stages": [
+      {
+        "attempt_count": 1,
+        "cache_hits": 0,
+        "cache_misses": 1,
+        "contract_refs": [
+          "video_set_selection_policy"
+        ],
+        "duration_ms": 80,
+        "effective_settings": {
+          "requested_image_count": 2
+        },
+        "fingerprint": "stg_6666666666666666666666666666666666666666666666666666666666666666",
+        "model_refs": [
+          "candidate_annotation"
+        ],
+        "name": "final_selection",
+        "recomputed_items": 1,
+        "status": "completed",
+        "tool_refs": [],
+        "upstream_fingerprints": [],
+        "validation_failures": 0
+      }
+    ],
+    "tools": {
+      "ctranslate2": "4.8.1",
+      "faster_whisper": "1.2.1",
+      "ffmpeg": "6.1.1",
+      "ffprobe": "6.1.1",
+      "ollama": "0.31.2"
+    }
+  },
+  "rejection_summary": {
+    "by_reason": {
+      "similarity_ceiling": 1
+    },
+    "total": 1
+  },
+  "run": {
+    "completed_at": "2026-07-16T12:01:00Z",
+    "id": "run_20260716T120000Z_fixture",
+    "requested_image_count": 2,
+    "selected_image_count": 1,
+    "started_at": "2026-07-16T12:00:00Z",
+    "status": "completed_with_warnings",
+    "warnings": [
+      {
+        "code": "selection_shortfall",
+        "details": {
+          "similarity_ceiling": 1
+        },
+        "message": "要求2枚に対して1枚を選択しました。"
+      }
+    ]
+  },
+  "schema": {
+    "name": "game-screen-pick/report",
+    "version": "1.0.0"
+  },
+  "selected": [
+    {
+      "annotation": {
+        "context_cue_relevance": "strong",
+        "representative_frame_reason": "構図と情報量が最も明瞭なframe。",
+        "summary": "遺跡の広さとHUDが分かる通常play。",
+        "supporting_context_cue_ids": [
+          "cue_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ]
+      },
+      "classification": {
+        "blog_image_type": "normal_gameplay",
+        "explanation_value": "high",
+        "scene_display_name": "探索",
+        "scene_selection_role": "recurring_gameplay",
+        "scene_slug": "test-scene",
+        "screen_text_kind": "hud",
+        "spoiler_evidence": null,
+        "spoiler_risk": "none"
+      },
+      "image_id": "frm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "output": {
+        "bytes": "<bytes>",
+        "height": 48,
+        "relative_path": "images/0001_test-scene_aaaaaaaaaaaa.webp",
+        "sha256": "<sha256>",
+        "width": 64
+      },
+      "selection": {
+        "base_utility": 0.81,
+        "coverage_bonus": 0.1,
+        "decision_explanation": {
+          "renderer": "selection-explanation-ja-v1",
+          "text": "高い画質、高い説明価値、normal_gameplay coverageにより選択された。"
+        },
+        "marginal_utility": 0.91,
+        "nearest_selected_similarity": null,
+        "reason_codes": [
+          "high_quality",
+          "high_explanation_value",
+          "normal_gameplay_coverage"
+        ],
+        "similarity_pass": 0.72,
+        "spoiler_penalty": 0.0,
+        "temporal_diversity_penalty": 0.0,
+        "tie_break_applied": false,
+        "variant_group_id": "variant_1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "selection_index": 1,
+      "source": {
+        "candidate_moment_id": "mom_1111111111111111111111111111111111111111111111111111111111111111",
+        "timeline_segment_id": "seg_9999999999999999999999999999999999999999999999999999999999999999",
+        "video_id": "vid_9b84276662ce",
+        "video_set_progress": 0.15,
+        "video_time": {
+          "display": "00:00:01.500",
+          "offset_seconds": {
+            "denominator": 2,
+            "numerator": 3
+          },
+          "origin_pts": 0,
+          "source_pts": 15,
+          "time_base": {
+            "denominator": 10,
+            "numerator": 1
+          }
+        }
+      }
+    }
+  ],
+  "selection_summary": {
+    "blog_image_type": {
+      "event": {
+        "actual": 0,
+        "target": 1
+      },
+      "menu": {
+        "actual": 0,
+        "target": 0
+      },
+      "normal_gameplay": {
+        "actual": 1,
+        "target": 1
+      },
+      "other": {
+        "actual": 0,
+        "target": 0
+      },
+      "title": {
+        "actual": 0,
+        "target": 0
+      }
+    },
+    "candidate_annotation_failures": 0,
+    "candidate_annotations": 2,
+    "candidate_moments": 2,
+    "final_similarity_ceiling": 0.98,
+    "moments_without_valid_frame": 0,
+    "not_selected": 1,
+    "selected": 1,
+    "shortfall": {
+      "all_candidate_moments_exhausted": true,
+      "requested": 2,
+      "selected": 1
+    },
+    "shortlist_expansion_count": 1
+  },
+  "video_set": {
+    "duration": {
+      "display": "00:00:10.000",
+      "exact_seconds": "10"
+    },
+    "fingerprint_algorithm": "ordered-video-sha256-v1",
+    "id": "vset_50863fa66e43",
+    "source_path_policy": {
+      "absolute_paths": "omitted",
+      "base": "video_input_folder",
+      "parent_segments": "forbidden",
+      "separator": "/"
+    },
+    "sources": [
+      {
+        "duration": {
+          "display": "00:00:10.000",
+          "exact_seconds": "10",
+          "origin_pts": 0,
+          "source_pts": 100,
+          "time_base": {
+            "denominator": 10,
+            "numerator": 1
+          }
+        },
+        "fingerprint": {
+          "algorithm": "sha256-whole-file",
+          "value": "9b84276662cea119c50238c7254b2196c22a4802c35e3e6f7c0800208b919c15"
+        },
+        "id": "vid_9b84276662ce",
+        "order": 1,
+        "relative_path": "chapter-01.mkv"
+      }
+    ],
+    "time_contract": {
+      "authoritative_value": "offset_seconds_rational",
+      "display_format": "unbounded_hours_HH:MM:SS.mmm",
+      "display_rounding": "half_up",
+      "frame_index": "omitted"
+    }
+  }
+}

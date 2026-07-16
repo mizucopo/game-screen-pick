@@ -23,6 +23,7 @@ from tests_ffmpeg.support.ffmpeg_fixture_factory import (
     generate_av1_aac_video,
     generate_cfr_video,
     generate_corrupt_video,
+    generate_odd_dimension_video,
     generate_scene_change_video,
     generate_stream_matrix_video,
     generate_vfr_video,
@@ -642,6 +643,35 @@ def test_extract_video_frame_returns_exact_requested_pts(tmp_path: Path) -> None
     assert Fraction(frame.pts) * frame.time_base == Fraction(1, 2)
     assert (frame.width, frame.height, frame.pixel_format) == (64, 48, "rgb24")
     assert len(frame.pixels) == 64 * 48 * 3
+
+
+def test_extract_original_video_frame_preserves_odd_source_dimensions(
+    tmp_path: Path,
+) -> None:
+    """奇数寸法のsource frameがscaleされず抽出されること。
+
+    Arrange:
+        - 65x49のsource frameを持つfixtureが用意される
+    Act:
+        - original frame extractionがexact PTSで実行される
+    Assert:
+        - 幅と高さが偶数へ丸められずRGB24で返されること
+    """
+    # Arrange
+    video_path = generate_odd_dimension_video(tmp_path / "odd-dimension.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+
+    # Act
+    frame = runtime.extract_original_video_frame(
+        video_path,
+        stream_index=stream.index,
+        pts=0,
+    )
+
+    # Assert
+    assert (frame.width, frame.height, frame.pixel_format) == (65, 49, "rgb24")
+    assert len(frame.pixels) == 65 * 49 * 3
 
 
 def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
