@@ -238,8 +238,9 @@ def _validate_inputs(
         or len(moment_ids) != len(set(moment_ids))
     ):
         raise ValueError("Vision Stage inputのSelection IntentまたはMomentが不正です")
-    SceneCatalogRequest(representatives, next(iter(selection_intents)))
-    return next(iter(selection_intents))
+    selection_intent = next(iter(selection_intents))
+    SceneCatalogRequest(representatives, selection_intent)
+    return selection_intent
 
 
 def _validate_runtime_annotation(

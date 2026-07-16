@@ -572,20 +572,8 @@ def _diagnostics(
     context_cue_count: int,
     duration_seconds: float,
 ) -> VisionInferenceDiagnostics:
-    prompt_version = (
-        SCENE_CATALOG_PROMPT_VERSION
-        if stage_kind == "scene_catalog"
-        else CANDIDATE_ANNOTATION_PROMPT_VERSION
-    )
-    schema_version = (
-        SCENE_CATALOG_SCHEMA_VERSION
-        if stage_kind == "scene_catalog"
-        else CANDIDATE_ANNOTATION_SCHEMA_VERSION
-    )
-    stage_contract_version = (
-        SCENE_CATALOG_STAGE_CONTRACT_VERSION
-        if stage_kind == "scene_catalog"
-        else CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION
+    prompt_version, schema_version, stage_contract_version = _contract_versions(
+        stage_kind
     )
     done_reason = response.get("done_reason")
     return VisionInferenceDiagnostics(
@@ -611,6 +599,20 @@ def _diagnostics(
             and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:+/-]{0,255}", done_reason)
             else None
         ),
+    )
+
+
+def _contract_versions(stage_kind: StageKind) -> tuple[str, str, str]:
+    if stage_kind == "scene_catalog":
+        return (
+            SCENE_CATALOG_PROMPT_VERSION,
+            SCENE_CATALOG_SCHEMA_VERSION,
+            SCENE_CATALOG_STAGE_CONTRACT_VERSION,
+        )
+    return (
+        CANDIDATE_ANNOTATION_PROMPT_VERSION,
+        CANDIDATE_ANNOTATION_SCHEMA_VERSION,
+        CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
     )
 
 
