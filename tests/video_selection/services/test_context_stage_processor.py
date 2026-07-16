@@ -18,7 +18,7 @@ from src.video_selection.models.media_runtime_failure_reason import (
     MediaRuntimeFailureReason,
 )
 from src.video_selection.models.media_runtime_identity import MediaRuntimeIdentity
-from src.video_selection.models.media_stream import MediaStream
+from src.video_selection.models.media_stream import MediaStream, MediaStreamKind
 from src.video_selection.models.pcm_audio_chunk import PcmAudioChunk
 from src.video_selection.models.speech_recognition_result import (
     SpeechRecognitionResult,
@@ -1901,7 +1901,7 @@ def test_discontinuous_pcm_grid_is_reported_as_timestamp_drift(
 
 def _stream(
     index: int,
-    kind: str,
+    kind: MediaStreamKind,
     codec_name: str,
     *,
     language: str | None = None,
@@ -1911,7 +1911,7 @@ def _stream(
 ) -> MediaStream:
     return MediaStream(
         index=index,
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         codec_name=codec_name,
         time_base=Fraction(1, 10),
         start_pts=start_pts,
