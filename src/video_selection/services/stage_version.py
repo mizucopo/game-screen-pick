@@ -9,4 +9,6 @@ def stage_version(stage: ProcessingStage) -> str:
         return "video-scan-v1"
     if stage is ProcessingStage.EXTRACT_FRAME_CANDIDATES:
         return "frame-candidate-extraction-v1"
+    if stage is ProcessingStage.COLLECT_CONTEXT:
+        return "context-collection-v1"
     return "walking-skeleton-0"

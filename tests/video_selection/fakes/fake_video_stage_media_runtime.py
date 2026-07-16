@@ -9,10 +9,12 @@ import cv2
 import numpy as np
 
 from src.video_selection.models.decoded_video_frame import DecodedVideoFrame
+from src.video_selection.models.embedded_subtitle import EmbeddedSubtitle
 from src.video_selection.models.media_probe import MediaProbe
 from src.video_selection.models.media_runtime_identity import MediaRuntimeIdentity
 from src.video_selection.models.media_stream import MediaStream
 from src.video_selection.models.native_video_scan import NativeVideoScan
+from src.video_selection.models.pcm_audio_chunk import PcmAudioChunk
 from src.video_selection.models.scanned_video_frame import ScannedVideoFrame
 
 
@@ -29,6 +31,10 @@ class FakeVideoStageMediaRuntime:
         cpu_burn_seconds: float = 0.0,
         reported_scan_wall_seconds: float = 0.1,
         reported_scan_cpu_seconds: float = 0.05,
+        media_probe: MediaProbe | None = None,
+        embedded_subtitles: tuple[EmbeddedSubtitle, ...] = (),
+        pcm_audio_chunks: tuple[PcmAudioChunk, ...] = (),
+        audio_error: Exception | None = None,
     ) -> None:
         self.scan_calls: list[Path] = []
         self.range_calls: list[Path] = []
@@ -44,7 +50,13 @@ class FakeVideoStageMediaRuntime:
         self._cpu_burn_seconds = cpu_burn_seconds
         self._reported_scan_wall_seconds = reported_scan_wall_seconds
         self._reported_scan_cpu_seconds = reported_scan_cpu_seconds
+        self._media_probe = media_probe
+        self._embedded_subtitles = embedded_subtitles
+        self._pcm_audio_chunks = pcm_audio_chunks
+        self._audio_error = audio_error
         self._candidate_proxy_write_count = 0
+        self.subtitle_calls: list[tuple[Path, int]] = []
+        self.audio_calls: list[tuple[Path, int, int, int]] = []
 
     def preflight(self) -> MediaRuntimeIdentity:
         """固定runtime identityを返す。"""
@@ -55,7 +67,7 @@ class FakeVideoStageMediaRuntime:
     def probe(self, media_path: Path) -> MediaProbe:
         """一つのdefault video streamを返す。"""
         self.call_order.append(("probe", media_path.name))
-        return MediaProbe(
+        return self._media_probe or MediaProbe(
             format_names=("matroska",),
             streams=(
                 MediaStream(
@@ -76,6 +88,30 @@ class FakeVideoStageMediaRuntime:
                 ),
             ),
         )
+
+    def scan_pcm_audio(
+        self,
+        media_path: Path,
+        stream_index: int,
+        sample_rate: int,
+        frame_sample_count: int,
+    ) -> Iterator[PcmAudioChunk]:
+        """固定PCM chunk列を返す。"""
+        self.audio_calls.append(
+            (media_path, stream_index, sample_rate, frame_sample_count)
+        )
+        if self._audio_error is not None:
+            raise self._audio_error
+        yield from self._pcm_audio_chunks
+
+    def read_embedded_subtitles(
+        self,
+        media_path: Path,
+        stream_index: int,
+    ) -> tuple[EmbeddedSubtitle, ...]:
+        """固定embedded subtitle列を返す。"""
+        self.subtitle_calls.append((media_path, stream_index))
+        return self._embedded_subtitles
 
     def scan_video(
         self,

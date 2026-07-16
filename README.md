@@ -3,7 +3,7 @@
 
 ## 動画入力版の設計と内部実装（公開前）
 
-複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysisまで内部実装済みです。Context Cue、Video Set Stage、public CLIの接続と切り替えは後続Issueで行うため、このcommandはまだ実行できません。
+複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysis、embedded subtitle/audio STTからのContext Cue収集まで内部実装済みです。model lifecycle、Video Set Stage、public CLIの接続と切り替えは後続Issueで行うため、このcommandはまだ実行できません。
 
 ```bash
 game-screen-pick \
@@ -16,7 +16,7 @@ game-screen-pick \
 最低runtimeはPython 3.13、FFmpeg/ffprobe 6.1.1、Ollama server 0.31.2、faster-whisper 1.2.1、CTranslate2 4.8.1です。Windows 11 + WSL2ではWindows native Ollamaへ明示URLで接続し、Windows/WSLのserverを自動切替しません。
 
 - [動画入力とCLI](docs/video-input.md)
-- [動画単位のscan、timeline、Frame Candidate cache](docs/video-stage.md)
+- [動画単位のscan、timeline、Frame Candidate、Context Cue cache](docs/video-stage.md)
 - [TOML、優先順位、model更新](docs/configuration.md)
 - [runtime、cache、進捗、エラー、WSL2運用](docs/operations.md)
 - [選択画像とreport](docs/report.md)
