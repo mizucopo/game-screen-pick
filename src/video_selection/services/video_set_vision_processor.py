@@ -283,11 +283,12 @@ def _validate_runtime_annotation(
     request: CandidateAnnotationRequest,
     catalog: SceneCatalog,
 ) -> None:
-    frame_ids = {item.identifier for item in request.frame_candidates}
+    frames_by_id = {item.identifier: item for item in request.frame_candidates}
+    expected_candidate = frames_by_id.get(annotation.candidate.identifier)
     cue_ids = tuple(item.identifier for item in request.context_cues)
     if (
         annotation.candidate_moment_id != request.moment.identifier
-        or annotation.candidate.identifier not in frame_ids
+        or expected_candidate != annotation.candidate
         or annotation.scene_slug not in catalog.slugs
         or not candidate_annotation_relationships_are_valid(
             annotation.context_relevance,

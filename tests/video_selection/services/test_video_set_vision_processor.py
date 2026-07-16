@@ -295,6 +295,53 @@ def test_verbatim_context_cue_is_rejected_before_annotation_cache(
     assert raw_context_text not in cache_text
 
 
+def test_foreign_frame_payload_is_rejected_before_annotation_cache(
+    tmp_path: Path,
+) -> None:
+    """同じIDで異なるpayloadを持つFrame Candidateがcache前に拒否されること。
+
+    Arrange:
+        - request frameと同じIDに異なる画像bytesを持つAnnotationが用意される
+    Act:
+        - 一つのCandidate Annotationが処理される
+    Assert:
+        - runtime境界で失敗しforeign frameがcold resultへ返されないこと
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    request = _requests()[0]
+    foreign_frame = FrameCandidate(
+        request.frame_candidates[0].identifier,
+        b"foreign-image",
+    )
+    foreign_annotation = CandidateAnnotation(
+        candidate=foreign_frame,
+        summary="フィールドを探索する場面",
+        candidate_moment_id=request.moment.identifier,
+        scene_slug="exploration",
+        blog_image_type="normal_gameplay",
+        explanation_value="medium",
+        frame_choice_reason="探索場所が明確に写る",
+        screen_text_kind="hud",
+        context_relevance="unavailable",
+        spoiler_risk="none",
+    )
+    runtime = FakeStructuredVisionRuntime(_catalog(), (foreign_annotation,))
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Candidate Annotation"):
+        VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+            video_set=video_set,
+            representatives=request.frame_candidates,
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=(request,),
+            configuration=configuration,
+            resolved_models=models,
+        )
+
+
 def _video_set_and_configuration(
     tmp_path: Path,
 ) -> tuple[VideoSet, EffectiveConfiguration]:
