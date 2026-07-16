@@ -11,6 +11,7 @@ dependencies = [
     "click>=8.1.7",
     "faster-whisper>=1.2.1,<2.0.0",
     "huggingface-hub>=0.36.2,<1.0.0",
+    "jsonschema>=4.23.0,<5.0.0",
     "numpy>=2.3.1",
     "opencv-python>=4.11.0.86",
     "pillow>=12.1.0",
@@ -36,6 +37,7 @@ dev = [
     "python-decouple-stubs>=0.1",
     "ruff>=0.14.10",
     "taskipy>=1.14.1",
+    "types-jsonschema>=4.23.0.20240813",
     "types-requests>=2.32.4.20250913",
     "vulture>=2.14",
 ]

@@ -3,7 +3,7 @@
 
 ## 動画入力版の設計と内部実装（公開前）
 
-複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysis、embedded subtitle/audio STTからのContext Cue収集、Ollama/Hugging Faceのmodel lifecycleとrun単位のidentity freeze、共有Scene Catalog、Moment単位のCandidate Annotation、soft coverage・spoiler・動画横断diversityを扱う決定的な最終selectorまで内部実装済みです。canonical reportとpublic CLIの接続・切り替えは後続Issueで行うため、このcommandはまだ実行できません。
+複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysis、embedded subtitle/audio STTからのContext Cue収集、Ollama/Hugging Faceのmodel lifecycleとrun単位のidentity freeze、共有Scene Catalog、Moment単位のCandidate Annotation、soft coverage・spoiler・動画横断diversityを扱う決定的な最終selector、固定WebP、`game-screen-pick/report@1.0.0`、gallery-first Markdown、atomic publisherまで内部実装済みです。Video Set applicationへのcanonical publisher接続とpublic CLI切り替えは後続Issueで行うため、このcommandはまだ実行できません。
 
 ```bash
 game-screen-pick \

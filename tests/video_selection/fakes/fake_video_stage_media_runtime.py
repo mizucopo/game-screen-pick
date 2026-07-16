@@ -57,6 +57,7 @@ class FakeVideoStageMediaRuntime:
         self._candidate_proxy_write_count = 0
         self.subtitle_calls: list[tuple[Path, int]] = []
         self.audio_calls: list[tuple[Path, int, int, int]] = []
+        self.extracted_frame_calls: list[tuple[Path, int, int, int]] = []
 
     def preflight(self) -> MediaRuntimeIdentity:
         """固定runtime identityを返す。"""
@@ -188,6 +189,19 @@ class FakeVideoStageMediaRuntime:
                     msg = "次のrefinement groupより前にproxyが書かれていません"
                     raise AssertionError(msg)
                 yield self._decoded_frame(stream_index, pts)
+
+    def extract_video_frame(
+        self,
+        media_path: Path,
+        stream_index: int,
+        pts: int,
+        max_dimension: int,
+    ) -> DecodedVideoFrame:
+        """指定PTSの元解像度test frameを返す。"""
+        self.extracted_frame_calls.append(
+            (media_path, stream_index, pts, max_dimension)
+        )
+        return self._decoded_frame(stream_index, pts)
 
     def write_mjpeg_proxy(
         self,
