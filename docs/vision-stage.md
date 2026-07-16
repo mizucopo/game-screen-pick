@@ -35,7 +35,7 @@ Candidate Annotation v1は次の意味情報だけを返します。
 - Spoiler Riskと引用を含まないevidence summary
 - annotation summaryとRepresentative Frameの選択理由
 
-Quality Score、model confidence、final score、soft coverage、eligible/selected flag、生成した逐語的画面テキスト、reasoning traceはschemaに含めません。最終採否は[`video-set-selection-v1`](selection-stage.md)の決定的selectorが所有します。
+Quality Score、model confidence、final score、soft coverage、eligible/selected flag、生成した逐語的画面テキスト、reasoning traceはschemaに含めません。最終採否は[Video Set最終選定Stage](selection-stage.md)の決定的selectorが所有します。
 
 ## Retryとfailure
 

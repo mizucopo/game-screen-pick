@@ -44,15 +44,15 @@ def test_resolve_models_has_model_resolution_stage_version() -> None:
     assert version == "model-resolution-v1"
 
 
-def test_select_images_has_video_set_selection_policy_version() -> None:
-    """最終選定Stageに決定的selector固有versionが付与されること。
+def test_select_images_keeps_walking_skeleton_version_until_selector_is_wired() -> None:
+    """旧selectorの実行中はwalking skeleton versionが維持されること。
 
     Arrange:
         - select-images Processing Stageが用意される
     Act:
         - Stage versionが解決される
     Assert:
-        - Video Set selection policy固有のversionが返されること
+        - 現行のwalking skeleton versionが返されること
     """
     # Arrange
     stage = ProcessingStage.SELECT_IMAGES
@@ -61,4 +61,4 @@ def test_select_images_has_video_set_selection_policy_version() -> None:
     version = stage_version(stage)
 
     # Assert
-    assert version == "video-set-selection-v1"
+    assert version == "walking-skeleton-0"
