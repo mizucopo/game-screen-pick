@@ -246,3 +246,87 @@ def test_video_stage_runner_completes_scan_before_candidate_extraction(
     ]
     assert observer.completed_stages == list(runner.completed_stages)
     assert scan_bundle.root.joinpath("heartbeats/000.jpg").read_bytes() == b"heartbeat"
+
+
+def test_stage_can_select_only_semantic_upstream_dependencies(tmp_path: Path) -> None:
+    """Stageが順序上流から意味的に依存するStageだけを選べること。
+
+    Arrange:
+        - discovery、model resolution、annotationの順序が用意される
+        - model resolution fingerprintだけが異なる2 runが用意される
+    Act:
+        - annotationがdiscoveryだけを上流依存として確定・再利用される
+    Assert:
+        - model resolution変更後も同じannotationが再利用されること
+        - manifestへ選択された上流fingerprintだけが記録されること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "3" * 64
+    stage_order = (
+        ProcessingStage.DISCOVER_VIDEO_SET,
+        ProcessingStage.RESOLVE_MODELS,
+        ProcessingStage.ANNOTATE_CANDIDATES,
+    )
+    first = ProcessingStageRunner(
+        cache_folder,
+        RecordingRunObserver(),
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+        stage_order=stage_order,
+    )
+    discovery = first.complete(
+        ProcessingStage.DISCOVER_VIDEO_SET,
+        {"video_set": "same"},
+        {"video_set": "same"},
+    )
+    first.complete(
+        ProcessingStage.RESOLVE_MODELS,
+        {"speech_model": "a"},
+        {"speech_model": "a"},
+    )
+    annotation_input = {"candidate_model": "same"}
+    annotation = first.complete(
+        ProcessingStage.ANNOTATE_CANDIDATES,
+        annotation_input,
+        {"summary": "cached"},
+        upstream_stages=(ProcessingStage.DISCOVER_VIDEO_SET,),
+    )
+    second = ProcessingStageRunner(
+        cache_folder,
+        RecordingRunObserver(),
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+        stage_order=stage_order,
+    )
+    second.complete(
+        ProcessingStage.DISCOVER_VIDEO_SET,
+        {"video_set": "same"},
+        {"video_set": "same"},
+    )
+    second.complete(
+        ProcessingStage.RESOLVE_MODELS,
+        {"speech_model": "b"},
+        {"speech_model": "b"},
+    )
+
+    # Act
+    restored = second.reuse(
+        ProcessingStage.ANNOTATE_CANDIDATES,
+        annotation_input,
+        lambda artifact: artifact["summary"],
+        upstream_stages=(ProcessingStage.DISCOVER_VIDEO_SET,),
+    )
+
+    # Assert
+    assert restored == "cached"
+    manifest_path = (
+        cache_folder
+        / "video-sets"
+        / subject_fingerprint
+        / ProcessingStage.ANNOTATE_CANDIDATES.value
+        / annotation.fingerprint.value
+        / "manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["upstream_stage_fingerprints"] == [discovery.fingerprint.value]

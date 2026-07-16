@@ -5,6 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from ..models.resolved_models import ResolvedModels
 from ..models.run_status import RunStatus
 from ..models.selected_image import SelectedImage
 from ..models.video_set import VideoSet
@@ -21,6 +22,7 @@ class AtomicOutputPublisher:
         selected_images: tuple[SelectedImage, ...],
         requested_count: int,
         run_status: RunStatus,
+        resolved_models: ResolvedModels,
     ) -> PreparedOutput:
         """画像、JSON、Markdownを公開直前までstagingする。"""
         if output_folder.is_symlink() or (
@@ -44,6 +46,7 @@ class AtomicOutputPublisher:
                 selected_images,
                 requested_count,
                 run_status,
+                resolved_models,
             )
         except BaseException:
             shutil.rmtree(staging_folder, ignore_errors=True)
@@ -57,21 +60,32 @@ class AtomicOutputPublisher:
         selected_images: tuple[SelectedImage, ...],
         requested_count: int,
         run_status: RunStatus,
+        resolved_models: ResolvedModels,
     ) -> dict[str, object]:
         """staging directoryへ全artifactを書き出す。"""
         images_folder = staging_folder / "images"
         images_folder.mkdir()
         selected_records: list[dict[str, object]] = []
         selected_count = len(selected_images)
+        selection_shortfall = selected_count < requested_count
+        unavailable_roles = [role.value for role in resolved_models.unavailable_roles()]
         warnings: list[dict[str, object]] = []
         if run_status is RunStatus.COMPLETED_WITH_WARNINGS:
-            warnings.append(
-                {
-                    "code": "selection_shortfall",
-                    "requested_count": requested_count,
-                    "selected_count": selected_count,
-                }
-            )
+            if selection_shortfall:
+                warnings.append(
+                    {
+                        "code": "selection_shortfall",
+                        "requested_count": requested_count,
+                        "selected_count": selected_count,
+                    }
+                )
+            if unavailable_roles:
+                warnings.append(
+                    {
+                        "code": "model_update_unavailable",
+                        "roles": unavailable_roles,
+                    }
+                )
         markdown_lines = [
             "# Video Selection Report",
             "",
@@ -81,13 +95,27 @@ class AtomicOutputPublisher:
             "",
         ]
         if warnings:
-            markdown_lines.extend(
-                (
+            if selection_shortfall:
+                markdown_lines.append(
                     "Selection Shortfall: "
-                    f"requested={requested_count}, selected={selected_count}",
-                    "",
+                    f"requested={requested_count}, selected={selected_count}"
                 )
+            if unavailable_roles:
+                markdown_lines.append(
+                    "Model Update Unavailable: roles=" + ",".join(unavailable_roles)
+                )
+            markdown_lines.append("")
+        markdown_lines.extend(("## Models", ""))
+        for model in sorted(
+            resolved_models.items,
+            key=lambda value: value.role.value,
+        ):
+            markdown_lines.append(
+                f"- {model.role.value}: {model.configured_name} @ "
+                f"{_abbreviate_identity(model.execution_identity.identifier)} "
+                f"({model.update_status.value})"
             )
+        markdown_lines.append("")
         markdown_lines.extend(("## Selected images", ""))
         for index, selected_image in enumerate(selected_images, start=1):
             annotation = selected_image.annotation
@@ -112,6 +140,7 @@ class AtomicOutputPublisher:
             "requested_count": requested_count,
             "selected_count": selected_count,
             "warnings": warnings,
+            "models": resolved_models.provenance(),
             "video_set": {"videos": list(video_set.relative_paths)},
             "selected": selected_records,
         }
@@ -124,3 +153,9 @@ class AtomicOutputPublisher:
             encoding="utf-8",
         )
         return report
+
+
+def _abbreviate_identity(identifier: str) -> str:
+    """report.md用にstore prefixを保った短縮identityを返す。"""
+    prefix, value = identifier.rsplit(":", maxsplit=1)
+    return f"{prefix}:{value[:12]}…"

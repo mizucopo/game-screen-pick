@@ -18,8 +18,8 @@ class ProcessingStage(StrEnum):
 VIDEO_SET_STAGE_ORDER = (
     ProcessingStage.DISCOVER_VIDEO_SET,
     ProcessingStage.EXTRACT_FRAME_CANDIDATES,
-    ProcessingStage.COLLECT_CONTEXT,
     ProcessingStage.RESOLVE_MODELS,
+    ProcessingStage.COLLECT_CONTEXT,
     ProcessingStage.ANNOTATE_CANDIDATES,
     ProcessingStage.SELECT_IMAGES,
 )

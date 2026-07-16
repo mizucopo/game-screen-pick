@@ -32,6 +32,6 @@ output/
 
 Spoiler Riskは常時表示しますが、`none`以外の短いevidence summaryはMarkdownで閉じた`details`にします。選定に使ったSpoiler Penaltyとは別fieldです。
 
-Selection Shortfallはwarning付き正常成果物として選択済みsubsetを公開します。それ以外のfatal error、schema不正、renderer失敗、成果物不一致ではOutput Folderを公開しません。
+Selection Shortfallはwarning付き正常成果物として選択済みsubsetを公開します。model更新が利用不能でも完全でload可能なlocal artifactを再検査できた場合は、`model_update_unavailable`と対象roleをwarningとして公開します。それ以外のfatal error、schema不正、renderer失敗、成果物不一致ではOutput Folderを公開しません。
 
 完全なfield、命名、時刻、near miss、schema evolution、atomic publication契約は[ADR 0005](adr/0005-publish-video-selection-artifacts-atomically.md)を参照してください。

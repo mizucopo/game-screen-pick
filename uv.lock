@@ -258,6 +258,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "faster-whisper" },
+    { name = "huggingface-hub" },
     { name = "numpy" },
     { name = "opencv-python" },
     { name = "pillow" },
@@ -281,6 +282,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.1.7" },
     { name = "faster-whisper", specifier = ">=1.2.1,<2.0.0" },
+    { name = "huggingface-hub", specifier = ">=0.36.2,<1.0.0" },
     { name = "numpy", specifier = ">=2.3.1" },
     { name = "opencv-python", specifier = ">=4.11.0.86" },
     { name = "pillow", specifier = ">=12.1.0" },

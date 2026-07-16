@@ -3,7 +3,9 @@
 from contextlib import suppress
 
 from ..models.effective_configuration import EffectiveConfiguration
+from ..models.model_role import ModelRole
 from ..models.processing_stage import ProcessingStage
+from ..models.resolved_models import ResolvedModels
 from ..models.run_outcome import RunOutcome
 from ..models.run_status import RunStatus
 from ..models.video_set import VideoSet
@@ -27,6 +29,13 @@ from ..services.snapshot_frame_candidates import snapshot_frame_candidates
 from ..services.snapshot_video_set import snapshot_video_set
 from ..services.validate_output_folder import validate_output_folder
 from ..services.validate_video_set_snapshot import validate_video_set_snapshot
+
+_ANNOTATION_UPSTREAM_STAGES = (
+    ProcessingStage.DISCOVER_VIDEO_SET,
+    ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+)
+_CONTEXT_UPSTREAM_STAGES = (ProcessingStage.DISCOVER_VIDEO_SET,)
+_SELECTION_UPSTREAM_STAGES = (ProcessingStage.ANNOTATE_CANDIDATES,)
 
 
 class VideoSelectionApplication:
@@ -59,18 +68,21 @@ class VideoSelectionApplication:
         )
         with InputFolderLock(configuration.video_input_folder) as input_lock:
             validate_video_set_snapshot(video_set)
+            resolved_models = self._model_runtime.resolve_models(configuration)
+            validate_video_set_snapshot(video_set)
             diagnostic = prepare_processing_cache(
                 configuration.processing_cache_folder,
                 input_lock=input_lock,
                 reset_cache=configuration.reset_cache,
             )
             self._observer.legacy_cache_cleaned(diagnostic)
-            return self._run_locked(configuration, video_set)
+            return self._run_locked(configuration, video_set, resolved_models)
 
     def _run_locked(
         self,
         configuration: EffectiveConfiguration,
         video_set: VideoSet,
+        resolved_models: ResolvedModels,
     ) -> RunOutcome:
         """Input Lockを保持したまま全Processing Stageを実行する。"""
         video_set_snapshot = snapshot_video_set(video_set)
@@ -103,25 +115,48 @@ class VideoSelectionApplication:
             {"candidates": list(candidate_snapshot)},
         )
 
-        context_cues = self._speech_runtime.collect_context(video_set)
-        context_cue_ids = [item.identifier for item in context_cues]
-        stage_runner.complete(
-            ProcessingStage.COLLECT_CONTEXT,
-            {"context_cue_ids": context_cue_ids},
-            {"context_cue_ids": context_cue_ids},
-        )
-
-        model_identity = self._model_runtime.resolve_models()
+        candidate_model = resolved_models.for_role(ModelRole.CANDIDATE_ANNOTATION)
+        speech_model = resolved_models.for_role(ModelRole.SPEECH_TO_TEXT)
         stage_runner.complete(
             ProcessingStage.RESOLVE_MODELS,
-            {"resolved_model_identity": model_identity.identifier},
-            {"model_identity": model_identity.identifier},
+            {"models": resolved_models.semantic_input()},
+            {"models": resolved_models.semantic_input()},
+        )
+
+        collected_context = self._speech_runtime.collect_context(
+            video_set, speech_model
+        )
+        context_cues = collected_context.cues
+        context_cue_ids = [item.identifier for item in context_cues]
+        context_semantic_input: dict[str, object] = {
+            "context_cue_ids": context_cue_ids,
+        }
+        if collected_context.speech_runtime_identity is not None:
+            context_semantic_input["speech_to_text"] = {
+                "runtime_identity": collected_context.speech_runtime_identity,
+                "model": speech_model.semantic_input(),
+                "language": configuration.language,
+                "device": configuration.speech_to_text_device,
+                "compute_type": configuration.speech_to_text_compute_type,
+                "beam_size": configuration.speech_to_text_beam_size,
+                "vad_filter": configuration.speech_vad_filter,
+                "chunk_seconds": configuration.speech_chunk_seconds,
+                "overlap_seconds": configuration.speech_overlap_seconds,
+            }
+        stage_runner.complete(
+            ProcessingStage.COLLECT_CONTEXT,
+            context_semantic_input,
+            {"context_cue_ids": context_cue_ids},
+            upstream_stages=_CONTEXT_UPSTREAM_STAGES,
         )
 
         annotation_semantic_input = {
             "candidates": list(candidate_snapshot),
             "context_cue_ids": context_cue_ids,
-            "resolved_model_identity": model_identity.identifier,
+            "model": {
+                **candidate_model.semantic_input(),
+                "num_ctx": configuration.candidate_annotation_num_ctx,
+            },
         }
         annotations = stage_runner.reuse(
             ProcessingStage.ANNOTATE_CANDIDATES,
@@ -130,13 +165,14 @@ class VideoSelectionApplication:
                 artifact,
                 frame_candidates,
             ),
+            upstream_stages=_ANNOTATION_UPSTREAM_STAGES,
         )
         if annotations is None:
             annotations = normalize_candidate_annotations(
                 self._vision_runtime.annotate_candidates(
                     frame_candidates,
                     context_cues,
-                    model_identity,
+                    candidate_model,
                 ),
                 frame_candidates,
             )
@@ -144,6 +180,7 @@ class VideoSelectionApplication:
                 ProcessingStage.ANNOTATE_CANDIDATES,
                 annotation_semantic_input,
                 build_candidate_annotation_artifact(annotations, frame_candidates),
+                upstream_stages=_ANNOTATION_UPSTREAM_STAGES,
             )
 
         selected_images = select_images(annotations, configuration.image_count)
@@ -151,6 +188,7 @@ class VideoSelectionApplication:
         run_status = RunStatus.from_selection_counts(
             configuration.image_count,
             selected_count,
+            has_other_warnings=bool(resolved_models.unavailable_roles()),
         )
         stage_runner.complete(
             ProcessingStage.SELECT_IMAGES,
@@ -160,6 +198,7 @@ class VideoSelectionApplication:
                     item.annotation.candidate.identifier for item in selected_images
                 ]
             },
+            upstream_stages=_SELECTION_UPSTREAM_STAGES,
         )
 
         publisher = AtomicOutputPublisher()
@@ -169,6 +208,7 @@ class VideoSelectionApplication:
             selected_images,
             configuration.image_count,
             run_status,
+            resolved_models,
         )
         try:
             validate_video_set_snapshot(video_set)

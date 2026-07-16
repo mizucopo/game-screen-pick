@@ -1,7 +1,7 @@
 # 動画入力設定
 
 > [!IMPORTANT]
-> v1 schemaとEffective Configuration resolverは内部実装済みです。installed public CLIはIssue #190までscreenshot入力のままであり、現在の`--config`にはこのschemaを使用できません。
+> v1 schema、Effective Configuration resolver、model lifecycleは内部実装済みです。installed public CLIはIssue #190までscreenshot入力のままであり、現在の`--config`にはこのschemaを使用できません。
 
 内部・test用adapterは、設定解決が成功した後だけ`run(EffectiveConfiguration) -> RunOutcome`境界を呼び出します。これにより、public cutover前もstrict schemaと優先順位を副作用なしで検証できます。
 
@@ -72,10 +72,22 @@ Resolved Model Identityが前回と同じならmodel依存cacheを再利用し�
 
 `models.auto_upgrade = true`が既定です。
 
-- `true`: 処理Stage開始前に、distinctなOllama tagは`/api/pull`で一度だけ同期し、Hugging Face modelはremote `main`のcommitを解決してそのimmutable snapshotを取得します。
+- `true`: 処理Stage開始前に、distinctなOllama tagは`/api/pull`で一度だけ同期し、Hugging Face modelはremote `main`のcommitを解決してそのimmutable snapshotを取得します。Ollamaの省略tagと`:latest`は同じselectorとして重複排除します。
 - `false`: 完全でload可能なlocal modelがあればnetworkへ更新確認せず使います。localにないmodelだけは自動downloadしてbootstrapします。
 - 更新確認・downloadがoffline、timeout、registry障害、権限不足などで失敗しても、完全でload可能なlocal modelがあればwarningと`update_status = "unavailable"`を記録して継続します。local modelもなければfatalです。
 - partial downloadは使用しません。`--reset-cache`はmodel storeを削除しません。
+
+更新結果は設定名や実行identityと混ぜず、roleごとに次の`update_status`としてprovenanceへ記録します。
+
+| Status | 意味 |
+|---|---|
+| `not_requested` | `auto_upgrade = false`で検証済みlocal artifactが使われた |
+| `unchanged` | 同期後の完全identityが更新前と同じだった |
+| `updated` | 同期後の完全identityが更新前から変わった |
+| `bootstrapped` | 利用可能なlocal artifactがなく新たに取得された |
+| `unavailable` | 同期前に利用可能なlocal artifactがあり、同期不能後の再検査に合格したlocal artifactがwarning付きで使われた |
+
+`local_identity_before_update`は完全でrole capabilityを満たすlocal artifactだけに設定されます。存在していてもpartialまたはload不能なartifactはlocal fallbackとして扱いません。同期不能時はlocal storeを再解決・再検査し、同期中にtagやsnapshot stateが不完全になっていないことも確認します。`update_status`、更新時刻、`auto_upgrade`は現在runの`report.json`へ残す診断値であり、Completed Stage artifactや同じ実行identityのStage Fingerprintを変えません。
 
 Ollamaにはremote digestだけを確認するdocumented read-only APIがないため、`auto_upgrade = true`は単なる通知ではなくpullによる同期です。更新時刻や`auto_upgrade`自体ではなく、実際にfreezeしたmodel identityがStage Fingerprintを変えます。
 
