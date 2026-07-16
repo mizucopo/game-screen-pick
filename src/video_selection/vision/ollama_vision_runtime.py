@@ -12,18 +12,26 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from ..models.candidate_annotation import (
-    BlogImageType,
+    BLOG_IMAGE_TYPES,
+    CONTEXT_CUE_RELEVANCES,
+    EXPLANATION_VALUES,
+    SCREEN_TEXT_KINDS,
+    SPOILER_RISKS,
     CandidateAnnotation,
-    ContextCueRelevance,
-    ExplanationValue,
-    ScreenTextKind,
-    SpoilerRisk,
+    candidate_annotation_context_is_valid,
+    candidate_annotation_free_text_is_safe,
+    candidate_annotation_relationships_are_valid,
 )
 from ..models.candidate_annotation_request import CandidateAnnotationRequest
 from ..models.model_role import ModelRole
 from ..models.resolved_model import ResolvedModel
 from ..models.scene_catalog import SceneCatalog
-from ..models.scene_catalog_entry import SceneCatalogEntry, SceneSelectionRole
+from ..models.scene_catalog_entry import (
+    SCENE_SELECTION_ROLES,
+    SceneCatalogEntry,
+    SceneSelectionRole,
+    is_valid_scene_slug,
+)
 from ..models.scene_catalog_request import SceneCatalogRequest
 from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 from ..models.vision_runtime_error import VisionRuntimeError
@@ -63,9 +71,13 @@ _ANNOTATION_KEYS = {
     "spoiler_risk",
     "spoiler_evidence",
 }
-_SCENE_SLUG_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _RETRYABLE_REASONS = {
     VisionRuntimeFailureReason.TRANSPORT_FAILURE,
+    VisionRuntimeFailureReason.RESPONSE_INVALID,
+    VisionRuntimeFailureReason.SCHEMA_INVALID,
+    VisionRuntimeFailureReason.DOMAIN_INVALID,
+}
+_PROMPT_REPAIR_REASONS = {
     VisionRuntimeFailureReason.RESPONSE_INVALID,
     VisionRuntimeFailureReason.SCHEMA_INVALID,
     VisionRuntimeFailureReason.DOMAIN_INVALID,
@@ -145,8 +157,9 @@ class OllamaVisionRuntime:
         """同じsemantic入力を最大2回実行しsafe diagnosticsを返す。"""
         started_at = time.monotonic()
         previous_validation_code: str | None = None
+        repair_code: str | None = None
         for attempt in (1, 2):
-            attempt_payload = _with_repair_code(payload, previous_validation_code)
+            attempt_payload = _with_repair_code(payload, repair_code)
             try:
                 response = self._request(attempt_payload)
                 value = parser(_decode_content(response, stage_kind))
@@ -158,6 +171,11 @@ class OllamaVisionRuntime:
                         attempt_count=attempt,
                     ) from None
                 previous_validation_code = error.validation_code
+                repair_code = (
+                    error.validation_code
+                    if error.reason in _PROMPT_REPAIR_REASONS
+                    else None
+                )
                 self._sleeper(error.retry_after_seconds)
                 continue
             diagnostics = _diagnostics(
@@ -285,7 +303,8 @@ def _candidate_payload(
         "入力された1〜3枚からブログ上の意味を最も表すframeを1枚選び、"
         "共有Scene Catalogを使ってCandidate Annotationを返してください。"
         "画像品質、confidence、final score、eligible、selected、逐語的画面文、"
-        "推論過程は出力しません。Context Cue本文をannotation summaryへ引用しません。\n"
+        "推論過程は出力しません。Context Cue本文をannotation summary、"
+        "frame choice reason、spoiler evidenceへ引用しません。\n"
         + json.dumps(semantic_request, ensure_ascii=False, sort_keys=True)
     )
     return {
@@ -324,7 +343,8 @@ def _with_repair_code(
 def _decode_content(
     response: Mapping[str, object], stage_kind: StageKind
 ) -> Mapping[str, object]:
-    if response.get("done") is not True:
+    done_reason = response.get("done_reason")
+    if response.get("done") is not True or done_reason not in (None, "stop"):
         raise VisionRuntimeError(
             VisionRuntimeFailureReason.RESPONSE_INVALID,
             validation_code=f"{stage_kind}_response_truncated",
@@ -369,12 +389,12 @@ def _parse_scene_catalog(value: Mapping[str, object]) -> SceneCatalog:
         selection_role = raw_scene.get("selection_role")
         if (
             not isinstance(slug, str)
-            or _SCENE_SLUG_PATTERN.fullmatch(slug) is None
+            or not is_valid_scene_slug(slug)
             or not isinstance(display_name, str)
             or not display_name.strip()
             or not isinstance(description, str)
             or not description.strip()
-            or selection_role not in {"ordinary", "cinematic", "recurring_gameplay"}
+            or selection_role not in SCENE_SELECTION_ROLES
         ):
             raise _schema_error("scene_catalog_schema_invalid")
         entries.append(
@@ -412,35 +432,44 @@ def _parse_candidate_annotation(
     if (
         not isinstance(representative_frame_id, str)
         or not isinstance(scene_slug, str)
-        or blog_image_type not in {"normal_gameplay", "event", "menu", "title", "other"}
-        or explanation_value not in {"none", "low", "medium", "high"}
+        or blog_image_type not in BLOG_IMAGE_TYPES
+        or explanation_value not in EXPLANATION_VALUES
         or not isinstance(annotation_summary, str)
         or not annotation_summary.strip()
         or not isinstance(frame_choice_reason, str)
         or not frame_choice_reason.strip()
-        or screen_text_kind not in {"none", "dialogue", "menu", "title", "hud", "other"}
-        or context_relevance not in {"unavailable", "none", "weak", "strong"}
+        or screen_text_kind not in SCREEN_TEXT_KINDS
+        or context_relevance not in CONTEXT_CUE_RELEVANCES
         or not isinstance(cue_ids, list)
         or not all(isinstance(item, str) for item in cue_ids)
         or len(cue_ids) != len(set(cue_ids))
-        or spoiler_risk not in {"none", "low", "medium", "high"}
+        or spoiler_risk not in SPOILER_RISKS
         or not isinstance(spoiler_evidence, str)
     ):
         raise _schema_error("candidate_annotation_schema_invalid")
     frames = {item.identifier: item for item in request.frame_candidates}
-    available_cue_ids = {item.identifier for item in request.context_cues}
+    typed_context_relevance = context_relevance
+    typed_cue_ids = tuple(cast(list[str], cue_ids))
+    typed_spoiler_risk = spoiler_risk
+    available_cue_ids = tuple(item.identifier for item in request.context_cues)
     if (
         representative_frame_id not in frames
         or scene_slug not in catalog.slugs
-        or not set(cue_ids).issubset(available_cue_ids)
-        or context_relevance in {"unavailable", "none"}
-        and cue_ids
-        or context_relevance in {"weak", "strong"}
-        and not cue_ids
-        or spoiler_risk == "none"
-        and spoiler_evidence
-        or spoiler_risk != "none"
-        and not spoiler_evidence.strip()
+        or not candidate_annotation_relationships_are_valid(
+            typed_context_relevance,
+            typed_cue_ids,
+            typed_spoiler_risk,
+            spoiler_evidence,
+        )
+        or not candidate_annotation_context_is_valid(
+            typed_context_relevance,
+            typed_cue_ids,
+            available_cue_ids,
+        )
+        or not candidate_annotation_free_text_is_safe(
+            (annotation_summary, frame_choice_reason, spoiler_evidence),
+            tuple(item.text for item in request.context_cues),
+        )
     ):
         raise _domain_error("candidate_annotation_domain_invalid")
     try:
@@ -449,13 +478,13 @@ def _parse_candidate_annotation(
             summary=annotation_summary,
             candidate_moment_id=request.moment.identifier,
             scene_slug=scene_slug,
-            blog_image_type=cast(BlogImageType, blog_image_type),
-            explanation_value=cast(ExplanationValue, explanation_value),
+            blog_image_type=blog_image_type,
+            explanation_value=explanation_value,
             frame_choice_reason=frame_choice_reason,
-            screen_text_kind=cast(ScreenTextKind, screen_text_kind),
-            context_relevance=cast(ContextCueRelevance, context_relevance),
-            supporting_context_cue_ids=tuple(cast(list[str], cue_ids)),
-            spoiler_risk=cast(SpoilerRisk, spoiler_risk),
+            screen_text_kind=screen_text_kind,
+            context_relevance=typed_context_relevance,
+            supporting_context_cue_ids=typed_cue_ids,
+            spoiler_risk=typed_spoiler_risk,
             spoiler_evidence=spoiler_evidence,
         )
     except ValueError:

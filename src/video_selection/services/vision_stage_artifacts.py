@@ -4,16 +4,23 @@ from dataclasses import replace
 from typing import Mapping, cast
 
 from ..models.candidate_annotation import (
-    BlogImageType,
+    BLOG_IMAGE_TYPES,
+    CONTEXT_CUE_RELEVANCES,
+    EXPLANATION_VALUES,
+    SCREEN_TEXT_KINDS,
+    SPOILER_RISKS,
     CandidateAnnotation,
-    ContextCueRelevance,
-    ExplanationValue,
-    ScreenTextKind,
-    SpoilerRisk,
+    candidate_annotation_context_is_valid,
+    candidate_annotation_free_text_is_safe,
+    candidate_annotation_relationships_are_valid,
 )
 from ..models.candidate_annotation_request import CandidateAnnotationRequest
 from ..models.scene_catalog import SceneCatalog
-from ..models.scene_catalog_entry import SceneCatalogEntry, SceneSelectionRole
+from ..models.scene_catalog_entry import (
+    SCENE_SELECTION_ROLES,
+    SceneCatalogEntry,
+    SceneSelectionRole,
+)
 from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 
 _CATALOG_SCHEMA = "game-screen-pick/scene-catalog@1.0.0"
@@ -98,24 +105,44 @@ def restore_candidate_annotation(
     spoiler_risk = annotation.get("spoiler_risk")
     spoiler_evidence = annotation.get("spoiler_evidence")
     frames = {item.identifier: item for item in request.frame_candidates}
-    cue_ids = {item.identifier for item in request.context_cues}
+    available_cue_ids = tuple(item.identifier for item in request.context_cues)
     if (
         candidate_moment_id != request.moment.identifier
         or not isinstance(representative_frame_id, str)
         or representative_frame_id not in frames
         or not isinstance(scene_slug, str)
         or scene_slug not in catalog.slugs
-        or blog_image_type not in {"normal_gameplay", "event", "menu", "title", "other"}
-        or explanation_value not in {"none", "low", "medium", "high"}
+        or blog_image_type not in BLOG_IMAGE_TYPES
+        or explanation_value not in EXPLANATION_VALUES
         or not isinstance(summary, str)
         or not isinstance(frame_choice_reason, str)
-        or screen_text_kind not in {"none", "dialogue", "menu", "title", "hud", "other"}
-        or context_relevance not in {"unavailable", "none", "weak", "strong"}
+        or screen_text_kind not in SCREEN_TEXT_KINDS
+        or context_relevance not in CONTEXT_CUE_RELEVANCES
         or not isinstance(raw_cue_ids, list)
         or not all(isinstance(item, str) for item in raw_cue_ids)
-        or not set(raw_cue_ids).issubset(cue_ids)
-        or spoiler_risk not in {"none", "low", "medium", "high"}
+        or spoiler_risk not in SPOILER_RISKS
         or not isinstance(spoiler_evidence, str)
+    ):
+        raise ValueError("Candidate Annotation artifact domainが不正です")
+    typed_context_relevance = context_relevance
+    typed_cue_ids = tuple(cast(list[str], raw_cue_ids))
+    typed_spoiler_risk = spoiler_risk
+    if (
+        not candidate_annotation_relationships_are_valid(
+            typed_context_relevance,
+            typed_cue_ids,
+            typed_spoiler_risk,
+            spoiler_evidence,
+        )
+        or not candidate_annotation_context_is_valid(
+            typed_context_relevance,
+            typed_cue_ids,
+            available_cue_ids,
+        )
+        or not candidate_annotation_free_text_is_safe(
+            (summary, frame_choice_reason, spoiler_evidence),
+            tuple(item.text for item in request.context_cues),
+        )
     ):
         raise ValueError("Candidate Annotation artifact domainが不正です")
     restored = CandidateAnnotation(
@@ -123,13 +150,13 @@ def restore_candidate_annotation(
         summary=summary,
         candidate_moment_id=candidate_moment_id,
         scene_slug=scene_slug,
-        blog_image_type=cast(BlogImageType, blog_image_type),
-        explanation_value=cast(ExplanationValue, explanation_value),
+        blog_image_type=blog_image_type,
+        explanation_value=explanation_value,
         frame_choice_reason=frame_choice_reason,
-        screen_text_kind=cast(ScreenTextKind, screen_text_kind),
-        context_relevance=cast(ContextCueRelevance, context_relevance),
-        supporting_context_cue_ids=tuple(cast(list[str], raw_cue_ids)),
-        spoiler_risk=cast(SpoilerRisk, spoiler_risk),
+        screen_text_kind=screen_text_kind,
+        context_relevance=typed_context_relevance,
+        supporting_context_cue_ids=typed_cue_ids,
+        spoiler_risk=typed_spoiler_risk,
         spoiler_evidence=spoiler_evidence,
     )
     diagnostics = _restore_diagnostics(artifact.get("diagnostics"))
@@ -156,7 +183,7 @@ def _restore_scene(value: object) -> SceneCatalogEntry:
         not isinstance(slug, str)
         or not isinstance(display_name, str)
         or not isinstance(description, str)
-        or selection_role not in {"ordinary", "cinematic", "recurring_gameplay"}
+        or selection_role not in SCENE_SELECTION_ROLES
     ):
         raise ValueError("Scene Catalog artifact entry fieldが不正です")
     return SceneCatalogEntry(

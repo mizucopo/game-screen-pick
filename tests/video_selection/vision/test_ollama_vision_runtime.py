@@ -158,6 +158,107 @@ def test_schema_failure_is_retried_once_with_stable_code() -> None:
     assert "secret chain of thought" not in second_prompt
 
 
+def test_truncated_response_is_retried_before_success() -> None:
+    """token上限で打ち切られた応答が一度だけ再試行されること。
+
+    Arrange:
+        - 初回だけdone reasonがlengthとなるschema-valid responseが用意される
+    Act:
+        - Scene Catalog推論が実行される
+    Assert:
+        - 打ち切り応答が採用されずstable code付きで再試行されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _response(_catalog_payload())
+        if len(payloads) == 1:
+            response["done_reason"] = "length"
+        return response
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+    )
+
+    # Act
+    catalog, diagnostics = runtime.create_scene_catalog(
+        SceneCatalogRequest(
+            representatives=(FrameCandidate("frame-a", b"image-a"),),
+            selection_intent="ブログ画像を分類する",
+        ),
+        _resolved_model(ModelRole.SCENE_CATALOG),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert catalog.slugs[-1] == "other"
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "scene_catalog_response_truncated"
+    assert len(payloads) == 2
+    second_prompt = _first_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "scene_catalog_response_truncated" in second_prompt
+
+
+def test_repeated_truncated_response_fails_after_one_retry() -> None:
+    """打ち切り応答が2回続いた場合にrunが停止されること。
+
+    Arrange:
+        - done reasonがlengthとなるschema-valid responseが用意される
+    Act:
+        - Scene Catalog推論が実行される
+    Assert:
+        - 2回だけrequestされresponse_truncatedで失敗すること
+    """
+    # Arrange
+    calls = 0
+
+    def requester(
+        _method: str,
+        _url: str,
+        _payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        nonlocal calls
+        calls += 1
+        response = _response(_catalog_payload())
+        response["done_reason"] = "length"
+        return response
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.create_scene_catalog(
+            SceneCatalogRequest(
+                representatives=(FrameCandidate("frame-a", b"image-a"),),
+                selection_intent="ブログ画像を分類する",
+            ),
+            _resolved_model(ModelRole.SCENE_CATALOG),
+            num_ctx=32768,
+        )
+    assert calls == 2
+    assert captured.value.reason is VisionRuntimeFailureReason.RESPONSE_INVALID
+    assert captured.value.validation_code == "scene_catalog_response_truncated"
+
+
 def test_candidate_domain_failure_stops_without_other_fallback() -> None:
     """Candidate Annotation domain failureが2回後にrun停止へ変換されること。
 
@@ -251,6 +352,170 @@ def test_candidate_without_context_is_explicitly_unavailable() -> None:
     assert diagnostics.context_cue_count == 0
 
 
+def test_candidate_without_context_rejects_none_relevance() -> None:
+    """Context Cueなしでnone relevanceが返された場合に拒否されること。
+
+    Arrange:
+        - Context CueなしのCandidateとnone responseが用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - unavailable以外がdomain invalidとして拒否されること
+    """
+    # Arrange
+    request = _annotation_request()
+    request_without_context = CandidateAnnotationRequest(
+        moment=request.moment,
+        frame_candidates=request.frame_candidates,
+        context_cues=(),
+        video_set_progress=request.video_set_progress,
+        selection_intent=request.selection_intent,
+        cue_selection_policy_version=request.cue_selection_policy_version,
+    )
+    response = _annotation_payload()
+    response["context_relevance"] = "none"
+    response["supporting_context_cue_ids"] = []
+    response["spoiler_risk"] = "none"
+    response["spoiler_evidence"] = ""
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.annotate_candidate(
+            request_without_context,
+            _catalog(),
+            _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+            num_ctx=32768,
+        )
+    assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
+    assert captured.value.validation_code == "candidate_annotation_domain_invalid"
+
+
+def test_candidate_with_context_rejects_unavailable_relevance() -> None:
+    """Context Cueありでunavailable relevanceが返された場合に拒否されること。
+
+    Arrange:
+        - Context CueありのCandidateとunavailable responseが用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - Context Cueを評価しない応答がdomain invalidとして拒否されること
+    """
+    # Arrange
+    response = _annotation_payload()
+    response["context_relevance"] = "unavailable"
+    response["supporting_context_cue_ids"] = []
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.annotate_candidate(
+            _annotation_request(),
+            _catalog(),
+            _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+            num_ctx=32768,
+        )
+    assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
+    assert captured.value.validation_code == "candidate_annotation_domain_invalid"
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ("annotation_summary", "frame_choice_reason", "spoiler_evidence"),
+)
+def test_candidate_rejects_verbatim_context_cue_in_free_text(
+    field_name: str,
+) -> None:
+    """Context Cue本文が自由文fieldへ逐語再出力された場合に拒否されること。
+
+    Arrange:
+        - Context Cue本文を一つの自由文fieldへそのまま返すresponseが用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - raw textを含む応答がdomain invalidとして拒否されること
+    """
+    # Arrange
+    request = _annotation_request()
+    response = _annotation_payload()
+    response[field_name] = request.context_cues[0].text
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.annotate_candidate(
+            request,
+            _catalog(),
+            _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+            num_ctx=32768,
+        )
+    assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
+    assert captured.value.validation_code == "candidate_annotation_domain_invalid"
+
+
+@pytest.mark.parametrize(
+    ("cue_text", "leaked_text"),
+    (
+        ("「正体は王だ」", "正体は王だ"),
+        ("王都は陥落した。次の目的地は北の塔だ。", "次の目的地は北の塔だ"),
+    ),
+)
+def test_candidate_rejects_normalized_or_partial_context_cue_quote(
+    cue_text: str,
+    leaked_text: str,
+) -> None:
+    """Context Cueの引用符除去または一部引用が拒否されること。
+
+    Arrange:
+        - 引用符付きまたは複数文のContext Cueが用意される
+        - Cueの正規化後全文または一文だけを返すresponseが用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 十分長い逐語spanを含む応答がdomain invalidとして拒否されること
+    """
+    # Arrange
+    request = _annotation_request_with_context_text(cue_text)
+    response = _annotation_payload()
+    response["annotation_summary"] = leaked_text
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.annotate_candidate(
+            request,
+            _catalog(),
+            _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+            num_ctx=32768,
+        )
+    assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
+    assert captured.value.validation_code == "candidate_annotation_domain_invalid"
+
+
 def test_retryable_transport_failure_is_retried_with_same_semantic_input() -> None:
     """一時transport failureが同じsemantic入力で一度だけ再試行されること。
 
@@ -298,6 +563,10 @@ def test_retryable_transport_failure_is_retried_with_same_semantic_input() -> No
     assert (
         _first_message(payloads[0])["images"] == _first_message(payloads[1])["images"]
     )
+    assert (
+        _first_message(payloads[0])["content"] == _first_message(payloads[1])["content"]
+    )
+    assert "ollama_transport_failure" not in str(_first_message(payloads[1])["content"])
 
 
 def test_non_retryable_http_4xx_fails_immediately_without_external_detail() -> None:
@@ -495,6 +764,26 @@ def _annotation_request() -> CandidateAnnotationRequest:
         video_set_progress=Fraction(1, 2),
         selection_intent="ブログ本文を説明できる画像を選ぶ",
         cue_selection_policy_version="nearby-context-v1",
+    )
+
+
+def _annotation_request_with_context_text(text: str) -> CandidateAnnotationRequest:
+    request = _annotation_request()
+    cue = request.context_cues[0]
+    return CandidateAnnotationRequest(
+        moment=request.moment,
+        frame_candidates=request.frame_candidates,
+        context_cues=(
+            ContextCue(
+                identifier=cue.identifier,
+                start=cue.start,
+                end=cue.end,
+                text=text,
+            ),
+        ),
+        video_set_progress=request.video_set_progress,
+        selection_intent=request.selection_intent,
+        cue_selection_policy_version=request.cue_selection_policy_version,
     )
 
 

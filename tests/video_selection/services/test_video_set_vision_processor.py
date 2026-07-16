@@ -1,3 +1,4 @@
+import threading
 from fractions import Fraction
 from pathlib import Path
 
@@ -105,6 +106,85 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     assert '"reasoning"' not in cache_text
 
 
+def test_same_catalog_fingerprint_runs_inference_once_under_lock(
+    tmp_path: Path,
+) -> None:
+    """同じCatalog fingerprintの並行処理でmodel推論が一度だけ実行されること。
+
+    Arrange:
+        - 最初のCatalog推論を一時停止するfake runtimeが用意される
+        - 同じVideo Setとsemantic入力を処理する2つのthreadが用意される
+    Act:
+        - 最初の推論中に2つ目の処理が開始される
+    Assert:
+        - 2つ目が同じ推論を開始せず最初のCompleted Stageを再利用すること
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    requests = _requests()
+    request = requests[0]
+    annotation = _annotations(requests)[0]
+    first_call_started = threading.Event()
+    release_first_call = threading.Event()
+    second_process_started = threading.Event()
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        (annotation,),
+        scene_catalog_call_started=first_call_started,
+        release_scene_catalog_call=release_first_call,
+    )
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+    errors: list[BaseException] = []
+    results: list[object] = []
+
+    def process(second: bool = False) -> None:
+        try:
+            if second:
+                second_process_started.set()
+            results.append(
+                VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+                    video_set=video_set,
+                    representatives=request.frame_candidates,
+                    representative_source_fingerprints=(StageFingerprint("c" * 64),),
+                    annotation_requests=(request,),
+                    configuration=configuration,
+                    resolved_models=models,
+                )
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    first_thread = threading.Thread(target=process, name="first-vision-processor")
+    second_thread = threading.Thread(
+        target=process,
+        args=(True,),
+        name="second-vision-processor",
+    )
+
+    # Act
+    first_thread.start()
+    assert first_call_started.wait(timeout=5)
+    second_thread.start()
+    assert second_process_started.wait(timeout=5)
+    try:
+        second_thread.join(timeout=0.2)
+        second_finished_early = not second_thread.is_alive()
+        inference_count_while_locked = len(runtime.scene_catalog_calls)
+    finally:
+        release_first_call.set()
+        first_thread.join(timeout=5)
+        second_thread.join(timeout=5)
+
+    # Assert
+    assert second_finished_early is False
+    assert inference_count_while_locked == 1
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert errors == []
+    assert len(results) == 2
+    assert len(runtime.scene_catalog_calls) == 1
+
+
 def test_completed_annotations_survive_a_later_annotation_failure(
     tmp_path: Path,
 ) -> None:
@@ -162,6 +242,57 @@ def test_completed_annotations_survive_a_later_annotation_failure(
     ] == [requests[1].moment.identifier]
     assert result.annotations == annotations
     assert [item.cache_hit for item in result.annotation_diagnostics] == [True, False]
+
+
+def test_verbatim_context_cue_is_rejected_before_annotation_cache(
+    tmp_path: Path,
+) -> None:
+    """Context Cue本文を含むAnnotationがcache保存前に拒否されること。
+
+    Arrange:
+        - Context Cue本文をsummaryへ逐語再出力するfake runtimeが用意される
+    Act:
+        - 一つのCandidate Annotationが処理される
+    Assert:
+        - runtime境界で失敗しraw Context Cue本文がcacheへ保存されないこと
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    request = _requests()[1]
+    raw_context_text = request.context_cues[0].text
+    unsafe_annotation = CandidateAnnotation(
+        candidate=request.frame_candidates[0],
+        summary=raw_context_text,
+        candidate_moment_id=request.moment.identifier,
+        scene_slug="climax",
+        blog_image_type="event",
+        explanation_value="high",
+        frame_choice_reason="対決する人物が明確に写る",
+        screen_text_kind="dialogue",
+        context_relevance="strong",
+        supporting_context_cue_ids=("cue-b",),
+        spoiler_risk="high",
+        spoiler_evidence="主要人物の正体が画面で明示される",
+    )
+    runtime = FakeStructuredVisionRuntime(_catalog(), (unsafe_annotation,))
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Candidate Annotation"):
+        VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+            video_set=video_set,
+            representatives=request.frame_candidates,
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=(request,),
+            configuration=configuration,
+            resolved_models=models,
+        )
+    cache_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in configuration.processing_cache_folder.rglob("*.json")
+    )
+    assert raw_context_text not in cache_text
 
 
 def _video_set_and_configuration(

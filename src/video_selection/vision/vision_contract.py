@@ -1,5 +1,14 @@
 """VisionRuntime v1のschemaとversion定数。"""
 
+from ..models.candidate_annotation import (
+    BLOG_IMAGE_TYPES,
+    CONTEXT_CUE_RELEVANCES,
+    EXPLANATION_VALUES,
+    SCREEN_TEXT_KINDS,
+    SPOILER_RISKS,
+)
+from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
+
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v1"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
@@ -28,7 +37,7 @@ SCENE_CATALOG_SCHEMA: dict[str, object] = {
                     "description": {"type": "string", "minLength": 1},
                     "selection_role": {
                         "type": "string",
-                        "enum": ["ordinary", "cinematic", "recurring_gameplay"],
+                        "enum": list(SCENE_SELECTION_ROLES),
                     },
                 },
                 "required": [
@@ -51,21 +60,21 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
         "scene_slug": {"type": "string"},
         "blog_image_type": {
             "type": "string",
-            "enum": ["normal_gameplay", "event", "menu", "title", "other"],
+            "enum": list(BLOG_IMAGE_TYPES),
         },
         "explanation_value": {
             "type": "string",
-            "enum": ["none", "low", "medium", "high"],
+            "enum": list(EXPLANATION_VALUES),
         },
         "annotation_summary": {"type": "string", "minLength": 1},
         "frame_choice_reason": {"type": "string", "minLength": 1},
         "screen_text_kind": {
             "type": "string",
-            "enum": ["none", "dialogue", "menu", "title", "hud", "other"],
+            "enum": list(SCREEN_TEXT_KINDS),
         },
         "context_relevance": {
             "type": "string",
-            "enum": ["unavailable", "none", "weak", "strong"],
+            "enum": list(CONTEXT_CUE_RELEVANCES),
         },
         "supporting_context_cue_ids": {
             "type": "array",
@@ -74,7 +83,7 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
         },
         "spoiler_risk": {
             "type": "string",
-            "enum": ["none", "low", "medium", "high"],
+            "enum": list(SPOILER_RISKS),
         },
         "spoiler_evidence": {"type": "string"},
     },

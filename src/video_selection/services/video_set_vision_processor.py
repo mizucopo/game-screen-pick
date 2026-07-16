@@ -1,10 +1,17 @@
 """Video Set単位のScene CatalogとCandidate Annotation Stage。"""
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from fractions import Fraction
+from pathlib import Path
+from typing import TypeVar
 
-from ..models.candidate_annotation import CandidateAnnotation
+from ..models.candidate_annotation import (
+    CandidateAnnotation,
+    candidate_annotation_context_is_valid,
+    candidate_annotation_free_text_is_safe,
+    candidate_annotation_relationships_are_valid,
+)
 from ..models.candidate_annotation_request import CandidateAnnotationRequest
 from ..models.completed_stage import CompletedStage
 from ..models.effective_configuration import EffectiveConfiguration
@@ -40,6 +47,8 @@ from .vision_stage_artifacts import (
     serialize_candidate_annotation,
     serialize_scene_catalog,
 )
+
+VisionStageValue = TypeVar("VisionStageValue")
 
 
 class VideoSetVisionProcessor:
@@ -127,31 +136,21 @@ class VideoSetVisionProcessor:
             upstream_fingerprints,
             semantic_input,
         )
-        artifact = writer.read(
-            ProcessingStage.BUILD_SCENE_CATALOG,
-            fingerprint,
-            upstream_fingerprints,
-            semantic_input,
-        )
-        if artifact is None:
-            catalog, diagnostics = self._runtime.create_scene_catalog(
+        (catalog, diagnostics), completed = _execute_cached_vision_stage(
+            writer=writer,
+            stage=ProcessingStage.BUILD_SCENE_CATALOG,
+            fingerprint=fingerprint,
+            upstream_fingerprints=upstream_fingerprints,
+            semantic_input=semantic_input,
+            generate=lambda: self._runtime.create_scene_catalog(
                 request,
                 model,
                 num_ctx=num_ctx,
-            )
-            completed = writer.write(
-                ProcessingStage.BUILD_SCENE_CATALOG,
-                fingerprint,
-                upstream_fingerprints,
-                semantic_input,
-                serialize_scene_catalog(catalog, diagnostics),
-            )
-        else:
-            catalog, diagnostics = restore_scene_catalog(artifact)
-            completed = CompletedStage(
-                ProcessingStage.BUILD_SCENE_CATALOG,
-                fingerprint,
-            )
+            ),
+            serialize=lambda value: serialize_scene_catalog(*value),
+            restore=restore_scene_catalog,
+            artifact_label="Scene Catalog",
+        )
         self._observer.stage_completed(completed)
         return catalog, diagnostics, completed
 
@@ -179,39 +178,75 @@ class VideoSetVisionProcessor:
             upstream,
             semantic_input,
         )
-        artifact = writer.read(
-            ProcessingStage.ANNOTATE_CANDIDATE,
-            fingerprint,
-            upstream,
-            semantic_input,
-        )
-        if artifact is None:
-            annotation, diagnostics = self._runtime.annotate_candidate(
+
+        def generate() -> tuple[CandidateAnnotation, VisionInferenceDiagnostics]:
+            generated = self._runtime.annotate_candidate(
                 request,
                 catalog,
                 model,
                 num_ctx=num_ctx,
             )
+            annotation, diagnostics = generated
             _validate_runtime_annotation(annotation, request, catalog)
-            completed = writer.write(
-                ProcessingStage.ANNOTATE_CANDIDATE,
-                fingerprint,
-                upstream,
-                semantic_input,
-                serialize_candidate_annotation(annotation, diagnostics),
-            )
-        else:
-            annotation, diagnostics = restore_candidate_annotation(
+            return generated
+
+        (annotation, diagnostics), completed = _execute_cached_vision_stage(
+            writer=writer,
+            stage=ProcessingStage.ANNOTATE_CANDIDATE,
+            fingerprint=fingerprint,
+            upstream_fingerprints=upstream,
+            semantic_input=semantic_input,
+            generate=generate,
+            serialize=lambda value: serialize_candidate_annotation(*value),
+            restore=lambda artifact: restore_candidate_annotation(
                 artifact,
                 request,
                 catalog,
-            )
-            completed = CompletedStage(
-                ProcessingStage.ANNOTATE_CANDIDATE,
-                fingerprint,
-            )
+            ),
+            artifact_label="Candidate Annotation",
+        )
         self._observer.stage_completed(completed)
         return annotation, diagnostics, completed
+
+
+def _execute_cached_vision_stage(
+    *,
+    writer: CompletedStageWriter,
+    stage: ProcessingStage,
+    fingerprint: StageFingerprint,
+    upstream_fingerprints: tuple[StageFingerprint, ...],
+    semantic_input: Mapping[str, object],
+    generate: Callable[[], VisionStageValue],
+    serialize: Callable[[VisionStageValue], dict[str, object]],
+    restore: Callable[[Mapping[str, object]], VisionStageValue],
+    artifact_label: str,
+) -> tuple[VisionStageValue, CompletedStage]:
+    """同じfingerprintの生成と復元を一つのlock lifecycleで確定する。"""
+    generated: VisionStageValue | None = None
+
+    def produce(_stage_folder: Path) -> dict[str, object]:
+        nonlocal generated
+        generated = generate()
+        return serialize(generated)
+
+    completed = writer.write_artifacts(
+        stage,
+        fingerprint,
+        upstream_fingerprints,
+        semantic_input,
+        produce,
+    )
+    if generated is not None:
+        return generated, completed
+    artifact = writer.read(
+        stage,
+        fingerprint,
+        upstream_fingerprints,
+        semantic_input,
+    )
+    if artifact is None:
+        raise RuntimeError(f"確定した{artifact_label} artifactを復元できません")
+    return restore(artifact), completed
 
 
 def _validate_inputs(
@@ -249,12 +284,30 @@ def _validate_runtime_annotation(
     catalog: SceneCatalog,
 ) -> None:
     frame_ids = {item.identifier for item in request.frame_candidates}
-    cue_ids = {item.identifier for item in request.context_cues}
+    cue_ids = tuple(item.identifier for item in request.context_cues)
     if (
         annotation.candidate_moment_id != request.moment.identifier
         or annotation.candidate.identifier not in frame_ids
         or annotation.scene_slug not in catalog.slugs
-        or not set(annotation.supporting_context_cue_ids).issubset(cue_ids)
+        or not candidate_annotation_relationships_are_valid(
+            annotation.context_relevance,
+            annotation.supporting_context_cue_ids,
+            annotation.spoiler_risk,
+            annotation.spoiler_evidence,
+        )
+        or not candidate_annotation_context_is_valid(
+            annotation.context_relevance,
+            annotation.supporting_context_cue_ids,
+            cue_ids,
+        )
+        or not candidate_annotation_free_text_is_safe(
+            (
+                annotation.summary,
+                annotation.frame_choice_reason or "",
+                annotation.spoiler_evidence,
+            ),
+            tuple(item.text for item in request.context_cues),
+        )
     ):
         raise ValueError("VisionRuntimeがrequest外のCandidate Annotationを返しました")
 

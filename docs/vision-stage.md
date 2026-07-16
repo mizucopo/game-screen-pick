@@ -21,7 +21,7 @@ Ollamaの`/api/chat`を次の2種類だけに使います。
 1. `build-scene-catalog`: Video Set共有の3〜8 sceneを一回生成します。`other`を必ず1件含め、そのScene Selection Roleは`ordinary`です。
 2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、入力frameの一つをRepresentative Frameとして返します。
 
-両方ともJSON Schema object全体、`stream=false`、`think=false`、`temperature=0`を送ります。JSON Schema検証後にも、Scene Slug、Frame Candidate ID、Context Cue IDが入力集合へ属することをlocalで検査します。
+両方ともJSON Schema object全体、`stream=false`、`think=false`、`temperature=0`を送ります。JSON Schema検証後にも、Scene Slug、Frame Candidate ID、Context Cue IDが入力集合へ属すること、Context Cueの有無とRelevanceが整合することをlocalで検査します。annotation summary、Representative Frameの選択理由、spoiler evidenceに入力Context Cue本文が逐語再出力された応答はdomain invalidとして拒否します。
 
 Candidate Annotation v1は次の意味情報だけを返します。
 
@@ -39,11 +39,11 @@ Quality Score、model confidence、final score、soft coverage、eligible/select
 
 同じsemantic入力で初回と一回のretryだけを行います。timeout、connection failure、HTTP 408/429/5xx、空・打ち切り応答、schema/domain validation failureがretry対象です。429の`Retry-After`は最大30秒まで尊重し、その他は1秒待ちます。
 
-validation retryではstable validation codeだけを追加し、raw responseを次promptへ戻しません。画像、Context Cue、Catalogを削る、代表画像を減らす、`other`へfallbackする、失敗したCandidateを黙って除外する処理は行いません。model不在と408/429以外のHTTP 4xxは即時fatalです。
+response/schema/domain validation retryではstable validation codeだけを追加し、raw responseを次promptへ戻しません。model出力が存在しないtransport retryでは元のpromptを変更しません。画像、Context Cue、Catalogを削る、代表画像を減らす、`other`へfallbackする、失敗したCandidateを黙って除外する処理は行いません。model不在と408/429以外のHTTP 4xxは即時fatalです。
 
 ## Completed Stage cache
 
-Scene CatalogはVideo Setごとに一つ、Candidate AnnotationはCandidate Momentごとに一つのatomic Completed Stageです。一つのAnnotationが最終失敗した場合、最終選定とoutput公開へ進みませんが、それ以前に完了したCatalogとAnnotationは次回runで再利用されます。
+Scene CatalogはVideo Setごとに一つ、Candidate AnnotationはCandidate Momentごとに一つのatomic Completed Stageです。同じStage Fingerprintの推論はfingerprint lock内で一度だけ実行し、並行workerも最初に確定したartifactを復元します。一つのAnnotationが最終失敗した場合、最終選定とoutput公開へ進みませんが、それ以前に完了したCatalogとAnnotationは次回runで再利用されます。
 
 fingerprintには、順序付きFrame Candidate IDと画像SHA-256、Context Cue ID・正確な範囲・本文SHA-256、Cue選択policy、Scene Catalog fingerprint、Video Set Progress、Selection Intent、Resolved Model Identity、Ollama runtime identity、generation option、prompt/schema/stage/retry versionを含めます。
 
@@ -63,4 +63,4 @@ cache artifactには検証済みCatalog／Annotationと、identity、version、�
 uv run task test
 ```
 
-fake VisionRuntime goldenでschema invalid、domain invalid、transport failure、retry成功・失敗、Context Cue有無、major spoiler evidence、warm cache、途中失敗後のMoment単位再開を検証します。
+fake VisionRuntime goldenでschema invalid、domain invalid、transport failure、打ち切り応答、retry成功・失敗、Context Cue有無、raw text拒否、major spoiler evidence、warm cache、同一fingerprintの並行処理、途中失敗後のMoment単位再開を検証します。
