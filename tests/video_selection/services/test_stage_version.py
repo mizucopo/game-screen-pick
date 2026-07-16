@@ -22,3 +22,23 @@ def test_collect_context_has_context_collection_stage_version() -> None:
 
     # Assert
     assert version == "context-collection-v1"
+
+
+def test_resolve_models_has_model_resolution_stage_version() -> None:
+    """Model Resolution Stageに固有のcontract versionが付与されること。
+
+    Arrange:
+        - resolve-models Processing Stageが用意される
+    Act:
+        - Stage versionが解決される
+    Assert:
+        - model resolution固有のversionが返されること
+    """
+    # Arrange
+    stage = ProcessingStage.RESOLVE_MODELS
+
+    # Act
+    version = stage_version(stage)
+
+    # Assert
+    assert version == "model-resolution-v1"

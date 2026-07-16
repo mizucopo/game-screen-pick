@@ -19,7 +19,6 @@ from src.video_selection.models.processing_stage import (
     VIDEO_SET_STAGE_ORDER,
     ProcessingStage,
 )
-from src.video_selection.models.resolved_model_identity import ResolvedModelIdentity
 from src.video_selection.models.run_status import RunStatus
 from src.video_selection.models.selected_image import SelectedImage
 from src.video_selection.models.video_set import VideoSet
@@ -52,9 +51,7 @@ def _successful_application(
     return VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=candidate, summary="summary"),)
         ),
@@ -92,9 +89,7 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector((ContextCue(identifier="cue-001"),)),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime((annotation,)),
         observer=observer,
     )
@@ -386,9 +381,7 @@ def test_stage_failure_leaves_output_unpublished(tmp_path: Path) -> None:
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FailingVisionRuntime(),
         observer=observer,
     )
@@ -434,9 +427,7 @@ def test_existing_empty_output_folder_is_removed_before_stage_failure(
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FailingVisionRuntime(),
         observer=RecordingRunObserver(),
     )
@@ -484,9 +475,7 @@ def test_invalid_output_folder_is_rejected_before_cache_side_effects(
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=candidate, summary="summary"),)
         ),
@@ -536,9 +525,7 @@ def test_resolved_model_identity_changes_model_stage_fingerprint(
         application = VideoSelectionApplication(
             media_runtime=FakeMediaRuntime((candidate,)),
             speech_runtime=FakeContextCollector(()),
-            model_runtime=FakeModelRuntime(
-                ResolvedModelIdentity(identifier=model_identity)
-            ),
+            model_runtime=FakeModelRuntime(model_identity),
             vision_runtime=FakeVisionRuntime((annotation,)),
             observer=RecordingRunObserver(),
         )
@@ -553,6 +540,63 @@ def test_resolved_model_identity_changes_model_stage_fingerprint(
     # Assert
     assert (
         len(_video_set_stage_manifests(input_folder, ProcessingStage.RESOLVE_MODELS))
+        == 2
+    )
+    assert (
+        len(
+            _video_set_stage_manifests(
+                input_folder,
+                ProcessingStage.ANNOTATE_CANDIDATES,
+            )
+        )
+        == 2
+    )
+
+
+def test_candidate_model_context_setting_changes_annotation_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """Candidate Annotationのcontext設定変更でそのStageが再計算されること。
+
+    Arrange:
+        - 同じVideo Setとmodel identityに異なるnum_ctxを持つ2 runが用意される
+    Act:
+        - 各runが別の空Output Folderへ実行される
+    Assert:
+        - Candidate Annotationに異なるfingerprintが保存されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    annotation = CandidateAnnotation(candidate=candidate, summary="summary")
+
+    # Act
+    for run_index, num_ctx in enumerate((32768, 65536), start=1):
+        VideoSelectionApplication(
+            media_runtime=FakeMediaRuntime((candidate,)),
+            speech_runtime=FakeContextCollector(()),
+            model_runtime=FakeModelRuntime("same-model"),
+            vision_runtime=FakeVisionRuntime((annotation,)),
+            observer=RecordingRunObserver(),
+        ).run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=tmp_path / f"output-{run_index}",
+                image_count=1,
+                candidate_annotation_num_ctx=num_ctx,
+            )
+        )
+
+    # Assert
+    assert (
+        len(
+            _video_set_stage_manifests(
+                input_folder,
+                ProcessingStage.ANNOTATE_CANDIDATES,
+            )
+        )
         == 2
     )
 
@@ -585,9 +629,7 @@ def test_video_content_change_changes_discovery_stage_fingerprint(
         VideoSelectionApplication(
             media_runtime=FakeMediaRuntime((candidate,)),
             speech_runtime=FakeContextCollector(()),
-            model_runtime=FakeModelRuntime(
-                ResolvedModelIdentity(identifier="model-sha-001")
-            ),
+            model_runtime=FakeModelRuntime("model-sha-001"),
             vision_runtime=FakeVisionRuntime((annotation,)),
             observer=RecordingRunObserver(),
         ).run(
@@ -629,7 +671,7 @@ def test_warm_run_reuses_cached_candidate_annotations(tmp_path: Path) -> None:
         identifier="frame-001",
         image_bytes=b"fake-webp-image",
     )
-    model_runtime = FakeModelRuntime(ResolvedModelIdentity(identifier="model-sha-001"))
+    model_runtime = FakeModelRuntime("model-sha-001")
     VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
@@ -670,6 +712,78 @@ def test_warm_run_reuses_cached_candidate_annotations(tmp_path: Path) -> None:
     assert report["selected"][0]["summary"] == "cached summary"
 
 
+def test_speech_model_change_does_not_invalidate_candidate_annotation_cache(
+    tmp_path: Path,
+) -> None:
+    """STT model identity変更でCandidate Annotation cacheが無効化されないこと。
+
+    Arrange:
+        - candidate modelが同じでSTT modelだけが異なる2 runが用意される
+        - 初回runでCandidate Annotationが確定される
+        - 再実行されると失敗するVisionRuntimeが2回目に用意される
+    Act:
+        - 2回目のrunが別の空Output Folderへ実行される
+    Assert:
+        - model resolutionは別fingerprintとなること
+        - Candidate Annotationは既存cacheから再利用されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    annotation = CandidateAnnotation(candidate=candidate, summary="cached summary")
+    VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeContextCollector(()),
+        model_runtime=FakeModelRuntime(
+            "candidate-model",
+            speech_identity_seed="speech-model-a",
+        ),
+        vision_runtime=FakeVisionRuntime((annotation,)),
+        observer=RecordingRunObserver(),
+    ).run(
+        EffectiveConfiguration(
+            video_input_folder=input_folder,
+            output_folder=tmp_path / "output-1",
+            image_count=1,
+        )
+    )
+
+    # Act
+    VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeContextCollector(()),
+        model_runtime=FakeModelRuntime(
+            "candidate-model",
+            speech_identity_seed="speech-model-b",
+        ),
+        vision_runtime=FailingVisionRuntime(),
+        observer=RecordingRunObserver(),
+    ).run(
+        EffectiveConfiguration(
+            video_input_folder=input_folder,
+            output_folder=tmp_path / "output-2",
+            image_count=1,
+        )
+    )
+
+    # Assert
+    assert (
+        len(_video_set_stage_manifests(input_folder, ProcessingStage.RESOLVE_MODELS))
+        == 2
+    )
+    assert (
+        len(
+            _video_set_stage_manifests(
+                input_folder,
+                ProcessingStage.ANNOTATE_CANDIDATES,
+            )
+        )
+        == 1
+    )
+
+
 def test_annotation_order_is_normalized_to_frame_candidate_order(
     tmp_path: Path,
 ) -> None:
@@ -690,7 +804,7 @@ def test_annotation_order_is_normalized_to_frame_candidate_order(
     first_candidate = FrameCandidate(identifier="frame-001", image_bytes=b"first")
     second_candidate = FrameCandidate(identifier="frame-002", image_bytes=b"second")
     candidates = (first_candidate, second_candidate)
-    model_runtime = FakeModelRuntime(ResolvedModelIdentity(identifier="model-sha-001"))
+    model_runtime = FakeModelRuntime("model-sha-001")
     cold_output_folder = tmp_path / "output-cold"
     warm_output_folder = tmp_path / "output-warm"
     cold_application = VideoSelectionApplication(
@@ -765,9 +879,7 @@ def test_candidate_identity_changes_extraction_stage_fingerprint(
         VideoSelectionApplication(
             media_runtime=FakeMediaRuntime((candidate,)),
             speech_runtime=FakeContextCollector(()),
-            model_runtime=FakeModelRuntime(
-                ResolvedModelIdentity(identifier="model-sha-001")
-            ),
+            model_runtime=FakeModelRuntime("model-sha-001"),
             vision_runtime=FakeVisionRuntime(
                 (CandidateAnnotation(candidate=candidate, summary="summary"),)
             ),
@@ -818,9 +930,7 @@ def test_context_identity_changes_context_stage_fingerprint(tmp_path: Path) -> N
         VideoSelectionApplication(
             media_runtime=FakeMediaRuntime((candidate,)),
             speech_runtime=FakeContextCollector((ContextCue(identifier=context_id),)),
-            model_runtime=FakeModelRuntime(
-                ResolvedModelIdentity(identifier="model-sha-001")
-            ),
+            model_runtime=FakeModelRuntime("model-sha-001"),
             vision_runtime=FakeVisionRuntime((annotation,)),
             observer=RecordingRunObserver(),
         ).run(
@@ -861,9 +971,7 @@ def test_duplicate_video_content_is_rejected_before_cache_side_effects(
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=candidate, summary="summary"),)
         ),
@@ -910,9 +1018,7 @@ def test_existing_empty_output_folder_is_preserved_when_input_preflight_fails(
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=candidate, summary="summary"),)
         ),
@@ -957,9 +1063,7 @@ def test_output_nested_in_input_is_rejected_before_cache_side_effects(
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=candidate, summary="summary"),)
         ),
@@ -1001,9 +1105,7 @@ def test_existing_empty_output_folder_is_accepted(tmp_path: Path) -> None:
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=candidate, summary="summary"),)
         ),
@@ -1054,9 +1156,7 @@ def test_changed_candidate_content_changes_extraction_stage_fingerprint(
         VideoSelectionApplication(
             media_runtime=FakeMediaRuntime((candidate,)),
             speech_runtime=FakeContextCollector(()),
-            model_runtime=FakeModelRuntime(
-                ResolvedModelIdentity(identifier="model-sha-001")
-            ),
+            model_runtime=FakeModelRuntime("model-sha-001"),
             vision_runtime=FakeVisionRuntime(
                 (CandidateAnnotation(candidate=candidate, summary="summary"),)
             ),
@@ -1104,9 +1204,7 @@ def test_duplicate_candidate_ids_are_rejected_before_candidate_cache(
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((first_candidate, second_candidate)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (
                 CandidateAnnotation(candidate=first_candidate, summary="first"),
@@ -1156,9 +1254,7 @@ def test_unsafe_candidate_id_is_rejected_before_candidate_cache(
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=candidate, summary="summary"),)
         ),
@@ -1212,9 +1308,7 @@ def test_foreign_candidate_annotation_is_rejected_before_caching(
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((extracted_candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=foreign_candidate, summary="foreign"),)
         ),
@@ -1259,9 +1353,7 @@ def test_selection_shortfall_is_published_with_warning(tmp_path: Path) -> None:
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=candidate, summary="summary"),)
         ),
@@ -1321,9 +1413,7 @@ def test_invalid_output_parent_is_rejected_before_cache_side_effects(
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=candidate, summary="summary"),)
         ),
@@ -1369,9 +1459,7 @@ def test_incomplete_candidate_annotations_are_rejected_before_caching(
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((first_candidate, second_candidate)),
         speech_runtime=FakeContextCollector(()),
-        model_runtime=FakeModelRuntime(
-            ResolvedModelIdentity(identifier="model-sha-001")
-        ),
+        model_runtime=FakeModelRuntime("model-sha-001"),
         vision_runtime=FakeVisionRuntime(
             (CandidateAnnotation(candidate=first_candidate, summary="first"),)
         ),

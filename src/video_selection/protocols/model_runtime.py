@@ -2,11 +2,15 @@
 
 from typing import Protocol
 
-from ..models.resolved_model_identity import ResolvedModelIdentity
+from ..models.effective_configuration import EffectiveConfiguration
+from ..models.resolved_models import ResolvedModels
 
 
 class ModelRuntime(Protocol):
-    """実行に使うmodel identityを解決する境界。"""
+    """全roleのmodel lifecycleと実行identityを閉じ込める境界。"""
 
-    def resolve_models(self) -> ResolvedModelIdentity:
-        """freezeされたResolved Model Identityを返す。"""
+    def resolve_models(
+        self,
+        configuration: EffectiveConfiguration,
+    ) -> ResolvedModels:
+        """run内でfreezeされた全roleのResolved Modelを返す。"""

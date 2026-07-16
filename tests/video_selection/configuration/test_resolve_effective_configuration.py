@@ -559,6 +559,10 @@ def test_recursive_absence_and_explicit_false_are_distinguished(
             '[models.scene_catalog]\nrevision = "secret"\n',
             id="unknown-model-key",
         ),
+        pytest.param(
+            '[models.scene_catalog]\nexpected_digest = "sha256:manual"\n',
+            id="manual-model-hash",
+        ),
         pytest.param('[input]\nrecursive = "yes"\n', id="invalid-type"),
         pytest.param(
             '[selection]\nspoiler_sensitivity = "extreme"\n',

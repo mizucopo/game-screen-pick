@@ -11,4 +11,6 @@ def stage_version(stage: ProcessingStage) -> str:
         return "frame-candidate-extraction-v1"
     if stage is ProcessingStage.COLLECT_CONTEXT:
         return "context-collection-v1"
+    if stage is ProcessingStage.RESOLVE_MODELS:
+        return "model-resolution-v1"
     return "walking-skeleton-0"

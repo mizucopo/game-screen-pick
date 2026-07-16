@@ -58,9 +58,15 @@ class ProcessingStageRunner:
         stage: ProcessingStage,
         semantic_input: Mapping[str, object],
         artifact: dict[str, object],
+        *,
+        upstream_stages: tuple[ProcessingStage, ...] | None = None,
     ) -> CompletedStage:
         """次のStageだけをartifactとmanifestへ確定する。"""
-        upstream_fingerprints, fingerprint = self._prepare_stage(stage, semantic_input)
+        upstream_fingerprints, fingerprint = self._prepare_stage(
+            stage,
+            semantic_input,
+            upstream_stages,
+        )
         completed_stage = self._writer.write(
             stage,
             fingerprint,
@@ -76,9 +82,15 @@ class ProcessingStageRunner:
         stage: ProcessingStage,
         semantic_input: Mapping[str, object],
         restore: Callable[[dict[str, object]], StageResult],
+        *,
+        upstream_stages: tuple[ProcessingStage, ...] | None = None,
     ) -> StageResult | None:
         """検証済みCompleted Stageがあれば復元して完了扱いにする。"""
-        upstream_fingerprints, fingerprint = self._prepare_stage(stage, semantic_input)
+        upstream_fingerprints, fingerprint = self._prepare_stage(
+            stage,
+            semantic_input,
+            upstream_stages,
+        )
         artifact = self._writer.read(
             stage,
             fingerprint,
@@ -96,9 +108,15 @@ class ProcessingStageRunner:
         stage: ProcessingStage,
         semantic_input: Mapping[str, object],
         produce_artifacts: ArtifactProducer,
+        *,
+        upstream_stages: tuple[ProcessingStage, ...] | None = None,
     ) -> CompletedStageBundle:
         """複数artifactを生成して次のStageを確定する。"""
-        upstream_fingerprints, fingerprint = self._prepare_stage(stage, semantic_input)
+        upstream_fingerprints, fingerprint = self._prepare_stage(
+            stage,
+            semantic_input,
+            upstream_stages,
+        )
         completed_stage = self._writer.write_artifacts(
             stage,
             fingerprint,
@@ -122,9 +140,15 @@ class ProcessingStageRunner:
         self,
         stage: ProcessingStage,
         semantic_input: Mapping[str, object],
+        *,
+        upstream_stages: tuple[ProcessingStage, ...] | None = None,
     ) -> CompletedStageBundle | None:
         """検証済みCompleted Stage bundleがあれば完了扱いにする。"""
-        upstream_fingerprints, fingerprint = self._prepare_stage(stage, semantic_input)
+        upstream_fingerprints, fingerprint = self._prepare_stage(
+            stage,
+            semantic_input,
+            upstream_stages,
+        )
         bundle = self._writer.read_bundle(
             stage,
             fingerprint,
@@ -140,6 +164,7 @@ class ProcessingStageRunner:
         self,
         stage: ProcessingStage,
         semantic_input: Mapping[str, object],
+        upstream_stages: tuple[ProcessingStage, ...] | None,
     ) -> tuple[tuple[StageFingerprint, ...], StageFingerprint]:
         """次Stageを検証して上流とfingerprintを返す。"""
         stages = self._stage_order
@@ -152,13 +177,37 @@ class ProcessingStageRunner:
             msg = f"expected={expected_stage.value}, actual={stage.value}"
             raise ValueError(msg)
         self._before_stage()
-        upstream_fingerprints = tuple(
-            item.fingerprint for item in self._completed_stages
-        )
+        upstream_fingerprints = self._select_upstream_fingerprints(upstream_stages)
         return upstream_fingerprints, build_stage_fingerprint(
             stage,
             upstream_fingerprints,
             semantic_input,
+        )
+
+    def _select_upstream_fingerprints(
+        self,
+        upstream_stages: tuple[ProcessingStage, ...] | None,
+    ) -> tuple[StageFingerprint, ...]:
+        """完了済みStageから意味的に依存するfingerprintを順番に返す。"""
+        if upstream_stages is None:
+            return tuple(item.fingerprint for item in self._completed_stages)
+        if len(upstream_stages) != len(set(upstream_stages)):
+            msg = "upstream_stagesには重複しないStageが必要です"
+            raise ValueError(msg)
+        completed_by_stage = {
+            item.stage: item.fingerprint for item in self._completed_stages
+        }
+        missing = [
+            stage for stage in upstream_stages if stage not in completed_by_stage
+        ]
+        if missing:
+            msg = f"upstream Stageが未完了です: {missing[0].value}"
+            raise ValueError(msg)
+        selected = set(upstream_stages)
+        return tuple(
+            item.fingerprint
+            for item in self._completed_stages
+            if item.stage in selected
         )
 
     def _record_completion(self, completed_stage: CompletedStage) -> None:

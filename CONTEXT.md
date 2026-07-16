@@ -80,9 +80,21 @@ _Avoid_: global config hash, Video Fingerprint, unrelated downstream setting
 明示CLI、明示TOML、公開環境変数、組み込み既定値の順で項目ごとに解決し、型・範囲・相互制約を検証した1回の実行設定。設定sourceはprovenanceに残すが、無関係な全項目を一つのStage Fingerprintへ混ぜない。
 _Avoid_: raw TOML, environment dump, global config hash, CLI defaults applied before precedence
 
+**Model Runtime**:
+Effective Configurationの3 model roleをdistinctなstore/nameごとに一度だけlocal解決・同期し、全共有roleの完全性とcapabilityを検証してResolved Modelをrun単位でfreezeするruntime境界。promptの意味評価や選定を所有せず、model storeのpath、token、external error detailを境界外へ出さない。
+_Avoid_: Vision Runtime, Speech Runtime, model store, inference client, model fallback
+
 **Resolved Model Identity**:
 configured model名から実行時に解決し、完全性とload能力を検証して1 run内でfreezeする、Ollamaの完全manifest digestまたはHugging Faceの完全commit SHA。model依存Stageのfingerprintとprovenanceへ保持し、TOMLへ手入力するhashとはしない。
 _Avoid_: model tag, configured model name, truncated report value, expected digest
+
+**Resolved Model**:
+一つのmodel roleについて、設定名、canonical名、完全でload可能な更新前identity、Model Update Status、freeze済み実行identity、runtime identity、非公開のlocal artifact locationを分離して保持するrun内結果。model依存Stageへはrole固有の設定名、実行identity、runtime identityだけを渡し、locationや更新診断をfingerprintへ含めない。
+_Avoid_: Resolved Model Identity, configured model, model store entry, global model bundle
+
+**Model Update Status**:
+一つのdistinct modelにModel Upgrade Policyを適用したrun別診断。`not_requested`、`unchanged`、`updated`、`bootstrapped`、`unavailable`のいずれかで、共有tagを使うroleへ同じ結果を割り当てる。実行identityと分離してprovenanceへ残し、それ自体ではStage Fingerprintを変えない。
+_Avoid_: Resolved Model Identity, model version, progress state, cache invalidation reason
 
 **Speech Runtime**:
 ModelRuntimeからrun単位で渡された、解決済みでload可能なSTT model artifactとfreeze済みResolved Model Identityを使い、設定されたdevice、compute type、beamなどのprofileでspeech-to-textとword timestampを実行するruntime境界。Context Cueを直接返さず、backend非依存のSpeech Recognition Resultを返す。faster-whisperは既定adapterだが、固定revisionの解決、download、更新確認、run中のmodel freezeは所有しない。

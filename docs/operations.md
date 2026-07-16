@@ -1,7 +1,7 @@
 # 動画入力の運用
 
 > [!IMPORTANT]
-> Video Set探索・identity、Input Lock、Completed Stage cache、Legacy Cache削除、FFmpeg MediaRuntime、動画単位のFrame Candidate・Context Cueを作るVideo Stageは内部実装済みです。model lifecycle、Video Set Stage、進捗表示、public CLIは後続Issueで接続し、installed CLIはIssue #190までscreenshot入力のままです。
+> Video Set探索・identity、Input Lock、Completed Stage cache、Legacy Cache削除、FFmpeg MediaRuntime、動画単位のFrame Candidate・Context Cueを作るVideo Stage、model lifecycleは内部実装済みです。Scene Catalog以降のVideo Set Stage、進捗表示、public CLIは後続Issueで接続し、installed CLIはIssue #190までscreenshot入力のままです。
 
 ## 最低runtime
 
@@ -14,6 +14,16 @@
 | CTranslate2 | 4.8.1 | configured device / compute typeの初期化 |
 
 新しいversionは許可しますが、実際のtool/runtime versionは関係するStage Fingerprintとprovenanceへ記録します。version番号だけで能力を推測せず、処理開始前に必要なoperationを検査します。
+
+## ModelRuntime
+
+ModelRuntimeはScene Catalog、Candidate Annotation、Speech to Textの3 roleを一回のrun開始時に解決します。同じOllama tagを複数roleが共有するときは、local identityの解決とpullをdistinct tagごとに一度だけ行い、roleごとのcontext requirementをすべて検証してから同じpost-pull identityをfreezeします。
+
+Ollama adapterは`/api/version`、`/api/tags`、`/api/pull`、`/api/show`、固定JSON Schemaを渡す最小`/api/chat` probeを使い、最低server version、完全manifest digest、vision、要求context length、structured outputを検査します。Hugging Face adapterはlocal `refs/main`をnetworkなしで確認し、更新時は`model_info(..., revision = "main")`の完全commit SHAを解決してから、そのSHAのimmutable snapshotだけを取得します。STT snapshotは設定されたdeviceとcompute typeでfaster-whisperへlocal-only loadできた場合だけ完全とみなします。
+
+同期後artifactがpartial、identity不一致、load不能、capability不足なら、更新前artifactへ戻さずfatalです。offlineやtimeoutなどで同期自体が利用不能な場合に限り、同期前に利用可能なlocal artifactがあったことを条件にlocal storeを再解決し、全共有roleの再検査へ合格したartifactを`update_status = "unavailable"`として使用します。別modelへのfallbackは行いません。
+
+run内の解決結果はroleごとに設定名、canonical名、更新前identity、更新status、実行identity、runtime identityを分離します。model storeの絶対pathとtokenは内部のload境界だけで使い、Stage入力、provenance、warning、errorへ含めません。fingerprintにはrole固有の設定名、実行identity、runtime identityだけを渡すため、同じidentityへのno-op pullや一時offlineはcacheを無効化せず、あるroleのidentity変更は無関係なroleのsemantic inputを変えません。
 
 ## FFmpeg MediaRuntime
 
