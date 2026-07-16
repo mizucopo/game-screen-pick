@@ -34,12 +34,23 @@ _SPOILER_PENALTIES: Mapping[SpoilerSensitivity, Mapping[str, float]] = {
     "medium": {"none": 0.0, "low": 0.01, "medium": 0.04, "high": 0.10},
     "high": {"none": 0.0, "low": 0.02, "medium": 0.08, "high": 0.18},
 }
+_SPOILER_SENSITIVITY_ORDER: tuple[SpoilerSensitivity, ...] = (
+    "low",
+    "medium",
+    "high",
+)
 _COVERAGE_TYPES = ("normal_gameplay", "event", "menu")
 _COVERAGE_PERCENTAGES = (70, 25, 5)
 _SIMILARITY_RELAXATION_DELTAS = (0.03, 0.06, 0.10, 0.15)
 _MAX_SIMILARITY_CEILING = 0.98
 _VISUAL_NEAR_DUPLICATE_THRESHOLD = 0.995
 _VARIANT_GROUP_SIMILARITY_THRESHOLD = 0.95
+_SIMILARITY_REJECTION_REASONS = frozenset(
+    {
+        SelectionRejectionReason.VISUAL_NEAR_DUPLICATE,
+        SelectionRejectionReason.SIMILARITY_CEILING,
+    }
+)
 
 
 def select_from_shortlist_batches(
@@ -99,37 +110,19 @@ def select_video_set_images(
         spoiler_sensitivity,
         similarity_threshold,
     )
-    if spoiler_sensitivity == "low":
-        return _select_with_major_spoiler_limit(
+    major_spoiler_limit: int | None = None
+    for current_sensitivity in _SPOILER_SENSITIVITY_ORDER:
+        result = _select_with_major_spoiler_limit(
             candidates,
             requested_count=requested_count,
-            spoiler_sensitivity="low",
+            spoiler_sensitivity=current_sensitivity,
             similarity_threshold=similarity_threshold,
-            major_spoiler_limit=None,
+            major_spoiler_limit=major_spoiler_limit,
         )
-    low_result = _select_with_major_spoiler_limit(
-        candidates,
-        requested_count=requested_count,
-        spoiler_sensitivity="low",
-        similarity_threshold=similarity_threshold,
-        major_spoiler_limit=None,
-    )
-    medium_result = _select_with_major_spoiler_limit(
-        candidates,
-        requested_count=requested_count,
-        spoiler_sensitivity="medium",
-        similarity_threshold=similarity_threshold,
-        major_spoiler_limit=low_result.major_spoiler_selected_count,
-    )
-    if spoiler_sensitivity == "medium":
-        return medium_result
-    return _select_with_major_spoiler_limit(
-        candidates,
-        requested_count=requested_count,
-        spoiler_sensitivity="high",
-        similarity_threshold=similarity_threshold,
-        major_spoiler_limit=medium_result.major_spoiler_selected_count,
-    )
+        if current_sensitivity == spoiler_sensitivity:
+            return result
+        major_spoiler_limit = result.major_spoiler_selected_count
+    raise AssertionError("検証済みSpoiler Sensitivityを選定できません")
 
 
 def _select_with_major_spoiler_limit(
@@ -559,22 +552,11 @@ def _rejection(
         ),
         nearest_selected_image_id=(
             nearest_selected.candidate.identifier
-            if reason
-            in {
-                SelectionRejectionReason.VISUAL_NEAR_DUPLICATE,
-                SelectionRejectionReason.SIMILARITY_CEILING,
-            }
-            and nearest_selected is not None
+            if reason in _SIMILARITY_REJECTION_REASONS and nearest_selected is not None
             else None
         ),
         similarity=(
-            nearest_similarity
-            if reason
-            in {
-                SelectionRejectionReason.VISUAL_NEAR_DUPLICATE,
-                SelectionRejectionReason.SIMILARITY_CEILING,
-            }
-            else None
+            nearest_similarity if reason in _SIMILARITY_REJECTION_REASONS else None
         ),
         variant_group_id=variant_group_id,
     )
