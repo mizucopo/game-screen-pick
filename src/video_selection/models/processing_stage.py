@@ -11,6 +11,8 @@ class ProcessingStage(StrEnum):
     EXTRACT_FRAME_CANDIDATES = "extract-frame-candidates"
     COLLECT_CONTEXT = "collect-context"
     RESOLVE_MODELS = "resolve-models"
+    BUILD_SCENE_CATALOG = "build-scene-catalog"
+    ANNOTATE_CANDIDATE = "annotate-candidate"
     ANNOTATE_CANDIDATES = "annotate-candidates"
     SELECT_IMAGES = "select-images"
 

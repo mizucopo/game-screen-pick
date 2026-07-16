@@ -9,11 +9,11 @@ from ..models.resolved_models import ResolvedModels
 from ..models.run_outcome import RunOutcome
 from ..models.run_status import RunStatus
 from ..models.video_set import VideoSet
+from ..protocols.candidate_batch_annotator import CandidateBatchAnnotator
 from ..protocols.context_collector import ContextCollector
 from ..protocols.frame_candidate_extractor import FrameCandidateExtractor
 from ..protocols.model_runtime import ModelRuntime
 from ..protocols.run_observer import RunObserver
-from ..protocols.vision_runtime import VisionRuntime
 from ..services.atomic_output_publisher import AtomicOutputPublisher
 from ..services.candidate_annotation_artifact import (
     build_candidate_annotation_artifact,
@@ -46,7 +46,7 @@ class VideoSelectionApplication:
         media_runtime: FrameCandidateExtractor,
         speech_runtime: ContextCollector,
         model_runtime: ModelRuntime,
-        vision_runtime: VisionRuntime,
+        vision_runtime: CandidateBatchAnnotator,
         observer: RunObserver,
     ) -> None:
         self._media_runtime = media_runtime

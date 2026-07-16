@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from typing import cast
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from ..models.model_artifact import ModelArtifact
@@ -11,9 +12,11 @@ from ..models.model_artifact_invalid_error import ModelArtifactInvalidError
 from ..models.model_capability import ModelCapability
 from ..models.model_requirement import ModelRequirement
 from ..models.model_runtime_identity import ModelRuntimeIdentity
+from ..models.model_store_http_error import ModelStoreHttpError
 from ..models.model_store_kind import ModelStoreKind
 from ..models.model_store_unavailable_error import ModelStoreUnavailableError
 from ..models.resolved_model_identity import ResolvedModelIdentity
+from ..utils.http_retry_delay import http_retry_delay
 from .canonicalize_ollama_model_selector import (
     canonicalize_ollama_model_selector,
 )
@@ -57,8 +60,19 @@ class OllamaModelStore:
     def resolve_local(self, requirement: ModelRequirement) -> ModelArtifact | None:
         """exact configured tagのlocal manifest digestを解決する。"""
         _require_ollama_requirement(requirement)
-        runtime_identity = self._runtime_identity()
-        return self._resolve_local_artifact(requirement, runtime_identity)
+        return self.resolve_current_artifact(requirement.configured_name)
+
+    def resolve_current_artifact(
+        self,
+        configured_name: str,
+    ) -> ModelArtifact | None:
+        """configured tagとserverから現在の完全artifactを解決する。"""
+        if not configured_name.strip():
+            raise ValueError("Ollama model名が必要です")
+        return self._resolve_local_artifact(
+            configured_name,
+            self._runtime_identity(),
+        )
 
     def synchronize(self, requirement: ModelRequirement) -> ModelArtifact:
         """configured tagをpullしpost-pull identityを解決する。"""
@@ -73,7 +87,10 @@ class OllamaModelStore:
         )
         if response.get("status") != "success":
             raise ModelArtifactInvalidError("Ollama pullの完了を確認できませんでした")
-        artifact = self._resolve_local_artifact(requirement, runtime_identity)
+        artifact = self._resolve_local_artifact(
+            requirement.configured_name,
+            runtime_identity,
+        )
         if artifact is None:
             raise ModelArtifactInvalidError(
                 "Ollama pull後のmodel identityを確認できませんでした"
@@ -130,13 +147,14 @@ class OllamaModelStore:
         _require_ollama_requirement(requirement)
         if artifact.identity.store_kind is not self.kind:
             raise ModelArtifactInvalidError("Ollama artifact kindが不正です")
-        current = self._resolve_local_artifact(
-            requirement,
-            artifact.runtime_identity,
-        )
-        if current is None or current.identity != artifact.identity:
+        current = self.resolve_current_artifact(requirement.configured_name)
+        if (
+            current is None
+            or current.identity != artifact.identity
+            or current.runtime_identity != artifact.runtime_identity
+        ):
             raise ModelArtifactInvalidError(
-                "Ollama tagがcapability検証中に変更されました"
+                "Ollama modelまたはruntimeがcapability検証中に変更されました"
             )
 
     def publish_validated(self, artifact: ModelArtifact) -> None:
@@ -200,9 +218,25 @@ class OllamaModelStore:
 
     def _resolve_local_artifact(
         self,
-        requirement: ModelRequirement,
+        configured_name: str,
         runtime_identity: ModelRuntimeIdentity,
     ) -> ModelArtifact | None:
+        resolved = self._resolve_current_model(configured_name)
+        if resolved is None:
+            return None
+        identity, canonical_name = resolved
+        return ModelArtifact(
+            identity=identity,
+            canonical_name=canonical_name,
+            runtime_identity=runtime_identity,
+            location=None,
+        )
+
+    def _resolve_current_model(
+        self,
+        configured_name: str,
+    ) -> tuple[ResolvedModelIdentity, str] | None:
+        """local一覧からidentityとcanonical nameを一度に解決する。"""
         response = _require_mapping(self._request("GET", "/api/tags", None))
         models = response.get("models")
         if not isinstance(models, list):
@@ -220,9 +254,7 @@ class OllamaModelStore:
                 for key in ("name", "model")
                 if isinstance((value := model.get(key)), str)
             )
-            if not any(
-                _names_match(requirement.configured_name, name) for name in names
-            ):
+            if not any(_names_match(configured_name, name) for name in names):
                 continue
             digest = model.get("digest")
             canonical_name = model.get("name")
@@ -238,12 +270,7 @@ class OllamaModelStore:
                 raise ModelArtifactInvalidError(
                     "Ollama local model identityを検証できませんでした"
                 ) from None
-            return ModelArtifact(
-                identity=identity,
-                canonical_name=canonical_name,
-                runtime_identity=runtime_identity,
-                location=None,
-            )
+            return identity, canonical_name
         return None
 
     def _request(
@@ -259,6 +286,14 @@ class OllamaModelStore:
                 payload,
                 self._timeout_seconds,
             )
+        except HTTPError as error:
+            retry_after = (
+                error.headers.get("Retry-After") if error.headers is not None else None
+            )
+            raise ModelStoreHttpError(
+                error.code,
+                retry_after_seconds=http_retry_delay(error.code, retry_after),
+            ) from None
         except (ModelArtifactInvalidError, ModelStoreUnavailableError):
             raise
         except Exception:

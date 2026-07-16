@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from typing import Self
 
 from .model_store_kind import ModelStoreKind
 
@@ -32,3 +33,12 @@ class ResolvedModelIdentity:
         """store間で衝突しないcanonical identityを返す。"""
         prefix = "ollama" if self.store_kind is ModelStoreKind.OLLAMA else "hf"
         return f"{prefix}:{self.value}"
+
+    @classmethod
+    def from_identifier(cls, identifier: str) -> Self:
+        """canonical identifierを検証してtyped identityへ戻す。"""
+        if identifier.startswith("ollama:"):
+            return cls(ModelStoreKind.OLLAMA, identifier.removeprefix("ollama:"))
+        if identifier.startswith("hf:"):
+            return cls(ModelStoreKind.HUGGING_FACE, identifier.removeprefix("hf:"))
+        raise ValueError("canonicalなmodel identity identifierが必要です")
