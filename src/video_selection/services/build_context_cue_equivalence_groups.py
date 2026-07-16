@@ -1,6 +1,7 @@
 """forced subtitleとSTT Context Cueの等価group構築。"""
 
 import unicodedata
+from fractions import Fraction
 
 from ..models.context_cue import ContextCue
 from ..models.context_cue_equivalence_group import ContextCueEquivalenceGroup
@@ -9,40 +10,74 @@ from ..models.context_cue_equivalence_group import ContextCueEquivalenceGroup
 def build_context_cue_equivalence_groups(
     cues: tuple[ContextCue, ...],
 ) -> tuple[ContextCueEquivalenceGroup, ...]:
-    """正規化本文が一致し時間が重なるcross-source Cueをまとめる。"""
-    parents = list(range(len(cues)))
-    for left_index, left in enumerate(cues):
-        for right_index in range(left_index + 1, len(cues)):
-            right = cues[right_index]
-            if (
-                left.source_kind != right.source_kind
-                and _comparison_text(left.text) == _comparison_text(right.text)
-                and left.start < right.end
-                and right.start < left.end
-            ):
-                _union(parents, left_index, right_index)
-    components: dict[int, list[int]] = {}
-    for index in range(len(cues)):
-        components.setdefault(_find(parents, index), []).append(index)
-    groups: list[ContextCueEquivalenceGroup] = []
-    for indexes in components.values():
-        if len(indexes) < 2:
+    """同じ発話occurrenceを表すsubtitle/STT Cueを一対一でまとめる。"""
+    subtitle_indexes = tuple(
+        index
+        for index, cue in enumerate(cues)
+        if cue.source_kind == "embedded_subtitle"
+    )
+    speech_indexes = tuple(
+        index for index, cue in enumerate(cues) if cue.source_kind == "speech_to_text"
+    )
+    candidates = sorted(
+        (
+            (subtitle_index, speech_index)
+            for subtitle_index in subtitle_indexes
+            for speech_index in speech_indexes
+            if _are_equivalent(cues[subtitle_index], cues[speech_index])
+        ),
+        key=lambda pair: _pair_priority(cues[pair[0]], cues[pair[1]]),
+    )
+    used_subtitles: set[int] = set()
+    used_speech: set[int] = set()
+    selected_pairs: list[tuple[int, int]] = []
+    for subtitle_index, speech_index in candidates:
+        if subtitle_index in used_subtitles or speech_index in used_speech:
             continue
-        representative_index = min(
-            indexes,
-            key=lambda index: (
-                cues[index].source_kind != "embedded_subtitle",
-                cues[index].start,
-                cues[index].identifier,
+        used_subtitles.add(subtitle_index)
+        used_speech.add(speech_index)
+        selected_pairs.append((subtitle_index, speech_index))
+    selected_pairs.sort(
+        key=lambda pair: (
+            cues[pair[0]].start,
+            cues[pair[0]].identifier,
+            cues[pair[1]].identifier,
+        )
+    )
+    return tuple(
+        ContextCueEquivalenceGroup(
+            representative_cue_id=cues[subtitle_index].identifier,
+            cue_ids=(
+                cues[subtitle_index].identifier,
+                cues[speech_index].identifier,
             ),
         )
-        groups.append(
-            ContextCueEquivalenceGroup(
-                representative_cue_id=cues[representative_index].identifier,
-                cue_ids=tuple(cues[index].identifier for index in indexes),
-            )
-        )
-    return tuple(groups)
+        for subtitle_index, speech_index in selected_pairs
+    )
+
+
+def _are_equivalent(subtitle: ContextCue, speech: ContextCue) -> bool:
+    return (
+        _comparison_text(subtitle.text) == _comparison_text(speech.text)
+        and subtitle.start < speech.end
+        and speech.start < subtitle.end
+    )
+
+
+def _pair_priority(
+    subtitle: ContextCue,
+    speech: ContextCue,
+) -> tuple[Fraction, Fraction, Fraction, Fraction, str, str]:
+    overlap = min(subtitle.end, speech.end) - max(subtitle.start, speech.start)
+    midpoint_distance = abs(subtitle.start + subtitle.end - speech.start - speech.end)
+    return (
+        -overlap,
+        midpoint_distance,
+        subtitle.start,
+        speech.start,
+        subtitle.identifier,
+        speech.identifier,
+    )
 
 
 def _comparison_text(text: str) -> str:
@@ -53,17 +88,3 @@ def _comparison_text(text: str) -> str:
         if not character.isspace()
         and not unicodedata.category(character).startswith("P")
     )
-
-
-def _find(parents: list[int], index: int) -> int:
-    while parents[index] != index:
-        parents[index] = parents[parents[index]]
-        index = parents[index]
-    return index
-
-
-def _union(parents: list[int], left: int, right: int) -> None:
-    left_root = _find(parents, left)
-    right_root = _find(parents, right)
-    if left_root != right_root:
-        parents[right_root] = left_root

@@ -22,6 +22,7 @@ from ..protocols.speech_runtime import SpeechRuntime
 from ..protocols.video_stage_media_runtime import VideoStageMediaRuntime
 from .build_context_cue_id import build_context_cue_id
 from .iter_overlapping_pcm_chunks import iter_overlapping_pcm_chunks
+from .normalize_context_language import normalize_context_language
 
 _AUDIO_SAMPLE_RATE = 16000
 _WORD_GAP_SECONDS = Fraction(3, 2)
@@ -46,6 +47,7 @@ def collect_speech_context(
     rejected_diagnostics: list[RejectedSpeechDiagnostic] = []
     detected_speech = False
     processed_chunk_count = 0
+    speech_language = normalize_context_language(configuration.language)
     source_chunks = _iter_validated_pcm_chunks(
         media_runtime.scan_pcm_audio(
             source.path,
@@ -65,7 +67,7 @@ def collect_speech_context(
         try:
             recognition = speech_runtime.transcribe(
                 chunk,
-                language=configuration.language,
+                language=speech_language,
                 vad_filter=configuration.speech_vad_filter,
                 beam_size=configuration.speech_to_text_beam_size,
             )

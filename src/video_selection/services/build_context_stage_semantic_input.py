@@ -10,6 +10,7 @@ from ..models.media_stream import MediaStream
 from ..models.video_scan_result import VideoScanResult
 from ..models.video_source import VideoSource
 from ..protocols.speech_runtime import SpeechRuntime
+from .normalize_context_language import normalize_context_language
 
 _CONTEXT_POLICY_VERSION = "context-collection-v1"
 _SUBTITLE_EXTRACTION_VERSION = "embedded-subtitle-v1"
@@ -44,7 +45,7 @@ def build_context_stage_semantic_input(
         "video_fingerprint": source.fingerprint,
         "timeline_contract": "exact-video-time-v1",
         "timeline_digest": timeline_digest,
-        "language": configuration.language,
+        "language": normalize_context_language(configuration.language),
         "subtitle_stream_index": configuration.subtitle_stream_index,
         "selected_subtitle_stream": _subtitle_stream_value(subtitle_stream),
         "selected_audio_stream": _audio_stream_value(audio_stream),

@@ -268,7 +268,7 @@ def test_audio_stt_is_used_when_text_subtitle_is_absent(tmp_path: Path) -> None:
     configuration = EffectiveConfiguration(
         video_input_folder=input_folder,
         output_folder=tmp_path / "output",
-        language="ja",
+        language="ja-JP",
     )
 
     # Act
@@ -323,6 +323,7 @@ def test_audio_stt_is_used_when_text_subtitle_is_absent(tmp_path: Path) -> None:
         ("available", "context_extracted"),
     ]
     assert speech_runtime.transcribe_calls == [pcm]
+    assert speech_runtime.transcribe_options == [("ja", True, 5)]
 
 
 @pytest.mark.parametrize(

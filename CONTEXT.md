@@ -172,12 +172,16 @@ _Avoid_: candidate index, evidence hash, display ID
 一つのVideo SourceのVideo Time区間に対応付けられた、内蔵text subtitleまたは音声の文字起こしから得る文脈テキスト。視覚的なCandidate Momentへの加点根拠に限り、単独ではCandidate Momentを生成せずframeの採否も決めない。
 _Avoid_: external subtitle, raw ASR segment, independent candidate, prompt text
 
+**Context Language**:
+Context Cue抽出の対象言語。設定されたBCP 47相当tagとstream metadataは同じprimary languageとして扱い、stream選択とSpeech Runtimeへ一貫して適用する。
+_Avoid_: raw backend language, stream-only language policy
+
 **Context Cue ID**:
 algorithm名、Video Fingerprint、source kind、stream index、正確な開始・終了Video Time、保存textのSHA-256をcanonical JSON化して導出する、`cue_`と64桁digestからなる安定識別子。source path、Video Order、model名、runtime identity、平文textを含めない。
 _Avoid_: sequential cue number, plaintext-derived display ID, model-specific cue ID
 
 **Context Cue Equivalence Group**:
-forced embedded subtitleとSTTを併用したとき、Unicode正規化、case folding、空白・記号除去後の本文が一致し、Video Time区間が重なるContext Cueを関連付ける集合。両方のCueとsource provenanceをcacheに保持するが、Candidate Annotationへはsource PTSを持つembedded subtitleを代表として1件だけ渡し、二重加点しない。関連する全Cue IDはtraceabilityへ保持する。
+forced embedded subtitleとSTTを併用したとき、同じ一回の発話を表すContext Cueを関連付ける非推移的なpair。同じ正規化本文と重なるVideo Timeを持つ各source kind最大1件で構成し、両方のCueとprovenanceをcacheに保持しながらCandidate Annotationへはembedded subtitleだけを渡す。
 _Avoid_: cue deletion, fuzzy semantic deduplication, duplicate annotation input, source provenance loss
 
 **Report Context Evidence**:
