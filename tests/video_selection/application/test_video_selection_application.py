@@ -1,6 +1,8 @@
 """Video Set選定applicationのintegration test。"""
 
+import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,10 +17,12 @@ from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.legacy_cache_cleanup_diagnostic import (
     LegacyCacheCleanupDiagnostic,
 )
+from src.video_selection.models.model_role import ModelRole
 from src.video_selection.models.processing_stage import (
     VIDEO_SET_STAGE_ORDER,
     ProcessingStage,
 )
+from src.video_selection.models.resolved_models import ResolvedModels
 from src.video_selection.models.run_status import RunStatus
 from src.video_selection.models.selected_image import SelectedImage
 from src.video_selection.models.video_set import VideoSet
@@ -86,10 +90,11 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
         summary="主人公が草原を進んでいる",
     )
     observer = RecordingRunObserver()
+    model_runtime = FakeModelRuntime("model-sha-001")
     application = VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
         speech_runtime=FakeContextCollector((ContextCue(identifier="cue-001"),)),
-        model_runtime=FakeModelRuntime("model-sha-001"),
+        model_runtime=model_runtime,
         vision_runtime=FakeVisionRuntime((annotation,)),
         observer=observer,
     )
@@ -98,6 +103,9 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
         output_folder=output_folder,
         image_count=1,
     )
+    expected_models = model_runtime.resolve_models(configuration).provenance()
+    vision_digest = hashlib.sha256(b"model-sha-001").hexdigest()
+    speech_commit = hashlib.sha256(b"speech-model").hexdigest()[:40]
 
     # Act
     outcome = application.run(configuration)
@@ -117,6 +125,7 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
         "requested_count": 1,
         "selected_count": 1,
         "warnings": [],
+        "models": expected_models,
         "video_set": {
             "videos": ["chapter-01.mp4", "chapter-02.mp4"],
         },
@@ -134,6 +143,13 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
         "Status: completed\n"
         "Requested images: 1\n"
         "Selected images: 1\n\n"
+        "## Models\n\n"
+        "- candidate_annotation: qwen3-vl:8b-instruct @ "
+        f"ollama:sha256:{vision_digest[:12]}… (not_requested)\n"
+        "- scene_catalog: qwen3-vl:8b-instruct @ "
+        f"ollama:sha256:{vision_digest[:12]}… (not_requested)\n"
+        "- speech_to_text: dropbox-dash/faster-whisper-large-v3-turbo @ "
+        f"hf:{speech_commit[:12]}… (not_requested)\n\n"
         "## Selected images\n\n"
         "1. [frame-001](images/0001_frame-001.webp) — "
         "主人公が草原を進んでいる\n"
@@ -148,6 +164,53 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
         )
     )
     assert len(manifests) == len(VIDEO_SET_STAGE_ORDER)
+
+
+def test_speech_model_is_frozen_before_context_collection(tmp_path: Path) -> None:
+    """freeze済みSTT modelがContext Collectionへ渡されること。
+
+    Arrange:
+        - 一つのvideoとmodel resolutionを記録するContext Collectorが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - Context Collectionがfreeze済みspeech modelを一度受け取ること
+        - Model Resolution StageがContext Collectionより先に確定されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    collector = FakeContextCollector(())
+    observer = RecordingRunObserver()
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=collector,
+        model_runtime=FakeModelRuntime("model-sha-001"),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=observer,
+    )
+
+    # Act
+    application.run(
+        EffectiveConfiguration(
+            video_input_folder=input_folder,
+            output_folder=output_folder,
+            image_count=1,
+        )
+    )
+
+    # Assert
+    assert len(collector.models) == 1
+    assert collector.models[0].role is ModelRole.SPEECH_TO_TEXT
+    completed = tuple(item.stage for item in observer.completed_stages)
+    assert completed.index(ProcessingStage.RESOLVE_MODELS) < completed.index(
+        ProcessingStage.COLLECT_CONTEXT
+    )
 
 
 def test_final_snapshot_failure_discards_staged_output(
@@ -179,6 +242,7 @@ def test_final_snapshot_failure_discards_staged_output(
         selected_images: tuple[SelectedImage, ...],
         requested_count: int,
         run_status: RunStatus,
+        resolved_models: ResolvedModels,
     ) -> PreparedOutput:
         prepared_output = original_prepare(
             publisher,
@@ -187,13 +251,15 @@ def test_final_snapshot_failure_discards_staged_output(
             selected_images,
             requested_count,
             run_status,
+            resolved_models,
         )
         video_path.write_bytes(b"changed-video")
         return prepared_output
 
     monkeypatch.setattr(AtomicOutputPublisher, "prepare", prepare_then_change_input)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
         _successful_application(RecordingRunObserver()).run(
             EffectiveConfiguration(
@@ -398,8 +464,8 @@ def test_stage_failure_leaves_output_unpublished(tmp_path: Path) -> None:
     assert tuple(stage.stage for stage in observer.completed_stages) == (
         ProcessingStage.DISCOVER_VIDEO_SET,
         ProcessingStage.EXTRACT_FRAME_CANDIDATES,
-        ProcessingStage.COLLECT_CONTEXT,
         ProcessingStage.RESOLVE_MODELS,
+        ProcessingStage.COLLECT_CONTEXT,
     )
 
 
@@ -541,6 +607,10 @@ def test_resolved_model_identity_changes_model_stage_fingerprint(
     assert (
         len(_video_set_stage_manifests(input_folder, ProcessingStage.RESOLVE_MODELS))
         == 2
+    )
+    assert (
+        len(_video_set_stage_manifests(input_folder, ProcessingStage.COLLECT_CONTEXT))
+        == 1
     )
     assert (
         len(
@@ -735,7 +805,10 @@ def test_speech_model_change_does_not_invalidate_candidate_annotation_cache(
     annotation = CandidateAnnotation(candidate=candidate, summary="cached summary")
     VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
-        speech_runtime=FakeContextCollector(()),
+        speech_runtime=FakeContextCollector(
+            (),
+            speech_runtime_identity="speech-runtime-v1",
+        ),
         model_runtime=FakeModelRuntime(
             "candidate-model",
             speech_identity_seed="speech-model-a",
@@ -753,7 +826,10 @@ def test_speech_model_change_does_not_invalidate_candidate_annotation_cache(
     # Act
     VideoSelectionApplication(
         media_runtime=FakeMediaRuntime((candidate,)),
-        speech_runtime=FakeContextCollector(()),
+        speech_runtime=FakeContextCollector(
+            (),
+            speech_runtime_identity="speech-runtime-v1",
+        ),
         model_runtime=FakeModelRuntime(
             "candidate-model",
             speech_identity_seed="speech-model-b",
@@ -774,6 +850,10 @@ def test_speech_model_change_does_not_invalidate_candidate_annotation_cache(
         == 2
     )
     assert (
+        len(_video_set_stage_manifests(input_folder, ProcessingStage.COLLECT_CONTEXT))
+        == 2
+    )
+    assert (
         len(
             _video_set_stage_manifests(
                 input_folder,
@@ -782,6 +862,90 @@ def test_speech_model_change_does_not_invalidate_candidate_annotation_cache(
         )
         == 1
     )
+    assert (
+        len(_video_set_stage_manifests(input_folder, ProcessingStage.SELECT_IMAGES))
+        == 1
+    )
+
+
+def test_context_fingerprint_includes_speech_inputs_only_when_stt_runs(
+    tmp_path: Path,
+) -> None:
+    """STT関連identityとprofileがSTT実行時だけfingerprintへ入ること。
+
+    Arrange:
+        - 同じCueを返すsubtitle-only runとSTT runが用意される
+    Act:
+        - 両runが別のOutput Folderへ実行される
+    Assert:
+        - Context cacheが別fingerprintとして共存すること
+        - subtitle-only入力にSTT fieldがなくSTT入力に全profileがあること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    cue = ContextCue(identifier="cue-001")
+    annotation = CandidateAnnotation(candidate=candidate, summary="summary")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "unused",
+        image_count=1,
+        speech_to_text_beam_size=7,
+        speech_vad_filter=False,
+        speech_chunk_seconds=120.0,
+        speech_overlap_seconds=3.0,
+    )
+
+    # Act
+    for run_name, collector in (
+        ("subtitle", FakeContextCollector((cue,))),
+        (
+            "stt",
+            FakeContextCollector(
+                (cue,),
+                speech_runtime_identity="speech-runtime-v2",
+            ),
+        ),
+    ):
+        VideoSelectionApplication(
+            media_runtime=FakeMediaRuntime((candidate,)),
+            speech_runtime=collector,
+            model_runtime=FakeModelRuntime("model-sha-001"),
+            vision_runtime=FakeVisionRuntime((annotation,)),
+            observer=RecordingRunObserver(),
+        ).run(replace(configuration, output_folder=tmp_path / f"output-{run_name}"))
+
+    # Assert
+    manifests = _video_set_stage_manifests(
+        input_folder,
+        ProcessingStage.COLLECT_CONTEXT,
+    )
+    assert len(manifests) == 2
+    semantic_inputs = [
+        json.loads(path.read_text(encoding="utf-8"))["semantic_input"]
+        for path in manifests
+    ]
+    subtitle_input = next(
+        item for item in semantic_inputs if "speech_to_text" not in item
+    )
+    speech_input = next(item for item in semantic_inputs if "speech_to_text" in item)
+    assert subtitle_input == {"context_cue_ids": ["cue-001"]}
+    assert speech_input["speech_to_text"] == {
+        "beam_size": 7,
+        "chunk_seconds": 120.0,
+        "compute_type": "float16",
+        "device": "cuda",
+        "language": "ja",
+        "model": FakeModelRuntime("model-sha-001")
+        .resolve_models(configuration)
+        .for_role(ModelRole.SPEECH_TO_TEXT)
+        .semantic_input(),
+        "overlap_seconds": 3.0,
+        "runtime_identity": "speech-runtime-v2",
+        "vad_filter": False,
+    }
 
 
 def test_annotation_order_is_normalized_to_frame_candidate_order(
@@ -1387,6 +1551,123 @@ def test_selection_shortfall_is_published_with_warning(tmp_path: Path) -> None:
     assert "Selection Shortfall: requested=2, selected=1" in (
         output_folder / "report.md"
     ).read_text(encoding="utf-8")
+
+
+def test_unavailable_model_update_is_published_with_warning(tmp_path: Path) -> None:
+    """offline local model利用がwarning付き成功として公開されること。
+
+    Arrange:
+        - 全枚数を選定できSTT model更新だけがunavailableのrunが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - outcomeとreportがcompleted_with_warningsになること
+        - warningと完全model provenanceがJSONへ公開されること
+        - Markdownには短縮identityだけが公開されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeContextCollector(()),
+        model_runtime=FakeModelRuntime(
+            "model-sha-001",
+            unavailable_roles=frozenset({ModelRole.SPEECH_TO_TEXT}),
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=RecordingRunObserver(),
+    )
+    full_sha = hashlib.sha256(b"speech-model").hexdigest()[:40]
+
+    # Act
+    outcome = application.run(
+        EffectiveConfiguration(
+            video_input_folder=input_folder,
+            output_folder=output_folder,
+            image_count=1,
+        )
+    )
+
+    # Assert
+    assert outcome.status is RunStatus.COMPLETED_WITH_WARNINGS
+    report = json.loads((output_folder / "report.json").read_text(encoding="utf-8"))
+    assert report["warnings"] == [
+        {
+            "code": "model_update_unavailable",
+            "roles": ["speech_to_text"],
+        }
+    ]
+    assert report["models"]["speech_to_text"]["execution_identity"] == (
+        f"hf:{full_sha}"
+    )
+    markdown = (output_folder / "report.md").read_text(encoding="utf-8")
+    assert f"hf:{full_sha[:12]}…" in markdown
+    assert f"hf:{full_sha}" not in markdown
+
+
+def test_run_diagnostics_do_not_change_or_stale_model_resolution_cache(
+    tmp_path: Path,
+) -> None:
+    """同じ実行identityのrun診断がcache fingerprintと分離されること。
+
+    Arrange:
+        - 同じmodel identityでnot_requestedとunavailableになる2 runが用意される
+    Act:
+        - 各runが別のOutput Folderへ実行される
+    Assert:
+        - Model Resolution cacheは一つだけ共存すること
+        - cache artifactへrun固有update statusが保存されないこと
+        - 2回目reportへ現在runのunavailableが記録されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    annotation = CandidateAnnotation(candidate=candidate, summary="summary")
+
+    # Act
+    for run_index, unavailable_roles in enumerate(
+        (frozenset(), frozenset({ModelRole.SPEECH_TO_TEXT})),
+        start=1,
+    ):
+        VideoSelectionApplication(
+            media_runtime=FakeMediaRuntime((candidate,)),
+            speech_runtime=FakeContextCollector(()),
+            model_runtime=FakeModelRuntime(
+                "model-sha-001",
+                unavailable_roles=unavailable_roles,
+            ),
+            vision_runtime=FakeVisionRuntime((annotation,)),
+            observer=RecordingRunObserver(),
+        ).run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=tmp_path / f"output-{run_index}",
+                image_count=1,
+            )
+        )
+
+    # Assert
+    manifests = _video_set_stage_manifests(
+        input_folder,
+        ProcessingStage.RESOLVE_MODELS,
+    )
+    assert len(manifests) == 1
+    cache_artifact = json.loads(
+        (manifests[0].parent / "artifact.json").read_text(encoding="utf-8")
+    )
+    assert "update_status" not in json.dumps(cache_artifact)
+    report = json.loads(
+        (tmp_path / "output-2" / "report.json").read_text(encoding="utf-8")
+    )
+    assert report["models"]["speech_to_text"]["update_status"] == "unavailable"
 
 
 def test_invalid_output_parent_is_rejected_before_cache_side_effects(

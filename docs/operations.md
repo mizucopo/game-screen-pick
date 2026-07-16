@@ -17,13 +17,13 @@
 
 ## ModelRuntime
 
-ModelRuntimeはScene Catalog、Candidate Annotation、Speech to Textの3 roleを一回のrun開始時に解決します。同じOllama tagを複数roleが共有するときは、local identityの解決とpullをdistinct tagごとに一度だけ行い、roleごとのcontext requirementをすべて検証してから同じpost-pull identityをfreezeします。
+ModelRuntimeはScene Catalog、Candidate Annotation、Speech to Textの3 roleをmodel依存Stageより前に解決します。同じOllama tagを複数roleが共有するときは、省略tagと`:latest`も同じselectorとして扱い、local identityの解決とpullをdistinct tagごとに一度だけ行います。roleごとのcontext requirementをすべて検証してから同じpost-pull identityをfreezeします。
 
-Ollama adapterは`/api/version`、`/api/tags`、`/api/pull`、`/api/show`、固定JSON Schemaを渡す最小`/api/chat` probeを使い、最低server version、完全manifest digest、vision、要求context length、structured outputを検査します。Hugging Face adapterはlocal `refs/main`をnetworkなしで確認し、更新時は`model_info(..., revision = "main")`の完全commit SHAを解決してから、そのSHAのimmutable snapshotだけを取得します。STT snapshotは設定されたdeviceとcompute typeでfaster-whisperへlocal-only loadできた場合だけ完全とみなします。
+Ollama adapterは`/api/version`、`/api/tags`、`/api/pull`、`/api/show`、固定JSON Schemaを渡す最小`/api/chat` probeを使い、最低server version、完全manifest digest、vision、要求context length、structured outputを検査します。`/api/tags`のbare 64桁digestは境界内で`sha256:`付きcanonical identityへ正規化します。Hugging Face adapterはlocal `refs/main`をnetworkなしで確認し、更新時は`model_info(..., revision = "main")`の完全commit SHAを一度解決してから、そのSHAのimmutable snapshotだけを取得します。identity一致とfaster-whisper local-only loadの検証が終わったsnapshotだけを`refs/main`へatomicに記録し、次のofflineまたは`auto_upgrade = false` runから再利用できます。検証またはref公開に失敗しても、以前の検証済みrefは置き換えません。local refやsnapshotがpartialならlocal候補にせず、online同期による修復を妨げません。
 
 同期後artifactがpartial、identity不一致、load不能、capability不足なら、更新前artifactへ戻さずfatalです。offlineやtimeoutなどで同期自体が利用不能な場合に限り、同期前に利用可能なlocal artifactがあったことを条件にlocal storeを再解決し、全共有roleの再検査へ合格したartifactを`update_status = "unavailable"`として使用します。別modelへのfallbackは行いません。
 
-run内の解決結果はroleごとに設定名、canonical名、更新前identity、更新status、実行identity、runtime identityを分離します。model storeの絶対pathとtokenは内部のload境界だけで使い、Stage入力、provenance、warning、errorへ含めません。fingerprintにはrole固有の設定名、実行identity、runtime identityだけを渡すため、同じidentityへのno-op pullや一時offlineはcacheを無効化せず、あるroleのidentity変更は無関係なroleのsemantic inputを変えません。
+run内の解決結果はroleごとに設定名、canonical名、更新前identity、更新status、実行identity、runtime identityを分離します。runtime identityはstore kindと検証済みclient/server versionから構築し、自由形式の値を受け入れません。model storeの絶対pathとtokenは内部のload境界だけで使い、Stage入力、provenance、warning、errorへ含めません。fingerprintとCompleted Stage artifactにはrole固有の設定名、実行identity、runtime identityだけを渡し、更新前identityと更新statusは現在runの`report.json`へ記録します。このため、同じidentityへのno-op pullや一時offlineはcacheを無効化せず、同じfingerprintのartifactへ古いrun診断を固定しません。あるroleのidentity変更も、無関係なroleのsemantic inputを変えません。
 
 ## FFmpeg MediaRuntime
 
@@ -98,14 +98,14 @@ TTYでは更新型表示、redirect/CIでは一行event logにします。進捗
 
 | Exit | 意味 |
 |---:|---|
-| 0 | 成功。Selection Shortfallのwarning付き成功も含む |
+| 0 | 成功。Selection Shortfallまたはmodel更新不能のwarning付き成功も含む |
 | 1 | preflight、外部tool、model、Processing Stage、公開などの運用失敗 |
 | 2 | CLIまたはTOMLのusage/validation error |
 | 130 | Ctrl+C |
 
 エラーはstable reason code、秘密を含まない観測値、修復方法、再実行時に再利用できるcacheを示します。通常はstack traceを表示しません。`--debug`時だけ安全化済みstack traceを加えますが、credential、環境変数一覧、絶対path、prompt本文、raw model response、Context Cue本文は出しません。
 
-fatal errorではOutput Folderを公開しません。Selection Shortfallだけはexit 0の`completed_with_warnings`として選べたsubsetと理由をatomicに公開します。
+fatal errorではOutput Folderを公開しません。Selection Shortfallと、検証済みlocal modelを使えたmodel更新不能はexit 0の`completed_with_warnings`として理由をatomicに公開します。後者は`model_update_unavailable`と対象roleを`report.json`へ記録し、model storeのpathやtokenは含めません。
 
 ## Windows 11 + WSL2 reference runtime
 

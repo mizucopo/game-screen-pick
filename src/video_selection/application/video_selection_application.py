@@ -32,8 +32,9 @@ from ..services.validate_video_set_snapshot import validate_video_set_snapshot
 _ANNOTATION_UPSTREAM_STAGES = (
     ProcessingStage.DISCOVER_VIDEO_SET,
     ProcessingStage.EXTRACT_FRAME_CANDIDATES,
-    ProcessingStage.COLLECT_CONTEXT,
 )
+_CONTEXT_UPSTREAM_STAGES = (ProcessingStage.DISCOVER_VIDEO_SET,)
+_SELECTION_UPSTREAM_STAGES = (ProcessingStage.ANNOTATE_CANDIDATES,)
 
 
 class VideoSelectionApplication:
@@ -110,20 +111,40 @@ class VideoSelectionApplication:
             {"candidates": list(candidate_snapshot)},
         )
 
-        context_cues = self._speech_runtime.collect_context(video_set)
-        context_cue_ids = [item.identifier for item in context_cues]
-        stage_runner.complete(
-            ProcessingStage.COLLECT_CONTEXT,
-            {"context_cue_ids": context_cue_ids},
-            {"context_cue_ids": context_cue_ids},
-        )
-
         resolved_models = self._model_runtime.resolve_models(configuration)
         candidate_model = resolved_models.for_role(ModelRole.CANDIDATE_ANNOTATION)
+        speech_model = resolved_models.for_role(ModelRole.SPEECH_TO_TEXT)
         stage_runner.complete(
             ProcessingStage.RESOLVE_MODELS,
             {"models": resolved_models.semantic_input()},
-            {"models": resolved_models.provenance()},
+            {"models": resolved_models.semantic_input()},
+        )
+
+        collected_context = self._speech_runtime.collect_context(
+            video_set, speech_model
+        )
+        context_cues = collected_context.cues
+        context_cue_ids = [item.identifier for item in context_cues]
+        context_semantic_input: dict[str, object] = {
+            "context_cue_ids": context_cue_ids,
+        }
+        if collected_context.speech_runtime_identity is not None:
+            context_semantic_input["speech_to_text"] = {
+                "runtime_identity": collected_context.speech_runtime_identity,
+                "model": speech_model.semantic_input(),
+                "language": configuration.language,
+                "device": configuration.speech_to_text_device,
+                "compute_type": configuration.speech_to_text_compute_type,
+                "beam_size": configuration.speech_to_text_beam_size,
+                "vad_filter": configuration.speech_vad_filter,
+                "chunk_seconds": configuration.speech_chunk_seconds,
+                "overlap_seconds": configuration.speech_overlap_seconds,
+            }
+        stage_runner.complete(
+            ProcessingStage.COLLECT_CONTEXT,
+            context_semantic_input,
+            {"context_cue_ids": context_cue_ids},
+            upstream_stages=_CONTEXT_UPSTREAM_STAGES,
         )
 
         annotation_semantic_input = {
@@ -164,6 +185,7 @@ class VideoSelectionApplication:
         run_status = RunStatus.from_selection_counts(
             configuration.image_count,
             selected_count,
+            has_other_warnings=bool(resolved_models.unavailable_roles()),
         )
         stage_runner.complete(
             ProcessingStage.SELECT_IMAGES,
@@ -173,6 +195,7 @@ class VideoSelectionApplication:
                     item.annotation.candidate.identifier for item in selected_images
                 ]
             },
+            upstream_stages=_SELECTION_UPSTREAM_STAGES,
         )
 
         publisher = AtomicOutputPublisher()
@@ -182,6 +205,7 @@ class VideoSelectionApplication:
             selected_images,
             configuration.image_count,
             run_status,
+            resolved_models,
         )
         try:
             validate_video_set_snapshot(video_set)

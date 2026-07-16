@@ -70,17 +70,21 @@ def test_local_ref_and_remote_main_are_resolved_to_immutable_snapshots(
     local = store.resolve_local(requirement)
     synchronized = store.synchronize(requirement)
     store.validate(synchronized, requirement)
+    ref_before_publication = (tmp_path / "refs" / "main").exists()
+    store.publish_validated(synchronized)
 
     # Assert
     assert local is not None
     assert local.identity.identifier == "hf:" + old_sha
     assert synchronized.identity.identifier == "hf:" + new_sha
     assert synchronized.canonical_name == "canonical-org/faster-whisper"
-    assert synchronized.runtime_identity.startswith("huggingface-hub:")
+    assert synchronized.runtime_identity.identifier.startswith("huggingface-hub:")
     assert download_calls[0][1]["revision"] == "main"
     assert download_calls[0][1]["local_files_only"] is True
     assert download_calls[1][1]["revision"] == new_sha
     assert download_calls[1][1]["local_files_only"] is False
+    assert ref_before_publication is False
+    assert (tmp_path / "refs" / "main").read_text(encoding="utf-8") == new_sha
     assert validation_calls == [(new_snapshot, ModelRole.SPEECH_TO_TEXT)]
 
 
@@ -119,6 +123,127 @@ def test_missing_local_ref_is_reported_without_network_fallback() -> None:
     assert metadata_called is False
 
 
+def test_partial_local_snapshot_is_treated_as_missing_and_can_sync(
+    tmp_path: Path,
+) -> None:
+    """partial local snapshotがremote同期を妨げず修復されること。
+
+    Arrange:
+        - local-only lookupだけがpartial cache errorになるdownloaderが用意される
+        - remote mainの完全snapshotとmetadataが用意される
+    Act:
+        - local解決後にremote同期が実行される
+    Assert:
+        - partial localは候補にならず完全snapshotが返されること
+        - external error detailが公開されないこと
+    """
+    # Arrange
+    sha = "c" * 40
+    snapshot = tmp_path / "snapshots" / sha
+    snapshot.mkdir(parents=True)
+
+    def download(_repo_id: str, **options: object) -> str:
+        if options["local_files_only"] is True:
+            raise RuntimeError("IncompleteSnapshotError token-secret")
+        return str(snapshot)
+
+    store = HuggingFaceModelStore(
+        model_info_resolver=lambda *_args, **_kwargs: SimpleNamespace(
+            sha=sha,
+            id="org/model",
+        ),
+        snapshot_downloader=download,
+        model_validator=lambda _path, _requirement: None,
+    )
+
+    # Act
+    local = store.resolve_local(_requirement("org/model"))
+    synchronized = store.synchronize(_requirement("org/model"))
+
+    # Assert
+    assert local is None
+    assert synchronized.identity.identifier == f"hf:{sha}"
+    assert "token-secret" not in repr(synchronized)
+
+
+def test_main_ref_update_failure_does_not_expose_cache_path(tmp_path: Path) -> None:
+    """Hugging Face main ref更新失敗がcache pathを公開しないこと。
+
+    Arrange:
+        - 完全snapshotとdirectory化できないrefs pathが用意される
+    Act:
+        - remote mainの同期が試行される
+    Assert:
+        - pathやcredentialを含まないstore unavailable errorになること
+    """
+    # Arrange
+    sha = "d" * 40
+    snapshot = tmp_path / "token-secret" / "snapshots" / sha
+    snapshot.mkdir(parents=True)
+    (snapshot.parent.parent / "refs").write_text("not-a-directory", encoding="utf-8")
+    store = HuggingFaceModelStore(
+        model_info_resolver=lambda *_args, **_kwargs: SimpleNamespace(
+            sha=sha,
+            id="org/model",
+        ),
+        snapshot_downloader=lambda *_args, **_kwargs: str(snapshot),
+        model_validator=lambda _path, _requirement: None,
+    )
+
+    # Act
+    # Assert
+    artifact = store.synchronize(_requirement("org/model"))
+    with pytest.raises(ModelStoreUnavailableError) as captured:
+        store.publish_validated(artifact)
+    assert str(tmp_path) not in str(captured.value)
+    assert "token-secret" not in str(captured.value)
+    formatted = "".join(
+        traceback.format_exception(captured.type, captured.value, captured.tb)
+    )
+    assert str(tmp_path) not in formatted
+    assert "token-secret" not in formatted
+
+
+def test_load_invalid_snapshot_does_not_advance_main_ref(tmp_path: Path) -> None:
+    """load検証に失敗する新snapshotがmain refへ公開されないこと。
+
+    Arrange:
+        - 検証済みlocalを指すmain refとload不能な新snapshotが用意される
+    Act:
+        - 新snapshotの同期とload検証が実行される
+    Assert:
+        - load errorになりmain refは更新前identityを指し続けること
+    """
+    # Arrange
+    old_sha = "a" * 40
+    new_sha = "e" * 40
+    snapshot = tmp_path / "snapshots" / new_sha
+    snapshot.mkdir(parents=True)
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    (refs / "main").write_text(old_sha, encoding="utf-8")
+
+    def fail_load(_path: Path, _requirement: ModelRequirement) -> None:
+        raise RuntimeError("load failed")
+
+    store = HuggingFaceModelStore(
+        model_info_resolver=lambda *_args, **_kwargs: SimpleNamespace(
+            sha=new_sha,
+            id="org/model",
+        ),
+        snapshot_downloader=lambda *_args, **_kwargs: str(snapshot),
+        model_validator=fail_load,
+    )
+
+    # Act
+    artifact = store.synchronize(_requirement("org/model"))
+
+    # Assert
+    with pytest.raises(ModelArtifactInvalidError):
+        store.validate(artifact, _requirement("org/model"))
+    assert (refs / "main").read_text(encoding="utf-8") == old_sha
+
+
 def test_snapshot_mismatch_and_external_detail_are_sanitized(tmp_path: Path) -> None:
     """snapshot不一致とexternal failure detailが安全なerrorへ変換されること。
 
@@ -152,7 +277,8 @@ def test_snapshot_mismatch_and_external_detail_are_sanitized(tmp_path: Path) -> 
         model_validator=lambda _path, _requirement: None,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ModelArtifactInvalidError, match="一致しません"):
         mismatch.synchronize(_requirement("org/model"))
     with pytest.raises(ModelStoreUnavailableError) as captured:
@@ -191,7 +317,8 @@ def test_load_failure_does_not_expose_snapshot_path(tmp_path: Path) -> None:
     artifact = store.resolve_local(_requirement("org/model"))
     assert artifact is not None
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ModelArtifactInvalidError) as captured:
         store.validate(artifact, _requirement("org/model"))
     assert str(tmp_path) not in str(captured.value)

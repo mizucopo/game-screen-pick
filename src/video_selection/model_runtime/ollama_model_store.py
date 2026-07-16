@@ -10,9 +10,13 @@ from ..models.model_artifact import ModelArtifact
 from ..models.model_artifact_invalid_error import ModelArtifactInvalidError
 from ..models.model_capability import ModelCapability
 from ..models.model_requirement import ModelRequirement
+from ..models.model_runtime_identity import ModelRuntimeIdentity
 from ..models.model_store_kind import ModelStoreKind
 from ..models.model_store_unavailable_error import ModelStoreUnavailableError
 from ..models.resolved_model_identity import ResolvedModelIdentity
+from .canonicalize_ollama_model_selector import (
+    canonicalize_ollama_model_selector,
+)
 
 JsonRequester = Callable[
     [str, str, Mapping[str, object] | None, float],
@@ -117,6 +121,11 @@ class OllamaModelStore:
             )
         self._validate_structured_output(requirement, minimum)
 
+    def publish_validated(self, artifact: ModelArtifact) -> None:
+        """Ollamaはpull時にtagを公開済みのためkindだけを検証する。"""
+        if artifact.identity.store_kind is not self.kind:
+            raise ModelArtifactInvalidError("Ollama artifact kindが不正です")
+
     def _validate_structured_output(
         self,
         requirement: ModelRequirement,
@@ -156,7 +165,7 @@ class OllamaModelStore:
                 "Ollama modelのstructured output capabilityを確認できませんでした"
             )
 
-    def _runtime_identity(self) -> str:
+    def _runtime_identity(self) -> ModelRuntimeIdentity:
         """supported Ollama server versionをruntime identityへ変換する。"""
         response = _require_mapping(self._request("GET", "/api/version", None))
         version = response.get("version")
@@ -164,12 +173,17 @@ class OllamaModelStore:
             _MINIMUM_OLLAMA_VERSION
         ):
             raise ModelArtifactInvalidError("Ollama server 0.31.2以上が必要です")
-        return f"ollama:{version}"
+        try:
+            return ModelRuntimeIdentity(ModelStoreKind.OLLAMA, version)
+        except ValueError:
+            raise ModelArtifactInvalidError(
+                "Ollama server versionを検証できませんでした"
+            ) from None
 
     def _resolve_local_artifact(
         self,
         requirement: ModelRequirement,
-        runtime_identity: str,
+        runtime_identity: ModelRuntimeIdentity,
     ) -> ModelArtifact | None:
         response = _require_mapping(self._request("GET", "/api/tags", None))
         models = response.get("models")
@@ -198,6 +212,8 @@ class OllamaModelStore:
                 raise ModelArtifactInvalidError(
                     "Ollama local model identityを検証できませんでした"
                 )
+            if re.fullmatch(r"[0-9a-f]{64}", digest) is not None:
+                digest = f"sha256:{digest}"
             try:
                 identity = ResolvedModelIdentity(ModelStoreKind.OLLAMA, digest)
             except ValueError:
@@ -276,6 +292,6 @@ def _semantic_version(version: str) -> tuple[int, int, int]:
 
 
 def _names_match(configured_name: str, local_name: str) -> bool:
-    return local_name == configured_name or (
-        ":" not in configured_name and local_name == f"{configured_name}:latest"
-    )
+    return canonicalize_ollama_model_selector(
+        configured_name
+    ) == canonicalize_ollama_model_selector(local_name)

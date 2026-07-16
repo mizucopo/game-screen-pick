@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from .model_role import ModelRole
+from .model_update_status import ModelUpdateStatus
 from .resolved_model import ResolvedModel
 
 
@@ -36,3 +37,11 @@ class ResolvedModels:
             item.role.value: item.provenance()
             for item in sorted(self.items, key=lambda value: value.role.value)
         }
+
+    def unavailable_roles(self) -> tuple[ModelRole, ...]:
+        """model更新不能warningの対象roleを安定順で返す。"""
+        return tuple(
+            item.role
+            for item in sorted(self.items, key=lambda value: value.role.value)
+            if item.update_status is ModelUpdateStatus.UNAVAILABLE
+        )

@@ -49,7 +49,7 @@ def test_local_pull_and_capability_use_documented_ollama_api() -> None:
                     {
                         "name": "qwen3-vl:8b-instruct",
                         "model": "qwen3-vl:8b-instruct",
-                        "digest": "sha256:" + fill * 64,
+                        "digest": fill * 64,
                     }
                 ]
             }
@@ -81,7 +81,7 @@ def test_local_pull_and_capability_use_documented_ollama_api() -> None:
     assert before is not None
     assert before.identity.identifier == "ollama:sha256:" + "a" * 64
     assert after.identity.identifier == "ollama:sha256:" + "b" * 64
-    assert after.runtime_identity == "ollama:0.31.2"
+    assert after.runtime_identity.identifier == "ollama:0.31.2"
     pull_requests = [item for item in requests if item[1].endswith("/api/pull")]
     assert pull_requests == [
         (
@@ -161,7 +161,8 @@ def test_missing_vision_or_context_capability_is_rejected(
     artifact = store.resolve_local(requirement)
     assert artifact is not None
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ModelArtifactInvalidError, match="capability"):
         store.validate(artifact, requirement)
 
@@ -214,7 +215,8 @@ def test_malformed_digest_and_transport_detail_are_not_exposed() -> None:
         requester=failing_requester,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ModelArtifactInvalidError):
         malformed.resolve_local(_requirement())
     with pytest.raises(ModelStoreUnavailableError) as captured:
@@ -272,7 +274,8 @@ def test_structured_output_capability_failure_is_rejected() -> None:
     artifact = store.resolve_local(_requirement())
     assert artifact is not None
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ModelArtifactInvalidError, match="structured output"):
         store.validate(artifact, _requirement())
 
@@ -307,10 +310,36 @@ def test_unsupported_server_is_rejected_before_pull_mutation() -> None:
         requester=requester,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ModelArtifactInvalidError, match="0.31.2"):
         store.synchronize(_requirement())
     assert not any(path.endswith("/api/pull") for path in requested_paths)
+
+
+def test_unsafe_server_version_is_rejected_as_artifact_invalid() -> None:
+    """unsafeなOllama version responseがadapter errorへ変換されること。
+
+    Arrange:
+        - path風suffixを含む最低version以上のserver responseが用意される
+    Act:
+        - configured modelのlocal解決が試行される
+    Assert:
+        - raw versionを公開しないartifact invalid errorになること
+    """
+    # Arrange
+    unsafe_version = "0.31.2/token-secret"
+    store = OllamaModelStore(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: {"version": unsafe_version},
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(ModelArtifactInvalidError) as captured:
+        store.resolve_local(_requirement())
+    assert unsafe_version not in str(captured.value)
 
 
 def _requirement() -> ModelRequirement:

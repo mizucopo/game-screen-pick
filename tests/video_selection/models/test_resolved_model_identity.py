@@ -52,7 +52,9 @@ def test_incomplete_or_malformed_identity_is_rejected(
     Assert:
         - raw identityを表示せずvalidation errorになること
     """
-    # Arrange / Act / Assert
+    # Arrange
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="完全なmodel identity") as captured:
         ResolvedModelIdentity(store_kind, value)
     assert value not in str(captured.value)

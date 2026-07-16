@@ -17,6 +17,9 @@ from ..models.resolved_model import ResolvedModel
 from ..models.resolved_model_identity import ResolvedModelIdentity
 from ..models.resolved_models import ResolvedModels
 from ..protocols.model_store import ModelStore
+from .canonicalize_ollama_model_selector import (
+    canonicalize_ollama_model_selector,
+)
 from .hugging_face_model_store import HuggingFaceModelStore
 from .ollama_model_store import OllamaModelStore
 
@@ -53,7 +56,7 @@ class ModelLifecycleRuntime:
         ] = {}
         for requirement in _build_requirements(configuration):
             requirements_by_model.setdefault(
-                (requirement.store_kind, requirement.configured_name),
+                _resolution_key(requirement),
                 [],
             ).append(requirement)
 
@@ -116,19 +119,14 @@ class ModelLifecycleRuntime:
                 primary.role,
             ) from None
         except ModelStoreUnavailableError:
-            if local is not None:
-                fallback = _resolve_valid_local_after_unavailable(
-                    store,
-                    primary,
-                    requirements,
-                )
-                if fallback is not None:
-                    return _build_resolutions(
-                        requirements,
-                        fallback,
-                        local.identity,
-                        ModelUpdateStatus.UNAVAILABLE,
-                    )
+            fallback = _build_unavailable_fallback(
+                store,
+                primary,
+                requirements,
+                local,
+            )
+            if fallback is not None:
+                return fallback
             raise ModelRuntimeError(
                 ModelRuntimeFailureReason.MODEL_NOT_AVAILABLE,
                 primary.role,
@@ -144,6 +142,31 @@ class ModelLifecycleRuntime:
                 ModelRuntimeFailureReason.MODEL_ARTIFACT_INVALID,
                 primary.role,
             )
+        try:
+            store.publish_validated(synchronized)
+        except ModelArtifactInvalidError:
+            raise ModelRuntimeError(
+                ModelRuntimeFailureReason.MODEL_ARTIFACT_INVALID,
+                primary.role,
+            ) from None
+        except ModelStoreUnavailableError:
+            fallback = _build_unavailable_fallback(
+                store,
+                primary,
+                requirements,
+                local,
+            )
+            if fallback is not None:
+                return fallback
+            raise ModelRuntimeError(
+                ModelRuntimeFailureReason.MODEL_NOT_AVAILABLE,
+                primary.role,
+            ) from None
+        except Exception:
+            raise ModelRuntimeError(
+                ModelRuntimeFailureReason.MODEL_NOT_AVAILABLE,
+                primary.role,
+            ) from None
         if local is None:
             status = ModelUpdateStatus.BOOTSTRAPPED
         elif local.identity == synchronized.identity:
@@ -185,6 +208,30 @@ def _resolve_valid_local_after_unavailable(
     if candidate is None or not _artifact_is_valid(store, candidate, requirements):
         return None
     return candidate
+
+
+def _build_unavailable_fallback(
+    store: ModelStore,
+    primary: ModelRequirement,
+    requirements: tuple[ModelRequirement, ...],
+    local: ModelArtifact | None,
+) -> tuple[ResolvedModel, ...] | None:
+    """同期不能後も同じ検証済みlocal identityだけをwarning付きで返す。"""
+    if local is None:
+        return None
+    fallback = _resolve_valid_local_after_unavailable(
+        store,
+        primary,
+        requirements,
+    )
+    if fallback is None or fallback.identity != local.identity:
+        return None
+    return _build_resolutions(
+        requirements,
+        fallback,
+        local.identity,
+        ModelUpdateStatus.UNAVAILABLE,
+    )
 
 
 def _build_resolutions(
@@ -235,6 +282,14 @@ def _build_requirements(
             compute_type=configuration.speech_to_text_compute_type,
         ),
     )
+
+
+def _resolution_key(requirement: ModelRequirement) -> tuple[ModelStoreKind, str]:
+    """store内で同じmutable selectorを指すconfigured名を正規化する。"""
+    configured_name = requirement.configured_name
+    if requirement.store_kind is ModelStoreKind.OLLAMA:
+        configured_name = canonicalize_ollama_model_selector(configured_name)
+    return requirement.store_kind, configured_name
 
 
 def _build_ollama_store(

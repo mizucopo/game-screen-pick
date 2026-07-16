@@ -2,7 +2,9 @@
 
 import re
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
+from uuid import uuid4
 
 from faster_whisper import WhisperModel
 from huggingface_hub import HfApi, __version__, snapshot_download
@@ -12,6 +14,7 @@ from ..models.model_artifact import ModelArtifact
 from ..models.model_artifact_invalid_error import ModelArtifactInvalidError
 from ..models.model_capability import ModelCapability
 from ..models.model_requirement import ModelRequirement
+from ..models.model_runtime_identity import ModelRuntimeIdentity
 from ..models.model_store_kind import ModelStoreKind
 from ..models.model_store_unavailable_error import ModelStoreUnavailableError
 from ..models.resolved_model_identity import ResolvedModelIdentity
@@ -64,9 +67,7 @@ class HuggingFaceModelStore:
         except LocalEntryNotFoundError:
             return None
         except Exception:
-            raise ModelStoreUnavailableError(
-                "Hugging Face local storeを確認できませんでした"
-            ) from None
+            return None
         path = _require_snapshot_path(downloaded)
         return _build_artifact(
             path,
@@ -116,11 +117,12 @@ class HuggingFaceModelStore:
             raise ModelStoreUnavailableError(
                 "Hugging Face snapshotを取得できませんでした"
             ) from None
-        return _build_artifact(
+        artifact = _build_artifact(
             _require_snapshot_path(downloaded),
             canonical_name=canonical_name,
             expected_identity=identity,
         )
+        return artifact
 
     def validate(
         self,
@@ -144,6 +146,12 @@ class HuggingFaceModelStore:
             raise ModelArtifactInvalidError(
                 "Hugging Face snapshotをSTT backendへloadできませんでした"
             ) from None
+
+    def publish_validated(self, artifact: ModelArtifact) -> None:
+        """load検証済みsnapshotだけを次回local mainとして公開する。"""
+        if artifact.identity.store_kind is not self.kind:
+            raise ModelArtifactInvalidError("Hugging Face artifact kindが不正です")
+        _update_main_ref(artifact)
 
 
 def _validate_faster_whisper_model(
@@ -178,7 +186,10 @@ def _build_artifact(
     return ModelArtifact(
         identity=identity,
         canonical_name=canonical_name,
-        runtime_identity=f"huggingface-hub:{__version__}",
+        runtime_identity=ModelRuntimeIdentity(
+            ModelStoreKind.HUGGING_FACE,
+            __version__,
+        ),
         location=path,
     )
 
@@ -189,6 +200,28 @@ def _require_snapshot_path(value: object) -> Path:
             "Hugging Face snapshot locationを検証できませんでした"
         )
     return Path(value)
+
+
+def _update_main_ref(artifact: ModelArtifact) -> None:
+    """immutable snapshotを次回local-only解決用のmain refへatomicに記録する。"""
+    location = artifact.location
+    if location is None or location.parent.name != "snapshots":
+        raise ModelArtifactInvalidError(
+            "Hugging Face snapshot layoutを検証できませんでした"
+        )
+    refs_folder = location.parent.parent / "refs"
+    temporary_ref = refs_folder / f".main.{uuid4().hex}.tmp"
+    try:
+        refs_folder.mkdir(parents=True, exist_ok=True)
+        temporary_ref.write_text(artifact.identity.value, encoding="utf-8")
+        temporary_ref.replace(refs_folder / "main")
+    except OSError:
+        raise ModelStoreUnavailableError(
+            "Hugging Face local refを更新できませんでした"
+        ) from None
+    finally:
+        with suppress(OSError):
+            temporary_ref.unlink(missing_ok=True)
 
 
 def _require_hugging_face_requirement(requirement: ModelRequirement) -> None:

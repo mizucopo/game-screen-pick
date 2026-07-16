@@ -17,6 +17,7 @@ from src.video_selection.models.model_runtime_error import ModelRuntimeError
 from src.video_selection.models.model_runtime_failure_reason import (
     ModelRuntimeFailureReason,
 )
+from src.video_selection.models.model_runtime_identity import ModelRuntimeIdentity
 from src.video_selection.models.model_store_kind import ModelStoreKind
 from src.video_selection.models.model_store_unavailable_error import (
     ModelStoreUnavailableError,
@@ -64,11 +65,15 @@ def test_updates_each_distinct_model_once_and_freezes_role_resolutions(
     # Assert
     assert ollama_store.local_resolution_calls == [configuration.scene_catalog_model]
     assert ollama_store.synchronization_calls == [configuration.scene_catalog_model]
+    assert ollama_store.publication_calls == [new_ollama.identity.identifier]
     assert hugging_face_store.local_resolution_calls == [
         configuration.speech_to_text_model
     ]
     assert hugging_face_store.synchronization_calls == [
         configuration.speech_to_text_model
+    ]
+    assert hugging_face_store.publication_calls == [
+        new_hugging_face.identity.identifier
     ]
     for role in (ModelRole.SCENE_CATALOG, ModelRole.CANDIDATE_ANNOTATION):
         resolution = resolved.for_role(role)
@@ -79,6 +84,53 @@ def test_updates_each_distinct_model_once_and_freezes_role_resolutions(
     assert speech.local_identity_before_update == old_hugging_face.identity
     assert speech.update_status is ModelUpdateStatus.UPDATED
     assert speech.execution_identity == new_hugging_face.identity
+
+
+def test_equivalent_ollama_latest_names_are_synchronized_once(tmp_path: Path) -> None:
+    """省略tagとlatest表記が同じOllama modelとして一度だけ同期されること。
+
+    Arrange:
+        - Scene Catalogに省略tag、Candidate Annotationにlatest表記が用意される
+        - 両表記が指す一つのlocal・同期後artifactが用意される
+    Act:
+        - auto upgrade有効で全modelが解決される
+    Assert:
+        - equivalent tagが一度だけlocal解決・同期され両roleへfreezeされること
+    """
+    # Arrange
+    configuration = EffectiveConfiguration(
+        video_input_folder=tmp_path / "videos",
+        output_folder=tmp_path / "output",
+        scene_catalog_model="qwen3-vl",
+        candidate_annotation_model="qwen3-vl:latest",
+        models_auto_upgrade=True,
+    )
+    old_ollama = _ollama_artifact("1")
+    new_ollama = _ollama_artifact("2")
+    hugging_face = _hugging_face_artifact(tmp_path, "3")
+    ollama_store = FakeModelStore(
+        ModelStoreKind.OLLAMA,
+        local_artifacts={configuration.scene_catalog_model: old_ollama},
+        synchronized_artifacts={configuration.scene_catalog_model: new_ollama},
+    )
+    hugging_face_store = FakeModelStore(
+        ModelStoreKind.HUGGING_FACE,
+        local_artifacts={configuration.speech_to_text_model: hugging_face},
+        synchronized_artifacts={configuration.speech_to_text_model: hugging_face},
+    )
+
+    # Act
+    resolved = _runtime(ollama_store, hugging_face_store).resolve_models(configuration)
+
+    # Assert
+    assert ollama_store.local_resolution_calls == ["qwen3-vl"]
+    assert ollama_store.synchronization_calls == ["qwen3-vl"]
+    assert resolved.for_role(ModelRole.SCENE_CATALOG).execution_identity == (
+        new_ollama.identity
+    )
+    assert resolved.for_role(ModelRole.CANDIDATE_ANNOTATION).execution_identity == (
+        new_ollama.identity
+    )
 
 
 def test_same_execution_identity_preserves_semantic_fingerprint_input(
@@ -271,6 +323,51 @@ def test_unavailable_update_uses_only_a_validated_local_artifact(
     )
 
 
+def test_validated_artifact_publication_failure_reuses_old_local_artifact(
+    tmp_path: Path,
+) -> None:
+    """検証後のlocal selector公開失敗で更新前artifactが再検査されること。
+
+    Arrange:
+        - 完全な更新前artifactと検証可能な同期後artifactが用意される
+        - 同期後artifactのlocal selector公開だけが利用不能にされる
+    Act:
+        - auto upgrade有効でmodel解決が実行される
+    Assert:
+        - 更新後identityをfreezeせず再検査済み更新前identityが使われること
+        - update statusがunavailableになること
+    """
+    # Arrange
+    configuration = _configuration(tmp_path, auto_upgrade=True)
+    old_ollama = _ollama_artifact("1")
+    new_ollama = _ollama_artifact("2")
+    hugging_face = _hugging_face_artifact(tmp_path, "3")
+    ollama_store = FakeModelStore(
+        ModelStoreKind.OLLAMA,
+        local_artifacts={configuration.scene_catalog_model: old_ollama},
+        synchronized_artifacts={configuration.scene_catalog_model: new_ollama},
+        publication_errors={
+            new_ollama.identity.identifier: ModelStoreUnavailableError(
+                "local ref unavailable"
+            )
+        },
+    )
+    hugging_face_store = FakeModelStore(
+        ModelStoreKind.HUGGING_FACE,
+        local_artifacts={configuration.speech_to_text_model: hugging_face},
+        synchronized_artifacts={configuration.speech_to_text_model: hugging_face},
+    )
+
+    # Act
+    resolved = _runtime(ollama_store, hugging_face_store).resolve_models(configuration)
+
+    # Assert
+    candidate = resolved.for_role(ModelRole.CANDIDATE_ANNOTATION)
+    assert candidate.execution_identity == old_ollama.identity
+    assert candidate.update_status is ModelUpdateStatus.UNAVAILABLE
+    assert ollama_store.publication_calls == [new_ollama.identity.identifier]
+
+
 def test_unavailable_update_rechecks_local_store_and_rejects_partial_state(
     tmp_path: Path,
 ) -> None:
@@ -308,7 +405,8 @@ def test_unavailable_update_rechecks_local_store_and_rejects_partial_state(
         ),
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ModelRuntimeError) as captured:
         runtime.resolve_models(configuration)
     assert captured.value.reason is ModelRuntimeFailureReason.MODEL_NOT_AVAILABLE
@@ -347,7 +445,8 @@ def test_missing_or_partial_local_model_cannot_mask_bootstrap_failure(
     )
     runtime = _runtime(ollama_store, hugging_face_store)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ModelRuntimeError) as captured:
         runtime.resolve_models(configuration)
     assert captured.value.reason is ModelRuntimeFailureReason.MODEL_NOT_AVAILABLE
@@ -389,7 +488,8 @@ def test_invalid_synchronized_artifact_is_fatal_without_old_model_fallback(
         ),
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ModelRuntimeError) as captured:
         runtime.resolve_models(configuration)
     assert captured.value.reason is ModelRuntimeFailureReason.MODEL_ARTIFACT_INVALID
@@ -427,7 +527,8 @@ def test_invalid_synchronization_result_cannot_be_treated_as_unavailable(
         ),
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ModelRuntimeError) as captured:
         runtime.resolve_models(configuration)
     assert captured.value.reason is ModelRuntimeFailureReason.MODEL_ARTIFACT_INVALID
@@ -499,7 +600,10 @@ def test_provenance_does_not_expose_model_path_or_credentials(tmp_path: Path) ->
             "2" * 40,
         ),
         canonical_name=configuration.speech_to_text_model,
-        runtime_identity="huggingface-hub:0.36.2",
+        runtime_identity=ModelRuntimeIdentity(
+            ModelStoreKind.HUGGING_FACE,
+            "0.36.2",
+        ),
         location=secret_path,
     )
     runtime = _runtime(
@@ -561,7 +665,7 @@ def _ollama_artifact(fill: str) -> ModelArtifact:
             "sha256:" + fill * 64,
         ),
         canonical_name="qwen3-vl:8b-instruct",
-        runtime_identity="ollama:0.31.2",
+        runtime_identity=ModelRuntimeIdentity(ModelStoreKind.OLLAMA, "0.31.2"),
         location=None,
     )
 
@@ -573,6 +677,9 @@ def _hugging_face_artifact(tmp_path: Path, fill: str) -> ModelArtifact:
             fill * 40,
         ),
         canonical_name="dropbox-dash/faster-whisper-large-v3-turbo",
-        runtime_identity="huggingface-hub:0.36.2",
+        runtime_identity=ModelRuntimeIdentity(
+            ModelStoreKind.HUGGING_FACE,
+            "0.36.2",
+        ),
         location=tmp_path / "model-store" / "snapshots" / (fill * 40),
     )

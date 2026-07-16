@@ -96,6 +96,10 @@ _Avoid_: Resolved Model Identity, configured model, model store entry, global mo
 一つのdistinct modelにModel Upgrade Policyを適用したrun別診断。`not_requested`、`unchanged`、`updated`、`bootstrapped`、`unavailable`のいずれかで、共有tagを使うroleへ同じ結果を割り当てる。実行identityと分離してprovenanceへ残し、それ自体ではStage Fingerprintを変えない。
 _Avoid_: Resolved Model Identity, model version, progress state, cache invalidation reason
 
+**Model Runtime Identity**:
+model store adapterが実行時に検証したstore kindとclientまたはserver versionのprivacy-safeなcanonical identity。Resolved Model Identityとは分離し、関係するmodel依存Stageのfingerprintとprovenanceへ保持する。path、host、token、自由形式のexternal version detailは含めない。
+_Avoid_: Resolved Model Identity, model store path, endpoint, credential, raw version response
+
 **Speech Runtime**:
 ModelRuntimeからrun単位で渡された、解決済みでload可能なSTT model artifactとfreeze済みResolved Model Identityを使い、設定されたdevice、compute type、beamなどのprofileでspeech-to-textとword timestampを実行するruntime境界。Context Cueを直接返さず、backend非依存のSpeech Recognition Resultを返す。faster-whisperは既定adapterだが、固定revisionの解決、download、更新確認、run中のmodel freezeは所有しない。
 _Avoid_: ModelRuntime, audio extraction, stream selection, Context Cue policy, self-downloading STT backend
@@ -147,6 +151,10 @@ _Avoid_: full video scan, Context Cue extraction, final selection
 **Context Collection Stage**:
 Frame Candidate Extraction Stageの後に実行し、一つのVideo SourceからContext CueをCompleted Stageとして確定する3番目のVideo Stage。Video Scan Stageのexact timelineとVideo Durationだけを時間基準として使い、Frame Candidate、Candidate Moment、候補密度、refinementの成果物や設定には依存しない。FingerprintにはVideo Fingerprint、exact timeline digestとcontract version、選択stream metadata、stream選択・抽出policyと関連設定、Media Runtime Identity、Cue生成policy versionを含め、STTを実行した場合だけSpeech Runtime Identity、Resolved Model Identity、STT・chunk・VAD設定を加える。model更新時刻と`auto_upgrade`は実行identityが同じなら含めない。Context Cueは後続のVideo Set Stageで集約され、Candidate Momentを生成せずframeの適格性も変更しない。
 _Avoid_: Video Set context collection, candidate-generating subtitle stage, candidate-dependent context cache
+
+**Collected Context**:
+Video Set Stageへ集約されたContext Cueと、STTが実際に実行された場合だけ存在するSpeech Runtime Identityの組。STT未実行と、STTを実行したがCueが0件だった結果を区別し、Context fingerprintへSTT model・runtime・profileを条件付きで加える判断を運ぶ。
+_Avoid_: Context Cue, Context Stage Result, unconditional STT dependency, raw transcript
 
 **Context Source Outcome**:
 Context Collection Stageが実際に選択・試行したsource kindごとに残すstatusと安定reason code。usable cueがある`available`、track不在の`absent`、選択・decodeされたsourceからusable eventが得られない`no_context`、発話のない`no_speech`、文字列はあるが全件不採用の`low_reliability`を正常結果として区別する。non-forced subtitleの`no_context / no_subtitle_events`ではaudio STTへfallbackしない。ambiguous・unsupported・decode・STT・timestamp・partial chunk failureはfatalであり、一方のsourceだけ成功してもCompleted Stageをpublishしない。

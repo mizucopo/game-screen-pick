@@ -26,7 +26,9 @@ class ModelRequirement:
             raise ValueError(msg)
         if self.capability is ModelCapability.VISION_STRUCTURED_OUTPUT:
             if (
-                self.store_kind is not ModelStoreKind.OLLAMA
+                self.role
+                not in (ModelRole.SCENE_CATALOG, ModelRole.CANDIDATE_ANNOTATION)
+                or self.store_kind is not ModelStoreKind.OLLAMA
                 or self.minimum_context_length is None
                 or self.minimum_context_length < 1
                 or self.device is not None

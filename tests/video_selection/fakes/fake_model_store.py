@@ -24,6 +24,7 @@ class FakeModelStore:
         ]
         | None = None,
         invalid_identifiers: frozenset[str] = frozenset(),
+        publication_errors: Mapping[str, Exception] | None = None,
     ) -> None:
         self._kind = kind
         self._local_artifacts = dict(local_artifacts)
@@ -33,9 +34,11 @@ class FakeModelStore:
             local_artifacts_after_synchronization_error or {}
         )
         self._invalid_identifiers = invalid_identifiers
+        self._publication_errors = dict(publication_errors or {})
         self.local_resolution_calls: list[str] = []
         self.synchronization_calls: list[str] = []
         self.validation_calls: list[tuple[str, str]] = []
+        self.publication_calls: list[str] = []
 
     @property
     def kind(self) -> ModelStoreKind:
@@ -70,3 +73,11 @@ class FakeModelStore:
         self.validation_calls.append((identifier, requirement.role.value))
         if identifier in self._invalid_identifiers:
             raise ModelArtifactInvalidError("fake artifact detail")
+
+    def publish_validated(self, artifact: ModelArtifact) -> None:
+        """検証済みartifactのstore-local selector公開を記録する。"""
+        identifier = artifact.identity.identifier
+        self.publication_calls.append(identifier)
+        error = self._publication_errors.get(identifier)
+        if error is not None:
+            raise error

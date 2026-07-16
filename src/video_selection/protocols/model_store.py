@@ -26,3 +26,6 @@ class ModelStore(Protocol):
         requirement: ModelRequirement,
     ) -> None:
         """artifactの完全性とrole capabilityを検証する。"""
+
+    def publish_validated(self, artifact: ModelArtifact) -> None:
+        """全capability検証済みartifactをstoreのlocal selectorへ公開する。"""
