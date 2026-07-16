@@ -21,7 +21,7 @@ Ollamaの`/api/chat`を次の2種類だけに使います。
 1. `build-scene-catalog`: Video Set共有の3〜8 sceneを一回生成します。`other`を必ず1件含め、そのScene Selection Roleは`ordinary`です。
 2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、入力frameの一つをRepresentative Frameとして返します。
 
-各推論の直前に`/api/tags`でconfigured tagのlocal完全digestを再確認します。Model LifecycleでfreezeしたResolved Model Identityと異なる場合は、別digestの結果を同じfingerprintへ保存せず`ollama_model_identity_changed`で停止します。この確認はtagの更新や再解決を行いません。
+各推論attemptの直前と応答受領直後に`/api/version`と`/api/tags`でOllama server versionとconfigured tagのlocal完全digestを再確認します。Model LifecycleでfreezeしたRuntime IdentityまたはResolved Model Identityと異なる場合は、別runtime／digestの結果を同じfingerprintへ保存せず停止します。この確認はtagの更新や再解決を行いません。
 
 両方ともJSON Schema object全体、`stream=false`、`think=false`、`temperature=0`を送ります。JSON Schema検証後にも、Scene Slug、Frame Candidate ID、Context Cue IDが入力集合へ属すること、Context Cueの有無とRelevanceが整合することをlocalで検査します。annotation summary、Representative Frameの選択理由、spoiler evidenceに入力Context Cue本文が逐語再出力された応答はdomain invalidとして拒否します。
 
@@ -65,4 +65,4 @@ cache artifactには検証済みCatalog／Annotationと、canonical形式を検�
 uv run task test
 ```
 
-fake VisionRuntime goldenでmodel identity変更、schema invalid、domain invalid、transport failure、打ち切り応答、retry成功・失敗、秒数／HTTP-dateのRetry-After、Context Cue有無、短いCueを含むraw text拒否、canonical diagnostic identity、major spoiler evidence、warm cache、同一fingerprintの並行処理、途中失敗後のMoment単位再開を検証します。
+fake VisionRuntime goldenで推論前後のmodel/runtime identity変更、schema invalid、domain invalid、transport failure、打ち切り応答、retry成功・失敗、秒数／HTTP-dateのRetry-After、Context Cue有無、短いCueを含むraw text拒否、canonical diagnostic identity、major spoiler evidence、warm cache、同一fingerprintの並行処理、途中失敗後のMoment単位再開を検証します。

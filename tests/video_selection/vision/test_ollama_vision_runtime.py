@@ -15,6 +15,7 @@ from src.video_selection.models.candidate_annotation_request import (
 from src.video_selection.models.candidate_moment import CandidateMoment
 from src.video_selection.models.context_cue import ContextCue
 from src.video_selection.models.frame_candidate import FrameCandidate
+from src.video_selection.models.model_artifact import ModelArtifact
 from src.video_selection.models.model_role import ModelRole
 from src.video_selection.models.model_runtime_identity import ModelRuntimeIdentity
 from src.video_selection.models.model_store_kind import ModelStoreKind
@@ -51,6 +52,8 @@ def test_scene_catalog_uses_strict_documented_ollama_request() -> None:
         payload: Mapping[str, object] | None,
         _timeout: float,
     ) -> object:
+        if url.endswith("/api/version"):
+            return {"version": "0.31.2"}
         if url.endswith("/api/tags"):
             return {
                 "models": [
@@ -142,7 +145,7 @@ def test_schema_failure_is_retried_once_with_stable_code() -> None:
         timeout_seconds=60.0,
         requester=requester,
         sleeper=sleeps.append,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
     request = SceneCatalogRequest(
         representatives=(FrameCandidate("frame-a", b"image-a"),),
@@ -201,7 +204,7 @@ def test_truncated_response_is_retried_before_success() -> None:
         timeout_seconds=60.0,
         requester=requester,
         sleeper=lambda _seconds: None,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -254,7 +257,7 @@ def test_repeated_truncated_response_fails_after_one_retry() -> None:
         timeout_seconds=60.0,
         requester=requester,
         sleeper=lambda _seconds: None,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -303,7 +306,7 @@ def test_candidate_domain_failure_stops_without_other_fallback() -> None:
         timeout_seconds=60.0,
         requester=requester,
         sleeper=lambda _seconds: None,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -341,6 +344,8 @@ def test_changed_ollama_tag_is_rejected_before_inference() -> None:
         _timeout: float,
     ) -> object:
         nonlocal chat_calls
+        if url.endswith("/api/version"):
+            return {"version": "0.31.2"}
         if url.endswith("/api/tags"):
             return {
                 "models": [
@@ -376,6 +381,187 @@ def test_changed_ollama_tag_is_rejected_before_inference() -> None:
     assert captured.value.validation_code == "ollama_model_identity_changed"
 
 
+def test_changed_ollama_runtime_is_rejected_before_inference() -> None:
+    """freeze後にOllama runtime versionが変わった場合に推論前に停止されること。
+
+    Arrange:
+        - freeze済みruntimeと異なるserver versionが用意される
+        - freeze済みdigestを指すlocal model一覧が用意される
+    Act:
+        - Scene Catalog推論が実行される
+    Assert:
+        - chat requestが送られずruntime identity changedで失敗すること
+    """
+    # Arrange
+    chat_calls = 0
+
+    def requester(
+        _method: str,
+        url: str,
+        _payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        nonlocal chat_calls
+        if url.endswith("/api/version"):
+            return {"version": "0.31.3"}
+        if url.endswith("/api/tags"):
+            return {
+                "models": [
+                    {
+                        "name": "qwen3-vl:8b-instruct",
+                        "digest": "a" * 64,
+                    }
+                ]
+            }
+        chat_calls += 1
+        return _response(_catalog_payload())
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.create_scene_catalog(
+            SceneCatalogRequest(
+                representatives=(FrameCandidate("frame-a", b"image-a"),),
+                selection_intent="ブログ画像を分類する",
+            ),
+            _resolved_model(ModelRole.SCENE_CATALOG),
+            num_ctx=32768,
+        )
+    assert chat_calls == 0
+    assert captured.value.reason is VisionRuntimeFailureReason.MODEL_UNAVAILABLE
+    assert captured.value.validation_code == "ollama_runtime_identity_changed"
+
+
+def test_changed_ollama_tag_is_rejected_after_inference() -> None:
+    """推論中にOllama tagのdigestが変わった場合に応答が破棄されること。
+
+    Arrange:
+        - 推論前はfreeze済みdigest、推論後は異なるdigestが用意される
+    Act:
+        - Scene Catalog推論が実行される
+    Assert:
+        - chat応答が返ってもmodel identity changedで失敗すること
+    """
+    # Arrange
+    tag_calls = 0
+    chat_calls = 0
+
+    def requester(
+        _method: str,
+        url: str,
+        _payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        nonlocal tag_calls, chat_calls
+        if url.endswith("/api/version"):
+            return {"version": "0.31.2"}
+        if url.endswith("/api/tags"):
+            tag_calls += 1
+            fill = "a" if tag_calls == 1 else "b"
+            return {
+                "models": [
+                    {
+                        "name": "qwen3-vl:8b-instruct",
+                        "digest": fill * 64,
+                    }
+                ]
+            }
+        chat_calls += 1
+        return _response(_catalog_payload())
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.create_scene_catalog(
+            SceneCatalogRequest(
+                representatives=(FrameCandidate("frame-a", b"image-a"),),
+                selection_intent="ブログ画像を分類する",
+            ),
+            _resolved_model(ModelRole.SCENE_CATALOG),
+            num_ctx=32768,
+        )
+    assert tag_calls == 2
+    assert chat_calls == 1
+    assert captured.value.reason is VisionRuntimeFailureReason.MODEL_UNAVAILABLE
+    assert captured.value.validation_code == "ollama_model_identity_changed"
+
+
+def test_changed_ollama_runtime_is_rejected_after_inference() -> None:
+    """推論中にOllama runtime versionが変わった場合に応答が破棄されること。
+
+    Arrange:
+        - 推論前はfreeze済みversion、推論後は異なるversionが用意される
+        - 両確認でfreeze済みdigestを指すlocal model一覧が用意される
+    Act:
+        - Scene Catalog推論が実行される
+    Assert:
+        - chat応答が返ってもruntime identity changedで失敗すること
+    """
+    # Arrange
+    version_calls = 0
+    chat_calls = 0
+
+    def requester(
+        _method: str,
+        url: str,
+        _payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        nonlocal version_calls, chat_calls
+        if url.endswith("/api/version"):
+            version_calls += 1
+            version = "0.31.2" if version_calls == 1 else "0.31.3"
+            return {"version": version}
+        if url.endswith("/api/tags"):
+            return {
+                "models": [
+                    {
+                        "name": "qwen3-vl:8b-instruct",
+                        "digest": "a" * 64,
+                    }
+                ]
+            }
+        chat_calls += 1
+        return _response(_catalog_payload())
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.create_scene_catalog(
+            SceneCatalogRequest(
+                representatives=(FrameCandidate("frame-a", b"image-a"),),
+                selection_intent="ブログ画像を分類する",
+            ),
+            _resolved_model(ModelRole.SCENE_CATALOG),
+            num_ctx=32768,
+        )
+    assert version_calls == 2
+    assert chat_calls == 1
+    assert captured.value.reason is VisionRuntimeFailureReason.MODEL_UNAVAILABLE
+    assert captured.value.validation_code == "ollama_runtime_identity_changed"
+
+
 def test_tag_preflight_http_429_honors_http_date_retry_after() -> None:
     """推論前tag確認のHTTP 429でもHTTP-date待機が尊重されること。
 
@@ -398,6 +584,8 @@ def test_tag_preflight_http_429_honors_http_date_retry_after() -> None:
         _timeout: float,
     ) -> object:
         nonlocal tag_calls
+        if url.endswith("/api/version"):
+            return {"version": "0.31.2"}
         if url.endswith("/api/tags"):
             tag_calls += 1
             if tag_calls == 1:
@@ -435,7 +623,7 @@ def test_tag_preflight_http_429_honors_http_date_retry_after() -> None:
     # Assert
     assert catalog.slugs[-1] == "other"
     assert diagnostics.attempt_count == 2
-    assert tag_calls == 2
+    assert tag_calls == 3
     assert sleeps == [30.0]
 
 
@@ -461,7 +649,7 @@ def test_tag_preflight_non_retryable_http_4xx_fails_immediately(
         - 再試行されずstatusに対応する安全なfatal errorになること
     """
     # Arrange
-    calls = 0
+    tag_calls = 0
 
     def requester(
         _method: str,
@@ -469,8 +657,10 @@ def test_tag_preflight_non_retryable_http_4xx_fails_immediately(
         _payload: Mapping[str, object] | None,
         _timeout: float,
     ) -> object:
-        nonlocal calls
-        calls += 1
+        nonlocal tag_calls
+        if url.endswith("/api/version"):
+            return {"version": "0.31.2"}
+        tag_calls += 1
         raise HTTPError(
             url,
             status_code,
@@ -497,7 +687,7 @@ def test_tag_preflight_non_retryable_http_4xx_fails_immediately(
             _resolved_model(ModelRole.SCENE_CATALOG),
             num_ctx=32768,
         )
-    assert calls == 1
+    assert tag_calls == 1
     assert captured.value.reason is expected_reason
     assert "token-secret" not in str(captured.value)
     assert "/private/model" not in str(captured.value)
@@ -525,6 +715,8 @@ def test_invalid_tag_preflight_retries_without_repairing_prompt() -> None:
         _timeout: float,
     ) -> object:
         nonlocal tag_calls
+        if url.endswith("/api/version"):
+            return {"version": "0.31.2"}
         if url.endswith("/api/tags"):
             tag_calls += 1
             if tag_calls == 1:
@@ -561,6 +753,7 @@ def test_invalid_tag_preflight_retries_without_repairing_prompt() -> None:
     # Assert
     assert diagnostics.attempt_count == 2
     assert diagnostics.validation_code == "ollama_model_identity_response_invalid"
+    assert tag_calls == 3
     assert len(chat_payloads) == 1
     assert "validation_code" not in str(_first_message(chat_payloads[0])["content"])
 
@@ -595,7 +788,7 @@ def test_candidate_without_context_is_explicitly_unavailable() -> None:
         timeout_seconds=60.0,
         requester=lambda _method, _url, _payload, _timeout: _response(response),
         sleeper=lambda _seconds: None,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -642,7 +835,7 @@ def test_candidate_without_context_rejects_none_relevance() -> None:
         timeout_seconds=60.0,
         requester=lambda _method, _url, _payload, _timeout: _response(response),
         sleeper=lambda _seconds: None,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -677,7 +870,7 @@ def test_candidate_with_context_rejects_unavailable_relevance() -> None:
         timeout_seconds=60.0,
         requester=lambda _method, _url, _payload, _timeout: _response(response),
         sleeper=lambda _seconds: None,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -718,7 +911,7 @@ def test_candidate_rejects_verbatim_context_cue_in_free_text(
         timeout_seconds=60.0,
         requester=lambda _method, _url, _payload, _timeout: _response(response),
         sleeper=lambda _seconds: None,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -765,7 +958,7 @@ def test_candidate_rejects_normalized_or_partial_context_cue_quote(
         timeout_seconds=60.0,
         requester=lambda _method, _url, _payload, _timeout: _response(response),
         sleeper=lambda _seconds: None,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -811,7 +1004,7 @@ def test_retryable_transport_failure_is_retried_with_same_semantic_input() -> No
         timeout_seconds=60.0,
         requester=requester,
         sleeper=lambda _seconds: None,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -869,7 +1062,7 @@ def test_non_retryable_http_4xx_fails_immediately_without_external_detail() -> N
         timeout_seconds=60.0,
         requester=requester,
         sleeper=lambda _seconds: None,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -922,7 +1115,7 @@ def test_http_429_honors_capped_retry_after() -> None:
         timeout_seconds=60.0,
         requester=requester,
         sleeper=sleeps.append,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -976,7 +1169,7 @@ def test_http_429_honors_http_date_retry_after() -> None:
         timeout_seconds=60.0,
         requester=requester,
         sleeper=sleeps.append,
-        model_identity_resolver=_resolved_identity,
+        model_state_resolver=_resolved_artifact,
     )
 
     # Act
@@ -1123,8 +1316,13 @@ def _resolved_model(role: ModelRole) -> ResolvedModel:
     )
 
 
-def _resolved_identity(model: ResolvedModel) -> str:
-    return model.execution_identity.identifier
+def _resolved_artifact(model: ResolvedModel) -> ModelArtifact:
+    return ModelArtifact(
+        identity=model.execution_identity,
+        canonical_name=model.canonical_name,
+        runtime_identity=model.runtime_identity,
+        location=None,
+    )
 
 
 def _first_message(payload: Mapping[str, object]) -> Mapping[str, object]:

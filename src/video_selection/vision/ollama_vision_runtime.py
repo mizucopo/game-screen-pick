@@ -24,6 +24,7 @@ from ..models.candidate_annotation import (
     candidate_annotation_relationships_are_valid,
 )
 from ..models.candidate_annotation_request import CandidateAnnotationRequest
+from ..models.model_artifact import ModelArtifact
 from ..models.model_artifact_invalid_error import ModelArtifactInvalidError
 from ..models.model_role import ModelRole
 from ..models.model_store_http_error import ModelStoreHttpError
@@ -59,7 +60,7 @@ JsonRequester = Callable[
     object,
 ]
 Sleeper = Callable[[float], None]
-ModelIdentityResolver = Callable[[ResolvedModel], str]
+ModelStateResolver = Callable[[ResolvedModel], ModelArtifact]
 InferenceValue = TypeVar("InferenceValue")
 InferenceParser = Callable[[Mapping[str, object]], InferenceValue]
 StageKind = Literal["scene_catalog", "candidate_annotation"]
@@ -101,7 +102,7 @@ class OllamaVisionRuntime:
         timeout_seconds: float,
         requester: JsonRequester | None = None,
         sleeper: Sleeper = time.sleep,
-        model_identity_resolver: ModelIdentityResolver | None = None,
+        model_state_resolver: ModelStateResolver | None = None,
     ) -> None:
         if not host.strip() or timeout_seconds <= 0:
             raise ValueError("Ollama VisionRuntimeの接続設定が不正です")
@@ -114,8 +115,8 @@ class OllamaVisionRuntime:
             timeout_seconds=self._timeout_seconds,
             requester=self._requester,
         )
-        self._model_identity_resolver = (
-            model_identity_resolver or self._resolve_current_model_identity
+        self._model_state_resolver = (
+            model_state_resolver or self._resolve_current_model_state
         )
 
     def create_scene_catalog(
@@ -177,8 +178,9 @@ class OllamaVisionRuntime:
         for attempt in (1, 2):
             attempt_payload = _with_repair_code(payload, repair_code)
             try:
-                self._require_frozen_model_identity(model)
+                self._require_frozen_model_state(model)
                 response = self._request(attempt_payload)
+                self._require_frozen_model_state(model)
                 value = parser(_decode_content(response, stage_kind))
             except VisionRuntimeError as error:
                 if attempt == 2 or error.reason not in _RETRYABLE_REASONS:
@@ -205,10 +207,10 @@ class OllamaVisionRuntime:
             return value, diagnostics
         raise AssertionError("VisionRuntime retry loop did not terminate")
 
-    def _require_frozen_model_identity(self, model: ResolvedModel) -> None:
-        """推論直前のmutable tagがfreeze済みdigestを指すことを要求する。"""
+    def _require_frozen_model_state(self, model: ResolvedModel) -> None:
+        """推論前後のmodel artifactがfreeze済みstateと一致することを要求する。"""
         try:
-            current_identity = self._model_identity_resolver(model)
+            current = self._model_state_resolver(model)
         except VisionRuntimeError:
             raise
         except Exception:
@@ -216,16 +218,21 @@ class OllamaVisionRuntime:
                 VisionRuntimeFailureReason.TRANSPORT_FAILURE,
                 validation_code="ollama_transport_failure",
             ) from None
-        if current_identity != model.execution_identity.identifier:
+        if current.identity != model.execution_identity:
             raise VisionRuntimeError(
                 VisionRuntimeFailureReason.MODEL_UNAVAILABLE,
                 validation_code="ollama_model_identity_changed",
             )
+        if current.runtime_identity != model.runtime_identity:
+            raise VisionRuntimeError(
+                VisionRuntimeFailureReason.MODEL_UNAVAILABLE,
+                validation_code="ollama_runtime_identity_changed",
+            )
 
-    def _resolve_current_model_identity(self, model: ResolvedModel) -> str:
-        """Model Storeの確認portをVision failureへ変換する。"""
+    def _resolve_current_model_state(self, model: ResolvedModel) -> ModelArtifact:
+        """Model Storeのartifact確認portをVision failureへ変換する。"""
         try:
-            identity = self._model_store.resolve_current_identity(model.configured_name)
+            artifact = self._model_store.resolve_current_artifact(model.configured_name)
         except ModelArtifactInvalidError:
             raise VisionRuntimeError(
                 VisionRuntimeFailureReason.RESPONSE_INVALID,
@@ -241,12 +248,12 @@ class OllamaVisionRuntime:
                 VisionRuntimeFailureReason.TRANSPORT_FAILURE,
                 validation_code="ollama_transport_failure",
             ) from None
-        if identity is None:
+        if artifact is None:
             raise VisionRuntimeError(
                 VisionRuntimeFailureReason.MODEL_UNAVAILABLE,
                 validation_code="ollama_model_identity_unavailable",
             )
-        return identity.identifier
+        return artifact
 
     def _request(self, payload: Mapping[str, object]) -> Mapping[str, object]:
         """transport detailをstable failureへ変換する。"""
