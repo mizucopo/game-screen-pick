@@ -42,3 +42,23 @@ def test_resolve_models_has_model_resolution_stage_version() -> None:
 
     # Assert
     assert version == "model-resolution-v1"
+
+
+def test_select_images_keeps_walking_skeleton_version_until_selector_is_wired() -> None:
+    """旧selectorの実行中はwalking skeleton versionが維持されること。
+
+    Arrange:
+        - select-images Processing Stageが用意される
+    Act:
+        - Stage versionが解決される
+    Assert:
+        - 現行のwalking skeleton versionが返されること
+    """
+    # Arrange
+    stage = ProcessingStage.SELECT_IMAGES
+
+    # Act
+    version = stage_version(stage)
+
+    # Assert
+    assert version == "walking-skeleton-0"

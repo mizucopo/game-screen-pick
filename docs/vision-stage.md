@@ -12,7 +12,7 @@
 - 決定的なlocal順を持つSelection ShortlistのCandidate Annotation request
 - Effective Configurationとrun中にfreeze済みのResolved Models
 
-Scene Catalog Representative Setは要求画像枚数から独立します。Selection Shortlistの初期sizeと不足時の拡張は、決定的selectorとcapacity acceptanceを実装する後続Issue #186・#189が所有します。Candidate Annotation requestには1〜3件のFrame Candidate、versioned policyで選ばれた近傍Context Cue、Video Set Progress、Selection Intentを明示し、VisionRuntimeが暗黙に候補やCueを削りません。
+Scene Catalog Representative Setは要求画像枚数から独立します。Selection Shortlistは決定的selectorが不足時に追加batchを受けて拡張し、batch sizeと実model capacityの受け入れはIssue #189が所有します。Candidate Annotation requestには1〜3件のFrame Candidate、versioned policyで選ばれた近傍Context Cue、Video Set Progress、Selection Intentを明示し、VisionRuntimeが暗黙に候補やCueを削りません。
 
 ## Ollama operation
 
@@ -35,7 +35,7 @@ Candidate Annotation v1は次の意味情報だけを返します。
 - Spoiler Riskと引用を含まないevidence summary
 - annotation summaryとRepresentative Frameの選択理由
 
-Quality Score、model confidence、final score、soft coverage、eligible/selected flag、生成した逐語的画面テキスト、reasoning traceはschemaに含めません。最終採否はIssue #186の決定的selectorが所有します。
+Quality Score、model confidence、final score、soft coverage、eligible/selected flag、生成した逐語的画面テキスト、reasoning traceはschemaに含めません。最終採否は[Video Set最終選定Stage](selection-stage.md)の決定的selectorが所有します。
 
 ## Retryとfailure
 
