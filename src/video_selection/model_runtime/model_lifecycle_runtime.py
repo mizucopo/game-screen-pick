@@ -97,12 +97,12 @@ class ModelLifecycleRuntime:
                 primary.role,
             ) from None
 
-        local = (
-            local_candidate
-            if local_candidate is not None
-            and _artifact_is_valid(store, local_candidate, requirements)
-            else None
+        local_invalid_role = (
+            None
+            if local_candidate is None
+            else _artifact_invalid_role(store, local_candidate, requirements)
         )
+        local = local_candidate if local_invalid_role is None else None
         if local is not None and not auto_upgrade:
             return _build_resolutions(
                 requirements,
@@ -129,7 +129,7 @@ class ModelLifecycleRuntime:
                 return fallback
             raise ModelRuntimeError(
                 ModelRuntimeFailureReason.MODEL_NOT_AVAILABLE,
-                primary.role,
+                local_invalid_role or primary.role,
             ) from None
         except Exception:
             raise ModelRuntimeError(
@@ -137,10 +137,11 @@ class ModelLifecycleRuntime:
                 primary.role,
             ) from None
 
-        if not _artifact_is_valid(store, synchronized, requirements):
+        invalid_role = _artifact_invalid_role(store, synchronized, requirements)
+        if invalid_role is not None:
             raise ModelRuntimeError(
                 ModelRuntimeFailureReason.MODEL_ARTIFACT_INVALID,
-                primary.role,
+                invalid_role,
             )
         try:
             store.publish_validated(synchronized)
@@ -181,20 +182,23 @@ class ModelLifecycleRuntime:
         )
 
 
-def _artifact_is_valid(
+def _artifact_invalid_role(
     store: ModelStore,
     artifact: ModelArtifact,
     requirements: tuple[ModelRequirement, ...],
-) -> bool:
+) -> ModelRole | None:
     if artifact.identity.store_kind is not store.kind:
-        return False
-    try:
-        for requirement in requirements:
+        return requirements[0].role
+    for requirement in requirements:
+        try:
             store.validate(artifact, requirement)
+        except Exception:
+            return requirement.role
+    try:
         store.confirm_current_identity(artifact, requirements[0])
     except Exception:
-        return False
-    return True
+        return requirements[0].role
+    return None
 
 
 def _resolve_valid_local_after_unavailable(
@@ -206,8 +210,14 @@ def _resolve_valid_local_after_unavailable(
         candidate = store.resolve_local(primary)
     except Exception:
         return None
-    if candidate is None or not _artifact_is_valid(store, candidate, requirements):
+    if candidate is None:
         return None
+    invalid_role = _artifact_invalid_role(store, candidate, requirements)
+    if invalid_role is not None:
+        raise ModelRuntimeError(
+            ModelRuntimeFailureReason.MODEL_NOT_AVAILABLE,
+            invalid_role,
+        )
     return candidate
 
 

@@ -5,6 +5,7 @@ from src.video_selection.models.model_artifact_invalid_error import (
     ModelArtifactInvalidError,
 )
 from src.video_selection.models.model_requirement import ModelRequirement
+from src.video_selection.models.model_role import ModelRole
 from src.video_selection.models.model_store_kind import ModelStoreKind
 
 
@@ -24,6 +25,7 @@ class FakeModelStore:
         ]
         | None = None,
         invalid_identifiers: frozenset[str] = frozenset(),
+        invalid_artifact_roles: frozenset[tuple[str, ModelRole]] = frozenset(),
         publication_errors: Mapping[str, Exception] | None = None,
     ) -> None:
         self._kind = kind
@@ -34,6 +36,7 @@ class FakeModelStore:
             local_artifacts_after_synchronization_error or {}
         )
         self._invalid_identifiers = invalid_identifiers
+        self._invalid_artifact_roles = invalid_artifact_roles
         self._publication_errors = dict(publication_errors or {})
         self.local_resolution_calls: list[str] = []
         self.synchronization_calls: list[str] = []
@@ -72,7 +75,14 @@ class FakeModelStore:
         """artifactとroleの組を記録し、指定identityだけ拒否する。"""
         identifier = artifact.identity.identifier
         self.validation_calls.append((identifier, requirement.role.value))
-        if identifier in self._invalid_identifiers:
+        if (
+            identifier in self._invalid_identifiers
+            or (
+                identifier,
+                requirement.role,
+            )
+            in self._invalid_artifact_roles
+        ):
             raise ModelArtifactInvalidError("fake artifact detail")
 
     def confirm_current_identity(

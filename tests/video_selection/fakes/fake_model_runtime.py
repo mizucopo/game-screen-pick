@@ -1,4 +1,5 @@
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
@@ -20,16 +21,24 @@ class FakeModelRuntime:
         *,
         speech_identity_seed: str = "speech-model",
         unavailable_roles: frozenset[ModelRole] = frozenset(),
+        resolution_error: Exception | None = None,
+        resolution_action: Callable[[], None] | None = None,
     ) -> None:
         self._candidate_identity_seed = candidate_identity_seed
         self._speech_identity_seed = speech_identity_seed
         self._unavailable_roles = unavailable_roles
+        self._resolution_error = resolution_error
+        self._resolution_action = resolution_action
 
     def resolve_models(
         self,
         configuration: EffectiveConfiguration,
     ) -> ResolvedModels:
         """実行に使う全roleのmodel identityを返す。"""
+        if self._resolution_action is not None:
+            self._resolution_action()
+        if self._resolution_error is not None:
+            raise self._resolution_error
         vision_identity = ResolvedModelIdentity(
             ModelStoreKind.OLLAMA,
             "sha256:"

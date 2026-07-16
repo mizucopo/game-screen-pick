@@ -509,6 +509,96 @@ def test_invalid_synchronized_artifact_is_fatal_without_old_model_fallback(
     assert captured.value.reason is ModelRuntimeFailureReason.MODEL_ARTIFACT_INVALID
 
 
+def test_shared_model_capability_failure_reports_rejecting_role(
+    tmp_path: Path,
+) -> None:
+    """共有modelのcapability失敗が検査を拒否したroleへ帰属されること。
+
+    Arrange:
+        - 2 roleが共有する同期後Ollama artifactが用意される
+        - Candidate Annotation roleだけのcapability検証が失敗するようにされる
+    Act:
+        - auto upgrade有効でmodel解決が試行される
+    Assert:
+        - artifact invalid errorのroleがCandidate Annotationになること
+    """
+    # Arrange
+    configuration = _configuration(tmp_path, auto_upgrade=True)
+    synchronized = _ollama_artifact("2")
+    runtime = _runtime(
+        FakeModelStore(
+            ModelStoreKind.OLLAMA,
+            local_artifacts={configuration.scene_catalog_model: None},
+            synchronized_artifacts={configuration.scene_catalog_model: synchronized},
+            invalid_artifact_roles=frozenset(
+                {
+                    (
+                        synchronized.identity.identifier,
+                        ModelRole.CANDIDATE_ANNOTATION,
+                    )
+                }
+            ),
+        ),
+        FakeModelStore(
+            ModelStoreKind.HUGGING_FACE,
+            local_artifacts={configuration.speech_to_text_model: None},
+        ),
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(ModelRuntimeError) as captured:
+        runtime.resolve_models(configuration)
+    assert captured.value.reason is ModelRuntimeFailureReason.MODEL_ARTIFACT_INVALID
+    assert captured.value.role is ModelRole.CANDIDATE_ANNOTATION
+
+
+def test_unavailable_sync_preserves_role_that_rejected_local_shared_model(
+    tmp_path: Path,
+) -> None:
+    """共有local検証後の同期不能が最初に拒否したroleへ帰属されること。
+
+    Arrange:
+        - 2 roleが共有するlocal Ollama artifactが用意される
+        - Candidate Annotationだけがlocalを拒否しremote同期も不能にされる
+    Act:
+        - auto upgrade有効でmodel解決が試行される
+    Assert:
+        - model not available errorのroleがCandidate Annotationになること
+    """
+    # Arrange
+    configuration = _configuration(tmp_path, auto_upgrade=True)
+    local = _ollama_artifact("1")
+    runtime = _runtime(
+        FakeModelStore(
+            ModelStoreKind.OLLAMA,
+            local_artifacts={configuration.scene_catalog_model: local},
+            synchronization_errors={
+                configuration.scene_catalog_model: ModelStoreUnavailableError("offline")
+            },
+            invalid_artifact_roles=frozenset(
+                {
+                    (
+                        local.identity.identifier,
+                        ModelRole.CANDIDATE_ANNOTATION,
+                    )
+                }
+            ),
+        ),
+        FakeModelStore(
+            ModelStoreKind.HUGGING_FACE,
+            local_artifacts={configuration.speech_to_text_model: None},
+        ),
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(ModelRuntimeError) as captured:
+        runtime.resolve_models(configuration)
+    assert captured.value.reason is ModelRuntimeFailureReason.MODEL_NOT_AVAILABLE
+    assert captured.value.role is ModelRole.CANDIDATE_ANNOTATION
+
+
 def test_invalid_synchronization_result_cannot_be_treated_as_unavailable(
     tmp_path: Path,
 ) -> None:

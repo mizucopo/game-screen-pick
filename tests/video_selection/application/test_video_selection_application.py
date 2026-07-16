@@ -18,6 +18,10 @@ from src.video_selection.models.legacy_cache_cleanup_diagnostic import (
     LegacyCacheCleanupDiagnostic,
 )
 from src.video_selection.models.model_role import ModelRole
+from src.video_selection.models.model_runtime_error import ModelRuntimeError
+from src.video_selection.models.model_runtime_failure_reason import (
+    ModelRuntimeFailureReason,
+)
 from src.video_selection.models.processing_stage import (
     VIDEO_SET_STAGE_ORDER,
     ProcessingStage,
@@ -420,6 +424,122 @@ def test_reset_cache_removes_entire_processing_cache_before_run(
     assert observer.legacy_cache_diagnostics == [
         LegacyCacheCleanupDiagnostic(removed_entry_count=0, removed_bytes=0)
     ]
+
+
+def test_model_preflight_failure_preserves_cache_requested_for_reset(
+    tmp_path: Path,
+) -> None:
+    """model preflight失敗時にreset対象のprocessing cacheが保持されること。
+
+    Arrange:
+        - 既存processing cacheとreset_cache有効の設定が用意される
+        - model解決で失敗するruntimeが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - model errorが返され既存cacheが変更されないこと
+        - cache cleanup通知とOutput Folder公開が行われないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    cache_folder = input_folder / ".game-screen-pick" / "cache"
+    stale_marker = cache_folder / "existing" / "preserved.txt"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    stale_marker.parent.mkdir(parents=True)
+    stale_marker.write_text("preserve", encoding="utf-8")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    observer = RecordingRunObserver()
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeContextCollector(()),
+        model_runtime=FakeModelRuntime(
+            "model-sha-001",
+            resolution_error=ModelRuntimeError(
+                ModelRuntimeFailureReason.MODEL_STORE_UNAVAILABLE,
+                ModelRole.SPEECH_TO_TEXT,
+            ),
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=observer,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(ModelRuntimeError):
+        application.run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=output_folder,
+                image_count=1,
+                reset_cache=True,
+            )
+        )
+    assert stale_marker.read_text(encoding="utf-8") == "preserve"
+    assert observer.legacy_cache_diagnostics == []
+    assert not output_folder.exists()
+
+
+def test_input_change_during_model_preflight_preserves_cache_requested_for_reset(
+    tmp_path: Path,
+) -> None:
+    """model preflight中の入力変更がreset前に再検出されること。
+
+    Arrange:
+        - 既存processing cacheとreset_cache有効の設定が用意される
+        - model解決中に入力videoを変更するruntimeが用意される
+    Act:
+        - Video Set選定applicationが実行される
+    Assert:
+        - snapshot errorが返され既存cacheが変更されないこと
+        - cache cleanup通知とOutput Folder公開が行われないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    cache_folder = input_folder / ".game-screen-pick" / "cache"
+    stale_marker = cache_folder / "existing" / "preserved.txt"
+    input_folder.mkdir()
+    video_path = input_folder / "chapter-01.mp4"
+    video_path.write_bytes(b"video-01")
+    stale_marker.parent.mkdir(parents=True)
+    stale_marker.write_text("preserve", encoding="utf-8")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    observer = RecordingRunObserver()
+
+    def mutate_input() -> None:
+        video_path.write_bytes(b"changed-video")
+
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeContextCollector(()),
+        model_runtime=FakeModelRuntime(
+            "model-sha-001",
+            resolution_action=mutate_input,
+        ),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=observer,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
+        application.run(
+            EffectiveConfiguration(
+                video_input_folder=input_folder,
+                output_folder=output_folder,
+                image_count=1,
+                reset_cache=True,
+            )
+        )
+    assert stale_marker.read_text(encoding="utf-8") == "preserve"
+    assert observer.legacy_cache_diagnostics == []
+    assert not output_folder.exists()
 
 
 def test_stage_failure_leaves_output_unpublished(tmp_path: Path) -> None:

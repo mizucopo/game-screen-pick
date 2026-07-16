@@ -5,6 +5,7 @@ from contextlib import suppress
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.model_role import ModelRole
 from ..models.processing_stage import ProcessingStage
+from ..models.resolved_models import ResolvedModels
 from ..models.run_outcome import RunOutcome
 from ..models.run_status import RunStatus
 from ..models.video_set import VideoSet
@@ -67,18 +68,21 @@ class VideoSelectionApplication:
         )
         with InputFolderLock(configuration.video_input_folder) as input_lock:
             validate_video_set_snapshot(video_set)
+            resolved_models = self._model_runtime.resolve_models(configuration)
+            validate_video_set_snapshot(video_set)
             diagnostic = prepare_processing_cache(
                 configuration.processing_cache_folder,
                 input_lock=input_lock,
                 reset_cache=configuration.reset_cache,
             )
             self._observer.legacy_cache_cleaned(diagnostic)
-            return self._run_locked(configuration, video_set)
+            return self._run_locked(configuration, video_set, resolved_models)
 
     def _run_locked(
         self,
         configuration: EffectiveConfiguration,
         video_set: VideoSet,
+        resolved_models: ResolvedModels,
     ) -> RunOutcome:
         """Input Lockを保持したまま全Processing Stageを実行する。"""
         video_set_snapshot = snapshot_video_set(video_set)
@@ -111,7 +115,6 @@ class VideoSelectionApplication:
             {"candidates": list(candidate_snapshot)},
         )
 
-        resolved_models = self._model_runtime.resolve_models(configuration)
         candidate_model = resolved_models.for_role(ModelRole.CANDIDATE_ANNOTATION)
         speech_model = resolved_models.for_role(ModelRole.SPEECH_TO_TEXT)
         stage_runner.complete(
