@@ -191,6 +191,7 @@ def _artifact_is_valid(
     try:
         for requirement in requirements:
             store.validate(artifact, requirement)
+        store.confirm_current_identity(artifact, requirements[0])
     except Exception:
         return False
     return True
@@ -258,6 +259,7 @@ def _build_resolutions(
 def _build_requirements(
     configuration: EffectiveConfiguration,
 ) -> tuple[ModelRequirement, ...]:
+    """ADR 0006でrun開始時の解決対象とされた3 roleを構築する。"""
     return (
         ModelRequirement(
             role=ModelRole.SCENE_CATALOG,

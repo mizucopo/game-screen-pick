@@ -121,6 +121,24 @@ class OllamaModelStore:
             )
         self._validate_structured_output(requirement, minimum)
 
+    def confirm_current_identity(
+        self,
+        artifact: ModelArtifact,
+        requirement: ModelRequirement,
+    ) -> None:
+        """capability検証後もtagがfreeze対象digestを指すことを確認する。"""
+        _require_ollama_requirement(requirement)
+        if artifact.identity.store_kind is not self.kind:
+            raise ModelArtifactInvalidError("Ollama artifact kindが不正です")
+        current = self._resolve_local_artifact(
+            requirement,
+            artifact.runtime_identity,
+        )
+        if current is None or current.identity != artifact.identity:
+            raise ModelArtifactInvalidError(
+                "Ollama tagがcapability検証中に変更されました"
+            )
+
     def publish_validated(self, artifact: ModelArtifact) -> None:
         """Ollamaはpull時にtagを公開済みのためkindだけを検証する。"""
         if artifact.identity.store_kind is not self.kind:

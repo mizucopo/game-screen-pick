@@ -86,6 +86,8 @@ class HuggingFaceModelStore:
                 token=self._token,
             )
         except Exception:
+            # RepositoryNotFoundErrorはrepo不在と認証不足を区別できない。
+            # ADR 0006に従い、検証済みlocalの再利用可否はlifecycleへ委ねる。
             raise ModelStoreUnavailableError(
                 "Hugging Face model metadataを取得できませんでした"
             ) from None
@@ -146,6 +148,16 @@ class HuggingFaceModelStore:
             raise ModelArtifactInvalidError(
                 "Hugging Face snapshotをSTT backendへloadできませんでした"
             ) from None
+
+    def confirm_current_identity(
+        self,
+        artifact: ModelArtifact,
+        requirement: ModelRequirement,
+    ) -> None:
+        """immutable snapshotのstore kindを確認する。"""
+        _require_hugging_face_requirement(requirement)
+        if artifact.identity.store_kind is not self.kind:
+            raise ModelArtifactInvalidError("Hugging Face artifact kindが不正です")
 
     def publish_validated(self, artifact: ModelArtifact) -> None:
         """load検証済みsnapshotだけを次回local mainとして公開する。"""

@@ -76,6 +76,7 @@ def test_local_pull_and_capability_use_documented_ollama_api() -> None:
     before = store.resolve_local(requirement)
     after = store.synchronize(requirement)
     store.validate(after, requirement)
+    store.confirm_current_identity(after, requirement)
 
     # Assert
     assert before is not None
@@ -278,6 +279,64 @@ def test_structured_output_capability_failure_is_rejected() -> None:
     # Assert
     with pytest.raises(ModelArtifactInvalidError, match="structured output"):
         store.validate(artifact, _requirement())
+
+
+def test_changed_tag_digest_is_rejected_after_capability_validation() -> None:
+    """capability検証中にmutable tagが移動したartifactがfreezeされないこと。
+
+    Arrange:
+        - local解決時と最終確認時で異なるdigestを返すAPIが用意される
+        - 両digestのmodelがcapability probeへ応答するようにされる
+    Act:
+        - 解決済みartifactのcapabilityが検証される
+    Assert:
+        - 最終identity確認でtag移動がartifact invalidとして拒否されること
+    """
+    # Arrange
+    tag_resolutions = 0
+
+    def requester(
+        _method: str,
+        url: str,
+        _payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        nonlocal tag_resolutions
+        if url.endswith("/api/version"):
+            return {"version": "0.31.2"}
+        if url.endswith("/api/tags"):
+            tag_resolutions += 1
+            fill = "a" if tag_resolutions == 1 else "b"
+            return {
+                "models": [
+                    {
+                        "name": "qwen3-vl:8b-instruct",
+                        "digest": "sha256:" + fill * 64,
+                    }
+                ]
+            }
+        if url.endswith("/api/show"):
+            return {
+                "capabilities": ["completion", "vision"],
+                "model_info": {"qwen3vl.context_length": 131072},
+            }
+        return {"message": {"content": '{"ready": true}'}}
+
+    store = OllamaModelStore(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+    )
+    requirement = _requirement()
+    artifact = store.resolve_local(requirement)
+    assert artifact is not None
+
+    # Act
+    store.validate(artifact, requirement)
+
+    # Assert
+    with pytest.raises(ModelArtifactInvalidError, match="変更"):
+        store.confirm_current_identity(artifact, requirement)
 
 
 def test_unsupported_server_is_rejected_before_pull_mutation() -> None:

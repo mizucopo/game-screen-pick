@@ -27,5 +27,12 @@ class ModelStore(Protocol):
     ) -> None:
         """artifactの完全性とrole capabilityを検証する。"""
 
+    def confirm_current_identity(
+        self,
+        artifact: ModelArtifact,
+        requirement: ModelRequirement,
+    ) -> None:
+        """全capability検証後もmutable selectorが同じartifactを指すことを確認する。"""
+
     def publish_validated(self, artifact: ModelArtifact) -> None:
         """全capability検証済みartifactをstoreのlocal selectorへ公開する。"""

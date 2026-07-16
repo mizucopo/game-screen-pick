@@ -38,6 +38,7 @@ class FakeModelStore:
         self.local_resolution_calls: list[str] = []
         self.synchronization_calls: list[str] = []
         self.validation_calls: list[tuple[str, str]] = []
+        self.identity_confirmation_calls: list[str] = []
         self.publication_calls: list[str] = []
 
     @property
@@ -73,6 +74,16 @@ class FakeModelStore:
         self.validation_calls.append((identifier, requirement.role.value))
         if identifier in self._invalid_identifiers:
             raise ModelArtifactInvalidError("fake artifact detail")
+
+    def confirm_current_identity(
+        self,
+        artifact: ModelArtifact,
+        requirement: ModelRequirement,
+    ) -> None:
+        """mutable selectorの最終identity確認を記録する。"""
+        self.identity_confirmation_calls.append(
+            f"{requirement.configured_name}:{artifact.identity.identifier}"
+        )
 
     def publish_validated(self, artifact: ModelArtifact) -> None:
         """検証済みartifactのstore-local selector公開を記録する。"""

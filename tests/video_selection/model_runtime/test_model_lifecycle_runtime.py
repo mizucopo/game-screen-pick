@@ -66,6 +66,10 @@ def test_updates_each_distinct_model_once_and_freezes_role_resolutions(
     assert ollama_store.local_resolution_calls == [configuration.scene_catalog_model]
     assert ollama_store.synchronization_calls == [configuration.scene_catalog_model]
     assert ollama_store.publication_calls == [new_ollama.identity.identifier]
+    assert ollama_store.identity_confirmation_calls == [
+        f"{configuration.scene_catalog_model}:{old_ollama.identity.identifier}",
+        f"{configuration.scene_catalog_model}:{new_ollama.identity.identifier}",
+    ]
     assert hugging_face_store.local_resolution_calls == [
         configuration.speech_to_text_model
     ]
@@ -74,6 +78,16 @@ def test_updates_each_distinct_model_once_and_freezes_role_resolutions(
     ]
     assert hugging_face_store.publication_calls == [
         new_hugging_face.identity.identifier
+    ]
+    assert hugging_face_store.identity_confirmation_calls == [
+        (
+            f"{configuration.speech_to_text_model}:"
+            f"{old_hugging_face.identity.identifier}"
+        ),
+        (
+            f"{configuration.speech_to_text_model}:"
+            f"{new_hugging_face.identity.identifier}"
+        ),
     ]
     for role in (ModelRole.SCENE_CATALOG, ModelRole.CANDIDATE_ANNOTATION):
         resolution = resolved.for_role(role)
