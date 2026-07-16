@@ -71,6 +71,9 @@ def test_selected_webp_and_reports_are_published_from_one_canonical_object(
             "details": {"similarity_ceiling": 1},
         }
     ]
+    context_start = report["context_cues"][0]["start"]
+    assert context_start["source_pts"] == 1000
+    assert context_start["time_base"] == {"numerator": 1, "denominator": 1000}
     selected = report["selected"][0]
     image_path = output_folder / selected["output"]["relative_path"]
     image_bytes = image_path.read_bytes()

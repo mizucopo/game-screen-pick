@@ -42,9 +42,9 @@
           "numerator": 2
         },
         "origin_pts": 0,
-        "source_pts": 20,
+        "source_pts": 2000,
         "time_base": {
-          "denominator": 10,
+          "denominator": 1000,
           "numerator": 1
         }
       },
@@ -64,9 +64,9 @@
           "numerator": 1
         },
         "origin_pts": 0,
-        "source_pts": 10,
+        "source_pts": 1000,
         "time_base": {
-          "denominator": 10,
+          "denominator": 1000,
           "numerator": 1
         }
       },

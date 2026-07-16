@@ -162,9 +162,7 @@ def build_canonical_selection_report(
             ),
         },
         "near_misses": near_miss_records,
-        "context_cues": [
-            _context_cue_record(cue, stages_by_fingerprint, source_ids) for cue in cues
-        ],
+        "context_cues": [_context_cue_record(cue, source_ids) for cue in cues],
         "provenance": {
             "selection": {
                 "policy_version": SELECTION_POLICY_VERSION,
@@ -504,10 +502,8 @@ def _near_miss_limit(total_rejected: int, requested_count: int) -> int:
 
 def _context_cue_record(
     cue: ContextCue,
-    stages: dict[str, VideoStageResult],
     source_ids: dict[str, str],
 ) -> dict[str, object]:
-    stage = stages[cue.video_fingerprint]
     provenance = cue.provenance
     if provenance is None:
         raise ValueError("Report Context Evidenceにprovenanceがありません")
@@ -517,19 +513,7 @@ def _context_cue_record(
         else "stream_metadata"
     )
     if cue.timestamp_basis == "source_pts":
-        timeline = stage.scan.timeline
-        start = _video_time_record(
-            _source_pts(timeline.origin_pts, timeline.time_base, cue.start),
-            timeline.origin_pts,
-            timeline.time_base,
-            cue.start,
-        )
-        end = _video_time_record(
-            _source_pts(timeline.origin_pts, timeline.time_base, cue.end),
-            timeline.origin_pts,
-            timeline.time_base,
-            cue.end,
-        )
+        start, end = _source_pts_context_time_records(cue)
     elif cue.timestamp_basis == "asr_sample_grid_estimate":
         start = _sample_time_record(cue.start, provenance.source_time_base)
         end = _sample_time_record(cue.end, provenance.source_time_base)
@@ -551,6 +535,35 @@ def _context_cue_record(
         "reliability": reliability,
         "text_included": False,
     }
+
+
+def _source_pts_context_time_records(
+    cue: ContextCue,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Context source stream固有PTSから開始・終了時刻を構築する。"""
+    provenance = cue.provenance
+    if provenance is None:
+        raise ValueError("Report Context Evidenceにprovenanceがありません")
+    time_base = provenance.source_time_base
+    origin_pts = Fraction(provenance.source_pts) - cue.start / time_base
+    if origin_pts.denominator != 1:
+        msg = "Context Cueのsource origin PTSをlosslessに復元できません"
+        raise ValueError(msg)
+    origin = origin_pts.numerator
+    return (
+        _video_time_record(
+            provenance.source_pts,
+            origin,
+            time_base,
+            cue.start,
+        ),
+        _video_time_record(
+            _source_pts(origin, time_base, cue.end),
+            origin,
+            time_base,
+            cue.end,
+        ),
+    )
 
 
 def _sample_time_record(

@@ -152,8 +152,8 @@ def build_canonical_publication_request(
         reliability="usable",
         provenance=ContextCueProvenance(
             codec_name="ass",
-            source_pts=10,
-            source_time_base=Fraction(1, 10),
+            source_pts=1000,
+            source_time_base=Fraction(1, 1000),
             stream_language="ja",
             is_default=True,
             is_forced=False,
