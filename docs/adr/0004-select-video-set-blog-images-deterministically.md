@@ -49,7 +49,13 @@ Spoiler Sensitivity is a run setting with `low`, `medium`, and `high`; the defau
 | `medium` | 0.02 | 0.04 | 0.08 |
 | `high` | 0.05 | 0.10 | 0.18 |
 
-All values are soft penalties. No sensitivity level rejects a candidate.
+All table values are soft penalties; no table entry is a per-candidate hard
+rejection. Because greedy coverage and diversity interactions can otherwise make
+a higher sensitivity select more major spoilers, the selector also applies a
+deterministic monotonicity guard: `medium` may select no more `high`-risk
+candidates than the same pool selected at `low`, and `high` may select no more
+than `medium`. Each guarded profile is recomputed from an empty selected set
+under its own penalty values and the immediately lower profile's count limit.
 
 Risk boundaries are:
 
@@ -92,6 +98,7 @@ Visual similarity is an eligibility rule rather than another numeric penalty:
 
 - Normal selection begins at the configured similarity ceiling, whose default is 0.72.
 - If the current annotated pool cannot fill the request, the ceiling is relaxed through deterministic configured steps and ends at 0.98.
+- The built-in relaxation deltas are `+0.03`, `+0.06`, `+0.10`, and `+0.15`; duplicate capped values are removed and a terminal `0.98` pass is always appended.
 - A `recurring_gameplay` scene may use a ceiling of 0.98 after eligible Variant Groups have each had their first opportunity, allowing state variants without immediately expanding one group.
 - A pair with cosine similarity greater than 0.995 is a Visual Near-Duplicate and can never be selected together.
 
@@ -152,6 +159,6 @@ If seven gameplay and one event image have already been selected for `N=10`, a g
 
 Changing requested count, Spoiler Sensitivity, penalty weights, or coverage targets can reuse Candidate Annotation because these inputs affect only deterministic final selection. The selection-policy version must still be part of the final selection stage fingerprint.
 
-The report must retain enough diagnostic data to reproduce each decision: utility components, type targets and actuals, spoiler setting and penalty, progress distance and temporal penalty, visual threshold/pass, nearest selected similarity, Variant Group behavior, tie-break use, and Selection Shortfall reasons. The exact public report schema is decided with the CLI/config/report contract.
+The report must retain enough diagnostic data to reproduce each decision: utility components, type targets and actuals, spoiler setting and penalty, the monotonicity count limit, progress distance and temporal penalty, visual threshold/pass, nearest selected similarity, Variant Group behavior, tie-break use, and Selection Shortfall reasons. Unselected candidates retain their best observed counterfactual utility and one stable rejection code. The exact public report schema is decided with the CLI/config/report contract.
 
 Greedy selection is intentionally preferred over a global optimizer: it is deterministic, incremental, and reportable, while still allowing coverage and temporal effects to react after each selected image.

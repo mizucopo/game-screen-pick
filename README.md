@@ -3,7 +3,7 @@
 
 ## 動画入力版の設計と内部実装（公開前）
 
-複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysis、embedded subtitle/audio STTからのContext Cue収集、Ollama/Hugging Faceのmodel lifecycleとrun単位のidentity freeze、共有Scene CatalogとMoment単位のCandidate Annotationまで内部実装済みです。決定的な最終selector、public CLIの接続と切り替えは後続Issueで行うため、このcommandはまだ実行できません。
+複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysis、embedded subtitle/audio STTからのContext Cue収集、Ollama/Hugging Faceのmodel lifecycleとrun単位のidentity freeze、共有Scene Catalog、Moment単位のCandidate Annotation、soft coverage・spoiler・動画横断diversityを扱う決定的な最終selectorまで内部実装済みです。canonical reportとpublic CLIの接続・切り替えは後続Issueで行うため、このcommandはまだ実行できません。
 
 ```bash
 game-screen-pick \
@@ -18,6 +18,7 @@ game-screen-pick \
 - [動画入力とCLI](docs/video-input.md)
 - [動画単位のscan、timeline、Frame Candidate、Context Cue cache](docs/video-stage.md)
 - [共有Scene CatalogとCandidate Annotation Stage](docs/vision-stage.md)
+- [決定的なVideo Set最終選定Stage](docs/selection-stage.md)
 - [TOML、優先順位、model更新](docs/configuration.md)
 - [runtime、cache、進捗、エラー、WSL2運用](docs/operations.md)
 - [選択画像とreport](docs/report.md)

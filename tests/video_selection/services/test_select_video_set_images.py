@@ -1,0 +1,835 @@
+"""決定的なVideo Set selectorのtest。"""
+
+import math
+from fractions import Fraction
+
+import pytest
+
+from src.video_selection.models.blog_candidate import BlogCandidate
+from src.video_selection.models.candidate_annotation import (
+    BlogImageType,
+    CandidateAnnotation,
+    ContextCueRelevance,
+    ExplanationValue,
+    SpoilerRisk,
+)
+from src.video_selection.models.frame_candidate import FrameCandidate
+from src.video_selection.models.neutral_image_analysis import NeutralImageAnalysis
+from src.video_selection.models.neutral_image_metrics import NeutralImageMetrics
+from src.video_selection.models.scene_catalog_entry import SceneSelectionRole
+from src.video_selection.models.video_set_selection_result import (
+    VideoSetSelectionResult,
+)
+from src.video_selection.services.select_video_set_images import (
+    SpoilerSensitivity,
+    select_from_shortlist_batches,
+    select_video_set_images,
+)
+
+type CandidateSpec = tuple[
+    str,
+    float,
+    tuple[float, ...],
+    Fraction,
+    BlogImageType,
+    ExplanationValue,
+    SpoilerRisk,
+]
+
+
+def _metrics() -> NeutralImageMetrics:
+    return NeutralImageMetrics(
+        blur_score=100.0,
+        brightness=100.0,
+        contrast=50.0,
+        edge_density=0.2,
+        color_richness=0.5,
+        ui_density=0.2,
+        action_intensity=0.4,
+        visual_balance=0.8,
+        dramatic_score=0.3,
+        luminance_entropy=1.0,
+        luminance_range=100.0,
+        near_black_ratio=0.0,
+        near_white_ratio=0.0,
+        dominant_tone_ratio=0.2,
+        information_score=0.8,
+        visibility_score=0.9,
+    )
+
+
+def _candidate(
+    digest_character: str,
+    *,
+    quality: float,
+    feature: tuple[float, ...],
+    progress: Fraction,
+    blog_image_type: BlogImageType,
+    explanation_value: ExplanationValue,
+    context_relevance: ContextCueRelevance,
+    spoiler_risk: SpoilerRisk = "none",
+    scene_selection_role: SceneSelectionRole = "ordinary",
+    scene_slug: str | None = None,
+    video_order: int = 0,
+) -> BlogCandidate:
+    frame = FrameCandidate(
+        identifier="frm_" + digest_character * 64,
+        image_bytes=digest_character.encode(),
+        video_fingerprint=digest_character * 64,
+        stream_index=0,
+        source_pts=int(progress * 1000),
+        origin_pts=0,
+        time_base=Fraction(1, 1000),
+        video_time=progress * 100,
+        analysis=NeutralImageAnalysis(
+            source_pts=int(progress * 1000),
+            metrics=_metrics(),
+            quality_score=quality,
+            visual_feature=feature,
+            grayscale_signature=b"signature",
+            reject_reason=None,
+        ),
+    )
+    annotation = CandidateAnnotation(
+        candidate=frame,
+        candidate_moment_id="mom_" + digest_character * 64,
+        summary=f"candidate {digest_character}",
+        scene_slug=scene_slug or "scene-" + digest_character,
+        blog_image_type=blog_image_type,
+        explanation_value=explanation_value,
+        context_relevance=context_relevance,
+        supporting_context_cue_ids=(
+            ("cue_" + digest_character * 64,)
+            if context_relevance in {"weak", "strong"}
+            else ()
+        ),
+        spoiler_risk=spoiler_risk,
+        spoiler_evidence=(
+            "重大な物語情報が画像に示される" if spoiler_risk != "none" else ""
+        ),
+    )
+    return BlogCandidate(
+        annotation=annotation,
+        scene_selection_role=scene_selection_role,
+        video_order=video_order,
+        video_set_progress=progress,
+        shortlist_rank=ord(digest_character),
+    )
+
+
+def _normalized(result: VideoSetSelectionResult) -> list[dict[str, object]]:
+    selected = result.selected
+    return [
+        {
+            "id": item.candidate.annotation.candidate.identifier,
+            "reason_codes": list(item.reason_codes),
+            "base": round(item.score.base_utility, 6),
+            "coverage": round(item.score.coverage_bonus, 6),
+            "spoiler": round(item.score.spoiler_penalty, 6),
+            "temporal": round(item.score.temporal_diversity_penalty, 6),
+            "marginal": round(item.score.marginal_utility, 6),
+            "pass": item.score.similarity_pass,
+        }
+        for item in selected
+    ]
+
+
+def test_normalized_selection_is_exact_and_independent_of_input_order() -> None:
+    """同じ候補集合のselected ID・順序・理由・数値が一定であること。
+
+    Arrange:
+        - 品質、説明価値、coverage、spoiler、進行位置が異なる4候補が用意される
+        - 同じ候補集合が異なる入力順で用意される
+    Act:
+        - Video Set selectorが両方の候補集合へ実行される
+    Assert:
+        - 正規化したselected ID、順序、reason code、数値内訳がgoldenと一致すること
+    """
+    # Arrange
+    candidates = (
+        _candidate(
+            "b",
+            quality=0.9,
+            feature=(1.0, 0.0, 0.0, 0.0),
+            progress=Fraction(82, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="strong",
+        ),
+        _candidate(
+            "d",
+            quality=0.8,
+            feature=(0.0, 1.0, 0.0, 0.0),
+            progress=Fraction(40, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="strong",
+        ),
+        _candidate(
+            "c",
+            quality=0.95,
+            feature=(0.0, 0.0, 1.0, 0.0),
+            progress=Fraction(90, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="strong",
+            spoiler_risk="high",
+        ),
+        _candidate(
+            "a",
+            quality=0.7,
+            feature=(0.0, 0.0, 0.0, 1.0),
+            progress=Fraction(10, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="low",
+            context_relevance="none",
+        ),
+    )
+    expected = [
+        {
+            "id": "frm_" + "b" * 64,
+            "reason_codes": [
+                "high_quality",
+                "high_explanation_value",
+                "strong_context_relevance",
+                "normal_gameplay_coverage",
+            ],
+            "base": 0.93,
+            "coverage": 0.1,
+            "spoiler": 0.0,
+            "temporal": 0.0,
+            "marginal": 1.03,
+            "pass": 0.72,
+        },
+        {
+            "id": "frm_" + "d" * 64,
+            "reason_codes": [
+                "high_quality",
+                "high_explanation_value",
+                "strong_context_relevance",
+                "event_coverage",
+            ],
+            "base": 0.86,
+            "coverage": 0.1,
+            "spoiler": 0.0,
+            "temporal": 0.0,
+            "marginal": 0.96,
+            "pass": 0.72,
+        },
+        {
+            "id": "frm_" + "c" * 64,
+            "reason_codes": [
+                "high_quality",
+                "high_explanation_value",
+                "strong_context_relevance",
+                "high_spoiler_penalty_applied",
+            ],
+            "base": 0.965,
+            "coverage": 0.0,
+            "spoiler": 0.1,
+            "temporal": 0.0544,
+            "marginal": 0.8106,
+            "pass": 0.72,
+        },
+        {
+            "id": "frm_" + "a" * 64,
+            "reason_codes": ["normal_gameplay_coverage"],
+            "base": 0.573333,
+            "coverage": 0.1,
+            "spoiler": 0.0,
+            "temporal": 0.0,
+            "marginal": 0.673333,
+            "pass": 0.72,
+        },
+    ]
+
+    # Act
+    forward = select_video_set_images(
+        candidates,
+        requested_count=4,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+    reordered = select_video_set_images(
+        tuple(reversed(candidates)),
+        requested_count=4,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert _normalized(forward) == expected
+    assert _normalized(reordered) == expected
+
+
+def test_visual_near_duplicate_is_rejected_even_when_selection_is_short() -> None:
+    """Visual Near-Duplicateで要求不足が穴埋めされないこと。
+
+    Arrange:
+        - cosine similarityが0.995を超えるrecurring gameplay候補が2件用意される
+        - 2枚の選定が要求される
+    Act:
+        - Video Set selectorが終端similarity passまで実行される
+    Assert:
+        - 近似重複の2件目が選択されずSelection Shortfallになること
+        - stable rejection codeとblocking candidateが返されること
+    """
+    # Arrange
+    first = _candidate(
+        "e",
+        quality=0.9,
+        feature=(1.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+    )
+    second = _candidate(
+        "f",
+        quality=0.8,
+        feature=(0.996, math.sqrt(1 - 0.996**2)),
+        progress=Fraction(8, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (second, first),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [first.identifier]
+    assert result.shortfall is True
+    assert result.final_similarity_ceiling == 0.98
+    assert len(result.rejected) == 1
+    rejection = result.rejected[0]
+    assert rejection.candidate.identifier == second.identifier
+    assert rejection.reason_code == "visual_near_duplicate"
+    assert rejection.nearest_selected_image_id == first.identifier
+    assert rejection.similarity == pytest.approx(0.996)
+
+
+def test_recurring_gameplay_expands_only_after_each_variant_group() -> None:
+    """recurring gameplayで各Variant Groupの代表後に状態差が選ばれること。
+
+    Arrange:
+        - 同じrecurring sceneに同一groupの高品質2候補と別groupの低品質候補がある
+        - base ceilingでは最初の候補以外が視覚条件を満たさない
+    Act:
+        - 3枚の選定が要求され終端passまでselectorが実行される
+    Assert:
+        - 別groupの代表が同一groupの2枚目より先に選択されること
+        - 同一groupの2枚目にvariant expansionのstable reasonが付くこと
+    """
+    # Arrange
+    first = _candidate(
+        "1",
+        quality=0.9,
+        feature=(1.0, 0.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+    same_group = _candidate(
+        "2",
+        quality=0.89,
+        feature=(0.96, math.sqrt(1 - 0.96**2), 0.0),
+        progress=Fraction(8, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+    other_group = _candidate(
+        "3",
+        quality=0.5,
+        feature=(0.9, 0.0, math.sqrt(1 - 0.9**2)),
+        progress=Fraction(45, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="none",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (same_group, other_group, first),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        first.identifier,
+        other_group.identifier,
+        same_group.identifier,
+    ]
+    first_selected, other_selected, expanded = result.selected
+    assert first_selected.variant_group_id == expanded.variant_group_id
+    assert other_selected.variant_group_id != expanded.variant_group_id
+    assert expanded.score.similarity_pass == 0.98
+    assert "recurring_gameplay_variant" in expanded.reason_codes
+
+
+def test_second_title_is_rejected_with_counterfactual_score() -> None:
+    """2枚目のtitleがnear-miss数値を保ったままhard limitで拒否されること。
+
+    Arrange:
+        - 視覚的に異なるtitle候補が2件用意される
+        - 2枚の選定が要求される
+    Act:
+        - Video Set selectorが終端passまで実行される
+    Assert:
+        - titleは1件だけ選択されSelection Shortfallになること
+        - 2件目へtitle limit、blocking ID、制約前の数値内訳が返されること
+    """
+    # Arrange
+    best = _candidate(
+        "4",
+        quality=0.9,
+        feature=(1.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="title",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    second = _candidate(
+        "5",
+        quality=0.8,
+        feature=(0.0, 1.0),
+        progress=Fraction(9, 10),
+        blog_image_type="title",
+        explanation_value="high",
+        context_relevance="none",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (second, best),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [best.identifier]
+    assert result.shortfall is True
+    assert len(result.rejected) == 1
+    rejection = result.rejected[0]
+    assert rejection.reason_code == "title_limit"
+    assert rejection.blocked_by_image_id == best.identifier
+    assert rejection.nearest_selected_image_id is None
+    assert rejection.counterfactual_score.base_utility == pytest.approx(0.81)
+    assert rejection.counterfactual_score.coverage_bonus == 0.05
+    assert rejection.counterfactual_score.temporal_diversity_penalty == 0.0
+    assert rejection.counterfactual_score.marginal_utility == pytest.approx(0.86)
+
+
+def test_soft_coverage_allows_event_overflow_when_other_types_are_absent() -> None:
+    """候補不足のtypeをhard quotaにせず有用なeventで超過できること。
+
+    Arrange:
+        - 視覚的に異なるevent候補だけが3件用意される
+        - 3枚の選定が要求される
+    Act:
+        - Video Set selectorが実行される
+    Assert:
+        - event目標1件を超えて3件すべて選択されること
+        - 5種のtargetとactualからcoverage超過が説明できること
+    """
+    # Arrange
+    candidates = tuple(
+        _candidate(
+            digest,
+            quality=quality,
+            feature=feature,
+            progress=progress,
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+        )
+        for digest, quality, feature, progress in (
+            ("6", 0.9, (1.0, 0.0, 0.0), Fraction(1, 10)),
+            ("7", 0.8, (0.0, 1.0, 0.0), Fraction(5, 10)),
+            ("8", 0.7, (0.0, 0.0, 1.0), Fraction(9, 10)),
+        )
+    )
+
+    # Act
+    result = select_video_set_images(
+        candidates,
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert len(result.selected) == 3
+    assert result.shortfall is False
+    assert result.blog_image_type_targets == {
+        "normal_gameplay": 2,
+        "event": 1,
+        "menu": 0,
+        "title": 0,
+        "other": 0,
+    }
+    assert result.blog_image_type_actuals == {
+        "normal_gameplay": 0,
+        "event": 3,
+        "menu": 0,
+        "title": 0,
+        "other": 0,
+    }
+    assert "event_coverage" in result.selected[0].reason_codes
+    assert all(
+        "event_coverage" not in item.reason_codes for item in result.selected[1:]
+    )
+
+
+def test_higher_spoiler_sensitivity_never_increases_major_spoilers() -> None:
+    """感度上昇で同じ候補集合のMajor Spoiler選択数が増えないこと。
+
+    Arrange:
+        - 単純greedyではdiversityとcoverageによりhigh感度の件数が増える候補行列がある
+        - 同じ7候補と要求3枚がlow、medium、high向けに用意される
+    Act:
+        - 各Spoiler SensitivityでVideo Set selectorが実行される
+    Assert:
+        - Major Spoiler選択数が感度順に単調非増加であること
+    """
+    # Arrange
+    specs: tuple[CandidateSpec, ...] = (
+        (
+            "0",
+            0.38,
+            (0.3010184307, 0.2251490036, 0.8531105982, 0.3617984767),
+            Fraction(18, 25),
+            "event",
+            "low",
+            "high",
+        ),
+        (
+            "1",
+            0.70,
+            (0.9405985621, 0.1960576527, 0.2755141423, 0.0304581544),
+            Fraction(17, 25),
+            "event",
+            "low",
+            "none",
+        ),
+        (
+            "2",
+            0.53,
+            (0.6382307865, 0.1248780060, 0.7098586663, 0.2704951396),
+            Fraction(69, 100),
+            "normal_gameplay",
+            "none",
+            "high",
+        ),
+        (
+            "3",
+            0.90,
+            (0.5763720210, 0.1029043598, 0.6540056522, 0.4790434145),
+            Fraction(47, 50),
+            "normal_gameplay",
+            "high",
+            "high",
+        ),
+        (
+            "4",
+            0.81,
+            (0.8368746524, 0.1520583373, 0.2970922673, 0.4338839281),
+            Fraction(7, 100),
+            "event",
+            "high",
+            "none",
+        ),
+        (
+            "5",
+            0.48,
+            (0.8195546317, 0.3893717013, 0.4171090861, 0.0523439990),
+            Fraction(91, 100),
+            "event",
+            "low",
+            "high",
+        ),
+        (
+            "6",
+            0.44,
+            (0.6511259894, 0.2176397414, 0.7058702682, 0.1743991209),
+            Fraction(3, 50),
+            "menu",
+            "high",
+            "high",
+        ),
+    )
+    candidates = tuple(
+        _candidate(
+            digest,
+            quality=quality,
+            feature=feature,
+            progress=progress,
+            blog_image_type=image_type,
+            explanation_value=explanation,
+            context_relevance="none",
+            spoiler_risk=spoiler,
+        )
+        for (
+            digest,
+            quality,
+            feature,
+            progress,
+            image_type,
+            explanation,
+            spoiler,
+        ) in specs
+    )
+
+    # Act
+    sensitivities: tuple[SpoilerSensitivity, ...] = ("low", "medium", "high")
+    results = tuple(
+        select_video_set_images(
+            candidates,
+            requested_count=3,
+            spoiler_sensitivity=sensitivity,
+            similarity_threshold=0.72,
+        )
+        for sensitivity in sensitivities
+    )
+
+    # Assert
+    major_counts = [result.major_spoiler_selected_count for result in results]
+    assert major_counts[0] == 1
+    assert major_counts == sorted(major_counts, reverse=True)
+
+
+def test_shortlist_expansion_recomputes_selection_from_full_expanded_pool() -> None:
+    """Shortlist拡張後に以前の選択を固定せず全候補から再計算されること。
+
+    Arrange:
+        - 初期batchには要求数を満たさない低utility候補が1件だけある
+        - 次のbatchには視覚的に異なる高utility候補が2件ある
+    Act:
+        - lazyなSelection Shortlist batch列から選定される
+    Assert:
+        - 拡張poolの高utility候補2件が選ばれ初期候補が固定されないこと
+        - annotation件数と拡張回数が返されること
+    """
+    # Arrange
+    initial = _candidate(
+        "9",
+        quality=0.5,
+        feature=(1.0, 0.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="none",
+        context_relevance="none",
+    )
+    event = _candidate(
+        "a",
+        quality=0.9,
+        feature=(0.0, 1.0, 0.0),
+        progress=Fraction(5, 10),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    gameplay = _candidate(
+        "b",
+        quality=0.8,
+        feature=(0.0, 0.0, 1.0),
+        progress=Fraction(9, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+
+    # Act
+    result = select_from_shortlist_batches(
+        ((initial,), (gameplay, event)),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        event.identifier,
+        gameplay.identifier,
+    ]
+    assert [item.candidate.identifier for item in result.rejected] == [
+        initial.identifier
+    ]
+    assert result.rejected[0].reason_code == "lower_marginal_utility"
+    assert result.annotated_candidate_count == 3
+    assert result.shortlist_expansion_count == 1
+    assert result.all_candidate_moments_exhausted is False
+
+
+def test_exact_utility_tie_uses_stable_video_order_and_records_tie_break() -> None:
+    """完全同点がVideo Orderで安定解消され診断へ残ること。
+
+    Arrange:
+        - utility、spoiler、quality、選択前visual similarityが同じ2候補がある
+        - 入力順の後ろにある候補のVideo Orderが小さい
+    Act:
+        - 1枚の選定が要求される
+    Assert:
+        - 小さいVideo Orderの候補が選ばれること
+        - stable tie-breakが使われたことをreasonとfieldで確認できること
+    """
+    # Arrange
+    later_video = _candidate(
+        "c",
+        quality=0.8,
+        feature=(1.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        video_order=1,
+    )
+    earlier_video = _candidate(
+        "d",
+        quality=0.8,
+        feature=(0.0, 1.0),
+        progress=Fraction(9, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        video_order=0,
+    )
+
+    # Act
+    result = select_video_set_images(
+        (later_video, earlier_video),
+        requested_count=1,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected = result.selected[0]
+    assert selected.candidate.identifier == earlier_video.identifier
+    assert selected.tie_break_applied is True
+    assert "stable_tie_break" in selected.reason_codes
+
+
+def test_similarity_above_terminal_ceiling_is_counted_separately() -> None:
+    """0.98超の候補がVisual Near-Duplicateとは別理由で集計されること。
+
+    Arrange:
+        - cosine similarityが0.98超0.995以下のordinary候補が2件ある
+        - 2枚の選定が要求される
+    Act:
+        - selectorが終端similarity passまで実行される
+    Assert:
+        - 2件目がsimilarity ceilingで拒否されること
+        - shortfallのreason countをstable enumで説明できること
+    """
+    # Arrange
+    first = _candidate(
+        "e",
+        quality=0.9,
+        feature=(1.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    second = _candidate(
+        "f",
+        quality=0.8,
+        feature=(0.985, math.sqrt(1 - 0.985**2)),
+        progress=Fraction(9, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (second, first),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert result.shortfall is True
+    assert result.final_similarity_ceiling == 0.98
+    assert result.rejection_counts == {"similarity_ceiling": 1}
+    rejection = result.rejected[0]
+    assert rejection.reason_code == "similarity_ceiling"
+    assert rejection.nearest_selected_image_id == first.identifier
+    assert rejection.similarity == pytest.approx(0.985)
+
+
+def test_rejections_are_ordered_by_counterfactual_utility() -> None:
+    """near-miss候補が反実仮想utilityとstable tie-break順で返されること。
+
+    Arrange:
+        - 選択1件と、ID順がutility順の逆になる未採用2件が用意される
+    Act:
+        - 1枚の選定が要求される
+    Assert:
+        - 未採用候補がID順でなくcounterfactual utility降順になること
+    """
+    # Arrange
+    selected = _candidate(
+        "9",
+        quality=0.9,
+        feature=(1.0, 0.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="none",
+        context_relevance="none",
+    )
+    stronger_near_miss = _candidate(
+        "f",
+        quality=0.8,
+        feature=(0.0, 1.0, 0.0),
+        progress=Fraction(5, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="none",
+        context_relevance="none",
+    )
+    weaker_near_miss = _candidate(
+        "0",
+        quality=0.1,
+        feature=(0.0, 0.0, 1.0),
+        progress=Fraction(9, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="none",
+        context_relevance="none",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (weaker_near_miss, selected, stronger_near_miss),
+        requested_count=1,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.rejected] == [
+        stronger_near_miss.identifier,
+        weaker_near_miss.identifier,
+    ]
+    assert [
+        round(item.counterfactual_score.marginal_utility, 2) for item in result.rejected
+    ] == [0.66, 0.17]

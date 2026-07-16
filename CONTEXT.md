@@ -400,6 +400,10 @@ _Avoid_: Spoiler Risk, story progress, hard reject
 Spoiler SensitivityとSpoiler Riskの組み合わせから、0から1の選定utilityに適用する決定的な減点。`low`ではriskが`medium`、`high`のとき0.02、0.05、`medium`では`low`、`medium`、`high`のとき0.01、0.04、0.10、`high`では0.02、0.08、0.18とし、riskが`none`なら常に0とする。
 _Avoid_: hard reject, late-video penalty, model confidence
 
+**Spoiler Monotonicity Guard**:
+同じBlog Candidate集合でSpoiler Sensitivityを上げたとき、Major Spoiler Signalを持つ選択画像数が増えないようにする最終選定の件数境界。`medium`は`low`、`high`は`medium`の選択件数を上限としてgreedy選定を再実行し、個々の候補をriskだけで常時除外するhard cutoffとは区別する。
+_Avoid_: per-candidate spoiler rejection, late-video cutoff, model safety filter
+
 **Quality Score**:
 blog candidate がブログ画像としてどれだけ使いやすいかを表す評価値。scene の種類やゲームジャンルの指示ではなく、画像そのものの見やすさを表す。
 _Avoid_: scene hint, user-facing mode, selection profile
@@ -423,6 +427,14 @@ _Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
 **Selection Shortfall**:
 有効な未注釈Candidate Momentを決定的なshortlist順で追加し、許可された視覚類似度緩和をすべて適用しても、適格なBlog Candidateが要求枚数に満たない状態。選べた画像とshortfall理由をreportへ出してwarning付きで正常終了し、Ollama Stage Failureとは区別する。
 _Avoid_: Candidate Annotation failure, silent omission, fabricated output, invalid-frame fallback
+
+**Selection Rejection Reason**:
+未採用Blog Candidateの主因を表すstable enum。`title_limit`、`visual_near_duplicate`、`similarity_ceiling`、`spoiler_monotonicity_guard`、`lower_marginal_utility`を持ち、model自由文や例外messageから推測しない。
+_Avoid_: free-text rejection, Content Reject Reason, Ollama Stage Failure
+
+**Counterfactual Selection Score**:
+未採用Blog Candidateが選定中に持ち得た最も高いMarginal Selection Utilityと、そのBase、coverage、spoiler、temporal、similarity passの内訳。採用を妨げた制約を説明するnear-miss診断であり、制約を無視して実際に選び直した結果ではない。
+_Avoid_: final selected score, model confidence, regenerated explanation
 
 **Neutral Image Analysis**:
 sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。画像の内容分類ではなく、blog candidate判定や動画横断のcosine similarity判定の土台になる。明確な無効frameには絶対条件、暗いgameなど入力特性にはRefinement Window Group内の分布、Transition Frameには同一streamとtime baseでdurationどおりに連続するnative frameだけの前後関係を使う。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。

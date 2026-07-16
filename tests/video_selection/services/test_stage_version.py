@@ -42,3 +42,23 @@ def test_resolve_models_has_model_resolution_stage_version() -> None:
 
     # Assert
     assert version == "model-resolution-v1"
+
+
+def test_select_images_has_video_set_selection_policy_version() -> None:
+    """最終選定Stageに決定的selector固有versionが付与されること。
+
+    Arrange:
+        - select-images Processing Stageが用意される
+    Act:
+        - Stage versionが解決される
+    Assert:
+        - Video Set selection policy固有のversionが返されること
+    """
+    # Arrange
+    stage = ProcessingStage.SELECT_IMAGES
+
+    # Act
+    version = stage_version(stage)
+
+    # Assert
+    assert version == "video-set-selection-v1"
