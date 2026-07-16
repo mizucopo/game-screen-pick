@@ -11,6 +11,7 @@ from typing import Literal, TypeVar, cast
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from ..model_runtime.ollama_model_store import OllamaModelStore
 from ..models.candidate_annotation import (
     BLOG_IMAGE_TYPES,
     CONTEXT_CUE_RELEVANCES,
@@ -23,7 +24,11 @@ from ..models.candidate_annotation import (
     candidate_annotation_relationships_are_valid,
 )
 from ..models.candidate_annotation_request import CandidateAnnotationRequest
+from ..models.model_artifact_invalid_error import ModelArtifactInvalidError
 from ..models.model_role import ModelRole
+from ..models.model_store_http_error import ModelStoreHttpError
+from ..models.model_store_kind import ModelStoreKind
+from ..models.model_store_unavailable_error import ModelStoreUnavailableError
 from ..models.resolved_model import ResolvedModel
 from ..models.scene_catalog import SceneCatalog
 from ..models.scene_catalog_entry import (
@@ -36,6 +41,7 @@ from ..models.scene_catalog_request import SceneCatalogRequest
 from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 from ..models.vision_runtime_error import VisionRuntimeError
 from ..models.vision_runtime_failure_reason import VisionRuntimeFailureReason
+from ..utils.http_retry_delay import http_retry_delay
 from .vision_contract import (
     CANDIDATE_ANNOTATION_PROMPT_VERSION,
     CANDIDATE_ANNOTATION_SCHEMA,
@@ -53,6 +59,7 @@ JsonRequester = Callable[
     object,
 ]
 Sleeper = Callable[[float], None]
+ModelIdentityResolver = Callable[[ResolvedModel], str]
 InferenceValue = TypeVar("InferenceValue")
 InferenceParser = Callable[[Mapping[str, object]], InferenceValue]
 StageKind = Literal["scene_catalog", "candidate_annotation"]
@@ -94,6 +101,7 @@ class OllamaVisionRuntime:
         timeout_seconds: float,
         requester: JsonRequester | None = None,
         sleeper: Sleeper = time.sleep,
+        model_identity_resolver: ModelIdentityResolver | None = None,
     ) -> None:
         if not host.strip() or timeout_seconds <= 0:
             raise ValueError("Ollama VisionRuntimeの接続設定が不正です")
@@ -101,6 +109,14 @@ class OllamaVisionRuntime:
         self._timeout_seconds = timeout_seconds
         self._requester = requester or _request_json
         self._sleeper = sleeper
+        self._model_store = OllamaModelStore(
+            self._host,
+            timeout_seconds=self._timeout_seconds,
+            requester=self._requester,
+        )
+        self._model_identity_resolver = (
+            model_identity_resolver or self._resolve_current_model_identity
+        )
 
     def create_scene_catalog(
         self,
@@ -161,6 +177,7 @@ class OllamaVisionRuntime:
         for attempt in (1, 2):
             attempt_payload = _with_repair_code(payload, repair_code)
             try:
+                self._require_frozen_model_identity(model)
                 response = self._request(attempt_payload)
                 value = parser(_decode_content(response, stage_kind))
             except VisionRuntimeError as error:
@@ -171,11 +188,7 @@ class OllamaVisionRuntime:
                         attempt_count=attempt,
                     ) from None
                 previous_validation_code = error.validation_code
-                repair_code = (
-                    error.validation_code
-                    if error.reason in _PROMPT_REPAIR_REASONS
-                    else None
-                )
+                repair_code = _repair_validation_code(error)
                 self._sleeper(error.retry_after_seconds)
                 continue
             diagnostics = _diagnostics(
@@ -192,6 +205,49 @@ class OllamaVisionRuntime:
             return value, diagnostics
         raise AssertionError("VisionRuntime retry loop did not terminate")
 
+    def _require_frozen_model_identity(self, model: ResolvedModel) -> None:
+        """推論直前のmutable tagがfreeze済みdigestを指すことを要求する。"""
+        try:
+            current_identity = self._model_identity_resolver(model)
+        except VisionRuntimeError:
+            raise
+        except Exception:
+            raise VisionRuntimeError(
+                VisionRuntimeFailureReason.TRANSPORT_FAILURE,
+                validation_code="ollama_transport_failure",
+            ) from None
+        if current_identity != model.execution_identity.identifier:
+            raise VisionRuntimeError(
+                VisionRuntimeFailureReason.MODEL_UNAVAILABLE,
+                validation_code="ollama_model_identity_changed",
+            )
+
+    def _resolve_current_model_identity(self, model: ResolvedModel) -> str:
+        """Model Storeの確認portをVision failureへ変換する。"""
+        try:
+            identity = self._model_store.resolve_current_identity(model.configured_name)
+        except ModelArtifactInvalidError:
+            raise VisionRuntimeError(
+                VisionRuntimeFailureReason.RESPONSE_INVALID,
+                validation_code="ollama_model_identity_response_invalid",
+            ) from None
+        except ModelStoreHttpError as error:
+            raise _http_failure(
+                error.status_code,
+                error.retry_after_seconds,
+            ) from None
+        except ModelStoreUnavailableError:
+            raise VisionRuntimeError(
+                VisionRuntimeFailureReason.TRANSPORT_FAILURE,
+                validation_code="ollama_transport_failure",
+            ) from None
+        if identity is None:
+            raise VisionRuntimeError(
+                VisionRuntimeFailureReason.MODEL_UNAVAILABLE,
+                validation_code="ollama_model_identity_unavailable",
+            )
+        return identity.identifier
+
     def _request(self, payload: Mapping[str, object]) -> Mapping[str, object]:
         """transport detailをstable failureへ変換する。"""
         try:
@@ -202,18 +258,13 @@ class OllamaVisionRuntime:
                 self._timeout_seconds,
             )
         except HTTPError as error:
-            if error.code in {408, 429} or error.code >= 500:
-                raise VisionRuntimeError(
-                    VisionRuntimeFailureReason.TRANSPORT_FAILURE,
-                    validation_code="ollama_transport_failure",
-                    retry_after_seconds=_retry_delay(error),
-                ) from None
-            reason = (
-                VisionRuntimeFailureReason.MODEL_UNAVAILABLE
-                if error.code == 404
-                else VisionRuntimeFailureReason.INVALID_REQUEST
+            retry_after = (
+                error.headers.get("Retry-After") if error.headers is not None else None
             )
-            raise VisionRuntimeError(reason) from None
+            raise _http_failure(
+                error.code,
+                http_retry_delay(error.code, retry_after),
+            ) from None
         except Exception:
             raise VisionRuntimeError(
                 VisionRuntimeFailureReason.TRANSPORT_FAILURE,
@@ -651,15 +702,32 @@ def _non_negative_int(value: object) -> int | None:
     return None
 
 
-def _retry_delay(error: HTTPError) -> float:
-    if error.code != 429 or error.headers is None:
-        return 1.0
-    value = error.headers.get("Retry-After")
-    try:
-        seconds = float(value) if value is not None else 1.0
-    except ValueError:
-        return 1.0
-    return min(max(seconds, 0.0), 30.0)
+def _http_failure(
+    status_code: int,
+    retry_after_seconds: float,
+) -> VisionRuntimeError:
+    if status_code in {408, 429} or status_code >= 500:
+        return VisionRuntimeError(
+            VisionRuntimeFailureReason.TRANSPORT_FAILURE,
+            validation_code="ollama_transport_failure",
+            retry_after_seconds=retry_after_seconds,
+        )
+    reason = (
+        VisionRuntimeFailureReason.MODEL_UNAVAILABLE
+        if status_code == 404
+        else VisionRuntimeFailureReason.INVALID_REQUEST
+    )
+    return VisionRuntimeError(reason)
+
+
+def _repair_validation_code(error: VisionRuntimeError) -> str | None:
+    """model出力を検証できたfailureだけをprompt修復指示へ変換する。"""
+    if (
+        error.reason not in _PROMPT_REPAIR_REASONS
+        or error.validation_code == "ollama_model_identity_response_invalid"
+    ):
+        return None
+    return error.validation_code
 
 
 def _require_model_role(
@@ -667,5 +735,9 @@ def _require_model_role(
     expected_role: ModelRole,
     num_ctx: int,
 ) -> None:
-    if model.role is not expected_role or num_ctx < 1:
+    if (
+        model.role is not expected_role
+        or model.execution_identity.store_kind is not ModelStoreKind.OLLAMA
+        or num_ctx < 1
+    ):
         raise VisionRuntimeError(VisionRuntimeFailureReason.INVALID_REQUEST)

@@ -3,6 +3,9 @@
 import re
 from dataclasses import dataclass
 
+from .model_runtime_identity import ModelRuntimeIdentity
+from .resolved_model_identity import ResolvedModelIdentity
+
 _SAFE_VALUE_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._:+/-]{0,255}")
 
 
@@ -43,6 +46,16 @@ class VisionInferenceDiagnostics:
             self.context_cue_count,
         )
         optional_counts = (self.prompt_eval_count, self.eval_count)
+        try:
+            model_identity = ResolvedModelIdentity.from_identifier(self.model_identity)
+            runtime_identity = ModelRuntimeIdentity.from_identifier(
+                self.runtime_identity
+            )
+            canonical_identity_pair = (
+                model_identity.store_kind is runtime_identity.store_kind
+            )
+        except ValueError:
+            canonical_identity_pair = False
         if (
             len(self.request_fingerprint) != 64
             or any(
@@ -60,9 +73,8 @@ class VisionInferenceDiagnostics:
             or any(value < 0 for value in counts)
             or any(value is not None and value < 0 for value in optional_counts)
             or self.duration_seconds < 0
-            or not self.model_name.strip()
-            or not self.model_identity.strip()
-            or not self.runtime_identity.strip()
+            or _SAFE_VALUE_PATTERN.fullmatch(self.model_name) is None
+            or not canonical_identity_pair
         ):
             msg = "Vision inference diagnosticsが不正です"
             raise ValueError(msg)

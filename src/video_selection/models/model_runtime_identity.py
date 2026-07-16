@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from typing import Self
 
 from .model_store_kind import ModelStoreKind
 
@@ -28,3 +29,15 @@ class ModelRuntimeIdentity:
             "ollama" if self.store_kind is ModelStoreKind.OLLAMA else "huggingface-hub"
         )
         return f"{prefix}:{self.version}"
+
+    @classmethod
+    def from_identifier(cls, identifier: str) -> Self:
+        """canonical identifierを検証してtyped identityへ戻す。"""
+        if identifier.startswith("ollama:"):
+            return cls(ModelStoreKind.OLLAMA, identifier.removeprefix("ollama:"))
+        if identifier.startswith("huggingface-hub:"):
+            return cls(
+                ModelStoreKind.HUGGING_FACE,
+                identifier.removeprefix("huggingface-hub:"),
+            )
+        raise ValueError("canonicalなmodel runtime identity identifierが必要です")

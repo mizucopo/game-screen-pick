@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from typing import cast
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from ..models.model_artifact import ModelArtifact
@@ -11,9 +12,11 @@ from ..models.model_artifact_invalid_error import ModelArtifactInvalidError
 from ..models.model_capability import ModelCapability
 from ..models.model_requirement import ModelRequirement
 from ..models.model_runtime_identity import ModelRuntimeIdentity
+from ..models.model_store_http_error import ModelStoreHttpError
 from ..models.model_store_kind import ModelStoreKind
 from ..models.model_store_unavailable_error import ModelStoreUnavailableError
 from ..models.resolved_model_identity import ResolvedModelIdentity
+from ..utils.http_retry_delay import http_retry_delay
 from .canonicalize_ollama_model_selector import (
     canonicalize_ollama_model_selector,
 )
@@ -59,6 +62,16 @@ class OllamaModelStore:
         _require_ollama_requirement(requirement)
         runtime_identity = self._runtime_identity()
         return self._resolve_local_artifact(requirement, runtime_identity)
+
+    def resolve_current_identity(
+        self,
+        configured_name: str,
+    ) -> ResolvedModelIdentity | None:
+        """local configured tagが現在指す完全identityだけを解決する。"""
+        if not configured_name.strip():
+            raise ValueError("Ollama model名が必要です")
+        resolved = self._resolve_current_model(configured_name)
+        return None if resolved is None else resolved[0]
 
     def synchronize(self, requirement: ModelRequirement) -> ModelArtifact:
         """configured tagをpullしpost-pull identityを解決する。"""
@@ -203,6 +216,22 @@ class OllamaModelStore:
         requirement: ModelRequirement,
         runtime_identity: ModelRuntimeIdentity,
     ) -> ModelArtifact | None:
+        resolved = self._resolve_current_model(requirement.configured_name)
+        if resolved is None:
+            return None
+        identity, canonical_name = resolved
+        return ModelArtifact(
+            identity=identity,
+            canonical_name=canonical_name,
+            runtime_identity=runtime_identity,
+            location=None,
+        )
+
+    def _resolve_current_model(
+        self,
+        configured_name: str,
+    ) -> tuple[ResolvedModelIdentity, str] | None:
+        """local一覧からidentityとcanonical nameを一度に解決する。"""
         response = _require_mapping(self._request("GET", "/api/tags", None))
         models = response.get("models")
         if not isinstance(models, list):
@@ -220,9 +249,7 @@ class OllamaModelStore:
                 for key in ("name", "model")
                 if isinstance((value := model.get(key)), str)
             )
-            if not any(
-                _names_match(requirement.configured_name, name) for name in names
-            ):
+            if not any(_names_match(configured_name, name) for name in names):
                 continue
             digest = model.get("digest")
             canonical_name = model.get("name")
@@ -238,12 +265,7 @@ class OllamaModelStore:
                 raise ModelArtifactInvalidError(
                     "Ollama local model identityを検証できませんでした"
                 ) from None
-            return ModelArtifact(
-                identity=identity,
-                canonical_name=canonical_name,
-                runtime_identity=runtime_identity,
-                location=None,
-            )
+            return identity, canonical_name
         return None
 
     def _request(
@@ -259,6 +281,14 @@ class OllamaModelStore:
                 payload,
                 self._timeout_seconds,
             )
+        except HTTPError as error:
+            retry_after = (
+                error.headers.get("Retry-After") if error.headers is not None else None
+            )
+            raise ModelStoreHttpError(
+                error.code,
+                retry_after_seconds=http_retry_delay(error.code, retry_after),
+            ) from None
         except (ModelArtifactInvalidError, ModelStoreUnavailableError):
             raise
         except Exception:
