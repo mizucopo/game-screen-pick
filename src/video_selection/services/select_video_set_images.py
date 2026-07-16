@@ -176,6 +176,7 @@ def _select_with_major_spoiler_limit(
                     actuals,
                     similarity_pass,
                     variant_groups,
+                    major_spoiler_limit,
                 )
                 and not (
                     candidate.annotation.blog_image_type == "title"
@@ -235,6 +236,7 @@ def _select_with_major_spoiler_limit(
             variant_groups[candidate.identifier],
             counterfactual_scores[candidate.identifier],
             major_spoiler_limit,
+            final_similarity_ceiling,
         )
         for candidate in remaining
     ]
@@ -384,6 +386,7 @@ def _is_visually_eligible(
     actuals: Mapping[str, int],
     similarity_threshold: float,
     variant_groups: Mapping[str, str],
+    major_spoiler_limit: int | None,
 ) -> bool:
     nearest = _nearest_selected_similarity(candidate, selected)
     if nearest is not None and nearest > similarity_threshold:
@@ -405,6 +408,7 @@ def _is_visually_eligible(
             similarity_threshold,
             variant_groups,
             selected_groups,
+            major_spoiler_limit,
         )
     )
 
@@ -417,6 +421,7 @@ def _has_unrepresented_eligible_variant_group(
     similarity_threshold: float,
     variant_groups: Mapping[str, str],
     selected_groups: set[str],
+    major_spoiler_limit: int | None,
 ) -> bool:
     for alternative in remaining:
         if (
@@ -425,6 +430,11 @@ def _has_unrepresented_eligible_variant_group(
             or (
                 alternative.annotation.blog_image_type == "title"
                 and actuals["title"] >= 1
+            )
+            or _major_spoiler_limit_reached(
+                alternative,
+                selected,
+                major_spoiler_limit,
             )
         ):
             continue
@@ -510,6 +520,7 @@ def _rejection(
     variant_group_id: str,
     counterfactual_score: SelectionScore,
     major_spoiler_limit: int | None,
+    final_similarity_ceiling: float,
 ) -> RejectedBlogCandidate:
     nearest_similarity = _nearest_selected_similarity(candidate, selected)
     nearest_selected = _nearest_selected(candidate, selected)
@@ -529,7 +540,7 @@ def _rejection(
     ):
         reason = SelectionRejectionReason.VISUAL_NEAR_DUPLICATE
     elif (
-        nearest_similarity is not None and nearest_similarity > _MAX_SIMILARITY_CEILING
+        nearest_similarity is not None and nearest_similarity > final_similarity_ceiling
     ):
         reason = SelectionRejectionReason.SIMILARITY_CEILING
     elif _major_spoiler_limit_reached(

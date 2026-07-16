@@ -384,6 +384,82 @@ def test_recurring_gameplay_expands_only_after_each_variant_group() -> None:
     assert "recurring_gameplay_variant" in expanded.reason_codes
 
 
+def test_spoiler_guarded_group_does_not_block_recurring_variant_expansion() -> None:
+    """Spoiler上限で採用不能なGroupにより採用可能なvariantが阻害されないこと。
+
+    Arrange:
+        - 同じrecurring sceneに選択済みGroupのvariantと未代表のMajor Spoiler Groupがある
+        - 別sceneのMajor Spoilerでlow感度由来の件数上限が満たされる候補順がある
+    Act:
+        - medium感度で3枚の選定が要求される
+    Assert:
+        - guard対象Groupを待たず採用可能なvariantで要求数が満たされること
+    """
+    # Arrange
+    first = _candidate(
+        "a",
+        quality=0.8,
+        feature=(1.0, 0.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="none",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+    same_group = _candidate(
+        "b",
+        quality=0.8,
+        feature=(0.96, math.sqrt(1 - 0.96**2), 0.0),
+        progress=Fraction(9, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="none",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+    guarded_group = _candidate(
+        "c",
+        quality=127 / 140,
+        feature=(0.0, 1.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="event",
+        explanation_value="none",
+        context_relevance="none",
+        spoiler_risk="high",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+    selected_major = _candidate(
+        "d",
+        quality=123 / 140,
+        feature=(0.0, 0.97, math.sqrt(1 - 0.97**2)),
+        progress=Fraction(9, 10),
+        blog_image_type="event",
+        explanation_value="none",
+        context_relevance="none",
+        spoiler_risk="high",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (same_group, guarded_group, selected_major, first),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        first.identifier,
+        selected_major.identifier,
+        same_group.identifier,
+    ]
+    assert result.shortfall is False
+    assert result.major_spoiler_limit == 1
+    assert result.major_spoiler_selected_count == 1
+
+
 def test_second_title_is_rejected_with_counterfactual_score() -> None:
     """2枚目のtitleがnear-miss数値を保ったままhard limitで拒否されること。
 
@@ -776,6 +852,62 @@ def test_similarity_above_terminal_ceiling_is_counted_separately() -> None:
     assert rejection.reason_code == "similarity_ceiling"
     assert rejection.nearest_selected_image_id == first.identifier
     assert rejection.similarity == pytest.approx(0.985)
+
+
+def test_rejection_uses_pass_that_satisfied_request() -> None:
+    """要求数を満たした実際のpassでsimilarity rejectionが説明されること。
+
+    Arrange:
+        - base passで選ばれる2候補とbase超0.98以下の高utility候補がある
+    Act:
+        - base passで2枚の選定が満たされる
+    Assert:
+        - 未採用候補が最終到達passによるsimilarity ceilingとして返されること
+    """
+    # Arrange
+    first = _candidate(
+        "e",
+        quality=0.9,
+        feature=(1.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    similar_near_miss = _candidate(
+        "f",
+        quality=0.89,
+        feature=(0.9, math.sqrt(1 - 0.9**2)),
+        progress=Fraction(9, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    diverse_filler = _candidate(
+        "0",
+        quality=0.5,
+        feature=(0.0, 1.0),
+        progress=Fraction(9, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="none",
+        context_relevance="none",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (similar_near_miss, diverse_filler, first),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert result.final_similarity_ceiling == 0.72
+    rejection = result.rejected[0]
+    assert rejection.candidate.identifier == similar_near_miss.identifier
+    assert rejection.reason_code == "similarity_ceiling"
+    assert rejection.nearest_selected_image_id == first.identifier
+    assert rejection.similarity == pytest.approx(0.9)
 
 
 def test_rejections_are_ordered_by_counterfactual_utility() -> None:

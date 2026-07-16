@@ -38,7 +38,7 @@ ADR 0004の表に従うSpoiler Penaltyは候補単体へのsoft penaltyです。
 2. `medium`を`low`のMajor Spoiler選択数以下で選ぶ。
 3. `high`を`medium`のMajor Spoiler選択数以下で選ぶ。
 
-このguardで未採用になった候補は`spoiler_monotonicity_guard`として説明します。Video Set ProgressだけでSpoiler Riskを変更しません。
+このguardで未採用になった候補は`spoiler_monotonicity_guard`として説明します。guardで採用不能な候補はrecurring gameplayの未代表Variant Groupへ機会を与える判定から除外します。Video Set ProgressだけでSpoiler Riskを変更しません。
 
 ## 視覚・時間的多様性
 
@@ -60,7 +60,7 @@ Video Orderや後半位置そのものへの加点・減点、動画ごとの最
 
 `select_from_shortlist_batches`は初期注釈batchでshortfallになった場合だけ次の決定的batchを受け取り、拡張済みpoolを空の選択状態から再計算します。以前の緩和passで選んだ候補を固定しません。batchの生成、Candidate Annotation、batch sizeの性能上限は呼び出し側とIssue #189が所有します。
 
-全Candidate Momentを使い切っても不足する場合は、選べた画像だけを正常結果として返します。2枚目のtitle、Visual Near-Duplicate、不適格frame、未完了Annotationでは穴埋めしません。未採用候補はCounterfactual Selection Scoreの降順と同じstable tie-breakで返し、主因を次のenumで示します。
+全Candidate Momentを使い切っても不足する場合は、選べた画像だけを正常結果として返します。2枚目のtitle、Visual Near-Duplicate、不適格frame、未完了Annotationでは穴埋めしません。未採用候補のSimilarity Ceilingは要求数を満たした時点、またはshortfallで最後まで到達した実際の最終passを基準にします。未採用候補はCounterfactual Selection Scoreの降順と同じstable tie-breakで返し、主因を次のenumで示します。
 
 - `title_limit`
 - `visual_near_duplicate`
