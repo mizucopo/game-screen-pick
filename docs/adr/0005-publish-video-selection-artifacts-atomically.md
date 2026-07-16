@@ -68,8 +68,10 @@ Each selected output record includes relative path, SHA-256, width, height, and 
 Both reports identify a source with:
 
 - Video Order;
-- short Video Source ID;
+- Video Source ID, normally shortened to a 12-character fingerprint prefix;
 - Report Source Path relative to the Video Input Folder.
+
+If two source fingerprints share that prefix, only the colliding IDs expand to the complete 64-character fingerprint. Source IDs must remain unique within a report.
 
 The relative path uses `/`, contains no `..`, and never acts as Video Identity. Absolute input, cache, staging, and output paths are omitted.
 
@@ -96,6 +98,8 @@ For a selected image or published near miss, `report.json` stores:
 ```
 
 The reduced `offset_seconds` rational is authoritative. Float seconds and frame index are not part of the public contract. The display value uses unbounded hours, does not wrap at 24 hours, and rounds half-up to milliseconds.
+
+Context Cue records retain their source timestamp basis. When container cue timing is not losslessly aligned to an integer source PTS grid, the record omits reconstructed PTS values and uses the authoritative reduced `offset_seconds` form instead.
 
 `report.json` also keeps Candidate Moment ID and Timeline Segment ID for selected images. `report.md` shows only Video Order, Report Source Path, Video Source ID, and display time.
 

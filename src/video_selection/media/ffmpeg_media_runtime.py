@@ -349,6 +349,35 @@ class FfmpegMediaRuntime:
             msg = "max_dimensionは正の整数である必要があります"
             raise ValueError(msg)
         frame_filter = f"select=eq(pts\\,{pts})," + _scale_filter(max_dimension)
+        return self._extract_exact_video_frame(
+            media_path,
+            stream_index,
+            pts,
+            frame_filter,
+        )
+
+    def extract_original_video_frame(
+        self,
+        media_path: Path,
+        stream_index: int,
+        pts: int,
+    ) -> DecodedVideoFrame:
+        """指定source PTSの一つの元寸法RGB24 frameを返す。"""
+        return self._extract_exact_video_frame(
+            media_path,
+            stream_index,
+            pts,
+            f"select=eq(pts\\,{pts}),format=rgb24,showinfo",
+        )
+
+    def _extract_exact_video_frame(
+        self,
+        media_path: Path,
+        stream_index: int,
+        pts: int,
+        frame_filter: str,
+    ) -> DecodedVideoFrame:
+        """指定filterでexact PTSのRGB24 frameを一つだけ返す。"""
         command = self._video_decode_command(
             media_path,
             stream_index,

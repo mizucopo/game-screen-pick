@@ -11,6 +11,7 @@ from ..models.selected_blog_image import SelectedBlogImage
 from ..models.selected_image_artifact import SelectedImageArtifact
 from ..models.selection_score import SelectionScore
 from ..models.video_stage_result import VideoStageResult
+from .build_video_source_ids import build_video_source_ids
 from .report_time import (
     display_report_time,
     exact_seconds_string,
@@ -53,10 +54,7 @@ def build_canonical_selection_report(
     stages_by_fingerprint = {
         item.source.fingerprint: item for item in request.video_stage_results
     }
-    source_ids = {
-        source.fingerprint: f"vid_{source.fingerprint[:12]}"
-        for source in request.video_set.sources
-    }
+    source_ids = build_video_source_ids(request.video_set.sources)
     near_misses = _published_near_misses(selection.rejected, selection.requested_count)
     referenced_cue_ids = {
         cue_id
@@ -546,9 +544,9 @@ def _source_pts_context_time_records(
         raise ValueError("Report Context Evidenceにprovenanceがありません")
     time_base = provenance.source_time_base
     origin_pts = Fraction(provenance.source_pts) - cue.start / time_base
-    if origin_pts.denominator != 1:
-        msg = "Context Cueのsource origin PTSをlosslessに復元できません"
-        raise ValueError(msg)
+    end_pts = origin_pts + cue.end / time_base
+    if origin_pts.denominator != 1 or end_pts.denominator != 1:
+        return _offset_time_record(cue.start), _offset_time_record(cue.end)
     origin = origin_pts.numerator
     return (
         _video_time_record(
@@ -558,7 +556,7 @@ def _source_pts_context_time_records(
             cue.start,
         ),
         _video_time_record(
-            _source_pts(origin, time_base, cue.end),
+            end_pts.numerator,
             origin,
             time_base,
             cue.end,

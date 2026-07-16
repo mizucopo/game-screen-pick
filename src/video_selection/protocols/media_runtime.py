@@ -62,6 +62,14 @@ class MediaRuntime(Protocol):
     ) -> DecodedVideoFrame:
         """指定source PTSの一つのframeを返す。"""
 
+    def extract_original_video_frame(
+        self,
+        media_path: Path,
+        stream_index: int,
+        pts: int,
+    ) -> DecodedVideoFrame:
+        """指定source PTSの一つの元寸法frameを返す。"""
+
     def write_mjpeg_proxy(
         self,
         frame: DecodedVideoFrame,

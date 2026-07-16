@@ -3,6 +3,7 @@
 import json
 from copy import deepcopy
 from dataclasses import replace
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,6 +13,12 @@ from PIL import Image
 from src.video_selection.models.model_role import ModelRole
 from src.video_selection.services.canonical_output_publisher import (
     CanonicalOutputPublisher,
+)
+from src.video_selection.services.serialize_canonical_selection_report import (
+    serialize_canonical_selection_report,
+)
+from src.video_selection.services.validate_canonical_selection_report import (
+    validate_canonical_selection_report,
 )
 from tests.video_selection.fakes.canonical_publication_factory import (
     build_canonical_publication_request,
@@ -85,6 +92,9 @@ def test_selected_webp_and_reports_are_published_from_one_canonical_object(
         "high_explanation_value",
         "normal_gameplay_coverage",
     ]
+    assert runtime.extracted_original_frame_calls == [
+        (request.video_set.sources[0].path, 0, 15)
+    ]
     with Image.open(image_path) as image:
         assert image.format == "WEBP"
         assert image.size == (64, 48)
@@ -145,6 +155,164 @@ def test_colliding_digest_prefixes_expand_only_affected_output_names(
     ]
     assert report["run"]["status"] == "completed"
     assert report["run"]["warnings"] == []
+
+
+def test_duplicate_video_source_ids_are_rejected_before_publication(
+    tmp_path: Path,
+) -> None:
+    """重複したVideo Source IDを持つCanonical reportが拒否されること。
+
+    Arrange:
+        - 正常公開済みreportへ同じIDのVideo Source recordが追加される
+    Act:
+        - Canonical Selection Reportの公開前検証が実行される
+    Assert:
+        - Video Source ID重複として拒否されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    output_folder = request.configuration.output_folder
+    report = cast(
+        dict[str, Any],
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request),
+    )
+    video_set = cast(dict[str, Any], report["video_set"])
+    sources = cast(list[dict[str, Any]], video_set["sources"])
+    sources.append(deepcopy(sources[0]))
+    (output_folder / "report.json").write_text(
+        serialize_canonical_selection_report(report),
+        encoding="utf-8",
+    )
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Video Source IDが重複"):
+        validate_canonical_selection_report(report, output_folder, request)
+
+
+def test_short_context_cue_text_does_not_trigger_privacy_false_positive(
+    tmp_path: Path,
+) -> None:
+    """短いContext Cue本文が構造化値との偶然一致で拒否されないこと。
+
+    Arrange:
+        - 本文が1文字だけのContext Cueを持つpublication requestが用意される
+    Act:
+        - Canonical Output Publisherが実行される
+    Assert:
+        - 公開free textへ逐語転載されていない成果物が正常公開されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    stage = request.video_stage_results[0]
+    cue = replace(stage.context.cues[0], text="1")
+    request = replace(
+        request,
+        video_stage_results=(
+            replace(stage, context=replace(stage.context, cues=(cue,))),
+        ),
+    )
+
+    # Act
+    report = cast(
+        dict[str, Any],
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request),
+    )
+
+    # Assert
+    assert report["run"]["status"] == "completed_with_warnings"
+    assert request.configuration.output_folder.is_dir()
+
+
+def test_near_miss_free_text_is_escaped_in_markdown_table(tmp_path: Path) -> None:
+    """Near Missのmodel自由文に含まれる表区切り文字がescapeされること。
+
+    Arrange:
+        - summaryに縦棒を含むNear Missが用意される
+    Act:
+        - Canonical Output Publisherが実行される
+    Assert:
+        - Markdown表へescape済みsummaryが描画されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    rejected = request.selection_result.rejected[0]
+    annotation = replace(
+        rejected.candidate.annotation,
+        summary="HP | MPを比較する画面。",
+    )
+    candidate = replace(rejected.candidate, annotation=annotation)
+    request = replace(
+        request,
+        selection_result=replace(
+            request.selection_result,
+            rejected=(replace(rejected, candidate=candidate),),
+        ),
+    )
+
+    # Act
+    CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request)
+
+    # Assert
+    markdown = (request.configuration.output_folder / "report.md").read_text(
+        encoding="utf-8"
+    )
+    assert "HP \\| MPを比較する画面。" in markdown
+    assert "HP | MPを比較する画面。" not in markdown
+
+
+def test_non_aligned_source_pts_context_cue_uses_exact_offset_fallback(
+    tmp_path: Path,
+) -> None:
+    """source PTS gridに非整列のCue時刻がexact offsetで公開されること。
+
+    Arrange:
+        - source PTSから整数origin PTSを復元できないContext Cueが用意される
+    Act:
+        - Canonical Output Publisherが実行される
+    Assert:
+        - timestamp basisを保ったままlosslessなoffset時刻が公開されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    stage = request.video_stage_results[0]
+    original_cue = stage.context.cues[0]
+    provenance = original_cue.provenance
+    if provenance is None:
+        raise AssertionError("fixtureにContext Cue provenanceが必要です")
+    cue = replace(
+        original_cue,
+        start=Fraction(29, 30),
+        end=Fraction(59, 30),
+        provenance=replace(
+            provenance,
+            source_pts=1000,
+            source_time_base=Fraction(1, 1000),
+        ),
+    )
+    request = replace(
+        request,
+        video_stage_results=(
+            replace(stage, context=replace(stage.context, cues=(cue,))),
+        ),
+    )
+
+    # Act
+    report = cast(
+        dict[str, Any],
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request),
+    )
+
+    # Assert
+    context = report["context_cues"][0]
+    assert context["timestamp_basis"] == "source_pts"
+    assert context["start"] == {
+        "offset_seconds": {"numerator": 29, "denominator": 30},
+        "display": "00:00:00.967",
+    }
+    assert context["end"] == {
+        "offset_seconds": {"numerator": 59, "denominator": 30},
+        "display": "00:00:01.967",
+    }
 
 
 @pytest.mark.parametrize(
@@ -352,7 +520,7 @@ def test_nonempty_output_is_rejected_before_frame_extraction(tmp_path: Path) -> 
     # Act / Assert
     with pytest.raises(ValueError, match="存在しないか空"):
         CanonicalOutputPublisher(runtime).publish(request)
-    assert runtime.extracted_frame_calls == []
+    assert runtime.extracted_original_frame_calls == []
 
 
 def test_empty_output_is_removed_and_replaced_by_atomic_publication(
@@ -410,7 +578,7 @@ def test_atomic_rename_unavailable_fails_before_frame_extraction(
     # Act / Assert
     with pytest.raises(OSError, match="atomic directory rename"):
         CanonicalOutputPublisher(runtime).publish(request)
-    assert runtime.extracted_frame_calls == []
+    assert runtime.extracted_original_frame_calls == []
     assert not request.configuration.output_folder.exists()
 
 

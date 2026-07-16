@@ -20,6 +20,8 @@ output/
 
 画像名は全体選択順、Scene Slug、Frame Candidate IDの短縮digestから作ります。安定identityはfilenameではなく、完全なFrame Candidate IDです。
 
+Video Source IDは通常、whole-file SHA-256の先頭12文字を使います。同じVideo Set内でそのprefixが衝突した場合は、衝突したsourceだけを64文字の完全digestへ拡張し、一意性を保ちます。
+
 producerが検証する厳密なschema実体は[`report-1.0.0.schema.json`](../src/video_selection/schemas/report-1.0.0.schema.json)です。readerは同じmajorの将来minor field／enumを保持できるcompatibility gateを別に持ち、producerの厳密検証とは分離しています。report schema versionはpackage versionから独立します。
 
 ## provenanceとmodel更新
@@ -30,7 +32,9 @@ producerが検証する厳密なschema実体は[`report-1.0.0.schema.json`](../s
 
 ## 公開しない情報
 
-絶対path、環境変数、credential、prompt本文、raw model response、stack trace、字幕・STT本文、生成した画面内textの逐語引用はreportへ含めません。Context CueはID、source、正確な時間範囲、reliability、選定への関連度だけを公開します。
+絶対path、環境変数、credential、prompt本文、raw model response、stack trace、字幕・STT本文、生成した画面内textの逐語引用はreportへ含めません。Context CueはID、source、正確な時間範囲、reliability、選定への関連度だけを公開します。逐語転載の検査はmodel由来の公開自由文を対象とし、独立生成と区別できない1〜2文字の一般語は引用判定から除外します。
+
+Context Cueの時刻がsource streamの整数PTS gridへlosslessに対応する場合は、`source_pts`、`origin_pts`、`time_base`を保持します。containerが与えるCue時刻とPTS gridが非整列の場合は、`timestamp_basis`を維持しつつ、reduced rationalの`offset_seconds`へlosslessにfallbackします。
 
 Spoiler Riskは常時表示しますが、`none`以外の短いevidence summaryはMarkdownで閉じた`details`にします。選定に使ったSpoiler Penaltyとは別fieldです。
 

@@ -254,7 +254,7 @@
       "additionalProperties": false,
       "required": ["id", "order", "relative_path", "fingerprint", "duration"],
       "properties": {
-        "id": {"type": "string", "pattern": "^vid_[0-9a-f]{12}$"},
+        "id": {"type": "string", "pattern": "^vid_(?:[0-9a-f]{12}|[0-9a-f]{64})$"},
         "order": {"type": "integer", "minimum": 1},
         "relative_path": {"type": "string", "minLength": 1},
         "fingerprint": {
@@ -331,7 +331,7 @@
       "additionalProperties": false,
       "required": ["video_id", "candidate_moment_id", "timeline_segment_id", "video_time", "video_set_progress"],
       "properties": {
-        "video_id": {"type": "string", "pattern": "^vid_[0-9a-f]{12}$"},
+        "video_id": {"type": "string", "pattern": "^vid_(?:[0-9a-f]{12}|[0-9a-f]{64})$"},
         "candidate_moment_id": {"type": "string", "pattern": "^mom_[0-9a-f]{64}$"},
         "timeline_segment_id": {"type": "string", "pattern": "^seg_[0-9a-f]{64}$"},
         "video_time": {"$ref": "#/$defs/videoTime"},
@@ -472,7 +472,7 @@
       "required": ["id", "video_id", "source_kind", "stream_index", "language", "timestamp_basis", "start", "end", "reliability", "text_included"],
       "properties": {
         "id": {"type": "string", "pattern": "^cue_[0-9a-f]{64}$"},
-        "video_id": {"type": "string", "pattern": "^vid_[0-9a-f]{12}$"},
+        "video_id": {"type": "string", "pattern": "^vid_(?:[0-9a-f]{12}|[0-9a-f]{64})$"},
         "source_kind": {"enum": ["embedded_subtitle", "speech_to_text"]},
         "stream_index": {"type": "integer", "minimum": 0},
         "language": {

@@ -68,7 +68,8 @@ def render_human_selection_report(report: dict[str, object]) -> str:
             if "similarity" in rejection:
                 detail += f" ({float(rejection['similarity']):.3f})"
             lines.append(
-                f"| `{_abbreviate(identifier, 8)}` {annotation['summary']} | "
+                f"| `{_abbreviate(identifier, 8)}` "
+                f"{_escape_markdown_table_cell(str(annotation['summary']))} | "
                 f"{float(counterfactual['marginal_utility']):.6f} | `{detail}` |"
             )
     else:
@@ -278,6 +279,17 @@ def _abbreviate(value: str, count: int) -> str:
     if len(value) <= count:
         return value
     return value[:count] + "…"
+
+
+def _escape_markdown_table_cell(value: str) -> str:
+    """自由文を一つのMarkdown table cell内へ閉じ込める。"""
+    return (
+        value.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r\n", "<br>")
+        .replace("\r", "<br>")
+        .replace("\n", "<br>")
+    )
 
 
 def _mapping(value: object) -> dict[str, Any]:

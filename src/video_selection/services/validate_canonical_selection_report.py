@@ -11,6 +11,7 @@ from typing import Any, cast
 from jsonschema import Draft202012Validator
 from PIL import Image
 
+from ..models.candidate_annotation import candidate_annotation_free_text_is_safe
 from ..models.canonical_publication_request import CanonicalPublicationRequest
 from ..models.report_value import string_looks_private
 from .render_human_selection_report import render_human_selection_report
@@ -131,10 +132,10 @@ def _validate_report_relationships(
         raise ValueError(
             "Canonical Selection ReportのSelected Image IDが重複しています"
         )
-    source_ids = {
-        str(item["id"])
-        for item in _mapping_list(_mapping(report["video_set"])["sources"])
-    }
+    sources = _mapping_list(_mapping(report["video_set"])["sources"])
+    source_ids = {str(item["id"]) for item in sources}
+    if len(source_ids) != len(sources):
+        raise ValueError("Canonical Selection ReportのVideo Source IDが重複しています")
     context_cues = _mapping_list(report["context_cues"])
     cue_ids = {str(item["id"]) for item in context_cues}
     if len(cue_ids) != len(context_cues):
@@ -239,7 +240,11 @@ def _validate_context_cue_time(
 def _context_time_offset(value: dict[str, Any], basis: str) -> Fraction:
     if basis == "source_pts":
         if "source_pts" not in value:
-            raise ValueError("Canonical Selection ReportのContext Cue PTSがありません")
+            if "offset_seconds" not in value:
+                raise ValueError(
+                    "Canonical Selection ReportのContext Cue時刻がありません"
+                )
+            return _fraction(_mapping(value["offset_seconds"]))
         time_base = _fraction(_mapping(value["time_base"]))
         offset = _fraction(_mapping(value["offset_seconds"]))
         if (int(value["source_pts"]) - int(value["origin_pts"])) * time_base != offset:
@@ -364,13 +369,17 @@ def _validate_privacy(
         str(request.configuration.processing_cache_folder.resolve(strict=False)),
         str(staging_folder.resolve(strict=False)),
     }
-    raw_context_texts = {
+    raw_context_texts = tuple(
         cue.text
         for stage in request.video_stage_results
         for cue in stage.context.cues
         if cue.text
-    }
-    if any(value in serialized for value in (*private_paths, *raw_context_texts)):
+    )
+    free_text_is_safe = candidate_annotation_free_text_is_safe(
+        tuple(_published_free_text(report)),
+        raw_context_texts,
+    )
+    if any(value in serialized for value in private_paths) or not free_text_is_safe:
         raise ValueError(
             "Canonical Selection Reportに非公開pathまたはContext Cueがあります"
         )
@@ -379,6 +388,26 @@ def _validate_privacy(
             raise ValueError(
                 "Canonical Selection Reportに絶対pathまたはendpointがあります"
             )
+
+
+def _published_free_text(report: dict[str, object]) -> list[str]:
+    """Context Cue由来になり得る公開自由文だけを返す。"""
+    values: list[str] = []
+    for item in (
+        *_mapping_list(report["selected"]),
+        *_mapping_list(report["near_misses"]),
+    ):
+        annotation = _mapping(item["annotation"])
+        values.extend(
+            (
+                str(annotation["summary"]),
+                str(annotation["representative_frame_reason"]),
+            )
+        )
+        spoiler_evidence = _mapping(item["classification"])["spoiler_evidence"]
+        if spoiler_evidence is not None:
+            values.append(str(_mapping(spoiler_evidence)["summary"]))
+    return values
 
 
 def _validate_staging_layout(report: dict[str, object], staging_folder: Path) -> None:

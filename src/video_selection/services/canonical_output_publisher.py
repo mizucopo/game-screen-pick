@@ -135,11 +135,10 @@ class CanonicalOutputPublisher:
         ):
             msg = "Selected Imageのexact frame情報が不足しています"
             raise ValueError(msg)
-        decoded = self._media_runtime.extract_video_frame(
+        decoded = self._media_runtime.extract_original_video_frame(
             stage.source.path,
             candidate.stream_index,
             candidate.source_pts,
-            max(stream.width, stream.height),
         )
         if (
             decoded.stream_index != candidate.stream_index

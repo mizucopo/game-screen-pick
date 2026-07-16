@@ -58,6 +58,7 @@ class FakeVideoStageMediaRuntime:
         self.subtitle_calls: list[tuple[Path, int]] = []
         self.audio_calls: list[tuple[Path, int, int, int]] = []
         self.extracted_frame_calls: list[tuple[Path, int, int, int]] = []
+        self.extracted_original_frame_calls: list[tuple[Path, int, int]] = []
 
     def preflight(self) -> MediaRuntimeIdentity:
         """固定runtime identityを返す。"""
@@ -201,6 +202,16 @@ class FakeVideoStageMediaRuntime:
         self.extracted_frame_calls.append(
             (media_path, stream_index, pts, max_dimension)
         )
+        return self._decoded_frame(stream_index, pts)
+
+    def extract_original_video_frame(
+        self,
+        media_path: Path,
+        stream_index: int,
+        pts: int,
+    ) -> DecodedVideoFrame:
+        """指定PTSの元寸法test frameを返す。"""
+        self.extracted_original_frame_calls.append((media_path, stream_index, pts))
         return self._decoded_frame(stream_index, pts)
 
     def write_mjpeg_proxy(

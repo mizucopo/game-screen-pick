@@ -9,11 +9,10 @@ from ..models.decoded_video_frame import DecodedVideoFrame
 class SelectedFrameMediaRuntime(Protocol):
     """exact PTSの元解像度frame再抽出だけを公開する境界。"""
 
-    def extract_video_frame(
+    def extract_original_video_frame(
         self,
         media_path: Path,
         stream_index: int,
         pts: int,
-        max_dimension: int,
     ) -> DecodedVideoFrame:
-        """指定source PTSの一つのRGB24 frameを返す。"""
+        """指定source PTSの一つの元寸法RGB24 frameを返す。"""
