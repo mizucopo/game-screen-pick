@@ -23,7 +23,7 @@ Ollamaの`/api/chat`を次の2種類だけに使います。
 
 各推論attemptの直前と応答受領直後に`/api/version`と`/api/tags`でOllama server versionとconfigured tagのlocal完全digestを再確認します。Model LifecycleでfreezeしたRuntime IdentityまたはResolved Model Identityと異なる場合は、別runtime／digestの結果を同じfingerprintへ保存せず停止します。この確認はtagの更新や再解決を行いません。
 
-両方ともJSON Schema object全体、`stream=false`、`think=false`、`temperature=0`を送ります。JSON Schema検証後にも、Scene Slug、Frame Candidate ID、Context Cue IDが入力集合へ属すること、Context Cueの有無とRelevanceが整合することをlocalで検査します。annotation summary、Representative Frameの選択理由、spoiler evidenceに入力Context Cue本文が逐語再出力された応答はdomain invalidとして拒否します。
+両方ともJSON Schema object全体、`stream=false`、`think=false`、`temperature=0`を送ります。JSON Schema検証後にも、Scene Slug、Frame Candidate ID、Context Cue IDが入力集合へ属すること、Context Cueの有無とRelevanceが整合することをlocalで検査します。annotation summary、Representative Frameの選択理由、spoiler evidenceに正規化後3文字以上の入力Context Cue本文が逐語再出力された応答はdomain invalidとして拒否します。1〜2文字の一般語は独立生成との区別がつかないため引用判定から除外します。
 
 Candidate Annotation v1は次の意味情報だけを返します。
 

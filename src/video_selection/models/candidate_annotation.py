@@ -23,6 +23,7 @@ CONTEXT_CUE_RELEVANCES = cast(
 SPOILER_RISKS = cast(tuple[SpoilerRisk, ...], get_args(SpoilerRisk))
 
 _MIN_VERBATIM_SPAN_LENGTH = 6
+_MIN_VERBATIM_CUE_LENGTH = 3
 
 
 def candidate_annotation_relationships_are_valid(
@@ -65,7 +66,7 @@ def candidate_annotation_free_text_is_safe(
     normalized_cues = tuple(
         normalized
         for item in raw_context_texts
-        if (normalized := _normalize_verbatim_text(item))
+        if len(normalized := _normalize_verbatim_text(item)) >= _MIN_VERBATIM_CUE_LENGTH
     )
     for cue in normalized_cues:
         span_length = min(len(cue), _MIN_VERBATIM_SPAN_LENGTH)

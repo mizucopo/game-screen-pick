@@ -974,6 +974,50 @@ def test_candidate_rejects_normalized_or_partial_context_cue_quote(
     assert captured.value.validation_code == "candidate_annotation_domain_invalid"
 
 
+@pytest.mark.parametrize(
+    ("cue_text", "annotation_summary"),
+    (
+        ("はい", "人物がはいと返事する場面"),
+        ("OK", "画面にOK表示が示される場面"),
+    ),
+)
+def test_candidate_allows_ambiguous_one_or_two_character_cue_occurrence(
+    cue_text: str,
+    annotation_summary: str,
+) -> None:
+    """一般的な1〜2文字Cueの出現が逐語引用と判定されないこと。
+
+    Arrange:
+        - 一般的な1〜2文字Cueと、その文字列を含む要約が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 独立生成との区別がつかない短い一致が受理されること
+    """
+    # Arrange
+    request = _annotation_request_with_context_text(cue_text)
+    response = _annotation_payload()
+    response["annotation_summary"] = annotation_summary
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _ = runtime.annotate_candidate(
+        request,
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.summary == annotation_summary
+
+
 def test_retryable_transport_failure_is_retried_with_same_semantic_input() -> None:
     """一時transport failureが同じsemantic入力で一度だけ再試行されること。
 
