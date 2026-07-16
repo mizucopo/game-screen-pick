@@ -13,4 +13,8 @@ def stage_version(stage: ProcessingStage) -> str:
         return "context-collection-v1"
     if stage is ProcessingStage.RESOLVE_MODELS:
         return "model-resolution-v1"
+    if stage is ProcessingStage.BUILD_SCENE_CATALOG:
+        return "scene-catalog-v1"
+    if stage is ProcessingStage.ANNOTATE_CANDIDATE:
+        return "candidate-annotation-v1"
     return "walking-skeleton-0"

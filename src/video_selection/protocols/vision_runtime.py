@@ -1,20 +1,33 @@
-"""VisionRuntimeのsemantic port。"""
+"""strict structured outputを生成するVisionRuntime port。"""
 
 from typing import Protocol
 
 from ..models.candidate_annotation import CandidateAnnotation
-from ..models.context_cue import ContextCue
-from ..models.frame_candidate import FrameCandidate
+from ..models.candidate_annotation_request import CandidateAnnotationRequest
 from ..models.resolved_model import ResolvedModel
+from ..models.scene_catalog import SceneCatalog
+from ..models.scene_catalog_request import SceneCatalogRequest
+from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 
 
 class VisionRuntime(Protocol):
-    """Frame Candidateへ意味annotationを付ける境界。"""
+    """model transport、strict validation、retryを閉じ込めるseam。"""
 
-    def annotate_candidates(
+    def create_scene_catalog(
         self,
-        candidates: tuple[FrameCandidate, ...],
-        context_cues: tuple[ContextCue, ...],
+        request: SceneCatalogRequest,
         model: ResolvedModel,
-    ) -> tuple[CandidateAnnotation, ...]:
-        """候補に対応するCandidate Annotationを返す。"""
+        *,
+        num_ctx: int,
+    ) -> tuple[SceneCatalog, VisionInferenceDiagnostics]:
+        """共有Scene Catalogとprivacy-safe診断を返す。"""
+
+    def annotate_candidate(
+        self,
+        request: CandidateAnnotationRequest,
+        catalog: SceneCatalog,
+        model: ResolvedModel,
+        *,
+        num_ctx: int,
+    ) -> tuple[CandidateAnnotation, VisionInferenceDiagnostics]:
+        """一つのCandidate Momentのannotationと診断を返す。"""

@@ -1,0 +1,640 @@
+"""Ollama structured outputsを使うVisionRuntime adapter。"""
+
+import base64
+import hashlib
+import json
+import re
+import time
+from collections.abc import Callable, Mapping
+from fractions import Fraction
+from typing import Literal, TypeVar, cast
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+from ..models.candidate_annotation import (
+    BlogImageType,
+    CandidateAnnotation,
+    ContextCueRelevance,
+    ExplanationValue,
+    ScreenTextKind,
+    SpoilerRisk,
+)
+from ..models.candidate_annotation_request import CandidateAnnotationRequest
+from ..models.model_role import ModelRole
+from ..models.resolved_model import ResolvedModel
+from ..models.scene_catalog import SceneCatalog
+from ..models.scene_catalog_entry import SceneCatalogEntry, SceneSelectionRole
+from ..models.scene_catalog_request import SceneCatalogRequest
+from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
+from ..models.vision_runtime_error import VisionRuntimeError
+from ..models.vision_runtime_failure_reason import VisionRuntimeFailureReason
+from .vision_contract import (
+    CANDIDATE_ANNOTATION_PROMPT_VERSION,
+    CANDIDATE_ANNOTATION_SCHEMA,
+    CANDIDATE_ANNOTATION_SCHEMA_VERSION,
+    CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+    RETRY_POLICY_VERSION,
+    SCENE_CATALOG_PROMPT_VERSION,
+    SCENE_CATALOG_SCHEMA,
+    SCENE_CATALOG_SCHEMA_VERSION,
+    SCENE_CATALOG_STAGE_CONTRACT_VERSION,
+)
+
+JsonRequester = Callable[
+    [str, str, Mapping[str, object] | None, float],
+    object,
+]
+Sleeper = Callable[[float], None]
+InferenceValue = TypeVar("InferenceValue")
+InferenceParser = Callable[[Mapping[str, object]], InferenceValue]
+StageKind = Literal["scene_catalog", "candidate_annotation"]
+
+_SCENE_ENTRY_KEYS = {"slug", "display_name", "description", "selection_role"}
+_ANNOTATION_KEYS = {
+    "representative_frame_id",
+    "scene_slug",
+    "blog_image_type",
+    "explanation_value",
+    "annotation_summary",
+    "frame_choice_reason",
+    "screen_text_kind",
+    "context_relevance",
+    "supporting_context_cue_ids",
+    "spoiler_risk",
+    "spoiler_evidence",
+}
+_SCENE_SLUG_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_RETRYABLE_REASONS = {
+    VisionRuntimeFailureReason.TRANSPORT_FAILURE,
+    VisionRuntimeFailureReason.RESPONSE_INVALID,
+    VisionRuntimeFailureReason.SCHEMA_INVALID,
+    VisionRuntimeFailureReason.DOMAIN_INVALID,
+}
+
+
+class OllamaVisionRuntime:
+    """Scene CatalogとCandidate Annotationの全推論規則を閉じ込める。"""
+
+    def __init__(
+        self,
+        host: str,
+        *,
+        timeout_seconds: float,
+        requester: JsonRequester | None = None,
+        sleeper: Sleeper = time.sleep,
+    ) -> None:
+        if not host.strip() or timeout_seconds <= 0:
+            raise ValueError("Ollama VisionRuntimeの接続設定が不正です")
+        self._host = host.rstrip("/")
+        self._timeout_seconds = timeout_seconds
+        self._requester = requester or _request_json
+        self._sleeper = sleeper
+
+    def create_scene_catalog(
+        self,
+        request: SceneCatalogRequest,
+        model: ResolvedModel,
+        *,
+        num_ctx: int,
+    ) -> tuple[SceneCatalog, VisionInferenceDiagnostics]:
+        """共有Scene Catalogをstrict schemaとdomain validationで生成する。"""
+        _require_model_role(model, ModelRole.SCENE_CATALOG, num_ctx)
+        semantic_input = _scene_catalog_semantic_input(request, model, num_ctx)
+        return self._infer(
+            stage_kind="scene_catalog",
+            request_fingerprint=_fingerprint(semantic_input),
+            payload=_scene_catalog_payload(request, model, num_ctx),
+            parser=_parse_scene_catalog,
+            model=model,
+            image_count=len(request.representatives),
+            context_cue_count=0,
+        )
+
+    def annotate_candidate(
+        self,
+        request: CandidateAnnotationRequest,
+        catalog: SceneCatalog,
+        model: ResolvedModel,
+        *,
+        num_ctx: int,
+    ) -> tuple[CandidateAnnotation, VisionInferenceDiagnostics]:
+        """一つのCandidate Momentをstrict schemaと所属検証で評価する。"""
+        _require_model_role(model, ModelRole.CANDIDATE_ANNOTATION, num_ctx)
+        semantic_input = _candidate_semantic_input(request, catalog, model, num_ctx)
+        return self._infer(
+            stage_kind="candidate_annotation",
+            request_fingerprint=_fingerprint(semantic_input),
+            payload=_candidate_payload(request, catalog, model, num_ctx),
+            parser=lambda value: _parse_candidate_annotation(value, request, catalog),
+            model=model,
+            image_count=len(request.frame_candidates),
+            context_cue_count=len(request.context_cues),
+        )
+
+    def _infer(
+        self,
+        *,
+        stage_kind: StageKind,
+        request_fingerprint: str,
+        payload: dict[str, object],
+        parser: InferenceParser[InferenceValue],
+        model: ResolvedModel,
+        image_count: int,
+        context_cue_count: int,
+    ) -> tuple[InferenceValue, VisionInferenceDiagnostics]:
+        """同じsemantic入力を最大2回実行しsafe diagnosticsを返す。"""
+        started_at = time.monotonic()
+        previous_validation_code: str | None = None
+        for attempt in (1, 2):
+            attempt_payload = _with_repair_code(payload, previous_validation_code)
+            try:
+                response = self._request(attempt_payload)
+                value = parser(_decode_content(response, stage_kind))
+            except VisionRuntimeError as error:
+                if attempt == 2 or error.reason not in _RETRYABLE_REASONS:
+                    raise VisionRuntimeError(
+                        error.reason,
+                        validation_code=error.validation_code,
+                        attempt_count=attempt,
+                    ) from None
+                previous_validation_code = error.validation_code
+                self._sleeper(error.retry_after_seconds)
+                continue
+            diagnostics = _diagnostics(
+                response=response,
+                stage_kind=stage_kind,
+                request_fingerprint=request_fingerprint,
+                model=model,
+                attempt_count=attempt,
+                validation_code=previous_validation_code,
+                image_count=image_count,
+                context_cue_count=context_cue_count,
+                duration_seconds=time.monotonic() - started_at,
+            )
+            return value, diagnostics
+        raise AssertionError("VisionRuntime retry loop did not terminate")
+
+    def _request(self, payload: Mapping[str, object]) -> Mapping[str, object]:
+        """transport detailをstable failureへ変換する。"""
+        try:
+            response = self._requester(
+                "POST",
+                f"{self._host}/api/chat",
+                payload,
+                self._timeout_seconds,
+            )
+        except HTTPError as error:
+            if error.code in {408, 429} or error.code >= 500:
+                raise VisionRuntimeError(
+                    VisionRuntimeFailureReason.TRANSPORT_FAILURE,
+                    validation_code="ollama_transport_failure",
+                    retry_after_seconds=_retry_delay(error),
+                ) from None
+            reason = (
+                VisionRuntimeFailureReason.MODEL_UNAVAILABLE
+                if error.code == 404
+                else VisionRuntimeFailureReason.INVALID_REQUEST
+            )
+            raise VisionRuntimeError(reason) from None
+        except Exception:
+            raise VisionRuntimeError(
+                VisionRuntimeFailureReason.TRANSPORT_FAILURE,
+                validation_code="ollama_transport_failure",
+            ) from None
+        if not isinstance(response, dict) or not all(
+            isinstance(key, str) for key in response
+        ):
+            raise VisionRuntimeError(
+                VisionRuntimeFailureReason.RESPONSE_INVALID,
+                validation_code="ollama_response_invalid",
+            )
+        return cast(dict[str, object], response)
+
+
+def _request_json(
+    method: str,
+    url: str,
+    payload: Mapping[str, object] | None,
+    timeout: float,
+) -> object:
+    body = None if payload is None else json.dumps(payload).encode()
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    with urlopen(request, timeout=timeout) as response:
+        return json.load(response)
+
+
+def _scene_catalog_payload(
+    request: SceneCatalogRequest,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    hint = request.scene_hint or "なし"
+    content = (
+        "Video Set全体で共有するブログ画像用Scene Catalogを作成してください。"
+        "3〜8 sceneにotherを必ず1件含め、otherのselection_roleはordinaryにします。"
+        "画像品質、最終score、採否、推論過程は出力しません。\n"
+        f"Selection Intent: {request.selection_intent}\nScene Hint: {hint}"
+    )
+    return {
+        "model": model.configured_name,
+        "stream": False,
+        "think": False,
+        "format": SCENE_CATALOG_SCHEMA,
+        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "messages": [
+            {
+                "role": "user",
+                "content": content,
+                "images": [
+                    base64.b64encode(item.image_bytes).decode()
+                    for item in request.representatives
+                ],
+            }
+        ],
+    }
+
+
+def _candidate_payload(
+    request: CandidateAnnotationRequest,
+    catalog: SceneCatalog,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    semantic_request = {
+        "candidate_moment_id": request.moment.identifier,
+        "frame_candidate_ids": [item.identifier for item in request.frame_candidates],
+        "scene_catalog": [_scene_value(item) for item in catalog.scenes],
+        "context_cues": [
+            {
+                "id": cue.identifier,
+                "start": _fraction_value(cue.start),
+                "end": _fraction_value(cue.end),
+                "text": cue.text,
+            }
+            for cue in request.context_cues
+        ],
+        "video_set_progress": _fraction_value(request.video_set_progress),
+        "selection_intent": request.selection_intent,
+    }
+    content = (
+        "入力された1〜3枚からブログ上の意味を最も表すframeを1枚選び、"
+        "共有Scene Catalogを使ってCandidate Annotationを返してください。"
+        "画像品質、confidence、final score、eligible、selected、逐語的画面文、"
+        "推論過程は出力しません。Context Cue本文をannotation summaryへ引用しません。\n"
+        + json.dumps(semantic_request, ensure_ascii=False, sort_keys=True)
+    )
+    return {
+        "model": model.configured_name,
+        "stream": False,
+        "think": False,
+        "format": CANDIDATE_ANNOTATION_SCHEMA,
+        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "messages": [
+            {
+                "role": "user",
+                "content": content,
+                "images": [
+                    base64.b64encode(item.image_bytes).decode()
+                    for item in request.frame_candidates
+                ],
+            }
+        ],
+    }
+
+
+def _with_repair_code(
+    payload: dict[str, object], validation_code: str | None
+) -> dict[str, object]:
+    if validation_code is None:
+        return payload
+    copied = cast(dict[str, object], json.loads(json.dumps(payload)))
+    messages = cast(list[dict[str, object]], copied["messages"])
+    content = cast(str, messages[0]["content"])
+    messages[0]["content"] = (
+        f"{content}\n前回の出力を修正してください。validation_code={validation_code}"
+    )
+    return copied
+
+
+def _decode_content(
+    response: Mapping[str, object], stage_kind: StageKind
+) -> Mapping[str, object]:
+    if response.get("done") is not True:
+        raise VisionRuntimeError(
+            VisionRuntimeFailureReason.RESPONSE_INVALID,
+            validation_code=f"{stage_kind}_response_truncated",
+        )
+    message = response.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise VisionRuntimeError(
+            VisionRuntimeFailureReason.RESPONSE_INVALID,
+            validation_code=f"{stage_kind}_response_empty",
+        )
+    try:
+        parsed: object = json.loads(content)
+    except json.JSONDecodeError:
+        raise VisionRuntimeError(
+            VisionRuntimeFailureReason.SCHEMA_INVALID,
+            validation_code=f"{stage_kind}_schema_invalid",
+        ) from None
+    if not isinstance(parsed, dict) or not all(isinstance(key, str) for key in parsed):
+        raise VisionRuntimeError(
+            VisionRuntimeFailureReason.SCHEMA_INVALID,
+            validation_code=f"{stage_kind}_schema_invalid",
+        )
+    return cast(dict[str, object], parsed)
+
+
+def _parse_scene_catalog(value: Mapping[str, object]) -> SceneCatalog:
+    scenes = value.get("scenes")
+    if (
+        set(value) != {"scenes"}
+        or not isinstance(scenes, list)
+        or not 3 <= len(scenes) <= 8
+    ):
+        raise _schema_error("scene_catalog_schema_invalid")
+    entries: list[SceneCatalogEntry] = []
+    for raw_scene in scenes:
+        if not isinstance(raw_scene, dict) or set(raw_scene) != _SCENE_ENTRY_KEYS:
+            raise _schema_error("scene_catalog_schema_invalid")
+        slug = raw_scene.get("slug")
+        display_name = raw_scene.get("display_name")
+        description = raw_scene.get("description")
+        selection_role = raw_scene.get("selection_role")
+        if (
+            not isinstance(slug, str)
+            or _SCENE_SLUG_PATTERN.fullmatch(slug) is None
+            or not isinstance(display_name, str)
+            or not display_name.strip()
+            or not isinstance(description, str)
+            or not description.strip()
+            or selection_role not in {"ordinary", "cinematic", "recurring_gameplay"}
+        ):
+            raise _schema_error("scene_catalog_schema_invalid")
+        entries.append(
+            SceneCatalogEntry(
+                slug=slug,
+                display_name=display_name,
+                description=description,
+                selection_role=cast(SceneSelectionRole, selection_role),
+            )
+        )
+    try:
+        return SceneCatalog(tuple(entries))
+    except ValueError:
+        raise _domain_error("scene_catalog_domain_invalid") from None
+
+
+def _parse_candidate_annotation(
+    value: Mapping[str, object],
+    request: CandidateAnnotationRequest,
+    catalog: SceneCatalog,
+) -> CandidateAnnotation:
+    if set(value) != _ANNOTATION_KEYS:
+        raise _schema_error("candidate_annotation_schema_invalid")
+    representative_frame_id = value.get("representative_frame_id")
+    scene_slug = value.get("scene_slug")
+    blog_image_type = value.get("blog_image_type")
+    explanation_value = value.get("explanation_value")
+    annotation_summary = value.get("annotation_summary")
+    frame_choice_reason = value.get("frame_choice_reason")
+    screen_text_kind = value.get("screen_text_kind")
+    context_relevance = value.get("context_relevance")
+    cue_ids = value.get("supporting_context_cue_ids")
+    spoiler_risk = value.get("spoiler_risk")
+    spoiler_evidence = value.get("spoiler_evidence")
+    if (
+        not isinstance(representative_frame_id, str)
+        or not isinstance(scene_slug, str)
+        or blog_image_type not in {"normal_gameplay", "event", "menu", "title", "other"}
+        or explanation_value not in {"none", "low", "medium", "high"}
+        or not isinstance(annotation_summary, str)
+        or not annotation_summary.strip()
+        or not isinstance(frame_choice_reason, str)
+        or not frame_choice_reason.strip()
+        or screen_text_kind not in {"none", "dialogue", "menu", "title", "hud", "other"}
+        or context_relevance not in {"unavailable", "none", "weak", "strong"}
+        or not isinstance(cue_ids, list)
+        or not all(isinstance(item, str) for item in cue_ids)
+        or len(cue_ids) != len(set(cue_ids))
+        or spoiler_risk not in {"none", "low", "medium", "high"}
+        or not isinstance(spoiler_evidence, str)
+    ):
+        raise _schema_error("candidate_annotation_schema_invalid")
+    frames = {item.identifier: item for item in request.frame_candidates}
+    available_cue_ids = {item.identifier for item in request.context_cues}
+    if (
+        representative_frame_id not in frames
+        or scene_slug not in catalog.slugs
+        or not set(cue_ids).issubset(available_cue_ids)
+        or context_relevance in {"unavailable", "none"}
+        and cue_ids
+        or context_relevance in {"weak", "strong"}
+        and not cue_ids
+        or spoiler_risk == "none"
+        and spoiler_evidence
+        or spoiler_risk != "none"
+        and not spoiler_evidence.strip()
+    ):
+        raise _domain_error("candidate_annotation_domain_invalid")
+    try:
+        return CandidateAnnotation(
+            candidate=frames[representative_frame_id],
+            summary=annotation_summary,
+            candidate_moment_id=request.moment.identifier,
+            scene_slug=scene_slug,
+            blog_image_type=cast(BlogImageType, blog_image_type),
+            explanation_value=cast(ExplanationValue, explanation_value),
+            frame_choice_reason=frame_choice_reason,
+            screen_text_kind=cast(ScreenTextKind, screen_text_kind),
+            context_relevance=cast(ContextCueRelevance, context_relevance),
+            supporting_context_cue_ids=tuple(cast(list[str], cue_ids)),
+            spoiler_risk=cast(SpoilerRisk, spoiler_risk),
+            spoiler_evidence=spoiler_evidence,
+        )
+    except ValueError:
+        raise _domain_error("candidate_annotation_domain_invalid") from None
+
+
+def _schema_error(code: str) -> VisionRuntimeError:
+    return VisionRuntimeError(
+        VisionRuntimeFailureReason.SCHEMA_INVALID,
+        validation_code=code,
+    )
+
+
+def _domain_error(code: str) -> VisionRuntimeError:
+    return VisionRuntimeError(
+        VisionRuntimeFailureReason.DOMAIN_INVALID,
+        validation_code=code,
+    )
+
+
+def _scene_catalog_semantic_input(
+    request: SceneCatalogRequest,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    return {
+        "representatives": [
+            {
+                "id": item.identifier,
+                "image_sha256": hashlib.sha256(item.image_bytes).hexdigest(),
+            }
+            for item in request.representatives
+        ],
+        "selection_intent": request.selection_intent,
+        "scene_hint": request.scene_hint,
+        "model": {**model.semantic_input(), "num_ctx": num_ctx},
+        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "prompt_version": SCENE_CATALOG_PROMPT_VERSION,
+        "schema_version": SCENE_CATALOG_SCHEMA_VERSION,
+        "stage_contract_version": SCENE_CATALOG_STAGE_CONTRACT_VERSION,
+        "retry_policy_version": RETRY_POLICY_VERSION,
+    }
+
+
+def _candidate_semantic_input(
+    request: CandidateAnnotationRequest,
+    catalog: SceneCatalog,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    return {
+        "candidate_moment_id": request.moment.identifier,
+        "frame_candidates": [
+            {
+                "id": item.identifier,
+                "image_sha256": hashlib.sha256(item.image_bytes).hexdigest(),
+            }
+            for item in request.frame_candidates
+        ],
+        "context_cues": [
+            {
+                "id": cue.identifier,
+                "text_sha256": hashlib.sha256(cue.text.encode()).hexdigest(),
+                "start": _fraction_value(cue.start),
+                "end": _fraction_value(cue.end),
+            }
+            for cue in request.context_cues
+        ],
+        "cue_selection_policy_version": request.cue_selection_policy_version,
+        "scene_catalog": [_scene_value(item) for item in catalog.scenes],
+        "video_set_progress": _fraction_value(request.video_set_progress),
+        "selection_intent": request.selection_intent,
+        "model": {**model.semantic_input(), "num_ctx": num_ctx},
+        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "prompt_version": CANDIDATE_ANNOTATION_PROMPT_VERSION,
+        "schema_version": CANDIDATE_ANNOTATION_SCHEMA_VERSION,
+        "stage_contract_version": CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+        "retry_policy_version": RETRY_POLICY_VERSION,
+    }
+
+
+def _fingerprint(value: Mapping[str, object]) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _scene_value(scene: SceneCatalogEntry) -> dict[str, str]:
+    return {
+        "slug": scene.slug,
+        "display_name": scene.display_name,
+        "description": scene.description,
+        "selection_role": scene.selection_role,
+    }
+
+
+def _fraction_value(value: Fraction) -> dict[str, int]:
+    return {"numerator": value.numerator, "denominator": value.denominator}
+
+
+def _diagnostics(
+    *,
+    response: Mapping[str, object],
+    stage_kind: StageKind,
+    request_fingerprint: str,
+    model: ResolvedModel,
+    attempt_count: int,
+    validation_code: str | None,
+    image_count: int,
+    context_cue_count: int,
+    duration_seconds: float,
+) -> VisionInferenceDiagnostics:
+    prompt_version = (
+        SCENE_CATALOG_PROMPT_VERSION
+        if stage_kind == "scene_catalog"
+        else CANDIDATE_ANNOTATION_PROMPT_VERSION
+    )
+    schema_version = (
+        SCENE_CATALOG_SCHEMA_VERSION
+        if stage_kind == "scene_catalog"
+        else CANDIDATE_ANNOTATION_SCHEMA_VERSION
+    )
+    stage_contract_version = (
+        SCENE_CATALOG_STAGE_CONTRACT_VERSION
+        if stage_kind == "scene_catalog"
+        else CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION
+    )
+    done_reason = response.get("done_reason")
+    return VisionInferenceDiagnostics(
+        request_fingerprint=request_fingerprint,
+        model_name=model.configured_name,
+        model_identity=model.execution_identity.identifier,
+        runtime_identity=model.runtime_identity.identifier,
+        prompt_version=prompt_version,
+        schema_version=schema_version,
+        stage_contract_version=stage_contract_version,
+        retry_policy_version=RETRY_POLICY_VERSION,
+        cache_hit=False,
+        attempt_count=attempt_count,
+        validation_code=validation_code,
+        image_count=image_count,
+        context_cue_count=context_cue_count,
+        duration_seconds=duration_seconds,
+        prompt_eval_count=_non_negative_int(response.get("prompt_eval_count")),
+        eval_count=_non_negative_int(response.get("eval_count")),
+        done_reason=(
+            done_reason
+            if isinstance(done_reason, str)
+            and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:+/-]{0,255}", done_reason)
+            else None
+        ),
+    )
+
+
+def _non_negative_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _retry_delay(error: HTTPError) -> float:
+    if error.code != 429 or error.headers is None:
+        return 1.0
+    value = error.headers.get("Retry-After")
+    try:
+        seconds = float(value) if value is not None else 1.0
+    except ValueError:
+        return 1.0
+    return min(max(seconds, 0.0), 30.0)
+
+
+def _require_model_role(
+    model: ResolvedModel,
+    expected_role: ModelRole,
+    num_ctx: int,
+) -> None:
+    if model.role is not expected_role or num_ctx < 1:
+        raise VisionRuntimeError(VisionRuntimeFailureReason.INVALID_REQUEST)
