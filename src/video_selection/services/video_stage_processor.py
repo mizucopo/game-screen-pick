@@ -21,6 +21,7 @@ from ..models.video_set import VideoSet
 from ..models.video_source import VideoSource
 from ..models.video_stage_result import VideoStageResult
 from ..protocols.run_observer import RunObserver
+from ..protocols.speech_runtime import SpeechRuntime
 from ..protocols.video_stage_media_runtime import VideoStageMediaRuntime
 from .analyze_neutral_images import (
     BLUR_REJECT_VARIANCE_MIN,
@@ -28,6 +29,7 @@ from .analyze_neutral_images import (
 )
 from .build_refinement_pts_ranges import build_refinement_pts_ranges
 from .build_video_scan_result import build_video_scan_result
+from .context_stage_processor import ContextStageProcessor
 from .discover_candidate_moments import discover_candidate_moments
 from .processing_stage_runner import ProcessingStageRunner
 from .refine_candidate_moments import (
@@ -58,14 +60,20 @@ _CANDIDATE_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
 
 
 class VideoStageProcessor:
-    """Video Order順にsource-localなscanとcandidate抽出を確定する。"""
+    """Video Order順にsource-localな3つのVideo Stageを確定する。"""
 
     def __init__(
         self,
         media_runtime: VideoStageMediaRuntime,
+        speech_runtime: SpeechRuntime,
         observer: RunObserver,
     ) -> None:
         self._media_runtime = media_runtime
+        self._context_processor = ContextStageProcessor(
+            media_runtime,
+            speech_runtime,
+            observer,
+        )
         self._observer = observer
 
     def process(
@@ -73,7 +81,7 @@ class VideoStageProcessor:
         video_set: VideoSet,
         configuration: EffectiveConfiguration,
     ) -> tuple[VideoStageResult, ...]:
-        """各Video Sourceをscanからcandidate抽出まで直列処理する。"""
+        """各Video Sourceをscanからcontext収集まで直列処理する。"""
         validate_video_set_snapshot(video_set)
         runtime_identity = self._media_runtime.preflight()
         results: list[VideoStageResult] = []
@@ -95,11 +103,10 @@ class VideoStageProcessor:
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
     ) -> VideoStageResult:
-        """一つのVideo Sourceの2 Stageを確定または再利用する。"""
+        """一つのVideo Sourceの3 Stageを確定または再利用する。"""
         validate_video_source_snapshot(video_set, source)
-        primary_stream = select_primary_video_stream(
-            self._media_runtime.probe(source.path)
-        )
+        probe = self._media_runtime.probe(source.path)
+        primary_stream = select_primary_video_stream(probe)
         runner = ProcessingStageRunner(
             configuration.processing_cache_folder,
             self._observer,
@@ -162,12 +169,24 @@ class VideoStageProcessor:
             extraction_bundle.artifact,
             extraction_bundle.root,
         )
+        context = self._context_processor.process(
+            video_set=video_set,
+            source=source,
+            probe=probe,
+            scan=scan,
+            configuration=configuration,
+            media_runtime_identity=runtime_identity,
+        )
+        if context.completed_stage is None:
+            msg = "Context Collection Stageが完了していません"
+            raise RuntimeError(msg)
         return VideoStageResult(
             source=source,
             scan=scan,
             extraction=extraction,
             extraction_metrics=extraction_metrics,
-            completed_stages=runner.completed_stages,
+            context=context,
+            completed_stages=(*runner.completed_stages, context.completed_stage),
         )
 
     def _produce_scan_artifact(

@@ -84,6 +84,22 @@ _Avoid_: raw TOML, environment dump, global config hash, CLI defaults applied be
 configured model名から実行時に解決し、完全性とload能力を検証して1 run内でfreezeする、Ollamaの完全manifest digestまたはHugging Faceの完全commit SHA。model依存Stageのfingerprintとprovenanceへ保持し、TOMLへ手入力するhashとはしない。
 _Avoid_: model tag, configured model name, truncated report value, expected digest
 
+**Speech Runtime**:
+ModelRuntimeからrun単位で渡された、解決済みでload可能なSTT model artifactとfreeze済みResolved Model Identityを使い、設定されたdevice、compute type、beamなどのprofileでspeech-to-textとword timestampを実行するruntime境界。Context Cueを直接返さず、backend非依存のSpeech Recognition Resultを返す。faster-whisperは既定adapterだが、固定revisionの解決、download、更新確認、run中のmodel freezeは所有しない。
+_Avoid_: ModelRuntime, audio extraction, stream selection, Context Cue policy, self-downloading STT backend
+
+**Speech Runtime Identity**:
+Speech Runtime adapterとSTT backend、CTranslate2、必要なGPU runtimeのversion・capabilityから実行時に導出するcanonical identity。Resolved Model Identity、device・compute typeなどのoperation設定、host名、GPU serial、model pathとは分離し、STTを実行したContext Collection Stageのfingerprintとprovenanceへ保持する。
+_Avoid_: Resolved Model Identity, configured device profile, host identity, model store path
+
+**Speech Recognition Result**:
+Speech Runtimeが返す、word本文、chunk内の開始・終了PCM sample位置、source segmentとの対応、未校正のbackend diagnosticsからなるinfra-level結果。faster-whisper固有型とbinary float秒を境界の外へ漏らさず、Context Collection Stageがword grouping、global Video Time変換、chunk overlap所有権、reliability、Context Cue IDを決める。
+_Avoid_: Context Cue, backend object, calibrated confidence, global Video Time
+
+**Rejected Speech Diagnostic**:
+word grouping後に低reliabilityとしてContext Cueへ採用しなかったSTT文字列、正確な時刻範囲、未校正backend値を保持する非公開のContext Collection Stage artifact。processing cache内だけに保存し、画像評価、progress、error、Human Selection Report、machine-readable reportへ渡さず、`--reset-cache`で削除する。
+_Avoid_: Context Cue, public report evidence, progress detail, permanent transcript archive
+
 **Media Runtime Identity**:
 system FFmpegとffprobeのversion、および正規化したbuild情報と検証済みcapability一覧から実行時に導出する完全SHA-256の組。raw build文字列やTOMLへ手入力するhashではなく、同じversionでもbuildまたはcapabilityが変われば別identityになる。
 _Avoid_: version-only identity, raw version output, configured runtime hash
@@ -97,7 +113,7 @@ _Avoid_: model fallback, cache reset, model identity, notification-only update c
 _Avoid_: partial cache, in-progress stage, progress checkpoint
 
 **Video Stage**:
-一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysisを所有する。複数VideoはVideo Order順に各Videoのscanからcandidate extractionまでを直列実行し、Video Orderは実行順にだけ使ってfingerprintへ含めない。
+一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysis、Context Cue収集を所有する。複数VideoはVideo Order順に各Videoのscan、candidate extraction、context collectionを直列実行し、Video Orderは実行順にだけ使ってfingerprintへ含めない。
 _Avoid_: Video Set Stage, cross-video selection, whole-run stage
 
 **Video Scan Stage**:
@@ -115,6 +131,14 @@ _Avoid_: scene signal image, Frame Candidate, selected output
 **Frame Candidate Extraction Stage**:
 Video Scan Stageを上流にして、Candidate Moment Density、Frame Refinement、Neutral Image AnalysisをCompleted Stageとして確定するVideo Stage。FingerprintにはVideo Fingerprint、上流Stage Fingerprint、density、refinement半径、最大Frame Candidate数、Neutral Analysis/reject/dedupe/ID/proxyのalgorithm versionだけを含める。metricにはwall/CPU時間、density上限/実Moment数、refinement frame数、reason別reject、dedupe、0-frame Moment、Frame Candidate件数/bytesを残すがfingerprintへ含めない。heartbeat/scene設定やdecode結果を独自に作り直さない。
 _Avoid_: full video scan, Context Cue extraction, final selection
+
+**Context Collection Stage**:
+Frame Candidate Extraction Stageの後に実行し、一つのVideo SourceからContext CueをCompleted Stageとして確定する3番目のVideo Stage。Video Scan Stageのexact timelineとVideo Durationだけを時間基準として使い、Frame Candidate、Candidate Moment、候補密度、refinementの成果物や設定には依存しない。FingerprintにはVideo Fingerprint、exact timeline digestとcontract version、選択stream metadata、stream選択・抽出policyと関連設定、Media Runtime Identity、Cue生成policy versionを含め、STTを実行した場合だけSpeech Runtime Identity、Resolved Model Identity、STT・chunk・VAD設定を加える。model更新時刻と`auto_upgrade`は実行identityが同じなら含めない。Context Cueは後続のVideo Set Stageで集約され、Candidate Momentを生成せずframeの適格性も変更しない。
+_Avoid_: Video Set context collection, candidate-generating subtitle stage, candidate-dependent context cache
+
+**Context Source Outcome**:
+Context Collection Stageが実際に選択・試行したsource kindごとに残すstatusと安定reason code。usable cueがある`available`、track不在の`absent`、選択・decodeされたsourceからusable eventが得られない`no_context`、発話のない`no_speech`、文字列はあるが全件不採用の`low_reliability`を正常結果として区別する。non-forced subtitleの`no_context / no_subtitle_events`ではaudio STTへfallbackしない。ambiguous・unsupported・decode・STT・timestamp・partial chunk failureはfatalであり、一方のsourceだけ成功してもCompleted Stageをpublishしない。
+_Avoid_: empty-context fallback, partial success, no-speech reliability failure, free-text-only status
 
 **Video Set Stage**:
 順序付きのVideo Setと各Video Stageの成果物を入力にして、Scene Catalog、Candidate Annotation、動画横断の比較と多様性、最終選定を所有する Processing Stage。各Video Sourceからの最低採用数は持たない。
@@ -147,6 +171,18 @@ _Avoid_: candidate index, evidence hash, display ID
 **Context Cue**:
 一つのVideo SourceのVideo Time区間に対応付けられた、内蔵text subtitleまたは音声の文字起こしから得る文脈テキスト。視覚的なCandidate Momentへの加点根拠に限り、単独ではCandidate Momentを生成せずframeの採否も決めない。
 _Avoid_: external subtitle, raw ASR segment, independent candidate, prompt text
+
+**Context Language**:
+Context Cue抽出の対象言語。設定されたBCP 47相当tagとstream metadataは同じprimary languageとして扱い、stream選択とSpeech Runtimeへ一貫して適用する。
+_Avoid_: raw backend language, stream-only language policy
+
+**Context Cue ID**:
+algorithm名、Video Fingerprint、source kind、stream index、正確な開始・終了Video Time、保存textのSHA-256をcanonical JSON化して導出する、`cue_`と64桁digestからなる安定識別子。source path、Video Order、model名、runtime identity、平文textを含めない。
+_Avoid_: sequential cue number, plaintext-derived display ID, model-specific cue ID
+
+**Context Cue Equivalence Group**:
+forced embedded subtitleとSTTを併用したとき、同じ一回の発話を表すContext Cueを関連付ける非推移的なpair。同じ正規化本文と重なるVideo Timeを持つ各source kind最大1件で構成し、両方のCueとprovenanceをcacheに保持しながらCandidate Annotationへはembedded subtitleだけを渡す。
+_Avoid_: cue deletion, fuzzy semantic deduplication, duplicate annotation input, source provenance loss
 
 **Report Context Evidence**:
 Context Cueが選定へどう関係したかを公開成果物で追跡する、Cue ID、source kind、正確なVideo Time範囲、reliability、Context Cue Relevanceの組。Context Cue本文は処理cacheだけに保持し、Human Selection Report、machine-readable report、採用理由、要約では引用しない。

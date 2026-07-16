@@ -17,6 +17,7 @@ from src.video_selection.models.media_runtime_failure_reason import (
 )
 from src.video_selection.services.discover_video_set import discover_video_set
 from src.video_selection.services.video_stage_processor import VideoStageProcessor
+from tests.video_selection.fakes.fake_speech_runtime import FakeSpeechRuntime
 from tests.video_selection.fakes.recording_run_observer import RecordingRunObserver
 from tests_ffmpeg.support.ffmpeg_fixture_factory import (
     generate_av1_aac_video,
@@ -729,6 +730,7 @@ def test_real_cfr_vfr_video_stage_preserves_exact_timeline_and_scene_boundaries(
     # Act
     results = VideoStageProcessor(
         FfmpegMediaRuntime(),
+        FakeSpeechRuntime(),
         RecordingRunObserver(),
     ).process(video_set, configuration)
 
@@ -919,6 +921,51 @@ def test_read_embedded_subtitles_preserves_packet_pts_and_text(
         Fraction(3, 4),
         Fraction(3, 4),
     ]
+
+
+def test_real_embedded_subtitles_become_exact_context_cues(tmp_path: Path) -> None:
+    """実embedded subtitleがVideo Time付きContext Cueへ変換されること。
+
+    Arrange:
+        - 日本語non-forced subtitleとaudioを持つ実Matroska fixtureが用意される
+    Act:
+        - fixtureが3つのsource-local Video Stageへ通される
+    Assert:
+        - subtitle packet PTSから正確なCue範囲と本文が得られること
+        - subtitle優先によりSpeechRuntimeが実行されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    generate_stream_matrix_video(input_folder / "streams.mkv")
+    speech_runtime = FakeSpeechRuntime()
+
+    # Act
+    result = VideoStageProcessor(
+        FfmpegMediaRuntime(),
+        speech_runtime,
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        EffectiveConfiguration(
+            video_input_folder=input_folder,
+            output_folder=tmp_path / "output",
+            language="ja",
+        ),
+    )[0]
+
+    # Assert
+    assert [cue.text for cue in result.context.cues] == [
+        "これは既定の日本語字幕です",
+        "二つ目の字幕イベントです",
+    ]
+    assert [
+        (cue.start, cue.end, cue.timestamp_basis) for cue in result.context.cues
+    ] == [
+        (Fraction(1, 2), Fraction(5, 4), "source_pts"),
+        (Fraction(3, 2), Fraction(9, 4), "source_pts"),
+    ]
+    assert speech_runtime.transcribe_calls == []
 
 
 def test_scan_video_frames_reports_corrupt_packet_as_decoder_failure(

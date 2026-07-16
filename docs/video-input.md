@@ -1,7 +1,7 @@
 # 動画入力
 
 > [!IMPORTANT]
-> Effective Configuration、動画探索・identity、Input Lock、Completed Stage cacheの内部基盤は実装済みですが、installed public CLIはIssue #190までscreenshot入力のままです。現在のconsole commandではまだ動画入力を実行できません。
+> Effective Configuration、動画探索・identity、Input Lock、Completed Stage cache、動画単位のFrame Candidate・Context Cueを作るVideo Stageは内部実装済みですが、installed public CLIはIssue #190までscreenshot入力のままです。現在のconsole commandではまだ動画入力を実行できません。
 
 ## 実行単位
 

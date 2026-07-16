@@ -11,6 +11,7 @@ from src.video_selection.models.media_runtime_identity import MediaRuntimeIdenti
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.services.discover_video_set import discover_video_set
 from src.video_selection.services.video_stage_processor import VideoStageProcessor
+from tests.video_selection.fakes.fake_speech_runtime import FakeSpeechRuntime
 from tests.video_selection.fakes.fake_video_stage_media_runtime import (
     FakeVideoStageMediaRuntime,
 )
@@ -22,6 +23,46 @@ def _configuration(input_folder: Path, output_folder: Path) -> EffectiveConfigur
         video_input_folder=input_folder,
         output_folder=output_folder,
     )
+
+
+def test_context_collection_is_the_third_source_local_video_stage(
+    tmp_path: Path,
+) -> None:
+    """Context Collectionがcandidate抽出後の3番目のVideo Stageになること。
+
+    Arrange:
+        - context streamを持たない一つのVideo Sourceが用意される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - scan、candidate抽出、context収集の順でCompleted Stageになること
+        - context stream不在がsource-localな正常結果として保持されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+
+    # Act
+    result = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert [stage.stage for stage in result.completed_stages] == [
+        ProcessingStage.SCAN_VIDEO,
+        ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+        ProcessingStage.COLLECT_CONTEXT,
+    ]
+    assert [(item.status, item.reason_code) for item in result.context.outcomes] == [
+        ("absent", "no_subtitle_stream"),
+        ("absent", "no_audio_stream"),
+    ]
 
 
 def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
@@ -54,6 +95,7 @@ def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
     # Act
     first_results = VideoStageProcessor(
         first_runtime,
+        FakeSpeechRuntime(),
         RecordingRunObserver(),
     ).process(first_video_set, configuration)
 
@@ -68,7 +110,11 @@ def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
     ]
     assert all(
         [item.stage for item in result.completed_stages]
-        == [ProcessingStage.SCAN_VIDEO, ProcessingStage.EXTRACT_FRAME_CANDIDATES]
+        == [
+            ProcessingStage.SCAN_VIDEO,
+            ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+            ProcessingStage.COLLECT_CONTEXT,
+        ]
         for result in first_results
     )
     assert not tuple(configuration.processing_cache_folder.rglob(".scene-proxies"))
@@ -89,6 +135,7 @@ def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
     # Act
     cached_results = VideoStageProcessor(
         cached_runtime,
+        FakeSpeechRuntime(),
         RecordingRunObserver(),
     ).process(reordered_video_set, downstream_changed)
 
@@ -114,6 +161,7 @@ def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
     # Act
     VideoStageProcessor(
         density_runtime,
+        FakeSpeechRuntime(),
         RecordingRunObserver(),
     ).process(reordered_video_set, density_changed)
 
@@ -147,6 +195,7 @@ def test_corrupt_candidate_proxy_recomputes_only_candidate_stage(
     video_set = discover_video_set(input_folder)
     initial_result = VideoStageProcessor(
         FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
         RecordingRunObserver(),
     ).process(video_set, configuration)[0]
     proxy_path = initial_result.extraction.candidates[0].proxy_path
@@ -157,6 +206,7 @@ def test_corrupt_candidate_proxy_recomputes_only_candidate_stage(
     # Act
     repaired_result = VideoStageProcessor(
         repair_runtime,
+        FakeSpeechRuntime(),
         RecordingRunObserver(),
     ).process(video_set, configuration)[0]
 
@@ -203,7 +253,11 @@ def test_same_stat_change_is_checked_when_affected_source_reaches_video_stage(
 
     # Act / Assert
     with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
-        VideoStageProcessor(runtime, RecordingRunObserver()).process(
+        VideoStageProcessor(
+            runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(
             video_set,
             configuration,
         )
@@ -237,7 +291,11 @@ def test_refinement_is_streamed_between_distant_moment_groups(
     )
 
     # Act
-    result = VideoStageProcessor(runtime, RecordingRunObserver()).process(
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
         discover_video_set(input_folder),
         configuration,
     )[0]
@@ -271,7 +329,11 @@ def test_runtime_build_identity_change_recomputes_scan_stage(tmp_path: Path) -> 
             "a" * 64,
         )
     )
-    VideoStageProcessor(first_runtime, RecordingRunObserver()).process(
+    VideoStageProcessor(
+        first_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
         video_set,
         configuration,
     )
@@ -284,7 +346,11 @@ def test_runtime_build_identity_change_recomputes_scan_stage(tmp_path: Path) -> 
     )
 
     # Act
-    VideoStageProcessor(changed_runtime, RecordingRunObserver()).process(
+    VideoStageProcessor(
+        changed_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
         video_set,
         configuration,
     )
@@ -318,7 +384,11 @@ def test_stage_metrics_include_current_process_and_full_stage_time(
     )
 
     # Act
-    result = VideoStageProcessor(runtime, RecordingRunObserver()).process(
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
         discover_video_set(input_folder),
         configuration,
     )[0]

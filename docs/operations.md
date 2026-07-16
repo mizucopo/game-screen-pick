@@ -1,7 +1,7 @@
 # 動画入力の運用
 
 > [!IMPORTANT]
-> Video Set探索・identity、Input Lock、Completed Stage cache、Legacy Cache削除とFFmpeg MediaRuntimeの内部基盤は実装済みです。MediaRuntimeを使うVideo Stage、進捗表示、public CLIは後続Issueで接続し、installed CLIはIssue #190までscreenshot入力のままです。
+> Video Set探索・identity、Input Lock、Completed Stage cache、Legacy Cache削除、FFmpeg MediaRuntime、動画単位のFrame Candidate・Context Cueを作るVideo Stageは内部実装済みです。model lifecycle、Video Set Stage、進捗表示、public CLIは後続Issueで接続し、installed CLIはIssue #190までscreenshot入力のままです。
 
 ## 最低runtime
 
