@@ -16,6 +16,11 @@ def validate_video_set_snapshot(video_set: VideoSet) -> None:
         _validate_source_content(source, current_path)
 
 
+def validate_video_set_snapshot_metadata(video_set: VideoSet) -> None:
+    """相対path列とstatが発見時から不変か軽量に検証する。"""
+    _validate_paths_and_stats(video_set)
+
+
 def validate_video_source_snapshot(
     video_set: VideoSet,
     source: VideoSource,

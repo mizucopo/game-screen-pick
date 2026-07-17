@@ -1,3 +1,4 @@
+import os
 import threading
 from fractions import Fraction
 from pathlib import Path
@@ -106,6 +107,52 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     assert '"messages"' not in cache_text
     assert '"raw_response"' not in cache_text
     assert '"reasoning"' not in cache_text
+
+
+def test_batch_boundary_rejects_same_stat_content_change_after_annotation(
+    tmp_path: Path,
+) -> None:
+    """Annotation中の同一stat内容変更がbatch完了時に拒否されること。
+
+    Arrange:
+        - 発見時のsize、inode、mtimeを維持して内容を書き換えるruntimeが用意される
+    Act:
+        - 一つのCandidate Annotation batchが処理される
+    Assert:
+        - batch結果が返されずVideo Set snapshot変更として拒否されること
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    request = _requests()[0]
+    source_path = video_set.sources[0].path
+    original_stat = source_path.stat()
+
+    def mutate_source() -> None:
+        source_path.write_bytes(b"mutated-video")
+        os.utime(
+            source_path,
+            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+        )
+
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        (_annotations(_requests())[0],),
+        on_candidate_annotation=mutate_source,
+    )
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
+        VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+            video_set=video_set,
+            representatives=request.frame_candidates,
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=(request,),
+            configuration=configuration,
+            resolved_models=models,
+        )
+    assert len(runtime.candidate_annotation_calls) == 1
 
 
 def test_same_catalog_fingerprint_runs_inference_once_under_lock(
