@@ -12,10 +12,10 @@ from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v1"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
-CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v2"
+CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v3"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v2"
 CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v1"
-RETRY_POLICY_VERSION = "ollama-retry-v1"
+RETRY_POLICY_VERSION = "ollama-retry-v2"
 
 SCENE_CATALOG_SCHEMA: dict[str, object] = {
     "type": "object",

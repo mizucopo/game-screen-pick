@@ -93,6 +93,12 @@ _PROMPT_REPAIR_REASONS = {
     VisionRuntimeFailureReason.SCHEMA_INVALID,
     VisionRuntimeFailureReason.DOMAIN_INVALID,
 }
+_REPAIR_INSTRUCTIONS = {
+    "candidate_annotation_verbatim_context": (
+        "自由文を言い換え、正規化後3〜5文字のCue全文または"
+        "6文字以上の連続一致を除去してください。"
+    ),
+}
 
 
 class OllamaVisionRuntime:
@@ -373,7 +379,8 @@ def _candidate_payload(
         "共有Scene Catalogを使ってCandidate Annotationを返してください。"
         "画像品質、confidence、final score、eligible、selected、逐語的画面文、"
         "推論過程は出力しません。Context Cue本文をannotation summary、"
-        "frame choice reason、spoiler evidenceへ引用しません。"
+        "frame choice reason、spoiler evidenceへ引用しません。正規化後3〜5文字の"
+        "Cueは全文、6文字以上のCueは6文字以上の連続部分も自由文へ再出力しません。"
         "representative_frame_idはframe_candidate_idsから、scene_slugは"
         "scene_catalogから選びます。context_cuesが空ならcontext_relevanceは"
         "unavailable、supporting_context_cue_idsは空配列にします。context_cuesが"
@@ -435,9 +442,11 @@ def _with_repair_code(
     copied = cast(dict[str, object], json.loads(json.dumps(payload)))
     messages = cast(list[dict[str, object]], copied["messages"])
     content = cast(str, messages[0]["content"])
-    messages[0]["content"] = (
-        f"{content}\n前回の出力を修正してください。validation_code={validation_code}"
-    )
+    instruction = _REPAIR_INSTRUCTIONS.get(validation_code)
+    repair = f"前回の出力を修正してください。validation_code={validation_code}"
+    if instruction is not None:
+        repair = f"{repair} {instruction}"
+    messages[0]["content"] = f"{content}\n{repair}"
     return copied
 
 

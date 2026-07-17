@@ -1134,10 +1134,22 @@ def test_candidate_rejects_verbatim_context_cue_in_free_text(
     request = _annotation_request()
     response = _annotation_payload()
     response[field_name] = request.context_cues[0].text
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        return _response(response)
+
     runtime = OllamaVisionRuntime(
         "http://localhost:11434",
         timeout_seconds=60.0,
-        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        requester=requester,
         sleeper=lambda _seconds: None,
         model_state_resolver=_resolved_artifact,
     )
@@ -1153,6 +1165,12 @@ def test_candidate_rejects_verbatim_context_cue_in_free_text(
         )
     assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
     assert captured.value.validation_code == "candidate_annotation_verbatim_context"
+    first_prompt = _first_message(payloads[0])["content"]
+    second_prompt = _first_message(payloads[1])["content"]
+    assert isinstance(first_prompt, str)
+    assert isinstance(second_prompt, str)
+    assert "正規化後3〜5文字のCueは全文" in first_prompt
+    assert "正規化後3〜5文字のCue全文または6文字以上の連続一致" in second_prompt
 
 
 @pytest.mark.parametrize(
