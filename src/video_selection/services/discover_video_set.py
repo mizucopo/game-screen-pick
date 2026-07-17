@@ -4,6 +4,7 @@ import hashlib
 import os
 from pathlib import Path
 
+from ..configuration.configuration_error import ConfigurationError
 from ..models.video_set import VideoSet
 from ..models.video_source import VideoSource
 from .discover_video_paths import discover_video_paths
@@ -13,11 +14,11 @@ def discover_video_set(input_folder: Path, recursive: bool = False) -> VideoSet:
     """対応videoを自然順で発見し内容identityを確定する。"""
     if not input_folder.is_dir():
         msg = "Video Input Folderが存在しません"
-        raise ValueError(msg)
+        raise ConfigurationError("VIDEO_INPUT_FOLDER_NOT_FOUND", msg)
     video_paths = discover_video_paths(input_folder, recursive)
     if not video_paths:
         msg = "Video Input Folderに対応videoがありません"
-        raise ValueError(msg)
+        raise ConfigurationError("VIDEO_INPUT_FOLDER_EMPTY", msg)
     sources = tuple(_build_video_source(input_folder, path) for path in video_paths)
     _reject_duplicate_videos(sources)
     return VideoSet(
@@ -60,7 +61,7 @@ def _reject_duplicate_videos(sources: tuple[VideoSource, ...]) -> None:
         if len(relative_paths) > 1:
             displayed_paths = ", ".join(relative_paths)
             msg = f"Duplicate Videoが見つかりました: {displayed_paths}"
-            raise ValueError(msg)
+            raise ConfigurationError("DUPLICATE_VIDEO", msg)
 
 
 def _build_video_set_fingerprint(sources: tuple[VideoSource, ...]) -> str:

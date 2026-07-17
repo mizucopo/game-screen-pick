@@ -116,15 +116,20 @@ class RunProgressTracker:
     def record_work_sample(
         self,
         disposition: WorkDisposition,
-        duration_seconds: float,
+        duration_seconds: float | None = None,
     ) -> None:
         """active Comparable Work Seriesへ完了sampleを記録する。"""
         stage, work_unit_kind = self._active_work_series()
+        observed_duration = (
+            self._stage_elapsed() if duration_seconds is None else duration_seconds
+        )
+        if observed_duration == 0:
+            return
         self._eta_estimator.record_sample(
             stage,
             work_unit_kind,
             disposition,
-            duration_seconds,
+            observed_duration,
         )
 
     def external_work_started(self, reason_code: str) -> None:

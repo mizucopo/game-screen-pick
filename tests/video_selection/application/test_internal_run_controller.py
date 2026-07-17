@@ -174,6 +174,85 @@ def test_internal_run_controller_maps_configuration_error() -> None:
     assert "secret" not in repr(result)
 
 
+def test_internal_run_controller_normalizes_configuration_reason_code() -> None:
+    """設定層の大文字reason codeがstable codeへ正規化されること。
+
+    Arrange:
+        - 実設定層と同じ大文字reason codeのConfiguration Errorが用意される
+    Act:
+        - internal run controllerから失敗するoperationが実行される
+    Assert:
+        - 小文字reason codeを持つexit 2のRun Failureが返されること
+    """
+    # Arrange
+    observer = RecordingRunObserver()
+    tracker = RunProgressTracker(observer)
+    controller = InternalRunController(tracker)
+    error = ConfigurationError(
+        "CONFIG_INVALID_TYPE",
+        "video_input_folderはpathである必要があります",
+    )
+
+    def fail_configuration() -> object:
+        raise error
+
+    # Act
+    exit_code, result = controller.execute(fail_configuration)
+
+    # Assert
+    assert isinstance(result, RunFailure)
+    assert (
+        exit_code,
+        result.reason_code,
+        result.remediation_code,
+        result.resume_guidance,
+        observer.progress_events[-1].reason_code,
+    ) == (
+        2,
+        "config_invalid_type",
+        "fix_configuration",
+        "run_not_started",
+        "config_invalid_type",
+    )
+
+
+def test_internal_run_controller_keeps_runtime_value_error_operational() -> None:
+    """実行中のValueErrorがusage errorへ誤分類されないこと。
+
+    Arrange:
+        - snapshot変更を表すplain ValueErrorが用意される
+    Act:
+        - internal run controllerから失敗するoperationが実行される
+    Assert:
+        - internal operation failureとしてexit 1が返されること
+    """
+    # Arrange
+    observer = RecordingRunObserver()
+    tracker = RunProgressTracker(observer)
+    controller = InternalRunController(tracker)
+    error = ValueError("Video Set snapshotがfingerprint計算中に変更されました")
+
+    def fail_during_snapshot() -> object:
+        raise error
+
+    # Act
+    exit_code, result = controller.execute(fail_during_snapshot)
+
+    # Assert
+    assert isinstance(result, RunFailure)
+    assert (
+        exit_code,
+        result.reason_code,
+        result.remediation_code,
+        result.resume_guidance,
+    ) == (
+        1,
+        "internal_error",
+        "report_internal_error",
+        "completed_stages_reusable",
+    )
+
+
 def test_internal_run_controller_hides_unexpected_error_detail() -> None:
     """未知例外がraw detailを出さずinternal_errorへ変換されること。
 

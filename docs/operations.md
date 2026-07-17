@@ -47,7 +47,7 @@ PRでは通常quality checkと別のUbuntu 24.04 jobとして実行されます�
 
 ## preflightとcache reset
 
-処理前に、CLI/TOML、入力・出力path、Video Set snapshot、cache書き込み、同一inputの非待機lock、外部tool、stream、model解決と能力を検査します。異常時はcache処理やOutput Folder公開を始めません。
+処理前に、CLI/TOML、入力・出力path、Video Set snapshot、cache書き込み、同一inputの非待機lock、外部tool、stream、model解決と能力を検査します。異常時はcache処理やOutput Folder公開を始めません。不存在・動画なし・Duplicate Video・不正なOutput Folderなど、実行前に利用者が修正できる入力不備はexit 2と`fix_configuration`で返します。fingerprint計算中を含む実行時のsnapshot変更やI/O障害はoperation failureとしてexit 1にし、usage errorへ分類しません。
 
 `--reset-cache`は上記の安全なpreflightとlock取得が成功した後に、`<VIDEO_INPUT_FOLDER>/.game-screen-pick/cache/`全体だけを削除します。Output Folder、Ollama model store、Hugging Face model cacheには触れません。Stage単位またはVideo単位の手動reset、自動削除、保持期限、容量上限はv1に含めません。
 
@@ -92,7 +92,7 @@ processing cacheはcontent-addressedな次のnamespaceを使います。
 - model downloadのartifact、bytes、percent
 - Stage開始、完了、warning、再試行、cache再利用などのevent
 
-Stage ETAは同じrun内の`Stage種別 × work-unit種別 × reuse/recompute`が同じsampleだけから求めます。残りのreuse/recompute件数が別々に判明し、各系列に5件以上のsampleがあり、Stage開始から30秒以上経過した場合だけ表示します。新しいsampleで予測が50%を超えて変動した系列は破棄し、5件の新しいsampleが集まるまで`estimating`へ戻します。runをまたぐ実績や観測済みcache hit率から今後のcache結果を推測しません。
+Stage ETAは同じrun内の`Stage種別 × work-unit種別 × reuse/recompute`が同じsampleだけから求めます。各sampleはcache lookup前のStage開始から、recomputeではartifactとmanifestのatomic completion、reuseでは検証済みcacheの復元完了までのcurrent-run実時間を記録し、0秒のsampleは除外します。残りのreuse/recompute件数が別々に判明し、各系列に5件以上のsampleがあり、Stage開始から30秒以上経過した場合だけ表示します。新しいsampleで予測が50%を超えて変動した系列は破棄し、5件の新しいsampleが集まるまで`estimating`へ戻します。runをまたぐ実績や観測済みcache hit率から今後のcache結果を推測しません。
 
 TTYでは更新型表示、redirect/CIでは一行event logにします。`stderr.isatty()`で自動選択し、v1では強制切替optionを設けません。relative pathの制御文字をescapeし、line rendererの1 event 1行を維持します。進捗、warning、errorはstderrへ出し、stdoutにmachine-readable reportを流しません。60秒以上沈黙し得る外部処理は開始eventを直ちに発行し、その後30秒ごとにelapsedだけのheartbeatを出します。
 

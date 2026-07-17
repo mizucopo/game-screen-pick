@@ -391,3 +391,57 @@ def test_processing_stage_runner_emits_cache_and_completion_events(
         ("cache", 1, 0, 1, 0, 1),
         ("stage_completed", 1, 0, 0, 0, 0),
     )
+
+
+def test_processing_stage_runner_records_recompute_duration_for_eta(
+    tmp_path: Path,
+) -> None:
+    """Stage runnerのrecompute完了時間がETA sampleへ記録されること。
+
+    Arrange:
+        - 同じComparable Work Seriesを5回完了するcold Stage runnerが用意される
+    Act:
+        - 6件目のStageで残り1件のETAが通知される
+    Assert:
+        - 実完了時間を使ったETAがavailableとして通知されること
+    """
+    # Arrange
+    observer = RecordingRunObserver()
+    current_time = [0.0]
+    progress = RunProgressTracker(observer, clock=lambda: current_time[0])
+    progress.start_run()
+
+    def produce_artifact(_stage_folder: Path) -> dict[str, object]:
+        current_time[0] += 10.0
+        return {"status": "completed"}
+
+    for run_index in range(5):
+        runner = ProcessingStageRunner(
+            tmp_path / f"cache-{run_index}",
+            observer,
+            subject_namespace="video-sets",
+            subject_fingerprint=f"{run_index:064x}",
+            stage_order=(ProcessingStage.DISCOVER_VIDEO_SET,),
+            progress=progress,
+            work_unit_kind="video_set",
+        )
+        runner.complete_artifacts(
+            ProcessingStage.DISCOVER_VIDEO_SET,
+            {"run_index": run_index},
+            produce_artifact,
+        )
+    progress.start_stage(
+        ProcessingStage.DISCOVER_VIDEO_SET,
+        work_unit_kind="video_set",
+    )
+    current_time[0] += 30.0
+
+    # Act
+    progress.progress(
+        remaining_reuse_count=0,
+        remaining_recompute_count=1,
+    )
+
+    # Assert
+    event = observer.progress_events[-1]
+    assert (event.estimation_state, event.eta_seconds) == ("available", 10.0)

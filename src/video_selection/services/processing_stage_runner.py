@@ -243,6 +243,7 @@ class ProcessingStageRunner:
     ) -> None:
         """Stage完了をrun stateへ追加して通知する。"""
         if self._progress is not None:
+            self._progress.record_work_sample("reuse" if reused else "recompute")
             self._progress.cache_observed(
                 cache_hit_count=1 if reused else 0,
                 cache_miss_count=0 if reused else 1,

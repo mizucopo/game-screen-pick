@@ -30,6 +30,7 @@ from src.video_selection.models.processing_stage import (
     ProcessingStage,
 )
 from src.video_selection.models.resolved_models import ResolvedModels
+from src.video_selection.models.run_failure import RunFailure
 from src.video_selection.models.run_outcome import RunOutcome
 from src.video_selection.models.run_status import RunStatus
 from src.video_selection.models.selected_image import SelectedImage
@@ -304,6 +305,72 @@ def test_application_omits_unknown_total_when_nested_stages_expand_run(
         0,
         tuple((index, None) for index in range(1, 8)),
         "run_completed",
+    )
+
+
+@pytest.mark.parametrize(
+    ("invalid_input", "expected_reason_code"),
+    (
+        ("missing_input", "video_input_folder_not_found"),
+        ("empty_input", "video_input_folder_empty"),
+        ("duplicate_input", "duplicate_video"),
+        ("invalid_output", "output_folder_invalid"),
+    ),
+)
+def test_internal_controller_maps_preflight_path_failures_to_usage_result(
+    tmp_path: Path,
+    invalid_input: str,
+    expected_reason_code: str,
+) -> None:
+    """実行前に修正できる入力・出力不備がexit 2へ分類されること。
+
+    Arrange:
+        - 不存在・動画なし・重複入力、または非空Output Folderが用意される
+    Act:
+        - Internal Run Controllerからapplicationが実行される
+    Assert:
+        - run未開始相当の安全なusage failureが返されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    if invalid_input != "missing_input":
+        input_folder.mkdir()
+    if invalid_input == "duplicate_input":
+        (input_folder / "chapter-01.mp4").write_bytes(b"duplicate")
+        (input_folder / "chapter-02.mp4").write_bytes(b"duplicate")
+    if invalid_input == "invalid_output":
+        (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+        output_folder.mkdir()
+        (output_folder / "keep.txt").write_text("keep", encoding="utf-8")
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer)
+    application = _successful_application(observer)
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=output_folder,
+        image_count=1,
+    )
+
+    # Act
+    exit_code, result = InternalRunController(progress).execute(
+        lambda: application.run(configuration)
+    )
+
+    # Assert
+    assert isinstance(result, RunFailure)
+    assert (
+        exit_code,
+        result.reason_code,
+        result.remediation_code,
+        result.resume_guidance,
+        tuple(event.kind for event in observer.progress_events),
+    ) == (
+        2,
+        expected_reason_code,
+        "fix_configuration",
+        "run_not_started",
+        ("run_started", "run_failed"),
     )
 
 

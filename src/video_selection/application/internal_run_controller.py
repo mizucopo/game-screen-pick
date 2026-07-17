@@ -47,7 +47,7 @@ class InternalRunController:
             return (failure.exit_code, failure)
         except ConfigurationError as error:
             failure = _safe_run_failure(
-                reason_code=error.reason_code,
+                reason_code=error.reason_code.lower(),
                 exit_code=2,
                 remediation_code="fix_configuration",
                 resume_guidance="run_not_started",

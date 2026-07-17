@@ -99,6 +99,52 @@ def test_run_progress_tracker_emits_eta_from_known_work_series() -> None:
     ) == ("progress", "available", 50.0, 50.0)
 
 
+def test_run_progress_tracker_excludes_zero_duration_sample() -> None:
+    """0秒の完了sampleがComparable Work Seriesから除外されること。
+
+    Arrange:
+        - 0秒のcurrent sampleと4件の10秒sampleが記録される
+    Act:
+        - 5件目の有効sampleの前後でETAが要求される
+    Assert:
+        - 0秒は件数に含まれず、有効sampleが5件になった後だけETAが返されること
+    """
+    # Arrange
+    observer = RecordingRunObserver()
+    current_time = [0.0]
+    tracker = RunProgressTracker(observer, clock=lambda: current_time[0])
+    tracker.start_run()
+    tracker.start_stage(
+        ProcessingStage.ANNOTATE_CANDIDATE,
+        work_unit_kind="candidate",
+    )
+    tracker.record_work_sample("recompute")
+    for _ in range(4):
+        tracker.record_work_sample("recompute", 10.0)
+    current_time[0] = 30.0
+
+    # Act
+    tracker.progress(
+        remaining_reuse_count=0,
+        remaining_recompute_count=1,
+    )
+    before_fifth_sample = observer.progress_events[-1]
+    tracker.record_work_sample("recompute", 10.0)
+    tracker.progress(
+        remaining_reuse_count=0,
+        remaining_recompute_count=1,
+    )
+    after_fifth_sample = observer.progress_events[-1]
+
+    # Assert
+    assert (
+        before_fifth_sample.estimation_state,
+        before_fifth_sample.eta_seconds,
+        after_fifth_sample.estimation_state,
+        after_fifth_sample.eta_seconds,
+    ) == ("estimating", None, "available", 10.0)
+
+
 def test_progress_without_comparable_series_omits_eta() -> None:
     """比較可能なwork系列がなくても件数進捗だけが通知されること。
 

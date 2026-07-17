@@ -2,6 +2,7 @@
 
 from contextlib import suppress
 
+from ..configuration.configuration_error import ConfigurationError
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.model_role import ModelRole
 from ..models.processing_stage import ProcessingStage
@@ -60,10 +61,16 @@ class VideoSelectionApplication:
 
     def run(self, configuration: EffectiveConfiguration) -> RunOutcome:
         """内部Video Set選定を実行してRunOutcomeを返す。"""
-        validate_output_folder(
-            configuration.video_input_folder,
-            configuration.output_folder,
-        )
+        try:
+            validate_output_folder(
+                configuration.video_input_folder,
+                configuration.output_folder,
+            )
+        except ValueError as error:
+            raise ConfigurationError(
+                "OUTPUT_FOLDER_INVALID",
+                str(error),
+            ) from None
 
         video_set = discover_video_set(
             configuration.video_input_folder,

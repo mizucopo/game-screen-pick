@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import replace
 from threading import Event
 
@@ -26,6 +27,7 @@ class FakeStructuredVisionRuntime:
         reject_all_calls: bool = False,
         scene_catalog_call_started: Event | None = None,
         release_scene_catalog_call: Event | None = None,
+        on_candidate_annotation: Callable[[], None] | None = None,
     ) -> None:
         self._catalog = catalog
         self._annotations = {
@@ -36,6 +38,7 @@ class FakeStructuredVisionRuntime:
         self._reject_all_calls = reject_all_calls
         self._scene_catalog_call_started = scene_catalog_call_started
         self._release_scene_catalog_call = release_scene_catalog_call
+        self._on_candidate_annotation = on_candidate_annotation
         self.scene_catalog_calls: list[SceneCatalogRequest] = []
         self.candidate_annotation_calls: list[CandidateAnnotationRequest] = []
 
@@ -76,6 +79,8 @@ class FakeStructuredVisionRuntime:
         if self._reject_all_calls:
             raise AssertionError("Candidate Annotationが再生成されました")
         self.candidate_annotation_calls.append(request)
+        if self._on_candidate_annotation is not None:
+            self._on_candidate_annotation()
         if request.moment.identifier == self._failure_moment_id:
             raise RuntimeError("fake raw response: chain of thought")
         annotation = self._annotations[request.moment.identifier]

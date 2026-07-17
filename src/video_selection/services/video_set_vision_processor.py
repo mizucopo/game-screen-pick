@@ -247,6 +247,7 @@ class VideoSetVisionProcessor:
     def _complete_progress_stage(self, reused: bool) -> None:
         if self._progress is None:
             return
+        self._progress.record_work_sample("reuse" if reused else "recompute")
         self._progress.cache_observed(
             cache_hit_count=1 if reused else 0,
             cache_miss_count=0 if reused else 1,

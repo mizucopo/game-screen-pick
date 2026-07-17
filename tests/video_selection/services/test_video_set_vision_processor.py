@@ -449,6 +449,69 @@ def test_warm_vision_progress_reports_reuse_without_external_work(
     )
 
 
+def test_vision_processor_records_annotation_duration_for_eta(
+    tmp_path: Path,
+) -> None:
+    """Vision processorのAnnotation完了時間がETA sampleへ記録されること。
+
+    Arrange:
+        - 同じAnnotation系列を異なるVideo Setで5回再計算するprocessorが用意される
+    Act:
+        - 6件目のAnnotation Stageで残り1件のETAが通知される
+    Assert:
+        - atomic completionまでの実時間によるETAが通知されること
+    """
+    # Arrange
+    observer = RecordingRunObserver()
+    current_time = [0.0]
+    progress = RunProgressTracker(observer, clock=lambda: current_time[0])
+    progress.start_run()
+    requests = _requests()
+    request = requests[0]
+    annotation = _annotations(requests)[0]
+
+    def advance_annotation_clock() -> None:
+        current_time[0] += 10.0
+
+    for run_index in range(5):
+        run_folder = tmp_path / f"run-{run_index}"
+        run_folder.mkdir()
+        video_set, configuration = _video_set_and_configuration(run_folder)
+        VideoSetVisionProcessor(
+            FakeStructuredVisionRuntime(
+                _catalog(),
+                (annotation,),
+                on_candidate_annotation=advance_annotation_clock,
+            ),
+            observer,
+            progress=progress,
+        ).process(
+            video_set=video_set,
+            representatives=request.frame_candidates,
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=(request,),
+            configuration=configuration,
+            resolved_models=FakeModelRuntime("vision-model").resolve_models(
+                configuration
+            ),
+        )
+    progress.start_stage(
+        ProcessingStage.ANNOTATE_CANDIDATE,
+        work_unit_kind="candidate",
+    )
+    current_time[0] += 30.0
+
+    # Act
+    progress.progress(
+        remaining_reuse_count=0,
+        remaining_recompute_count=1,
+    )
+
+    # Assert
+    event = observer.progress_events[-1]
+    assert (event.estimation_state, event.eta_seconds) == ("available", 10.0)
+
+
 def test_verbatim_context_cue_is_rejected_before_annotation_cache(
     tmp_path: Path,
 ) -> None:
