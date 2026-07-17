@@ -13,8 +13,8 @@ Video Set内の動画はVideo Order順に直列処理されます。各sourceは
    - Heartbeat Proxy、scene signalの時刻、exact timeline、scan metricをatomicに確定します。
 2. `extract-frame-candidates`
    - timeline順の単調windowでscene近傍のheartbeat品質を参照し、density windowごとに最大1件のCandidate Momentを発見します。
-   - Moment前後のnative frameだけを一回のrange scanで取り出します。
-   - 重なるMoment windowを一つのRefinement Window Groupとして順次処理し、選抜proxyを書いた時点でそのgroupのRGB frameを解放します。
+   - Moment前後のnative frameだけをrange scanで取り出します。独立rangeは入力順を保ったまま、logical CPU数に応じて最大4 workerで並列decodeします。
+   - 同時に保持するdecode結果はworker数以下へ制限します。重なるMoment windowを一つのRefinement Window Groupとして順次処理し、選抜proxyを書いた時点でそのgroupのRGB frameを解放します。
    - group内でmodel-free Neutral Image Analysis、無効frame除外、Moment内deduplication、多様性選抜を行います。
    - Frame Candidate Proxyと抽出metricをatomicに確定します。
 3. `collect-context`

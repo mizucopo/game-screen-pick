@@ -2,12 +2,14 @@
 
 import hashlib
 import json
+import os
 import re
 import resource
 import subprocess
 import time
 from collections import deque
 from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from fractions import Fraction
 from pathlib import Path
 from typing import NoReturn
@@ -71,6 +73,8 @@ _SHOWINFO_DURATION_PATTERN = re.compile(r"\bduration:\s*(-?\d+)")
 _SHOWINFO_SIZE_PATTERN = re.compile(r"\bs:(\d+)x(\d+)")
 _FRAME_RANGE_SEEK_PADDING = Fraction(1)
 _FRAME_RANGE_END_PADDING = Fraction(1, 10)
+_MAX_FRAME_RANGE_WORKERS = 4
+_LOGICAL_CPUS_PER_FRAME_RANGE_WORKER = 4
 
 
 class FfmpegMediaRuntime:
@@ -332,8 +336,8 @@ class FfmpegMediaRuntime:
                 msg = "Frame Refinementには開始PTSを持つvideo streamが必要です"
                 raise ValueError(msg)
             media_origin = _media_origin(probe)
-            for start, end in pts_ranges:
-                command = self._video_range_decode_command(
+            commands = tuple(
+                self._video_range_decode_command(
                     media_path,
                     stream,
                     start,
@@ -341,7 +345,34 @@ class FfmpegMediaRuntime:
                     media_origin,
                     max_dimension,
                 )
-                yield from iter_decoded_video_frames(command, stream_index)
+                for start, end in pts_ranges
+            )
+            worker_count = _frame_range_worker_count(len(commands))
+            with ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="frame-range-decode",
+            ) as executor:
+                command_iterator = iter(commands)
+                pending: deque[Future[tuple[DecodedVideoFrame, ...]]] = deque()
+                for _ in range(worker_count):
+                    pending.append(
+                        executor.submit(
+                            _decode_video_frame_range,
+                            next(command_iterator),
+                            stream_index,
+                        )
+                    )
+                while pending:
+                    yield from pending.popleft().result()
+                    command = next(command_iterator, None)
+                    if command is not None:
+                        pending.append(
+                            executor.submit(
+                                _decode_video_frame_range,
+                                command,
+                                stream_index,
+                            )
+                        )
         except (*_DECODE_ERRORS, StopIteration) as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
@@ -920,6 +951,21 @@ def _media_origin(probe: MediaProbe) -> Fraction:
         msg = "media streamに開始PTSがありません"
         raise ValueError(msg)
     return min(origins)
+
+
+def _frame_range_worker_count(range_count: int) -> int:
+    """CPU decodeを過剰subscribeしないbounded worker数を返す。"""
+    logical_cpus = os.cpu_count() or 1
+    cpu_workers = max(1, logical_cpus // _LOGICAL_CPUS_PER_FRAME_RANGE_WORKER)
+    return min(range_count, _MAX_FRAME_RANGE_WORKERS, cpu_workers)
+
+
+def _decode_video_frame_range(
+    command: list[str],
+    stream_index: int,
+) -> tuple[DecodedVideoFrame, ...]:
+    """一つのrangeをworker内で完結させ順序付きframeを返す。"""
+    return tuple(iter_decoded_video_frames(command, stream_index))
 
 
 def _bounded_scale_filter(max_dimension: int) -> str:
