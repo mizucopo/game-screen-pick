@@ -405,7 +405,10 @@ def test_candidate_domain_failure_stops_without_other_fallback() -> None:
         )
     assert calls == 2
     assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
-    assert captured.value.validation_code == "candidate_annotation_domain_invalid"
+    assert (
+        captured.value.validation_code
+        == "candidate_annotation_representative_frame_unknown"
+    )
     assert "foreign-frame" not in str(captured.value)
 
 
@@ -890,6 +893,72 @@ def test_candidate_without_context_is_explicitly_unavailable() -> None:
     assert diagnostics.context_cue_count == 0
 
 
+def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
+    """Cueなし応答の関係違反が明示契約と個別codeで修復されること。
+
+    Arrange:
+        - Cueなし入力と、初回だけrelevanceとspoiler関係が不正な応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 条件付き契約と個別validation codeを受けた再試行が成功すること
+    """
+    # Arrange
+    request = _annotation_request()
+    request_without_context = CandidateAnnotationRequest(
+        moment=request.moment,
+        frame_candidates=request.frame_candidates,
+        context_cues=(),
+        video_set_progress=request.video_set_progress,
+        selection_intent=request.selection_intent,
+        cue_selection_policy_version=request.cue_selection_policy_version,
+    )
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _annotation_payload()
+        response["context_relevance"] = "none" if len(payloads) == 1 else "unavailable"
+        response["supporting_context_cue_ids"] = []
+        response["spoiler_risk"] = "none"
+        response["spoiler_evidence"] = "画面由来の根拠" if len(payloads) == 1 else ""
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        request_without_context,
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.context_relevance == "unavailable"
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "candidate_annotation_relationship_invalid"
+    first_prompt = _first_message(payloads[0])["content"]
+    second_prompt = _first_message(payloads[1])["content"]
+    assert isinstance(first_prompt, str)
+    assert isinstance(second_prompt, str)
+    assert "context_cuesが空ならcontext_relevanceはunavailable" in first_prompt
+    assert "spoiler_riskがnoneならspoiler_evidenceは空文字列" in first_prompt
+    assert "candidate_annotation_relationship_invalid" in second_prompt
+
+
 def test_candidate_without_context_rejects_none_relevance() -> None:
     """Context Cueなしでnone relevanceが返された場合に拒否されること。
 
@@ -933,7 +1002,7 @@ def test_candidate_without_context_rejects_none_relevance() -> None:
             num_ctx=32768,
         )
     assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
-    assert captured.value.validation_code == "candidate_annotation_domain_invalid"
+    assert captured.value.validation_code == "candidate_annotation_context_invalid"
 
 
 def test_candidate_with_context_rejects_unavailable_relevance() -> None:
@@ -968,7 +1037,7 @@ def test_candidate_with_context_rejects_unavailable_relevance() -> None:
             num_ctx=32768,
         )
     assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
-    assert captured.value.validation_code == "candidate_annotation_domain_invalid"
+    assert captured.value.validation_code == "candidate_annotation_context_invalid"
 
 
 @pytest.mark.parametrize(
@@ -1009,7 +1078,7 @@ def test_candidate_rejects_verbatim_context_cue_in_free_text(
             num_ctx=32768,
         )
     assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
-    assert captured.value.validation_code == "candidate_annotation_domain_invalid"
+    assert captured.value.validation_code == "candidate_annotation_verbatim_context"
 
 
 @pytest.mark.parametrize(
@@ -1056,7 +1125,7 @@ def test_candidate_rejects_normalized_or_partial_context_cue_quote(
             num_ctx=32768,
         )
     assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
-    assert captured.value.validation_code == "candidate_annotation_domain_invalid"
+    assert captured.value.validation_code == "candidate_annotation_verbatim_context"
 
 
 @pytest.mark.parametrize(

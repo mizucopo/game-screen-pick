@@ -372,7 +372,14 @@ def _candidate_payload(
         "共有Scene Catalogを使ってCandidate Annotationを返してください。"
         "画像品質、confidence、final score、eligible、selected、逐語的画面文、"
         "推論過程は出力しません。Context Cue本文をannotation summary、"
-        "frame choice reason、spoiler evidenceへ引用しません。\n"
+        "frame choice reason、spoiler evidenceへ引用しません。"
+        "representative_frame_idはframe_candidate_idsから、scene_slugは"
+        "scene_catalogから選びます。context_cuesが空ならcontext_relevanceは"
+        "unavailable、supporting_context_cue_idsは空配列にします。context_cuesが"
+        "ある場合はcontext_relevanceをunavailableにせず、weakまたはstrongなら"
+        "supporting_context_cue_idsへ入力内のIDを1件以上入れ、noneなら空配列に"
+        "します。spoiler_riskがnoneならspoiler_evidenceは空文字列にし、それ以外"
+        "なら根拠を空でない自分の言葉で記述します。\n"
         + json.dumps(semantic_request, ensure_ascii=False, sort_keys=True)
     )
     return {
@@ -520,26 +527,28 @@ def _parse_candidate_annotation(
     typed_cue_ids = tuple(cast(list[str], cue_ids))
     typed_spoiler_risk = spoiler_risk
     available_cue_ids = tuple(item.identifier for item in request.context_cues)
-    if (
-        representative_frame_id not in frames
-        or scene_slug not in catalog.slugs
-        or not candidate_annotation_relationships_are_valid(
-            typed_context_relevance,
-            typed_cue_ids,
-            typed_spoiler_risk,
-            spoiler_evidence,
-        )
-        or not candidate_annotation_context_is_valid(
-            typed_context_relevance,
-            typed_cue_ids,
-            available_cue_ids,
-        )
-        or not candidate_annotation_free_text_is_safe(
-            (annotation_summary, frame_choice_reason, spoiler_evidence),
-            tuple(item.text for item in request.context_cues),
-        )
+    if representative_frame_id not in frames:
+        raise _domain_error("candidate_annotation_representative_frame_unknown")
+    if scene_slug not in catalog.slugs:
+        raise _domain_error("candidate_annotation_scene_slug_unknown")
+    if not candidate_annotation_relationships_are_valid(
+        typed_context_relevance,
+        typed_cue_ids,
+        typed_spoiler_risk,
+        spoiler_evidence,
     ):
-        raise _domain_error("candidate_annotation_domain_invalid")
+        raise _domain_error("candidate_annotation_relationship_invalid")
+    if not candidate_annotation_context_is_valid(
+        typed_context_relevance,
+        typed_cue_ids,
+        available_cue_ids,
+    ):
+        raise _domain_error("candidate_annotation_context_invalid")
+    if not candidate_annotation_free_text_is_safe(
+        (annotation_summary, frame_choice_reason, spoiler_evidence),
+        tuple(item.text for item in request.context_cues),
+    ):
+        raise _domain_error("candidate_annotation_verbatim_context")
     try:
         return CandidateAnnotation(
             candidate=frames[representative_frame_id],
