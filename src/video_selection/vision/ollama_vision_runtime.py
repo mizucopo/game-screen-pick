@@ -1,6 +1,7 @@
 """Ollama structured outputsを使うVisionRuntime adapter。"""
 
 import base64
+import copy
 import hashlib
 import json
 import re
@@ -386,7 +387,7 @@ def _candidate_payload(
         "model": model.configured_name,
         "stream": False,
         "think": False,
-        "format": CANDIDATE_ANNOTATION_SCHEMA,
+        "format": _candidate_schema(request, catalog),
         "options": {"temperature": 0, "num_ctx": num_ctx},
         "messages": [
             {
@@ -399,6 +400,31 @@ def _candidate_payload(
             }
         ],
     }
+
+
+def _candidate_schema(
+    request: CandidateAnnotationRequest,
+    catalog: SceneCatalog,
+) -> dict[str, object]:
+    """requestで選択可能なIDとContext relevanceへschemaを限定する。"""
+    schema = copy.deepcopy(CANDIDATE_ANNOTATION_SCHEMA)
+    properties = cast(dict[str, dict[str, object]], schema["properties"])
+    properties["representative_frame_id"]["enum"] = [
+        item.identifier for item in request.frame_candidates
+    ]
+    properties["scene_slug"]["enum"] = list(catalog.slugs)
+    cue_ids = [item.identifier for item in request.context_cues]
+    relevance = properties["context_relevance"]
+    supporting_cues = properties["supporting_context_cue_ids"]
+    if cue_ids:
+        relevance["enum"] = ["none", "weak", "strong"]
+        items = cast(dict[str, object], supporting_cues["items"])
+        items["enum"] = cue_ids
+        supporting_cues["maxItems"] = len(cue_ids)
+    else:
+        relevance["enum"] = ["unavailable"]
+        supporting_cues["maxItems"] = 0
+    return schema
 
 
 def _with_repair_code(

@@ -871,10 +871,22 @@ def test_candidate_without_context_is_explicitly_unavailable() -> None:
     response["supporting_context_cue_ids"] = []
     response["spoiler_risk"] = "none"
     response["spoiler_evidence"] = ""
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        return _response(response)
+
     runtime = OllamaVisionRuntime(
         "http://localhost:11434",
         timeout_seconds=60.0,
-        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        requester=requester,
         sleeper=lambda _seconds: None,
         model_state_resolver=_resolved_artifact,
     )
@@ -891,6 +903,68 @@ def test_candidate_without_context_is_explicitly_unavailable() -> None:
     assert annotation.context_relevance == "unavailable"
     assert annotation.supporting_context_cue_ids == ()
     assert diagnostics.context_cue_count == 0
+    schema = payloads[0]["format"]
+    assert isinstance(schema, dict)
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    assert properties["context_relevance"]["enum"] == ["unavailable"]
+    assert properties["supporting_context_cue_ids"]["maxItems"] == 0
+
+
+def test_candidate_schema_limits_references_to_request_members() -> None:
+    """Candidateの参照先がrequest内のIDへschemaで限定されること。
+
+    Arrange:
+        - frame、Catalog、Context Cueを持つCandidate requestが用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - frame、scene、Cue IDとCueありrelevanceが入力集合へ限定されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        return _response(_annotation_payload())
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    schema = payloads[0]["format"]
+    assert isinstance(schema, dict)
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    assert properties["representative_frame_id"]["enum"] == ["frame-a"]
+    assert properties["scene_slug"]["enum"] == [
+        "exploration",
+        "battle",
+        "other",
+    ]
+    assert properties["context_relevance"]["enum"] == ["none", "weak", "strong"]
+    cue_schema = properties["supporting_context_cue_ids"]
+    assert cue_schema["items"]["enum"] == ["cue-a"]
+    assert cue_schema["maxItems"] == 1
 
 
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
