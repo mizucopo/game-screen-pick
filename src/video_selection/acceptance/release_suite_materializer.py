@@ -93,8 +93,8 @@ class ReleaseSuiteMaterializer:
                 _ffmpeg_time(interval.start),
                 "-i",
                 str(source),
-                "-t",
-                _ffmpeg_time(interval.expected_duration),
+                "-to",
+                _ffmpeg_time(interval.end),
                 "-map",
                 "0",
                 "-c",
@@ -109,12 +109,14 @@ class ReleaseSuiteMaterializer:
         clip_probe = self._media_probe(output)
         source_start = _probe_fraction(source_probe, "start")
         clip_start = _probe_fraction(clip_probe, "start")
-        duration = _probe_fraction(clip_probe, "duration")
+        clip_end_timestamp = _probe_fraction(clip_probe, "duration")
         actual_start = clip_start - source_start
-        actual_end = actual_start + duration
+        actual_end = clip_end_timestamp - source_start
+        duration = actual_end - actual_start
         tolerance = profile.release_boundary_tolerance_seconds
         if (
-            abs(actual_start - interval.start) > tolerance
+            duration <= 0
+            or abs(actual_start - interval.start) > tolerance
             or abs(actual_end - interval.end) > tolerance
             or _probe_streams(source_probe) != _probe_streams(clip_probe)
         ):
@@ -187,6 +189,7 @@ def _run_command(command: list[str]) -> None:
 
 
 def _probe_media(path: Path) -> Mapping[str, object]:
+    """startとcopyts Matroskaのend timestampを含むmedia probeを返す。"""
     try:
         process = subprocess.run(
             [
