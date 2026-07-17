@@ -7,6 +7,7 @@ import json
 import re
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from fractions import Fraction
 from functools import partial
 from typing import Literal, TypeVar, cast
@@ -93,12 +94,6 @@ _PROMPT_REPAIR_REASONS = {
     VisionRuntimeFailureReason.SCHEMA_INVALID,
     VisionRuntimeFailureReason.DOMAIN_INVALID,
 }
-_REPAIR_INSTRUCTIONS = {
-    "candidate_annotation_verbatim_context": (
-        "自由文を言い換え、正規化後3〜5文字のCue全文または"
-        "6文字以上の連続一致を除去してください。"
-    ),
-}
 
 
 class OllamaVisionRuntime:
@@ -161,7 +156,7 @@ class OllamaVisionRuntime:
         """一つのCandidate Momentをstrict schemaと所属検証で評価する。"""
         _require_model_role(model, ModelRole.CANDIDATE_ANNOTATION, num_ctx)
         semantic_input = _candidate_semantic_input(request, catalog, model, num_ctx)
-        return self._infer(
+        (annotation, free_text_redacted), diagnostics = self._infer(
             stage_kind="candidate_annotation",
             request_fingerprint=_fingerprint(semantic_input),
             payload=_candidate_payload(request, catalog, model, num_ctx),
@@ -170,6 +165,12 @@ class OllamaVisionRuntime:
             image_count=len(request.frame_candidates),
             context_cue_count=len(request.context_cues),
         )
+        if free_text_redacted:
+            diagnostics = replace(
+                diagnostics,
+                validation_code="candidate_annotation_verbatim_context_redacted",
+            )
+        return annotation, diagnostics
 
     def _infer(
         self,
@@ -442,10 +443,7 @@ def _with_repair_code(
     copied = cast(dict[str, object], json.loads(json.dumps(payload)))
     messages = cast(list[dict[str, object]], copied["messages"])
     content = cast(str, messages[0]["content"])
-    instruction = _REPAIR_INSTRUCTIONS.get(validation_code)
     repair = f"前回の出力を修正してください。validation_code={validation_code}"
-    if instruction is not None:
-        repair = f"{repair} {instruction}"
     messages[0]["content"] = f"{content}\n{repair}"
     return copied
 
@@ -525,7 +523,7 @@ def _parse_candidate_annotation(
     value: Mapping[str, object],
     request: CandidateAnnotationRequest,
     catalog: SceneCatalog,
-) -> CandidateAnnotation:
+) -> tuple[CandidateAnnotation, bool]:
     if set(value) != _ANNOTATION_KEYS:
         raise _schema_error("candidate_annotation_schema_invalid")
     representative_frame_id = value.get("representative_frame_id")
@@ -579,28 +577,93 @@ def _parse_candidate_annotation(
         available_cue_ids,
     ):
         raise _domain_error("candidate_annotation_context_invalid")
-    if not candidate_annotation_free_text_is_safe(
-        (annotation_summary, frame_choice_reason, spoiler_evidence),
-        tuple(item.text for item in request.context_cues),
-    ):
-        raise _domain_error("candidate_annotation_verbatim_context")
-    try:
-        return CandidateAnnotation(
-            candidate=frames[representative_frame_id],
-            summary=annotation_summary,
-            candidate_moment_id=request.moment.identifier,
-            scene_slug=scene_slug,
-            blog_image_type=blog_image_type,
-            explanation_value=explanation_value,
+    annotation_summary, frame_choice_reason, spoiler_evidence, free_text_redacted = (
+        _privacy_safe_candidate_texts(
+            annotation_summary=annotation_summary,
             frame_choice_reason=frame_choice_reason,
-            screen_text_kind=screen_text_kind,
-            context_relevance=typed_context_relevance,
-            supporting_context_cue_ids=typed_cue_ids,
-            spoiler_risk=typed_spoiler_risk,
             spoiler_evidence=spoiler_evidence,
+            scene_slug=scene_slug,
+            blog_image_type=cast(str, blog_image_type),
+            spoiler_risk=cast(str, typed_spoiler_risk),
+            raw_context_texts=tuple(item.text for item in request.context_cues),
+            catalog=catalog,
+        )
+    )
+    try:
+        return (
+            CandidateAnnotation(
+                candidate=frames[representative_frame_id],
+                summary=annotation_summary,
+                candidate_moment_id=request.moment.identifier,
+                scene_slug=scene_slug,
+                blog_image_type=blog_image_type,
+                explanation_value=explanation_value,
+                frame_choice_reason=frame_choice_reason,
+                screen_text_kind=screen_text_kind,
+                context_relevance=typed_context_relevance,
+                supporting_context_cue_ids=typed_cue_ids,
+                spoiler_risk=typed_spoiler_risk,
+                spoiler_evidence=spoiler_evidence,
+            ),
+            free_text_redacted,
         )
     except ValueError:
         raise _domain_error("candidate_annotation_domain_invalid") from None
+
+
+def _privacy_safe_candidate_texts(
+    *,
+    annotation_summary: str,
+    frame_choice_reason: str,
+    spoiler_evidence: str,
+    scene_slug: str,
+    blog_image_type: str,
+    spoiler_risk: str,
+    raw_context_texts: tuple[str, ...],
+    catalog: SceneCatalog,
+) -> tuple[str, str, str, bool]:
+    """Cue逐語一致fieldだけを視覚・enum由来の安全な説明へ置換する。"""
+    scene = next(item for item in catalog.scenes if item.slug == scene_slug)
+    summary, summary_redacted = _privacy_safe_text(
+        annotation_summary,
+        f"{scene.display_name}に分類される{blog_image_type}の場面",
+        raw_context_texts,
+    )
+    reason, reason_redacted = _privacy_safe_text(
+        frame_choice_reason,
+        f"{scene.description}を視覚的に表すフレーム",
+        raw_context_texts,
+    )
+    evidence, evidence_redacted = _privacy_safe_text(
+        spoiler_evidence,
+        (
+            ""
+            if spoiler_risk == "none"
+            else f"{spoiler_risk}相当の進行情報を映像から判定"
+        ),
+        raw_context_texts,
+    )
+    return (
+        summary,
+        reason,
+        evidence,
+        summary_redacted or reason_redacted or evidence_redacted,
+    )
+
+
+def _privacy_safe_text(
+    generated: str,
+    fallback: str,
+    raw_context_texts: tuple[str, ...],
+) -> tuple[str, bool]:
+    """安全なら生成文を保ち、不安全なら必ず非逐語になるfallbackを返す。"""
+    if candidate_annotation_free_text_is_safe((generated,), raw_context_texts):
+        return generated, False
+    if fallback and candidate_annotation_free_text_is_safe(
+        (fallback,), raw_context_texts
+    ):
+        return fallback, True
+    return "［…］", True
 
 
 def _schema_error(code: str) -> VisionRuntimeError:

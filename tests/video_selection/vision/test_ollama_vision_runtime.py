@@ -10,6 +10,9 @@ from urllib.error import HTTPError
 
 import pytest
 
+from src.video_selection.models.candidate_annotation import (
+    candidate_annotation_free_text_is_safe,
+)
 from src.video_selection.models.candidate_annotation_request import (
     CandidateAnnotationRequest,
 )
@@ -1118,17 +1121,17 @@ def test_candidate_with_context_rejects_unavailable_relevance() -> None:
     "field_name",
     ("annotation_summary", "frame_choice_reason", "spoiler_evidence"),
 )
-def test_candidate_rejects_verbatim_context_cue_in_free_text(
+def test_candidate_redacts_verbatim_context_cue_in_free_text(
     field_name: str,
 ) -> None:
-    """Context Cue本文が自由文fieldへ逐語再出力された場合に拒否されること。
+    """Context Cue本文が自由文fieldへ逐語再出力された場合に安全化されること。
 
     Arrange:
         - Context Cue本文を一つの自由文fieldへそのまま返すresponseが用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - raw textを含む応答がdomain invalidとして拒否されること
+        - raw textを含むfieldだけが非逐語表現へ置換されること
     """
     # Arrange
     request = _annotation_request()
@@ -1155,22 +1158,32 @@ def test_candidate_rejects_verbatim_context_cue_in_free_text(
     )
 
     # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        request,
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
     # Assert
-    with pytest.raises(VisionRuntimeError) as captured:
-        runtime.annotate_candidate(
-            request,
-            _catalog(),
-            _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
-            num_ctx=32768,
-        )
-    assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
-    assert captured.value.validation_code == "candidate_annotation_verbatim_context"
+    free_text = (
+        annotation.summary,
+        annotation.frame_choice_reason or "",
+        annotation.spoiler_evidence,
+    )
+    assert candidate_annotation_free_text_is_safe(
+        free_text,
+        tuple(item.text for item in request.context_cues),
+    )
+    assert request.context_cues[0].text not in free_text
+    assert diagnostics.validation_code == (
+        "candidate_annotation_verbatim_context_redacted"
+    )
+    assert diagnostics.attempt_count == 1
+    assert len(payloads) == 1
     first_prompt = _first_message(payloads[0])["content"]
-    second_prompt = _first_message(payloads[1])["content"]
     assert isinstance(first_prompt, str)
-    assert isinstance(second_prompt, str)
     assert "正規化後3〜5文字のCueは全文" in first_prompt
-    assert "正規化後3〜5文字のCue全文または6文字以上の連続一致" in second_prompt
 
 
 @pytest.mark.parametrize(
@@ -1181,11 +1194,11 @@ def test_candidate_rejects_verbatim_context_cue_in_free_text(
         ("王都は陥落した。次の目的地は北の塔だ。", "次の目的地は北の塔だ"),
     ),
 )
-def test_candidate_rejects_normalized_or_partial_context_cue_quote(
+def test_candidate_redacts_normalized_or_partial_context_cue_quote(
     cue_text: str,
     leaked_text: str,
 ) -> None:
-    """Context Cueの引用符除去または一部引用が拒否されること。
+    """Context Cueの引用符除去または一部引用が安全化されること。
 
     Arrange:
         - 引用符付きまたは複数文のContext Cueが用意される
@@ -1193,7 +1206,7 @@ def test_candidate_rejects_normalized_or_partial_context_cue_quote(
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 十分長い逐語spanを含む応答がdomain invalidとして拒否されること
+        - 十分長い逐語spanを含むfieldが非逐語表現へ置換されること
     """
     # Arrange
     request = _annotation_request_with_context_text(cue_text)
@@ -1208,16 +1221,64 @@ def test_candidate_rejects_normalized_or_partial_context_cue_quote(
     )
 
     # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        request,
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
     # Assert
-    with pytest.raises(VisionRuntimeError) as captured:
-        runtime.annotate_candidate(
-            request,
-            _catalog(),
-            _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
-            num_ctx=32768,
-        )
-    assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
-    assert captured.value.validation_code == "candidate_annotation_verbatim_context"
+    assert annotation.summary != leaked_text
+    assert candidate_annotation_free_text_is_safe(
+        (annotation.summary,),
+        (cue_text,),
+    )
+    assert diagnostics.validation_code == (
+        "candidate_annotation_verbatim_context_redacted"
+    )
+
+
+def test_candidate_uses_symbol_omission_when_safe_fallback_matches_context() -> None:
+    """安全化fallbackもCueと一致する場合に記号だけへ置換されること。
+
+    Arrange:
+        - Scene由来fallbackと一致するContext Cueと逐語responseが用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - Cue文字を持たない省略記号がsummaryへ返されること
+    """
+    # Arrange
+    cue_text = "戦闘に分類されるeventの場面"
+    request = _annotation_request_with_context_text(cue_text)
+    response = _annotation_payload()
+    response["annotation_summary"] = cue_text
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        request,
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.summary == "［…］"
+    assert candidate_annotation_free_text_is_safe(
+        (annotation.summary,),
+        (cue_text,),
+    )
+    assert diagnostics.validation_code == (
+        "candidate_annotation_verbatim_context_redacted"
+    )
 
 
 @pytest.mark.parametrize(
