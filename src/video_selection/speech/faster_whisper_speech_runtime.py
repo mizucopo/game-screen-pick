@@ -164,7 +164,7 @@ def _convert_word(
     text = _string_attribute(word, "word")
     start_sample = _timestamp_sample(word, "start", sample_rate)
     end_sample = _timestamp_sample(word, "end", sample_rate)
-    if start_sample < 0 or end_sample <= start_sample or end_sample > sample_count:
+    if start_sample < 0 or end_sample < start_sample or end_sample > sample_count:
         msg = "faster-whisper word timestampがPCM chunk範囲外です"
         raise ValueError(msg)
     return SpeechWord(

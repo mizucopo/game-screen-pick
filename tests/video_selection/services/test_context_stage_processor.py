@@ -331,6 +331,7 @@ def test_audio_stt_is_used_when_text_subtitle_is_absent(tmp_path: Path) -> None:
                     SpeechSegment(
                         words=(
                             SpeechWord("冒険", 16000, 24000, 0.95),
+                            SpeechWord("者", 24000, 24000, 0.94),
                             SpeechWord("が", 24800, 27200, 0.93),
                             SpeechWord("始まる", 28800, 40000, 0.96),
                         ),
@@ -373,13 +374,13 @@ def test_audio_stt_is_used_when_text_subtitle_is_absent(tmp_path: Path) -> None:
     assert cue.start == Fraction(1)
     assert cue.end == Fraction(5, 2)
     assert cue.timestamp_basis == "asr_sample_grid_estimate"
-    assert cue.text == "冒険が始まる"
+    assert cue.text == "冒険者が始まる"
     assert cue.language == "ja"
     assert cue.reliability == "usable"
     assert cue.diagnostics is not None
     assert cue.diagnostics.average_log_probability == -0.5
     assert cue.diagnostics.no_speech_probability == 0.01
-    assert cue.diagnostics.word_probabilities == (0.95, 0.93, 0.96)
+    assert cue.diagnostics.word_probabilities == (0.95, 0.94, 0.93, 0.96)
     assert cue.provenance is not None
     assert cue.provenance.codec_name == "pcm_s16le"
     assert cue.provenance.source_pts == 160000
@@ -1736,11 +1737,21 @@ def test_missing_explicit_audio_stream_is_fatal(tmp_path: Path) -> None:
     assert raised.value.reason is ContextStageFailureReason.INVALID_AUDIO_STREAM
 
 
-def test_out_of_range_speech_timestamp_is_fatal(tmp_path: Path) -> None:
-    """PCM範囲外のASR timestampがclipされずtimestamp driftになること。
+@pytest.mark.parametrize(
+    "word",
+    [
+        SpeechWord("範囲外台詞", 8000, 20000, 0.9),
+        SpeechWord("時刻なし台詞", 8000, 8000, 0.9),
+    ],
+)
+def test_invalid_speech_timestamp_is_fatal(
+    tmp_path: Path,
+    word: SpeechWord,
+) -> None:
+    """Cue区間を作れないASR timestampがtimestamp driftになること。
 
     Arrange:
-        - 1秒PCMに対して終端が1.25秒のwordを返すSpeechRuntimeが用意される
+        - 1秒PCMに対して範囲外または時間幅0のwordが用意される
     Act:
         - Context Collection Stageが実行される
     Assert:
@@ -1782,7 +1793,7 @@ def test_out_of_range_speech_timestamp_is_fatal(tmp_path: Path) -> None:
                 vad_speech_detected=True,
                 segments=(
                     SpeechSegment(
-                        words=(SpeechWord("範囲外台詞", 8000, 20000, 0.9),),
+                        words=(word,),
                         average_log_probability=-0.2,
                     ),
                 ),
