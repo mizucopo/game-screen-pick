@@ -677,6 +677,50 @@ def test_extract_original_video_frame_preserves_odd_source_dimensions(
     assert len(frame.pixels) == 65 * 49 * 3
 
 
+def test_extract_original_video_frame_seek_preserves_late_nonzero_frame(
+    tmp_path: Path,
+) -> None:
+    """入力seek後も遅い非ゼロPTSの元寸法frameが完全一致すること。
+
+    Arrange:
+        - 5秒開始のVideo Sourceと先頭decode済みの8秒frameが用意される
+    Act:
+        - 8秒の元寸法frameがexact PTS指定で再抽出される
+    Assert:
+        - PTS、time base、寸法、RGB pixelが先頭decode結果と一致すること
+    """
+    # Arrange
+    video_path = generate_nonzero_start_video(tmp_path / "nonzero-original.mkv")
+    runtime = FfmpegMediaRuntime()
+    expected = next(
+        frame
+        for frame in runtime.scan_video_frames(video_path, 0, 64)
+        if Fraction(frame.pts) * frame.time_base == Fraction(8)
+    )
+
+    # Act
+    actual = runtime.extract_original_video_frame(
+        video_path,
+        stream_index=0,
+        pts=expected.pts,
+    )
+
+    # Assert
+    assert (
+        actual.pts,
+        actual.time_base,
+        actual.width,
+        actual.height,
+        actual.pixels,
+    ) == (
+        expected.pts,
+        expected.time_base,
+        expected.width,
+        expected.height,
+        expected.pixels,
+    )
+
+
 def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
     tmp_path: Path,
 ) -> None:

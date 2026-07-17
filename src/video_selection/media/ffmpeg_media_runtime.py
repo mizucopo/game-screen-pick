@@ -388,16 +388,31 @@ class FfmpegMediaRuntime:
         pts: int,
         frame_filter: str,
     ) -> DecodedVideoFrame:
-        """指定filterでexact PTSのRGB24 frameを一つだけ返す。"""
-        command = self._video_decode_command(
-            media_path,
-            stream_index,
-            frame_filter,
-            frame_limit=1,
-        )
+        """入力seek後に指定filterでexact PTSのRGB24 frameを一つだけ返す。"""
         try:
+            probe = self.probe(media_path)
+            stream = next(
+                item
+                for item in probe.streams
+                if item.index == stream_index and item.kind == "video"
+            )
+            if stream.time_base is None or stream.start_pts is None:
+                msg = "Exact Frame Extractionには開始PTSが必要です"
+                raise ValueError(msg)
+            input_options = self._exact_frame_input_options(
+                stream,
+                pts,
+                _media_origin(probe),
+            )
+            command = self._video_decode_command(
+                media_path,
+                stream_index,
+                frame_filter,
+                frame_limit=1,
+                input_options=input_options,
+            )
             frames = tuple(iter_decoded_video_frames(command, stream_index))
-        except _DECODE_ERRORS as error:
+        except (*_DECODE_ERRORS, StopIteration) as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
                 "指定されたvideo frameを抽出できませんでした",
@@ -408,6 +423,30 @@ class FfmpegMediaRuntime:
                 "指定されたsource PTSのvideo frameがありません",
             )
         return frames[0]
+
+    @staticmethod
+    def _exact_frame_input_options(
+        stream: MediaStream,
+        pts: int,
+        media_origin: Fraction,
+    ) -> tuple[str, ...]:
+        """Exact PTSの直前からdecodeするinput seek範囲を返す。"""
+        if stream.time_base is None:
+            msg = "Exact Frame Extraction streamのtime baseがありません"
+            raise ValueError(msg)
+        relative_target = pts * stream.time_base - media_origin
+        if relative_target < 0:
+            msg = "Exact Frame Extraction PTSがmedia originより前です"
+            raise ValueError(msg)
+        seek_padding = min(_FRAME_RANGE_SEEK_PADDING, relative_target)
+        seek_seconds = relative_target - seek_padding
+        read_seconds = seek_padding + _FRAME_RANGE_END_PADDING
+        return (
+            "-ss",
+            _ffmpeg_number(float(seek_seconds)),
+            "-t",
+            _ffmpeg_number(float(read_seconds)),
+        )
 
     def write_mjpeg_proxy(
         self,
