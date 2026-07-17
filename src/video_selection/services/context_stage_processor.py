@@ -32,7 +32,9 @@ from .build_context_stage_semantic_input import (
 )
 from .collect_speech_context import collect_speech_context
 from .context_stage_artifacts import restore_context_stage, serialize_context_stage
+from .external_work_monitor import ExternalWorkMonitor
 from .processing_stage_runner import ProcessingStageRunner
+from .run_progress_tracker import RunProgressTracker
 from .select_context_audio_stream import select_context_audio_stream
 from .select_context_subtitle_stream import select_context_subtitle_stream
 from .validate_video_set_snapshot import validate_video_source_snapshot
@@ -46,10 +48,16 @@ class ContextStageProcessor:
         media_runtime: VideoStageMediaRuntime,
         speech_runtime: SpeechRuntime,
         observer: RunObserver,
+        *,
+        progress: RunProgressTracker | None = None,
     ) -> None:
         self._media_runtime = media_runtime
         self._speech_runtime = speech_runtime
         self._observer = observer
+        self._progress = progress
+        self._external_work_monitor = (
+            ExternalWorkMonitor(progress) if progress is not None else None
+        )
 
     def process(
         self,
@@ -95,6 +103,11 @@ class ContextStageProcessor:
             subject_fingerprint=source.fingerprint,
             before_stage=lambda: validate_video_source_snapshot(video_set, source),
             stage_order=(ProcessingStage.COLLECT_CONTEXT,),
+            progress=self._progress,
+            video_order=video_set.sources.index(source) + 1,
+            video_count=len(video_set.sources),
+            video_relative_path=source.relative_path,
+            work_unit_kind="video",
         )
         cached = runner.reuse(
             ProcessingStage.COLLECT_CONTEXT,
@@ -190,6 +203,7 @@ class ContextStageProcessor:
             scan=scan,
             stream=audio_stream,
             configuration=configuration,
+            external_work_monitor=self._external_work_monitor,
         )
         cues.extend(speech_result.cues)
         outcomes.extend(speech_result.outcomes)

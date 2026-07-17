@@ -36,6 +36,7 @@ from .refine_candidate_moments import (
     combine_refined_candidate_groups,
     iter_refined_candidate_groups,
 )
+from .run_progress_tracker import RunProgressTracker
 from .select_primary_video_stream import select_primary_video_stream
 from .validate_video_set_snapshot import (
     validate_video_set_snapshot,
@@ -67,14 +68,18 @@ class VideoStageProcessor:
         media_runtime: VideoStageMediaRuntime,
         speech_runtime: SpeechRuntime,
         observer: RunObserver,
+        *,
+        progress: RunProgressTracker | None = None,
     ) -> None:
         self._media_runtime = media_runtime
         self._context_processor = ContextStageProcessor(
             media_runtime,
             speech_runtime,
             observer,
+            progress=progress,
         )
         self._observer = observer
+        self._progress = progress
 
     def process(
         self,
@@ -85,11 +90,12 @@ class VideoStageProcessor:
         validate_video_set_snapshot(video_set)
         runtime_identity = self._media_runtime.preflight()
         results: list[VideoStageResult] = []
-        for source in video_set.sources:
+        for video_order, source in enumerate(video_set.sources, start=1):
             results.append(
                 self._process_source(
                     video_set,
                     source,
+                    video_order,
                     configuration,
                     runtime_identity,
                 )
@@ -100,6 +106,7 @@ class VideoStageProcessor:
         self,
         video_set: VideoSet,
         source: VideoSource,
+        video_order: int,
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
     ) -> VideoStageResult:
@@ -114,6 +121,11 @@ class VideoStageProcessor:
             subject_fingerprint=source.fingerprint,
             before_stage=lambda: validate_video_source_snapshot(video_set, source),
             stage_order=VIDEO_STAGE_ORDER,
+            progress=self._progress,
+            video_order=video_order,
+            video_count=len(video_set.sources),
+            video_relative_path=source.relative_path,
+            work_unit_kind="video",
         )
         scan_input = _scan_semantic_input(
             source,

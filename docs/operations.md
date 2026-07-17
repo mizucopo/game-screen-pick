@@ -72,7 +72,7 @@ processing cacheはcontent-addressedな次のnamespaceを使います。
 通常実行は常に再開可能です。`--resume`はありません。
 
 - 完了manifestと成果物がatomicに確定したCompleted Stageだけを再利用します。
-- 中断・失敗したStageの部分成果物は再利用せず、そのStageから再実行します。
+- 中断・失敗したStageの部分成果物は再利用しません。認識可能なtemporary StageはInput Lock取得後に削除し、そのStageから再実行します。Completed Stageと未知のdirectoryは削除しません。
 - 同じVideoのVideo StageはpathやVideo Orderが変わっても再利用できます。
 - Videoの追加・削除・並べ替えでは再利用可能なVideo Stageを残し、Video Set Stageだけを新しいVideo Set Fingerprintで再実行します。
 - model identity、prompt、schema、policy、Stage固有設定が変わった場合は影響するStageだけを再計算します。
@@ -81,18 +81,22 @@ processing cacheはcontent-addressedな次のnamespaceを使います。
 
 ## 進捗表示
 
-全体の根拠のないpercentは表示せず、現在のProcessing Stageに対する観測可能な進捗を表示します。
+全体の根拠のないpercentは表示せず、現在のProcessing Stageに対する観測可能な進捗をrenderer非依存の`ProgressEvent`として発行します。1回のrunではProcessing Stageを直列に扱い、`run_started`、Stageの開始・進行・完了、最後の`run_completed`、`run_failed`、`run_interrupted`の順序を守ります。
 
-- `Stage i/N`とStage名
+- atomicなProcessing Stage候補ごとのStage番号とStage名。総Stage数が判明した場合だけ`Stage i/N`とする
 - Video Order、総動画数、正規化済み相対path
 - 処理済み件数と現在判明している総件数
-- cache hit、miss、recompute
+- cache lookupのhit/missと、実処理のreuse/recompute
 - Stage経過時間
 - 信頼できるsampleがある場合だけStage ETA
 - model downloadのartifact、bytes、percent
 - Stage開始、完了、warning、再試行、cache再利用などのevent
 
-TTYでは更新型表示、redirect/CIでは一行event logにします。進捗、warning、errorはstderrへ出し、v1ではstdoutにmachine-readable reportを流しません。60秒以上沈黙し得る外部処理でもStage eventまたはheartbeatを出します。
+Stage ETAは同じrun内の`Stage種別 × work-unit種別 × reuse/recompute`が同じsampleだけから求めます。残りのreuse/recompute件数が別々に判明し、各系列に5件以上のsampleがあり、Stage開始から30秒以上経過した場合だけ表示します。新しいsampleで予測が50%を超えて変動した系列は破棄し、5件の新しいsampleが集まるまで`estimating`へ戻します。runをまたぐ実績や観測済みcache hit率から今後のcache結果を推測しません。
+
+TTYでは更新型表示、redirect/CIでは一行event logにします。`stderr.isatty()`で自動選択し、v1では強制切替optionを設けません。relative pathの制御文字をescapeし、line rendererの1 event 1行を維持します。進捗、warning、errorはstderrへ出し、stdoutにmachine-readable reportを流しません。60秒以上沈黙し得る外部処理は開始eventを直ちに発行し、その後30秒ごとにelapsedだけのheartbeatを出します。
+
+同じCLI process内では共有GPU coordinatorがOllamaとSTTのGPU-heavy処理を直列化します。別々に起動したCLI process間のGPU排他は行いません。
 
 ## 終了codeとエラー表示
 
@@ -103,7 +107,9 @@ TTYでは更新型表示、redirect/CIでは一行event logにします。進捗
 | 2 | CLIまたはTOMLのusage/validation error |
 | 130 | Ctrl+C |
 
-エラーはstable reason code、秘密を含まない観測値、修復方法、再実行時に再利用できるcacheを示します。通常はstack traceを表示しません。`--debug`時だけ安全化済みstack traceを加えますが、credential、環境変数一覧、絶対path、prompt本文、raw model response、Context Cue本文は出しません。
+最外周のrun controllerがStageの型付き例外を`RunFailure`へ正規化し、stable reason code、allowlistで許可した安全な観測値、修復方法、再実行時に再利用できるcacheを示します。未知の例外は`internal_error`とし、元の例外は内部causeとしてだけ保持します。通常はstack traceを表示しません。`--debug`時だけ安全化済みstack traceを加えますが、credential、環境変数一覧、絶対path、prompt本文、raw model response、Context Cue本文は出しません。
+
+Ctrl+Cはfailureではなく`run_interrupted`、reason `user_interrupt`、exit 130として扱い、処理中のpartial Stageを再利用しません。
 
 fatal errorではOutput Folderを公開しません。Selection Shortfallと、検証済みlocal modelを使えたmodel更新不能はexit 0の`completed_with_warnings`として理由をatomicに公開します。後者は`model_update_unavailable`と対象roleを`report.json`へ記録し、model storeのpathやtokenは含めません。
 

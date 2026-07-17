@@ -12,11 +12,13 @@ from src.video_selection.models.candidate_moment import CandidateMoment
 from src.video_selection.models.context_cue import ContextCue
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.frame_candidate import FrameCandidate
+from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.scene_catalog import SceneCatalog
 from src.video_selection.models.scene_catalog_entry import SceneCatalogEntry
 from src.video_selection.models.stage_fingerprint import StageFingerprint
 from src.video_selection.models.video_set import VideoSet
 from src.video_selection.services.discover_video_set import discover_video_set
+from src.video_selection.services.run_progress_tracker import RunProgressTracker
 from src.video_selection.services.video_set_vision_processor import (
     VideoSetVisionProcessor,
 )
@@ -185,36 +187,98 @@ def test_same_catalog_fingerprint_runs_inference_once_under_lock(
     assert len(runtime.scene_catalog_calls) == 1
 
 
-def test_completed_annotations_survive_a_later_annotation_failure(
+@pytest.mark.parametrize("failure_position", [0, 1, 2])
+def test_completed_annotations_survive_first_middle_last_failure(
     tmp_path: Path,
+    failure_position: int,
 ) -> None:
-    """後続Annotation失敗後も先に完了したMomentが再利用されること。
+    """先頭・途中・末尾Annotation失敗後も先行Momentが再利用されること。
 
     Arrange:
-        - 2件目だけ失敗するfake VisionRuntimeが用意される
+        - 3件のうち指定位置だけ失敗するfake VisionRuntimeが用意される
     Act:
         - 失敗runの後に同じ入力が再実行される
     Assert:
-        - Scene Catalogと1件目は再実行されず2件目だけ生成されること
-        - 最初の失敗runで全Annotation完了結果が返されないこと
+        - Scene Catalogと先行Annotationは再実行されず未完了分だけ生成されること
     """
     # Arrange
     video_set, configuration = _video_set_and_configuration(tmp_path)
-    requests = _requests()
+    requests = _three_requests()
     catalog = _catalog()
-    annotations = _annotations(requests)
+    annotations = _three_annotations(requests)
     first_runtime = FakeStructuredVisionRuntime(
         catalog,
         annotations,
-        failure_moment_id=requests[1].moment.identifier,
+        failure_moment_id=requests[failure_position].moment.identifier,
+    )
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+
+    # Act / Assert
+    with pytest.raises(RuntimeError, match="fake raw response"):
+        VideoSetVisionProcessor(
+            first_runtime,
+            RecordingRunObserver(),
+        ).process(
+            video_set=video_set,
+            representatives=tuple(request.frame_candidates[0] for request in requests),
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=requests,
+            configuration=configuration,
+            resolved_models=models,
+        )
+
+    # Act
+    retry_runtime = FakeStructuredVisionRuntime(catalog, annotations)
+    result = VideoSetVisionProcessor(
+        retry_runtime,
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=tuple(request.frame_candidates[0] for request in requests),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=requests,
+        configuration=configuration,
+        resolved_models=models,
+    )
+
+    # Assert
+    assert retry_runtime.scene_catalog_calls == []
+    assert [
+        item.moment.identifier for item in retry_runtime.candidate_annotation_calls
+    ] == [request.moment.identifier for request in requests[failure_position:]]
+    assert result.annotations == annotations
+    assert [item.cache_hit for item in result.annotation_diagnostics] == [
+        *([True] * failure_position),
+        *([False] * (len(requests) - failure_position)),
+    ]
+
+
+def test_failed_scene_catalog_is_recomputed_on_rerun(tmp_path: Path) -> None:
+    """失敗したScene Catalogが未完了として再生成されること。
+
+    Arrange:
+        - Scene Catalogだけが失敗するfake Vision Runtimeが用意される
+    Act:
+        - 失敗runの後に同じ入力が再実行される
+    Assert:
+        - 失敗Catalogは再生成され、その後のAnnotationがすべて確定されること
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    requests = _three_requests()
+    catalog = _catalog()
+    annotations = _three_annotations(requests)
+    failing_runtime = FakeStructuredVisionRuntime(
+        catalog,
+        annotations,
+        fail_scene_catalog=True,
     )
     models = FakeModelRuntime("vision-model").resolve_models(configuration)
 
     # Act
-    # Assert
-    with pytest.raises(RuntimeError, match="fake raw response"):
+    with pytest.raises(RuntimeError, match="fake raw catalog response"):
         VideoSetVisionProcessor(
-            first_runtime,
+            failing_runtime,
             RecordingRunObserver(),
         ).process(
             video_set=video_set,
@@ -236,12 +300,153 @@ def test_completed_annotations_survive_a_later_annotation_failure(
         configuration=configuration,
         resolved_models=models,
     )
-    assert retry_runtime.scene_catalog_calls == []
+
+    # Assert
+    assert len(failing_runtime.scene_catalog_calls) == 1
+    assert failing_runtime.candidate_annotation_calls == []
+    assert len(retry_runtime.scene_catalog_calls) == 1
     assert [
         item.moment.identifier for item in retry_runtime.candidate_annotation_calls
-    ] == [requests[1].moment.identifier]
+    ] == [request.moment.identifier for request in requests]
     assert result.annotations == annotations
-    assert [item.cache_hit for item in result.annotation_diagnostics] == [True, False]
+
+
+def test_vision_stage_progress_reports_catalog_and_each_annotation(
+    tmp_path: Path,
+) -> None:
+    """Scene Catalogと各Candidate Annotationが個別Stageとして通知されること。
+
+    Arrange:
+        - 2件のAnnotation requestとrun開始済みProgress Trackerが用意される
+    Act:
+        - cold Video Set Vision processingが実行される
+    Assert:
+        - Catalogと各Annotationが単調なStage番号とrecompute結果で通知されること
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    requests = _requests()
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer, clock=lambda: 10.0)
+    progress.start_run()
+    processor = VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(_catalog(), _annotations(requests)),
+        observer,
+        progress=progress,
+    )
+
+    # Act
+    processor.process(
+        video_set=video_set,
+        representatives=tuple(request.frame_candidates[0] for request in requests),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=requests,
+        configuration=configuration,
+        resolved_models=FakeModelRuntime("vision-model").resolve_models(configuration),
+    )
+
+    # Assert
+    assert tuple(
+        (event.stage, event.stage_index, event.work_unit_kind)
+        for event in observer.progress_events
+        if event.kind == "stage_started"
+    ) == (
+        (ProcessingStage.BUILD_SCENE_CATALOG, 1, "scene_catalog"),
+        (ProcessingStage.ANNOTATE_CANDIDATE, 2, "candidate"),
+        (ProcessingStage.ANNOTATE_CANDIDATE, 3, "candidate"),
+    )
+    assert tuple(
+        (
+            event.cache_miss_count,
+            event.recompute_count,
+            event.cache_hit_count,
+            event.reuse_count,
+        )
+        for event in observer.progress_events
+        if event.kind == "cache"
+    ) == ((1, 1, 0, 0), (1, 1, 0, 0), (1, 1, 0, 0))
+    assert tuple(
+        event.reason_code
+        for event in observer.progress_events
+        if event.kind == "external_work_started"
+    ) == (
+        "scene_catalog_inference_started",
+        "candidate_annotation_inference_started",
+        "candidate_annotation_inference_started",
+    )
+
+
+def test_warm_vision_progress_reports_reuse_without_external_work(
+    tmp_path: Path,
+) -> None:
+    """warm Vision Stageがcache reuseだけを通知し外部処理を開始しないこと。
+
+    Arrange:
+        - Catalogと2件のAnnotationがCompleted Stageとして確定済みである
+    Act:
+        - 同じ入力がProgress Tracker付きで再実行される
+    Assert:
+        - 各Stageがhit/reuseとして通知され外部処理eventがないこと
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    requests = _requests()
+    catalog = _catalog()
+    annotations = _annotations(requests)
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+    VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(catalog, annotations),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=tuple(request.frame_candidates[0] for request in requests),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=requests,
+        configuration=configuration,
+        resolved_models=models,
+    )
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer, clock=lambda: 10.0)
+    progress.start_run()
+
+    # Act
+    VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(
+            catalog,
+            annotations,
+            reject_all_calls=True,
+        ),
+        observer,
+        progress=progress,
+    ).process(
+        video_set=video_set,
+        representatives=tuple(request.frame_candidates[0] for request in requests),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=requests,
+        configuration=configuration,
+        resolved_models=models,
+    )
+
+    # Assert
+    cache_events = tuple(
+        (
+            event.cache_hit_count,
+            event.cache_miss_count,
+            event.reuse_count,
+            event.recompute_count,
+            event.reason_code,
+        )
+        for event in observer.progress_events
+        if event.kind == "cache"
+    )
+    assert cache_events == (
+        (1, 0, 1, 0, "cache_reused"),
+        (1, 0, 1, 0, "cache_reused"),
+        (1, 0, 1, 0, "cache_reused"),
+    )
+    assert not any(
+        event.kind == "external_work_started" for event in observer.progress_events
+    )
 
 
 def test_verbatim_context_cue_is_rejected_before_annotation_cache(
@@ -387,6 +592,20 @@ def _requests() -> tuple[CandidateAnnotationRequest, ...]:
     )
 
 
+def _three_requests() -> tuple[CandidateAnnotationRequest, ...]:
+    first, second = _requests()
+    third_frame = FrameCandidate("frame-c", b"image-c")
+    third = CandidateAnnotationRequest(
+        moment=_moment("c", third_frame.identifier, Fraction(30)),
+        frame_candidates=(third_frame,),
+        context_cues=(),
+        video_set_progress=Fraction(7, 8),
+        selection_intent="ブログ本文を説明できる画像を選ぶ",
+        cue_selection_policy_version="nearby-context-v1",
+    )
+    return (first, second, third)
+
+
 def _moment(seed: str, frame_id: str, time: Fraction) -> CandidateMoment:
     return CandidateMoment(
         identifier="mom_" + seed * 64,
@@ -440,3 +659,22 @@ def _annotations(
             spoiler_evidence="主要人物の正体が画面で明示される",
         ),
     )
+
+
+def _three_annotations(
+    requests: tuple[CandidateAnnotationRequest, ...],
+) -> tuple[CandidateAnnotation, ...]:
+    first, second = _annotations(requests[:2])
+    third = CandidateAnnotation(
+        candidate=requests[2].frame_candidates[0],
+        summary="終盤の探索場面",
+        candidate_moment_id=requests[2].moment.identifier,
+        scene_slug="exploration",
+        blog_image_type="normal_gameplay",
+        explanation_value="medium",
+        frame_choice_reason="探索対象が明確に写る",
+        screen_text_kind="hud",
+        context_relevance="unavailable",
+        spoiler_risk="none",
+    )
+    return (first, second, third)

@@ -16,6 +16,7 @@ from .completed_stage_writer import (
     CompletedStageWriter,
     FaultInjector,
 )
+from .run_progress_tracker import RunProgressTracker
 
 StageResult = TypeVar("StageResult")
 
@@ -33,6 +34,12 @@ class ProcessingStageRunner:
         before_stage: Callable[[], None] | None = None,
         fault_injector: FaultInjector | None = None,
         stage_order: tuple[ProcessingStage, ...] = VIDEO_SET_STAGE_ORDER,
+        progress: RunProgressTracker | None = None,
+        total_stage_count: int | None = None,
+        video_order: int | None = None,
+        video_count: int | None = None,
+        video_relative_path: str | None = None,
+        work_unit_kind: str = "processing_stage",
     ) -> None:
         self._writer = CompletedStageWriter(
             cache_folder,
@@ -44,6 +51,14 @@ class ProcessingStageRunner:
         self._before_stage = before_stage or _skip_before_stage
         self._stage_order = stage_order
         self._completed_stages: list[CompletedStage] = []
+        self._progress = progress
+        self._total_stage_count = total_stage_count
+        self._video_order = video_order
+        self._video_count = video_count
+        self._video_relative_path = video_relative_path
+        self._work_unit_kind = work_unit_kind
+        self._progress_stage: ProcessingStage | None = None
+        self._cache_miss_observed = False
         if not stage_order or len(stage_order) != len(set(stage_order)):
             msg = "stage_orderには重複のない1件以上のStageが必要です"
             raise ValueError(msg)
@@ -74,7 +89,7 @@ class ProcessingStageRunner:
             semantic_input,
             artifact,
         )
-        self._record_completion(completed_stage)
+        self._record_completion(completed_stage, reused=False)
         return completed_stage
 
     def reuse(
@@ -98,9 +113,13 @@ class ProcessingStageRunner:
             semantic_input,
         )
         if artifact is None:
+            self._record_cache_miss()
             return None
         restored = restore(artifact)
-        self._record_completion(CompletedStage(stage=stage, fingerprint=fingerprint))
+        self._record_completion(
+            CompletedStage(stage=stage, fingerprint=fingerprint),
+            reused=True,
+        )
         return restored
 
     def complete_artifacts(
@@ -133,7 +152,7 @@ class ProcessingStageRunner:
         if bundle is None:
             msg = "確定直後のCompleted Stage artifactを検証できませんでした"
             raise RuntimeError(msg)
-        self._record_completion(completed_stage)
+        self._record_completion(completed_stage, reused=False)
         return bundle
 
     def reuse_bundle(
@@ -156,8 +175,12 @@ class ProcessingStageRunner:
             semantic_input,
         )
         if bundle is None:
+            self._record_cache_miss()
             return None
-        self._record_completion(CompletedStage(stage=stage, fingerprint=fingerprint))
+        self._record_completion(
+            CompletedStage(stage=stage, fingerprint=fingerprint),
+            reused=True,
+        )
         return bundle
 
     def _prepare_stage(
@@ -178,11 +201,13 @@ class ProcessingStageRunner:
             raise ValueError(msg)
         self._before_stage()
         upstream_fingerprints = self._select_upstream_fingerprints(upstream_stages)
-        return upstream_fingerprints, build_stage_fingerprint(
+        fingerprint = build_stage_fingerprint(
             stage,
             upstream_fingerprints,
             semantic_input,
         )
+        self._start_progress_stage(stage)
+        return upstream_fingerprints, fingerprint
 
     def _select_upstream_fingerprints(
         self,
@@ -210,10 +235,56 @@ class ProcessingStageRunner:
             if item.stage in selected
         )
 
-    def _record_completion(self, completed_stage: CompletedStage) -> None:
+    def _record_completion(
+        self,
+        completed_stage: CompletedStage,
+        *,
+        reused: bool,
+    ) -> None:
         """Stage完了をrun stateへ追加して通知する。"""
+        if self._progress is not None:
+            self._progress.cache_observed(
+                cache_hit_count=1 if reused else 0,
+                cache_miss_count=0 if reused else 1,
+                reuse_count=1 if reused else 0,
+                recompute_count=0 if reused else 1,
+                reason_code="cache_reused" if reused else "stage_recomputed",
+            )
+            self._progress.complete_stage()
+            self._progress_stage = None
+            self._cache_miss_observed = False
         self._completed_stages.append(completed_stage)
         self._observer.stage_completed(completed_stage)
+
+    def _start_progress_stage(self, stage: ProcessingStage) -> None:
+        if self._progress is None:
+            return
+        if self._progress_stage is stage:
+            return
+        if self._progress_stage is not None:
+            msg = "別のProcessing Stageがprogress上でactiveです"
+            raise RuntimeError(msg)
+        self._progress.start_stage(
+            stage,
+            stage_count=self._total_stage_count,
+            video_order=self._video_order,
+            video_count=self._video_count,
+            video_relative_path=self._video_relative_path,
+            work_unit_kind=self._work_unit_kind,
+        )
+        self._progress_stage = stage
+
+    def _record_cache_miss(self) -> None:
+        if self._progress is None or self._cache_miss_observed:
+            return
+        self._progress.cache_observed(
+            cache_hit_count=0,
+            cache_miss_count=1,
+            reuse_count=0,
+            recompute_count=0,
+            reason_code="cache_miss",
+        )
+        self._cache_miss_observed = True
 
 
 def _skip_before_stage() -> None:

@@ -39,6 +39,8 @@ from ..vision.vision_contract import (
 )
 from .build_stage_fingerprint import build_stage_fingerprint
 from .completed_stage_writer import CompletedStageWriter
+from .external_work_monitor import ExternalWorkMonitor
+from .run_progress_tracker import RunProgressTracker
 from .snapshot_frame_candidates import snapshot_frame_candidates
 from .validate_video_set_snapshot import validate_video_set_snapshot
 from .vision_stage_artifacts import (
@@ -54,9 +56,19 @@ VisionStageValue = TypeVar("VisionStageValue")
 class VideoSetVisionProcessor:
     """VisionRuntimeとMoment単位atomic cacheを一つの深いmoduleに保つ。"""
 
-    def __init__(self, runtime: VisionRuntime, observer: RunObserver) -> None:
+    def __init__(
+        self,
+        runtime: VisionRuntime,
+        observer: RunObserver,
+        *,
+        progress: RunProgressTracker | None = None,
+    ) -> None:
         self._runtime = runtime
         self._observer = observer
+        self._progress = progress
+        self._external_work = (
+            ExternalWorkMonitor(progress) if progress is not None else None
+        )
 
     def process(
         self,
@@ -136,21 +148,29 @@ class VideoSetVisionProcessor:
             upstream_fingerprints,
             semantic_input,
         )
-        (catalog, diagnostics), completed = _execute_cached_vision_stage(
+        self._start_progress_stage(
+            ProcessingStage.BUILD_SCENE_CATALOG,
+            "scene_catalog",
+        )
+        (catalog, diagnostics), completed, reused = _execute_cached_vision_stage(
             writer=writer,
             stage=ProcessingStage.BUILD_SCENE_CATALOG,
             fingerprint=fingerprint,
             upstream_fingerprints=upstream_fingerprints,
             semantic_input=semantic_input,
-            generate=lambda: self._runtime.create_scene_catalog(
-                request,
-                model,
-                num_ctx=num_ctx,
+            generate=lambda: self._run_external(
+                lambda: self._runtime.create_scene_catalog(
+                    request,
+                    model,
+                    num_ctx=num_ctx,
+                ),
+                reason_code="scene_catalog_inference_started",
             ),
             serialize=lambda value: serialize_scene_catalog(*value),
             restore=restore_scene_catalog,
             artifact_label="Scene Catalog",
         )
+        self._complete_progress_stage(reused)
         self._observer.stage_completed(completed)
         return catalog, diagnostics, completed
 
@@ -180,17 +200,24 @@ class VideoSetVisionProcessor:
         )
 
         def generate() -> tuple[CandidateAnnotation, VisionInferenceDiagnostics]:
-            generated = self._runtime.annotate_candidate(
-                request,
-                catalog,
-                model,
-                num_ctx=num_ctx,
+            generated = self._run_external(
+                lambda: self._runtime.annotate_candidate(
+                    request,
+                    catalog,
+                    model,
+                    num_ctx=num_ctx,
+                ),
+                reason_code="candidate_annotation_inference_started",
             )
             annotation, diagnostics = generated
             _validate_runtime_annotation(annotation, request, catalog)
             return generated
 
-        (annotation, diagnostics), completed = _execute_cached_vision_stage(
+        self._start_progress_stage(
+            ProcessingStage.ANNOTATE_CANDIDATE,
+            "candidate",
+        )
+        (annotation, diagnostics), completed, reused = _execute_cached_vision_stage(
             writer=writer,
             stage=ProcessingStage.ANNOTATE_CANDIDATE,
             fingerprint=fingerprint,
@@ -205,8 +232,39 @@ class VideoSetVisionProcessor:
             ),
             artifact_label="Candidate Annotation",
         )
+        self._complete_progress_stage(reused)
         self._observer.stage_completed(completed)
         return annotation, diagnostics, completed
+
+    def _start_progress_stage(
+        self,
+        stage: ProcessingStage,
+        work_unit_kind: str,
+    ) -> None:
+        if self._progress is not None:
+            self._progress.start_stage(stage, work_unit_kind=work_unit_kind)
+
+    def _complete_progress_stage(self, reused: bool) -> None:
+        if self._progress is None:
+            return
+        self._progress.cache_observed(
+            cache_hit_count=1 if reused else 0,
+            cache_miss_count=0 if reused else 1,
+            reuse_count=1 if reused else 0,
+            recompute_count=0 if reused else 1,
+            reason_code="cache_reused" if reused else "stage_recomputed",
+        )
+        self._progress.complete_stage()
+
+    def _run_external(
+        self,
+        operation: Callable[[], VisionStageValue],
+        *,
+        reason_code: str,
+    ) -> VisionStageValue:
+        if self._external_work is None:
+            return operation()
+        return self._external_work.run(operation, reason_code=reason_code)
 
 
 def _execute_cached_vision_stage(
@@ -220,7 +278,7 @@ def _execute_cached_vision_stage(
     serialize: Callable[[VisionStageValue], dict[str, object]],
     restore: Callable[[Mapping[str, object]], VisionStageValue],
     artifact_label: str,
-) -> tuple[VisionStageValue, CompletedStage]:
+) -> tuple[VisionStageValue, CompletedStage, bool]:
     """同じfingerprintの生成と復元を一つのlock lifecycleで確定する。"""
     generated: VisionStageValue | None = None
 
@@ -237,7 +295,7 @@ def _execute_cached_vision_stage(
         produce,
     )
     if generated is not None:
-        return generated, completed
+        return generated, completed, False
     artifact = writer.read(
         stage,
         fingerprint,
@@ -246,7 +304,7 @@ def _execute_cached_vision_stage(
     )
     if artifact is None:
         raise RuntimeError(f"確定した{artifact_label} artifactを復元できません")
-    return restore(artifact), completed
+    return restore(artifact), completed, True
 
 
 def _validate_inputs(

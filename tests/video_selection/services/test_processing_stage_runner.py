@@ -12,6 +12,7 @@ from src.video_selection.services.build_stage_fingerprint import (
 from src.video_selection.services.processing_stage_runner import (
     ProcessingStageRunner,
 )
+from src.video_selection.services.run_progress_tracker import RunProgressTracker
 from tests.video_selection.fakes.recording_run_observer import RecordingRunObserver
 
 
@@ -330,3 +331,63 @@ def test_stage_can_select_only_semantic_upstream_dependencies(tmp_path: Path) ->
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["upstream_stage_fingerprints"] == [discovery.fingerprint.value]
+
+
+def test_processing_stage_runner_emits_cache_and_completion_events(
+    tmp_path: Path,
+) -> None:
+    """cache missからrecompute完了までtyped eventが順番に通知されること。
+
+    Arrange:
+        - run開始済みProgress Trackerとcold Stage cacheが用意される
+    Act:
+        - cache lookup後に一つのProcessing Stageが確定される
+    Assert:
+        - miss、recompute、Stage完了が同じStage番号で通知されること
+    """
+    # Arrange
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer, clock=lambda: 10.0)
+    progress.start_run()
+    runner = ProcessingStageRunner(
+        tmp_path / "cache",
+        observer,
+        subject_namespace="video-sets",
+        subject_fingerprint="4" * 64,
+        stage_order=(ProcessingStage.DISCOVER_VIDEO_SET,),
+        progress=progress,
+        total_stage_count=1,
+    )
+    semantic_input = {"video_set": "cold"}
+
+    # Act
+    restored = runner.reuse(
+        ProcessingStage.DISCOVER_VIDEO_SET,
+        semantic_input,
+        lambda artifact: artifact,
+    )
+    runner.complete(
+        ProcessingStage.DISCOVER_VIDEO_SET,
+        semantic_input,
+        {"video_set": "completed"},
+    )
+
+    # Assert
+    assert restored is None
+    assert tuple(
+        (
+            event.kind,
+            event.stage_index,
+            event.cache_hit_count,
+            event.cache_miss_count,
+            event.reuse_count,
+            event.recompute_count,
+        )
+        for event in observer.progress_events
+    ) == (
+        ("run_started", None, 0, 0, 0, 0),
+        ("stage_started", 1, 0, 0, 0, 0),
+        ("cache", 1, 0, 1, 0, 0),
+        ("cache", 1, 0, 1, 0, 1),
+        ("stage_completed", 1, 0, 0, 0, 0),
+    )

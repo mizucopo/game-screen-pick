@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from email.message import Message
 from email.utils import format_datetime
 from fractions import Fraction
+from threading import Event, Thread
 from typing import cast
 from urllib.error import HTTPError
 
@@ -29,7 +30,91 @@ from src.video_selection.models.vision_runtime_error import VisionRuntimeError
 from src.video_selection.models.vision_runtime_failure_reason import (
     VisionRuntimeFailureReason,
 )
+from src.video_selection.services.gpu_work_coordinator import GpuWorkCoordinator
 from src.video_selection.vision.ollama_vision_runtime import OllamaVisionRuntime
+
+
+def test_inference_waits_for_shared_gpu_lease() -> None:
+    """Ollama推論が共有GPU leaseを取得してからrequestされること。
+
+    Arrange:
+        - STT相当workが保持中の実coordinatorとVision Runtimeが用意される
+    Act:
+        - 別threadからScene Catalog推論が要求され、先行leaseが解放される
+    Assert:
+        - 解放前はOllamaへrequestされず、解放後に推論が完了すること
+    """
+    # Arrange
+    coordinator = GpuWorkCoordinator()
+    lease_started = Event()
+    release_lease = Event()
+    request_count = 0
+    failures: list[BaseException] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        _payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        nonlocal request_count
+        request_count += 1
+        return _response(_catalog_payload())
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+        gpu_coordinator=coordinator,
+    )
+    request = SceneCatalogRequest(
+        representatives=(FrameCandidate("frame-a", b"image-a"),),
+        selection_intent="ブログ画像を分類する",
+    )
+
+    def hold_gpu_lease() -> None:
+        def wait_for_release() -> None:
+            lease_started.set()
+            if not release_lease.wait(timeout=1.0):
+                msg = "GPU leaseを解放できませんでした"
+                raise RuntimeError(msg)
+
+        try:
+            coordinator.run("speech_to_text", wait_for_release)
+        except BaseException as error:
+            failures.append(error)
+
+    def infer() -> None:
+        try:
+            runtime.create_scene_catalog(
+                request,
+                _resolved_model(ModelRole.SCENE_CATALOG),
+                num_ctx=32768,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    holder = Thread(target=hold_gpu_lease)
+    worker = Thread(target=infer)
+
+    # Act
+    holder.start()
+    assert lease_started.wait(timeout=1.0)
+    worker.start()
+    worker.join(timeout=0.05)
+    blocked_before_release = worker.is_alive() and request_count == 0
+    release_lease.set()
+    holder.join(timeout=1.0)
+    worker.join(timeout=1.0)
+
+    # Assert
+    assert blocked_before_release is True
+    assert failures == []
+    assert request_count == 1
+    assert holder.is_alive() is False
+    assert worker.is_alive() is False
 
 
 def test_scene_catalog_uses_strict_documented_ollama_request() -> None:

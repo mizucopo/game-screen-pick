@@ -5,6 +5,7 @@ import json
 import math
 from collections.abc import Callable, Iterable
 from decimal import ROUND_HALF_EVEN, Decimal
+from functools import partial
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import cast
@@ -18,6 +19,7 @@ from ..models.speech_recognition_result import SpeechRecognitionResult
 from ..models.speech_segment import SpeechSegment
 from ..models.speech_word import SpeechWord
 from ..protocols.faster_whisper_model import FasterWhisperModel
+from ..services.gpu_work_coordinator import GpuWorkCoordinator
 
 FasterWhisperModelLoader = Callable[
     [Path, str, str, bool],
@@ -41,10 +43,12 @@ class FasterWhisperSpeechRuntime:
         *,
         runtime_identity: str,
         resolved_model_identity: str,
+        gpu_coordinator: GpuWorkCoordinator | None = None,
     ) -> None:
         self._model = model
         self._runtime_identity = runtime_identity
         self._resolved_model_identity = resolved_model_identity
+        self._gpu_coordinator = gpu_coordinator
 
     @classmethod
     def load_local(
@@ -55,6 +59,7 @@ class FasterWhisperSpeechRuntime:
         device: str,
         compute_type: str,
         model_loader: FasterWhisperModelLoader | None = None,
+        gpu_coordinator: GpuWorkCoordinator | None = None,
     ) -> "FasterWhisperSpeechRuntime":
         """ModelRuntimeが解決したlocal artifactだけをloadして構築する。"""
         if not model_artifact.is_dir():
@@ -66,6 +71,7 @@ class FasterWhisperSpeechRuntime:
             model,
             runtime_identity=_build_runtime_identity(device),
             resolved_model_identity=resolved_model_identity,
+            gpu_coordinator=gpu_coordinator,
         )
 
     @property
@@ -87,6 +93,27 @@ class FasterWhisperSpeechRuntime:
         beam_size: int,
     ) -> SpeechRecognitionResult:
         """mono s16le PCMをbackend非依存のsample timestampへ変換する。"""
+        operation = partial(
+            self._transcribe,
+            chunk,
+            language=language,
+            vad_filter=vad_filter,
+            beam_size=beam_size,
+        )
+
+        if self._gpu_coordinator is None:
+            return operation()
+        return self._gpu_coordinator.run("speech_to_text", operation)
+
+    def _transcribe(
+        self,
+        chunk: PcmAudioChunk,
+        *,
+        language: str,
+        vad_filter: bool,
+        beam_size: int,
+    ) -> SpeechRecognitionResult:
+        """model呼び出しとlazy segment変換を一つのGPU workとして実行する。"""
         waveform = np.frombuffer(chunk.pcm_bytes, dtype="<i2").astype(np.float32)
         waveform /= 32768.0
         segments, info = self._model.transcribe(

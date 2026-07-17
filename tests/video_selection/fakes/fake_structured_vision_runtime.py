@@ -21,6 +21,7 @@ class FakeStructuredVisionRuntime:
         catalog: SceneCatalog,
         annotations: tuple[CandidateAnnotation, ...],
         *,
+        fail_scene_catalog: bool = False,
         failure_moment_id: str | None = None,
         reject_all_calls: bool = False,
         scene_catalog_call_started: Event | None = None,
@@ -30,6 +31,7 @@ class FakeStructuredVisionRuntime:
         self._annotations = {
             annotation.candidate_moment_id: annotation for annotation in annotations
         }
+        self._fail_scene_catalog = fail_scene_catalog
         self._failure_moment_id = failure_moment_id
         self._reject_all_calls = reject_all_calls
         self._scene_catalog_call_started = scene_catalog_call_started
@@ -50,6 +52,8 @@ class FakeStructuredVisionRuntime:
             raise AssertionError("Scene Catalogが再生成されました")
         is_first_call = not self.scene_catalog_calls
         self.scene_catalog_calls.append(request)
+        if self._fail_scene_catalog:
+            raise RuntimeError("fake raw catalog response: chain of thought")
         if is_first_call and self._scene_catalog_call_started is not None:
             self._scene_catalog_call_started.set()
             if (

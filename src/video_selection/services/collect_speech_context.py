@@ -3,6 +3,7 @@
 import unicodedata
 from collections.abc import Iterable, Iterator
 from fractions import Fraction
+from functools import partial
 
 from ..models.context_cue import ContextCue
 from ..models.context_cue_diagnostics import ContextCueDiagnostics
@@ -21,6 +22,7 @@ from ..models.video_source import VideoSource
 from ..protocols.speech_runtime import SpeechRuntime
 from ..protocols.video_stage_media_runtime import VideoStageMediaRuntime
 from .build_context_cue_id import build_context_cue_id
+from .external_work_monitor import ExternalWorkMonitor
 from .iter_overlapping_pcm_chunks import iter_overlapping_pcm_chunks
 from .normalize_context_language import normalize_context_language
 
@@ -38,6 +40,7 @@ def collect_speech_context(
     scan: VideoScanResult,
     stream: MediaStream,
     configuration: EffectiveConfiguration,
+    external_work_monitor: ExternalWorkMonitor | None = None,
 ) -> ContextStageResult:
     """選択audioをSTTしCue、低reliability診断、outcomeを返す。"""
     chunk_samples = int(configuration.speech_chunk_seconds * _AUDIO_SAMPLE_RATE)
@@ -65,11 +68,20 @@ def collect_speech_context(
         overlapping_chunks
     ):
         try:
-            recognition = speech_runtime.transcribe(
+            transcribe = partial(
+                speech_runtime.transcribe,
                 chunk,
                 language=speech_language,
                 vad_filter=configuration.speech_vad_filter,
                 beam_size=configuration.speech_to_text_beam_size,
+            )
+            recognition = (
+                transcribe()
+                if external_work_monitor is None
+                else external_work_monitor.run(
+                    transcribe,
+                    reason_code="speech_recognition_started",
+                )
             )
         except Exception:
             raise ContextStageError(

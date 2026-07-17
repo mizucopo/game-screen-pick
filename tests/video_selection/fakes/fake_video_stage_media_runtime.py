@@ -26,6 +26,7 @@ class FakeVideoStageMediaRuntime:
         *,
         runtime_identity: MediaRuntimeIdentity | None = None,
         on_preflight: Callable[[], None] | None = None,
+        on_scan_video: Callable[[Path], None] | None = None,
         distant_moments: bool = False,
         require_streaming_refinement: bool = False,
         cpu_burn_seconds: float = 0.0,
@@ -45,6 +46,7 @@ class FakeVideoStageMediaRuntime:
             "0" * 64,
         )
         self._on_preflight = on_preflight
+        self._on_scan_video = on_scan_video
         self._distant_moments = distant_moments
         self._require_streaming_refinement = require_streaming_refinement
         self._cpu_burn_seconds = cpu_burn_seconds
@@ -135,6 +137,8 @@ class FakeVideoStageMediaRuntime:
         )
         self.scan_calls.append(media_path)
         self.call_order.append(("scan", media_path.name))
+        if self._on_scan_video is not None:
+            self._on_scan_video(media_path)
         self._burn_cpu()
         heartbeat_folder = artifact_folder / "heartbeats"
         scene_folder = artifact_folder / ".scene-proxies"

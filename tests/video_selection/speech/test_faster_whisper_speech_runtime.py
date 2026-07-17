@@ -2,6 +2,7 @@
 
 from fractions import Fraction
 from pathlib import Path
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import ctranslate2
@@ -9,6 +10,7 @@ import numpy as np
 import pytest
 
 from src.video_selection.models.pcm_audio_chunk import PcmAudioChunk
+from src.video_selection.services.gpu_work_coordinator import GpuWorkCoordinator
 from src.video_selection.speech.faster_whisper_speech_runtime import (
     FasterWhisperSpeechRuntime,
 )
@@ -201,3 +203,84 @@ def test_runtime_identity_changes_with_gpu_runtime_capability(
 
     # Assert
     assert first.runtime_identity != second.runtime_identity
+
+
+def test_transcription_waits_for_shared_gpu_lease() -> None:
+    """STTが共有GPU leaseを取得してからmodelを実行すること。
+
+    Arrange:
+        - Vision相当workが保持中の実coordinatorとSpeech Runtimeが用意される
+    Act:
+        - 別threadからSTTが要求され、先行leaseが解放される
+    Assert:
+        - 解放前はmodelが呼ばれず、解放後にtranscriptionが完了すること
+    """
+    # Arrange
+    coordinator = GpuWorkCoordinator()
+    lease_started = Event()
+    release_lease = Event()
+    model = FakeFasterWhisperModel(
+        (),
+        SimpleNamespace(language="ja", duration_after_vad=0.0),
+    )
+    runtime = FasterWhisperSpeechRuntime(
+        model,
+        runtime_identity="speech-runtime:test",
+        resolved_model_identity="hf:" + "a" * 40,
+        gpu_coordinator=coordinator,
+    )
+    pcm = PcmAudioChunk(
+        stream_index=1,
+        sample_start=0,
+        sample_count=1,
+        sample_rate=16000,
+        channel_count=1,
+        sample_format="s16le",
+        pts=0,
+        time_base=Fraction(1, 16000),
+        pcm_bytes=b"\x00\x00",
+    )
+    failures: list[BaseException] = []
+
+    def hold_gpu_lease() -> None:
+        def wait_for_release() -> None:
+            lease_started.set()
+            if not release_lease.wait(timeout=1.0):
+                msg = "GPU leaseを解放できませんでした"
+                raise RuntimeError(msg)
+
+        try:
+            coordinator.run("vision_inference", wait_for_release)
+        except BaseException as error:
+            failures.append(error)
+
+    def transcribe() -> None:
+        try:
+            runtime.transcribe(
+                pcm,
+                language="ja",
+                vad_filter=True,
+                beam_size=5,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    holder = Thread(target=hold_gpu_lease)
+    worker = Thread(target=transcribe)
+
+    # Act
+    holder.start()
+    assert lease_started.wait(timeout=1.0)
+    worker.start()
+    worker.join(timeout=0.05)
+    blocked_before_release = worker.is_alive() and model.audio is None
+    release_lease.set()
+    holder.join(timeout=1.0)
+    worker.join(timeout=1.0)
+
+    # Assert
+    assert blocked_before_release is True
+    assert failures == []
+    assert model.audio is not None
+    assert holder.is_alive() is False
+    assert worker.is_alive() is False
