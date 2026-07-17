@@ -10,6 +10,7 @@ from src.video_selection.models.effective_configuration import EffectiveConfigur
 from src.video_selection.models.media_runtime_identity import MediaRuntimeIdentity
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.services.discover_video_set import discover_video_set
+from src.video_selection.services.run_progress_tracker import RunProgressTracker
 from src.video_selection.services.video_stage_processor import VideoStageProcessor
 from tests.video_selection.fakes.fake_speech_runtime import FakeSpeechRuntime
 from tests.video_selection.fakes.fake_video_stage_media_runtime import (
@@ -63,6 +64,76 @@ def test_context_collection_is_the_third_source_local_video_stage(
         ("absent", "no_subtitle_stream"),
         ("absent", "no_audio_stream"),
     ]
+
+
+def test_video_stage_progress_follows_video_order_with_monotonic_stage_index(
+    tmp_path: Path,
+) -> None:
+    """複数Videoの3 StageがVideo Orderと単調なStage番号で通知されること。
+
+    Arrange:
+        - 自然順の2動画とrun開始済みProgress Trackerが用意される
+    Act:
+        - Video Stage processorで両動画が直列処理される
+    Assert:
+        - scan、extract、contextが各Video Orderに結び付いて通知されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "01-first.mp4").write_bytes(b"first-video")
+    (input_folder / "02-second.mp4").write_bytes(b"second-video")
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer, clock=lambda: 10.0)
+    progress.start_run()
+    processor = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        observer,
+        progress=progress,
+    )
+
+    # Act
+    processor.process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )
+
+    # Assert
+    started = tuple(
+        (
+            event.stage,
+            event.stage_index,
+            event.stage_count,
+            event.video_order,
+            event.video_count,
+            event.video_relative_path,
+        )
+        for event in observer.progress_events
+        if event.kind == "stage_started"
+    )
+    assert started == (
+        (ProcessingStage.SCAN_VIDEO, 1, None, 1, 2, "01-first.mp4"),
+        (
+            ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+            2,
+            None,
+            1,
+            2,
+            "01-first.mp4",
+        ),
+        (ProcessingStage.COLLECT_CONTEXT, 3, None, 1, 2, "01-first.mp4"),
+        (ProcessingStage.SCAN_VIDEO, 4, None, 2, 2, "02-second.mp4"),
+        (
+            ProcessingStage.EXTRACT_FRAME_CANDIDATES,
+            5,
+            None,
+            2,
+            2,
+            "02-second.mp4",
+        ),
+        (ProcessingStage.COLLECT_CONTEXT, 6, None, 2, 2, "02-second.mp4"),
+    )
 
 
 def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
@@ -171,6 +242,63 @@ def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
         "01-renamed.mp4",
         "99-renamed.mp4",
     ]
+
+
+@pytest.mark.parametrize("failure_position", [0, 1, 2])
+def test_completed_video_stages_survive_first_middle_last_video_failure(
+    tmp_path: Path,
+    failure_position: int,
+) -> None:
+    """先頭・途中・末尾Videoの失敗後も先行Video Stageが再利用されること。
+
+    Arrange:
+        - 自然順の3動画と指定Videoのscanだけ失敗するMedia Runtimeが用意される
+    Act:
+        - 失敗runの後に同じVideo Setとcacheで再実行される
+    Assert:
+        - 失敗Videoより前は再計算されず、失敗Video以降だけが処理されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    video_names = ("01-first.mp4", "02-middle.mp4", "03-last.mp4")
+    for index, name in enumerate(video_names, start=1):
+        (input_folder / name).write_bytes(f"video-{index}".encode())
+    configuration = _configuration(input_folder, tmp_path / "output")
+    video_set = discover_video_set(input_folder)
+    failed_name = video_names[failure_position]
+
+    def fail_selected_video(path: Path) -> None:
+        if path.name == failed_name:
+            raise OSError("injected video scan failure")
+
+    failing_runtime = FakeVideoStageMediaRuntime(on_scan_video=fail_selected_video)
+
+    # Act
+    with pytest.raises(OSError, match="injected video scan failure"):
+        VideoStageProcessor(
+            failing_runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(video_set, configuration)
+    retry_runtime = FakeVideoStageMediaRuntime()
+    results = VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)
+
+    # Assert
+    expected_recomputed = list(video_names[failure_position:])
+    assert [path.name for path in failing_runtime.scan_calls] == list(
+        video_names[: failure_position + 1]
+    )
+    assert [path.name for path in failing_runtime.range_calls] == list(
+        video_names[:failure_position]
+    )
+    assert [path.name for path in retry_runtime.scan_calls] == expected_recomputed
+    assert [path.name for path in retry_runtime.range_calls] == expected_recomputed
+    assert len(results) == 3
 
 
 def test_corrupt_candidate_proxy_recomputes_only_candidate_stage(

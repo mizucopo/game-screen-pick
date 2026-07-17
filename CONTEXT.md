@@ -48,6 +48,18 @@ _Avoid_: path hash, file stat, stage setting hash
 再開可能な画像選定を構成する、入力と再利用可能な成果物の境界が明示された処理単位。
 _Avoid_: arbitrary function, progress message, whole run
 
+**Progress Event**:
+一回のrunとProcessing Stageの開始、観測可能な進行、cache利用、完了、中断、失敗をrenderer非依存の型付き値で表す通知。表示文、外部toolの生出力、raw Context Cue、prompt、model responseは含めない。
+_Avoid_: log line, renderer message, model trace, exception text
+
+**Comparable Work Series**:
+一回のrun内でStage種別、work-unit種別、reuseまたはrecomputeの処理方法が等しく、Stage ETAのsampleを共有できる作業系列。runをまたぐ実績や、今後の処理方法が未確定なunitを推定へ混ぜない。
+_Avoid_: whole-run average, persisted benchmark, cache hit ratio forecast
+
+**Run Failure**:
+runを終了させる失敗をstable reason code、安全な観測値、修復方法、Completed Stageの再利用案内、終了codeで表した利用者向け結果。元の例外や外部toolの生出力そのものではない。
+_Avoid_: traceback, raw exception, Progress Event message, partial success
+
 **Stage Resource Metric**:
 Completed Stageを初回計算するときの処理開始からartifact構築までを対象にしたwall時間とCPU時間。CPU時間はcurrent processとchild processの合計で、cache再利用時は初回に保存された値を復元する。
 _Avoid_: FFmpeg-only metric, cache lookup duration, current-run reuse overhead
@@ -127,6 +139,10 @@ _Avoid_: model fallback, cache reset, model identity, notification-only update c
 **Completed Stage**:
 成果物と完了manifestがatomicに確定し、再利用できる Processing Stage。完了manifestのない部分成果物は含まない。
 _Avoid_: partial cache, in-progress stage, progress checkpoint
+
+**Recognized Partial Stage**:
+Completed Stageとして確定する前に中断・失敗したことをcache構造から安全に識別できる一時成果物。再利用せず、Input Lock取得後に削除して同じProcessing Stageを再計算する。
+_Avoid_: Completed Stage, Legacy Cache, unknown directory, resume checkpoint
 
 **Video Stage**:
 一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysis、Context Cue収集を所有する。複数VideoはVideo Order順に各Videoのscan、candidate extraction、context collectionを直列実行し、Video Orderは実行順にだけ使ってfingerprintへ含めない。

@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from src.video_selection.application.internal_run_controller import (
+    InternalRunController,
+)
 from src.video_selection.application.video_selection_application import (
     VideoSelectionApplication,
 )
@@ -27,12 +30,15 @@ from src.video_selection.models.processing_stage import (
     ProcessingStage,
 )
 from src.video_selection.models.resolved_models import ResolvedModels
+from src.video_selection.models.run_failure import RunFailure
+from src.video_selection.models.run_outcome import RunOutcome
 from src.video_selection.models.run_status import RunStatus
 from src.video_selection.models.selected_image import SelectedImage
 from src.video_selection.models.video_set import VideoSet
 from src.video_selection.services.atomic_output_publisher import AtomicOutputPublisher
 from src.video_selection.services.input_folder_lock import InputFolderLock
 from src.video_selection.services.prepared_output import PreparedOutput
+from src.video_selection.services.run_progress_tracker import RunProgressTracker
 from tests.video_selection.fakes.failing_vision_runtime import FailingVisionRuntime
 from tests.video_selection.fakes.fake_context_collector import FakeContextCollector
 from tests.video_selection.fakes.fake_media_runtime import FakeMediaRuntime
@@ -168,6 +174,204 @@ def test_run_publishes_normalized_fake_result_atomically(tmp_path: Path) -> None
         )
     )
     assert len(manifests) == len(VIDEO_SET_STAGE_ORDER)
+
+
+def test_internal_controller_emits_application_stage_events(tmp_path: Path) -> None:
+    """internal application runが全Stageをtyped eventとして通知すること。
+
+    Arrange:
+        - 共有observer、Progress Tracker、fake applicationが用意される
+    Act:
+        - Internal Run Controllerから成功runが実行される
+    Assert:
+        - 全Stageの開始・完了とrun terminalが表示文字列なしで通知されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer, clock=lambda: 10.0)
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime((candidate,)),
+        speech_runtime=FakeContextCollector(()),
+        model_runtime=FakeModelRuntime("model-sha-001"),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=observer,
+        progress=progress,
+    )
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+        image_count=1,
+    )
+
+    # Act
+    exit_code, result = InternalRunController(progress).execute(
+        lambda: application.run(configuration)
+    )
+
+    # Assert
+    started = tuple(
+        event.stage
+        for event in observer.progress_events
+        if event.kind == "stage_started"
+    )
+    completed = tuple(
+        event.stage
+        for event in observer.progress_events
+        if event.kind == "stage_completed"
+    )
+    assert isinstance(result, RunOutcome)
+    assert (
+        exit_code,
+        result.status,
+        observer.progress_events[0].kind,
+        observer.progress_events[-1].kind,
+        started,
+        completed,
+    ) == (
+        0,
+        RunStatus.COMPLETED,
+        "run_started",
+        "run_completed",
+        VIDEO_SET_STAGE_ORDER,
+        VIDEO_SET_STAGE_ORDER,
+    )
+
+
+def test_application_omits_unknown_total_when_nested_stages_expand_run(
+    tmp_path: Path,
+) -> None:
+    """内部runtimeがStageを追加するrunで根拠のない総Stage数が省略されること。
+
+    Arrange:
+        - candidate抽出中にatomic Video Stageを通知するruntimeが用意される
+    Act:
+        - 同じProgress Trackerでapplication全体が実行される
+    Assert:
+        - Stage番号は単調増加し、未確定の総Stage数なしでrunが完了すること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+    candidate = FrameCandidate(identifier="frame-001", image_bytes=b"image")
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer, clock=lambda: 10.0)
+
+    def emit_nested_video_stage() -> None:
+        progress.start_stage(
+            ProcessingStage.SCAN_VIDEO,
+            work_unit_kind="video",
+        )
+        progress.complete_stage()
+
+    application = VideoSelectionApplication(
+        media_runtime=FakeMediaRuntime(
+            (candidate,),
+            on_extract_candidates=emit_nested_video_stage,
+        ),
+        speech_runtime=FakeContextCollector(()),
+        model_runtime=FakeModelRuntime("model-sha-001"),
+        vision_runtime=FakeVisionRuntime(
+            (CandidateAnnotation(candidate=candidate, summary="summary"),)
+        ),
+        observer=observer,
+        progress=progress,
+    )
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+        image_count=1,
+    )
+
+    # Act
+    exit_code, result = InternalRunController(progress).execute(
+        lambda: application.run(configuration)
+    )
+
+    # Assert
+    started = tuple(
+        (event.stage_index, event.stage_count)
+        for event in observer.progress_events
+        if event.kind == "stage_started"
+    )
+    assert isinstance(result, RunOutcome)
+    assert (exit_code, started, observer.progress_events[-1].kind) == (
+        0,
+        tuple((index, None) for index in range(1, 8)),
+        "run_completed",
+    )
+
+
+@pytest.mark.parametrize(
+    ("invalid_input", "expected_reason_code"),
+    (
+        ("missing_input", "video_input_folder_not_found"),
+        ("empty_input", "video_input_folder_empty"),
+        ("duplicate_input", "duplicate_video"),
+        ("invalid_output", "output_folder_invalid"),
+    ),
+)
+def test_internal_controller_maps_preflight_path_failures_to_usage_result(
+    tmp_path: Path,
+    invalid_input: str,
+    expected_reason_code: str,
+) -> None:
+    """実行前に修正できる入力・出力不備がexit 2へ分類されること。
+
+    Arrange:
+        - 不存在・動画なし・重複入力、または非空Output Folderが用意される
+    Act:
+        - Internal Run Controllerからapplicationが実行される
+    Assert:
+        - run未開始相当の安全なusage failureが返されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+    if invalid_input != "missing_input":
+        input_folder.mkdir()
+    if invalid_input == "duplicate_input":
+        (input_folder / "chapter-01.mp4").write_bytes(b"duplicate")
+        (input_folder / "chapter-02.mp4").write_bytes(b"duplicate")
+    if invalid_input == "invalid_output":
+        (input_folder / "chapter-01.mp4").write_bytes(b"video-01")
+        output_folder.mkdir()
+        (output_folder / "keep.txt").write_text("keep", encoding="utf-8")
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer)
+    application = _successful_application(observer)
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=output_folder,
+        image_count=1,
+    )
+
+    # Act
+    exit_code, result = InternalRunController(progress).execute(
+        lambda: application.run(configuration)
+    )
+
+    # Assert
+    assert isinstance(result, RunFailure)
+    assert (
+        exit_code,
+        result.reason_code,
+        result.remediation_code,
+        result.resume_guidance,
+        tuple(event.kind for event in observer.progress_events),
+    ) == (
+        2,
+        expected_reason_code,
+        "fix_configuration",
+        "run_not_started",
+        ("run_started", "run_failed"),
+    )
 
 
 def test_speech_model_is_frozen_before_context_collection(tmp_path: Path) -> None:

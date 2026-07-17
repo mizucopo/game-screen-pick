@@ -32,6 +32,7 @@ from src.video_selection.models.video_scan_result import VideoScanResult
 from src.video_selection.models.video_timeline import VideoTimeline
 from src.video_selection.services.context_stage_processor import ContextStageProcessor
 from src.video_selection.services.discover_video_set import discover_video_set
+from src.video_selection.services.run_progress_tracker import RunProgressTracker
 from tests.video_selection.fakes.fake_speech_runtime import FakeSpeechRuntime
 from tests.video_selection.fakes.fake_video_stage_media_runtime import (
     FakeVideoStageMediaRuntime,
@@ -136,6 +137,81 @@ def test_non_forced_text_subtitle_is_preferred_without_running_stt(
         ("available", "context_extracted")
     ]
     assert speech_runtime.transcribe_calls == []
+
+
+def test_stt_chunk_emits_external_work_start_event(tmp_path: Path) -> None:
+    """STT chunkのblocking処理開始がProgress Eventとして通知されること。
+
+    Arrange:
+        - audio 1 chunkとrun開始済みProgress Trackerが用意される
+    Act:
+        - Context Collection StageのSTT fallbackが実行される
+    Assert:
+        - speech recognition開始eventがraw transcriptなしで一度通知されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    source = video_set.sources[0]
+    audio_stream = _stream(
+        1,
+        "audio",
+        "pcm_s16le",
+        language="jpn",
+        is_default=True,
+        start_pts=100,
+    )
+    probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(_stream(0, "video", "ffv1", is_default=True), audio_stream),
+    )
+    pcm = PcmAudioChunk(
+        stream_index=1,
+        sample_start=0,
+        sample_count=16000,
+        sample_rate=16000,
+        channel_count=1,
+        sample_format="s16le",
+        pts=160000,
+        time_base=Fraction(1, 16000),
+        pcm_bytes=b"\x00\x00" * 16000,
+    )
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer, clock=lambda: 10.0)
+    progress.start_run()
+    processor = ContextStageProcessor(
+        FakeVideoStageMediaRuntime(media_probe=probe, pcm_audio_chunks=(pcm,)),
+        FakeSpeechRuntime(),
+        observer,
+        progress=progress,
+    )
+
+    # Act
+    processor.process(
+        video_set=video_set,
+        source=source,
+        probe=probe,
+        scan=_scan(),
+        configuration=EffectiveConfiguration(
+            video_input_folder=input_folder,
+            output_folder=tmp_path / "output",
+            language="ja",
+        ),
+        media_runtime_identity=MediaRuntimeIdentity(
+            "6.1.1-test",
+            "6.1.1-test",
+            "0" * 64,
+        ),
+    )
+
+    # Assert
+    assert tuple(
+        (event.kind, event.reason_code, event.processed_count, event.eta_seconds)
+        for event in observer.progress_events
+        if event.kind == "external_work_started"
+    ) == (("external_work_started", "speech_recognition_started", None, None),)
 
 
 def test_empty_non_forced_subtitle_is_no_context_without_stt_fallback(

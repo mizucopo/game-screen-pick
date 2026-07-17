@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import replace
 from threading import Event
 
@@ -21,19 +22,23 @@ class FakeStructuredVisionRuntime:
         catalog: SceneCatalog,
         annotations: tuple[CandidateAnnotation, ...],
         *,
+        fail_scene_catalog: bool = False,
         failure_moment_id: str | None = None,
         reject_all_calls: bool = False,
         scene_catalog_call_started: Event | None = None,
         release_scene_catalog_call: Event | None = None,
+        on_candidate_annotation: Callable[[], None] | None = None,
     ) -> None:
         self._catalog = catalog
         self._annotations = {
             annotation.candidate_moment_id: annotation for annotation in annotations
         }
+        self._fail_scene_catalog = fail_scene_catalog
         self._failure_moment_id = failure_moment_id
         self._reject_all_calls = reject_all_calls
         self._scene_catalog_call_started = scene_catalog_call_started
         self._release_scene_catalog_call = release_scene_catalog_call
+        self._on_candidate_annotation = on_candidate_annotation
         self.scene_catalog_calls: list[SceneCatalogRequest] = []
         self.candidate_annotation_calls: list[CandidateAnnotationRequest] = []
 
@@ -50,6 +55,8 @@ class FakeStructuredVisionRuntime:
             raise AssertionError("Scene Catalogが再生成されました")
         is_first_call = not self.scene_catalog_calls
         self.scene_catalog_calls.append(request)
+        if self._fail_scene_catalog:
+            raise RuntimeError("fake raw catalog response: chain of thought")
         if is_first_call and self._scene_catalog_call_started is not None:
             self._scene_catalog_call_started.set()
             if (
@@ -72,6 +79,8 @@ class FakeStructuredVisionRuntime:
         if self._reject_all_calls:
             raise AssertionError("Candidate Annotationが再生成されました")
         self.candidate_annotation_calls.append(request)
+        if self._on_candidate_annotation is not None:
+            self._on_candidate_annotation()
         if request.moment.identifier == self._failure_moment_id:
             raise RuntimeError("fake raw response: chain of thought")
         annotation = self._annotations[request.moment.identifier]

@@ -7,6 +7,7 @@ import re
 import time
 from collections.abc import Callable, Mapping
 from fractions import Fraction
+from functools import partial
 from typing import Literal, TypeVar, cast
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -42,6 +43,7 @@ from ..models.scene_catalog_request import SceneCatalogRequest
 from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 from ..models.vision_runtime_error import VisionRuntimeError
 from ..models.vision_runtime_failure_reason import VisionRuntimeFailureReason
+from ..services.gpu_work_coordinator import GpuWorkCoordinator
 from ..utils.http_retry_delay import http_retry_delay
 from .vision_contract import (
     CANDIDATE_ANNOTATION_PROMPT_VERSION,
@@ -103,6 +105,7 @@ class OllamaVisionRuntime:
         requester: JsonRequester | None = None,
         sleeper: Sleeper = time.sleep,
         model_state_resolver: ModelStateResolver | None = None,
+        gpu_coordinator: GpuWorkCoordinator | None = None,
     ) -> None:
         if not host.strip() or timeout_seconds <= 0:
             raise ValueError("Ollama VisionRuntimeの接続設定が不正です")
@@ -118,6 +121,7 @@ class OllamaVisionRuntime:
         self._model_state_resolver = (
             model_state_resolver or self._resolve_current_model_state
         )
+        self._gpu_coordinator = gpu_coordinator
 
     def create_scene_catalog(
         self,
@@ -258,11 +262,17 @@ class OllamaVisionRuntime:
     def _request(self, payload: Mapping[str, object]) -> Mapping[str, object]:
         """transport detailをstable failureへ変換する。"""
         try:
-            response = self._requester(
+            request = partial(
+                self._requester,
                 "POST",
                 f"{self._host}/api/chat",
                 payload,
                 self._timeout_seconds,
+            )
+            response = (
+                request()
+                if self._gpu_coordinator is None
+                else self._gpu_coordinator.run("vision_inference", request)
             )
         except HTTPError as error:
             retry_after = (

@@ -105,6 +105,7 @@ class CompletedStageWriter:
     ) -> CompletedStage:
         """fingerprint lockの内側でStageを一度だけ確定する。"""
         stage_folder = stage_root / fingerprint.value
+        _remove_recognized_temporary_stages(stage_root, fingerprint)
         if (
             self.read_bundle(
                 stage,
@@ -287,6 +288,28 @@ def _is_timezone_aware_iso_datetime(value: object) -> bool:
 
 def _ignore_fault_checkpoint(_checkpoint: str) -> None:
     return
+
+
+def _remove_recognized_temporary_stages(
+    stage_root: Path,
+    fingerprint: StageFingerprint,
+) -> None:
+    """同じfingerprintの正規形式temporary entryだけを削除する。"""
+    prefix = f".{fingerprint.value}."
+    suffix = ".tmp"
+    for path in stage_root.iterdir():
+        name = path.name
+        if not name.startswith(prefix) or not name.endswith(suffix):
+            continue
+        token = name[len(prefix) : -len(suffix)]
+        if len(token) != 32 or any(
+            character not in "0123456789abcdef" for character in token
+        ):
+            continue
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
 
 
 def _artifact_records(stage_folder: Path) -> list[dict[str, object]]:

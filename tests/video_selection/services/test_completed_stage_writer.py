@@ -272,6 +272,105 @@ def test_fault_after_rename_keeps_reusable_completed_stage(tmp_path: Path) -> No
     assert restored == {"value": "committed"}
 
 
+@pytest.mark.parametrize("stage", tuple(ProcessingStage))
+@pytest.mark.parametrize(
+    ("checkpoint", "expected_reusable"),
+    [("before-rename", False), ("after-rename", True)],
+)
+def test_each_processing_stage_observes_atomic_commit_boundary(
+    tmp_path: Path,
+    stage: ProcessingStage,
+    checkpoint: str,
+    expected_reusable: bool,
+) -> None:
+    """全Processing Stageがrename境界の前後で同じ再利用契約を守ること。
+
+    Arrange:
+        - 指定Stageのatomic rename直前または直後で失敗するwriterが用意される
+    Act:
+        - Stage確定が失敗した後に通常writerから同じfingerprintが読まれる
+    Assert:
+        - rename前は未完了、rename後だけCompleted Stageとして再利用されること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "5" * 64
+    semantic_input = {"stage": stage.value}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+
+    def inject_fault(actual_checkpoint: str) -> None:
+        if actual_checkpoint == checkpoint:
+            raise OSError(f"injected {checkpoint}")
+
+    writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+        fault_injector=inject_fault,
+    )
+
+    # Act
+    with pytest.raises(OSError, match=f"injected {checkpoint}"):
+        writer.write(
+            stage,
+            fingerprint,
+            (),
+            semantic_input,
+            {"value": "committed"},
+        )
+    restored = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+    ).read(stage, fingerprint, (), semantic_input)
+
+    # Assert
+    assert (restored is not None) is expected_reusable
+
+
+def test_recognized_orphan_temporary_stage_is_removed_before_recompute(
+    tmp_path: Path,
+) -> None:
+    """hard terminationで残った認識可能なpartial Stageだけが削除されること。
+
+    Arrange:
+        - Stage rootに正規形式のorphan temporary folderと未知entryが用意される
+    Act:
+        - 同じStage Fingerprintが再計算されCompleted Stageへ確定される
+    Assert:
+        - orphanだけが削除され、未知entryとCompleted Stageが保持されること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "1" * 64
+    stage = ProcessingStage.DISCOVER_VIDEO_SET
+    semantic_input = {"value": "resume"}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+    stage_root = cache_folder / "video-sets" / subject_fingerprint / stage.value
+    stage_root.mkdir(parents=True)
+    orphan = stage_root / f".{fingerprint.value}.{'a' * 32}.tmp"
+    orphan.mkdir()
+    (orphan / "partial.bin").write_bytes(b"partial")
+    unknown = stage_root / f".{fingerprint.value}.user.tmp"
+    unknown.mkdir()
+    (unknown / "keep.bin").write_bytes(b"keep")
+    writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+    )
+
+    # Act
+    writer.write(stage, fingerprint, (), semantic_input, {"value": "recomputed"})
+
+    # Assert
+    assert (
+        orphan.exists(),
+        unknown.exists(),
+        (stage_root / fingerprint.value / "manifest.json").is_file(),
+    ) == (False, True, True)
+
+
 def test_rename_failure_leaves_no_partial_completed_stage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

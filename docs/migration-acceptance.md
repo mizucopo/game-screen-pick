@@ -118,7 +118,7 @@ rename失敗、disk full、permission denied、不正manifest、artifact欠落�
 検証する不変条件は次の通り。
 
 - 完了manifestと成果物がatomicに確定したCompleted Stageだけを再利用する。
-- partial/in-progress Stageは無視して再計算し、fatal runはOutput Folderを公開しない。
+- recognized partial/in-progress StageはInput Lock取得後に削除して再計算し、Completed Stageと未知のdirectoryは削除しない。fatal runはOutput Folderを公開しない。
 - Ctrl+Cはexit 130、operation errorはexit 1であり、どちらも完了済み上流Stageを保持する。
 - 同じVideo内のfirst/middle/lastおよび複数Videoの一部失敗で、成功済み独立Video Stageを
   再計算しない。
@@ -132,16 +132,30 @@ cache hit/miss/recompute、elapsed、任意のETA、severity、reason codeを持
 absolute path、raw Context Cue、prompt、model responseを含めない。domain testは日本語の表示
 文字列ではなくeventを検証する。
 
+一回のrunでactiveなProcessing Stageは一つだけとし、`run_started`からStageの開始・進行・完了を
+繰り返して、一つのterminal eventで終了する。Stage番号はatomicなCompleted Stage候補ごとに増やし、
+総Stage数は判明した場合だけeventと表示へ含める。cache lookupのhit/missと実処理の
+reuse/recomputeは別の観測値とし、miss後に実処理したunitはmissとrecomputeの双方へ数える。
+
 ETAは次の全部を満たすときだけ表示する。
 
-- 比較可能なwork unitの総数が判明している。
-- 少なくとも5 unitのsampleがある。
-- Stageが通常30秒以上続く。
-- cache hitとrecomputeのsampleを別系列で推定している。
+- 残りのreuse/recompute件数が別々に判明している。
+- 同じrun内の`Stage種別 × work-unit種別 × reuse/recompute`ごとに少なくとも5 unitのsampleがある。
+- Stage開始から実時間で30秒以上経過している。
+- runをまたぐ実績や観測済みcache hit率から今後のcache結果を推測していない。
 
 安定したfake workloadでは最終実績の20%以内へ収束させる。新しいsampleで予測が50%を
-超えて変動したときはETAを一時的に隠し、`estimating`とする。根拠のない0%、0秒、全runの
-擬似percentageは表示しない。
+超えて変動した系列はresetし、新しい5 sampleが集まるまでETAを隠して`estimating`とする。
+根拠のない0%、0秒、全runの擬似percentageは表示しない。
+
+TTY/line rendererは`stderr.isatty()`で自動選択し、line rendererはrelative path内の制御文字を
+escapeして1 event 1行を守る。外部処理は開始eventを直ちに発行し、完了まで30秒ごとにelapsed
+だけのheartbeatを発行する。同じCLI process内ではOllamaとSTTのGPU-heavy処理を共有coordinatorで
+直列化し、別process間のGPU排他は行わない。
+
+最外周の内部run controllerだけがStage例外を安全な`RunFailure`へ正規化し、terminal event、
+resume guidance、exit 1/2/130を決める。Ctrl+Cは`run_interrupted / user_interrupt / 130`とし、
+public CLIへの接続はIMP-13まで行わない。
 
 ## Target acceptance profileと記録
 

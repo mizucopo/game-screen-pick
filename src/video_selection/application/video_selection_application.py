@@ -2,6 +2,7 @@
 
 from contextlib import suppress
 
+from ..configuration.configuration_error import ConfigurationError
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.model_role import ModelRole
 from ..models.processing_stage import ProcessingStage
@@ -24,6 +25,7 @@ from ..services.discover_video_set import discover_video_set
 from ..services.input_folder_lock import InputFolderLock
 from ..services.prepare_processing_cache import prepare_processing_cache
 from ..services.processing_stage_runner import ProcessingStageRunner
+from ..services.run_progress_tracker import RunProgressTracker
 from ..services.select_images import select_images
 from ..services.snapshot_frame_candidates import snapshot_frame_candidates
 from ..services.snapshot_video_set import snapshot_video_set
@@ -48,19 +50,27 @@ class VideoSelectionApplication:
         model_runtime: ModelRuntime,
         vision_runtime: CandidateBatchAnnotator,
         observer: RunObserver,
+        progress: RunProgressTracker | None = None,
     ) -> None:
         self._media_runtime = media_runtime
         self._speech_runtime = speech_runtime
         self._model_runtime = model_runtime
         self._vision_runtime = vision_runtime
         self._observer = observer
+        self._progress = progress
 
     def run(self, configuration: EffectiveConfiguration) -> RunOutcome:
         """内部Video Set選定を実行してRunOutcomeを返す。"""
-        validate_output_folder(
-            configuration.video_input_folder,
-            configuration.output_folder,
-        )
+        try:
+            validate_output_folder(
+                configuration.video_input_folder,
+                configuration.output_folder,
+            )
+        except ValueError as error:
+            raise ConfigurationError(
+                "OUTPUT_FOLDER_INVALID",
+                str(error),
+            ) from None
 
         video_set = discover_video_set(
             configuration.video_input_folder,
@@ -94,6 +104,7 @@ class VideoSelectionApplication:
             subject_namespace="video-sets",
             subject_fingerprint=video_set.fingerprint,
             before_stage=lambda: validate_video_set_snapshot(video_set),
+            progress=self._progress,
         )
         stage_runner.complete(
             ProcessingStage.DISCOVER_VIDEO_SET,
