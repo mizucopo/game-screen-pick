@@ -32,6 +32,8 @@ run内の解決結果はroleごとに設定名、canonical名、更新前identit
 
 MediaRuntimeはPATH上のsystem `ffmpeg` / `ffprobe`だけを使い、binaryをbundleしません。preflightでは両toolが6.1.1以上かつ同一buildであることに加え、Matroska/MP4 demux、AV1/AAC/text subtitle decode、PPM/PCM/SRT encode・mux、frame/audio filter、ffprobe JSON出力の能力を検査します。tool不在、最低version未満、build不一致、能力不足はそれぞれstable reason codeへ変換されます。
 
+Frame Candidate Extractionはmerge済みの各refinement PTS rangeへ1秒前からinput seekし、range終端直後までにdecodeを制限します。全Video Sourceを2回目も先頭からdecodeせず、`select`で半開rangeのexact source PTSだけを返します。
+
 後段のVideo Stageへはsubprocess command、終了code、stderrではなく、次の意味結果だけを返します。
 
 - containerとordered stream metadataのprobe

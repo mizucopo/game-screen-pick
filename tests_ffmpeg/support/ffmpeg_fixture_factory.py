@@ -60,6 +60,33 @@ def generate_odd_dimension_video(output_path: Path) -> Path:
     return output_path
 
 
+def generate_nonzero_start_video(output_path: Path) -> Path:
+    """5秒の非ゼロ開始PTSを持つ4fps fixtureを生成する。"""
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x48:rate=4:duration=4",
+            "-output_ts_offset",
+            "5",
+            "-c:v",
+            "ffv1",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ],
+        check=True,
+    )
+    return output_path
+
+
 def generate_vfr_video(output_path: Path) -> Path:
     """不均一なsource PTSを持つVFR test patternを生成する。"""
     subprocess.run(

@@ -8,7 +8,7 @@ def stage_version(stage: ProcessingStage) -> str:
     if stage is ProcessingStage.SCAN_VIDEO:
         return "video-scan-v1"
     if stage is ProcessingStage.EXTRACT_FRAME_CANDIDATES:
-        return "frame-candidate-extraction-v1"
+        return "frame-candidate-extraction-v2"
     if stage is ProcessingStage.COLLECT_CONTEXT:
         return "context-collection-v2"
     if stage is ProcessingStage.RESOLVE_MODELS:

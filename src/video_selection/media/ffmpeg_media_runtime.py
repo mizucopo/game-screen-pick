@@ -69,6 +69,8 @@ _SHOWINFO_BRANCH_PATTERN = re.compile(r"showinfo@(?P<branch>timeline|heartbeat|s
 _SHOWINFO_PTS_PATTERN = re.compile(r"\bpts:\s*(-?\d+)")
 _SHOWINFO_DURATION_PATTERN = re.compile(r"\bduration:\s*(-?\d+)")
 _SHOWINFO_SIZE_PATTERN = re.compile(r"\bs:(\d+)x(\d+)")
+_FRAME_RANGE_SEEK_PADDING = Fraction(1)
+_FRAME_RANGE_END_PADDING = Fraction(1, 10)
 
 
 class FfmpegMediaRuntime:
@@ -319,20 +321,28 @@ class FfmpegMediaRuntime:
         ):
             msg = "PTS rangeとmax_dimensionが不正です"
             raise ValueError(msg)
-        expressions = [
-            f"gte(pts\\,{start})*lt(pts\\,{end})" for start, end in pts_ranges
-        ]
-        frame_filter = f"select='{'+'.join(expressions)}'," + _scale_filter(
-            max_dimension
-        )
-        command = self._video_decode_command(
-            media_path,
-            stream_index,
-            frame_filter,
-        )
+        probe = self.probe(media_path)
         try:
-            yield from iter_decoded_video_frames(command, stream_index)
-        except _DECODE_ERRORS as error:
+            stream = next(
+                item
+                for item in probe.streams
+                if item.index == stream_index and item.kind == "video"
+            )
+            if stream.time_base is None or stream.start_pts is None:
+                msg = "Frame Refinementには開始PTSを持つvideo streamが必要です"
+                raise ValueError(msg)
+            media_origin = _media_origin(probe)
+            for start, end in pts_ranges:
+                command = self._video_range_decode_command(
+                    media_path,
+                    stream,
+                    start,
+                    end,
+                    media_origin,
+                    max_dimension,
+                )
+                yield from iter_decoded_video_frames(command, stream_index)
+        except (*_DECODE_ERRORS, StopIteration) as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
                 "指定されたPTS rangeのnative frameを抽出できませんでした",
@@ -538,8 +548,13 @@ class FfmpegMediaRuntime:
         stream_index: int,
         frame_filter: str,
         frame_limit: int | None = None,
+        input_options: tuple[str, ...] = (),
     ) -> list[str]:
-        command = self._decode_command_prefix(media_path, stream_index)
+        command = self._decode_command_prefix(
+            media_path,
+            stream_index,
+            input_options=input_options,
+        )
         command.extend(["-an", "-sn", "-dn", "-vf", frame_filter])
         if frame_limit is not None:
             command.extend(["-frames:v", str(frame_limit)])
@@ -555,6 +570,46 @@ class FfmpegMediaRuntime:
             ]
         )
         return command
+
+    def _video_range_decode_command(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        start_pts: int,
+        end_pts: int,
+        media_origin: Fraction,
+        max_dimension: int,
+    ) -> list[str]:
+        """一つの半開PTS rangeだけを入力seek付きでdecodeする。"""
+        if stream.time_base is None:
+            msg = "Frame Refinement streamのtime baseがありません"
+            raise ValueError(msg)
+        relative_start = start_pts * stream.time_base - media_origin
+        if relative_start < 0:
+            msg = "Frame Refinement rangeがmedia originより前です"
+            raise ValueError(msg)
+        seek_padding = min(_FRAME_RANGE_SEEK_PADDING, relative_start)
+        seek_seconds = relative_start - seek_padding
+        read_seconds = (
+            seek_padding
+            + (end_pts - start_pts) * stream.time_base
+            + _FRAME_RANGE_END_PADDING
+        )
+        frame_filter = (
+            f"select='gte(pts\\,{start_pts})*lt(pts\\,{end_pts})',"
+            + _scale_filter(max_dimension)
+        )
+        return self._video_decode_command(
+            media_path,
+            stream.index,
+            frame_filter,
+            input_options=(
+                "-ss",
+                _ffmpeg_number(float(seek_seconds)),
+                "-t",
+                _ffmpeg_number(float(read_seconds)),
+            ),
+        )
 
     def _composite_scan_command(
         self,
@@ -641,6 +696,8 @@ class FfmpegMediaRuntime:
         self,
         media_path: Path,
         stream_index: int,
+        *,
+        input_options: tuple[str, ...] = (),
     ) -> list[str]:
         return [
             self._ffmpeg_executable,
@@ -653,6 +710,7 @@ class FfmpegMediaRuntime:
             "-err_detect",
             "explode",
             "-copyts",
+            *input_options,
             "-i",
             str(media_path),
             "-map",
@@ -811,6 +869,18 @@ def _scale_filter(max_dimension: int) -> str:
         "force_original_aspect_ratio=decrease:force_divisible_by=2,"
         "format=rgb24,showinfo"
     )
+
+
+def _media_origin(probe: MediaProbe) -> Fraction:
+    origins = tuple(
+        stream.start_pts * stream.time_base
+        for stream in probe.streams
+        if stream.start_pts is not None and stream.time_base is not None
+    )
+    if not origins:
+        msg = "media streamに開始PTSがありません"
+        raise ValueError(msg)
+    return min(origins)
 
 
 def _bounded_scale_filter(max_dimension: int) -> str:

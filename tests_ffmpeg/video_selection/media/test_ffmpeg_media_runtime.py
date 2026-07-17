@@ -23,6 +23,7 @@ from tests_ffmpeg.support.ffmpeg_fixture_factory import (
     generate_av1_aac_video,
     generate_cfr_video,
     generate_corrupt_video,
+    generate_nonzero_start_video,
     generate_odd_dimension_video,
     generate_quantized_audio,
     generate_scene_change_video,
@@ -704,6 +705,46 @@ def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
 
     # Assert
     assert [frame.pts for frame in frames] == [0, 750, 1000]
+
+
+def test_scan_video_frame_ranges_seek_preserves_nonzero_source_frames(
+    tmp_path: Path,
+) -> None:
+    """分離rangeへのinput seek後も非ゼロPTSとRGB frameが保持されること。
+
+    Arrange:
+        - 5秒開始で4fpsのVideo Sourceと分離した2 rangeが用意される
+        - 全frameを先頭からdecodeした比較結果が用意される
+    Act:
+        - 複数rangeだけがinput seek付きでscanされる
+    Assert:
+        - range内のPTSとRGB pixelが先頭decode結果と完全一致すること
+    """
+    # Arrange
+    video_path = generate_nonzero_start_video(tmp_path / "nonzero-start.mkv")
+    runtime = FfmpegMediaRuntime()
+    all_frames = tuple(runtime.scan_video_frames(video_path, 0, 64))
+    ranges = ((6000, 6500), (8000, 8750))
+    expected = tuple(
+        frame
+        for frame in all_frames
+        if any(start <= frame.pts < end for start, end in ranges)
+    )
+
+    # Act
+    actual = tuple(
+        runtime.scan_video_frame_ranges(
+            video_path,
+            stream_index=0,
+            pts_ranges=ranges,
+            max_dimension=64,
+        )
+    )
+
+    # Assert
+    assert [(frame.pts, frame.pixels) for frame in actual] == [
+        (frame.pts, frame.pixels) for frame in expected
+    ]
 
 
 def test_write_mjpeg_proxy_encodes_selected_rgb_frame_without_source_metadata(
