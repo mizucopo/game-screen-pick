@@ -23,7 +23,7 @@ class CanonicalPublicationRequest:
 
     video_set: VideoSet
     video_stage_results: tuple[VideoStageResult, ...]
-    scene_catalog: SceneCatalog
+    scene_catalog: SceneCatalog | None
     selection_result: VideoSetSelectionResult
     resolved_models: ResolvedModels
     configuration: EffectiveConfiguration
@@ -81,6 +81,9 @@ class CanonicalPublicationRequest:
             *(item.candidate for item in selected),
             *(item.candidate for item in rejected),
         )
+        if bool(candidates) != (self.scene_catalog is not None):
+            msg = "Scene CatalogはAnnotationがあるrunだけで必須です"
+            raise ValueError(msg)
         raw_context_texts = tuple(cue.text for cue in cues if cue.text)
         for candidate in candidates:
             frame = candidate.annotation.candidate
@@ -93,7 +96,10 @@ class CanonicalPublicationRequest:
             moment_ids = {moment.identifier for moment in stage.extraction.moments}
             stage_cue_ids = {cue.identifier for cue in stage.context.cues}
             annotation = candidate.annotation
-            scene = self.scene_catalog.for_slug(annotation.scene_slug)
+            scene_catalog = self.scene_catalog
+            if scene_catalog is None:  # pragma: no cover - 上で保証される
+                raise AssertionError
+            scene = scene_catalog.for_slug(annotation.scene_slug)
             if (
                 candidate.video_order != source_index
                 or annotation.candidate_moment_id not in moment_ids

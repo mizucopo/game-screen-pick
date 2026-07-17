@@ -36,6 +36,7 @@ class FakeVideoStageMediaRuntime:
         embedded_subtitles: tuple[EmbeddedSubtitle, ...] = (),
         pcm_audio_chunks: tuple[PcmAudioChunk, ...] = (),
         audio_error: Exception | None = None,
+        zero_valid_frames: bool = False,
     ) -> None:
         self.scan_calls: list[Path] = []
         self.range_calls: list[Path] = []
@@ -56,6 +57,7 @@ class FakeVideoStageMediaRuntime:
         self._embedded_subtitles = embedded_subtitles
         self._pcm_audio_chunks = pcm_audio_chunks
         self._audio_error = audio_error
+        self._zero_valid_frames = zero_valid_frames
         self._candidate_proxy_write_count = 0
         self.subtitle_calls: list[tuple[Path, int]] = []
         self.audio_calls: list[tuple[Path, int, int, int]] = []
@@ -258,8 +260,18 @@ class FakeVideoStageMediaRuntime:
             image_path=path,
         )
 
-    @staticmethod
-    def _decoded_frame(stream_index: int, pts: int) -> DecodedVideoFrame:
+    def _decoded_frame(self, stream_index: int, pts: int) -> DecodedVideoFrame:
+        if self._zero_valid_frames:
+            return DecodedVideoFrame(
+                stream_index=stream_index,
+                pts=pts,
+                duration_ts=5,
+                time_base=Fraction(1, 10),
+                width=64,
+                height=48,
+                pixel_format="rgb24",
+                pixels=bytes(64 * 48 * 3),
+            )
         rows, columns = np.indices((48, 64))
         values = ((rows // 3 + columns // 4 + pts // 5) % 3 * 90 + 25).astype(np.uint8)
         rgb = np.stack((values, np.roll(values, 5, axis=1), 255 - values), axis=2)

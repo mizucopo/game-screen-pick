@@ -427,7 +427,10 @@ def _classification(
     request: CanonicalPublicationRequest,
 ) -> dict[str, object]:
     annotation = candidate.annotation
-    scene = request.scene_catalog.for_slug(annotation.scene_slug)
+    scene_catalog = request.scene_catalog
+    if scene_catalog is None:  # pragma: no cover - publication requestで保証される
+        raise AssertionError
+    scene = scene_catalog.for_slug(annotation.scene_slug)
     spoiler_evidence: dict[str, str] | None = None
     if annotation.spoiler_risk != "none":
         spoiler_evidence = {

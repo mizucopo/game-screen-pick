@@ -1,84 +1,87 @@
-"""Video Set選定walking skeletonのapplication orchestration。"""
+"""実Video Stage、Vision、Selector、Canonical Publicationのcomposition。"""
 
+from collections.abc import Iterator
 from contextlib import suppress
+from datetime import datetime, timezone
+from typing import cast
+from uuid import uuid4
 
 from ..configuration.configuration_error import ConfigurationError
+from ..models.blog_candidate import BlogCandidate
+from ..models.canonical_publication_request import CanonicalPublicationRequest
+from ..models.completed_stage import CompletedStage
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.model_role import ModelRole
 from ..models.processing_stage import ProcessingStage
+from ..models.report_provenance import ReportProvenance
+from ..models.report_stage_provenance import ReportStageProvenance
 from ..models.resolved_models import ResolvedModels
 from ..models.run_outcome import RunOutcome
 from ..models.run_status import RunStatus
+from ..models.scene_catalog import SceneCatalog
+from ..models.stage_fingerprint import StageFingerprint
 from ..models.video_set import VideoSet
-from ..protocols.candidate_batch_annotator import CandidateBatchAnnotator
-from ..protocols.context_collector import ContextCollector
-from ..protocols.frame_candidate_extractor import FrameCandidateExtractor
+from ..models.video_set_selection_result import VideoSetSelectionResult
+from ..models.video_stage_result import VideoStageResult
 from ..protocols.model_runtime import ModelRuntime
 from ..protocols.run_observer import RunObserver
-from ..services.atomic_output_publisher import AtomicOutputPublisher
-from ..services.candidate_annotation_artifact import (
-    build_candidate_annotation_artifact,
-    normalize_candidate_annotations,
-    restore_candidate_annotations,
+from ..protocols.selection_media_runtime import SelectionMediaRuntime
+from ..protocols.speech_runtime_factory import SpeechRuntimeFactory
+from ..protocols.vision_runtime import VisionRuntime
+from ..services.build_blog_candidates import build_blog_candidates
+from ..services.build_candidate_annotation_requests import (
+    build_candidate_annotation_requests,
+    select_scene_catalog_representatives,
 )
+from ..services.build_stage_fingerprint import build_stage_fingerprint
+from ..services.canonical_output_publisher import CanonicalOutputPublisher
+from ..services.completed_stage_writer import CompletedStageWriter
 from ..services.discover_video_set import discover_video_set
 from ..services.input_folder_lock import InputFolderLock
 from ..services.prepare_processing_cache import prepare_processing_cache
-from ..services.processing_stage_runner import ProcessingStageRunner
 from ..services.run_progress_tracker import RunProgressTracker
-from ..services.select_images import select_images
-from ..services.snapshot_frame_candidates import snapshot_frame_candidates
-from ..services.snapshot_video_set import snapshot_video_set
+from ..services.select_video_set_images import (
+    SpoilerSensitivity,
+    select_from_shortlist_batches,
+    select_video_set_images,
+)
 from ..services.validate_output_folder import validate_output_folder
 from ..services.validate_video_set_snapshot import validate_video_set_snapshot
+from ..services.video_set_vision_processor import VideoSetVisionProcessor
+from ..services.video_stage_processor import VideoStageProcessor
 
-_ANNOTATION_UPSTREAM_STAGES = (
-    ProcessingStage.DISCOVER_VIDEO_SET,
-    ProcessingStage.EXTRACT_FRAME_CANDIDATES,
-)
-_CONTEXT_UPSTREAM_STAGES = (ProcessingStage.DISCOVER_VIDEO_SET,)
-_SELECTION_UPSTREAM_STAGES = (ProcessingStage.ANNOTATE_CANDIDATES,)
+_SELECTION_INTENT = "ブログ本文を説明できる画像を選ぶ"
+_INITIAL_ANNOTATION_MINIMUM = 24
 
 
 class VideoSelectionApplication:
-    """fake runtimeを通してVideo Setからoutputまでを接続する。"""
+    """実runtimeをVideo Set入力からcanonical outputまで接続する深いmodule。"""
 
     def __init__(
         self,
-        media_runtime: FrameCandidateExtractor,
-        speech_runtime: ContextCollector,
+        *,
+        media_runtime: SelectionMediaRuntime,
         model_runtime: ModelRuntime,
-        vision_runtime: CandidateBatchAnnotator,
+        speech_runtime_factory: SpeechRuntimeFactory,
+        vision_runtime: VisionRuntime,
         observer: RunObserver,
         progress: RunProgressTracker | None = None,
     ) -> None:
         self._media_runtime = media_runtime
-        self._speech_runtime = speech_runtime
         self._model_runtime = model_runtime
+        self._speech_runtime_factory = speech_runtime_factory
         self._vision_runtime = vision_runtime
         self._observer = observer
         self._progress = progress
 
     def run(self, configuration: EffectiveConfiguration) -> RunOutcome:
-        """内部Video Set選定を実行してRunOutcomeを返す。"""
-        try:
-            validate_output_folder(
-                configuration.video_input_folder,
-                configuration.output_folder,
-            )
-        except ValueError as error:
-            raise ConfigurationError(
-                "OUTPUT_FOLDER_INVALID",
-                str(error),
-            ) from None
-
+        """実Video Selection pipelineを実行しatomic outputを公開する。"""
+        _validate_configuration_paths(configuration)
         video_set = discover_video_set(
             configuration.video_input_folder,
             recursive=configuration.recursive,
         )
         with InputFolderLock(configuration.video_input_folder) as input_lock:
-            validate_video_set_snapshot(video_set)
-            resolved_models = self._model_runtime.resolve_models(configuration)
             validate_video_set_snapshot(video_set)
             diagnostic = prepare_processing_cache(
                 configuration.processing_cache_folder,
@@ -86,151 +89,342 @@ class VideoSelectionApplication:
                 reset_cache=configuration.reset_cache,
             )
             self._observer.legacy_cache_cleaned(diagnostic)
-            return self._run_locked(configuration, video_set, resolved_models)
+            resolved_models = self._model_runtime.resolve_models(configuration)
+            speech_runtime = self._speech_runtime_factory(
+                resolved_models.for_role(ModelRole.SPEECH_TO_TEXT),
+                configuration,
+            )
+            video_stage_results = VideoStageProcessor(
+                self._media_runtime,
+                speech_runtime,
+                self._observer,
+                progress=self._progress,
+            ).process(video_set, configuration)
+            return self._select_and_publish(
+                configuration,
+                video_set,
+                video_stage_results,
+                resolved_models,
+            )
 
-    def _run_locked(
+    def _select_and_publish(
         self,
         configuration: EffectiveConfiguration,
         video_set: VideoSet,
+        video_stage_results: tuple[VideoStageResult, ...],
         resolved_models: ResolvedModels,
     ) -> RunOutcome:
-        """Input Lockを保持したまま全Processing Stageを実行する。"""
-        video_set_snapshot = snapshot_video_set(video_set)
-        with suppress(FileNotFoundError):
-            configuration.output_folder.rmdir()
-        stage_runner = ProcessingStageRunner(
+        """shortlistを必要分だけ注釈し選定結果をcanonicalに公開する。"""
+        requests = build_candidate_annotation_requests(
+            video_stage_results,
+            selection_intent=_SELECTION_INTENT,
+            similarity_threshold=configuration.similarity_threshold,
+        )
+        vision_stages: list[CompletedStage] = []
+        scene_catalog: SceneCatalog | None = None
+        spoiler_sensitivity = cast(
+            SpoilerSensitivity,
+            configuration.spoiler_sensitivity,
+        )
+        if requests:
+            representatives = select_scene_catalog_representatives(requests)
+            extraction_fingerprints = _extraction_fingerprints(video_stage_results)
+            vision_processor = VideoSetVisionProcessor(
+                self._vision_runtime,
+                self._observer,
+                progress=self._progress,
+            )
+
+            def candidate_batches() -> Iterator[tuple[BlogCandidate, ...]]:
+                nonlocal scene_catalog
+                offset = 0
+                for batch_size in _annotation_batch_sizes(
+                    len(requests),
+                    configuration.image_count,
+                ):
+                    batch = requests[offset : offset + batch_size]
+                    vision = vision_processor.process(
+                        video_set=video_set,
+                        representatives=representatives,
+                        representative_source_fingerprints=extraction_fingerprints,
+                        annotation_requests=batch,
+                        configuration=configuration,
+                        resolved_models=resolved_models,
+                    )
+                    if scene_catalog is None:
+                        scene_catalog = vision.catalog
+                    elif scene_catalog != vision.catalog:
+                        msg = "再利用されたScene Catalogがrun内で変化しました"
+                        raise RuntimeError(msg)
+                    vision_stages.extend(vision.completed_stages)
+                    yield build_blog_candidates(
+                        batch,
+                        vision.annotations,
+                        vision.catalog,
+                        video_stage_results,
+                        shortlist_rank_offset=offset,
+                    )
+                    offset += batch_size
+
+            selection = select_from_shortlist_batches(
+                candidate_batches(),
+                requested_count=configuration.image_count,
+                spoiler_sensitivity=spoiler_sensitivity,
+                similarity_threshold=configuration.similarity_threshold,
+            )
+        else:
+            selection = select_video_set_images(
+                (),
+                requested_count=configuration.image_count,
+                spoiler_sensitivity=spoiler_sensitivity,
+                similarity_threshold=configuration.similarity_threshold,
+            )
+
+        completed_stages = _unique_completed_stages(
+            (
+                *(
+                    stage
+                    for result in video_stage_results
+                    for stage in result.completed_stages
+                ),
+                *vision_stages,
+            )
+        )
+        selection_stage = self._record_selection_stage(
+            configuration,
+            video_set,
+            selection,
+            completed_stages,
+        )
+        completed_stages = (*completed_stages, selection_stage)
+        return self._publish(
+            configuration,
+            video_set,
+            video_stage_results,
+            resolved_models,
+            scene_catalog,
+            selection,
+            completed_stages,
+        )
+
+    def _record_selection_stage(
+        self,
+        configuration: EffectiveConfiguration,
+        video_set: VideoSet,
+        selection: VideoSetSelectionResult,
+        completed_stages: tuple[CompletedStage, ...],
+    ) -> CompletedStage:
+        """最終selection decisionをCompleted Stageとしてatomicに確定する。"""
+        upstream = tuple(stage.fingerprint for stage in completed_stages)
+        semantic_input = {
+            "requested_count": configuration.image_count,
+            "spoiler_sensitivity": configuration.spoiler_sensitivity,
+            "similarity_threshold": configuration.similarity_threshold,
+            "annotated_candidate_ids": [
+                *(item.candidate.identifier for item in selection.selected),
+                *(item.candidate.identifier for item in selection.rejected),
+            ],
+        }
+        fingerprint = build_stage_fingerprint(
+            ProcessingStage.SELECT_IMAGES,
+            upstream,
+            semantic_input,
+        )
+        writer = CompletedStageWriter(
             configuration.processing_cache_folder,
-            self._observer,
             subject_namespace="video-sets",
             subject_fingerprint=video_set.fingerprint,
-            before_stage=lambda: validate_video_set_snapshot(video_set),
-            progress=self._progress,
         )
-        stage_runner.complete(
-            ProcessingStage.DISCOVER_VIDEO_SET,
-            {
-                "video_set_fingerprint": video_set.fingerprint,
-                "videos": list(video_set_snapshot),
-            },
-            {
-                "video_set_fingerprint": video_set.fingerprint,
-                "videos": list(video_set_snapshot),
-            },
-        )
-
-        frame_candidates = self._media_runtime.extract_candidates(video_set)
-        candidate_snapshot = snapshot_frame_candidates(frame_candidates)
-        stage_runner.complete(
-            ProcessingStage.EXTRACT_FRAME_CANDIDATES,
-            {"candidates": list(candidate_snapshot)},
-            {"candidates": list(candidate_snapshot)},
-        )
-
-        candidate_model = resolved_models.for_role(ModelRole.CANDIDATE_ANNOTATION)
-        speech_model = resolved_models.for_role(ModelRole.SPEECH_TO_TEXT)
-        stage_runner.complete(
-            ProcessingStage.RESOLVE_MODELS,
-            {"models": resolved_models.semantic_input()},
-            {"models": resolved_models.semantic_input()},
-        )
-
-        collected_context = self._speech_runtime.collect_context(
-            video_set, speech_model
-        )
-        context_cues = collected_context.cues
-        context_cue_ids = [item.identifier for item in context_cues]
-        context_semantic_input: dict[str, object] = {
-            "context_cue_ids": context_cue_ids,
-        }
-        if collected_context.speech_runtime_identity is not None:
-            context_semantic_input["speech_to_text"] = {
-                "runtime_identity": collected_context.speech_runtime_identity,
-                "model": speech_model.semantic_input(),
-                "language": configuration.language,
-                "device": configuration.speech_to_text_device,
-                "compute_type": configuration.speech_to_text_compute_type,
-                "beam_size": configuration.speech_to_text_beam_size,
-                "vad_filter": configuration.speech_vad_filter,
-                "chunk_seconds": configuration.speech_chunk_seconds,
-                "overlap_seconds": configuration.speech_overlap_seconds,
-            }
-        stage_runner.complete(
-            ProcessingStage.COLLECT_CONTEXT,
-            context_semantic_input,
-            {"context_cue_ids": context_cue_ids},
-            upstream_stages=_CONTEXT_UPSTREAM_STAGES,
-        )
-
-        annotation_semantic_input = {
-            "candidates": list(candidate_snapshot),
-            "context_cue_ids": context_cue_ids,
-            "model": {
-                **candidate_model.semantic_input(),
-                "num_ctx": configuration.candidate_annotation_num_ctx,
-            },
-        }
-        annotations = stage_runner.reuse(
-            ProcessingStage.ANNOTATE_CANDIDATES,
-            annotation_semantic_input,
-            lambda artifact: restore_candidate_annotations(
-                artifact,
-                frame_candidates,
-            ),
-            upstream_stages=_ANNOTATION_UPSTREAM_STAGES,
-        )
-        if annotations is None:
-            annotations = normalize_candidate_annotations(
-                self._vision_runtime.annotate_candidates(
-                    frame_candidates,
-                    context_cues,
-                    candidate_model,
-                ),
-                frame_candidates,
+        if self._progress is not None:
+            self._progress.start_stage(
+                ProcessingStage.SELECT_IMAGES,
+                work_unit_kind="selection",
             )
-            stage_runner.complete(
-                ProcessingStage.ANNOTATE_CANDIDATES,
-                annotation_semantic_input,
-                build_candidate_annotation_artifact(annotations, frame_candidates),
-                upstream_stages=_ANNOTATION_UPSTREAM_STAGES,
+        artifact = writer.read(
+            ProcessingStage.SELECT_IMAGES,
+            fingerprint,
+            upstream,
+            semantic_input,
+        )
+        reused = artifact is not None
+        if artifact is None:
+            completed = writer.write(
+                ProcessingStage.SELECT_IMAGES,
+                fingerprint,
+                upstream,
+                semantic_input,
+                {
+                    "selected_ids": [
+                        item.candidate.identifier for item in selection.selected
+                    ],
+                    "rejected_ids": [
+                        item.candidate.identifier for item in selection.rejected
+                    ],
+                    "rejected": [
+                        {
+                            "candidate_id": item.candidate.identifier,
+                            "reason_code": item.reason_code.value,
+                        }
+                        for item in selection.rejected
+                    ],
+                    "shortlist_expansion_count": (selection.shortlist_expansion_count),
+                    "all_candidate_moments_exhausted": (
+                        selection.all_candidate_moments_exhausted
+                    ),
+                },
             )
+        else:
+            completed = CompletedStage(ProcessingStage.SELECT_IMAGES, fingerprint)
+        if self._progress is not None:
+            self._progress.record_work_sample("reuse" if reused else "recompute")
+            self._progress.cache_observed(
+                cache_hit_count=1 if reused else 0,
+                cache_miss_count=0 if reused else 1,
+                reuse_count=1 if reused else 0,
+                recompute_count=0 if reused else 1,
+                reason_code="cache_reused" if reused else "stage_recomputed",
+            )
+            self._progress.complete_stage()
+        self._observer.stage_completed(completed)
+        return completed
 
-        selected_images = select_images(annotations, configuration.image_count)
-        selected_count = len(selected_images)
-        run_status = RunStatus.from_selection_counts(
+    def _publish(
+        self,
+        configuration: EffectiveConfiguration,
+        video_set: VideoSet,
+        video_stage_results: tuple[VideoStageResult, ...],
+        resolved_models: ResolvedModels,
+        scene_catalog: SceneCatalog | None,
+        selection: VideoSetSelectionResult,
+        completed_stages: tuple[CompletedStage, ...],
+    ) -> RunOutcome:
+        """Canonical Publication Requestを構築してOutput Folderへ公開する。"""
+        with suppress(FileNotFoundError):
+            configuration.output_folder.rmdir()
+        started_at = datetime.now(timezone.utc)
+        completed_at = datetime.now(timezone.utc)
+        status = RunStatus.from_selection_counts(
             configuration.image_count,
-            selected_count,
+            len(selection.selected),
             has_other_warnings=bool(resolved_models.unavailable_roles()),
         )
-        stage_runner.complete(
-            ProcessingStage.SELECT_IMAGES,
-            {"image_count": configuration.image_count},
-            {
-                "selected_ids": [
-                    item.annotation.candidate.identifier for item in selected_images
-                ]
-            },
-            upstream_stages=_SELECTION_UPSTREAM_STAGES,
+        request = CanonicalPublicationRequest(
+            video_set=video_set,
+            video_stage_results=video_stage_results,
+            scene_catalog=scene_catalog,
+            selection_result=selection,
+            resolved_models=resolved_models,
+            configuration=configuration,
+            run_id=_run_id(started_at),
+            started_at=started_at,
+            completed_at=completed_at,
+            provenance=_report_provenance(completed_stages, configuration),
         )
-
-        publisher = AtomicOutputPublisher()
-        prepared_output = publisher.prepare(
-            configuration.output_folder,
-            video_set,
-            selected_images,
-            configuration.image_count,
-            run_status,
-            resolved_models,
-        )
-        try:
-            validate_video_set_snapshot(video_set)
-        except BaseException:
-            prepared_output.discard()
-            raise
-        prepared_output.publish()
+        CanonicalOutputPublisher(self._media_runtime).publish(request)
         return RunOutcome(
             output_folder=configuration.output_folder,
-            status=run_status,
+            status=status,
             requested_count=configuration.image_count,
-            selected_count=selected_count,
-            completed_stages=stage_runner.completed_stages,
+            selected_count=len(selection.selected),
+            completed_stages=completed_stages,
         )
+
+
+def _validate_configuration_paths(configuration: EffectiveConfiguration) -> None:
+    """Configuration Errorへ変換可能なOutput Folder境界を検証する。"""
+    try:
+        validate_output_folder(
+            configuration.video_input_folder,
+            configuration.output_folder,
+        )
+    except ValueError as error:
+        raise ConfigurationError("OUTPUT_FOLDER_INVALID", str(error)) from None
+
+
+def _annotation_batch_sizes(total: int, requested_count: int) -> tuple[int, ...]:
+    """initialと不足時追加の有限batch列を返す。"""
+    first = min(total, max(_INITIAL_ANNOTATION_MINIMUM, requested_count * 2))
+    sizes = [first]
+    remaining = total - first
+    while remaining > 0:
+        size = min(remaining, requested_count)
+        sizes.append(size)
+        remaining -= size
+    return tuple(sizes)
+
+
+def _extraction_fingerprints(
+    results: tuple[VideoStageResult, ...],
+) -> tuple[StageFingerprint, ...]:
+    """Scene Catalogが依存するsource-local extraction fingerprintを返す。"""
+    values: dict[str, StageFingerprint] = {}
+    for result in results:
+        stage = next(
+            item
+            for item in result.completed_stages
+            if item.stage is ProcessingStage.EXTRACT_FRAME_CANDIDATES
+        )
+        values.setdefault(stage.fingerprint.value, stage.fingerprint)
+    return tuple(values.values())
+
+
+def _unique_completed_stages(
+    stages: tuple[CompletedStage, ...],
+) -> tuple[CompletedStage, ...]:
+    """同じCompleted Stage再利用通知を一つのrun resultへ畳む。"""
+    unique: dict[str, CompletedStage] = {}
+    for stage in stages:
+        unique.setdefault(stage.fingerprint.value, stage)
+    return tuple(unique.values())
+
+
+def _run_id(started_at: datetime) -> str:
+    """pathを含まない一意なrun IDを返す。"""
+    timestamp = started_at.strftime("%Y%m%dT%H%M%SZ")
+    return f"run_{timestamp}_{uuid4().hex}"
+
+
+def _report_provenance(
+    completed_stages: tuple[CompletedStage, ...],
+    configuration: EffectiveConfiguration,
+) -> ReportProvenance:
+    """Completed Stage graphをprivacy-safeなcanonical provenanceへ変換する。"""
+    counts: dict[ProcessingStage, int] = {}
+    stages: list[ReportStageProvenance] = []
+    for completed in completed_stages:
+        counts[completed.stage] = counts.get(completed.stage, 0) + 1
+        ordinal = counts[completed.stage]
+        name = f"{completed.stage.value.replace('-', '_')}_{ordinal:03d}"
+        settings: dict[str, object] = {}
+        if completed.stage is ProcessingStage.SELECT_IMAGES:
+            settings = {
+                "requested_count": configuration.image_count,
+                "spoiler_sensitivity": configuration.spoiler_sensitivity,
+                "similarity_threshold": configuration.similarity_threshold,
+            }
+        stages.append(
+            ReportStageProvenance(
+                name=name,
+                fingerprint="stg_" + completed.fingerprint.value,
+                upstream_fingerprints=(),
+                cache_hits=0,
+                cache_misses=0,
+                recomputed_items=0,
+                attempt_count=0,
+                validation_failures=0,
+                effective_settings=settings,
+                tool_refs=(),
+                model_refs=(),
+                contract_refs=("video_set_selection_policy",),
+                duration_ms=0,
+            )
+        )
+    return ReportProvenance(
+        runtime={"application": "video_selection"},
+        tools={"video_selection": "1"},
+        contracts={
+            "video_set_selection_policy": "video-set-selection-v1",
+            "nearby_context_policy": "nearby-context-v1",
+        },
+        stages=tuple(stages),
+    )
