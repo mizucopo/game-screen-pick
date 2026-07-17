@@ -104,10 +104,9 @@ def _os_release() -> dict[str, str]:
 
 
 def _windows_identity() -> dict[str, object]:
-    powershell = shutil.which("powershell.exe")
-    if powershell is None:
-        raise ValueError("Windows host identityを取得できません")
+    powershell = _find_powershell()
     script = (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
         "$v=Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion';"
         "@{build=[int]$v.CurrentBuildNumber;edition=$v.EditionID}|"
         "ConvertTo-Json -Compress"
@@ -129,6 +128,19 @@ def _windows_identity() -> dict[str, object]:
     ):
         raise ValueError("Windows host identityが不正です")
     return value
+
+
+def _find_powershell() -> str:
+    """PATHまたはWSL標準mountからWindows PowerShellを返す。"""
+    executable = shutil.which("powershell.exe")
+    if executable is not None:
+        return executable
+    wsl_executable = Path(
+        "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    )
+    if wsl_executable.is_file():
+        return str(wsl_executable)
+    raise ValueError("Windows host identityを取得できません")
 
 
 def _gpu_identity() -> dict[str, object]:
