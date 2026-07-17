@@ -1,0 +1,49 @@
+"""AcceptanceProfile modelのtest。"""
+
+from dataclasses import replace
+from fractions import Fraction
+from pathlib import Path
+
+import pytest
+
+from src.video_selection.acceptance.acceptance_profile import AcceptanceProfile
+from src.video_selection.acceptance.release_interval import ReleaseInterval
+
+
+def test_release_interval_sum_must_match_expected_duration_within_tolerance(
+    tmp_path: Path,
+) -> None:
+    """release interval合計がprofile期待値のtolerance内だけで受理されること。
+
+    Arrange:
+        - 60秒intervalと60秒期待値を持つprofileが用意される
+    Act:
+        - 期待値を70秒へ変更したprofileの構築が試行される
+    Assert:
+        - tolerance 1秒を超える不一致として拒否されること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Acceptance profile"):
+        replace(profile, release_expected_total_duration=Fraction(70))
+
+
+def _profile(tmp_path: Path) -> AcceptanceProfile:
+    """validな最小profileを返す。"""
+    return AcceptanceProfile(
+        profile_version="1.0.0",
+        input_root=tmp_path / "input",
+        configuration_path=tmp_path / "config.toml",
+        artifact_root=tmp_path / "artifacts",
+        release_expected_total_duration=Fraction(60),
+        release_boundary_tolerance_seconds=Fraction(1),
+        release_intervals=(
+            ReleaseInterval("video.mkv", Fraction(0), Fraction(60), "event"),
+        ),
+        full_expected_video_count=1,
+        full_expected_total_duration=Fraction(60),
+        full_duration_tolerance_seconds=Fraction(1),
+        profile_digest="a" * 64,
+    )

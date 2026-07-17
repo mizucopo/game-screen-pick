@@ -75,6 +75,7 @@ mypy_path = "src:stubs"
 [tool.taskipy.tasks]
 test = "ruff check --fix src tests tests_ffmpeg stubs && ruff format src tests tests_ffmpeg stubs && mypy && pytest"
 test-ffmpeg = "pytest tests_ffmpeg"
+acceptance-target = "python -m src.video_selection.acceptance.cli"
 prototype-issue-170 = "python prototypes/issue_170_migration_acceptance/prototype.py"
 
 [tool.uv]

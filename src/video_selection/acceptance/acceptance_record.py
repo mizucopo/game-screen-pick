@@ -1,0 +1,233 @@
+"""privacy-safe target acceptance recordとnormalized baseline。"""
+
+import hashlib
+import json
+import re
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+
+from ..models.report_value import string_looks_private
+from .atomic_json import write_atomic_json
+
+_RECORD_SCHEMA = "game-screen-pick/target-acceptance@1.0.0"
+_BASELINE_SCHEMA = "game-screen-pick/target-acceptance-baseline@1.0.0"
+_DENIED_KEY_PARTS = (
+    "absolute_path",
+    "credential",
+    "environment_variable",
+    "input_root",
+    "prompt",
+    "raw_",
+    "relative_video",
+    "response_body",
+    "secret",
+    "source_name",
+    "stack_trace",
+)
+_WINDOWS_PATH = re.compile(r"[A-Za-z]:[\\/]")
+
+_BUDGETS: dict[str, dict[str, int]] = {
+    "release": {
+        "cold_seconds": 20 * 60,
+        "warm_seconds": 3 * 60,
+    },
+    "full": {
+        "cold_seconds": 24 * 60 * 60,
+        "warm_seconds": 30 * 60,
+    },
+}
+_PERSISTENT_CACHE_BYTES = 64 * 1024**3
+_PEAK_ADDITIONAL_BYTES = 96 * 1024**3
+_OLLAMA_GPU_MIB = 18 * 1024
+_STT_GPU_MIB = 8 * 1024
+
+
+def build_acceptance_record(
+    *,
+    suite: str,
+    commit: str,
+    dirty: bool,
+    target: Mapping[str, object],
+    configuration: Mapping[str, object],
+    models: Mapping[str, object],
+    video_set: Mapping[str, object],
+    cold: Mapping[str, object],
+    warm: Mapping[str, object],
+    human_quality: Mapping[str, object],
+) -> dict[str, object]:
+    """phase metricsとquality aggregateからversioned acceptance recordを作る。"""
+    if suite not in _BUDGETS:
+        raise ValueError("Acceptance suiteが不正です")
+    budgets = {
+        **_BUDGETS[suite],
+        "warm_unexpected_recompute": 0,
+        "persistent_cache_bytes": _PERSISTENT_CACHE_BYTES,
+        "peak_additional_bytes": _PEAK_ADDITIONAL_BYTES,
+        "ollama_global_gpu_peak_mib": _OLLAMA_GPU_MIB,
+        "stt_global_gpu_peak_mib": _STT_GPU_MIB,
+    }
+    consistency = cold.get("normalized_result_digest") == warm.get(
+        "normalized_result_digest"
+    )
+    automatic_gates = {
+        "cold_duration": _number(cold, "duration_seconds") <= budgets["cold_seconds"],
+        "warm_duration": _number(warm, "duration_seconds") <= budgets["warm_seconds"],
+        "warm_unexpected_recompute": _integer(warm, "unexpected_recompute_count") == 0,
+        "warm_result_consistency": consistency,
+        "resource_sampling": _boolean(cold, "resource_sampling_complete")
+        and _boolean(warm, "resource_sampling_complete"),
+        "persistent_cache": max(
+            _integer(cold, "persistent_cache_bytes"),
+            _integer(warm, "persistent_cache_bytes"),
+        )
+        <= _PERSISTENT_CACHE_BYTES,
+        "peak_additional_storage": max(
+            _integer(cold, "peak_additional_bytes"),
+            _integer(warm, "peak_additional_bytes"),
+        )
+        <= _PEAK_ADDITIONAL_BYTES,
+        "ollama_global_gpu_peak": max(
+            _integer(cold, "ollama_global_gpu_peak_mib"),
+            _integer(warm, "ollama_global_gpu_peak_mib"),
+        )
+        <= _OLLAMA_GPU_MIB,
+        "stt_global_gpu_peak": max(
+            _integer(cold, "stt_global_gpu_peak_mib"),
+            _integer(warm, "stt_global_gpu_peak_mib"),
+        )
+        <= _STT_GPU_MIB,
+    }
+    human_status = human_quality.get("status")
+    automatic_passed = all(automatic_gates.values())
+    status = (
+        "failed"
+        if not automatic_passed or human_status == "failed"
+        else "passed"
+        if human_status == "passed"
+        else "pending_human_review"
+    )
+    return {
+        "schema": _RECORD_SCHEMA,
+        "status": status,
+        "suite": suite,
+        "source_revision": {"commit": commit, "dirty": dirty},
+        "target": dict(target),
+        "configuration": dict(configuration),
+        "models": dict(models),
+        "video_set": dict(video_set),
+        "phases": {"cold": dict(cold), "warm": dict(warm)},
+        "consistency": {"normalized_result_equal": consistency},
+        "budgets": budgets,
+        "automatic_gates": automatic_gates,
+        "human_quality": dict(human_quality),
+        "privacy": {
+            "actual_paths": "omitted",
+            "video_names": "omitted",
+            "media_text": "omitted",
+            "model_io": "omitted",
+        },
+    }
+
+
+def validate_acceptance_record_privacy(
+    record: Mapping[str, object],
+    *,
+    forbidden_values: Sequence[str],
+) -> None:
+    """actual path/nameとsecret-bearing fieldがrecordへ混入していないことを検証する。"""
+    _validate_private_value(record, forbidden_values, "record")
+
+
+def write_normalized_baseline(
+    record: Mapping[str, object],
+    directory: Path,
+) -> tuple[Path, Path]:
+    """承認済みrecordからcommit可能なnormalized JSON/Markdownを生成する。"""
+    if record.get("status") != "passed":
+        raise ValueError("合格済みacceptance recordだけをbaseline化できます")
+    normalized = {
+        "schema": _BASELINE_SCHEMA,
+        "suite": record.get("suite"),
+        "target": record.get("target"),
+        "configuration": record.get("configuration"),
+        "models": record.get("models"),
+        "video_set": record.get("video_set"),
+        "phases": record.get("phases"),
+        "budgets": record.get("budgets"),
+        "automatic_gates": record.get("automatic_gates"),
+        "human_quality": record.get("human_quality"),
+    }
+    json_path = directory / "baseline.json"
+    markdown_path = directory / "baseline.md"
+    write_atomic_json(json_path, normalized)
+    digest = hashlib.sha256(
+        json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    markdown_path.write_text(
+        _render_baseline_markdown(normalized, digest),
+        encoding="utf-8",
+    )
+    return json_path, markdown_path
+
+
+def _render_baseline_markdown(record: Mapping[str, object], digest: str) -> str:
+    suite = record.get("suite")
+    phases = record.get("phases")
+    gates = record.get("automatic_gates")
+    human = record.get("human_quality")
+    return (
+        "# Target acceptance baseline\n\n"
+        f"- Schema: `{_BASELINE_SCHEMA}`\n"
+        f"- Suite: `{suite}`\n"
+        f"- Normalized digest: `{digest}`\n"
+        f"- Phases: `{json.dumps(phases, sort_keys=True)}`\n"
+        f"- Automatic gates: `{json.dumps(gates, sort_keys=True)}`\n"
+        f"- Human quality: `{json.dumps(human, sort_keys=True)}`\n"
+    )
+
+
+def _validate_private_value(
+    value: object,
+    forbidden_values: Sequence[str],
+    location: str,
+) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str) or any(
+                part in key.casefold() for part in _DENIED_KEY_PARTS
+            ):
+                msg = f"Acceptance recordにprivate keyがあります: {location}"
+                raise ValueError(msg)
+            _validate_private_value(item, forbidden_values, f"{location}.{key}")
+        return
+    if isinstance(value, list | tuple):
+        for index, item in enumerate(value):
+            _validate_private_value(item, forbidden_values, f"{location}[{index}]")
+        return
+    if isinstance(value, str) and (
+        string_looks_private(value)
+        or _WINDOWS_PATH.search(value) is not None
+        or any(forbidden and forbidden in value for forbidden in forbidden_values)
+    ):
+        raise ValueError(f"Acceptance recordにprivate valueがあります: {location}")
+
+
+def _number(value: Mapping[str, object], key: str) -> float:
+    result = value.get(key)
+    if not isinstance(result, int | float) or isinstance(result, bool):
+        raise ValueError(f"Acceptance phase metric {key}がnumberではありません")
+    return float(result)
+
+
+def _integer(value: Mapping[str, object], key: str) -> int:
+    result = value.get(key)
+    if not isinstance(result, int) or isinstance(result, bool):
+        raise ValueError(f"Acceptance phase metric {key}がintegerではありません")
+    return result
+
+
+def _boolean(value: Mapping[str, object], key: str) -> bool:
+    result = value.get(key)
+    if not isinstance(result, bool):
+        raise ValueError(f"Acceptance phase metric {key}がbooleanではありません")
+    return result
