@@ -76,7 +76,7 @@ real filesystemで動かす。
 |---|---|---|---|
 | `uv run task test` | unit、contract、fake E2E | binary/network/GPUなし | 全PR必須 |
 | `uv run task test-ffmpeg` | 生成fixtureとreal FFmpeg/ffprobe | system FFmpeg | 別のrequired PR check |
-| `uv run task acceptance-target --profile PATH` | real Ollama/STT、性能、human review | target PC | cutover/release/該当変更時必須 |
+| `uv run task acceptance-target --profile PATH --suite release\|full` | real Ollama/STT、性能、human review | target PC | cutover/release/該当変更時必須 |
 
 real Ollamaとreal STTは通常のPR gateにしない。次の場合にtarget acceptanceを必須にする。
 
@@ -171,10 +171,11 @@ Ubuntu CIはunit/fake/FFmpeg integrationを保証する。native Linux、macOS�
 orchestrationにすぎず、repositoryやproduction commandへhost alias、gateway、target media
 pathをhard-codeしない。
 
-target-onlyのuntracked profileはinput rootと、relative video path、start/end Video Time、
-scenario roleだけを保持する。repositoryには
+target-onlyのuntracked profileはinput root、通常設定を指すconfiguration path、private
+artifact rootと、relative video path、start/end Video Time、scenario roleだけを保持する。repositoryには
 [`docs/examples/target-acceptance.toml`](examples/target-acceptance.toml)のschema/templateだけを
-置く。生成したtemporary clipはrun終了後に削除する。
+置く。生成したtemporary clipはrun終了後に削除する。実行、durable resume、private worksheet、
+終了code、baseline承認は[Target acceptance](target-acceptance.md)を参照する。
 
 各runはversioned `acceptance.json`を生成し、release/Issue artifactとして保管する。次を
 記録する。

@@ -1,7 +1,7 @@
 # 動画入力の運用
 
 > [!IMPORTANT]
-> Video Set探索・identity、Input Lock、Completed Stage cache、Legacy Cache削除、FFmpeg MediaRuntime、動画単位のFrame Candidate・Context Cueを作るVideo Stage、model lifecycleは内部実装済みです。Scene Catalog以降のVideo Set Stage、進捗表示、public CLIは後続Issueで接続し、installed CLIはIssue #190までscreenshot入力のままです。
+> Video Set探索からScene Catalog、Candidate Annotation、決定的selector、canonical publication、structured progress、target acceptanceまで内部実装済みです。public CLIはIssue #190で接続し、installed CLIはそれまでscreenshot入力のままです。target acceptanceは[専用手順](target-acceptance.md)から実行します。
 
 ## 最低runtime
 

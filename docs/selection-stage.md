@@ -68,4 +68,4 @@ Video Orderや後半位置そのものへの加点・減点、動画ごとの最
 - `spoiler_monotonicity_guard`
 - `lower_marginal_utility`
 
-現行アプリケーションはまだ旧first-N selectorを実行するため、`select-images`のStage versionは`walking-skeleton-0`を維持します。決定的selectorを実行経路へ接続するIssue #189で、Stage versionも同時に更新します。
+内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v1`としてCompleted Stageへ確定する。旧first-N fakeはwalking-skeleton専用applicationへ隔離され、public CLIはIssue #190までscreenshot入力のままである。
