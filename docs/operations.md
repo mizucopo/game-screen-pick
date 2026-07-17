@@ -40,6 +40,8 @@ MediaRuntimeはPATH上のsystem `ffmpeg` / `ffprobe`だけを使い、binaryをb
 - source PTSと連続sample位置を持つmono signed 16-bit PCM
 - 元packet PTS/time baseと本文を持つembedded text subtitle
 
+PCM timestampはaudio streamの開始PTSを原点とし、resample後の連続sample indexから生成します。container packet PTSの量子化ずれをchunk境界へ持ち込まず、`async=0`のままsampleを挿入・削除しません。
+
 real-runtime testは実行時に`lavfi`、synthetic tone、repository所有の短い字幕だけからCFR、VFR、AV1/AAC、multiple stream、破損packet fixtureを生成します。binary mediaはrepositoryへ保存しません。通常suiteはFFmpegを起動せず、real suiteだけを次で実行します。
 
 ```bash

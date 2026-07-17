@@ -49,6 +49,7 @@ _REQUIRED_FILTERS = frozenset(
         "aformat",
         "aresample",
         "asetnsamples",
+        "asetpts",
         "ashowinfo",
         "format",
         "nullsink",
@@ -466,7 +467,8 @@ class FfmpegMediaRuntime:
         audio_filter = (
             f"aresample={sample_rate}:async=0,"
             "aformat=sample_fmts=s16:channel_layouts=mono,"
-            f"asetnsamples=n={frame_sample_count}:p=0,ashowinfo"
+            f"asetnsamples=n={frame_sample_count}:p=0,"
+            "asetpts=N/SR/TB+STARTPTS,ashowinfo"
         )
         command = self._decode_command_prefix(media_path, stream_index)
         command.extend(

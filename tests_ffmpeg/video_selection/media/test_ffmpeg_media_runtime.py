@@ -24,6 +24,7 @@ from tests_ffmpeg.support.ffmpeg_fixture_factory import (
     generate_cfr_video,
     generate_corrupt_video,
     generate_odd_dimension_video,
+    generate_quantized_audio,
     generate_scene_change_video,
     generate_stream_matrix_video,
     generate_vfr_video,
@@ -85,6 +86,7 @@ elif "-filters" in arguments:
     print(" ... aformat")
     print(" ... aresample")
     print("T.C asetnsamples")
+    print(" ... asetpts")
     print(" ... ashowinfo")
     print(" ... format")
     print(" ... nullsink")
@@ -909,6 +911,41 @@ def test_scan_pcm_audio_returns_contiguous_sample_grid(tmp_path: Path) -> None:
         for (value,) in struct.iter_unpack("<h", chunk.pcm_bytes)
     ]
     assert sum(abs(value) for value in samples) / len(samples) > 100
+
+
+def test_scan_pcm_audio_normalizes_quantized_packet_pts_to_sample_grid(
+    tmp_path: Path,
+) -> None:
+    """packet PTSの量子化ずれが連続PCM sample gridへ正規化されること。
+
+    Arrange:
+        - 後半packet PTSが3 output sampleずれるaudio fixtureが用意される
+    Act:
+        - packet境界をまたぐ17,000 sample単位でPCMがscanされる
+    Assert:
+        - stream開始PTSとsample indexから連続chunk PTSが生成されること
+    """
+    # Arrange
+    audio_path = generate_quantized_audio(tmp_path / "quantized-audio.mkv")
+    runtime = FfmpegMediaRuntime()
+
+    # Act
+    chunks = tuple(
+        runtime.scan_pcm_audio(
+            audio_path,
+            stream_index=0,
+            sample_rate=16_000,
+            frame_sample_count=17_000,
+        )
+    )
+
+    # Assert
+    assert [chunk.sample_start for chunk in chunks] == [0, 17_000]
+    assert [chunk.sample_count for chunk in chunks] == [17_000, 15_000]
+    assert all(
+        chunk.pts * chunk.time_base == Fraction(chunk.sample_start, 16_000)
+        for chunk in chunks
+    )
 
 
 def test_read_embedded_subtitles_preserves_packet_pts_and_text(
