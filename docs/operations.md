@@ -12,8 +12,11 @@
 | Ollama server | 0.31.2 | version、vision、context、structured output、model load |
 | faster-whisper | 1.2.1 | configured modelのload |
 | CTranslate2 | 4.8.1 | configured device / compute typeの初期化 |
+| CUDA user-space libraries | CUDA 12 cuBLAS 12.8.4.1、CUDA Runtime 12.8.90、cuDNN 9.10.2.21 | faster-whisperによる実推論 |
 
 新しいversionは許可しますが、実際のtool/runtime versionは関係するStage Fingerprintとprovenanceへ記録します。version番号だけで能力を推測せず、処理開始前に必要なoperationを検査します。
+
+Linux x86_64ではfaster-whisper / CTranslate2が要求するCUDA 12 cuBLASとcuDNN 9をproject dependencyとして導入します。Torchは同じCUDA 12 namespaceを共有する2.9.1以上2.11未満へ制約し、CUDA 13 wheelとの混在を避けます。lock済みversionは`uv.lock`を正とします。
 
 ## ModelRuntime
 
