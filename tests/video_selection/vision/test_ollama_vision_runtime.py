@@ -1440,6 +1440,139 @@ def test_contextual_cinematic_dialogue_is_visually_rechecked(
     assert "weakまたはstrongなら入力内IDを1件以上" in second_prompt
 
 
+@pytest.mark.parametrize(
+    ("confirmed_opponent_visibility", "confirmed_effect_only", "expected_value"),
+    (("clear", False, "high"), ("absent", False, "none"), ("clear", True, "none")),
+)
+def test_publishable_combat_visibility_is_visually_rechecked(
+    confirmed_opponent_visibility: str,
+    confirmed_effect_only: bool,
+    expected_value: str,
+) -> None:
+    """掲載可能とされた戦闘の敵本体とエフェクトが画像だけで再確認されること。
+
+    Arrange:
+        - 初回は敵本体が明瞭でエフェクトだけではないとする戦闘応答が用意される
+        - 再確認では敵本体またはエフェクトだけという観測が変更される場合がある
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 再確認後の直接観測だけでExplanation Valueが決定されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+        )
+        if len(payloads) == 2:
+            observation = _first_frame_observation(response)
+            observation["opponent_body_visibility"] = confirmed_opponent_visibility
+            observation["effect_only_frame"] = confirmed_effect_only
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == expected_value
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == (
+        "candidate_annotation_combat_visibility_unverified"
+    )
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "candidate_annotation_combat_visibility_unverified" in second_prompt
+    assert "攻撃相手本体の輪郭と姿勢" in second_prompt
+    assert "光、爆発、煙、影、名前、HP bar" in second_prompt
+    assert "音声やContext Cueを根拠にしません" in second_prompt
+    assert "spoiler_riskがnoneならspoiler_evidenceは空文字列" in second_prompt
+
+
+def test_dialogue_and_combat_visibility_are_rechecked_in_one_retry() -> None:
+    """台詞と戦闘の直接観測が必要な場合も一回のretryへまとめられること。
+
+    Arrange:
+        - 初回に文脈付き映画演出の台詞と掲載可能な戦闘を同時に返す応答が用意される
+        - 再確認では画面内台詞と敵本体が見えない応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 一回のretryに両方の再確認指示が含まれ、掲載不可にされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (("frame-a", "battle", "event_dialogue", "high", "dialogue"),)
+        )
+        observation = _first_frame_observation(response)
+        observation["cinematic_event_presentation"] = True
+        observation["combat_action"] = True
+        observation["opponent_body_visibility"] = "clear"
+        if len(payloads) == 2:
+            observation["on_screen_dialogue_text_visible"] = False
+            observation["dialogue_text_presentation"] = "none"
+            observation["opponent_body_visibility"] = "absent"
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == (
+        "candidate_annotation_direct_visibility_unverified"
+    )
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "画面内台詞文字を画像だけに対して再確認" in second_prompt
+    assert "掲載可能とされた戦闘を画像だけに対して再確認" in second_prompt
+
+
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
     """Cueなし応答の関係違反が明示契約と個別codeで修復されること。
 
