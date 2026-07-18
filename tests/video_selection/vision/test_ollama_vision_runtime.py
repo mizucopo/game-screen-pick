@@ -1573,6 +1573,67 @@ def test_dialogue_and_combat_visibility_are_rechecked_in_one_retry() -> None:
     assert "掲載可能とされた戦闘を画像だけに対して再確認" in second_prompt
 
 
+def test_relationship_repair_also_rechecks_combat_visibility() -> None:
+    """関係違反のretryでも戦闘の直接観測が同時に再確認されること。
+
+    Arrange:
+        - 初回はSpoiler関係が不正で、敵本体が明瞭とされた戦闘応答が用意される
+        - 2回目はSpoiler関係が修正され、敵本体なしと再確認された応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 3回目を要求せず、関係修正と直接観測が一回のretryで確定されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+        )
+        observation = _first_frame_observation(response)
+        observation["spoiler_risk"] = "low"
+        observation["spoiler_evidence"] = (
+            "" if len(payloads) == 1 else "画面内に軽微な進行情報が見える"
+        )
+        if len(payloads) == 2:
+            observation["opponent_body_visibility"] = "absent"
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "candidate_annotation_relationship_invalid"
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "関係を必ず修正します" in second_prompt
+    assert "攻撃相手本体の輪郭と姿勢" in second_prompt
+    assert len(payloads) == 2
+
+
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
     """Cueなし応答の関係違反が明示契約と個別codeで修復されること。
 

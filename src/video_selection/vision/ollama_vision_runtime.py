@@ -130,13 +130,6 @@ _PROMPT_REPAIR_REASONS = {
     VisionRuntimeFailureReason.SCHEMA_INVALID,
     VisionRuntimeFailureReason.DOMAIN_INVALID,
 }
-_DIRECT_OBSERVATION_VERIFICATION_CODES = frozenset(
-    {
-        "candidate_annotation_dialogue_visibility_unverified",
-        "candidate_annotation_combat_visibility_unverified",
-        "candidate_annotation_direct_visibility_unverified",
-    }
-)
 _SCENE_CATALOG_SEMANTICS = (
     "selection_roleはordinary=通常の単発scene、cinematic=会話・演出・eventが主体、"
     "recurring_gameplay=戦闘UI・探索・puzzleなど繰り返し現れるplay構造です。"
@@ -300,12 +293,13 @@ class OllamaVisionRuntime:
         """一つのCandidate Momentをstrict schemaと所属検証で評価する。"""
         _require_model_role(model, ModelRole.CANDIDATE_ANNOTATION, num_ctx)
         semantic_input = _candidate_semantic_input(request, catalog, model, num_ctx)
-        direct_observation_verification_requested = False
+        candidate_response_count = 0
 
         def parse_candidate(
             value: Mapping[str, object],
         ) -> tuple[CandidateAnnotation, bool]:
-            nonlocal direct_observation_verification_requested
+            nonlocal candidate_response_count
+            candidate_response_count += 1
             (
                 annotation,
                 redacted,
@@ -314,8 +308,7 @@ class OllamaVisionRuntime:
             ) = _parse_candidate_annotation(value, request, catalog)
             if (
                 requires_dialogue_verification or requires_combat_verification
-            ) and not direct_observation_verification_requested:
-                direct_observation_verification_requested = True
+            ) and candidate_response_count == 1:
                 if requires_dialogue_verification and requires_combat_verification:
                     validation_code = (
                         "candidate_annotation_direct_visibility_unverified"
@@ -631,6 +624,7 @@ def _with_repair_code(
     messages = cast(list[dict[str, object]], copied["messages"])
     content = cast(str, messages[-1]["content"])
     repair = f"前回の出力を修正してください。validation_code={validation_code}"
+    recheck_candidate_observations = validation_code.startswith("candidate_annotation_")
     if validation_code == "candidate_annotation_relationship_invalid":
         repair += (
             "\n関係を必ず修正します。spoiler_riskがnoneならspoiler_evidenceは"
@@ -639,10 +633,7 @@ def _with_repair_code(
             "ならsupporting_context_cue_idsは空配列、weakまたはstrongなら入力内IDを"
             "1件以上入れます。"
         )
-    if validation_code in {
-        "candidate_annotation_dialogue_visibility_unverified",
-        "candidate_annotation_direct_visibility_unverified",
-    }:
+    if recheck_candidate_observations:
         repair += (
             "\n画面内台詞文字を画像だけに対して再確認します。音声やContext Cueを"
             "根拠にしません。画像内で台詞文字を実際に読める場合だけ"
@@ -650,10 +641,7 @@ def _with_repair_code(
             "dialogue_text_presentationを返します。人物portraitや会話中らしい構図"
             "だけで文字を読めない場合はfalseかつnoneにします。"
         )
-    if validation_code in {
-        "candidate_annotation_combat_visibility_unverified",
-        "candidate_annotation_direct_visibility_unverified",
-    }:
+    if recheck_candidate_observations:
         repair += (
             "\n掲載可能とされた戦闘を画像だけに対して再確認します。音声やContext Cueを"
             "根拠にしません。攻撃相手本体の輪郭と姿勢が明瞭な場合だけ"
@@ -663,7 +651,7 @@ def _with_repair_code(
             "人物・敵・物体の本体を主対象として一つも明瞭に判別できない場合は"
             "effect_only_frame=trueです。"
         )
-    if validation_code in _DIRECT_OBSERVATION_VERIFICATION_CODES:
+    if recheck_candidate_observations:
         repair += (
             "\n再確認時もspoiler_riskがnoneならspoiler_evidenceは空文字列、"
             "low・medium・highなら画面から判断した根拠を1文以上記述します。"
