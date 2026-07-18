@@ -9,6 +9,7 @@ from ..models.candidate_annotation import (
 from ..models.candidate_frame_observation import (
     CANDIDATE_FRAME_CONTENT_KINDS,
     CANDIDATE_INTERFACE_KINDS,
+    DIALOGUE_TEXT_PRESENTATIONS,
     PRIMARY_SUBJECT_VISIBILITIES,
     TRANSIENT_OBSTRUCTIONS,
 )
@@ -17,9 +18,9 @@ from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v2"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
-CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v10"
-CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v7"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v8"
+CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v11"
+CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v8"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v9"
 RETRY_POLICY_VERSION = "ollama-retry-v4"
 
 SCENE_CATALOG_SCHEMA: dict[str, object] = {
@@ -79,7 +80,22 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                     },
                     "prominent_event_portrait": {"type": "boolean"},
                     "cinematic_event_presentation": {"type": "boolean"},
-                    "visible_dialogue_text": {"type": "boolean"},
+                    "on_screen_dialogue_text_visible": {
+                        "type": "boolean",
+                        "description": (
+                            "画像内で登場人物の台詞文字を実際に読める場合だけtrue。"
+                            "音声、Context Cue、人物portrait、空欄、HUD、目的表示は"
+                            "false。"
+                        ),
+                    },
+                    "dialogue_text_presentation": {
+                        "type": "string",
+                        "enum": list(DIALOGUE_TEXT_PRESENTATIONS),
+                        "description": (
+                            "画像内で読める台詞文字の視覚的な表示形式。"
+                            "音声やContext Cueしかない場合はnone。"
+                        ),
+                    },
                     "visible_action": {"type": "boolean"},
                     "visible_character_or_enemy": {"type": "boolean"},
                     "combat_action": {"type": "boolean"},
@@ -114,7 +130,8 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                     "interface_kind",
                     "prominent_event_portrait",
                     "cinematic_event_presentation",
-                    "visible_dialogue_text",
+                    "on_screen_dialogue_text_visible",
+                    "dialogue_text_presentation",
                     "visible_action",
                     "visible_character_or_enemy",
                     "combat_action",

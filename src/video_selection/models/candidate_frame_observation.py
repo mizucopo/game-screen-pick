@@ -42,6 +42,13 @@ CandidateInterfaceKind = Literal[
 ]
 PrimarySubjectVisibility = Literal["clear", "partial", "absent"]
 TransientObstruction = Literal["none", "partial", "severe"]
+DialogueTextPresentation = Literal[
+    "none",
+    "dialogue_box",
+    "speech_bubble",
+    "subtitle_overlay",
+    "other",
+]
 
 CANDIDATE_FRAME_CONTENT_KINDS = cast(
     tuple[CandidateFrameContentKind, ...],
@@ -58,6 +65,10 @@ PRIMARY_SUBJECT_VISIBILITIES = cast(
 TRANSIENT_OBSTRUCTIONS = cast(
     tuple[TransientObstruction, ...],
     get_args(TransientObstruction),
+)
+DIALOGUE_TEXT_PRESENTATIONS = cast(
+    tuple[DialogueTextPresentation, ...],
+    get_args(DialogueTextPresentation),
 )
 
 _BLOG_IMAGE_TYPES: dict[CandidateFrameContentKind, BlogImageType] = {
@@ -101,6 +112,7 @@ class CandidateFrameObservation:
     prominent_event_portrait: bool
     cinematic_event_presentation: bool
     visible_dialogue_text: bool
+    dialogue_text_presentation: DialogueTextPresentation
     visible_action: bool
     visible_character_or_enemy: bool
     combat_action: bool
@@ -123,6 +135,8 @@ class CandidateFrameObservation:
             or not isinstance(self.prominent_event_portrait, bool)
             or not isinstance(self.cinematic_event_presentation, bool)
             or not isinstance(self.visible_dialogue_text, bool)
+            or self.dialogue_text_presentation not in DIALOGUE_TEXT_PRESENTATIONS
+            or self.visible_dialogue_text != (self.dialogue_text_presentation != "none")
             or not isinstance(self.visible_action, bool)
             or not isinstance(self.visible_character_or_enemy, bool)
             or not isinstance(self.combat_action, bool)

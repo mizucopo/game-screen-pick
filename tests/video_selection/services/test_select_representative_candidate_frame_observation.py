@@ -190,6 +190,11 @@ def _observation(
     visible_player_character: bool = True,
     visible_opponent: bool = False,
 ) -> CandidateFrameObservation:
+    has_visible_dialogue_text = (
+        content_kind == "event_dialogue"
+        if visible_dialogue_text is None
+        else visible_dialogue_text
+    )
     metrics = NeutralImageMetrics(
         blur_score=100.0,
         brightness=100.0,
@@ -233,10 +238,9 @@ def _observation(
         interface_kind=interface_kind,
         prominent_event_portrait=False,
         cinematic_event_presentation=False,
-        visible_dialogue_text=(
-            content_kind == "event_dialogue"
-            if visible_dialogue_text is None
-            else visible_dialogue_text
+        visible_dialogue_text=has_visible_dialogue_text,
+        dialogue_text_presentation=(
+            "dialogue_box" if has_visible_dialogue_text else "none"
         ),
         visible_action=(
             content_kind in {"gameplay_action", "event_action"}

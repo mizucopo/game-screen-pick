@@ -106,6 +106,9 @@ def test_atomic_observations_normalize_ambiguous_model_content(
         prominent_event_portrait=False,
         cinematic_event_presentation=False,
         visible_dialogue_text=visible_dialogue_text,
+        dialogue_text_presentation=(
+            "dialogue_box" if visible_dialogue_text else "none"
+        ),
         visible_action=visible_action,
         visible_character_or_enemy=visible_character_or_enemy,
         combat_action=False,
@@ -149,6 +152,7 @@ def test_combat_without_both_visible_participants_has_no_explanation_value() -> 
         prominent_event_portrait=False,
         cinematic_event_presentation=False,
         visible_dialogue_text=False,
+        dialogue_text_presentation="none",
         visible_action=True,
         visible_character_or_enemy=True,
         combat_action=True,
@@ -210,6 +214,7 @@ def test_static_document_and_silent_event_presentation_have_no_explanation_value
         prominent_event_portrait=prominent_event_portrait,
         cinematic_event_presentation=cinematic_event_presentation,
         visible_dialogue_text=False,
+        dialogue_text_presentation="none",
         visible_action=False,
         visible_character_or_enemy=True,
         combat_action=False,
@@ -232,3 +237,44 @@ def test_static_document_and_silent_event_presentation_have_no_explanation_value
     assert effective_content_kind == expected_content_kind
     assert explanation_value == "none"
     assert blog_image_type == expected_blog_image_type
+
+
+def test_dialogue_visibility_requires_a_visible_text_presentation() -> None:
+    """画面内台詞の真偽値と視覚的な表示形式が一致させられること。
+
+    Arrange:
+        - 台詞が見えるとする一方で表示形式がないframe観測が用意される
+    Act:
+        - Candidate Frame Observationが構築される
+    Assert:
+        - 矛盾した直接観測が拒否されること
+    """
+    # Arrange
+    candidate = FrameCandidate("frm_" + "a" * 64, b"image")
+
+    # Act
+    with pytest.raises(ValueError) as raised:
+        CandidateFrameObservation(
+            candidate=candidate,
+            scene_slug="scene",
+            content_kind="event_dialogue",
+            interface_kind="none",
+            prominent_event_portrait=False,
+            cinematic_event_presentation=True,
+            visible_dialogue_text=True,
+            dialogue_text_presentation="none",
+            visible_action=False,
+            visible_character_or_enemy=True,
+            combat_action=False,
+            visible_player_character=True,
+            visible_opponent=False,
+            explanation_value="high",
+            screen_text_kind="dialogue",
+            primary_subject_visibility="clear",
+            transient_obstruction="none",
+            spoiler_risk="none",
+            spoiler_evidence="",
+        )
+
+    # Assert
+    assert str(raised.value) == "Candidate Frame Observationのdomain fieldが不正です"

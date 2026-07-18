@@ -33,11 +33,13 @@ from ..models.candidate_annotation_request import CandidateAnnotationRequest
 from ..models.candidate_frame_observation import (
     CANDIDATE_FRAME_CONTENT_KINDS,
     CANDIDATE_INTERFACE_KINDS,
+    DIALOGUE_TEXT_PRESENTATIONS,
     PRIMARY_SUBJECT_VISIBILITIES,
     TRANSIENT_OBSTRUCTIONS,
     CandidateFrameContentKind,
     CandidateFrameObservation,
     CandidateInterfaceKind,
+    DialogueTextPresentation,
     PrimarySubjectVisibility,
     TransientObstruction,
 )
@@ -100,7 +102,8 @@ _FRAME_OBSERVATION_KEYS = {
     "interface_kind",
     "prominent_event_portrait",
     "cinematic_event_presentation",
-    "visible_dialogue_text",
+    "on_screen_dialogue_text_visible",
+    "dialogue_text_presentation",
     "visible_action",
     "visible_character_or_enemy",
     "combat_action",
@@ -140,8 +143,12 @@ _CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION = (
     "会話・event用に人物やNPCを並べた構図など、通常操作ではなくeventやcutsceneの"
     "提示だと画面自体から分かる場合だけtrueです。通常の戦闘・探索HUD、操作中の"
     "gameplay、画面隅の常設portraitはfalseです。"
-    "実際の台詞文が読めなければvisible_dialogue_text=falseです。人物portraitだけ、"
-    "空の台詞欄、見出し、説明、目的表示、操作案内、item名、HUDは台詞ではありません。"
+    "画像内で実際の台詞文字が読める場合だけ"
+    "on_screen_dialogue_text_visible=trueです。音声やContext Cueに会話文があっても、"
+    "画像内で文字を読めなければfalseです。dialogue_text_presentationは画像内で"
+    "読める台詞文字の表示形式をdialogue_box・speech_bubble・subtitle_overlay・other"
+    "から選び、音声やContext Cueしかない場合はnoneです。人物portraitだけ、空の"
+    "台詞欄、見出し、説明、目的表示、操作案内、item名、HUDは台詞ではありません。"
     "人物または敵の具体的な動作や相互作用がなければvisible_action=falseです。"
     "静止した立ち姿、空の背景、建物、移動先表示は動作ではありません。"
     "人物・NPC・player・monster・bossの本体を判別できなければ"
@@ -155,9 +162,13 @@ _CANDIDATE_ANNOTATION_SEMANTICS = (
     "interface_kindは画面全体の主用途をnone・document・shop・map・save・"
     "tutorial_help・other_interface・titleから選びます。documentは手紙・手記・"
     "日誌・記録を読む画面です。戦闘HUDだけをother_interfaceにせず、"
-    "戦闘や探索が主ならnoneにします。visible_dialogue_textは登場人物が話す実際の"
-    "台詞文を画像内で読めるときだけtrueです。人物portraitだけ、空の台詞欄、見出し、"
-    "説明、目的表示、操作案内、item名、HUDならfalseです。visible_actionは人物または"
+    "戦闘や探索が主ならnoneにします。on_screen_dialogue_text_visibleは登場人物の"
+    "台詞文字を画像内で実際に読めるときだけtrueです。音声やContext Cueに会話文が"
+    "あっても、画像内で文字を読めなければfalseです。dialogue_text_presentationは"
+    "画像内で読める台詞文字の表示形式をdialogue_box・speech_bubble・"
+    "subtitle_overlay・otherから選び、音声やContext Cueしかない場合はnoneです。"
+    "人物portraitだけ、空の台詞欄、見出し、説明、目的表示、操作案内、item名、HUD"
+    "ならfalseです。visible_actionは人物または"
     "敵の具体的な動作や相互作用が見えるときだけtrueで、静止した立ち姿、空の背景、"
     "建物、移動先表示だけならfalseです。visible_character_or_enemyは人物・NPC・player・"
     "monster・bossの本体を判別できるときだけtrueで、portrait、HUD、文字、影、発光、"
@@ -764,7 +775,8 @@ def _parse_candidate_frame_observations(
         cinematic_event_presentation = raw_observation.get(
             "cinematic_event_presentation"
         )
-        visible_dialogue_text = raw_observation.get("visible_dialogue_text")
+        visible_dialogue_text = raw_observation.get("on_screen_dialogue_text_visible")
+        dialogue_text_presentation = raw_observation.get("dialogue_text_presentation")
         visible_action = raw_observation.get("visible_action")
         visible_character_or_enemy = raw_observation.get("visible_character_or_enemy")
         combat_action = raw_observation.get("combat_action")
@@ -784,6 +796,7 @@ def _parse_candidate_frame_observations(
             or not isinstance(prominent_event_portrait, bool)
             or not isinstance(cinematic_event_presentation, bool)
             or not isinstance(visible_dialogue_text, bool)
+            or dialogue_text_presentation not in DIALOGUE_TEXT_PRESENTATIONS
             or not isinstance(visible_action, bool)
             or not isinstance(visible_character_or_enemy, bool)
             or not isinstance(combat_action, bool)
@@ -819,6 +832,10 @@ def _parse_candidate_frame_observations(
                     prominent_event_portrait=prominent_event_portrait,
                     cinematic_event_presentation=cinematic_event_presentation,
                     visible_dialogue_text=visible_dialogue_text,
+                    dialogue_text_presentation=cast(
+                        DialogueTextPresentation,
+                        dialogue_text_presentation,
+                    ),
                     visible_action=visible_action,
                     visible_character_or_enemy=visible_character_or_enemy,
                     combat_action=combat_action,

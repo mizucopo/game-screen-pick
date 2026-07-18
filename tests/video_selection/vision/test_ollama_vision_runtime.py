@@ -983,7 +983,17 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
     ]
     assert observation_properties["prominent_event_portrait"] == {"type": "boolean"}
     assert observation_properties["cinematic_event_presentation"] == {"type": "boolean"}
-    assert observation_properties["visible_dialogue_text"] == {"type": "boolean"}
+    assert "visible_dialogue_text" not in observation_properties
+    assert observation_properties["on_screen_dialogue_text_visible"]["type"] == (
+        "boolean"
+    )
+    assert observation_properties["dialogue_text_presentation"]["enum"] == [
+        "none",
+        "dialogue_box",
+        "speech_bubble",
+        "subtitle_overlay",
+        "other",
+    ]
     assert observation_properties["visible_action"] == {"type": "boolean"}
     assert observation_properties["visible_character_or_enemy"] == {"type": "boolean"}
     assert observation_properties["combat_action"] == {"type": "boolean"}
@@ -1041,7 +1051,8 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     assert "大きな発光やエフェクトで主対象が隠れる" in prompt
     assert "gameplay_action=" in prompt
     assert "tutorial_help" in prompt
-    assert "visible_dialogue_text" in prompt
+    assert "on_screen_dialogue_text_visible" in prompt
+    assert "dialogue_text_presentation" in prompt
     assert "visible_action" in prompt
     assert "visible_character_or_enemy" in prompt
     assert "combat_action" in prompt
@@ -1208,7 +1219,8 @@ def test_atomic_observations_override_ambiguous_tutorial_content() -> None:
     observation.update(
         {
             "interface_kind": "tutorial_help",
-            "visible_dialogue_text": True,
+            "on_screen_dialogue_text_visible": True,
+            "dialogue_text_presentation": "dialogue_box",
             "visible_action": False,
             "visible_character_or_enemy": False,
         }
@@ -1275,7 +1287,8 @@ def test_static_document_and_silent_event_presentation_are_not_eligible(
             "interface_kind": interface_kind,
             "prominent_event_portrait": prominent_event_portrait,
             "cinematic_event_presentation": cinematic_event_presentation,
-            "visible_dialogue_text": False,
+            "on_screen_dialogue_text_visible": False,
+            "dialogue_text_presentation": "none",
             "visible_action": False,
         }
     )
@@ -2054,7 +2067,10 @@ def _frame_observation_payload(
                 ),
                 "prominent_event_portrait": False,
                 "cinematic_event_presentation": False,
-                "visible_dialogue_text": content_kind == "event_dialogue",
+                "on_screen_dialogue_text_visible": content_kind == "event_dialogue",
+                "dialogue_text_presentation": (
+                    "dialogue_box" if content_kind == "event_dialogue" else "none"
+                ),
                 "visible_action": content_kind in {"gameplay_action", "event_action"},
                 "visible_character_or_enemy": content_kind
                 not in {"map", "save", "tutorial_help", "title"},
