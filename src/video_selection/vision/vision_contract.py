@@ -17,9 +17,9 @@ from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v2"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
-CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v8"
-CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v5"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v5"
+CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v9"
+CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v6"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v6"
 RETRY_POLICY_VERSION = "ollama-retry-v4"
 
 SCENE_CATALOG_SCHEMA: dict[str, object] = {
@@ -77,6 +77,7 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                         "type": "string",
                         "enum": list(CANDIDATE_INTERFACE_KINDS),
                     },
+                    "prominent_event_portrait": {"type": "boolean"},
                     "visible_dialogue_text": {"type": "boolean"},
                     "visible_action": {"type": "boolean"},
                     "visible_character_or_enemy": {"type": "boolean"},
@@ -110,6 +111,7 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                     "scene_slug",
                     "content_kind",
                     "interface_kind",
+                    "prominent_event_portrait",
                     "visible_dialogue_text",
                     "visible_action",
                     "visible_character_or_enemy",

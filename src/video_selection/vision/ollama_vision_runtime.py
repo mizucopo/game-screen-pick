@@ -98,6 +98,7 @@ _FRAME_OBSERVATION_KEYS = {
     "scene_slug",
     "content_kind",
     "interface_kind",
+    "prominent_event_portrait",
     "visible_dialogue_text",
     "visible_action",
     "visible_character_or_enemy",
@@ -130,6 +131,10 @@ _SCENE_CATALOG_SEMANTICS = (
 )
 _CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION = (
     "この画像だけに実際に見えるものを最初に観測してください。"
+    "手紙・手記・日誌・記録を読む画面ならinterface_kind=documentです。"
+    "prominent_event_portraitは会話やeventの演出として大きな人物立ち絵・胸像が"
+    "gameplay画面へ重なる場合だけtrueです。画面隅の小さな円形・枠付きの常設HUD"
+    "portraitはfalseです。"
     "実際の台詞文が読めなければvisible_dialogue_text=falseです。人物portraitだけ、"
     "空の台詞欄、見出し、説明、目的表示、操作案内、item名、HUDは台詞ではありません。"
     "人物または敵の具体的な動作や相互作用がなければvisible_action=falseです。"
@@ -142,15 +147,18 @@ _CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION = (
 _CANDIDATE_ANNOTATION_SEMANTICS = (
     "各frameを他のframeの内容と混ぜず、対応するframe_idごとに個別評価します。"
     "最初に各画像の直接観測を推測せず決め、その後で画面内容と説明価値を決めます。"
-    "interface_kindは画面全体の主用途をnone・shop・map・save・tutorial_help・"
-    "other_interface・titleから選びます。戦闘HUDだけをother_interfaceにせず、"
+    "interface_kindは画面全体の主用途をnone・document・shop・map・save・"
+    "tutorial_help・other_interface・titleから選びます。documentは手紙・手記・"
+    "日誌・記録を読む画面です。戦闘HUDだけをother_interfaceにせず、"
     "戦闘や探索が主ならnoneにします。visible_dialogue_textは登場人物が話す実際の"
     "台詞文を画像内で読めるときだけtrueです。人物portraitだけ、空の台詞欄、見出し、"
     "説明、目的表示、操作案内、item名、HUDならfalseです。visible_actionは人物または"
     "敵の具体的な動作や相互作用が見えるときだけtrueで、静止した立ち姿、空の背景、"
     "建物、移動先表示だけならfalseです。visible_character_or_enemyは人物・NPC・player・"
     "monster・bossの本体を判別できるときだけtrueで、portrait、HUD、文字、影、発光、"
-    "移動軌跡だけは数えません。\n"
+    "移動軌跡だけは数えません。prominent_event_portraitは会話やeventの演出として"
+    "大きな人物立ち絵・胸像がgameplay画面へ重なる場合だけtrueです。画面隅の小さな"
+    "円形・枠付きの常設HUD portraitはfalseです。\n"
     "combat_actionはplayerと敵が戦っている場面だけtrueです。"
     "visible_player_characterは操作するplayer本体、visible_opponentはplayerが攻撃する"
     "相手の本体を判別できるときだけtrueです。portrait、HUD、文字、光、hit effect、"
@@ -158,8 +166,9 @@ _CANDIDATE_ANNOTATION_SEMANTICS = (
     "gameplay_action=操作・戦闘・探索の具体的な動作、gameplay_idle=人物や背景が"
     "見えても具体的な動作がない通常画面、event_dialogue=frame内に台詞表示が"
     "実在する会話、event_action=台詞がなくても具体的な演出や動作が見える出来事、"
-    "event_setup=出来事の開始待ちで動作も台詞表示もない画面、shop・map・save・"
-    "tutorial_help・other_interface=各interface、title・other=その他の役割です。\n"
+    "event_setup=出来事の開始待ちで動作も台詞表示もない画面、document=手紙・手記・"
+    "日誌・記録を読む画面、shop・map・save・tutorial_help・other_interface="
+    "各interface、title・other=その他の役割です。\n"
     "primary_subject_visibilityは人物・敵・品物・行動などブログ説明の主対象が"
     "clear・partial・absentのどれか、transient_obstructionは発光・白飛び・移動・"
     "画面切替による一時的な遮蔽がnone・partial・severeのどれかを返します。"
@@ -168,7 +177,7 @@ _CANDIDATE_ANNOTATION_SEMANTICS = (
     "explanation_valueのnone=主対象や出来事を説明できずブログ掲載価値がない、"
     "low=判別できるが汎用的・重複的、medium=具体的なplay状態や出来事を説明できる、"
     "high=重要な主対象・行動・関係が明瞭で本文を直接補強する、です。\n"
-    "tutorial_help、主対象がabsent、event_setup、severeな遮蔽は"
+    "document、tutorial_help、主対象がabsent、event_setup、severeな遮蔽は"
     "explanation_valueをnoneにします。screen_text_kindはそのframe内に実際に"
     "見える文字の役割だけで決め、別frameやContext Cueから推測しません。\n"
     "context_relevanceのnone=近接していても画像説明と無関係、weak=補足になる、"
@@ -186,6 +195,7 @@ _CONTENT_KIND_LABELS: Mapping[CandidateFrameContentKind, str] = {
     "event_dialogue": "台詞のあるイベント",
     "event_action": "動きのあるイベント",
     "event_setup": "イベント開始前の場面",
+    "document": "文書画面",
     "shop": "ショップ画面",
     "map": "マップ画面",
     "save": "セーブ画面",
@@ -741,6 +751,7 @@ def _parse_candidate_frame_observations(
         scene_slug = raw_observation.get("scene_slug")
         content_kind = raw_observation.get("content_kind")
         interface_kind = raw_observation.get("interface_kind")
+        prominent_event_portrait = raw_observation.get("prominent_event_portrait")
         visible_dialogue_text = raw_observation.get("visible_dialogue_text")
         visible_action = raw_observation.get("visible_action")
         visible_character_or_enemy = raw_observation.get("visible_character_or_enemy")
@@ -758,6 +769,7 @@ def _parse_candidate_frame_observations(
             or not isinstance(scene_slug, str)
             or content_kind not in CANDIDATE_FRAME_CONTENT_KINDS
             or interface_kind not in CANDIDATE_INTERFACE_KINDS
+            or not isinstance(prominent_event_portrait, bool)
             or not isinstance(visible_dialogue_text, bool)
             or not isinstance(visible_action, bool)
             or not isinstance(visible_character_or_enemy, bool)
@@ -791,6 +803,7 @@ def _parse_candidate_frame_observations(
                     scene_slug=scene_slug,
                     content_kind=cast(CandidateFrameContentKind, content_kind),
                     interface_kind=cast(CandidateInterfaceKind, interface_kind),
+                    prominent_event_portrait=prominent_event_portrait,
                     visible_dialogue_text=visible_dialogue_text,
                     visible_action=visible_action,
                     visible_character_or_enemy=visible_character_or_enemy,

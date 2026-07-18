@@ -103,6 +103,7 @@ def test_atomic_observations_normalize_ambiguous_model_content(
         scene_slug="scene",
         content_kind=content_kind,
         interface_kind=interface_kind,
+        prominent_event_portrait=False,
         visible_dialogue_text=visible_dialogue_text,
         visible_action=visible_action,
         visible_character_or_enemy=visible_character_or_enemy,
@@ -144,6 +145,7 @@ def test_combat_without_both_visible_participants_has_no_explanation_value() -> 
         scene_slug="battle",
         content_kind="event_action",
         interface_kind="other_interface",
+        prominent_event_portrait=False,
         visible_dialogue_text=False,
         visible_action=True,
         visible_character_or_enemy=True,
@@ -163,3 +165,64 @@ def test_combat_without_both_visible_participants_has_no_explanation_value() -> 
 
     # Assert
     assert explanation_value == "none"
+
+
+@pytest.mark.parametrize(
+    (
+        "content_kind",
+        "interface_kind",
+        "prominent_event_portrait",
+        "expected_content_kind",
+        "expected_blog_image_type",
+    ),
+    (
+        ("other", "document", False, "document", "menu"),
+        ("gameplay_idle", "none", True, "event_setup", "event"),
+    ),
+)
+def test_static_document_and_silent_event_portrait_have_no_explanation_value(
+    content_kind: CandidateFrameContentKind,
+    interface_kind: CandidateInterfaceKind,
+    prominent_event_portrait: bool,
+    expected_content_kind: CandidateFrameContentKind,
+    expected_blog_image_type: BlogImageType,
+) -> None:
+    """静止文書と台詞のないイベント立ち絵が掲載不可にされること。
+
+    Arrange:
+        - 高評価だが静止文書または台詞のないイベント立ち絵の観測が用意される
+    Act:
+        - 観測の決定的な公開値が参照される
+    Assert:
+        - 画面種別が補正され、説明価値なしにされること
+    """
+    # Arrange
+    observation = CandidateFrameObservation(
+        candidate=FrameCandidate("frm_" + "a" * 64, b"image"),
+        scene_slug="scene",
+        content_kind=content_kind,
+        interface_kind=interface_kind,
+        prominent_event_portrait=prominent_event_portrait,
+        visible_dialogue_text=False,
+        visible_action=False,
+        visible_character_or_enemy=True,
+        combat_action=False,
+        visible_player_character=True,
+        visible_opponent=False,
+        explanation_value="high",
+        screen_text_kind="none",
+        primary_subject_visibility="clear",
+        transient_obstruction="none",
+        spoiler_risk="none",
+        spoiler_evidence="",
+    )
+
+    # Act
+    effective_content_kind = observation.effective_content_kind
+    explanation_value = observation.effective_explanation_value
+    blog_image_type = observation.blog_image_type
+
+    # Assert
+    assert effective_content_kind == expected_content_kind
+    assert explanation_value == "none"
+    assert blog_image_type == expected_blog_image_type

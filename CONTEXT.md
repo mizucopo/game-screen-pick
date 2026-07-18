@@ -261,7 +261,7 @@ Selection Shortlist内の一つのCandidate Momentが参照する1から3件のF
 _Avoid_: model-selected output, selected output, Frame Refinement
 
 **Candidate Frame Observation**:
-Candidate Annotationの一回のOllama推論が、一つのFrame Candidateだけを対象に返すstrict enum中心の意味観測。Scene Slug、画面内容、画面全体の主用途を表すInterface Kind、画面内に実在する台詞・具体的な動作・判別可能な人物または敵の有無、戦闘かどうかとplayer本体・攻撃相手本体それぞれの可視性、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskとevidenceを持つ。戦闘HUDだけではInterface Kindを`other_interface`にせず、人物portrait、空の台詞欄、説明文、目的表示、menu項目を台詞として扱わない。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体として数えない。Representative Frame、最終score、適格性、最終採否は決めない。
+Candidate Annotationの一回のOllama推論が、一つのFrame Candidateだけを対象に返すstrict enum中心の意味観測。Scene Slug、画面内容、画面全体の主用途を表すInterface Kind、会話eventの大きな人物立ち絵・胸像の有無、画面内に実在する台詞・具体的な動作・判別可能な人物または敵の有無、戦闘かどうかとplayer本体・攻撃相手本体それぞれの可視性、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskとevidenceを持つ。手紙・手記・日誌・記録を読む画面はInterface Kind `document`として観測する。戦闘HUDだけではInterface Kindを`other_interface`にせず、人物portrait、空の台詞欄、説明文、目的表示、menu項目を台詞として扱わない。会話eventの大きな人物立ち絵・胸像と、画面隅の小さな常設HUD portraitを区別する。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体として数えない。Representative Frame、最終score、適格性、最終採否は決めない。
 _Avoid_: Candidate Annotation artifact, Representative Frame, model-selected output
 
 **Cross-Video Diversity**:
@@ -281,7 +281,7 @@ Video Set全体のNeutral Image Analysisから、品質、見た目の多様性�
 _Avoid_: Selection Shortlist, selected output, per-video representatives
 
 **Candidate Annotation**:
-Selection Shortlist内の一つのCandidate Momentについて、Neutral Image Analysisで先に確定した一つのRepresentative Frame、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、一回のOllama推論でID付きCandidate Frame Observationを評価するVideo Set Stage。各観測はScene Slug、画面内容、Interface Kind、画面内に実在する台詞・動作・人物または敵の有無、戦闘かどうかとplayer・攻撃相手それぞれの可視性、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。Blog Image Type、公開用要約と理由は観測からlocalに決定する。具体的なInterface Kindは曖昧な画面内容分類より優先する一方、動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として上書きに使わない。台詞のない`event_dialogue`と動作のないaction分類を静止場面へ補正し、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、player本体と攻撃相手本体の片方でも判別できない戦闘、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化するが、最終score、soft coverage、最終採否は決めない。
+Selection Shortlist内の一つのCandidate Momentについて、Neutral Image Analysisで先に確定した一つのRepresentative Frame、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、一回のOllama推論でID付きCandidate Frame Observationを評価するVideo Set Stage。各観測はScene Slug、画面内容、Interface Kind、会話eventの大きな人物立ち絵・胸像の有無、画面内に実在する台詞・動作・人物または敵の有無、戦闘かどうかとplayer・攻撃相手それぞれの可視性、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。Blog Image Type、公開用要約と理由は観測からlocalに決定する。具体的なInterface Kindは曖昧な画面内容分類より優先する一方、動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として上書きに使わない。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵を静止場面へ補正し、`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、player本体と攻撃相手本体の片方でも判別できない戦闘、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化するが、最終score、soft coverage、最終採否は決めない。
 _Avoid_: Candidate Scoring, Frame Refinement, Neutral Image Analysis, final selection
 
 **Scene**:

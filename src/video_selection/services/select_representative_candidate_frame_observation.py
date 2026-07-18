@@ -4,6 +4,7 @@ from ..models.candidate_frame_observation import CandidateFrameObservation
 
 _EXPLANATION_PRIORITY = {"none": 0, "low": 1, "medium": 2, "high": 3}
 _CONTENT_PRIORITY = {
+    "document": 0,
     "tutorial_help": 0,
     "event_setup": 0,
     "gameplay_idle": 1,

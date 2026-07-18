@@ -972,6 +972,7 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
     ]
     assert observation_properties["interface_kind"]["enum"] == [
         "none",
+        "document",
         "shop",
         "map",
         "save",
@@ -979,6 +980,7 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
         "other_interface",
         "title",
     ]
+    assert observation_properties["prominent_event_portrait"] == {"type": "boolean"}
     assert observation_properties["visible_dialogue_text"] == {"type": "boolean"}
     assert observation_properties["visible_action"] == {"type": "boolean"}
     assert observation_properties["visible_character_or_enemy"] == {"type": "boolean"}
@@ -1044,6 +1046,9 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     assert "visible_player_character" in prompt
     assert "visible_opponent" in prompt
     assert "人物portraitだけ" in prompt
+    assert "手紙・手記・日誌・記録" in prompt
+    assert "prominent_event_portrait" in prompt
+    assert "画面隅の小さな" in prompt
     assert "explanation_valueのnone=" in prompt
     assert "context_relevanceのstrong=" in prompt
     assert "spoiler_riskのhigh=" in prompt
@@ -1224,6 +1229,67 @@ def test_atomic_observations_override_ambiguous_tutorial_content() -> None:
     assert annotation.blog_image_type == "menu"
     assert annotation.explanation_value == "none"
     assert annotation.screen_text_kind == "menu"
+
+
+@pytest.mark.parametrize(
+    (
+        "content_kind",
+        "interface_kind",
+        "prominent_event_portrait",
+        "expected_blog_image_type",
+    ),
+    (
+        ("other", "document", False, "menu"),
+        ("gameplay_idle", "none", True, "event"),
+    ),
+)
+def test_static_document_and_silent_event_portrait_are_not_eligible(
+    content_kind: str,
+    interface_kind: str,
+    prominent_event_portrait: bool,
+    expected_blog_image_type: str,
+) -> None:
+    """静止文書と台詞のないイベント立ち絵が掲載不可にされること。
+
+    Arrange:
+        - 高評価だが静止文書または台詞のないイベント立ち絵の応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 画面種別を保ちながら説明価値なしへ正規化されること
+    """
+    # Arrange
+    response = _frame_observation_payload(
+        (("frame-a", "exploration", content_kind, "high", "none"),)
+    )
+    observation = _first_frame_observation(response)
+    observation.update(
+        {
+            "interface_kind": interface_kind,
+            "prominent_event_portrait": prominent_event_portrait,
+            "visible_dialogue_text": False,
+            "visible_action": False,
+        }
+    )
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.blog_image_type == expected_blog_image_type
+    assert annotation.explanation_value == "none"
 
 
 def test_combat_without_both_visible_participants_has_no_explanation_value() -> None:
@@ -1895,6 +1961,7 @@ def _frame_observation_payload(
                     }
                     else "none"
                 ),
+                "prominent_event_portrait": False,
                 "visible_dialogue_text": content_kind == "event_dialogue",
                 "visible_action": content_kind in {"gameplay_action", "event_action"},
                 "visible_character_or_enemy": content_kind

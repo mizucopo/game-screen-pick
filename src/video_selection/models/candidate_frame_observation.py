@@ -21,6 +21,7 @@ CandidateFrameContentKind = Literal[
     "event_dialogue",
     "event_action",
     "event_setup",
+    "document",
     "shop",
     "map",
     "save",
@@ -31,6 +32,7 @@ CandidateFrameContentKind = Literal[
 ]
 CandidateInterfaceKind = Literal[
     "none",
+    "document",
     "shop",
     "map",
     "save",
@@ -64,6 +66,7 @@ _BLOG_IMAGE_TYPES: dict[CandidateFrameContentKind, BlogImageType] = {
     "event_dialogue": "event",
     "event_action": "event",
     "event_setup": "event",
+    "document": "menu",
     "shop": "menu",
     "map": "menu",
     "save": "menu",
@@ -72,11 +75,12 @@ _BLOG_IMAGE_TYPES: dict[CandidateFrameContentKind, BlogImageType] = {
     "title": "title",
     "other": "other",
 }
-_NO_EXPLANATION_CONTENT = frozenset({"event_setup", "tutorial_help"})
+_NO_EXPLANATION_CONTENT = frozenset({"event_setup", "document", "tutorial_help"})
 _MENU_TEXT_CONTENT = frozenset(
-    {"shop", "map", "save", "tutorial_help", "other_interface"}
+    {"document", "shop", "map", "save", "tutorial_help", "other_interface"}
 )
 _INTERFACE_CONTENT_KINDS: dict[CandidateInterfaceKind, CandidateFrameContentKind] = {
+    "document": "document",
     "shop": "shop",
     "map": "map",
     "save": "save",
@@ -94,6 +98,7 @@ class CandidateFrameObservation:
     scene_slug: str
     content_kind: CandidateFrameContentKind
     interface_kind: CandidateInterfaceKind
+    prominent_event_portrait: bool
     visible_dialogue_text: bool
     visible_action: bool
     visible_character_or_enemy: bool
@@ -114,6 +119,7 @@ class CandidateFrameObservation:
             or not is_valid_scene_slug(self.scene_slug)
             or self.content_kind not in CANDIDATE_FRAME_CONTENT_KINDS
             or self.interface_kind not in CANDIDATE_INTERFACE_KINDS
+            or not isinstance(self.prominent_event_portrait, bool)
             or not isinstance(self.visible_dialogue_text, bool)
             or not isinstance(self.visible_action, bool)
             or not isinstance(self.visible_character_or_enemy, bool)
@@ -142,6 +148,12 @@ class CandidateFrameObservation:
             self.interface_kind != "other_interface" or not self.visible_action
         ):
             return _INTERFACE_CONTENT_KINDS[self.interface_kind]
+        if (
+            self.prominent_event_portrait
+            and not self.visible_dialogue_text
+            and not self.visible_action
+        ):
+            return "event_setup"
         if self.content_kind == "event_dialogue" and not self.visible_dialogue_text:
             return "event_action" if self.visible_action else "event_setup"
         if self.content_kind == "event_action" and not self.visible_action:
