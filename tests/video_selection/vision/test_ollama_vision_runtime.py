@@ -24,6 +24,7 @@ from src.video_selection.models.model_role import ModelRole
 from src.video_selection.models.model_runtime_identity import ModelRuntimeIdentity
 from src.video_selection.models.model_store_kind import ModelStoreKind
 from src.video_selection.models.model_update_status import ModelUpdateStatus
+from src.video_selection.models.report_value import string_looks_private
 from src.video_selection.models.resolved_model import ResolvedModel
 from src.video_selection.models.resolved_model_identity import ResolvedModelIdentity
 from src.video_selection.models.scene_catalog import SceneCatalog
@@ -1546,6 +1547,89 @@ def test_candidate_redacts_verbatim_context_cue_in_spoiler_evidence() -> None:
     first_prompt = _last_message(payloads[0])["content"]
     assert isinstance(first_prompt, str)
     assert "正規化後3〜5文字のCueは全文" in first_prompt
+
+
+def test_candidate_normalizes_multiline_spoiler_evidence_for_publication() -> None:
+    """複数行のSpoiler Evidenceが公開可能な1行へ正規化されること。
+
+    Arrange:
+        - 画像由来だが改行を含むSpoiler Evidence応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 内容を保った1行の安全なEvidenceが返されること
+    """
+    # Arrange
+    response = _annotation_payload()
+    observation = _first_frame_observation(response)
+    observation["spoiler_evidence"] = (
+        "重要人物の姿が画面で示される\n次の形態が表示される"
+    )
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.spoiler_evidence == (
+        "重要人物の姿が画面で示される 次の形態が表示される"
+    )
+    assert not string_looks_private(annotation.spoiler_evidence)
+
+
+@pytest.mark.parametrize(
+    "unsafe_evidence",
+    (
+        "/private/model/result",
+        "https://example.invalid/model/result",
+    ),
+)
+def test_candidate_replaces_private_looking_spoiler_evidence(
+    unsafe_evidence: str,
+) -> None:
+    """非公開形式のSpoiler Evidenceが決定的な安全文へ置換されること。
+
+    Arrange:
+        - 絶対pathまたはendpoint形式のSpoiler Evidence応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - raw応答を含まない安全なEvidenceへ置換されること
+    """
+    # Arrange
+    response = _annotation_payload()
+    _first_frame_observation(response)["spoiler_evidence"] = unsafe_evidence
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.spoiler_evidence == "high相当の進行情報を映像から判定"
+    assert unsafe_evidence not in annotation.spoiler_evidence
+    assert not string_looks_private(annotation.spoiler_evidence)
 
 
 @pytest.mark.parametrize(
