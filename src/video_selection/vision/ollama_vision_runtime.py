@@ -74,6 +74,10 @@ from .vision_contract import (
     CANDIDATE_ANNOTATION_SCHEMA,
     CANDIDATE_ANNOTATION_SCHEMA_VERSION,
     CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+    COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
+    COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
+    COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
+    COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION,
     RETRY_POLICY_VERSION,
     SCENE_CATALOG_PROMPT_VERSION,
     SCENE_CATALOG_SCHEMA,
@@ -89,7 +93,11 @@ Sleeper = Callable[[float], None]
 ModelStateResolver = Callable[[ResolvedModel], ModelArtifact]
 InferenceValue = TypeVar("InferenceValue")
 InferenceParser = Callable[[Mapping[str, object]], InferenceValue]
-StageKind = Literal["scene_catalog", "candidate_annotation"]
+StageKind = Literal[
+    "scene_catalog",
+    "candidate_annotation",
+    "combat_visibility_verification",
+]
 
 _SCENE_ENTRY_KEYS = {"slug", "display_name", "description", "selection_role"}
 _ANNOTATION_KEYS = {
@@ -119,6 +127,30 @@ _FRAME_OBSERVATION_KEYS = {
     "spoiler_risk",
     "spoiler_evidence",
 }
+_COMBAT_VISIBILITY_VERIFICATION_KEYS = {
+    "effect_screen_coverage",
+    "largest_foreground_element",
+    "player_body_visibility",
+    "opponent_body_visibility",
+    "effect_overlaps_combatant_body",
+    "effect_only_frame",
+}
+_EFFECT_SCREEN_COVERAGES = {
+    "none",
+    "under_quarter",
+    "quarter_to_half",
+    "over_half",
+}
+_LARGEST_FOREGROUND_ELEMENTS = {
+    "player_body",
+    "opponent_body",
+    "other_character_body",
+    "environment",
+    "interface",
+    "visual_effect",
+    "unclear",
+}
+_EFFECT_COMBATANT_OVERLAPS = {"none", "partial", "severe"}
 _RETRYABLE_REASONS = {
     VisionRuntimeFailureReason.TRANSPORT_FAILURE,
     VisionRuntimeFailureReason.RESPONSE_INVALID,
@@ -158,6 +190,22 @@ _CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION = (
     "visible_character_or_enemy=falseです。portrait、HUD、文字、影、発光、"
     "移動軌跡だけは本体ではありません。戦闘ではplayer本体と攻撃相手本体を別々に"
     "判定し、portrait、HUD、文字、光、hit effect、影を本体に数えません。"
+)
+_COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION = (
+    "この画像1枚に実際に見える画素だけを観測してください。音声、前後場面、"
+    "説明文は使いません。visual_effectは攻撃の光、爆発、煙、軌跡、白飛びなど"
+    "一時的な演出です。effect_screen_coverageはvisual_effectが画面全体に占める"
+    "面積をnone、under_quarter、quarter_to_half、over_halfから選びます。"
+    "largest_foreground_elementは前景で最も大きく目立つものをplayer_body、"
+    "opponent_body、other_character_body、environment、interface、visual_effect、"
+    "unclearから選びます。player_body_visibilityとopponent_body_visibilityは、"
+    "本体の輪郭と姿勢がはっきり判別できるならclear、一部がエフェクト等に隠れる"
+    "ならpartial、本体を判別できなければabsentです。光、影、名前、HUDを本体に"
+    "数えません。effect_overlaps_combatant_bodyはvisual_effectがplayerまたは"
+    "opponentの本体へ重なる程度をnone、partial、severeから選びます。"
+    "effect_only_frameは画面中央の主内容が一時的な光・爆発・煙だけで、人物・敵・"
+    "物体の本体を主対象として一つも明瞭に判別できない場合だけtrueです。敵や人物"
+    "の本体が一体でもclearならfalseです。"
 )
 _CANDIDATE_ANNOTATION_SEMANTICS = (
     "各frameを他のframeの内容と混ぜず、対応するframe_idごとに個別評価します。"
@@ -297,7 +345,7 @@ class OllamaVisionRuntime:
 
         def parse_candidate(
             value: Mapping[str, object],
-        ) -> tuple[CandidateAnnotation, bool]:
+        ) -> tuple[CandidateAnnotation, bool, bool]:
             nonlocal candidate_response_count
             candidate_response_count += 1
             (
@@ -306,25 +354,20 @@ class OllamaVisionRuntime:
                 requires_dialogue_verification,
                 requires_combat_verification,
             ) = _parse_candidate_annotation(value, request, catalog)
-            if (
-                requires_dialogue_verification or requires_combat_verification
-            ) and candidate_response_count == 1:
-                if requires_dialogue_verification and requires_combat_verification:
-                    validation_code = (
-                        "candidate_annotation_direct_visibility_unverified"
-                    )
-                elif requires_dialogue_verification:
-                    validation_code = (
-                        "candidate_annotation_dialogue_visibility_unverified"
-                    )
-                else:
-                    validation_code = (
-                        "candidate_annotation_combat_visibility_unverified"
-                    )
-                raise _domain_error(validation_code)
-            return annotation, redacted
+            if requires_dialogue_verification and candidate_response_count == 1:
+                raise _domain_error(
+                    "candidate_annotation_dialogue_visibility_unverified"
+                )
+            return annotation, redacted, requires_combat_verification
 
-        (annotation, free_text_redacted), diagnostics = self._infer(
+        (
+            (
+                annotation,
+                free_text_redacted,
+                requires_combat_verification,
+            ),
+            diagnostics,
+        ) = self._infer(
             stage_kind="candidate_annotation",
             request_fingerprint=_fingerprint(semantic_input),
             payload=_candidate_payload(request, catalog, model, num_ctx),
@@ -333,6 +376,37 @@ class OllamaVisionRuntime:
             image_count=len(request.frame_candidates),
             context_cue_count=len(request.context_cues),
         )
+        if requires_combat_verification:
+            verification_input = _combat_visibility_verification_semantic_input(
+                annotation.candidate,
+                model,
+                num_ctx,
+            )
+            (
+                (
+                    opponent_body_visibility,
+                    effect_only_frame,
+                ),
+                verification_diagnostics,
+            ) = self._infer(
+                stage_kind="combat_visibility_verification",
+                request_fingerprint=_fingerprint(verification_input),
+                payload=_combat_visibility_verification_payload(
+                    annotation.candidate,
+                    model,
+                    num_ctx,
+                ),
+                parser=_parse_combat_visibility_verification,
+                model=model,
+                image_count=1,
+                context_cue_count=0,
+            )
+            if opponent_body_visibility != "clear" or effect_only_frame:
+                annotation = replace(annotation, explanation_value="none")
+            diagnostics = _merge_candidate_diagnostics(
+                diagnostics,
+                verification_diagnostics,
+            )
         if free_text_redacted:
             diagnostics = replace(
                 diagnostics,
@@ -582,6 +656,28 @@ def _candidate_payload(
     }
 
 
+def _combat_visibility_verification_payload(
+    candidate: FrameCandidate,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    """戦闘の掲載境界だけを一画像へ確認する小さなstructured requestを返す。"""
+    return {
+        "model": model.configured_name,
+        "stream": False,
+        "think": False,
+        "format": COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
+        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "messages": [
+            {
+                "role": "user",
+                "content": _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION,
+                "images": [base64.b64encode(candidate.image_bytes).decode()],
+            }
+        ],
+    }
+
+
 def _candidate_schema(
     request: CandidateAnnotationRequest,
     catalog: SceneCatalog,
@@ -640,16 +736,6 @@ def _with_repair_code(
             "on_screen_dialogue_text_visible=trueとし、対応する"
             "dialogue_text_presentationを返します。人物portraitや会話中らしい構図"
             "だけで文字を読めない場合はfalseかつnoneにします。"
-        )
-    if recheck_candidate_observations:
-        repair += (
-            "\n掲載可能とされた戦闘を画像だけに対して再確認します。音声やContext Cueを"
-            "根拠にしません。攻撃相手本体の輪郭と姿勢が明瞭な場合だけ"
-            "opponent_body_visibility=clearです。一部が隠れる場合はpartial、本体を"
-            "判別できない場合はabsentです。光、爆発、煙、影、名前、HP bar、HUDを"
-            "攻撃相手本体に数えません。画面中央の主内容が一時的な光・爆発・煙だけで、"
-            "人物・敵・物体の本体を主対象として一つも明瞭に判別できない場合は"
-            "effect_only_frame=trueです。"
         )
     if recheck_candidate_observations:
         repair += (
@@ -829,6 +915,30 @@ def _parse_candidate_annotation(
         )
     except ValueError:
         raise _domain_error("candidate_annotation_domain_invalid") from None
+
+
+def _parse_combat_visibility_verification(
+    value: Mapping[str, object],
+) -> tuple[CharacterBodyVisibility, bool]:
+    """専用schemaの全fieldを検証し、掲載境界に必要な二値だけを返す。"""
+    if set(value) != _COMBAT_VISIBILITY_VERIFICATION_KEYS:
+        raise _schema_error("combat_visibility_verification_schema_invalid")
+    effect_screen_coverage = value.get("effect_screen_coverage")
+    largest_foreground_element = value.get("largest_foreground_element")
+    player_body_visibility = value.get("player_body_visibility")
+    opponent_body_visibility = value.get("opponent_body_visibility")
+    effect_overlap = value.get("effect_overlaps_combatant_body")
+    effect_only_frame = value.get("effect_only_frame")
+    if (
+        effect_screen_coverage not in _EFFECT_SCREEN_COVERAGES
+        or largest_foreground_element not in _LARGEST_FOREGROUND_ELEMENTS
+        or player_body_visibility not in CHARACTER_BODY_VISIBILITIES
+        or opponent_body_visibility not in CHARACTER_BODY_VISIBILITIES
+        or effect_overlap not in _EFFECT_COMBATANT_OVERLAPS
+        or not isinstance(effect_only_frame, bool)
+    ):
+        raise _schema_error("combat_visibility_verification_schema_invalid")
+    return opponent_body_visibility, effect_only_frame
 
 
 def _parse_candidate_frame_observations(
@@ -1060,6 +1170,36 @@ def _candidate_semantic_input(
         "prompt_version": CANDIDATE_ANNOTATION_PROMPT_VERSION,
         "schema_version": CANDIDATE_ANNOTATION_SCHEMA_VERSION,
         "stage_contract_version": CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+        "combat_visibility_verification_prompt_version": (
+            COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION
+        ),
+        "combat_visibility_verification_schema_version": (
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_visibility_verification_stage_contract_version": (
+            COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "retry_policy_version": RETRY_POLICY_VERSION,
+    }
+
+
+def _combat_visibility_verification_semantic_input(
+    candidate: FrameCandidate,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    return {
+        "frame_candidate": {
+            "id": candidate.identifier,
+            "image_sha256": hashlib.sha256(candidate.image_bytes).hexdigest(),
+        },
+        "model": {**model.semantic_input(), "num_ctx": num_ctx},
+        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "prompt_version": COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
+        "schema_version": COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
+        "stage_contract_version": (
+            COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
 
@@ -1136,11 +1276,53 @@ def _contract_versions(stage_kind: StageKind) -> tuple[str, str, str]:
             SCENE_CATALOG_SCHEMA_VERSION,
             SCENE_CATALOG_STAGE_CONTRACT_VERSION,
         )
+    if stage_kind == "combat_visibility_verification":
+        return (
+            COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
+            COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION,
+        )
     return (
         CANDIDATE_ANNOTATION_PROMPT_VERSION,
         CANDIDATE_ANNOTATION_SCHEMA_VERSION,
         CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
     )
+
+
+def _merge_candidate_diagnostics(
+    primary: VisionInferenceDiagnostics,
+    verification: VisionInferenceDiagnostics,
+) -> VisionInferenceDiagnostics:
+    """注釈と専用可視性確認のsafe計測値を一つのStage診断へ集約する。"""
+    if (
+        primary.model_name != verification.model_name
+        or primary.model_identity != verification.model_identity
+        or primary.runtime_identity != verification.runtime_identity
+        or primary.retry_policy_version != verification.retry_policy_version
+    ):
+        msg = "Candidate Annotationの推論診断identityが一致しません"
+        raise ValueError(msg)
+    return replace(
+        primary,
+        attempt_count=primary.attempt_count + verification.attempt_count,
+        validation_code=primary.validation_code or verification.validation_code,
+        duration_seconds=primary.duration_seconds + verification.duration_seconds,
+        prompt_eval_count=_sum_optional_counts(
+            primary.prompt_eval_count,
+            verification.prompt_eval_count,
+        ),
+        eval_count=_sum_optional_counts(
+            primary.eval_count,
+            verification.eval_count,
+        ),
+        done_reason=verification.done_reason or primary.done_reason,
+    )
+
+
+def _sum_optional_counts(left: int | None, right: int | None) -> int | None:
+    if left is None or right is None:
+        return None
+    return left + right
 
 
 def _non_negative_int(value: object) -> int | None:

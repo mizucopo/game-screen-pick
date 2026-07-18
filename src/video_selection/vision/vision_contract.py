@@ -21,8 +21,17 @@ SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v12"
-RETRY_POLICY_VERSION = "ollama-retry-v6"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v13"
+COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION = (
+    "combat-visibility-verification-prompt-v1"
+)
+COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION = (
+    "combat-visibility-verification-schema-v1"
+)
+COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION = (
+    "combat-visibility-verification-stage-v1"
+)
+RETRY_POLICY_VERSION = "ollama-retry-v7"
 
 SCENE_CATALOG_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -175,5 +184,49 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
         "frame_observations",
         "context_relevance",
         "supporting_context_cue_ids",
+    ],
+}
+
+COMBAT_VISIBILITY_VERIFICATION_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "effect_screen_coverage": {
+            "type": "string",
+            "enum": ["none", "under_quarter", "quarter_to_half", "over_half"],
+        },
+        "largest_foreground_element": {
+            "type": "string",
+            "enum": [
+                "player_body",
+                "opponent_body",
+                "other_character_body",
+                "environment",
+                "interface",
+                "visual_effect",
+                "unclear",
+            ],
+        },
+        "player_body_visibility": {
+            "type": "string",
+            "enum": list(CHARACTER_BODY_VISIBILITIES),
+        },
+        "opponent_body_visibility": {
+            "type": "string",
+            "enum": list(CHARACTER_BODY_VISIBILITIES),
+        },
+        "effect_overlaps_combatant_body": {
+            "type": "string",
+            "enum": ["none", "partial", "severe"],
+        },
+        "effect_only_frame": {"type": "boolean"},
+    },
+    "required": [
+        "effect_screen_coverage",
+        "largest_foreground_element",
+        "player_body_visibility",
+        "opponent_body_visibility",
+        "effect_overlaps_combatant_body",
+        "effect_only_frame",
     ],
 }

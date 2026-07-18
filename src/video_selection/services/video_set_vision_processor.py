@@ -32,6 +32,9 @@ from ..vision.vision_contract import (
     CANDIDATE_ANNOTATION_PROMPT_VERSION,
     CANDIDATE_ANNOTATION_SCHEMA_VERSION,
     CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+    COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
+    COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
+    COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION,
     RETRY_POLICY_VERSION,
     SCENE_CATALOG_PROMPT_VERSION,
     SCENE_CATALOG_SCHEMA_VERSION,
@@ -424,6 +427,15 @@ def _annotation_semantic_input(
         "prompt_version": CANDIDATE_ANNOTATION_PROMPT_VERSION,
         "schema_version": CANDIDATE_ANNOTATION_SCHEMA_VERSION,
         "stage_contract_version": CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+        "combat_visibility_verification_prompt_version": (
+            COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION
+        ),
+        "combat_visibility_verification_schema_version": (
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_visibility_verification_stage_contract_version": (
+            COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
 

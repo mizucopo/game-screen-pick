@@ -1470,14 +1470,22 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     ) -> object:
         assert payload is not None
         payloads.append(payload)
-        response = _frame_observation_payload(
-            (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+                )
+            )
+        return _response(
+            {
+                "effect_screen_coverage": "over_half",
+                "largest_foreground_element": "visual_effect",
+                "player_body_visibility": "partial",
+                "opponent_body_visibility": confirmed_opponent_visibility,
+                "effect_overlaps_combatant_body": "severe",
+                "effect_only_frame": confirmed_effect_only,
+            }
         )
-        if len(payloads) == 2:
-            observation = _first_frame_observation(response)
-            observation["opponent_body_visibility"] = confirmed_opponent_visibility
-            observation["effect_only_frame"] = confirmed_effect_only
-        return _response(response)
 
     runtime = OllamaVisionRuntime(
         "http://localhost:11434",
@@ -1498,28 +1506,36 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     # Assert
     assert annotation.explanation_value == expected_value
     assert diagnostics.attempt_count == 2
-    assert diagnostics.validation_code == (
-        "candidate_annotation_combat_visibility_unverified"
-    )
+    assert diagnostics.validation_code is None
+    verification_schema = payloads[1]["format"]
+    assert isinstance(verification_schema, Mapping)
+    verification_properties = verification_schema.get("properties")
+    assert isinstance(verification_properties, Mapping)
+    assert set(verification_properties) == {
+        "effect_screen_coverage",
+        "largest_foreground_element",
+        "player_body_visibility",
+        "opponent_body_visibility",
+        "effect_overlaps_combatant_body",
+        "effect_only_frame",
+    }
     second_prompt = _last_message(payloads[1])["content"]
     assert isinstance(second_prompt, str)
-    assert "candidate_annotation_combat_visibility_unverified" in second_prompt
-    assert "攻撃相手本体の輪郭と姿勢" in second_prompt
-    assert "光、爆発、煙、影、名前、HP bar" in second_prompt
-    assert "音声やContext Cueを根拠にしません" in second_prompt
-    assert "spoiler_riskがnoneならspoiler_evidenceは空文字列" in second_prompt
+    assert "この画像1枚に実際に見える画素だけ" in second_prompt
+    assert "本体の輪郭と姿勢" in second_prompt
+    assert "音声、前後場面、説明文は使いません" in second_prompt
 
 
-def test_dialogue_and_combat_visibility_are_rechecked_in_one_retry() -> None:
-    """台詞と戦闘の直接観測が必要な場合も一回のretryへまとめられること。
+def test_combat_visibility_schema_failure_is_retried() -> None:
+    """戦闘可視性専用確認のschema違反が一回だけ再試行されること。
 
     Arrange:
-        - 初回に文脈付き映画演出の台詞と掲載可能な戦闘を同時に返す応答が用意される
-        - 再確認では画面内台詞と敵本体が見えない応答が用意される
+        - 掲載可能な戦闘応答と、必須fieldを欠く専用応答が用意される
+        - 再試行では敵本体が明瞭な有効応答が用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 一回のretryに両方の再確認指示が含まれ、掲載不可にされること
+        - stable validation code付きの再試行結果が採用されること
     """
     # Arrange
     payloads: list[Mapping[str, object]] = []
@@ -1532,17 +1548,95 @@ def test_dialogue_and_combat_visibility_are_rechecked_in_one_retry() -> None:
     ) -> object:
         assert payload is not None
         payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+                )
+            )
+        verification = {
+            "effect_screen_coverage": "under_quarter",
+            "largest_foreground_element": "opponent_body",
+            "player_body_visibility": "clear",
+            "opponent_body_visibility": "clear",
+            "effect_overlaps_combatant_body": "partial",
+            "effect_only_frame": False,
+        }
+        if len(payloads) == 2:
+            del verification["effect_only_frame"]
+        return _response(verification)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "high"
+    assert diagnostics.attempt_count == 3
+    assert (
+        diagnostics.validation_code == "combat_visibility_verification_schema_invalid"
+    )
+    third_prompt = _last_message(payloads[2])["content"]
+    assert isinstance(third_prompt, str)
+    assert "combat_visibility_verification_schema_invalid" in third_prompt
+
+
+def test_dialogue_and_combat_visibility_are_rechecked_separately() -> None:
+    """台詞の修復後に戦闘可視性が専用推論で再確認されること。
+
+    Arrange:
+        - 初回に文脈付き映画演出の台詞と掲載可能な戦闘を同時に返す応答が用意される
+        - 台詞修復後に敵本体が見えない専用応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 台詞と戦闘が別々に再確認され、掲載不可にされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 3:
+            return _response(
+                {
+                    "effect_screen_coverage": "under_quarter",
+                    "largest_foreground_element": "player_body",
+                    "player_body_visibility": "clear",
+                    "opponent_body_visibility": "absent",
+                    "effect_overlaps_combatant_body": "partial",
+                    "effect_only_frame": False,
+                }
+            )
         response = _frame_observation_payload(
             (("frame-a", "battle", "event_dialogue", "high", "dialogue"),)
         )
         observation = _first_frame_observation(response)
         observation["cinematic_event_presentation"] = True
+        observation["visible_action"] = True
         observation["combat_action"] = True
         observation["opponent_body_visibility"] = "clear"
         if len(payloads) == 2:
             observation["on_screen_dialogue_text_visible"] = False
             observation["dialogue_text_presentation"] = "none"
-            observation["opponent_body_visibility"] = "absent"
         return _response(response)
 
     runtime = OllamaVisionRuntime(
@@ -1563,26 +1657,28 @@ def test_dialogue_and_combat_visibility_are_rechecked_in_one_retry() -> None:
 
     # Assert
     assert annotation.explanation_value == "none"
-    assert diagnostics.attempt_count == 2
+    assert diagnostics.attempt_count == 3
     assert diagnostics.validation_code == (
-        "candidate_annotation_direct_visibility_unverified"
+        "candidate_annotation_dialogue_visibility_unverified"
     )
     second_prompt = _last_message(payloads[1])["content"]
     assert isinstance(second_prompt, str)
     assert "画面内台詞文字を画像だけに対して再確認" in second_prompt
-    assert "掲載可能とされた戦闘を画像だけに対して再確認" in second_prompt
+    third_prompt = _last_message(payloads[2])["content"]
+    assert isinstance(third_prompt, str)
+    assert "この画像1枚に実際に見える画素だけ" in third_prompt
 
 
-def test_relationship_repair_also_rechecks_combat_visibility() -> None:
-    """関係違反のretryでも戦闘の直接観測が同時に再確認されること。
+def test_relationship_repair_is_followed_by_combat_visibility_check() -> None:
+    """関係違反の修復後に戦闘可視性が専用推論で再確認されること。
 
     Arrange:
         - 初回はSpoiler関係が不正で、敵本体が明瞭とされた戦闘応答が用意される
-        - 2回目はSpoiler関係が修正され、敵本体なしと再確認された応答が用意される
+        - 2回目はSpoiler関係が修正され、専用応答では敵本体なしとされる
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 3回目を要求せず、関係修正と直接観測が一回のretryで確定されること
+        - 関係修正後の専用推論で掲載不可にされること
     """
     # Arrange
     payloads: list[Mapping[str, object]] = []
@@ -1595,6 +1691,17 @@ def test_relationship_repair_also_rechecks_combat_visibility() -> None:
     ) -> object:
         assert payload is not None
         payloads.append(payload)
+        if len(payloads) == 3:
+            return _response(
+                {
+                    "effect_screen_coverage": "over_half",
+                    "largest_foreground_element": "visual_effect",
+                    "player_body_visibility": "partial",
+                    "opponent_body_visibility": "absent",
+                    "effect_overlaps_combatant_body": "severe",
+                    "effect_only_frame": True,
+                }
+            )
         response = _frame_observation_payload(
             (("frame-a", "battle", "gameplay_action", "high", "hud"),)
         )
@@ -1603,8 +1710,6 @@ def test_relationship_repair_also_rechecks_combat_visibility() -> None:
         observation["spoiler_evidence"] = (
             "" if len(payloads) == 1 else "画面内に軽微な進行情報が見える"
         )
-        if len(payloads) == 2:
-            observation["opponent_body_visibility"] = "absent"
         return _response(response)
 
     runtime = OllamaVisionRuntime(
@@ -1625,13 +1730,15 @@ def test_relationship_repair_also_rechecks_combat_visibility() -> None:
 
     # Assert
     assert annotation.explanation_value == "none"
-    assert diagnostics.attempt_count == 2
+    assert diagnostics.attempt_count == 3
     assert diagnostics.validation_code == "candidate_annotation_relationship_invalid"
     second_prompt = _last_message(payloads[1])["content"]
     assert isinstance(second_prompt, str)
     assert "関係を必ず修正します" in second_prompt
-    assert "攻撃相手本体の輪郭と姿勢" in second_prompt
-    assert len(payloads) == 2
+    third_prompt = _last_message(payloads[2])["content"]
+    assert isinstance(third_prompt, str)
+    assert "この画像1枚に実際に見える画素だけ" in third_prompt
+    assert len(payloads) == 3
 
 
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
