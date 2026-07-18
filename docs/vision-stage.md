@@ -21,9 +21,9 @@ Ollamaの`/api/chat`を次の2種類だけに使います。
 1. `build-scene-catalog`: Video Set共有の3〜8 sceneを一回生成します。`other`を必ず1件含め、そのScene Selection Roleは`ordinary`です。
 2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、先に確定した一つのRepresentative Frameの意味観測を一回の推論で返します。画像は対応するFrame Candidate IDとその画像だけに対する直接観測条件を持つmessageで送り、同じMoment内で切り替わった別画面の内容を混ぜません。総合分類の指示は画像messageの後に一度だけ送ります。
 
-Scene Catalog promptは`ordinary`、`cinematic`、`recurring_gameplay`の意味を明示し、同じplay画面を一時的な敵や発光だけで別sceneへ分割しないよう要求します。Candidate Annotation promptは、総合分類より先にInterface Kind、会話eventの大きな人物立ち絵・胸像の有無、黒帯・HUDのない固定camera・人物配置から分かるCinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、具体的な動作・判別可能な人物または敵の有無、戦闘かどうかとplayer本体・攻撃相手本体それぞれの可視性を直接観測させます。その後、画面内容、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Context Cue Relevance、Spoiler Riskの全境界を評価させます。Dialogue Text Presentationは`none`、`dialogue_box`、`speech_bubble`、`subtitle_overlay`、`other`のいずれかとし、画面内台詞文字の真偽値と一致させます。音声やContext Cueに会話文があっても、画像内で文字を読めなければ`none`です。手紙・手記・日誌・記録を読む画面は`document`とし、文書本文を台詞にしません。戦闘HUDだけを`other_interface`とせず、会話eventの大きな人物立ち絵・胸像と画面隅の小さな常設HUD portraitを区別します。通常の戦闘・探索HUDをCinematic Event Presentationにしません。人物portrait、空の台詞欄、説明文、目的表示、tutorial文、menu項目を台詞にしません。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体に数えません。各frame内に実在する情報だけを評価し、別frameの台詞やContext Cueを画面内情報として補いません。Context Cueが存在するだけでは`strong`にせず、進行位置だけではSpoiler Riskを上げません。
+Scene Catalog promptは`ordinary`、`cinematic`、`recurring_gameplay`の意味を明示し、同じplay画面を一時的な敵や発光だけで別sceneへ分割しないよう要求します。Candidate Annotation promptは、総合分類より先にInterface Kind、会話eventの大きな人物立ち絵・胸像の有無、黒帯・HUDのない固定camera・人物配置から分かるCinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、具体的な動作・判別可能な人物または敵の有無、戦闘かどうか、player本体・攻撃相手本体それぞれの`clear`・`partial`・`absent`、一時的な光・爆発・煙だけが主内容かを直接観測させます。その後、画面内容、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Context Cue Relevance、Spoiler Riskの全境界を評価させます。Dialogue Text Presentationは`none`、`dialogue_box`、`speech_bubble`、`subtitle_overlay`、`other`のいずれかとし、画面内台詞文字の真偽値と一致させます。音声やContext Cueに会話文があっても、画像内で文字を読めなければ`none`です。手紙・手記・日誌・記録を読む画面は`document`とし、文書本文を台詞にしません。戦闘HUDだけを`other_interface`とせず、会話eventの大きな人物立ち絵・胸像と画面隅の小さな常設HUD portraitを区別します。通常の戦闘・探索HUDをCinematic Event Presentationにしません。人物portrait、空の台詞欄、説明文、目的表示、tutorial文、menu項目を台詞にしません。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体に数えません。各frame内に実在する情報だけを評価し、別frameの台詞やContext Cueを画面内情報として補いません。Context Cueが存在するだけでは`strong`にせず、進行位置だけではSpoiler Riskを上げません。
 
-modelはRepresentative Frame、Blog Image Type、eligible/selected flagを返しません。Representative Frameは推論前にlocalで確定済みです。local処理は具体的なInterface Kindを曖昧な画面内容分類より優先します。ただし、具体的な動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として画面内容を上書きしません。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正してから、Blog Image Type、公開用要約、選択理由を決定的に導出します。`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、player本体と攻撃相手本体の片方でも判別できない戦闘、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`へ正規化します。追加推論は行いません。
+modelはRepresentative Frame、Blog Image Type、eligible/selected flagを返しません。Representative Frameは推論前にlocalで確定済みです。local処理は具体的なInterface Kindを曖昧な画面内容分類より優先します。ただし、具体的な動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として画面内容を上書きしません。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正してから、Blog Image Type、公開用要約、選択理由を決定的に導出します。`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、攻撃相手本体が`clear`でない戦闘、一時的な光・爆発・煙だけが主内容のframe、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`へ正規化します。この正規化だけを目的とする追加推論は行いません。
 
 各推論attemptの直前と応答受領直後に`/api/version`と`/api/tags`でOllama server versionとconfigured tagのlocal完全digestを再確認します。Model LifecycleでfreezeしたRuntime IdentityまたはResolved Model Identityと異なる場合は、別runtime／digestの結果を同じfingerprintへ保存せず停止します。この確認はtagの更新や再解決を行いません。
 
@@ -40,8 +40,9 @@ OllamaのCandidate Annotation responseはframeごとに次の意味情報だけ�
 - 具体的な動作の有無
 - 判別可能な人物または敵の有無
 - 戦闘かどうか
-- 判別可能なplayer本体の有無
-- 判別可能な攻撃相手本体の有無
+- player本体の可視性（`clear`、`partial`、`absent`）
+- 攻撃相手本体の可視性（`clear`、`partial`、`absent`）
+- 一時的な光・爆発・煙だけが主内容か
 - Explanation Value
 - Screen Text Kind
 - 主対象の視認性

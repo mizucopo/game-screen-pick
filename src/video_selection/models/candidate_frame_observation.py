@@ -42,6 +42,7 @@ CandidateInterfaceKind = Literal[
 ]
 PrimarySubjectVisibility = Literal["clear", "partial", "absent"]
 TransientObstruction = Literal["none", "partial", "severe"]
+CharacterBodyVisibility = Literal["clear", "partial", "absent"]
 DialogueTextPresentation = Literal[
     "none",
     "dialogue_box",
@@ -65,6 +66,10 @@ PRIMARY_SUBJECT_VISIBILITIES = cast(
 TRANSIENT_OBSTRUCTIONS = cast(
     tuple[TransientObstruction, ...],
     get_args(TransientObstruction),
+)
+CHARACTER_BODY_VISIBILITIES = cast(
+    tuple[CharacterBodyVisibility, ...],
+    get_args(CharacterBodyVisibility),
 )
 DIALOGUE_TEXT_PRESENTATIONS = cast(
     tuple[DialogueTextPresentation, ...],
@@ -116,8 +121,9 @@ class CandidateFrameObservation:
     visible_action: bool
     visible_character_or_enemy: bool
     combat_action: bool
-    visible_player_character: bool
-    visible_opponent: bool
+    player_body_visibility: CharacterBodyVisibility
+    opponent_body_visibility: CharacterBodyVisibility
+    effect_only_frame: bool
     explanation_value: ExplanationValue
     screen_text_kind: ScreenTextKind
     primary_subject_visibility: PrimarySubjectVisibility
@@ -140,8 +146,9 @@ class CandidateFrameObservation:
             or not isinstance(self.visible_action, bool)
             or not isinstance(self.visible_character_or_enemy, bool)
             or not isinstance(self.combat_action, bool)
-            or not isinstance(self.visible_player_character, bool)
-            or not isinstance(self.visible_opponent, bool)
+            or self.player_body_visibility not in CHARACTER_BODY_VISIBILITIES
+            or self.opponent_body_visibility not in CHARACTER_BODY_VISIBILITIES
+            or not isinstance(self.effect_only_frame, bool)
             or self.explanation_value not in EXPLANATION_VALUES
             or self.screen_text_kind not in SCREEN_TEXT_KINDS
             or self.primary_subject_visibility not in PRIMARY_SUBJECT_VISIBILITIES
@@ -195,10 +202,8 @@ class CandidateFrameObservation:
                 self.effective_content_kind == "shop"
                 and not self.visible_character_or_enemy
             )
-            or (
-                self.combat_action
-                and not (self.visible_player_character and self.visible_opponent)
-            )
+            or (self.combat_action and self.opponent_body_visibility != "clear")
+            or self.effect_only_frame
             or self.primary_subject_visibility == "absent"
             or self.transient_obstruction == "severe"
             or is_low_information

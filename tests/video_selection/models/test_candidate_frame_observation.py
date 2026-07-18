@@ -10,6 +10,7 @@ from src.video_selection.models.candidate_frame_observation import (
     CandidateFrameContentKind,
     CandidateFrameObservation,
     CandidateInterfaceKind,
+    CharacterBodyVisibility,
 )
 from src.video_selection.models.frame_candidate import FrameCandidate
 
@@ -112,8 +113,9 @@ def test_atomic_observations_normalize_ambiguous_model_content(
         visible_action=visible_action,
         visible_character_or_enemy=visible_character_or_enemy,
         combat_action=False,
-        visible_player_character=visible_character_or_enemy,
-        visible_opponent=False,
+        player_body_visibility=("clear" if visible_character_or_enemy else "absent"),
+        opponent_body_visibility="absent",
+        effect_only_frame=False,
         explanation_value="high",
         screen_text_kind="dialogue",
         primary_subject_visibility="clear",
@@ -133,15 +135,15 @@ def test_atomic_observations_normalize_ambiguous_model_content(
     assert blog_image_type == expected_blog_image_type
 
 
-def test_combat_without_both_visible_participants_has_no_explanation_value() -> None:
-    """片方しか判別できない戦闘がブログ掲載価値なしにされること。
+def test_combat_without_visible_opponent_has_no_explanation_value() -> None:
+    """敵本体を判別できない戦闘がブログ掲載価値なしにされること。
 
     Arrange:
-        - 戦闘中だが発光でplayer本体が判別できない高評価frameが用意される
+        - 戦闘中だが発光で敵本体が判別できない高評価frameが用意される
     Act:
         - 観測の決定的なExplanation Valueが参照される
     Assert:
-        - 相手だけ見える戦闘が説明価値なしにされること
+        - playerだけ見える戦闘が説明価値なしにされること
     """
     # Arrange
     observation = CandidateFrameObservation(
@@ -156,8 +158,57 @@ def test_combat_without_both_visible_participants_has_no_explanation_value() -> 
         visible_action=True,
         visible_character_or_enemy=True,
         combat_action=True,
-        visible_player_character=False,
-        visible_opponent=True,
+        player_body_visibility="clear",
+        opponent_body_visibility="absent",
+        effect_only_frame=False,
+        explanation_value="high",
+        screen_text_kind="hud",
+        primary_subject_visibility="clear",
+        transient_obstruction="none",
+        spoiler_risk="none",
+        spoiler_evidence="",
+    )
+
+    # Act
+    explanation_value = observation.effective_explanation_value
+
+    # Assert
+    assert explanation_value == "none"
+
+
+@pytest.mark.parametrize(
+    ("opponent_body_visibility", "effect_only_frame"),
+    (("partial", False), ("absent", False), ("clear", True)),
+)
+def test_unreadable_action_frame_has_no_explanation_value(
+    opponent_body_visibility: CharacterBodyVisibility,
+    effect_only_frame: bool,
+) -> None:
+    """敵本体が不明瞭またはエフェクトだけの動作frameが掲載不可にされること。
+
+    Arrange:
+        - 敵本体が不明瞭か、一時的なエフェクトだけが主内容の高評価frameが用意される
+    Act:
+        - 観測の決定的なExplanation Valueが参照される
+    Assert:
+        - modelの高評価より直接観測が優先され、説明価値なしにされること
+    """
+    # Arrange
+    observation = CandidateFrameObservation(
+        candidate=FrameCandidate("frm_" + "b" * 64, b"image"),
+        scene_slug="battle",
+        content_kind="event_action",
+        interface_kind="none",
+        prominent_event_portrait=False,
+        cinematic_event_presentation=False,
+        visible_dialogue_text=False,
+        dialogue_text_presentation="none",
+        visible_action=True,
+        visible_character_or_enemy=True,
+        combat_action=True,
+        player_body_visibility="partial",
+        opponent_body_visibility=opponent_body_visibility,
+        effect_only_frame=effect_only_frame,
         explanation_value="high",
         screen_text_kind="hud",
         primary_subject_visibility="clear",
@@ -218,8 +269,9 @@ def test_static_document_and_silent_event_presentation_have_no_explanation_value
         visible_action=False,
         visible_character_or_enemy=True,
         combat_action=False,
-        visible_player_character=True,
-        visible_opponent=False,
+        player_body_visibility="clear",
+        opponent_body_visibility="absent",
+        effect_only_frame=False,
         explanation_value="high",
         screen_text_kind="none",
         primary_subject_visibility="clear",
@@ -266,8 +318,9 @@ def test_dialogue_visibility_requires_a_visible_text_presentation() -> None:
             visible_action=False,
             visible_character_or_enemy=True,
             combat_action=False,
-            visible_player_character=True,
-            visible_opponent=False,
+            player_body_visibility="clear",
+            opponent_body_visibility="absent",
+            effect_only_frame=False,
             explanation_value="high",
             screen_text_kind="dialogue",
             primary_subject_visibility="clear",

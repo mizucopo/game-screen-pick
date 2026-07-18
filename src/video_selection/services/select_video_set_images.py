@@ -42,7 +42,8 @@ _SPOILER_SENSITIVITY_ORDER: tuple[SpoilerSensitivity, ...] = (
 _COVERAGE_TYPES = ("normal_gameplay", "event", "menu")
 _COVERAGE_PERCENTAGES = (70, 25, 5)
 _SIMILARITY_RELAXATION_DELTAS = (0.03, 0.06, 0.10, 0.15)
-_MAX_SIMILARITY_CEILING = 0.98
+_MAX_AUTOMATIC_SIMILARITY_CEILING = 0.97
+_MAX_CONFIGURED_SIMILARITY_THRESHOLD = 0.98
 _VISUAL_NEAR_DUPLICATE_THRESHOLD = 0.995
 _VARIANT_GROUP_SIMILARITY_THRESHOLD = 0.95
 _SIMILARITY_REJECTION_REASONS = frozenset(
@@ -262,13 +263,14 @@ def _select_with_major_spoiler_limit(
 
 
 def _similarity_passes(base_threshold: float) -> tuple[float, ...]:
+    terminal_ceiling = max(base_threshold, _MAX_AUTOMATIC_SIMILARITY_CEILING)
     candidates = (
         base_threshold,
         *(
-            min(base_threshold + delta, _MAX_SIMILARITY_CEILING)
+            min(base_threshold + delta, terminal_ceiling)
             for delta in _SIMILARITY_RELAXATION_DELTAS
         ),
-        _MAX_SIMILARITY_CEILING,
+        terminal_ceiling,
     )
     return tuple(dict.fromkeys(candidates))
 
@@ -289,7 +291,7 @@ def _validate_inputs(
         requested_count < 1
         or spoiler_sensitivity not in _SPOILER_PENALTIES
         or not math.isfinite(similarity_threshold)
-        or not 0 <= similarity_threshold <= 0.98
+        or not 0 <= similarity_threshold <= _MAX_CONFIGURED_SIMILARITY_THRESHOLD
         or len(identifiers) != len(set(identifiers))
         or len(moment_ids) != len(set(moment_ids))
         or len(shortlist_ranks) != len(set(shortlist_ranks))

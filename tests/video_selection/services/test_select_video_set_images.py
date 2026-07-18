@@ -307,13 +307,64 @@ def test_visual_near_duplicate_is_rejected_even_when_selection_is_short() -> Non
     # Assert
     assert [item.candidate.identifier for item in result.selected] == [first.identifier]
     assert result.shortfall is True
-    assert result.final_similarity_ceiling == 0.98
+    assert result.final_similarity_ceiling == 0.97
     assert len(result.rejected) == 1
     rejection = result.rejected[0]
     assert rejection.candidate.identifier == second.identifier
     assert rejection.reason_code == "visual_near_duplicate"
     assert rejection.nearest_selected_image_id == first.identifier
     assert rejection.similarity == pytest.approx(0.996)
+
+
+def test_automatic_relaxation_does_not_select_redundant_gameplay_frame() -> None:
+    """自動緩和で視覚的に冗長なgameplay画像が穴埋めされないこと。
+
+    Arrange:
+        - 同じ戦闘をほぼ同じ構図で示すsimilarity 0.973の2候補が用意される
+        - 組み込み既定値から2枚の選定が要求される
+    Act:
+        - selectorが自動similarity passの終端まで実行される
+    Assert:
+        - 2枚目が選択されず、0.97の終端でSelection Shortfallになること
+    """
+    # Arrange
+    first = _candidate(
+        "7",
+        quality=0.9,
+        feature=(1.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+    redundant = _candidate(
+        "8",
+        quality=0.8,
+        feature=(0.973, math.sqrt(1 - 0.973**2)),
+        progress=Fraction(8, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (redundant, first),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [first.identifier]
+    assert result.shortfall is True
+    assert result.final_similarity_ceiling == 0.97
+    assert result.rejected[0].reason_code == "similarity_ceiling"
+    assert result.rejected[0].similarity == pytest.approx(0.973)
 
 
 def test_candidate_without_explanation_value_does_not_fill_shortfall() -> None:
@@ -430,7 +481,7 @@ def test_recurring_gameplay_expands_only_after_each_variant_group() -> None:
     first_selected, other_selected, expanded = result.selected
     assert first_selected.variant_group_id == expanded.variant_group_id
     assert other_selected.variant_group_id != expanded.variant_group_id
-    assert expanded.score.similarity_pass == 0.98
+    assert expanded.score.similarity_pass == 0.97
     assert "recurring_gameplay_variant" in expanded.reason_codes
 
 
@@ -855,10 +906,10 @@ def test_exact_utility_tie_uses_stable_video_order_and_records_tie_break() -> No
 
 
 def test_similarity_above_terminal_ceiling_is_counted_separately() -> None:
-    """0.98超の候補がVisual Near-Duplicateとは別理由で集計されること。
+    """0.97超の候補がVisual Near-Duplicateとは別理由で集計されること。
 
     Arrange:
-        - cosine similarityが0.98超0.995以下のordinary候補が2件ある
+        - cosine similarityが0.97超0.995以下のordinary候補が2件ある
         - 2枚の選定が要求される
     Act:
         - selectorが終端similarity passまで実行される
@@ -896,7 +947,7 @@ def test_similarity_above_terminal_ceiling_is_counted_separately() -> None:
 
     # Assert
     assert result.shortfall is True
-    assert result.final_similarity_ceiling == 0.98
+    assert result.final_similarity_ceiling == 0.97
     assert result.rejection_counts == {"similarity_ceiling": 1}
     rejection = result.rejected[0]
     assert rejection.reason_code == "similarity_ceiling"
@@ -908,7 +959,7 @@ def test_rejection_uses_pass_that_satisfied_request() -> None:
     """要求数を満たした実際のpassでsimilarity rejectionが説明されること。
 
     Arrange:
-        - base passで選ばれる2候補とbase超0.98以下の高utility候補がある
+        - base passで選ばれる2候補とbase超0.97以下の高utility候補がある
     Act:
         - base passで2枚の選定が満たされる
     Assert:

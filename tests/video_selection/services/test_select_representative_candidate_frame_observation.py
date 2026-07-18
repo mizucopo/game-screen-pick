@@ -10,6 +10,7 @@ from src.video_selection.models.candidate_frame_observation import (
     CandidateFrameContentKind,
     CandidateFrameObservation,
     CandidateInterfaceKind,
+    CharacterBodyVisibility,
 )
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.neutral_image_analysis import NeutralImageAnalysis
@@ -134,15 +135,15 @@ def test_static_tutorial_cannot_override_action_frame() -> None:
     assert selected.candidate.identifier == "frm_" + "b" * 64
 
 
-def test_combat_with_both_participants_is_selected_over_obscured_combat() -> None:
-    """playerと相手の両方が見える戦闘frameが代表にされること。
+def test_combat_with_clear_opponent_is_selected_over_obscured_combat() -> None:
+    """敵本体が明瞭に見える戦闘frameが代表にされること。
 
     Arrange:
-        - highだがplayerが発光で隠れた戦闘とmediumで両者が見える戦闘が用意される
+        - highだが敵本体が発光で隠れた戦闘とmediumで敵が見える戦闘が用意される
     Act:
         - Representative Frameが決定的に選択される
     Assert:
-        - 相手だけ見える高評価frameより両者が見えるframeが選ばれること
+        - 敵が不明瞭な高評価frameより敵が明瞭なframeが選ばれること
     """
     # Arrange
     obscured = _observation(
@@ -151,8 +152,8 @@ def test_combat_with_both_participants_is_selected_over_obscured_combat() -> Non
         quality=0.90,
         explanation_value="high",
         combat_action=True,
-        visible_player_character=False,
-        visible_opponent=True,
+        player_body_visibility="clear",
+        opponent_body_visibility="partial",
     )
     readable = _observation(
         "b",
@@ -160,8 +161,8 @@ def test_combat_with_both_participants_is_selected_over_obscured_combat() -> Non
         quality=0.80,
         explanation_value="medium",
         combat_action=True,
-        visible_player_character=True,
-        visible_opponent=True,
+        player_body_visibility="partial",
+        opponent_body_visibility="clear",
     )
 
     # Act
@@ -187,8 +188,8 @@ def _observation(
     visible_action: bool | None = None,
     visible_character_or_enemy: bool = True,
     combat_action: bool = False,
-    visible_player_character: bool = True,
-    visible_opponent: bool = False,
+    player_body_visibility: CharacterBodyVisibility = "clear",
+    opponent_body_visibility: CharacterBodyVisibility = "absent",
 ) -> CandidateFrameObservation:
     has_visible_dialogue_text = (
         content_kind == "event_dialogue"
@@ -249,8 +250,9 @@ def _observation(
         ),
         visible_character_or_enemy=visible_character_or_enemy,
         combat_action=combat_action,
-        visible_player_character=visible_player_character,
-        visible_opponent=visible_opponent,
+        player_body_visibility=player_body_visibility,
+        opponent_body_visibility=opponent_body_visibility,
+        effect_only_frame=False,
         explanation_value=explanation_value,
         screen_text_kind=screen_text_kind,
         primary_subject_visibility="clear",

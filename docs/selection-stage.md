@@ -44,9 +44,9 @@ ADR 0004の表に従うSpoiler Penaltyは候補単体へのsoft penaltyです。
 
 ## 視覚・時間的多様性
 
-通常のsimilarity ceilingは設定値から開始し、`+0.03`、`+0.06`、`+0.10`、`+0.15`の決定的passを適用して、必ず終端`0.98`へ進みます。上限で同じ値になるpassは重複させません。cosine similarityが`0.995`を超える組はVisual Near-Duplicateとして、shortfall時にも同時採用しません。
+通常のsimilarity ceilingは設定値から開始し、`+0.03`、`+0.06`、`+0.10`、`+0.15`の決定的passを適用します。設定値が`0.97`以下なら自動緩和の終端は`0.97`です。`0.97`を超える設定値を利用者が明示した場合は、その設定値を緩和せずに終端として使います。上限で同じ値になるpassは重複させません。cosine similarityが`0.995`を超える組はVisual Near-Duplicateとして、shortfall時にも同時採用しません。
 
-同じsceneでsimilarityが`0.95`以上の連結成分を安定したVariant Groupにします。`recurring_gameplay`で同じGroupの2枚目を選ぶ前に、そのpassで適格な未代表Groupへ一度ずつ機会を与えます。全Groupの代表後はVisual Near-Duplicateを除き`0.98`までvariantを広げます。旧Cinematic Soft Capは適用しません。
+同じsceneでsimilarityが`0.95`以上の連結成分を安定したVariant Groupにします。`recurring_gameplay`で同じGroupの2枚目を選ぶ前に、そのpassで適格な未代表Groupへ一度ずつ機会を与えます。全Groupの代表後も、利用者がより緩い設定値を明示していなければ`0.97`までしかvariantを広げません。旧Cinematic Soft Capは適用しません。
 
 Temporal Diversity Penaltyは、要求枚数`N`と最も近い選択済みVideo Set Progress距離`d`から次の式で求めます。
 

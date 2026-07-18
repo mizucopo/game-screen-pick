@@ -33,12 +33,14 @@ from ..models.candidate_annotation_request import CandidateAnnotationRequest
 from ..models.candidate_frame_observation import (
     CANDIDATE_FRAME_CONTENT_KINDS,
     CANDIDATE_INTERFACE_KINDS,
+    CHARACTER_BODY_VISIBILITIES,
     DIALOGUE_TEXT_PRESENTATIONS,
     PRIMARY_SUBJECT_VISIBILITIES,
     TRANSIENT_OBSTRUCTIONS,
     CandidateFrameContentKind,
     CandidateFrameObservation,
     CandidateInterfaceKind,
+    CharacterBodyVisibility,
     DialogueTextPresentation,
     PrimarySubjectVisibility,
     TransientObstruction,
@@ -107,8 +109,9 @@ _FRAME_OBSERVATION_KEYS = {
     "visible_action",
     "visible_character_or_enemy",
     "combat_action",
-    "visible_player_character",
-    "visible_opponent",
+    "player_body_visibility",
+    "opponent_body_visibility",
+    "effect_only_frame",
     "explanation_value",
     "screen_text_kind",
     "primary_subject_visibility",
@@ -180,9 +183,12 @@ _CANDIDATE_ANNOTATION_SEMANTICS = (
     "提示だと画面自体から分かる場合だけtrueです。通常の戦闘・探索HUD、操作中の"
     "gameplay、画面隅の常設portraitはfalseです。\n"
     "combat_actionはplayerと敵が戦っている場面だけtrueです。"
-    "visible_player_characterは操作するplayer本体、visible_opponentはplayerが攻撃する"
-    "相手の本体を判別できるときだけtrueです。portrait、HUD、文字、光、hit effect、"
-    "影をplayerや相手の本体に数えません。\n"
+    "player_body_visibilityとopponent_body_visibilityは、操作するplayer本体と攻撃する"
+    "相手本体の輪郭・姿勢が明瞭ならclear、一部が隠れるならpartial、本体を判別"
+    "できなければabsentです。portrait、HUD、文字、光、hit effect、影を本体に"
+    "数えません。effect_only_frameは画面中央の主内容が一時的な光・爆発・煙だけで、"
+    "人物・敵・物体の本体を主対象として一つも明瞭に判別できない場合だけtrueです。"
+    "敵や人物の本体が一体でもclearならfalseです。\n"
     "gameplay_action=操作・戦闘・探索の具体的な動作、gameplay_idle=人物や背景が"
     "見えても具体的な動作がない通常画面、event_dialogue=frame内に台詞表示が"
     "実在する会話、event_action=台詞がなくても具体的な演出や動作が見える出来事、"
@@ -197,7 +203,8 @@ _CANDIDATE_ANNOTATION_SEMANTICS = (
     "explanation_valueのnone=主対象や出来事を説明できずブログ掲載価値がない、"
     "low=判別できるが汎用的・重複的、medium=具体的なplay状態や出来事を説明できる、"
     "high=重要な主対象・行動・関係が明瞭で本文を直接補強する、です。\n"
-    "document、tutorial_help、主対象がabsent、event_setup、severeな遮蔽は"
+    "document、tutorial_help、主対象がabsent、event_setup、severeな遮蔽、"
+    "effect_only_frameは"
     "explanation_valueをnoneにします。screen_text_kindはそのframe内に実際に"
     "見える文字の役割だけで決め、別frameやContext Cueから推測しません。\n"
     "context_relevanceのnone=近接していても画像説明と無関係、weak=補足になる、"
@@ -817,8 +824,9 @@ def _parse_candidate_frame_observations(
         visible_action = raw_observation.get("visible_action")
         visible_character_or_enemy = raw_observation.get("visible_character_or_enemy")
         combat_action = raw_observation.get("combat_action")
-        visible_player_character = raw_observation.get("visible_player_character")
-        visible_opponent = raw_observation.get("visible_opponent")
+        player_body_visibility = raw_observation.get("player_body_visibility")
+        opponent_body_visibility = raw_observation.get("opponent_body_visibility")
+        effect_only_frame = raw_observation.get("effect_only_frame")
         explanation_value = raw_observation.get("explanation_value")
         screen_text_kind = raw_observation.get("screen_text_kind")
         subject_visibility = raw_observation.get("primary_subject_visibility")
@@ -837,8 +845,9 @@ def _parse_candidate_frame_observations(
             or not isinstance(visible_action, bool)
             or not isinstance(visible_character_or_enemy, bool)
             or not isinstance(combat_action, bool)
-            or not isinstance(visible_player_character, bool)
-            or not isinstance(visible_opponent, bool)
+            or player_body_visibility not in CHARACTER_BODY_VISIBILITIES
+            or opponent_body_visibility not in CHARACTER_BODY_VISIBILITIES
+            or not isinstance(effect_only_frame, bool)
             or explanation_value not in EXPLANATION_VALUES
             or screen_text_kind not in SCREEN_TEXT_KINDS
             or subject_visibility not in PRIMARY_SUBJECT_VISIBILITIES
@@ -876,8 +885,15 @@ def _parse_candidate_frame_observations(
                     visible_action=visible_action,
                     visible_character_or_enemy=visible_character_or_enemy,
                     combat_action=combat_action,
-                    visible_player_character=visible_player_character,
-                    visible_opponent=visible_opponent,
+                    player_body_visibility=cast(
+                        CharacterBodyVisibility,
+                        player_body_visibility,
+                    ),
+                    opponent_body_visibility=cast(
+                        CharacterBodyVisibility,
+                        opponent_body_visibility,
+                    ),
+                    effect_only_frame=effect_only_frame,
                     explanation_value=cast(ExplanationValue, explanation_value),
                     screen_text_kind=cast(ScreenTextKind, screen_text_kind),
                     primary_subject_visibility=cast(

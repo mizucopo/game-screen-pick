@@ -99,12 +99,12 @@ There are no chronological buckets and no per-video minimums.
 Visual similarity is an eligibility rule rather than another numeric penalty:
 
 - Normal selection begins at the configured similarity ceiling, whose default is 0.72.
-- If the current annotated pool cannot fill the request, the ceiling is relaxed through deterministic configured steps and ends at 0.98.
-- The built-in relaxation deltas are `+0.03`, `+0.06`, `+0.10`, and `+0.15`; duplicate capped values are removed and a terminal `0.98` pass is always appended.
-- A `recurring_gameplay` scene may use a ceiling of 0.98 after eligible Variant Groups have each had their first opportunity, allowing state variants without immediately expanding one group.
+- If the current annotated pool cannot fill the request, the ceiling is relaxed through deterministic configured steps. A configured base at or below 0.97 ends at 0.97; an explicitly configured base above 0.97 remains the terminal ceiling.
+- The built-in relaxation deltas are `+0.03`, `+0.06`, `+0.10`, and `+0.15`; duplicate capped values are removed and the terminal ceiling is appended.
+- A `recurring_gameplay` scene may use the same terminal ceiling after eligible Variant Groups have each had their first opportunity, allowing state variants without automatically admitting the observed 0.973 near-repetition boundary.
 - A pair with cosine similarity greater than 0.995 is a Visual Near-Duplicate and can never be selected together.
 
-The selector-level normal ceiling never exceeds 0.98. The user-facing configuration and validation contract belongs to the CLI/config design.
+The selector-level ceiling never exceeds the explicitly configured maximum of 0.98. The user-facing configuration and validation contract belongs to the CLI/config design.
 
 ## Greedy selection
 
@@ -131,7 +131,7 @@ Selection starts at the normal similarity ceiling and preserves selected images 
 
 ## Shortfall and failure
 
-If the current annotated Selection Shortlist cannot produce `N` images even at similarity 0.98, the Video Set Stage extends it in deterministic local shortlist order, completes Candidate Annotation for the added Candidate Moments, and recomputes selection. Batch sizing and operational limits belong to the runtime-capacity design.
+If the current annotated Selection Shortlist cannot produce `N` images at the terminal similarity ceiling, the Video Set Stage extends it in deterministic local shortlist order, completes Candidate Annotation for the added Candidate Moments, and recomputes selection. Batch sizing and operational limits belong to the runtime-capacity design.
 
 After all valid Candidate Moments are exhausted, selecting fewer than `N` images is a Selection Shortfall. The run publishes the selected images, completes successfully with a warning, and reports requested count, selected count, the final similarity pass, and reason counts. It never fills a shortfall with:
 

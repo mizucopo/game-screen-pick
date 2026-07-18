@@ -997,8 +997,17 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
     assert observation_properties["visible_action"] == {"type": "boolean"}
     assert observation_properties["visible_character_or_enemy"] == {"type": "boolean"}
     assert observation_properties["combat_action"] == {"type": "boolean"}
-    assert observation_properties["visible_player_character"] == {"type": "boolean"}
-    assert observation_properties["visible_opponent"] == {"type": "boolean"}
+    assert observation_properties["player_body_visibility"]["enum"] == [
+        "clear",
+        "partial",
+        "absent",
+    ]
+    assert observation_properties["opponent_body_visibility"]["enum"] == [
+        "clear",
+        "partial",
+        "absent",
+    ]
+    assert observation_properties["effect_only_frame"]["type"] == "boolean"
     assert properties["context_relevance"]["enum"] == ["none", "weak", "strong"]
     cue_schema = properties["supporting_context_cue_ids"]
     assert cue_schema["items"]["enum"] == ["cue-a"]
@@ -1056,8 +1065,9 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     assert "visible_action" in prompt
     assert "visible_character_or_enemy" in prompt
     assert "combat_action" in prompt
-    assert "visible_player_character" in prompt
-    assert "visible_opponent" in prompt
+    assert "player_body_visibility" in prompt
+    assert "opponent_body_visibility" in prompt
+    assert "effect_only_frame" in prompt
     assert "人物portraitだけ" in prompt
     assert "手紙・手記・日誌・記録" in prompt
     assert "prominent_event_portrait" in prompt
@@ -1313,11 +1323,11 @@ def test_static_document_and_silent_event_presentation_are_not_eligible(
     assert annotation.explanation_value == "none"
 
 
-def test_combat_without_both_visible_participants_has_no_explanation_value() -> None:
-    """戦闘の片方が見えないframeがmodelの高評価より優先して除外されること。
+def test_combat_without_visible_opponent_has_no_explanation_value() -> None:
+    """敵本体が見えないframeがmodelの高評価より優先して除外されること。
 
     Arrange:
-        - 戦闘中だが発光でplayerが判別できないhigh応答が用意される
+        - 戦闘中だが発光で敵本体が判別できないhigh応答が用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
@@ -1331,8 +1341,9 @@ def test_combat_without_both_visible_participants_has_no_explanation_value() -> 
     observation.update(
         {
             "combat_action": True,
-            "visible_player_character": False,
-            "visible_opponent": True,
+            "player_body_visibility": "clear",
+            "opponent_body_visibility": "absent",
+            "effect_only_frame": False,
         }
     )
     runtime = OllamaVisionRuntime(
@@ -2149,10 +2160,18 @@ def _frame_observation_payload(
                 not in {"map", "save", "tutorial_help", "title"},
                 "combat_action": scene_slug == "battle"
                 and content_kind in {"gameplay_action", "event_action"},
-                "visible_player_character": content_kind
-                not in {"map", "save", "tutorial_help", "title"},
-                "visible_opponent": scene_slug == "battle"
-                and content_kind in {"gameplay_action", "event_action"},
+                "player_body_visibility": (
+                    "clear"
+                    if content_kind not in {"map", "save", "tutorial_help", "title"}
+                    else "absent"
+                ),
+                "opponent_body_visibility": (
+                    "clear"
+                    if scene_slug == "battle"
+                    and content_kind in {"gameplay_action", "event_action"}
+                    else "absent"
+                ),
+                "effect_only_frame": False,
                 "explanation_value": explanation_value,
                 "screen_text_kind": screen_text_kind,
                 "primary_subject_visibility": "clear",
