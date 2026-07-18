@@ -982,6 +982,9 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
     assert observation_properties["visible_dialogue_text"] == {"type": "boolean"}
     assert observation_properties["visible_action"] == {"type": "boolean"}
     assert observation_properties["visible_character_or_enemy"] == {"type": "boolean"}
+    assert observation_properties["combat_action"] == {"type": "boolean"}
+    assert observation_properties["visible_player_character"] == {"type": "boolean"}
+    assert observation_properties["visible_opponent"] == {"type": "boolean"}
     assert properties["context_relevance"]["enum"] == ["none", "weak", "strong"]
     cue_schema = properties["supporting_context_cue_ids"]
     assert cue_schema["items"]["enum"] == ["cue-a"]
@@ -1037,6 +1040,10 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     assert "visible_dialogue_text" in prompt
     assert "visible_action" in prompt
     assert "visible_character_or_enemy" in prompt
+    assert "combat_action" in prompt
+    assert "visible_player_character" in prompt
+    assert "visible_opponent" in prompt
+    assert "人物portraitだけ" in prompt
     assert "explanation_valueのnone=" in prompt
     assert "context_relevanceのstrong=" in prompt
     assert "spoiler_riskのhigh=" in prompt
@@ -1208,6 +1215,49 @@ def test_atomic_observations_override_ambiguous_tutorial_content() -> None:
     assert annotation.blog_image_type == "menu"
     assert annotation.explanation_value == "none"
     assert annotation.screen_text_kind == "menu"
+
+
+def test_combat_without_both_visible_participants_has_no_explanation_value() -> None:
+    """戦闘の片方が見えないframeがmodelの高評価より優先して除外されること。
+
+    Arrange:
+        - 戦闘中だが発光でplayerが判別できないhigh応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 戦闘分類を保ちながら説明価値なしへ正規化されること
+    """
+    # Arrange
+    response = _frame_observation_payload(
+        (("frame-a", "battle", "event_action", "high", "hud"),)
+    )
+    observation = _first_frame_observation(response)
+    observation.update(
+        {
+            "combat_action": True,
+            "visible_player_character": False,
+            "visible_opponent": True,
+        }
+    )
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.blog_image_type == "event"
+    assert annotation.explanation_value == "none"
 
 
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
@@ -1840,6 +1890,12 @@ def _frame_observation_payload(
                 "visible_action": content_kind in {"gameplay_action", "event_action"},
                 "visible_character_or_enemy": content_kind
                 not in {"map", "save", "tutorial_help", "title"},
+                "combat_action": scene_slug == "battle"
+                and content_kind in {"gameplay_action", "event_action"},
+                "visible_player_character": content_kind
+                not in {"map", "save", "tutorial_help", "title"},
+                "visible_opponent": scene_slug == "battle"
+                and content_kind in {"gameplay_action", "event_action"},
                 "explanation_value": explanation_value,
                 "screen_text_kind": screen_text_kind,
                 "primary_subject_visibility": "clear",

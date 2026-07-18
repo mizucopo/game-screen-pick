@@ -106,6 +106,9 @@ def test_atomic_observations_normalize_ambiguous_model_content(
         visible_dialogue_text=visible_dialogue_text,
         visible_action=visible_action,
         visible_character_or_enemy=visible_character_or_enemy,
+        combat_action=False,
+        visible_player_character=visible_character_or_enemy,
+        visible_opponent=False,
         explanation_value="high",
         screen_text_kind="dialogue",
         primary_subject_visibility="clear",
@@ -123,3 +126,40 @@ def test_atomic_observations_normalize_ambiguous_model_content(
     assert effective_content_kind == expected_content_kind
     assert explanation_value == expected_explanation_value
     assert blog_image_type == expected_blog_image_type
+
+
+def test_combat_without_both_visible_participants_has_no_explanation_value() -> None:
+    """片方しか判別できない戦闘がブログ掲載価値なしにされること。
+
+    Arrange:
+        - 戦闘中だが発光でplayer本体が判別できない高評価frameが用意される
+    Act:
+        - 観測の決定的なExplanation Valueが参照される
+    Assert:
+        - 相手だけ見える戦闘が説明価値なしにされること
+    """
+    # Arrange
+    observation = CandidateFrameObservation(
+        candidate=FrameCandidate("frm_" + "a" * 64, b"image"),
+        scene_slug="battle",
+        content_kind="event_action",
+        interface_kind="other_interface",
+        visible_dialogue_text=False,
+        visible_action=True,
+        visible_character_or_enemy=True,
+        combat_action=True,
+        visible_player_character=False,
+        visible_opponent=True,
+        explanation_value="high",
+        screen_text_kind="hud",
+        primary_subject_visibility="clear",
+        transient_obstruction="none",
+        spoiler_risk="none",
+        spoiler_evidence="",
+    )
+
+    # Act
+    explanation_value = observation.effective_explanation_value
+
+    # Assert
+    assert explanation_value == "none"

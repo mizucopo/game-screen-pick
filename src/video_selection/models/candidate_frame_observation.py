@@ -97,6 +97,9 @@ class CandidateFrameObservation:
     visible_dialogue_text: bool
     visible_action: bool
     visible_character_or_enemy: bool
+    combat_action: bool
+    visible_player_character: bool
+    visible_opponent: bool
     explanation_value: ExplanationValue
     screen_text_kind: ScreenTextKind
     primary_subject_visibility: PrimarySubjectVisibility
@@ -114,6 +117,9 @@ class CandidateFrameObservation:
             or not isinstance(self.visible_dialogue_text, bool)
             or not isinstance(self.visible_action, bool)
             or not isinstance(self.visible_character_or_enemy, bool)
+            or not isinstance(self.combat_action, bool)
+            or not isinstance(self.visible_player_character, bool)
+            or not isinstance(self.visible_opponent, bool)
             or self.explanation_value not in EXPLANATION_VALUES
             or self.screen_text_kind not in SCREEN_TEXT_KINDS
             or self.primary_subject_visibility not in PRIMARY_SUBJECT_VISIBILITIES
@@ -160,6 +166,10 @@ class CandidateFrameObservation:
             or (
                 self.effective_content_kind == "shop"
                 and not self.visible_character_or_enemy
+            )
+            or (
+                self.combat_action
+                and not (self.visible_player_character and self.visible_opponent)
             )
             or self.primary_subject_visibility == "absent"
             or self.transient_obstruction == "severe"

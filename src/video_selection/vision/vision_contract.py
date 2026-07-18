@@ -17,9 +17,9 @@ from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v2"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
-CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v6"
-CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v4"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v3"
+CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v7"
+CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v5"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v4"
 RETRY_POLICY_VERSION = "ollama-retry-v4"
 
 SCENE_CATALOG_SCHEMA: dict[str, object] = {
@@ -80,6 +80,9 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                     "visible_dialogue_text": {"type": "boolean"},
                     "visible_action": {"type": "boolean"},
                     "visible_character_or_enemy": {"type": "boolean"},
+                    "combat_action": {"type": "boolean"},
+                    "visible_player_character": {"type": "boolean"},
+                    "visible_opponent": {"type": "boolean"},
                     "explanation_value": {
                         "type": "string",
                         "enum": list(EXPLANATION_VALUES),
@@ -110,6 +113,9 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                     "visible_dialogue_text",
                     "visible_action",
                     "visible_character_or_enemy",
+                    "combat_action",
+                    "visible_player_character",
+                    "visible_opponent",
                     "explanation_value",
                     "screen_text_kind",
                     "primary_subject_visibility",

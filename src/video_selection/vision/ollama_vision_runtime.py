@@ -101,6 +101,9 @@ _FRAME_OBSERVATION_KEYS = {
     "visible_dialogue_text",
     "visible_action",
     "visible_character_or_enemy",
+    "combat_action",
+    "visible_player_character",
+    "visible_opponent",
     "explanation_value",
     "screen_text_kind",
     "primary_subject_visibility",
@@ -127,19 +130,25 @@ _SCENE_CATALOG_SEMANTICS = (
 )
 _CANDIDATE_ANNOTATION_SEMANTICS = (
     "各frameを他のframeの内容と混ぜず、対応するframe_idごとに個別評価します。"
+    "最初に各画像の直接観測を推測せず決め、その後で画面内容と説明価値を決めます。"
+    "interface_kindは画面全体の主用途をnone・shop・map・save・tutorial_help・"
+    "other_interface・titleから選びます。戦闘HUDだけをother_interfaceにせず、"
+    "戦闘や探索が主ならnoneにします。visible_dialogue_textは登場人物が話す実際の"
+    "台詞文を画像内で読めるときだけtrueです。人物portraitだけ、空の台詞欄、見出し、"
+    "説明、目的表示、操作案内、item名、HUDならfalseです。visible_actionは人物または"
+    "敵の具体的な動作や相互作用が見えるときだけtrueで、静止した立ち姿、空の背景、"
+    "建物、移動先表示だけならfalseです。visible_character_or_enemyは人物・NPC・player・"
+    "monster・bossの本体を判別できるときだけtrueで、portrait、HUD、文字、影、発光、"
+    "移動軌跡だけは数えません。\n"
+    "combat_actionはplayerと敵が戦っている場面だけtrueです。"
+    "visible_player_characterは操作するplayer本体、visible_opponentはplayerが攻撃する"
+    "相手の本体を判別できるときだけtrueです。portrait、HUD、文字、光、hit effect、"
+    "影をplayerや相手の本体に数えません。\n"
     "gameplay_action=操作・戦闘・探索の具体的な動作、gameplay_idle=人物や背景が"
     "見えても具体的な動作がない通常画面、event_dialogue=frame内に台詞表示が"
     "実在する会話、event_action=台詞がなくても具体的な演出や動作が見える出来事、"
     "event_setup=出来事の開始待ちで動作も台詞表示もない画面、shop・map・save・"
     "tutorial_help・other_interface=各interface、title・other=その他の役割です。\n"
-    "interface_kindは画面全体の主用途をnone・shop・map・save・tutorial_help・"
-    "other_interface・titleから選びます。戦闘HUDだけをother_interfaceにせず、"
-    "戦闘や探索が主ならnoneにします。visible_dialogue_textは登場人物の台詞が"
-    "frame内に実在するときだけtrue、visible_actionは戦闘・移動・演出などの"
-    "具体的な動きが見えるときだけtrue、visible_character_or_enemyは人物または"
-    "敵が判別できるときだけtrueにします。説明文、tutorial文、menu項目は"
-    "visible_dialogue_textではありません。これらのbooleanは各画像を個別に"
-    "観察して推測せずに返します。\n"
     "primary_subject_visibilityは人物・敵・品物・行動などブログ説明の主対象が"
     "clear・partial・absentのどれか、transient_obstructionは発光・白飛び・移動・"
     "画面切替による一時的な遮蔽がnone・partial・severeのどれかを返します。"
@@ -721,6 +730,9 @@ def _parse_candidate_frame_observations(
         visible_dialogue_text = raw_observation.get("visible_dialogue_text")
         visible_action = raw_observation.get("visible_action")
         visible_character_or_enemy = raw_observation.get("visible_character_or_enemy")
+        combat_action = raw_observation.get("combat_action")
+        visible_player_character = raw_observation.get("visible_player_character")
+        visible_opponent = raw_observation.get("visible_opponent")
         explanation_value = raw_observation.get("explanation_value")
         screen_text_kind = raw_observation.get("screen_text_kind")
         subject_visibility = raw_observation.get("primary_subject_visibility")
@@ -735,6 +747,9 @@ def _parse_candidate_frame_observations(
             or not isinstance(visible_dialogue_text, bool)
             or not isinstance(visible_action, bool)
             or not isinstance(visible_character_or_enemy, bool)
+            or not isinstance(combat_action, bool)
+            or not isinstance(visible_player_character, bool)
+            or not isinstance(visible_opponent, bool)
             or explanation_value not in EXPLANATION_VALUES
             or screen_text_kind not in SCREEN_TEXT_KINDS
             or subject_visibility not in PRIMARY_SUBJECT_VISIBILITIES
@@ -765,6 +780,9 @@ def _parse_candidate_frame_observations(
                     visible_dialogue_text=visible_dialogue_text,
                     visible_action=visible_action,
                     visible_character_or_enemy=visible_character_or_enemy,
+                    combat_action=combat_action,
+                    visible_player_character=visible_player_character,
+                    visible_opponent=visible_opponent,
                     explanation_value=cast(ExplanationValue, explanation_value),
                     screen_text_kind=cast(ScreenTextKind, screen_text_kind),
                     primary_subject_visibility=cast(

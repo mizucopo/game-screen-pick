@@ -134,6 +134,45 @@ def test_static_tutorial_cannot_override_action_frame() -> None:
     assert selected.candidate.identifier == "frm_" + "b" * 64
 
 
+def test_combat_with_both_participants_is_selected_over_obscured_combat() -> None:
+    """playerと相手の両方が見える戦闘frameが代表にされること。
+
+    Arrange:
+        - highだがplayerが発光で隠れた戦闘とmediumで両者が見える戦闘が用意される
+    Act:
+        - Representative Frameが決定的に選択される
+    Assert:
+        - 相手だけ見える高評価frameより両者が見えるframeが選ばれること
+    """
+    # Arrange
+    obscured = _observation(
+        "a",
+        "event_action",
+        quality=0.90,
+        explanation_value="high",
+        combat_action=True,
+        visible_player_character=False,
+        visible_opponent=True,
+    )
+    readable = _observation(
+        "b",
+        "event_action",
+        quality=0.80,
+        explanation_value="medium",
+        combat_action=True,
+        visible_player_character=True,
+        visible_opponent=True,
+    )
+
+    # Act
+    selected = selection_service.select_representative_candidate_frame_observation(
+        (obscured, readable)
+    )
+
+    # Assert
+    assert selected.candidate.identifier == "frm_" + "b" * 64
+
+
 def _observation(
     digest_character: str,
     content_kind: CandidateFrameContentKind,
@@ -147,6 +186,9 @@ def _observation(
     visible_dialogue_text: bool | None = None,
     visible_action: bool | None = None,
     visible_character_or_enemy: bool = True,
+    combat_action: bool = False,
+    visible_player_character: bool = True,
+    visible_opponent: bool = False,
 ) -> CandidateFrameObservation:
     metrics = NeutralImageMetrics(
         blur_score=100.0,
@@ -200,6 +242,9 @@ def _observation(
             else visible_action
         ),
         visible_character_or_enemy=visible_character_or_enemy,
+        combat_action=combat_action,
+        visible_player_character=visible_player_character,
+        visible_opponent=visible_opponent,
         explanation_value=explanation_value,
         screen_text_kind=screen_text_kind,
         primary_subject_visibility="clear",
