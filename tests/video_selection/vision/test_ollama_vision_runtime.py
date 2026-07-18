@@ -982,6 +982,7 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
         "title",
     ]
     assert observation_properties["prominent_event_portrait"] == {"type": "boolean"}
+    assert observation_properties["cinematic_event_presentation"] == {"type": "boolean"}
     assert observation_properties["visible_dialogue_text"] == {"type": "boolean"}
     assert observation_properties["visible_action"] == {"type": "boolean"}
     assert observation_properties["visible_character_or_enemy"] == {"type": "boolean"}
@@ -1049,6 +1050,8 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     assert "人物portraitだけ" in prompt
     assert "手紙・手記・日誌・記録" in prompt
     assert "prominent_event_portrait" in prompt
+    assert "cinematic_event_presentation" in prompt
+    assert "上下の映画的な黒帯" in prompt
     assert "画面隅の小さな" in prompt
     assert "explanation_valueのnone=" in prompt
     assert "context_relevanceのstrong=" in prompt
@@ -1237,23 +1240,26 @@ def test_atomic_observations_override_ambiguous_tutorial_content() -> None:
         "content_kind",
         "interface_kind",
         "prominent_event_portrait",
+        "cinematic_event_presentation",
         "expected_blog_image_type",
     ),
     (
-        ("other", "document", False, "menu"),
-        ("gameplay_idle", "none", True, "event"),
+        ("other", "document", False, False, "menu"),
+        ("gameplay_idle", "none", True, False, "event"),
+        ("gameplay_idle", "none", False, True, "event"),
     ),
 )
-def test_static_document_and_silent_event_portrait_are_not_eligible(
+def test_static_document_and_silent_event_presentation_are_not_eligible(
     content_kind: str,
     interface_kind: str,
     prominent_event_portrait: bool,
+    cinematic_event_presentation: bool,
     expected_blog_image_type: str,
 ) -> None:
-    """静止文書と台詞のないイベント立ち絵が掲載不可にされること。
+    """静止文書と台詞のないイベント演出が掲載不可にされること。
 
     Arrange:
-        - 高評価だが静止文書または台詞のないイベント立ち絵の応答が用意される
+        - 高評価だが静止文書または台詞のないイベント演出の応答が用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
@@ -1268,6 +1274,7 @@ def test_static_document_and_silent_event_portrait_are_not_eligible(
         {
             "interface_kind": interface_kind,
             "prominent_event_portrait": prominent_event_portrait,
+            "cinematic_event_presentation": cinematic_event_presentation,
             "visible_dialogue_text": False,
             "visible_action": False,
         }
@@ -2046,6 +2053,7 @@ def _frame_observation_payload(
                     else "none"
                 ),
                 "prominent_event_portrait": False,
+                "cinematic_event_presentation": False,
                 "visible_dialogue_text": content_kind == "event_dialogue",
                 "visible_action": content_kind in {"gameplay_action", "event_action"},
                 "visible_character_or_enemy": content_kind

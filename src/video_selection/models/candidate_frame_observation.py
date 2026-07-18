@@ -99,6 +99,7 @@ class CandidateFrameObservation:
     content_kind: CandidateFrameContentKind
     interface_kind: CandidateInterfaceKind
     prominent_event_portrait: bool
+    cinematic_event_presentation: bool
     visible_dialogue_text: bool
     visible_action: bool
     visible_character_or_enemy: bool
@@ -120,6 +121,7 @@ class CandidateFrameObservation:
             or self.content_kind not in CANDIDATE_FRAME_CONTENT_KINDS
             or self.interface_kind not in CANDIDATE_INTERFACE_KINDS
             or not isinstance(self.prominent_event_portrait, bool)
+            or not isinstance(self.cinematic_event_presentation, bool)
             or not isinstance(self.visible_dialogue_text, bool)
             or not isinstance(self.visible_action, bool)
             or not isinstance(self.visible_character_or_enemy, bool)
@@ -149,7 +151,7 @@ class CandidateFrameObservation:
         ):
             return _INTERFACE_CONTENT_KINDS[self.interface_kind]
         if (
-            self.prominent_event_portrait
+            (self.prominent_event_portrait or self.cinematic_event_presentation)
             and not self.visible_dialogue_text
             and not self.visible_action
         ):

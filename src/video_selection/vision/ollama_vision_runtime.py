@@ -99,6 +99,7 @@ _FRAME_OBSERVATION_KEYS = {
     "content_kind",
     "interface_kind",
     "prominent_event_portrait",
+    "cinematic_event_presentation",
     "visible_dialogue_text",
     "visible_action",
     "visible_character_or_enemy",
@@ -135,6 +136,10 @@ _CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION = (
     "prominent_event_portraitは会話やeventの演出として大きな人物立ち絵・胸像が"
     "gameplay画面へ重なる場合だけtrueです。画面隅の小さな円形・枠付きの常設HUD"
     "portraitはfalseです。"
+    "cinematic_event_presentationは上下の映画的な黒帯、操作HUDのない固定camera、"
+    "会話・event用に人物やNPCを並べた構図など、通常操作ではなくeventやcutsceneの"
+    "提示だと画面自体から分かる場合だけtrueです。通常の戦闘・探索HUD、操作中の"
+    "gameplay、画面隅の常設portraitはfalseです。"
     "実際の台詞文が読めなければvisible_dialogue_text=falseです。人物portraitだけ、"
     "空の台詞欄、見出し、説明、目的表示、操作案内、item名、HUDは台詞ではありません。"
     "人物または敵の具体的な動作や相互作用がなければvisible_action=falseです。"
@@ -159,6 +164,10 @@ _CANDIDATE_ANNOTATION_SEMANTICS = (
     "移動軌跡だけは数えません。prominent_event_portraitは会話やeventの演出として"
     "大きな人物立ち絵・胸像がgameplay画面へ重なる場合だけtrueです。画面隅の小さな"
     "円形・枠付きの常設HUD portraitはfalseです。\n"
+    "cinematic_event_presentationは上下の映画的な黒帯、操作HUDのない固定camera、"
+    "会話・event用に人物やNPCを並べた構図など、通常操作ではなくeventやcutsceneの"
+    "提示だと画面自体から分かる場合だけtrueです。通常の戦闘・探索HUD、操作中の"
+    "gameplay、画面隅の常設portraitはfalseです。\n"
     "combat_actionはplayerと敵が戦っている場面だけtrueです。"
     "visible_player_characterは操作するplayer本体、visible_opponentはplayerが攻撃する"
     "相手の本体を判別できるときだけtrueです。portrait、HUD、文字、光、hit effect、"
@@ -752,6 +761,9 @@ def _parse_candidate_frame_observations(
         content_kind = raw_observation.get("content_kind")
         interface_kind = raw_observation.get("interface_kind")
         prominent_event_portrait = raw_observation.get("prominent_event_portrait")
+        cinematic_event_presentation = raw_observation.get(
+            "cinematic_event_presentation"
+        )
         visible_dialogue_text = raw_observation.get("visible_dialogue_text")
         visible_action = raw_observation.get("visible_action")
         visible_character_or_enemy = raw_observation.get("visible_character_or_enemy")
@@ -770,6 +782,7 @@ def _parse_candidate_frame_observations(
             or content_kind not in CANDIDATE_FRAME_CONTENT_KINDS
             or interface_kind not in CANDIDATE_INTERFACE_KINDS
             or not isinstance(prominent_event_portrait, bool)
+            or not isinstance(cinematic_event_presentation, bool)
             or not isinstance(visible_dialogue_text, bool)
             or not isinstance(visible_action, bool)
             or not isinstance(visible_character_or_enemy, bool)
@@ -804,6 +817,7 @@ def _parse_candidate_frame_observations(
                     content_kind=cast(CandidateFrameContentKind, content_kind),
                     interface_kind=cast(CandidateInterfaceKind, interface_kind),
                     prominent_event_portrait=prominent_event_portrait,
+                    cinematic_event_presentation=cinematic_event_presentation,
                     visible_dialogue_text=visible_dialogue_text,
                     visible_action=visible_action,
                     visible_character_or_enemy=visible_character_or_enemy,

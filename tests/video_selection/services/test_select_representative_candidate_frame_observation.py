@@ -232,6 +232,7 @@ def _observation(
         content_kind=content_kind,
         interface_kind=interface_kind,
         prominent_event_portrait=False,
+        cinematic_event_presentation=False,
         visible_dialogue_text=(
             content_kind == "event_dialogue"
             if visible_dialogue_text is None
