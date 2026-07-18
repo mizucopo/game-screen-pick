@@ -12,22 +12,22 @@
 - 決定的なlocal順を持つSelection ShortlistのCandidate Annotation request
 - Effective Configurationとrun中にfreeze済みのResolved Models
 
-Scene Catalog Representative Setは要求画像枚数から独立します。Selection Shortlistは決定的selectorが不足時に追加batchを受けて拡張し、batch sizeと実model capacityの受け入れはIssue #189が所有します。Candidate Annotation requestには1〜3件のFrame Candidate、versioned policyで選ばれた近傍Context Cue、Video Set Progress、Selection Intentを明示し、VisionRuntimeが暗黙に候補やCueを削りません。
+Scene Catalog Representative Setは要求画像枚数から独立します。Selection Shortlistは決定的selectorが不足時に追加batchを受けて拡張し、batch sizeと実model capacityの受け入れはIssue #189が所有します。各Candidate Momentの1〜3件のFrame Candidateは、Neutral Image AnalysisのQuality ScoreとFrame Candidate IDで一つのRepresentative Frameへ先に確定します。Candidate Annotation requestにはその1件、versioned policyで選ばれた近傍Context Cue、Video Set Progress、Selection Intentを明示し、VisionRuntimeが暗黙に候補やCueを削りません。
 
 ## Ollama operation
 
 Ollamaの`/api/chat`を次の2種類だけに使います。
 
 1. `build-scene-catalog`: Video Set共有の3〜8 sceneを一回生成します。`other`を必ず1件含め、そのScene Selection Roleは`ordinary`です。
-2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、入力frame別の意味観測を一回の推論で返します。各画像は対応するFrame Candidate IDとその画像だけに対する直接観測条件を持つ個別messageで送り、別画像の内容を混ぜません。総合分類の指示は全画像messageの後に一度だけ送ります。
+2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、先に確定した一つのRepresentative Frameの意味観測を一回の推論で返します。画像は対応するFrame Candidate IDとその画像だけに対する直接観測条件を持つmessageで送り、同じMoment内で切り替わった別画面の内容を混ぜません。総合分類の指示は画像messageの後に一度だけ送ります。
 
 Scene Catalog promptは`ordinary`、`cinematic`、`recurring_gameplay`の意味を明示し、同じplay画面を一時的な敵や発光だけで別sceneへ分割しないよう要求します。Candidate Annotation promptは、総合分類より先にInterface Kind、画面内に実在する台詞・具体的な動作・判別可能な人物または敵の有無、戦闘かどうかとplayer本体・攻撃相手本体それぞれの可視性を直接観測させます。その後、画面内容、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Context Cue Relevance、Spoiler Riskの全境界を評価させます。戦闘HUDだけを`other_interface`とせず、人物portrait、空の台詞欄、説明文、目的表示、tutorial文、menu項目を台詞にしません。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体に数えません。各frame内に実在する情報だけを評価し、別frameの台詞やContext Cueを画面内情報として補いません。Context Cueが存在するだけでは`strong`にせず、進行位置だけではSpoiler Riskを上げません。
 
-modelはRepresentative Frame、Blog Image Type、eligible/selected flagを返しません。local処理は具体的なInterface Kindを曖昧な画面内容分類より優先します。ただし、具体的な動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として画面内容を上書きしません。台詞のない`event_dialogue`と動作のないaction分類を静止場面へ補正してから、Explanation Value、補正後の画面内容、主対象の視認性、一時的な遮蔽、Neutral Image Analysisの順でRepresentative Frameを決め、Blog Image Type、公開用要約、選択理由を決定的に導出します。著しく画質・情報量・視認性が低いframeは明瞭なpeerより優先しません。`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、player本体と攻撃相手本体の片方でも判別できない戦闘、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`へ正規化します。追加推論は行いません。
+modelはRepresentative Frame、Blog Image Type、eligible/selected flagを返しません。Representative Frameは推論前にlocalで確定済みです。local処理は具体的なInterface Kindを曖昧な画面内容分類より優先します。ただし、具体的な動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として画面内容を上書きしません。台詞のない`event_dialogue`と動作のないaction分類を静止場面へ補正してから、Blog Image Type、公開用要約、選択理由を決定的に導出します。`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、player本体と攻撃相手本体の片方でも判別できない戦闘、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`へ正規化します。追加推論は行いません。
 
 各推論attemptの直前と応答受領直後に`/api/version`と`/api/tags`でOllama server versionとconfigured tagのlocal完全digestを再確認します。Model LifecycleでfreezeしたRuntime IdentityまたはResolved Model Identityと異なる場合は、別runtime／digestの結果を同じfingerprintへ保存せず停止します。この確認はtagの更新や再解決を行いません。
 
-両方ともJSON Schema object全体、`stream=false`、`think=false`、`temperature=0`を送ります。JSON Schema検証後にも、全Frame Candidate IDが入力順に一度ずつ返されたこと、Scene SlugとContext Cue IDが入力集合へ属すること、Context Cueの有無とRelevanceが整合することをlocalで検査します。local生成したannotation summary、Representative Frameの選択理由、modelが返したspoiler evidenceに正規化後3文字以上の入力Context Cue本文が逐語再出力された場合は、該当fieldだけをScene Catalogとenumから組み立てた非逐語説明へ置換します。その説明もCueと一致する場合は明示的な省略記号へ置換し、安全化前の自由文はcacheへ保存しません。1〜2文字の一般語は独立生成との区別がつかないため引用判定から除外します。
+両方ともJSON Schema object全体、`stream=false`、`think=false`、`temperature=0`を送ります。JSON Schema検証後にも、Representative Frame IDが一度だけ返されたこと、Scene SlugとContext Cue IDが入力集合へ属すること、Context Cueの有無とRelevanceが整合することをlocalで検査します。local生成したannotation summary、Representative Frameの選択理由、modelが返したspoiler evidenceに正規化後3文字以上の入力Context Cue本文が逐語再出力された場合は、該当fieldだけをScene Catalogとenumから組み立てた非逐語説明へ置換します。その説明もCueと一致する場合は明示的な省略記号へ置換し、安全化前の自由文はcacheへ保存しません。1〜2文字の一般語は独立生成との区別がつかないため引用判定から除外します。
 
 OllamaのCandidate Annotation responseはframeごとに次の意味情報だけを返します。
 
@@ -54,13 +54,13 @@ Quality Score、model confidence、final score、soft coverage、eligible/select
 
 同じsemantic入力で初回と一回のretryだけを行います。timeout、connection failure、HTTP 408/429/5xx、空・打ち切り応答、schema/domain validation failureがretry対象です。このHTTP分類は推論前の`/api/tags`確認にも適用します。429の`Retry-After`は秒数とHTTP-dateの両形式を解釈して最大30秒まで尊重し、その他は1秒待ちます。
 
-response/schema/domain validation retryではstable validation codeを追加し、raw responseを次promptへ戻しません。Candidate Annotationの関係違反では、Context Cue参照とSpoiler Evidenceの条件をstable validation codeから決まる修正指示として再提示します。Cue逐語一致は再推論へ依存せずfield単位で決定的に安全化し、diagnosticsへ`candidate_annotation_verbatim_context_redacted`を記録します。公開前には同じ安全化をVideo Set全体のContext Cueに対して再適用し、Candidateに未提示のCueと偶然一致する生成文もreportへ公開しません。model出力が存在しないtransport retryでは元のpromptを変更しません。画像、Context Cue、Catalogを削る、代表画像を減らす、`other`へfallbackする、失敗したCandidateを黙って除外する処理は行いません。model不在と408/429以外のHTTP 4xxは即時fatalです。
+response/schema/domain validation retryではstable validation codeを追加し、raw responseを次promptへ戻しません。Candidate Annotationの関係違反では、Context Cue参照とSpoiler Evidenceの条件をstable validation codeから決まる修正指示として再提示します。Cue逐語一致は再推論へ依存せずfield単位で決定的に安全化し、diagnosticsへ`candidate_annotation_verbatim_context_redacted`を記録します。公開前には同じ安全化をVideo Set全体のContext Cueに対して再適用し、Candidateに未提示のCueと偶然一致する生成文もreportへ公開しません。model出力が存在しないtransport retryでは元のpromptを変更しません。Representative Frame、Context Cue、Catalogを削る、別frameへ差し替える、`other`へfallbackする、失敗したCandidateを黙って除外する処理は行いません。model不在と408/429以外のHTTP 4xxは即時fatalです。
 
 ## Completed Stage cache
 
 Scene CatalogはVideo Setごとに一つ、Candidate AnnotationはCandidate Momentごとに一つのatomic Completed Stageです。同じStage Fingerprintの推論はfingerprint lock内で一度だけ実行し、並行workerも最初に確定したartifactを復元します。Vision batch境界とpublisher開始時にはInput Lock内のpath・device・inode・size・mtime・ctimeを検査し、snapshot一致を通るまでoutputを公開しません。一つのAnnotationが最終失敗した場合、最終選定とoutput公開へ進みませんが、それ以前に完了したCatalogとAnnotationは次回runで再利用されます。
 
-fingerprintには、順序付きFrame Candidate IDと画像SHA-256、Context Cue ID・正確な範囲・本文SHA-256、Cue選択policy、Scene Catalog fingerprint、Video Set Progress、Selection Intent、Resolved Model Identity、Ollama runtime identity、generation option、prompt/schema/stage/retry versionを含めます。
+fingerprintには、Representative Frame IDと画像SHA-256、Context Cue ID・正確な範囲・本文SHA-256、Cue選択policy、Scene Catalog fingerprint、Video Set Progress、Selection Intent、Resolved Model Identity、Ollama runtime identity、generation option、prompt/schema/stage/retry versionを含めます。
 
 次の値はmodel contentを変えないため含めません。
 

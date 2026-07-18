@@ -22,7 +22,7 @@ def build_candidate_annotation_requests(
     selection_intent: str,
     similarity_threshold: float,
 ) -> tuple[CandidateAnnotationRequest, ...]:
-    """有効Momentをlocal品質とvisual diversityで決定的に並べる。"""
+    """各Momentを一つのlocal代表へ絞りvisual diversity順に並べる。"""
     if (
         not selection_intent.strip()
         or not math.isfinite(similarity_threshold)
@@ -66,18 +66,18 @@ def build_candidate_annotation_requests(
             if not 0 <= moment.anchor_time < duration:
                 msg = "Candidate MomentがVideo Durationの範囲外です"
                 raise ValueError(msg)
+            representative = _local_representative(frames)
             normalized_moment = replace(
                 moment,
-                frame_candidate_ids=tuple(frame.identifier for frame in frames),
+                frame_candidate_ids=(representative.identifier,),
             )
-            representative = _local_representative(frames)
             progress = (elapsed + moment.anchor_time) / total_duration
             candidates.append(
                 (
                     video_order,
                     result,
                     normalized_moment,
-                    frames,
+                    (representative,),
                     representative,
                     progress,
                 )
@@ -127,7 +127,7 @@ def _representative_key(frame: FrameCandidate) -> tuple[float, str]:
     """local代表の決定的な比較keyを返す。"""
     analysis = frame.analysis
     if analysis is None or not analysis.eligible:
-        raise ValueError("Scene Catalog代表には適格なNeutral Image Analysisが必要です")
+        raise ValueError("local代表には適格なNeutral Image Analysisが必要です")
     return (-analysis.quality_score, frame.identifier)
 
 

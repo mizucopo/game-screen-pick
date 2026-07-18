@@ -37,10 +37,10 @@ from src.video_selection.services.build_candidate_annotation_requests import (
 )
 
 
-def test_local_quality_representative_drives_diverse_shortlist_order(
+def test_local_quality_representative_drives_shortlist_and_annotation_input(
     tmp_path: Path,
 ) -> None:
-    """最高品質のlocal代表から多様なMomentが先に並べられること。
+    """最高品質のlocal代表だけが意味注釈へ渡されること。
 
     Arrange:
         - 最高品質frameを2枚持つMomentと、近似・多様な2 Momentが用意される
@@ -49,7 +49,7 @@ def test_local_quality_representative_drives_diverse_shortlist_order(
     Assert:
         - 各Momentの最高品質frameがlocal代表として使われること
         - 近似Momentより多様なMomentが先に並べられること
-        - requestには各Momentの全frameが元の順序で保持されること
+        - requestには画像間で意味を混ぜないようlocal代表だけが保持されること
     """
     # Arrange
     first_low = _frame("a", quality=0.70, feature=(1.0, 0.0), second=1)
@@ -87,7 +87,8 @@ def test_local_quality_representative_drives_diverse_shortlist_order(
         diverse.identifier,
         near.identifier,
     ]
-    assert requests[0].frame_candidates == (first_low, first_high)
+    assert requests[0].frame_candidates == (first_high,)
+    assert requests[0].moment.frame_candidate_ids == (first_high.identifier,)
 
 
 def test_ties_follow_video_order_time_moment_and_frame_id(tmp_path: Path) -> None:
