@@ -35,6 +35,9 @@ from ..vision.vision_contract import (
     COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION,
+    PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION,
+    PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION,
+    PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION,
     RETRY_POLICY_VERSION,
     SCENE_CATALOG_PROMPT_VERSION,
     SCENE_CATALOG_SCHEMA_VERSION,
@@ -435,6 +438,15 @@ def _annotation_semantic_input(
         ),
         "combat_visibility_verification_stage_contract_version": (
             COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "publication_boundary_verification_prompt_version": (
+            PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION
+        ),
+        "publication_boundary_verification_schema_version": (
+            PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "publication_boundary_verification_stage_contract_version": (
+            PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION
         ),
         "retry_policy_version": RETRY_POLICY_VERSION,
     }

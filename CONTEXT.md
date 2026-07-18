@@ -281,12 +281,16 @@ Video Set全体のNeutral Image Analysisから、品質、見た目の多様性�
 _Avoid_: Selection Shortlist, selected output, per-video representatives
 
 **Candidate Annotation**:
-Selection Shortlist内の一つのCandidate Momentについて、Neutral Image Analysisで先に確定した一つのRepresentative Frame、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、主Ollama推論でID付きCandidate Frame Observationを評価するVideo Set Stage。各観測はScene Slug、画面内容、Interface Kind、会話eventの大きな人物立ち絵・胸像の有無、Cinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、動作・人物または敵の有無、戦闘かどうか、player・攻撃相手それぞれの本体可視性、一時的な光・爆発・煙だけが主内容か、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。音声やContext Cueの会話文は画面内台詞文字の根拠に使わない。Blog Image Type、公開用要約と理由は観測からlocalに決定する。具体的なInterface Kindは曖昧な画面内容分類より優先する一方、動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として上書きに使わない。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正し、`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、攻撃相手本体が`clear`でない戦闘、一時的な光・爆発・煙だけが主内容のframe、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化する。主推論が攻撃相手本体`clear`、エフェクトだけではない、掲載価値ありとした戦闘だけはCombat Visibility Verificationを追加し、敵本体の可視性と画面内構図を含む直接観測を適格性境界に優先する。最終score、soft coverage、最終採否は決めない。
+Selection Shortlist内の一つのCandidate Momentについて、Neutral Image Analysisで先に確定した一つのRepresentative Frame、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、主Ollama推論でID付きCandidate Frame Observationを評価するVideo Set Stage。各観測はScene Slug、画面内容、Interface Kind、会話eventの大きな人物立ち絵・胸像の有無、Cinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、動作・人物または敵の有無、戦闘かどうか、player・攻撃相手それぞれの本体可視性、一時的な光・爆発・煙だけが主内容か、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。音声やContext Cueの会話文は画面内台詞文字の根拠に使わない。Blog Image Type、公開用要約と理由は観測からlocalに決定する。具体的なInterface Kindは曖昧な画面内容分類より優先する一方、動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として上書きに使わない。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正し、`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、攻撃相手本体が`clear`でない戦闘、一時的な光・爆発・煙だけが主内容のframe、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化する。主推論が攻撃相手本体`clear`、エフェクトだけではない、掲載価値ありとした戦闘にはCombat Visibility Verificationを追加し、敵本体の可視性と画面内構図を含む直接観測を適格性境界に優先する。掲載価値ありとした非戦闘の地図または`cinematic` sceneにはPublication Boundary Verificationを追加し、一時的な遷移effectと、台詞も動作もないevent導入の直接観測を適格性境界に優先する。最終score、soft coverage、最終採否は決めない。
 _Avoid_: Candidate Scoring, Frame Refinement, Neutral Image Analysis, final selection
 
 **Combat Visibility Verification**:
 Candidate Annotationの主推論が掲載可能とした戦闘のRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeかをstrict enumで観測する。攻撃相手本体が`partial`・`absent`、構図が`edge_cropped`・`occluded`・`absent`、またはエフェクトだけならExplanation Valueを`none`に下げるが、Scene Slug、画面内容、Spoiler Risk、説明文を変更しない。
 _Avoid_: second Candidate Annotation, contextual combat classification, final selection
+
+**Publication Boundary Verification**:
+Candidate Annotationの主推論が掲載可能とした非戦闘の地図、またはScene Selection Roleが`cinematic`のRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。一時的な遷移effectの有無・種類・画面占有率、上下の黒帯、event用の人物配置、画面内台詞文字、人物の具体的な動作、主内容の可読性をstrict enumで観測する。一時的な遷移effectがある場合、または上下の黒帯とevent用の人物配置があり画面内台詞も具体的な動作もない場合はExplanation Valueを`none`に下げるが、Scene Slug、画面内容、Spoiler Risk、説明文を変更しない。地図の雲、cursor、選択marker、常設UIは遷移effectにしない。
+_Avoid_: second Candidate Annotation, contextual event classification, final selection
 
 **Scene**:
 ブログ用の画像選択で使う、画像内容を表すカテゴリ。ゲームジャンルや入力画像群に応じて決まる。
@@ -497,7 +501,7 @@ _Avoid_: recurring gameplay variant, same scene, temporal neighbor
 _Avoid_: scene, duplicate file
 
 **Ollama Stage Failure**:
-Scene Catalog、Candidate Annotationの主推論、またはCombat Visibility Verificationが、それぞれ同じsemantic入力による初回と1回の再試行後もtransport、schema、domain validationを完了できなかった状態。`other`への分類とは区別し、fallbackや失敗Candidateの除外で処理を継続せず、最終選定とoutput公開を中止する。
+Scene Catalog、Candidate Annotationの主推論、Combat Visibility Verification、またはPublication Boundary Verificationが、それぞれ同じsemantic入力による初回と1回の再試行後もtransport、schema、domain validationを完了できなかった状態。`other`への分類とは区別し、fallbackや失敗Candidateの除外で処理を継続せず、最終選定とoutput公開を中止する。
 _Avoid_: other scene, silent exclusion, catalog fallback, partial output
 
 **Resumable Run**:

@@ -1759,6 +1759,232 @@ def test_relationship_repair_is_followed_by_combat_visibility_check() -> None:
     assert len(payloads) == 3
 
 
+@pytest.mark.parametrize(
+    ("transient_transition_effect", "expected_value"),
+    ((False, "high"), (True, "none")),
+)
+def test_map_transition_is_visually_rechecked(
+    transient_transition_effect: bool,
+    expected_value: str,
+) -> None:
+    """地図を隠す一時的な移動エフェクトが画像だけで再確認されること。
+
+    Arrange:
+        - 掲載価値ありとされた地図応答が用意される
+        - 安定した地図または白いwipeを持つ専用応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 一時的な遷移がある地図だけ掲載不可にされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "exploration", "map", "high", "menu"),)
+                )
+            )
+        return _response(
+            _publication_boundary_payload(
+                transient_transition_effect=transient_transition_effect,
+                transition_effect_kind=(
+                    "white_wipe" if transient_transition_effect else "none"
+                ),
+                transition_effect_coverage=(
+                    "over_half" if transient_transition_effect else "none"
+                ),
+                primary_content_readability=(
+                    "obscured" if transient_transition_effect else "clear"
+                ),
+            )
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == expected_value
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code is None
+    verification_schema = payloads[1]["format"]
+    assert isinstance(verification_schema, Mapping)
+    verification_properties = verification_schema.get("properties")
+    assert isinstance(verification_properties, Mapping)
+    assert set(verification_properties) == {
+        "transient_transition_effect",
+        "transition_effect_kind",
+        "transition_effect_coverage",
+        "cinematic_letterbox",
+        "event_staging",
+        "on_screen_dialogue_text_visible",
+        "visible_character_action",
+        "primary_content_readability",
+    }
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "この画像1枚に実際に見える画素だけ" in second_prompt
+    assert "白いwipe、太い光帯" in second_prompt
+    assert "地図の雲、通常のcursor" in second_prompt
+    assert "音声、前後場面、説明文は使いません" in second_prompt
+
+
+@pytest.mark.parametrize(
+    ("content_kind", "dialogue_visible", "expected_value"),
+    (("gameplay_idle", False, "none"), ("event_dialogue", True, "high")),
+)
+def test_static_cinematic_setup_is_visually_rechecked(
+    content_kind: str,
+    dialogue_visible: bool,
+    expected_value: str,
+) -> None:
+    """台詞も動作もない映画的な人物配置だけが掲載不可にされること。
+
+    Arrange:
+        - cinematic sceneの静止場面または台詞場面が用意される
+        - 黒帯とevent人物配置を持つ画像だけの専用応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 画面内台詞のない静止eventだけ掲載不可にされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (
+                        (
+                            "frame-a",
+                            "town",
+                            content_kind,
+                            "high",
+                            "dialogue" if dialogue_visible else "none",
+                        ),
+                    )
+                )
+            )
+        return _response(
+            _publication_boundary_payload(
+                cinematic_letterbox=True,
+                event_staging=True,
+                dialogue_visible=dialogue_visible,
+            )
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog_with_cinematic_town(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == expected_value
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code is None
+
+
+def test_publication_boundary_schema_failure_is_retried() -> None:
+    """掲載境界専用確認のschema違反が一回だけ再試行されること。
+
+    Arrange:
+        - 掲載価値ありの地図と、必須fieldを欠く専用応答が用意される
+        - 再試行では安定した地図を示す有効応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - stable validation code付きの再試行結果が採用されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "exploration", "map", "high", "menu"),)
+                )
+            )
+        verification = _publication_boundary_payload()
+        if len(payloads) == 2:
+            del verification["primary_content_readability"]
+        return _response(verification)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "high"
+    assert diagnostics.attempt_count == 3
+    assert diagnostics.validation_code == (
+        "publication_boundary_verification_schema_invalid"
+    )
+    third_prompt = _last_message(payloads[2])["content"]
+    assert isinstance(third_prompt, str)
+    assert "publication_boundary_verification_schema_invalid" in third_prompt
+
+
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
     """Cueなし応答の関係違反が明示契約と個別codeで修復されること。
 
@@ -2511,6 +2737,29 @@ def _frame_observation_payload(
     }
 
 
+def _publication_boundary_payload(
+    *,
+    transient_transition_effect: bool = False,
+    transition_effect_kind: str = "none",
+    transition_effect_coverage: str = "none",
+    cinematic_letterbox: bool = False,
+    event_staging: bool = False,
+    dialogue_visible: bool = False,
+    visible_character_action: bool = False,
+    primary_content_readability: str = "clear",
+) -> dict[str, object]:
+    return {
+        "transient_transition_effect": transient_transition_effect,
+        "transition_effect_kind": transition_effect_kind,
+        "transition_effect_coverage": transition_effect_coverage,
+        "cinematic_letterbox": cinematic_letterbox,
+        "event_staging": event_staging,
+        "on_screen_dialogue_text_visible": dialogue_visible,
+        "visible_character_action": visible_character_action,
+        "primary_content_readability": primary_content_readability,
+    }
+
+
 def _response(content: dict[str, object]) -> dict[str, object]:
     return {
         "message": {"content": json.dumps(content, ensure_ascii=False)},
@@ -2531,6 +2780,16 @@ def _catalog() -> SceneCatalog:
                 "繰り返される通常戦闘",
                 "recurring_gameplay",
             ),
+            SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
+        )
+    )
+
+
+def _catalog_with_cinematic_town() -> SceneCatalog:
+    return SceneCatalog(
+        (
+            SceneCatalogEntry("exploration", "探索", "フィールド探索", "ordinary"),
+            SceneCatalogEntry("town", "街", "街で起こる会話event", "cinematic"),
             SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
         )
     )

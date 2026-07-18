@@ -21,7 +21,7 @@ SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v14"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v15"
 COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION = (
     "combat-visibility-verification-prompt-v2"
 )
@@ -30,6 +30,15 @@ COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION = (
 )
 COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION = (
     "combat-visibility-verification-stage-v2"
+)
+PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION = (
+    "publication-boundary-verification-prompt-v1"
+)
+PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION = (
+    "publication-boundary-verification-schema-v1"
+)
+PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION = (
+    "publication-boundary-verification-stage-v1"
 )
 RETRY_POLICY_VERSION = "ollama-retry-v7"
 
@@ -233,5 +242,45 @@ COMBAT_VISIBILITY_VERIFICATION_SCHEMA: dict[str, object] = {
         "opponent_body_framing",
         "effect_overlaps_combatant_body",
         "effect_only_frame",
+    ],
+}
+
+PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "transient_transition_effect": {"type": "boolean"},
+        "transition_effect_kind": {
+            "type": "string",
+            "enum": [
+                "none",
+                "white_wipe",
+                "motion_blur_or_streak",
+                "fade",
+                "other",
+            ],
+        },
+        "transition_effect_coverage": {
+            "type": "string",
+            "enum": ["none", "under_quarter", "quarter_to_half", "over_half"],
+        },
+        "cinematic_letterbox": {"type": "boolean"},
+        "event_staging": {"type": "boolean"},
+        "on_screen_dialogue_text_visible": {"type": "boolean"},
+        "visible_character_action": {"type": "boolean"},
+        "primary_content_readability": {
+            "type": "string",
+            "enum": ["clear", "partial", "obscured"],
+        },
+    },
+    "required": [
+        "transient_transition_effect",
+        "transition_effect_kind",
+        "transition_effect_coverage",
+        "cinematic_letterbox",
+        "event_staging",
+        "on_screen_dialogue_text_visible",
+        "visible_character_action",
+        "primary_content_readability",
     ],
 }

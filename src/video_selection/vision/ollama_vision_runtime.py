@@ -78,6 +78,10 @@ from .vision_contract import (
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION,
+    PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION,
+    PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA,
+    PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION,
+    PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION,
     RETRY_POLICY_VERSION,
     SCENE_CATALOG_PROMPT_VERSION,
     SCENE_CATALOG_SCHEMA,
@@ -97,6 +101,7 @@ StageKind = Literal[
     "scene_catalog",
     "candidate_annotation",
     "combat_visibility_verification",
+    "publication_boundary_verification",
 ]
 OpponentBodyFraming = Literal["complete", "edge_cropped", "occluded", "absent"]
 
@@ -137,6 +142,16 @@ _COMBAT_VISIBILITY_VERIFICATION_KEYS = {
     "effect_overlaps_combatant_body",
     "effect_only_frame",
 }
+_PUBLICATION_BOUNDARY_VERIFICATION_KEYS = {
+    "transient_transition_effect",
+    "transition_effect_kind",
+    "transition_effect_coverage",
+    "cinematic_letterbox",
+    "event_staging",
+    "on_screen_dialogue_text_visible",
+    "visible_character_action",
+    "primary_content_readability",
+}
 _EFFECT_SCREEN_COVERAGES = {
     "none",
     "under_quarter",
@@ -159,6 +174,14 @@ _OPPONENT_BODY_FRAMINGS: tuple[OpponentBodyFraming, ...] = (
     "occluded",
     "absent",
 )
+_TRANSITION_EFFECT_KINDS = {
+    "none",
+    "white_wipe",
+    "motion_blur_or_streak",
+    "fade",
+    "other",
+}
+_PRIMARY_CONTENT_READABILITIES = {"clear", "partial", "obscured"}
 _RETRYABLE_REASONS = {
     VisionRuntimeFailureReason.TRANSPORT_FAILURE,
     VisionRuntimeFailureReason.RESPONSE_INVALID,
@@ -219,6 +242,24 @@ _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION = (
     "effect_only_frameは画面中央の主内容が一時的な光・爆発・煙だけで、人物・敵・"
     "物体の本体を主対象として一つも明瞭に判別できない場合だけtrueです。敵や人物"
     "の本体が一体でもclearならfalseです。"
+)
+_PUBLICATION_BOUNDARY_VERIFICATION_INSTRUCTION = (
+    "この画像1枚に実際に見える画素だけを観測してください。音声、前後場面、"
+    "説明文は使いません。transient_transition_effectは、画面の切替や移動中だけ"
+    "現れる白いwipe、太い光帯、fade、motion blurやstreakが、安定した画面内容を"
+    "横切り隠している場合だけtrueです。地図の雲、通常のcursor、選択marker、"
+    "常設UIはfalseです。transition_effect_kindはnone、white_wipe、"
+    "motion_blur_or_streak、fade、otherから選びます。transition_effect_coverageは"
+    "一時的な切替effectが画面に占める面積をnone、under_quarter、quarter_to_half、"
+    "over_halfから選びます。cinematic_letterboxは画面上端と下端の両方に太い"
+    "黒帯がある場合だけtrueです。event_stagingは複数人物が会話やevent用の固定構図で"
+    "向き合う、並ぶ、囲む場合だけtrueです。通常操作中に偶然近くにいるだけなら"
+    "falseです。on_screen_dialogue_text_visibleは登場人物の台詞文字が画像内で"
+    "実際に読める場合だけtrueです。目的表示、地名、menu、操作案内は台詞では"
+    "ありません。visible_character_actionは人物同士の具体的な動作や相互作用が"
+    "画像内で明瞭な場合だけtrueです。静止して立つ、向き合う、並ぶだけならfalseです。"
+    "primary_content_readabilityは主内容が遮られず明瞭ならclear、一部隠れるなら"
+    "partial、切替effect等で何の画面か分からないならobscuredです。"
 )
 _CANDIDATE_ANNOTATION_SEMANTICS = (
     "各frameを他のframeの内容と混ぜず、対応するframe_idごとに個別評価します。"
@@ -358,7 +399,7 @@ class OllamaVisionRuntime:
 
         def parse_candidate(
             value: Mapping[str, object],
-        ) -> tuple[CandidateAnnotation, bool, bool]:
+        ) -> tuple[CandidateAnnotation, bool, bool, bool]:
             nonlocal candidate_response_count
             candidate_response_count += 1
             (
@@ -366,18 +407,25 @@ class OllamaVisionRuntime:
                 redacted,
                 requires_dialogue_verification,
                 requires_combat_verification,
+                requires_publication_verification,
             ) = _parse_candidate_annotation(value, request, catalog)
             if requires_dialogue_verification and candidate_response_count == 1:
                 raise _domain_error(
                     "candidate_annotation_dialogue_visibility_unverified"
                 )
-            return annotation, redacted, requires_combat_verification
+            return (
+                annotation,
+                redacted,
+                requires_combat_verification,
+                requires_publication_verification,
+            )
 
         (
             (
                 annotation,
                 free_text_redacted,
                 requires_combat_verification,
+                requires_publication_verification,
             ),
             diagnostics,
         ) = self._infer(
@@ -420,6 +468,46 @@ class OllamaVisionRuntime:
                 or opponent_body_framing != "complete"
                 or effect_only_frame
             ):
+                annotation = replace(annotation, explanation_value="none")
+            diagnostics = _merge_candidate_diagnostics(
+                diagnostics,
+                verification_diagnostics,
+            )
+        elif requires_publication_verification:
+            verification_input = _publication_boundary_verification_semantic_input(
+                annotation.candidate,
+                model,
+                num_ctx,
+            )
+            (
+                (
+                    transient_transition_effect,
+                    cinematic_letterbox,
+                    event_staging,
+                    on_screen_dialogue_text_visible,
+                    visible_character_action,
+                ),
+                verification_diagnostics,
+            ) = self._infer(
+                stage_kind="publication_boundary_verification",
+                request_fingerprint=_fingerprint(verification_input),
+                payload=_publication_boundary_verification_payload(
+                    annotation.candidate,
+                    model,
+                    num_ctx,
+                ),
+                parser=_parse_publication_boundary_verification,
+                model=model,
+                image_count=1,
+                context_cue_count=0,
+            )
+            static_event_setup = (
+                cinematic_letterbox
+                and event_staging
+                and not on_screen_dialogue_text_visible
+                and not visible_character_action
+            )
+            if transient_transition_effect or static_event_setup:
                 annotation = replace(annotation, explanation_value="none")
             diagnostics = _merge_candidate_diagnostics(
                 diagnostics,
@@ -696,6 +784,28 @@ def _combat_visibility_verification_payload(
     }
 
 
+def _publication_boundary_verification_payload(
+    candidate: FrameCandidate,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    """遷移と静止eventの掲載境界を一画像へ確認するrequestを返す。"""
+    return {
+        "model": model.configured_name,
+        "stream": False,
+        "think": False,
+        "format": PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA,
+        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "messages": [
+            {
+                "role": "user",
+                "content": _PUBLICATION_BOUNDARY_VERIFICATION_INSTRUCTION,
+                "images": [base64.b64encode(candidate.image_bytes).decode()],
+            }
+        ],
+    }
+
+
 def _candidate_schema(
     request: CandidateAnnotationRequest,
     catalog: SceneCatalog,
@@ -841,7 +951,7 @@ def _parse_candidate_annotation(
     value: Mapping[str, object],
     request: CandidateAnnotationRequest,
     catalog: SceneCatalog,
-) -> tuple[CandidateAnnotation, bool, bool, bool]:
+) -> tuple[CandidateAnnotation, bool, bool, bool, bool]:
     if set(value) != _ANNOTATION_KEYS:
         raise _schema_error("candidate_annotation_schema_invalid")
     raw_observations = value.get("frame_observations")
@@ -894,6 +1004,15 @@ def _parse_candidate_annotation(
             and selected.effective_explanation_value != "none"
         )
         scene = catalog.for_slug(selected.scene_slug)
+        requires_publication_verification = (
+            selected.effective_explanation_value != "none"
+            and not requires_combat_verification
+            and (
+                selected.effective_content_kind == "map"
+                or selected.interface_kind == "map"
+                or scene.selection_role == "cinematic"
+            )
+        )
         content_label = _CONTENT_KIND_LABELS[selected.effective_content_kind]
         annotation_summary = f"{scene.display_name}の{content_label}"
         frame_choice_reason = f"{content_label}が候補内で最も明瞭なフレーム"
@@ -930,6 +1049,7 @@ def _parse_candidate_annotation(
             free_text_redacted,
             requires_dialogue_verification,
             requires_combat_verification,
+            requires_publication_verification,
         )
     except ValueError:
         raise _domain_error("candidate_annotation_domain_invalid") from None
@@ -959,6 +1079,53 @@ def _parse_combat_visibility_verification(
     ):
         raise _schema_error("combat_visibility_verification_schema_invalid")
     return opponent_body_visibility, opponent_body_framing, effect_only_frame
+
+
+def _parse_publication_boundary_verification(
+    value: Mapping[str, object],
+) -> tuple[bool, bool, bool, bool, bool]:
+    """遷移と静止eventの専用schemaを検証し掲載境界の観測を返す。"""
+    if set(value) != _PUBLICATION_BOUNDARY_VERIFICATION_KEYS:
+        raise _schema_error("publication_boundary_verification_schema_invalid")
+    transient_transition_effect = value.get("transient_transition_effect")
+    transition_effect_kind = value.get("transition_effect_kind")
+    transition_effect_coverage = value.get("transition_effect_coverage")
+    cinematic_letterbox = value.get("cinematic_letterbox")
+    event_staging = value.get("event_staging")
+    on_screen_dialogue_text_visible = value.get("on_screen_dialogue_text_visible")
+    visible_character_action = value.get("visible_character_action")
+    primary_content_readability = value.get("primary_content_readability")
+    if (
+        not isinstance(transient_transition_effect, bool)
+        or not isinstance(cinematic_letterbox, bool)
+        or not isinstance(event_staging, bool)
+        or not isinstance(on_screen_dialogue_text_visible, bool)
+        or not isinstance(visible_character_action, bool)
+    ):
+        raise _schema_error("publication_boundary_verification_schema_invalid")
+    transition_relationship_is_valid = (
+        transient_transition_effect
+        and transition_effect_kind != "none"
+        and transition_effect_coverage != "none"
+    ) or (
+        not transient_transition_effect
+        and transition_effect_kind == "none"
+        and transition_effect_coverage == "none"
+    )
+    if (
+        transition_effect_kind not in _TRANSITION_EFFECT_KINDS
+        or transition_effect_coverage not in _EFFECT_SCREEN_COVERAGES
+        or primary_content_readability not in _PRIMARY_CONTENT_READABILITIES
+        or not transition_relationship_is_valid
+    ):
+        raise _schema_error("publication_boundary_verification_schema_invalid")
+    return (
+        transient_transition_effect,
+        cinematic_letterbox,
+        event_staging,
+        on_screen_dialogue_text_visible,
+        visible_character_action,
+    )
 
 
 def _parse_candidate_frame_observations(
@@ -1199,6 +1366,15 @@ def _candidate_semantic_input(
         "combat_visibility_verification_stage_contract_version": (
             COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
         ),
+        "publication_boundary_verification_prompt_version": (
+            PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION
+        ),
+        "publication_boundary_verification_schema_version": (
+            PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "publication_boundary_verification_stage_contract_version": (
+            PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
 
@@ -1219,6 +1395,27 @@ def _combat_visibility_verification_semantic_input(
         "schema_version": COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
         "stage_contract_version": (
             COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "retry_policy_version": RETRY_POLICY_VERSION,
+    }
+
+
+def _publication_boundary_verification_semantic_input(
+    candidate: FrameCandidate,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    return {
+        "frame_candidate": {
+            "id": candidate.identifier,
+            "image_sha256": hashlib.sha256(candidate.image_bytes).hexdigest(),
+        },
+        "model": {**model.semantic_input(), "num_ctx": num_ctx},
+        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "prompt_version": PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION,
+        "schema_version": PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION,
+        "stage_contract_version": (
+            PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION
         ),
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
@@ -1302,6 +1499,12 @@ def _contract_versions(stage_kind: StageKind) -> tuple[str, str, str]:
             COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
             COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION,
         )
+    if stage_kind == "publication_boundary_verification":
+        return (
+            PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION,
+            PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION,
+            PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION,
+        )
     return (
         CANDIDATE_ANNOTATION_PROMPT_VERSION,
         CANDIDATE_ANNOTATION_SCHEMA_VERSION,
@@ -1313,7 +1516,7 @@ def _merge_candidate_diagnostics(
     primary: VisionInferenceDiagnostics,
     verification: VisionInferenceDiagnostics,
 ) -> VisionInferenceDiagnostics:
-    """注釈と専用可視性確認のsafe計測値を一つのStage診断へ集約する。"""
+    """注釈と条件付き専用確認のsafe計測値を一つのStage診断へ集約する。"""
     if (
         primary.model_name != verification.model_name
         or primary.model_identity != verification.model_identity
