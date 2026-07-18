@@ -616,7 +616,11 @@ def _with_repair_code(
             "根拠にしません。画像内で台詞文字を実際に読める場合だけ"
             "on_screen_dialogue_text_visible=trueとし、対応する"
             "dialogue_text_presentationを返します。人物portraitや会話中らしい構図"
-            "だけで文字を読めない場合はfalseかつnoneにします。"
+            "だけで文字を読めない場合はfalseかつnoneにします。再確認時も"
+            "spoiler_riskがnoneならspoiler_evidenceは空文字列、low・medium・high"
+            "なら画面から判断した根拠を1文以上記述します。context_relevanceがnone"
+            "またはunavailableならsupporting_context_cue_idsは空配列、weakまたは"
+            "strongなら入力内IDを1件以上入れます。"
         )
     messages[-1]["content"] = f"{content}\n{repair}"
     return copied

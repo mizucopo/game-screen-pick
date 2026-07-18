@@ -1425,6 +1425,8 @@ def test_contextual_cinematic_dialogue_is_visually_rechecked(
     assert isinstance(second_prompt, str)
     assert "candidate_annotation_dialogue_visibility_unverified" in second_prompt
     assert "音声やContext Cueを根拠にしません" in second_prompt
+    assert "spoiler_riskがnoneならspoiler_evidenceは空文字列" in second_prompt
+    assert "weakまたはstrongなら入力内IDを1件以上" in second_prompt
 
 
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
