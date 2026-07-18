@@ -1115,11 +1115,20 @@ def test_candidate_frames_are_labeled_and_selected_from_per_frame_observations()
     # Assert
     messages = payloads[0]["messages"]
     assert isinstance(messages, list)
-    assert [message["content"] for message in messages[:-1]] == [
+    frame_message_contents = [message["content"] for message in messages[:-1]]
+    frame_message_ids = [
+        content.split("。", maxsplit=1)[0] for content in frame_message_contents
+    ]
+    assert frame_message_ids == [
         "frame_candidate_id=frame-a",
         "frame_candidate_id=frame-b",
         "frame_candidate_id=frame-c",
     ]
+    assert all(
+        "この画像だけに実際に見えるもの" in content
+        for content in frame_message_contents
+    )
+    assert all("人物portraitだけ" in content for content in frame_message_contents)
     assert [message["images"] for message in messages[:-1]] == [
         ["aW1hZ2UtZnJhbWUtYQ=="],
         ["aW1hZ2UtZnJhbWUtYg=="],

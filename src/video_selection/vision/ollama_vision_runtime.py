@@ -128,6 +128,17 @@ _SCENE_CATALOG_SEMANTICS = (
     "同じ画面構造を一時的な敵やエフェクトだけで別sceneへ分割しません。"
     "sceneはブログで役割が異なる視覚・内容のまとまりとして作ります。\n"
 )
+_CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION = (
+    "この画像だけに実際に見えるものを最初に観測してください。"
+    "実際の台詞文が読めなければvisible_dialogue_text=falseです。人物portraitだけ、"
+    "空の台詞欄、見出し、説明、目的表示、操作案内、item名、HUDは台詞ではありません。"
+    "人物または敵の具体的な動作や相互作用がなければvisible_action=falseです。"
+    "静止した立ち姿、空の背景、建物、移動先表示は動作ではありません。"
+    "人物・NPC・player・monster・bossの本体を判別できなければ"
+    "visible_character_or_enemy=falseです。portrait、HUD、文字、影、発光、"
+    "移動軌跡だけは本体ではありません。戦闘ではplayer本体と攻撃相手本体を別々に"
+    "判定し、portrait、HUD、文字、光、hit effect、影を本体に数えません。"
+)
 _CANDIDATE_ANNOTATION_SEMANTICS = (
     "各frameを他のframeの内容と混ぜず、対応するframe_idごとに個別評価します。"
     "最初に各画像の直接観測を推測せず決め、その後で画面内容と説明価値を決めます。"
@@ -485,7 +496,10 @@ def _candidate_payload(
     frame_messages = [
         {
             "role": "user",
-            "content": f"frame_candidate_id={item.identifier}",
+            "content": (
+                f"frame_candidate_id={item.identifier}。"
+                f"{_CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION}"
+            ),
             "images": [base64.b64encode(item.image_bytes).decode()],
         }
         for item in request.frame_candidates

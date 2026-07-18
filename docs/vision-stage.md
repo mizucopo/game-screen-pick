@@ -19,7 +19,7 @@ Scene Catalog Representative Setは要求画像枚数から独立します。Sel
 Ollamaの`/api/chat`を次の2種類だけに使います。
 
 1. `build-scene-catalog`: Video Set共有の3〜8 sceneを一回生成します。`other`を必ず1件含め、そのScene Selection Roleは`ordinary`です。
-2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、入力frame別の意味観測を一回の推論で返します。各画像は対応するFrame Candidate IDだけを持つ個別messageで送り、別画像の内容を混ぜません。
+2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、入力frame別の意味観測を一回の推論で返します。各画像は対応するFrame Candidate IDとその画像だけに対する直接観測条件を持つ個別messageで送り、別画像の内容を混ぜません。総合分類の指示は全画像messageの後に一度だけ送ります。
 
 Scene Catalog promptは`ordinary`、`cinematic`、`recurring_gameplay`の意味を明示し、同じplay画面を一時的な敵や発光だけで別sceneへ分割しないよう要求します。Candidate Annotation promptは、総合分類より先にInterface Kind、画面内に実在する台詞・具体的な動作・判別可能な人物または敵の有無、戦闘かどうかとplayer本体・攻撃相手本体それぞれの可視性を直接観測させます。その後、画面内容、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Context Cue Relevance、Spoiler Riskの全境界を評価させます。戦闘HUDだけを`other_interface`とせず、人物portrait、空の台詞欄、説明文、目的表示、tutorial文、menu項目を台詞にしません。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体に数えません。各frame内に実在する情報だけを評価し、別frameの台詞やContext Cueを画面内情報として補いません。Context Cueが存在するだけでは`strong`にせず、進行位置だけではSpoiler Riskを上げません。
 
