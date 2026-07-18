@@ -286,11 +286,27 @@ class OllamaVisionRuntime:
         """一つのCandidate Momentをstrict schemaと所属検証で評価する。"""
         _require_model_role(model, ModelRole.CANDIDATE_ANNOTATION, num_ctx)
         semantic_input = _candidate_semantic_input(request, catalog, model, num_ctx)
+        dialogue_verification_requested = False
+
+        def parse_candidate(
+            value: Mapping[str, object],
+        ) -> tuple[CandidateAnnotation, bool]:
+            nonlocal dialogue_verification_requested
+            annotation, redacted, requires_verification = _parse_candidate_annotation(
+                value, request, catalog
+            )
+            if requires_verification and not dialogue_verification_requested:
+                dialogue_verification_requested = True
+                raise _domain_error(
+                    "candidate_annotation_dialogue_visibility_unverified"
+                )
+            return annotation, redacted
+
         (annotation, free_text_redacted), diagnostics = self._infer(
             stage_kind="candidate_annotation",
             request_fingerprint=_fingerprint(semantic_input),
             payload=_candidate_payload(request, catalog, model, num_ctx),
-            parser=lambda value: _parse_candidate_annotation(value, request, catalog),
+            parser=parse_candidate,
             model=model,
             image_count=len(request.frame_candidates),
             context_cue_count=len(request.context_cues),
@@ -594,6 +610,14 @@ def _with_repair_code(
             "ならsupporting_context_cue_idsは空配列、weakまたはstrongなら入力内IDを"
             "1件以上入れます。"
         )
+    if validation_code == "candidate_annotation_dialogue_visibility_unverified":
+        repair += (
+            "\n画面内台詞文字を画像だけに対して再確認します。音声やContext Cueを"
+            "根拠にしません。画像内で台詞文字を実際に読める場合だけ"
+            "on_screen_dialogue_text_visible=trueとし、対応する"
+            "dialogue_text_presentationを返します。人物portraitや会話中らしい構図"
+            "だけで文字を読めない場合はfalseかつnoneにします。"
+        )
     messages[-1]["content"] = f"{content}\n{repair}"
     return copied
 
@@ -673,7 +697,7 @@ def _parse_candidate_annotation(
     value: Mapping[str, object],
     request: CandidateAnnotationRequest,
     catalog: SceneCatalog,
-) -> tuple[CandidateAnnotation, bool]:
+) -> tuple[CandidateAnnotation, bool, bool]:
     if set(value) != _ANNOTATION_KEYS:
         raise _schema_error("candidate_annotation_schema_invalid")
     raw_observations = value.get("frame_observations")
@@ -709,6 +733,14 @@ def _parse_candidate_annotation(
     actual_frame_ids = tuple(item.candidate.identifier for item in observations)
     if actual_frame_ids != expected_frame_ids:
         raise _domain_error("candidate_annotation_frame_observations_mismatch")
+    requires_dialogue_verification = bool(request.context_cues) and any(
+        (
+            observation.prominent_event_portrait
+            or observation.cinematic_event_presentation
+        )
+        and observation.visible_dialogue_text
+        for observation in observations
+    )
     try:
         selected = select_representative_candidate_frame_observation(observations)
         scene = catalog.for_slug(selected.scene_slug)
@@ -746,6 +778,7 @@ def _parse_candidate_annotation(
                 spoiler_evidence=spoiler_evidence,
             ),
             free_text_redacted,
+            requires_dialogue_verification,
         )
     except ValueError:
         raise _domain_error("candidate_annotation_domain_invalid") from None

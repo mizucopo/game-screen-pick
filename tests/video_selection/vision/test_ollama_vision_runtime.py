@@ -1356,6 +1356,77 @@ def test_combat_without_both_visible_participants_has_no_explanation_value() -> 
     assert annotation.explanation_value == "none"
 
 
+@pytest.mark.parametrize(
+    ("confirmed_visible", "expected_explanation_value"),
+    ((False, "none"), (True, "high")),
+)
+def test_contextual_cinematic_dialogue_is_visually_rechecked(
+    confirmed_visible: bool,
+    expected_explanation_value: str,
+) -> None:
+    """文脈付きイベントの画面内台詞が画像に対して再確認されること。
+
+    Arrange:
+        - 初回は音声会話を画面内台詞としたイベント応答が用意される
+        - 再確認では画像上の台詞文字がある場合とない場合が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 視覚再確認後の台詞表示だけで説明価値が決定されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (("frame-a", "exploration", "event_dialogue", "high", "dialogue"),)
+        )
+        observation = _first_frame_observation(response)
+        visible = True if len(payloads) == 1 else confirmed_visible
+        observation.update(
+            {
+                "cinematic_event_presentation": True,
+                "on_screen_dialogue_text_visible": visible,
+                "dialogue_text_presentation": ("dialogue_box" if visible else "none"),
+            }
+        )
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == expected_explanation_value
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == (
+        "candidate_annotation_dialogue_visibility_unverified"
+    )
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "candidate_annotation_dialogue_visibility_unverified" in second_prompt
+    assert "音声やContext Cueを根拠にしません" in second_prompt
+
+
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
     """Cueなし応答の関係違反が明示契約と個別codeで修復されること。
 
