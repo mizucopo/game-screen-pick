@@ -29,12 +29,25 @@ CandidateFrameContentKind = Literal[
     "title",
     "other",
 ]
+CandidateInterfaceKind = Literal[
+    "none",
+    "shop",
+    "map",
+    "save",
+    "tutorial_help",
+    "other_interface",
+    "title",
+]
 PrimarySubjectVisibility = Literal["clear", "partial", "absent"]
 TransientObstruction = Literal["none", "partial", "severe"]
 
 CANDIDATE_FRAME_CONTENT_KINDS = cast(
     tuple[CandidateFrameContentKind, ...],
     get_args(CandidateFrameContentKind),
+)
+CANDIDATE_INTERFACE_KINDS = cast(
+    tuple[CandidateInterfaceKind, ...],
+    get_args(CandidateInterfaceKind),
 )
 PRIMARY_SUBJECT_VISIBILITIES = cast(
     tuple[PrimarySubjectVisibility, ...],
@@ -63,6 +76,14 @@ _NO_EXPLANATION_CONTENT = frozenset({"event_setup", "tutorial_help"})
 _MENU_TEXT_CONTENT = frozenset(
     {"shop", "map", "save", "tutorial_help", "other_interface"}
 )
+_INTERFACE_CONTENT_KINDS: dict[CandidateInterfaceKind, CandidateFrameContentKind] = {
+    "shop": "shop",
+    "map": "map",
+    "save": "save",
+    "tutorial_help": "tutorial_help",
+    "other_interface": "other_interface",
+    "title": "title",
+}
 
 
 @dataclass(frozen=True)
@@ -72,6 +93,10 @@ class CandidateFrameObservation:
     candidate: FrameCandidate
     scene_slug: str
     content_kind: CandidateFrameContentKind
+    interface_kind: CandidateInterfaceKind
+    visible_dialogue_text: bool
+    visible_action: bool
+    visible_character_or_enemy: bool
     explanation_value: ExplanationValue
     screen_text_kind: ScreenTextKind
     primary_subject_visibility: PrimarySubjectVisibility
@@ -85,6 +110,10 @@ class CandidateFrameObservation:
             not self.candidate.image_bytes
             or not is_valid_scene_slug(self.scene_slug)
             or self.content_kind not in CANDIDATE_FRAME_CONTENT_KINDS
+            or self.interface_kind not in CANDIDATE_INTERFACE_KINDS
+            or not isinstance(self.visible_dialogue_text, bool)
+            or not isinstance(self.visible_action, bool)
+            or not isinstance(self.visible_character_or_enemy, bool)
             or self.explanation_value not in EXPLANATION_VALUES
             or self.screen_text_kind not in SCREEN_TEXT_KINDS
             or self.primary_subject_visibility not in PRIMARY_SUBJECT_VISIBILITIES
@@ -98,7 +127,22 @@ class CandidateFrameObservation:
     @property
     def blog_image_type(self) -> BlogImageType:
         """視覚内容から決定的なBlog Image Typeを返す。"""
-        return _BLOG_IMAGE_TYPES[self.content_kind]
+        return _BLOG_IMAGE_TYPES[self.effective_content_kind]
+
+    @property
+    def effective_content_kind(self) -> CandidateFrameContentKind:
+        """単純な視覚観測を優先して曖昧なmodel分類を正規化する。"""
+        if self.interface_kind != "none" and (
+            self.interface_kind != "other_interface" or not self.visible_action
+        ):
+            return _INTERFACE_CONTENT_KINDS[self.interface_kind]
+        if self.content_kind == "event_dialogue" and not self.visible_dialogue_text:
+            return "event_action" if self.visible_action else "event_setup"
+        if self.content_kind == "event_action" and not self.visible_action:
+            return "event_setup"
+        if self.content_kind == "gameplay_action" and not self.visible_action:
+            return "gameplay_idle"
+        return self.content_kind
 
     @property
     def effective_explanation_value(self) -> ExplanationValue:
@@ -111,7 +155,12 @@ class CandidateFrameObservation:
             and analysis.metrics.visibility_score < 0.85
         )
         if (
-            self.content_kind in _NO_EXPLANATION_CONTENT
+            self.effective_content_kind in _NO_EXPLANATION_CONTENT
+            or self.effective_content_kind == "save"
+            or (
+                self.effective_content_kind == "shop"
+                and not self.visible_character_or_enemy
+            )
             or self.primary_subject_visibility == "absent"
             or self.transient_obstruction == "severe"
             or is_low_information
@@ -122,12 +171,13 @@ class CandidateFrameObservation:
     @property
     def effective_screen_text_kind(self) -> ScreenTextKind:
         """content kindと矛盾しない画面内text roleを返す。"""
-        if self.content_kind in _MENU_TEXT_CONTENT:
+        content_kind = self.effective_content_kind
+        if content_kind in _MENU_TEXT_CONTENT:
             return "menu"
-        if self.content_kind == "event_dialogue":
+        if content_kind == "event_dialogue":
             return "dialogue"
-        if self.content_kind == "event_setup":
+        if content_kind == "event_setup":
             return "none"
-        if self.content_kind == "title":
+        if content_kind == "title":
             return "title"
         return self.screen_text_kind

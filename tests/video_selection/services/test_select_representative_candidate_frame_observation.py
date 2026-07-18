@@ -9,6 +9,7 @@ from src.video_selection.models.candidate_annotation import (
 from src.video_selection.models.candidate_frame_observation import (
     CandidateFrameContentKind,
     CandidateFrameObservation,
+    CandidateInterfaceKind,
 )
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.neutral_image_analysis import NeutralImageAnalysis
@@ -94,6 +95,45 @@ def test_grossly_degraded_frame_cannot_override_visible_peer() -> None:
     assert selected.candidate.identifier == "frm_" + "b" * 64
 
 
+def test_static_tutorial_cannot_override_action_frame() -> None:
+    """modelがeventと誤分類した説明画面より動作frameが選ばれること。
+
+    Arrange:
+        - highのevent_dialogueとされた静止tutorialとmediumの戦闘が用意される
+    Act:
+        - Representative Frameが決定的に選択される
+    Assert:
+        - atomic observationで掲載不可になるtutorialが選ばれないこと
+    """
+    # Arrange
+    tutorial = _observation(
+        "a",
+        "event_dialogue",
+        quality=0.90,
+        explanation_value="high",
+        screen_text_kind="dialogue",
+        interface_kind="tutorial_help",
+        visible_dialogue_text=True,
+        visible_character_or_enemy=False,
+    )
+    action = _observation(
+        "b",
+        "event_action",
+        quality=0.80,
+        explanation_value="medium",
+        interface_kind="other_interface",
+        visible_action=True,
+    )
+
+    # Act
+    selected = selection_service.select_representative_candidate_frame_observation(
+        (tutorial, action)
+    )
+
+    # Assert
+    assert selected.candidate.identifier == "frm_" + "b" * 64
+
+
 def _observation(
     digest_character: str,
     content_kind: CandidateFrameContentKind,
@@ -103,6 +143,10 @@ def _observation(
     visibility: float = 0.95,
     explanation_value: ExplanationValue,
     screen_text_kind: ScreenTextKind = "none",
+    interface_kind: CandidateInterfaceKind = "none",
+    visible_dialogue_text: bool | None = None,
+    visible_action: bool | None = None,
+    visible_character_or_enemy: bool = True,
 ) -> CandidateFrameObservation:
     metrics = NeutralImageMetrics(
         blur_score=100.0,
@@ -144,6 +188,18 @@ def _observation(
         candidate=candidate,
         scene_slug="scene",
         content_kind=content_kind,
+        interface_kind=interface_kind,
+        visible_dialogue_text=(
+            content_kind == "event_dialogue"
+            if visible_dialogue_text is None
+            else visible_dialogue_text
+        ),
+        visible_action=(
+            content_kind in {"gameplay_action", "event_action"}
+            if visible_action is None
+            else visible_action
+        ),
+        visible_character_or_enemy=visible_character_or_enemy,
         explanation_value=explanation_value,
         screen_text_kind=screen_text_kind,
         primary_subject_visibility="clear",

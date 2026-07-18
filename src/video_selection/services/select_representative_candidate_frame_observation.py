@@ -61,7 +61,7 @@ def _selection_key(
     quality_score = 0.0 if analysis is None else analysis.quality_score
     return (
         -_EXPLANATION_PRIORITY[observation.effective_explanation_value],
-        -_CONTENT_PRIORITY[observation.content_kind],
+        -_CONTENT_PRIORITY[observation.effective_content_kind],
         -_SUBJECT_PRIORITY[observation.primary_subject_visibility],
         -_OBSTRUCTION_PRIORITY[observation.transient_obstruction],
         -quality_score,

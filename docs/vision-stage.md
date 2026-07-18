@@ -21,9 +21,9 @@ Ollamaの`/api/chat`を次の2種類だけに使います。
 1. `build-scene-catalog`: Video Set共有の3〜8 sceneを一回生成します。`other`を必ず1件含め、そのScene Selection Roleは`ordinary`です。
 2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、入力frame別の意味観測を一回の推論で返します。各画像は対応するFrame Candidate IDだけを持つ個別messageで送り、別画像の内容を混ぜません。
 
-Scene Catalog promptは`ordinary`、`cinematic`、`recurring_gameplay`の意味を明示し、同じplay画面を一時的な敵や発光だけで別sceneへ分割しないよう要求します。Candidate Annotation promptは画面内容、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Context Cue Relevance、Spoiler Riskの全enum境界を明示します。各frame内に実在する情報だけを評価し、別frameの台詞やContext Cueを画面内情報として補いません。Context Cueが存在するだけでは`strong`にせず、進行位置だけではSpoiler Riskを上げません。
+Scene Catalog promptは`ordinary`、`cinematic`、`recurring_gameplay`の意味を明示し、同じplay画面を一時的な敵や発光だけで別sceneへ分割しないよう要求します。Candidate Annotation promptは画面内容、Interface Kind、画面内に実在する台詞・具体的な動作・判別可能な人物または敵の有無、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Context Cue Relevance、Spoiler Riskの全境界を明示します。戦闘HUDだけを`other_interface`とせず、説明文・tutorial文・menu項目を台詞にしません。各frame内に実在する情報だけを評価し、別frameの台詞やContext Cueを画面内情報として補いません。Context Cueが存在するだけでは`strong`にせず、進行位置だけではSpoiler Riskを上げません。
 
-modelはRepresentative Frame、Blog Image Type、eligible/selected flagを返しません。local処理がframe別観測のExplanation Value、画面内容、主対象の視認性、一時的な遮蔽、Neutral Image Analysisの順でRepresentative Frameを決め、Blog Image Type、公開用要約、選択理由を決定的に導出します。著しく画質・情報量・視認性が低いframeは明瞭なpeerより優先しません。`tutorial_help`、台詞も動作もない`event_setup`、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`へ正規化します。追加推論は行いません。
+modelはRepresentative Frame、Blog Image Type、eligible/selected flagを返しません。local処理は具体的なInterface Kindを曖昧な画面内容分類より優先します。ただし、具体的な動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として画面内容を上書きしません。台詞のない`event_dialogue`と動作のないaction分類を静止場面へ補正してから、Explanation Value、補正後の画面内容、主対象の視認性、一時的な遮蔽、Neutral Image Analysisの順でRepresentative Frameを決め、Blog Image Type、公開用要約、選択理由を決定的に導出します。著しく画質・情報量・視認性が低いframeは明瞭なpeerより優先しません。`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`へ正規化します。追加推論は行いません。
 
 各推論attemptの直前と応答受領直後に`/api/version`と`/api/tags`でOllama server versionとconfigured tagのlocal完全digestを再確認します。Model LifecycleでfreezeしたRuntime IdentityまたはResolved Model Identityと異なる場合は、別runtime／digestの結果を同じfingerprintへ保存せず停止します。この確認はtagの更新や再解決を行いません。
 
@@ -33,6 +33,10 @@ OllamaのCandidate Annotation responseはframeごとに次の意味情報だけ�
 
 - Scene Slug
 - 画面内容
+- Interface Kind
+- 画面内に実在する台詞の有無
+- 具体的な動作の有無
+- 判別可能な人物または敵の有無
 - Explanation Value
 - Screen Text Kind
 - 主対象の視認性

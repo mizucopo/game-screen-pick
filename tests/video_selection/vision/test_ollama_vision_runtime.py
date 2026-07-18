@@ -970,6 +970,18 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
         "battle",
         "other",
     ]
+    assert observation_properties["interface_kind"]["enum"] == [
+        "none",
+        "shop",
+        "map",
+        "save",
+        "tutorial_help",
+        "other_interface",
+        "title",
+    ]
+    assert observation_properties["visible_dialogue_text"] == {"type": "boolean"}
+    assert observation_properties["visible_action"] == {"type": "boolean"}
+    assert observation_properties["visible_character_or_enemy"] == {"type": "boolean"}
     assert properties["context_relevance"]["enum"] == ["none", "weak", "strong"]
     cue_schema = properties["supporting_context_cue_ids"]
     assert cue_schema["items"]["enum"] == ["cue-a"]
@@ -1022,6 +1034,9 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     assert "大きな発光やエフェクトで主対象が隠れる" in prompt
     assert "gameplay_action=" in prompt
     assert "tutorial_help" in prompt
+    assert "visible_dialogue_text" in prompt
+    assert "visible_action" in prompt
+    assert "visible_character_or_enemy" in prompt
     assert "explanation_valueのnone=" in prompt
     assert "context_relevanceのstrong=" in prompt
     assert "spoiler_riskのhigh=" in prompt
@@ -1139,6 +1154,51 @@ def test_tutorial_observation_is_not_eligible_for_selection_filling() -> None:
     # Act
     annotation, _diagnostics = runtime.annotate_candidate(
         request,
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.blog_image_type == "menu"
+    assert annotation.explanation_value == "none"
+    assert annotation.screen_text_kind == "menu"
+
+
+def test_atomic_observations_override_ambiguous_tutorial_content() -> None:
+    """単純観測でtutorialと判明したframeがmodelのevent分類を上書きすること。
+
+    Arrange:
+        - event_dialogueかつhighだが、静止tutorialを示すatomic観測が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - menu分類の説明価値なしへ決定的に正規化されること
+    """
+    # Arrange
+    response = _frame_observation_payload(
+        (("frame-a", "exploration", "event_dialogue", "high", "dialogue"),)
+    )
+    observation = _first_frame_observation(response)
+    observation.update(
+        {
+            "interface_kind": "tutorial_help",
+            "visible_dialogue_text": True,
+            "visible_action": False,
+            "visible_character_or_enemy": False,
+        }
+    )
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
         _catalog(),
         _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
         num_ctx=32768,
@@ -1763,6 +1823,23 @@ def _frame_observation_payload(
                 "frame_id": frame_id,
                 "scene_slug": scene_slug,
                 "content_kind": content_kind,
+                "interface_kind": (
+                    content_kind
+                    if content_kind
+                    in {
+                        "shop",
+                        "map",
+                        "save",
+                        "tutorial_help",
+                        "other_interface",
+                        "title",
+                    }
+                    else "none"
+                ),
+                "visible_dialogue_text": content_kind == "event_dialogue",
+                "visible_action": content_kind in {"gameplay_action", "event_action"},
+                "visible_character_or_enemy": content_kind
+                not in {"map", "save", "tutorial_help", "title"},
                 "explanation_value": explanation_value,
                 "screen_text_kind": screen_text_kind,
                 "primary_subject_visibility": "clear",

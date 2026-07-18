@@ -139,6 +139,31 @@ def test_large_white_effects_are_rejected_without_pure_white_frame() -> None:
     ]
 
 
+def test_compact_central_flash_is_rejected_without_rejecting_visible_scene() -> None:
+    """主対象を覆う中央発光が画面全体の白飛びでなくても除外されること。
+
+    Arrange:
+        - 情報のあるscene中央だけを連結した白い発光が覆うframeが用意される
+    Act:
+        - model-free Neutral Image Analysisが実行される
+    Assert:
+        - 背景が見えていても中央発光がwhiteoutとして除外されること
+    """
+    # Arrange
+    central_flash = cv2.resize(
+        _checkerboard(),
+        (960, 540),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    central_flash[230:310, 330:630] = 250
+
+    # Act
+    analysis = analyze_neutral_images((_frame(0, central_flash),))[0]
+
+    # Assert
+    assert analysis.reject_reason is ContentRejectReason.WHITEOUT
+
+
 def test_bright_menu_with_distinct_structure_remains_eligible() -> None:
     """明るくても構造が判別できるmenu frameが除外されないこと。
 

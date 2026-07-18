@@ -13,7 +13,7 @@ from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.neutral_image_analysis import NeutralImageAnalysis
 from ..models.neutral_image_metrics import NeutralImageMetrics
 
-NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v4"
+NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v5"
 BLUR_REJECT_VARIANCE_MIN = 12.0
 _CLIPPED_WHITE_THRESHOLD = 235
 _SOFT_WHITE_THRESHOLD = 230
@@ -23,6 +23,10 @@ _BRIGHT_SWEEP_AFFECTED_REGION_MIN = 0.08
 _BRIGHT_SWEEP_LOW_REGION_MAX = 0.20
 _BRIGHT_SWEEP_DOMINANT_REGION_MIN = 0.60
 _BRIGHT_SWEEP_REGION_CHANGE_MIN = 0.45
+_CENTRAL_FLASH_CLIPPED_RATIO_MIN = 0.04
+_CENTRAL_FLASH_CLIPPED_RATIO_MAX = 0.25
+_CENTRAL_FLASH_CENTER_RATIO_MIN = 0.15
+_CENTRAL_FLASH_REGION_RATIO_MIN = 0.035
 _QUALITY_WEIGHTS = {
     "blur_score": 0.165,
     "contrast": 0.145,
@@ -129,7 +133,7 @@ def _measure_frame(
     )
     largest_clipped_white_region_ratio = (
         _largest_connected_region_ratio(clipped_white)
-        if clipped_white_ratio >= 0.20
+        if clipped_white_ratio >= _CENTRAL_FLASH_CLIPPED_RATIO_MIN
         else 0.0
     )
     soft_white_ratio = float(np.mean(gray >= _SOFT_WHITE_THRESHOLD))
@@ -271,6 +275,13 @@ def _absolute_reject_reason(
         and raw["clipped_white_ratio"] <= 0.65
         and raw["center_clipped_white_ratio"] >= 0.50
         and raw["largest_clipped_white_region_ratio"] >= 0.20
+    ):
+        return ContentRejectReason.WHITEOUT
+    if (
+        raw["clipped_white_ratio"] >= _CENTRAL_FLASH_CLIPPED_RATIO_MIN
+        and raw["clipped_white_ratio"] < _CENTRAL_FLASH_CLIPPED_RATIO_MAX
+        and raw["center_clipped_white_ratio"] >= _CENTRAL_FLASH_CENTER_RATIO_MIN
+        and raw["largest_clipped_white_region_ratio"] >= _CENTRAL_FLASH_REGION_RATIO_MIN
     ):
         return ContentRejectReason.WHITEOUT
     if (

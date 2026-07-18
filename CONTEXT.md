@@ -261,7 +261,7 @@ Selection Shortlist内の一つのCandidate Momentが参照する1から3件のF
 _Avoid_: highest Quality Score, selected output, Frame Refinement
 
 **Candidate Frame Observation**:
-Candidate Annotationの一回のOllama推論が、一つのFrame Candidateだけを対象に返すstrict enum中心の意味観測。Scene Slug、画面内容、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskとevidenceを持つが、Representative Frame、最終score、適格性、最終採否は決めない。
+Candidate Annotationの一回のOllama推論が、一つのFrame Candidateだけを対象に返すstrict enum中心の意味観測。Scene Slug、画面内容、画面全体の主用途を表すInterface Kind、画面内に実在する台詞・具体的な動作・判別可能な人物または敵の有無、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskとevidenceを持つ。戦闘HUDだけではInterface Kindを`other_interface`にせず、説明文やmenu項目を台詞として扱わない。Representative Frame、最終score、適格性、最終採否は決めない。
 _Avoid_: Candidate Annotation artifact, Representative Frame, model-selected output
 
 **Cross-Video Diversity**:
@@ -281,7 +281,7 @@ Video Set全体のNeutral Image Analysisから、品質、見た目の多様性�
 _Avoid_: Selection Shortlist, selected output, per-video representatives
 
 **Candidate Annotation**:
-Selection Shortlist内の一つのCandidate Momentについて、1から3件の有効なFrame Candidate、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、一回のOllama推論で各画像をID付きCandidate Frame Observationとして個別評価するVideo Set Stage。各観測はScene Slug、画面内容、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。Representative Frame、Blog Image Type、公開用要約と理由は観測からlocalに決定する。`tutorial_help`、台詞も動作もない`event_setup`、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化するが、最終score、soft coverage、最終採否は決めない。
+Selection Shortlist内の一つのCandidate Momentについて、1から3件の有効なFrame Candidate、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、一回のOllama推論で各画像をID付きCandidate Frame Observationとして個別評価するVideo Set Stage。各観測はScene Slug、画面内容、Interface Kind、画面内に実在する台詞・動作・人物または敵の有無、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。Representative Frame、Blog Image Type、公開用要約と理由は観測からlocalに決定する。具体的なInterface Kindは曖昧な画面内容分類より優先する一方、動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として上書きに使わない。台詞のない`event_dialogue`と動作のないaction分類を静止場面へ補正し、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化するが、最終score、soft coverage、最終採否は決めない。
 _Avoid_: Candidate Scoring, Frame Refinement, Neutral Image Analysis, final selection
 
 **Scene**:
@@ -457,7 +457,7 @@ _Avoid_: free-text rejection, Content Reject Reason, Ollama Stage Failure
 _Avoid_: final selected score, model confidence, regenerated explanation
 
 **Neutral Image Analysis**:
-sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。画像の内容分類ではなく、blog candidate判定や動画横断のcosine similarity判定の土台になる。明確な無効frameには絶対条件を使い、純白だけでなく主対象を覆う連結した白い発光と、画面の大半を覆う低情報の淡い白もwhiteoutにする。暗いgameなど入力特性にはRefinement Window Group内の分布を使う。Transition Frameには同一streamとtime baseでdurationどおりに連続するnative frameだけの前後関係を使い、0.25秒以内に画面の一部から大半へ拡大または縮小する淡い明領域もtemporal transitionにする。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
+sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。画像の内容分類ではなく、blog candidate判定や動画横断のcosine similarity判定の土台になる。明確な無効frameには絶対条件を使い、純白だけでなく主対象を覆う大きな連結白領域、画面全体では小さくても中央の主対象を覆う連結した白い発光、画面の大半を覆う低情報の淡い白もwhiteoutにする。構造が判別できる明るいmenuは明るさだけで除外しない。暗いgameなど入力特性にはRefinement Window Group内の分布を使う。Transition Frameには同一streamとtime baseでdurationどおりに連続するnative frameだけの前後関係を使い、0.25秒以内に画面の一部から大半へ拡大または縮小する淡い明領域もtemporal transitionにする。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
 _Avoid_: scene classification, selection intent, CLIP embedding, model-dependent feature
 
 **Content Reject Reason**:

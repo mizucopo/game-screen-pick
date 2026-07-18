@@ -32,10 +32,12 @@ from ..models.candidate_annotation import (
 from ..models.candidate_annotation_request import CandidateAnnotationRequest
 from ..models.candidate_frame_observation import (
     CANDIDATE_FRAME_CONTENT_KINDS,
+    CANDIDATE_INTERFACE_KINDS,
     PRIMARY_SUBJECT_VISIBILITIES,
     TRANSIENT_OBSTRUCTIONS,
     CandidateFrameContentKind,
     CandidateFrameObservation,
+    CandidateInterfaceKind,
     PrimarySubjectVisibility,
     TransientObstruction,
 )
@@ -95,6 +97,10 @@ _FRAME_OBSERVATION_KEYS = {
     "frame_id",
     "scene_slug",
     "content_kind",
+    "interface_kind",
+    "visible_dialogue_text",
+    "visible_action",
+    "visible_character_or_enemy",
     "explanation_value",
     "screen_text_kind",
     "primary_subject_visibility",
@@ -126,6 +132,14 @@ _CANDIDATE_ANNOTATION_SEMANTICS = (
     "実在する会話、event_action=台詞がなくても具体的な演出や動作が見える出来事、"
     "event_setup=出来事の開始待ちで動作も台詞表示もない画面、shop・map・save・"
     "tutorial_help・other_interface=各interface、title・other=その他の役割です。\n"
+    "interface_kindは画面全体の主用途をnone・shop・map・save・tutorial_help・"
+    "other_interface・titleから選びます。戦闘HUDだけをother_interfaceにせず、"
+    "戦闘や探索が主ならnoneにします。visible_dialogue_textは登場人物の台詞が"
+    "frame内に実在するときだけtrue、visible_actionは戦闘・移動・演出などの"
+    "具体的な動きが見えるときだけtrue、visible_character_or_enemyは人物または"
+    "敵が判別できるときだけtrueにします。説明文、tutorial文、menu項目は"
+    "visible_dialogue_textではありません。これらのbooleanは各画像を個別に"
+    "観察して推測せずに返します。\n"
     "primary_subject_visibilityは人物・敵・品物・行動などブログ説明の主対象が"
     "clear・partial・absentのどれか、transient_obstructionは発光・白飛び・移動・"
     "画面切替による一時的な遮蔽がnone・partial・severeのどれかを返します。"
@@ -645,7 +659,7 @@ def _parse_candidate_annotation(
     try:
         selected = select_representative_candidate_frame_observation(observations)
         scene = catalog.for_slug(selected.scene_slug)
-        content_label = _CONTENT_KIND_LABELS[selected.content_kind]
+        content_label = _CONTENT_KIND_LABELS[selected.effective_content_kind]
         annotation_summary = f"{scene.display_name}の{content_label}"
         frame_choice_reason = f"{content_label}が候補内で最も明瞭なフレーム"
         (
@@ -703,6 +717,10 @@ def _parse_candidate_frame_observations(
         frame_id = raw_observation.get("frame_id")
         scene_slug = raw_observation.get("scene_slug")
         content_kind = raw_observation.get("content_kind")
+        interface_kind = raw_observation.get("interface_kind")
+        visible_dialogue_text = raw_observation.get("visible_dialogue_text")
+        visible_action = raw_observation.get("visible_action")
+        visible_character_or_enemy = raw_observation.get("visible_character_or_enemy")
         explanation_value = raw_observation.get("explanation_value")
         screen_text_kind = raw_observation.get("screen_text_kind")
         subject_visibility = raw_observation.get("primary_subject_visibility")
@@ -713,6 +731,10 @@ def _parse_candidate_frame_observations(
             not isinstance(frame_id, str)
             or not isinstance(scene_slug, str)
             or content_kind not in CANDIDATE_FRAME_CONTENT_KINDS
+            or interface_kind not in CANDIDATE_INTERFACE_KINDS
+            or not isinstance(visible_dialogue_text, bool)
+            or not isinstance(visible_action, bool)
+            or not isinstance(visible_character_or_enemy, bool)
             or explanation_value not in EXPLANATION_VALUES
             or screen_text_kind not in SCREEN_TEXT_KINDS
             or subject_visibility not in PRIMARY_SUBJECT_VISIBILITIES
@@ -739,6 +761,10 @@ def _parse_candidate_frame_observations(
                     candidate=frames[frame_id],
                     scene_slug=scene_slug,
                     content_kind=cast(CandidateFrameContentKind, content_kind),
+                    interface_kind=cast(CandidateInterfaceKind, interface_kind),
+                    visible_dialogue_text=visible_dialogue_text,
+                    visible_action=visible_action,
+                    visible_character_or_enemy=visible_character_or_enemy,
                     explanation_value=cast(ExplanationValue, explanation_value),
                     screen_text_kind=cast(ScreenTextKind, screen_text_kind),
                     primary_subject_visibility=cast(
