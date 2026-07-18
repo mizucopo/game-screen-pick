@@ -44,7 +44,7 @@ Frame Candidate Extractionはmerge済みの各refinement PTS rangeへ1秒前か�
 
 PCM timestampはaudio streamの開始PTSを原点とし、resample後の連続sample indexから生成します。container packet PTSの量子化ずれをchunk境界へ持ち込まず、`async=0`のままsampleを挿入・削除しません。
 
-faster-whisperが0.01秒へ量子化した個別word tokenは、startとendが同一点でも推測で延長せず保持します。Context Cueはgap policyでまとめたtoken列全体に正の時間幅を要求し、全tokenが同一点など有効なCue区間を作れない場合は`timestamp_drift`です。
+faster-whisperが0.01秒へ量子化した個別word tokenは、startとendが同一点でも推測で延長せず保持します。Context Cueはgap policyでまとめたtoken列全体に正の時間幅を要求します。group全体が同一点の場合は時間を補間せず、`asr_zero_duration`の低信頼diagnosticとしてprivate cacheへ隔離します。PCM範囲外、時刻逆転、sample grid不一致は`timestamp_drift`です。
 
 real-runtime testは実行時に`lavfi`、synthetic tone、repository所有の短い字幕だけからCFR、VFR、AV1/AAC、multiple stream、破損packet fixtureを生成します。binary mediaはrepositoryへ保存しません。通常suiteはFFmpegを起動せず、real suiteだけを次で実行します。
 

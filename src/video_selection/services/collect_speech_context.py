@@ -112,6 +112,22 @@ def collect_speech_context(
                 )
                 if not ownership_start <= cue_midpoint < ownership_end:
                     continue
+                if words[0].start_sample == words[-1].end_sample:
+                    rejected_diagnostics.append(
+                        _rejected_speech_diagnostic(
+                            scan,
+                            stream,
+                            chunk,
+                            words,
+                            text,
+                            segment.average_log_probability,
+                            segment.no_speech_probability,
+                            provenance,
+                            reason_code="asr_zero_duration",
+                            allow_zero_duration=True,
+                        )
+                    )
+                    continue
                 if (
                     segment.average_log_probability < _MINIMUM_AVERAGE_LOG_PROBABILITY
                     or _semantic_character_count(text)
@@ -184,7 +200,14 @@ def _speech_outcome(
             source_kind="speech_to_text",
             stream_index=stream_index,
             status="low_reliability",
-            reason_code="asr_below_policy_threshold",
+            reason_code=(
+                "asr_zero_duration"
+                if all(
+                    item.reason_code == "asr_zero_duration"
+                    for item in rejected_diagnostics
+                )
+                else "asr_below_policy_threshold"
+            ),
             rejected_count=len(rejected_diagnostics),
             processed_chunk_count=processed_chunk_count,
         )
@@ -246,6 +269,9 @@ def _rejected_speech_diagnostic(
     average_log_probability: float,
     no_speech_probability: float | None,
     provenance: ContextCueProvenance,
+    *,
+    reason_code: str = "asr_below_policy_threshold",
+    allow_zero_duration: bool = False,
 ) -> RejectedSpeechDiagnostic:
     first_word = words[0]
     last_word = words[-1]
@@ -254,6 +280,7 @@ def _rejected_speech_diagnostic(
         chunk,
         first_word.start_sample,
         last_word.end_sample,
+        allow_zero_duration=allow_zero_duration,
     )
     return RejectedSpeechDiagnostic(
         stream_index=stream.index,
@@ -263,6 +290,7 @@ def _rejected_speech_diagnostic(
         average_log_probability=average_log_probability,
         no_speech_probability=no_speech_probability,
         word_probabilities=tuple(word.probability for word in words),
+        reason_code=reason_code,
         provenance=provenance,
     )
 
@@ -299,10 +327,17 @@ def _video_time_interval(
     chunk: PcmAudioChunk,
     local_start_sample: int,
     local_end_sample: int,
+    *,
+    allow_zero_duration: bool = False,
 ) -> tuple[Fraction, Fraction]:
+    invalid_local_interval = (
+        local_end_sample < local_start_sample
+        if allow_zero_duration
+        else local_end_sample <= local_start_sample
+    )
     if (
         local_start_sample < 0
-        or local_end_sample <= local_start_sample
+        or invalid_local_interval
         or local_end_sample > chunk.sample_count
     ):
         msg = "timestamp_drift"
@@ -311,7 +346,8 @@ def _video_time_interval(
     chunk_origin = chunk.pts * chunk.time_base - video_origin
     start = chunk_origin + Fraction(local_start_sample, chunk.sample_rate)
     end = chunk_origin + Fraction(local_end_sample, chunk.sample_rate)
-    if start < 0 or end <= start or end > scan.timeline.duration.seconds:
+    invalid_video_interval = end < start if allow_zero_duration else end <= start
+    if start < 0 or invalid_video_interval or end > scan.timeline.duration.seconds:
         msg = "timestamp_drift"
         raise ValueError(msg)
     return start, end

@@ -12,7 +12,7 @@ from ..models.video_source import VideoSource
 from ..protocols.speech_runtime import SpeechRuntime
 from .normalize_context_language import normalize_context_language
 
-_CONTEXT_POLICY_VERSION = "context-collection-v1"
+_CONTEXT_POLICY_VERSION = "context-collection-v2"
 _SUBTITLE_EXTRACTION_VERSION = "embedded-subtitle-v1"
 
 
@@ -65,7 +65,7 @@ def build_context_stage_semantic_input(
                 "speech_vad_filter": configuration.speech_vad_filter,
                 "speech_chunk_seconds": configuration.speech_chunk_seconds,
                 "speech_overlap_seconds": configuration.speech_overlap_seconds,
-                "word_group_policy": "word-gap-1.5s-v1",
+                "word_group_policy": "word-gap-1.5s-zero-duration-reject-v2",
                 "reliability_policy": "avg-logprob--0.8-min-chars-3-v1",
             }
             if use_stt

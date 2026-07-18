@@ -56,9 +56,9 @@ non-forced text subtitleが選ばれるとSTTは実行しません。forced subt
 
 各Cueのprivate cache provenanceにはcodec、stream languageとdisposition、観測source PTS/time baseを保持します。STT Cueと低reliability診断にはさらにPCM chunk sample範囲、Speech Runtime Identity、freeze済みResolved Model Identity、device、compute typeを保持し、採用Cueにはsegmentの未校正average log probability、no-speech probability、word probabilityも保存します。これらはcache再利用とtraceabilityのための値であり、公開reportへraw textやbackend scoreを出しません。
 
-audioはMediaRuntimeがmono signed 16-bit、16 kHzの連続PCM sample gridとしてstreaming decodeします。設定したchunkとoverlapへ分け、overlap中央の半開境界で一つのCue所有者を決めます。観測PCM origin、chunk連続性、word timestampが1 sampleの許容範囲を超える場合はclipせず`timestamp_drift`にします。SpeechRuntimeはmodel lifecycleが解決・freezeしたlocal artifactだけをloadし、backend非依存のword sample位置を返します。Context Stageが1.5秒のword gap、Video Time対応付け、reliability policy、Cue IDを所有します。
+audioはMediaRuntimeがmono signed 16-bit、16 kHzの連続PCM sample gridとしてstreaming decodeします。設定したchunkとoverlapへ分け、overlap中央の半開境界で一つのCue所有者を決めます。観測PCM origin、chunk連続性、範囲外または逆転したword timestampが1 sampleの許容範囲を超える場合はclipせず`timestamp_drift`にします。SpeechRuntimeはmodel lifecycleが解決・freezeしたlocal artifactだけをloadし、backend非依存のword sample位置を返します。Context Stageが1.5秒のword gap、Video Time対応付け、reliability policy、Cue IDを所有します。
 
-STT結果は平均log probabilityが-0.8以上かつ句読点・空白以外が3文字以上のword groupだけをContext Cueにします。VADで発話がなかった`vad_no_speech`、VAD通過後に文字がなかった`asr_no_speech`、文字はあったが全件不採用の`low_reliability`を区別します。不採用のraw transcriptとbackend値はprivate processing cacheの診断だけに保存し、annotation、進捗、error、public reportへ渡しません。`--reset-cache`では他のprocessing cacheとともに削除されます。
+STT結果は正の時間幅を持ち、平均log probabilityが-0.8以上かつ句読点・空白以外が3文字以上のword groupだけをContext Cueにします。group全体のstartとendが同一点なら時刻を推測で延長せず、幅0の`asr_zero_duration`診断へ隔離します。VADで発話がなかった`vad_no_speech`、VAD通過後に文字がなかった`asr_no_speech`、文字はあったが全件不採用の`low_reliability`を区別します。不採用のraw transcriptとbackend値はprivate processing cacheの診断だけに保存し、annotation、進捗、error、public reportへ渡しません。`--reset-cache`では他のprocessing cacheとともに削除されます。
 
 ## Cache再利用
 
@@ -83,7 +83,7 @@ Completed Stage manifestは`artifact.json`を含む全artifactの相対path、by
 
 `extract-frame-candidates`はwall/CPU秒、density上限と実Moment数、native frame件数、reason別reject件数、dedupe件数、0-frame Moment件数、Frame Candidate件数・容量を記録します。両Stageのwall時間はartifact構築まで、CPU時間はcurrent processのPython/OpenCV/NumPyとFFmpeg child processの合計です。cache hitでは初回計算時のmetricを復元し、metric値はStage Fingerprintに含めません。
 
-`collect-context`は選択・試行したsourceごとに`available`、`absent`、`no_context`、`no_speech`、`low_reliability`とstable reason、Cue件数、除外件数を記録します。ambiguous stream、unsupported subtitle、decode/STT失敗、timestamp drift、一部chunkの`chunk_failed`はfatalであり、先に成功したCueを含むpartial manifestを公開しません。
+`collect-context`は選択・試行したsourceごとに`available`、`absent`、`no_context`、`no_speech`、`low_reliability`とstable reason、Cue件数、除外件数を記録します。ambiguous stream、unsupported subtitle、decode/STT失敗、PCM gridまたは範囲外・逆転時刻のtimestamp drift、一部chunkの`chunk_failed`はfatalであり、先に成功したCueを含むpartial manifestを公開しません。
 
 ## 検証
 

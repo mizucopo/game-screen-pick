@@ -1737,21 +1737,11 @@ def test_missing_explicit_audio_stream_is_fatal(tmp_path: Path) -> None:
     assert raised.value.reason is ContextStageFailureReason.INVALID_AUDIO_STREAM
 
 
-@pytest.mark.parametrize(
-    "word",
-    [
-        SpeechWord("範囲外台詞", 8000, 20000, 0.9),
-        SpeechWord("時刻なし台詞", 8000, 8000, 0.9),
-    ],
-)
-def test_invalid_speech_timestamp_is_fatal(
-    tmp_path: Path,
-    word: SpeechWord,
-) -> None:
-    """Cue区間を作れないASR timestampがtimestamp driftになること。
+def test_out_of_range_speech_timestamp_is_fatal(tmp_path: Path) -> None:
+    """PCM範囲外のASR timestampがtimestamp driftになること。
 
     Arrange:
-        - 1秒PCMに対して範囲外または時間幅0のwordが用意される
+        - 1秒PCMに対して範囲外のwordが用意される
     Act:
         - Context Collection Stageが実行される
     Assert:
@@ -1793,7 +1783,7 @@ def test_invalid_speech_timestamp_is_fatal(
                 vad_speech_detected=True,
                 segments=(
                     SpeechSegment(
-                        words=(word,),
+                        words=(SpeechWord("範囲外台詞", 8000, 20000, 0.9),),
                         average_log_probability=-0.2,
                     ),
                 ),
@@ -1829,6 +1819,101 @@ def test_invalid_speech_timestamp_is_fatal(
 
     # Assert
     assert raised.value.reason is ContextStageFailureReason.TIMESTAMP_DRIFT
+
+
+def test_zero_duration_speech_is_rejected_without_guessing_interval(
+    tmp_path: Path,
+) -> None:
+    """時間幅0のASR groupが時刻を補間せず低信頼へ隔離されること。
+
+    Arrange:
+        - 1秒PCMと同一点のsample境界だけを持つword groupが用意される
+    Act:
+        - Context Collection Stageが実行される
+    Assert:
+        - Context Cueへ採用されず幅0のprivate診断として記録されること
+        - source outcomeがasr_zero_durationの非fatal結果になること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    source = video_set.sources[0]
+    audio_stream = _stream(
+        1,
+        "audio",
+        "pcm_s16le",
+        language="jpn",
+        is_default=True,
+        start_pts=100,
+    )
+    probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(_stream(0, "video", "ffv1", is_default=True), audio_stream),
+    )
+    pcm = PcmAudioChunk(
+        stream_index=1,
+        sample_start=0,
+        sample_count=16000,
+        sample_rate=16000,
+        channel_count=1,
+        sample_format="s16le",
+        pts=160000,
+        time_base=Fraction(1, 16000),
+        pcm_bytes=b"\x00\x00" * 16000,
+    )
+    speech_runtime = FakeSpeechRuntime(
+        (
+            SpeechRecognitionResult(
+                vad_speech_detected=True,
+                segments=(
+                    SpeechSegment(
+                        words=(SpeechWord("時刻なし台詞", 8000, 8000, 0.9),),
+                        average_log_probability=-0.2,
+                    ),
+                ),
+            ),
+        )
+    )
+
+    # Act
+    result = ContextStageProcessor(
+        FakeVideoStageMediaRuntime(
+            media_probe=probe,
+            pcm_audio_chunks=(pcm,),
+        ),
+        speech_runtime,
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        source=source,
+        probe=probe,
+        scan=_scan(),
+        configuration=EffectiveConfiguration(
+            video_input_folder=input_folder,
+            output_folder=tmp_path / "output",
+            language="ja",
+        ),
+        media_runtime_identity=MediaRuntimeIdentity(
+            "6.1.1-test",
+            "6.1.1-test",
+            "0" * 64,
+        ),
+    )
+
+    # Assert
+    assert result.cues == ()
+    assert [(item.status, item.reason_code) for item in result.outcomes] == [
+        ("absent", "no_subtitle_stream"),
+        ("low_reliability", "asr_zero_duration"),
+    ]
+    assert len(result.rejected_speech_diagnostics) == 1
+    diagnostic = result.rejected_speech_diagnostics[0]
+    assert diagnostic.start == Fraction(1, 2)
+    assert diagnostic.end == Fraction(1, 2)
+    assert diagnostic.reason_code == "asr_zero_duration"
+    assert diagnostic.text == "時刻なし台詞"
 
 
 def test_pcm_origin_drift_is_fatal_without_publishing_context(
