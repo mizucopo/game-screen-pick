@@ -38,6 +38,8 @@ Selection Base Utility = 0.70 * Q + 0.25 * E + 0.05 * C
 
 Context Cue can therefore add at most 0.05. Video position, Blog Image Type, diversity, and spoiler handling are not part of this candidate-local value.
 
+An annotated candidate whose Explanation Value is `none` remains available for diagnostics and receives a Counterfactual Selection Score, but is deterministically ineligible for final selection. The selector reports it as `lower_marginal_utility` and accepts a Selection Shortfall instead of filling the request with an image that cannot explain play or an event. Candidate Annotation still does not return an eligibility or selected flag; it returns the ordinal semantic value and the deterministic selector applies this boundary.
+
 ## Spoiler handling
 
 Spoiler Sensitivity is a run setting with `low`, `medium`, and `high`; the default is `medium`. The selector subtracts the following Spoiler Penalty from utility:
@@ -135,6 +137,7 @@ After all valid Candidate Moments are exhausted, selecting fewer than `N` images
 
 - an invalid Frame Candidate;
 - an incomplete Candidate Annotation;
+- a Candidate Annotation whose Explanation Value is `none`;
 - a second `title` image;
 - a Visual Near-Duplicate.
 

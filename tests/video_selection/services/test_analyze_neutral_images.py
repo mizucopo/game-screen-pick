@@ -100,6 +100,69 @@ def test_smooth_blurred_frame_is_rejected_without_model_inference() -> None:
     assert analysis.reject_reason is ContentRejectReason.BLUR
 
 
+def test_large_white_effects_are_rejected_without_pure_white_frame() -> None:
+    """主対象を覆う白い発光と白いveilがwhiteoutとして除外されること。
+
+    Arrange:
+        - 中央を白い発光が覆うframeと、画面の大半が淡い白になるframeが用意される
+    Act:
+        - Neutral Image Analysisが実行される
+    Assert:
+        - 完全な白一色でなくても両方がwhiteoutとして除外されること
+    """
+    # Arrange
+    central_flash = cv2.resize(
+        _checkerboard(),
+        (960, 540),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    central_flash[90:450, 180:780] = 250
+    soft_white_veil = np.full((540, 960, 3), 232, dtype=np.uint8)
+    soft_white_veil[:, 900:] = cv2.resize(
+        _checkerboard(),
+        (60, 540),
+        interpolation=cv2.INTER_NEAREST,
+    )
+
+    # Act
+    analyses = analyze_neutral_images(
+        (
+            _frame(0, central_flash),
+            _frame(10, soft_white_veil),
+        )
+    )
+
+    # Assert
+    assert [item.reject_reason for item in analyses] == [
+        ContentRejectReason.WHITEOUT,
+        ContentRejectReason.WHITEOUT,
+    ]
+
+
+def test_bright_menu_with_distinct_structure_remains_eligible() -> None:
+    """明るくても構造が判別できるmenu frameが除外されないこと。
+
+    Arrange:
+        - 淡い背景へ濃い罫線と区画を持つmenu風frameが用意される
+    Act:
+        - Neutral Image Analysisが実行される
+    Assert:
+        - 明るさだけを理由にwhiteoutとして除外されないこと
+    """
+    # Arrange
+    menu = np.full((540, 960, 3), 250, dtype=np.uint8)
+    for row in range(60, 500, 55):
+        cv2.line(menu, (80, row), (880, row), (45, 55, 65), 4)
+    cv2.rectangle(menu, (610, 80), (880, 430), (35, 70, 110), 8)
+
+    # Act
+    analysis = analyze_neutral_images((_frame(0, menu),))[0]
+
+    # Assert
+    assert analysis.reject_reason is None
+    assert analysis.eligible
+
+
 def test_visual_feature_is_l2_normalized_and_temporal_transition_is_rejected() -> None:
     """model-free視覚特徴と前後関係から遷移frameが解析されること。
 

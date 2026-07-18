@@ -428,7 +428,7 @@ def _report_provenance(
         runtime={"application": "video_selection"},
         tools={"video_selection": "1"},
         contracts={
-            "video_set_selection_policy": "video-set-selection-v1",
+            "video_set_selection_policy": "video-set-selection-v2",
             "nearby_context_policy": "nearby-context-v1",
         },
         stages=tuple(stages),

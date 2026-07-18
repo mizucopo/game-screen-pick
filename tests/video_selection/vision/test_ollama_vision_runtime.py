@@ -199,6 +199,10 @@ def test_scene_catalog_uses_strict_documented_ollama_request() -> None:
     messages = payload["messages"]
     assert isinstance(messages, list)
     assert messages[0]["images"] == ["aW1hZ2UtYQ==", "aW1hZ2UtYg=="]
+    prompt = messages[0]["content"]
+    assert isinstance(prompt, str)
+    assert "recurring_gameplay=" in prompt
+    assert "同じ画面構造を一時的な敵やエフェクトだけで別sceneへ分割しません" in prompt
 
 
 def test_schema_failure_is_retried_once_with_stable_code() -> None:
@@ -968,6 +972,57 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
     cue_schema = properties["supporting_context_cue_ids"]
     assert cue_schema["items"]["enum"] == ["cue-a"]
     assert cue_schema["maxItems"] == 1
+
+
+def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
+    """Candidate promptへブログ用途の意味境界が明示されること。
+
+    Arrange:
+        - frame、Catalog、Context Cueを持つCandidate requestが用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 代表frame、Blog Image Type、説明価値、Context、Spoilerの基準が送信されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        return _response(_annotation_payload())
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    prompt = _first_message(payloads[0])["content"]
+    assert isinstance(prompt, str)
+    assert "主対象や行動が判別できるframeを優先" in prompt
+    assert "大きな発光やエフェクトで主対象が隠れる" in prompt
+    assert "normal_gameplay=" in prompt
+    assert "menu=" in prompt
+    assert "explanation_valueのnone=" in prompt
+    assert "context_relevanceのstrong=" in prompt
+    assert "spoiler_riskのhigh=" in prompt
 
 
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:

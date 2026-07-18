@@ -169,7 +169,8 @@ def _select_with_major_spoiler_limit(
             evaluated = [
                 (candidate, score)
                 for candidate, score in scored
-                if _is_visually_eligible(
+                if _has_explanation_value(candidate)
+                and _is_visually_eligible(
                     candidate,
                     remaining,
                     selected,
@@ -413,6 +414,10 @@ def _is_visually_eligible(
     )
 
 
+def _has_explanation_value(candidate: BlogCandidate) -> bool:
+    return candidate.annotation.explanation_value != "none"
+
+
 def _has_unrepresented_eligible_variant_group(
     candidate: BlogCandidate,
     remaining: list[BlogCandidate],
@@ -425,7 +430,8 @@ def _has_unrepresented_eligible_variant_group(
 ) -> bool:
     for alternative in remaining:
         if (
-            alternative.annotation.scene_slug != candidate.annotation.scene_slug
+            not _has_explanation_value(alternative)
+            or alternative.annotation.scene_slug != candidate.annotation.scene_slug
             or variant_groups[alternative.identifier] in selected_groups
             or (
                 alternative.annotation.blog_image_type == "title"

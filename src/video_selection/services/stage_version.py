@@ -18,5 +18,5 @@ def stage_version(stage: ProcessingStage) -> str:
     if stage is ProcessingStage.ANNOTATE_CANDIDATE:
         return "candidate-annotation-v1"
     if stage is ProcessingStage.SELECT_IMAGES:
-        return "video-set-selection-v1"
+        return "video-set-selection-v2"
     return "walking-skeleton-0"

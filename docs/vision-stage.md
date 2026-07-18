@@ -21,6 +21,8 @@ Ollamaの`/api/chat`を次の2種類だけに使います。
 1. `build-scene-catalog`: Video Set共有の3〜8 sceneを一回生成します。`other`を必ず1件含め、そのScene Selection Roleは`ordinary`です。
 2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、入力frameの一つをRepresentative Frameとして返します。
 
+Scene Catalog promptは`ordinary`、`cinematic`、`recurring_gameplay`の意味を明示し、同じplay画面を一時的な敵や発光だけで別sceneへ分割しないよう要求します。Candidate Annotation promptはBlog Image Type、Explanation Value、Context Cue Relevance、Spoiler Riskの全enum境界を明示します。Representative Frameは主対象や行動が判別できるものを優先し、大きな発光、白飛び、移動・画面切替の途中を避けます。全frameで判別不能なら最も明瞭なframeを返し、Explanation Valueを`none`にします。Context Cueが存在するだけでは`strong`にせず、進行位置だけではSpoiler Riskを上げません。
+
 各推論attemptの直前と応答受領直後に`/api/version`と`/api/tags`でOllama server versionとconfigured tagのlocal完全digestを再確認します。Model LifecycleでfreezeしたRuntime IdentityまたはResolved Model Identityと異なる場合は、別runtime／digestの結果を同じfingerprintへ保存せず停止します。この確認はtagの更新や再解決を行いません。
 
 両方ともJSON Schema object全体、`stream=false`、`think=false`、`temperature=0`を送ります。JSON Schema検証後にも、Scene SlugとContext Cue IDが入力集合へ属すること、Representative FrameのID・画像・metadataが入力Frame Candidateと一致すること、Context Cueの有無とRelevanceが整合することをlocalで検査します。annotation summary、Representative Frameの選択理由、spoiler evidenceに正規化後3文字以上の入力Context Cue本文が逐語再出力された場合は、該当fieldだけをScene Catalogとenumから組み立てた非逐語説明へ置換します。その説明もCueと一致する場合は明示的な省略記号へ置換し、安全化前の自由文はcacheへ保存しません。1〜2文字の一般語は独立生成との区別がつかないため引用判定から除外します。
@@ -35,7 +37,7 @@ Candidate Annotation v1は次の意味情報だけを返します。
 - Spoiler Riskと引用を含まないevidence summary
 - annotation summaryとRepresentative Frameの選択理由
 
-Quality Score、model confidence、final score、soft coverage、eligible/selected flag、生成した逐語的画面テキスト、reasoning traceはschemaに含めません。最終採否は[Video Set最終選定Stage](selection-stage.md)の決定的selectorが所有します。
+Quality Score、model confidence、final score、soft coverage、eligible/selected flag、生成した逐語的画面テキスト、reasoning traceはschemaに含めません。最終採否は[Video Set最終選定Stage](selection-stage.md)の決定的selectorが所有し、Explanation Valueが`none`の候補を要求枚数の穴埋めに使いません。
 
 ## Retryとfailure
 

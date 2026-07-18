@@ -21,7 +21,7 @@ from .report_time import (
 
 REPORT_SCHEMA_NAME = "game-screen-pick/report"
 REPORT_SCHEMA_VERSION = "1.0.0"
-SELECTION_POLICY_VERSION = "video-set-selection-v1"
+SELECTION_POLICY_VERSION = "video-set-selection-v2"
 SELECTION_EXPLANATION_RENDERER = "selection-explanation-ja-v1"
 
 _REASON_LABELS = {

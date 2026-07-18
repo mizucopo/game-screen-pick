@@ -94,6 +94,33 @@ _PROMPT_REPAIR_REASONS = {
     VisionRuntimeFailureReason.SCHEMA_INVALID,
     VisionRuntimeFailureReason.DOMAIN_INVALID,
 }
+_SCENE_CATALOG_SEMANTICS = (
+    "selection_roleはordinary=通常の単発scene、cinematic=会話・演出・eventが主体、"
+    "recurring_gameplay=戦闘UI・探索・puzzleなど繰り返し現れるplay構造です。"
+    "同じ画面構造を一時的な敵やエフェクトだけで別sceneへ分割しません。"
+    "sceneはブログで役割が異なる視覚・内容のまとまりとして作ります。\n"
+)
+_CANDIDATE_ANNOTATION_SEMANTICS = (
+    "代表frameは主対象や行動が判別できるframeを優先します。"
+    "大きな発光やエフェクトで主対象が隠れるframe、白飛び、移動・画面切替の"
+    "途中は避けます。全frameで主対象が判別できない場合は最も明瞭なframeを"
+    "選び、explanation_valueをnoneにします。\n"
+    "blog_image_typeはnormal_gameplay=探索・戦闘・puzzleなどplayが主体、"
+    "event=会話・cutscene・scripted presentationが主体、menu=inventory・装備・"
+    "map・設定・shop・save・helpなどinterfaceが主体、title=title・logo・landing、"
+    "other=どれにも当てはまらない有効画像です。\n"
+    "explanation_valueのnone=主対象や出来事を説明できずブログ掲載価値がない、"
+    "low=判別できるが汎用的・重複的、medium=具体的なplay状態や出来事を説明できる、"
+    "high=重要な主対象・行動・関係が明瞭で本文を直接補強する、です。\n"
+    "context_relevanceのnone=近接していても画像説明と無関係、weak=補足になる、"
+    "context_relevanceのstrong=画像の意味を特定するため不可欠、です。"
+    "単にContext Cueが存在するだけで"
+    "strongにしません。\n"
+    "spoiler_riskはnone=汎用的な探索・戦闘、low=軽微な進行情報、medium=固有boss・"
+    "終盤固有area・重要quest結果、spoiler_riskのhigh=ending・最終bossの正体や形態・"
+    "主要人物の生死・裏切り・犯人や真の正体・中心的な種明かしです。"
+    "進行位置だけではriskを上げません。\n"
+)
 
 
 class OllamaVisionRuntime:
@@ -332,7 +359,8 @@ def _scene_catalog_payload(
         "Video Set全体で共有するブログ画像用Scene Catalogを作成してください。"
         "3〜8 sceneにotherを必ず1件含め、otherのselection_roleはordinaryにします。"
         "画像品質、最終score、採否、推論過程は出力しません。\n"
-        f"Selection Intent: {request.selection_intent}\nScene Hint: {hint}"
+        + _SCENE_CATALOG_SEMANTICS
+        + f"Selection Intent: {request.selection_intent}\nScene Hint: {hint}"
     )
     return {
         "model": model.configured_name,
@@ -378,7 +406,8 @@ def _candidate_payload(
     content = (
         "入力された1〜3枚からブログ上の意味を最も表すframeを1枚選び、"
         "共有Scene Catalogを使ってCandidate Annotationを返してください。"
-        "画像品質、confidence、final score、eligible、selected、逐語的画面文、"
+        + _CANDIDATE_ANNOTATION_SEMANTICS
+        + "画像品質、confidence、final score、eligible、selected、逐語的画面文、"
         "推論過程は出力しません。Context Cue本文をannotation summary、"
         "frame choice reason、spoiler evidenceへ引用しません。正規化後3〜5文字の"
         "Cueは全文、6文字以上のCueは6文字以上の連続部分も自由文へ再出力しません。"

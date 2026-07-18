@@ -277,7 +277,7 @@ Video Set全体のNeutral Image Analysisから、品質、見た目の多様性�
 _Avoid_: Selection Shortlist, selected output, per-video representatives
 
 **Candidate Annotation**:
-Selection Shortlist内の一つのCandidate Momentについて、1から3件の有効なFrame Candidate、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、Representative Frameと意味情報を構造化して返すVideo Set StageのOllama評価。画像品質、最終score、soft coverage、最終採否は決めない。
+Selection Shortlist内の一つのCandidate Momentについて、1から3件の有効なFrame Candidate、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、主対象や行動が最も判別しやすいRepresentative Frameと意味情報を構造化して返すVideo Set StageのOllama評価。大きな発光や遷移で全frameの主対象が判別不能ならExplanation Valueを`none`にするが、画像品質、最終score、soft coverage、最終採否は決めない。
 _Avoid_: Candidate Scoring, Frame Refinement, Neutral Image Analysis, final selection
 
 **Scene**:
@@ -389,7 +389,7 @@ _Avoid_: hard quota, per-video quota, Cinematic Soft Cap, guaranteed title image
 _Avoid_: hard quota, overflow penalty, guaranteed title image
 
 **Explanation Value**:
-Representative FrameとそのCandidate Momentがブログ本文でplayや出来事を説明できる度合い。値は`none`、`low`、`medium`、`high`で、Candidate Annotationが意味評価として付与するが、最終scoreや採否そのものではない。
+Representative FrameとそのCandidate Momentがブログ本文でplayや出来事を説明できる度合い。値は`none`、`low`、`medium`、`high`で、Candidate Annotationが意味評価として付与する。`none`はCandidate Annotation自体の失敗やmodelによる最終採否ではないが、決定的selectorが要求枚数の穴埋めに使わない適格性境界になる。
 _Avoid_: Quality Score, model confidence, final selection score
 
 **Screen Text Kind**:
@@ -445,7 +445,7 @@ _Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
 _Avoid_: Candidate Annotation failure, silent omission, fabricated output, invalid-frame fallback
 
 **Selection Rejection Reason**:
-未採用Blog Candidateの主因を表すstable enum。`title_limit`、`visual_near_duplicate`、`similarity_ceiling`、`spoiler_monotonicity_guard`、`lower_marginal_utility`を持ち、model自由文や例外messageから推測しない。
+未採用Blog Candidateの主因を表すstable enum。`title_limit`、`visual_near_duplicate`、`similarity_ceiling`、`spoiler_monotonicity_guard`、`lower_marginal_utility`を持つ。Explanation Valueが`none`の候補はCounterfactual Selection Scoreを保持した`lower_marginal_utility`として説明し、model自由文や例外messageから理由を推測しない。
 _Avoid_: free-text rejection, Content Reject Reason, Ollama Stage Failure
 
 **Counterfactual Selection Score**:
@@ -453,7 +453,7 @@ _Avoid_: free-text rejection, Content Reject Reason, Ollama Stage Failure
 _Avoid_: final selected score, model confidence, regenerated explanation
 
 **Neutral Image Analysis**:
-sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。画像の内容分類ではなく、blog candidate判定や動画横断のcosine similarity判定の土台になる。明確な無効frameには絶対条件、暗いgameなど入力特性にはRefinement Window Group内の分布、Transition Frameには同一streamとtime baseでdurationどおりに連続するnative frameだけの前後関係を使う。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
+sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。画像の内容分類ではなく、blog candidate判定や動画横断のcosine similarity判定の土台になる。明確な無効frameには絶対条件を使い、純白だけでなく主対象を覆う連結した白い発光と、画面の大半を覆う低情報の淡い白もwhiteoutにする。暗いgameなど入力特性にはRefinement Window Group内の分布、Transition Frameには同一streamとtime baseでdurationどおりに連続するnative frameだけの前後関係を使う。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
 _Avoid_: scene classification, selection intent, CLIP embedding, model-dependent feature
 
 **Content Reject Reason**:

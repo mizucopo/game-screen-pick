@@ -316,6 +316,56 @@ def test_visual_near_duplicate_is_rejected_even_when_selection_is_short() -> Non
     assert rejection.similarity == pytest.approx(0.996)
 
 
+def test_candidate_without_explanation_value_does_not_fill_shortfall() -> None:
+    """説明価値のない候補で要求枚数が穴埋めされないこと。
+
+    Arrange:
+        - 説明価値がある候補と、高品質でも説明価値がない候補が用意される
+        - 2枚の選定が要求される
+    Act:
+        - Video Set selectorが終端similarity passまで実行される
+    Assert:
+        - 説明価値がある候補だけが選択されSelection Shortfallになること
+        - 説明価値がない候補がstable reason付きで未採用になること
+    """
+    # Arrange
+    meaningful = _candidate(
+        "9",
+        quality=0.7,
+        feature=(1.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="medium",
+        context_relevance="none",
+    )
+    meaningless = _candidate(
+        "a",
+        quality=0.99,
+        feature=(0.0, 1.0),
+        progress=Fraction(9, 10),
+        blog_image_type="other",
+        explanation_value="none",
+        context_relevance="strong",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (meaningless, meaningful),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        meaningful.identifier
+    ]
+    assert result.shortfall is True
+    assert len(result.rejected) == 1
+    assert result.rejected[0].candidate.identifier == meaningless.identifier
+    assert result.rejected[0].reason_code == "lower_marginal_utility"
+
+
 def test_recurring_gameplay_expands_only_after_each_variant_group() -> None:
     """recurring gameplayで各Variant Groupの代表後に状態差が選ばれること。
 
@@ -357,7 +407,7 @@ def test_recurring_gameplay_expands_only_after_each_variant_group() -> None:
         feature=(0.9, 0.0, math.sqrt(1 - 0.9**2)),
         progress=Fraction(45, 100),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
         scene_selection_role="recurring_gameplay",
         scene_slug="battle",
@@ -402,7 +452,7 @@ def test_spoiler_guarded_group_does_not_block_recurring_variant_expansion() -> N
         feature=(1.0, 0.0, 0.0),
         progress=Fraction(1, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
         scene_selection_role="recurring_gameplay",
         scene_slug="battle",
@@ -413,7 +463,7 @@ def test_spoiler_guarded_group_does_not_block_recurring_variant_expansion() -> N
         feature=(0.96, math.sqrt(1 - 0.96**2), 0.0),
         progress=Fraction(9, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
         scene_selection_role="recurring_gameplay",
         scene_slug="battle",
@@ -424,7 +474,7 @@ def test_spoiler_guarded_group_does_not_block_recurring_variant_expansion() -> N
         feature=(0.0, 1.0, 0.0),
         progress=Fraction(1, 10),
         blog_image_type="event",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
         spoiler_risk="high",
         scene_selection_role="recurring_gameplay",
@@ -436,7 +486,7 @@ def test_spoiler_guarded_group_does_not_block_recurring_variant_expansion() -> N
         feature=(0.0, 0.97, math.sqrt(1 - 0.97**2)),
         progress=Fraction(9, 10),
         blog_image_type="event",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
         spoiler_risk="high",
     )
@@ -889,7 +939,7 @@ def test_rejection_uses_pass_that_satisfied_request() -> None:
         feature=(0.0, 1.0),
         progress=Fraction(9, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
     )
 
@@ -927,7 +977,7 @@ def test_rejections_are_ordered_by_counterfactual_utility() -> None:
         feature=(1.0, 0.0, 0.0),
         progress=Fraction(1, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
     )
     stronger_near_miss = _candidate(
@@ -936,7 +986,7 @@ def test_rejections_are_ordered_by_counterfactual_utility() -> None:
         feature=(0.0, 1.0, 0.0),
         progress=Fraction(5, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
     )
     weaker_near_miss = _candidate(
@@ -945,7 +995,7 @@ def test_rejections_are_ordered_by_counterfactual_utility() -> None:
         feature=(0.0, 0.0, 1.0),
         progress=Fraction(9, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
     )
 
@@ -964,4 +1014,4 @@ def test_rejections_are_ordered_by_counterfactual_utility() -> None:
     ]
     assert [
         round(item.counterfactual_score.marginal_utility, 2) for item in result.rejected
-    ] == [0.66, 0.17]
+    ] == [0.74, 0.25]

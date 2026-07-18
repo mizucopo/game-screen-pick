@@ -13,8 +13,10 @@ from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.neutral_image_analysis import NeutralImageAnalysis
 from ..models.neutral_image_metrics import NeutralImageMetrics
 
-NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v2"
+NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v3"
 BLUR_REJECT_VARIANCE_MIN = 12.0
+_CLIPPED_WHITE_THRESHOLD = 235
+_SOFT_WHITE_THRESHOLD = 230
 _QUALITY_WEIGHTS = {
     "blur_score": 0.165,
     "contrast": 0.145,
@@ -103,6 +105,23 @@ def _measure_frame(
     luminance_p5, luminance_p95 = np.percentile(gray_flat, [5, 95])
     dominant_tone_hist = np.bincount(gray_flat // 16, minlength=16)
     brightness = float(cv2.mean(gray)[0])
+    clipped_white = gray >= _CLIPPED_WHITE_THRESHOLD
+    clipped_white_ratio = float(np.mean(clipped_white))
+    height, width = gray.shape
+    center_clipped_white_ratio = float(
+        np.mean(
+            clipped_white[
+                height // 4 : height - height // 4,
+                width // 4 : width - width // 4,
+            ]
+        )
+    )
+    largest_clipped_white_region_ratio = (
+        _largest_connected_region_ratio(clipped_white)
+        if clipped_white_ratio >= 0.20
+        else 0.0
+    )
+    soft_white_ratio = float(np.mean(gray >= _SOFT_WHITE_THRESHOLD))
     raw = {
         "blur_score": float(laplacian.var()),
         "brightness": brightness,
@@ -122,6 +141,10 @@ def _measure_frame(
         "near_black_ratio": float(np.mean(gray_flat <= 12)),
         "near_white_ratio": float(np.mean(gray_flat >= 243)),
         "dominant_tone_ratio": float(dominant_tone_hist.max() / gray_size),
+        "clipped_white_ratio": clipped_white_ratio,
+        "center_clipped_white_ratio": center_clipped_white_ratio,
+        "largest_clipped_white_region_ratio": (largest_clipped_white_region_ratio),
+        "soft_white_ratio": soft_white_ratio,
     }
     hsv_hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256])
     luminance_hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
@@ -223,6 +246,20 @@ def _absolute_reject_reason(
     ):
         return ContentRejectReason.WHITEOUT
     if (
+        raw["clipped_white_ratio"] >= 0.25
+        and raw["clipped_white_ratio"] <= 0.65
+        and raw["center_clipped_white_ratio"] >= 0.50
+        and raw["largest_clipped_white_region_ratio"] >= 0.20
+    ):
+        return ContentRejectReason.WHITEOUT
+    if (
+        raw["soft_white_ratio"] >= 0.85
+        and raw["dominant_tone_ratio"] >= 0.85
+        and raw["luminance_entropy"] <= 2.0
+        and raw["edge_density"] <= 0.02
+    ):
+        return ContentRejectReason.WHITEOUT
+    if (
         raw["dominant_tone_ratio"] >= 0.97
         and raw["luminance_range"] <= 20
         and raw["contrast"] <= 10
@@ -231,6 +268,16 @@ def _absolute_reject_reason(
     if raw["blur_score"] < BLUR_REJECT_VARIANCE_MIN and raw["edge_density"] < 0.03:
         return ContentRejectReason.BLUR
     return None
+
+
+def _largest_connected_region_ratio(mask: np.ndarray) -> float:
+    component_count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8),
+        connectivity=8,
+    )
+    if component_count <= 1:
+        return 0.0
+    return float(stats[1:, cv2.CC_STAT_AREA].max() / mask.size)
 
 
 def _apply_temporal_rejections(
