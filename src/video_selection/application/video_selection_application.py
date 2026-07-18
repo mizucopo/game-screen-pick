@@ -40,6 +40,9 @@ from ..services.discover_video_set import discover_video_set
 from ..services.input_folder_lock import InputFolderLock
 from ..services.prepare_processing_cache import prepare_processing_cache
 from ..services.run_progress_tracker import RunProgressTracker
+from ..services.sanitize_selection_annotations_for_publication import (
+    sanitize_selection_annotations_for_publication,
+)
 from ..services.select_video_set_images import (
     SpoilerSensitivity,
     select_from_shortlist_batches,
@@ -308,6 +311,16 @@ class VideoSelectionApplication:
             configuration.output_folder.rmdir()
         started_at = datetime.now(timezone.utc)
         completed_at = datetime.now(timezone.utc)
+        publication_selection = sanitize_selection_annotations_for_publication(
+            selection,
+            scene_catalog,
+            tuple(
+                cue.text
+                for stage in video_stage_results
+                for cue in stage.context.cues
+                if cue.text
+            ),
+        )
         status = RunStatus.from_selection_counts(
             configuration.image_count,
             len(selection.selected),
@@ -317,7 +330,7 @@ class VideoSelectionApplication:
             video_set=video_set,
             video_stage_results=video_stage_results,
             scene_catalog=scene_catalog,
-            selection_result=selection,
+            selection_result=publication_selection,
             resolved_models=resolved_models,
             configuration=configuration,
             run_id=_run_id(started_at),

@@ -83,6 +83,21 @@ def candidate_annotation_free_text_is_safe(
     return True
 
 
+def privacy_safe_candidate_text(
+    generated: str,
+    fallback: str,
+    raw_context_texts: tuple[str, ...],
+) -> tuple[str, bool]:
+    """生成文をContext Cueと照合し、必要なfieldだけを安全化する。"""
+    if candidate_annotation_free_text_is_safe((generated,), raw_context_texts):
+        return generated, False
+    if fallback and candidate_annotation_free_text_is_safe(
+        (fallback,), raw_context_texts
+    ):
+        return fallback, True
+    return "［…］", True
+
+
 def _normalize_verbatim_text(value: str) -> str:
     """Unicode、空白、句読点の表記差を除いて逐語一致を比較可能にする。"""
     normalized = unicodedata.normalize("NFKC", value).casefold()

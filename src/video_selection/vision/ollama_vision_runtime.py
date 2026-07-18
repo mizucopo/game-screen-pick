@@ -23,8 +23,8 @@ from ..models.candidate_annotation import (
     SPOILER_RISKS,
     CandidateAnnotation,
     candidate_annotation_context_is_valid,
-    candidate_annotation_free_text_is_safe,
     candidate_annotation_relationships_are_valid,
+    privacy_safe_candidate_text,
 )
 from ..models.candidate_annotation_request import CandidateAnnotationRequest
 from ..models.model_artifact import ModelArtifact
@@ -661,17 +661,17 @@ def _privacy_safe_candidate_texts(
 ) -> tuple[str, str, str, bool]:
     """Cue逐語一致fieldだけを視覚・enum由来の安全な説明へ置換する。"""
     scene = next(item for item in catalog.scenes if item.slug == scene_slug)
-    summary, summary_redacted = _privacy_safe_text(
+    summary, summary_redacted = privacy_safe_candidate_text(
         annotation_summary,
         f"{scene.display_name}に分類される{blog_image_type}の場面",
         raw_context_texts,
     )
-    reason, reason_redacted = _privacy_safe_text(
+    reason, reason_redacted = privacy_safe_candidate_text(
         frame_choice_reason,
         f"{scene.description}を視覚的に表すフレーム",
         raw_context_texts,
     )
-    evidence, evidence_redacted = _privacy_safe_text(
+    evidence, evidence_redacted = privacy_safe_candidate_text(
         spoiler_evidence,
         (
             ""
@@ -686,21 +686,6 @@ def _privacy_safe_candidate_texts(
         evidence,
         summary_redacted or reason_redacted or evidence_redacted,
     )
-
-
-def _privacy_safe_text(
-    generated: str,
-    fallback: str,
-    raw_context_texts: tuple[str, ...],
-) -> tuple[str, bool]:
-    """安全なら生成文を保ち、不安全なら必ず非逐語になるfallbackを返す。"""
-    if candidate_annotation_free_text_is_safe((generated,), raw_context_texts):
-        return generated, False
-    if fallback and candidate_annotation_free_text_is_safe(
-        (fallback,), raw_context_texts
-    ):
-        return fallback, True
-    return "［…］", True
 
 
 def _schema_error(code: str) -> VisionRuntimeError:
