@@ -1,21 +1,25 @@
 """VisionRuntime v1のschemaとversion定数。"""
 
 from ..models.candidate_annotation import (
-    BLOG_IMAGE_TYPES,
     CONTEXT_CUE_RELEVANCES,
     EXPLANATION_VALUES,
     SCREEN_TEXT_KINDS,
     SPOILER_RISKS,
+)
+from ..models.candidate_frame_observation import (
+    CANDIDATE_FRAME_CONTENT_KINDS,
+    PRIMARY_SUBJECT_VISIBILITIES,
+    TRANSIENT_OBSTRUCTIONS,
 )
 from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
 
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v2"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
-CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v4"
-CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v2"
+CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v5"
+CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v3"
 CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v2"
-RETRY_POLICY_VERSION = "ollama-retry-v3"
+RETRY_POLICY_VERSION = "ollama-retry-v4"
 
 SCENE_CATALOG_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -56,21 +60,52 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "representative_frame_id": {"type": "string"},
-        "scene_slug": {"type": "string"},
-        "blog_image_type": {
-            "type": "string",
-            "enum": list(BLOG_IMAGE_TYPES),
-        },
-        "explanation_value": {
-            "type": "string",
-            "enum": list(EXPLANATION_VALUES),
-        },
-        "annotation_summary": {"type": "string", "minLength": 1},
-        "frame_choice_reason": {"type": "string", "minLength": 1},
-        "screen_text_kind": {
-            "type": "string",
-            "enum": list(SCREEN_TEXT_KINDS),
+        "frame_observations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "frame_id": {"type": "string"},
+                    "scene_slug": {"type": "string"},
+                    "content_kind": {
+                        "type": "string",
+                        "enum": list(CANDIDATE_FRAME_CONTENT_KINDS),
+                    },
+                    "explanation_value": {
+                        "type": "string",
+                        "enum": list(EXPLANATION_VALUES),
+                    },
+                    "screen_text_kind": {
+                        "type": "string",
+                        "enum": list(SCREEN_TEXT_KINDS),
+                    },
+                    "primary_subject_visibility": {
+                        "type": "string",
+                        "enum": list(PRIMARY_SUBJECT_VISIBILITIES),
+                    },
+                    "transient_obstruction": {
+                        "type": "string",
+                        "enum": list(TRANSIENT_OBSTRUCTIONS),
+                    },
+                    "spoiler_risk": {
+                        "type": "string",
+                        "enum": list(SPOILER_RISKS),
+                    },
+                    "spoiler_evidence": {"type": "string"},
+                },
+                "required": [
+                    "frame_id",
+                    "scene_slug",
+                    "content_kind",
+                    "explanation_value",
+                    "screen_text_kind",
+                    "primary_subject_visibility",
+                    "transient_obstruction",
+                    "spoiler_risk",
+                    "spoiler_evidence",
+                ],
+            },
         },
         "context_relevance": {
             "type": "string",
@@ -81,23 +116,10 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
             "items": {"type": "string"},
             "uniqueItems": True,
         },
-        "spoiler_risk": {
-            "type": "string",
-            "enum": list(SPOILER_RISKS),
-        },
-        "spoiler_evidence": {"type": "string"},
     },
     "required": [
-        "representative_frame_id",
-        "scene_slug",
-        "blog_image_type",
-        "explanation_value",
-        "annotation_summary",
-        "frame_choice_reason",
-        "screen_text_kind",
+        "frame_observations",
         "context_relevance",
         "supporting_context_cue_ids",
-        "spoiler_risk",
-        "spoiler_evidence",
     ],
 }

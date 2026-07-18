@@ -390,7 +390,7 @@ def test_candidate_domain_failure_stops_without_other_fallback() -> None:
         nonlocal calls
         calls += 1
         response = _annotation_payload()
-        response["representative_frame_id"] = "foreign-frame"
+        _first_frame_observation(response)["frame_id"] = "foreign-frame"
         return _response(response)
 
     runtime = OllamaVisionRuntime(
@@ -876,8 +876,6 @@ def test_candidate_without_context_is_explicitly_unavailable() -> None:
     response = _annotation_payload()
     response["context_relevance"] = "unavailable"
     response["supporting_context_cue_ids"] = []
-    response["spoiler_risk"] = "none"
-    response["spoiler_evidence"] = ""
     payloads: list[Mapping[str, object]] = []
 
     def requester(
@@ -962,8 +960,12 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
     assert isinstance(schema, dict)
     properties = schema["properties"]
     assert isinstance(properties, dict)
-    assert properties["representative_frame_id"]["enum"] == ["frame-a"]
-    assert properties["scene_slug"]["enum"] == [
+    observations = properties["frame_observations"]
+    assert observations["minItems"] == 1
+    assert observations["maxItems"] == 1
+    observation_properties = observations["items"]["properties"]
+    assert observation_properties["frame_id"]["enum"] == ["frame-a"]
+    assert observation_properties["scene_slug"]["enum"] == [
         "exploration",
         "battle",
         "other",
@@ -1014,15 +1016,138 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     )
 
     # Assert
-    prompt = _first_message(payloads[0])["content"]
+    prompt = _last_message(payloads[0])["content"]
     assert isinstance(prompt, str)
-    assert "主対象や行動が判別できるframeを優先" in prompt
+    assert "各frameを他のframeの内容と混ぜず" in prompt
     assert "大きな発光やエフェクトで主対象が隠れる" in prompt
-    assert "normal_gameplay=" in prompt
-    assert "menu=" in prompt
+    assert "gameplay_action=" in prompt
+    assert "tutorial_help" in prompt
     assert "explanation_valueのnone=" in prompt
     assert "context_relevanceのstrong=" in prompt
     assert "spoiler_riskのhigh=" in prompt
+
+
+def test_candidate_frames_are_labeled_and_selected_from_per_frame_observations() -> (
+    None
+):
+    """画像とIDが対応付けられ、frame別観測から代表画像が決定されること。
+
+    Arrange:
+        - shop、待機画面、台詞eventの3枚とframe別応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 各画像が対応するIDだけを持つmessageで送信されること
+        - 同じhigh評価では台詞eventのframeが代表として構築されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+    request = _annotation_request_with_frame_ids(("frame-a", "frame-b", "frame-c"))
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        return _response(
+            _frame_observation_payload(
+                (
+                    ("frame-a", "exploration", "shop", "high", "menu"),
+                    (
+                        "frame-b",
+                        "exploration",
+                        "gameplay_idle",
+                        "high",
+                        "none",
+                    ),
+                    (
+                        "frame-c",
+                        "battle",
+                        "event_dialogue",
+                        "high",
+                        "dialogue",
+                    ),
+                )
+            )
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _diagnostics = runtime.annotate_candidate(
+        request,
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    messages = payloads[0]["messages"]
+    assert isinstance(messages, list)
+    assert [message["content"] for message in messages[:-1]] == [
+        "frame_candidate_id=frame-a",
+        "frame_candidate_id=frame-b",
+        "frame_candidate_id=frame-c",
+    ]
+    assert [message["images"] for message in messages[:-1]] == [
+        ["aW1hZ2UtZnJhbWUtYQ=="],
+        ["aW1hZ2UtZnJhbWUtYg=="],
+        ["aW1hZ2UtZnJhbWUtYw=="],
+    ]
+    assert "images" not in messages[-1]
+    assert annotation.candidate.identifier == "frame-c"
+    assert annotation.blog_image_type == "event"
+    assert annotation.explanation_value == "high"
+    assert annotation.screen_text_kind == "dialogue"
+
+
+def test_tutorial_observation_is_not_eligible_for_selection_filling() -> None:
+    """modelがmediumと返してもtutorialが説明価値なしへ正規化されること。
+
+    Arrange:
+        - Context Cueなしのtutorial_help frameとmedium応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - menu分類を保ちながら説明価値なしへ正規化されること
+    """
+    # Arrange
+    request = _annotation_request_with_frame_ids(("frame-a",), include_context=False)
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(
+            _frame_observation_payload(
+                (("frame-a", "exploration", "tutorial_help", "medium", "dialogue"),),
+                context_relevance="unavailable",
+                supporting_context_cue_ids=(),
+            )
+        ),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _diagnostics = runtime.annotate_candidate(
+        request,
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.blog_image_type == "menu"
+    assert annotation.explanation_value == "none"
+    assert annotation.screen_text_kind == "menu"
 
 
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
@@ -1056,10 +1181,11 @@ def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> 
         assert payload is not None
         payloads.append(payload)
         response = _annotation_payload()
-        response["context_relevance"] = "none" if len(payloads) == 1 else "unavailable"
+        response["context_relevance"] = "unavailable"
         response["supporting_context_cue_ids"] = []
-        response["spoiler_risk"] = "none"
-        response["spoiler_evidence"] = "画面由来の根拠" if len(payloads) == 1 else ""
+        observation = _first_frame_observation(response)
+        observation["spoiler_risk"] = "none"
+        observation["spoiler_evidence"] = "画面由来の根拠" if len(payloads) == 1 else ""
         return _response(response)
 
     runtime = OllamaVisionRuntime(
@@ -1082,8 +1208,8 @@ def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> 
     assert annotation.context_relevance == "unavailable"
     assert diagnostics.attempt_count == 2
     assert diagnostics.validation_code == "candidate_annotation_relationship_invalid"
-    first_prompt = _first_message(payloads[0])["content"]
-    second_prompt = _first_message(payloads[1])["content"]
+    first_prompt = _last_message(payloads[0])["content"]
+    second_prompt = _last_message(payloads[1])["content"]
     assert isinstance(first_prompt, str)
     assert isinstance(second_prompt, str)
     assert "context_cuesが空ならcontext_relevanceはunavailable" in first_prompt
@@ -1116,8 +1242,6 @@ def test_candidate_without_context_rejects_none_relevance() -> None:
     response = _annotation_payload()
     response["context_relevance"] = "none"
     response["supporting_context_cue_ids"] = []
-    response["spoiler_risk"] = "none"
-    response["spoiler_evidence"] = ""
     runtime = OllamaVisionRuntime(
         "http://localhost:11434",
         timeout_seconds=60.0,
@@ -1174,26 +1298,22 @@ def test_candidate_with_context_rejects_unavailable_relevance() -> None:
     assert captured.value.validation_code == "candidate_annotation_context_invalid"
 
 
-@pytest.mark.parametrize(
-    "field_name",
-    ("annotation_summary", "frame_choice_reason", "spoiler_evidence"),
-)
-def test_candidate_redacts_verbatim_context_cue_in_free_text(
-    field_name: str,
-) -> None:
+def test_candidate_redacts_verbatim_context_cue_in_spoiler_evidence() -> None:
     """Context Cue本文が自由文fieldへ逐語再出力された場合に安全化されること。
 
     Arrange:
-        - Context Cue本文を一つの自由文fieldへそのまま返すresponseが用意される
+        - Context Cue本文をspoiler evidenceへそのまま返すresponseが用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - raw textを含むfieldだけが非逐語表現へ置換されること
+        - raw textを含むevidenceが非逐語表現へ置換されること
     """
     # Arrange
     request = _annotation_request()
     response = _annotation_payload()
-    response[field_name] = request.context_cues[0].text
+    _first_frame_observation(response)["spoiler_evidence"] = request.context_cues[
+        0
+    ].text
     payloads: list[Mapping[str, object]] = []
 
     def requester(
@@ -1238,7 +1358,7 @@ def test_candidate_redacts_verbatim_context_cue_in_free_text(
     )
     assert diagnostics.attempt_count == 1
     assert len(payloads) == 1
-    first_prompt = _first_message(payloads[0])["content"]
+    first_prompt = _last_message(payloads[0])["content"]
     assert isinstance(first_prompt, str)
     assert "正規化後3〜5文字のCueは全文" in first_prompt
 
@@ -1268,7 +1388,7 @@ def test_candidate_redacts_normalized_or_partial_context_cue_quote(
     # Arrange
     request = _annotation_request_with_context_text(cue_text)
     response = _annotation_payload()
-    response["annotation_summary"] = leaked_text
+    _first_frame_observation(response)["spoiler_evidence"] = leaked_text
     runtime = OllamaVisionRuntime(
         "http://localhost:11434",
         timeout_seconds=60.0,
@@ -1286,9 +1406,9 @@ def test_candidate_redacts_normalized_or_partial_context_cue_quote(
     )
 
     # Assert
-    assert annotation.summary != leaked_text
+    assert annotation.spoiler_evidence != leaked_text
     assert candidate_annotation_free_text_is_safe(
-        (annotation.summary,),
+        (annotation.spoiler_evidence,),
         (cue_text,),
     )
     assert diagnostics.validation_code == (
@@ -1307,10 +1427,9 @@ def test_candidate_uses_symbol_omission_when_safe_fallback_matches_context() -> 
         - Cue文字を持たない省略記号がsummaryへ返されること
     """
     # Arrange
-    cue_text = "戦闘に分類されるeventの場面"
+    cue_text = "戦闘の台詞のあるイベント。戦闘に分類されるeventの場面"
     request = _annotation_request_with_context_text(cue_text)
     response = _annotation_payload()
-    response["annotation_summary"] = cue_text
     runtime = OllamaVisionRuntime(
         "http://localhost:11434",
         timeout_seconds=60.0,
@@ -1361,7 +1480,7 @@ def test_candidate_allows_ambiguous_one_or_two_character_cue_occurrence(
     # Arrange
     request = _annotation_request_with_context_text(cue_text)
     response = _annotation_payload()
-    response["annotation_summary"] = annotation_summary
+    catalog = _catalog_with_battle_display(annotation_summary)
     runtime = OllamaVisionRuntime(
         "http://localhost:11434",
         timeout_seconds=60.0,
@@ -1373,13 +1492,13 @@ def test_candidate_allows_ambiguous_one_or_two_character_cue_occurrence(
     # Act
     annotation, _ = runtime.annotate_candidate(
         request,
-        _catalog(),
+        catalog,
         _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
         num_ctx=32768,
     )
 
     # Assert
-    assert annotation.summary == annotation_summary
+    assert annotation.summary.startswith(annotation_summary)
 
 
 def test_retryable_transport_failure_is_retried_with_same_semantic_input() -> None:
@@ -1623,18 +1742,44 @@ def _catalog_payload() -> dict[str, object]:
 
 
 def _annotation_payload() -> dict[str, object]:
+    payload = _frame_observation_payload(
+        (("frame-a", "battle", "event_dialogue", "high", "dialogue"),)
+    )
+    observation = _first_frame_observation(payload)
+    observation["spoiler_risk"] = "high"
+    observation["spoiler_evidence"] = "最終ボスの正体が画面で明示される"
+    return payload
+
+
+def _frame_observation_payload(
+    rows: tuple[tuple[str, str, str, str, str], ...],
+    *,
+    context_relevance: str = "strong",
+    supporting_context_cue_ids: tuple[str, ...] = ("cue-a",),
+) -> dict[str, object]:
     return {
-        "representative_frame_id": "frame-a",
-        "scene_slug": "battle",
-        "blog_image_type": "event",
-        "explanation_value": "high",
-        "annotation_summary": "終盤の重要な対決",
-        "frame_choice_reason": "対決する人物が明確に写る",
-        "screen_text_kind": "dialogue",
-        "context_relevance": "strong",
-        "supporting_context_cue_ids": ["cue-a"],
-        "spoiler_risk": "high",
-        "spoiler_evidence": "最終ボスの正体が画面で明示される",
+        "frame_observations": [
+            {
+                "frame_id": frame_id,
+                "scene_slug": scene_slug,
+                "content_kind": content_kind,
+                "explanation_value": explanation_value,
+                "screen_text_kind": screen_text_kind,
+                "primary_subject_visibility": "clear",
+                "transient_obstruction": "none",
+                "spoiler_risk": "none",
+                "spoiler_evidence": "",
+            }
+            for (
+                frame_id,
+                scene_slug,
+                content_kind,
+                explanation_value,
+                screen_text_kind,
+            ) in rows
+        ],
+        "context_relevance": context_relevance,
+        "supporting_context_cue_ids": list(supporting_context_cue_ids),
     }
 
 
@@ -1663,6 +1808,21 @@ def _catalog() -> SceneCatalog:
     )
 
 
+def _catalog_with_battle_display(display_name: str) -> SceneCatalog:
+    """battle表示名だけを置換したCatalogを返す。"""
+    return SceneCatalog(
+        tuple(
+            SceneCatalogEntry(
+                scene.slug,
+                display_name if scene.slug == "battle" else scene.display_name,
+                scene.description,
+                scene.selection_role,
+            )
+            for scene in _catalog().scenes
+        )
+    )
+
+
 def _annotation_request() -> CandidateAnnotationRequest:
     frame = FrameCandidate("frame-a", b"image-a")
     moment = CandidateMoment(
@@ -1684,6 +1844,46 @@ def _annotation_request() -> CandidateAnnotationRequest:
         moment=moment,
         frame_candidates=(frame,),
         context_cues=(cue,),
+        video_set_progress=Fraction(1, 2),
+        selection_intent="ブログ本文を説明できる画像を選ぶ",
+        cue_selection_policy_version="nearby-context-v1",
+    )
+
+
+def _annotation_request_with_frame_ids(
+    frame_ids: tuple[str, ...],
+    *,
+    include_context: bool = True,
+) -> CandidateAnnotationRequest:
+    frames = tuple(
+        FrameCandidate(identifier, f"image-{identifier}".encode())
+        for identifier in frame_ids
+    )
+    moment = CandidateMoment(
+        identifier="mom_" + "a" * 64,
+        source_pts=100,
+        anchor_time=Fraction(10),
+        timeline_segment_id="seg_" + "b" * 64,
+        evidence=("scene",),
+        proxy_quality_score=0.9,
+        frame_candidate_ids=frame_ids,
+    )
+    cues = (
+        (
+            ContextCue(
+                identifier="cue-a",
+                start=Fraction(9),
+                end=Fraction(11),
+                text="正体を明かす台詞",
+            ),
+        )
+        if include_context
+        else ()
+    )
+    return CandidateAnnotationRequest(
+        moment=moment,
+        frame_candidates=frames,
+        context_cues=cues,
         video_set_progress=Fraction(1, 2),
         selection_intent="ブログ本文を説明できる画像を選ぶ",
         cue_selection_policy_version="nearby-context-v1",
@@ -1740,3 +1940,21 @@ def _first_message(payload: Mapping[str, object]) -> Mapping[str, object]:
     message = messages[0]
     assert isinstance(message, dict)
     return cast(dict[str, object], message)
+
+
+def _last_message(payload: Mapping[str, object]) -> Mapping[str, object]:
+    messages = payload.get("messages")
+    assert isinstance(messages, list)
+    assert messages
+    message = messages[-1]
+    assert isinstance(message, dict)
+    return cast(dict[str, object], message)
+
+
+def _first_frame_observation(payload: Mapping[str, object]) -> dict[str, object]:
+    observations = payload.get("frame_observations")
+    assert isinstance(observations, list)
+    assert observations
+    observation = observations[0]
+    assert isinstance(observation, dict)
+    return cast(dict[str, object], observation)

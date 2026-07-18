@@ -16,17 +16,30 @@ from urllib.request import Request, urlopen
 
 from ..model_runtime.ollama_model_store import OllamaModelStore
 from ..models.candidate_annotation import (
-    BLOG_IMAGE_TYPES,
     CONTEXT_CUE_RELEVANCES,
     EXPLANATION_VALUES,
     SCREEN_TEXT_KINDS,
     SPOILER_RISKS,
     CandidateAnnotation,
+    ContextCueRelevance,
+    ExplanationValue,
+    ScreenTextKind,
+    SpoilerRisk,
     candidate_annotation_context_is_valid,
     candidate_annotation_relationships_are_valid,
     privacy_safe_candidate_text,
 )
 from ..models.candidate_annotation_request import CandidateAnnotationRequest
+from ..models.candidate_frame_observation import (
+    CANDIDATE_FRAME_CONTENT_KINDS,
+    PRIMARY_SUBJECT_VISIBILITIES,
+    TRANSIENT_OBSTRUCTIONS,
+    CandidateFrameContentKind,
+    CandidateFrameObservation,
+    PrimarySubjectVisibility,
+    TransientObstruction,
+)
+from ..models.frame_candidate import FrameCandidate
 from ..models.model_artifact import ModelArtifact
 from ..models.model_artifact_invalid_error import ModelArtifactInvalidError
 from ..models.model_role import ModelRole
@@ -46,6 +59,9 @@ from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 from ..models.vision_runtime_error import VisionRuntimeError
 from ..models.vision_runtime_failure_reason import VisionRuntimeFailureReason
 from ..services.gpu_work_coordinator import GpuWorkCoordinator
+from ..services.select_representative_candidate_frame_observation import (
+    select_representative_candidate_frame_observation,
+)
 from ..utils.http_retry_delay import http_retry_delay
 from .vision_contract import (
     CANDIDATE_ANNOTATION_PROMPT_VERSION,
@@ -71,15 +87,18 @@ StageKind = Literal["scene_catalog", "candidate_annotation"]
 
 _SCENE_ENTRY_KEYS = {"slug", "display_name", "description", "selection_role"}
 _ANNOTATION_KEYS = {
-    "representative_frame_id",
-    "scene_slug",
-    "blog_image_type",
-    "explanation_value",
-    "annotation_summary",
-    "frame_choice_reason",
-    "screen_text_kind",
+    "frame_observations",
     "context_relevance",
     "supporting_context_cue_ids",
+}
+_FRAME_OBSERVATION_KEYS = {
+    "frame_id",
+    "scene_slug",
+    "content_kind",
+    "explanation_value",
+    "screen_text_kind",
+    "primary_subject_visibility",
+    "transient_obstruction",
     "spoiler_risk",
     "spoiler_evidence",
 }
@@ -101,17 +120,23 @@ _SCENE_CATALOG_SEMANTICS = (
     "sceneはブログで役割が異なる視覚・内容のまとまりとして作ります。\n"
 )
 _CANDIDATE_ANNOTATION_SEMANTICS = (
-    "代表frameは主対象や行動が判別できるframeを優先します。"
+    "各frameを他のframeの内容と混ぜず、対応するframe_idごとに個別評価します。"
+    "gameplay_action=操作・戦闘・探索の具体的な動作、gameplay_idle=人物や背景が"
+    "見えても具体的な動作がない通常画面、event_dialogue=frame内に台詞表示が"
+    "実在する会話、event_action=台詞がなくても具体的な演出や動作が見える出来事、"
+    "event_setup=出来事の開始待ちで動作も台詞表示もない画面、shop・map・save・"
+    "tutorial_help・other_interface=各interface、title・other=その他の役割です。\n"
+    "primary_subject_visibilityは人物・敵・品物・行動などブログ説明の主対象が"
+    "clear・partial・absentのどれか、transient_obstructionは発光・白飛び・移動・"
+    "画面切替による一時的な遮蔽がnone・partial・severeのどれかを返します。"
     "大きな発光やエフェクトで主対象が隠れるframe、白飛び、移動・画面切替の"
-    "途中は避けます。全frameで主対象が判別できない場合は最も明瞭なframeを"
-    "選び、explanation_valueをnoneにします。\n"
-    "blog_image_typeはnormal_gameplay=探索・戦闘・puzzleなどplayが主体、"
-    "event=会話・cutscene・scripted presentationが主体、menu=inventory・装備・"
-    "map・設定・shop・save・helpなどinterfaceが主体、title=title・logo・landing、"
-    "other=どれにも当てはまらない有効画像です。\n"
+    "途中はsevereにします。\n"
     "explanation_valueのnone=主対象や出来事を説明できずブログ掲載価値がない、"
     "low=判別できるが汎用的・重複的、medium=具体的なplay状態や出来事を説明できる、"
     "high=重要な主対象・行動・関係が明瞭で本文を直接補強する、です。\n"
+    "tutorial_help、主対象がabsent、event_setup、severeな遮蔽は"
+    "explanation_valueをnoneにします。screen_text_kindはそのframe内に実際に"
+    "見える文字の役割だけで決め、別frameやContext Cueから推測しません。\n"
     "context_relevanceのnone=近接していても画像説明と無関係、weak=補足になる、"
     "context_relevanceのstrong=画像の意味を特定するため不可欠、です。"
     "単にContext Cueが存在するだけで"
@@ -121,6 +146,20 @@ _CANDIDATE_ANNOTATION_SEMANTICS = (
     "主要人物の生死・裏切り・犯人や真の正体・中心的な種明かしです。"
     "進行位置だけではriskを上げません。\n"
 )
+_CONTENT_KIND_LABELS: Mapping[CandidateFrameContentKind, str] = {
+    "gameplay_action": "具体的なプレイ",
+    "gameplay_idle": "通常プレイの待機場面",
+    "event_dialogue": "台詞のあるイベント",
+    "event_action": "動きのあるイベント",
+    "event_setup": "イベント開始前の場面",
+    "shop": "ショップ画面",
+    "map": "マップ画面",
+    "save": "セーブ画面",
+    "tutorial_help": "チュートリアル画面",
+    "other_interface": "操作画面",
+    "title": "タイトル画面",
+    "other": "その他の場面",
+}
 
 
 class OllamaVisionRuntime:
@@ -404,38 +443,37 @@ def _candidate_payload(
         "selection_intent": request.selection_intent,
     }
     content = (
-        "入力された1〜3枚からブログ上の意味を最も表すframeを1枚選び、"
-        "共有Scene Catalogを使ってCandidate Annotationを返してください。"
+        "入力された1〜3枚を個別に評価し、共有Scene Catalogを使って"
+        "frame_observationsを返してください。"
         + _CANDIDATE_ANNOTATION_SEMANTICS
-        + "画像品質、confidence、final score、eligible、selected、逐語的画面文、"
-        "推論過程は出力しません。Context Cue本文をannotation summary、"
-        "frame choice reason、spoiler evidenceへ引用しません。正規化後3〜5文字の"
-        "Cueは全文、6文字以上のCueは6文字以上の連続部分も自由文へ再出力しません。"
-        "representative_frame_idはframe_candidate_idsから、scene_slugは"
-        "scene_catalogから選びます。context_cuesが空ならcontext_relevanceは"
+        + "frame_observationsは全frame_candidate_idsを入力順に一度ずつ含め、"
+        "frame_idは対応する個別画像のID、scene_slugはscene_catalogから選びます。"
+        "画像品質、confidence、final score、eligible、selected、逐語的画面文、"
+        "推論過程は出力しません。Context Cue本文をspoiler_evidenceへ引用しません。"
+        "正規化後3〜5文字のCueは全文、6文字以上のCueは6文字以上の連続部分も"
+        "spoiler_evidenceへ再出力しません。context_cuesが空ならcontext_relevanceは"
         "unavailable、supporting_context_cue_idsは空配列にします。context_cuesが"
         "ある場合はcontext_relevanceをunavailableにせず、weakまたはstrongなら"
         "supporting_context_cue_idsへ入力内のIDを1件以上入れ、noneなら空配列に"
-        "します。spoiler_riskがnoneならspoiler_evidenceは空文字列にし、それ以外"
-        "なら根拠を空でない自分の言葉で記述します。\n"
+        "します。各frameのspoiler_riskがnoneならspoiler_evidenceは空文字列にし、"
+        "それ以外ならそのframeから判断できる根拠を空でない自分の言葉で記述します。\n"
         + json.dumps(semantic_request, ensure_ascii=False, sort_keys=True)
     )
+    frame_messages = [
+        {
+            "role": "user",
+            "content": f"frame_candidate_id={item.identifier}",
+            "images": [base64.b64encode(item.image_bytes).decode()],
+        }
+        for item in request.frame_candidates
+    ]
     return {
         "model": model.configured_name,
         "stream": False,
         "think": False,
         "format": _candidate_schema(request, catalog),
         "options": {"temperature": 0, "num_ctx": num_ctx},
-        "messages": [
-            {
-                "role": "user",
-                "content": content,
-                "images": [
-                    base64.b64encode(item.image_bytes).decode()
-                    for item in request.frame_candidates
-                ],
-            }
-        ],
+        "messages": [*frame_messages, {"role": "user", "content": content}],
     }
 
 
@@ -446,10 +484,18 @@ def _candidate_schema(
     """requestで選択可能なIDとContext relevanceへschemaを限定する。"""
     schema = copy.deepcopy(CANDIDATE_ANNOTATION_SCHEMA)
     properties = cast(dict[str, dict[str, object]], schema["properties"])
-    properties["representative_frame_id"]["enum"] = [
+    observation_array = properties["frame_observations"]
+    observation_array["minItems"] = len(request.frame_candidates)
+    observation_array["maxItems"] = len(request.frame_candidates)
+    observation_items = cast(dict[str, object], observation_array["items"])
+    observation_properties = cast(
+        dict[str, dict[str, object]],
+        observation_items["properties"],
+    )
+    observation_properties["frame_id"]["enum"] = [
         item.identifier for item in request.frame_candidates
     ]
-    properties["scene_slug"]["enum"] = list(catalog.slugs)
+    observation_properties["scene_slug"]["enum"] = list(catalog.slugs)
     cue_ids = [item.identifier for item in request.context_cues]
     relevance = properties["context_relevance"]
     supporting_cues = properties["supporting_context_cue_ids"]
@@ -471,7 +517,7 @@ def _with_repair_code(
         return payload
     copied = cast(dict[str, object], json.loads(json.dumps(payload)))
     messages = cast(list[dict[str, object]], copied["messages"])
-    content = cast(str, messages[0]["content"])
+    content = cast(str, messages[-1]["content"])
     repair = f"前回の出力を修正してください。validation_code={validation_code}"
     if validation_code == "candidate_annotation_relationship_invalid":
         repair += (
@@ -481,7 +527,7 @@ def _with_repair_code(
             "ならsupporting_context_cue_idsは空配列、weakまたはstrongなら入力内IDを"
             "1件以上入れます。"
         )
-    messages[0]["content"] = f"{content}\n{repair}"
+    messages[-1]["content"] = f"{content}\n{repair}"
     return copied
 
 
@@ -563,89 +609,153 @@ def _parse_candidate_annotation(
 ) -> tuple[CandidateAnnotation, bool]:
     if set(value) != _ANNOTATION_KEYS:
         raise _schema_error("candidate_annotation_schema_invalid")
-    representative_frame_id = value.get("representative_frame_id")
-    scene_slug = value.get("scene_slug")
-    blog_image_type = value.get("blog_image_type")
-    explanation_value = value.get("explanation_value")
-    annotation_summary = value.get("annotation_summary")
-    frame_choice_reason = value.get("frame_choice_reason")
-    screen_text_kind = value.get("screen_text_kind")
+    raw_observations = value.get("frame_observations")
     context_relevance = value.get("context_relevance")
     cue_ids = value.get("supporting_context_cue_ids")
-    spoiler_risk = value.get("spoiler_risk")
-    spoiler_evidence = value.get("spoiler_evidence")
     if (
-        not isinstance(representative_frame_id, str)
-        or not isinstance(scene_slug, str)
-        or blog_image_type not in BLOG_IMAGE_TYPES
-        or explanation_value not in EXPLANATION_VALUES
-        or not isinstance(annotation_summary, str)
-        or not annotation_summary.strip()
-        or not isinstance(frame_choice_reason, str)
-        or not frame_choice_reason.strip()
-        or screen_text_kind not in SCREEN_TEXT_KINDS
+        not isinstance(raw_observations, list)
+        or len(raw_observations) != len(request.frame_candidates)
         or context_relevance not in CONTEXT_CUE_RELEVANCES
         or not isinstance(cue_ids, list)
         or not all(isinstance(item, str) for item in cue_ids)
         or len(cue_ids) != len(set(cue_ids))
-        or spoiler_risk not in SPOILER_RISKS
-        or not isinstance(spoiler_evidence, str)
     ):
         raise _schema_error("candidate_annotation_schema_invalid")
     frames = {item.identifier: item for item in request.frame_candidates}
     typed_context_relevance = context_relevance
     typed_cue_ids = tuple(cast(list[str], cue_ids))
-    typed_spoiler_risk = spoiler_risk
     available_cue_ids = tuple(item.identifier for item in request.context_cues)
-    if representative_frame_id not in frames:
-        raise _domain_error("candidate_annotation_representative_frame_unknown")
-    if scene_slug not in catalog.slugs:
-        raise _domain_error("candidate_annotation_scene_slug_unknown")
-    if not candidate_annotation_relationships_are_valid(
-        typed_context_relevance,
-        typed_cue_ids,
-        typed_spoiler_risk,
-        spoiler_evidence,
-    ):
-        raise _domain_error("candidate_annotation_relationship_invalid")
     if not candidate_annotation_context_is_valid(
         typed_context_relevance,
         typed_cue_ids,
         available_cue_ids,
     ):
         raise _domain_error("candidate_annotation_context_invalid")
-    annotation_summary, frame_choice_reason, spoiler_evidence, free_text_redacted = (
-        _privacy_safe_candidate_texts(
+    observations = _parse_candidate_frame_observations(
+        raw_observations,
+        frames=frames,
+        catalog=catalog,
+        context_relevance=typed_context_relevance,
+        cue_ids=typed_cue_ids,
+    )
+    expected_frame_ids = tuple(item.identifier for item in request.frame_candidates)
+    actual_frame_ids = tuple(item.candidate.identifier for item in observations)
+    if actual_frame_ids != expected_frame_ids:
+        raise _domain_error("candidate_annotation_frame_observations_mismatch")
+    try:
+        selected = select_representative_candidate_frame_observation(observations)
+        scene = catalog.for_slug(selected.scene_slug)
+        content_label = _CONTENT_KIND_LABELS[selected.content_kind]
+        annotation_summary = f"{scene.display_name}の{content_label}"
+        frame_choice_reason = f"{content_label}が候補内で最も明瞭なフレーム"
+        (
+            annotation_summary,
+            frame_choice_reason,
+            spoiler_evidence,
+            free_text_redacted,
+        ) = _privacy_safe_candidate_texts(
             annotation_summary=annotation_summary,
             frame_choice_reason=frame_choice_reason,
-            spoiler_evidence=spoiler_evidence,
-            scene_slug=scene_slug,
-            blog_image_type=cast(str, blog_image_type),
-            spoiler_risk=cast(str, typed_spoiler_risk),
+            spoiler_evidence=selected.spoiler_evidence,
+            scene_slug=selected.scene_slug,
+            blog_image_type=selected.blog_image_type,
+            spoiler_risk=selected.spoiler_risk,
             raw_context_texts=tuple(item.text for item in request.context_cues),
             catalog=catalog,
         )
-    )
-    try:
         return (
             CandidateAnnotation(
-                candidate=frames[representative_frame_id],
+                candidate=selected.candidate,
                 summary=annotation_summary,
                 candidate_moment_id=request.moment.identifier,
-                scene_slug=scene_slug,
-                blog_image_type=blog_image_type,
-                explanation_value=explanation_value,
+                scene_slug=selected.scene_slug,
+                blog_image_type=selected.blog_image_type,
+                explanation_value=selected.effective_explanation_value,
                 frame_choice_reason=frame_choice_reason,
-                screen_text_kind=screen_text_kind,
+                screen_text_kind=selected.effective_screen_text_kind,
                 context_relevance=typed_context_relevance,
                 supporting_context_cue_ids=typed_cue_ids,
-                spoiler_risk=typed_spoiler_risk,
+                spoiler_risk=selected.spoiler_risk,
                 spoiler_evidence=spoiler_evidence,
             ),
             free_text_redacted,
         )
     except ValueError:
         raise _domain_error("candidate_annotation_domain_invalid") from None
+
+
+def _parse_candidate_frame_observations(
+    raw_observations: list[object],
+    *,
+    frames: Mapping[str, FrameCandidate],
+    catalog: SceneCatalog,
+    context_relevance: ContextCueRelevance,
+    cue_ids: tuple[str, ...],
+) -> tuple[CandidateFrameObservation, ...]:
+    """strictなframe別応答をdomain observationへ変換する。"""
+    observations: list[CandidateFrameObservation] = []
+    for raw_observation in raw_observations:
+        if (
+            not isinstance(raw_observation, dict)
+            or set(raw_observation) != _FRAME_OBSERVATION_KEYS
+        ):
+            raise _schema_error("candidate_annotation_schema_invalid")
+        frame_id = raw_observation.get("frame_id")
+        scene_slug = raw_observation.get("scene_slug")
+        content_kind = raw_observation.get("content_kind")
+        explanation_value = raw_observation.get("explanation_value")
+        screen_text_kind = raw_observation.get("screen_text_kind")
+        subject_visibility = raw_observation.get("primary_subject_visibility")
+        transient_obstruction = raw_observation.get("transient_obstruction")
+        spoiler_risk = raw_observation.get("spoiler_risk")
+        spoiler_evidence = raw_observation.get("spoiler_evidence")
+        if (
+            not isinstance(frame_id, str)
+            or not isinstance(scene_slug, str)
+            or content_kind not in CANDIDATE_FRAME_CONTENT_KINDS
+            or explanation_value not in EXPLANATION_VALUES
+            or screen_text_kind not in SCREEN_TEXT_KINDS
+            or subject_visibility not in PRIMARY_SUBJECT_VISIBILITIES
+            or transient_obstruction not in TRANSIENT_OBSTRUCTIONS
+            or spoiler_risk not in SPOILER_RISKS
+            or not isinstance(spoiler_evidence, str)
+        ):
+            raise _schema_error("candidate_annotation_schema_invalid")
+        if frame_id not in frames:
+            raise _domain_error("candidate_annotation_representative_frame_unknown")
+        if scene_slug not in catalog.slugs:
+            raise _domain_error("candidate_annotation_scene_slug_unknown")
+        typed_spoiler_risk = cast(SpoilerRisk, spoiler_risk)
+        if not candidate_annotation_relationships_are_valid(
+            context_relevance,
+            cue_ids,
+            typed_spoiler_risk,
+            spoiler_evidence,
+        ):
+            raise _domain_error("candidate_annotation_relationship_invalid")
+        try:
+            observations.append(
+                CandidateFrameObservation(
+                    candidate=frames[frame_id],
+                    scene_slug=scene_slug,
+                    content_kind=cast(CandidateFrameContentKind, content_kind),
+                    explanation_value=cast(ExplanationValue, explanation_value),
+                    screen_text_kind=cast(ScreenTextKind, screen_text_kind),
+                    primary_subject_visibility=cast(
+                        PrimarySubjectVisibility,
+                        subject_visibility,
+                    ),
+                    transient_obstruction=cast(
+                        TransientObstruction,
+                        transient_obstruction,
+                    ),
+                    spoiler_risk=typed_spoiler_risk,
+                    spoiler_evidence=spoiler_evidence,
+                )
+            )
+        except ValueError:
+            raise _domain_error("candidate_annotation_domain_invalid") from None
+    return tuple(observations)
 
 
 def _privacy_safe_candidate_texts(

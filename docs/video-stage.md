@@ -46,7 +46,7 @@ Neutral Image AnalysisはOpenCV/NumPyの画質metricsとL2正規化済みHSV・�
 - `fade_transition`
 - `temporal_transition`
 
-絶対的に無効な露出・単色・ぼけを先に除外します。`whiteout`は純白一色に限らず、中央の主対象を覆う大きな連結白領域と、画面の大半を覆う低情報の淡い白も対象にします。明るくても罫線や区画が判別できるmenuは、明るさだけを理由に除外しません。暗いゲーム画面にはRefinement Window Group内の相対分布を使います。`temporal_transition`は同一stream・time baseで、前frameの`PTS + duration_ts`が次frameのPTSと一致する3つのnative frameだけに適用します。離れたrangeのsampleを前後frameとして比較しません。
+絶対的に無効な露出・単色・ぼけを先に除外します。`whiteout`は純白一色に限らず、中央の主対象を覆う大きな連結白領域と、画面の大半を覆う低情報の淡い白も対象にします。明るくても罫線や区画が判別できるmenuは、明るさだけを理由に除外しません。暗いゲーム画面にはRefinement Window Group内の相対分布を使います。`temporal_transition`は同一stream・time baseで、前frameの`PTS + duration_ts`が次frameのPTSと一致するnative frameだけに適用します。短い3-frame dipに加え、0.25秒以内に淡い連結明領域が画面の一部から60%以上へ拡大または縮小する3枚以上のframeを遷移として除外します。領域が静止した明るいmenuは除外しません。離れたrangeのsampleを前後frameとして比較しません。
 
 ## Context CueとSpeechRuntime
 

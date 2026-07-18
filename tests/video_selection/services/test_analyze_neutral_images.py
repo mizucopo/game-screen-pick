@@ -217,3 +217,62 @@ def test_temporal_transition_requires_exact_native_frame_adjacency() -> None:
 
     # Assert
     assert analyses[1].reject_reason is not ContentRejectReason.TEMPORAL_TRANSITION
+
+
+def test_expanding_soft_bright_sweep_is_rejected_as_temporal_transition() -> None:
+    """短時間に拡大する淡い白の移動演出が遷移frameとして除外されること。
+
+    Arrange:
+        - 情報のある背景を淡い白領域が連続3frameで急速に覆う場面が用意される
+    Act:
+        - 前後関係を使うNeutral Image Analysisが実行される
+    Assert:
+        - 純白でなくても移動演出中の3frameがすべて除外されること
+    """
+    # Arrange
+    detailed = cv2.resize(
+        _checkerboard(),
+        (960, 540),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    sweep_frames = []
+    for covered_width in (100, 660, 900):
+        swept = detailed.copy()
+        swept[:, :covered_width] = 225
+        sweep_frames.append(swept)
+
+    # Act
+    analyses = analyze_neutral_images(
+        tuple(_frame(index, frame) for index, frame in enumerate(sweep_frames))
+    )
+
+    # Assert
+    assert [item.reject_reason for item in analyses] == [
+        ContentRejectReason.TEMPORAL_TRANSITION,
+        ContentRejectReason.TEMPORAL_TRANSITION,
+        ContentRejectReason.TEMPORAL_TRANSITION,
+    ]
+
+
+def test_static_bright_interface_is_not_a_soft_bright_sweep() -> None:
+    """静止した明るいinterfaceが移動演出として誤除外されないこと。
+
+    Arrange:
+        - 広い淡色領域と濃い罫線を持つ同一menu frameが連続して用意される
+    Act:
+        - 前後関係を使うNeutral Image Analysisが実行される
+    Assert:
+        - 明るい領域が変化しないframeはすべて有効なままであること
+    """
+    # Arrange
+    menu = np.full((540, 960, 3), 225, dtype=np.uint8)
+    for row in range(50, 500, 50):
+        cv2.line(menu, (60, row), (900, row), (40, 55, 70), 5)
+    cv2.rectangle(menu, (600, 70), (900, 450), (30, 65, 100), 10)
+    frames = tuple(_frame(index, menu) for index in range(3))
+
+    # Act
+    analyses = analyze_neutral_images(frames)
+
+    # Assert
+    assert all(item.reject_reason is None for item in analyses)

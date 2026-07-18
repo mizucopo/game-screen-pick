@@ -13,10 +13,16 @@ from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.neutral_image_analysis import NeutralImageAnalysis
 from ..models.neutral_image_metrics import NeutralImageMetrics
 
-NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v3"
+NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v4"
 BLUR_REJECT_VARIANCE_MIN = 12.0
 _CLIPPED_WHITE_THRESHOLD = 235
 _SOFT_WHITE_THRESHOLD = 230
+_TRANSITION_BRIGHT_THRESHOLD = 220
+_BRIGHT_SWEEP_WINDOW = Fraction(1, 4)
+_BRIGHT_SWEEP_AFFECTED_REGION_MIN = 0.08
+_BRIGHT_SWEEP_LOW_REGION_MAX = 0.20
+_BRIGHT_SWEEP_DOMINANT_REGION_MIN = 0.60
+_BRIGHT_SWEEP_REGION_CHANGE_MIN = 0.45
 _QUALITY_WEIGHTS = {
     "blur_score": 0.165,
     "contrast": 0.145,
@@ -66,6 +72,11 @@ def analyze_neutral_images(
         )
         for index, (raw, feature, signature) in enumerate(raw_rows)
     ]
+    _apply_expanding_bright_sweep_rejections(
+        analyses,
+        frame_timings,
+        raw_rows,
+    )
     _apply_temporal_rejections(analyses, frame_timings)
     _apply_relative_fade_rejections(analyses)
     return tuple(analyses)
@@ -122,6 +133,13 @@ def _measure_frame(
         else 0.0
     )
     soft_white_ratio = float(np.mean(gray >= _SOFT_WHITE_THRESHOLD))
+    transition_bright = gray >= _TRANSITION_BRIGHT_THRESHOLD
+    transition_bright_ratio = float(np.mean(transition_bright))
+    largest_transition_bright_region_ratio = (
+        _largest_connected_region_ratio(transition_bright)
+        if transition_bright_ratio >= _BRIGHT_SWEEP_AFFECTED_REGION_MIN
+        else 0.0
+    )
     raw = {
         "blur_score": float(laplacian.var()),
         "brightness": brightness,
@@ -145,6 +163,9 @@ def _measure_frame(
         "center_clipped_white_ratio": center_clipped_white_ratio,
         "largest_clipped_white_region_ratio": (largest_clipped_white_region_ratio),
         "soft_white_ratio": soft_white_ratio,
+        "largest_transition_bright_region_ratio": (
+            largest_transition_bright_region_ratio
+        ),
     }
     hsv_hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256])
     luminance_hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
@@ -308,6 +329,53 @@ def _apply_temporal_rejections(
             previous.metrics.visibility_score,
             following.metrics.visibility_score,
         ):
+            analyses[index] = replace(
+                current,
+                reject_reason=ContentRejectReason.TEMPORAL_TRANSITION,
+            )
+
+
+def _apply_expanding_bright_sweep_rejections(
+    analyses: list[NeutralImageAnalysis],
+    frame_timings: list[_FrameTiming],
+    raw_rows: list[tuple[dict[str, float], np.ndarray, bytes]],
+) -> None:
+    """短時間に画面を覆う淡い連結領域の拡大・縮小を遷移として除外する。"""
+    region_ratios = [
+        row[0]["largest_transition_bright_region_ratio"] for row in raw_rows
+    ]
+    rejected_indices: set[int] = set()
+    for start in range(len(analyses)):
+        end = start
+        while end + 1 < len(analyses) and _are_adjacent(
+            frame_timings[end],
+            frame_timings[end + 1],
+        ):
+            start_timing = frame_timings[start]
+            next_timing = frame_timings[end + 1]
+            elapsed = (next_timing[1] - start_timing[1]) * start_timing[3]
+            if elapsed > _BRIGHT_SWEEP_WINDOW:
+                break
+            end += 1
+        affected = [
+            index
+            for index in range(start, end + 1)
+            if region_ratios[index] >= _BRIGHT_SWEEP_AFFECTED_REGION_MIN
+        ]
+        if len(affected) < 3:
+            continue
+        affected_ratios = [region_ratios[index] for index in affected]
+        minimum = min(affected_ratios)
+        maximum = max(affected_ratios)
+        if (
+            minimum <= _BRIGHT_SWEEP_LOW_REGION_MAX
+            and maximum >= _BRIGHT_SWEEP_DOMINANT_REGION_MIN
+            and maximum - minimum >= _BRIGHT_SWEEP_REGION_CHANGE_MIN
+        ):
+            rejected_indices.update(affected)
+    for index in rejected_indices:
+        current = analyses[index]
+        if current.reject_reason is None:
             analyses[index] = replace(
                 current,
                 reject_reason=ContentRejectReason.TEMPORAL_TRANSITION,
