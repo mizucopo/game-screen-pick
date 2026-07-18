@@ -21,15 +21,15 @@ SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v13"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v14"
 COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION = (
-    "combat-visibility-verification-prompt-v1"
+    "combat-visibility-verification-prompt-v2"
 )
 COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION = (
-    "combat-visibility-verification-schema-v1"
+    "combat-visibility-verification-schema-v2"
 )
 COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION = (
-    "combat-visibility-verification-stage-v1"
+    "combat-visibility-verification-stage-v2"
 )
 RETRY_POLICY_VERSION = "ollama-retry-v7"
 
@@ -215,6 +215,10 @@ COMBAT_VISIBILITY_VERIFICATION_SCHEMA: dict[str, object] = {
             "type": "string",
             "enum": list(CHARACTER_BODY_VISIBILITIES),
         },
+        "opponent_body_framing": {
+            "type": "string",
+            "enum": ["complete", "edge_cropped", "occluded", "absent"],
+        },
         "effect_overlaps_combatant_body": {
             "type": "string",
             "enum": ["none", "partial", "severe"],
@@ -226,6 +230,7 @@ COMBAT_VISIBILITY_VERIFICATION_SCHEMA: dict[str, object] = {
         "largest_foreground_element",
         "player_body_visibility",
         "opponent_body_visibility",
+        "opponent_body_framing",
         "effect_overlaps_combatant_body",
         "effect_only_frame",
     ],

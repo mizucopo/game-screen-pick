@@ -1441,19 +1441,30 @@ def test_contextual_cinematic_dialogue_is_visually_rechecked(
 
 
 @pytest.mark.parametrize(
-    ("confirmed_opponent_visibility", "confirmed_effect_only", "expected_value"),
-    (("clear", False, "high"), ("absent", False, "none"), ("clear", True, "none")),
+    (
+        "confirmed_opponent_visibility",
+        "confirmed_opponent_framing",
+        "confirmed_effect_only",
+        "expected_value",
+    ),
+    (
+        ("clear", "complete", False, "high"),
+        ("clear", "edge_cropped", False, "none"),
+        ("absent", "absent", False, "none"),
+        ("clear", "complete", True, "none"),
+    ),
 )
 def test_publishable_combat_visibility_is_visually_rechecked(
     confirmed_opponent_visibility: str,
+    confirmed_opponent_framing: str,
     confirmed_effect_only: bool,
     expected_value: str,
 ) -> None:
-    """掲載可能とされた戦闘の敵本体とエフェクトが画像だけで再確認されること。
+    """掲載可能とされた戦闘の敵本体、構図、エフェクトが再確認されること。
 
     Arrange:
         - 初回は敵本体が明瞭でエフェクトだけではないとする戦闘応答が用意される
-        - 再確認では敵本体またはエフェクトだけという観測が変更される場合がある
+        - 再確認では敵本体、画面端の欠け、エフェクトだけという観測が変更される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
@@ -1482,6 +1493,7 @@ def test_publishable_combat_visibility_is_visually_rechecked(
                 "largest_foreground_element": "visual_effect",
                 "player_body_visibility": "partial",
                 "opponent_body_visibility": confirmed_opponent_visibility,
+                "opponent_body_framing": confirmed_opponent_framing,
                 "effect_overlaps_combatant_body": "severe",
                 "effect_only_frame": confirmed_effect_only,
             }
@@ -1516,13 +1528,16 @@ def test_publishable_combat_visibility_is_visually_rechecked(
         "largest_foreground_element",
         "player_body_visibility",
         "opponent_body_visibility",
+        "opponent_body_framing",
         "effect_overlaps_combatant_body",
         "effect_only_frame",
     }
     second_prompt = _last_message(payloads[1])["content"]
     assert isinstance(second_prompt, str)
     assert "この画像1枚に実際に見える画素だけ" in second_prompt
-    assert "本体の輪郭と姿勢" in second_prompt
+    assert "輪郭と姿勢" in second_prompt
+    assert "画像の端で大きく切れる" in second_prompt
+    assert "opponent_body_framing" in second_prompt
     assert "音声、前後場面、説明文は使いません" in second_prompt
 
 
@@ -1559,6 +1574,7 @@ def test_combat_visibility_schema_failure_is_retried() -> None:
             "largest_foreground_element": "opponent_body",
             "player_body_visibility": "clear",
             "opponent_body_visibility": "clear",
+            "opponent_body_framing": "complete",
             "effect_overlaps_combatant_body": "partial",
             "effect_only_frame": False,
         }
@@ -1622,6 +1638,7 @@ def test_dialogue_and_combat_visibility_are_rechecked_separately() -> None:
                     "largest_foreground_element": "player_body",
                     "player_body_visibility": "clear",
                     "opponent_body_visibility": "absent",
+                    "opponent_body_framing": "absent",
                     "effect_overlaps_combatant_body": "partial",
                     "effect_only_frame": False,
                 }
@@ -1698,6 +1715,7 @@ def test_relationship_repair_is_followed_by_combat_visibility_check() -> None:
                     "largest_foreground_element": "visual_effect",
                     "player_body_visibility": "partial",
                     "opponent_body_visibility": "absent",
+                    "opponent_body_framing": "absent",
                     "effect_overlaps_combatant_body": "severe",
                     "effect_only_frame": True,
                 }

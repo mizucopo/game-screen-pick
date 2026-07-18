@@ -98,6 +98,7 @@ StageKind = Literal[
     "candidate_annotation",
     "combat_visibility_verification",
 ]
+OpponentBodyFraming = Literal["complete", "edge_cropped", "occluded", "absent"]
 
 _SCENE_ENTRY_KEYS = {"slug", "display_name", "description", "selection_role"}
 _ANNOTATION_KEYS = {
@@ -132,6 +133,7 @@ _COMBAT_VISIBILITY_VERIFICATION_KEYS = {
     "largest_foreground_element",
     "player_body_visibility",
     "opponent_body_visibility",
+    "opponent_body_framing",
     "effect_overlaps_combatant_body",
     "effect_only_frame",
 }
@@ -151,6 +153,12 @@ _LARGEST_FOREGROUND_ELEMENTS = {
     "unclear",
 }
 _EFFECT_COMBATANT_OVERLAPS = {"none", "partial", "severe"}
+_OPPONENT_BODY_FRAMINGS: tuple[OpponentBodyFraming, ...] = (
+    "complete",
+    "edge_cropped",
+    "occluded",
+    "absent",
+)
 _RETRYABLE_REASONS = {
     VisionRuntimeFailureReason.TRANSPORT_FAILURE,
     VisionRuntimeFailureReason.RESPONSE_INVALID,
@@ -199,10 +207,15 @@ _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION = (
     "largest_foreground_elementは前景で最も大きく目立つものをplayer_body、"
     "opponent_body、other_character_body、environment、interface、visual_effect、"
     "unclearから選びます。player_body_visibilityとopponent_body_visibilityは、"
-    "本体の輪郭と姿勢がはっきり判別できるならclear、一部がエフェクト等に隠れる"
-    "ならpartial、本体を判別できなければabsentです。光、影、名前、HUDを本体に"
-    "数えません。effect_overlaps_combatant_bodyはvisual_effectがplayerまたは"
-    "opponentの本体へ重なる程度をnone、partial、severeから選びます。"
+    "本体の頭部または上端から足元または下端までの輪郭と姿勢が画面内で明瞭なら"
+    "clear、本体は判別できても画像の端で大きく切れるかエフェクト等に隠れるなら"
+    "partial、本体を判別できなければabsentです。光、影、名前、HUDを本体に"
+    "数えません。opponent_body_framingは攻撃相手本体の主要部が画面内に収まり"
+    "輪郭と姿勢を追えるならcomplete、本体が画像の端で大きく切れるなら"
+    "edge_cropped、画像内にはあるがエフェクト等で大きく隠れるならoccluded、"
+    "本体を判別できなければabsentです。effect_overlaps_combatant_bodyは"
+    "visual_effectがplayerまたはopponentの本体へ重なる程度をnone、partial、"
+    "severeから選びます。"
     "effect_only_frameは画面中央の主内容が一時的な光・爆発・煙だけで、人物・敵・"
     "物体の本体を主対象として一つも明瞭に判別できない場合だけtrueです。敵や人物"
     "の本体が一体でもclearならfalseです。"
@@ -385,6 +398,7 @@ class OllamaVisionRuntime:
             (
                 (
                     opponent_body_visibility,
+                    opponent_body_framing,
                     effect_only_frame,
                 ),
                 verification_diagnostics,
@@ -401,7 +415,11 @@ class OllamaVisionRuntime:
                 image_count=1,
                 context_cue_count=0,
             )
-            if opponent_body_visibility != "clear" or effect_only_frame:
+            if (
+                opponent_body_visibility != "clear"
+                or opponent_body_framing != "complete"
+                or effect_only_frame
+            ):
                 annotation = replace(annotation, explanation_value="none")
             diagnostics = _merge_candidate_diagnostics(
                 diagnostics,
@@ -919,14 +937,15 @@ def _parse_candidate_annotation(
 
 def _parse_combat_visibility_verification(
     value: Mapping[str, object],
-) -> tuple[CharacterBodyVisibility, bool]:
-    """専用schemaの全fieldを検証し、掲載境界に必要な二値だけを返す。"""
+) -> tuple[CharacterBodyVisibility, OpponentBodyFraming, bool]:
+    """専用schemaの全fieldを検証し、掲載境界に必要な観測だけを返す。"""
     if set(value) != _COMBAT_VISIBILITY_VERIFICATION_KEYS:
         raise _schema_error("combat_visibility_verification_schema_invalid")
     effect_screen_coverage = value.get("effect_screen_coverage")
     largest_foreground_element = value.get("largest_foreground_element")
     player_body_visibility = value.get("player_body_visibility")
     opponent_body_visibility = value.get("opponent_body_visibility")
+    opponent_body_framing = value.get("opponent_body_framing")
     effect_overlap = value.get("effect_overlaps_combatant_body")
     effect_only_frame = value.get("effect_only_frame")
     if (
@@ -934,11 +953,12 @@ def _parse_combat_visibility_verification(
         or largest_foreground_element not in _LARGEST_FOREGROUND_ELEMENTS
         or player_body_visibility not in CHARACTER_BODY_VISIBILITIES
         or opponent_body_visibility not in CHARACTER_BODY_VISIBILITIES
+        or opponent_body_framing not in _OPPONENT_BODY_FRAMINGS
         or effect_overlap not in _EFFECT_COMBATANT_OVERLAPS
         or not isinstance(effect_only_frame, bool)
     ):
         raise _schema_error("combat_visibility_verification_schema_invalid")
-    return opponent_body_visibility, effect_only_frame
+    return opponent_body_visibility, opponent_body_framing, effect_only_frame
 
 
 def _parse_candidate_frame_observations(
