@@ -244,10 +244,10 @@ def test_snapshot_validation_rejects_video_changes_before_cache_commit(
         validate_video_set_snapshot(video_set)
 
 
-def test_snapshot_validation_rejects_same_stat_content_rewrite(
+def test_snapshot_validation_rejects_rewrite_with_restored_mtime(
     tmp_path: Path,
 ) -> None:
-    """stat signatureが維持された内容変更もsnapshot不一致になること。
+    """size・inode・mtimeが維持された内容変更もsnapshot不一致になること。
 
     Arrange:
         - 発見済みvideoと同じsize・inode・mtimeを保つ別内容が用意される
@@ -274,7 +274,8 @@ def test_snapshot_validation_rejects_same_stat_content_rewrite(
         rewritten_stat.st_ino,
         rewritten_stat.st_size,
         rewritten_stat.st_mtime_ns,
-    ) == video_set.sources[0].stat_signature
+    ) == video_set.sources[0].stat_signature[:4]
+    assert rewritten_stat.st_ctime_ns != video_set.sources[0].changed_at_ns
 
     # Act / Assert
     with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):

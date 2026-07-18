@@ -63,6 +63,7 @@ class FakeVideoStageMediaRuntime:
         self.audio_calls: list[tuple[Path, int, int, int]] = []
         self.extracted_frame_calls: list[tuple[Path, int, int, int]] = []
         self.extracted_original_frame_calls: list[tuple[Path, int, int]] = []
+        self.cancel_video_scans_call_count = 0
 
     def preflight(self) -> MediaRuntimeIdentity:
         """固定runtime identityを返す。"""
@@ -172,6 +173,10 @@ class FakeVideoStageMediaRuntime:
             cpu_seconds=self._reported_scan_cpu_seconds,
             decode_pass_count=1,
         )
+
+    def cancel_video_scans(self) -> None:
+        """scan cancellation要求を記録する。"""
+        self.cancel_video_scans_call_count += 1
 
     def scan_video_frame_ranges(
         self,

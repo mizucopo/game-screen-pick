@@ -65,12 +65,13 @@ def _validate_source_content(source: VideoSource, current_path: Path) -> None:
         _raise_snapshot_changed()
 
 
-def _stat_signature(stat: os.stat_result) -> tuple[int, int, int, int]:
+def _stat_signature(stat: os.stat_result) -> tuple[int, int, int, int, int]:
     return (
         stat.st_dev,
         stat.st_ino,
         stat.st_size,
         stat.st_mtime_ns,
+        stat.st_ctime_ns,
     )
 
 

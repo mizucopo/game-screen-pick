@@ -55,6 +55,10 @@ modelの更新確認、download、capability検証とResolved Model Identityのf
 processing cacheを使うexact warmの順に実行する。性能予算超過は処理を途中でkillせず、
 完了後のgate failureにする。
 
+coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
+確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
+full Video Setを再hashしない。fullの独立Video Scanは最大2 workerで先行確定される。
+
 release intervalは全streamをFFmpeg stream copyした`scenario-001.mkv`形式の匿名clipに
 変換する。ffprobeの実測開始、終了、durationがprofileの許容差を超える場合はpipeline前に
 exit 2になる。materialize時間はphase予算に含めない。

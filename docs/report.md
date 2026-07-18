@@ -40,6 +40,6 @@ Spoiler Riskは常時表示しますが、`none`以外の短いevidence summary�
 
 Selection Shortfallはwarning付き正常成果物として選択済みsubsetを公開します。model更新が利用不能でも完全でload可能なlocal artifactを再検査できた場合は、`model_update_unavailable`と対象roleをwarningとして公開します。それ以外のfatal error、schema不正、renderer失敗、成果物不一致ではOutput Folderを公開しません。
 
-publisherはartifact生成前に同じparent内のdirectory renameをprobeし、元動画のsnapshotを開始時と最終rename直前に再検証します。hidden sibling staging内のfileとdirectoryをflushし、schema・画像hash／寸法／path・JSON serialization・Markdown再render・privacy・layoutを検証してから一回だけfinal renameを行い、そのparent directoryもflushします。renameの前後を含む失敗時はstagingとfinal Output Folderを除去します。
+publisherはartifact生成前に同じparent内のdirectory renameをprobeし、元動画のpath・device・inode・size・mtime・ctime snapshotを開始時と最終rename直前に再検証します。hidden sibling staging内のfileとdirectoryをflushし、schema・画像hash／寸法／path・JSON serialization・Markdown再render・privacy・layoutを検証してから一回だけfinal renameを行い、そのparent directoryもflushします。renameの前後を含む失敗時はstagingとfinal Output Folderを除去します。
 
 完全なfield、命名、時刻、near miss、schema evolution、atomic publication契約は[ADR 0005](adr/0005-publish-video-selection-artifacts-atomically.md)を参照してください。

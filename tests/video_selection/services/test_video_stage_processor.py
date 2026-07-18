@@ -1,5 +1,6 @@
 """Video Stage processorの統合style test。"""
 
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -135,10 +136,10 @@ def test_video_stage_progress_follows_video_order_with_monotonic_stage_index(
     )
 
 
-def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
+def test_video_scans_are_prepared_before_ordered_downstream_stages(
     tmp_path: Path,
 ) -> None:
-    """動画が直列処理されpath、順序、downstream設定から独立して再利用されること。
+    """scanが先行確定されdownstreamがVideo Order順に処理されること。
 
     Arrange:
         - 異なる内容を持つ2動画のVideo SetとVideo Stage processorが用意される
@@ -146,7 +147,7 @@ def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
         - 初回処理後に動画をrenameして順序とdownstream設定を変えて再実行される
         - 続いてCandidate Moment Densityだけを変えて再実行される
     Assert:
-        - 各動画がscanからrefinementまでVideo Order順に直列処理されること
+        - 全probeとscanの後にrefinementがVideo Order順で処理されること
         - rename、順序、downstream変更では両Stageが再利用されること
         - density変更ではscanだけが再利用されcandidate抽出だけ再計算されること
         - scene一時画像がCompleted Stageへ永続化されないこと
@@ -170,12 +171,16 @@ def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
     ).process(first_video_set, configuration)
 
     # Assert
-    assert first_runtime.call_order == [
+    assert first_runtime.call_order[:2] == [
         ("probe", "01-first.mp4"),
-        ("scan", "01-first.mp4"),
-        ("refine", "01-first.mp4"),
         ("probe", "02-second.mp4"),
+    ]
+    assert sorted(first_runtime.call_order[2:4]) == [
+        ("scan", "01-first.mp4"),
         ("scan", "02-second.mp4"),
+    ]
+    assert first_runtime.call_order[4:] == [
+        ("refine", "01-first.mp4"),
         ("refine", "02-second.mp4"),
     ]
     assert all(
@@ -243,19 +248,105 @@ def test_video_sources_are_serial_and_video_stage_cache_is_source_local(
     ]
 
 
+def test_two_video_scans_run_concurrently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """独立した2動画のscanがbounded workerで同時実行されること。
+
+    Arrange:
+        - 2 workerを許可するCPU数と2動画が用意される
+        - 両scanの開始を同期するbarrierが用意される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - 2件のscanが同時にactiveになること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "01-first.mp4").write_bytes(b"first-video")
+    (input_folder / "02-second.mp4").write_bytes(b"second-video")
+    barrier = threading.Barrier(2)
+    active_count = 0
+    peak_count = 0
+    count_lock = threading.Lock()
+
+    def synchronize_scans(_path: Path) -> None:
+        nonlocal active_count, peak_count
+        with count_lock:
+            active_count += 1
+            peak_count = max(peak_count, active_count)
+        barrier.wait(timeout=2)
+        with count_lock:
+            active_count -= 1
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        lambda: 24,
+    )
+
+    # Act
+    VideoStageProcessor(
+        FakeVideoStageMediaRuntime(on_scan_video=synchronize_scans),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )
+
+    # Assert
+    assert peak_count == 2
+
+
+def test_interrupt_cancels_active_video_scans(tmp_path: Path) -> None:
+    """scan中のKeyboardInterruptでactive subprocess cancellationが要求されること。
+
+    Arrange:
+        - scan開始時にKeyboardInterruptとなるMedia Runtimeが用意される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - interruptが維持され、active scan cancellationが一度要求されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+
+    def interrupt_scan(_path: Path) -> None:
+        raise KeyboardInterrupt
+
+    runtime = FakeVideoStageMediaRuntime(on_scan_video=interrupt_scan)
+
+    # Act / Assert
+    with pytest.raises(KeyboardInterrupt):
+        VideoStageProcessor(
+            runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(
+            discover_video_set(input_folder),
+            _configuration(input_folder, tmp_path / "output"),
+        )
+    assert runtime.cancel_video_scans_call_count == 1
+
+
 @pytest.mark.parametrize("failure_position", [0, 1, 2])
-def test_completed_video_stages_survive_first_middle_last_video_failure(
+def test_completed_parallel_scans_survive_first_middle_last_video_failure(
     tmp_path: Path,
     failure_position: int,
 ) -> None:
-    """先頭・途中・末尾Videoの失敗後も先行Video Stageが再利用されること。
+    """scan失敗後も並行して正常完了したVideo Scanが再利用されること。
 
     Arrange:
         - 自然順の3動画と指定Videoのscanだけ失敗するMedia Runtimeが用意される
     Act:
         - 失敗runの後に同じVideo Setとcacheで再実行される
     Assert:
-        - 失敗Videoより前は再計算されず、失敗Video以降だけが処理されること
+        - 正常完了したscanは再利用され、未確定scanだけが再計算されること
+        - extractionはretry時にVideo Order順で処理されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
@@ -288,15 +379,13 @@ def test_completed_video_stages_survive_first_middle_last_video_failure(
     ).process(video_set, configuration)
 
     # Assert
-    expected_recomputed = list(video_names[failure_position:])
-    assert [path.name for path in failing_runtime.scan_calls] == list(
-        video_names[: failure_position + 1]
-    )
-    assert [path.name for path in failing_runtime.range_calls] == list(
-        video_names[:failure_position]
-    )
-    assert [path.name for path in retry_runtime.scan_calls] == expected_recomputed
-    assert [path.name for path in retry_runtime.range_calls] == expected_recomputed
+    attempted = {path.name for path in failing_runtime.scan_calls}
+    completed = attempted - {failed_name}
+    expected_scan_recompute = [name for name in video_names if name not in completed]
+    assert failed_name in attempted
+    assert failing_runtime.range_calls == []
+    assert [path.name for path in retry_runtime.scan_calls] == expected_scan_recompute
+    assert [path.name for path in retry_runtime.range_calls] == list(video_names)
     assert len(results) == 3
 
 

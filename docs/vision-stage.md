@@ -45,7 +45,7 @@ response/schema/domain validation retryではstable validation codeだけを追�
 
 ## Completed Stage cache
 
-Scene CatalogはVideo Setごとに一つ、Candidate AnnotationはCandidate Momentごとに一つのatomic Completed Stageです。同じStage Fingerprintの推論はfingerprint lock内で一度だけ実行し、並行workerも最初に確定したartifactを復元します。Vision batch境界ではInput Lock内のpath・statを検査し、publisher開始時の完全SHA-256検査を通るまでoutputを公開しません。一つのAnnotationが最終失敗した場合、最終選定とoutput公開へ進みませんが、それ以前に完了したCatalogとAnnotationは次回runで再利用されます。
+Scene CatalogはVideo Setごとに一つ、Candidate AnnotationはCandidate Momentごとに一つのatomic Completed Stageです。同じStage Fingerprintの推論はfingerprint lock内で一度だけ実行し、並行workerも最初に確定したartifactを復元します。Vision batch境界とpublisher開始時にはInput Lock内のpath・device・inode・size・mtime・ctimeを検査し、snapshot一致を通るまでoutputを公開しません。一つのAnnotationが最終失敗した場合、最終選定とoutput公開へ進みませんが、それ以前に完了したCatalogとAnnotationは次回runで再利用されます。
 
 fingerprintには、順序付きFrame Candidate IDと画像SHA-256、Context Cue ID・正確な範囲・本文SHA-256、Cue選択policy、Scene Catalog fingerprint、Video Set Progress、Selection Intent、Resolved Model Identity、Ollama runtime identity、generation option、prompt/schema/stage/retry versionを含めます。
 

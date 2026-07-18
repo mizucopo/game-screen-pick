@@ -10,8 +10,10 @@ import time
 from collections import deque
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import suppress
 from fractions import Fraction
 from pathlib import Path
+from threading import Lock
 from typing import NoReturn
 
 from ..models.decoded_video_frame import DecodedVideoFrame
@@ -87,6 +89,8 @@ class FfmpegMediaRuntime:
     ) -> None:
         self._ffmpeg_executable = ffmpeg_executable
         self._ffprobe_executable = ffprobe_executable
+        self._active_scan_lock = Lock()
+        self._active_scan_processes: set[subprocess.Popen[str]] = set()
 
     def preflight(self) -> MediaRuntimeIdentity:
         """両toolのversionを解決してidentityを返す。"""
@@ -220,6 +224,7 @@ class FfmpegMediaRuntime:
         heartbeat_metadata: list[tuple[int, int | None, int, int]] = []
         scene_metadata: list[tuple[int, int | None, int, int]] = []
         stderr_tail: deque[str] = deque(maxlen=80)
+        process: subprocess.Popen[str] | None = None
         try:
             process = subprocess.Popen(
                 command,
@@ -227,6 +232,8 @@ class FfmpegMediaRuntime:
                 stderr=subprocess.PIPE,
                 text=True,
             )
+            with self._active_scan_lock:
+                self._active_scan_processes.add(process)
             if process.stderr is None:
                 msg = "FFmpeg scan stderrを開始できません"
                 raise RuntimeError(msg)
@@ -250,6 +257,10 @@ class FfmpegMediaRuntime:
                 MediaRuntimeFailureReason.DECODER_FAILURE,
                 "Video ScanのFFmpeg processを開始できませんでした",
             ) from error
+        finally:
+            if process is not None:
+                with self._active_scan_lock:
+                    self._active_scan_processes.discard(process)
         wall_seconds = time.monotonic() - started_at
         usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
         cpu_seconds = (
@@ -309,6 +320,15 @@ class FfmpegMediaRuntime:
             cpu_seconds=cpu_seconds,
             decode_pass_count=1,
         )
+
+    def cancel_video_scans(self) -> None:
+        """実行中のVideo Scan FFmpeg processへ終了要求を送る。"""
+        with self._active_scan_lock:
+            processes = tuple(self._active_scan_processes)
+        for process in processes:
+            if process.poll() is None:
+                with suppress(OSError):
+                    process.terminate()
 
     def scan_video_frame_ranges(
         self,

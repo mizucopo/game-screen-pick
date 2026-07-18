@@ -13,6 +13,7 @@ class VideoSource:
     fingerprint: str
     size_bytes: int
     modified_at_ns: int
+    changed_at_ns: int
     device: int
     inode: int
 
@@ -33,6 +34,12 @@ class VideoSource:
             raise ValueError(msg)
 
     @property
-    def stat_signature(self) -> tuple[int, int, int, int]:
+    def stat_signature(self) -> tuple[int, int, int, int, int]:
         """実行中の内容変更検知に使う発見時statを返す。"""
-        return (self.device, self.inode, self.size_bytes, self.modified_at_ns)
+        return (
+            self.device,
+            self.inode,
+            self.size_bytes,
+            self.modified_at_ns,
+            self.changed_at_ns,
+        )

@@ -23,7 +23,7 @@ from .validate_canonical_selection_report import (
     validate_canonical_selection_report,
 )
 from .validate_output_folder import validate_output_folder
-from .validate_video_set_snapshot import validate_video_set_snapshot
+from .validate_video_set_snapshot import validate_video_set_snapshot_metadata
 
 PublicationFaultInjector = Callable[[str, Path], None]
 DirectoryRenamer = Callable[[Path, Path], None]
@@ -49,7 +49,7 @@ class CanonicalOutputPublisher:
     ) -> dict[str, object]:
         """WebP、Canonical JSON、Markdownを検証してatomicに公開する。"""
         output_folder = request.configuration.output_folder
-        validate_video_set_snapshot(request.video_set)
+        validate_video_set_snapshot_metadata(request.video_set)
         validate_output_folder(request.video_set.input_folder, output_folder)
         output_folder.parent.mkdir(parents=True, exist_ok=True)
         if output_folder.exists():
@@ -64,7 +64,7 @@ class CanonicalOutputPublisher:
         )
         try:
             report = self._prepare_and_validate(request, staging_folder)
-            validate_video_set_snapshot(request.video_set)
+            validate_video_set_snapshot_metadata(request.video_set)
             self._fault_injector("before-rename", staging_folder)
             if output_folder.exists():
                 raise ValueError("Output Folderが公開前に再作成されました")

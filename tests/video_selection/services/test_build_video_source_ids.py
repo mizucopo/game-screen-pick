@@ -13,6 +13,7 @@ def _source(path: str, fingerprint: str) -> VideoSource:
         fingerprint=fingerprint,
         size_bytes=1,
         modified_at_ns=1,
+        changed_at_ns=1,
         device=1,
         inode=1,
     )

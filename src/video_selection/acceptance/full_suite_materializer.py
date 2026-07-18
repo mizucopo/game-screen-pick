@@ -15,7 +15,7 @@ from .release_suite_materializer import _probe_media
 
 MediaProbe = Callable[[Path], Mapping[str, object]]
 
-_MATERIALIZATION_SCHEMA = "game-screen-pick/full-materialization@1.0.0"
+_MATERIALIZATION_SCHEMA = "game-screen-pick/full-materialization@2.0.0"
 
 
 class FullSuiteMaterializer:
@@ -118,6 +118,7 @@ def _source_snapshot_fingerprint(sources: tuple[Path, ...]) -> str:
                 "inode": stat.st_ino,
                 "size_bytes": stat.st_size,
                 "modified_at_ns": stat.st_mtime_ns,
+                "changed_at_ns": stat.st_ctime_ns,
                 "suffix": source.suffix.casefold(),
             }
         )

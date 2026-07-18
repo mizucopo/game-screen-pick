@@ -1,8 +1,11 @@
-"""Video Sourceを2つのVideo Stageへ直列で通す。"""
+"""Video Sourceのscanを先行確定し3つのVideo Stageを組み立てる。"""
 
+import os
 import resource
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -13,6 +16,7 @@ from ..models.frame_candidate_extraction import FrameCandidateExtraction
 from ..models.frame_candidate_extraction_metrics import (
     FrameCandidateExtractionMetrics,
 )
+from ..models.media_probe import MediaProbe
 from ..models.media_runtime_identity import MediaRuntimeIdentity
 from ..models.media_stream import MediaStream
 from ..models.processing_stage import VIDEO_STAGE_ORDER, ProcessingStage
@@ -28,7 +32,9 @@ from .analyze_neutral_images import (
     NEUTRAL_ANALYSIS_ALGORITHM_VERSION,
 )
 from .build_refinement_pts_ranges import build_refinement_pts_ranges
+from .build_stage_fingerprint import build_stage_fingerprint
 from .build_video_scan_result import build_video_scan_result
+from .completed_stage_writer import CompletedStageWriter
 from .context_stage_processor import ContextStageProcessor
 from .discover_candidate_moments import discover_candidate_moments
 from .processing_stage_runner import ProcessingStageRunner
@@ -55,10 +61,15 @@ _CONTENT_REJECT_VERSION = "content-reject-v2"
 _DEDUPE_VERSION = "grayscale-64x36-mad-2-v1"
 _ENTITY_ID_VERSION = "video-entity-id-v1"
 _CANDIDATE_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
+_MAX_VIDEO_SCAN_WORKERS = 2
+_LOGICAL_CPUS_PER_VIDEO_SCAN_WORKER = 8
+
+PreparedVideoScan = tuple[bool, float]
+ProbedVideoSource = tuple[VideoSource, MediaProbe, MediaStream]
 
 
 class VideoStageProcessor:
-    """Video Order順にsource-localな3つのVideo Stageを確定する。"""
+    """scanをbounded並列化しsource-localな3 Stageを順序付きで確定する。"""
 
     def __init__(
         self,
@@ -83,15 +94,32 @@ class VideoStageProcessor:
         video_set: VideoSet,
         configuration: EffectiveConfiguration,
     ) -> tuple[VideoStageResult, ...]:
-        """各Video Sourceをscanからcontext収集まで直列処理する。"""
+        """scanを先行確定し各Video SourceをVideo Order順に組み立てる。"""
         validate_video_set_snapshot_metadata(video_set)
         runtime_identity = self._media_runtime.preflight()
+        probed_sources: list[ProbedVideoSource] = []
+        for source in video_set.sources:
+            validate_video_set_snapshot_metadata(video_set)
+            probe = self._media_runtime.probe(source.path)
+            probed_sources.append((source, probe, select_primary_video_stream(probe)))
+        prepared_scans = self._prepare_scans(
+            video_set,
+            tuple(probed_sources),
+            configuration,
+            runtime_identity,
+        )
         results: list[VideoStageResult] = []
-        for video_order, source in enumerate(video_set.sources, start=1):
+        for video_order, (source, probe, primary_stream) in enumerate(
+            probed_sources,
+            start=1,
+        ):
             results.append(
                 self._process_source(
                     video_set,
                     source,
+                    probe,
+                    primary_stream,
+                    prepared_scans[source.fingerprint],
                     video_order,
                     configuration,
                     runtime_identity,
@@ -103,14 +131,15 @@ class VideoStageProcessor:
         self,
         video_set: VideoSet,
         source: VideoSource,
+        probe: MediaProbe,
+        primary_stream: MediaStream,
+        prepared_scan: PreparedVideoScan,
         video_order: int,
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
     ) -> VideoStageResult:
         """一つのVideo Sourceの3 Stageを確定または再利用する。"""
         validate_video_set_snapshot_metadata(video_set)
-        probe = self._media_runtime.probe(source.path)
-        primary_stream = select_primary_video_stream(probe)
         runner = ProcessingStageRunner(
             configuration.processing_cache_folder,
             self._observer,
@@ -130,18 +159,12 @@ class VideoStageProcessor:
             runtime_identity,
             configuration,
         )
-        scan_bundle = runner.reuse_bundle(ProcessingStage.SCAN_VIDEO, scan_input)
-        if scan_bundle is None:
-            scan_bundle = runner.complete_artifacts(
-                ProcessingStage.SCAN_VIDEO,
-                scan_input,
-                lambda stage_root: self._produce_scan_artifact(
-                    source,
-                    primary_stream,
-                    configuration,
-                    stage_root,
-                ),
-            )
+        scan_bundle = runner.adopt_prepared_bundle(
+            ProcessingStage.SCAN_VIDEO,
+            scan_input,
+            reused=prepared_scan[0],
+            duration_seconds=prepared_scan[1],
+        )
         scan = restore_video_scan(scan_bundle.artifact, scan_bundle.root)
         discovery = discover_candidate_moments(
             video_fingerprint=source.fingerprint,
@@ -197,6 +220,102 @@ class VideoStageProcessor:
             context=context,
             completed_stages=(*runner.completed_stages, context.completed_stage),
         )
+
+    def _prepare_scans(
+        self,
+        video_set: VideoSet,
+        probed_sources: tuple[ProbedVideoSource, ...],
+        configuration: EffectiveConfiguration,
+        runtime_identity: MediaRuntimeIdentity,
+    ) -> dict[str, PreparedVideoScan]:
+        """source-local scanをbounded並列でCompleted Stageへ先行確定する。"""
+        worker_count = _video_scan_worker_count(len(probed_sources))
+
+        def prepare(item: ProbedVideoSource) -> PreparedVideoScan:
+            source, _probe, primary_stream = item
+            return self._prepare_scan(
+                source,
+                primary_stream,
+                configuration,
+                runtime_identity,
+            )
+
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="video-scan",
+        ) as executor:
+            try:
+                prepared = tuple(executor.map(prepare, probed_sources))
+            except KeyboardInterrupt:
+                with suppress(Exception):
+                    self._media_runtime.cancel_video_scans()
+                raise
+        validate_video_set_snapshot_metadata(video_set)
+        return {
+            source.fingerprint: result
+            for (source, _probe, _primary_stream), result in zip(
+                probed_sources,
+                prepared,
+                strict=True,
+            )
+        }
+
+    def _prepare_scan(
+        self,
+        source: VideoSource,
+        primary_stream: MediaStream,
+        configuration: EffectiveConfiguration,
+        runtime_identity: MediaRuntimeIdentity,
+    ) -> PreparedVideoScan:
+        """一つのscan cacheを再利用またはatomic確定してdispositionを返す。"""
+        semantic_input = _scan_semantic_input(
+            source,
+            primary_stream,
+            runtime_identity,
+            configuration,
+        )
+        fingerprint = build_stage_fingerprint(
+            ProcessingStage.SCAN_VIDEO,
+            (),
+            semantic_input,
+        )
+        writer = CompletedStageWriter(
+            configuration.processing_cache_folder,
+            subject_namespace="videos",
+            subject_fingerprint=source.fingerprint,
+        )
+        started_at = time.monotonic()
+        bundle = writer.read_bundle(
+            ProcessingStage.SCAN_VIDEO,
+            fingerprint,
+            (),
+            semantic_input,
+        )
+        reused = bundle is not None
+        if bundle is None:
+            writer.write_artifacts(
+                ProcessingStage.SCAN_VIDEO,
+                fingerprint,
+                (),
+                semantic_input,
+                lambda stage_root: self._produce_scan_artifact(
+                    source,
+                    primary_stream,
+                    configuration,
+                    stage_root,
+                ),
+            )
+            bundle = writer.read_bundle(
+                ProcessingStage.SCAN_VIDEO,
+                fingerprint,
+                (),
+                semantic_input,
+            )
+        if bundle is None:
+            msg = "先行確定したVideo Scan artifactを検証できませんでした"
+            raise RuntimeError(msg)
+        duration_seconds = max(time.monotonic() - started_at, 1e-9)
+        return (reused, duration_seconds)
 
     def _produce_scan_artifact(
         self,
@@ -386,6 +505,13 @@ def _fraction_value(value: Fraction | None) -> dict[str, int] | None:
     if value is None:
         return None
     return {"numerator": value.numerator, "denominator": value.denominator}
+
+
+def _video_scan_worker_count(video_count: int) -> int:
+    """CPU scanを過剰subscribeしないbounded worker数を返す。"""
+    logical_cpus = os.cpu_count() or 1
+    cpu_workers = max(1, logical_cpus // _LOGICAL_CPUS_PER_VIDEO_SCAN_WORKER)
+    return min(video_count, _MAX_VIDEO_SCAN_WORKERS, cpu_workers)
 
 
 def _stage_cpu_seconds() -> float:

@@ -335,6 +335,7 @@ def _stage_result(
         fingerprint=digest * 64,
         size_bytes=1,
         modified_at_ns=1,
+        changed_at_ns=1,
         device=1,
         inode=int(digest),
     )

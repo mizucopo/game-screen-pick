@@ -46,7 +46,8 @@ from ..services.select_video_set_images import (
     select_video_set_images,
 )
 from ..services.validate_output_folder import validate_output_folder
-from ..services.validate_video_set_snapshot import validate_video_set_snapshot
+from ..services.validate_video_set_snapshot import validate_video_set_snapshot_metadata
+from ..services.video_identity_cache import VideoIdentityCache
 from ..services.video_set_vision_processor import VideoSetVisionProcessor
 from ..services.video_stage_processor import VideoStageProcessor
 
@@ -77,18 +78,22 @@ class VideoSelectionApplication:
     def run(self, configuration: EffectiveConfiguration) -> RunOutcome:
         """実Video Selection pipelineを実行しatomic outputを公開する。"""
         _validate_configuration_paths(configuration)
+        identity_cache = VideoIdentityCache(configuration.processing_cache_folder)
         video_set = discover_video_set(
             configuration.video_input_folder,
             recursive=configuration.recursive,
+            identity_cache=None if configuration.reset_cache else identity_cache,
         )
         with InputFolderLock(configuration.video_input_folder) as input_lock:
-            validate_video_set_snapshot(video_set)
+            validate_video_set_snapshot_metadata(video_set)
             diagnostic = prepare_processing_cache(
                 configuration.processing_cache_folder,
                 input_lock=input_lock,
                 reset_cache=configuration.reset_cache,
             )
             self._observer.legacy_cache_cleaned(diagnostic)
+            for source in video_set.sources:
+                identity_cache.store(source)
             resolved_models = self._model_runtime.resolve_models(configuration)
             speech_runtime = self._speech_runtime_factory(
                 resolved_models.for_role(ModelRole.SPEECH_TO_TEXT),

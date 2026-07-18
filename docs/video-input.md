@@ -38,10 +38,10 @@ game-screen-pick [OPTIONS] <VIDEO_INPUT_FOLDER> <OUTPUT_FOLDER>
 - 既定ではroot直下だけを探索し、recursive時だけ子directoryを探索します。
 - directory symlinkは辿りません。対応拡張子を持つfile symlinkは許可し、link先の内容を処理します。
 - Video Orderは入力rootからの正規化済み相対pathの自然順です。mtimeやfilesystem列挙順は使いません。
-- Video Identityはfile全体のSHA-256で決まります。renameやmtime変更では変わらず、内容変更時だけ変わります。
+- Video Identityはfile全体のSHA-256で決まります。renameやmtime変更では変わらず、内容変更時だけ変わります。cache missではstat-content-statの順に全体を読み、確定後はpathを含まないVideo Identity cacheへ保存します。
 - Video Set FingerprintはVideo OrderどおりのVideo Fingerprint列から決まり、input rootや設定値を含みません。
 - 対応動画0本、壊れた動画、同一内容の重複動画は、cacheやoutputを作る前に実行全体を失敗させます。
-- 発見後にpath、内容、size、mtime、inodeが変化した場合はsnapshot不一致としてrunを中止します。全体内容はInput Lock取得直後とpublisherのstaging開始時・final rename直前に完全SHA-256で検査し、その間のmedia probe、各Video Stage、Vision batch境界ではpathとstatを軽量検査します。Input Lock内のStageごとに同じ全fileを再hashしません。
+- 発見後にpath、size、mtime、ctime、inodeが変化した場合はsnapshot不一致としてrunを中止します。Video Identity cacheはdevice、inode、size、mtime、ctimeが完全一致する場合だけwhole-file SHA-256を再利用し、通常の内容書換えやmtime復元もctime変更によりcache missにします。Input Lock取得後、media probe、各Video Stage、Vision batch、publisherのstaging開始時・final rename直前は同じmetadataを検査し、同じ大容量fileをStageごとに再hashしません。`--reset-cache`ではidentityも再計算されます。
 
 入力と出力は同一pathにも相互の親子にもできません。`OUTPUT_FOLDER`は存在しないか空である必要があり、途中処理や再開には使いません。
 

@@ -62,17 +62,18 @@ PRでは通常quality checkと別のUbuntu 24.04 jobとして実行されます�
 
 ## processing cache基盤
 
-Input Lockは`<VIDEO_INPUT_FOLDER>/.game-screen-pick/input.lock`でVideo Input Folder単位に取得します。待機queueは作らず、同じinputの別runが保持中なら即時に失敗します。lockはVideo Set snapshotの非破壊検査後から、cache準備、全Processing Stage、Output Folder公開の終了まで保持します。lock取得直後と公開直前はVideo Set全体のpath・stat・内容を検査し、各Video Sourceのmedia probe前と各Video Stage直前は全体のpath・statと対象Video Sourceの内容を検査します。これにより変更済み動画をprobeせず拒否しつつ、Stageごとに全動画を再hashする二乗I/Oを避けます。
+Input Lockは`<VIDEO_INPUT_FOLDER>/.game-screen-pick/input.lock`でVideo Input Folder単位に取得します。待機queueは作らず、同じinputの別runが保持中なら即時に失敗します。lockはVideo Set discovery後から、cache準備、全Processing Stage、Output Folder公開の終了まで保持します。cache missのVideo Identityはstat-content-statでwhole-file SHA-256を計算し、lock取得後にpath非依存cacheへatomic保存します。同じdevice・inode・size・mtime・ctimeではidentityを再利用し、lock取得直後、media probe、各Stage、Vision batch、publisher前後でmetadataを再検査します。これにより通常の書換えを拒否しつつ、1 TiB級Video Setをexact warmで再hashしません。
 
 processing cacheはcontent-addressedな次のnamespaceを使います。
 
 ```text
 <VIDEO_INPUT_FOLDER>/.game-screen-pick/cache/
+├── video-identities/<STAT_SIGNATURE_SHA256>.json
 ├── videos/<VIDEO_FINGERPRINT>/<STAGE>/<STAGE_FINGERPRINT>/
 └── video-sets/<VIDEO_SET_FINGERPRINT>/<STAGE>/<STAGE_FINGERPRINT>/
 ```
 
-各Stage folderには`artifact.json`と`manifest.json`を置きます。manifestはschema、Stageとsubjectの完全fingerprint、上流fingerprint、Stage固有の正規化済み入力、artifactの相対path・byte数・SHA-256、timezone付き完了日時を保持し、absolute pathを含みません。artifactを書いた後にmanifestを作り、temporary directoryをrenameして一括公開します。manifestまたはartifactが欠ける、hashやmetadataが一致しない、symlinkであるなどのpartial・破損Stageはcache hitにせず再計算します。
+Video Identity entryはstat signatureとwhole-file SHA-256だけを保持し、absolute/relative pathやvideo名を含みません。各Stage folderには`artifact.json`と`manifest.json`を置きます。manifestはschema、Stageとsubjectの完全fingerprint、上流fingerprint、Stage固有の正規化済み入力、artifactの相対path・byte数・SHA-256、timezone付き完了日時を保持し、absolute pathを含みません。artifactを書いた後にmanifestを作り、temporary directoryをrenameして一括公開します。manifestまたはartifactが欠ける、hashやmetadataが一致しない、symlinkであるなどのpartial・破損Stageはcache hitにせず再計算します。
 
 通常実行ではcacheの書込検査とInput Lock取得後に、認識済みLegacy Cacheの`neutral-analysis/`と`ollama-scenes.json`だけを自動削除します。削除件数と内容byte数をstructured diagnosticへ記録し、削除失敗はfatalです。新しい`videos/`、`video-sets/`、未知のentry、Output Folder、model storeは保持します。Legacy Cacheを変換または再利用する互換layerはありません。
 

@@ -183,6 +183,39 @@ class ProcessingStageRunner:
         )
         return bundle
 
+    def adopt_prepared_bundle(
+        self,
+        stage: ProcessingStage,
+        semantic_input: Mapping[str, object],
+        *,
+        reused: bool,
+        duration_seconds: float,
+        upstream_stages: tuple[ProcessingStage, ...] | None = None,
+    ) -> CompletedStageBundle:
+        """先行確定されたbundleを実際のdispositionと時間で完了扱いにする。"""
+        upstream_fingerprints, fingerprint = self._prepare_stage(
+            stage,
+            semantic_input,
+            upstream_stages,
+        )
+        bundle = self._writer.read_bundle(
+            stage,
+            fingerprint,
+            upstream_fingerprints,
+            semantic_input,
+        )
+        if bundle is None:
+            msg = "先行確定されたCompleted Stage artifactを検証できませんでした"
+            raise RuntimeError(msg)
+        if not reused:
+            self._record_cache_miss()
+        self._record_completion(
+            CompletedStage(stage=stage, fingerprint=fingerprint),
+            reused=reused,
+            duration_seconds=duration_seconds,
+        )
+        return bundle
+
     def _prepare_stage(
         self,
         stage: ProcessingStage,
@@ -240,10 +273,14 @@ class ProcessingStageRunner:
         completed_stage: CompletedStage,
         *,
         reused: bool,
+        duration_seconds: float | None = None,
     ) -> None:
         """Stage完了をrun stateへ追加して通知する。"""
         if self._progress is not None:
-            self._progress.record_work_sample("reuse" if reused else "recompute")
+            self._progress.record_work_sample(
+                "reuse" if reused else "recompute",
+                duration_seconds,
+            )
             self._progress.cache_observed(
                 cache_hit_count=1 if reused else 0,
                 cache_miss_count=0 if reused else 1,
@@ -251,7 +288,7 @@ class ProcessingStageRunner:
                 recompute_count=0 if reused else 1,
                 reason_code="cache_reused" if reused else "stage_recomputed",
             )
-            self._progress.complete_stage()
+            self._progress.complete_stage(duration_seconds)
             self._progress_stage = None
             self._cache_miss_observed = False
         self._completed_stages.append(completed_stage)

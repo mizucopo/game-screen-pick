@@ -35,6 +35,9 @@ class VideoStageMediaRuntime(Protocol):
     ) -> NativeVideoScan:
         """一回のdecodeからVideo Scan artifactを返す。"""
 
+    def cancel_video_scans(self) -> None:
+        """実行中のVideo Scan subprocessを終了させる。"""
+
     def scan_video_frame_ranges(
         self,
         media_path: Path,

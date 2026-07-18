@@ -174,12 +174,14 @@ class RunProgressTracker:
             )
         )
 
-    def complete_stage(self) -> None:
+    def complete_stage(self, duration_seconds: float | None = None) -> None:
         """active Stageを完了して次のStage開始を許可する。"""
         event = self._stage_event(
             kind="stage_completed",
             reason_code="stage_completed",
-            elapsed_seconds=self._stage_elapsed(),
+            elapsed_seconds=(
+                self._stage_elapsed() if duration_seconds is None else duration_seconds
+            ),
         )
         self._observer.observe(event)
         self._clear_active_stage()

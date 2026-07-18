@@ -53,6 +53,9 @@ class MediaRuntime(Protocol):
     ) -> NativeVideoScan:
         """一回のdecodeからheartbeat、scene、timeline端点を返す。"""
 
+    def cancel_video_scans(self) -> None:
+        """実行中のVideo Scan subprocessを終了させる。"""
+
     def extract_video_frame(
         self,
         media_path: Path,
