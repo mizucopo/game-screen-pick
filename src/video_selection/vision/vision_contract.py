@@ -15,7 +15,7 @@ SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v4"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v2"
 CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v2"
-RETRY_POLICY_VERSION = "ollama-retry-v2"
+RETRY_POLICY_VERSION = "ollama-retry-v3"
 
 SCENE_CATALOG_SCHEMA: dict[str, object] = {
     "type": "object",

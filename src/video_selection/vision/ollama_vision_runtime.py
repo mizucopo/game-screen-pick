@@ -473,6 +473,14 @@ def _with_repair_code(
     messages = cast(list[dict[str, object]], copied["messages"])
     content = cast(str, messages[0]["content"])
     repair = f"前回の出力を修正してください。validation_code={validation_code}"
+    if validation_code == "candidate_annotation_relationship_invalid":
+        repair += (
+            "\n関係を必ず修正します。spoiler_riskがnoneならspoiler_evidenceは"
+            "空文字列、low・medium・highならspoiler_evidenceは画面から判断した"
+            "根拠を1文以上記述します。context_relevanceがnoneまたはunavailable"
+            "ならsupporting_context_cue_idsは空配列、weakまたはstrongなら入力内IDを"
+            "1件以上入れます。"
+        )
     messages[0]["content"] = f"{content}\n{repair}"
     return copied
 

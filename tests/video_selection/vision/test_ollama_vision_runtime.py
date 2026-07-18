@@ -1089,6 +1089,8 @@ def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> 
     assert "context_cuesが空ならcontext_relevanceはunavailable" in first_prompt
     assert "spoiler_riskがnoneならspoiler_evidenceは空文字列" in first_prompt
     assert "candidate_annotation_relationship_invalid" in second_prompt
+    assert "関係を必ず修正します" in second_prompt
+    assert "low・medium・highならspoiler_evidenceは" in second_prompt
 
 
 def test_candidate_without_context_rejects_none_relevance() -> None:

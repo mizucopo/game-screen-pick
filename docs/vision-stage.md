@@ -43,7 +43,7 @@ Quality Score、model confidence、final score、soft coverage、eligible/select
 
 同じsemantic入力で初回と一回のretryだけを行います。timeout、connection failure、HTTP 408/429/5xx、空・打ち切り応答、schema/domain validation failureがretry対象です。このHTTP分類は推論前の`/api/tags`確認にも適用します。429の`Retry-After`は秒数とHTTP-dateの両形式を解釈して最大30秒まで尊重し、その他は1秒待ちます。
 
-response/schema/domain validation retryではstable validation codeだけを追加し、raw responseを次promptへ戻しません。Cue逐語一致は再推論へ依存せずfield単位で決定的に安全化し、diagnosticsへ`candidate_annotation_verbatim_context_redacted`を記録します。model出力が存在しないtransport retryでは元のpromptを変更しません。画像、Context Cue、Catalogを削る、代表画像を減らす、`other`へfallbackする、失敗したCandidateを黙って除外する処理は行いません。model不在と408/429以外のHTTP 4xxは即時fatalです。
+response/schema/domain validation retryではstable validation codeを追加し、raw responseを次promptへ戻しません。Candidate Annotationの関係違反では、Context Cue参照とSpoiler Evidenceの条件をstable validation codeから決まる修正指示として再提示します。Cue逐語一致は再推論へ依存せずfield単位で決定的に安全化し、diagnosticsへ`candidate_annotation_verbatim_context_redacted`を記録します。model出力が存在しないtransport retryでは元のpromptを変更しません。画像、Context Cue、Catalogを削る、代表画像を減らす、`other`へfallbackする、失敗したCandidateを黙って除外する処理は行いません。model不在と408/429以外のHTTP 4xxは即時fatalです。
 
 ## Completed Stage cache
 
