@@ -42,10 +42,7 @@ from .completed_stage_writer import CompletedStageWriter
 from .external_work_monitor import ExternalWorkMonitor
 from .run_progress_tracker import RunProgressTracker
 from .snapshot_frame_candidates import snapshot_frame_candidates
-from .validate_video_set_snapshot import (
-    validate_video_set_snapshot,
-    validate_video_set_snapshot_metadata,
-)
+from .validate_video_set_snapshot import validate_video_set_snapshot_metadata
 from .vision_stage_artifacts import (
     restore_candidate_annotation,
     restore_scene_catalog,
@@ -101,7 +98,7 @@ class VideoSetVisionProcessor:
             selection_intent=selection_intent,
             scene_hint=configuration.scene_hint,
         )
-        validate_video_set_snapshot(video_set)
+        validate_video_set_snapshot_metadata(video_set)
         catalog, catalog_diagnostics, catalog_stage = self._catalog_stage(
             writer,
             video_set,
@@ -134,7 +131,7 @@ class VideoSetVisionProcessor:
             annotation_diagnostics=tuple(annotation_diagnostics),
             completed_stages=tuple(completed_stages),
         )
-        validate_video_set_snapshot(video_set)
+        validate_video_set_snapshot_metadata(video_set)
         return result
 
     def _catalog_stage(

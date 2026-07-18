@@ -1,6 +1,5 @@
 """Video Stage processorの統合style test。"""
 
-import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -346,18 +345,18 @@ def test_corrupt_candidate_proxy_recomputes_only_candidate_stage(
     assert repaired_proxy_path.read_bytes() != b"corrupt-proxy"
 
 
-def test_same_stat_change_is_checked_when_affected_source_reaches_video_stage(
+def test_metadata_change_is_checked_before_video_stage(
     tmp_path: Path,
 ) -> None:
-    """対象外sourceの同一stat変更が、そのsourceのprobe前に検知されること。
+    """Video Setのmetadata変更が最初のsourceのprobe前に検知されること。
 
     Arrange:
         - 異なる内容を持つ2動画の発見済みVideo Setが用意される
-        - initial validation後に2本目だけが同一statの別内容へ変更される
+        - initial validation後に2本目の内容とmetadataが変更される
     Act:
         - Video Stage処理がVideo Order順に実行される
     Assert:
-        - 1本目の両Stageは完了し、2本目のprobe前で変更が拒否されること
+        - 最初のsourceのprobe前に変更が拒否されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
@@ -368,14 +367,9 @@ def test_same_stat_change_is_checked_when_affected_source_reaches_video_stage(
     second_path.write_bytes(b"second-video")
     configuration = _configuration(input_folder, tmp_path / "output")
     video_set = discover_video_set(input_folder)
-    original_stat = second_path.stat()
 
     def rewrite_second_source() -> None:
-        second_path.write_bytes(b"x" * original_stat.st_size)
-        os.utime(
-            second_path,
-            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
-        )
+        second_path.write_bytes(b"changed-second-video")
 
     runtime = FakeVideoStageMediaRuntime(on_preflight=rewrite_second_source)
 
@@ -389,11 +383,7 @@ def test_same_stat_change_is_checked_when_affected_source_reaches_video_stage(
             video_set,
             configuration,
         )
-    assert runtime.call_order == [
-        ("probe", "01-first.mp4"),
-        ("scan", "01-first.mp4"),
-        ("refine", "01-first.mp4"),
-    ]
+    assert runtime.call_order == []
 
 
 def test_refinement_is_streamed_between_distant_moment_groups(

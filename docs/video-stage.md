@@ -4,7 +4,7 @@
 
 ## Processing Stage
 
-Video Set内の動画はVideo Order順に直列処理されます。各sourceはmedia probeより前にsnapshotが検査され、各Video Identityには次の3つのCompleted Stageが作られます。
+Video Set内の動画はVideo Order順に直列処理されます。各sourceはmedia probeより前と各Stage境界でpath・stat snapshotが検査され、各Video Identityには次の3つのCompleted Stageが作られます。内容の完全SHA-256はInput Lock取得直後とpublisher前後でVideo Set全体を検査します。
 
 1. `scan-video`
    - `attached_pic`を除外し、default disposition、stream indexの順でPrimary Video Streamを決めます。

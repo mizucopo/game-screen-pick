@@ -1,6 +1,7 @@
 """Canonical Selection Reportとatomic publicationのtest。"""
 
 import json
+import os
 from copy import deepcopy
 from dataclasses import replace
 from fractions import Fraction
@@ -582,11 +583,13 @@ def test_atomic_rename_unavailable_fails_before_frame_extraction(
     assert not request.configuration.output_folder.exists()
 
 
-def test_video_set_change_before_rename_discards_staging(tmp_path: Path) -> None:
-    """frame抽出後のVideo Set変更がfinal rename前に検知されること。
+def test_same_stat_video_set_change_before_rename_discards_staging(
+    tmp_path: Path,
+) -> None:
+    """frame抽出後の同一stat内容変更がfinal rename前に検知されること。
 
     Arrange:
-        - validation checkpointでsource videoを書き換えるfaultが用意される
+        - validation checkpointでsize、inode、mtimeを保って書き換えるfaultが用意される
     Act:
         - Canonical Output Publisherが実行される
     Assert:
@@ -595,10 +598,16 @@ def test_video_set_change_before_rename_discards_staging(tmp_path: Path) -> None
     """
     # Arrange
     request = build_canonical_publication_request(tmp_path)
+    source_path = request.video_set.sources[0].path
+    original_stat = source_path.stat()
 
     def mutate_source(actual: str, _staging_folder: Path) -> None:
         if actual == "before-validation":
-            request.video_set.sources[0].path.write_bytes(b"changed-video")
+            source_path.write_bytes(b"x" * original_stat.st_size)
+            os.utime(
+                source_path,
+                ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+            )
 
     # Act / Assert
     with pytest.raises(ValueError, match="Video Set snapshotが変更"):

@@ -37,7 +37,7 @@ from .processing_stage_runner import ProcessingStageRunner
 from .run_progress_tracker import RunProgressTracker
 from .select_context_audio_stream import select_context_audio_stream
 from .select_context_subtitle_stream import select_context_subtitle_stream
-from .validate_video_set_snapshot import validate_video_source_snapshot
+from .validate_video_set_snapshot import validate_video_set_snapshot_metadata
 
 
 class ContextStageProcessor:
@@ -101,7 +101,7 @@ class ContextStageProcessor:
             self._observer,
             subject_namespace="videos",
             subject_fingerprint=source.fingerprint,
-            before_stage=lambda: validate_video_source_snapshot(video_set, source),
+            before_stage=lambda: validate_video_set_snapshot_metadata(video_set),
             stage_order=(ProcessingStage.COLLECT_CONTEXT,),
             progress=self._progress,
             video_order=video_set.sources.index(source) + 1,

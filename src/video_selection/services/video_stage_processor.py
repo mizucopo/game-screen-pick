@@ -38,10 +38,7 @@ from .refine_candidate_moments import (
 )
 from .run_progress_tracker import RunProgressTracker
 from .select_primary_video_stream import select_primary_video_stream
-from .validate_video_set_snapshot import (
-    validate_video_set_snapshot,
-    validate_video_source_snapshot,
-)
+from .validate_video_set_snapshot import validate_video_set_snapshot_metadata
 from .video_stage_artifacts import (
     restore_frame_candidate_extraction,
     restore_video_scan,
@@ -87,7 +84,7 @@ class VideoStageProcessor:
         configuration: EffectiveConfiguration,
     ) -> tuple[VideoStageResult, ...]:
         """各Video Sourceをscanからcontext収集まで直列処理する。"""
-        validate_video_set_snapshot(video_set)
+        validate_video_set_snapshot_metadata(video_set)
         runtime_identity = self._media_runtime.preflight()
         results: list[VideoStageResult] = []
         for video_order, source in enumerate(video_set.sources, start=1):
@@ -111,7 +108,7 @@ class VideoStageProcessor:
         runtime_identity: MediaRuntimeIdentity,
     ) -> VideoStageResult:
         """一つのVideo Sourceの3 Stageを確定または再利用する。"""
-        validate_video_source_snapshot(video_set, source)
+        validate_video_set_snapshot_metadata(video_set)
         probe = self._media_runtime.probe(source.path)
         primary_stream = select_primary_video_stream(probe)
         runner = ProcessingStageRunner(
@@ -119,7 +116,7 @@ class VideoStageProcessor:
             self._observer,
             subject_namespace="videos",
             subject_fingerprint=source.fingerprint,
-            before_stage=lambda: validate_video_source_snapshot(video_set, source),
+            before_stage=lambda: validate_video_set_snapshot_metadata(video_set),
             stage_order=VIDEO_STAGE_ORDER,
             progress=self._progress,
             video_order=video_order,

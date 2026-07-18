@@ -1,4 +1,3 @@
-import os
 import threading
 from fractions import Fraction
 from pathlib import Path
@@ -109,13 +108,13 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     assert '"reasoning"' not in cache_text
 
 
-def test_batch_boundary_rejects_same_stat_content_change_after_annotation(
+def test_batch_boundary_rejects_metadata_change_after_annotation(
     tmp_path: Path,
 ) -> None:
-    """Annotation中の同一stat内容変更がbatch完了時に拒否されること。
+    """Annotation中のmetadata変更がbatch完了時に拒否されること。
 
     Arrange:
-        - 発見時のsize、inode、mtimeを維持して内容を書き換えるruntimeが用意される
+        - Annotation中にsource内容とmetadataを書き換えるruntimeが用意される
     Act:
         - 一つのCandidate Annotation batchが処理される
     Assert:
@@ -125,14 +124,9 @@ def test_batch_boundary_rejects_same_stat_content_change_after_annotation(
     video_set, configuration = _video_set_and_configuration(tmp_path)
     request = _requests()[0]
     source_path = video_set.sources[0].path
-    original_stat = source_path.stat()
 
     def mutate_source() -> None:
-        source_path.write_bytes(b"mutated-video")
-        os.utime(
-            source_path,
-            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
-        )
+        source_path.write_bytes(b"mutated-video-with-new-size")
 
     runtime = FakeStructuredVisionRuntime(
         _catalog(),
