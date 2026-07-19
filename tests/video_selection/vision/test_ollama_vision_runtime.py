@@ -211,6 +211,8 @@ def test_scene_catalog_uses_strict_documented_ollama_request() -> None:
     prompt = messages[0]["content"]
     assert isinstance(prompt, str)
     assert "scene_kindはcombat=" in prompt
+    assert "scene_kindは複数sceneで重複して構いません" in prompt
+    assert "slugはcatalog内で一意にします" in prompt
     assert "recurring_gameplay=" in prompt
     assert "同じ画面構造を一時的な敵やエフェクトだけで別sceneへ分割しません" in prompt
 
@@ -273,6 +275,64 @@ def test_schema_failure_is_retried_once_with_stable_code() -> None:
     assert isinstance(second_prompt, str)
     assert "scene_catalog_schema_invalid" in second_prompt
     assert "secret chain of thought" not in second_prompt
+
+
+def test_duplicate_scene_slug_is_repaired_with_explicit_contract() -> None:
+    """重複Scene Slugが一意性の修復指示付きで再試行されること。
+
+    Arrange:
+        - 初回だけScene Kindをslugとして重複させたCatalog応答が用意される
+    Act:
+        - Scene Catalog推論が実行される
+    Assert:
+        - Scene Kindの重複を許しつつslugを一意にする指示で修復されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _catalog_payload()
+        if len(payloads) == 1:
+            scenes = response["scenes"]
+            assert isinstance(scenes, list)
+            second_scene = scenes[1]
+            assert isinstance(second_scene, dict)
+            second_scene["slug"] = "exploration"
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    catalog, diagnostics = runtime.create_scene_catalog(
+        SceneCatalogRequest(
+            representatives=(FrameCandidate("frame-a", b"image-a"),),
+            selection_intent="ブログ画像を分類する",
+        ),
+        _resolved_model(ModelRole.SCENE_CATALOG),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert catalog.slugs == ("exploration", "battle", "other")
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "scene_catalog_domain_invalid"
+    second_prompt = _first_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "scene_kindは重複可能" in second_prompt
+    assert "一意なslug" in second_prompt
 
 
 def test_truncated_response_is_retried_before_success() -> None:

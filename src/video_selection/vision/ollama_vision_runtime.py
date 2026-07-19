@@ -250,6 +250,9 @@ _SCENE_CATALOG_SEMANTICS = (
     "interface=menu・map・shop・save・tutorial・document・title、"
     "event=会話・cutscene・物語event、other=どれにも該当しない場面です。"
     "slug=otherのscene_kindは必ずotherにします。"
+    "scene_kindは複数sceneで重複して構いませんが、slugはcatalog内で一意にします。"
+    "同じscene_kindのsceneを複数作る場合は、battle・boss-battle、shop・mapのように"
+    "視覚的・説明上の役割を区別する一意なslugを付けます。"
     "selection_roleはordinary=通常の単発scene、cinematic=会話・演出・eventが主体、"
     "recurring_gameplay=戦闘UI・探索・puzzleなど繰り返し現れるplay構造です。"
     "同じ画面構造を一時的な敵やエフェクトだけで別sceneへ分割しません。"
@@ -1113,6 +1116,13 @@ def _with_repair_code(
             "根拠を1文以上記述します。context_relevanceがnoneまたはunavailable"
             "ならsupporting_context_cue_idsは空配列、weakまたはstrongなら入力内IDを"
             "1件以上入れます。"
+        )
+    if validation_code == "scene_catalog_domain_invalid":
+        repair += (
+            "\nscene slugをcatalog内で重複させません。scene_kindは重複可能ですが、"
+            "同じscene_kindの各sceneには視覚的・説明上の役割を区別する一意なslugを"
+            "付けます。slug=otherは一件だけにし、そのscene_kindはother、"
+            "selection_roleはordinaryにします。"
         )
     if recheck_candidate_observations:
         repair += (
