@@ -78,12 +78,12 @@ def test_noncanonical_or_mismatched_diagnostic_identity_is_rejected(
         _diagnostics(model_identity, runtime_identity)
 
 
-@pytest.mark.parametrize("attempt_count", (3, 4))
+@pytest.mark.parametrize("attempt_count", (3, 4, 5, 6))
 def test_aggregate_candidate_attempt_count_is_accepted(attempt_count: int) -> None:
     """注釈と専用確認を集約した推論回数が受理されること。
 
     Arrange:
-        - 注釈と専用確認の合計を表す3回または4回が用意される
+        - 注釈と二段階の専用確認を含む3回から6回が用意される
     Act:
         - Vision推論診断が構築される
     Assert:
@@ -106,7 +106,7 @@ def test_attempt_count_above_aggregate_limit_is_rejected() -> None:
     """集約上限を超える推論回数が拒否されること。
 
     Arrange:
-        - 注釈と専用確認の合計上限を超える5回が用意される
+        - 注釈と二段階の専用確認の合計上限を超える7回が用意される
     Act:
         - Vision推論診断が構築される
     Assert:
@@ -120,7 +120,7 @@ def test_attempt_count_above_aggregate_limit_is_rejected() -> None:
         _diagnostics(
             "ollama:sha256:" + "a" * 64,
             "ollama:0.31.2",
-            attempt_count=5,
+            attempt_count=7,
         )
 
 

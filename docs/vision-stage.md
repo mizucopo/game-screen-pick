@@ -16,16 +16,17 @@ Scene Catalog Representative Setは要求画像枚数から独立します。Sel
 
 ## Ollama operation
 
-Ollamaの`/api/chat`を次の4種類だけに使います。
+Ollamaの`/api/chat`を次の5種類だけに使います。
 
 1. `build-scene-catalog`: Video Set共有の3〜8 sceneを一回生成します。`other`を必ず1件含め、そのScene Selection Roleは`ordinary`です。
 2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、先に確定した一つのRepresentative Frameの意味観測を主推論で返します。画像は対応するFrame Candidate IDとその画像だけに対する直接観測条件を持つmessageで送り、同じMoment内で切り替わった別画面の内容を混ぜません。総合分類の指示は画像messageの後に一度だけ送ります。
-3. 戦闘可視性専用確認: 主推論が攻撃相手本体`clear`、エフェクトだけではない、掲載価値ありとした戦闘だけに条件付きで実行します。同じRepresentative Frame一枚だけを入力し、音声、Context Cue、前後場面、主推論の説明文を渡しません。
-4. 掲載境界専用確認: 主推論が掲載価値ありとした非戦闘の地図、またはScene Selection Roleが`cinematic`の場面だけに条件付きで実行します。同じRepresentative Frame一枚だけを入力し、音声、Context Cue、前後場面、主推論の説明文を渡しません。
+3. 戦闘有無専用確認: 主推論が掲載価値ありの非戦闘とした`recurring_gameplay`のactionだけに条件付きで実行します。敵・boss固有のstatus UIまたは対戦する本体から戦闘かを確認し、戦闘なら次の専用確認へ進みます。
+4. 戦闘可視性専用確認: 主推論または戦闘有無専用確認が掲載可能な戦闘とした場合に実行します。同じRepresentative Frame一枚だけを入力し、音声、Context Cue、前後場面、主推論の説明文を渡しません。
+5. 掲載境界専用確認: 主推論が掲載価値ありとした非戦闘の地図、またはScene Selection Roleが`cinematic`の場面だけに条件付きで実行します。同じRepresentative Frame一枚だけを入力し、音声、Context Cue、前後場面、主推論の説明文を渡しません。
 
-Scene Catalog promptは`ordinary`、`cinematic`、`recurring_gameplay`の意味を明示し、同じplay画面を一時的な敵や発光だけで別sceneへ分割しないよう要求します。Candidate Annotation promptは、総合分類より先にInterface Kind、会話eventの大きな人物立ち絵・胸像の有無、黒帯・HUDのない固定camera・人物配置から分かるCinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、具体的な動作・判別可能な人物または敵の有無、戦闘かどうか、player本体・攻撃相手本体それぞれの`clear`・`partial`・`absent`、一時的な光・爆発・煙だけが主内容かを直接観測させます。その後、画面内容、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Context Cue Relevance、Spoiler Riskの全境界を評価させます。Dialogue Text Presentationは`none`、`dialogue_box`、`speech_bubble`、`subtitle_overlay`、`other`のいずれかとし、画面内台詞文字の真偽値と一致させます。音声やContext Cueに会話文があっても、画像内で文字を読めなければ`none`です。手紙・手記・日誌・記録を読む画面は`document`とし、文書本文を台詞にしません。戦闘HUDだけを`other_interface`とせず、会話eventの大きな人物立ち絵・胸像と画面隅の小さな常設HUD portraitを区別します。通常の戦闘・探索HUDをCinematic Event Presentationにしません。人物portrait、空の台詞欄、説明文、目的表示、tutorial文、menu項目を台詞にしません。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体に数えません。各frame内に実在する情報だけを評価し、別frameの台詞やContext Cueを画面内情報として補いません。Context Cueが存在するだけでは`strong`にせず、進行位置だけではSpoiler Riskを上げません。戦闘可視性専用確認は、エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeか、という七つの直接観測だけをstrict schemaで返します。掲載境界専用確認は、一時的な遷移effectの有無・種類・画面占有率、上下の黒帯、event用の人物配置、画面内台詞文字、人物の具体的な動作、主内容の可読性という八つの直接観測だけをstrict schemaで返します。
+Scene Catalog promptは`ordinary`、`cinematic`、`recurring_gameplay`の意味を明示し、同じplay画面を一時的な敵や発光だけで別sceneへ分割しないよう要求します。Candidate Annotation promptは、総合分類より先にInterface Kind、会話eventの大きな人物立ち絵・胸像の有無、黒帯・HUDのない固定camera・人物配置から分かるCinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、具体的な動作・判別可能な人物または敵の有無、戦闘かどうか、player本体・攻撃相手本体それぞれの`clear`・`partial`・`absent`、一時的な光・爆発・煙だけが主内容かを直接観測させます。その後、画面内容、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Context Cue Relevance、Spoiler Riskの全境界を評価させます。Dialogue Text Presentationは`none`、`dialogue_box`、`speech_bubble`、`subtitle_overlay`、`other`のいずれかとし、画面内台詞文字の真偽値と一致させます。音声やContext Cueに会話文があっても、画像内で文字を読めなければ`none`です。手紙・手記・日誌・記録を読む画面は`document`とし、文書本文を台詞にしません。戦闘HUDだけを`other_interface`とせず、会話eventの大きな人物立ち絵・胸像と画面隅の小さな常設HUD portraitを区別します。通常の戦闘・探索HUDをCinematic Event Presentationにしません。人物portrait、空の台詞欄、説明文、目的表示、tutorial文、menu項目を台詞にしません。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体に数えません。各frame内に実在する情報だけを評価し、別frameの台詞やContext Cueを画面内情報として補いません。Context Cueが存在するだけでは`strong`にせず、進行位置だけではSpoiler Riskを上げません。戦闘有無専用確認は、戦闘の有無と`enemy_status_ui`・`opposing_bodies`・`both`の根拠だけをstrict schemaで返します。戦闘可視性専用確認は、エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeか、という七つの直接観測だけをstrict schemaで返します。掲載境界専用確認は、一時的な遷移effectの有無・種類・画面占有率、上下の黒帯、event用の人物配置、画面内台詞文字、人物の具体的な動作、主内容の可読性という八つの直接観測だけをstrict schemaで返します。
 
-modelはRepresentative Frame、Blog Image Type、eligible/selected flagを返しません。Representative Frameは推論前にlocalで確定済みです。local処理は具体的なInterface Kindを曖昧な画面内容分類より優先します。ただし、具体的な動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として画面内容を上書きしません。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正してから、Blog Image Type、公開用要約、選択理由を決定的に導出します。`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、攻撃相手本体が`clear`でない戦闘、一時的な光・爆発・煙だけが主内容のframe、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`へ正規化します。主推論が掲載可能とした戦闘では戦闘可視性専用確認の結果を優先します。非戦闘の地図または`cinematic` sceneでは掲載境界専用確認の結果を優先し、一時的な遷移effectがあるframe、または上下の黒帯とevent用の人物配置があり画面内台詞も具体的な動作もないframeを`none`へ正規化します。いずれの専用確認も主推論の分類や説明を上書きしません。
+modelはRepresentative Frame、Blog Image Type、eligible/selected flagを返しません。Representative Frameは推論前にlocalで確定済みです。local処理は具体的なInterface Kindを曖昧な画面内容分類より優先します。ただし、具体的な動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として画面内容を上書きしません。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正してから、Blog Image Type、公開用要約、選択理由を決定的に導出します。`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、攻撃相手本体が`clear`でない戦闘、一時的な光・爆発・煙だけが主内容のframe、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`へ正規化します。主推論が掲載可能とした戦闘では戦闘可視性専用確認の結果を優先します。主推論が非戦闘とした掲載可能な`recurring_gameplay`のactionは戦闘有無専用確認へ進み、戦闘と確認された場合だけ戦闘可視性専用確認の結果を優先します。非戦闘の地図または`cinematic` sceneでは掲載境界専用確認の結果を優先し、一時的な遷移effectがあるframe、または上下の黒帯とevent用の人物配置があり画面内台詞も具体的な動作もないframeを`none`へ正規化します。いずれの専用確認も主推論の分類や説明を上書きしません。
 
 各推論attemptの直前と応答受領直後に`/api/version`と`/api/tags`でOllama server versionとconfigured tagのlocal完全digestを再確認します。Model LifecycleでfreezeしたRuntime IdentityまたはResolved Model Identityと異なる場合は、別runtime／digestの結果を同じfingerprintへ保存せず停止します。この確認はtagの更新や再解決を行いません。
 
@@ -57,11 +58,13 @@ Quality Score、model confidence、final score、soft coverage、eligible/select
 
 ## Retryとfailure
 
-各Ollama operationは同じsemantic入力で初回と一回のretryだけを行います。Candidate Annotation Stageは主推論に加えて二つの専用確認のどちらか一方を条件付きで含むため、Stage全体のdiagnosticsは合計1〜4 attemptになります。timeout、connection failure、HTTP 408/429/5xx、空・打ち切り応答、schema/domain validation failureがretry対象です。このHTTP分類は推論前の`/api/tags`確認にも適用します。429の`Retry-After`は秒数とHTTP-dateの両形式を解釈して最大30秒まで尊重し、その他は1秒待ちます。
+各Ollama operationは同じsemantic入力で初回と一回のretryだけを行います。Candidate Annotation Stageは主推論に加えて、戦闘有無と戦闘可視性の二段階、戦闘可視性だけ、または掲載境界専用確認を条件付きで含むため、Stage全体のdiagnosticsは合計1〜6 attemptになります。timeout、connection failure、HTTP 408/429/5xx、空・打ち切り応答、schema/domain validation failureがretry対象です。このHTTP分類は推論前の`/api/tags`確認にも適用します。429の`Retry-After`は秒数とHTTP-dateの両形式を解釈して最大30秒まで尊重し、その他は1秒待ちます。
 
 response/schema/domain validation retryではstable validation codeを追加し、raw responseを次promptへ戻しません。Candidate Annotation主推論の関係違反では、Context Cue参照とSpoiler Evidenceの条件をstable validation codeから決まる修正指示として再提示します。Context Cueを持つCinematic Event Presentationまたは大きなevent portraitで画面内台詞文字ありと返された場合は、同じ画像とsemantic入力を使う主推論の一回のretryで、音声やContext Cueを根拠にせずDialogue Text Presentationを再確認します。再確認でも台詞文字ありなら有効な会話画面として保持し、文字表示なしなら静止eventへ正規化します。
 
-主推論またはそのretryの最終結果が掲載可能な戦闘なら、独立した戦闘可視性専用確認を実行します。専用確認は主推論の分類・音声・Context Cueを根拠にせず、Representative Frameの画素だけを小さなschemaで観測します。専用確認自体のtransport、schema、domain failureにも一回だけretryし、攻撃相手本体が`partial`・`absent`、本体の主要部が画面端で切れる・エフェクト等で隠れる・不在、またはエフェクトだけならExplanation Valueを`none`へ正規化します。専用確認が返す他の四fieldはstrict responseを保つために検証しますが、主推論の分類や説明を上書きしません。
+主推論またはそのretryの最終結果が掲載可能な非戦闘の`recurring_gameplay` actionなら、独立した戦闘有無専用確認を実行します。敵・boss固有の名前とHP・status bar、または対戦するplayer・相手本体を直接観測し、敵本体が画面外やエフェクト内でもstatus UIがあれば戦闘とします。非戦闘ならそこで専用確認を終え、戦闘なら次の戦闘可視性専用確認へ進みます。
+
+主推論または戦闘有無専用確認の最終結果が掲載可能な戦闘なら、独立した戦闘可視性専用確認を実行します。専用確認は主推論の分類・音声・Context Cueを根拠にせず、Representative Frameの画素だけを小さなschemaで観測します。専用確認自体のtransport、schema、domain failureにも一回だけretryし、攻撃相手本体が`partial`・`absent`、本体の主要部が画面端で切れる・エフェクト等で隠れる・不在、またはエフェクトだけならExplanation Valueを`none`へ正規化します。専用確認が返す他の四fieldはstrict responseを保つために検証しますが、主推論の分類や説明を上書きしません。
 
 主推論またはそのretryの最終結果が掲載可能な非戦闘の地図、または`cinematic` sceneなら、独立した掲載境界専用確認を実行します。この専用確認もRepresentative Frameの画素だけを小さなschemaで観測し、transport、schema、domain failureには一回だけretryします。一時的な遷移effectがある場合、または上下の黒帯とevent用の人物配置があり画面内台詞も具体的な動作もない場合はExplanation Valueを`none`へ正規化します。地図の雲、cursor、選択marker、常設UIは遷移effectにしません。
 
@@ -71,7 +74,7 @@ Cue逐語一致は再推論へ依存せずfield単位で決定的に安全化し
 
 Scene CatalogはVideo Setごとに一つ、Candidate AnnotationはCandidate Momentごとに一つのatomic Completed Stageです。同じStage Fingerprintの推論はfingerprint lock内で一度だけ実行し、並行workerも最初に確定したartifactを復元します。Vision batch境界とpublisher開始時にはInput Lock内のpath・device・inode・size・mtime・ctimeを検査し、snapshot一致を通るまでoutputを公開しません。一つのAnnotationが最終失敗した場合、最終選定とoutput公開へ進みませんが、それ以前に完了したCatalogとAnnotationは次回runで再利用されます。
 
-fingerprintには、Representative Frame IDと画像SHA-256、Context Cue ID・正確な範囲・本文SHA-256、Cue選択policy、Scene Catalog fingerprint、Video Set Progress、Selection Intent、Resolved Model Identity、Ollama runtime identity、generation option、主推論・戦闘可視性専用確認・掲載境界専用確認それぞれのprompt/schema/stage version、retry versionを含めます。
+fingerprintには、Representative Frame IDと画像SHA-256、Context Cue ID・正確な範囲・本文SHA-256、Cue選択policy、Scene Catalog fingerprint、Video Set Progress、Selection Intent、Resolved Model Identity、Ollama runtime identity、generation option、主推論・戦闘有無専用確認・戦闘可視性専用確認・掲載境界専用確認それぞれのprompt/schema/stage version、retry versionを含めます。
 
 次の値はmodel contentを変えないため含めません。
 
@@ -89,4 +92,4 @@ cache artifactには検証済みCatalog／Annotationと、canonical形式を検�
 uv run task test
 ```
 
-fake VisionRuntime goldenで推論前後のmodel/runtime identity変更、schema invalid、domain invalid、transport failure、打ち切り応答、retry成功・失敗、戦闘可視性専用確認・掲載境界専用確認と集約attempt数、秒数／HTTP-dateのRetry-After、Context Cue有無、Cue逐語一致fieldの決定的な安全化、未安全化raw textのcache拒否、canonical diagnostic identity、major spoiler evidence、warm cache、同一fingerprintの並行処理、途中失敗後のMoment単位再開を検証します。
+fake VisionRuntime goldenで推論前後のmodel/runtime identity変更、schema invalid、domain invalid、transport failure、打ち切り応答、retry成功・失敗、戦闘有無専用確認・戦闘可視性専用確認・掲載境界専用確認と集約attempt数、秒数／HTTP-dateのRetry-After、Context Cue有無、Cue逐語一致fieldの決定的な安全化、未安全化raw textのcache拒否、canonical diagnostic identity、major spoiler evidence、warm cache、同一fingerprintの並行処理、途中失敗後のMoment単位再開を検証します。

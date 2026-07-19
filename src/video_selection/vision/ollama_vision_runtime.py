@@ -74,6 +74,10 @@ from .vision_contract import (
     CANDIDATE_ANNOTATION_SCHEMA,
     CANDIDATE_ANNOTATION_SCHEMA_VERSION,
     CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+    COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION,
+    COMBAT_ENCOUNTER_VERIFICATION_SCHEMA,
+    COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION,
+    COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
@@ -100,6 +104,7 @@ InferenceParser = Callable[[Mapping[str, object]], InferenceValue]
 StageKind = Literal[
     "scene_catalog",
     "candidate_annotation",
+    "combat_encounter_verification",
     "combat_visibility_verification",
     "publication_boundary_verification",
 ]
@@ -141,6 +146,16 @@ _COMBAT_VISIBILITY_VERIFICATION_KEYS = {
     "opponent_body_framing",
     "effect_overlaps_combatant_body",
     "effect_only_frame",
+}
+_COMBAT_ENCOUNTER_VERIFICATION_KEYS = {
+    "combat_encounter_visible",
+    "combat_encounter_evidence",
+}
+_COMBAT_ENCOUNTER_EVIDENCE = {
+    "none",
+    "enemy_status_ui",
+    "opposing_bodies",
+    "both",
 }
 _PUBLICATION_BOUNDARY_VERIFICATION_KEYS = {
     "transient_transition_effect",
@@ -221,6 +236,16 @@ _CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION = (
     "visible_character_or_enemy=falseです。portrait、HUD、文字、影、発光、"
     "移動軌跡だけは本体ではありません。戦闘ではplayer本体と攻撃相手本体を別々に"
     "判定し、portrait、HUD、文字、光、hit effect、影を本体に数えません。"
+)
+_COMBAT_ENCOUNTER_VERIFICATION_INSTRUCTION = (
+    "この画像1枚に実際に見える画素だけを観測してください。音声、前後場面、"
+    "説明文は使いません。combat_encounter_visibleは、敵またはboss固有の名前と"
+    "HP・status barがある、またはplayer本体と攻撃相手本体が戦闘中だと画面から"
+    "分かる場合にtrueです。敵本体が画面端で切れる、エフェクトに隠れる、画面外に"
+    "いる場合でも、敵・boss固有の名前とHP・status barがあればtrueです。player自身の"
+    "通常HP、portrait、操作button、minimapだけではfalseです。"
+    "combat_encounter_evidenceはnone、enemy_status_ui、opposing_bodies、bothから"
+    "選びます。combat_encounter_visibleがfalseならnone、trueならnone以外です。"
 )
 _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION = (
     "この画像1枚に実際に見える画素だけを観測してください。音声、前後場面、"
@@ -399,7 +424,7 @@ class OllamaVisionRuntime:
 
         def parse_candidate(
             value: Mapping[str, object],
-        ) -> tuple[CandidateAnnotation, bool, bool, bool]:
+        ) -> tuple[CandidateAnnotation, bool, bool, bool, bool]:
             nonlocal candidate_response_count
             candidate_response_count += 1
             (
@@ -407,6 +432,7 @@ class OllamaVisionRuntime:
                 redacted,
                 requires_dialogue_verification,
                 requires_combat_verification,
+                requires_combat_encounter_verification,
                 requires_publication_verification,
             ) = _parse_candidate_annotation(value, request, catalog)
             if requires_dialogue_verification and candidate_response_count == 1:
@@ -417,6 +443,7 @@ class OllamaVisionRuntime:
                 annotation,
                 redacted,
                 requires_combat_verification,
+                requires_combat_encounter_verification,
                 requires_publication_verification,
             )
 
@@ -425,6 +452,7 @@ class OllamaVisionRuntime:
                 annotation,
                 free_text_redacted,
                 requires_combat_verification,
+                requires_combat_encounter_verification,
                 requires_publication_verification,
             ),
             diagnostics,
@@ -437,6 +465,30 @@ class OllamaVisionRuntime:
             image_count=len(request.frame_candidates),
             context_cue_count=len(request.context_cues),
         )
+        if requires_combat_encounter_verification:
+            verification_input = _combat_encounter_verification_semantic_input(
+                annotation.candidate,
+                model,
+                num_ctx,
+            )
+            combat_encounter_visible, verification_diagnostics = self._infer(
+                stage_kind="combat_encounter_verification",
+                request_fingerprint=_fingerprint(verification_input),
+                payload=_combat_encounter_verification_payload(
+                    annotation.candidate,
+                    model,
+                    num_ctx,
+                ),
+                parser=_parse_combat_encounter_verification,
+                model=model,
+                image_count=1,
+                context_cue_count=0,
+            )
+            requires_combat_verification = combat_encounter_visible
+            diagnostics = _merge_candidate_diagnostics(
+                diagnostics,
+                verification_diagnostics,
+            )
         if requires_combat_verification:
             verification_input = _combat_visibility_verification_semantic_input(
                 annotation.candidate,
@@ -762,6 +814,28 @@ def _candidate_payload(
     }
 
 
+def _combat_encounter_verification_payload(
+    candidate: FrameCandidate,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    """曖昧なactionが戦闘かを一画像へ確認するrequestを返す。"""
+    return {
+        "model": model.configured_name,
+        "stream": False,
+        "think": False,
+        "format": COMBAT_ENCOUNTER_VERIFICATION_SCHEMA,
+        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "messages": [
+            {
+                "role": "user",
+                "content": _COMBAT_ENCOUNTER_VERIFICATION_INSTRUCTION,
+                "images": [base64.b64encode(candidate.image_bytes).decode()],
+            }
+        ],
+    }
+
+
 def _combat_visibility_verification_payload(
     candidate: FrameCandidate,
     model: ResolvedModel,
@@ -951,7 +1025,7 @@ def _parse_candidate_annotation(
     value: Mapping[str, object],
     request: CandidateAnnotationRequest,
     catalog: SceneCatalog,
-) -> tuple[CandidateAnnotation, bool, bool, bool, bool]:
+) -> tuple[CandidateAnnotation, bool, bool, bool, bool, bool]:
     if set(value) != _ANNOTATION_KEYS:
         raise _schema_error("candidate_annotation_schema_invalid")
     raw_observations = value.get("frame_observations")
@@ -1004,9 +1078,16 @@ def _parse_candidate_annotation(
             and selected.effective_explanation_value != "none"
         )
         scene = catalog.for_slug(selected.scene_slug)
+        requires_combat_encounter_verification = (
+            selected.effective_explanation_value != "none"
+            and not selected.combat_action
+            and scene.selection_role == "recurring_gameplay"
+            and selected.effective_content_kind in {"gameplay_action", "event_action"}
+        )
         requires_publication_verification = (
             selected.effective_explanation_value != "none"
             and not requires_combat_verification
+            and not requires_combat_encounter_verification
             and (
                 selected.effective_content_kind == "map"
                 or selected.interface_kind == "map"
@@ -1049,10 +1130,26 @@ def _parse_candidate_annotation(
             free_text_redacted,
             requires_dialogue_verification,
             requires_combat_verification,
+            requires_combat_encounter_verification,
             requires_publication_verification,
         )
     except ValueError:
         raise _domain_error("candidate_annotation_domain_invalid") from None
+
+
+def _parse_combat_encounter_verification(value: Mapping[str, object]) -> bool:
+    """戦闘有無と根拠enumの関係を検証して戦闘有無だけを返す。"""
+    if set(value) != _COMBAT_ENCOUNTER_VERIFICATION_KEYS:
+        raise _schema_error("combat_encounter_verification_schema_invalid")
+    combat_encounter_visible = value.get("combat_encounter_visible")
+    combat_encounter_evidence = value.get("combat_encounter_evidence")
+    if (
+        not isinstance(combat_encounter_visible, bool)
+        or combat_encounter_evidence not in _COMBAT_ENCOUNTER_EVIDENCE
+        or combat_encounter_visible != (combat_encounter_evidence != "none")
+    ):
+        raise _schema_error("combat_encounter_verification_schema_invalid")
+    return combat_encounter_visible
 
 
 def _parse_combat_visibility_verification(
@@ -1357,6 +1454,15 @@ def _candidate_semantic_input(
         "prompt_version": CANDIDATE_ANNOTATION_PROMPT_VERSION,
         "schema_version": CANDIDATE_ANNOTATION_SCHEMA_VERSION,
         "stage_contract_version": CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+        "combat_encounter_verification_prompt_version": (
+            COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION
+        ),
+        "combat_encounter_verification_schema_version": (
+            COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_encounter_verification_stage_contract_version": (
+            COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
         "combat_visibility_verification_prompt_version": (
             COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION
         ),
@@ -1374,6 +1480,27 @@ def _candidate_semantic_input(
         ),
         "publication_boundary_verification_stage_contract_version": (
             PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "retry_policy_version": RETRY_POLICY_VERSION,
+    }
+
+
+def _combat_encounter_verification_semantic_input(
+    candidate: FrameCandidate,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    return {
+        "frame_candidate": {
+            "id": candidate.identifier,
+            "image_sha256": hashlib.sha256(candidate.image_bytes).hexdigest(),
+        },
+        "model": {**model.semantic_input(), "num_ctx": num_ctx},
+        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "prompt_version": COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION,
+        "schema_version": COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION,
+        "stage_contract_version": (
+            COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION
         ),
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
@@ -1492,6 +1619,12 @@ def _contract_versions(stage_kind: StageKind) -> tuple[str, str, str]:
             SCENE_CATALOG_PROMPT_VERSION,
             SCENE_CATALOG_SCHEMA_VERSION,
             SCENE_CATALOG_STAGE_CONTRACT_VERSION,
+        )
+    if stage_kind == "combat_encounter_verification":
+        return (
+            COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION,
+            COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION,
+            COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION,
         )
     if stage_kind == "combat_visibility_verification":
         return (

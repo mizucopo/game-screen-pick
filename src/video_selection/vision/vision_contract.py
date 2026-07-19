@@ -21,7 +21,12 @@ SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v15"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v16"
+COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION = "combat-encounter-verification-prompt-v1"
+COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION = "combat-encounter-verification-schema-v1"
+COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION = (
+    "combat-encounter-verification-stage-v1"
+)
 COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION = (
     "combat-visibility-verification-prompt-v2"
 )
@@ -243,6 +248,19 @@ COMBAT_VISIBILITY_VERIFICATION_SCHEMA: dict[str, object] = {
         "effect_overlaps_combatant_body",
         "effect_only_frame",
     ],
+}
+
+COMBAT_ENCOUNTER_VERIFICATION_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "combat_encounter_visible": {"type": "boolean"},
+        "combat_encounter_evidence": {
+            "type": "string",
+            "enum": ["none", "enemy_status_ui", "opposing_bodies", "both"],
+        },
+    },
+    "required": ["combat_encounter_visible", "combat_encounter_evidence"],
 }
 
 PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA: dict[str, object] = {

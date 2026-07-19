@@ -1541,6 +1541,224 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     assert "音声、前後場面、説明文は使いません" in second_prompt
 
 
+def test_possible_combat_is_routed_before_visibility_verification() -> None:
+    """主推論が戦闘flagを落としたboss戦も敵可視性が確認されること。
+
+    Arrange:
+        - recurring gameplayのactionを非戦闘と誤分類した掲載可能応答が用意される
+        - 敵status UIで戦闘と確認され、敵本体なしとする可視性応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 戦闘有無と敵可視性が別々に確認され、掲載不可にされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            response = _frame_observation_payload(
+                (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+            )
+            observation = _first_frame_observation(response)
+            observation["combat_action"] = False
+            observation["opponent_body_visibility"] = "absent"
+            return _response(response)
+        if len(payloads) == 2:
+            return _response(
+                _combat_encounter_payload(
+                    visible=True,
+                    evidence="enemy_status_ui",
+                )
+            )
+        return _response(
+            {
+                "effect_screen_coverage": "quarter_to_half",
+                "largest_foreground_element": "visual_effect",
+                "player_body_visibility": "partial",
+                "opponent_body_visibility": "absent",
+                "opponent_body_framing": "absent",
+                "effect_overlaps_combatant_body": "severe",
+                "effect_only_frame": False,
+            }
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 3
+    assert diagnostics.validation_code is None
+    routing_schema = payloads[1]["format"]
+    assert isinstance(routing_schema, Mapping)
+    routing_properties = routing_schema.get("properties")
+    assert isinstance(routing_properties, Mapping)
+    assert set(routing_properties) == {
+        "combat_encounter_visible",
+        "combat_encounter_evidence",
+    }
+    routing_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(routing_prompt, str)
+    assert "敵またはboss固有の名前とHP・status bar" in routing_prompt
+    assert "敵本体が画面端で切れる" in routing_prompt
+    visibility_prompt = _last_message(payloads[2])["content"]
+    assert isinstance(visibility_prompt, str)
+    assert "opponent_body_framing" in visibility_prompt
+
+
+def test_noncombat_recurring_action_stops_after_encounter_verification() -> None:
+    """非戦闘のrecurring actionが敵不在だけでは掲載不可にされないこと。
+
+    Arrange:
+        - recurring gameplayの非戦闘action応答が用意される
+        - 敵status UIも対戦相手もない専用応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 戦闘可視性確認へ進まず掲載価値が保持されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "exploration", "gameplay_action", "high", "hud"),)
+                )
+            )
+        return _response(_combat_encounter_payload(visible=False, evidence="none"))
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog_with_recurring_exploration(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "high"
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code is None
+    assert len(payloads) == 2
+
+
+def test_combat_encounter_schema_failure_is_retried() -> None:
+    """戦闘有無確認のschema違反が一回だけ再試行されること。
+
+    Arrange:
+        - recurring gameplayの曖昧なaction応答が用意される
+        - 初回だけ根拠fieldを欠き、再試行で戦闘と確認される応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - stable validation code付きで修復され、敵可視性確認へ進むこと
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            response = _frame_observation_payload(
+                (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+            )
+            observation = _first_frame_observation(response)
+            observation["combat_action"] = False
+            observation["opponent_body_visibility"] = "absent"
+            return _response(response)
+        if len(payloads) == 2:
+            return _response({"combat_encounter_visible": True})
+        if len(payloads) == 3:
+            return _response(
+                _combat_encounter_payload(
+                    visible=True,
+                    evidence="enemy_status_ui",
+                )
+            )
+        return _response(
+            {
+                "effect_screen_coverage": "under_quarter",
+                "largest_foreground_element": "opponent_body",
+                "player_body_visibility": "clear",
+                "opponent_body_visibility": "clear",
+                "opponent_body_framing": "complete",
+                "effect_overlaps_combatant_body": "partial",
+                "effect_only_frame": False,
+            }
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "high"
+    assert diagnostics.attempt_count == 4
+    assert diagnostics.validation_code == (
+        "combat_encounter_verification_schema_invalid"
+    )
+    third_prompt = _last_message(payloads[2])["content"]
+    assert isinstance(third_prompt, str)
+    assert "combat_encounter_verification_schema_invalid" in third_prompt
+    assert len(payloads) == 4
+
+
 def test_combat_visibility_schema_failure_is_retried() -> None:
     """戦闘可視性専用確認のschema違反が一回だけ再試行されること。
 
@@ -2760,6 +2978,13 @@ def _publication_boundary_payload(
     }
 
 
+def _combat_encounter_payload(*, visible: bool, evidence: str) -> dict[str, object]:
+    return {
+        "combat_encounter_visible": visible,
+        "combat_encounter_evidence": evidence,
+    }
+
+
 def _response(content: dict[str, object]) -> dict[str, object]:
     return {
         "message": {"content": json.dumps(content, ensure_ascii=False)},
@@ -2790,6 +3015,21 @@ def _catalog_with_cinematic_town() -> SceneCatalog:
         (
             SceneCatalogEntry("exploration", "探索", "フィールド探索", "ordinary"),
             SceneCatalogEntry("town", "街", "街で起こる会話event", "cinematic"),
+            SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
+        )
+    )
+
+
+def _catalog_with_recurring_exploration() -> SceneCatalog:
+    return SceneCatalog(
+        (
+            SceneCatalogEntry(
+                "exploration",
+                "探索",
+                "繰り返されるフィールド探索",
+                "recurring_gameplay",
+            ),
+            SceneCatalogEntry("battle", "戦闘", "通常戦闘", "ordinary"),
             SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
         )
     )
