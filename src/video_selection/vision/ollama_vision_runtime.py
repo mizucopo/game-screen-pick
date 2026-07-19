@@ -1217,6 +1217,8 @@ def _parse_scene_catalog(
             or selection_role not in SCENE_SELECTION_ROLES
         ):
             raise _schema_error("scene_catalog_schema_invalid")
+        if scene_kind == "other":
+            slug = "other"
         if slug in used_slugs:
             if not repair_duplicate_slugs or slug == "other":
                 raise _domain_error("scene_catalog_domain_invalid")

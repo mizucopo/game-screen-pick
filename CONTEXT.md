@@ -381,7 +381,7 @@ scene を人が読みやすいように表す日本語名。ブログ用の画�
 _Avoid_: filename prefix, report key
 
 **Scene Catalog**:
-Scene Catalog Representative Setから作る、一つのVideo Setを横断して共有するscene、Scene Kind、Scene Selection Roleの一覧。3から8個のsceneと分類の逃げ先である`other`で構成され、Videoごとには分割しない。Scene Kindは複数sceneで重複できるが、Scene Slugはcatalog内で一意とする。domain再試行でも非`other`のScene Slugだけが重複した場合は、入力順の数値suffixで決定的に一意化する。
+Scene Catalog Representative Setから作る、一つのVideo Setを横断して共有するscene、Scene Kind、Scene Selection Roleの一覧。3から8個のsceneと分類の逃げ先である`other`で構成され、Videoごとには分割しない。Scene Kind `other`のsceneは自由なslugが返っても正確な`other`へ正規化する。Scene Kindは複数sceneで重複できるが、Scene Slugはcatalog内で一意とする。domain再試行でも非`other`のScene Slugだけが重複した場合は、入力順の数値suffixで決定的に一意化する。
 _Avoid_: fixed scene list, free-form per-image labels, per-video catalog
 
 **Scene Description**:

@@ -389,6 +389,56 @@ def test_duplicate_scene_slug_is_deterministically_suffixed_after_retry() -> Non
     assert len(payloads) == 2
 
 
+def test_other_scene_slug_is_canonicalized_from_scene_kind() -> None:
+    """Scene Kind otherの自由なslugが分類の逃げ先へ正規化されること。
+
+    Arrange:
+        - other sceneへ具体化された自由なslugを返すCatalog応答が用意される
+    Act:
+        - Scene Catalog推論が実行される
+    Assert:
+        - Scene Kindを根拠にslugが正確なotherへ正規化されること
+    """
+
+    # Arrange
+    def requester(
+        _method: str,
+        _url: str,
+        _payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        response = _catalog_payload()
+        scenes = response["scenes"]
+        assert isinstance(scenes, list)
+        other_scene = scenes[2]
+        assert isinstance(other_scene, dict)
+        other_scene["slug"] = "other-ordinary-scene"
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    catalog, diagnostics = runtime.create_scene_catalog(
+        SceneCatalogRequest(
+            representatives=(FrameCandidate("frame-a", b"image-a"),),
+            selection_intent="ブログ画像を分類する",
+        ),
+        _resolved_model(ModelRole.SCENE_CATALOG),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert catalog.slugs == ("exploration", "battle", "other")
+    assert catalog.for_slug("other").scene_kind == "other"
+    assert diagnostics.attempt_count == 1
+
+
 def test_truncated_response_is_retried_before_success() -> None:
     """token上限で打ち切られた応答が一度だけ再試行されること。
 

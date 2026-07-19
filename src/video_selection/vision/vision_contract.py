@@ -19,7 +19,7 @@ from ..models.scene_kind import SCENE_KINDS
 
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v4"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v2"
-SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v5"
+SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v6"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
 CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v21"
