@@ -291,6 +291,53 @@ def test_static_document_and_silent_event_presentation_have_no_explanation_value
     assert blog_image_type == expected_blog_image_type
 
 
+def test_visible_event_dialogue_overrides_generic_interface() -> None:
+    """人物立ち絵と台詞を持つ会話eventが汎用UIより優先されること。
+
+    Arrange:
+        - 大きな人物立ち絵と台詞が見える一方で汎用UIと分類された観測が用意される
+    Act:
+        - 観測の決定的な公開値が参照される
+    Assert:
+        - 会話event、台詞、元の説明価値へ正規化されること
+    """
+    # Arrange
+    observation = CandidateFrameObservation(
+        candidate=FrameCandidate("frm_" + "a" * 64, b"image"),
+        scene_slug="event",
+        content_kind="other_interface",
+        interface_kind="other_interface",
+        prominent_event_portrait=True,
+        cinematic_event_presentation=False,
+        visible_dialogue_text=True,
+        dialogue_text_presentation="dialogue_box",
+        visible_action=False,
+        visible_character_or_enemy=True,
+        combat_action=False,
+        player_body_visibility="clear",
+        opponent_body_visibility="absent",
+        effect_only_frame=False,
+        explanation_value="high",
+        screen_text_kind="menu",
+        primary_subject_visibility="clear",
+        transient_obstruction="none",
+        spoiler_risk="none",
+        spoiler_evidence="",
+    )
+
+    # Act
+    effective_content_kind = observation.effective_content_kind
+    blog_image_type = observation.blog_image_type
+    screen_text_kind = observation.effective_screen_text_kind
+    explanation_value = observation.effective_explanation_value
+
+    # Assert
+    assert effective_content_kind == "event_dialogue"
+    assert blog_image_type == "event"
+    assert screen_text_kind == "dialogue"
+    assert explanation_value == "high"
+
+
 def test_dialogue_visibility_requires_a_visible_text_presentation() -> None:
     """画面内台詞の真偽値と視覚的な表示形式が一致させられること。
 

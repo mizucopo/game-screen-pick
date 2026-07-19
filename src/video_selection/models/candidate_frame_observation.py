@@ -167,10 +167,16 @@ class CandidateFrameObservation:
     @property
     def effective_content_kind(self) -> CandidateFrameContentKind:
         """単純な視覚観測を優先して曖昧なmodel分類を正規化する。"""
-        if self.interface_kind != "none" and (
-            self.interface_kind != "other_interface" or not self.visible_action
-        ):
+        if self.interface_kind not in {"none", "other_interface"}:
             return _INTERFACE_CONTENT_KINDS[self.interface_kind]
+        if self.visible_dialogue_text and (
+            self.content_kind == "event_dialogue"
+            or self.prominent_event_portrait
+            or self.cinematic_event_presentation
+        ):
+            return "event_dialogue"
+        if self.interface_kind == "other_interface" and not self.visible_action:
+            return "other_interface"
         if (
             (self.prominent_event_portrait or self.cinematic_event_presentation)
             and not self.visible_dialogue_text
