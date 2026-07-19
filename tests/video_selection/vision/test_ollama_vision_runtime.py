@@ -129,7 +129,7 @@ def test_scene_catalog_uses_strict_documented_ollama_request() -> None:
     Act:
         - Scene Catalog推論が実行される
     Assert:
-        - JSON Schema object、temperature 0、stream/think falseが送られること
+        - JSON Schema object、temperature 0、seed 0、stream/think falseが送られること
         - token/runtime診断とdomain検証済みCatalogが返されること
     """
     # Arrange
@@ -190,7 +190,7 @@ def test_scene_catalog_uses_strict_documented_ollama_request() -> None:
     assert payload["model"] == "qwen3-vl:8b-instruct"
     assert payload["stream"] is False
     assert payload["think"] is False
-    assert payload["options"] == {"temperature": 0, "num_ctx": 32768}
+    assert payload["options"] == {"temperature": 0, "num_ctx": 32768, "seed": 0}
     schema = payload["format"]
     assert isinstance(schema, dict)
     assert schema["additionalProperties"] is False

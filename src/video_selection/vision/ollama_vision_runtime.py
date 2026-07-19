@@ -97,6 +97,7 @@ from .vision_contract import (
     SCENE_CATALOG_SCHEMA,
     SCENE_CATALOG_SCHEMA_VERSION,
     SCENE_CATALOG_STAGE_CONTRACT_VERSION,
+    VISION_GENERATION_SEED,
 )
 
 JsonRequester = Callable[
@@ -118,6 +119,26 @@ StageKind = Literal[
     "publication_boundary_verification",
 ]
 OpponentBodyFraming = Literal["complete", "edge_cropped", "occluded", "absent"]
+
+
+def _generation_options(num_ctx: int) -> dict[str, int]:
+    """全Vision operationで共有する再現可能なOllama optionsを返す。"""
+    return {
+        "temperature": 0,
+        "num_ctx": num_ctx,
+        "seed": VISION_GENERATION_SEED,
+    }
+
+
+def _semantic_generation_options() -> dict[str, object]:
+    """Stage fingerprintへ含める再現可能な生成条件を返す。"""
+    return {
+        "temperature": 0,
+        "stream": False,
+        "think": False,
+        "seed": VISION_GENERATION_SEED,
+    }
+
 
 _SCENE_ENTRY_KEYS = {"slug", "display_name", "description", "selection_role"}
 _ANNOTATION_KEYS = {
@@ -846,7 +867,7 @@ def _scene_catalog_payload(
         "stream": False,
         "think": False,
         "format": SCENE_CATALOG_SCHEMA,
-        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "options": _generation_options(num_ctx),
         "messages": [
             {
                 "role": "user",
@@ -915,7 +936,7 @@ def _candidate_payload(
         "stream": False,
         "think": False,
         "format": _candidate_schema(request, catalog),
-        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "options": _generation_options(num_ctx),
         "messages": [*frame_messages, {"role": "user", "content": content}],
     }
 
@@ -933,7 +954,7 @@ def _combat_encounter_verification_payload(
         "stream": False,
         "think": False,
         "format": COMBAT_ENCOUNTER_VERIFICATION_SCHEMA,
-        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "options": _generation_options(num_ctx),
         "messages": [
             {
                 "role": "user",
@@ -962,7 +983,7 @@ def _combat_visibility_verification_payload(
         "stream": False,
         "think": False,
         "format": COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
-        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "options": _generation_options(num_ctx),
         "messages": [
             {
                 "role": "user",
@@ -989,7 +1010,7 @@ def _combat_visibility_edge_audit_payload(
         "stream": False,
         "think": False,
         "format": COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
-        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "options": _generation_options(num_ctx),
         "messages": [
             {
                 "role": "user",
@@ -1015,7 +1036,7 @@ def _publication_boundary_verification_payload(
         "stream": False,
         "think": False,
         "format": PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA,
-        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "options": _generation_options(num_ctx),
         "messages": [
             {
                 "role": "user",
@@ -1559,7 +1580,7 @@ def _scene_catalog_semantic_input(
         "selection_intent": request.selection_intent,
         "scene_hint": request.scene_hint,
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
-        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "generation_options": _semantic_generation_options(),
         "prompt_version": SCENE_CATALOG_PROMPT_VERSION,
         "schema_version": SCENE_CATALOG_SCHEMA_VERSION,
         "stage_contract_version": SCENE_CATALOG_STAGE_CONTRACT_VERSION,
@@ -1596,7 +1617,7 @@ def _candidate_semantic_input(
         "video_set_progress": _fraction_value(request.video_set_progress),
         "selection_intent": request.selection_intent,
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
-        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "generation_options": _semantic_generation_options(),
         "prompt_version": CANDIDATE_ANNOTATION_PROMPT_VERSION,
         "schema_version": CANDIDATE_ANNOTATION_SCHEMA_VERSION,
         "stage_contract_version": CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
@@ -1681,7 +1702,7 @@ def _combat_encounter_verification_semantic_input(
             "image_sha256": hashlib.sha256(candidate.image_bytes).hexdigest(),
         },
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
-        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "generation_options": _semantic_generation_options(),
         "prompt_version": prompt_version,
         "schema_version": COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION,
         "stage_contract_version": stage_contract_version,
@@ -1712,7 +1733,7 @@ def _combat_visibility_verification_semantic_input(
             "image_sha256": hashlib.sha256(candidate.image_bytes).hexdigest(),
         },
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
-        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "generation_options": _semantic_generation_options(),
         "prompt_version": prompt_version,
         "schema_version": COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
         "stage_contract_version": stage_contract_version,
@@ -1732,7 +1753,7 @@ def _combat_visibility_edge_audit_semantic_input(
             "image_sha256": hashlib.sha256(candidate.image_bytes).hexdigest(),
         },
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
-        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "generation_options": _semantic_generation_options(),
         "prompt_version": COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION,
         "schema_version": COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
         "stage_contract_version": COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION,
@@ -1751,7 +1772,7 @@ def _publication_boundary_verification_semantic_input(
             "image_sha256": hashlib.sha256(candidate.image_bytes).hexdigest(),
         },
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
-        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "generation_options": _semantic_generation_options(),
         "prompt_version": PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION,
         "schema_version": PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION,
         "stage_contract_version": (

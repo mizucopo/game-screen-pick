@@ -18,10 +18,10 @@ from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
 
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v2"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
-SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
+SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v2"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v19"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v20"
 COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION = "combat-encounter-verification-prompt-v1"
 COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION = "combat-encounter-verification-schema-v1"
 COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION = (
@@ -60,6 +60,7 @@ PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION = (
     "publication-boundary-verification-stage-v1"
 )
 RETRY_POLICY_VERSION = "ollama-retry-v7"
+VISION_GENERATION_SEED = 0
 
 SCENE_CATALOG_SCHEMA: dict[str, object] = {
     "type": "object",
