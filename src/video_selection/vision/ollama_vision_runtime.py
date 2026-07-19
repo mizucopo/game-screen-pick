@@ -3,6 +3,7 @@
 import base64
 import copy
 import hashlib
+import io
 import json
 import re
 import time
@@ -13,6 +14,8 @@ from functools import partial
 from typing import Literal, TypeVar, cast
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+
+from PIL import Image
 
 from ..model_runtime.ollama_model_store import OllamaModelStore
 from ..models.candidate_annotation import (
@@ -84,7 +87,10 @@ from .vision_contract import (
     COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION,
     COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION,
     COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION,
+    COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA,
+    COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA_VERSION,
     COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION,
+    COMBAT_VISIBILITY_EDGE_STRIP_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
@@ -183,6 +189,12 @@ _COMBAT_VISIBILITY_VERIFICATION_KEYS = {
     "opponent_body_framing",
     "effect_overlaps_combatant_body",
     "effect_only_frame",
+}
+_COMBAT_VISIBILITY_EDGE_NAMES = ("top", "bottom", "left", "right")
+_COMBAT_VISIBILITY_EDGE_OBSERVATION_KEYS = {
+    "edge",
+    "opponent_body_present",
+    "opponent_body_reaches_outer_edge",
 }
 _COMBAT_ENCOUNTER_VERIFICATION_KEYS = {
     "combat_encounter_visible",
@@ -317,10 +329,16 @@ _INDEPENDENT_CONFIRMATION_INSTRUCTION = (
     "画像の画素を最初から観測し直してください。"
 )
 _COMBAT_VISIBILITY_EDGE_AUDIT_INSTRUCTION = (
-    "掲載可能と判断する前に、画像の上端、下端、左端、右端を順に確認してください。"
-    "攻撃相手本体の主要な輪郭がどれかの画像端で切れている場合は、"
-    "opponent_body_framingを必ずedge_croppedにし、opponent_body_visibilityを"
-    "clearにしません。敵名、HP bar、光、攻撃effectを敵本体と取り違えません。"
+    "添付した4画像は、同じ戦闘スクリーンショットから外周30%を切り出した診断画像で、"
+    "順番はtop、bottom、left、rightです。各診断画像では、そのedge名と同じ側だけが"
+    "元スクリーンショットの実際の外端で、反対側は診断用の内側crop境界です。"
+    "操作player、HUD、敵名、HP bar、光、hit effect、影、背景ではなく、playerが攻撃する"
+    "相手の生物・monster・boss本体だけを観測してください。opponent_body_presentは、"
+    "その本体の主要な輪郭を判別できる場合だけtrueです。"
+    "opponent_body_reaches_outer_edgeは、その本体の主要な輪郭が元スクリーンショットの"
+    "実際の外端に触れる、または外へ続く場合だけtrueです。診断用の内側crop境界に触れる"
+    "ことは数えません。edgesをtop、bottom、left、rightの順で必ず4件返してください。"
+    "推論過程や説明文は返しません。"
 )
 _PUBLICATION_BOUNDARY_VERIFICATION_INSTRUCTION = (
     "この画像1枚に実際に見える画素だけを観測してください。音声、前後場面、"
@@ -661,7 +679,7 @@ class OllamaVisionRuntime:
                     model,
                     num_ctx,
                 )
-                edge_audit, edge_audit_diagnostics = self._infer(
+                opponent_reaches_outer_edge, edge_audit_diagnostics = self._infer(
                     stage_kind="combat_visibility_edge_audit",
                     request_fingerprint=_fingerprint(edge_audit_input),
                     payload=_combat_visibility_edge_audit_payload(
@@ -669,16 +687,16 @@ class OllamaVisionRuntime:
                         model,
                         num_ctx,
                     ),
-                    parser=_parse_combat_visibility_verification,
+                    parser=_parse_combat_visibility_edge_audit,
                     model=model,
-                    image_count=1,
+                    image_count=4,
                     context_cue_count=0,
                 )
                 diagnostics = _merge_candidate_diagnostics(
                     diagnostics,
                     edge_audit_diagnostics,
                 )
-                visibility_is_acceptable = _is_publishable_combat_visibility(edge_audit)
+                visibility_is_acceptable = not opponent_reaches_outer_edge
             if not visibility_is_acceptable:
                 annotation = replace(annotation, explanation_value="none")
         elif requires_publication_verification:
@@ -1033,25 +1051,51 @@ def _combat_visibility_edge_audit_payload(
     model: ResolvedModel,
     num_ctx: int,
 ) -> dict[str, object]:
-    """敵本体が画像端で欠けるfalse positiveを監査するrequestを返す。"""
+    """敵本体が外端へ続くfalse positiveを4辺stripで監査するrequestを返す。"""
     return {
         "model": model.configured_name,
         "stream": False,
         "think": False,
-        "format": COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
+        "format": COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA,
         "options": _generation_options(num_ctx),
         "messages": [
             {
                 "role": "user",
-                "content": (
-                    _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION
-                    + _INDEPENDENT_CONFIRMATION_INSTRUCTION
-                    + _COMBAT_VISIBILITY_EDGE_AUDIT_INSTRUCTION
-                ),
-                "images": [base64.b64encode(candidate.image_bytes).decode()],
+                "content": _COMBAT_VISIBILITY_EDGE_AUDIT_INSTRUCTION,
+                "images": [
+                    base64.b64encode(image_bytes).decode()
+                    for image_bytes in _combat_visibility_edge_strips(
+                        candidate.image_bytes
+                    )
+                ],
             }
         ],
     }
+
+
+def _combat_visibility_edge_strips(image_bytes: bytes) -> tuple[bytes, ...]:
+    """画像のtop、bottom、left、right外周30%を決定的なJPEGで返す。"""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as source:
+            image = source.convert("RGB")
+        width, height = image.size
+        boxes = (
+            (0, 0, width, max(1, height * 3 // 10)),
+            (0, min(height - 1, height * 7 // 10), width, height),
+            (0, 0, max(1, width * 3 // 10), height),
+            (min(width - 1, width * 7 // 10), 0, width, height),
+        )
+        strips: list[bytes] = []
+        for box in boxes:
+            output = io.BytesIO()
+            image.crop(box).save(output, format="JPEG", quality=95)
+            strips.append(output.getvalue())
+    except (OSError, ValueError):
+        raise VisionRuntimeError(
+            VisionRuntimeFailureReason.INVALID_REQUEST,
+            validation_code="combat_visibility_edge_audit_image_invalid",
+        ) from None
+    return tuple(strips)
 
 
 def _publication_boundary_verification_payload(
@@ -1414,6 +1458,37 @@ def _parse_combat_visibility_verification(
     return opponent_body_visibility, opponent_body_framing, effect_only_frame
 
 
+def _parse_combat_visibility_edge_audit(value: Mapping[str, object]) -> bool:
+    """4辺の直接観測を検証し、敵本体が外端へ到達するかだけを返す。"""
+    raw_edges = value.get("edges")
+    if set(value) != {"edges"} or not isinstance(raw_edges, list):
+        raise _schema_error("combat_visibility_edge_audit_schema_invalid")
+    if len(raw_edges) != len(_COMBAT_VISIBILITY_EDGE_NAMES):
+        raise _schema_error("combat_visibility_edge_audit_schema_invalid")
+    opponent_reaches_outer_edge = False
+    for expected_edge, raw_edge in zip(
+        _COMBAT_VISIBILITY_EDGE_NAMES,
+        raw_edges,
+        strict=True,
+    ):
+        if (
+            not isinstance(raw_edge, dict)
+            or set(raw_edge) != _COMBAT_VISIBILITY_EDGE_OBSERVATION_KEYS
+            or raw_edge.get("edge") != expected_edge
+        ):
+            raise _schema_error("combat_visibility_edge_audit_schema_invalid")
+        opponent_body_present = raw_edge.get("opponent_body_present")
+        reaches_outer_edge = raw_edge.get("opponent_body_reaches_outer_edge")
+        if (
+            not isinstance(opponent_body_present, bool)
+            or not isinstance(reaches_outer_edge, bool)
+            or (reaches_outer_edge and not opponent_body_present)
+        ):
+            raise _schema_error("combat_visibility_edge_audit_schema_invalid")
+        opponent_reaches_outer_edge |= opponent_body_present and reaches_outer_edge
+    return opponent_reaches_outer_edge
+
+
 def _parse_publication_boundary_verification(
     value: Mapping[str, object],
 ) -> tuple[bool, bool, bool, bool, bool]:
@@ -1730,11 +1805,12 @@ def _candidate_semantic_input(
             COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION
         ),
         "combat_visibility_edge_audit_schema_version": (
-            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION
+            COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA_VERSION
         ),
         "combat_visibility_edge_audit_stage_contract_version": (
             COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION
         ),
+        "combat_visibility_edge_strip_version": (COMBAT_VISIBILITY_EDGE_STRIP_VERSION),
         "publication_boundary_verification_prompt_version": (
             PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION
         ),
@@ -1815,7 +1891,7 @@ def _combat_visibility_edge_audit_semantic_input(
     model: ResolvedModel,
     num_ctx: int,
 ) -> dict[str, object]:
-    """四辺監査のcache identity入力を返す。"""
+    """外周strip監査のcache identity入力を返す。"""
     return {
         "frame_candidate": {
             "id": candidate.identifier,
@@ -1824,8 +1900,9 @@ def _combat_visibility_edge_audit_semantic_input(
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
         "generation_options": _semantic_generation_options(),
         "prompt_version": COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION,
-        "schema_version": COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
+        "schema_version": COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA_VERSION,
         "stage_contract_version": COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION,
+        "edge_strip_version": COMBAT_VISIBILITY_EDGE_STRIP_VERSION,
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
 
@@ -1951,7 +2028,7 @@ def _contract_versions(stage_kind: StageKind) -> tuple[str, str, str]:
     if stage_kind == "combat_visibility_edge_audit":
         return (
             COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION,
-            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
+            COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA_VERSION,
             COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION,
         )
     if stage_kind == "publication_boundary_verification":

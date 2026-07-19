@@ -293,7 +293,7 @@ Candidate Annotationの主推論が掲載可能とした戦闘、Combat Encounte
 _Avoid_: second Candidate Annotation, contextual combat classification, final selection
 
 **Combat Visibility Edge Audit**:
-二回のCombat Visibility Verificationがともに掲載可能としたRepresentative Frame一枚だけに対し、同じstrict schemaと画像を使って実行する最終の条件付きOllama推論。画像の上端・下端・左端・右端を順に確認し、敵名、HP bar、光、攻撃effectを敵本体に数えず、攻撃相手本体の主要な輪郭がどれかの画像端で切れていればExplanation Valueを`none`に下げる。二回の可視性確認と四辺監査のすべてが攻撃相手本体を`clear`、構図を`complete`、エフェクトだけではないとした場合だけ掲載価値を保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
+二回のCombat Visibility Verificationがともに掲載可能としたRepresentative Frame一枚だけに対し、上端・下端・左端・右端それぞれの外周30%をlocalで切り出し、4枚を一度に渡して実行する最終の条件付きOllama推論。各stripについて攻撃相手本体が判別可能か、その主要な輪郭が元画像の実際の外端へ到達するかだけを専用strict schemaで直接観測する。敵名、HP bar、光、攻撃effect、影、背景、診断用の内側crop境界を敵本体の外端到達に数えない。どれか一辺で敵本体の存在と実際の外端への到達がともに確認された場合はExplanation Valueを`none`に下げる。二回の可視性確認と外周strip監査のすべてを通った場合だけ掲載価値を保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
 _Avoid_: generic effect threshold, second Candidate Annotation, final selection
 
 **Publication Boundary Verification**:

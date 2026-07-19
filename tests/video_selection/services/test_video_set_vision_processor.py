@@ -110,6 +110,7 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     assert '"scene_kind": "exploration"' in cache_text
     assert '"seed": 0' in cache_text
     assert '"combat_visibility_edge_audit_prompt_version"' in cache_text
+    assert '"combat_visibility_edge_strip_version"' in cache_text
 
 
 def test_batch_boundary_rejects_metadata_change_after_annotation(

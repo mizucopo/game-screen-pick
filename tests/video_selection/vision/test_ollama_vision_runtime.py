@@ -1,3 +1,5 @@
+import base64
+import io
 import json
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -9,6 +11,7 @@ from typing import cast
 from urllib.error import HTTPError
 
 import pytest
+from PIL import Image
 
 from src.video_selection.models.candidate_annotation import (
     candidate_annotation_free_text_is_safe,
@@ -1662,6 +1665,8 @@ def test_publishable_combat_visibility_is_visually_rechecked(
                     (("frame-a", "battle", "gameplay_action", "high", "hud"),)
                 )
             )
+        if len(payloads) == 4:
+            return _response(_combat_visibility_edge_audit_payload())
         return _response(
             {
                 "effect_screen_coverage": "over_half",
@@ -1721,7 +1726,8 @@ def test_publishable_combat_visibility_is_visually_rechecked(
         assert "先の回答を推測せず" in confirmation_prompt
         edge_audit_prompt = _last_message(payloads[3])["content"]
         assert isinstance(edge_audit_prompt, str)
-        assert "画像の上端、下端、左端、右端を順に確認" in edge_audit_prompt
+        assert "外周30%を切り出した診断画像" in edge_audit_prompt
+        assert "順番はtop、bottom、left、right" in edge_audit_prompt
 
 
 def test_clean_combat_visibility_is_confirmed_before_publication() -> None:
@@ -1793,15 +1799,15 @@ def test_clean_combat_visibility_is_confirmed_before_publication() -> None:
 
 
 def test_combat_edge_audit_rejects_cropped_opponent_after_false_positives() -> None:
-    """二回の可視性誤判定後も四辺監査で欠けた敵が掲載不可にされること。
+    """二回の可視性誤判定後も外周strip監査で欠けた敵が掲載不可にされること。
 
     Arrange:
         - 主推論と二回の可視性確認で掲載可能と誤判定される戦闘が用意される
-        - 四辺監査では敵本体が画面端で欠ける応答が用意される
+        - 外周strip監査では敵本体が実際の外端へ到達する応答が用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 四辺監査の直接観測によりExplanation Valueがnoneにされること
+        - 外周stripの直接観測によりExplanation Valueがnoneにされること
     """
     # Arrange
     payloads: list[Mapping[str, object]] = []
@@ -1820,16 +1826,14 @@ def test_combat_edge_audit_rejects_cropped_opponent_after_false_positives() -> N
                     (("frame-a", "battle", "gameplay_action", "high", "hud"),)
                 )
             )
-        verification = _combat_visibility_payload(
-            opponent_body_visibility="clear",
-            opponent_body_framing="complete",
-        )
         if len(payloads) == 4:
-            verification = _combat_visibility_payload(
-                opponent_body_visibility="partial",
-                opponent_body_framing="edge_cropped",
+            return _response(_combat_visibility_edge_audit_payload(("right",)))
+        return _response(
+            _combat_visibility_payload(
+                opponent_body_visibility="clear",
+                opponent_body_framing="complete",
             )
-        return _response(verification)
+        )
 
     runtime = OllamaVisionRuntime(
         "http://localhost:11434",
@@ -1852,8 +1856,81 @@ def test_combat_edge_audit_rejects_cropped_opponent_after_false_positives() -> N
     assert diagnostics.attempt_count == 4
     edge_audit_prompt = _last_message(payloads[3])["content"]
     assert isinstance(edge_audit_prompt, str)
-    assert "画像の上端、下端、左端、右端を順に確認" in edge_audit_prompt
-    assert "opponent_body_framingを必ずedge_cropped" in edge_audit_prompt
+    assert "外周30%を切り出した診断画像" in edge_audit_prompt
+    assert "診断用の内側crop境界に触れることは数えません" in edge_audit_prompt
+    edge_images = _last_message(payloads[3])["images"]
+    assert isinstance(edge_images, list)
+    assert all(isinstance(item, str) for item in edge_images)
+    image_sizes = []
+    for encoded_image in edge_images:
+        assert isinstance(encoded_image, str)
+        with Image.open(io.BytesIO(base64.b64decode(encoded_image))) as image:
+            image_sizes.append(image.size)
+    assert image_sizes == [(20, 3), (20, 3), (6, 10), (6, 10)]
+
+
+def test_combat_edge_audit_schema_failure_is_retried() -> None:
+    """外周strip監査の不正な辺一覧が一回だけ再試行されること。
+
+    Arrange:
+        - 二回の可視性確認で掲載可能とされる戦闘が用意される
+        - 初回の外周strip監査では辺が欠け、再試行では4辺が返される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - stable validation code付きで修復され掲載価値が保持されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+                )
+            )
+        if len(payloads) == 4:
+            return _response({"edges": []})
+        if len(payloads) == 5:
+            return _response(_combat_visibility_edge_audit_payload())
+        return _response(
+            _combat_visibility_payload(
+                opponent_body_visibility="clear",
+                opponent_body_framing="complete",
+            )
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "high"
+    assert diagnostics.attempt_count == 5
+    assert diagnostics.validation_code == "combat_visibility_edge_audit_schema_invalid"
+    repair_prompt = _last_message(payloads[4])["content"]
+    assert isinstance(repair_prompt, str)
+    assert "combat_visibility_edge_audit_schema_invalid" in repair_prompt
 
 
 def test_possible_combat_is_routed_before_visibility_verification() -> None:
@@ -2241,6 +2318,8 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
                     evidence="enemy_status_ui",
                 )
             )
+        if len(payloads) == 6:
+            return _response(_combat_visibility_edge_audit_payload())
         return _response(
             {
                 "effect_screen_coverage": "under_quarter",
@@ -2281,7 +2360,7 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
     assert len(payloads) == 6
     edge_audit_prompt = _last_message(payloads[5])["content"]
     assert isinstance(edge_audit_prompt, str)
-    assert "画像の上端、下端、左端、右端を順に確認" in edge_audit_prompt
+    assert "外周30%を切り出した診断画像" in edge_audit_prompt
     confirmation_prompt = _last_message(payloads[4])["content"]
     assert isinstance(confirmation_prompt, str)
     assert "掲載可否を確定する独立した再確認" in confirmation_prompt
@@ -2326,6 +2405,8 @@ def test_combat_visibility_schema_failure_is_retried() -> None:
         }
         if len(payloads) == 2:
             del verification["effect_only_frame"]
+        if len(payloads) == 5:
+            return _response(_combat_visibility_edge_audit_payload())
         return _response(verification)
 
     runtime = OllamaVisionRuntime(
@@ -3535,6 +3616,21 @@ def _combat_visibility_payload(
     }
 
 
+def _combat_visibility_edge_audit_payload(
+    cropped_edges: tuple[str, ...] = (),
+) -> dict[str, object]:
+    return {
+        "edges": [
+            {
+                "edge": edge,
+                "opponent_body_present": edge in cropped_edges,
+                "opponent_body_reaches_outer_edge": edge in cropped_edges,
+            }
+            for edge in ("top", "bottom", "left", "right")
+        ]
+    }
+
+
 def _response(content: dict[str, object]) -> dict[str, object]:
     return {
         "message": {"content": json.dumps(content, ensure_ascii=False)},
@@ -3610,7 +3706,7 @@ def _catalog_with_battle_display(display_name: str) -> SceneCatalog:
 
 
 def _annotation_request() -> CandidateAnnotationRequest:
-    frame = FrameCandidate("frame-a", b"image-a")
+    frame = FrameCandidate("frame-a", _image_bytes())
     moment = CandidateMoment(
         identifier="mom_" + "a" * 64,
         source_pts=100,
@@ -3634,6 +3730,13 @@ def _annotation_request() -> CandidateAnnotationRequest:
         selection_intent="ブログ本文を説明できる画像を選ぶ",
         cue_selection_policy_version="nearby-context-v1",
     )
+
+
+def _image_bytes() -> bytes:
+    """外周cropにも利用できる20x10 JPEGを返す。"""
+    output = io.BytesIO()
+    Image.new("RGB", (20, 10), color=(32, 64, 96)).save(output, format="JPEG")
+    return output.getvalue()
 
 
 def _annotation_request_with_frame_ids(

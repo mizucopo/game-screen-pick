@@ -22,7 +22,7 @@ SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v2"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v6"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v21"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v22"
 COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION = "combat-encounter-verification-prompt-v1"
 COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION = "combat-encounter-verification-schema-v1"
 COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION = (
@@ -47,10 +47,12 @@ COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION = (
 COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION = (
     "combat-visibility-confirmation-stage-v1"
 )
-COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION = "combat-visibility-edge-audit-prompt-v1"
+COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION = "combat-visibility-edge-audit-prompt-v2"
+COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA_VERSION = "combat-visibility-edge-audit-schema-v1"
 COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION = (
-    "combat-visibility-edge-audit-stage-v1"
+    "combat-visibility-edge-audit-stage-v2"
 )
+COMBAT_VISIBILITY_EDGE_STRIP_VERSION = "combat-visibility-edge-strips-v1"
 PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION = (
     "publication-boundary-verification-prompt-v1"
 )
@@ -269,6 +271,36 @@ COMBAT_VISIBILITY_VERIFICATION_SCHEMA: dict[str, object] = {
         "effect_overlaps_combatant_body",
         "effect_only_frame",
     ],
+}
+
+COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "edges": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "edge": {
+                        "type": "string",
+                        "enum": ["top", "bottom", "left", "right"],
+                    },
+                    "opponent_body_present": {"type": "boolean"},
+                    "opponent_body_reaches_outer_edge": {"type": "boolean"},
+                },
+                "required": [
+                    "edge",
+                    "opponent_body_present",
+                    "opponent_body_reaches_outer_edge",
+                ],
+            },
+        }
+    },
+    "required": ["edges"],
 }
 
 COMBAT_ENCOUNTER_VERIFICATION_SCHEMA: dict[str, object] = {
