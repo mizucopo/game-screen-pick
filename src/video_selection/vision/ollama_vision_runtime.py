@@ -73,6 +73,10 @@ from ..services.select_representative_candidate_frame_observation import (
     select_representative_candidate_frame_observation,
 )
 from ..utils.http_retry_delay import http_retry_delay
+from .detect_cinematic_letterbox import (
+    CINEMATIC_LETTERBOX_DETECTION_VERSION,
+    has_cinematic_letterbox,
+)
 from .vision_contract import (
     CANDIDATE_ANNOTATION_PROMPT_VERSION,
     CANDIDATE_ANNOTATION_SCHEMA,
@@ -547,6 +551,12 @@ class OllamaVisionRuntime:
             image_count=len(request.frame_candidates),
             context_cue_count=len(request.context_cues),
         )
+        cinematic_letterbox_detected = has_cinematic_letterbox(
+            annotation.candidate.image_bytes
+        )
+        requires_publication_verification = requires_publication_verification or (
+            annotation.explanation_value != "none" and cinematic_letterbox_detected
+        )
         combat_scene = catalog.for_slug(annotation.scene_slug).scene_kind == "combat"
         if requires_combat_encounter_verification:
             verification_input = _combat_encounter_verification_semantic_input(
@@ -728,7 +738,7 @@ class OllamaVisionRuntime:
                 context_cue_count=0,
             )
             static_event_setup = (
-                cinematic_letterbox
+                (cinematic_letterbox or cinematic_letterbox_detected)
                 and event_staging
                 and not on_screen_dialogue_text_visible
                 and not visible_character_action
@@ -1819,6 +1829,9 @@ def _candidate_semantic_input(
         ),
         "publication_boundary_verification_stage_contract_version": (
             PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "cinematic_letterbox_detection_version": (
+            CINEMATIC_LETTERBOX_DETECTION_VERSION
         ),
         "retry_policy_version": RETRY_POLICY_VERSION,
     }

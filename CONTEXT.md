@@ -261,7 +261,7 @@ Selection Shortlist内の一つのCandidate Momentが参照する1から3件のF
 _Avoid_: model-selected output, selected output, Frame Refinement
 
 **Candidate Frame Observation**:
-Candidate Annotationの主Ollama推論が、一つのFrame Candidateだけを対象に返すstrict enum中心の意味観測。Scene Slug、画面内容、画面全体の主用途を表すInterface Kind、会話eventの大きな人物立ち絵・胸像の有無、黒帯・HUDのない固定camera・人物配置から分かるCinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、具体的な動作・判別可能な人物または敵の有無、戦闘かどうか、player本体・攻撃相手本体それぞれの`clear`・`partial`・`absent`、一時的な光・爆発・煙だけが主内容か、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskとevidenceを持つ。Dialogue Text Presentationは`none`、`dialogue_box`、`speech_bubble`、`subtitle_overlay`、`other`のいずれかで、画面内台詞文字の有無と必ず一致する。音声やContext Cueの会話文を画面内台詞にしない。手紙・手記・日誌・記録を読む画面はInterface Kind `document`として観測する。戦闘HUDだけではInterface Kindを`other_interface`にせず、人物portrait、空の台詞欄、説明文、目的表示、menu項目を台詞として扱わない。会話eventの大きな人物立ち絵・胸像と、画面隅の小さな常設HUD portraitを区別する。通常の戦闘・探索HUDをCinematic Event Presentationにしない。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体として数えない。Representative Frame、最終score、適格性、最終採否は決めない。
+Candidate Annotationの主Ollama推論が、一つのFrame Candidateだけを対象に返すstrict enum中心の意味観測。Scene Slug、画面内容、画面全体の主用途を表すInterface Kind、会話eventの大きな人物立ち絵・胸像の有無、黒帯・HUDのない固定camera・人物配置から分かるCinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、具体的な動作・判別可能な人物または敵の有無、戦闘かどうか、player本体・攻撃相手本体それぞれの`clear`・`partial`・`absent`、一時的な光・爆発・煙だけが主内容か、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskとevidenceを持つ。Dialogue Text Presentationは`none`、`dialogue_box`、`speech_bubble`、`subtitle_overlay`、`other`のいずれかで、画面内台詞文字の有無と必ず一致する。音声やContext Cueの会話文を画面内台詞にしない。手紙・手記・日誌・記録を読む画面はInterface Kind `document`として観測する。戦闘HUDだけではInterface Kindを`other_interface`にせず、人物portrait、空の台詞欄、説明文、目的表示、menu項目を台詞として扱わない。会話eventの大きな人物立ち絵・胸像と、画面隅の小さな常設HUD portraitを区別する。通常の戦闘・探索HUDをCinematic Event Presentationにしない。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体として数えない。上下両端の太い暗色帯は画素から決定的に補助検知し、Scene Catalogや主推論がeventを`other`へ誤分類しても掲載境界監査を省略しない。Representative Frame、最終score、適格性、最終採否は決めない。
 _Avoid_: Candidate Annotation artifact, Representative Frame, model-selected output
 
 **Cross-Video Diversity**:
@@ -297,7 +297,7 @@ _Avoid_: second Candidate Annotation, contextual combat classification, final se
 _Avoid_: generic effect threshold, second Candidate Annotation, final selection
 
 **Publication Boundary Verification**:
-Candidate Annotationの主推論が掲載可能とした非戦闘の地図、またはScene Selection Roleが`cinematic`のRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。一時的な遷移effectの有無・種類・画面占有率、上下の黒帯、event用の人物配置、画面内台詞文字、人物の具体的な動作、主内容の可読性をstrict enumで観測する。一時的な遷移effectがある場合、または上下の黒帯とevent用の人物配置があり画面内台詞も具体的な動作もない場合はExplanation Valueを`none`に下げるが、Scene Slug、画面内容、Spoiler Risk、説明文を変更しない。地図の雲、cursor、選択marker、常設UIは遷移effectにしない。
+Candidate Annotationの主推論が掲載可能とした非戦闘の地図、Scene Selection Roleが`cinematic`の場面、または画素から上下両端の太い暗色帯が検知されたRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。一時的な遷移effectの有無・種類・画面占有率、上下の黒帯、event用の人物配置、画面内台詞文字、人物の具体的な動作、主内容の可読性をstrict enumで観測する。画素検知した黒帯はmodelの見落としより優先する。一時的な遷移effectがある場合、または上下の黒帯とevent用の人物配置があり画面内台詞も具体的な動作もない場合はExplanation Valueを`none`に下げるが、Scene Slug、画面内容、Spoiler Risk、説明文を変更しない。地図の雲、cursor、選択marker、常設UIは遷移effectにしない。
 _Avoid_: second Candidate Annotation, contextual event classification, final selection
 
 **Scene**:

@@ -2755,6 +2755,63 @@ def test_static_cinematic_setup_is_visually_rechecked(
     assert diagnostics.validation_code is None
 
 
+def test_letterboxed_ordinary_scene_is_visually_rechecked() -> None:
+    """Otherへ誤分類された上下黒帯の静止eventも専用確認されること。
+
+    Arrange:
+        - 上下黒帯の画像が通常playの待機場面と誤分類される応答が用意される
+        - 複数人物の固定配置だが黒帯を見落とした専用応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 画素から黒帯が補完され、台詞のない静止eventが掲載不可にされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "other", "gameplay_idle", "medium", "none"),)
+                )
+            )
+        return _response(
+            _publication_boundary_payload(
+                cinematic_letterbox=False,
+                event_staging=True,
+            )
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(image_bytes=_letterboxed_image_bytes()),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 2
+    assert len(payloads) == 2
+
+
 def test_publication_boundary_schema_failure_is_retried() -> None:
     """掲載境界専用確認のschema違反が一回だけ再試行されること。
 
@@ -3705,8 +3762,11 @@ def _catalog_with_battle_display(display_name: str) -> SceneCatalog:
     )
 
 
-def _annotation_request() -> CandidateAnnotationRequest:
-    frame = FrameCandidate("frame-a", _image_bytes())
+def _annotation_request(
+    *,
+    image_bytes: bytes | None = None,
+) -> CandidateAnnotationRequest:
+    frame = FrameCandidate("frame-a", image_bytes or _image_bytes())
     moment = CandidateMoment(
         identifier="mom_" + "a" * 64,
         source_pts=100,
@@ -3736,6 +3796,19 @@ def _image_bytes() -> bytes:
     """外周cropにも利用できる20x10 JPEGを返す。"""
     output = io.BytesIO()
     Image.new("RGB", (20, 10), color=(32, 64, 96)).save(output, format="JPEG")
+    return output.getvalue()
+
+
+def _letterboxed_image_bytes() -> bytes:
+    """上下10%に黒帯を持つJPEGを返す。"""
+    image = Image.new("RGB", (320, 180), color=(72, 104, 136))
+    pixels = image.load()
+    assert pixels is not None
+    for y in (*range(18), *range(162, 180)):
+        for x in range(image.width):
+            pixels[x, y] = (0, 0, 0)
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=95)
     return output.getvalue()
 
 

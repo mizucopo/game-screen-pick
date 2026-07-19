@@ -28,6 +28,9 @@ from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 from ..models.vision_stage_result import VisionStageResult
 from ..protocols.run_observer import RunObserver
 from ..protocols.vision_runtime import VisionRuntime
+from ..vision.detect_cinematic_letterbox import (
+    CINEMATIC_LETTERBOX_DETECTION_VERSION,
+)
 from ..vision.vision_contract import (
     CANDIDATE_ANNOTATION_PROMPT_VERSION,
     CANDIDATE_ANNOTATION_SCHEMA_VERSION,
@@ -506,6 +509,9 @@ def _annotation_semantic_input(
         ),
         "publication_boundary_verification_stage_contract_version": (
             PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "cinematic_letterbox_detection_version": (
+            CINEMATIC_LETTERBOX_DETECTION_VERSION
         ),
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
