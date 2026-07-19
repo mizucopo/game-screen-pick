@@ -82,6 +82,8 @@ from .vision_contract import (
     COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION,
     COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION,
     COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION,
+    COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION,
+    COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
@@ -111,6 +113,7 @@ StageKind = Literal[
     "combat_encounter_confirmation",
     "combat_encounter_verification",
     "combat_visibility_confirmation",
+    "combat_visibility_edge_audit",
     "combat_visibility_verification",
     "publication_boundary_verification",
 ]
@@ -277,6 +280,12 @@ _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION = (
 _INDEPENDENT_CONFIRMATION_INSTRUCTION = (
     "これは掲載可否を確定する独立した再確認です。先の回答を推測せず、"
     "画像の画素を最初から観測し直してください。"
+)
+_COMBAT_VISIBILITY_EDGE_AUDIT_INSTRUCTION = (
+    "掲載可能と判断する前に、画像の上端、下端、左端、右端を順に確認してください。"
+    "攻撃相手本体の主要な輪郭がどれかの画像端で切れている場合は、"
+    "opponent_body_framingを必ずedge_croppedにし、opponent_body_visibilityを"
+    "clearにしません。敵名、HP bar、光、攻撃effectを敵本体と取り違えません。"
 )
 _PUBLICATION_BOUNDARY_VERIFICATION_INSTRUCTION = (
     "この画像1枚に実際に見える画素だけを観測してください。音声、前後場面、"
@@ -551,6 +560,7 @@ class OllamaVisionRuntime:
                 verification_diagnostics,
             )
             first_combat_visibility = combat_visibility
+            confirmed_combat_visibility = None
             if (
                 _is_publishable_combat_visibility(first_combat_visibility)
                 or requires_noncombat_visibility_verification
@@ -579,17 +589,46 @@ class OllamaVisionRuntime:
                     diagnostics,
                     confirmation_diagnostics,
                 )
+                confirmed_combat_visibility = combat_visibility
+            combat_is_consistently_publishable = (
+                confirmed_combat_visibility is not None
+                and _is_publishable_combat_visibility(first_combat_visibility)
+                and _is_publishable_combat_visibility(confirmed_combat_visibility)
+            )
             if requires_noncombat_visibility_verification:
                 visibility_is_acceptable = (
-                    _is_consistent_noncombat_or_publishable_combat_visibility(
+                    confirmed_combat_visibility is not None
+                    and _is_consistent_noncombat_or_publishable_combat_visibility(
                         first_combat_visibility,
-                        combat_visibility,
+                        confirmed_combat_visibility,
                     )
                 )
             else:
-                visibility_is_acceptable = _is_publishable_combat_visibility(
-                    combat_visibility
+                visibility_is_acceptable = combat_is_consistently_publishable
+            if visibility_is_acceptable and combat_is_consistently_publishable:
+                edge_audit_input = _combat_visibility_edge_audit_semantic_input(
+                    annotation.candidate,
+                    model,
+                    num_ctx,
                 )
+                edge_audit, edge_audit_diagnostics = self._infer(
+                    stage_kind="combat_visibility_edge_audit",
+                    request_fingerprint=_fingerprint(edge_audit_input),
+                    payload=_combat_visibility_edge_audit_payload(
+                        annotation.candidate,
+                        model,
+                        num_ctx,
+                    ),
+                    parser=_parse_combat_visibility_verification,
+                    model=model,
+                    image_count=1,
+                    context_cue_count=0,
+                )
+                diagnostics = _merge_candidate_diagnostics(
+                    diagnostics,
+                    edge_audit_diagnostics,
+                )
+                visibility_is_acceptable = _is_publishable_combat_visibility(edge_audit)
             if not visibility_is_acceptable:
                 annotation = replace(annotation, explanation_value="none")
         elif requires_publication_verification:
@@ -932,6 +971,32 @@ def _combat_visibility_verification_payload(
                     _INDEPENDENT_CONFIRMATION_INSTRUCTION
                     if independently_confirm
                     else ""
+                ),
+                "images": [base64.b64encode(candidate.image_bytes).decode()],
+            }
+        ],
+    }
+
+
+def _combat_visibility_edge_audit_payload(
+    candidate: FrameCandidate,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    """敵本体が画像端で欠けるfalse positiveを監査するrequestを返す。"""
+    return {
+        "model": model.configured_name,
+        "stream": False,
+        "think": False,
+        "format": COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
+        "options": {"temperature": 0, "num_ctx": num_ctx},
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION
+                    + _INDEPENDENT_CONFIRMATION_INSTRUCTION
+                    + _COMBAT_VISIBILITY_EDGE_AUDIT_INSTRUCTION
                 ),
                 "images": [base64.b64encode(candidate.image_bytes).decode()],
             }
@@ -1571,6 +1636,15 @@ def _candidate_semantic_input(
         "combat_visibility_confirmation_stage_contract_version": (
             COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION
         ),
+        "combat_visibility_edge_audit_prompt_version": (
+            COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION
+        ),
+        "combat_visibility_edge_audit_schema_version": (
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_visibility_edge_audit_stage_contract_version": (
+            COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION
+        ),
         "publication_boundary_verification_prompt_version": (
             PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION
         ),
@@ -1642,6 +1716,26 @@ def _combat_visibility_verification_semantic_input(
         "prompt_version": prompt_version,
         "schema_version": COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
         "stage_contract_version": stage_contract_version,
+        "retry_policy_version": RETRY_POLICY_VERSION,
+    }
+
+
+def _combat_visibility_edge_audit_semantic_input(
+    candidate: FrameCandidate,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> dict[str, object]:
+    """四辺監査のcache identity入力を返す。"""
+    return {
+        "frame_candidate": {
+            "id": candidate.identifier,
+            "image_sha256": hashlib.sha256(candidate.image_bytes).hexdigest(),
+        },
+        "model": {**model.semantic_input(), "num_ctx": num_ctx},
+        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "prompt_version": COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION,
+        "schema_version": COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
+        "stage_contract_version": COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION,
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
 
@@ -1762,6 +1856,12 @@ def _contract_versions(stage_kind: StageKind) -> tuple[str, str, str]:
             COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION,
             COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
             COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION,
+        )
+    if stage_kind == "combat_visibility_edge_audit":
+        return (
+            COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION,
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
+            COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION,
         )
     if stage_kind == "publication_boundary_verification":
         return (

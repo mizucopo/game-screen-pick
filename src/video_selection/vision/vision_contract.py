@@ -21,7 +21,7 @@ SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v1"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v18"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v19"
 COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION = "combat-encounter-verification-prompt-v1"
 COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION = "combat-encounter-verification-schema-v1"
 COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION = (
@@ -45,6 +45,10 @@ COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION = (
 )
 COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION = (
     "combat-visibility-confirmation-stage-v1"
+)
+COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION = "combat-visibility-edge-audit-prompt-v1"
+COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION = (
+    "combat-visibility-edge-audit-stage-v1"
 )
 PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION = (
     "publication-boundary-verification-prompt-v1"

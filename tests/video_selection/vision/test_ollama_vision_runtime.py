@@ -1449,7 +1449,7 @@ def test_contextual_cinematic_dialogue_is_visually_rechecked(
         "expected_attempt_count",
     ),
     (
-        ("clear", "complete", False, "high", 3),
+        ("clear", "complete", False, "high", 4),
         ("clear", "edge_cropped", False, "none", 2),
         ("absent", "absent", False, "none", 2),
         ("clear", "complete", True, "none", 2),
@@ -1541,11 +1541,14 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     assert "画像の端で大きく切れる" in second_prompt
     assert "opponent_body_framing" in second_prompt
     assert "音声、前後場面、説明文は使いません" in second_prompt
-    if expected_attempt_count == 3:
+    if expected_attempt_count == 4:
         confirmation_prompt = _last_message(payloads[2])["content"]
         assert isinstance(confirmation_prompt, str)
         assert "掲載可否を確定する独立した再確認" in confirmation_prompt
         assert "先の回答を推測せず" in confirmation_prompt
+        edge_audit_prompt = _last_message(payloads[3])["content"]
+        assert isinstance(edge_audit_prompt, str)
+        assert "画像の上端、下端、左端、右端を順に確認" in edge_audit_prompt
 
 
 def test_clean_combat_visibility_is_confirmed_before_publication() -> None:
@@ -1614,6 +1617,70 @@ def test_clean_combat_visibility_is_confirmed_before_publication() -> None:
     confirmation_prompt = _last_message(payloads[2])["content"]
     assert isinstance(confirmation_prompt, str)
     assert "画像の画素を最初から観測し直してください" in confirmation_prompt
+
+
+def test_combat_edge_audit_rejects_cropped_opponent_after_false_positives() -> None:
+    """二回の可視性誤判定後も四辺監査で欠けた敵が掲載不可にされること。
+
+    Arrange:
+        - 主推論と二回の可視性確認で掲載可能と誤判定される戦闘が用意される
+        - 四辺監査では敵本体が画面端で欠ける応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 四辺監査の直接観測によりExplanation Valueがnoneにされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+                )
+            )
+        verification = _combat_visibility_payload(
+            opponent_body_visibility="clear",
+            opponent_body_framing="complete",
+        )
+        if len(payloads) == 4:
+            verification = _combat_visibility_payload(
+                opponent_body_visibility="partial",
+                opponent_body_framing="edge_cropped",
+            )
+        return _response(verification)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 4
+    edge_audit_prompt = _last_message(payloads[3])["content"]
+    assert isinstance(edge_audit_prompt, str)
+    assert "画像の上端、下端、左端、右端を順に確認" in edge_audit_prompt
+    assert "opponent_body_framingを必ずedge_cropped" in edge_audit_prompt
 
 
 def test_possible_combat_is_routed_before_visibility_verification() -> None:
@@ -1975,14 +2042,17 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
 
     # Assert
     assert annotation.explanation_value == "high"
-    assert diagnostics.attempt_count == 5
+    assert diagnostics.attempt_count == 6
     assert diagnostics.validation_code == (
         "combat_encounter_verification_schema_invalid"
     )
     third_prompt = _last_message(payloads[2])["content"]
     assert isinstance(third_prompt, str)
     assert "combat_encounter_verification_schema_invalid" in third_prompt
-    assert len(payloads) == 5
+    assert len(payloads) == 6
+    edge_audit_prompt = _last_message(payloads[5])["content"]
+    assert isinstance(edge_audit_prompt, str)
+    assert "画像の上端、下端、左端、右端を順に確認" in edge_audit_prompt
     confirmation_prompt = _last_message(payloads[4])["content"]
     assert isinstance(confirmation_prompt, str)
     assert "掲載可否を確定する独立した再確認" in confirmation_prompt
@@ -2047,7 +2117,7 @@ def test_combat_visibility_schema_failure_is_retried() -> None:
 
     # Assert
     assert annotation.explanation_value == "high"
-    assert diagnostics.attempt_count == 4
+    assert diagnostics.attempt_count == 5
     assert (
         diagnostics.validation_code == "combat_visibility_verification_schema_invalid"
     )
