@@ -1702,16 +1702,16 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
     assert "opponent_body_framing" in visibility_prompt
 
 
-def test_noncombat_recurring_action_stops_after_encounter_verification() -> None:
-    """非戦闘のrecurring actionが敵不在だけでは掲載不可にされないこと。
+def test_noncombat_recurring_action_is_cross_checked_by_visibility() -> None:
+    """非戦闘のrecurring actionが敵可視性でも再確認されること。
 
     Arrange:
         - recurring gameplayの非戦闘action応答が用意される
-        - 敵status UIも対戦相手もない専用応答が用意される
+        - 戦闘なしと敵本体なしが各二回返される専用応答が用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 二回とも非戦闘なら戦闘可視性確認へ進まず掲載価値が保持されること
+        - 両方の観測で戦闘が否定された場合だけ掲載価値が保持されること
     """
     # Arrange
     payloads: list[Mapping[str, object]] = []
@@ -1730,7 +1730,9 @@ def test_noncombat_recurring_action_stops_after_encounter_verification() -> None
                     (("frame-a", "exploration", "gameplay_action", "high", "hud"),)
                 )
             )
-        return _response(_combat_encounter_payload(visible=False, evidence="none"))
+        if len(payloads) <= 3:
+            return _response(_combat_encounter_payload(visible=False, evidence="none"))
+        return _response(_combat_visibility_payload())
 
     runtime = OllamaVisionRuntime(
         "http://localhost:11434",
@@ -1750,15 +1752,85 @@ def test_noncombat_recurring_action_stops_after_encounter_verification() -> None
 
     # Assert
     assert annotation.explanation_value == "high"
-    assert diagnostics.attempt_count == 3
+    assert diagnostics.attempt_count == 5
     assert diagnostics.validation_code is None
-    assert len(payloads) == 3
+    assert len(payloads) == 5
     confirmation_prompt = _last_message(payloads[2])["content"]
     assert isinstance(confirmation_prompt, str)
     assert "掲載可否を確定する独立した再確認" in confirmation_prompt
+    visibility_prompt = _last_message(payloads[3])["content"]
+    assert isinstance(visibility_prompt, str)
+    assert "opponent_body_framing" in visibility_prompt
+    visibility_confirmation_prompt = _last_message(payloads[4])["content"]
+    assert isinstance(visibility_confirmation_prompt, str)
+    assert "掲載可否を確定する独立した再確認" in (visibility_confirmation_prompt)
 
 
-def test_negative_combat_encounter_is_confirmed_before_skipping_visibility() -> None:
+def test_missed_combat_is_rejected_by_visibility_cross_check() -> None:
+    """二回見落とされた戦闘が敵本体の画面端検出で掲載不可にされること。
+
+    Arrange:
+        - boss戦を非戦闘と誤分類したrecurring gameplay応答が用意される
+        - 戦闘なしが二回返された後、画面端の敵が独立確認で検出される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 戦闘有無確認の見落としにかかわらずExplanation Valueがnoneにされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            response = _frame_observation_payload(
+                (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+            )
+            observation = _first_frame_observation(response)
+            observation["combat_action"] = False
+            observation["opponent_body_visibility"] = "absent"
+            return _response(response)
+        if len(payloads) <= 3:
+            return _response(_combat_encounter_payload(visible=False, evidence="none"))
+        if len(payloads) == 4:
+            return _response(_combat_visibility_payload())
+        return _response(
+            _combat_visibility_payload(
+                opponent_body_visibility="partial",
+                opponent_body_framing="edge_cropped",
+            )
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 5
+    assert diagnostics.validation_code is None
+    assert len(payloads) == 5
+
+
+def test_negative_combat_encounter_is_confirmed_before_visibility_routing() -> None:
     """一度だけ非戦闘とされたactionが独立確認で戦闘へ戻されること。
 
     Arrange:
@@ -3142,6 +3214,22 @@ def _combat_encounter_payload(*, visible: bool, evidence: str) -> dict[str, obje
     return {
         "combat_encounter_visible": visible,
         "combat_encounter_evidence": evidence,
+    }
+
+
+def _combat_visibility_payload(
+    *,
+    opponent_body_visibility: str = "absent",
+    opponent_body_framing: str = "absent",
+) -> dict[str, object]:
+    return {
+        "effect_screen_coverage": "none",
+        "largest_foreground_element": "environment",
+        "player_body_visibility": "clear",
+        "opponent_body_visibility": opponent_body_visibility,
+        "opponent_body_framing": opponent_body_framing,
+        "effect_overlaps_combatant_body": "none",
+        "effect_only_frame": False,
     }
 
 

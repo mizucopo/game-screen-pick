@@ -524,7 +524,10 @@ class OllamaVisionRuntime:
                     confirmation_diagnostics,
                 )
             requires_combat_verification = combat_encounter_visible
-        if requires_combat_verification:
+        requires_noncombat_visibility_verification = (
+            requires_combat_encounter_verification and not requires_combat_verification
+        )
+        if requires_combat_verification or requires_noncombat_visibility_verification:
             verification_input = _combat_visibility_verification_semantic_input(
                 annotation.candidate,
                 model,
@@ -547,7 +550,11 @@ class OllamaVisionRuntime:
                 diagnostics,
                 verification_diagnostics,
             )
-            if _is_publishable_combat_visibility(combat_visibility):
+            first_combat_visibility = combat_visibility
+            if (
+                _is_publishable_combat_visibility(first_combat_visibility)
+                or requires_noncombat_visibility_verification
+            ):
                 confirmation_input = _combat_visibility_verification_semantic_input(
                     annotation.candidate,
                     model,
@@ -572,7 +579,18 @@ class OllamaVisionRuntime:
                     diagnostics,
                     confirmation_diagnostics,
                 )
-            if not _is_publishable_combat_visibility(combat_visibility):
+            if requires_noncombat_visibility_verification:
+                visibility_is_acceptable = (
+                    _is_consistent_noncombat_or_publishable_combat_visibility(
+                        first_combat_visibility,
+                        combat_visibility,
+                    )
+                )
+            else:
+                visibility_is_acceptable = _is_publishable_combat_visibility(
+                    combat_visibility
+                )
+            if not visibility_is_acceptable:
                 annotation = replace(annotation, explanation_value="none")
         elif requires_publication_verification:
             verification_input = _publication_boundary_verification_semantic_input(
@@ -1798,6 +1816,21 @@ def _is_publishable_combat_visibility(
         and opponent_body_framing == "complete"
         and not effect_only_frame
     )
+
+
+def _is_consistent_noncombat_or_publishable_combat_visibility(
+    first: tuple[CharacterBodyVisibility, OpponentBodyFraming, bool],
+    confirmation: tuple[CharacterBodyVisibility, OpponentBodyFraming, bool],
+) -> bool:
+    """二回とも敵不在、または二回とも掲載可能な戦闘の場合だけ許可する。"""
+    observations = (first, confirmation)
+    opponent_is_observed = any(
+        opponent_body_visibility != "absent" or opponent_body_framing != "absent"
+        for opponent_body_visibility, opponent_body_framing, _ in observations
+    )
+    if opponent_is_observed:
+        return all(_is_publishable_combat_visibility(item) for item in observations)
+    return all(not effect_only_frame for _, _, effect_only_frame in observations)
 
 
 def _sum_optional_counts(left: int | None, right: int | None) -> int | None:
