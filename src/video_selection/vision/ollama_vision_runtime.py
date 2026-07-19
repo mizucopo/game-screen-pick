@@ -453,11 +453,21 @@ class OllamaVisionRuntime:
         """共有Scene Catalogをstrict schemaとdomain validationで生成する。"""
         _require_model_role(model, ModelRole.SCENE_CATALOG, num_ctx)
         semantic_input = _scene_catalog_semantic_input(request, model, num_ctx)
+        catalog_response_count = 0
+
+        def parse_catalog(value: Mapping[str, object]) -> SceneCatalog:
+            nonlocal catalog_response_count
+            catalog_response_count += 1
+            return _parse_scene_catalog(
+                value,
+                repair_duplicate_slugs=catalog_response_count > 1,
+            )
+
         return self._infer(
             stage_kind="scene_catalog",
             request_fingerprint=_fingerprint(semantic_input),
             payload=_scene_catalog_payload(request, model, num_ctx),
-            parser=_parse_scene_catalog,
+            parser=parse_catalog,
             model=model,
             image_count=len(request.representatives),
             context_cue_count=0,
@@ -1174,7 +1184,11 @@ def _decode_content(
     return cast(dict[str, object], parsed)
 
 
-def _parse_scene_catalog(value: Mapping[str, object]) -> SceneCatalog:
+def _parse_scene_catalog(
+    value: Mapping[str, object],
+    *,
+    repair_duplicate_slugs: bool = False,
+) -> SceneCatalog:
     scenes = value.get("scenes")
     if (
         set(value) != {"scenes"}
@@ -1183,6 +1197,7 @@ def _parse_scene_catalog(value: Mapping[str, object]) -> SceneCatalog:
     ):
         raise _schema_error("scene_catalog_schema_invalid")
     entries: list[SceneCatalogEntry] = []
+    used_slugs: set[str] = set()
     for raw_scene in scenes:
         if not isinstance(raw_scene, dict) or set(raw_scene) != _SCENE_ENTRY_KEYS:
             raise _schema_error("scene_catalog_schema_invalid")
@@ -1202,6 +1217,11 @@ def _parse_scene_catalog(value: Mapping[str, object]) -> SceneCatalog:
             or selection_role not in SCENE_SELECTION_ROLES
         ):
             raise _schema_error("scene_catalog_schema_invalid")
+        if slug in used_slugs:
+            if not repair_duplicate_slugs or slug == "other":
+                raise _domain_error("scene_catalog_domain_invalid")
+            slug = _unique_scene_slug(slug, used_slugs)
+        used_slugs.add(slug)
         entries.append(
             SceneCatalogEntry(
                 slug=slug,
@@ -1215,6 +1235,14 @@ def _parse_scene_catalog(value: Mapping[str, object]) -> SceneCatalog:
         return SceneCatalog(tuple(entries))
     except ValueError:
         raise _domain_error("scene_catalog_domain_invalid") from None
+
+
+def _unique_scene_slug(slug: str, used_slugs: set[str]) -> str:
+    """重複した非other slugへ入力順の決定的suffixを付ける。"""
+    suffix = 2
+    while f"{slug}-{suffix}" in used_slugs:
+        suffix += 1
+    return f"{slug}-{suffix}"
 
 
 def _parse_candidate_annotation(

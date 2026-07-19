@@ -19,7 +19,7 @@ from ..models.scene_kind import SCENE_KINDS
 
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v4"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v2"
-SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v4"
+SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v5"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
 CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v21"
@@ -60,7 +60,7 @@ PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION = (
 PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION = (
     "publication-boundary-verification-stage-v1"
 )
-RETRY_POLICY_VERSION = "ollama-retry-v8"
+RETRY_POLICY_VERSION = "ollama-retry-v9"
 VISION_GENERATION_SEED = 0
 
 SCENE_CATALOG_SCHEMA: dict[str, object] = {

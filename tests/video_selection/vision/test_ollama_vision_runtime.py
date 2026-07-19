@@ -335,6 +335,60 @@ def test_duplicate_scene_slug_is_repaired_with_explicit_contract() -> None:
     assert "一意なslug" in second_prompt
 
 
+def test_duplicate_scene_slug_is_deterministically_suffixed_after_retry() -> None:
+    """再試行でも重複する非other slugが決定的に一意化されること。
+
+    Arrange:
+        - 二回とも異なるScene Kindへ同じslugを返すCatalog応答が用意される
+    Act:
+        - Scene Catalog推論が実行される
+    Assert:
+        - 二回目の重複slugへ入力順のsuffixが付けられること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _catalog_payload()
+        scenes = response["scenes"]
+        assert isinstance(scenes, list)
+        second_scene = scenes[1]
+        assert isinstance(second_scene, dict)
+        second_scene["slug"] = "exploration"
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    catalog, diagnostics = runtime.create_scene_catalog(
+        SceneCatalogRequest(
+            representatives=(FrameCandidate("frame-a", b"image-a"),),
+            selection_intent="ブログ画像を分類する",
+        ),
+        _resolved_model(ModelRole.SCENE_CATALOG),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert catalog.slugs == ("exploration", "exploration-2", "other")
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "scene_catalog_domain_invalid"
+    assert len(payloads) == 2
+
+
 def test_truncated_response_is_retried_before_success() -> None:
     """token上限で打ち切られた応答が一度だけ再試行されること。
 
