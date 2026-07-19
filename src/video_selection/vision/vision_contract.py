@@ -15,13 +15,14 @@ from ..models.candidate_frame_observation import (
     TRANSIENT_OBSTRUCTIONS,
 )
 from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
+from ..models.scene_kind import SCENE_KINDS
 
-SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v2"
-SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v1"
-SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v2"
+SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v3"
+SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v2"
+SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v3"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v20"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v21"
 COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION = "combat-encounter-verification-prompt-v1"
 COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION = "combat-encounter-verification-schema-v1"
 COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION = (
@@ -80,6 +81,10 @@ SCENE_CATALOG_SCHEMA: dict[str, object] = {
                     },
                     "display_name": {"type": "string", "minLength": 1},
                     "description": {"type": "string", "minLength": 1},
+                    "scene_kind": {
+                        "type": "string",
+                        "enum": list(SCENE_KINDS),
+                    },
                     "selection_role": {
                         "type": "string",
                         "enum": list(SCENE_SELECTION_ROLES),
@@ -89,6 +94,7 @@ SCENE_CATALOG_SCHEMA: dict[str, object] = {
                     "slug",
                     "display_name",
                     "description",
+                    "scene_kind",
                     "selection_role",
                 ],
             },

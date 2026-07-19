@@ -61,6 +61,7 @@ from ..models.scene_catalog_entry import (
     is_valid_scene_slug,
 )
 from ..models.scene_catalog_request import SceneCatalogRequest
+from ..models.scene_kind import SCENE_KINDS, SceneKind
 from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 from ..models.vision_runtime_error import VisionRuntimeError
 from ..models.vision_runtime_failure_reason import VisionRuntimeFailureReason
@@ -140,7 +141,13 @@ def _semantic_generation_options() -> dict[str, object]:
     }
 
 
-_SCENE_ENTRY_KEYS = {"slug", "display_name", "description", "selection_role"}
+_SCENE_ENTRY_KEYS = {
+    "slug",
+    "display_name",
+    "description",
+    "scene_kind",
+    "selection_role",
+}
 _ANNOTATION_KEYS = {
     "frame_observations",
     "context_relevance",
@@ -239,6 +246,10 @@ _PROMPT_REPAIR_REASONS = {
     VisionRuntimeFailureReason.DOMAIN_INVALID,
 }
 _SCENE_CATALOG_SEMANTICS = (
+    "scene_kindはcombat=敵またはbossとの戦闘、exploration=探索・移動・puzzle、"
+    "interface=menu・map・shop・save・tutorial・document・title、"
+    "event=会話・cutscene・物語event、other=どれにも該当しない場面です。"
+    "slug=otherのscene_kindは必ずotherにします。"
     "selection_roleはordinary=通常の単発scene、cinematic=会話・演出・eventが主体、"
     "recurring_gameplay=戦闘UI・探索・puzzleなど繰り返し現れるplay構造です。"
     "同じ画面構造を一時的な敵やエフェクトだけで別sceneへ分割しません。"
@@ -505,6 +516,7 @@ class OllamaVisionRuntime:
             image_count=len(request.frame_candidates),
             context_cue_count=len(request.context_cues),
         )
+        combat_scene = catalog.for_slug(annotation.scene_slug).scene_kind == "combat"
         if requires_combat_encounter_verification:
             verification_input = _combat_encounter_verification_semantic_input(
                 annotation.candidate,
@@ -553,9 +565,13 @@ class OllamaVisionRuntime:
                     diagnostics,
                     confirmation_diagnostics,
                 )
+            if not combat_encounter_visible and combat_scene:
+                annotation = replace(annotation, explanation_value="none")
             requires_combat_verification = combat_encounter_visible
         requires_noncombat_visibility_verification = (
-            requires_combat_encounter_verification and not requires_combat_verification
+            requires_combat_encounter_verification
+            and not requires_combat_verification
+            and annotation.explanation_value != "none"
         )
         if requires_combat_verification or requires_noncombat_visibility_verification:
             verification_input = _combat_visibility_verification_semantic_input(
@@ -1163,6 +1179,7 @@ def _parse_scene_catalog(value: Mapping[str, object]) -> SceneCatalog:
         slug = raw_scene.get("slug")
         display_name = raw_scene.get("display_name")
         description = raw_scene.get("description")
+        scene_kind = raw_scene.get("scene_kind")
         selection_role = raw_scene.get("selection_role")
         if (
             not isinstance(slug, str)
@@ -1171,6 +1188,7 @@ def _parse_scene_catalog(value: Mapping[str, object]) -> SceneCatalog:
             or not display_name.strip()
             or not isinstance(description, str)
             or not description.strip()
+            or scene_kind not in SCENE_KINDS
             or selection_role not in SCENE_SELECTION_ROLES
         ):
             raise _schema_error("scene_catalog_schema_invalid")
@@ -1179,6 +1197,7 @@ def _parse_scene_catalog(value: Mapping[str, object]) -> SceneCatalog:
                 slug=slug,
                 display_name=display_name,
                 description=description,
+                scene_kind=cast(SceneKind, scene_kind),
                 selection_role=cast(SceneSelectionRole, selection_role),
             )
         )
@@ -1248,8 +1267,18 @@ def _parse_candidate_annotation(
         requires_combat_encounter_verification = (
             selected.effective_explanation_value != "none"
             and not selected.combat_action
-            and scene.selection_role == "recurring_gameplay"
-            and selected.effective_content_kind in {"gameplay_action", "event_action"}
+            and (
+                (
+                    scene.scene_kind == "combat"
+                    and selected.effective_content_kind
+                    in {"gameplay_action", "gameplay_idle"}
+                )
+                or (
+                    scene.selection_role == "recurring_gameplay"
+                    and selected.effective_content_kind
+                    in {"gameplay_action", "event_action"}
+                )
+            )
         )
         requires_publication_verification = (
             selected.effective_explanation_value != "none"
@@ -1797,6 +1826,7 @@ def _scene_value(scene: SceneCatalogEntry) -> dict[str, str]:
         "slug": scene.slug,
         "display_name": scene.display_name,
         "description": scene.description,
+        "scene_kind": scene.scene_kind,
         "selection_role": scene.selection_role,
     }
 

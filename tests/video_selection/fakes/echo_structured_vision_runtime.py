@@ -37,18 +37,21 @@ class EchoStructuredVisionRuntime:
                         "gameplay",
                         "ゲームプレイ",
                         "通常のゲームプレイ場面",
+                        "exploration",
                         "ordinary",
                     ),
                     SceneCatalogEntry(
                         "event",
                         "イベント",
                         "イベント場面",
+                        "event",
                         "cinematic",
                     ),
                     SceneCatalogEntry(
                         "other",
                         "その他",
                         "分類不能な場面",
+                        "other",
                         "ordinary",
                     ),
                 )

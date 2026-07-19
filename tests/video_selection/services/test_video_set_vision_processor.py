@@ -42,6 +42,7 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     Assert:
         - 2回目はCatalogとAnnotationをすべて独立cacheから復元すること
         - raw Context Cue、prompt body、raw response、reasoningがcacheされないこと
+        - Scene Kindと全生成条件・監査versionがfingerprint入力へ保存されること
     """
     # Arrange
     video_set, configuration = _video_set_and_configuration(tmp_path)
@@ -106,6 +107,9 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     assert '"messages"' not in cache_text
     assert '"raw_response"' not in cache_text
     assert '"reasoning"' not in cache_text
+    assert '"scene_kind": "exploration"' in cache_text
+    assert '"seed": 0' in cache_text
+    assert '"combat_visibility_edge_audit_prompt_version"' in cache_text
 
 
 def test_batch_boundary_rejects_metadata_change_after_annotation(
@@ -725,9 +729,11 @@ def _moment(seed: str, frame_id: str, time: Fraction) -> CandidateMoment:
 def _catalog() -> SceneCatalog:
     return SceneCatalog(
         (
-            SceneCatalogEntry("exploration", "探索", "フィールド探索", "ordinary"),
-            SceneCatalogEntry("climax", "終盤", "重要な対決", "cinematic"),
-            SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
+            SceneCatalogEntry(
+                "exploration", "探索", "フィールド探索", "exploration", "ordinary"
+            ),
+            SceneCatalogEntry("climax", "終盤", "重要な対決", "event", "cinematic"),
+            SceneCatalogEntry("other", "その他", "分類不能", "other", "ordinary"),
         )
     )
 

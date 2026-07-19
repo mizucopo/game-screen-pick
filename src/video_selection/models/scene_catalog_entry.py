@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Literal, cast, get_args
 
+from .scene_kind import SCENE_KINDS, SceneKind
+
 SceneSelectionRole = Literal["ordinary", "cinematic", "recurring_gameplay"]
 SCENE_SELECTION_ROLES = cast(
     tuple[SceneSelectionRole, ...],
@@ -20,11 +22,12 @@ def is_valid_scene_slug(value: str) -> bool:
 
 @dataclass(frozen=True)
 class SceneCatalogEntry:
-    """scene slug、表示名、説明、選定roleを保持する。"""
+    """scene slug、表示名、説明、内容種別、選定roleを保持する。"""
 
     slug: str
     display_name: str
     description: str
+    scene_kind: SceneKind
     selection_role: SceneSelectionRole
 
     def __post_init__(self) -> None:
@@ -33,6 +36,7 @@ class SceneCatalogEntry:
             not is_valid_scene_slug(self.slug)
             or not self.display_name.strip()
             or not self.description.strip()
+            or self.scene_kind not in SCENE_KINDS
             or self.selection_role not in SCENE_SELECTION_ROLES
         ):
             msg = "Scene Catalog entryが不正です"

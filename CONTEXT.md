@@ -281,15 +281,15 @@ Video Set全体のNeutral Image Analysisから、品質、見た目の多様性�
 _Avoid_: Selection Shortlist, selected output, per-video representatives
 
 **Candidate Annotation**:
-Selection Shortlist内の一つのCandidate Momentについて、Neutral Image Analysisで先に確定した一つのRepresentative Frame、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、主Ollama推論でID付きCandidate Frame Observationを評価するVideo Set Stage。各観測はScene Slug、画面内容、Interface Kind、会話eventの大きな人物立ち絵・胸像の有無、Cinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、動作・人物または敵の有無、戦闘かどうか、player・攻撃相手それぞれの本体可視性、一時的な光・爆発・煙だけが主内容か、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。音声やContext Cueの会話文は画面内台詞文字の根拠に使わない。Blog Image Type、公開用要約と理由は観測からlocalに決定する。具体的なInterface Kindは曖昧な画面内容分類より優先する一方、動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として上書きに使わない。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正し、`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、攻撃相手本体が`clear`でない戦闘、一時的な光・爆発・煙だけが主内容のframe、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化する。主推論が非戦闘とした掲載可能な`recurring_gameplay` actionにはCombat Encounter Verificationを追加し、最初の非戦闘または掲載可能判定だけを独立再確認する。戦闘有無の結果にかかわらずCombat Visibility Verificationへ進め、二回の敵本体観測がともに敵不在、または掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。掲載価値ありとした非戦闘の地図または`cinematic` sceneにはPublication Boundary Verificationを追加し、一時的な遷移effectと、台詞も動作もないevent導入の直接観測を適格性境界に優先する。最終score、soft coverage、最終採否は決めない。
+Selection Shortlist内の一つのCandidate Momentについて、Neutral Image Analysisで先に確定した一つのRepresentative Frame、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、主Ollama推論でID付きCandidate Frame Observationを評価するVideo Set Stage。各観測はScene Slug、画面内容、Interface Kind、会話eventの大きな人物立ち絵・胸像の有無、Cinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、動作・人物または敵の有無、戦闘かどうか、player・攻撃相手それぞれの本体可視性、一時的な光・爆発・煙だけが主内容か、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。音声やContext Cueの会話文は画面内台詞文字の根拠に使わない。Blog Image Type、公開用要約と理由は観測からlocalに決定する。具体的なInterface Kindは曖昧な画面内容分類より優先する一方、動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として上書きに使わない。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正し、`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、攻撃相手本体が`clear`でない戦闘、一時的な光・爆発・煙だけが主内容のframe、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化する。主推論が非戦闘とした掲載可能なScene Kind `combat`のgameplay、または`recurring_gameplay` actionにはCombat Encounter Verificationを追加し、最初の非戦闘判定を独立再確認する。Scene Kind `combat`で二回とも戦闘を確認できなければExplanation Valueを`none`にする。それ以外の`recurring_gameplay` actionは戦闘有無の結果にかかわらずCombat Visibility Verificationへ進め、二回の敵本体観測がともに敵不在、または掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。掲載価値ありとした非戦闘の地図または`cinematic` sceneにはPublication Boundary Verificationを追加し、一時的な遷移effectと、台詞も動作もないevent導入の直接観測を適格性境界に優先する。最終score、soft coverage、最終採否は決めない。
 _Avoid_: Candidate Scoring, Frame Refinement, Neutral Image Analysis, final selection
 
 **Combat Encounter Verification**:
-Candidate Annotationの主推論が掲載可能な非戦闘とした`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。敵・boss固有の名前とHP・status bar、または戦うplayer・相手本体から戦闘の有無を確認する。敵本体が画面外・画面端・エフェクト内でも敵status UIがあれば戦闘とし、Combat Visibility Verificationへ進める。player自身の通常HUD、portrait、操作button、minimapだけでは戦闘にしない。最初の確認が非戦闘なら、先の回答を推測しない別promptで同じ画素を独立再確認する。二回とも非戦闘の場合もCombat Visibility Verificationへ進め、敵本体の直接観測との不一致を検出する。
+Candidate Annotationの主推論が掲載可能な非戦闘としたScene Kind `combat`のgameplay、または`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。敵・boss固有の名前とHP・status bar、または戦うplayer・相手本体から戦闘の有無を確認する。敵本体が画面外・画面端・エフェクト内でも敵status UIがあれば戦闘とし、Combat Visibility Verificationへ進める。player自身の通常HUD、portrait、操作button、minimapだけでは戦闘にしない。最初の確認が非戦闘なら、先の回答を推測しない別promptで同じ画素を独立再確認する。Scene Kind `combat`で二回とも非戦闘なら、戦闘sceneとして説明できないframeとしてExplanation Valueを`none`にする。それ以外の`recurring_gameplay` actionではCombat Visibility Verificationへ進め、敵本体の直接観測との不一致を検出する。
 _Avoid_: combat visibility, contextual combat classification, final selection
 
 **Combat Visibility Verification**:
-Candidate Annotationの主推論が掲載可能とした戦闘、またはCombat Encounter Verificationの対象になった`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeかをstrict enumで観測する。戦闘と確認済みの場合、攻撃相手本体が`partial`・`absent`、構図が`edge_cropped`・`occluded`・`absent`、またはエフェクトだけならExplanation Valueを`none`に下げる。最初の確認が掲載可能なら、先の回答を推測しない別promptで同じ画素を独立再確認し、二回とも攻撃相手本体が`clear`、構図が`complete`、かつエフェクトだけではない場合だけCombat Visibility Edge Auditへ進む。戦闘有無が二回とも否定された場合は可視性を必ず二回確認し、両方で敵本体が不在かつエフェクトだけではない場合、または両方で掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
+Candidate Annotationの主推論が掲載可能とした戦闘、Combat Encounter Verificationで戦闘と確認されたframe、またはScene Kind `combat`以外でCombat Encounter Verificationの対象になった`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeかをstrict enumで観測する。戦闘と確認済みの場合、攻撃相手本体が`partial`・`absent`、構図が`edge_cropped`・`occluded`・`absent`、またはエフェクトだけならExplanation Valueを`none`に下げる。最初の確認が掲載可能なら、先の回答を推測しない別promptで同じ画素を独立再確認し、二回とも攻撃相手本体が`clear`、構図が`complete`、かつエフェクトだけではない場合だけCombat Visibility Edge Auditへ進む。Scene Kind `combat`以外で戦闘有無が二回とも否定された場合は可視性を必ず二回確認し、両方で敵本体が不在かつエフェクトだけではない場合、または両方で掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
 _Avoid_: second Candidate Annotation, contextual combat classification, final selection
 
 **Combat Visibility Edge Audit**:
@@ -307,6 +307,10 @@ _Avoid_: play/event density bucket, fixed category
 **Scene Slug**:
 scene を表す小文字英数字の安定名。出力ファイル名、レポート、カテゴリ集計に使われる。
 _Avoid_: localized category name
+
+**Scene Kind**:
+Scene Catalogが各sceneへ付ける機械判定可能な内容種別。値は`combat`、`exploration`、`interface`、`event`、`other`で、自由なScene Slugや表示名から戦闘などの意味を推測しないために使う。`other` sceneのScene Kindは必ず`other`とする。
+_Avoid_: Scene Slug naming convention, Scene Selection Role, per-frame content kind
 
 **Scene-numbered Output Name**:
 既存の画像入力selectorが選択画像に付ける、scene slugとscene内連番からなる出力ファイル名。Video Set selectorではSelected Image Output Nameに置き換える。
@@ -377,7 +381,7 @@ scene を人が読みやすいように表す日本語名。ブログ用の画�
 _Avoid_: filename prefix, report key
 
 **Scene Catalog**:
-Scene Catalog Representative Setから作る、一つのVideo Setを横断して共有するsceneとScene Selection Roleの一覧。3から8個のsceneと分類の逃げ先である`other`で構成され、Videoごとには分割しない。
+Scene Catalog Representative Setから作る、一つのVideo Setを横断して共有するscene、Scene Kind、Scene Selection Roleの一覧。3から8個のsceneと分類の逃げ先である`other`で構成され、Videoごとには分割しない。
 _Avoid_: fixed scene list, free-form per-image labels, per-video catalog
 
 **Scene Description**:

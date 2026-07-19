@@ -384,18 +384,21 @@ def _scene_catalog() -> SceneCatalog:
                 slug="test-scene",
                 display_name="探索",
                 description="通常の探索画面",
+                scene_kind="exploration",
                 selection_role="recurring_gameplay",
             ),
             SceneCatalogEntry(
                 slug="event",
                 display_name="イベント",
                 description="物語上のイベント画面",
+                scene_kind="event",
                 selection_role="cinematic",
             ),
             SceneCatalogEntry(
                 slug="other",
                 display_name="その他",
                 description="他のsceneに分類されない画面",
+                scene_kind="other",
                 selection_role="ordinary",
             ),
         )

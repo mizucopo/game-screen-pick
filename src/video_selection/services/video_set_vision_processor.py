@@ -39,6 +39,8 @@ from ..vision.vision_contract import (
     COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION,
     COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION,
     COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION,
+    COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION,
+    COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION,
@@ -49,6 +51,7 @@ from ..vision.vision_contract import (
     SCENE_CATALOG_PROMPT_VERSION,
     SCENE_CATALOG_SCHEMA_VERSION,
     SCENE_CATALOG_STAGE_CONTRACT_VERSION,
+    VISION_GENERATION_SEED,
 )
 from .build_stage_fingerprint import build_stage_fingerprint
 from .completed_stage_writer import CompletedStageWriter
@@ -399,7 +402,12 @@ def _catalog_semantic_input(
         "selection_intent": request.selection_intent,
         "scene_hint": request.scene_hint,
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
-        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "generation_options": {
+            "temperature": 0,
+            "stream": False,
+            "think": False,
+            "seed": VISION_GENERATION_SEED,
+        },
         "prompt_version": SCENE_CATALOG_PROMPT_VERSION,
         "schema_version": SCENE_CATALOG_SCHEMA_VERSION,
         "stage_contract_version": SCENE_CATALOG_STAGE_CONTRACT_VERSION,
@@ -433,7 +441,12 @@ def _annotation_semantic_input(
         "video_set_progress": _fraction_value(request.video_set_progress),
         "selection_intent": request.selection_intent,
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
-        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "generation_options": {
+            "temperature": 0,
+            "stream": False,
+            "think": False,
+            "seed": VISION_GENERATION_SEED,
+        },
         "prompt_version": CANDIDATE_ANNOTATION_PROMPT_VERSION,
         "schema_version": CANDIDATE_ANNOTATION_SCHEMA_VERSION,
         "stage_contract_version": CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
@@ -472,6 +485,15 @@ def _annotation_semantic_input(
         ),
         "combat_visibility_confirmation_stage_contract_version": (
             COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION
+        ),
+        "combat_visibility_edge_audit_prompt_version": (
+            COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION
+        ),
+        "combat_visibility_edge_audit_schema_version": (
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_visibility_edge_audit_stage_contract_version": (
+            COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION
         ),
         "publication_boundary_verification_prompt_version": (
             PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION

@@ -53,10 +53,13 @@ def test_annotations_are_mapped_to_source_role_progress_and_global_rank(
                 "test-scene",
                 "テスト場面",
                 "テスト用場面",
+                "exploration",
                 "recurring_gameplay",
             ),
-            SceneCatalogEntry("event", "イベント", "イベント場面", "cinematic"),
-            SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
+            SceneCatalogEntry(
+                "event", "イベント", "イベント場面", "event", "cinematic"
+            ),
+            SceneCatalogEntry("other", "その他", "分類不能", "other", "ordinary"),
         )
     )
 

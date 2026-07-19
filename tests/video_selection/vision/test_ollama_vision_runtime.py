@@ -194,6 +194,14 @@ def test_scene_catalog_uses_strict_documented_ollama_request() -> None:
     schema = payload["format"]
     assert isinstance(schema, dict)
     assert schema["additionalProperties"] is False
+    scene_properties = schema["properties"]["scenes"]["items"]["properties"]
+    assert scene_properties["scene_kind"]["enum"] == [
+        "combat",
+        "exploration",
+        "interface",
+        "event",
+        "other",
+    ]
     assert "quality_score" not in json.dumps(schema)
     assert "final_score" not in json.dumps(schema)
     assert "selected" not in json.dumps(schema)
@@ -202,6 +210,7 @@ def test_scene_catalog_uses_strict_documented_ollama_request() -> None:
     assert messages[0]["images"] == ["aW1hZ2UtYQ==", "aW1hZ2UtYg=="]
     prompt = messages[0]["content"]
     assert isinstance(prompt, str)
+    assert "scene_kindはcombat=" in prompt
     assert "recurring_gameplay=" in prompt
     assert "同じ画面構造を一時的な敵やエフェクトだけで別sceneへ分割しません" in prompt
 
@@ -1707,7 +1716,7 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
         payloads.append(payload)
         if len(payloads) == 1:
             response = _frame_observation_payload(
-                (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+                (("frame-a", "exploration", "gameplay_action", "high", "hud"),)
             )
             observation = _first_frame_observation(response)
             observation["combat_action"] = False
@@ -1743,7 +1752,7 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
     # Act
     annotation, diagnostics = runtime.annotate_candidate(
         _annotation_request(),
-        _catalog(),
+        _catalog_with_recurring_exploration(),
         _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
         num_ctx=32768,
     )
@@ -1833,6 +1842,62 @@ def test_noncombat_recurring_action_is_cross_checked_by_visibility() -> None:
     assert "掲載可否を確定する独立した再確認" in (visibility_confirmation_prompt)
 
 
+def test_unconfirmed_combat_scene_has_no_explanation_value() -> None:
+    """戦闘sceneで戦闘を確認できないframeが掲載不可にされること。
+
+    Arrange:
+        - 戦闘sceneを非戦闘と誤分類した掲載可能応答が用意される
+        - 二回の戦闘有無確認で戦闘対象なしとされる
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 戦闘sceneとして説明できないためExplanation Valueがnoneにされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            response = _frame_observation_payload(
+                (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+            )
+            observation = _first_frame_observation(response)
+            observation["combat_action"] = False
+            observation["opponent_body_visibility"] = "absent"
+            return _response(response)
+        if len(payloads) <= 3:
+            return _response(_combat_encounter_payload(visible=False, evidence="none"))
+        return _response(_combat_visibility_payload())
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 3
+    assert len(payloads) == 3
+
+
 def test_missed_combat_is_rejected_by_visibility_cross_check() -> None:
     """二回見落とされた戦闘が敵本体の画面端検出で掲載不可にされること。
 
@@ -1857,7 +1922,7 @@ def test_missed_combat_is_rejected_by_visibility_cross_check() -> None:
         payloads.append(payload)
         if len(payloads) == 1:
             response = _frame_observation_payload(
-                (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+                (("frame-a", "exploration", "gameplay_action", "high", "hud"),)
             )
             observation = _first_frame_observation(response)
             observation["combat_action"] = False
@@ -1885,7 +1950,7 @@ def test_missed_combat_is_rejected_by_visibility_cross_check() -> None:
     # Act
     annotation, diagnostics = runtime.annotate_candidate(
         _annotation_request(),
-        _catalog(),
+        _catalog_with_recurring_exploration(),
         _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
         num_ctx=32768,
     )
@@ -3161,18 +3226,21 @@ def _catalog_payload() -> dict[str, object]:
                 "slug": "exploration",
                 "display_name": "探索",
                 "description": "フィールド探索",
+                "scene_kind": "exploration",
                 "selection_role": "ordinary",
             },
             {
                 "slug": "battle",
                 "display_name": "戦闘",
                 "description": "繰り返される通常戦闘",
+                "scene_kind": "combat",
                 "selection_role": "recurring_gameplay",
             },
             {
                 "slug": "other",
                 "display_name": "その他",
                 "description": "分類不能",
+                "scene_kind": "other",
                 "selection_role": "ordinary",
             },
         ]
@@ -3316,14 +3384,17 @@ def _response(content: dict[str, object]) -> dict[str, object]:
 def _catalog() -> SceneCatalog:
     return SceneCatalog(
         (
-            SceneCatalogEntry("exploration", "探索", "フィールド探索", "ordinary"),
+            SceneCatalogEntry(
+                "exploration", "探索", "フィールド探索", "exploration", "ordinary"
+            ),
             SceneCatalogEntry(
                 "battle",
                 "戦闘",
                 "繰り返される通常戦闘",
+                "combat",
                 "recurring_gameplay",
             ),
-            SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
+            SceneCatalogEntry("other", "その他", "分類不能", "other", "ordinary"),
         )
     )
 
@@ -3331,9 +3402,13 @@ def _catalog() -> SceneCatalog:
 def _catalog_with_cinematic_town() -> SceneCatalog:
     return SceneCatalog(
         (
-            SceneCatalogEntry("exploration", "探索", "フィールド探索", "ordinary"),
-            SceneCatalogEntry("town", "街", "街で起こる会話event", "cinematic"),
-            SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
+            SceneCatalogEntry(
+                "exploration", "探索", "フィールド探索", "exploration", "ordinary"
+            ),
+            SceneCatalogEntry(
+                "town", "街", "街で起こる会話event", "event", "cinematic"
+            ),
+            SceneCatalogEntry("other", "その他", "分類不能", "other", "ordinary"),
         )
     )
 
@@ -3345,10 +3420,11 @@ def _catalog_with_recurring_exploration() -> SceneCatalog:
                 "exploration",
                 "探索",
                 "繰り返されるフィールド探索",
+                "exploration",
                 "recurring_gameplay",
             ),
-            SceneCatalogEntry("battle", "戦闘", "通常戦闘", "ordinary"),
-            SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
+            SceneCatalogEntry("battle", "戦闘", "通常戦闘", "combat", "ordinary"),
+            SceneCatalogEntry("other", "その他", "分類不能", "other", "ordinary"),
         )
     )
 
@@ -3361,6 +3437,7 @@ def _catalog_with_battle_display(display_name: str) -> SceneCatalog:
                 scene.slug,
                 display_name if scene.slug == "battle" else scene.display_name,
                 scene.description,
+                scene.scene_kind,
                 scene.selection_role,
             )
             for scene in _catalog().scenes

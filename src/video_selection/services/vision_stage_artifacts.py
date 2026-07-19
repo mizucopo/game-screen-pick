@@ -21,9 +21,10 @@ from ..models.scene_catalog_entry import (
     SceneCatalogEntry,
     SceneSelectionRole,
 )
+from ..models.scene_kind import SCENE_KINDS, SceneKind
 from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 
-_CATALOG_SCHEMA = "game-screen-pick/scene-catalog@1.0.0"
+_CATALOG_SCHEMA = "game-screen-pick/scene-catalog@2.0.0"
 _ANNOTATION_SCHEMA = "game-screen-pick/candidate-annotation@1.0.0"
 
 
@@ -168,6 +169,7 @@ def _scene_value(scene: SceneCatalogEntry) -> dict[str, str]:
         "slug": scene.slug,
         "display_name": scene.display_name,
         "description": scene.description,
+        "scene_kind": scene.scene_kind,
         "selection_role": scene.selection_role,
     }
 
@@ -178,11 +180,13 @@ def _restore_scene(value: object) -> SceneCatalogEntry:
     slug = value.get("slug")
     display_name = value.get("display_name")
     description = value.get("description")
+    scene_kind = value.get("scene_kind")
     selection_role = value.get("selection_role")
     if (
         not isinstance(slug, str)
         or not isinstance(display_name, str)
         or not isinstance(description, str)
+        or scene_kind not in SCENE_KINDS
         or selection_role not in SCENE_SELECTION_ROLES
     ):
         raise ValueError("Scene Catalog artifact entry fieldが不正です")
@@ -190,6 +194,7 @@ def _restore_scene(value: object) -> SceneCatalogEntry:
         slug,
         display_name,
         description,
+        cast(SceneKind, scene_kind),
         cast(SceneSelectionRole, selection_role),
     )
 
