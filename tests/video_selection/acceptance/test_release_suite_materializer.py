@@ -60,6 +60,9 @@ def test_anonymous_clips_preserve_all_streams_and_record_actual_boundaries(
     assert commands[0][commands[0].index("-map") + 1] == "0"
     assert commands[0][commands[0].index("-c") + 1] == "copy"
     assert "-copyts" in commands[0]
+    assert commands[0][commands[0].index("-map_metadata") + 1] == "-1"
+    assert commands[0][commands[0].index("-map_chapters") + 1] == "-1"
+    assert commands[0][commands[0].index("-fflags") + 1] == "+bitexact"
     assert commands[0][commands[0].index("-to") + 1] == "1810.000000"
     assert descriptor["scenario_count"] == 1
     assert descriptor["total_duration"] == {"numerator": 1801, "denominator": 1}

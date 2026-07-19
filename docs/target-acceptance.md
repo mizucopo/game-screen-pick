@@ -60,8 +60,10 @@ coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。
 full Video Setを再hashしない。fullの独立Video Scanは最大2 workerで先行確定される。
 
 release intervalは全streamをFFmpeg stream copyした`scenario-001.mkv`形式の匿名clipに
-変換する。ffprobeの実測開始、終了、durationがprofileの許容差を超える場合はpipeline前に
-exit 2になる。materialize時間はphase予算に含めない。
+変換する。source metadataとchapterは引き継がず、FFmpegのbitexact format flagを使うため、
+同じ入力、区間、tool identityから再生成したclipは同じwhole-file fingerprintになる。
+ffprobeの実測開始、終了、durationがprofileの許容差を超える場合はpipeline前にexit 2に
+なる。materialize時間はphase予算に含めない。
 
 ## Durable resumeとreset
 

@@ -16,7 +16,7 @@ CommandRunner = Callable[[list[str]], None]
 MediaProbe = Callable[[Path], Mapping[str, object]]
 ContentDigester = Callable[[Path], str]
 
-_MATERIALIZATION_SCHEMA = "game-screen-pick/release-materialization@1.0.0"
+_MATERIALIZATION_SCHEMA = "game-screen-pick/release-materialization@2.0.0"
 
 
 class ReleaseSuiteMaterializer:
@@ -102,6 +102,12 @@ class ReleaseSuiteMaterializer:
                 "-copyts",
                 "-avoid_negative_ts",
                 "disabled",
+                "-map_metadata",
+                "-1",
+                "-map_chapters",
+                "-1",
+                "-fflags",
+                "+bitexact",
                 "-y",
                 str(output),
             ]
