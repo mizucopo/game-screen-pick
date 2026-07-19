@@ -74,10 +74,14 @@ from .vision_contract import (
     CANDIDATE_ANNOTATION_SCHEMA,
     CANDIDATE_ANNOTATION_SCHEMA_VERSION,
     CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+    COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION,
+    COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION,
     COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION,
     COMBAT_ENCOUNTER_VERIFICATION_SCHEMA,
     COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION,
     COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION,
+    COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION,
+    COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
@@ -104,7 +108,9 @@ InferenceParser = Callable[[Mapping[str, object]], InferenceValue]
 StageKind = Literal[
     "scene_catalog",
     "candidate_annotation",
+    "combat_encounter_confirmation",
     "combat_encounter_verification",
+    "combat_visibility_confirmation",
     "combat_visibility_verification",
     "publication_boundary_verification",
 ]
@@ -267,6 +273,10 @@ _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION = (
     "effect_only_frameは画面中央の主内容が一時的な光・爆発・煙だけで、人物・敵・"
     "物体の本体を主対象として一つも明瞭に判別できない場合だけtrueです。敵や人物"
     "の本体が一体でもclearならfalseです。"
+)
+_INDEPENDENT_CONFIRMATION_INSTRUCTION = (
+    "これは掲載可否を確定する独立した再確認です。先の回答を推測せず、"
+    "画像の画素を最初から観測し直してください。"
 )
 _PUBLICATION_BOUNDARY_VERIFICATION_INSTRUCTION = (
     "この画像1枚に実際に見える画素だけを観測してください。音声、前後場面、"
@@ -484,25 +494,43 @@ class OllamaVisionRuntime:
                 image_count=1,
                 context_cue_count=0,
             )
-            requires_combat_verification = combat_encounter_visible
             diagnostics = _merge_candidate_diagnostics(
                 diagnostics,
                 verification_diagnostics,
             )
+            if not combat_encounter_visible:
+                confirmation_input = _combat_encounter_verification_semantic_input(
+                    annotation.candidate,
+                    model,
+                    num_ctx,
+                    independently_confirm=True,
+                )
+                combat_encounter_visible, confirmation_diagnostics = self._infer(
+                    stage_kind="combat_encounter_confirmation",
+                    request_fingerprint=_fingerprint(confirmation_input),
+                    payload=_combat_encounter_verification_payload(
+                        annotation.candidate,
+                        model,
+                        num_ctx,
+                        independently_confirm=True,
+                    ),
+                    parser=_parse_combat_encounter_verification,
+                    model=model,
+                    image_count=1,
+                    context_cue_count=0,
+                )
+                diagnostics = _merge_candidate_diagnostics(
+                    diagnostics,
+                    confirmation_diagnostics,
+                )
+            requires_combat_verification = combat_encounter_visible
         if requires_combat_verification:
             verification_input = _combat_visibility_verification_semantic_input(
                 annotation.candidate,
                 model,
                 num_ctx,
             )
-            (
-                (
-                    opponent_body_visibility,
-                    opponent_body_framing,
-                    effect_only_frame,
-                ),
-                verification_diagnostics,
-            ) = self._infer(
+            combat_visibility, verification_diagnostics = self._infer(
                 stage_kind="combat_visibility_verification",
                 request_fingerprint=_fingerprint(verification_input),
                 payload=_combat_visibility_verification_payload(
@@ -515,16 +543,37 @@ class OllamaVisionRuntime:
                 image_count=1,
                 context_cue_count=0,
             )
-            if (
-                opponent_body_visibility != "clear"
-                or opponent_body_framing != "complete"
-                or effect_only_frame
-            ):
-                annotation = replace(annotation, explanation_value="none")
             diagnostics = _merge_candidate_diagnostics(
                 diagnostics,
                 verification_diagnostics,
             )
+            if _is_publishable_combat_visibility(combat_visibility):
+                confirmation_input = _combat_visibility_verification_semantic_input(
+                    annotation.candidate,
+                    model,
+                    num_ctx,
+                    independently_confirm=True,
+                )
+                combat_visibility, confirmation_diagnostics = self._infer(
+                    stage_kind="combat_visibility_confirmation",
+                    request_fingerprint=_fingerprint(confirmation_input),
+                    payload=_combat_visibility_verification_payload(
+                        annotation.candidate,
+                        model,
+                        num_ctx,
+                        independently_confirm=True,
+                    ),
+                    parser=_parse_combat_visibility_verification,
+                    model=model,
+                    image_count=1,
+                    context_cue_count=0,
+                )
+                diagnostics = _merge_candidate_diagnostics(
+                    diagnostics,
+                    confirmation_diagnostics,
+                )
+            if not _is_publishable_combat_visibility(combat_visibility):
+                annotation = replace(annotation, explanation_value="none")
         elif requires_publication_verification:
             verification_input = _publication_boundary_verification_semantic_input(
                 annotation.candidate,
@@ -818,6 +867,8 @@ def _combat_encounter_verification_payload(
     candidate: FrameCandidate,
     model: ResolvedModel,
     num_ctx: int,
+    *,
+    independently_confirm: bool = False,
 ) -> dict[str, object]:
     """曖昧なactionが戦闘かを一画像へ確認するrequestを返す。"""
     return {
@@ -829,7 +880,12 @@ def _combat_encounter_verification_payload(
         "messages": [
             {
                 "role": "user",
-                "content": _COMBAT_ENCOUNTER_VERIFICATION_INSTRUCTION,
+                "content": _COMBAT_ENCOUNTER_VERIFICATION_INSTRUCTION
+                + (
+                    _INDEPENDENT_CONFIRMATION_INSTRUCTION
+                    if independently_confirm
+                    else ""
+                ),
                 "images": [base64.b64encode(candidate.image_bytes).decode()],
             }
         ],
@@ -840,6 +896,8 @@ def _combat_visibility_verification_payload(
     candidate: FrameCandidate,
     model: ResolvedModel,
     num_ctx: int,
+    *,
+    independently_confirm: bool = False,
 ) -> dict[str, object]:
     """戦闘の掲載境界だけを一画像へ確認する小さなstructured requestを返す。"""
     return {
@@ -851,7 +909,12 @@ def _combat_visibility_verification_payload(
         "messages": [
             {
                 "role": "user",
-                "content": _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION,
+                "content": _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION
+                + (
+                    _INDEPENDENT_CONFIRMATION_INSTRUCTION
+                    if independently_confirm
+                    else ""
+                ),
                 "images": [base64.b64encode(candidate.image_bytes).decode()],
             }
         ],
@@ -1463,6 +1526,15 @@ def _candidate_semantic_input(
         "combat_encounter_verification_stage_contract_version": (
             COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION
         ),
+        "combat_encounter_confirmation_prompt_version": (
+            COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION
+        ),
+        "combat_encounter_confirmation_schema_version": (
+            COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_encounter_confirmation_stage_contract_version": (
+            COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION
+        ),
         "combat_visibility_verification_prompt_version": (
             COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION
         ),
@@ -1471,6 +1543,15 @@ def _candidate_semantic_input(
         ),
         "combat_visibility_verification_stage_contract_version": (
             COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "combat_visibility_confirmation_prompt_version": (
+            COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION
+        ),
+        "combat_visibility_confirmation_schema_version": (
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_visibility_confirmation_stage_contract_version": (
+            COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION
         ),
         "publication_boundary_verification_prompt_version": (
             PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION
@@ -1489,7 +1570,19 @@ def _combat_encounter_verification_semantic_input(
     candidate: FrameCandidate,
     model: ResolvedModel,
     num_ctx: int,
+    *,
+    independently_confirm: bool = False,
 ) -> dict[str, object]:
+    prompt_version = (
+        COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION
+        if independently_confirm
+        else COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION
+    )
+    stage_contract_version = (
+        COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION
+        if independently_confirm
+        else COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION
+    )
     return {
         "frame_candidate": {
             "id": candidate.identifier,
@@ -1497,11 +1590,9 @@ def _combat_encounter_verification_semantic_input(
         },
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
         "generation_options": {"temperature": 0, "stream": False, "think": False},
-        "prompt_version": COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION,
+        "prompt_version": prompt_version,
         "schema_version": COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION,
-        "stage_contract_version": (
-            COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION
-        ),
+        "stage_contract_version": stage_contract_version,
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
 
@@ -1510,7 +1601,19 @@ def _combat_visibility_verification_semantic_input(
     candidate: FrameCandidate,
     model: ResolvedModel,
     num_ctx: int,
+    *,
+    independently_confirm: bool = False,
 ) -> dict[str, object]:
+    prompt_version = (
+        COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION
+        if independently_confirm
+        else COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION
+    )
+    stage_contract_version = (
+        COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION
+        if independently_confirm
+        else COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
+    )
     return {
         "frame_candidate": {
             "id": candidate.identifier,
@@ -1518,11 +1621,9 @@ def _combat_visibility_verification_semantic_input(
         },
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
         "generation_options": {"temperature": 0, "stream": False, "think": False},
-        "prompt_version": COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
+        "prompt_version": prompt_version,
         "schema_version": COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
-        "stage_contract_version": (
-            COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
-        ),
+        "stage_contract_version": stage_contract_version,
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
 
@@ -1626,11 +1727,23 @@ def _contract_versions(stage_kind: StageKind) -> tuple[str, str, str]:
             COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION,
             COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION,
         )
+    if stage_kind == "combat_encounter_confirmation":
+        return (
+            COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION,
+            COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION,
+            COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION,
+        )
     if stage_kind == "combat_visibility_verification":
         return (
             COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
             COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
             COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION,
+        )
+    if stage_kind == "combat_visibility_confirmation":
+        return (
+            COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION,
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
+            COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION,
         )
     if stage_kind == "publication_boundary_verification":
         return (
@@ -1672,6 +1785,18 @@ def _merge_candidate_diagnostics(
             verification.eval_count,
         ),
         done_reason=verification.done_reason or primary.done_reason,
+    )
+
+
+def _is_publishable_combat_visibility(
+    observation: tuple[CharacterBodyVisibility, OpponentBodyFraming, bool],
+) -> bool:
+    """敵本体が明瞭で構図内に収まりeffectだけではない場合だけ許可する。"""
+    opponent_body_visibility, opponent_body_framing, effect_only_frame = observation
+    return (
+        opponent_body_visibility == "clear"
+        and opponent_body_framing == "complete"
+        and not effect_only_frame
     )
 
 

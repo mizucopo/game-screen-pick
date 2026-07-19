@@ -32,9 +32,13 @@ from ..vision.vision_contract import (
     CANDIDATE_ANNOTATION_PROMPT_VERSION,
     CANDIDATE_ANNOTATION_SCHEMA_VERSION,
     CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+    COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION,
+    COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION,
     COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION,
     COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION,
     COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION,
+    COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION,
+    COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
     COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION,
@@ -442,6 +446,15 @@ def _annotation_semantic_input(
         "combat_encounter_verification_stage_contract_version": (
             COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION
         ),
+        "combat_encounter_confirmation_prompt_version": (
+            COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION
+        ),
+        "combat_encounter_confirmation_schema_version": (
+            COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_encounter_confirmation_stage_contract_version": (
+            COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION
+        ),
         "combat_visibility_verification_prompt_version": (
             COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION
         ),
@@ -450,6 +463,15 @@ def _annotation_semantic_input(
         ),
         "combat_visibility_verification_stage_contract_version": (
             COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "combat_visibility_confirmation_prompt_version": (
+            COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION
+        ),
+        "combat_visibility_confirmation_schema_version": (
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_visibility_confirmation_stage_contract_version": (
+            COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION
         ),
         "publication_boundary_verification_prompt_version": (
             PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION

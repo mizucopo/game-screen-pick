@@ -1446,12 +1446,13 @@ def test_contextual_cinematic_dialogue_is_visually_rechecked(
         "confirmed_opponent_framing",
         "confirmed_effect_only",
         "expected_value",
+        "expected_attempt_count",
     ),
     (
-        ("clear", "complete", False, "high"),
-        ("clear", "edge_cropped", False, "none"),
-        ("absent", "absent", False, "none"),
-        ("clear", "complete", True, "none"),
+        ("clear", "complete", False, "high", 3),
+        ("clear", "edge_cropped", False, "none", 2),
+        ("absent", "absent", False, "none", 2),
+        ("clear", "complete", True, "none", 2),
     ),
 )
 def test_publishable_combat_visibility_is_visually_rechecked(
@@ -1459,6 +1460,7 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     confirmed_opponent_framing: str,
     confirmed_effect_only: bool,
     expected_value: str,
+    expected_attempt_count: int,
 ) -> None:
     """掲載可能とされた戦闘の敵本体、構図、エフェクトが再確認されること。
 
@@ -1517,7 +1519,7 @@ def test_publishable_combat_visibility_is_visually_rechecked(
 
     # Assert
     assert annotation.explanation_value == expected_value
-    assert diagnostics.attempt_count == 2
+    assert diagnostics.attempt_count == expected_attempt_count
     assert diagnostics.validation_code is None
     verification_schema = payloads[1]["format"]
     assert isinstance(verification_schema, Mapping)
@@ -1539,6 +1541,79 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     assert "画像の端で大きく切れる" in second_prompt
     assert "opponent_body_framing" in second_prompt
     assert "音声、前後場面、説明文は使いません" in second_prompt
+    if expected_attempt_count == 3:
+        confirmation_prompt = _last_message(payloads[2])["content"]
+        assert isinstance(confirmation_prompt, str)
+        assert "掲載可否を確定する独立した再確認" in confirmation_prompt
+        assert "先の回答を推測せず" in confirmation_prompt
+
+
+def test_clean_combat_visibility_is_confirmed_before_publication() -> None:
+    """一度だけ明瞭とされた戦闘が独立確認で掲載不可にされること。
+
+    Arrange:
+        - 主推論と初回専用確認で掲載可能とされた戦闘応答が用意される
+        - 独立確認では敵本体が画面端で欠ける応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 二回の直接観測が一致しない戦闘のExplanation Valueがnoneにされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+                )
+            )
+        verification = {
+            "effect_screen_coverage": "under_quarter",
+            "largest_foreground_element": "opponent_body",
+            "player_body_visibility": "clear",
+            "opponent_body_visibility": "clear",
+            "opponent_body_framing": "complete",
+            "effect_overlaps_combatant_body": "partial",
+            "effect_only_frame": False,
+        }
+        if len(payloads) == 3:
+            verification["largest_foreground_element"] = "visual_effect"
+            verification["opponent_body_visibility"] = "partial"
+            verification["opponent_body_framing"] = "edge_cropped"
+            verification["effect_overlaps_combatant_body"] = "severe"
+        return _response(verification)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 3
+    confirmation_prompt = _last_message(payloads[2])["content"]
+    assert isinstance(confirmation_prompt, str)
+    assert "画像の画素を最初から観測し直してください" in confirmation_prompt
 
 
 def test_possible_combat_is_routed_before_visibility_verification() -> None:
@@ -1636,7 +1711,7 @@ def test_noncombat_recurring_action_stops_after_encounter_verification() -> None
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 戦闘可視性確認へ進まず掲載価値が保持されること
+        - 二回とも非戦闘なら戦闘可視性確認へ進まず掲載価値が保持されること
     """
     # Arrange
     payloads: list[Mapping[str, object]] = []
@@ -1675,9 +1750,88 @@ def test_noncombat_recurring_action_stops_after_encounter_verification() -> None
 
     # Assert
     assert annotation.explanation_value == "high"
-    assert diagnostics.attempt_count == 2
+    assert diagnostics.attempt_count == 3
     assert diagnostics.validation_code is None
-    assert len(payloads) == 2
+    assert len(payloads) == 3
+    confirmation_prompt = _last_message(payloads[2])["content"]
+    assert isinstance(confirmation_prompt, str)
+    assert "掲載可否を確定する独立した再確認" in confirmation_prompt
+
+
+def test_negative_combat_encounter_is_confirmed_before_skipping_visibility() -> None:
+    """一度だけ非戦闘とされたactionが独立確認で戦闘へ戻されること。
+
+    Arrange:
+        - 主推論が非戦闘としたrecurring gameplayのactionが用意される
+        - 初回確認は非戦闘、独立確認は敵status UIのある戦闘とする応答が用意される
+        - 戦闘可視性確認では敵本体が不在とする応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 一回の非戦闘判定では確認が終了せず掲載不可にされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            response = _frame_observation_payload(
+                (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+            )
+            observation = _first_frame_observation(response)
+            observation["combat_action"] = False
+            observation["opponent_body_visibility"] = "absent"
+            return _response(response)
+        if len(payloads) == 2:
+            return _response(_combat_encounter_payload(visible=False, evidence="none"))
+        if len(payloads) == 3:
+            return _response(
+                _combat_encounter_payload(visible=True, evidence="enemy_status_ui")
+            )
+        return _response(
+            {
+                "effect_screen_coverage": "over_half",
+                "largest_foreground_element": "visual_effect",
+                "player_body_visibility": "partial",
+                "opponent_body_visibility": "absent",
+                "opponent_body_framing": "absent",
+                "effect_overlaps_combatant_body": "severe",
+                "effect_only_frame": False,
+            }
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 4
+    confirmation_prompt = _last_message(payloads[2])["content"]
+    assert isinstance(confirmation_prompt, str)
+    assert "先の回答を推測せず" in confirmation_prompt
+    visibility_prompt = _last_message(payloads[3])["content"]
+    assert isinstance(visibility_prompt, str)
+    assert "opponent_body_framing" in visibility_prompt
 
 
 def test_combat_encounter_schema_failure_is_retried() -> None:
@@ -1749,14 +1903,17 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
 
     # Assert
     assert annotation.explanation_value == "high"
-    assert diagnostics.attempt_count == 4
+    assert diagnostics.attempt_count == 5
     assert diagnostics.validation_code == (
         "combat_encounter_verification_schema_invalid"
     )
     third_prompt = _last_message(payloads[2])["content"]
     assert isinstance(third_prompt, str)
     assert "combat_encounter_verification_schema_invalid" in third_prompt
-    assert len(payloads) == 4
+    assert len(payloads) == 5
+    confirmation_prompt = _last_message(payloads[4])["content"]
+    assert isinstance(confirmation_prompt, str)
+    assert "掲載可否を確定する独立した再確認" in confirmation_prompt
 
 
 def test_combat_visibility_schema_failure_is_retried() -> None:
@@ -1818,13 +1975,16 @@ def test_combat_visibility_schema_failure_is_retried() -> None:
 
     # Assert
     assert annotation.explanation_value == "high"
-    assert diagnostics.attempt_count == 3
+    assert diagnostics.attempt_count == 4
     assert (
         diagnostics.validation_code == "combat_visibility_verification_schema_invalid"
     )
     third_prompt = _last_message(payloads[2])["content"]
     assert isinstance(third_prompt, str)
     assert "combat_visibility_verification_schema_invalid" in third_prompt
+    confirmation_prompt = _last_message(payloads[3])["content"]
+    assert isinstance(confirmation_prompt, str)
+    assert "掲載可否を確定する独立した再確認" in confirmation_prompt
 
 
 def test_dialogue_and_combat_visibility_are_rechecked_separately() -> None:

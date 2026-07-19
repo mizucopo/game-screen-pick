@@ -69,7 +69,7 @@ class VisionInferenceDiagnostics:
                 value is not None and _SAFE_VALUE_PATTERN.fullmatch(value) is None
                 for value in optional_safe_values
             )
-            or not 1 <= self.attempt_count <= 6
+            or not 1 <= self.attempt_count <= 10
             or any(value < 0 for value in counts)
             or any(value is not None and value < 0 for value in optional_counts)
             or self.duration_seconds < 0
