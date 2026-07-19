@@ -17,12 +17,12 @@ from ..models.candidate_frame_observation import (
 from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
 from ..models.scene_kind import SCENE_KINDS
 
-SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v4"
+SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v5"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v2"
-SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v6"
-CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v14"
-CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v9"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v24"
+SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v7"
+CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v15"
+CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v10"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v25"
 COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION = "combat-encounter-verification-prompt-v1"
 COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION = "combat-encounter-verification-schema-v1"
 COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION = (
@@ -117,6 +117,14 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                 "properties": {
                     "frame_id": {"type": "string"},
                     "scene_slug": {"type": "string"},
+                    "scene_catalog_match": {
+                        "type": "boolean",
+                        "description": (
+                            "画像だけで選択Sceneの表示名と説明にある具体的な場所・"
+                            "人物・出来事まで確認できる場合だけtrue。Scene Kindだけが"
+                            "一致する場合やContext Cueによる推測はfalse。"
+                        ),
+                    },
                     "content_kind": {
                         "type": "string",
                         "enum": list(CANDIDATE_FRAME_CONTENT_KINDS),
@@ -186,6 +194,7 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                 "required": [
                     "frame_id",
                     "scene_slug",
+                    "scene_catalog_match",
                     "content_kind",
                     "interface_kind",
                     "prominent_event_portrait",

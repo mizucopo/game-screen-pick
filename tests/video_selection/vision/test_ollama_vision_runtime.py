@@ -218,6 +218,8 @@ def test_scene_catalog_uses_strict_documented_ollama_request() -> None:
     assert "slugはcatalog内で一意にします" in prompt
     assert "recurring_gameplay=" in prompt
     assert "同じ画面構造を一時的な敵やエフェクトだけで別sceneへ分割しません" in prompt
+    assert "どの画像にも当てはまる再利用可能なカテゴリ表現" in prompt
+    assert "町・ダンジョンなどの場所" in prompt
 
 
 def test_schema_failure_is_retried_once_with_stable_code() -> None:
@@ -416,6 +418,8 @@ def test_other_scene_slug_is_canonicalized_from_scene_kind() -> None:
         other_scene = scenes[2]
         assert isinstance(other_scene, dict)
         other_scene["slug"] = "other-ordinary-scene"
+        other_scene["display_name"] = "通常の探索シーン"
+        other_scene["description"] = "石畳の町で探索する場面"
         return _response(response)
 
     runtime = OllamaVisionRuntime(
@@ -438,7 +442,10 @@ def test_other_scene_slug_is_canonicalized_from_scene_kind() -> None:
 
     # Assert
     assert catalog.slugs == ("exploration", "battle", "other")
-    assert catalog.for_slug("other").scene_kind == "other"
+    other = catalog.for_slug("other")
+    assert other.display_name == "その他"
+    assert other.description == "共有Scene Catalogの他sceneに分類できない場面"
+    assert other.scene_kind == "other"
     assert diagnostics.attempt_count == 1
 
 
@@ -1147,6 +1154,7 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
         "battle",
         "other",
     ]
+    assert observation_properties["scene_catalog_match"]["type"] == "boolean"
     assert observation_properties["interface_kind"]["enum"] == [
         "none",
         "document",
@@ -1250,9 +1258,68 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     assert "cinematic_event_presentation" in prompt
     assert "上下の映画的な黒帯" in prompt
     assert "画面隅の小さな" in prompt
+    assert "scene_catalog_match" in prompt
+    assert "音声、Context Cue、Video Set Progressを一致の根拠にしません" in prompt
     assert "explanation_valueのnone=" in prompt
     assert "context_relevanceのstrong=" in prompt
     assert "spoiler_riskのhigh=" in prompt
+
+
+def test_candidate_uses_generic_scene_when_catalog_details_do_not_match_frame() -> None:
+    """Catalogの具体的な場所が画像で確認できなければ要約から除かれること。
+
+    Arrange:
+        - 町でのevent sceneと、ダンジョンに見える会話frameの観測が用意される
+        - 画像がScene Catalogの具体的な説明と一致しないことが返される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - Sceneが分類の逃げ先へ正規化されること
+        - 町と断定しない画像単体の要約が返されること
+    """
+    # Arrange
+    catalog = SceneCatalog(
+        (
+            SceneCatalogEntry(
+                "exploration",
+                "探索",
+                "フィールド探索",
+                "exploration",
+                "ordinary",
+            ),
+            SceneCatalogEntry(
+                "event-town",
+                "町での会話イベント",
+                "町の広場で人物が会話するevent",
+                "event",
+                "ordinary",
+            ),
+            SceneCatalogEntry("other", "その他", "分類不能", "other", "ordinary"),
+        )
+    )
+    response = _frame_observation_payload(
+        (("frame-a", "event-town", "event_dialogue", "high", "dialogue"),)
+    )
+    _first_frame_observation(response)["scene_catalog_match"] = False
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        catalog,
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.scene_slug == "other"
+    assert annotation.summary == "台詞のあるイベント"
 
 
 def test_candidate_frames_are_labeled_and_selected_from_per_frame_observations() -> (
@@ -3570,6 +3637,7 @@ def _frame_observation_payload(
             {
                 "frame_id": frame_id,
                 "scene_slug": scene_slug,
+                "scene_catalog_match": True,
                 "content_kind": content_kind,
                 "interface_kind": (
                     content_kind

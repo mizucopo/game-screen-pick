@@ -166,6 +166,7 @@ _ANNOTATION_KEYS = {
 _FRAME_OBSERVATION_KEYS = {
     "frame_id",
     "scene_slug",
+    "scene_catalog_match",
     "content_kind",
     "interface_kind",
     "prominent_event_portrait",
@@ -272,10 +273,18 @@ _SCENE_CATALOG_SEMANTICS = (
     "selection_roleはordinary=通常の単発scene、cinematic=会話・演出・eventが主体、"
     "recurring_gameplay=戦闘UI・探索・puzzleなど繰り返し現れるplay構造です。"
     "同じ画面構造を一時的な敵やエフェクトだけで別sceneへ分割しません。"
-    "sceneはブログで役割が異なる視覚・内容のまとまりとして作ります。\n"
+    "sceneはブログで役割が異なる視覚・内容のまとまりとして作ります。"
+    "slug、display_name、descriptionは、そのsceneへ後から分類されるどの画像にも"
+    "当てはまる再利用可能なカテゴリ表現にします。一部の代表画像だけから推測した"
+    "町・ダンジョンなどの場所、固有人物、物語上の結果をscene全体へ断定せず、"
+    "会話イベント・boss戦・地図画面のような視覚・操作上の役割を優先します。\n"
 )
 _CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION = (
     "この画像だけに実際に見えるものを最初に観測してください。"
+    "scene_catalog_matchは、選んだscene_slugのdisplay_nameとdescriptionに含まれる"
+    "具体的な場所・人物・出来事まで、この画像だけで確認できる場合だけtrueです。"
+    "Scene Kindや会話・戦闘という大分類だけが一致する場合、または音声・Context Cue"
+    "から補わなければ一致しない場合はfalseです。"
     "手紙・手記・日誌・記録を読む画面ならinterface_kind=documentです。"
     "prominent_event_portraitは会話やeventの演出として大きな人物立ち絵・胸像が"
     "gameplay画面へ重なる場合だけtrueです。画面隅の小さな円形・枠付きの常設HUD"
@@ -365,6 +374,10 @@ _PUBLICATION_BOUNDARY_VERIFICATION_INSTRUCTION = (
 _CANDIDATE_ANNOTATION_SEMANTICS = (
     "各frameを他のframeの内容と混ぜず、対応するframe_idごとに個別評価します。"
     "最初に各画像の直接観測を推測せず決め、その後で画面内容と説明価値を決めます。"
+    "scene_slugは最も近いScene Catalog entryから選び、scene_catalog_matchはその"
+    "entryの具体的な表示名と説明が画像だけで裏付けられるかを返します。場所名・"
+    "人物名・物語上の出来事の一部でも画像から確認できなければfalseです。音声、"
+    "Context Cue、Video Set Progressを一致の根拠にしません。"
     "interface_kindは画面全体の主用途をnone・document・shop・map・save・"
     "tutorial_help・other_interface・titleから選びます。documentは手紙・手記・"
     "日誌・記録を読む画面です。戦闘HUDだけをother_interfaceにせず、"
@@ -510,7 +523,7 @@ class OllamaVisionRuntime:
 
         def parse_candidate(
             value: Mapping[str, object],
-        ) -> tuple[CandidateAnnotation, bool, bool, bool, bool]:
+        ) -> tuple[CandidateAnnotation, bool, bool, bool, bool, bool]:
             nonlocal candidate_response_count
             candidate_response_count += 1
             (
@@ -520,6 +533,7 @@ class OllamaVisionRuntime:
                 requires_combat_verification,
                 requires_combat_encounter_verification,
                 requires_publication_verification,
+                scene_is_combat,
             ) = _parse_candidate_annotation(value, request, catalog)
             if requires_dialogue_verification and candidate_response_count == 1:
                 raise _domain_error(
@@ -531,6 +545,7 @@ class OllamaVisionRuntime:
                 requires_combat_verification,
                 requires_combat_encounter_verification,
                 requires_publication_verification,
+                scene_is_combat,
             )
 
         (
@@ -540,6 +555,7 @@ class OllamaVisionRuntime:
                 requires_combat_verification,
                 requires_combat_encounter_verification,
                 requires_publication_verification,
+                scene_is_combat,
             ),
             diagnostics,
         ) = self._infer(
@@ -557,7 +573,7 @@ class OllamaVisionRuntime:
         requires_publication_verification = requires_publication_verification or (
             annotation.explanation_value != "none" and cinematic_letterbox_detected
         )
-        combat_scene = catalog.for_slug(annotation.scene_slug).scene_kind == "combat"
+        combat_scene = scene_is_combat
         if requires_combat_encounter_verification:
             verification_input = _combat_encounter_verification_semantic_input(
                 annotation.candidate,
@@ -1273,6 +1289,8 @@ def _parse_scene_catalog(
             raise _schema_error("scene_catalog_schema_invalid")
         if scene_kind == "other":
             slug = "other"
+            display_name = "その他"
+            description = "共有Scene Catalogの他sceneに分類できない場面"
         if slug in used_slugs:
             if not repair_duplicate_slugs or slug == "other":
                 raise _domain_error("scene_catalog_domain_invalid")
@@ -1305,7 +1323,7 @@ def _parse_candidate_annotation(
     value: Mapping[str, object],
     request: CandidateAnnotationRequest,
     catalog: SceneCatalog,
-) -> tuple[CandidateAnnotation, bool, bool, bool, bool, bool]:
+) -> tuple[CandidateAnnotation, bool, bool, bool, bool, bool, bool]:
     if set(value) != _ANNOTATION_KEYS:
         raise _schema_error("candidate_annotation_schema_invalid")
     raw_observations = value.get("frame_observations")
@@ -1385,7 +1403,15 @@ def _parse_candidate_annotation(
             )
         )
         content_label = _CONTENT_KIND_LABELS[selected.effective_content_kind]
-        annotation_summary = f"{scene.display_name}の{content_label}"
+        annotation_scene_slug = (
+            selected.scene_slug if selected.scene_catalog_match else "other"
+        )
+        annotation_scene = catalog.for_slug(annotation_scene_slug)
+        annotation_summary = (
+            f"{annotation_scene.display_name}の{content_label}"
+            if selected.scene_catalog_match
+            else content_label
+        )
         frame_choice_reason = f"{content_label}が候補内で最も明瞭なフレーム"
         (
             annotation_summary,
@@ -1396,7 +1422,7 @@ def _parse_candidate_annotation(
             annotation_summary=annotation_summary,
             frame_choice_reason=frame_choice_reason,
             spoiler_evidence=selected.spoiler_evidence,
-            scene_slug=selected.scene_slug,
+            scene_slug=annotation_scene_slug,
             blog_image_type=selected.blog_image_type,
             spoiler_risk=selected.spoiler_risk,
             raw_context_texts=tuple(item.text for item in request.context_cues),
@@ -1407,7 +1433,7 @@ def _parse_candidate_annotation(
                 candidate=selected.candidate,
                 summary=annotation_summary,
                 candidate_moment_id=request.moment.identifier,
-                scene_slug=selected.scene_slug,
+                scene_slug=annotation_scene_slug,
                 blog_image_type=selected.blog_image_type,
                 explanation_value=selected.effective_explanation_value,
                 frame_choice_reason=frame_choice_reason,
@@ -1422,6 +1448,7 @@ def _parse_candidate_annotation(
             requires_combat_verification,
             requires_combat_encounter_verification,
             requires_publication_verification,
+            scene.scene_kind == "combat",
         )
     except ValueError:
         raise _domain_error("candidate_annotation_domain_invalid") from None
@@ -1564,6 +1591,7 @@ def _parse_candidate_frame_observations(
             raise _schema_error("candidate_annotation_schema_invalid")
         frame_id = raw_observation.get("frame_id")
         scene_slug = raw_observation.get("scene_slug")
+        scene_catalog_match = raw_observation.get("scene_catalog_match")
         content_kind = raw_observation.get("content_kind")
         interface_kind = raw_observation.get("interface_kind")
         prominent_event_portrait = raw_observation.get("prominent_event_portrait")
@@ -1587,6 +1615,7 @@ def _parse_candidate_frame_observations(
         if (
             not isinstance(frame_id, str)
             or not isinstance(scene_slug, str)
+            or not isinstance(scene_catalog_match, bool)
             or content_kind not in CANDIDATE_FRAME_CONTENT_KINDS
             or interface_kind not in CANDIDATE_INTERFACE_KINDS
             or not isinstance(prominent_event_portrait, bool)
@@ -1624,6 +1653,7 @@ def _parse_candidate_frame_observations(
                 CandidateFrameObservation(
                     candidate=frames[frame_id],
                     scene_slug=scene_slug,
+                    scene_catalog_match=scene_catalog_match,
                     content_kind=cast(CandidateFrameContentKind, content_kind),
                     interface_kind=cast(CandidateInterfaceKind, interface_kind),
                     prominent_event_portrait=prominent_event_portrait,

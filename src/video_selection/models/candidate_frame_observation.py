@@ -130,6 +130,7 @@ class CandidateFrameObservation:
     transient_obstruction: TransientObstruction
     spoiler_risk: SpoilerRisk
     spoiler_evidence: str
+    scene_catalog_match: bool = True
 
     def __post_init__(self) -> None:
         """frame identity、enum、Spoiler evidenceの関係を検証する。"""
@@ -155,6 +156,7 @@ class CandidateFrameObservation:
             or self.transient_obstruction not in TRANSIENT_OBSTRUCTIONS
             or self.spoiler_risk not in SPOILER_RISKS
             or (self.spoiler_risk == "none") != (not self.spoiler_evidence)
+            or not isinstance(self.scene_catalog_match, bool)
         ):
             msg = "Candidate Frame Observationのdomain fieldが不正です"
             raise ValueError(msg)
