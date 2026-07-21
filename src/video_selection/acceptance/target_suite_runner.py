@@ -29,6 +29,10 @@ from .execute_acceptance_phase import (
 from .full_suite_materializer import FullSuiteMaterializer
 from .human_review import ensure_review_worksheet, evaluate_human_review
 from .load_acceptance_profile import load_acceptance_profile
+from .phase_attempt_metrics import (
+    aggregate_phase_attempts,
+    validate_phase_measurements,
+)
 from .release_suite_materializer import ReleaseSuiteMaterializer
 from .target_environment import probe_source_revision, probe_target_environment
 
@@ -187,7 +191,7 @@ class TargetSuiteRunner:
                 }
                 write_atomic_json(state_path, state)
                 return 1
-            _validate_phase_measurements(record)
+            validate_phase_measurements(record)
             prior_attempts = _phase_attempts(state, phase)
             state.pop("active_phase", None)
             if exit_code != 0:
@@ -201,7 +205,7 @@ class TargetSuiteRunner:
                 return exit_code
             if record.get("operation_status") != "completed":
                 raise ValueError("成功phaseの計測記録がcompletedではありません")
-            phases[phase] = _aggregate_phase_attempts((*prior_attempts, record))
+            phases[phase] = aggregate_phase_attempts((*prior_attempts, record))
             state["phases"] = phases
             _clear_phase_attempts(state, phase)
             state.pop("last_failure", None)
@@ -419,29 +423,6 @@ def _phases_completed(state: Mapping[str, object]) -> bool:
     )
 
 
-_SUMMED_INTEGER_METRICS = (
-    "cache_hit_count",
-    "cache_miss_count",
-    "reuse_count",
-    "unexpected_recompute_count",
-    "disk_sample_count",
-    "gpu_sample_count",
-    "gpu_sample_error_count",
-)
-_MAXIMUM_INTEGER_METRICS = (
-    "persistent_cache_bytes",
-    "peak_additional_bytes",
-    "system_global_gpu_peak_mib",
-    "ollama_global_gpu_peak_mib",
-    "stt_global_gpu_peak_mib",
-    "ollama_model_size_vram_bytes",
-)
-_BASELINE_INTEGER_METRICS = (
-    "process_gpu_baseline_mib",
-    "system_gpu_baseline_mib",
-)
-
-
 def _phase_attempts(
     state: Mapping[str, object],
     phase: str,
@@ -479,122 +460,6 @@ def _clear_phase_attempts(state: dict[str, object], phase: str) -> None:
         state["phase_attempts"] = attempts_by_phase
     else:
         state.pop("phase_attempts", None)
-
-
-def _validate_phase_measurements(record: Mapping[str, object]) -> None:
-    _measurement_number(record, "duration_seconds")
-    for key in (
-        *_SUMMED_INTEGER_METRICS,
-        *_MAXIMUM_INTEGER_METRICS,
-        *_BASELINE_INTEGER_METRICS,
-    ):
-        _measurement_integer(record, key)
-    _measurement_numeric_mapping(record, "stage_durations_seconds")
-    _measurement_integer_mapping(record, "completed_stage_counts")
-    if not isinstance(record.get("resource_sampling_complete"), bool):
-        raise ValueError("Acceptance phase metric resource_sampling_completeが不正です")
-
-
-def _aggregate_phase_attempts(
-    records: tuple[Mapping[str, object], ...],
-) -> dict[str, object]:
-    if not records:
-        raise ValueError("Acceptance phase attemptがありません")
-    for record in records:
-        _validate_phase_measurements(record)
-    aggregate = dict(records[-1])
-    aggregate["attempt_count"] = len(records)
-    aggregate["duration_seconds"] = sum(
-        _measurement_number(record, "duration_seconds") for record in records
-    )
-    for key in _SUMMED_INTEGER_METRICS:
-        aggregate[key] = sum(_measurement_integer(record, key) for record in records)
-    for key in _MAXIMUM_INTEGER_METRICS:
-        aggregate[key] = max(_measurement_integer(record, key) for record in records)
-    for key in _BASELINE_INTEGER_METRICS:
-        aggregate[key] = _measurement_integer(records[0], key)
-    aggregate["stage_durations_seconds"] = _sum_numeric_mappings(
-        records,
-        "stage_durations_seconds",
-    )
-    aggregate["completed_stage_counts"] = _sum_integer_mappings(
-        records,
-        "completed_stage_counts",
-    )
-    aggregate["resource_sampling_complete"] = all(
-        record["resource_sampling_complete"] is True for record in records
-    )
-    aggregate.pop("failure_reason", None)
-    aggregate.pop("failure_exit_code", None)
-    return aggregate
-
-
-def _sum_numeric_mappings(
-    records: tuple[Mapping[str, object], ...],
-    key: str,
-) -> dict[str, float]:
-    result: dict[str, float] = {}
-    for record in records:
-        for name, value in _measurement_numeric_mapping(record, key).items():
-            result[name] = result.get(name, 0.0) + value
-    return result
-
-
-def _sum_integer_mappings(
-    records: tuple[Mapping[str, object], ...],
-    key: str,
-) -> dict[str, int]:
-    result: dict[str, int] = {}
-    for record in records:
-        for name, value in _measurement_integer_mapping(record, key).items():
-            result[name] = result.get(name, 0) + value
-    return result
-
-
-def _measurement_number(record: Mapping[str, object], key: str) -> float:
-    value = record.get(key)
-    if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"Acceptance phase metric {key}が不正です")
-    return float(value)
-
-
-def _measurement_integer(record: Mapping[str, object], key: str) -> int:
-    value = record.get(key)
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"Acceptance phase metric {key}が不正です")
-    return value
-
-
-def _measurement_numeric_mapping(
-    record: Mapping[str, object],
-    key: str,
-) -> dict[str, float]:
-    value = record.get(key)
-    if not isinstance(value, dict) or not all(
-        isinstance(name, str)
-        and isinstance(item, int | float)
-        and not isinstance(item, bool)
-        and item >= 0
-        for name, item in value.items()
-    ):
-        raise ValueError(f"Acceptance phase metric {key}が不正です")
-    return {name: float(item) for name, item in value.items()}
-
-
-def _measurement_integer_mapping(
-    record: Mapping[str, object],
-    key: str,
-) -> dict[str, int]:
-    value = record.get(key)
-    if not isinstance(value, dict) or not all(
-        isinstance(name, str)
-        and isinstance(item, int)
-        and not isinstance(item, bool)
-        and item >= 0
-        for name, item in value.items()
-    ):
-        raise ValueError(f"Acceptance phase metric {key}が不正です")
-    return cast(dict[str, int], value)
 
 
 def _forbidden_values(profile: AcceptanceProfile) -> tuple[str, ...]:
