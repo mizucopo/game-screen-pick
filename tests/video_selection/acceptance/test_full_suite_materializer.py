@@ -123,6 +123,36 @@ def test_repointed_anonymous_symlink_requires_reset(tmp_path: Path) -> None:
     assert "匿名input" in str(error.value)
 
 
+def test_stray_supported_video_requires_reset(tmp_path: Path) -> None:
+    """manifest外の対応videoが匿名inputに残るとresumeが拒否されること。
+
+    Arrange:
+        - 確定済みfull input viewへ余分なscenario videoが追加される
+    Act:
+        - 同じprofileでresume materializeが試行される
+    Assert:
+        - 匿名inputの完全一致違反としてresetが必要になること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    profile.input_root.mkdir()
+    (profile.input_root / "private-chapter-01.mkv").write_bytes(b"first")
+    (profile.input_root / "private-chapter-02.mp4").write_bytes(b"second")
+    materializer = FullSuiteMaterializer(
+        media_probe=lambda _path: {"duration": Fraction(50)},
+    )
+    suite_root = profile.artifact_root / "full"
+    input_folder, _ = materializer.materialize(profile, suite_root)
+    (input_folder / "scenario-999.mkv").write_bytes(b"stray")
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        materializer.materialize(profile, suite_root)
+
+    # Assert
+    assert "匿名input" in str(error.value)
+
+
 def test_duration_mismatch_removes_partial_anonymous_view(tmp_path: Path) -> None:
     """full duration preflight failureでpartial symlink viewが削除されること。
 

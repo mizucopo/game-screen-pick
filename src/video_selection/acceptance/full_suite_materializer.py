@@ -105,6 +105,14 @@ def _restore_existing(
     paths = tuple(input_folder / name for name in names)
     if len(paths) != profile.full_expected_video_count or len(paths) != len(sources):
         raise ValueError("Full suite匿名inputが変更されています")
+    if not input_folder.is_dir():
+        raise ValueError("Full suite匿名inputが変更されています")
+    actual_names = tuple(
+        path.relative_to(input_folder).as_posix()
+        for path in discover_video_paths(input_folder, recursive=True)
+    )
+    if actual_names != tuple(names):
+        raise ValueError("Full suite匿名inputが変更されています")
     for path, source in zip(paths, sources, strict=True):
         try:
             target_matches = (

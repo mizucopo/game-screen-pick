@@ -40,7 +40,7 @@ def test_anonymous_clips_preserve_all_streams_and_record_actual_boundaries(
     def probe(path: Path) -> dict[str, object]:
         return {
             "start": Fraction(0 if path == source else 8),
-            "duration": Fraction(100 if path == source else 1802),
+            "duration": Fraction(100 if path == source else 1810),
             "streams": (("audio", "aac"), ("video", "h264")),
         }
 
@@ -110,6 +110,45 @@ def test_boundary_outside_tolerance_removes_partial_clips(tmp_path: Path) -> Non
     assert not (suite_root / "work" / "input").exists()
 
 
+def test_nonzero_source_start_offsets_ffmpeg_stop_timestamp(tmp_path: Path) -> None:
+    """非0 source startを加えた停止timestampでclipが作成されること。
+
+    Arrange:
+        - container start_timeが5秒のsourceと10〜1810秒のintervalが用意される
+    Act:
+        - release suiteがmaterializeされる
+    Assert:
+        - FFmpegの停止timestampにsource startを加えた1815秒が指定されること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    profile.input_root.mkdir()
+    source = profile.input_root / "private-video.mkv"
+    source.write_bytes(b"source")
+    commands: list[list[str]] = []
+
+    def run(command: list[str]) -> None:
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"clip")
+
+    def probe(path: Path) -> dict[str, object]:
+        return {
+            "start": Fraction(5 if path == source else 13),
+            "duration": Fraction(100 if path == source else 1815),
+            "streams": (("video", "h264"),),
+        }
+
+    # Act
+    ReleaseSuiteMaterializer(
+        command_runner=run,
+        media_probe=probe,
+    ).materialize(profile, profile.artifact_root / "release")
+
+    # Assert
+    command = commands[0]
+    assert command[command.index("-to") + 1] == "1815.000000"
+
+
 def test_completed_materialization_is_reused_without_ffmpeg(tmp_path: Path) -> None:
     """同じprofileとcontentの確定済みclipがresume時に再利用されること。
 
@@ -135,7 +174,7 @@ def test_completed_materialization_is_reused_without_ffmpeg(tmp_path: Path) -> N
     def probe(path: Path) -> dict[str, object]:
         return {
             "start": Fraction(0 if path == source else 8),
-            "duration": Fraction(100 if path == source else 1802),
+            "duration": Fraction(100 if path == source else 1810),
             "streams": (("video", "h264"),),
         }
 

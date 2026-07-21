@@ -82,6 +82,7 @@ class ReleaseSuiteMaterializer:
         if not source.is_file():
             raise ValueError("Release interval sourceが存在しません")
         source_probe = self._media_probe(source)
+        source_start = _probe_fraction(source_probe, "start")
         output = input_folder / f"scenario-{zero_based_index + 1:03d}.mkv"
         self._command_runner(
             [
@@ -94,7 +95,7 @@ class ReleaseSuiteMaterializer:
                 "-i",
                 str(source),
                 "-to",
-                _ffmpeg_time(interval.end),
+                _ffmpeg_time(source_start + interval.end),
                 "-map",
                 "0",
                 "-c",
@@ -113,11 +114,10 @@ class ReleaseSuiteMaterializer:
             ]
         )
         clip_probe = self._media_probe(output)
-        source_start = _probe_fraction(source_probe, "start")
         clip_start = _probe_fraction(clip_probe, "start")
-        clip_duration = _probe_fraction(clip_probe, "duration")
+        clip_end_timestamp = _probe_fraction(clip_probe, "duration")
         actual_start = clip_start - source_start
-        actual_end = clip_start + clip_duration - source_start
+        actual_end = clip_end_timestamp - source_start
         duration = actual_end - actual_start
         tolerance = profile.release_boundary_tolerance_seconds
         if (

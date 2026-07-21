@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 from ..media.ffmpeg_media_runtime import FfmpegMediaRuntime
 from .gpu_resource_monitor import find_nvidia_smi
@@ -158,8 +159,18 @@ def _gpu_identity() -> dict[str, object]:
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         raise ValueError("NVIDIA GPU identityを取得できません") from None
-    parts = [part.strip() for part in output.split(",")]
-    if len(parts) != 3 or not parts[2].isdigit():
+    rows = tuple(_parse_gpu_row(line) for line in output.splitlines() if line.strip())
+    if not rows:
+        raise ValueError("NVIDIA GPU identityが不正です")
+    return next(
+        (row for row in rows if "RTX 5090" in cast(str, row["name"])),
+        rows[0],
+    )
+
+
+def _parse_gpu_row(line: str) -> dict[str, object]:
+    parts = [part.strip() for part in line.split(",")]
+    if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2].isdigit():
         raise ValueError("NVIDIA GPU identityが不正です")
     return {"name": parts[0], "driver": parts[1], "memory_total_mib": int(parts[2])}
 
