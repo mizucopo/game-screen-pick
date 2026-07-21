@@ -149,6 +149,48 @@ def test_ties_follow_video_order_time_moment_and_frame_id(tmp_path: Path) -> Non
     assert representatives[0].identifier == earlier_low_id.identifier
 
 
+def test_scene_catalog_representatives_skip_shared_frames_and_fill_limit(
+    tmp_path: Path,
+) -> None:
+    """共有Frameが除外され後続の一意な代表で上限まで補充されること。
+
+    Arrange:
+        - 最初の2 Momentが同じFrame Candidateを共有し、後続Momentが別frameを持つ
+    Act:
+        - 上限2件のScene Catalog Representative Setが構築される
+    Assert:
+        - 重複Frame Candidate IDが除外され、後続frameで2件まで補充されること
+    """
+    # Arrange
+    shared = _frame("a", quality=0.90, feature=(1.0, 0.0), second=1)
+    later = _frame("b", quality=0.80, feature=(0.0, 1.0), second=3)
+    result = _stage_result(
+        tmp_path,
+        "1",
+        duration=10,
+        moments=(
+            _moment("1", Fraction(1), (shared.identifier,)),
+            _moment("2", Fraction(2), (shared.identifier,)),
+            _moment("3", Fraction(3), (later.identifier,)),
+        ),
+        candidates=(shared, later),
+    )
+    requests = build_candidate_annotation_requests(
+        (result,),
+        selection_intent="ブログ本文を説明できる画像を選ぶ",
+        similarity_threshold=1.0,
+    )
+
+    # Act
+    representatives = select_scene_catalog_representatives(requests, limit=2)
+
+    # Assert
+    assert [frame.identifier for frame in representatives] == [
+        shared.identifier,
+        later.identifier,
+    ]
+
+
 def test_context_uses_nearby_equivalence_representatives_and_global_progress(
     tmp_path: Path,
 ) -> None:

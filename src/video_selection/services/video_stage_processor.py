@@ -61,7 +61,7 @@ _CONTENT_REJECT_VERSION = "content-reject-v2"
 _DEDUPE_VERSION = "grayscale-64x36-mad-2-v1"
 _ENTITY_ID_VERSION = "video-entity-id-v1"
 _CANDIDATE_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
-_MAX_VIDEO_SCAN_WORKERS = 2
+_MAX_VIDEO_SCAN_WORKERS = 3
 _LOGICAL_CPUS_PER_VIDEO_SCAN_WORKER = 8
 
 PreparedVideoScan = tuple[bool, float]

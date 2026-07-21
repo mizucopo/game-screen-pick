@@ -107,13 +107,21 @@ def select_scene_catalog_representatives(
     *,
     limit: int = _SCENE_CATALOG_REPRESENTATIVE_LIMIT,
 ) -> tuple[FrameCandidate, ...]:
-    """shortlist全体から要求枚数非依存のlocal代表を最大24枚返す。"""
+    """shortlist全体から一意なlocal代表を要求枚数非依存で最大24枚返す。"""
     if limit < 1:
         msg = "Scene Catalog Representative上限は正の整数が必要です"
         raise ValueError(msg)
-    return tuple(
-        _local_representative(request.frame_candidates) for request in requests[:limit]
-    )
+    representatives: list[FrameCandidate] = []
+    seen_identifiers: set[str] = set()
+    for request in requests:
+        representative = _local_representative(request.frame_candidates)
+        if representative.identifier in seen_identifiers:
+            continue
+        representatives.append(representative)
+        seen_identifiers.add(representative.identifier)
+        if len(representatives) == limit:
+            break
+    return tuple(representatives)
 
 
 def _local_representative(

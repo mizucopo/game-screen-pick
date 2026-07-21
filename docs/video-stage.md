@@ -4,7 +4,7 @@
 
 ## Processing Stage
 
-Video Set内の全sourceをVideo Order順にprobeした後、独立した`scan-video`をlogical CPU数に応じて最大2 workerで先行確定します。`extract-frame-candidates`と`collect-context`、結果順、progress通知はVideo Order順です。各Stage境界ではpath・device・inode・size・mtime・ctime snapshotを検査し、内容のwhole-file SHA-256はVideo Identity cache miss時だけ計算します。
+Video Set内の全sourceをVideo Order順にprobeした後、独立した`scan-video`をlogical CPU 8個につき1 worker、最大3 workerで先行確定します。`extract-frame-candidates`と`collect-context`、結果順、progress通知はVideo Order順です。各Stage境界ではpath・device・inode・size・mtime・ctime snapshotを検査し、内容のwhole-file SHA-256はVideo Identity cache miss時だけ計算します。
 
 1. `scan-video`
    - `attached_pic`を除外し、default disposition、stream indexの順でPrimary Video Streamを決めます。

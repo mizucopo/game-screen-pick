@@ -277,7 +277,7 @@ _Avoid_: per-video position, story importance, spoiler score, selection quota
 _Avoid_: late-video penalty, timeline bucket quota, per-video quota
 
 **Scene Catalog Representative Set**:
-Video Set全体のNeutral Image Analysisから、品質、見た目の多様性、頻出patternを表すFrame Candidateを最大24件選んだScene Catalog専用の入力集合。Selection Shortlistと要求出力枚数から独立し、要求枚数の変更だけではScene Catalogを変えない。
+Video Set全体のNeutral Image Analysisから、品質、見た目の多様性、頻出patternを表すFrame Candidateを最大24件選んだScene Catalog専用の入力集合。Frame Candidate IDは集合内で一意とし、Selection Shortlistと要求出力枚数から独立するため、要求枚数の変更だけではScene Catalogを変えない。
 _Avoid_: Selection Shortlist, selected output, per-video representatives
 
 **Candidate Annotation**:

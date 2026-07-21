@@ -248,26 +248,26 @@ def test_video_scans_are_prepared_before_ordered_downstream_stages(
     ]
 
 
-def test_two_video_scans_run_concurrently(
+def test_three_video_scans_run_concurrently(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """独立した2動画のscanがbounded workerで同時実行されること。
+    """24 logical CPUでは独立した3動画のscanが同時実行されること。
 
     Arrange:
-        - 2 workerを許可するCPU数と2動画が用意される
-        - 両scanの開始を同期するbarrierが用意される
+        - 3 workerを許可する24 logical CPUと3動画が用意される
+        - 3 scanの開始を同期するbarrierが用意される
     Act:
         - Video Stage processorが実行される
     Assert:
-        - 2件のscanが同時にactiveになること
+        - 3件のscanが同時にactiveになること
     """
     # Arrange
     input_folder = tmp_path / "videos"
     input_folder.mkdir()
-    (input_folder / "01-first.mp4").write_bytes(b"first-video")
-    (input_folder / "02-second.mp4").write_bytes(b"second-video")
-    barrier = threading.Barrier(2)
+    for index in range(1, 4):
+        (input_folder / f"0{index}-video.mp4").write_bytes(f"video-{index}".encode())
+    barrier = threading.Barrier(3)
     active_count = 0
     peak_count = 0
     count_lock = threading.Lock()
@@ -297,7 +297,7 @@ def test_two_video_scans_run_concurrently(
     )
 
     # Assert
-    assert peak_count == 2
+    assert peak_count == 3
 
 
 def test_interrupt_cancels_active_video_scans(tmp_path: Path) -> None:
