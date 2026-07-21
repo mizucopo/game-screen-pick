@@ -75,13 +75,16 @@ cold/warmを再実行したりしない。
 
 完了済みphaseからhuman reviewを再開する場合も、現在のsourceをmaterializeし直してsuite
 fingerprintを照合し、Resolved Model Identityを再解決してからrecordを確定する。入力または
-modelが変わっていれば既存の完了stateを流用しない。
+modelが変わっていれば既存の完了stateを流用しない。同じ実行identityに対する
+`Model Update Status`や更新前identityの違いはrun別診断であり、再利用可否を変えない。
 
 user interruptや計測済みoperation failureの未完了phaseはCompleted Stage cacheを保持する。
 再開後のphase recordでは、それ以前の試行を含む経過時間、cache/recompute count、Stage時間、
 storage/GPU aggregateを累積または保守的な最大値として集計するため、再開後の短い試行だけで
-性能を判定しない。process強制終了などで試行の計測記録を確定できなかった場合は、安全な性能
-根拠を復元できないため同じstateから再開せず、`--reset-suite`を要求する。
+性能を判定しない。user interruptで詳細計測を確定できなかった場合も経過時間を試行へ残し、
+resource計測を不完全とする。Completed Stage cacheから再開できるが、そのsuiteは不完全な
+性能・resource根拠では合格しない。process強制終了などでinterrupt handler自体を通らず
+active phaseが残った場合は、安全な試行境界を復元できないため`--reset-suite`を要求する。
 
 identityを変えた場合や意図的にcoldからやり直す場合だけ、対象suiteを明示的にresetする。
 

@@ -115,9 +115,12 @@ def test_repointed_anonymous_symlink_requires_reset(tmp_path: Path) -> None:
     anonymous_first.unlink()
     anonymous_first.symlink_to(second.resolve(strict=True))
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="匿名input"):
+    # Act
+    with pytest.raises(ValueError) as error:
         materializer.materialize(profile, suite_root)
+
+    # Assert
+    assert "匿名input" in str(error.value)
 
 
 def test_duration_mismatch_removes_partial_anonymous_view(tmp_path: Path) -> None:

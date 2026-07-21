@@ -1,5 +1,6 @@
 """durable cold/warm target suite runnerのtest。"""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from src.video_selection.acceptance.atomic_json import (
     write_atomic_json,
 )
 from src.video_selection.acceptance.target_suite_runner import (
+    ModelResolver,
     PhaseExecutor,
     TargetSuiteRunner,
 )
@@ -17,6 +19,7 @@ from src.video_selection.configuration.resolve_effective_configuration import (
     resolve_effective_configuration,
 )
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
+from src.video_selection.models.model_update_status import ModelUpdateStatus
 from src.video_selection.models.resolved_models import ResolvedModels
 from tests.video_selection.fakes.fake_model_runtime import FakeModelRuntime
 
@@ -252,12 +255,15 @@ def test_completed_state_revalidates_current_suite_fingerprint(tmp_path: Path) -
 
     assert _runner(execute).run(profile_path=profile_path, suite="release") == 3
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="suite identity"):
+    # Act
+    with pytest.raises(ValueError) as error:
         _runner(execute, suite_fingerprint="c" * 64).run(
             profile_path=profile_path,
             suite="release",
         )
+
+    # Assert
+    assert "suite identity" in str(error.value)
     assert calls == ["cold", "warm"]
 
 
@@ -291,12 +297,72 @@ def test_completed_state_revalidates_current_model_identity(tmp_path: Path) -> N
 
     assert _runner(execute).run(profile_path=profile_path, suite="release") == 3
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="suite identity"):
+    # Act
+    with pytest.raises(ValueError) as error:
         _runner(execute, model_identity_seed="changed-model").run(
             profile_path=profile_path,
             suite="release",
         )
+
+    # Assert
+    assert "suite identity" in str(error.value)
+    assert calls == ["cold", "warm"]
+
+
+def test_completed_state_ignores_model_update_diagnostic_change(
+    tmp_path: Path,
+) -> None:
+    """同じ実行identityのmodel更新診断変更では完了stateが再利用されること。
+
+    Arrange:
+        - 初回はnot_requested、再開時はunchangedとなる同一Resolved Modelが用意される
+    Act:
+        - cold/warm完了後のhuman review待ちsuiteが再開される
+    Assert:
+        - phaseを再実行せずpending human reviewのまま再開されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    model_runtime = FakeModelRuntime("stable-model")
+    resolution_count = 0
+
+    def resolve(configuration: EffectiveConfiguration) -> ResolvedModels:
+        nonlocal resolution_count
+        resolution_count += 1
+        resolved = model_runtime.resolve_models(configuration)
+        if resolution_count == 1:
+            return resolved
+        return ResolvedModels(
+            tuple(
+                replace(item, update_status=ModelUpdateStatus.UNCHANGED)
+                for item in resolved.items
+            )
+        )
+
+    def execute(
+        phase: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> tuple[
+        int,
+        dict[str, object],
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        calls.append(phase)
+        return _successful_phase(configuration, phase)
+
+    runner = _runner(execute, model_resolver=resolve)
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+
+    # Act
+    resumed = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert resumed == 3
+    assert resolution_count == 2
     assert calls == ["cold", "warm"]
 
 
@@ -345,25 +411,27 @@ def test_incomplete_phase_removes_uncommitted_output_before_rerun(
     assert calls == ["cold", "warm"]
 
 
-def test_unmeasured_phase_interrupt_requires_reset_before_retry(
+def test_interrupt_before_phase_record_can_retry_without_reset(
     tmp_path: Path,
 ) -> None:
-    """計測記録を確定できないphase中断では再利用が拒否されること。
+    """phase recordより前のuser interruptでも明示resetなしで再開されること。
 
     Arrange:
-        - phase executor自体が記録を返す前にinterruptされるsuiteが用意される
+        - phase executorが初回だけ記録を返す前にinterruptされるsuiteが用意される
     Act:
         - suiteが中断後に同じstateから再開される
     Assert:
-        - 初回はexit 130となり、再開には明示resetが要求されること
+        - 初回はexit 130となり、2回目はcoldから再開されること
+        - 不完全なresource計測ではacceptanceが誤合格しないこと
     """
     # Arrange
     profile_path = _profile(tmp_path)
     calls: list[str] = []
+    interrupted_once = False
 
     def execute(
         phase: str,
-        _configuration: EffectiveConfiguration,
+        configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
     ) -> tuple[
@@ -372,19 +440,32 @@ def test_unmeasured_phase_interrupt_requires_reset_before_retry(
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
+        nonlocal interrupted_once
         calls.append(phase)
-        raise KeyboardInterrupt
+        if not interrupted_once:
+            interrupted_once = True
+            raise KeyboardInterrupt
+        return _successful_phase(configuration, phase)
 
     runner = _runner(execute)
 
     # Act
     interrupted = runner.run(profile_path=profile_path, suite="release")
+    resumed = runner.run(profile_path=profile_path, suite="release")
 
     # Assert
     assert interrupted == 130
-    with pytest.raises(ValueError, match="--reset-suite"):
-        runner.run(profile_path=profile_path, suite="release")
-    assert calls == ["cold"]
+    assert resumed == 1
+    assert calls == ["cold", "cold", "warm"]
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state = read_json_object(suite_root / "acceptance-state.json")
+    assert state is not None
+    phases = state["phases"]
+    assert isinstance(phases, dict)
+    cold = phases["cold"]
+    assert isinstance(cold, dict)
+    assert cold["attempt_count"] == 2
+    assert cold["resource_sampling_complete"] is False
 
 
 def _runner(
@@ -392,6 +473,7 @@ def _runner(
     *,
     suite_fingerprint: str = "d" * 64,
     model_identity_seed: str = "acceptance-runner",
+    model_resolver: ModelResolver | None = None,
 ) -> TargetSuiteRunner:
     """target外でもstate machineを検証できるdependency構成を返す。"""
     model_runtime = FakeModelRuntime(model_identity_seed)
@@ -413,7 +495,7 @@ def _runner(
             "gpu": "rtx_5090",
         },
         revision_probe=lambda _path: ("a" * 40, False),
-        model_resolver=model_runtime.resolve_models,
+        model_resolver=model_resolver or model_runtime.resolve_models,
         phase_executor=phase_executor,
         release_materializer=materialize,
     )

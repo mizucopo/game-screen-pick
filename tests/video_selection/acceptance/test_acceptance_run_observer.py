@@ -60,3 +60,42 @@ def test_phase_metrics_aggregate_cache_recompute_and_stage_duration() -> None:
     assert metrics["reuse_count"] == 1
     assert metrics["unexpected_recompute_count"] == 1
     assert metrics["stage_durations_seconds"] == {"scan-video": 3.5}
+
+
+def test_phase_metrics_include_interrupted_active_stage_duration() -> None:
+    """中断時に実行中だったStageの経過時間も集計されること。
+
+    Arrange:
+        - scan-video開始後2.5秒でrunが中断されたevent列が用意される
+    Act:
+        - acceptance observerがeventを収集して集計する
+    Assert:
+        - 未完了scan-videoの2.5秒もStage時間へ含まれること
+    """
+    # Arrange
+    observer = AcceptanceRunObserver()
+    events = (
+        ProgressEvent(
+            kind="stage_started",
+            severity="info",
+            stage=ProcessingStage.SCAN_VIDEO,
+            elapsed_seconds=0.0,
+            reason_code="stage_started",
+        ),
+        ProgressEvent(
+            kind="run_interrupted",
+            severity="warning",
+            stage=ProcessingStage.SCAN_VIDEO,
+            elapsed_seconds=2.5,
+            reason_code="user_interrupt",
+        ),
+    )
+
+    # Act
+    for event in events:
+        observer.observe(event)
+    metrics = observer.phase_metrics()
+
+    # Assert
+    assert observer.current_stage is None
+    assert metrics["stage_durations_seconds"] == {"scan-video": 2.5}

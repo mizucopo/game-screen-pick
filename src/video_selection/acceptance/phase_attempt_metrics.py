@@ -26,6 +26,26 @@ _BASELINE_INTEGER_METRICS = (
 )
 
 
+def build_incomplete_interrupt_attempt(
+    duration_seconds: float,
+) -> dict[str, object]:
+    """詳細計測を確定できないuser interruptを保守的な試行として返す。"""
+    record: dict[str, object] = {
+        "operation_status": "failed",
+        "failure_reason": "user_interrupt",
+        "failure_exit_code": 130,
+        "duration_seconds": duration_seconds,
+        "stage_durations_seconds": {},
+        "completed_stage_counts": {},
+        "resource_sampling_complete": False,
+        **dict.fromkeys(_SUMMED_INTEGER_METRICS, 0),
+        **dict.fromkeys(_MAXIMUM_INTEGER_METRICS, 0),
+        **dict.fromkeys(_BASELINE_INTEGER_METRICS, 0),
+    }
+    validate_phase_measurements(record)
+    return record
+
+
 def validate_phase_measurements(record: Mapping[str, object]) -> None:
     """一試行を安全に累積できる完全な計測recordとして検証する。"""
     _measurement_number(record, "duration_seconds")

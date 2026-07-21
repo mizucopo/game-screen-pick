@@ -3,6 +3,7 @@
 import hashlib
 import json
 import shutil
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import cast
@@ -31,6 +32,7 @@ from .human_review import ensure_review_worksheet, evaluate_human_review
 from .load_acceptance_profile import load_acceptance_profile
 from .phase_attempt_metrics import (
     aggregate_phase_attempts,
+    build_incomplete_interrupt_attempt,
     validate_phase_measurements,
 )
 from .release_suite_materializer import ReleaseSuiteMaterializer
@@ -168,6 +170,7 @@ class TargetSuiteRunner:
             shutil.rmtree(configuration.output_folder, ignore_errors=True)
             state["active_phase"] = phase
             write_atomic_json(state_path, state)
+            phase_started_at = time.monotonic()
             try:
                 exit_code, record, report, selection = self._phase_executor(
                     phase,
@@ -176,13 +179,12 @@ class TargetSuiteRunner:
                     suite_root,
                 )
             except KeyboardInterrupt:
-                state["last_failure"] = {
-                    "phase": phase,
-                    "exit_code": 130,
-                    "reason": "phase_measurement_incomplete",
-                }
-                write_atomic_json(state_path, state)
-                return 130
+                exit_code = 130
+                record = build_incomplete_interrupt_attempt(
+                    time.monotonic() - phase_started_at
+                )
+                report = None
+                selection = None
             except Exception:
                 state["last_failure"] = {
                     "phase": phase,
@@ -380,7 +382,7 @@ def _identity(
     if not isinstance(descriptor_fingerprint, str):
         raise ValueError("Suite materialization fingerprintがありません")
     models_json = json.dumps(
-        models.provenance(),
+        models.semantic_input(),
         sort_keys=True,
         separators=(",", ":"),
     ).encode()

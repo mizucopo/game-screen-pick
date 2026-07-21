@@ -65,7 +65,15 @@ class AcceptanceRunObserver:
         recompute_count = sum(event.recompute_count for event in self.progress_events)
         durations: dict[str, float] = {}
         for event in self.progress_events:
-            if event.kind != "stage_completed" or event.stage is None:
+            if (
+                event.kind
+                not in {
+                    "stage_completed",
+                    "run_failed",
+                    "run_interrupted",
+                }
+                or event.stage is None
+            ):
                 continue
             name = event.stage.value
             if event.elapsed_seconds is None:
