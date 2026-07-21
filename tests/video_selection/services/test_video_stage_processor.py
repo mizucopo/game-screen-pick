@@ -261,6 +261,7 @@ def test_three_video_scans_run_concurrently(
         - Video Stage processorが実行される
     Assert:
         - 3件のscanが同時にactiveになること
+        - 各scanのCPU時間が他の並列scanを重複計上しないこと
     """
     # Arrange
     input_folder = tmp_path / "videos"
@@ -287,8 +288,11 @@ def test_three_video_scans_run_concurrently(
     )
 
     # Act
-    VideoStageProcessor(
-        FakeVideoStageMediaRuntime(on_scan_video=synchronize_scans),
+    results = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(
+            on_scan_video=synchronize_scans,
+            reported_scan_cpu_seconds=7.0,
+        ),
         FakeSpeechRuntime(),
         RecordingRunObserver(),
     ).process(
@@ -298,6 +302,7 @@ def test_three_video_scans_run_concurrently(
 
     # Assert
     assert peak_count == 3
+    assert all(7.0 <= result.scan.metrics.cpu_seconds < 8.0 for result in results)
 
 
 def test_interrupt_cancels_active_video_scans(tmp_path: Path) -> None:

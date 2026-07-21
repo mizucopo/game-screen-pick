@@ -59,10 +59,13 @@ class AcceptanceRunObserver:
 
     def phase_metrics(self) -> dict[str, object]:
         """pathやraw内容を含まないStage/cache aggregateを返す。"""
-        cache_hits = sum(event.cache_hit_count for event in self.progress_events)
-        cache_misses = sum(event.cache_miss_count for event in self.progress_events)
-        reuse_count = sum(event.reuse_count for event in self.progress_events)
-        recompute_count = sum(event.recompute_count for event in self.progress_events)
+        cache_events = tuple(
+            event for event in self.progress_events if event.kind == "cache"
+        )
+        cache_hits = sum(event.cache_hit_count for event in cache_events)
+        cache_misses = sum(event.cache_miss_count for event in cache_events)
+        reuse_count = sum(event.reuse_count for event in cache_events)
+        recompute_count = sum(event.recompute_count for event in cache_events)
         durations: dict[str, float] = {}
         for event in self.progress_events:
             if (

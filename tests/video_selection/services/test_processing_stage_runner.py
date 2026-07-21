@@ -343,7 +343,8 @@ def test_processing_stage_runner_emits_cache_and_completion_events(
     Act:
         - cache lookup後に一つのProcessing Stageが確定される
     Assert:
-        - miss、recompute、Stage完了が同じStage番号で通知されること
+        - missが一度だけ数えられrecompute、Stage完了へ集約されること
+        - Stage完了eventが実際のfingerprintを持つこと
     """
     # Arrange
     observer = RecordingRunObserver()
@@ -388,8 +389,11 @@ def test_processing_stage_runner_emits_cache_and_completion_events(
         ("run_started", None, 0, 0, 0, 0),
         ("stage_started", 1, 0, 0, 0, 0),
         ("cache", 1, 0, 1, 0, 0),
-        ("cache", 1, 0, 1, 0, 1),
-        ("stage_completed", 1, 0, 0, 0, 0),
+        ("cache", 1, 0, 0, 0, 1),
+        ("stage_completed", 1, 0, 1, 0, 1),
+    )
+    assert progress.completed_stage_events[0].stage_fingerprint == (
+        runner.completed_stages[0].fingerprint.value
     )
 
 

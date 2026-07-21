@@ -1,7 +1,9 @@
 """実Processorを接続するVideo Selection Applicationのtest。"""
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.video_selection.application.video_selection_application import (
@@ -105,6 +107,71 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     assert len(warm_selection_cache) == 1
     assert warm_selection_cache[0].reuse_count == 1
     assert warm_selection_cache[0].recompute_count == 0
+    cold_stages = {
+        stage["name"]: stage for stage in cold_report["provenance"]["stages"]
+    }
+    warm_stages = {
+        stage["name"]: stage for stage in warm_report["provenance"]["stages"]
+    }
+    cold_scan = cold_stages["scan_video_001"]
+    cold_extraction = cold_stages["extract_frame_candidates_001"]
+    warm_scan = warm_stages["scan_video_001"]
+    assert cold_scan["cache_misses"] == 1
+    assert cold_scan["recomputed_items"] == 1
+    assert cold_scan["attempt_count"] == 1
+    assert cold_extraction["upstream_fingerprints"] == [cold_scan["fingerprint"]]
+    assert warm_scan["cache_hits"] == 1
+    assert warm_scan["cache_misses"] == 0
+    assert warm_scan["recomputed_items"] == 0
+    assert warm_scan["attempt_count"] == 1
+
+
+def test_report_timestamps_cover_the_pipeline_lifecycle(tmp_path: Path) -> None:
+    """reportの開始・完了時刻がpipeline全体の境界から記録されること。
+
+    Arrange:
+        - run開始時刻とpublication時刻を返すUTC clockが用意される
+    Act:
+        - Video Selection Applicationが実行される
+    Assert:
+        - reportへ異なる開始・完了時刻がそのまま記録されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter.mkv").write_bytes(b"video-content")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+        image_count=1,
+    )
+    media = FakeVideoStageMediaRuntime()
+    clock_call_count = 0
+
+    def lifecycle_clock() -> datetime:
+        nonlocal clock_call_count
+        clock_call_count += 1
+        if clock_call_count == 1:
+            return datetime(2026, 7, 21, 1, 2, 3, tzinfo=timezone.utc)
+        assert media.extracted_original_frame_calls
+        return datetime(2026, 7, 21, 1, 3, 4, tzinfo=timezone.utc)
+
+    application = _application(
+        media,
+        EchoStructuredVisionRuntime(),
+        clock=lifecycle_clock,
+    )
+
+    # Act
+    outcome = application.run(configuration)
+
+    # Assert
+    report = json.loads(
+        (outcome.output_folder / "report.json").read_text(encoding="utf-8")
+    )
+    assert report["run"]["started_at"] == "2026-07-21T01:02:03Z"
+    assert report["run"]["completed_at"] == "2026-07-21T01:03:04Z"
+    assert clock_call_count == 2
 
 
 def test_no_valid_candidate_skips_vision_and_publishes_zero_shortfall(
@@ -207,9 +274,13 @@ def _application(
     *,
     observer: RecordingRunObserver | None = None,
     progress: RunProgressTracker | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> VideoSelectionApplication:
     """実Processorをtest fake境界へ接続する。"""
     actual_observer = observer or RecordingRunObserver()
+    actual_progress = progress or RunProgressTracker(actual_observer)
+    if progress is None:
+        actual_progress.start_run()
     return VideoSelectionApplication(
         media_runtime=media_runtime,
         model_runtime=FakeModelRuntime("application-test"),
@@ -218,5 +289,6 @@ def _application(
         ),
         vision_runtime=vision_runtime,
         observer=actual_observer,
-        progress=progress,
+        progress=actual_progress,
+        clock=clock,
     )

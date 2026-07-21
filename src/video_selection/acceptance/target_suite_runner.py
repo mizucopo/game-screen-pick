@@ -145,6 +145,10 @@ class TargetSuiteRunner:
             write_atomic_json(state_path, state)
         else:
             _validate_state_identity(state, identity)
+            if state.get("target") != target:
+                raise ValueError(
+                    "Acceptance stateが現在のtarget identityと一致しません"
+                )
 
         if _phases_completed(state) and state.get("worksheet_ready") is True:
             return self._finalize(

@@ -595,6 +595,7 @@ def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
 
     # Assert
     assert scan.decode_pass_count == 1
+    assert scan.cpu_seconds > 0
     assert scan.origin_pts == 0
     assert scan.last_frame_duration_ts is not None
     assert stream.time_base is not None

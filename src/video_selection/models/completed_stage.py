@@ -12,3 +12,4 @@ class CompletedStage:
 
     stage: ProcessingStage
     fingerprint: StageFingerprint
+    upstream_fingerprints: tuple[StageFingerprint, ...] = ()

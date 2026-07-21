@@ -1,6 +1,6 @@
 """実Video Stage、Vision、Selector、Canonical Publicationのcomposition。"""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from datetime import datetime, timezone
 from typing import cast
@@ -13,6 +13,7 @@ from ..models.completed_stage import CompletedStage
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.model_role import ModelRole
 from ..models.processing_stage import ProcessingStage
+from ..models.progress_event import ProgressEvent
 from ..models.report_provenance import ReportProvenance
 from ..models.report_stage_provenance import ReportStageProvenance
 from ..models.resolved_models import ResolvedModels
@@ -56,6 +57,7 @@ from ..services.video_stage_processor import VideoStageProcessor
 
 _SELECTION_INTENT = "ブログ本文を説明できる画像を選ぶ"
 _INITIAL_ANNOTATION_MINIMUM = 24
+UtcClock = Callable[[], datetime]
 
 
 class VideoSelectionApplication:
@@ -69,7 +71,8 @@ class VideoSelectionApplication:
         speech_runtime_factory: SpeechRuntimeFactory,
         vision_runtime: VisionRuntime,
         observer: RunObserver,
-        progress: RunProgressTracker | None = None,
+        progress: RunProgressTracker,
+        clock: UtcClock | None = None,
     ) -> None:
         self._media_runtime = media_runtime
         self._model_runtime = model_runtime
@@ -77,9 +80,11 @@ class VideoSelectionApplication:
         self._vision_runtime = vision_runtime
         self._observer = observer
         self._progress = progress
+        self._clock = clock or _utc_now
 
     def run(self, configuration: EffectiveConfiguration) -> RunOutcome:
         """実Video Selection pipelineを実行しatomic outputを公開する。"""
+        started_at = self._clock()
         _validate_configuration_paths(configuration)
         identity_cache = VideoIdentityCache(configuration.processing_cache_folder)
         video_set = discover_video_set(
@@ -113,6 +118,7 @@ class VideoSelectionApplication:
                 video_set,
                 video_stage_results,
                 resolved_models,
+                started_at,
             )
 
     def _select_and_publish(
@@ -121,6 +127,7 @@ class VideoSelectionApplication:
         video_set: VideoSet,
         video_stage_results: tuple[VideoStageResult, ...],
         resolved_models: ResolvedModels,
+        started_at: datetime,
     ) -> RunOutcome:
         """shortlistを必要分だけ注釈し選定結果をcanonicalに公開する。"""
         requests = build_candidate_annotation_requests(
@@ -213,6 +220,7 @@ class VideoSelectionApplication:
             scene_catalog,
             selection,
             completed_stages,
+            started_at,
         )
 
     def _record_selection_stage(
@@ -243,11 +251,10 @@ class VideoSelectionApplication:
             subject_namespace="video-sets",
             subject_fingerprint=video_set.fingerprint,
         )
-        if self._progress is not None:
-            self._progress.start_stage(
-                ProcessingStage.SELECT_IMAGES,
-                work_unit_kind="selection",
-            )
+        self._progress.start_stage(
+            ProcessingStage.SELECT_IMAGES,
+            work_unit_kind="selection",
+        )
         artifact = writer.read(
             ProcessingStage.SELECT_IMAGES,
             fingerprint,
@@ -282,17 +289,20 @@ class VideoSelectionApplication:
                 },
             )
         else:
-            completed = CompletedStage(ProcessingStage.SELECT_IMAGES, fingerprint)
-        if self._progress is not None:
-            self._progress.record_work_sample("reuse" if reused else "recompute")
-            self._progress.cache_observed(
-                cache_hit_count=1 if reused else 0,
-                cache_miss_count=0 if reused else 1,
-                reuse_count=1 if reused else 0,
-                recompute_count=0 if reused else 1,
-                reason_code="cache_reused" if reused else "stage_recomputed",
+            completed = CompletedStage(
+                ProcessingStage.SELECT_IMAGES,
+                fingerprint,
+                upstream,
             )
-            self._progress.complete_stage()
+        self._progress.record_work_sample("reuse" if reused else "recompute")
+        self._progress.cache_observed(
+            cache_hit_count=1 if reused else 0,
+            cache_miss_count=0 if reused else 1,
+            reuse_count=1 if reused else 0,
+            recompute_count=0 if reused else 1,
+            reason_code="cache_reused" if reused else "stage_recomputed",
+        )
+        self._progress.complete_stage(stage_fingerprint=completed.fingerprint)
         self._observer.stage_completed(completed)
         return completed
 
@@ -305,12 +315,11 @@ class VideoSelectionApplication:
         scene_catalog: SceneCatalog | None,
         selection: VideoSetSelectionResult,
         completed_stages: tuple[CompletedStage, ...],
+        started_at: datetime,
     ) -> RunOutcome:
         """Canonical Publication Requestを構築してOutput Folderへ公開する。"""
         with suppress(FileNotFoundError):
             configuration.output_folder.rmdir()
-        started_at = datetime.now(timezone.utc)
-        completed_at = datetime.now(timezone.utc)
         publication_selection = sanitize_selection_annotations_for_publication(
             selection,
             scene_catalog,
@@ -335,10 +344,17 @@ class VideoSelectionApplication:
             configuration=configuration,
             run_id=_run_id(started_at),
             started_at=started_at,
-            completed_at=completed_at,
-            provenance=_report_provenance(completed_stages, configuration),
+            completed_at=started_at,
+            provenance=_report_provenance(
+                completed_stages,
+                self._progress.completed_stage_events,
+                configuration,
+            ),
         )
-        CanonicalOutputPublisher(self._media_runtime).publish(request)
+        CanonicalOutputPublisher(
+            self._media_runtime,
+            completion_clock=self._clock,
+        ).publish(request)
         return RunOutcome(
             output_folder=configuration.output_folder,
             status=status,
@@ -404,12 +420,21 @@ def _run_id(started_at: datetime) -> str:
 
 def _report_provenance(
     completed_stages: tuple[CompletedStage, ...],
+    completed_stage_events: tuple[ProgressEvent, ...],
     configuration: EffectiveConfiguration,
 ) -> ReportProvenance:
     """Completed Stage graphをprivacy-safeなcanonical provenanceへ変換する。"""
+    events_by_fingerprint: dict[str, list[ProgressEvent]] = {}
+    for event in completed_stage_events:
+        if event.stage_fingerprint is None:
+            continue
+        events_by_fingerprint.setdefault(event.stage_fingerprint, []).append(event)
     counts: dict[ProcessingStage, int] = {}
     stages: list[ReportStageProvenance] = []
     for completed in completed_stages:
+        events = events_by_fingerprint.get(completed.fingerprint.value, [])
+        if not events or any(event.stage is not completed.stage for event in events):
+            raise ValueError("Completed Stageのrun provenanceがありません")
         counts[completed.stage] = counts.get(completed.stage, 0) + 1
         ordinal = counts[completed.stage]
         name = f"{completed.stage.value.replace('-', '_')}_{ordinal:03d}"
@@ -424,17 +449,21 @@ def _report_provenance(
             ReportStageProvenance(
                 name=name,
                 fingerprint="stg_" + completed.fingerprint.value,
-                upstream_fingerprints=(),
-                cache_hits=0,
-                cache_misses=0,
-                recomputed_items=0,
-                attempt_count=0,
+                upstream_fingerprints=tuple(
+                    "stg_" + item.value for item in completed.upstream_fingerprints
+                ),
+                cache_hits=sum(event.cache_hit_count for event in events),
+                cache_misses=sum(event.cache_miss_count for event in events),
+                recomputed_items=sum(event.recompute_count for event in events),
+                attempt_count=len(events),
                 validation_failures=0,
                 effective_settings=settings,
                 tool_refs=(),
                 model_refs=(),
                 contract_refs=("video_set_selection_policy",),
-                duration_ms=0,
+                duration_ms=round(
+                    sum(event.elapsed_seconds or 0.0 for event in events) * 1000
+                ),
             )
         )
     return ReportProvenance(
@@ -446,3 +475,8 @@ def _report_provenance(
         },
         stages=tuple(stages),
     )
+
+
+def _utc_now() -> datetime:
+    """run lifecycle用のtimezone-aware UTC時刻を返す。"""
+    return datetime.now(timezone.utc)

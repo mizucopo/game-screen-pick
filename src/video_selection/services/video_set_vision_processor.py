@@ -193,7 +193,7 @@ class VideoSetVisionProcessor:
             restore=restore_scene_catalog,
             artifact_label="Scene Catalog",
         )
-        self._complete_progress_stage(reused)
+        self._complete_progress_stage(reused, completed.fingerprint)
         self._observer.stage_completed(completed)
         return catalog, diagnostics, completed
 
@@ -255,7 +255,7 @@ class VideoSetVisionProcessor:
             ),
             artifact_label="Candidate Annotation",
         )
-        self._complete_progress_stage(reused)
+        self._complete_progress_stage(reused, completed.fingerprint)
         self._observer.stage_completed(completed)
         return annotation, diagnostics, completed
 
@@ -267,7 +267,11 @@ class VideoSetVisionProcessor:
         if self._progress is not None:
             self._progress.start_stage(stage, work_unit_kind=work_unit_kind)
 
-    def _complete_progress_stage(self, reused: bool) -> None:
+    def _complete_progress_stage(
+        self,
+        reused: bool,
+        fingerprint: StageFingerprint,
+    ) -> None:
         if self._progress is None:
             return
         self._progress.record_work_sample("reuse" if reused else "recompute")
@@ -278,7 +282,7 @@ class VideoSetVisionProcessor:
             recompute_count=0 if reused else 1,
             reason_code="cache_reused" if reused else "stage_recomputed",
         )
-        self._progress.complete_stage()
+        self._progress.complete_stage(stage_fingerprint=fingerprint)
 
     def _run_external(
         self,

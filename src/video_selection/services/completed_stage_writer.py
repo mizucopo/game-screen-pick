@@ -115,7 +115,11 @@ class CompletedStageWriter:
             )
             is not None
         ):
-            return CompletedStage(stage=stage, fingerprint=fingerprint)
+            return CompletedStage(
+                stage=stage,
+                fingerprint=fingerprint,
+                upstream_fingerprints=upstream_fingerprints,
+            )
 
         temporary_folder = stage_root / f".{fingerprint.value}.{uuid4().hex}.tmp"
         temporary_folder.mkdir()
@@ -167,7 +171,11 @@ class CompletedStageWriter:
             self._fault_injector("after-rename")
         finally:
             shutil.rmtree(temporary_folder, ignore_errors=True)
-        return CompletedStage(stage=stage, fingerprint=fingerprint)
+        return CompletedStage(
+            stage=stage,
+            fingerprint=fingerprint,
+            upstream_fingerprints=upstream_fingerprints,
+        )
 
     def read(
         self,

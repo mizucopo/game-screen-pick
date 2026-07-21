@@ -117,7 +117,11 @@ class ProcessingStageRunner:
             return None
         restored = restore(artifact)
         self._record_completion(
-            CompletedStage(stage=stage, fingerprint=fingerprint),
+            CompletedStage(
+                stage=stage,
+                fingerprint=fingerprint,
+                upstream_fingerprints=upstream_fingerprints,
+            ),
             reused=True,
         )
         return restored
@@ -178,7 +182,11 @@ class ProcessingStageRunner:
             self._record_cache_miss()
             return None
         self._record_completion(
-            CompletedStage(stage=stage, fingerprint=fingerprint),
+            CompletedStage(
+                stage=stage,
+                fingerprint=fingerprint,
+                upstream_fingerprints=upstream_fingerprints,
+            ),
             reused=True,
         )
         return bundle
@@ -210,7 +218,11 @@ class ProcessingStageRunner:
         if not reused:
             self._record_cache_miss()
         self._record_completion(
-            CompletedStage(stage=stage, fingerprint=fingerprint),
+            CompletedStage(
+                stage=stage,
+                fingerprint=fingerprint,
+                upstream_fingerprints=upstream_fingerprints,
+            ),
             reused=reused,
             duration_seconds=duration_seconds,
         )
@@ -283,12 +295,15 @@ class ProcessingStageRunner:
             )
             self._progress.cache_observed(
                 cache_hit_count=1 if reused else 0,
-                cache_miss_count=0 if reused else 1,
+                cache_miss_count=(0 if reused or self._cache_miss_observed else 1),
                 reuse_count=1 if reused else 0,
                 recompute_count=0 if reused else 1,
                 reason_code="cache_reused" if reused else "stage_recomputed",
             )
-            self._progress.complete_stage(duration_seconds)
+            self._progress.complete_stage(
+                duration_seconds,
+                stage_fingerprint=completed_stage.fingerprint,
+            )
             self._progress_stage = None
             self._cache_miss_observed = False
         self._completed_stages.append(completed_stage)

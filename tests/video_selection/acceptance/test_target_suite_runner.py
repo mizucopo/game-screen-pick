@@ -11,6 +11,7 @@ from src.video_selection.acceptance.atomic_json import (
     write_atomic_json,
 )
 from src.video_selection.acceptance.target_suite_runner import (
+    EnvironmentProbe,
     ModelResolver,
     PhaseExecutor,
     TargetSuiteRunner,
@@ -366,6 +367,48 @@ def test_completed_state_ignores_model_update_diagnostic_change(
     assert calls == ["cold", "warm"]
 
 
+def test_completed_state_rejects_changed_target_identity(tmp_path: Path) -> None:
+    """target環境が変わった完了stateは再利用されないこと。
+
+    Arrange:
+        - cold/warm完了後にdriver identityが変わるtarget probeが用意される
+    Act:
+        - 同じprofileとsourceでsuiteが再開される
+    Assert:
+        - target identity不一致として既存stateの再利用が拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    target = {"os": "linux", "gpu_driver": "first"}
+
+    def execute(
+        phase: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> tuple[
+        int,
+        dict[str, object],
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        calls.append(phase)
+        return _successful_phase(configuration, phase)
+
+    runner = _runner(execute, environment_probe=lambda: dict(target))
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    target["gpu_driver"] = "changed"
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert "target identity" in str(error.value)
+    assert calls == ["cold", "warm"]
+
+
 def test_incomplete_phase_removes_uncommitted_output_before_rerun(
     tmp_path: Path,
 ) -> None:
@@ -474,6 +517,7 @@ def _runner(
     suite_fingerprint: str = "d" * 64,
     model_identity_seed: str = "acceptance-runner",
     model_resolver: ModelResolver | None = None,
+    environment_probe: EnvironmentProbe | None = None,
 ) -> TargetSuiteRunner:
     """target外でもstate machineを検証できるdependency構成を返す。"""
     model_runtime = FakeModelRuntime(model_identity_seed)
@@ -489,11 +533,14 @@ def _runner(
         return input_folder, {"suite_fingerprint": suite_fingerprint}
 
     return TargetSuiteRunner(
-        environment_probe=lambda: {
-            "host_os": "windows_11_pro",
-            "environment": "wsl2",
-            "gpu": "rtx_5090",
-        },
+        environment_probe=environment_probe
+        or (
+            lambda: {
+                "host_os": "windows_11_pro",
+                "environment": "wsl2",
+                "gpu": "rtx_5090",
+            }
+        ),
         revision_probe=lambda _path: ("a" * 40, False),
         model_resolver=model_resolver or model_runtime.resolve_models,
         phase_executor=phase_executor,

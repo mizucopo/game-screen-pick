@@ -4,6 +4,8 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 from ..models.canonical_publication_request import CanonicalPublicationRequest
@@ -27,6 +29,7 @@ from .validate_video_set_snapshot import validate_video_set_snapshot_metadata
 
 PublicationFaultInjector = Callable[[str, Path], None]
 DirectoryRenamer = Callable[[Path, Path], None]
+CompletionClock = Callable[[], datetime]
 
 
 class CanonicalOutputPublisher:
@@ -38,10 +41,12 @@ class CanonicalOutputPublisher:
         *,
         fault_injector: PublicationFaultInjector | None = None,
         directory_renamer: DirectoryRenamer | None = None,
+        completion_clock: CompletionClock | None = None,
     ) -> None:
         self._media_runtime = media_runtime
         self._fault_injector = fault_injector or _ignore_fault
         self._directory_renamer = directory_renamer or _rename_directory
+        self._completion_clock = completion_clock
 
     def publish(
         self,
@@ -103,6 +108,8 @@ class CanonicalOutputPublisher:
                     relative_path,
                 )
             )
+        if self._completion_clock is not None:
+            request = replace(request, completed_at=self._completion_clock())
         report = build_canonical_selection_report(request, tuple(artifacts))
         self._fault_injector("before-report-json-write", staging_folder)
         (staging_folder / "report.json").write_text(

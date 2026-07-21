@@ -26,7 +26,17 @@ producerが検証する厳密なschema実体は[`report-1.0.0.schema.json`](../s
 
 ## provenanceとmodel更新
 
-`report.json`は各Processing Stageについて、完全なStage Fingerprint、上流fingerprint、cache結果、実行時間、正規化済み設定、tool/runtime version、実行時に解決した完全なmodel digestまたはcommit SHAを保持します。`report.md`は短縮fingerprintと主要診断だけを表示します。
+`report.json`は各Processing Stageについて、完全なStage Fingerprint、検証済みCompleted
+Stage manifestの上流fingerprint、現在runで観測したcache hit/miss・再計算件数・試行回数・
+実行時間、正規化済み設定、tool/runtime version、実行時に解決した完全なmodel digestまたは
+commit SHAを保持します。coldとwarmのreportは同じartifact identityでも、各runで実際に
+再計算または再利用された結果を別々に示します。`report.md`は短縮fingerprintと主要診断だけを
+表示します。
+
+`run.started_at`はApplicationへ入った時点、`run.completed_at`は全Processing Stageと選定に
+加えて選択画像のstagingが完了し、atomic publisherがCanonical reportを最終化する時点をUTCで
+記録します。公開済みreportを後書きせず、最終directory renameまで同じ検証済みstagingを使う
+ための最新のatomic-safeな完了境界です。
 
 設定ファイルにはmodel hashを書きません。modelが更新されるとResolved Model Identityが変わり、そのmodelに依存するStageだけが新しいfingerprintで再計算されます。実際に同じidentityへ解決された場合は既存cacheを再利用します。
 

@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 import re
-import resource
+import signal
 import subprocess
 import time
 from collections import deque
@@ -217,7 +217,6 @@ class FfmpegMediaRuntime:
             scene_min_interval_seconds,
             decode_backend,
         )
-        usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
         started_at = time.monotonic()
         timeline_first: tuple[int, int | None, int, int] | None = None
         timeline_last: tuple[int, int | None, int, int] | None = None
@@ -251,7 +250,7 @@ class FfmpegMediaRuntime:
                     heartbeat_metadata.append(metadata)
                 else:
                     scene_metadata.append(metadata)
-            return_code = process.wait()
+            return_code, cpu_seconds = _wait_for_process(process)
         except OSError as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.DECODER_FAILURE,
@@ -262,13 +261,6 @@ class FfmpegMediaRuntime:
                 with self._active_scan_lock:
                     self._active_scan_processes.discard(process)
         wall_seconds = time.monotonic() - started_at
-        usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
-        cpu_seconds = (
-            usage_after.ru_utime
-            - usage_before.ru_utime
-            + usage_after.ru_stime
-            - usage_before.ru_stime
-        )
         if return_code != 0:
             detail = "\n".join(stderr_tail)
             raise MediaRuntimeError(
@@ -326,9 +318,8 @@ class FfmpegMediaRuntime:
         with self._active_scan_lock:
             processes = tuple(self._active_scan_processes)
         for process in processes:
-            if process.poll() is None:
-                with suppress(OSError):
-                    process.terminate()
+            with suppress(OSError):
+                os.kill(process.pid, signal.SIGTERM)
 
     def scan_video_frame_ranges(
         self,
@@ -959,6 +950,19 @@ def _scale_filter(max_dimension: int) -> str:
         "force_original_aspect_ratio=decrease:force_divisible_by=2,"
         "format=rgb24,showinfo"
     )
+
+
+def _wait_for_process(process: subprocess.Popen[str]) -> tuple[int, float]:
+    """一つのFFmpeg subprocessだけの終了statusとCPU時間を回収する。"""
+    while True:
+        try:
+            _pid, status, usage = os.wait4(process.pid, 0)
+            break
+        except InterruptedError:
+            continue
+    return_code = os.waitstatus_to_exitcode(status)
+    process.returncode = return_code
+    return return_code, usage.ru_utime + usage.ru_stime
 
 
 def _media_origin(probe: MediaProbe) -> Fraction:

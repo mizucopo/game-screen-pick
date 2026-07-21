@@ -47,6 +47,10 @@ def test_phase_metrics_aggregate_cache_recompute_and_stage_duration() -> None:
             kind="stage_completed",
             severity="info",
             stage=ProcessingStage.SCAN_VIDEO,
+            cache_hit_count=1,
+            cache_miss_count=1,
+            reuse_count=1,
+            recompute_count=1,
             elapsed_seconds=3.5,
             reason_code="stage_completed",
         )

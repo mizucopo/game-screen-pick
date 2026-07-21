@@ -325,7 +325,7 @@ class VideoStageProcessor:
         stage_root: Path,
     ) -> dict[str, object]:
         """single-decode scanを実行しscene一時画像を除去する。"""
-        cpu_before = _stage_cpu_seconds()
+        thread_cpu_before = time.thread_time()
         started_at = time.monotonic()
         native_scan = self._media_runtime.scan_video(
             source.path,
@@ -347,7 +347,7 @@ class VideoStageProcessor:
         finally:
             shutil.rmtree(stage_root / ".scene-proxies", ignore_errors=True)
         wall_seconds = time.monotonic() - started_at
-        cpu_seconds = _stage_cpu_seconds() - cpu_before
+        cpu_seconds = native_scan.cpu_seconds + (time.thread_time() - thread_cpu_before)
         metrics = _artifact_metrics(artifact)
         metrics["wall_seconds"] = wall_seconds
         metrics["cpu_seconds"] = cpu_seconds

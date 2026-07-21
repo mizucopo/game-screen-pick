@@ -69,9 +69,10 @@ ffprobeの実測開始、終了、durationがprofileの許容差を超える場�
 ## Durable resumeとreset
 
 phase完了はsuite別の`acceptance-state.json`へatomicに確定する。中断後に同じcommandを
-実行すると、同じprofile、suite、設定、source snapshot、Resolved Model Identity、commitを
-検証し、未完了phaseだけを続行する。completed coldを再実行してwarmへ戻したり、completed
-cold/warmを再実行したりしない。
+実行すると、同じprofile、suite、設定、source snapshot、Resolved Model Identity、target
+identity、commitを検証し、未完了phaseだけを続行する。driver、FFmpeg、kernelなどtarget
+probeの値が変わったstateは混在させない。completed coldを再実行してwarmへ戻したり、
+completed cold/warmを再実行したりしない。
 
 完了済みphaseからhuman reviewを再開する場合も、現在のsourceをmaterializeし直してsuite
 fingerprintを照合し、Resolved Model Identityを再解決してからrecordを確定する。入力または
