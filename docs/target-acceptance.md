@@ -73,6 +73,16 @@ phase完了はsuite別の`acceptance-state.json`へatomicに確定する。中�
 検証し、未完了phaseだけを続行する。completed coldを再実行してwarmへ戻したり、completed
 cold/warmを再実行したりしない。
 
+完了済みphaseからhuman reviewを再開する場合も、現在のsourceをmaterializeし直してsuite
+fingerprintを照合し、Resolved Model Identityを再解決してからrecordを確定する。入力または
+modelが変わっていれば既存の完了stateを流用しない。
+
+user interruptや計測済みoperation failureの未完了phaseはCompleted Stage cacheを保持する。
+再開後のphase recordでは、それ以前の試行を含む経過時間、cache/recompute count、Stage時間、
+storage/GPU aggregateを累積または保守的な最大値として集計するため、再開後の短い試行だけで
+性能を判定しない。process強制終了などで試行の計測記録を確定できなかった場合は、安全な性能
+根拠を復元できないため同じstateから再開せず、`--reset-suite`を要求する。
+
 identityを変えた場合や意図的にcoldからやり直す場合だけ、対象suiteを明示的にresetする。
 
 ```bash
@@ -122,7 +132,7 @@ uv run task acceptance-target \
 | 1 | pipeline operationまたはperformance/resource/privacy/quality gateが不合格 |
 | 2 | CLI、profile、configuration、target preflightが不正 |
 | 3 | cold/warmと自動gateは合格したがhuman reviewが未完了 |
-| 130 | user interrupt。completed phaseとCompleted Stage cacheを保持 |
+| 130 | 計測済みuser interrupt。completed phaseとCompleted Stage cacheを保持し、再開時に試行計測を累積 |
 
 ## Artifactとprivacy
 

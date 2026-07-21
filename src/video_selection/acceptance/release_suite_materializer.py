@@ -115,9 +115,9 @@ class ReleaseSuiteMaterializer:
         clip_probe = self._media_probe(output)
         source_start = _probe_fraction(source_probe, "start")
         clip_start = _probe_fraction(clip_probe, "start")
-        clip_end_timestamp = _probe_fraction(clip_probe, "duration")
+        clip_duration = _probe_fraction(clip_probe, "duration")
         actual_start = clip_start - source_start
-        actual_end = clip_end_timestamp - source_start
+        actual_end = clip_start + clip_duration - source_start
         duration = actual_end - actual_start
         tolerance = profile.release_boundary_tolerance_seconds
         if (

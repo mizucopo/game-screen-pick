@@ -89,6 +89,37 @@ def test_changed_full_source_requires_reset(tmp_path: Path) -> None:
         materializer.materialize(profile, suite_root)
 
 
+def test_repointed_anonymous_symlink_requires_reset(tmp_path: Path) -> None:
+    """匿名symlinkが別sourceへ付け替えられるとresumeが拒否されること。
+
+    Arrange:
+        - 確定済みfull input viewの先頭symlinkが2本目のsourceへ付け替えられる
+    Act:
+        - 同じprofileでresume materializeが試行される
+    Assert:
+        - 現在のsource対応不一致としてresetが必要になること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    profile.input_root.mkdir()
+    first = profile.input_root / "private-chapter-01.mkv"
+    second = profile.input_root / "private-chapter-02.mp4"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    materializer = FullSuiteMaterializer(
+        media_probe=lambda _path: {"duration": Fraction(50)},
+    )
+    suite_root = profile.artifact_root / "full"
+    input_folder, _ = materializer.materialize(profile, suite_root)
+    anonymous_first = input_folder / "scenario-001.mkv"
+    anonymous_first.unlink()
+    anonymous_first.symlink_to(second.resolve(strict=True))
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="匿名input"):
+        materializer.materialize(profile, suite_root)
+
+
 def test_duration_mismatch_removes_partial_anonymous_view(tmp_path: Path) -> None:
     """full duration preflight failureでpartial symlink viewが削除されること。
 

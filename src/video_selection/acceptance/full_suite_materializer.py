@@ -42,6 +42,7 @@ class FullSuiteMaterializer:
             return input_folder, _restore_existing(
                 profile,
                 input_folder,
+                sources,
                 source_snapshot,
                 existing,
             )
@@ -86,6 +87,7 @@ class FullSuiteMaterializer:
 def _restore_existing(
     profile: AcceptanceProfile,
     input_folder: Path,
+    sources: tuple[Path, ...],
     source_snapshot: str,
     manifest: dict[str, object],
 ) -> dict[str, object]:
@@ -101,10 +103,19 @@ def _restore_existing(
     if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
         raise ValueError("Full suite匿名input manifestが不正です")
     paths = tuple(input_folder / name for name in names)
-    if len(paths) != profile.full_expected_video_count or any(
-        not path.is_symlink() or not path.is_file() for path in paths
-    ):
+    if len(paths) != profile.full_expected_video_count or len(paths) != len(sources):
         raise ValueError("Full suite匿名inputが変更されています")
+    for path, source in zip(paths, sources, strict=True):
+        try:
+            target_matches = (
+                path.is_symlink()
+                and path.is_file()
+                and path.resolve(strict=True) == source.resolve(strict=True)
+            )
+        except OSError:
+            target_matches = False
+        if not target_matches:
+            raise ValueError("Full suite匿名inputが変更されています")
     return cast(dict[str, object], descriptor)
 
 

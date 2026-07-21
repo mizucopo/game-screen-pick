@@ -40,7 +40,7 @@ def test_anonymous_clips_preserve_all_streams_and_record_actual_boundaries(
     def probe(path: Path) -> dict[str, object]:
         return {
             "start": Fraction(0 if path == source else 8),
-            "duration": Fraction(100 if path == source else 1809),
+            "duration": Fraction(100 if path == source else 1802),
             "streams": (("audio", "aac"), ("video", "h264")),
         }
 
@@ -65,7 +65,7 @@ def test_anonymous_clips_preserve_all_streams_and_record_actual_boundaries(
     assert commands[0][commands[0].index("-fflags") + 1] == "+bitexact"
     assert commands[0][commands[0].index("-to") + 1] == "1810.000000"
     assert descriptor["scenario_count"] == 1
-    assert descriptor["total_duration"] == {"numerator": 1801, "denominator": 1}
+    assert descriptor["total_duration"] == {"numerator": 1802, "denominator": 1}
     manifest = (input_folder.parent / "release-materialization.json").read_text(
         encoding="utf-8"
     )
@@ -135,7 +135,7 @@ def test_completed_materialization_is_reused_without_ffmpeg(tmp_path: Path) -> N
     def probe(path: Path) -> dict[str, object]:
         return {
             "start": Fraction(0 if path == source else 8),
-            "duration": Fraction(100 if path == source else 1809),
+            "duration": Fraction(100 if path == source else 1802),
             "streams": (("video", "h264"),),
         }
 

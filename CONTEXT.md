@@ -80,6 +80,14 @@ _Avoid_: public TOML, Effective Configuration, committed fixture, production def
 一回のtarget acceptanceで得たcommit、runtime/model identity、pathなしのVideo Set fingerprint、Stage時間、resource、cache、quality判定をversioned JSONとして保存する証拠。media、absolute path、raw text、prompt、model responseを含めない。
 _Avoid_: Canonical Selection Report, runtime log, baseline snapshot, raw benchmark output
 
+**Acceptance Phase**:
+target acceptanceでfresh processing cacheを測るcold、または同じcacheを使うexact warmの論理的な性能判定単位。中断後に再開された場合は複数のAcceptance Phase Attemptを持ち、全attemptの経過時間と作業量、保守的なresource peakをまとめて予算判定する。
+_Avoid_: Acceptance Phase Attempt, Processing Stage, one process lifetime
+
+**Acceptance Phase Attempt**:
+一つのAcceptance Phaseについて、開始から正常終了、中断、またはoperation failureまで連続して計測された実行区間。Completed Stageを再利用してphaseを再開しても、それ以前のattemptを性能証拠から除外しない。
+_Avoid_: Acceptance Phase, retry inside model inference, Processing Stage
+
 **Legacy Cache**:
 旧screenshot selectorが作成した認識可能なprocessing cache entry。cache lock取得後に自動削除し、変換・保持・互換利用は行わない。新しい`videos/`と`video-sets/`は含まない。
 _Avoid_: old model store, old Stage Fingerprint, user output, unknown directory

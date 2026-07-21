@@ -93,25 +93,8 @@ class TargetSuiteRunner:
         commit, dirty = self._revision_probe(Path.cwd())
         if dirty:
             raise ValueError("Target acceptanceはclean Git revisionで実行してください")
-
-        if (
-            state is not None
-            and _phases_completed(state)
-            and state.get("worksheet_ready") is True
-        ):
-            _validate_completed_state(
-                state,
-                suite=suite,
-                profile_digest=profile.profile_digest,
-                configuration_digest=configuration_digest,
-                commit=commit,
-            )
-            return self._finalize(
-                profile,
-                suite_root,
-                state,
-                human_review_path=human_review_path,
-            )
+        if state is not None and state.get("active_phase") is not None:
+            raise ValueError("前回phaseの計測が未確定です。--reset-suiteが必要です")
 
         target = self._environment_probe()
         input_folder, suite_descriptor = self._materialize(
@@ -155,7 +138,15 @@ class TargetSuiteRunner:
             }
             write_atomic_json(state_path, state)
         else:
-            _validate_incomplete_state(state, identity)
+            _validate_state_identity(state, identity)
+
+        if _phases_completed(state) and state.get("worksheet_ready") is True:
+            return self._finalize(
+                profile,
+                suite_root,
+                state,
+                human_review_path=human_review_path,
+            )
 
         phases = _mapping(state.get("phases"), "phases")
         cold_report: dict[str, object] | None = None
@@ -171,6 +162,8 @@ class TargetSuiteRunner:
             ):
                 continue
             shutil.rmtree(configuration.output_folder, ignore_errors=True)
+            state["active_phase"] = phase
+            write_atomic_json(state_path, state)
             try:
                 exit_code, record, report, selection = self._phase_executor(
                     phase,
@@ -179,10 +172,26 @@ class TargetSuiteRunner:
                     suite_root,
                 )
             except KeyboardInterrupt:
+                state["last_failure"] = {
+                    "phase": phase,
+                    "exit_code": 130,
+                    "reason": "phase_measurement_incomplete",
+                }
+                write_atomic_json(state_path, state)
                 return 130
             except Exception:
+                state["last_failure"] = {
+                    "phase": phase,
+                    "exit_code": 1,
+                    "reason": "phase_measurement_incomplete",
+                }
+                write_atomic_json(state_path, state)
                 return 1
+            _validate_phase_measurements(record)
+            prior_attempts = _phase_attempts(state, phase)
+            state.pop("active_phase", None)
             if exit_code != 0:
+                _store_phase_attempts(state, phase, (*prior_attempts, record))
                 state["last_failure"] = {
                     "phase": phase,
                     "exit_code": exit_code,
@@ -190,8 +199,11 @@ class TargetSuiteRunner:
                 }
                 write_atomic_json(state_path, state)
                 return exit_code
-            phases[phase] = record
+            if record.get("operation_status") != "completed":
+                raise ValueError("成功phaseの計測記録がcompletedではありません")
+            phases[phase] = _aggregate_phase_attempts((*prior_attempts, record))
             state["phases"] = phases
+            _clear_phase_attempts(state, phase)
             state.pop("last_failure", None)
             write_atomic_json(state_path, state)
             if phase == "cold":
@@ -386,7 +398,7 @@ def _validate_profile_files(profile: AcceptanceProfile) -> None:
     profile.artifact_root.mkdir(parents=True, exist_ok=True)
 
 
-def _validate_incomplete_state(
+def _validate_state_identity(
     state: Mapping[str, object],
     identity: Mapping[str, object],
 ) -> None:
@@ -394,26 +406,6 @@ def _validate_incomplete_state(
         state.get(key) != value for key, value in identity.items()
     ):
         raise ValueError("Acceptance stateが現在のsuite identityと一致しません")
-
-
-def _validate_completed_state(
-    state: Mapping[str, object],
-    *,
-    suite: str,
-    profile_digest: str,
-    configuration_digest: str,
-    commit: str,
-) -> None:
-    expected = {
-        "suite": suite,
-        "profile_digest": profile_digest,
-        "configuration_digest": configuration_digest,
-        "commit": commit,
-    }
-    if state.get("schema") != _STATE_SCHEMA or any(
-        state.get(key) != value for key, value in expected.items()
-    ):
-        raise ValueError("Completed acceptance stateが現在の入力と一致しません")
 
 
 def _phases_completed(state: Mapping[str, object]) -> bool:
@@ -425,6 +417,184 @@ def _phases_completed(state: Mapping[str, object]) -> bool:
         and phases[phase].get("operation_status") == "completed"
         for phase in ("cold", "warm")
     )
+
+
+_SUMMED_INTEGER_METRICS = (
+    "cache_hit_count",
+    "cache_miss_count",
+    "reuse_count",
+    "unexpected_recompute_count",
+    "disk_sample_count",
+    "gpu_sample_count",
+    "gpu_sample_error_count",
+)
+_MAXIMUM_INTEGER_METRICS = (
+    "persistent_cache_bytes",
+    "peak_additional_bytes",
+    "system_global_gpu_peak_mib",
+    "ollama_global_gpu_peak_mib",
+    "stt_global_gpu_peak_mib",
+    "ollama_model_size_vram_bytes",
+)
+_BASELINE_INTEGER_METRICS = (
+    "process_gpu_baseline_mib",
+    "system_gpu_baseline_mib",
+)
+
+
+def _phase_attempts(
+    state: Mapping[str, object],
+    phase: str,
+) -> tuple[dict[str, object], ...]:
+    attempts = state.get("phase_attempts")
+    if attempts is None:
+        return ()
+    attempts_by_phase = _mapping(attempts, "phase attempts")
+    values = attempts_by_phase.get(phase, [])
+    if not isinstance(values, list) or any(
+        not isinstance(value, dict) for value in values
+    ):
+        raise ValueError("Acceptance state phase attemptsが不正です")
+    return tuple(cast(dict[str, object], value) for value in values)
+
+
+def _store_phase_attempts(
+    state: dict[str, object],
+    phase: str,
+    attempts: tuple[Mapping[str, object], ...],
+) -> None:
+    existing = state.get("phase_attempts")
+    attempts_by_phase = {} if existing is None else _mapping(existing, "phase attempts")
+    attempts_by_phase[phase] = [dict(attempt) for attempt in attempts]
+    state["phase_attempts"] = attempts_by_phase
+
+
+def _clear_phase_attempts(state: dict[str, object], phase: str) -> None:
+    existing = state.get("phase_attempts")
+    if existing is None:
+        return
+    attempts_by_phase = _mapping(existing, "phase attempts")
+    attempts_by_phase.pop(phase, None)
+    if attempts_by_phase:
+        state["phase_attempts"] = attempts_by_phase
+    else:
+        state.pop("phase_attempts", None)
+
+
+def _validate_phase_measurements(record: Mapping[str, object]) -> None:
+    _measurement_number(record, "duration_seconds")
+    for key in (
+        *_SUMMED_INTEGER_METRICS,
+        *_MAXIMUM_INTEGER_METRICS,
+        *_BASELINE_INTEGER_METRICS,
+    ):
+        _measurement_integer(record, key)
+    _measurement_numeric_mapping(record, "stage_durations_seconds")
+    _measurement_integer_mapping(record, "completed_stage_counts")
+    if not isinstance(record.get("resource_sampling_complete"), bool):
+        raise ValueError("Acceptance phase metric resource_sampling_completeが不正です")
+
+
+def _aggregate_phase_attempts(
+    records: tuple[Mapping[str, object], ...],
+) -> dict[str, object]:
+    if not records:
+        raise ValueError("Acceptance phase attemptがありません")
+    for record in records:
+        _validate_phase_measurements(record)
+    aggregate = dict(records[-1])
+    aggregate["attempt_count"] = len(records)
+    aggregate["duration_seconds"] = sum(
+        _measurement_number(record, "duration_seconds") for record in records
+    )
+    for key in _SUMMED_INTEGER_METRICS:
+        aggregate[key] = sum(_measurement_integer(record, key) for record in records)
+    for key in _MAXIMUM_INTEGER_METRICS:
+        aggregate[key] = max(_measurement_integer(record, key) for record in records)
+    for key in _BASELINE_INTEGER_METRICS:
+        aggregate[key] = _measurement_integer(records[0], key)
+    aggregate["stage_durations_seconds"] = _sum_numeric_mappings(
+        records,
+        "stage_durations_seconds",
+    )
+    aggregate["completed_stage_counts"] = _sum_integer_mappings(
+        records,
+        "completed_stage_counts",
+    )
+    aggregate["resource_sampling_complete"] = all(
+        record["resource_sampling_complete"] is True for record in records
+    )
+    aggregate.pop("failure_reason", None)
+    aggregate.pop("failure_exit_code", None)
+    return aggregate
+
+
+def _sum_numeric_mappings(
+    records: tuple[Mapping[str, object], ...],
+    key: str,
+) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for record in records:
+        for name, value in _measurement_numeric_mapping(record, key).items():
+            result[name] = result.get(name, 0.0) + value
+    return result
+
+
+def _sum_integer_mappings(
+    records: tuple[Mapping[str, object], ...],
+    key: str,
+) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for record in records:
+        for name, value in _measurement_integer_mapping(record, key).items():
+            result[name] = result.get(name, 0) + value
+    return result
+
+
+def _measurement_number(record: Mapping[str, object], key: str) -> float:
+    value = record.get(key)
+    if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"Acceptance phase metric {key}が不正です")
+    return float(value)
+
+
+def _measurement_integer(record: Mapping[str, object], key: str) -> int:
+    value = record.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"Acceptance phase metric {key}が不正です")
+    return value
+
+
+def _measurement_numeric_mapping(
+    record: Mapping[str, object],
+    key: str,
+) -> dict[str, float]:
+    value = record.get(key)
+    if not isinstance(value, dict) or not all(
+        isinstance(name, str)
+        and isinstance(item, int | float)
+        and not isinstance(item, bool)
+        and item >= 0
+        for name, item in value.items()
+    ):
+        raise ValueError(f"Acceptance phase metric {key}が不正です")
+    return {name: float(item) for name, item in value.items()}
+
+
+def _measurement_integer_mapping(
+    record: Mapping[str, object],
+    key: str,
+) -> dict[str, int]:
+    value = record.get(key)
+    if not isinstance(value, dict) or not all(
+        isinstance(name, str)
+        and isinstance(item, int)
+        and not isinstance(item, bool)
+        and item >= 0
+        for name, item in value.items()
+    ):
+        raise ValueError(f"Acceptance phase metric {key}が不正です")
+    return cast(dict[str, int], value)
 
 
 def _forbidden_values(profile: AcceptanceProfile) -> tuple[str, ...]:

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from src.video_selection.acceptance.acceptance_profile import AcceptanceProfile
 from src.video_selection.acceptance.atomic_json import (
     read_json_object,
@@ -53,7 +55,7 @@ def test_interrupt_after_cold_resumes_only_warm_then_waits_for_human_review(
         calls.append(phase)
         if phase == "warm" and not warm_interrupted:
             warm_interrupted = True
-            return 130, {"failure_reason": "user_interrupt"}, None, None
+            return 130, _interrupted_phase(phase), None, None
         return _successful_phase(configuration, phase)
 
     runner = _runner(execute)
@@ -94,6 +96,19 @@ def test_interrupt_after_cold_resumes_only_warm_then_waits_for_human_review(
     assert pending == 3
     assert passed == 0
     assert calls == ["cold", "warm", "warm"]
+    state = read_json_object(suite_root / "acceptance-state.json")
+    assert state is not None
+    phases = state["phases"]
+    assert isinstance(phases, dict)
+    warm = phases["warm"]
+    assert isinstance(warm, dict)
+    assert warm["duration_seconds"] == 14.0
+    assert warm["attempt_count"] == 2
+    assert warm["cache_hit_count"] == 1
+    assert warm["cache_miss_count"] == 2
+    assert warm["stage_durations_seconds"] == {"scan-video": 14.0}
+    assert warm["completed_stage_counts"] == {"scan-video": 2}
+    assert "phase_attempts" not in state
     record = read_json_object(suite_root / "acceptance.json")
     assert record is not None
     assert record["status"] == "passed"
@@ -207,6 +222,84 @@ def test_completed_phases_resume_worksheet_finalization_without_rerun(
     assert (suite_root / "review-worksheet.json").is_file()
 
 
+def test_completed_state_revalidates_current_suite_fingerprint(tmp_path: Path) -> None:
+    """完了済みstateでも現在のsuite fingerprintが再検証されること。
+
+    Arrange:
+        - cold/warm完了後にmaterializerのsuite fingerprintが変化する
+    Act:
+        - human review待ちのsuiteが再開される
+    Assert:
+        - phaseを再実行せずidentity不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        phase: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> tuple[
+        int,
+        dict[str, object],
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        calls.append(phase)
+        return _successful_phase(configuration, phase)
+
+    assert _runner(execute).run(profile_path=profile_path, suite="release") == 3
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="suite identity"):
+        _runner(execute, suite_fingerprint="c" * 64).run(
+            profile_path=profile_path,
+            suite="release",
+        )
+    assert calls == ["cold", "warm"]
+
+
+def test_completed_state_revalidates_current_model_identity(tmp_path: Path) -> None:
+    """完了済みstateでも現在のResolved Model Identityが再検証されること。
+
+    Arrange:
+        - cold/warm完了後にmodel resolverのexecution identityが変化する
+    Act:
+        - human review待ちのsuiteが再開される
+    Assert:
+        - phaseを再実行せずidentity不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        phase: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> tuple[
+        int,
+        dict[str, object],
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        calls.append(phase)
+        return _successful_phase(configuration, phase)
+
+    assert _runner(execute).run(profile_path=profile_path, suite="release") == 3
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="suite identity"):
+        _runner(execute, model_identity_seed="changed-model").run(
+            profile_path=profile_path,
+            suite="release",
+        )
+    assert calls == ["cold", "warm"]
+
+
 def test_incomplete_phase_removes_uncommitted_output_before_rerun(
     tmp_path: Path,
 ) -> None:
@@ -252,9 +345,56 @@ def test_incomplete_phase_removes_uncommitted_output_before_rerun(
     assert calls == ["cold", "warm"]
 
 
-def _runner(phase_executor: PhaseExecutor) -> TargetSuiteRunner:
+def test_unmeasured_phase_interrupt_requires_reset_before_retry(
+    tmp_path: Path,
+) -> None:
+    """計測記録を確定できないphase中断では再利用が拒否されること。
+
+    Arrange:
+        - phase executor自体が記録を返す前にinterruptされるsuiteが用意される
+    Act:
+        - suiteが中断後に同じstateから再開される
+    Assert:
+        - 初回はexit 130となり、再開には明示resetが要求されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        phase: str,
+        _configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> tuple[
+        int,
+        dict[str, object],
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        calls.append(phase)
+        raise KeyboardInterrupt
+
+    runner = _runner(execute)
+
+    # Act
+    interrupted = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert interrupted == 130
+    with pytest.raises(ValueError, match="--reset-suite"):
+        runner.run(profile_path=profile_path, suite="release")
+    assert calls == ["cold"]
+
+
+def _runner(
+    phase_executor: PhaseExecutor,
+    *,
+    suite_fingerprint: str = "d" * 64,
+    model_identity_seed: str = "acceptance-runner",
+) -> TargetSuiteRunner:
     """target外でもstate machineを検証できるdependency構成を返す。"""
-    model_runtime = FakeModelRuntime("acceptance-runner")
+    model_runtime = FakeModelRuntime(model_identity_seed)
 
     def materialize(
         profile: AcceptanceProfile,
@@ -264,7 +404,7 @@ def _runner(phase_executor: PhaseExecutor) -> TargetSuiteRunner:
         input_folder = suite_root / "work" / "input"
         input_folder.mkdir(parents=True, exist_ok=True)
         (input_folder / "scenario-001.mkv").write_bytes(b"anonymous")
-        return input_folder, {"suite_fingerprint": "d" * 64}
+        return input_folder, {"suite_fingerprint": suite_fingerprint}
 
     return TargetSuiteRunner(
         environment_probe=lambda: {
@@ -314,11 +454,23 @@ def _successful_phase(
     record: dict[str, object] = {
         "operation_status": "completed",
         "duration_seconds": 10.0,
+        "cache_hit_count": 0,
+        "cache_miss_count": 1,
+        "reuse_count": 0,
         "unexpected_recompute_count": 0,
+        "stage_durations_seconds": {"scan-video": 10.0},
+        "completed_stage_counts": {"scan-video": 1},
         "persistent_cache_bytes": 1024,
         "peak_additional_bytes": 2048,
+        "disk_sample_count": 1,
+        "gpu_sample_count": 1,
+        "gpu_sample_error_count": 0,
+        "process_gpu_baseline_mib": 100,
+        "system_gpu_baseline_mib": 200,
+        "system_global_gpu_peak_mib": 1000,
         "ollama_global_gpu_peak_mib": 1000,
         "stt_global_gpu_peak_mib": 1000,
+        "ollama_model_size_vram_bytes": 512,
         "resource_sampling_complete": True,
         "normalized_result_digest": "9" * 64,
         "selection_stage_fingerprint": selection_fingerprint,
@@ -330,6 +482,35 @@ def _successful_phase(
         "phase_marker": phase,
     }
     return 0, record, report, artifact
+
+
+def _interrupted_phase(phase: str) -> dict[str, object]:
+    """resume時に累積される計測済みinterrupt evidenceを返す。"""
+    return {
+        "operation_status": "failed",
+        "failure_reason": "user_interrupt",
+        "failure_exit_code": 130,
+        "duration_seconds": 4.0,
+        "cache_hit_count": 1,
+        "cache_miss_count": 1,
+        "reuse_count": 0,
+        "unexpected_recompute_count": 0,
+        "stage_durations_seconds": {"scan-video": 4.0},
+        "completed_stage_counts": {"scan-video": 1},
+        "persistent_cache_bytes": 1024,
+        "peak_additional_bytes": 2048,
+        "disk_sample_count": 1,
+        "gpu_sample_count": 1,
+        "gpu_sample_error_count": 0,
+        "process_gpu_baseline_mib": 100,
+        "system_gpu_baseline_mib": 200,
+        "system_global_gpu_peak_mib": 1000,
+        "ollama_global_gpu_peak_mib": 1000,
+        "stt_global_gpu_peak_mib": 1000,
+        "ollama_model_size_vram_bytes": 512,
+        "resource_sampling_complete": True,
+        "phase_marker": phase,
+    }
 
 
 def _profile(tmp_path: Path) -> Path:
