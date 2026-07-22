@@ -136,10 +136,10 @@ def test_video_stage_progress_follows_video_order_with_monotonic_stage_index(
     )
 
 
-def test_video_scans_are_prepared_before_ordered_downstream_stages(
+def test_video_stage_pipeline_preserves_order_and_source_local_cache(
     tmp_path: Path,
 ) -> None:
-    """scanが先行確定されdownstreamがVideo Order順に処理されること。
+    """pipelining後もVideo Orderとsource-local cacheが維持されること。
 
     Arrange:
         - 異なる内容を持つ2動画のVideo SetとVideo Stage processorが用意される
@@ -147,7 +147,7 @@ def test_video_scans_are_prepared_before_ordered_downstream_stages(
         - 初回処理後に動画をrenameして順序とdownstream設定を変えて再実行される
         - 続いてCandidate Moment Densityだけを変えて再実行される
     Assert:
-        - 全probeとscanの後にrefinementがVideo Order順で処理されること
+        - probeとscan後のrefinementがVideo Order順で処理されること
         - rename、順序、downstream変更では両Stageが再利用されること
         - density変更ではscanだけが再利用されcandidate抽出だけ再計算されること
         - scene一時画像がCompleted Stageへ永続化されないこと
@@ -175,13 +175,13 @@ def test_video_scans_are_prepared_before_ordered_downstream_stages(
         ("probe", "01-first.mp4"),
         ("probe", "02-second.mp4"),
     ]
-    assert sorted(first_runtime.call_order[2:4]) == [
-        ("scan", "01-first.mp4"),
-        ("scan", "02-second.mp4"),
+    assert sorted(path.name for path in first_runtime.scan_calls) == [
+        "01-first.mp4",
+        "02-second.mp4",
     ]
-    assert first_runtime.call_order[4:] == [
-        ("refine", "01-first.mp4"),
-        ("refine", "02-second.mp4"),
+    assert [path.name for path in first_runtime.range_calls] == [
+        "01-first.mp4",
+        "02-second.mp4",
     ]
     assert all(
         [item.stage for item in result.completed_stages]
@@ -305,6 +305,65 @@ def test_three_video_scans_run_concurrently(
     assert all(7.0 <= result.scan.metrics.cpu_seconds < 8.0 for result in results)
 
 
+def test_downstream_starts_while_later_video_scans_are_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """先頭Videoのdownstreamが後続scanの完了前に開始されること。
+
+    Arrange:
+        - 3 workerで同時開始し、後続2動画だけ待機するscanが用意される
+        - 先頭Videoのrefinementが後続scanを解放する同期境界が用意される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - 後続scanがactiveな間に先頭Videoのrefinementが開始されること
+        - 全Video Stage resultがVideo Order順に返されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    video_names = ("01-first.mp4", "02-second.mp4", "03-third.mp4")
+    for index, name in enumerate(video_names, start=1):
+        (input_folder / name).write_bytes(f"video-{index}".encode())
+    scans_started = threading.Barrier(3)
+    release_later_scans = threading.Event()
+    first_refinement_started = threading.Event()
+
+    def synchronize_scans(path: Path) -> None:
+        scans_started.wait(timeout=2)
+        if path.name != video_names[0]:
+            assert release_later_scans.wait(timeout=2)
+
+    def observe_refinement(path: Path) -> None:
+        if path.name == video_names[0]:
+            first_refinement_started.set()
+            release_later_scans.set()
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        lambda: 24,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        on_scan_video=synchronize_scans,
+        on_scan_video_frame_ranges=observe_refinement,
+    )
+
+    # Act
+    results = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )
+
+    # Assert
+    assert first_refinement_started.is_set()
+    assert [result.source.relative_path for result in results] == list(video_names)
+
+
 def test_interrupt_cancels_active_video_scans(tmp_path: Path) -> None:
     """scan中のKeyboardInterruptでactive subprocess cancellationが要求されること。
 
@@ -343,7 +402,7 @@ def test_completed_parallel_scans_survive_first_middle_last_video_failure(
     tmp_path: Path,
     failure_position: int,
 ) -> None:
-    """scan失敗後も並行して正常完了したVideo Scanが再利用されること。
+    """scan失敗後も先に完了したVideo Stageが再利用されること。
 
     Arrange:
         - 自然順の3動画と指定Videoのscanだけ失敗するMedia Runtimeが用意される
@@ -351,7 +410,8 @@ def test_completed_parallel_scans_survive_first_middle_last_video_failure(
         - 失敗runの後に同じVideo Setとcacheで再実行される
     Assert:
         - 正常完了したscanは再利用され、未確定scanだけが再計算されること
-        - extractionはretry時にVideo Order順で処理されること
+        - 失敗Videoより前のdownstreamは保持され、retryで再計算されないこと
+        - 残るextractionはretry時にVideo Order順で処理されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
@@ -388,9 +448,13 @@ def test_completed_parallel_scans_survive_first_middle_last_video_failure(
     completed = attempted - {failed_name}
     expected_scan_recompute = [name for name in video_names if name not in completed]
     assert failed_name in attempted
-    assert failing_runtime.range_calls == []
+    assert [path.name for path in failing_runtime.range_calls] == list(
+        video_names[:failure_position]
+    )
     assert [path.name for path in retry_runtime.scan_calls] == expected_scan_recompute
-    assert [path.name for path in retry_runtime.range_calls] == list(video_names)
+    assert [path.name for path in retry_runtime.range_calls] == list(
+        video_names[failure_position:]
+    )
     assert len(results) == 3
 
 

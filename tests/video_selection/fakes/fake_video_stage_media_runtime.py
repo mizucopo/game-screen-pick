@@ -27,6 +27,7 @@ class FakeVideoStageMediaRuntime:
         runtime_identity: MediaRuntimeIdentity | None = None,
         on_preflight: Callable[[], None] | None = None,
         on_scan_video: Callable[[Path], None] | None = None,
+        on_scan_video_frame_ranges: Callable[[Path], None] | None = None,
         distant_moments: bool = False,
         require_streaming_refinement: bool = False,
         cpu_burn_seconds: float = 0.0,
@@ -48,6 +49,7 @@ class FakeVideoStageMediaRuntime:
         )
         self._on_preflight = on_preflight
         self._on_scan_video = on_scan_video
+        self._on_scan_video_frame_ranges = on_scan_video_frame_ranges
         self._distant_moments = distant_moments
         self._require_streaming_refinement = require_streaming_refinement
         self._cpu_burn_seconds = cpu_burn_seconds
@@ -189,6 +191,8 @@ class FakeVideoStageMediaRuntime:
         del max_dimension
         self.range_calls.append(media_path)
         self.call_order.append(("refine", media_path.name))
+        if self._on_scan_video_frame_ranges is not None:
+            self._on_scan_video_frame_ranges(media_path)
         self._burn_cpu()
         frame_pts = (0, 5, 395, 400, 405) if self._distant_moments else (0, 5, 10, 15)
         for pts in frame_pts:

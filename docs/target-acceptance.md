@@ -58,7 +58,8 @@ processing cacheを使うexact warmの順に実行する。性能予算超過は
 coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
 full Video Setを再hashしない。fullの独立Video Scanはlogical CPU 8個につき1 worker、
-最大3 workerで先行確定される。
+最大3 workerで並列実行する。Video Order上の対象scanが確定した時点で、そのVideoの
+candidate extractionとcontext collectionを後続Videoのscanと重ねて開始する。
 
 release intervalは全streamをFFmpeg stream copyした`scenario-001.mkv`形式の匿名clipに
 変換する。source metadataとchapterは引き継がず、FFmpegのbitexact format flagを使うため、

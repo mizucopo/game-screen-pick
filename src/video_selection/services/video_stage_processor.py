@@ -1,10 +1,10 @@
-"""Video Sourceのscanを先行確定し3つのVideo Stageを組み立てる。"""
+"""Video Sourceのscanをpipeliningし3つのVideo Stageを組み立てる。"""
 
 import os
 import resource
 import shutil
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import replace
 from fractions import Fraction
@@ -69,7 +69,7 @@ ProbedVideoSource = tuple[VideoSource, MediaProbe, MediaStream]
 
 
 class VideoStageProcessor:
-    """scanをbounded並列化しsource-localな3 Stageを順序付きで確定する。"""
+    """scanをbounded並列化しdownstreamを順序付きでpipeliningする。"""
 
     def __init__(
         self,
@@ -102,29 +102,45 @@ class VideoStageProcessor:
             validate_video_set_snapshot_metadata(video_set)
             probe = self._media_runtime.probe(source.path)
             probed_sources.append((source, probe, select_primary_video_stream(probe)))
-        prepared_scans = self._prepare_scans(
-            video_set,
-            tuple(probed_sources),
-            configuration,
-            runtime_identity,
-        )
+        worker_count = _video_scan_worker_count(len(probed_sources))
         results: list[VideoStageResult] = []
-        for video_order, (source, probe, primary_stream) in enumerate(
-            probed_sources,
-            start=1,
-        ):
-            results.append(
-                self._process_source(
-                    video_set,
-                    source,
-                    probe,
-                    primary_stream,
-                    prepared_scans[source.fingerprint],
-                    video_order,
-                    configuration,
-                    runtime_identity,
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="video-scan",
+        ) as executor:
+            try:
+                prepared_scans: tuple[Future[PreparedVideoScan], ...] = tuple(
+                    executor.submit(
+                        self._prepare_scan,
+                        source,
+                        primary_stream,
+                        configuration,
+                        runtime_identity,
+                    )
+                    for source, _probe, primary_stream in probed_sources
                 )
-            )
+                for video_order, (probed, prepared_scan) in enumerate(
+                    zip(probed_sources, prepared_scans, strict=True),
+                    start=1,
+                ):
+                    source, probe, primary_stream = probed
+                    results.append(
+                        self._process_source(
+                            video_set,
+                            source,
+                            probe,
+                            primary_stream,
+                            prepared_scan.result(),
+                            video_order,
+                            configuration,
+                            runtime_identity,
+                        )
+                    )
+            except KeyboardInterrupt:
+                with suppress(Exception):
+                    self._media_runtime.cancel_video_scans()
+                raise
+        validate_video_set_snapshot_metadata(video_set)
         return tuple(results)
 
     def _process_source(
@@ -220,45 +236,6 @@ class VideoStageProcessor:
             context=context,
             completed_stages=(*runner.completed_stages, context.completed_stage),
         )
-
-    def _prepare_scans(
-        self,
-        video_set: VideoSet,
-        probed_sources: tuple[ProbedVideoSource, ...],
-        configuration: EffectiveConfiguration,
-        runtime_identity: MediaRuntimeIdentity,
-    ) -> dict[str, PreparedVideoScan]:
-        """source-local scanをbounded並列でCompleted Stageへ先行確定する。"""
-        worker_count = _video_scan_worker_count(len(probed_sources))
-
-        def prepare(item: ProbedVideoSource) -> PreparedVideoScan:
-            source, _probe, primary_stream = item
-            return self._prepare_scan(
-                source,
-                primary_stream,
-                configuration,
-                runtime_identity,
-            )
-
-        with ThreadPoolExecutor(
-            max_workers=worker_count,
-            thread_name_prefix="video-scan",
-        ) as executor:
-            try:
-                prepared = tuple(executor.map(prepare, probed_sources))
-            except KeyboardInterrupt:
-                with suppress(Exception):
-                    self._media_runtime.cancel_video_scans()
-                raise
-        validate_video_set_snapshot_metadata(video_set)
-        return {
-            source.fingerprint: result
-            for (source, _probe, _primary_stream), result in zip(
-                probed_sources,
-                prepared,
-                strict=True,
-            )
-        }
 
     def _prepare_scan(
         self,
