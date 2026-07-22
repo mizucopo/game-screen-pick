@@ -4,6 +4,9 @@ from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
+from src.video_selection.models.candidate_annotation_request import (
+    CandidateAnnotationRequest,
+)
 from src.video_selection.models.candidate_moment import CandidateMoment
 from src.video_selection.models.completed_stage import CompletedStage
 from src.video_selection.models.content_reject_reason import ContentRejectReason
@@ -149,9 +152,7 @@ def test_ties_follow_video_order_time_moment_and_frame_id(tmp_path: Path) -> Non
     assert representatives[0].identifier == earlier_low_id.identifier
 
 
-def test_scene_catalog_representatives_skip_shared_frames_and_fill_limit(
-    tmp_path: Path,
-) -> None:
+def test_scene_catalog_representatives_skip_shared_frames_and_fill_limit() -> None:
     """共有Frameが除外され後続の一意な代表で上限まで補充されること。
 
     Arrange:
@@ -160,6 +161,48 @@ def test_scene_catalog_representatives_skip_shared_frames_and_fill_limit(
         - 上限2件のScene Catalog Representative Setが構築される
     Assert:
         - 重複Frame Candidate IDが除外され、後続frameで2件まで補充されること
+    """
+    # Arrange
+    shared = _frame("a", quality=0.90, feature=(1.0, 0.0), second=1)
+    later = _frame("b", quality=0.80, feature=(0.0, 1.0), second=3)
+    requests = tuple(
+        CandidateAnnotationRequest(
+            moment=_moment(digest, Fraction(second), (frame.identifier,)),
+            frame_candidates=(frame,),
+            context_cues=(),
+            video_set_progress=Fraction(second, 10),
+            selection_intent="ブログ本文を説明できる画像を選ぶ",
+            cue_selection_policy_version="nearby-context-v1",
+        )
+        for digest, second, frame in (
+            ("1", 1, shared),
+            ("2", 2, shared),
+            ("3", 3, later),
+        )
+    )
+
+    # Act
+    representatives = select_scene_catalog_representatives(requests, limit=2)
+
+    # Assert
+    assert [frame.identifier for frame in representatives] == [
+        shared.identifier,
+        later.identifier,
+    ]
+
+
+def test_annotation_shortlist_skips_shared_representative_frames(
+    tmp_path: Path,
+) -> None:
+    """共有Frameが一度だけ注釈され後続の一意なMomentが保持されること。
+
+    Arrange:
+        - 最初の2 Momentが同じFrame Candidateを共有し、後続Momentが別frameを持つ
+    Act:
+        - Candidate Annotation requestが構築される
+    Assert:
+        - shortlist順で最初の共有Frameだけが保持されること
+        - 後続の一意なFrameを持つMomentが失われないこと
     """
     # Arrange
     shared = _frame("a", quality=0.90, feature=(1.0, 0.0), second=1)
@@ -175,17 +218,20 @@ def test_scene_catalog_representatives_skip_shared_frames_and_fill_limit(
         ),
         candidates=(shared, later),
     )
+
+    # Act
     requests = build_candidate_annotation_requests(
         (result,),
         selection_intent="ブログ本文を説明できる画像を選ぶ",
         similarity_threshold=1.0,
     )
 
-    # Act
-    representatives = select_scene_catalog_representatives(requests, limit=2)
-
     # Assert
-    assert [frame.identifier for frame in representatives] == [
+    assert [request.moment.identifier for request in requests] == [
+        "mom_" + "1" * 64,
+        "mom_" + "3" * 64,
+    ]
+    assert [request.frame_candidates[0].identifier for request in requests] == [
         shared.identifier,
         later.identifier,
     ]

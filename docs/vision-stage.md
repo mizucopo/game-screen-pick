@@ -12,7 +12,7 @@
 - 決定的なlocal順を持つSelection ShortlistのCandidate Annotation request
 - Effective Configurationとrun中にfreeze済みのResolved Models
 
-Scene Catalog Representative Setは要求画像枚数から独立します。Selection Shortlistは決定的selectorが不足時に追加batchを受けて拡張し、batch sizeと実model capacityの受け入れはIssue #189が所有します。各Candidate Momentの1〜3件のFrame Candidateは、Neutral Image AnalysisのQuality ScoreとFrame Candidate IDで一つのRepresentative Frameへ先に確定します。Candidate Annotation requestにはその1件、versioned policyで選ばれた近傍Context Cue、Video Set Progress、Selection Intentを明示し、VisionRuntimeが暗黙に候補やCueを削りません。
+Scene Catalog Representative Setは要求画像枚数から独立します。Selection Shortlistは決定的selectorが不足時に追加batchを受けて拡張し、batch sizeと実model capacityの受け入れはIssue #189が所有します。各Candidate Momentの1〜3件のFrame Candidateは、Neutral Image AnalysisのQuality ScoreとFrame Candidate IDで一つのRepresentative Frameへ先に確定します。複数Momentが同じRepresentative Frameを共有する場合は、品質と見た目の多様性で決定したshortlist順の最初のMomentだけを注釈対象にし、後続の一意なRepresentative Frameを持つMomentは保持します。Candidate Annotation requestにはその1件、versioned policyで選ばれた近傍Context Cue、Video Set Progress、Selection Intentを明示し、VisionRuntimeが暗黙に候補やCueを削りません。
 
 ## Ollama operation
 

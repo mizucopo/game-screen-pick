@@ -473,7 +473,7 @@ Candidate Annotationが完了し、Representative Frameと最終選定に必要�
 _Avoid_: all Candidate Moments, Selection Shortlist, selected output
 
 **Selection Shortlist**:
-有効なFrame Candidateを持つCandidate Momentのうち、Neutral Image Analysisによる品質と見た目の多様性から、Candidate Annotationへ進めるものをVideo Set全体でlocalに絞った集合。
+有効なFrame Candidateを持つCandidate Momentのうち、Neutral Image Analysisによる品質と見た目の多様性から、Candidate Annotationへ進めるものをVideo Set全体でlocalに絞った集合。複数Momentが同じRepresentative Frameを共有する場合は決定済みshortlist順の最初のMomentだけを残し、後続の一意なFrameを持つMomentの探索を続けるため、集合内のFrame Candidate IDは一意になる。
 _Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
 
 **Selection Shortfall**:

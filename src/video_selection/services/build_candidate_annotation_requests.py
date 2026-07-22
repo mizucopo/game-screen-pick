@@ -15,6 +15,15 @@ _CONTEXT_CUE_LIMIT = 3
 _CUE_SELECTION_POLICY_VERSION = "nearby-context-v1"
 _SCENE_CATALOG_REPRESENTATIVE_LIMIT = 24
 
+type AnnotationShortlistItem = tuple[
+    int,
+    VideoStageResult,
+    CandidateMoment,
+    tuple[FrameCandidate, ...],
+    FrameCandidate,
+    Fraction,
+]
+
 
 def build_candidate_annotation_requests(
     video_stage_results: tuple[VideoStageResult, ...],
@@ -37,16 +46,7 @@ def build_candidate_annotation_requests(
     if total_duration <= 0:
         return ()
 
-    candidates: list[
-        tuple[
-            int,
-            VideoStageResult,
-            CandidateMoment,
-            tuple[FrameCandidate, ...],
-            FrameCandidate,
-            Fraction,
-        ]
-    ] = []
+    candidates: list[AnnotationShortlistItem] = []
     elapsed = Fraction(0)
     for video_order, result in enumerate(video_stage_results, start=1):
         duration = result.scan.timeline.duration.seconds
@@ -85,7 +85,9 @@ def build_candidate_annotation_requests(
         elapsed += duration
 
     base_order = sorted(candidates, key=_shortlist_base_key)
-    ordered = _diverse_prefix(base_order, similarity_threshold)
+    ordered = _unique_representative_frames(
+        _diverse_prefix(base_order, similarity_threshold)
+    )
     return tuple(
         CandidateAnnotationRequest(
             moment=moment,
@@ -140,14 +142,7 @@ def _representative_key(frame: FrameCandidate) -> tuple[float, str]:
 
 
 def _shortlist_base_key(
-    item: tuple[
-        int,
-        VideoStageResult,
-        CandidateMoment,
-        tuple[FrameCandidate, ...],
-        FrameCandidate,
-        Fraction,
-    ],
+    item: AnnotationShortlistItem,
 ) -> tuple[float, int, Fraction, str]:
     """Qualityを基礎に残る同点をdomain順で固定する。"""
     video_order, _, moment, _, representative, _ = item
@@ -163,49 +158,12 @@ def _shortlist_base_key(
 
 
 def _diverse_prefix(
-    base_order: list[
-        tuple[
-            int,
-            VideoStageResult,
-            CandidateMoment,
-            tuple[FrameCandidate, ...],
-            FrameCandidate,
-            Fraction,
-        ]
-    ],
+    base_order: list[AnnotationShortlistItem],
     similarity_threshold: float,
-) -> tuple[
-    tuple[
-        int,
-        VideoStageResult,
-        CandidateMoment,
-        tuple[FrameCandidate, ...],
-        FrameCandidate,
-        Fraction,
-    ],
-    ...,
-]:
+) -> tuple[AnnotationShortlistItem, ...]:
     """base順を走査し既選抜と非類似のMomentを一つのprefixへ集める。"""
-    diverse: list[
-        tuple[
-            int,
-            VideoStageResult,
-            CandidateMoment,
-            tuple[FrameCandidate, ...],
-            FrameCandidate,
-            Fraction,
-        ]
-    ] = []
-    deferred: list[
-        tuple[
-            int,
-            VideoStageResult,
-            CandidateMoment,
-            tuple[FrameCandidate, ...],
-            FrameCandidate,
-            Fraction,
-        ]
-    ] = []
+    diverse: list[AnnotationShortlistItem] = []
+    deferred: list[AnnotationShortlistItem] = []
     for item in base_order:
         representative = item[4]
         if all(
@@ -216,6 +174,21 @@ def _diverse_prefix(
         else:
             deferred.append(item)
     return (*diverse, *deferred)
+
+
+def _unique_representative_frames(
+    items: tuple[AnnotationShortlistItem, ...],
+) -> tuple[AnnotationShortlistItem, ...]:
+    """shortlist順で各Representative Frameを一つのMomentへ限定する。"""
+    result: list[AnnotationShortlistItem] = []
+    seen_identifiers: set[str] = set()
+    for item in items:
+        identifier = item[4].identifier
+        if identifier in seen_identifiers:
+            continue
+        result.append(item)
+        seen_identifiers.add(identifier)
+    return tuple(result)
 
 
 def _cosine_similarity(left: FrameCandidate, right: FrameCandidate) -> float:
