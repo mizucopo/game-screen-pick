@@ -104,21 +104,22 @@ class VideoStageProcessor:
             probed_sources.append((source, probe, select_primary_video_stream(probe)))
         worker_count = _video_scan_worker_count(len(probed_sources))
         results: list[VideoStageResult] = []
+        prepared_scans: list[Future[PreparedVideoScan]] = []
         with ThreadPoolExecutor(
             max_workers=worker_count,
             thread_name_prefix="video-scan",
         ) as executor:
             try:
-                prepared_scans: tuple[Future[PreparedVideoScan], ...] = tuple(
-                    executor.submit(
-                        self._prepare_scan,
-                        source,
-                        primary_stream,
-                        configuration,
-                        runtime_identity,
+                for source, _probe, primary_stream in probed_sources:
+                    prepared_scans.append(
+                        executor.submit(
+                            self._prepare_scan,
+                            source,
+                            primary_stream,
+                            configuration,
+                            runtime_identity,
+                        )
                     )
-                    for source, _probe, primary_stream in probed_sources
-                )
                 for video_order, (probed, prepared_scan) in enumerate(
                     zip(probed_sources, prepared_scans, strict=True),
                     start=1,
@@ -137,6 +138,8 @@ class VideoStageProcessor:
                         )
                     )
             except KeyboardInterrupt:
+                for prepared_scan in prepared_scans:
+                    prepared_scan.cancel()
                 with suppress(Exception):
                     self._media_runtime.cancel_video_scans()
                 raise

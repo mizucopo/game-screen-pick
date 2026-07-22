@@ -1,5 +1,7 @@
 """Video Stage processorの統合style test。"""
 
+import os
+import signal
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -395,6 +397,82 @@ def test_interrupt_cancels_active_video_scans(tmp_path: Path) -> None:
             _configuration(input_folder, tmp_path / "output"),
         )
     assert runtime.cancel_video_scans_call_count == 1
+
+
+def test_interrupt_does_not_start_queued_video_scans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """割り込み後に待機中のVideo Scanが開始されないこと。
+
+    Arrange:
+        - 3 workerに対して4動画と、先頭3 scanを停止するMedia Runtimeが用意される
+        - 先頭3 scanの開始後にprocessへSIGINTが送られる
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - interruptが維持され、待機中の4本目が開始されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    video_names = (
+        "01-first.mp4",
+        "02-second.mp4",
+        "03-third.mp4",
+        "04-queued.mp4",
+    )
+    for index, name in enumerate(video_names, start=1):
+        (input_folder / name).write_bytes(f"video-{index}".encode())
+    active_scans_started = threading.Event()
+    release_active_scans = threading.Event()
+    started_scan_names: list[str] = []
+    started_scan_names_lock = threading.Lock()
+
+    def block_active_scans(path: Path) -> None:
+        with started_scan_names_lock:
+            started_scan_names.append(path.name)
+            if len(started_scan_names) == 3:
+                active_scans_started.set()
+        if path.name != video_names[-1]:
+            assert release_active_scans.wait(timeout=5)
+
+    interrupt_wait_timed_out = threading.Event()
+
+    def send_sigint_after_active_scans_start() -> None:
+        if not active_scans_started.wait(timeout=5):
+            interrupt_wait_timed_out.set()
+        os.kill(os.getpid(), signal.SIGINT)
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        lambda: 24,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        on_scan_video=block_active_scans,
+        on_cancel_video_scans=release_active_scans.set,
+    )
+    interrupt_thread = threading.Thread(
+        target=send_sigint_after_active_scans_start,
+        daemon=True,
+    )
+    interrupt_thread.start()
+
+    # Act / Assert
+    with pytest.raises(KeyboardInterrupt):
+        VideoStageProcessor(
+            runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(
+            discover_video_set(input_folder),
+            _configuration(input_folder, tmp_path / "output"),
+        )
+    interrupt_thread.join(timeout=1)
+    assert not interrupt_thread.is_alive()
+    assert not interrupt_wait_timed_out.is_set()
+    assert len(started_scan_names) == 3
+    assert set(started_scan_names) == set(video_names[:3])
 
 
 @pytest.mark.parametrize("failure_position", [0, 1, 2])

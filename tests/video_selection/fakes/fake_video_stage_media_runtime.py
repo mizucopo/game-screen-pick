@@ -27,6 +27,7 @@ class FakeVideoStageMediaRuntime:
         runtime_identity: MediaRuntimeIdentity | None = None,
         on_preflight: Callable[[], None] | None = None,
         on_scan_video: Callable[[Path], None] | None = None,
+        on_cancel_video_scans: Callable[[], None] | None = None,
         on_scan_video_frame_ranges: Callable[[Path], None] | None = None,
         distant_moments: bool = False,
         require_streaming_refinement: bool = False,
@@ -49,6 +50,7 @@ class FakeVideoStageMediaRuntime:
         )
         self._on_preflight = on_preflight
         self._on_scan_video = on_scan_video
+        self._on_cancel_video_scans = on_cancel_video_scans
         self._on_scan_video_frame_ranges = on_scan_video_frame_ranges
         self._distant_moments = distant_moments
         self._require_streaming_refinement = require_streaming_refinement
@@ -179,6 +181,8 @@ class FakeVideoStageMediaRuntime:
     def cancel_video_scans(self) -> None:
         """scan cancellation要求を記録する。"""
         self.cancel_video_scans_call_count += 1
+        if self._on_cancel_video_scans is not None:
+            self._on_cancel_video_scans()
 
     def scan_video_frame_ranges(
         self,

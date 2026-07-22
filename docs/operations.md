@@ -119,7 +119,7 @@ TTYでは更新型表示、redirect/CIでは一行event logにします。`stder
 
 最外周のrun controllerがStageの型付き例外を`RunFailure`へ正規化し、stable reason code、allowlistで許可した安全な観測値、修復方法、再実行時に再利用できるcacheを示します。未知の例外は`internal_error`とし、元の例外は内部causeとしてだけ保持します。通常はstack traceを表示しません。`--debug`時だけ安全化済みstack traceを加えますが、credential、環境変数一覧、絶対path、prompt本文、raw model response、Context Cue本文は出しません。
 
-Ctrl+Cはfailureではなく`run_interrupted`、reason `user_interrupt`、exit 130として扱い、処理中のpartial Stageを再利用しません。
+Ctrl+Cはfailureではなく`run_interrupted`、reason `user_interrupt`、exit 130として扱います。並列Video Scanでは未開始のscanを取り消してから実行中のscanを終了し、割り込み後に新しいscanを開始しません。処理中のpartial Stageは再利用しません。
 
 fatal errorではOutput Folderを公開しません。Selection Shortfallと、検証済みlocal modelを使えたmodel更新不能はexit 0の`completed_with_warnings`として理由をatomicに公開します。後者は`model_update_unavailable`と対象roleを`report.json`へ記録し、model storeのpathやtokenは含めません。
 

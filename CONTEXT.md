@@ -153,7 +153,7 @@ Completed Stageとして確定する前に中断・失敗したことをcache構
 _Avoid_: Completed Stage, Legacy Cache, unknown directory, resume checkpoint
 
 **Video Stage**:
-一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysis、Context Cue収集を所有する。複数Videoでは独立したscanをbounded workerで並列実行し、Video Order上の対象scanが確定した時点で後続Videoのscanを続けながら、そのVideoのcandidate extractionとcontext collectionを順序どおり進める。resultとprogressはVideo Order順に確定し、Video Orderはfingerprintへ含めない。
+一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysis、Context Cue収集を所有する。複数Videoでは独立したscanをbounded workerで並列実行し、Video Order上の対象scanが確定した時点で後続Videoのscanを続けながら、そのVideoのcandidate extractionとcontext collectionを順序どおり進める。中断時は未開始scanを取り消してから実行中scanへ終了を要求し、中断後に新しいscanを開始しない。resultとprogressはVideo Order順に確定し、Video Orderはfingerprintへ含めない。
 _Avoid_: Video Set Stage, cross-video selection, whole-run stage
 
 **Video Scan Stage**:
