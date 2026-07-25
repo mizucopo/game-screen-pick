@@ -77,6 +77,7 @@ def test_changed_full_source_requires_reset(tmp_path: Path) -> None:
     second.write_bytes(b"second")
     materializer = FullSuiteMaterializer(
         media_probe=lambda _path: {
+            "start": Fraction(0),
             "duration": Fraction(50),
         }
     )
@@ -87,6 +88,40 @@ def test_changed_full_source_requires_reset(tmp_path: Path) -> None:
     # Act / Assert
     with pytest.raises(ValueError, match="source"):
         materializer.materialize(profile, suite_root)
+
+
+def test_nonzero_media_start_is_subtracted_from_full_duration(
+    tmp_path: Path,
+) -> None:
+    """非0 media startがfull suiteの経過時間から除かれること。
+
+    Arrange:
+        - start 5秒、end timestamp 55秒の2動画が用意される
+    Act:
+        - 100秒を期待するfull suiteがmaterializeされる
+    Assert:
+        - 各動画50秒として合計100秒がdescriptorへ記録されること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    profile.input_root.mkdir()
+    (profile.input_root / "private-chapter-01.mkv").write_bytes(b"first")
+    (profile.input_root / "private-chapter-02.mp4").write_bytes(b"second")
+    materializer = FullSuiteMaterializer(
+        media_probe=lambda _path: {
+            "start": Fraction(5),
+            "duration": Fraction(55),
+        }
+    )
+
+    # Act
+    _, descriptor = materializer.materialize(
+        profile,
+        profile.artifact_root / "full",
+    )
+
+    # Assert
+    assert descriptor["total_duration"] == {"numerator": 100, "denominator": 1}
 
 
 def test_repointed_anonymous_symlink_requires_reset(tmp_path: Path) -> None:
@@ -107,7 +142,10 @@ def test_repointed_anonymous_symlink_requires_reset(tmp_path: Path) -> None:
     first.write_bytes(b"first")
     second.write_bytes(b"second")
     materializer = FullSuiteMaterializer(
-        media_probe=lambda _path: {"duration": Fraction(50)},
+        media_probe=lambda _path: {
+            "start": Fraction(0),
+            "duration": Fraction(50),
+        },
     )
     suite_root = profile.artifact_root / "full"
     input_folder, _ = materializer.materialize(profile, suite_root)
@@ -139,7 +177,10 @@ def test_stray_supported_video_requires_reset(tmp_path: Path) -> None:
     (profile.input_root / "private-chapter-01.mkv").write_bytes(b"first")
     (profile.input_root / "private-chapter-02.mp4").write_bytes(b"second")
     materializer = FullSuiteMaterializer(
-        media_probe=lambda _path: {"duration": Fraction(50)},
+        media_probe=lambda _path: {
+            "start": Fraction(0),
+            "duration": Fraction(50),
+        },
     )
     suite_root = profile.artifact_root / "full"
     input_folder, _ = materializer.materialize(profile, suite_root)
@@ -170,7 +211,10 @@ def test_duration_mismatch_removes_partial_anonymous_view(tmp_path: Path) -> Non
     (profile.input_root / "private-chapter-02.mp4").write_bytes(b"second")
     suite_root = profile.artifact_root / "full"
     materializer = FullSuiteMaterializer(
-        media_probe=lambda _path: {"duration": Fraction(40)},
+        media_probe=lambda _path: {
+            "start": Fraction(0),
+            "duration": Fraction(40),
+        },
     )
 
     # Act / Assert

@@ -1,6 +1,7 @@
 """durable cold/warm target suite runnerのtest。"""
 
-from dataclasses import replace
+import hashlib
+from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
@@ -173,6 +174,69 @@ def test_reset_suite_discards_completed_state_and_runs_cold_again(
     assert first == 3
     assert second == 3
     assert calls == ["cold", "warm", "cold", "warm"]
+
+
+def test_state_preserves_privacy_safe_performance_configuration(
+    tmp_path: Path,
+) -> None:
+    """baseline元stateへ性能に影響する実効設定が保存されること。
+
+    Arrange:
+        - target acceptance用のprivate profileと設定が用意される
+    Act:
+        - release suiteのcold/warm phaseが完了する
+    Assert:
+        - 設定file digestとperformance設定がpathなしでstateへ保存されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda phase, configuration, _models, _suite_root: _successful_phase(
+            configuration,
+            phase,
+        )
+    )
+
+    # Act
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+
+    # Assert
+    state = read_json_object(
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "release"
+        / "acceptance-state.json"
+    )
+    assert state is not None
+    configuration = state["configuration"]
+    assert isinstance(configuration, dict)
+    safe_configuration_fields = {
+        item.name for item in fields(EffectiveConfiguration)
+    } - {
+        "video_input_folder",
+        "output_folder",
+        "scene_hint",
+        "ollama_host",
+        "provenance",
+    }
+    assert set(configuration) == safe_configuration_fields | {
+        "configuration_digest",
+        "scene_hint_identity",
+        "ollama_endpoint_identity",
+    }
+    expected_digest = hashlib.sha256(
+        (tmp_path / "video-selection.toml").read_bytes()
+    ).hexdigest()
+    assert configuration["configuration_digest"] == expected_digest
+    assert configuration["scene_catalog_num_ctx"] == 32768
+    assert configuration["candidate_annotation_num_ctx"] == 32768
+    assert configuration["max_frame_candidates"] == 3
+    assert configuration["ollama_max_parallel_requests"] == 1
+    assert configuration["speech_to_text_beam_size"] == 5
+    assert configuration["speech_chunk_seconds"] == 600.0
+    assert configuration["speech_overlap_seconds"] == 5.0
+    assert "ollama_host" not in configuration
 
 
 def test_finalization_rejects_review_with_truncated_candidate_set(
@@ -788,7 +852,7 @@ def _runner(
         model_resolver=model_resolver or model_runtime.resolve_models,
         phase_executor=phase_executor,
         release_materializer=materialize,
-        storage_preflight=lambda _profile: {
+        storage_preflight=lambda _profile, _input_folder: {
             "input_video_bytes": 9,
             "input_video_count": 1,
             "artifact_available_bytes": 200 * 1024**3,

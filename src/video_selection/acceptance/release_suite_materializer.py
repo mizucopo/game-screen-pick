@@ -9,6 +9,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import cast
 
+from ..services.discover_video_paths import discover_video_paths
 from .acceptance_profile import AcceptanceProfile
 from .atomic_json import read_json_object, write_atomic_json
 
@@ -154,6 +155,16 @@ class ReleaseSuiteMaterializer:
         clips = descriptor.get("clips")
         if not isinstance(clips, list) or len(clips) != len(profile.release_intervals):
             raise ValueError("Release suite clip manifestが不正です")
+        expected_names = tuple(
+            f"scenario-{index:03d}.mkv"
+            for index in range(1, len(profile.release_intervals) + 1)
+        )
+        actual_names = tuple(
+            path.relative_to(input_folder).as_posix()
+            for path in discover_video_paths(input_folder, recursive=True)
+        )
+        if actual_names != expected_names:
+            raise ValueError("Release suite匿名inputが変更されています")
         for index, item in enumerate(clips, start=1):
             if not isinstance(item, dict):
                 raise ValueError("Release suite clip manifestが不正です")

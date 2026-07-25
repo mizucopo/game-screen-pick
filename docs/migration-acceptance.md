@@ -151,7 +151,8 @@ ETAは次の全部を満たすときだけ表示する。
 TTY/line rendererは`stderr.isatty()`で自動選択し、line rendererはrelative path内の制御文字を
 escapeして1 event 1行を守る。外部処理は開始eventを直ちに発行し、完了まで30秒ごとにelapsed
 だけのheartbeatを発行する。同じCLI process内ではOllamaとSTTのGPU-heavy処理を共有coordinatorで
-直列化し、別process間のGPU排他は行わない。
+直列化し、Context Collection後はSTT modelをcloseしてからOllama推論へ進む。別process間の
+GPU排他は行わない。
 
 最外周の内部run controllerだけがStage例外を安全な`RunFailure`へ正規化し、terminal event、
 resume guidance、exit 1/2/130を決める。Ctrl+Cは`run_interrupted / user_interrupt / 130`とし、
@@ -238,7 +239,7 @@ target動画から代表scenarioを固定し、合計約30分のintervalとし�
 GPU-heavy Stageは重ねない。GPU recordはprocess baseline、model `size_vram`、system全体の
 peakを分ける。Ollama `/api/ps`のmodel `size`と`size_vram`も比較し、coldでmodelが観測され、
 全量がGPU residentである場合だけ自動gateを合格させる。停止timeout内にbackground GPU
-probeが終了しない場合もsampling incompleteとして不合格にする。
+probeまたはdisk samplerが終了しない場合もsampling incompleteとして不合格にする。
 
 既存prototypeの参考値は、#163の全scan約14時間見込み、heartbeat proxy約17 GB、#165の
 500 annotations約18〜20分見込み、#166の600秒STT 4.641秒/peak 5,196 MiB、#169の24-image

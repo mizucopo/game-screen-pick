@@ -1,5 +1,7 @@
 """requestから決定的な有効結果を生成するVisionRuntime fake。"""
 
+from collections.abc import Callable
+
 from src.video_selection.models.candidate_annotation import CandidateAnnotation
 from src.video_selection.models.candidate_annotation_request import (
     CandidateAnnotationRequest,
@@ -16,9 +18,14 @@ from src.video_selection.models.vision_inference_diagnostics import (
 class EchoStructuredVisionRuntime:
     """request先頭frameをordinary sceneとして注釈し呼び出しを記録する。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        on_create_scene_catalog: Callable[[], None] | None = None,
+    ) -> None:
         self.scene_catalog_calls: list[SceneCatalogRequest] = []
         self.candidate_annotation_calls: list[CandidateAnnotationRequest] = []
+        self._on_create_scene_catalog = on_create_scene_catalog
 
     def create_scene_catalog(
         self,
@@ -29,6 +36,8 @@ class EchoStructuredVisionRuntime:
     ) -> tuple[SceneCatalog, VisionInferenceDiagnostics]:
         """固定された有効Scene Catalogを返す。"""
         del num_ctx
+        if self._on_create_scene_catalog is not None:
+            self._on_create_scene_catalog()
         self.scene_catalog_calls.append(request)
         return (
             SceneCatalog(

@@ -53,12 +53,13 @@ uv run task acceptance-target \
 modelの更新確認、download、capability検証とResolved Model Identityのfreezeはcold timer
 より前に行う。一回の起動でclean cacheのcold、同じVideo Set・設定・model identity・
 processing cacheを使うexact warmの順に実行する。性能予算超過は処理を途中でkillせず、
-完了後のgate failureにする。
+完了後のgate failureにする。phase durationはatomic publicationまたはoperation failureで
+確定し、その後のresource monitor停止時間を含めない。
 
-新規suiteではmaterializeとmodel実行より前に、対応videoの合計byteとartifact filesystemの
-空き容量を測る。persistent cache 64 GiBとtemporary/staging 96 GiBの合計160 GiB未満なら
-長時間処理を開始せずpreflight failureにする。開始時の測定値はdurable stateと
-privacy-safe recordへ保存する。
+新規suiteではmaterialize後かつmodel実行より前に、materialize済みsuite inputの合計byteと
+artifact filesystemの空き容量を測る。persistent cache 64 GiBとtemporary/staging 96 GiBの
+合計160 GiB未満なら長時間処理を開始せずpreflight failureにする。開始時の測定値はdurable
+stateとprivacy-safe recordへ保存する。
 
 coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
@@ -72,12 +73,16 @@ scanのprocess登録とcancellation要求は同じlockで直列化し、cancel�
 bytesを元のVideo Fingerprint配下へ保存しない。
 candidate extractionのCPU時間は所有threadと、そのStageが起動したrange decoder・proxy
 encoder subprocessだけを合算し、並列中の後続Video Scanを二重計上しない。
+Context Collection完了後はSpeech Runtime Identityを保持してSTT modelを明示closeし、
+GPU資源を解放してからOllama Vision推論を開始する。
 
 release intervalは全streamをFFmpeg stream copyした`scenario-001.mkv`形式の匿名clipに
 変換する。source metadataとchapterは引き継がず、FFmpegのbitexact format flagを使うため、
 同じ入力、区間、tool identityから再生成したclipは同じwhole-file fingerprintになる。
 ffprobeの実測開始、終了、durationがprofileの許容差を超える場合はpipeline前にexit 2に
-なる。materialize時間はphase予算に含めない。
+なる。full suiteの各経過時間はffprobeのend timestampから非0 startを差し引く。
+確定済みrelease inputの再利用時はmanifest記載clipと対応videoの完全一致も検証する。
+materialize時間はphase予算に含めない。
 
 ## Durable resumeとreset
 
@@ -165,6 +170,8 @@ uv run task acceptance-target \
 実Faster Whisper adapter/backendのSpeech Runtime Identity、path非依存Video Set fingerprint、
 phase/cache/storage/GPU aggregate、gate aggregateだけを含める。canonical reportの各Stageも
 実semantic inputと推論診断からtool/model/contract参照、設定、validation、token数を記録する。
+performance比較用configurationには設定file digest、URLを含まないendpoint identity、
+privacy-safeな全実効performance設定を保存する。
 absolute path、video名、media、raw Context Cue、prompt、model response、credential、個別human
 判定は含めない。
 

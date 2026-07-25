@@ -54,7 +54,7 @@ SuiteMaterializer = Callable[
     [AcceptanceProfile, Path],
     tuple[Path, dict[str, object]],
 ]
-StoragePreflight = Callable[[AcceptanceProfile], dict[str, object]]
+StoragePreflight = Callable[[AcceptanceProfile, Path], dict[str, object]]
 
 _STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.0.0"
 
@@ -103,11 +103,6 @@ class TargetSuiteRunner:
             shutil.rmtree(suite_root, ignore_errors=True)
         state_path = suite_root / "acceptance-state.json"
         state = read_json_object(state_path)
-        storage_preflight = (
-            self._storage_preflight(profile)
-            if state is None
-            else _mapping(state.get("storage_preflight"), "storage_preflight")
-        )
         configuration_digest = _content_digest(profile.configuration_path)
         commit, dirty = self._revision_probe(Path.cwd())
         if dirty:
@@ -120,6 +115,11 @@ class TargetSuiteRunner:
             profile,
             suite,
             suite_root,
+        )
+        storage_preflight = (
+            self._storage_preflight(profile, input_folder)
+            if state is None
+            else _mapping(state.get("storage_preflight"), "storage_preflight")
         )
         cold_configuration = _configuration(
             profile,
@@ -156,7 +156,10 @@ class TargetSuiteRunner:
                 **identity,
                 "source_revision": {"commit": commit, "dirty": False},
                 "target": target,
-                "configuration": _configuration_summary(cold_configuration),
+                "configuration": _configuration_summary(
+                    cold_configuration,
+                    configuration_digest=configuration_digest,
+                ),
                 "models": resolved_models.provenance(),
                 "storage_preflight": storage_preflight,
                 "phases": {},
@@ -381,19 +384,46 @@ def _configuration(
 
 def _configuration_summary(
     configuration: EffectiveConfiguration,
+    *,
+    configuration_digest: str,
 ) -> dict[str, object]:
     return {
+        "configuration_digest": configuration_digest,
         "config_version": configuration.config_version,
         "recursive": configuration.recursive,
         "image_count": configuration.image_count,
+        "scene_hint_identity": _optional_text_identity(
+            "scene-hint",
+            configuration.scene_hint,
+        ),
         "spoiler_sensitivity": configuration.spoiler_sensitivity,
         "similarity_threshold": configuration.similarity_threshold,
+        "heartbeat_interval_seconds": configuration.heartbeat_interval_seconds,
+        "scene_change_threshold": configuration.scene_change_threshold,
+        "scene_min_interval_seconds": configuration.scene_min_interval_seconds,
         "decode_backend": configuration.decode_backend,
-        "candidate_density_per_minute": (configuration.candidate_density_per_minute),
+        "refinement_radius_seconds": configuration.refinement_radius_seconds,
+        "max_frame_candidates": configuration.max_frame_candidates,
+        "candidate_density_per_minute": configuration.candidate_density_per_minute,
         "language": configuration.language,
+        "subtitle_stream_index": configuration.subtitle_stream_index,
+        "audio_stream_index": configuration.audio_stream_index,
+        "ollama_timeout_seconds": configuration.ollama_timeout_seconds,
+        "ollama_max_parallel_requests": configuration.ollama_max_parallel_requests,
         "models_auto_upgrade": configuration.models_auto_upgrade,
+        "scene_catalog_model": configuration.scene_catalog_model,
+        "scene_catalog_num_ctx": configuration.scene_catalog_num_ctx,
+        "candidate_annotation_model": configuration.candidate_annotation_model,
+        "candidate_annotation_num_ctx": configuration.candidate_annotation_num_ctx,
+        "speech_to_text_model": configuration.speech_to_text_model,
         "speech_to_text_device": configuration.speech_to_text_device,
         "speech_to_text_compute_type": configuration.speech_to_text_compute_type,
+        "speech_to_text_beam_size": configuration.speech_to_text_beam_size,
+        "speech_vad_filter": configuration.speech_vad_filter,
+        "speech_chunk_seconds": configuration.speech_chunk_seconds,
+        "speech_overlap_seconds": configuration.speech_overlap_seconds,
+        "reset_cache": configuration.reset_cache,
+        "debug": configuration.debug,
         "ollama_endpoint_identity": _ollama_endpoint_identity(
             configuration.ollama_host
         ),
@@ -519,6 +549,13 @@ def _content_digest(path: Path) -> str:
 def _ollama_endpoint_identity(host: str) -> str:
     normalized = host.rstrip("/")
     payload = f"game-screen-pick/ollama-endpoint@1\0{normalized}".encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _optional_text_identity(label: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    payload = f"game-screen-pick/{label}@1\0{value}".encode()
     return hashlib.sha256(payload).hexdigest()
 
 

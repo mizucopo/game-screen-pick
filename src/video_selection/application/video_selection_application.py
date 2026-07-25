@@ -25,7 +25,6 @@ from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 from ..protocols.model_runtime import ModelRuntime
 from ..protocols.run_observer import RunObserver
 from ..protocols.selection_media_runtime import SelectionMediaRuntime
-from ..protocols.speech_runtime import SpeechRuntime
 from ..protocols.speech_runtime_factory import SpeechRuntimeFactory
 from ..protocols.vision_runtime import VisionRuntime
 from ..services.build_blog_candidates import build_blog_candidates
@@ -107,18 +106,22 @@ class VideoSelectionApplication:
                 resolved_models.for_role(ModelRole.SPEECH_TO_TEXT),
                 configuration,
             )
-            video_stage_results = VideoStageProcessor(
-                self._media_runtime,
-                speech_runtime,
-                self._observer,
-                progress=self._progress,
-            ).process(video_set, configuration)
+            try:
+                video_stage_results = VideoStageProcessor(
+                    self._media_runtime,
+                    speech_runtime,
+                    self._observer,
+                    progress=self._progress,
+                ).process(video_set, configuration)
+                speech_runtime_identity = speech_runtime.runtime_identity
+            finally:
+                speech_runtime.close()
             return self._select_and_publish(
                 configuration,
                 video_set,
                 video_stage_results,
                 resolved_models,
-                speech_runtime,
+                speech_runtime_identity,
                 started_at,
             )
 
@@ -128,7 +131,7 @@ class VideoSelectionApplication:
         video_set: VideoSet,
         video_stage_results: tuple[VideoStageResult, ...],
         resolved_models: ResolvedModels,
-        speech_runtime: SpeechRuntime,
+        speech_runtime_identity: str,
         started_at: datetime,
     ) -> RunOutcome:
         """shortlistを必要分だけ注釈し選定結果をcanonicalに公開する。"""
@@ -236,7 +239,7 @@ class VideoSelectionApplication:
             selection,
             completed_stages,
             vision_diagnostics,
-            speech_runtime,
+            speech_runtime_identity,
             started_at,
         )
 
@@ -334,7 +337,7 @@ class VideoSelectionApplication:
         selection: VideoSetSelectionResult,
         completed_stages: tuple[CompletedStage, ...],
         vision_diagnostics: Mapping[str, VisionInferenceDiagnostics],
-        speech_runtime: SpeechRuntime,
+        speech_runtime_identity: str,
         started_at: datetime,
     ) -> RunOutcome:
         """Canonical Publication Requestを構築してOutput Folderへ公開する。"""
@@ -370,7 +373,7 @@ class VideoSelectionApplication:
                 self._progress.completed_stage_events,
                 configuration,
                 vision_diagnostics,
-                speech_runtime,
+                speech_runtime_identity,
             ),
         )
         CanonicalOutputPublisher(

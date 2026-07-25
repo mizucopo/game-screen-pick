@@ -255,6 +255,57 @@ def test_runtime_identity_changes_with_gpu_runtime_capability(
     assert first.runtime_identity != second.runtime_identity
 
 
+def test_close_unloads_backend_model_and_rejects_later_transcription() -> None:
+    """closeでCTranslate2 modelがunloadされ以降の認識が拒否されること。
+
+    Arrange:
+        - unload呼出しを記録するbackendを持つfaster-whisper modelが用意される
+    Act:
+        - Speech Runtimeがcloseされた後にtranscriptionが要求される
+    Assert:
+        - backend modelが一度unloadされること
+        - close後のtranscriptionが拒否されること
+    """
+    # Arrange
+    unload_calls: list[str] = []
+    model = FakeFasterWhisperModel(
+        (),
+        SimpleNamespace(language="ja", duration_after_vad=0.0),
+        backend=SimpleNamespace(
+            unload_model=lambda: unload_calls.append("unloaded"),
+        ),
+    )
+    runtime = FasterWhisperSpeechRuntime(
+        model,
+        runtime_identity="speech-runtime:test",
+        resolved_model_identity="hf:" + "a" * 40,
+    )
+    pcm = PcmAudioChunk(
+        stream_index=1,
+        sample_start=0,
+        sample_count=1,
+        sample_rate=16000,
+        channel_count=1,
+        sample_format="s16le",
+        pts=0,
+        time_base=Fraction(1, 16000),
+        pcm_bytes=b"\x00\x00",
+    )
+
+    # Act
+    runtime.close()
+
+    # Assert
+    assert unload_calls == ["unloaded"]
+    with pytest.raises(RuntimeError, match="close"):
+        runtime.transcribe(
+            pcm,
+            language="ja",
+            vad_filter=True,
+            beam_size=5,
+        )
+
+
 def test_transcription_waits_for_shared_gpu_lease() -> None:
     """STTが共有GPU leaseを取得してからmodelを実行すること。
 

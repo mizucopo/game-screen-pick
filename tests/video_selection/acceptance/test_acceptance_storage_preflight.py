@@ -30,6 +30,7 @@ def test_input_size_and_available_capacity_are_recorded(tmp_path: Path) -> None:
     # Act
     result = preflight_acceptance_storage(
         profile,
+        profile.input_root,
         disk_usage_probe=lambda _path: (available * 2, 0, available),
     )
 
@@ -60,8 +61,40 @@ def test_insufficient_capacity_is_rejected_before_execution(tmp_path: Path) -> N
     with pytest.raises(ValueError, match="容量が不足"):
         preflight_acceptance_storage(
             profile,
+            profile.input_root,
             disk_usage_probe=lambda _path: (available * 2, 0, available),
         )
+
+
+def test_materialized_release_input_is_measured_instead_of_full_root(
+    tmp_path: Path,
+) -> None:
+    """release preflightがfull input rootではなくmaterialize済みclipを測ること。
+
+    Arrange:
+        - 2本30 byteのfull rootと1本7 byteのrelease inputが用意される
+    Act:
+        - release inputを対象にstorage preflightが実行される
+    Assert:
+        - release clipだけの件数とbyteが記録されること
+    """
+    # Arrange
+    profile = _profile(tmp_path, (b"a" * 10, b"b" * 20))
+    release_input = tmp_path / "release-input"
+    release_input.mkdir()
+    (release_input / "scenario-001.mkv").write_bytes(b"release")
+    available = REQUIRED_ARTIFACT_CAPACITY_BYTES + 1
+
+    # Act
+    result = preflight_acceptance_storage(
+        profile,
+        release_input,
+        disk_usage_probe=lambda _path: (available * 2, 0, available),
+    )
+
+    # Assert
+    assert result["input_video_count"] == 1
+    assert result["input_video_bytes"] == 7
 
 
 def _profile(tmp_path: Path, videos: tuple[bytes, ...]) -> AcceptanceProfile:

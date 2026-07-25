@@ -26,3 +26,6 @@ class SpeechRuntime(Protocol):
         beam_size: int,
     ) -> SpeechRecognitionResult:
         """chunk内のinteger sample位置付き認識結果を返す。"""
+
+    def close(self) -> None:
+        """model資源を解放し、以降の認識を禁止する。"""

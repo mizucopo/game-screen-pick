@@ -203,6 +203,60 @@ def test_report_timestamps_cover_the_pipeline_lifecycle(tmp_path: Path) -> None:
     assert clock_call_count == 2
 
 
+def test_speech_runtime_is_closed_before_vision_inference(tmp_path: Path) -> None:
+    """STT model資源がVision推論開始前に解放されること。
+
+    Arrange:
+        - close状態を記録するSpeech RuntimeとVision callbackが用意される
+    Act:
+        - Video Selection Applicationが実行される
+    Assert:
+        - 最初のScene Catalog推論時にSpeech Runtimeがclose済みであること
+        - close前に取得したSpeech Runtime Identityがreportへ保持されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter.mkv").write_bytes(b"video-content")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+        image_count=1,
+    )
+    speech_runtime = FakeSpeechRuntime(runtime_identity="speech-runtime-before-close")
+    close_states_at_vision: list[bool] = []
+    vision = EchoStructuredVisionRuntime(
+        on_create_scene_catalog=lambda: close_states_at_vision.append(
+            speech_runtime.closed
+        )
+    )
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer)
+    progress.start_run()
+    application = VideoSelectionApplication(
+        media_runtime=FakeVideoStageMediaRuntime(),
+        model_runtime=FakeModelRuntime("application-test"),
+        speech_runtime_factory=lambda _model, _configuration: speech_runtime,
+        vision_runtime=vision,
+        observer=observer,
+        progress=progress,
+    )
+
+    # Act
+    outcome = application.run(configuration)
+
+    # Assert
+    report = json.loads(
+        (outcome.output_folder / "report.json").read_text(encoding="utf-8")
+    )
+    assert close_states_at_vision == [True]
+    assert speech_runtime.close_call_count == 1
+    assert (
+        report["provenance"]["runtime"]["speech_runtime_identity"]
+        == "speech-runtime-before-close"
+    )
+
+
 def test_no_valid_candidate_skips_vision_and_publishes_zero_shortfall(
     tmp_path: Path,
 ) -> None:

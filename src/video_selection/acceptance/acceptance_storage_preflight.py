@@ -18,11 +18,12 @@ REQUIRED_ARTIFACT_CAPACITY_BYTES = (
 
 def preflight_acceptance_storage(
     profile: AcceptanceProfile,
+    input_folder: Path,
     *,
     disk_usage_probe: DiskUsageProbe = shutil.disk_usage,
 ) -> dict[str, object]:
-    """input規模とartifact空き容量を測りbudget未満なら開始を拒否する。"""
-    video_paths = discover_video_paths(profile.input_root, recursive=True)
+    """materialize済みsuite規模とartifact空き容量を測り不足なら拒否する。"""
+    video_paths = discover_video_paths(input_folder, recursive=True)
     input_video_bytes = sum(path.stat().st_size for path in video_paths)
     _total, _used, available = disk_usage_probe(profile.artifact_root)
     if available < REQUIRED_ARTIFACT_CAPACITY_BYTES:

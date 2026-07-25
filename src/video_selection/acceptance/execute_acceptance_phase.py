@@ -66,14 +66,19 @@ def execute_acceptance_phase(
             lambda: application.run(configuration)
         )
     finally:
+        phase_completed_at = time.monotonic()
         disk_metrics = disk_monitor.stop()
         gpu_metrics = gpu_monitor.stop()
-    duration_seconds = time.monotonic() - started_at
+    duration_seconds = phase_completed_at - started_at
     phase_record: dict[str, object] = {
         "duration_seconds": duration_seconds,
         **observer.phase_metrics(),
         **disk_metrics,
         **gpu_metrics,
+        "resource_sampling_complete": (
+            disk_metrics.get("disk_sampling_complete") is True
+            and gpu_metrics.get("resource_sampling_complete") is True
+        ),
     }
     if exit_code != 0:
         if not isinstance(result, RunFailure):

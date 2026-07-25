@@ -25,6 +25,8 @@ class FakeSpeechRuntime:
         self._error_message = error_message
         self.transcribe_calls: list[PcmAudioChunk] = []
         self.transcribe_options: list[tuple[str, bool, int]] = []
+        self.close_call_count = 0
+        self.closed = False
 
     @property
     def runtime_identity(self) -> str:
@@ -45,6 +47,8 @@ class FakeSpeechRuntime:
         beam_size: int,
     ) -> SpeechRecognitionResult:
         """呼び出しを記録して対応する固定結果を返す。"""
+        if self.closed:
+            raise RuntimeError("fake speech runtime is closed")
         call_index = len(self.transcribe_calls)
         self.transcribe_calls.append(chunk)
         self.transcribe_options.append((language, vad_filter, beam_size))
@@ -53,3 +57,8 @@ class FakeSpeechRuntime:
         if call_index < len(self._results):
             return self._results[call_index]
         return SpeechRecognitionResult(vad_speech_detected=False, segments=())
+
+    def close(self) -> None:
+        """model資源解放を記録する。"""
+        self.close_call_count += 1
+        self.closed = True

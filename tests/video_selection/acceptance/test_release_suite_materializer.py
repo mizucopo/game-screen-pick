@@ -193,6 +193,45 @@ def test_completed_materialization_is_reused_without_ffmpeg(tmp_path: Path) -> N
     assert second == first
 
 
+def test_stray_supported_clip_requires_reset(tmp_path: Path) -> None:
+    """manifest外の対応videoがrelease inputにあるとresumeが拒否されること。
+
+    Arrange:
+        - 確定済みrelease inputへ余分なscenario videoが追加される
+    Act:
+        - 同じprofileでresume materializeが試行される
+    Assert:
+        - manifestの完全一致違反としてresetが必要になること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    profile.input_root.mkdir()
+    source = profile.input_root / "private-video.mkv"
+    source.write_bytes(b"source")
+
+    def run(command: list[str]) -> None:
+        Path(command[-1]).write_bytes(b"clip")
+
+    def probe(path: Path) -> dict[str, object]:
+        return {
+            "start": Fraction(0 if path == source else 8),
+            "duration": Fraction(100 if path == source else 1810),
+            "streams": (("video", "h264"),),
+        }
+
+    materializer = ReleaseSuiteMaterializer(
+        command_runner=run,
+        media_probe=probe,
+    )
+    suite_root = profile.artifact_root / "release"
+    input_folder, _ = materializer.materialize(profile, suite_root)
+    (input_folder / "scenario-999.mkv").write_bytes(b"stray")
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="匿名input"):
+        materializer.materialize(profile, suite_root)
+
+
 def _profile(tmp_path: Path) -> AcceptanceProfile:
     """一つの30分intervalを持つprofileを返す。"""
     return AcceptanceProfile(

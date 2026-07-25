@@ -10,7 +10,6 @@ from ..models.progress_event import ProgressEvent
 from ..models.report_provenance import ReportProvenance
 from ..models.report_stage_provenance import ReportStageProvenance
 from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
-from ..protocols.speech_runtime import SpeechRuntime
 
 
 def build_report_provenance(
@@ -18,7 +17,7 @@ def build_report_provenance(
     completed_stage_events: tuple[ProgressEvent, ...],
     configuration: EffectiveConfiguration,
     vision_diagnostics: Mapping[str, VisionInferenceDiagnostics],
-    speech_runtime: SpeechRuntime,
+    speech_runtime_identity: str,
 ) -> ReportProvenance:
     """実semantic inputと診断をprivacy-safeなStage provenanceへ変換する。"""
     events_by_fingerprint: dict[str, list[ProgressEvent]] = {}
@@ -74,9 +73,9 @@ def build_report_provenance(
     return ReportProvenance(
         runtime={
             "application": "video_selection",
-            "speech_runtime_identity": speech_runtime.runtime_identity,
+            "speech_runtime_identity": speech_runtime_identity,
         },
-        tools=_report_tools(completed_stages, speech_runtime),
+        tools=_report_tools(completed_stages, speech_runtime_identity),
         contracts=_report_contracts(completed_stages),
         stages=tuple(stages),
     )
@@ -84,7 +83,7 @@ def build_report_provenance(
 
 def _report_tools(
     completed_stages: tuple[CompletedStage, ...],
-    speech_runtime: SpeechRuntime,
+    speech_runtime_identity: str,
 ) -> dict[str, str]:
     """Completed Stage semantic inputから実tool identity registryを返す。"""
     media_identities: set[str] = set()
@@ -100,7 +99,7 @@ def _report_tools(
                 ollama_identities.add(runtime_identity)
     tools = {
         "video_selection": "application-v1",
-        "speech_to_text": speech_runtime.runtime_identity,
+        "speech_to_text": speech_runtime_identity,
     }
     if media_identities:
         tools["ffmpeg"] = _single_identity(media_identities, "FFmpeg")

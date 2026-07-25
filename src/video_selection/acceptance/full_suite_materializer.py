@@ -56,7 +56,7 @@ class FullSuiteMaterializer:
                 name = f"scenario-{index:03d}{source.suffix.casefold()}"
                 (input_folder / name).symlink_to(source.resolve(strict=True))
                 anonymous_names.append(name)
-                durations.append(_probe_duration(self._media_probe(source)))
+                durations.append(_probe_elapsed_duration(self._media_probe(source)))
             total_duration = sum(durations, start=Fraction(0))
             if (
                 abs(total_duration - profile.full_expected_total_duration)
@@ -145,11 +145,16 @@ def _source_snapshot_fingerprint(sources: tuple[Path, ...]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-def _probe_duration(value: Mapping[str, object]) -> Fraction:
+def _probe_elapsed_duration(value: Mapping[str, object]) -> Fraction:
+    start = value.get("start")
     duration = value.get("duration")
-    if not isinstance(duration, Fraction) or duration <= 0:
+    if (
+        not isinstance(start, Fraction)
+        or not isinstance(duration, Fraction)
+        or duration <= start
+    ):
         raise ValueError("Full suite media durationが不正です")
-    return duration
+    return duration - start
 
 
 def _fraction_record(value: Fraction) -> dict[str, int]:
