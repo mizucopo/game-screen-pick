@@ -33,6 +33,11 @@ from ..vision.detect_cinematic_letterbox import (
 )
 from ..vision.vision_contract import (
     CANDIDATE_ANNOTATION_PROMPT_VERSION,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_EVIDENCE_MAX_LENGTH,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_NUM_PREDICT,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_SCHEMA_VERSION,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_STAGE_CONTRACT_VERSION,
     CANDIDATE_ANNOTATION_SCHEMA_VERSION,
     CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
     COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION,
@@ -459,6 +464,21 @@ def _annotation_semantic_input(
         "prompt_version": CANDIDATE_ANNOTATION_PROMPT_VERSION,
         "schema_version": CANDIDATE_ANNOTATION_SCHEMA_VERSION,
         "stage_contract_version": CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+        "candidate_annotation_relationship_repair_prompt_version": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION
+        ),
+        "candidate_annotation_relationship_repair_schema_version": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_SCHEMA_VERSION
+        ),
+        "candidate_annotation_relationship_repair_stage_contract_version": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_STAGE_CONTRACT_VERSION
+        ),
+        "candidate_annotation_relationship_repair_num_predict": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_NUM_PREDICT
+        ),
+        "candidate_annotation_relationship_repair_evidence_max_length": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_EVIDENCE_MAX_LENGTH
+        ),
         "combat_encounter_verification_prompt_version": (
             COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION
         ),

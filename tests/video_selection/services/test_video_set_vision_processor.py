@@ -112,6 +112,17 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     assert '"combat_visibility_edge_audit_prompt_version"' in cache_text
     assert '"combat_visibility_edge_strip_version"' in cache_text
     assert '"cinematic_letterbox_detection_version"' in cache_text
+    assert '"candidate_annotation_relationship_repair_prompt_version"' in cache_text
+    assert '"candidate_annotation_relationship_repair_schema_version"' in cache_text
+    assert (
+        '"candidate_annotation_relationship_repair_stage_contract_version"'
+        in cache_text
+    )
+    assert '"candidate_annotation_relationship_repair_num_predict": 1024' in cache_text
+    assert (
+        '"candidate_annotation_relationship_repair_evidence_max_length": 160'
+        in cache_text
+    )
 
 
 def test_batch_boundary_rejects_metadata_change_after_annotation(

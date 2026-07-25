@@ -2605,6 +2605,17 @@ def test_relationship_repair_is_followed_by_combat_visibility_check() -> None:
     ) -> object:
         assert payload is not None
         payloads.append(payload)
+        if len(payloads) == 2:
+            return _response(
+                {
+                    "frame_observations": [
+                        {
+                            "frame_id": "frame-a",
+                            "spoiler_evidence": "画面内に軽微な進行情報が見える",
+                        }
+                    ]
+                }
+            )
         if len(payloads) == 3:
             return _response(
                 {
@@ -2622,9 +2633,7 @@ def test_relationship_repair_is_followed_by_combat_visibility_check() -> None:
         )
         observation = _first_frame_observation(response)
         observation["spoiler_risk"] = "low"
-        observation["spoiler_evidence"] = (
-            "" if len(payloads) == 1 else "画面内に軽微な進行情報が見える"
-        )
+        observation["spoiler_evidence"] = ""
         return _response(response)
 
     runtime = OllamaVisionRuntime(
@@ -2649,7 +2658,7 @@ def test_relationship_repair_is_followed_by_combat_visibility_check() -> None:
     assert diagnostics.validation_code == "candidate_annotation_relationship_invalid"
     second_prompt = _last_message(payloads[1])["content"]
     assert isinstance(second_prompt, str)
-    assert "関係を必ず修正します" in second_prompt
+    assert "spoiler_riskを変更しません" in second_prompt
     third_prompt = _last_message(payloads[2])["content"]
     assert isinstance(third_prompt, str)
     assert "この画像1枚に実際に見える画素だけ" in third_prompt
@@ -2940,25 +2949,18 @@ def test_publication_boundary_schema_failure_is_retried() -> None:
 
 
 def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> None:
-    """Cueなし応答の関係違反が明示契約と個別codeで修復されること。
+    """Spoiler関係違反が分類を凍結した小さいrepair契約で修復されること。
 
     Arrange:
-        - Cueなし入力と、初回だけrelevanceとspoiler関係が不正な応答が用意される
+        - Cueあり入力と、none relevance・low risk・空evidenceの応答が用意される
+        - 2回目は不足したSpoiler Evidenceだけを返す応答が用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 条件付き契約と個別validation codeを受けた再試行が成功すること
+        - Cue本文を再送せず、riskを変えない部分repairが統合されること
     """
     # Arrange
     request = _annotation_request()
-    request_without_context = CandidateAnnotationRequest(
-        moment=request.moment,
-        frame_candidates=request.frame_candidates,
-        context_cues=(),
-        video_set_progress=request.video_set_progress,
-        selection_intent=request.selection_intent,
-        cue_selection_policy_version=request.cue_selection_policy_version,
-    )
     payloads: list[Mapping[str, object]] = []
 
     def requester(
@@ -2969,12 +2971,23 @@ def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> 
     ) -> object:
         assert payload is not None
         payloads.append(payload)
+        if len(payloads) == 2:
+            return _response(
+                {
+                    "frame_observations": [
+                        {
+                            "frame_id": "frame-a",
+                            "spoiler_evidence": "画面内に軽微な進行情報が見える",
+                        }
+                    ]
+                }
+            )
         response = _annotation_payload()
-        response["context_relevance"] = "unavailable"
+        response["context_relevance"] = "none"
         response["supporting_context_cue_ids"] = []
         observation = _first_frame_observation(response)
-        observation["spoiler_risk"] = "none"
-        observation["spoiler_evidence"] = "画面由来の根拠" if len(payloads) == 1 else ""
+        observation["spoiler_risk"] = "low"
+        observation["spoiler_evidence"] = ""
         return _response(response)
 
     runtime = OllamaVisionRuntime(
@@ -2987,25 +3000,646 @@ def test_candidate_relationship_failure_is_repaired_with_explicit_contract() -> 
 
     # Act
     annotation, diagnostics = runtime.annotate_candidate(
-        request_without_context,
+        request,
         _catalog(),
         _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
         num_ctx=32768,
     )
 
     # Assert
-    assert annotation.context_relevance == "unavailable"
+    assert annotation.context_relevance == "none"
+    assert annotation.spoiler_risk == "low"
+    assert annotation.spoiler_evidence == "画面内に軽微な進行情報が見える"
     assert diagnostics.attempt_count == 2
     assert diagnostics.validation_code == "candidate_annotation_relationship_invalid"
     first_prompt = _last_message(payloads[0])["content"]
     second_prompt = _last_message(payloads[1])["content"]
     assert isinstance(first_prompt, str)
     assert isinstance(second_prompt, str)
-    assert "context_cuesが空ならcontext_relevanceはunavailable" in first_prompt
+    assert "正体を明かす台詞" in first_prompt
+    assert "正体を明かす台詞" not in second_prompt
     assert "spoiler_riskがnoneならspoiler_evidenceは空文字列" in first_prompt
     assert "candidate_annotation_relationship_invalid" in second_prompt
-    assert "関係を必ず修正します" in second_prompt
-    assert "low・medium・highならspoiler_evidenceは" in second_prompt
+    assert "spoiler_riskを変更しません" in second_prompt
+    assert '"scene_slug"' not in second_prompt
+    second_options = payloads[1]["options"]
+    assert isinstance(second_options, dict)
+    assert second_options["num_predict"] == 1024
+    second_schema = payloads[1]["format"]
+    assert isinstance(second_schema, dict)
+    assert second_schema["required"] == ["frame_observations"]
+    schema_text = json.dumps(second_schema, ensure_ascii=False)
+    assert "spoiler_risk" not in schema_text
+    evidence_schema = second_schema["properties"]["frame_observations"]["items"][
+        "properties"
+    ]["spoiler_evidence"]
+    assert evidence_schema == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+    }
+
+
+def test_candidate_context_relationship_repairs_only_supporting_cue_ids() -> None:
+    """Context Cue関係違反で凍結済みrelevanceの従属IDだけが修復されること。
+
+    Arrange:
+        - strong relevanceに空のsupporting Cue IDを返す初回応答が用意される
+        - 2回目は入力Cue IDだけを返す部分repair応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - relevanceとSpoiler分類を変えず、Cue IDだけが統合されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 2:
+            return _response({"supporting_context_cue_ids": ["cue-a"]})
+        response = _annotation_payload()
+        response["context_relevance"] = "strong"
+        response["supporting_context_cue_ids"] = []
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.context_relevance == "strong"
+    assert annotation.supporting_context_cue_ids == ("cue-a",)
+    assert annotation.spoiler_risk == "high"
+    assert annotation.spoiler_evidence == "最終ボスの正体が画面で明示される"
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "candidate_annotation_relationship_invalid"
+    second_schema = payloads[1]["format"]
+    assert isinstance(second_schema, dict)
+    assert second_schema["required"] == ["supporting_context_cue_ids"]
+    schema_text = json.dumps(second_schema, ensure_ascii=False)
+    assert "context_relevance" not in schema_text
+    assert "spoiler_risk" not in schema_text
+    cue_schema = second_schema["properties"]["supporting_context_cue_ids"]
+    assert cue_schema["minItems"] == 1
+    assert cue_schema["items"]["enum"] == ["cue-a"]
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "context_relevanceを変更しません" in second_prompt
+    assert "正体を明かす台詞" in second_prompt
+
+
+def test_candidate_multiple_relationships_share_one_repair_attempt() -> None:
+    """Cue IDとSpoiler Evidenceの違反が同じ1回のrepairで修復されること。
+
+    Arrange:
+        - strong relevanceのCue IDとlow riskのevidenceが空の応答が用意される
+        - 両方の従属fieldだけを返すrepair応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 分類を凍結したまま両方が統合され、追加retryされないこと
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 2:
+            return _response(
+                {
+                    "supporting_context_cue_ids": ["cue-a"],
+                    "frame_observations": [
+                        {
+                            "frame_id": "frame-a",
+                            "spoiler_evidence": "画面内に軽微な進行情報が見える",
+                        }
+                    ],
+                }
+            )
+        response = _annotation_payload()
+        response["context_relevance"] = "strong"
+        response["supporting_context_cue_ids"] = []
+        observation = _first_frame_observation(response)
+        observation["spoiler_risk"] = "low"
+        observation["spoiler_evidence"] = ""
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.context_relevance == "strong"
+    assert annotation.supporting_context_cue_ids == ("cue-a",)
+    assert annotation.spoiler_risk == "low"
+    assert annotation.spoiler_evidence == "画面内に軽微な進行情報が見える"
+    assert diagnostics.attempt_count == 2
+    assert len(payloads) == 2
+    second_schema = payloads[1]["format"]
+    assert isinstance(second_schema, dict)
+    assert second_schema["required"] == [
+        "supporting_context_cue_ids",
+        "frame_observations",
+    ]
+
+
+def test_candidate_none_spoiler_risk_repairs_evidence_to_empty() -> None:
+    """none riskに付いたevidenceがriskを変えず空文字列へ修復されること。
+
+    Arrange:
+        - none riskに非空evidenceを返す初回応答が用意される
+        - evidenceだけを空文字列で返すrepair応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - none分類を維持し、従属evidenceだけが空へ統合されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 2:
+            return _response(
+                {
+                    "frame_observations": [
+                        {"frame_id": "frame-a", "spoiler_evidence": ""}
+                    ]
+                }
+            )
+        response = _annotation_payload()
+        observation = _first_frame_observation(response)
+        observation["spoiler_risk"] = "none"
+        observation["spoiler_evidence"] = "分類と矛盾する根拠"
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.spoiler_risk == "none"
+    assert annotation.spoiler_evidence == ""
+    assert diagnostics.attempt_count == 2
+    second_schema = payloads[1]["format"]
+    assert isinstance(second_schema, dict)
+    evidence_schema = second_schema["properties"]["frame_observations"]["items"][
+        "properties"
+    ]["spoiler_evidence"]
+    assert evidence_schema["maxLength"] == 0
+
+
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_reason", "expected_code"),
+    (
+        (
+            "truncated",
+            VisionRuntimeFailureReason.RESPONSE_INVALID,
+            "candidate_annotation_relationship_repair_response_truncated",
+        ),
+        (
+            "schema",
+            VisionRuntimeFailureReason.SCHEMA_INVALID,
+            "candidate_annotation_relationship_repair_schema_invalid",
+        ),
+        (
+            "empty",
+            VisionRuntimeFailureReason.SCHEMA_INVALID,
+            "candidate_annotation_relationship_repair_schema_invalid",
+        ),
+        (
+            "domain",
+            VisionRuntimeFailureReason.DOMAIN_INVALID,
+            "candidate_annotation_relationship_repair_domain_invalid",
+        ),
+    ),
+)
+def test_candidate_relationship_repair_failure_is_fatal(
+    failure_kind: str,
+    expected_reason: VisionRuntimeFailureReason,
+    expected_code: str,
+) -> None:
+    """部分repairの打ち切り・空・Schema・domain違反がfatalになること。
+
+    Arrange:
+        - low riskに空evidenceを持つ初回応答が用意される
+        - 指定された種類で失敗する部分repair応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 専用codeとattempt 2でfatalになり、3回目が実行されないこと
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 2:
+            if failure_kind == "truncated":
+                response = _response({"frame_observations": []})
+                response["done_reason"] = "length"
+                return response
+            if failure_kind == "schema":
+                return _response({"unexpected": []})
+            if failure_kind == "empty":
+                response = _response({})
+                message = response["message"]
+                assert isinstance(message, dict)
+                message["content"] = ""
+                return response
+            return _response(
+                {
+                    "frame_observations": [
+                        {"frame_id": "frame-a", "spoiler_evidence": ""}
+                    ]
+                }
+            )
+        response = _annotation_payload()
+        observation = _first_frame_observation(response)
+        observation["spoiler_risk"] = "low"
+        observation["spoiler_evidence"] = ""
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.annotate_candidate(
+            _annotation_request(),
+            _catalog(),
+            _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+            num_ctx=32768,
+        )
+    assert captured.value.reason is expected_reason
+    assert captured.value.validation_code == expected_code
+    assert captured.value.attempt_count == 2
+    assert len(payloads) == 2
+
+
+@pytest.mark.parametrize(
+    "repair_observations",
+    (
+        ({"frame_id": "frame-a", "spoiler_evidence": "軽微な進行情報"},),
+        (
+            {"frame_id": "frame-a", "spoiler_evidence": "軽微な進行情報"},
+            {"frame_id": "frame-a", "spoiler_evidence": "別の進行情報"},
+        ),
+        (
+            {"frame_id": "frame-a", "spoiler_evidence": "軽微な進行情報"},
+            {"frame_id": "frame-x", "spoiler_evidence": "別の進行情報"},
+        ),
+        (
+            {"frame_id": "frame-b", "spoiler_evidence": "別の進行情報"},
+            {"frame_id": "frame-a", "spoiler_evidence": "軽微な進行情報"},
+        ),
+        (
+            {"frame_id": "frame-a", "spoiler_evidence": "あ" * 161},
+            {"frame_id": "frame-b", "spoiler_evidence": "別の進行情報"},
+        ),
+    ),
+    ids=("missing", "duplicate", "unknown", "reordered", "too-long"),
+)
+def test_candidate_relationship_repair_rejects_invalid_frame_projection(
+    repair_observations: tuple[dict[str, str], ...],
+) -> None:
+    """欠落・重複・unknown・順序変更・上限超過のrepairが拒否されること。
+
+    Arrange:
+        - 2 frameのSpoiler Evidenceがどちらも空の初回応答が用意される
+        - 不正なframe projectionを返すrepair応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 専用domain codeとattempt 2でfatalになること
+    """
+    # Arrange
+    request = _annotation_request_with_frame_ids(
+        ("frame-a", "frame-b"),
+        include_context=False,
+    )
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 2:
+            return _response(
+                {"frame_observations": [dict(item) for item in repair_observations]}
+            )
+        response = _frame_observation_payload(
+            (
+                ("frame-a", "exploration", "gameplay_idle", "high", "hud"),
+                ("frame-b", "exploration", "gameplay_idle", "medium", "hud"),
+            ),
+            context_relevance="unavailable",
+            supporting_context_cue_ids=(),
+        )
+        raw_observations = response["frame_observations"]
+        assert isinstance(raw_observations, list)
+        for observation in raw_observations:
+            assert isinstance(observation, dict)
+            observation["spoiler_risk"] = "low"
+            observation["spoiler_evidence"] = ""
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.annotate_candidate(
+            request,
+            _catalog(),
+            _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+            num_ctx=32768,
+        )
+    assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
+    assert (
+        captured.value.validation_code
+        == "candidate_annotation_relationship_repair_domain_invalid"
+    )
+    assert captured.value.attempt_count == 2
+    assert len(payloads) == 2
+
+
+def test_candidate_context_relationship_repair_rejects_unknown_cue_id() -> None:
+    """Context Cue repairが入力にないCue IDを拒否すること。
+
+    Arrange:
+        - strong relevanceに空のCue IDを返す初回応答が用意される
+        - 入力にないCue IDを返すrepair応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 専用domain codeとattempt 2でfatalになること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 2:
+            return _response({"supporting_context_cue_ids": ["cue-unknown"]})
+        response = _annotation_payload()
+        response["context_relevance"] = "strong"
+        response["supporting_context_cue_ids"] = []
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(VisionRuntimeError) as captured:
+        runtime.annotate_candidate(
+            _annotation_request(),
+            _catalog(),
+            _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+            num_ctx=32768,
+        )
+    assert captured.value.reason is VisionRuntimeFailureReason.DOMAIN_INVALID
+    assert (
+        captured.value.validation_code
+        == "candidate_annotation_relationship_repair_domain_invalid"
+    )
+    assert captured.value.attempt_count == 2
+    assert len(payloads) == 2
+
+
+def test_candidate_relationship_repair_redacts_verbatim_context_evidence() -> None:
+    """Cue選択とEvidenceの同時repair後にもCue本文が逐語安全化されること。
+
+    Arrange:
+        - strong relevanceのCue IDとlow riskのevidenceが空の応答が用意される
+        - Cue IDとCue本文そのものをevidenceに返すrepair応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - repair後のevidenceが非逐語表現へ置換され、raw Cue本文が残らないこと
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 2:
+            return _response(
+                {
+                    "supporting_context_cue_ids": ["cue-a"],
+                    "frame_observations": [
+                        {
+                            "frame_id": "frame-a",
+                            "spoiler_evidence": "正体を明かす台詞",
+                        }
+                    ],
+                }
+            )
+        response = _annotation_payload()
+        response["context_relevance"] = "strong"
+        response["supporting_context_cue_ids"] = []
+        observation = _first_frame_observation(response)
+        observation["spoiler_risk"] = "low"
+        observation["spoiler_evidence"] = ""
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.context_relevance == "strong"
+    assert annotation.supporting_context_cue_ids == ("cue-a",)
+    assert annotation.spoiler_risk == "low"
+    assert annotation.spoiler_evidence == "low相当の進行情報を映像から判定"
+    assert "正体を明かす台詞" not in annotation.spoiler_evidence
+    assert (
+        diagnostics.validation_code == "candidate_annotation_verbatim_context_redacted"
+    )
+    assert len(payloads) == 2
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "Context Cue本文をspoiler_evidenceへ引用しません" in second_prompt
+
+
+def test_candidate_relationship_repair_requires_fully_schema_valid_draft() -> None:
+    """後続frameにSchema違反がある応答へ部分repairが適用されないこと。
+
+    Arrange:
+        - 先頭frameにSpoiler関係違反、後続frameに未知fieldを持つ応答が用意される
+        - 2回目には全fieldがvalidなCandidate Annotation応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 初回全体がSchema違反として扱われ、通常の全体再試行が行われること
+    """
+    # Arrange
+    request = _annotation_request_with_frame_ids(
+        ("frame-a", "frame-b"),
+        include_context=False,
+    )
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (
+                ("frame-a", "exploration", "gameplay_idle", "high", "hud"),
+                ("frame-b", "exploration", "gameplay_idle", "medium", "hud"),
+            ),
+            context_relevance="unavailable",
+            supporting_context_cue_ids=(),
+        )
+        if len(payloads) == 1:
+            first_observation = _first_frame_observation(response)
+            first_observation["spoiler_risk"] = "low"
+            first_observation["spoiler_evidence"] = ""
+            raw_observations = response["frame_observations"]
+            assert isinstance(raw_observations, list)
+            second_observation = raw_observations[1]
+            assert isinstance(second_observation, dict)
+            second_observation["unexpected"] = True
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        request,
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.candidate.identifier == "frame-a"
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "candidate_annotation_schema_invalid"
+    second_schema = payloads[1]["format"]
+    assert isinstance(second_schema, dict)
+    assert "context_relevance" in second_schema["required"]
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "candidate_annotation_schema_invalid" in second_prompt
 
 
 def test_candidate_without_context_rejects_none_relevance() -> None:

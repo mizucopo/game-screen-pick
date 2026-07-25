@@ -79,6 +79,11 @@ from .detect_cinematic_letterbox import (
 )
 from .vision_contract import (
     CANDIDATE_ANNOTATION_PROMPT_VERSION,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_EVIDENCE_MAX_LENGTH,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_NUM_PREDICT,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_SCHEMA_VERSION,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_STAGE_CONTRACT_VERSION,
     CANDIDATE_ANNOTATION_SCHEMA,
     CANDIDATE_ANNOTATION_SCHEMA_VERSION,
     CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
@@ -119,6 +124,7 @@ Sleeper = Callable[[float], None]
 ModelStateResolver = Callable[[ResolvedModel], ModelArtifact]
 InferenceValue = TypeVar("InferenceValue")
 InferenceParser = Callable[[Mapping[str, object]], InferenceValue]
+CandidateDraftValidator = Callable[[Mapping[str, object]], None]
 StageKind = Literal[
     "scene_catalog",
     "candidate_annotation",
@@ -129,6 +135,7 @@ StageKind = Literal[
     "combat_visibility_verification",
     "publication_boundary_verification",
 ]
+ResponseStageKind = StageKind | Literal["candidate_annotation_relationship_repair"]
 OpponentBodyFraming = Literal["complete", "edge_cropped", "occluded", "absent"]
 
 
@@ -566,6 +573,12 @@ class OllamaVisionRuntime:
             model=model,
             image_count=len(request.frame_candidates),
             context_cue_count=len(request.context_cues),
+            candidate_request=request,
+            candidate_draft_validator=partial(
+                _validate_candidate_annotation_repair_draft,
+                request=request,
+                catalog=catalog,
+            ),
         )
         cinematic_letterbox_detected = has_cinematic_letterbox(
             annotation.candidate.image_bytes
@@ -782,19 +795,59 @@ class OllamaVisionRuntime:
         model: ResolvedModel,
         image_count: int,
         context_cue_count: int,
+        candidate_request: CandidateAnnotationRequest | None = None,
+        candidate_draft_validator: CandidateDraftValidator | None = None,
     ) -> tuple[InferenceValue, VisionInferenceDiagnostics]:
         """同じsemantic入力を最大2回実行しsafe diagnosticsを返す。"""
         started_at = time.monotonic()
         previous_validation_code: str | None = None
         repair_code: str | None = None
+        candidate_relationship_draft: Mapping[str, object] | None = None
         for attempt in (1, 2):
-            attempt_payload = _with_repair_code(payload, repair_code)
+            relationship_repair = candidate_relationship_draft is not None
+            decoded: Mapping[str, object] | None = None
             try:
+                attempt_payload = (
+                    _candidate_relationship_repair_payload(
+                        payload,
+                        candidate_relationship_draft,
+                        candidate_request,
+                    )
+                    if candidate_relationship_draft is not None
+                    else _with_repair_code(payload, repair_code)
+                )
                 self._require_frozen_model_state(model)
                 response = self._request(attempt_payload)
                 self._require_frozen_model_state(model)
-                value = parser(_decode_content(response, stage_kind))
+                decoded = _decode_content(
+                    response,
+                    (
+                        "candidate_annotation_relationship_repair"
+                        if relationship_repair
+                        else stage_kind
+                    ),
+                )
+                value = parser(
+                    _merge_candidate_relationship_repair(
+                        candidate_relationship_draft,
+                        decoded,
+                        candidate_request,
+                    )
+                    if candidate_relationship_draft is not None
+                    else decoded
+                )
             except VisionRuntimeError as error:
+                if relationship_repair:
+                    error = _relationship_repair_error(error)
+                elif (
+                    error.validation_code == "candidate_annotation_relationship_invalid"
+                    and decoded is not None
+                    and candidate_draft_validator is not None
+                ):
+                    try:
+                        candidate_draft_validator(decoded)
+                    except VisionRuntimeError as draft_error:
+                        error = draft_error
                 if attempt == 2 or error.reason not in _RETRYABLE_REASONS:
                     raise VisionRuntimeError(
                         error.reason,
@@ -802,7 +855,16 @@ class OllamaVisionRuntime:
                         attempt_count=attempt,
                     ) from None
                 previous_validation_code = error.validation_code
-                repair_code = _repair_validation_code(error)
+                if (
+                    stage_kind == "candidate_annotation"
+                    and error.validation_code
+                    == "candidate_annotation_relationship_invalid"
+                    and decoded is not None
+                ):
+                    candidate_relationship_draft = decoded
+                    repair_code = None
+                else:
+                    repair_code = _repair_validation_code(error)
                 self._sleeper(error.retry_after_seconds)
                 continue
             diagnostics = _diagnostics(
@@ -1014,6 +1076,287 @@ def _candidate_payload(
     }
 
 
+def _candidate_relationship_repair_payload(
+    payload: Mapping[str, object],
+    draft: Mapping[str, object],
+    request: CandidateAnnotationRequest | None,
+) -> dict[str, object]:
+    """関係違反の従属fieldだけを再生成するrequestを返す。"""
+    if request is None:
+        raise _domain_error("candidate_annotation_relationship_repair_domain_invalid")
+    evidence_repairs = _spoiler_evidence_repairs(draft)
+    repair_context = _supporting_context_cue_ids_need_repair(draft)
+    if not evidence_repairs and not repair_context:
+        raise _domain_error("candidate_annotation_relationship_repair_domain_invalid")
+    repair_ids = tuple(frame_id for frame_id, _risk in evidence_repairs)
+    raw_messages = payload.get("messages")
+    raw_options = payload.get("options")
+    if not isinstance(raw_messages, list) or not isinstance(raw_options, dict):
+        raise _domain_error("candidate_annotation_relationship_repair_domain_invalid")
+    message_ids = (
+        {item.identifier for item in request.frame_candidates}
+        if repair_context
+        else set(repair_ids)
+    )
+    frame_messages = [
+        copy.deepcopy(message)
+        for message in raw_messages[:-1]
+        if isinstance(message, dict)
+        and isinstance(message.get("content"), str)
+        and any(
+            message["content"].startswith(f"frame_candidate_id={frame_id}。")
+            for frame_id in message_ids
+        )
+    ]
+    if len(frame_messages) != len(message_ids):
+        raise _domain_error("candidate_annotation_relationship_repair_domain_invalid")
+    required: list[str] = []
+    properties: dict[str, object] = {}
+    semantic_request: dict[str, object] = {}
+    instructions: list[str] = []
+    if repair_context:
+        context_relevance = cast(str, draft["context_relevance"])
+        cue_ids = [item.identifier for item in request.context_cues]
+        cue_schema: dict[str, object] = {
+            "type": "array",
+            "uniqueItems": True,
+            "maxItems": len(cue_ids),
+            "items": {"type": "string", "enum": cue_ids},
+        }
+        if context_relevance in {"weak", "strong"}:
+            cue_schema["minItems"] = 1
+        else:
+            cue_schema["maxItems"] = 0
+        required.append("supporting_context_cue_ids")
+        properties["supporting_context_cue_ids"] = cue_schema
+        semantic_request["frozen_context_relevance"] = context_relevance
+        semantic_request["context_cues"] = [
+            {
+                "id": cue.identifier,
+                "start": _fraction_value(cue.start),
+                "end": _fraction_value(cue.end),
+                "text": cue.text,
+            }
+            for cue in request.context_cues
+        ]
+        instructions.append(
+            "context_relevanceを変更しません。frozen_context_relevanceがnoneまたは"
+            "unavailableならsupporting_context_cue_idsは空配列、weakまたはstrong"
+            "なら入力Context Cue IDを1件以上、重複なしで返します。"
+        )
+    if evidence_repairs:
+        evidence_schema: dict[str, object] = {
+            "type": "string",
+            "maxLength": (CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_EVIDENCE_MAX_LENGTH),
+        }
+        risks = {spoiler_risk for _frame_id, spoiler_risk in evidence_repairs}
+        if "none" not in risks:
+            evidence_schema["minLength"] = 1
+        elif risks == {"none"}:
+            evidence_schema["maxLength"] = 0
+        required.append("frame_observations")
+        properties["frame_observations"] = {
+            "type": "array",
+            "minItems": len(evidence_repairs),
+            "maxItems": len(evidence_repairs),
+            "uniqueItems": True,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["frame_id", "spoiler_evidence"],
+                "properties": {
+                    "frame_id": {
+                        "type": "string",
+                        "enum": list(repair_ids),
+                    },
+                    "spoiler_evidence": evidence_schema,
+                },
+            },
+        }
+        semantic_request["frame_observations"] = [
+            {"frame_id": frame_id, "frozen_spoiler_risk": spoiler_risk}
+            for frame_id, spoiler_risk in evidence_repairs
+        ]
+        instructions.append(
+            "spoiler_riskを変更しません。frozen_spoiler_riskがnoneなら"
+            "spoiler_evidenceは空文字列、それ以外なら各frameの画素だけから"
+            "判断できる空でない根拠を160文字以内の1文で返します。"
+        )
+        if repair_context:
+            instructions.append(
+                "Context Cue本文をspoiler_evidenceへ引用しません。正規化後3〜5文字の"
+                "Cueは全文、6文字以上のCueは6文字以上の連続部分も再出力しません。"
+            )
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": required,
+        "properties": properties,
+    }
+    instruction = (
+        "前回のCandidate Annotationはschemaに適合しましたが、"
+        "validation_code=candidate_annotation_relationship_invalidでした。"
+        "前回の応答本文は参照せず、同じ入力から関係違反の従属fieldだけを"
+        "再生成します。"
+        + "".join(instructions)
+        + "repair対象以外のfield、推論過程、逐語的な画面文は出力しません。\n"
+        + json.dumps(semantic_request, ensure_ascii=False, sort_keys=True)
+    )
+    options = cast(dict[str, object], copy.deepcopy(raw_options))
+    options["num_predict"] = CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_NUM_PREDICT
+    return {
+        "model": payload.get("model"),
+        "stream": False,
+        "think": False,
+        "format": schema,
+        "options": options,
+        "messages": [
+            *frame_messages,
+            {"role": "user", "content": instruction},
+        ],
+    }
+
+
+def _spoiler_evidence_repairs(
+    draft: Mapping[str, object],
+) -> tuple[tuple[str, SpoilerRisk], ...]:
+    """Spoiler Riskとevidenceが不整合なframeを入力順で返す。"""
+    raw_observations = draft.get("frame_observations")
+    if not isinstance(raw_observations, list):
+        raise _domain_error("candidate_annotation_relationship_repair_domain_invalid")
+    repairs: list[tuple[str, SpoilerRisk]] = []
+    for observation in raw_observations:
+        if not isinstance(observation, dict):
+            raise _domain_error(
+                "candidate_annotation_relationship_repair_domain_invalid"
+            )
+        frame_id = observation.get("frame_id")
+        spoiler_risk = observation.get("spoiler_risk")
+        spoiler_evidence = observation.get("spoiler_evidence")
+        if (
+            not isinstance(frame_id, str)
+            or spoiler_risk not in SPOILER_RISKS
+            or not isinstance(spoiler_evidence, str)
+        ):
+            raise _domain_error(
+                "candidate_annotation_relationship_repair_domain_invalid"
+            )
+        relationship_is_valid = (
+            not spoiler_evidence
+            if spoiler_risk == "none"
+            else bool(spoiler_evidence.strip())
+        )
+        if not relationship_is_valid:
+            repairs.append((frame_id, cast(SpoilerRisk, spoiler_risk)))
+    return tuple(repairs)
+
+
+def _supporting_context_cue_ids_need_repair(
+    draft: Mapping[str, object],
+) -> bool:
+    """凍結済みrelevanceと参照Cue IDの関係違反を返す。"""
+    context_relevance = draft.get("context_relevance")
+    cue_ids = draft.get("supporting_context_cue_ids")
+    if (
+        context_relevance not in CONTEXT_CUE_RELEVANCES
+        or not isinstance(cue_ids, list)
+        or not all(isinstance(item, str) for item in cue_ids)
+    ):
+        raise _domain_error("candidate_annotation_relationship_repair_domain_invalid")
+    return bool(cue_ids) != (context_relevance in {"weak", "strong"})
+
+
+def _merge_candidate_relationship_repair(
+    draft: Mapping[str, object],
+    repair: Mapping[str, object],
+    request: CandidateAnnotationRequest | None,
+) -> Mapping[str, object]:
+    """許可した従属fieldだけをdraftへ統合する。"""
+    if request is None:
+        raise _domain_error("candidate_annotation_relationship_repair_domain_invalid")
+    expected_evidence = _spoiler_evidence_repairs(draft)
+    repair_context = _supporting_context_cue_ids_need_repair(draft)
+    expected_keys: set[str] = set()
+    if repair_context:
+        expected_keys.add("supporting_context_cue_ids")
+    if expected_evidence:
+        expected_keys.add("frame_observations")
+    if set(repair) != expected_keys:
+        raise _schema_error("candidate_annotation_relationship_repair_schema_invalid")
+    merged = cast(dict[str, object], copy.deepcopy(draft))
+    if repair_context:
+        raw_cue_ids = repair.get("supporting_context_cue_ids")
+        if not isinstance(raw_cue_ids, list) or not all(
+            isinstance(item, str) for item in raw_cue_ids
+        ):
+            raise _schema_error(
+                "candidate_annotation_relationship_repair_schema_invalid"
+            )
+        cue_ids = cast(list[str], raw_cue_ids)
+        context_relevance = cast(str, draft["context_relevance"])
+        available_ids = {item.identifier for item in request.context_cues}
+        if (
+            len(cue_ids) != len(set(cue_ids))
+            or not set(cue_ids).issubset(available_ids)
+            or bool(cue_ids) != (context_relevance in {"weak", "strong"})
+        ):
+            raise _domain_error(
+                "candidate_annotation_relationship_repair_domain_invalid"
+            )
+        merged["supporting_context_cue_ids"] = cue_ids
+    if expected_evidence:
+        raw_repairs = repair.get("frame_observations")
+        if not isinstance(raw_repairs, list):
+            raise _schema_error(
+                "candidate_annotation_relationship_repair_schema_invalid"
+            )
+        if len(raw_repairs) != len(expected_evidence):
+            raise _domain_error(
+                "candidate_annotation_relationship_repair_domain_invalid"
+            )
+        values: dict[str, str] = {}
+        for raw_repair, (expected_frame_id, spoiler_risk) in zip(
+            raw_repairs,
+            expected_evidence,
+            strict=True,
+        ):
+            if not isinstance(raw_repair, dict) or set(raw_repair) != {
+                "frame_id",
+                "spoiler_evidence",
+            }:
+                raise _schema_error(
+                    "candidate_annotation_relationship_repair_schema_invalid"
+                )
+            frame_id = raw_repair.get("frame_id")
+            evidence = raw_repair.get("spoiler_evidence")
+            if not isinstance(frame_id, str) or not isinstance(evidence, str):
+                raise _schema_error(
+                    "candidate_annotation_relationship_repair_schema_invalid"
+                )
+            evidence_is_valid = (
+                not evidence if spoiler_risk == "none" else bool(evidence.strip())
+            )
+            if (
+                frame_id != expected_frame_id
+                or not evidence_is_valid
+                or len(evidence)
+                > CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_EVIDENCE_MAX_LENGTH
+            ):
+                raise _domain_error(
+                    "candidate_annotation_relationship_repair_domain_invalid"
+                )
+            values[frame_id] = evidence
+        merged_observations = cast(
+            list[dict[str, object]],
+            merged["frame_observations"],
+        )
+        for observation in merged_observations:
+            frame_id = cast(str, observation["frame_id"])
+            if frame_id in values:
+                observation["spoiler_evidence"] = values[frame_id]
+    return merged
+
+
 def _combat_encounter_verification_payload(
     candidate: FrameCandidate,
     model: ResolvedModel,
@@ -1189,14 +1532,6 @@ def _with_repair_code(
     content = cast(str, messages[-1]["content"])
     repair = f"前回の出力を修正してください。validation_code={validation_code}"
     recheck_candidate_observations = validation_code.startswith("candidate_annotation_")
-    if validation_code == "candidate_annotation_relationship_invalid":
-        repair += (
-            "\n関係を必ず修正します。spoiler_riskがnoneならspoiler_evidenceは"
-            "空文字列、low・medium・highならspoiler_evidenceは画面から判断した"
-            "根拠を1文以上記述します。context_relevanceがnoneまたはunavailable"
-            "ならsupporting_context_cue_idsは空配列、weakまたはstrongなら入力内IDを"
-            "1件以上入れます。"
-        )
     if validation_code == "scene_catalog_domain_invalid":
         repair += (
             "\nscene slugをcatalog内で重複させません。scene_kindは重複可能ですが、"
@@ -1224,7 +1559,7 @@ def _with_repair_code(
 
 
 def _decode_content(
-    response: Mapping[str, object], stage_kind: StageKind
+    response: Mapping[str, object], stage_kind: ResponseStageKind
 ) -> Mapping[str, object]:
     done_reason = response.get("done_reason")
     if response.get("done") is not True or done_reason not in (None, "stop"):
@@ -1317,6 +1652,47 @@ def _unique_scene_slug(slug: str, used_slugs: set[str]) -> str:
     while f"{slug}-{suffix}" in used_slugs:
         suffix += 1
     return f"{slug}-{suffix}"
+
+
+def _validate_candidate_annotation_repair_draft(
+    value: Mapping[str, object],
+    *,
+    request: CandidateAnnotationRequest,
+    catalog: SceneCatalog,
+) -> None:
+    """relationship以外の全fieldが部分repair前にvalidであることを検証する。"""
+    normalized = cast(dict[str, object], copy.deepcopy(value))
+    context_relevance = normalized.get("context_relevance")
+    cue_ids = normalized.get("supporting_context_cue_ids")
+    available_cue_ids = tuple(item.identifier for item in request.context_cues)
+    if (
+        context_relevance in CONTEXT_CUE_RELEVANCES
+        and isinstance(cue_ids, list)
+        and all(isinstance(item, str) for item in cue_ids)
+        and len(cue_ids) == len(set(cue_ids))
+        and candidate_annotation_context_is_valid(
+            context_relevance,
+            tuple(cast(list[str], cue_ids)),
+            available_cue_ids,
+        )
+    ):
+        normalized["supporting_context_cue_ids"] = (
+            [available_cue_ids[0]]
+            if context_relevance in {"weak", "strong"} and available_cue_ids
+            else []
+        )
+    raw_observations = normalized.get("frame_observations")
+    if isinstance(raw_observations, list):
+        for raw_observation in raw_observations:
+            if not isinstance(raw_observation, dict):
+                continue
+            spoiler_risk = raw_observation.get("spoiler_risk")
+            spoiler_evidence = raw_observation.get("spoiler_evidence")
+            if spoiler_risk in SPOILER_RISKS and isinstance(spoiler_evidence, str):
+                raw_observation["spoiler_evidence"] = (
+                    "" if spoiler_risk == "none" else "relationship validation"
+                )
+    _parse_candidate_annotation(normalized, request, catalog)
 
 
 def _parse_candidate_annotation(
@@ -1748,6 +2124,25 @@ def _domain_error(code: str) -> VisionRuntimeError:
     )
 
 
+def _relationship_repair_error(error: VisionRuntimeError) -> VisionRuntimeError:
+    """部分repair後の全体検証failureを専用codeへ正規化する。"""
+    if (
+        error.validation_code
+        == "candidate_annotation_relationship_repair_response_empty"
+    ):
+        return _schema_error("candidate_annotation_relationship_repair_schema_invalid")
+    if error.validation_code is not None and error.validation_code.startswith(
+        "candidate_annotation_relationship_repair_"
+    ):
+        return error
+    if error.reason in {
+        VisionRuntimeFailureReason.SCHEMA_INVALID,
+        VisionRuntimeFailureReason.DOMAIN_INVALID,
+    }:
+        return _domain_error("candidate_annotation_relationship_repair_domain_invalid")
+    return error
+
+
 def _scene_catalog_semantic_input(
     request: SceneCatalogRequest,
     model: ResolvedModel,
@@ -1805,6 +2200,21 @@ def _candidate_semantic_input(
         "prompt_version": CANDIDATE_ANNOTATION_PROMPT_VERSION,
         "schema_version": CANDIDATE_ANNOTATION_SCHEMA_VERSION,
         "stage_contract_version": CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+        "candidate_annotation_relationship_repair_prompt_version": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION
+        ),
+        "candidate_annotation_relationship_repair_schema_version": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_SCHEMA_VERSION
+        ),
+        "candidate_annotation_relationship_repair_stage_contract_version": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_STAGE_CONTRACT_VERSION
+        ),
+        "candidate_annotation_relationship_repair_num_predict": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_NUM_PREDICT
+        ),
+        "candidate_annotation_relationship_repair_evidence_max_length": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_EVIDENCE_MAX_LENGTH
+        ),
         "combat_encounter_verification_prompt_version": (
             COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION
         ),
