@@ -116,13 +116,15 @@ class ReleaseSuiteMaterializer:
         )
         clip_probe = self._media_probe(output)
         clip_start = _probe_fraction(clip_probe, "start")
-        clip_end_timestamp = _probe_fraction(clip_probe, "duration")
+        clip_duration = _probe_fraction(clip_probe, "duration")
+        clip_end_timestamp = _probe_fraction(clip_probe, "end")
         actual_start = clip_start - source_start
         actual_end = clip_end_timestamp - source_start
         duration = actual_end - actual_start
         tolerance = profile.release_boundary_tolerance_seconds
         if (
             duration <= 0
+            or duration != clip_duration
             or abs(actual_start - interval.start) > tolerance
             or abs(actual_end - interval.end) > tolerance
             or _probe_streams(source_probe) != _probe_streams(clip_probe)
@@ -206,7 +208,7 @@ def _run_command(command: list[str]) -> None:
 
 
 def _probe_media(path: Path) -> Mapping[str, object]:
-    """startとcopyts Matroskaのend timestampを含むmedia probeを返す。"""
+    """container差を吸収したstart、経過duration、absolute endを返す。"""
     try:
         process = subprocess.run(
             [
@@ -214,7 +216,10 @@ def _probe_media(path: Path) -> Mapping[str, object]:
                 "-v",
                 "error",
                 "-show_entries",
-                "format=start_time,duration:stream=codec_type,codec_name",
+                (
+                    "format=format_name,start_time,duration:"
+                    "stream=codec_type,codec_name,start_time,duration"
+                ),
                 "-of",
                 "json",
                 str(path),
@@ -232,7 +237,18 @@ def _probe_media(path: Path) -> Mapping[str, object]:
     streams_value = value.get("streams")
     if not isinstance(format_value, dict) or not isinstance(streams_value, list):
         raise ValueError("FFprobe resultにformatまたはstreamがありません")
+    try:
+        format_start = Fraction(str(format_value.get("start_time", "0")))
+        format_duration = Fraction(str(format_value["duration"]))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        raise ValueError("FFprobe format timingが不正です") from None
+    format_names = {
+        item.strip().casefold()
+        for item in str(format_value.get("format_name", "")).split(",")
+        if item.strip()
+    }
     streams: list[tuple[str, str]] = []
+    stream_end_timestamps: list[Fraction] = []
     for item in streams_value:
         if (
             not isinstance(item, dict)
@@ -241,9 +257,32 @@ def _probe_media(path: Path) -> Mapping[str, object]:
         ):
             raise ValueError("FFprobe streamが不正です")
         streams.append((item["codec_type"], item["codec_name"]))
+        stream_duration_value = item.get("duration")
+        if stream_duration_value is None:
+            continue
+        try:
+            stream_start = Fraction(str(item.get("start_time", format_start)))
+            stream_duration = Fraction(str(stream_duration_value))
+        except (TypeError, ValueError, ZeroDivisionError):
+            raise ValueError("FFprobe stream timingが不正です") from None
+        if stream_duration > 0:
+            stream_end_timestamps.append(stream_start + stream_duration)
+    if stream_end_timestamps:
+        end_timestamp = max(stream_end_timestamps)
+        elapsed_duration = end_timestamp - format_start
+    elif format_names & {"matroska", "webm"} and format_duration > format_start:
+        # Matroska demuxerは非0 PTSでAVFormatContext.durationをendとして返す。
+        end_timestamp = format_duration
+        elapsed_duration = end_timestamp - format_start
+    else:
+        elapsed_duration = format_duration
+        end_timestamp = format_start + elapsed_duration
+    if elapsed_duration <= 0 or end_timestamp <= format_start:
+        raise ValueError("FFprobe media timingが不正です")
     return {
-        "start": Fraction(str(format_value.get("start_time", "0"))),
-        "duration": Fraction(str(format_value["duration"])),
+        "start": format_start,
+        "duration": elapsed_duration,
+        "end": end_timestamp,
         "streams": tuple(sorted(streams)),
     }
 

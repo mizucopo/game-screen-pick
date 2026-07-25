@@ -176,6 +176,54 @@ def test_reset_suite_discards_completed_state_and_runs_cold_again(
     assert calls == ["cold", "warm", "cold", "warm"]
 
 
+def test_reset_suite_fails_when_suite_root_survives_deletion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """suite rootを削除できないresetが後続処理へ進まないこと。
+
+    Arrange:
+        - cold/warm完了済みsuiteと削除してもdirectoryを残すfilesystem境界が用意される
+    Act:
+        - reset_suite=trueで同じsuiteの再実行が試行される
+    Assert:
+        - reset失敗として拒否されphaseが再実行されないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        phase: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> tuple[
+        int,
+        dict[str, object],
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        calls.append(phase)
+        return _successful_phase(configuration, phase)
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    monkeypatch.setattr(
+        "src.video_selection.acceptance.target_suite_runner.shutil.rmtree",
+        lambda _path: None,
+    )
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="完全に削除"):
+        runner.run(
+            profile_path=profile_path,
+            suite="release",
+            reset_suite=True,
+        )
+    assert calls == ["cold", "warm"]
+
+
 def test_state_preserves_privacy_safe_performance_configuration(
     tmp_path: Path,
 ) -> None:
@@ -816,6 +864,74 @@ def test_pending_refinalization_removes_previously_passing_baseline(
     # Assert
     assert result == 3
     assert not (suite_root / "baseline").exists()
+
+
+def test_invalid_refinalization_preserves_previously_passing_baseline(
+    tmp_path: Path,
+) -> None:
+    """不正なworksheetでの再評価前にはpassing baselineが保持されること。
+
+    Arrange:
+        - external worksheetで合格済みのsuiteとpassing baselineが用意される
+        - candidate集合を欠落させたworksheetが用意される
+    Act:
+        - 不正なworksheetを指定して再finalizationが試行される
+    Assert:
+        - worksheet検証が拒否され既存baselineが変更されないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda phase, configuration, _models, _suite_root: _successful_phase(
+            configuration,
+            phase,
+        )
+    )
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    worksheet = read_json_object(suite_root / "review-worksheet.json")
+    assert worksheet is not None
+    worksheet["reviewer"] = "reviewer"
+    worksheet["completed_at"] = "2026-07-17T00:00:00+00:00"
+    selected = worksheet["selected"]
+    assert isinstance(selected, list)
+    selected_item = selected[0]
+    assert isinstance(selected_item, dict)
+    selected_item.update(
+        {
+            "visual_quality": "pass",
+            "blog_usable": "yes",
+            "annotation_consistency": "consistent",
+            "context_overrode_visual_invalidity": "no",
+        }
+    )
+    checks = worksheet["suite_checks"]
+    assert isinstance(checks, dict)
+    checks["spoiler_monotonicity"] = "pass"
+    valid_path = tmp_path / "valid-review.json"
+    write_atomic_json(valid_path, worksheet)
+    assert (
+        runner.run(
+            profile_path=profile_path,
+            suite="release",
+            human_review_path=valid_path,
+        )
+        == 0
+    )
+    baseline_path = suite_root / "baseline" / "baseline.json"
+    trusted_baseline = baseline_path.read_bytes()
+    worksheet["rejected"] = []
+    invalid_path = tmp_path / "invalid-review.json"
+    write_atomic_json(invalid_path, worksheet)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="candidate集合"):
+        runner.run(
+            profile_path=profile_path,
+            suite="release",
+            human_review_path=invalid_path,
+        )
+    assert baseline_path.read_bytes() == trusted_baseline
 
 
 def _runner(

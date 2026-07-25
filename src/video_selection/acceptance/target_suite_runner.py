@@ -100,7 +100,7 @@ class TargetSuiteRunner:
         _validate_profile_files(profile)
         suite_root = profile.artifact_root / "target-acceptance" / suite
         if reset_suite:
-            shutil.rmtree(suite_root, ignore_errors=True)
+            _remove_directory_strict(suite_root, "Acceptance suite")
         state_path = suite_root / "acceptance-state.json"
         state = read_json_object(state_path)
         configuration_digest = _content_digest(profile.configuration_path)
@@ -289,7 +289,6 @@ class TargetSuiteRunner:
         human_review_path: Path | None,
     ) -> int:
         """record、baseline、release cleanupをphase再実行なしで確定する。"""
-        shutil.rmtree(suite_root / "baseline", ignore_errors=True)
         suite = _string(state.get("suite"))
         worksheet_path = human_review_path or suite_root / "review-worksheet.json"
         worksheet = read_json_object(worksheet_path)
@@ -337,6 +336,7 @@ class TargetSuiteRunner:
             if suite == "release":
                 shutil.rmtree(suite_root / "work", ignore_errors=True)
             return 1
+        _remove_directory_strict(suite_root / "baseline", "Acceptance baseline")
         write_atomic_json(suite_root / "acceptance.json", record)
         try:
             state["acceptance_status"] = record["status"]
@@ -354,6 +354,20 @@ class TargetSuiteRunner:
             if record["status"] == "pending_human_review"
             else 1
         )
+
+
+def _remove_directory_strict(path: Path, label: str) -> None:
+    """reset対象directoryが完全に削除された場合だけ後続処理を許可する。"""
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_symlink():
+        raise ValueError(f"{label}はsymbolic linkのため削除できません")
+    try:
+        shutil.rmtree(path)
+    except OSError:
+        raise ValueError(f"{label}を完全に削除できません") from None
+    if path.exists() or path.is_symlink():
+        raise ValueError(f"{label}を完全に削除できません")
 
 
 def _execute_phase(

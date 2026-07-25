@@ -79,6 +79,56 @@ from .vision_stage_artifacts import (
 VisionStageValue = TypeVar("VisionStageValue")
 
 
+def plan_vision_stage_fingerprints(
+    *,
+    video_set: VideoSet,
+    representatives: tuple[FrameCandidate, ...],
+    representative_source_fingerprints: tuple[StageFingerprint, ...],
+    annotation_requests: tuple[CandidateAnnotationRequest, ...],
+    configuration: EffectiveConfiguration,
+    resolved_models: ResolvedModels,
+) -> tuple[StageFingerprint, ...]:
+    """推論せずCatalogと全Annotationの入力fingerprintを計画する。"""
+    selection_intent = _validate_inputs(
+        representatives,
+        representative_source_fingerprints,
+        annotation_requests,
+    )
+    catalog_request = SceneCatalogRequest(
+        representatives=representatives,
+        selection_intent=selection_intent,
+        scene_hint=configuration.scene_hint,
+    )
+    catalog_fingerprint = build_stage_fingerprint(
+        ProcessingStage.BUILD_SCENE_CATALOG,
+        representative_source_fingerprints,
+        _catalog_semantic_input(
+            video_set,
+            catalog_request,
+            resolved_models.for_role(ModelRole.SCENE_CATALOG),
+            configuration.scene_catalog_num_ctx,
+        ),
+    )
+    annotation_model = resolved_models.for_role(ModelRole.CANDIDATE_ANNOTATION)
+    return (
+        catalog_fingerprint,
+        *(
+            build_stage_fingerprint(
+                ProcessingStage.ANNOTATE_CANDIDATE,
+                (catalog_fingerprint,),
+                _annotation_semantic_input(
+                    video_set,
+                    request,
+                    catalog_fingerprint,
+                    annotation_model,
+                    configuration.candidate_annotation_num_ctx,
+                ),
+            )
+            for request in annotation_requests
+        ),
+    )
+
+
 class VideoSetVisionProcessor:
     """VisionRuntimeとMoment単位atomic cacheを一つの深いmoduleに保つ。"""
 

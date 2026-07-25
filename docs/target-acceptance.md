@@ -80,7 +80,9 @@ release intervalは全streamをFFmpeg stream copyした`scenario-001.mkv`形式�
 変換する。source metadataとchapterは引き継がず、FFmpegのbitexact format flagを使うため、
 同じ入力、区間、tool identityから再生成したclipは同じwhole-file fingerprintになる。
 ffprobeの実測開始、終了、durationがprofileの許容差を超える場合はpipeline前にexit 2に
-なる。full suiteの各経過時間はffprobeのend timestampから非0 startを差し引く。
+なる。ffprobeのcontainer差は、stream durationがある場合はstream timing、ないMatroskaでは
+非0 startを含むformat end、それ以外ではformat elapsed durationから、absolute endと経過
+durationへ正規化する。full suiteはこの正規化済み経過durationを合算する。
 確定済みrelease inputの再利用時はmanifest記載clipと対応videoの完全一致も検証する。
 materialize時間はphase予算に含めない。
 
@@ -119,6 +121,7 @@ uv run task acceptance-target \
 ```
 
 `--reset-suite`は選んだsuiteのstate、phase output、worksheet、processing cacheを破棄する。
+suite rootを完全に削除できない場合はpartial resetのまま続行せず失敗する。
 releaseとfullのartifactは混在しない。
 
 ## Human review
@@ -180,6 +183,7 @@ review pendingのいずれでも削除する。phase output、state、worksheet�
 
 合格時は同じsuite directoryの`baseline/baseline.json`と`baseline/baseline.md`へ、source
 commitを除いた正規化baselineを生成する。再評価がpendingまたは不合格なら、以前のpassing
-baselineを削除する。通常runではtarget artifactに留める。Issue #190の
+baselineを削除する。ただし新しいworksheet、candidate集合、acceptance record、privacyを
+検証できるまでは既存のpassing baselineを保持する。通常runではtarget artifactに留める。Issue #190の
 cutoverまたはperformance contract変更時だけprivacy検査済みの両fileをreviewし、専用PRで
 repositoryへ取り込む。実値入りprofileとprivate worksheetは一緒にcopyしない。

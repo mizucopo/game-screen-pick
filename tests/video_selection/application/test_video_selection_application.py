@@ -6,6 +6,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from src.video_selection.application.video_selection_application import (
     VideoSelectionApplication,
 )
@@ -26,6 +28,7 @@ from tests.video_selection.fakes.recording_run_observer import RecordingRunObser
 
 def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """実Processor列がcanonical outputを公開しwarm時に推論cacheが再利用されること。
 
@@ -60,6 +63,13 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
 
     # Act
     cold = cold_application.run(configuration)
+    monkeypatch.setattr(
+        "src.video_selection.application.video_selection_application."
+        "select_from_shortlist_batches",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("warm runでselectorが再実行されました")
+        ),
+    )
     warm_media = FakeVideoStageMediaRuntime()
     warm_vision = EchoStructuredVisionRuntime()
     warm_observer = RecordingRunObserver()
@@ -255,6 +265,130 @@ def test_speech_runtime_is_closed_before_vision_inference(tmp_path: Path) -> Non
         report["provenance"]["runtime"]["speech_runtime_identity"]
         == "speech-runtime-before-close"
     )
+
+
+@pytest.mark.parametrize("failure_point", ("model", "speech", "media"))
+def test_runtime_preflight_failure_preserves_cache_requested_for_reset(
+    tmp_path: Path,
+    failure_point: str,
+) -> None:
+    """runtime preflight失敗時にreset対象のprocessing cacheが保持されること。
+
+    Arrange:
+        - 既存processing cacheとmodel、speech、mediaの失敗境界が用意される
+    Act:
+        - reset_cacheを有効にして実Video Selection Applicationが実行される
+    Assert:
+        - runtime検証完了前には既存cacheが削除されないこと
+        - 構築済みSpeech Runtimeだけが確実にcloseされること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter.mkv").write_bytes(b"video-content")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+        image_count=1,
+        reset_cache=True,
+    )
+    cache_sentinel = configuration.processing_cache_folder / "keep.json"
+    cache_sentinel.parent.mkdir(parents=True)
+    cache_sentinel.write_text("keep", encoding="utf-8")
+    speech_runtime = FakeSpeechRuntime()
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer)
+    progress.start_run()
+
+    def fail_media_preflight() -> None:
+        if failure_point == "media":
+            raise RuntimeError("media preflight failed")
+
+    def speech_factory(
+        _model: object,
+        _configuration: EffectiveConfiguration,
+    ) -> FakeSpeechRuntime:
+        if failure_point == "speech":
+            raise RuntimeError("speech preflight failed")
+        return speech_runtime
+
+    application = VideoSelectionApplication(
+        media_runtime=FakeVideoStageMediaRuntime(
+            on_preflight=fail_media_preflight,
+        ),
+        model_runtime=FakeModelRuntime(
+            "application-test",
+            resolution_error=(
+                RuntimeError("model preflight failed")
+                if failure_point == "model"
+                else None
+            ),
+        ),
+        speech_runtime_factory=speech_factory,
+        vision_runtime=EchoStructuredVisionRuntime(),
+        observer=observer,
+        progress=progress,
+    )
+
+    # Act / Assert
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        application.run(configuration)
+    assert cache_sentinel.read_text(encoding="utf-8") == "keep"
+    assert observer.legacy_cache_diagnostics == []
+    assert speech_runtime.close_call_count == (1 if failure_point == "media" else 0)
+
+
+def test_media_preflight_failure_preserves_recognized_legacy_cache(
+    tmp_path: Path,
+) -> None:
+    """media preflight失敗時に認識済みlegacy cacheも保持されること。
+
+    Arrange:
+        - 認識済みlegacy cacheと失敗するmedia preflightが用意される
+    Act:
+        - resetなしで実Video Selection Applicationが実行される
+    Assert:
+        - runtime検証前にはlegacy cache cleanupが実行されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter.mkv").write_bytes(b"video-content")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+        image_count=1,
+    )
+    legacy_artifact = (
+        configuration.processing_cache_folder / "neutral-analysis" / "keep.json"
+    )
+    legacy_artifact.parent.mkdir(parents=True)
+    legacy_artifact.write_text("keep", encoding="utf-8")
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer)
+    progress.start_run()
+
+    def fail_media_preflight() -> None:
+        raise RuntimeError("media preflight failed")
+
+    application = VideoSelectionApplication(
+        media_runtime=FakeVideoStageMediaRuntime(
+            on_preflight=fail_media_preflight,
+        ),
+        model_runtime=FakeModelRuntime("application-test"),
+        speech_runtime_factory=lambda model, _configuration: FakeSpeechRuntime(
+            resolved_model_identity=model.execution_identity.identifier
+        ),
+        vision_runtime=EchoStructuredVisionRuntime(),
+        observer=observer,
+        progress=progress,
+    )
+
+    # Act / Assert
+    with pytest.raises(RuntimeError, match="media preflight failed"):
+        application.run(configuration)
+    assert legacy_artifact.read_text(encoding="utf-8") == "keep"
+    assert observer.legacy_cache_diagnostics == []
 
 
 def test_no_valid_candidate_skips_vision_and_publishes_zero_shortfall(

@@ -62,6 +62,7 @@ def generate_odd_dimension_video(output_path: Path) -> Path:
 
 def generate_nonzero_start_video(output_path: Path) -> Path:
     """5秒の非ゼロ開始PTSを持つ4fps fixtureを生成する。"""
+    codec = "mpeg4" if output_path.suffix.casefold() == ".mp4" else "ffv1"
     subprocess.run(
         [
             "ffmpeg",
@@ -77,7 +78,7 @@ def generate_nonzero_start_video(output_path: Path) -> Path:
             "-output_ts_offset",
             "5",
             "-c:v",
-            "ffv1",
+            codec,
             "-pix_fmt",
             "yuv420p",
             str(output_path),

@@ -70,4 +70,6 @@ Video Orderや後半位置そのものへの加点・減点、動画ごとの最
 - `spoiler_monotonicity_guard`
 - `lower_marginal_utility`
 
-内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v2`としてCompleted Stageへ確定する。旧first-N fakeはwalking-skeleton専用applicationへ隔離され、public CLIはIssue #190までscreenshot入力のままである。
+内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v2`としてCompleted Stageへ確定する。選定前cache keyには、Video Stage、全候補に対して計画したCatalog／Annotation Stage fingerprint、設定、batch境界を含める。warm runはこのkeyをselector実行前に検索し、coldで実際に使用したbatch境界までCatalog／Annotationをcacheから復元した後、score、reason、coverageを含む選定結果をartifactから結び直す。selectorを実行したrunをcache reuseとして数えない。
+
+旧first-N fakeはwalking-skeleton専用applicationへ隔離され、public CLIはIssue #190までscreenshot入力のままである。

@@ -40,7 +40,8 @@ def test_anonymous_clips_preserve_all_streams_and_record_actual_boundaries(
     def probe(path: Path) -> dict[str, object]:
         return {
             "start": Fraction(0 if path == source else 8),
-            "duration": Fraction(100 if path == source else 1810),
+            "duration": Fraction(100 if path == source else 1802),
+            "end": Fraction(100 if path == source else 1810),
             "streams": (("audio", "aac"), ("video", "h264")),
         }
 
@@ -95,7 +96,8 @@ def test_boundary_outside_tolerance_removes_partial_clips(tmp_path: Path) -> Non
     def probe(path: Path) -> dict[str, object]:
         return {
             "start": Fraction(0 if path == source else 20),
-            "duration": Fraction(100 if path == source else 1820),
+            "duration": Fraction(100 if path == source else 1800),
+            "end": Fraction(100 if path == source else 1820),
             "streams": (("video", "h264"),),
         }
 
@@ -134,7 +136,8 @@ def test_nonzero_source_start_offsets_ffmpeg_stop_timestamp(tmp_path: Path) -> N
     def probe(path: Path) -> dict[str, object]:
         return {
             "start": Fraction(5 if path == source else 13),
-            "duration": Fraction(100 if path == source else 1815),
+            "duration": Fraction(95 if path == source else 1802),
+            "end": Fraction(100 if path == source else 1815),
             "streams": (("video", "h264"),),
         }
 
@@ -174,7 +177,8 @@ def test_completed_materialization_is_reused_without_ffmpeg(tmp_path: Path) -> N
     def probe(path: Path) -> dict[str, object]:
         return {
             "start": Fraction(0 if path == source else 8),
-            "duration": Fraction(100 if path == source else 1810),
+            "duration": Fraction(100 if path == source else 1802),
+            "end": Fraction(100 if path == source else 1810),
             "streams": (("video", "h264"),),
         }
 
@@ -215,7 +219,8 @@ def test_stray_supported_clip_requires_reset(tmp_path: Path) -> None:
     def probe(path: Path) -> dict[str, object]:
         return {
             "start": Fraction(0 if path == source else 8),
-            "duration": Fraction(100 if path == source else 1810),
+            "duration": Fraction(100 if path == source else 1802),
+            "end": Fraction(100 if path == source else 1810),
             "streams": (("video", "h264"),),
         }
 

@@ -146,15 +146,10 @@ def _source_snapshot_fingerprint(sources: tuple[Path, ...]) -> str:
 
 
 def _probe_elapsed_duration(value: Mapping[str, object]) -> Fraction:
-    start = value.get("start")
     duration = value.get("duration")
-    if (
-        not isinstance(start, Fraction)
-        or not isinstance(duration, Fraction)
-        or duration <= start
-    ):
+    if not isinstance(duration, Fraction) or duration <= 0:
         raise ValueError("Full suite media durationが不正です")
-    return duration - start
+    return duration
 
 
 def _fraction_record(value: Fraction) -> dict[str, int]:

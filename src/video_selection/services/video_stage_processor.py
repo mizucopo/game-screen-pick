@@ -99,10 +99,12 @@ class VideoStageProcessor:
         self,
         video_set: VideoSet,
         configuration: EffectiveConfiguration,
+        *,
+        runtime_identity: MediaRuntimeIdentity | None = None,
     ) -> tuple[VideoStageResult, ...]:
         """scanを先行確定し各Video SourceをVideo Order順に組み立てる。"""
         validate_video_set_snapshot_metadata(video_set)
-        runtime_identity = self._media_runtime.preflight()
+        resolved_runtime_identity = runtime_identity or self._media_runtime.preflight()
         probed_sources: list[ProbedVideoSource] = []
         for source in video_set.sources:
             validate_video_set_snapshot_metadata(video_set)
@@ -130,7 +132,7 @@ class VideoStageProcessor:
                             source,
                             primary_stream,
                             configuration,
-                            runtime_identity,
+                            resolved_runtime_identity,
                         )
                     )
                 for video_order, (probed, prepared_scan) in enumerate(
@@ -156,7 +158,7 @@ class VideoStageProcessor:
                             ),
                             video_order,
                             configuration,
-                            runtime_identity,
+                            resolved_runtime_identity,
                             scan_progress_started=progress_started,
                         )
                     )

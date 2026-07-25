@@ -35,6 +35,7 @@ def test_full_sources_become_anonymous_symlinks_with_measured_duration(
         media_probe=lambda _path: {
             "start": Fraction(0),
             "duration": Fraction(50),
+            "end": Fraction(50),
             "streams": (("video", "h264"),),
         }
     )
@@ -79,6 +80,7 @@ def test_changed_full_source_requires_reset(tmp_path: Path) -> None:
         media_probe=lambda _path: {
             "start": Fraction(0),
             "duration": Fraction(50),
+            "end": Fraction(50),
         }
     )
     suite_root = profile.artifact_root / "full"
@@ -90,13 +92,13 @@ def test_changed_full_source_requires_reset(tmp_path: Path) -> None:
         materializer.materialize(profile, suite_root)
 
 
-def test_nonzero_media_start_is_subtracted_from_full_duration(
+def test_nonzero_media_start_preserves_normalized_full_duration(
     tmp_path: Path,
 ) -> None:
-    """非0 media startがfull suiteの経過時間から除かれること。
+    """非0 media startでも正規化済み経過時間がfull suiteへ加算されること。
 
     Arrange:
-        - start 5秒、end timestamp 55秒の2動画が用意される
+        - start 5秒、経過50秒、end timestamp 55秒の2動画が用意される
     Act:
         - 100秒を期待するfull suiteがmaterializeされる
     Assert:
@@ -110,7 +112,8 @@ def test_nonzero_media_start_is_subtracted_from_full_duration(
     materializer = FullSuiteMaterializer(
         media_probe=lambda _path: {
             "start": Fraction(5),
-            "duration": Fraction(55),
+            "duration": Fraction(50),
+            "end": Fraction(55),
         }
     )
 
@@ -145,6 +148,7 @@ def test_repointed_anonymous_symlink_requires_reset(tmp_path: Path) -> None:
         media_probe=lambda _path: {
             "start": Fraction(0),
             "duration": Fraction(50),
+            "end": Fraction(50),
         },
     )
     suite_root = profile.artifact_root / "full"
@@ -180,6 +184,7 @@ def test_stray_supported_video_requires_reset(tmp_path: Path) -> None:
         media_probe=lambda _path: {
             "start": Fraction(0),
             "duration": Fraction(50),
+            "end": Fraction(50),
         },
     )
     suite_root = profile.artifact_root / "full"
@@ -214,6 +219,7 @@ def test_duration_mismatch_removes_partial_anonymous_view(tmp_path: Path) -> Non
         media_probe=lambda _path: {
             "start": Fraction(0),
             "duration": Fraction(40),
+            "end": Fraction(40),
         },
     )
 

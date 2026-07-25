@@ -48,10 +48,19 @@ from ..services.select_video_set_images import (
     select_from_shortlist_batches,
     select_video_set_images,
 )
+from ..services.selection_stage_artifacts import (
+    restore_video_set_selection_result,
+    selection_artifact_candidate_count,
+    serialize_video_set_selection_result,
+)
+from ..services.selection_stage_cache import SelectionStageCache
 from ..services.validate_output_folder import validate_output_folder
 from ..services.validate_video_set_snapshot import validate_video_set_snapshot_metadata
 from ..services.video_identity_cache import VideoIdentityCache
-from ..services.video_set_vision_processor import VideoSetVisionProcessor
+from ..services.video_set_vision_processor import (
+    VideoSetVisionProcessor,
+    plan_vision_stage_fingerprints,
+)
 from ..services.video_stage_processor import VideoStageProcessor
 
 _SELECTION_INTENT = "ブログ本文を説明できる画像を選ぶ"
@@ -93,26 +102,32 @@ class VideoSelectionApplication:
         )
         with InputFolderLock(configuration.video_input_folder) as input_lock:
             validate_video_set_snapshot_metadata(video_set)
-            diagnostic = prepare_processing_cache(
-                configuration.processing_cache_folder,
-                input_lock=input_lock,
-                reset_cache=configuration.reset_cache,
-            )
-            self._observer.legacy_cache_cleaned(diagnostic)
-            for source in video_set.sources:
-                identity_cache.store(source)
             resolved_models = self._model_runtime.resolve_models(configuration)
             speech_runtime = self._speech_runtime_factory(
                 resolved_models.for_role(ModelRole.SPEECH_TO_TEXT),
                 configuration,
             )
             try:
+                media_runtime_identity = self._media_runtime.preflight()
+                validate_video_set_snapshot_metadata(video_set)
+                diagnostic = prepare_processing_cache(
+                    configuration.processing_cache_folder,
+                    input_lock=input_lock,
+                    reset_cache=configuration.reset_cache,
+                )
+                self._observer.legacy_cache_cleaned(diagnostic)
+                for source in video_set.sources:
+                    identity_cache.store(source)
                 video_stage_results = VideoStageProcessor(
                     self._media_runtime,
                     speech_runtime,
                     self._observer,
                     progress=self._progress,
-                ).process(video_set, configuration)
+                ).process(
+                    video_set,
+                    configuration,
+                    runtime_identity=media_runtime_identity,
+                )
                 speech_runtime_identity = speech_runtime.runtime_identity
             finally:
                 speech_runtime.close()
@@ -143,13 +158,29 @@ class VideoSelectionApplication:
         vision_stages: list[CompletedStage] = []
         vision_diagnostics: dict[str, VisionInferenceDiagnostics] = {}
         scene_catalog: SceneCatalog | None = None
+        base_completed_stages = _unique_completed_stages(
+            tuple(
+                stage
+                for result in video_stage_results
+                for stage in result.completed_stages
+            )
+        )
         spoiler_sensitivity = cast(
             SpoilerSensitivity,
             configuration.spoiler_sensitivity,
         )
+        planned_vision_fingerprints: tuple[StageFingerprint, ...] = ()
         if requests:
             representatives = select_scene_catalog_representatives(requests)
             extraction_fingerprints = _extraction_fingerprints(video_stage_results)
+            planned_vision_fingerprints = plan_vision_stage_fingerprints(
+                video_set=video_set,
+                representatives=representatives,
+                representative_source_fingerprints=extraction_fingerprints,
+                annotation_requests=requests,
+                configuration=configuration,
+                resolved_models=resolved_models,
+            )
             vision_processor = VideoSetVisionProcessor(
                 self._vision_runtime,
                 self._observer,
@@ -199,6 +230,39 @@ class VideoSelectionApplication:
                     )
                     offset += batch_size
 
+        selection_request_fingerprint = _selection_request_fingerprint(
+            configuration,
+            base_completed_stages,
+            planned_vision_fingerprints,
+            request_count=len(requests),
+        )
+        selection_cache = SelectionStageCache(
+            configuration.processing_cache_folder,
+            video_set_fingerprint=video_set.fingerprint,
+        )
+        cached_selection = selection_cache.read(selection_request_fingerprint)
+        selection_reused = cached_selection is not None
+        if cached_selection is not None:
+            selection_artifact, selection_stage = cached_selection
+            expected_candidate_count = selection_artifact_candidate_count(
+                selection_artifact
+            )
+            if requests:
+                annotated_candidates = _restore_annotated_candidates(
+                    candidate_batches(),
+                    expected_candidate_count,
+                )
+            elif expected_candidate_count == 0:
+                annotated_candidates = ()
+            else:
+                raise ValueError("Video Set Selection cacheのcandidate件数が不正です")
+            selection = restore_video_set_selection_result(
+                selection_artifact,
+                annotated_candidates,
+            )
+            if selection.requested_count != configuration.image_count:
+                raise ValueError("Video Set Selection cacheのrequested countが不正です")
+        elif requests:
             selection = select_from_shortlist_batches(
                 candidate_batches(),
                 requested_count=configuration.image_count,
@@ -215,19 +279,31 @@ class VideoSelectionApplication:
 
         completed_stages = _unique_completed_stages(
             (
-                *(
-                    stage
-                    for result in video_stage_results
-                    for stage in result.completed_stages
-                ),
+                *base_completed_stages,
                 *vision_stages,
             )
         )
-        selection_stage = self._record_selection_stage(
-            configuration,
-            video_set,
-            selection,
-            completed_stages,
+        if cached_selection is not None:
+            expected_upstream = tuple(stage.fingerprint for stage in completed_stages)
+            if selection_stage.upstream_fingerprints != expected_upstream:
+                raise ValueError(
+                    "Video Set Selection cacheのupstreamが現在のrunと一致しません"
+                )
+        else:
+            selection_stage = self._write_selection_stage(
+                configuration,
+                video_set,
+                selection,
+                completed_stages,
+                selection_request_fingerprint,
+            )
+            selection_cache.record(
+                selection_request_fingerprint,
+                selection_stage,
+            )
+        self._record_selection_progress(
+            selection_stage,
+            reused=selection_reused,
         )
         completed_stages = (*completed_stages, selection_stage)
         return self._publish(
@@ -243,16 +319,18 @@ class VideoSelectionApplication:
             started_at,
         )
 
-    def _record_selection_stage(
+    def _write_selection_stage(
         self,
         configuration: EffectiveConfiguration,
         video_set: VideoSet,
         selection: VideoSetSelectionResult,
         completed_stages: tuple[CompletedStage, ...],
+        selection_request_fingerprint: StageFingerprint,
     ) -> CompletedStage:
         """最終selection decisionをCompleted Stageとしてatomicに確定する。"""
         upstream = tuple(stage.fingerprint for stage in completed_stages)
         semantic_input = {
+            "selection_request_fingerprint": selection_request_fingerprint.value,
             "requested_count": configuration.image_count,
             "spoiler_sensitivity": configuration.spoiler_sensitivity,
             "similarity_threshold": configuration.similarity_threshold,
@@ -271,50 +349,25 @@ class VideoSelectionApplication:
             subject_namespace="video-sets",
             subject_fingerprint=video_set.fingerprint,
         )
-        self._progress.start_stage(
-            ProcessingStage.SELECT_IMAGES,
-            work_unit_kind="selection",
-        )
-        artifact = writer.read(
+        return writer.write(
             ProcessingStage.SELECT_IMAGES,
             fingerprint,
             upstream,
             semantic_input,
+            serialize_video_set_selection_result(selection),
         )
-        reused = artifact is not None
-        if artifact is None:
-            completed = writer.write(
-                ProcessingStage.SELECT_IMAGES,
-                fingerprint,
-                upstream,
-                semantic_input,
-                {
-                    "selected_ids": [
-                        item.candidate.identifier for item in selection.selected
-                    ],
-                    "rejected_ids": [
-                        item.candidate.identifier for item in selection.rejected
-                    ],
-                    "rejected": [
-                        {
-                            "candidate_id": item.candidate.identifier,
-                            "reason_code": item.reason_code.value,
-                        }
-                        for item in selection.rejected
-                    ],
-                    "shortlist_expansion_count": (selection.shortlist_expansion_count),
-                    "all_candidate_moments_exhausted": (
-                        selection.all_candidate_moments_exhausted
-                    ),
-                },
-            )
-        else:
-            completed = CompletedStage(
-                ProcessingStage.SELECT_IMAGES,
-                fingerprint,
-                upstream,
-                semantic_input,
-            )
+
+    def _record_selection_progress(
+        self,
+        completed: CompletedStage,
+        *,
+        reused: bool,
+    ) -> None:
+        """実際のselector実行有無をSelect Images progressへ記録する。"""
+        self._progress.start_stage(
+            ProcessingStage.SELECT_IMAGES,
+            work_unit_kind="selection",
+        )
         self._progress.record_work_sample("reuse" if reused else "recompute")
         self._progress.cache_observed(
             cache_hit_count=1 if reused else 0,
@@ -325,7 +378,6 @@ class VideoSelectionApplication:
         )
         self._progress.complete_stage(stage_fingerprint=completed.fingerprint)
         self._observer.stage_completed(completed)
-        return completed
 
     def _publish(
         self,
@@ -410,6 +462,52 @@ def _annotation_batch_sizes(total: int, requested_count: int) -> tuple[int, ...]
         sizes.append(size)
         remaining -= size
     return tuple(sizes)
+
+
+def _selection_request_fingerprint(
+    configuration: EffectiveConfiguration,
+    completed_stages: tuple[CompletedStage, ...],
+    planned_vision_fingerprints: tuple[StageFingerprint, ...],
+    *,
+    request_count: int,
+) -> StageFingerprint:
+    """selector実行前に全依存入力を識別するfingerprintを返す。"""
+    semantic_input = {
+        "request_contract": "preselection-input-v1",
+        "requested_count": configuration.image_count,
+        "spoiler_sensitivity": configuration.spoiler_sensitivity,
+        "similarity_threshold": configuration.similarity_threshold,
+        "annotation_batch_sizes": list(
+            _annotation_batch_sizes(request_count, configuration.image_count)
+            if request_count
+            else ()
+        ),
+    }
+    return build_stage_fingerprint(
+        ProcessingStage.SELECT_IMAGES,
+        (
+            *(stage.fingerprint for stage in completed_stages),
+            *planned_vision_fingerprints,
+        ),
+        semantic_input,
+    )
+
+
+def _restore_annotated_candidates(
+    batches: Iterator[tuple[BlogCandidate, ...]],
+    expected_count: int,
+) -> tuple[BlogCandidate, ...]:
+    """cache artifactが使用したbatch境界まで注釈済みcandidateを復元する。"""
+    if expected_count < 1:
+        raise ValueError("Video Set Selection cacheのcandidate件数が不正です")
+    candidates: list[BlogCandidate] = []
+    for batch in batches:
+        candidates.extend(batch)
+        if len(candidates) >= expected_count:
+            break
+    if len(candidates) != expected_count:
+        raise ValueError("Video Set Selection cacheのbatch境界が不正です")
+    return tuple(candidates)
 
 
 def _extraction_fingerprints(

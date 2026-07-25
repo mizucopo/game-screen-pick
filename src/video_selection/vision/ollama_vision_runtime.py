@@ -738,7 +738,7 @@ class OllamaVisionRuntime:
                 visibility_is_acceptable = not opponent_reaches_outer_edge
             if not visibility_is_acceptable:
                 annotation = replace(annotation, explanation_value="none")
-        elif requires_publication_verification:
+        if annotation.explanation_value != "none" and requires_publication_verification:
             verification_input = _publication_boundary_verification_semantic_input(
                 annotation.candidate,
                 model,

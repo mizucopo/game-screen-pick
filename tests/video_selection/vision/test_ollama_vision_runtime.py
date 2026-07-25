@@ -2888,6 +2888,75 @@ def test_letterboxed_ordinary_scene_is_visually_rechecked() -> None:
     assert len(payloads) == 2
 
 
+def test_letterboxed_combat_runs_independent_publication_boundary_check() -> None:
+    """戦闘可視性を通過した黒帯画像も掲載境界で独立確認されること。
+
+    Arrange:
+        - 敵が明瞭な戦闘として一貫して確認される上下黒帯画像が用意される
+        - 掲載境界確認では一時的な遷移effectが観測される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 戦闘確認後にも掲載境界確認が実行され掲載不可になること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+                )
+            )
+        if len(payloads) in {2, 3}:
+            return _response(
+                _combat_visibility_payload(
+                    opponent_body_visibility="clear",
+                    opponent_body_framing="complete",
+                )
+            )
+        if len(payloads) == 4:
+            return _response(_combat_visibility_edge_audit_payload())
+        return _response(
+            _publication_boundary_payload(
+                transient_transition_effect=True,
+                transition_effect_kind="white_wipe",
+                transition_effect_coverage="over_half",
+                primary_content_readability="obscured",
+            )
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(image_bytes=_letterboxed_image_bytes()),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 5
+    assert len(payloads) == 5
+    assert "transient_transition_effect" in str(_last_message(payloads[4])["content"])
+
+
 def test_publication_boundary_schema_failure_is_retried() -> None:
     """掲載境界専用確認のschema違反が一回だけ再試行されること。
 
