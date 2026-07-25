@@ -82,7 +82,9 @@ release intervalは全streamをFFmpeg stream copyした`scenario-001.mkv`形式�
 ffprobeの実測開始、終了、durationがprofileの許容差を超える場合はpipeline前にexit 2に
 なる。ffprobeのcontainer差は、stream durationがある場合はstream timing、ないMatroskaでは
 非0 startを含むformat end、それ以外ではformat elapsed durationから、absolute endと経過
-durationへ正規化する。full suiteはこの正規化済み経過durationを合算する。
+durationへ正規化する。各release区間の境界だけでなく、全clipの正規化済み実測duration合計も
+profileの期待合計と同じtolerance内であることを検証する。full suiteはこの正規化済み経過
+durationを合算する。
 確定済みrelease inputの再利用時はmanifest記載clipと対応videoの完全一致も検証する。
 materialize時間はphase予算に含めない。
 
@@ -175,11 +177,15 @@ phase/cache/storage/GPU aggregate、gate aggregateだけを含める。canonical
 実semantic inputと推論診断からtool/model/contract参照、設定、validation、token数を記録する。
 performance比較用configurationには設定file digest、URLを含まないendpoint identity、
 privacy-safeな全実効performance設定を保存する。
+cold/warmの結果一致digestには選定判断とmodel identityに加え、公開WebPのSHA-256、寸法、
+byte数を含め、同じ候補から異なる画像artifactが公開されたrunを一致扱いしない。
 absolute path、video名、media、raw Context Cue、prompt、model response、credential、個別human
 判定は含めない。
 
 releaseのtemporary clipとprocessing cacheはcold/warmおよびrecord生成後、合格・不合格・
-review pendingのいずれでも削除する。phase output、state、worksheet、recordは保持する。
+review pendingのいずれでも削除する。完全に削除できない場合はpassingまたはreview pendingを
+確定せず、`release_cleanup_failed`で受入不合格にする。phase output、state、worksheet、
+recordは保持する。
 
 合格時は同じsuite directoryの`baseline/baseline.json`と`baseline/baseline.md`へ、source
 commitを除いた正規化baselineを生成する。再評価がpendingまたは不合格なら、以前のpassing

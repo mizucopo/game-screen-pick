@@ -45,9 +45,8 @@ def build_report_provenance(
                 cache_hits=sum(event.cache_hit_count for event in events),
                 cache_misses=sum(event.cache_miss_count for event in events),
                 recomputed_items=sum(event.recompute_count for event in events),
-                attempt_count=max(
-                    len(events),
-                    0 if diagnostics is None else diagnostics.attempt_count,
+                attempt_count=(
+                    len(events) if diagnostics is None else diagnostics.attempt_count
                 ),
                 validation_failures=(
                     0

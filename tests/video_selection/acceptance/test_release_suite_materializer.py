@@ -1,5 +1,6 @@
 """release suite stream-copy materializerのtest。"""
 
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
@@ -105,6 +106,70 @@ def test_boundary_outside_tolerance_removes_partial_clips(tmp_path: Path) -> Non
 
     # Act / Assert
     with pytest.raises(ValueError, match="実測境界"):
+        ReleaseSuiteMaterializer(
+            command_runner=run,
+            media_probe=probe,
+        ).materialize(profile, suite_root)
+    assert not (suite_root / "work" / "input").exists()
+
+
+def test_aggregate_measured_duration_must_remain_within_suite_tolerance(
+    tmp_path: Path,
+) -> None:
+    """各区間が境界内でも実測合計がtolerance外なら拒否されること。
+
+    Arrange:
+        - 各終了境界が4秒ずつ延びた2区間と5秒toleranceが用意される
+    Act:
+        - 合計1808秒のrelease suiteがmaterializeされる
+    Assert:
+        - 期待1800秒との差がaggregate toleranceを超えるため拒否されること
+        - partial clip folderが削除されること
+    """
+    # Arrange
+    base_profile = _profile(tmp_path)
+    profile = replace(
+        base_profile,
+        release_intervals=(
+            ReleaseInterval(
+                "private-video.mkv",
+                Fraction(0),
+                Fraction(900),
+                "opening",
+            ),
+            ReleaseInterval(
+                "private-video.mkv",
+                Fraction(900),
+                Fraction(1800),
+                "combat",
+            ),
+        ),
+    )
+    profile.input_root.mkdir()
+    source = profile.input_root / "private-video.mkv"
+    source.write_bytes(b"source")
+
+    def run(command: list[str]) -> None:
+        Path(command[-1]).write_bytes(b"clip")
+
+    def probe(path: Path) -> dict[str, object]:
+        if path == source:
+            start, end = Fraction(0), Fraction(2000)
+        elif path.name == "scenario-001.mkv":
+            start, end = Fraction(0), Fraction(904)
+        else:
+            start, end = Fraction(900), Fraction(1804)
+        return {
+            "start": start,
+            "duration": end - start,
+            "end": end,
+            "streams": (("video", "h264"),),
+        }
+
+    suite_root = profile.artifact_root / "release"
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="実測合計duration"):
         ReleaseSuiteMaterializer(
             command_runner=run,
             media_probe=probe,

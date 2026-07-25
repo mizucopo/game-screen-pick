@@ -59,6 +59,7 @@ class ReleaseSuiteMaterializer:
                 for index in range(len(profile.release_intervals))
             )
             descriptor = _suite_descriptor(clips)
+            _validate_total_duration(profile, descriptor)
             manifest = {
                 "schema": _MATERIALIZATION_SCHEMA,
                 "profile_digest": profile.profile_digest,
@@ -175,6 +176,7 @@ class ReleaseSuiteMaterializer:
                 "content_sha256"
             ) != self._content_digester(path):
                 raise ValueError("Release suite clipが変更されています")
+        _validate_total_duration(profile, descriptor)
         return cast(dict[str, object], descriptor)
 
 
@@ -190,6 +192,19 @@ def _suite_descriptor(clips: tuple[dict[str, object], ...]) -> dict[str, object]
         "total_duration": _fraction_record(total),
         "clips": list(clips),
     }
+
+
+def _validate_total_duration(
+    profile: AcceptanceProfile,
+    descriptor: Mapping[str, object],
+) -> None:
+    """実測clip合計がprofileのrelease duration境界内であることを検証する。"""
+    measured = _record_fraction(descriptor.get("total_duration"))
+    if (
+        abs(measured - profile.release_expected_total_duration)
+        > profile.release_boundary_tolerance_seconds
+    ):
+        raise ValueError("Release suiteの実測合計durationが不正です")
 
 
 def _require_source_within_root(root: Path, source: Path) -> None:

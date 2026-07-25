@@ -218,16 +218,20 @@ def normalized_result_digest(report: Mapping[str, object]) -> str:
     for value in selected:
         if not isinstance(value, dict):
             raise ValueError("Canonical reportのselected recordが不正です")
+        output = value.get("output")
+        if not isinstance(output, dict):
+            raise ValueError("Canonical reportのselected outputが不正です")
         normalized_selected.append(
             {
-                key: value.get(key)
-                for key in (
-                    "image_id",
-                    "selection_index",
-                    "classification",
-                    "annotation",
-                    "selection",
-                )
+                "image_id": value.get("image_id"),
+                "selection_index": value.get("selection_index"),
+                "classification": value.get("classification"),
+                "annotation": value.get("annotation"),
+                "selection": value.get("selection"),
+                "output": {
+                    key: output.get(key)
+                    for key in ("sha256", "width", "height", "bytes")
+                },
             }
         )
     normalized = {

@@ -7,6 +7,7 @@ from .model_runtime_identity import ModelRuntimeIdentity
 from .resolved_model_identity import ResolvedModelIdentity
 
 _SAFE_VALUE_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._:+/-]{0,255}")
+_MAX_AGGREGATE_ATTEMPT_COUNT = 14
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,7 @@ class VisionInferenceDiagnostics:
                 value is not None and _SAFE_VALUE_PATTERN.fullmatch(value) is None
                 for value in optional_safe_values
             )
-            or not 1 <= self.attempt_count <= 10
+            or not 1 <= self.attempt_count <= _MAX_AGGREGATE_ATTEMPT_COUNT
             or any(value < 0 for value in counts)
             or any(value is not None and value < 0 for value in optional_counts)
             or self.duration_seconds < 0

@@ -32,6 +32,8 @@ Stage manifestの上流fingerprint、現在runで観測したcache hit/miss・�
 commit SHAを保持します。coldとwarmのreportは同じartifact identityでも、各runで実際に
 再計算または再利用された結果を別々に示します。`report.md`は短縮fingerprintと主要診断だけを
 表示します。
+Vision Stageの試行回数は推論診断のlogical attemptを正本とし、同じScene Catalogを後続batchで
+cache reuseした回数はcache hitへだけ計上します。
 
 `run.started_at`はApplicationへ入った時点、`run.completed_at`は全Processing Stageと選定に
 加えて選択画像のstagingが完了し、atomic publisherがCanonical reportを最終化する時点をUTCで

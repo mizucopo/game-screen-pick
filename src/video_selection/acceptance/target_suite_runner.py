@@ -332,21 +332,24 @@ class TargetSuiteRunner:
                 "exit_code": 1,
                 "reason": "privacy_gate_failed",
             }
+            if not _cleanup_release_work(
+                suite,
+                suite_root,
+                state,
+                prior_failure_reason="privacy_gate_failed",
+            ):
+                return 1
             write_atomic_json(suite_root / "acceptance-state.json", state)
-            if suite == "release":
-                shutil.rmtree(suite_root / "work", ignore_errors=True)
+            return 1
+        if not _cleanup_release_work(suite, suite_root, state):
             return 1
         _remove_directory_strict(suite_root / "baseline", "Acceptance baseline")
         write_atomic_json(suite_root / "acceptance.json", record)
-        try:
-            state["acceptance_status"] = record["status"]
-            state.pop("last_failure", None)
-            write_atomic_json(suite_root / "acceptance-state.json", state)
-            if record["status"] == "passed":
-                write_normalized_baseline(record, suite_root / "baseline")
-        finally:
-            if suite == "release":
-                shutil.rmtree(suite_root / "work", ignore_errors=True)
+        state["acceptance_status"] = record["status"]
+        state.pop("last_failure", None)
+        write_atomic_json(suite_root / "acceptance-state.json", state)
+        if record["status"] == "passed":
+            write_normalized_baseline(record, suite_root / "baseline")
         return (
             0
             if record["status"] == "passed"
@@ -354,6 +357,33 @@ class TargetSuiteRunner:
             if record["status"] == "pending_human_review"
             else 1
         )
+
+
+def _cleanup_release_work(
+    suite: str,
+    suite_root: Path,
+    state: dict[str, object],
+    *,
+    prior_failure_reason: str | None = None,
+) -> bool:
+    """release private workを完全に削除できた場合だけfinalizationを許可する。"""
+    if suite != "release":
+        return True
+    try:
+        _remove_directory_strict(suite_root / "work", "Release acceptance work")
+    except ValueError:
+        failure: dict[str, object] = {
+            "phase": "acceptance_cleanup",
+            "exit_code": 1,
+            "reason": "release_cleanup_failed",
+        }
+        if prior_failure_reason is not None:
+            failure["prior_reason"] = prior_failure_reason
+        state["acceptance_status"] = "failed"
+        state["last_failure"] = failure
+        write_atomic_json(suite_root / "acceptance-state.json", state)
+        return False
+    return True
 
 
 def _remove_directory_strict(path: Path, label: str) -> None:

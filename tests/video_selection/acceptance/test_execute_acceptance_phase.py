@@ -7,10 +7,53 @@ import pytest
 
 from src.video_selection.acceptance.execute_acceptance_phase import (
     execute_acceptance_phase,
+    normalized_result_digest,
 )
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.run_failure import RunFailure
 from tests.video_selection.fakes.fake_model_runtime import FakeModelRuntime
+
+
+def test_normalized_result_digest_includes_published_image_identity() -> None:
+    """公開画像のhashまたは寸法が異なるcold/warm digestが一致しないこと。
+
+    Arrange:
+        - 同じ選定結果と異なる画像hashまたは寸法を持つcanonical reportが用意される
+    Act:
+        - 各reportのnormalized result digestが生成される
+    Assert:
+        - 公開画像bytesまたは寸法が異なるdigestはcold digestと一致しないこと
+    """
+    # Arrange
+    cold_report = _canonical_report(
+        sha256="a" * 64,
+        width=1920,
+        height=1080,
+        size_bytes=1000,
+    )
+    changed_outputs = (
+        _canonical_report(
+            sha256="b" * 64,
+            width=1920,
+            height=1080,
+            size_bytes=1000,
+        ),
+        _canonical_report(
+            sha256="a" * 64,
+            width=1280,
+            height=720,
+            size_bytes=900,
+        ),
+    )
+
+    # Act
+    cold_digest = normalized_result_digest(cold_report)
+    changed_digests = tuple(
+        normalized_result_digest(report) for report in changed_outputs
+    )
+
+    # Assert
+    assert all(digest != cold_digest for digest in changed_digests)
 
 
 def test_phase_duration_excludes_resource_monitor_shutdown(
@@ -110,3 +153,32 @@ def test_phase_duration_excludes_resource_monitor_shutdown(
     assert report is None
     assert selection_artifact is None
     assert now[0] == 100.0
+
+
+def _canonical_report(
+    *,
+    sha256: str,
+    width: int,
+    height: int,
+    size_bytes: int,
+) -> dict[str, object]:
+    """digest境界だけを持つ最小canonical reportを返す。"""
+    return {
+        "selected": [
+            {
+                "image_id": "frm_" + "1" * 64,
+                "selection_index": 1,
+                "classification": {"blog_image_type": "normal_gameplay"},
+                "annotation": {"summary": "探索"},
+                "selection": {"marginal_utility": 0.9},
+                "output": {
+                    "relative_path": "images/0001_exploration.webp",
+                    "sha256": sha256,
+                    "width": width,
+                    "height": height,
+                    "bytes": size_bytes,
+                },
+            }
+        ],
+        "provenance": {"models": {}},
+    }

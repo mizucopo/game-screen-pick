@@ -224,6 +224,103 @@ def test_reset_suite_fails_when_suite_root_survives_deletion(
     assert calls == ["cold", "warm"]
 
 
+def test_release_finalization_fails_when_private_work_survives_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """private workを削除できないrelease finalizationが不合格になること。
+
+    Arrange:
+        - cold/warmが完了するrelease suiteが用意される
+        - 削除してもworkを残すfilesystem境界が用意される
+    Act:
+        - human review待ちまでrelease suiteが実行される
+    Assert:
+        - cleanup failureとしてexit 1になりpassing recordが生成されないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda phase, configuration, _models, _suite_root: _successful_phase(
+            configuration,
+            phase,
+        )
+    )
+    monkeypatch.setattr(
+        "src.video_selection.acceptance.target_suite_runner.shutil.rmtree",
+        lambda _path, *_args, **_kwargs: None,
+    )
+
+    # Act
+    result = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state = read_json_object(suite_root / "acceptance-state.json")
+    assert result == 1
+    assert state is not None
+    assert state["acceptance_status"] == "failed"
+    assert state["last_failure"] == {
+        "phase": "acceptance_cleanup",
+        "exit_code": 1,
+        "reason": "release_cleanup_failed",
+    }
+    assert (suite_root / "work").is_dir()
+    assert not (suite_root / "acceptance.json").exists()
+
+
+def test_privacy_failure_also_reports_release_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """privacy不合格時にもprivate work削除失敗が記録されること。
+
+    Arrange:
+        - privacy gateが不合格になるrelease suiteとworkを残すfilesystem境界が用意される
+    Act:
+        - release suiteのfinalizationが実行される
+    Assert:
+        - privacy不合格を先行理由に持つcleanup failureとしてexit 1になること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda phase, configuration, _models, _suite_root: _successful_phase(
+            configuration,
+            phase,
+        )
+    )
+
+    def reject_privacy(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("privacy failure")
+
+    monkeypatch.setattr(
+        "src.video_selection.acceptance.target_suite_runner."
+        "validate_acceptance_record_privacy",
+        reject_privacy,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.acceptance.target_suite_runner.shutil.rmtree",
+        lambda _path, *_args, **_kwargs: None,
+    )
+
+    # Act
+    result = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state = read_json_object(suite_root / "acceptance-state.json")
+    assert result == 1
+    assert state is not None
+    assert state["last_failure"] == {
+        "phase": "acceptance_cleanup",
+        "exit_code": 1,
+        "reason": "release_cleanup_failed",
+        "prior_reason": "privacy_gate_failed",
+    }
+    assert (suite_root / "work").is_dir()
+
+
 def test_state_preserves_privacy_safe_performance_configuration(
     tmp_path: Path,
 ) -> None:
