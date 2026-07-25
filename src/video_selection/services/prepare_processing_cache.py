@@ -102,15 +102,9 @@ def _remove_legacy_candidate_annotation_cache(
         for stage_folder in sorted(stage_root.iterdir()):
             if not _is_sha256_directory(stage_folder):
                 continue
-            manifest = _recognized_candidate_annotation_manifest(
+            revision = _recognized_candidate_annotation_contract_revision(
                 stage_folder,
                 subject_folder.name,
-            )
-            if manifest is None:
-                continue
-            semantic_input = cast(dict[str, object], manifest["semantic_input"])
-            revision = _candidate_annotation_contract_revision(
-                semantic_input.get("stage_contract_version")
             )
             if revision is None or revision >= current_revision:
                 continue
@@ -123,11 +117,11 @@ def _remove_legacy_candidate_annotation_cache(
     )
 
 
-def _recognized_candidate_annotation_manifest(
+def _recognized_candidate_annotation_contract_revision(
     stage_folder: Path,
     subject_fingerprint: str,
-) -> dict[str, object] | None:
-    """削除対象判定に必要なidentityを持つ通常manifestだけを返す。"""
+) -> int | None:
+    """認識済みCandidate Annotation manifestのcontract revisionを返す。"""
     manifest_path = stage_folder / "manifest.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
         return None
@@ -154,7 +148,9 @@ def _recognized_candidate_annotation_manifest(
         or not all(isinstance(key, str) for key in semantic_input)
     ):
         return None
-    return manifest
+    return _candidate_annotation_contract_revision(
+        semantic_input.get("stage_contract_version")
+    )
 
 
 def _candidate_annotation_contract_revision(value: object) -> int | None:
