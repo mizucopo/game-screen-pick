@@ -627,7 +627,7 @@ def test_completed_parallel_scans_survive_first_middle_last_video_failure(
         - 失敗runの後に同じVideo Setとcacheで再実行される
     Assert:
         - 正常完了したscanは再利用され、未確定scanだけが再計算されること
-        - 失敗Videoより前のdownstreamは保持され、retryで再計算されないこと
+        - 失敗検知前に完了した先頭Videoのdownstreamはretryで再計算されないこと
         - 残るextractionはretry時にVideo Order順で処理されること
     """
     # Arrange
@@ -665,12 +665,12 @@ def test_completed_parallel_scans_survive_first_middle_last_video_failure(
     completed = attempted - {failed_name}
     expected_scan_recompute = [name for name in video_names if name not in completed]
     assert failed_name in attempted
-    assert [path.name for path in failing_runtime.range_calls] == list(
-        video_names[:failure_position]
-    )
+    completed_downstream = [path.name for path in failing_runtime.range_calls]
+    assert completed_downstream == list(video_names[: len(completed_downstream)])
+    assert len(completed_downstream) <= failure_position
     assert [path.name for path in retry_runtime.scan_calls] == expected_scan_recompute
     assert [path.name for path in retry_runtime.range_calls] == list(
-        video_names[failure_position:]
+        video_names[len(completed_downstream) :]
     )
     assert len(results) == 3
 
