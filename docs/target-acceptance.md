@@ -65,7 +65,8 @@ coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。
 full Video Setを再hashしない。fullの独立Video Scanはlogical CPU 8個につき1 worker、
 最大3 workerで並列実行する。Video Order上の対象scanが確定した時点で、そのVideoの
 candidate extractionとcontext collectionを後続Videoのscanと重ねて開始する。background
-scan待機中もactive Stageとheartbeatを通知し、通常のscan失敗でも待機中workerをcancelする。
+scan待機中もactive Stageとheartbeatを通知し、通常のscan失敗でも一次障害を保持したまま
+待機中workerをcancelする。
 scanのprocess登録とcancellation要求は同じlockで直列化し、cancel後に新しいdecoderを開始しない。
 新規scan artifactは対象sourceのcontent snapshotを確定直前に再検証し、scan中に変更された
 bytesを元のVideo Fingerprint配下へ保存しない。

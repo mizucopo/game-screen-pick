@@ -4,6 +4,7 @@ import os
 import signal
 import threading
 import time
+from concurrent.futures import CancelledError
 from dataclasses import replace
 from pathlib import Path
 
@@ -672,6 +673,61 @@ def test_completed_parallel_scans_survive_first_middle_last_video_failure(
         video_names[failure_position:]
     )
     assert len(results) == 3
+
+
+def test_primary_scan_failure_is_not_masked_by_sibling_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一次scan障害が兄弟scanの取消例外に覆われず返されること。
+
+    Arrange:
+        - 2番目のscanが実行中に待機し、3番目のscanが一次障害になる
+        - cancellation要求を受けた2番目のscanが取消例外を返す
+    Act:
+        - 3動画のVideo Stage処理が実行される
+    Assert:
+        - Video Order上で先に待たれる取消例外ではなく一次障害が返されること
+    """
+    # Arrange
+    monkeypatch.setattr(os, "cpu_count", lambda: 24)
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    for index, name in enumerate(
+        ("01-first.mp4", "02-cancelled.mp4", "03-failed.mp4"),
+        start=1,
+    ):
+        (input_folder / name).write_bytes(f"video-{index}".encode())
+    cancelled_scan_started = threading.Event()
+    release_cancelled_scan = threading.Event()
+
+    def coordinate_scan_failure(path: Path) -> None:
+        if path.name == "02-cancelled.mp4":
+            cancelled_scan_started.set()
+            release_cancelled_scan.wait(timeout=1)
+            raise CancelledError
+        if path.name == "03-failed.mp4":
+            assert cancelled_scan_started.wait(timeout=1)
+            raise OSError("primary video scan failure")
+
+    runtime = FakeVideoStageMediaRuntime(
+        on_scan_video=coordinate_scan_failure,
+        on_cancel_video_scans=release_cancelled_scan.set,
+    )
+
+    # Act
+    with pytest.raises(OSError, match="primary video scan failure"):
+        VideoStageProcessor(
+            runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(
+            discover_video_set(input_folder),
+            _configuration(input_folder, tmp_path / "output"),
+        )
+
+    # Assert
+    assert runtime.cancel_video_scans_call_count == 1
 
 
 def test_corrupt_candidate_proxy_recomputes_only_candidate_stage(

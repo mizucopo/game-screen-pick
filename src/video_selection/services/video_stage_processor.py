@@ -113,6 +113,7 @@ class VideoStageProcessor:
         prepared_scans: list[Future[PreparedVideoScan]] = []
         scan_cancellation = Event()
         scan_cancellation_lock = Lock()
+        primary_scan_failure: list[BaseException] = []
         with ThreadPoolExecutor(
             max_workers=worker_count,
             thread_name_prefix="video-scan",
@@ -124,6 +125,7 @@ class VideoStageProcessor:
                             self._prepare_scan,
                             scan_cancellation,
                             scan_cancellation_lock,
+                            primary_scan_failure,
                             video_set,
                             source,
                             primary_stream,
@@ -158,13 +160,16 @@ class VideoStageProcessor:
                             scan_progress_started=progress_started,
                         )
                     )
-            except (Exception, KeyboardInterrupt):
+            except (Exception, KeyboardInterrupt) as error:
                 for prepared_scan in prepared_scans:
                     prepared_scan.cancel()
                 self._request_scan_cancellation(
                     scan_cancellation,
                     scan_cancellation_lock,
+                    primary_scan_failure,
                 )
+                if primary_scan_failure and error is not primary_scan_failure[0]:
+                    raise primary_scan_failure[0] from error
                 raise
         validate_video_set_snapshot_metadata(video_set)
         return tuple(results)
@@ -270,6 +275,7 @@ class VideoStageProcessor:
         self,
         scan_cancellation: Event,
         scan_cancellation_lock: LockType,
+        primary_scan_failure: list[BaseException],
         video_set: VideoSet,
         source: VideoSource,
         primary_stream: MediaStream,
@@ -330,10 +336,12 @@ class VideoStageProcessor:
                 raise RuntimeError(msg)
             duration_seconds = max(time.monotonic() - started_at, 1e-9)
             return (reused, duration_seconds)
-        except (Exception, KeyboardInterrupt):
+        except (Exception, KeyboardInterrupt) as error:
             self._request_scan_cancellation(
                 scan_cancellation,
                 scan_cancellation_lock,
+                primary_scan_failure,
+                cause=error,
             )
             raise
 
@@ -421,10 +429,15 @@ class VideoStageProcessor:
         self,
         cancellation: Event,
         cancellation_lock: LockType,
+        primary_scan_failure: list[BaseException],
+        *,
+        cause: BaseException | None = None,
     ) -> None:
         """兄弟scanの開始を止めactive subprocess cancellationを一度だけ要求する。"""
         with cancellation_lock:
             first_request = not cancellation.is_set()
+            if first_request and cause is not None:
+                primary_scan_failure.append(cause)
             cancellation.set()
         if first_request:
             with suppress(Exception):
