@@ -668,7 +668,9 @@ def test_completed_parallel_scans_survive_first_middle_last_video_failure(
     completed_downstream = [path.name for path in failing_runtime.range_calls]
     assert completed_downstream == list(video_names[: len(completed_downstream)])
     assert len(completed_downstream) <= failure_position
-    assert [path.name for path in retry_runtime.scan_calls] == expected_scan_recompute
+    assert sorted(path.name for path in retry_runtime.scan_calls) == (
+        expected_scan_recompute
+    )
     assert [path.name for path in retry_runtime.range_calls] == list(
         video_names[len(completed_downstream) :]
     )
