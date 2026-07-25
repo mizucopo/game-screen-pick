@@ -617,6 +617,35 @@ def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
             assert len(proxy.getexif()) == 0
 
 
+def test_cancel_requested_before_scan_prevents_decoder_start(tmp_path: Path) -> None:
+    """cancel後に新しいVideo Scan decoderが開始されないこと。
+
+    Arrange:
+        - probe済みVideo Sourceとcancel済みMedia Runtimeが用意される
+    Act:
+        - 同じruntimeでVideo Scan開始が要求される
+    Assert:
+        - decoder開始前のcancellationとして拒否されること
+    """
+    # Arrange
+    video_path = generate_cfr_video(tmp_path / "cancel-before-scan.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+    runtime.cancel_video_scans()
+
+    # Act / Assert
+    with pytest.raises(MediaRuntimeError, match="cancel"):
+        runtime.scan_video(
+            video_path,
+            stream,
+            tmp_path / "cancelled-scan",
+            heartbeat_interval_seconds=1.0,
+            scene_change_threshold=0.25,
+            scene_min_interval_seconds=0.5,
+            decode_backend="cpu",
+        )
+
+
 def test_extract_video_frame_returns_exact_requested_pts(tmp_path: Path) -> None:
     """指定されたsource PTSの一つのframe artifactが返されること。
 
@@ -737,6 +766,7 @@ def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
     # Arrange
     video_path = generate_vfr_video(tmp_path / "vfr-ranges.mkv")
     runtime = FfmpegMediaRuntime()
+    decoder_cpu_seconds: list[float] = []
 
     # Act
     frames = tuple(
@@ -745,11 +775,13 @@ def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
             stream_index=0,
             pts_ranges=((0, 1), (750, 1001)),
             max_dimension=64,
+            cpu_seconds_recorder=decoder_cpu_seconds.append,
         )
     )
 
     # Assert
     assert [frame.pts for frame in frames] == [0, 750, 1000]
+    assert sum(decoder_cpu_seconds) > 0
 
 
 def test_scan_video_frame_ranges_seek_preserves_nonzero_source_frames(
@@ -811,13 +843,14 @@ def test_write_mjpeg_proxy_encodes_selected_rgb_frame_without_source_metadata(
     proxy_path = tmp_path / "candidate.jpg"
 
     # Act
-    runtime.write_mjpeg_proxy(frame, proxy_path, quality=3)
+    encoder_cpu_seconds = runtime.write_mjpeg_proxy(frame, proxy_path, quality=3)
 
     # Assert
     with Image.open(proxy_path) as proxy:
         assert proxy.format == "JPEG"
         assert proxy.size == (64, 48)
         assert len(proxy.getexif()) == 0
+    assert encoder_cpu_seconds > 0
 
 
 def test_real_cfr_vfr_video_stage_preserves_exact_timeline_and_scene_boundaries(

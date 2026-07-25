@@ -10,6 +10,9 @@ from src.video_selection.acceptance.atomic_json import (
     read_json_object,
     write_atomic_json,
 )
+from src.video_selection.acceptance.execute_acceptance_phase import (
+    normalized_result_digest,
+)
 from src.video_selection.acceptance.target_suite_runner import (
     EnvironmentProbe,
     ModelResolver,
@@ -21,7 +24,12 @@ from src.video_selection.configuration.resolve_effective_configuration import (
 )
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.model_update_status import ModelUpdateStatus
+from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.resolved_models import ResolvedModels
+from src.video_selection.services.build_stage_fingerprint import (
+    build_stage_fingerprint,
+)
+from src.video_selection.services.completed_stage_writer import CompletedStageWriter
 from tests.video_selection.fakes.fake_model_runtime import FakeModelRuntime
 
 
@@ -241,24 +249,11 @@ def test_completed_phases_resume_worksheet_finalization_without_rerun(
         return _successful_phase(configuration, phase)
 
     runner = _runner(execute)
-    assert runner.run(profile_path=profile_path, suite="release") == 3
-    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
-    state_path = suite_root / "acceptance-state.json"
-    state = read_json_object(state_path)
-    assert state is not None
-    state["worksheet_ready"] = False
-    write_atomic_json(state_path, state)
-    (suite_root / "review-worksheet.json").unlink()
-    input_folder = suite_root / "work" / "input"
-    input_folder.mkdir(parents=True)
-    (input_folder / "scenario-001.mkv").write_bytes(b"anonymous")
-    cold_configuration = resolve_effective_configuration(
-        video_input_folder=input_folder,
-        output_folder=suite_root / "outputs" / "cold",
-        config_path=tmp_path / "video-selection.toml",
-        environ={},
+    suite_root, _cold_configuration = _prepare_resume_without_worksheet(
+        tmp_path,
+        runner,
+        profile_path,
     )
-    _successful_phase(cold_configuration, "cold")
 
     # Act
     result = runner.run(profile_path=profile_path, suite="release")
@@ -267,6 +262,97 @@ def test_completed_phases_resume_worksheet_finalization_without_rerun(
     assert result == 3
     assert calls == ["cold", "warm"]
     assert (suite_root / "review-worksheet.json").is_file()
+
+
+def test_resume_rejects_changed_completed_cold_report(tmp_path: Path) -> None:
+    """完了phase後に変更されたcold reportからworksheetが生成されないこと。
+
+    Arrange:
+        - cold/warm完了後かつworksheet未生成のresume stateが用意される
+        - cold reportのcandidate IDがphase確定後に変更される
+    Act:
+        - suiteがworksheet生成から再開される
+    Assert:
+        - phase recordのdigest不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda phase, configuration, _models, _suite_root: _successful_phase(
+            configuration,
+            phase,
+        )
+    )
+    _suite_root, cold_configuration = _prepare_resume_without_worksheet(
+        tmp_path,
+        runner,
+        profile_path,
+    )
+    report_path = cold_configuration.output_folder / "report.json"
+    report = read_json_object(report_path)
+    assert report is not None
+    selected = report["selected"]
+    assert isinstance(selected, list)
+    selected_item = selected[0]
+    assert isinstance(selected_item, dict)
+    selected_item["image_id"] = "frm_" + "3" * 64
+    write_atomic_json(report_path, report)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="report digest"):
+        runner.run(profile_path=profile_path, suite="release")
+
+
+def test_resume_rejects_changed_completed_selection_artifact(
+    tmp_path: Path,
+) -> None:
+    """完了phase後に変更されたselection artifactがworksheetへ使われないこと。
+
+    Arrange:
+        - cold/warm完了後かつworksheet未生成のresume stateが用意される
+        - cold selection artifactがmanifest確定後に変更される
+    Act:
+        - suiteがworksheet生成から再開される
+    Assert:
+        - Completed Stage integrity不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda phase, configuration, _models, _suite_root: _successful_phase(
+            configuration,
+            phase,
+        )
+    )
+    suite_root, cold_configuration = _prepare_resume_without_worksheet(
+        tmp_path,
+        runner,
+        profile_path,
+    )
+    state = read_json_object(suite_root / "acceptance-state.json")
+    assert state is not None
+    phases = state["phases"]
+    assert isinstance(phases, dict)
+    cold = phases["cold"]
+    assert isinstance(cold, dict)
+    selection_fingerprint = cold["selection_stage_fingerprint"]
+    assert isinstance(selection_fingerprint, str)
+    artifact_path = (
+        cold_configuration.processing_cache_folder
+        / "video-sets"
+        / ("f" * 64)
+        / ProcessingStage.SELECT_IMAGES.value
+        / selection_fingerprint
+        / "artifact.json"
+    )
+    artifact = read_json_object(artifact_path)
+    assert artifact is not None
+    artifact["rejected"] = []
+    write_atomic_json(artifact_path, artifact)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="integrity"):
+        runner.run(profile_path=profile_path, suite="release")
 
 
 def test_completed_state_revalidates_current_suite_fingerprint(tmp_path: Path) -> None:
@@ -350,6 +436,58 @@ def test_completed_state_revalidates_current_model_identity(tmp_path: Path) -> N
 
     # Assert
     assert "suite identity" in str(error.value)
+    assert calls == ["cold", "warm"]
+
+
+def test_completed_state_rejects_changed_environment_ollama_endpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """環境変数由来Ollama endpointが変わったstateは再利用されないこと。
+
+    Arrange:
+        - TOMLにhostを持たずOLLAMA_HOSTで完了したsuiteが用意される
+    Act:
+        - OLLAMA_HOSTを別endpointへ変えてsuiteが再開される
+    Assert:
+        - privacy-safeなsuite identity不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path, include_ollama_host=False)
+    monkeypatch.setenv("OLLAMA_HOST", "http://first.example:11434")
+    calls: list[str] = []
+
+    def execute(
+        phase: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> tuple[
+        int,
+        dict[str, object],
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        calls.append(phase)
+        return _successful_phase(configuration, phase)
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    state_path = (
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "release"
+        / "acceptance-state.json"
+    )
+    state = read_json_object(state_path)
+    assert state is not None
+    assert state["ollama_endpoint_identity"] != "http://first.example:11434"
+    monkeypatch.setenv("OLLAMA_HOST", "http://second.example:11434")
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="suite identity"):
+        runner.run(profile_path=profile_path, suite="release")
     assert calls == ["cold", "warm"]
 
 
@@ -554,6 +692,68 @@ def test_interrupt_before_phase_record_can_retry_without_reset(
     assert cold["resource_sampling_complete"] is False
 
 
+def test_pending_refinalization_removes_previously_passing_baseline(
+    tmp_path: Path,
+) -> None:
+    """再評価がpendingなら以前のpassing baselineが削除されること。
+
+    Arrange:
+        - default worksheetはpendingのままexternal worksheetでpassされる
+    Act:
+        - external worksheetを指定せず同じsuiteが再評価される
+    Assert:
+        - statusがpendingへ戻り古いbaselineが残らないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda phase, configuration, _models, _suite_root: _successful_phase(
+            configuration,
+            phase,
+        )
+    )
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    default_worksheet = read_json_object(suite_root / "review-worksheet.json")
+    assert default_worksheet is not None
+    completed_worksheet = dict(default_worksheet)
+    completed_worksheet["reviewer"] = "reviewer"
+    completed_worksheet["completed_at"] = "2026-07-17T00:00:00+00:00"
+    selected = completed_worksheet["selected"]
+    assert isinstance(selected, list)
+    selected_item = selected[0]
+    assert isinstance(selected_item, dict)
+    selected_item.update(
+        {
+            "visual_quality": "pass",
+            "blog_usable": "yes",
+            "annotation_consistency": "consistent",
+            "context_overrode_visual_invalidity": "no",
+        }
+    )
+    checks = completed_worksheet["suite_checks"]
+    assert isinstance(checks, dict)
+    checks["spoiler_monotonicity"] = "pass"
+    external_path = tmp_path / "completed-review.json"
+    write_atomic_json(external_path, completed_worksheet)
+    assert (
+        runner.run(
+            profile_path=profile_path,
+            suite="release",
+            human_review_path=external_path,
+        )
+        == 0
+    )
+    assert (suite_root / "baseline" / "baseline.json").is_file()
+
+    # Act
+    result = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert result == 3
+    assert not (suite_root / "baseline").exists()
+
+
 def _runner(
     phase_executor: PhaseExecutor,
     *,
@@ -616,11 +816,20 @@ def _successful_phase(
                 "image_id": candidate_id,
                 "output": {"relative_path": "images/0001_gameplay.webp"},
             }
-        ]
+        ],
+        "provenance": {"models": {}},
     }
     configuration.output_folder.mkdir(parents=True, exist_ok=True)
     write_atomic_json(configuration.output_folder / "report.json", report)
-    selection_fingerprint = "e" * 64
+    selection_semantic_input = {
+        "requested_count": 1,
+        "annotated_candidate_ids": [candidate_id, "frm_" + "2" * 64],
+    }
+    selection_fingerprint = build_stage_fingerprint(
+        ProcessingStage.SELECT_IMAGES,
+        (),
+        selection_semantic_input,
+    )
     artifact: dict[str, object] = {
         "rejected": [
             {
@@ -629,15 +838,17 @@ def _successful_phase(
             }
         ]
     }
-    artifact_path = (
-        configuration.processing_cache_folder
-        / "video-sets"
-        / ("f" * 64)
-        / "select-images"
-        / selection_fingerprint
-        / "artifact.json"
+    CompletedStageWriter(
+        configuration.processing_cache_folder,
+        subject_namespace="video-sets",
+        subject_fingerprint="f" * 64,
+    ).write(
+        ProcessingStage.SELECT_IMAGES,
+        selection_fingerprint,
+        (),
+        selection_semantic_input,
+        artifact,
     )
-    write_atomic_json(artifact_path, artifact)
     record: dict[str, object] = {
         "operation_status": "completed",
         "duration_seconds": 10.0,
@@ -663,16 +874,43 @@ def _successful_phase(
         "ollama_model_fully_resident": True,
         "resource_sampling_complete": True,
         "speech_runtime_identity": "speech_" + "7" * 64,
-        "normalized_result_digest": "9" * 64,
-        "selection_stage_fingerprint": selection_fingerprint,
+        "normalized_result_digest": normalized_result_digest(report),
+        "selection_stage_fingerprint": selection_fingerprint.value,
         "video_set": {
-            "fingerprint": "8" * 64,
+            "fingerprint": "f" * 64,
             "scenario_count": 1,
             "total_duration_seconds": "1",
         },
         "phase_marker": phase,
     }
     return 0, record, report, artifact
+
+
+def _prepare_resume_without_worksheet(
+    tmp_path: Path,
+    runner: TargetSuiteRunner,
+    profile_path: Path,
+) -> tuple[Path, EffectiveConfiguration]:
+    """完了phase evidenceを復元しworksheet直前のresume stateを返す。"""
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state_path = suite_root / "acceptance-state.json"
+    state = read_json_object(state_path)
+    assert state is not None
+    state["worksheet_ready"] = False
+    write_atomic_json(state_path, state)
+    (suite_root / "review-worksheet.json").unlink()
+    input_folder = suite_root / "work" / "input"
+    input_folder.mkdir(parents=True)
+    (input_folder / "scenario-001.mkv").write_bytes(b"anonymous")
+    cold_configuration = resolve_effective_configuration(
+        video_input_folder=input_folder,
+        output_folder=suite_root / "outputs" / "cold",
+        config_path=tmp_path / "video-selection.toml",
+        environ={},
+    )
+    _successful_phase(cold_configuration, "cold")
+    return suite_root, cold_configuration
 
 
 def _interrupted_phase(phase: str) -> dict[str, object]:
@@ -707,20 +945,16 @@ def _interrupted_phase(phase: str) -> dict[str, object]:
     }
 
 
-def _profile(tmp_path: Path) -> Path:
+def _profile(tmp_path: Path, *, include_ollama_host: bool = True) -> Path:
     """runner test用のprivate profile/config/sourceを作る。"""
     input_root = tmp_path / "private-input"
     input_root.mkdir()
     (input_root / "source.mkv").write_bytes(b"source")
     configuration = tmp_path / "video-selection.toml"
-    configuration.write_text(
-        """config_version = "1.0.0"
-
-[ollama]
-host = "http://127.0.0.1:11434"
-""",
-        encoding="utf-8",
-    )
+    configuration_text = 'config_version = "1.0.0"\n'
+    if include_ollama_host:
+        configuration_text += '\n[ollama]\nhost = "http://127.0.0.1:11434"\n'
+    configuration.write_text(configuration_text, encoding="utf-8")
     path = tmp_path / "target.toml"
     path.write_text(
         f'''profile_version = "1.0.0"

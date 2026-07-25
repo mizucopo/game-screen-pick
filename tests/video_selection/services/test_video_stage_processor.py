@@ -3,6 +3,7 @@
 import os
 import signal
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -854,14 +855,15 @@ def test_runtime_build_identity_change_recomputes_scan_stage(tmp_path: Path) -> 
 def test_stage_metrics_include_current_process_and_full_stage_time(
     tmp_path: Path,
 ) -> None:
-    """Video Stage metricにcurrent processを含む全Stage costが記録されること。
+    """Video Stage metricに所有threadとchild processのcostが記録されること。
 
     Arrange:
-        - native metricを0で返しscanとrefinement中にCPUを消費するruntimeが用意される
+        - native metricを0で返すruntimeが用意される
+        - Stage threadとdecoder childがCPUを消費する
     Act:
         - Video Stageが初回計算される
     Assert:
-        - scanとcandidate抽出のwall時間とCPU時間が正であること
+        - scanとcandidate抽出に所有するwall時間とCPU時間が記録されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
@@ -872,6 +874,7 @@ def test_stage_metrics_include_current_process_and_full_stage_time(
         cpu_burn_seconds=0.02,
         reported_scan_wall_seconds=0.0,
         reported_scan_cpu_seconds=0.0,
+        reported_refinement_child_cpu_seconds=1.0,
     )
 
     # Act
@@ -888,4 +891,63 @@ def test_stage_metrics_include_current_process_and_full_stage_time(
     assert result.scan.metrics.wall_seconds >= 0.01
     assert result.scan.metrics.cpu_seconds >= 0.01
     assert result.extraction_metrics.wall_seconds >= 0.01
-    assert result.extraction_metrics.cpu_seconds >= 0.01
+    assert result.extraction_metrics.cpu_seconds >= 1.01
+
+
+def test_extraction_cpu_metric_excludes_background_scan_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """後続Videoのbackground scan CPUがcandidate抽出へ計上されないこと。
+
+    Arrange:
+        - 2 workerで先頭Videoの抽出中に後続scan threadだけがCPUを消費する
+    Act:
+        - Video Stage processorが両Videoをpipeliningする
+    Assert:
+        - 先頭candidate抽出のCPU時間へ後続scanの消費が含まれないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "01-first.mp4").write_bytes(b"first-video")
+    (input_folder / "02-background.mp4").write_bytes(b"background-video")
+    extraction_started = threading.Event()
+    background_scan_finished = threading.Event()
+
+    def coordinate_background_scan(path: Path) -> None:
+        if path.name != "02-background.mp4":
+            return
+        assert extraction_started.wait(timeout=5)
+        started_at = time.thread_time()
+        while time.thread_time() - started_at < 0.4:
+            pass
+        background_scan_finished.set()
+
+    def wait_for_background_scan(path: Path) -> None:
+        if path.name != "01-first.mp4":
+            return
+        extraction_started.set()
+        assert background_scan_finished.wait(timeout=5)
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        lambda: 16,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        on_scan_video=coordinate_background_scan,
+        on_scan_video_frame_ranges=wait_for_background_scan,
+    )
+
+    # Act
+    first = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert first.extraction_metrics.cpu_seconds < 0.2

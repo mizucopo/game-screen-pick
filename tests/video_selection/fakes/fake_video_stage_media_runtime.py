@@ -34,6 +34,7 @@ class FakeVideoStageMediaRuntime:
         cpu_burn_seconds: float = 0.0,
         reported_scan_wall_seconds: float = 0.1,
         reported_scan_cpu_seconds: float = 0.05,
+        reported_refinement_child_cpu_seconds: float = 0.0,
         media_probe: MediaProbe | None = None,
         embedded_subtitles: tuple[EmbeddedSubtitle, ...] = (),
         pcm_audio_chunks: tuple[PcmAudioChunk, ...] = (),
@@ -57,6 +58,9 @@ class FakeVideoStageMediaRuntime:
         self._cpu_burn_seconds = cpu_burn_seconds
         self._reported_scan_wall_seconds = reported_scan_wall_seconds
         self._reported_scan_cpu_seconds = reported_scan_cpu_seconds
+        self._reported_refinement_child_cpu_seconds = (
+            reported_refinement_child_cpu_seconds
+        )
         self._media_probe = media_probe
         self._embedded_subtitles = embedded_subtitles
         self._pcm_audio_chunks = pcm_audio_chunks
@@ -190,6 +194,8 @@ class FakeVideoStageMediaRuntime:
         stream_index: int,
         pts_ranges: tuple[tuple[int, int], ...],
         max_dimension: int,
+        *,
+        cpu_seconds_recorder: Callable[[float], None] | None = None,
     ) -> Iterator[DecodedVideoFrame]:
         """range内のnative test frameを返す。"""
         del max_dimension
@@ -198,6 +204,8 @@ class FakeVideoStageMediaRuntime:
         if self._on_scan_video_frame_ranges is not None:
             self._on_scan_video_frame_ranges(media_path)
         self._burn_cpu()
+        if cpu_seconds_recorder is not None:
+            cpu_seconds_recorder(self._reported_refinement_child_cpu_seconds)
         frame_pts = (0, 5, 395, 400, 405) if self._distant_moments else (0, 5, 10, 15)
         for pts in frame_pts:
             if any(start <= pts < end for start, end in pts_ranges):
@@ -239,7 +247,7 @@ class FakeVideoStageMediaRuntime:
         output_path: Path,
         *,
         quality: int,
-    ) -> None:
+    ) -> float:
         """test用JPEG proxyを保存する。"""
         del quality
         rgb = np.frombuffer(frame.pixels, dtype=np.uint8).reshape(
@@ -254,6 +262,7 @@ class FakeVideoStageMediaRuntime:
         output_path.write_bytes(encoded.tobytes())
         if "candidates" in output_path.parts:
             self._candidate_proxy_write_count += 1
+        return 0.0
 
     def _burn_cpu(self) -> None:
         """Stage resource metric test用にcurrent processのCPUを消費する。"""

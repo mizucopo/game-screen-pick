@@ -122,7 +122,7 @@ def evaluate_human_review(
     pending = (
         not isinstance(worksheet.get("reviewer"), str)
         or not cast(str, worksheet.get("reviewer")).strip()
-        or worksheet.get("completed_at") is None
+        or not _is_timezone_aware_timestamp(worksheet.get("completed_at"))
         or spoiler_monotonicity == "pending"
         or any(
             value == "pending"
@@ -291,6 +291,16 @@ def _relative_output_path(value: object) -> str:
     ):
         raise ValueError("Selected candidate outputが不正です")
     return value
+
+
+def _is_timezone_aware_timestamp(value: object) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
 def _enum_value(value: object, allowed: set[str], location: str) -> str:

@@ -131,6 +131,10 @@ class TargetSuiteRunner:
             input_folder,
             suite_root / "outputs" / "warm",
         )
+        if state is not None and state.get(
+            "ollama_endpoint_identity"
+        ) != _ollama_endpoint_identity(cold_configuration.ollama_host):
+            raise ValueError("Acceptance stateが現在のsuite identityと一致しません")
         try:
             resolved_models = self._model_resolver(cold_configuration)
         except KeyboardInterrupt:
@@ -141,6 +145,7 @@ class TargetSuiteRunner:
             suite,
             profile,
             configuration_digest,
+            cold_configuration,
             suite_descriptor,
             resolved_models,
             commit,
@@ -281,6 +286,7 @@ class TargetSuiteRunner:
         human_review_path: Path | None,
     ) -> int:
         """record、baseline、release cleanupをphase再実行なしで確定する。"""
+        shutil.rmtree(suite_root / "baseline", ignore_errors=True)
         suite = _string(state.get("suite"))
         worksheet_path = human_review_path or suite_root / "review-worksheet.json"
         worksheet = read_json_object(worksheet_path)
@@ -388,6 +394,9 @@ def _configuration_summary(
         "models_auto_upgrade": configuration.models_auto_upgrade,
         "speech_to_text_device": configuration.speech_to_text_device,
         "speech_to_text_compute_type": configuration.speech_to_text_compute_type,
+        "ollama_endpoint_identity": _ollama_endpoint_identity(
+            configuration.ollama_host
+        ),
     }
 
 
@@ -395,6 +404,7 @@ def _identity(
     suite: str,
     profile: AcceptanceProfile,
     configuration_digest: str,
+    configuration: EffectiveConfiguration,
     descriptor: Mapping[str, object],
     models: ResolvedModels,
     commit: str,
@@ -414,6 +424,9 @@ def _identity(
         "suite": suite,
         "profile_digest": profile.profile_digest,
         "configuration_digest": configuration_digest,
+        "ollama_endpoint_identity": _ollama_endpoint_identity(
+            configuration.ollama_host
+        ),
         "suite_fingerprint": descriptor_fingerprint,
         "model_identity_digest": hashlib.sha256(models_json).hexdigest(),
         "commit": commit,
@@ -501,6 +514,12 @@ def _forbidden_values(profile: AcceptanceProfile) -> tuple[str, ...]:
 def _content_digest(path: Path) -> str:
     with path.open("rb") as file:
         return hashlib.file_digest(file, "sha256").hexdigest()
+
+
+def _ollama_endpoint_identity(host: str) -> str:
+    normalized = host.rstrip("/")
+    payload = f"game-screen-pick/ollama-endpoint@1\0{normalized}".encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _mapping(value: object, location: str) -> dict[str, object]:

@@ -13,6 +13,9 @@ from ..models.processing_stage import ProcessingStage
 from ..models.resolved_models import ResolvedModels
 from ..models.run_failure import RunFailure
 from ..models.run_outcome import RunOutcome
+from ..models.stage_fingerprint import StageFingerprint
+from ..services.build_stage_fingerprint import build_stage_fingerprint
+from ..services.completed_stage_writer import CompletedStageWriter
 from ..services.progress_stream_observer import ProgressStreamObserver
 from ..services.run_progress_tracker import RunProgressTracker
 from .acceptance_run_observer import AcceptanceRunObserver
@@ -91,20 +94,20 @@ def execute_acceptance_phase(
         for stage in reversed(result.completed_stages)
         if stage.stage is ProcessingStage.SELECT_IMAGES
     )
-    selection_artifact = _selection_artifact(
-        configuration.processing_cache_folder,
-        selection_stage.fingerprint.value,
-    )
     phase_record.update(
         {
             "operation_status": "completed",
             "selected_count": result.selected_count,
             "requested_count": result.requested_count,
-            "normalized_result_digest": _normalized_result_digest(report),
+            "normalized_result_digest": normalized_result_digest(report),
             "selection_stage_fingerprint": selection_stage.fingerprint.value,
             "video_set": _video_set_record(report),
             "speech_runtime_identity": _speech_runtime_identity(report),
         }
+    )
+    selection_artifact = _selection_artifact(
+        configuration.processing_cache_folder,
+        phase_record,
     )
     return 0, phase_record, report, selection_artifact
 
@@ -116,12 +119,15 @@ def load_completed_phase_evidence(
 ) -> tuple[dict[str, object], dict[str, object]]:
     """durable output/cacheからcompleted phaseのworksheet sourceを復元する。"""
     report = _read_json_object(configuration.output_folder / "report.json")
-    fingerprint = phase_record.get("selection_stage_fingerprint")
-    if not isinstance(fingerprint, str):
-        raise ValueError("Completed phaseにselection fingerprintがありません")
+    expected_digest = phase_record.get("normalized_result_digest")
+    if (
+        not isinstance(expected_digest, str)
+        or normalized_result_digest(report) != expected_digest
+    ):
+        raise ValueError("Completed phaseのcanonical report digestが一致しません")
     return report, _selection_artifact(
         configuration.processing_cache_folder,
-        fingerprint,
+        phase_record,
     )
 
 
@@ -130,13 +136,60 @@ def public_phase_record(value: Mapping[str, object]) -> dict[str, object]:
     return {key: item for key, item in value.items() if key != "video_set"}
 
 
-def _selection_artifact(cache_folder: Path, fingerprint: str) -> dict[str, object]:
-    matches = tuple(
-        cache_folder.glob(f"video-sets/*/select-images/{fingerprint}/artifact.json")
+def _selection_artifact(
+    cache_folder: Path,
+    phase_record: Mapping[str, object],
+) -> dict[str, object]:
+    fingerprint = _stage_fingerprint(
+        phase_record.get("selection_stage_fingerprint"),
+        "selection fingerprint",
     )
-    if len(matches) != 1:
-        raise ValueError("Selection Stage artifactを一意に復元できません")
-    return _read_json_object(matches[0])
+    video_set = _mapping(phase_record.get("video_set"), "Video Set")
+    subject_fingerprint = _fingerprint(
+        video_set.get("fingerprint"),
+        "Video Set fingerprint",
+    )
+    manifest_path = (
+        cache_folder
+        / "video-sets"
+        / subject_fingerprint
+        / ProcessingStage.SELECT_IMAGES.value
+        / fingerprint.value
+        / "manifest.json"
+    )
+    manifest = _read_json_object(manifest_path)
+    semantic_input = _mapping(
+        manifest.get("semantic_input"),
+        "Selection Stage semantic input",
+    )
+    upstream_values = manifest.get("upstream_stage_fingerprints")
+    if not isinstance(upstream_values, list):
+        raise ValueError("Selection Stage upstream fingerprintsが不正です")
+    upstream = tuple(
+        _stage_fingerprint(value, "upstream fingerprint") for value in upstream_values
+    )
+    if (
+        build_stage_fingerprint(
+            ProcessingStage.SELECT_IMAGES,
+            upstream,
+            semantic_input,
+        )
+        != fingerprint
+    ):
+        raise ValueError("Selection Stage fingerprintがsemantic inputと一致しません")
+    bundle = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+    ).read_bundle(
+        ProcessingStage.SELECT_IMAGES,
+        fingerprint,
+        upstream,
+        semantic_input,
+    )
+    if bundle is None:
+        raise ValueError("Selection Stage artifactのintegrity検証に失敗しました")
+    return bundle.artifact
 
 
 def _read_json_object(path: Path) -> dict[str, object]:
@@ -149,7 +202,9 @@ def _read_json_object(path: Path) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
-def _normalized_result_digest(report: Mapping[str, object]) -> str:
+def normalized_result_digest(report: Mapping[str, object]) -> str:
+    """cold/warm一致と永続証拠の再検証に使うdigestを返す。"""
+
     selected = report.get("selected")
     provenance = report.get("provenance")
     if not isinstance(selected, list) or not isinstance(provenance, dict):
@@ -181,6 +236,26 @@ def _normalized_result_digest(report: Mapping[str, object]) -> str:
         separators=(",", ":"),
     ).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _mapping(value: object, location: str) -> dict[str, object]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"Acceptance phase {location}がobjectではありません")
+    return cast(dict[str, object], value)
+
+
+def _stage_fingerprint(value: object, location: str) -> StageFingerprint:
+    return StageFingerprint(_fingerprint(value, location))
+
+
+def _fingerprint(value: object, location: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"Acceptance phase {location}が不正です")
+    return value
 
 
 def _video_set_record(report: Mapping[str, object]) -> dict[str, object]:

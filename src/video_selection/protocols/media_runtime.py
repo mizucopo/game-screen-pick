@@ -1,6 +1,6 @@
 """MediaRuntimeのsemantic port。"""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -37,6 +37,8 @@ class MediaRuntime(Protocol):
         stream_index: int,
         pts_ranges: tuple[tuple[int, int], ...],
         max_dimension: int,
+        *,
+        cpu_seconds_recorder: Callable[[float], None] | None = None,
     ) -> Iterator[DecodedVideoFrame]:
         """複数の半開PTS range内にあるnative frameを一回で返す。"""
 
@@ -79,8 +81,8 @@ class MediaRuntime(Protocol):
         output_path: Path,
         *,
         quality: int,
-    ) -> None:
-        """RGB frameをmetadataなしMJPEG proxyへ保存する。"""
+    ) -> float:
+        """RGB frameを保存しencoder subprocessのCPU時間を返す。"""
 
     def scan_pcm_audio(
         self,

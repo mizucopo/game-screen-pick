@@ -66,8 +66,11 @@ full Video Setを再hashしない。fullの独立Video Scanはlogical CPU 8個�
 最大3 workerで並列実行する。Video Order上の対象scanが確定した時点で、そのVideoの
 candidate extractionとcontext collectionを後続Videoのscanと重ねて開始する。background
 scan待機中もactive Stageとheartbeatを通知し、通常のscan失敗でも待機中workerをcancelする。
+scanのprocess登録とcancellation要求は同じlockで直列化し、cancel後に新しいdecoderを開始しない。
 新規scan artifactは対象sourceのcontent snapshotを確定直前に再検証し、scan中に変更された
 bytesを元のVideo Fingerprint配下へ保存しない。
+candidate extractionのCPU時間は所有threadと、そのStageが起動したrange decoder・proxy
+encoder subprocessだけを合算し、並列中の後続Video Scanを二重計上しない。
 
 release intervalは全streamをFFmpeg stream copyした`scenario-001.mkv`形式の匿名clipに
 変換する。source metadataとchapterは引き継がず、FFmpegのbitexact format flagを使うため、
@@ -82,11 +85,15 @@ phase完了はsuite別の`acceptance-state.json`へatomicに確定する。中�
 identity、commitを検証し、未完了phaseだけを続行する。driver、FFmpeg、kernelなどtarget
 probeの値が変わったstateは混在させない。completed coldを再実行してwarmへ戻したり、
 completed cold/warmを再実行したりしない。
+設定file外の`OLLAMA_HOST`を含む実効endpointも、URLを公開しないdigestとしてsuite identityへ
+固定する。
 
 完了済みphaseからhuman reviewを再開する場合も、現在のsourceをmaterializeし直してsuite
 fingerprintを照合し、Resolved Model Identityを再解決してからrecordを確定する。入力または
 modelが変わっていれば既存の完了stateを流用しない。同じ実行identityに対する
 `Model Update Status`や更新前identityの違いはrun別診断であり、再利用可否を変えない。
+worksheet未生成から再開するときはcold reportをphase digestと照合し、selection artifactを
+Completed Stage manifest、artifact hash、semantic fingerprintで再検証する。
 
 user interruptや計測済みoperation failureの未完了phaseはCompleted Stage cacheを保持する。
 再開後のphase recordでは、それ以前の試行を含む経過時間、cache/recompute count、Stage時間、
@@ -117,7 +124,7 @@ cold/warmと自動gateが完了すると、次のprivate worksheetが生成さ�
 ```
 
 target上のphase outputとmediaを確認し、各selected entryのpending値をworksheet記載の
-stable enumへ置き換える。`reviewer`と`completed_at`も記入する。
+stable enumへ置き換える。`reviewer`とtimezone-aware ISO 8601形式の`completed_at`も記入する。
 selected/rejected candidate ID、selected output relative path、rejection reasonはcold phaseの
 候補集合へdigestで固定されるため、追加・削除・書き換えない。`--human-review`で別fileを
 渡す場合も、このimmutable集合が一致しなければ集計されない。
@@ -164,6 +171,7 @@ releaseのtemporary clipとprocessing cacheはcold/warmおよびrecord生成後�
 review pendingのいずれでも削除する。phase output、state、worksheet、recordは保持する。
 
 合格時は同じsuite directoryの`baseline/baseline.json`と`baseline/baseline.md`へ、source
-commitを除いた正規化baselineを生成する。通常runではtarget artifactに留める。Issue #190の
+commitを除いた正規化baselineを生成する。再評価がpendingまたは不合格なら、以前のpassing
+baselineを削除する。通常runではtarget artifactに留める。Issue #190の
 cutoverまたはperformance contract変更時だけprivacy検査済みの両fileをreviewし、専用PRで
 repositoryへ取り込む。実値入りprofileとprivate worksheetは一緒にcopyしない。

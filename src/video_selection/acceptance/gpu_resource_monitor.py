@@ -30,12 +30,14 @@ class GpuResourceMonitor:
         stage_provider: StageProvider,
         probe: GpuProbe | None = None,
         interval_seconds: float = 0.5,
+        join_timeout_seconds: float = 2.0,
     ) -> None:
-        if interval_seconds <= 0:
-            raise ValueError("GPU sampler intervalは正の値が必要です")
+        if interval_seconds <= 0 or join_timeout_seconds <= 0:
+            raise ValueError("GPU sampler interval/停止timeoutは正の値が必要です")
         self._probe = probe or _default_probe(ollama_host)
         self._stage_provider = stage_provider
         self._interval_seconds = interval_seconds
+        self._join_timeout_seconds = join_timeout_seconds
         self._stop = Event()
         self._lock = Lock()
         self._thread: Thread | None = None
@@ -63,13 +65,18 @@ class GpuResourceMonitor:
     def stop(self) -> dict[str, object]:
         """samplerを停止しbudget用のsafe aggregateを返す。"""
         self._stop.set()
+        sampler_stopped = False
         if self._thread is not None:
-            self._thread.join(timeout=max(2.0, self._interval_seconds * 4))
-        self._sample(is_baseline=False)
+            self._thread.join(timeout=self._join_timeout_seconds)
+            sampler_stopped = not self._thread.is_alive()
+        if sampler_stopped:
+            self._sample(is_baseline=False)
         with self._lock:
             return {
                 "resource_sampling_complete": (
-                    self._sample_count > 0 and self._sample_errors == 0
+                    sampler_stopped
+                    and self._sample_count > 0
+                    and self._sample_errors == 0
                 ),
                 "gpu_sample_count": self._sample_count,
                 "gpu_sample_error_count": self._sample_errors,

@@ -8,7 +8,7 @@ import signal
 import subprocess
 import time
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from fractions import Fraction
@@ -30,6 +30,7 @@ from .ffmpeg_pcm_reader import iter_pcm_audio_chunks
 from .ffmpeg_subtitle_reader import read_embedded_subtitle_events
 from .ffmpeg_video_reader import iter_decoded_video_frames
 from .ffprobe_parser import parse_media_probe
+from .wait_for_process import wait_for_process
 
 _VERSION_PATTERN = re.compile(r"^(?:ffmpeg|ffprobe) version (?P<version>\S+)")
 _SEMANTIC_VERSION_PATTERN = re.compile(
@@ -91,6 +92,7 @@ class FfmpegMediaRuntime:
         self._ffprobe_executable = ffprobe_executable
         self._active_scan_lock = Lock()
         self._active_scan_processes: set[subprocess.Popen[str]] = set()
+        self._video_scan_cancellation_requested = False
 
     def preflight(self) -> MediaRuntimeIdentity:
         """両toolのversionを解決してidentityを返す。"""
@@ -225,13 +227,18 @@ class FfmpegMediaRuntime:
         stderr_tail: deque[str] = deque(maxlen=80)
         process: subprocess.Popen[str] | None = None
         try:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
             with self._active_scan_lock:
+                if self._video_scan_cancellation_requested:
+                    raise MediaRuntimeError(
+                        MediaRuntimeFailureReason.DECODER_FAILURE,
+                        "Video Scanは開始前にcancelされました",
+                    )
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
                 self._active_scan_processes.add(process)
             if process.stderr is None:
                 msg = "FFmpeg scan stderrを開始できません"
@@ -250,7 +257,7 @@ class FfmpegMediaRuntime:
                     heartbeat_metadata.append(metadata)
                 else:
                     scene_metadata.append(metadata)
-            return_code, cpu_seconds = _wait_for_process(process)
+            return_code, cpu_seconds = wait_for_process(process)
         except OSError as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.DECODER_FAILURE,
@@ -316,6 +323,7 @@ class FfmpegMediaRuntime:
     def cancel_video_scans(self) -> None:
         """実行中のVideo Scan FFmpeg processへ終了要求を送る。"""
         with self._active_scan_lock:
+            self._video_scan_cancellation_requested = True
             processes = tuple(self._active_scan_processes)
         for process in processes:
             with suppress(OSError):
@@ -327,6 +335,8 @@ class FfmpegMediaRuntime:
         stream_index: int,
         pts_ranges: tuple[tuple[int, int], ...],
         max_dimension: int,
+        *,
+        cpu_seconds_recorder: Callable[[float], None] | None = None,
     ) -> Iterator[DecodedVideoFrame]:
         """半開PTS rangeの和集合にあるnative RGB24 frameだけを返す。"""
         if (
@@ -371,6 +381,7 @@ class FfmpegMediaRuntime:
                             _decode_video_frame_range,
                             next(command_iterator),
                             stream_index,
+                            cpu_seconds_recorder,
                         )
                     )
                 while pending:
@@ -382,6 +393,7 @@ class FfmpegMediaRuntime:
                                 _decode_video_frame_range,
                                 command,
                                 stream_index,
+                                cpu_seconds_recorder,
                             )
                         )
         except (*_DECODE_ERRORS, StopIteration) as error:
@@ -496,7 +508,7 @@ class FfmpegMediaRuntime:
         output_path: Path,
         *,
         quality: int,
-    ) -> None:
+    ) -> float:
         """RGB24 artifactをFFmpeg MJPEGへmetadataなしで保存する。"""
         if not 1 <= quality <= 31:
             msg = "FFmpeg MJPEG qualityは1以上31以下である必要があります"
@@ -531,18 +543,43 @@ class FfmpegMediaRuntime:
             "yuvj420p",
             str(output_path),
         ]
+        process: subprocess.Popen[bytes] | None = None
         try:
-            subprocess.run(
+            process = subprocess.Popen(
                 command,
-                input=frame.pixels,
-                check=True,
-                capture_output=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
-        except (OSError, subprocess.CalledProcessError) as error:
+            if process.stdin is None or process.stderr is None:
+                raise RuntimeError("Frame Candidate Proxy pipeを開始できません")
+            process.stdin.write(frame.pixels)
+            process.stdin.close()
+            stderr = process.stderr.read()
+            return_code, cpu_seconds = wait_for_process(process)
+            if return_code != 0:
+                raise subprocess.CalledProcessError(
+                    return_code,
+                    command,
+                    stderr=stderr,
+                )
+            return cpu_seconds
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
                 "Frame Candidate ProxyをMJPEGへencodeできませんでした",
             ) from error
+        finally:
+            if process is not None:
+                if process.returncode is None:
+                    with suppress(ProcessLookupError):
+                        os.kill(process.pid, signal.SIGTERM)
+                    with suppress(ChildProcessError):
+                        wait_for_process(process)
+                if process.stdin is not None:
+                    process.stdin.close()
+                if process.stderr is not None:
+                    process.stderr.close()
 
     def scan_pcm_audio(
         self,
@@ -952,19 +989,6 @@ def _scale_filter(max_dimension: int) -> str:
     )
 
 
-def _wait_for_process(process: subprocess.Popen[str]) -> tuple[int, float]:
-    """一つのFFmpeg subprocessだけの終了statusとCPU時間を回収する。"""
-    while True:
-        try:
-            _pid, status, usage = os.wait4(process.pid, 0)
-            break
-        except InterruptedError:
-            continue
-    return_code = os.waitstatus_to_exitcode(status)
-    process.returncode = return_code
-    return return_code, usage.ru_utime + usage.ru_stime
-
-
 def _media_origin(probe: MediaProbe) -> Fraction:
     origins = tuple(
         stream.start_pts * stream.time_base
@@ -987,9 +1011,16 @@ def _frame_range_worker_count(range_count: int) -> int:
 def _decode_video_frame_range(
     command: list[str],
     stream_index: int,
+    cpu_seconds_recorder: Callable[[float], None] | None,
 ) -> tuple[DecodedVideoFrame, ...]:
     """一つのrangeをworker内で完結させ順序付きframeを返す。"""
-    return tuple(iter_decoded_video_frames(command, stream_index))
+    return tuple(
+        iter_decoded_video_frames(
+            command,
+            stream_index,
+            cpu_seconds_recorder=cpu_seconds_recorder,
+        )
+    )
 
 
 def _bounded_scale_filter(max_dimension: int) -> str:

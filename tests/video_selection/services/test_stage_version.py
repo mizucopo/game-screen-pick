@@ -24,15 +24,15 @@ def test_collect_context_has_context_collection_stage_version() -> None:
     assert version == "context-collection-v3"
 
 
-def test_extract_frame_candidates_has_range_seek_stage_version() -> None:
-    """Frame Candidate Extractionにrange seek版が付与されること。
+def test_extract_frame_candidates_has_isolated_cpu_metric_stage_version() -> None:
+    """Frame Candidate ExtractionにCPU計測分離版が付与されること。
 
     Arrange:
         - extract-frame-candidates Processing Stageが用意される
     Act:
         - Stage versionが解決される
     Assert:
-        - range seek実装固有のversionが返されること
+        - CPU計測分離実装固有のversionが返されること
     """
     # Arrange
     stage = ProcessingStage.EXTRACT_FRAME_CANDIDATES
@@ -41,7 +41,7 @@ def test_extract_frame_candidates_has_range_seek_stage_version() -> None:
     version = stage_version(stage)
 
     # Assert
-    assert version == "frame-candidate-extraction-v2"
+    assert version == "frame-candidate-extraction-v3"
 
 
 def test_resolve_models_has_model_resolution_stage_version() -> None:

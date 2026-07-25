@@ -1,5 +1,7 @@
 """GPU acceptance resource monitorのtest。"""
 
+from threading import Event
+
 from src.video_selection.acceptance.gpu_resource_monitor import GpuResourceMonitor
 from src.video_selection.models.processing_stage import ProcessingStage
 
@@ -93,3 +95,50 @@ def test_partial_ollama_offload_is_recorded_as_not_fully_resident() -> None:
     # Assert
     assert result["ollama_model_observed"] is True
     assert result["ollama_model_fully_resident"] is False
+
+
+def test_sampling_is_incomplete_when_background_probe_outlives_stop() -> None:
+    """停止timeout後もprobeが残る場合はresource計測が不完全になること。
+
+    Arrange:
+        - baseline後のbackground probeだけが停止timeoutを超えてblockする
+    Act:
+        - samplerが停止される
+    Assert:
+        - 途中snapshotがcomplete evidenceとして扱われないこと
+    """
+    # Arrange
+    background_started = Event()
+    release_background = Event()
+    call_count = 0
+    sample = {
+        "system_used_mib": 100,
+        "process_used_mib": 10,
+        "ollama_size_bytes": 0,
+        "ollama_size_vram_bytes": 0,
+    }
+
+    def probe() -> dict[str, int]:
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            background_started.set()
+            release_background.wait(timeout=1)
+        return sample
+
+    monitor = GpuResourceMonitor(
+        ollama_host="http://unused",
+        stage_provider=lambda: None,
+        probe=probe,
+        interval_seconds=0.001,
+        join_timeout_seconds=0.01,
+    )
+    monitor.start()
+    assert background_started.wait(timeout=1)
+
+    # Act
+    result = monitor.stop()
+    release_background.set()
+
+    # Assert
+    assert result["resource_sampling_complete"] is False

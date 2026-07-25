@@ -140,6 +140,55 @@ def test_zero_selected_candidates_fail_completed_human_gate() -> None:
     assert result["status"] == "failed"
 
 
+@pytest.mark.parametrize(
+    "completed_at",
+    [False, "", "not-a-timestamp", "2026-07-17T00:00:00"],
+)
+def test_invalid_completion_timestamp_keeps_review_pending(
+    completed_at: object,
+) -> None:
+    """timezone-awareでない完了時刻ではreviewが完了扱いされないこと。
+
+    Arrange:
+        - review enumとreviewerは完了し不正なcompleted_atだけを持つ
+    Act:
+        - human quality gateが評価される
+    Assert:
+        - audit metadata未完了としてpendingになること
+    """
+    # Arrange
+    worksheet: dict[str, object] = {
+        "schema": "game-screen-pick/human-review-worksheet@1.0.0",
+        "suite": "release",
+        "suite_fingerprint": "d" * 64,
+        "reviewer": "reviewer",
+        "completed_at": completed_at,
+        "selected": [
+            {
+                "candidate_id": "frm_" + "1" * 64,
+                "output_relative_path": "images/0001.webp",
+                "visual_quality": "pass",
+                "blog_usable": "yes",
+                "annotation_consistency": "consistent",
+                "context_overrode_visual_invalidity": "no",
+            }
+        ],
+        "rejected": [],
+        "suite_checks": {"spoiler_monotonicity": "pass"},
+    }
+
+    # Act
+    result = evaluate_human_review(
+        worksheet,
+        suite="release",
+        suite_fingerprint="d" * 64,
+        expected_candidate_digest=review_candidate_digest(worksheet),
+    )
+
+    # Assert
+    assert result["status"] == "pending_human_review"
+
+
 def test_review_rejects_candidate_set_changed_after_generation(tmp_path: Path) -> None:
     """cold evidenceから生成されたcandidate集合の欠落が拒否されること。
 

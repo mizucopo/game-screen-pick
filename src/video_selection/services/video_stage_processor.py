@@ -1,10 +1,10 @@
 """Video Sourceのscanをpipeliningし3つのVideo Stageを組み立てる。"""
 
 import os
-import resource
 import shutil
 import time
 from _thread import LockType
+from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, TimeoutError
 from contextlib import suppress
 from dataclasses import replace
@@ -311,6 +311,7 @@ class VideoStageProcessor:
                     (),
                     semantic_input,
                     lambda stage_root: self._produce_scan_artifact(
+                        scan_cancellation,
                         video_set,
                         source,
                         primary_stream,
@@ -338,6 +339,7 @@ class VideoStageProcessor:
 
     def _produce_scan_artifact(
         self,
+        scan_cancellation: Event,
         video_set: VideoSet,
         source: VideoSource,
         primary_stream: MediaStream,
@@ -345,6 +347,8 @@ class VideoStageProcessor:
         stage_root: Path,
     ) -> dict[str, object]:
         """single-decode scanを実行しscene一時画像を除去する。"""
+        if scan_cancellation.is_set():
+            raise CancelledError
         thread_cpu_before = time.thread_time()
         started_at = time.monotonic()
         native_scan = self._media_runtime.scan_video(
@@ -436,7 +440,15 @@ class VideoStageProcessor:
         stage_root: Path,
     ) -> dict[str, object]:
         """native refinementとcandidate proxy確定を実行する。"""
-        cpu_before = _stage_cpu_seconds()
+        thread_cpu_before = time.thread_time()
+        child_cpu_seconds = 0.0
+        child_cpu_lock = Lock()
+
+        def record_child_cpu_seconds(value: float) -> None:
+            nonlocal child_cpu_seconds
+            with child_cpu_lock:
+                child_cpu_seconds += value
+
         started_at = time.monotonic()
         pts_ranges = build_refinement_pts_ranges(
             scan.timeline,
@@ -449,6 +461,7 @@ class VideoStageProcessor:
                 scan.primary_stream.index,
                 pts_ranges,
                 960,
+                cpu_seconds_recorder=record_child_cpu_seconds,
             )
             if pts_ranges
             else iter(())
@@ -463,7 +476,13 @@ class VideoStageProcessor:
         )
         encoded_groups: list[FrameCandidateExtraction] = []
         for group in groups:
-            encoded_groups.append(self._encode_candidate_group(group, stage_root))
+            encoded_groups.append(
+                self._encode_candidate_group(
+                    group,
+                    stage_root,
+                    record_child_cpu_seconds,
+                )
+            )
             # 次groupのdecode前に選抜前RGBへの最後の参照を解放する。
             del group
         extraction = combine_refined_candidate_groups(moments, tuple(encoded_groups))
@@ -483,7 +502,7 @@ class VideoStageProcessor:
         )
         artifact = serialize_frame_candidate_extraction(extraction, metrics, stage_root)
         wall_seconds = time.monotonic() - started_at
-        cpu_seconds = _stage_cpu_seconds() - cpu_before
+        cpu_seconds = time.thread_time() - thread_cpu_before + child_cpu_seconds
         artifact_metrics = _artifact_metrics(artifact)
         artifact_metrics["wall_seconds"] = wall_seconds
         artifact_metrics["cpu_seconds"] = cpu_seconds
@@ -493,6 +512,7 @@ class VideoStageProcessor:
         self,
         group: FrameCandidateExtraction,
         stage_root: Path,
+        child_cpu_recorder: Callable[[float], None],
     ) -> FrameCandidateExtraction:
         """一つのrefinement groupのproxyを書きRGB artifactを解放する。"""
         encoded_candidates = []
@@ -501,10 +521,12 @@ class VideoStageProcessor:
                 msg = "Frame Candidate Proxy用のnative frameがありません"
                 raise ValueError(msg)
             proxy_path = stage_root / "candidates" / f"{candidate.identifier}.jpg"
-            self._media_runtime.write_mjpeg_proxy(
-                candidate.decoded_frame,
-                proxy_path,
-                quality=3,
+            child_cpu_recorder(
+                self._media_runtime.write_mjpeg_proxy(
+                    candidate.decoded_frame,
+                    proxy_path,
+                    quality=3,
+                )
             )
             encoded_candidates.append(
                 replace(
@@ -580,17 +602,6 @@ def _video_scan_worker_count(video_count: int) -> int:
     logical_cpus = os.cpu_count() or 1
     cpu_workers = max(1, logical_cpus // _LOGICAL_CPUS_PER_VIDEO_SCAN_WORKER)
     return min(video_count, _MAX_VIDEO_SCAN_WORKERS, cpu_workers)
-
-
-def _stage_cpu_seconds() -> float:
-    self_usage = resource.getrusage(resource.RUSAGE_SELF)
-    child_usage = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return (
-        self_usage.ru_utime
-        + self_usage.ru_stime
-        + child_usage.ru_utime
-        + child_usage.ru_stime
-    )
 
 
 def _artifact_metrics(artifact: dict[str, object]) -> dict[str, object]:

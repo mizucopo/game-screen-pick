@@ -1,6 +1,6 @@
 """Video Stageが必要とするMediaRuntime port。"""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Protocol
 
@@ -44,6 +44,8 @@ class VideoStageMediaRuntime(Protocol):
         stream_index: int,
         pts_ranges: tuple[tuple[int, int], ...],
         max_dimension: int,
+        *,
+        cpu_seconds_recorder: Callable[[float], None] | None = None,
     ) -> Iterator[DecodedVideoFrame]:
         """refinement range内のnative frameを返す。"""
 
@@ -53,8 +55,8 @@ class VideoStageMediaRuntime(Protocol):
         output_path: Path,
         *,
         quality: int,
-    ) -> None:
-        """選抜済みframeをMJPEG proxyへ保存する。"""
+    ) -> float:
+        """選抜済みframeを保存しencoder subprocessのCPU時間を返す。"""
 
     def scan_pcm_audio(
         self,
