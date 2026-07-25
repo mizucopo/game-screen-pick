@@ -236,7 +236,8 @@ target動画から代表scenarioを固定し、合計約30分のintervalとし�
 旧fingerprint artifactの併存はclean profile予算から除くが、runはcache root全体の容量と警告を
 記録する。容量予算はacceptance gateであり、runtimeの強制quotaではない。OllamaとSTTの
 GPU-heavy Stageは重ねない。GPU recordはprocess baseline、model `size_vram`、system全体の
-peakを分ける。
+peakを分ける。Ollama `/api/ps`のmodel `size`と`size_vram`も比較し、coldでmodelが観測され、
+全量がGPU residentである場合だけ自動gateを合格させる。
 
 既存prototypeの参考値は、#163の全scan約14時間見込み、heartbeat proxy約17 GB、#165の
 500 annotations約18〜20分見込み、#166の600秒STT 4.641秒/peak 5,196 MiB、#169の24-image

@@ -167,6 +167,49 @@ def test_reset_suite_discards_completed_state_and_runs_cold_again(
     assert calls == ["cold", "warm", "cold", "warm"]
 
 
+def test_finalization_rejects_review_with_truncated_candidate_set(
+    tmp_path: Path,
+) -> None:
+    """cold evidenceから候補を削除したhuman reviewではfinalizeされないこと。
+
+    Arrange:
+        - cold/warm完了後に生成されたprivate worksheetが用意される
+        - immutableなrejected candidateがworksheetから削除される
+    Act:
+        - 変更されたworksheetでfinalizationが実行される
+    Assert:
+        - candidate集合不一致としてacceptance evidenceにならないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda phase, configuration, _models, _suite_root: _successful_phase(
+            configuration,
+            phase,
+        )
+    )
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    worksheet_path = (
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "release"
+        / "review-worksheet.json"
+    )
+    worksheet = read_json_object(worksheet_path)
+    assert worksheet is not None
+    worksheet["rejected"] = []
+    write_atomic_json(worksheet_path, worksheet)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="candidate集合"):
+        runner.run(
+            profile_path=profile_path,
+            suite="release",
+            human_review_path=worksheet_path,
+        )
+
+
 def test_completed_phases_resume_worksheet_finalization_without_rerun(
     tmp_path: Path,
 ) -> None:
@@ -545,6 +588,14 @@ def _runner(
         model_resolver=model_resolver or model_runtime.resolve_models,
         phase_executor=phase_executor,
         release_materializer=materialize,
+        storage_preflight=lambda _profile: {
+            "input_video_bytes": 9,
+            "input_video_count": 1,
+            "artifact_available_bytes": 200 * 1024**3,
+            "required_artifact_capacity_bytes": 160 * 1024**3,
+            "persistent_cache_budget_bytes": 64 * 1024**3,
+            "peak_additional_budget_bytes": 96 * 1024**3,
+        },
     )
 
 
@@ -570,7 +621,14 @@ def _successful_phase(
     configuration.output_folder.mkdir(parents=True, exist_ok=True)
     write_atomic_json(configuration.output_folder / "report.json", report)
     selection_fingerprint = "e" * 64
-    artifact: dict[str, object] = {"rejected": []}
+    artifact: dict[str, object] = {
+        "rejected": [
+            {
+                "candidate_id": "frm_" + "2" * 64,
+                "reason_code": "lower_marginal_utility",
+            }
+        ]
+    }
     artifact_path = (
         configuration.processing_cache_folder
         / "video-sets"
@@ -599,8 +657,12 @@ def _successful_phase(
         "system_global_gpu_peak_mib": 1000,
         "ollama_global_gpu_peak_mib": 1000,
         "stt_global_gpu_peak_mib": 1000,
+        "ollama_model_size_bytes": 512,
         "ollama_model_size_vram_bytes": 512,
+        "ollama_model_observed": True,
+        "ollama_model_fully_resident": True,
         "resource_sampling_complete": True,
+        "speech_runtime_identity": "speech_" + "7" * 64,
         "normalized_result_digest": "9" * 64,
         "selection_stage_fingerprint": selection_fingerprint,
         "video_set": {
@@ -636,7 +698,10 @@ def _interrupted_phase(phase: str) -> dict[str, object]:
         "system_global_gpu_peak_mib": 1000,
         "ollama_global_gpu_peak_mib": 1000,
         "stt_global_gpu_peak_mib": 1000,
+        "ollama_model_size_bytes": 512,
         "ollama_model_size_vram_bytes": 512,
+        "ollama_model_observed": True,
+        "ollama_model_fully_resident": True,
         "resource_sampling_complete": True,
         "phase_marker": phase,
     }

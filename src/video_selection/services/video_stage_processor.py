@@ -4,11 +4,13 @@ import os
 import resource
 import shutil
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from _thread import LockType
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, TimeoutError
 from contextlib import suppress
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
+from threading import Event, Lock
 
 from ..models.candidate_moment import CandidateMoment
 from ..models.effective_configuration import EffectiveConfiguration
@@ -44,7 +46,10 @@ from .refine_candidate_moments import (
 )
 from .run_progress_tracker import RunProgressTracker
 from .select_primary_video_stream import select_primary_video_stream
-from .validate_video_set_snapshot import validate_video_set_snapshot_metadata
+from .validate_video_set_snapshot import (
+    validate_video_set_snapshot_metadata,
+    validate_video_source_snapshot,
+)
 from .video_stage_artifacts import (
     restore_frame_candidate_extraction,
     restore_video_scan,
@@ -63,6 +68,7 @@ _ENTITY_ID_VERSION = "video-entity-id-v1"
 _CANDIDATE_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
 _MAX_VIDEO_SCAN_WORKERS = 3
 _LOGICAL_CPUS_PER_VIDEO_SCAN_WORKER = 8
+_SCAN_PROGRESS_HEARTBEAT_SECONDS = 30.0
 
 PreparedVideoScan = tuple[bool, float]
 ProbedVideoSource = tuple[VideoSource, MediaProbe, MediaStream]
@@ -105,6 +111,8 @@ class VideoStageProcessor:
         worker_count = _video_scan_worker_count(len(probed_sources))
         results: list[VideoStageResult] = []
         prepared_scans: list[Future[PreparedVideoScan]] = []
+        scan_cancellation = Event()
+        scan_cancellation_lock = Lock()
         with ThreadPoolExecutor(
             max_workers=worker_count,
             thread_name_prefix="video-scan",
@@ -114,6 +122,9 @@ class VideoStageProcessor:
                     prepared_scans.append(
                         executor.submit(
                             self._prepare_scan,
+                            scan_cancellation,
+                            scan_cancellation_lock,
+                            video_set,
                             source,
                             primary_stream,
                             configuration,
@@ -125,23 +136,35 @@ class VideoStageProcessor:
                     start=1,
                 ):
                     source, probe, primary_stream = probed
+                    progress_started = self._start_scan_wait_progress(
+                        prepared_scan,
+                        source,
+                        video_order,
+                        len(probed_sources),
+                    )
                     results.append(
                         self._process_source(
                             video_set,
                             source,
                             probe,
                             primary_stream,
-                            prepared_scan.result(),
+                            self._await_prepared_scan(
+                                prepared_scan,
+                                emit_heartbeat=progress_started,
+                            ),
                             video_order,
                             configuration,
                             runtime_identity,
+                            scan_progress_started=progress_started,
                         )
                     )
-            except KeyboardInterrupt:
+            except (Exception, KeyboardInterrupt):
                 for prepared_scan in prepared_scans:
                     prepared_scan.cancel()
-                with suppress(Exception):
-                    self._media_runtime.cancel_video_scans()
+                self._request_scan_cancellation(
+                    scan_cancellation,
+                    scan_cancellation_lock,
+                )
                 raise
         validate_video_set_snapshot_metadata(video_set)
         return tuple(results)
@@ -156,6 +179,8 @@ class VideoStageProcessor:
         video_order: int,
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
+        *,
+        scan_progress_started: bool,
     ) -> VideoStageResult:
         """一つのVideo Sourceの3 Stageを確定または再利用する。"""
         validate_video_set_snapshot_metadata(video_set)
@@ -183,6 +208,7 @@ class VideoStageProcessor:
             scan_input,
             reused=prepared_scan[0],
             duration_seconds=prepared_scan[1],
+            progress_started_externally=scan_progress_started,
         )
         scan = restore_video_scan(scan_bundle.artifact, scan_bundle.root)
         discovery = discover_candidate_moments(
@@ -242,63 +268,77 @@ class VideoStageProcessor:
 
     def _prepare_scan(
         self,
+        scan_cancellation: Event,
+        scan_cancellation_lock: LockType,
+        video_set: VideoSet,
         source: VideoSource,
         primary_stream: MediaStream,
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
     ) -> PreparedVideoScan:
         """一つのscan cacheを再利用またはatomic確定してdispositionを返す。"""
-        semantic_input = _scan_semantic_input(
-            source,
-            primary_stream,
-            runtime_identity,
-            configuration,
-        )
-        fingerprint = build_stage_fingerprint(
-            ProcessingStage.SCAN_VIDEO,
-            (),
-            semantic_input,
-        )
-        writer = CompletedStageWriter(
-            configuration.processing_cache_folder,
-            subject_namespace="videos",
-            subject_fingerprint=source.fingerprint,
-        )
-        started_at = time.monotonic()
-        bundle = writer.read_bundle(
-            ProcessingStage.SCAN_VIDEO,
-            fingerprint,
-            (),
-            semantic_input,
-        )
-        reused = bundle is not None
-        if bundle is None:
-            writer.write_artifacts(
+        if scan_cancellation.is_set():
+            raise CancelledError
+        try:
+            semantic_input = _scan_semantic_input(
+                source,
+                primary_stream,
+                runtime_identity,
+                configuration,
+            )
+            fingerprint = build_stage_fingerprint(
                 ProcessingStage.SCAN_VIDEO,
-                fingerprint,
                 (),
                 semantic_input,
-                lambda stage_root: self._produce_scan_artifact(
-                    source,
-                    primary_stream,
-                    configuration,
-                    stage_root,
-                ),
             )
+            writer = CompletedStageWriter(
+                configuration.processing_cache_folder,
+                subject_namespace="videos",
+                subject_fingerprint=source.fingerprint,
+            )
+            started_at = time.monotonic()
             bundle = writer.read_bundle(
                 ProcessingStage.SCAN_VIDEO,
                 fingerprint,
                 (),
                 semantic_input,
             )
-        if bundle is None:
-            msg = "先行確定したVideo Scan artifactを検証できませんでした"
-            raise RuntimeError(msg)
-        duration_seconds = max(time.monotonic() - started_at, 1e-9)
-        return (reused, duration_seconds)
+            reused = bundle is not None
+            if bundle is None:
+                writer.write_artifacts(
+                    ProcessingStage.SCAN_VIDEO,
+                    fingerprint,
+                    (),
+                    semantic_input,
+                    lambda stage_root: self._produce_scan_artifact(
+                        video_set,
+                        source,
+                        primary_stream,
+                        configuration,
+                        stage_root,
+                    ),
+                )
+                bundle = writer.read_bundle(
+                    ProcessingStage.SCAN_VIDEO,
+                    fingerprint,
+                    (),
+                    semantic_input,
+                )
+            if bundle is None:
+                msg = "先行確定したVideo Scan artifactを検証できませんでした"
+                raise RuntimeError(msg)
+            duration_seconds = max(time.monotonic() - started_at, 1e-9)
+            return (reused, duration_seconds)
+        except (Exception, KeyboardInterrupt):
+            self._request_scan_cancellation(
+                scan_cancellation,
+                scan_cancellation_lock,
+            )
+            raise
 
     def _produce_scan_artifact(
         self,
+        video_set: VideoSet,
         source: VideoSource,
         primary_stream: MediaStream,
         configuration: EffectiveConfiguration,
@@ -336,7 +376,55 @@ class VideoStageProcessor:
             if wall_seconds > 0
             else 0.0
         )
+        validate_video_source_snapshot(video_set, source)
         return artifact
+
+    def _start_scan_wait_progress(
+        self,
+        prepared_scan: Future[PreparedVideoScan],
+        source: VideoSource,
+        video_order: int,
+        video_count: int,
+    ) -> bool:
+        """未完了のbackground scanをactive Stageとして可視化する。"""
+        if self._progress is None or prepared_scan.done():
+            return False
+        self._progress.start_stage(
+            ProcessingStage.SCAN_VIDEO,
+            video_order=video_order,
+            video_count=video_count,
+            video_relative_path=source.relative_path,
+            work_unit_kind="video",
+        )
+        return True
+
+    def _await_prepared_scan(
+        self,
+        prepared_scan: Future[PreparedVideoScan],
+        *,
+        emit_heartbeat: bool,
+    ) -> PreparedVideoScan:
+        """background scan完了を待ちactive Stageへ定期heartbeatを出す。"""
+        if not emit_heartbeat or self._progress is None:
+            return prepared_scan.result()
+        while True:
+            try:
+                return prepared_scan.result(timeout=_SCAN_PROGRESS_HEARTBEAT_SECONDS)
+            except TimeoutError:
+                self._progress.heartbeat()
+
+    def _request_scan_cancellation(
+        self,
+        cancellation: Event,
+        cancellation_lock: LockType,
+    ) -> None:
+        """兄弟scanの開始を止めactive subprocess cancellationを一度だけ要求する。"""
+        with cancellation_lock:
+            first_request = not cancellation.is_set()
+            cancellation.set()
+        if first_request:
+            with suppress(Exception):
+                self._media_runtime.cancel_video_scans()
 
     def _produce_extraction_artifact(
         self,

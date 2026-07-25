@@ -50,6 +50,7 @@ def build_acceptance_record(
     target: Mapping[str, object],
     configuration: Mapping[str, object],
     models: Mapping[str, object],
+    storage_preflight: Mapping[str, object],
     video_set: Mapping[str, object],
     cold: Mapping[str, object],
     warm: Mapping[str, object],
@@ -69,11 +70,15 @@ def build_acceptance_record(
     consistency = cold.get("normalized_result_digest") == warm.get(
         "normalized_result_digest"
     )
+    cold_speech_runtime = _string(cold, "speech_runtime_identity")
+    warm_speech_runtime = _string(warm, "speech_runtime_identity")
+    speech_runtime_consistency = cold_speech_runtime == warm_speech_runtime
     automatic_gates = {
         "cold_duration": _number(cold, "duration_seconds") <= budgets["cold_seconds"],
         "warm_duration": _number(warm, "duration_seconds") <= budgets["warm_seconds"],
         "warm_unexpected_recompute": _integer(warm, "unexpected_recompute_count") == 0,
         "warm_result_consistency": consistency,
+        "speech_runtime_identity_consistency": speech_runtime_consistency,
         "resource_sampling": _boolean(cold, "resource_sampling_complete")
         and _boolean(warm, "resource_sampling_complete"),
         "persistent_cache": max(
@@ -96,6 +101,14 @@ def build_acceptance_record(
             _integer(warm, "stt_global_gpu_peak_mib"),
         )
         <= _STT_GPU_MIB,
+        "ollama_model_fully_resident": (
+            _boolean(cold, "ollama_model_observed")
+            and _boolean(cold, "ollama_model_fully_resident")
+            and (
+                not _boolean(warm, "ollama_model_observed")
+                or _boolean(warm, "ollama_model_fully_resident")
+            )
+        ),
     }
     human_status = human_quality.get("status")
     automatic_passed = all(automatic_gates.values())
@@ -114,9 +127,14 @@ def build_acceptance_record(
         "target": dict(target),
         "configuration": dict(configuration),
         "models": dict(models),
+        "runtime": {"speech_to_text": cold_speech_runtime},
+        "storage_preflight": dict(storage_preflight),
         "video_set": dict(video_set),
         "phases": {"cold": dict(cold), "warm": dict(warm)},
-        "consistency": {"normalized_result_equal": consistency},
+        "consistency": {
+            "normalized_result_equal": consistency,
+            "speech_runtime_identity_equal": speech_runtime_consistency,
+        },
         "budgets": budgets,
         "automatic_gates": automatic_gates,
         "human_quality": dict(human_quality),
@@ -151,6 +169,8 @@ def write_normalized_baseline(
         "target": record.get("target"),
         "configuration": record.get("configuration"),
         "models": record.get("models"),
+        "runtime": record.get("runtime"),
+        "storage_preflight": record.get("storage_preflight"),
         "video_set": record.get("video_set"),
         "phases": record.get("phases"),
         "budgets": record.get("budgets"),
@@ -230,4 +250,11 @@ def _boolean(value: Mapping[str, object], key: str) -> bool:
     result = value.get(key)
     if not isinstance(result, bool):
         raise ValueError(f"Acceptance phase metric {key}がbooleanではありません")
+    return result
+
+
+def _string(value: Mapping[str, object], key: str) -> str:
+    result = value.get(key)
+    if not isinstance(result, str) or not result:
+        raise ValueError(f"Acceptance phase metric {key}がstringではありません")
     return result

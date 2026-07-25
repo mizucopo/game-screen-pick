@@ -103,6 +103,7 @@ def execute_acceptance_phase(
             "normalized_result_digest": _normalized_result_digest(report),
             "selection_stage_fingerprint": selection_stage.fingerprint.value,
             "video_set": _video_set_record(report),
+            "speech_runtime_identity": _speech_runtime_identity(report),
         }
     )
     return 0, phase_record, report, selection_artifact
@@ -215,3 +216,16 @@ def _video_set_record(report: Mapping[str, object]) -> dict[str, object]:
         "scenario_count": len(source_fingerprints),
         "total_duration_seconds": duration["exact_seconds"],
     }
+
+
+def _speech_runtime_identity(report: Mapping[str, object]) -> str:
+    provenance = report.get("provenance")
+    if not isinstance(provenance, dict):
+        raise ValueError("Canonical reportのprovenanceが不正です")
+    runtime = provenance.get("runtime")
+    if not isinstance(runtime, dict):
+        raise ValueError("Canonical reportのruntime provenanceが不正です")
+    identity = runtime.get("speech_runtime_identity")
+    if not isinstance(identity, str) or not identity:
+        raise ValueError("Canonical reportにSpeech Runtime Identityがありません")
+    return identity

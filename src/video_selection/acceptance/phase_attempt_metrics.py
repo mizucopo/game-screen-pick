@@ -18,6 +18,7 @@ _MAXIMUM_INTEGER_METRICS = (
     "system_global_gpu_peak_mib",
     "ollama_global_gpu_peak_mib",
     "stt_global_gpu_peak_mib",
+    "ollama_model_size_bytes",
     "ollama_model_size_vram_bytes",
 )
 _BASELINE_INTEGER_METRICS = (
@@ -38,6 +39,8 @@ def build_incomplete_interrupt_attempt(
         "stage_durations_seconds": {},
         "completed_stage_counts": {},
         "resource_sampling_complete": False,
+        "ollama_model_observed": False,
+        "ollama_model_fully_resident": False,
         **dict.fromkeys(_SUMMED_INTEGER_METRICS, 0),
         **dict.fromkeys(_MAXIMUM_INTEGER_METRICS, 0),
         **dict.fromkeys(_BASELINE_INTEGER_METRICS, 0),
@@ -57,8 +60,13 @@ def validate_phase_measurements(record: Mapping[str, object]) -> None:
         _measurement_integer(record, key)
     _measurement_numeric_mapping(record, "stage_durations_seconds")
     _measurement_integer_mapping(record, "completed_stage_counts")
-    if not isinstance(record.get("resource_sampling_complete"), bool):
-        raise ValueError("Acceptance phase metric resource_sampling_completeが不正です")
+    for key in (
+        "resource_sampling_complete",
+        "ollama_model_observed",
+        "ollama_model_fully_resident",
+    ):
+        if not isinstance(record.get(key), bool):
+            raise ValueError(f"Acceptance phase metric {key}が不正です")
 
 
 def aggregate_phase_attempts(
@@ -90,6 +98,15 @@ def aggregate_phase_attempts(
     )
     aggregate["resource_sampling_complete"] = all(
         record["resource_sampling_complete"] is True for record in records
+    )
+    aggregate["ollama_model_observed"] = any(
+        record["ollama_model_observed"] is True for record in records
+    )
+    observed_records = tuple(
+        record for record in records if record["ollama_model_observed"] is True
+    )
+    aggregate["ollama_model_fully_resident"] = bool(observed_records) and all(
+        record["ollama_model_fully_resident"] is True for record in observed_records
     )
     aggregate.pop("failure_reason", None)
     aggregate.pop("failure_exit_code", None)

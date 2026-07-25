@@ -121,6 +121,7 @@ class ProcessingStageRunner:
                 stage=stage,
                 fingerprint=fingerprint,
                 upstream_fingerprints=upstream_fingerprints,
+                semantic_input=semantic_input,
             ),
             reused=True,
         )
@@ -186,6 +187,7 @@ class ProcessingStageRunner:
                 stage=stage,
                 fingerprint=fingerprint,
                 upstream_fingerprints=upstream_fingerprints,
+                semantic_input=semantic_input,
             ),
             reused=True,
         )
@@ -198,6 +200,7 @@ class ProcessingStageRunner:
         *,
         reused: bool,
         duration_seconds: float,
+        progress_started_externally: bool = False,
         upstream_stages: tuple[ProcessingStage, ...] | None = None,
     ) -> CompletedStageBundle:
         """先行確定されたbundleを実際のdispositionと時間で完了扱いにする。"""
@@ -205,6 +208,7 @@ class ProcessingStageRunner:
             stage,
             semantic_input,
             upstream_stages,
+            progress_started_externally=progress_started_externally,
         )
         bundle = self._writer.read_bundle(
             stage,
@@ -222,6 +226,7 @@ class ProcessingStageRunner:
                 stage=stage,
                 fingerprint=fingerprint,
                 upstream_fingerprints=upstream_fingerprints,
+                semantic_input=semantic_input,
             ),
             reused=reused,
             duration_seconds=duration_seconds,
@@ -233,6 +238,8 @@ class ProcessingStageRunner:
         stage: ProcessingStage,
         semantic_input: Mapping[str, object],
         upstream_stages: tuple[ProcessingStage, ...] | None,
+        *,
+        progress_started_externally: bool = False,
     ) -> tuple[tuple[StageFingerprint, ...], StageFingerprint]:
         """次Stageを検証して上流とfingerprintを返す。"""
         stages = self._stage_order
@@ -251,7 +258,12 @@ class ProcessingStageRunner:
             upstream_fingerprints,
             semantic_input,
         )
-        self._start_progress_stage(stage)
+        if progress_started_externally:
+            if self._progress is None or self._progress_stage is not None:
+                raise RuntimeError("外部開始されたProcessing Stageを引き継げません")
+            self._progress_stage = stage
+        else:
+            self._start_progress_stage(stage)
         return upstream_fingerprints, fingerprint
 
     def _select_upstream_fingerprints(

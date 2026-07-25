@@ -2,10 +2,13 @@
 
 from pathlib import Path
 
+import pytest
+
 from src.video_selection.acceptance.human_review import (
     complete_review_metadata,
     ensure_review_worksheet,
     evaluate_human_review,
+    review_candidate_digest,
 )
 
 
@@ -35,6 +38,7 @@ def test_pending_worksheet_contains_private_candidate_ids_and_stable_enums(
         worksheet,
         suite="release",
         suite_fingerprint="a" * 64,
+        expected_candidate_digest=review_candidate_digest(worksheet),
     )
 
     # Assert
@@ -92,6 +96,7 @@ def test_completed_review_is_aggregated_without_candidate_ids() -> None:
         worksheet,
         suite="full",
         suite_fingerprint="b" * 64,
+        expected_candidate_digest=review_candidate_digest(worksheet),
     )
 
     # Assert
@@ -128,10 +133,43 @@ def test_zero_selected_candidates_fail_completed_human_gate() -> None:
         worksheet,
         suite="release",
         suite_fingerprint="c" * 64,
+        expected_candidate_digest=review_candidate_digest(worksheet),
     )
 
     # Assert
     assert result["status"] == "failed"
+
+
+def test_review_rejects_candidate_set_changed_after_generation(tmp_path: Path) -> None:
+    """cold evidenceから生成されたcandidate集合の欠落が拒否されること。
+
+    Arrange:
+        - selectedとrejectedへ結び付いたworksheetが生成される
+        - reviewer入力を装ってrejected candidateが削除される
+    Act:
+        - cold evidenceのcandidate digestを使ってreviewが評価される
+    Assert:
+        - candidate集合不一致として受理されないこと
+    """
+    # Arrange
+    worksheet = ensure_review_worksheet(
+        tmp_path / "review.json",
+        suite="release",
+        suite_fingerprint="d" * 64,
+        canonical_report=_report(),
+        selection_artifact=_selection_artifact(),
+    )
+    expected_digest = review_candidate_digest(worksheet)
+    worksheet["rejected"] = []
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="candidate集合"):
+        evaluate_human_review(
+            worksheet,
+            suite="release",
+            suite_fingerprint="d" * 64,
+            expected_candidate_digest=expected_digest,
+        )
 
 
 def _report() -> dict[str, object]:

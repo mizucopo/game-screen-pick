@@ -20,6 +20,7 @@ from .acceptance_record import (
     validate_acceptance_record_privacy,
     write_normalized_baseline,
 )
+from .acceptance_storage_preflight import preflight_acceptance_storage
 from .atomic_json import read_json_object, write_atomic_json
 from .execute_acceptance_phase import (
     PhaseExecutionResult,
@@ -28,7 +29,11 @@ from .execute_acceptance_phase import (
     public_phase_record,
 )
 from .full_suite_materializer import FullSuiteMaterializer
-from .human_review import ensure_review_worksheet, evaluate_human_review
+from .human_review import (
+    ensure_review_worksheet,
+    evaluate_human_review,
+    review_candidate_digest,
+)
 from .load_acceptance_profile import load_acceptance_profile
 from .phase_attempt_metrics import (
     aggregate_phase_attempts,
@@ -49,6 +54,7 @@ SuiteMaterializer = Callable[
     [AcceptanceProfile, Path],
     tuple[Path, dict[str, object]],
 ]
+StoragePreflight = Callable[[AcceptanceProfile], dict[str, object]]
 
 _STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.0.0"
 
@@ -65,6 +71,7 @@ class TargetSuiteRunner:
         phase_executor: PhaseExecutor | None = None,
         release_materializer: SuiteMaterializer | None = None,
         full_materializer: SuiteMaterializer | None = None,
+        storage_preflight: StoragePreflight = preflight_acceptance_storage,
     ) -> None:
         self._environment_probe = environment_probe
         self._revision_probe = revision_probe
@@ -76,6 +83,7 @@ class TargetSuiteRunner:
         self._full_materializer = (
             full_materializer or FullSuiteMaterializer().materialize
         )
+        self._storage_preflight = storage_preflight
 
     def run(
         self,
@@ -95,6 +103,11 @@ class TargetSuiteRunner:
             shutil.rmtree(suite_root, ignore_errors=True)
         state_path = suite_root / "acceptance-state.json"
         state = read_json_object(state_path)
+        storage_preflight = (
+            self._storage_preflight(profile)
+            if state is None
+            else _mapping(state.get("storage_preflight"), "storage_preflight")
+        )
         configuration_digest = _content_digest(profile.configuration_path)
         commit, dirty = self._revision_probe(Path.cwd())
         if dirty:
@@ -140,6 +153,7 @@ class TargetSuiteRunner:
                 "target": target,
                 "configuration": _configuration_summary(cold_configuration),
                 "models": resolved_models.provenance(),
+                "storage_preflight": storage_preflight,
                 "phases": {},
             }
             write_atomic_json(state_path, state)
@@ -231,13 +245,14 @@ class TargetSuiteRunner:
             "video_set",
         )
         state["video_set"] = cold_video_set
-        ensure_review_worksheet(
+        worksheet = ensure_review_worksheet(
             suite_root / "review-worksheet.json",
             suite=suite,
             suite_fingerprint=_string(state.get("suite_fingerprint")),
             canonical_report=cold_report,
             selection_artifact=cold_selection,
         )
+        state["review_candidate_digest"] = review_candidate_digest(worksheet)
         state["worksheet_ready"] = True
         write_atomic_json(state_path, state)
         return self._finalize(
@@ -275,6 +290,7 @@ class TargetSuiteRunner:
             worksheet,
             suite=suite,
             suite_fingerprint=_string(state.get("suite_fingerprint")),
+            expected_candidate_digest=_string(state.get("review_candidate_digest")),
         )
         phases = _mapping(state.get("phases"), "phases")
         cold = _mapping(phases.get("cold"), "cold phase")
@@ -287,6 +303,10 @@ class TargetSuiteRunner:
             target=_mapping(state.get("target"), "target"),
             configuration=_mapping(state.get("configuration"), "configuration"),
             models=_mapping(state.get("models"), "models"),
+            storage_preflight=_mapping(
+                state.get("storage_preflight"),
+                "storage_preflight",
+            ),
             video_set=_mapping(state.get("video_set"), "video_set"),
             cold=public_phase_record(cold),
             warm=public_phase_record(warm),

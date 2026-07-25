@@ -115,6 +115,10 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     }
     cold_scan = cold_stages["scan_video_001"]
     cold_extraction = cold_stages["extract_frame_candidates_001"]
+    cold_context = cold_stages["collect_context_001"]
+    cold_catalog = cold_stages["build_scene_catalog_001"]
+    cold_annotation = cold_stages["annotate_candidate_001"]
+    cold_selection = cold_stages["select_images_001"]
     warm_scan = warm_stages["scan_video_001"]
     assert cold_scan["cache_misses"] == 1
     assert cold_scan["recomputed_items"] == 1
@@ -124,6 +128,31 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     assert warm_scan["cache_misses"] == 0
     assert warm_scan["recomputed_items"] == 0
     assert warm_scan["attempt_count"] == 1
+    provenance = cold_report["provenance"]
+    assert provenance["runtime"]["speech_runtime_identity"] == (
+        "fake-speech-runtime-v1"
+    )
+    assert cold_scan["effective_settings"]["decode_backend"] == "cpu"
+    assert cold_scan["tool_refs"] == ["ffmpeg"]
+    assert cold_scan["contract_refs"] == ["video_scan"]
+    assert cold_extraction["tool_refs"] == ["ffmpeg"]
+    assert cold_extraction["contract_refs"] == ["frame_candidate_extraction"]
+    assert cold_context["tool_refs"] == ["ffmpeg"]
+    assert cold_context["model_refs"] == []
+    assert cold_context["contract_refs"] == ["context_collection"]
+    assert cold_catalog["tool_refs"] == ["ollama"]
+    assert cold_catalog["model_refs"] == ["scene_catalog"]
+    assert cold_catalog["effective_settings"]["stage_contract_version"]
+    assert cold_catalog["prompt_eval_tokens"] == 10
+    assert cold_catalog["eval_tokens"] == 5
+    assert cold_annotation["tool_refs"] == ["ollama"]
+    assert cold_annotation["model_refs"] == ["candidate_annotation"]
+    assert cold_annotation["contract_refs"] == [
+        "candidate_annotation",
+        "nearby_context_policy",
+    ]
+    assert cold_selection["tool_refs"] == ["video_selection"]
+    assert cold_selection["contract_refs"] == ["video_set_selection_policy"]
 
 
 def test_report_timestamps_cover_the_pipeline_lifecycle(tmp_path: Path) -> None:

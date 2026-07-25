@@ -1,6 +1,8 @@
 """target-only review worksheetの生成、検証、aggregate gate。"""
 
-from collections.abc import Mapping
+import hashlib
+import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
@@ -33,15 +35,19 @@ def ensure_review_worksheet(
 ) -> dict[str, object]:
     """既存worksheetを保持し、なければcandidate IDとstable enum欄を生成する。"""
     existing = read_json_object(path)
-    if existing is not None:
-        _require_worksheet_identity(existing, suite, suite_fingerprint)
-        return existing
     selected_value = canonical_report.get("selected")
     rejected_value = selection_artifact.get("rejected")
     if not isinstance(selected_value, list) or not isinstance(rejected_value, list):
         raise ValueError("Review worksheet sourceのcandidate集合が不正です")
     selected = [_selected_review_entry(item) for item in selected_value]
     rejected = [_rejected_review_entry(item) for item in rejected_value]
+    if existing is not None:
+        _require_worksheet_identity(existing, suite, suite_fingerprint)
+        expected_digest = _review_candidate_digest(selected, rejected)
+        if review_candidate_digest(existing) != expected_digest:
+            msg = "Human review worksheetのcandidate集合がcold evidenceと一致しません"
+            raise ValueError(msg)
+        return existing
     worksheet: dict[str, object] = {
         "schema": _WORKSHEET_SCHEMA,
         "suite": suite,
@@ -68,9 +74,13 @@ def evaluate_human_review(
     *,
     suite: str,
     suite_fingerprint: str,
+    expected_candidate_digest: str,
 ) -> dict[str, object]:
     """worksheetをstable aggregateへ変換しpending/pass/failを返す。"""
     _require_worksheet_identity(worksheet, suite, suite_fingerprint)
+    if review_candidate_digest(worksheet) != expected_candidate_digest:
+        msg = "Human review worksheetのcandidate集合がcold evidenceと一致しません"
+        raise ValueError(msg)
     selected = _mapping_list(worksheet.get("selected"), "selected")
     rejected = _mapping_list(worksheet.get("rejected"), "rejected")
     suite_checks = _mapping(worksheet.get("suite_checks"), "suite_checks")
@@ -168,13 +178,36 @@ def complete_review_metadata(worksheet: dict[str, object]) -> None:
     worksheet["completed_at"] = datetime.now(timezone.utc).isoformat()
 
 
+def review_candidate_digest(worksheet: Mapping[str, object]) -> str:
+    """worksheetのimmutableなcandidate集合をprivacy-safe digestへ固定する。"""
+    selected = _mapping_list(worksheet.get("selected"), "selected")
+    rejected = _mapping_list(worksheet.get("rejected"), "rejected")
+    selected_binding = [
+        {
+            "candidate_id": _candidate_id(item.get("candidate_id")),
+            "output_relative_path": _relative_output_path(
+                item.get("output_relative_path")
+            ),
+        }
+        for item in selected
+    ]
+    rejected_binding = [
+        _rejected_review_entry(
+            {
+                "candidate_id": item.get("candidate_id"),
+                "reason_code": item.get("reason_code"),
+            }
+        )
+        for item in rejected
+    ]
+    return _review_candidate_digest(selected_binding, rejected_binding)
+
+
 def _selected_review_entry(value: object) -> dict[str, object]:
     item = _mapping(value, "selected candidate")
     output = _mapping(item.get("output"), "selected output")
     candidate_id = _candidate_id(item.get("image_id"))
-    relative_output = output.get("relative_path")
-    if not isinstance(relative_output, str):
-        raise ValueError("Selected candidate outputが不正です")
+    relative_output = _relative_output_path(output.get("relative_path"))
     return {
         "candidate_id": candidate_id,
         "output_relative_path": relative_output,
@@ -197,6 +230,19 @@ def _rejected_review_entry(value: object) -> dict[str, object]:
         msg = "Rejected candidate reasonがstable enumではありません"
         raise ValueError(msg) from None
     return {"candidate_id": candidate_id, "reason_code": reason_code}
+
+
+def _review_candidate_digest(
+    selected: Sequence[Mapping[str, object]],
+    rejected: Sequence[Mapping[str, object]],
+) -> str:
+    canonical = json.dumps(
+        {"selected": selected, "rejected": rejected},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _rejection_is_stable(value: Mapping[str, object]) -> bool:
@@ -232,6 +278,18 @@ def _candidate_id(value: object) -> str:
         or any(character not in "0123456789abcdef" for character in value[4:])
     ):
         raise ValueError("Human review candidate IDが不正です")
+    return value
+
+
+def _relative_output_path(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith(("/", "\\"))
+        or "\\" in value
+        or ".." in Path(value).parts
+    ):
+        raise ValueError("Selected candidate outputが不正です")
     return value
 
 

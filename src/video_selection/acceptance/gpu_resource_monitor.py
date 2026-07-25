@@ -46,7 +46,10 @@ class GpuResourceMonitor:
         self._system_peak_mib = 0
         self._ollama_peak_mib = 0
         self._stt_peak_mib = 0
+        self._ollama_size_bytes = 0
         self._ollama_size_vram_bytes = 0
+        self._ollama_model_observed = False
+        self._ollama_model_fully_resident = True
 
     def start(self) -> None:
         """baselineをsampleしてbackground samplerを開始する。"""
@@ -75,7 +78,12 @@ class GpuResourceMonitor:
                 "system_global_gpu_peak_mib": self._system_peak_mib,
                 "ollama_global_gpu_peak_mib": self._ollama_peak_mib,
                 "stt_global_gpu_peak_mib": self._stt_peak_mib,
+                "ollama_model_size_bytes": self._ollama_size_bytes,
                 "ollama_model_size_vram_bytes": self._ollama_size_vram_bytes,
+                "ollama_model_observed": self._ollama_model_observed,
+                "ollama_model_fully_resident": (
+                    self._ollama_model_observed and self._ollama_model_fully_resident
+                ),
             }
 
     def sample_now(self) -> None:
@@ -91,6 +99,7 @@ class GpuResourceMonitor:
             sample = self._probe()
             system = _non_negative_integer(sample, "system_used_mib")
             process = _non_negative_integer(sample, "process_used_mib")
+            model_size = _non_negative_integer(sample, "ollama_size_bytes")
             model_vram = _non_negative_integer(sample, "ollama_size_vram_bytes")
         except Exception:
             with self._lock:
@@ -103,10 +112,19 @@ class GpuResourceMonitor:
                 self._process_baseline_mib = process
                 self._system_baseline_mib = system
             self._system_peak_mib = max(self._system_peak_mib, system)
+            self._ollama_size_bytes = max(
+                self._ollama_size_bytes,
+                model_size,
+            )
             self._ollama_size_vram_bytes = max(
                 self._ollama_size_vram_bytes,
                 model_vram,
             )
+            if model_size > 0:
+                self._ollama_model_observed = True
+                self._ollama_model_fully_resident = (
+                    self._ollama_model_fully_resident and model_vram == model_size
+                )
             if stage in _VISION_STAGES:
                 self._ollama_peak_mib = max(self._ollama_peak_mib, system)
             elif stage is ProcessingStage.COLLECT_CONTEXT:
@@ -121,10 +139,11 @@ def _default_probe(ollama_host: str) -> GpuProbe:
             [command, "--query-gpu=memory.used", "--format=csv,noheader,nounits"]
         )
         process = _query_current_process_memory(command)
-        model_vram = _query_ollama_vram(ollama_host)
+        model_size, model_vram = _query_ollama_sizes(ollama_host)
         return {
             "system_used_mib": system,
             "process_used_mib": process,
+            "ollama_size_bytes": model_size,
             "ollama_size_vram_bytes": model_vram,
         }
 
@@ -178,19 +197,30 @@ def _query_current_process_memory(command: str) -> int:
     return total
 
 
-def _query_ollama_vram(host: str) -> int:
+def _query_ollama_sizes(host: str) -> tuple[int, int]:
     request = Request(f"{host.rstrip('/')}/api/ps", method="GET")
     with urlopen(request, timeout=5) as response:  # noqa: S310 - configured target
         value: object = json.loads(response.read())
     if not isinstance(value, dict) or not isinstance(value.get("models"), list):
         raise ValueError("Ollama /api/ps responseが不正です")
-    total = 0
+    total_size = 0
+    total_vram = 0
     for item in value["models"]:
         if isinstance(item, dict):
-            size = item.get("size_vram", 0)
-            if isinstance(size, int) and not isinstance(size, bool) and size >= 0:
-                total += size
-    return total
+            size = item.get("size", 0)
+            size_vram = item.get("size_vram", 0)
+            if (
+                not isinstance(size, int)
+                or isinstance(size, bool)
+                or size < 0
+                or not isinstance(size_vram, int)
+                or isinstance(size_vram, bool)
+                or size_vram < 0
+            ):
+                raise ValueError("Ollama /api/ps model sizeが不正です")
+            total_size += size
+            total_vram += size_vram
+    return total_size, total_vram
 
 
 def _non_negative_integer(value: Mapping[str, int], key: str) -> int:

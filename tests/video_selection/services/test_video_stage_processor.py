@@ -475,6 +475,143 @@ def test_interrupt_does_not_start_queued_video_scans(
     assert set(started_scan_names) == set(video_names[:3])
 
 
+def test_scan_failure_cancels_queued_sibling_scans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """通常のscan失敗後に待機中の兄弟scanが開始されないこと。
+
+    Arrange:
+        - 1 workerに対して3動画と先頭で失敗するMedia Runtimeが用意される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - 失敗が維持され、待機中scanがcancelされること
+        - active scan cancellationが一度要求されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    for index in range(1, 4):
+        (input_folder / f"0{index}-video.mp4").write_bytes(f"video-{index}".encode())
+
+    def fail_first_scan(_path: Path) -> None:
+        raise OSError("injected scan failure")
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        lambda: 8,
+    )
+    runtime = FakeVideoStageMediaRuntime(on_scan_video=fail_first_scan)
+
+    # Act / Assert
+    with pytest.raises(OSError, match="injected scan failure"):
+        VideoStageProcessor(
+            runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(
+            discover_video_set(input_folder),
+            _configuration(input_folder, tmp_path / "output"),
+        )
+    assert [path.name for path in runtime.scan_calls] == ["01-video.mp4"]
+    assert runtime.cancel_video_scans_call_count == 1
+
+
+def test_changed_source_content_does_not_commit_prepared_scan(
+    tmp_path: Path,
+) -> None:
+    """scan中に変更されたsourceのprepared cacheが確定されないこと。
+
+    Arrange:
+        - 発見後のscan中だけ同じsourceを書き換えて元へ戻すruntimeが用意される
+    Act:
+        - 失敗run後に現在のVideo Setから再実行される
+    Assert:
+        - snapshot変更として失敗し、次回scanがcache再利用されず再計算されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    video_path = input_folder / "video.mp4"
+    original = b"video-content"
+    video_path.write_bytes(original)
+    configuration = _configuration(input_folder, tmp_path / "output")
+    discovered = discover_video_set(input_folder)
+
+    def temporarily_change_source(path: Path) -> None:
+        path.write_bytes(b"other-content")
+        path.write_bytes(original)
+
+    # Act
+    with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
+        VideoStageProcessor(
+            FakeVideoStageMediaRuntime(
+                on_scan_video=temporarily_change_source,
+            ),
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(discovered, configuration)
+    retry_runtime = FakeVideoStageMediaRuntime()
+    VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(discover_video_set(input_folder), configuration)
+
+    # Assert
+    assert retry_runtime.scan_calls == [video_path]
+
+
+def test_background_scan_emits_heartbeat_while_waiting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """background scan待機中にactive Stage heartbeatが通知されること。
+
+    Arrange:
+        - heartbeat間隔より長く実行されるcold scanが用意される
+        - run開始済みProgress Trackerが用意される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - scan完了前にscan-videoへ結び付いたheartbeatが通知されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer)
+    progress.start_run()
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor."
+        "_SCAN_PROGRESS_HEARTBEAT_SECONDS",
+        0.01,
+    )
+
+    def slow_scan(_path: Path) -> None:
+        threading.Event().wait(timeout=0.04)
+
+    # Act
+    VideoStageProcessor(
+        FakeVideoStageMediaRuntime(on_scan_video=slow_scan),
+        FakeSpeechRuntime(),
+        observer,
+        progress=progress,
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )
+
+    # Assert
+    heartbeats = [
+        event for event in observer.progress_events if event.kind == "heartbeat"
+    ]
+    assert heartbeats
+    assert all(event.stage is ProcessingStage.SCAN_VIDEO for event in heartbeats)
+
+
 @pytest.mark.parametrize("failure_position", [0, 1, 2])
 def test_completed_parallel_scans_survive_first_middle_last_video_failure(
     tmp_path: Path,

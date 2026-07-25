@@ -75,6 +75,29 @@ def test_warm_recompute_or_budget_excess_fails_automatic_gate() -> None:
     assert automatic_gates["warm_unexpected_recompute"] is False
 
 
+def test_partially_offloaded_ollama_model_fails_automatic_gate() -> None:
+    """Ollama modelが100% GPU residentでなければacceptanceが失敗すること。
+
+    Arrange:
+        - cold phaseでOllama modelの一部CPU offloadが観測される
+    Act:
+        - acceptance recordが構築される
+    Assert:
+        - fully resident gateがfalseでstatusがfailedになること
+    """
+    # Arrange / Act
+    record = _build_record(
+        human_quality={"status": "passed", "gates": {}},
+        cold_overrides={"ollama_model_fully_resident": False},
+    )
+
+    # Assert
+    gates = record["automatic_gates"]
+    assert isinstance(gates, dict)
+    assert gates["ollama_model_fully_resident"] is False
+    assert record["status"] == "failed"
+
+
 def test_actual_paths_and_video_names_are_rejected_from_record() -> None:
     """actual pathまたはprivate video名がacceptance recordへ混入すると拒否されること。
 
@@ -129,6 +152,7 @@ def test_passed_record_generates_normalized_json_and_markdown(tmp_path: Path) ->
 def _build_record(
     *,
     human_quality: Mapping[str, object],
+    cold_overrides: Mapping[str, object] | None = None,
     warm_overrides: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """release acceptance recordの共通入力からrecordを返す。"""
@@ -139,9 +163,15 @@ def _build_record(
         "peak_additional_bytes": 2048,
         "ollama_global_gpu_peak_mib": 1000,
         "stt_global_gpu_peak_mib": 1000,
+        "ollama_model_observed": True,
+        "ollama_model_fully_resident": True,
         "resource_sampling_complete": True,
+        "speech_runtime_identity": "speech_" + "d" * 64,
         "normalized_result_digest": "a" * 64,
     }
+    cold = dict(phase)
+    if cold_overrides is not None:
+        cold.update(cold_overrides)
     warm = dict(phase)
     if warm_overrides is not None:
         warm.update(warm_overrides)
@@ -152,8 +182,14 @@ def _build_record(
         target={"os": "windows_11_wsl2", "gpu": "rtx_5090"},
         configuration={"image_count": 100, "spoiler_sensitivity": "medium"},
         models={"scene_catalog": {"execution_identity": "sha256:abc"}},
+        storage_preflight={
+            "input_video_bytes": 1024,
+            "input_video_count": 3,
+            "artifact_available_bytes": 200 * 1024**3,
+            "required_artifact_capacity_bytes": 160 * 1024**3,
+        },
         video_set={"fingerprint": "c" * 64, "scenario_count": 3},
-        cold=dict(phase),
+        cold=cold,
         warm=warm,
         human_quality=human_quality,
     )

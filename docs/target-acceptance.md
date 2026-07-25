@@ -55,11 +55,19 @@ modelの更新確認、download、capability検証とResolved Model Identityのf
 processing cacheを使うexact warmの順に実行する。性能予算超過は処理を途中でkillせず、
 完了後のgate failureにする。
 
+新規suiteではmaterializeとmodel実行より前に、対応videoの合計byteとartifact filesystemの
+空き容量を測る。persistent cache 64 GiBとtemporary/staging 96 GiBの合計160 GiB未満なら
+長時間処理を開始せずpreflight failureにする。開始時の測定値はdurable stateと
+privacy-safe recordへ保存する。
+
 coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
 full Video Setを再hashしない。fullの独立Video Scanはlogical CPU 8個につき1 worker、
 最大3 workerで並列実行する。Video Order上の対象scanが確定した時点で、そのVideoの
-candidate extractionとcontext collectionを後続Videoのscanと重ねて開始する。
+candidate extractionとcontext collectionを後続Videoのscanと重ねて開始する。background
+scan待機中もactive Stageとheartbeatを通知し、通常のscan失敗でも待機中workerをcancelする。
+新規scan artifactは対象sourceのcontent snapshotを確定直前に再検証し、scan中に変更された
+bytesを元のVideo Fingerprint配下へ保存しない。
 
 release intervalは全streamをFFmpeg stream copyした`scenario-001.mkv`形式の匿名clipに
 変換する。source metadataとchapterは引き継がず、FFmpegのbitexact format flagを使うため、
@@ -110,6 +118,9 @@ cold/warmと自動gateが完了すると、次のprivate worksheetが生成さ�
 
 target上のphase outputとmediaを確認し、各selected entryのpending値をworksheet記載の
 stable enumへ置き換える。`reviewer`と`completed_at`も記入する。
+selected/rejected candidate ID、selected output relative path、rejection reasonはcold phaseの
+候補集合へdigestで固定されるため、追加・削除・書き換えない。`--human-review`で別fileを
+渡す場合も、このimmutable集合が一致しなければ集計されない。
 
 - `visual_quality`: `pass|broken|black|white|transition|near_duplicate`
 - `blog_usable`: `yes|no`
@@ -143,9 +154,11 @@ uv run task acceptance-target \
 
 `artifact_root`配下にはsuiteごとにphase output、durable state、private worksheet、
 `acceptance.json`を置く。recordにはcommit、target/runtime、Resolved Model Identity、
-path非依存Video Set fingerprint、phase/cache/storage/GPU aggregate、gate aggregateだけを
-含める。absolute path、video名、media、raw Context Cue、prompt、model response、credential、
-個別human判定は含めない。
+実Faster Whisper adapter/backendのSpeech Runtime Identity、path非依存Video Set fingerprint、
+phase/cache/storage/GPU aggregate、gate aggregateだけを含める。canonical reportの各Stageも
+実semantic inputと推論診断からtool/model/contract参照、設定、validation、token数を記録する。
+absolute path、video名、media、raw Context Cue、prompt、model response、credential、個別human
+判定は含めない。
 
 releaseのtemporary clipとprocessing cacheはcold/warmおよびrecord生成後、合格・不合格・
 review pendingのいずれでも削除する。phase output、state、worksheet、recordは保持する。

@@ -1,6 +1,6 @@
 """実Video Stage、Vision、Selector、Canonical Publicationのcomposition。"""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
 from datetime import datetime, timezone
 from typing import cast
@@ -13,9 +13,6 @@ from ..models.completed_stage import CompletedStage
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.model_role import ModelRole
 from ..models.processing_stage import ProcessingStage
-from ..models.progress_event import ProgressEvent
-from ..models.report_provenance import ReportProvenance
-from ..models.report_stage_provenance import ReportStageProvenance
 from ..models.resolved_models import ResolvedModels
 from ..models.run_outcome import RunOutcome
 from ..models.run_status import RunStatus
@@ -24,9 +21,11 @@ from ..models.stage_fingerprint import StageFingerprint
 from ..models.video_set import VideoSet
 from ..models.video_set_selection_result import VideoSetSelectionResult
 from ..models.video_stage_result import VideoStageResult
+from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 from ..protocols.model_runtime import ModelRuntime
 from ..protocols.run_observer import RunObserver
 from ..protocols.selection_media_runtime import SelectionMediaRuntime
+from ..protocols.speech_runtime import SpeechRuntime
 from ..protocols.speech_runtime_factory import SpeechRuntimeFactory
 from ..protocols.vision_runtime import VisionRuntime
 from ..services.build_blog_candidates import build_blog_candidates
@@ -34,6 +33,7 @@ from ..services.build_candidate_annotation_requests import (
     build_candidate_annotation_requests,
     select_scene_catalog_representatives,
 )
+from ..services.build_report_provenance import build_report_provenance
 from ..services.build_stage_fingerprint import build_stage_fingerprint
 from ..services.canonical_output_publisher import CanonicalOutputPublisher
 from ..services.completed_stage_writer import CompletedStageWriter
@@ -118,6 +118,7 @@ class VideoSelectionApplication:
                 video_set,
                 video_stage_results,
                 resolved_models,
+                speech_runtime,
                 started_at,
             )
 
@@ -127,6 +128,7 @@ class VideoSelectionApplication:
         video_set: VideoSet,
         video_stage_results: tuple[VideoStageResult, ...],
         resolved_models: ResolvedModels,
+        speech_runtime: SpeechRuntime,
         started_at: datetime,
     ) -> RunOutcome:
         """shortlistを必要分だけ注釈し選定結果をcanonicalに公開する。"""
@@ -136,6 +138,7 @@ class VideoSelectionApplication:
             similarity_threshold=configuration.similarity_threshold,
         )
         vision_stages: list[CompletedStage] = []
+        vision_diagnostics: dict[str, VisionInferenceDiagnostics] = {}
         scene_catalog: SceneCatalog | None = None
         spoiler_sensitivity = cast(
             SpoilerSensitivity,
@@ -172,6 +175,18 @@ class VideoSelectionApplication:
                         msg = "再利用されたScene Catalogがrun内で変化しました"
                         raise RuntimeError(msg)
                     vision_stages.extend(vision.completed_stages)
+                    for completed, diagnostics in zip(
+                        vision.completed_stages,
+                        (
+                            vision.catalog_diagnostics,
+                            *vision.annotation_diagnostics,
+                        ),
+                        strict=True,
+                    ):
+                        vision_diagnostics.setdefault(
+                            completed.fingerprint.value,
+                            diagnostics,
+                        )
                     yield build_blog_candidates(
                         batch,
                         vision.annotations,
@@ -220,6 +235,8 @@ class VideoSelectionApplication:
             scene_catalog,
             selection,
             completed_stages,
+            vision_diagnostics,
+            speech_runtime,
             started_at,
         )
 
@@ -293,6 +310,7 @@ class VideoSelectionApplication:
                 ProcessingStage.SELECT_IMAGES,
                 fingerprint,
                 upstream,
+                semantic_input,
             )
         self._progress.record_work_sample("reuse" if reused else "recompute")
         self._progress.cache_observed(
@@ -315,6 +333,8 @@ class VideoSelectionApplication:
         scene_catalog: SceneCatalog | None,
         selection: VideoSetSelectionResult,
         completed_stages: tuple[CompletedStage, ...],
+        vision_diagnostics: Mapping[str, VisionInferenceDiagnostics],
+        speech_runtime: SpeechRuntime,
         started_at: datetime,
     ) -> RunOutcome:
         """Canonical Publication Requestを構築してOutput Folderへ公開する。"""
@@ -345,10 +365,12 @@ class VideoSelectionApplication:
             run_id=_run_id(started_at),
             started_at=started_at,
             completed_at=started_at,
-            provenance=_report_provenance(
+            provenance=build_report_provenance(
                 completed_stages,
                 self._progress.completed_stage_events,
                 configuration,
+                vision_diagnostics,
+                speech_runtime,
             ),
         )
         CanonicalOutputPublisher(
@@ -416,65 +438,6 @@ def _run_id(started_at: datetime) -> str:
     """pathを含まない一意なrun IDを返す。"""
     timestamp = started_at.strftime("%Y%m%dT%H%M%SZ")
     return f"run_{timestamp}_{uuid4().hex}"
-
-
-def _report_provenance(
-    completed_stages: tuple[CompletedStage, ...],
-    completed_stage_events: tuple[ProgressEvent, ...],
-    configuration: EffectiveConfiguration,
-) -> ReportProvenance:
-    """Completed Stage graphをprivacy-safeなcanonical provenanceへ変換する。"""
-    events_by_fingerprint: dict[str, list[ProgressEvent]] = {}
-    for event in completed_stage_events:
-        if event.stage_fingerprint is None:
-            continue
-        events_by_fingerprint.setdefault(event.stage_fingerprint, []).append(event)
-    counts: dict[ProcessingStage, int] = {}
-    stages: list[ReportStageProvenance] = []
-    for completed in completed_stages:
-        events = events_by_fingerprint.get(completed.fingerprint.value, [])
-        if not events or any(event.stage is not completed.stage for event in events):
-            raise ValueError("Completed Stageのrun provenanceがありません")
-        counts[completed.stage] = counts.get(completed.stage, 0) + 1
-        ordinal = counts[completed.stage]
-        name = f"{completed.stage.value.replace('-', '_')}_{ordinal:03d}"
-        settings: dict[str, object] = {}
-        if completed.stage is ProcessingStage.SELECT_IMAGES:
-            settings = {
-                "requested_count": configuration.image_count,
-                "spoiler_sensitivity": configuration.spoiler_sensitivity,
-                "similarity_threshold": configuration.similarity_threshold,
-            }
-        stages.append(
-            ReportStageProvenance(
-                name=name,
-                fingerprint="stg_" + completed.fingerprint.value,
-                upstream_fingerprints=tuple(
-                    "stg_" + item.value for item in completed.upstream_fingerprints
-                ),
-                cache_hits=sum(event.cache_hit_count for event in events),
-                cache_misses=sum(event.cache_miss_count for event in events),
-                recomputed_items=sum(event.recompute_count for event in events),
-                attempt_count=len(events),
-                validation_failures=0,
-                effective_settings=settings,
-                tool_refs=(),
-                model_refs=(),
-                contract_refs=("video_set_selection_policy",),
-                duration_ms=round(
-                    sum(event.elapsed_seconds or 0.0 for event in events) * 1000
-                ),
-            )
-        )
-    return ReportProvenance(
-        runtime={"application": "video_selection"},
-        tools={"video_selection": "1"},
-        contracts={
-            "video_set_selection_policy": "video-set-selection-v2",
-            "nearby_context_policy": "nearby-context-v1",
-        },
-        stages=tuple(stages),
-    )
 
 
 def _utc_now() -> datetime:

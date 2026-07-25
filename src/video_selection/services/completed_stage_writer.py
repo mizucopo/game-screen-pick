@@ -119,6 +119,7 @@ class CompletedStageWriter:
                 stage=stage,
                 fingerprint=fingerprint,
                 upstream_fingerprints=upstream_fingerprints,
+                semantic_input=_normalize_json_mapping(semantic_input),
             )
 
         temporary_folder = stage_root / f".{fingerprint.value}.{uuid4().hex}.tmp"
@@ -175,6 +176,7 @@ class CompletedStageWriter:
             stage=stage,
             fingerprint=fingerprint,
             upstream_fingerprints=upstream_fingerprints,
+            semantic_input=_normalize_json_mapping(semantic_input),
         )
 
     def read(
