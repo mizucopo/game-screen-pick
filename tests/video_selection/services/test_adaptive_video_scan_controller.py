@@ -106,14 +106,15 @@ def test_auto_worker_count_changes_only_one_at_each_completion_boundary() -> Non
 
     Arrange:
         - GPU sample欠落により保守的な3 workerで開始するControllerが用意される
-        - 続いてGPU余力sampleとCPU pressure sampleが用意される
+        - 続いて一定期間のGPU余力sampleとCPU pressure sampleが用意される
     Act:
-        - 二つのscan完了境界が順に通知される
+        - 各sampleが三つのscan完了境界で順に通知される
     Assert:
         - worker数が3から4、4から3へ一つずつ変更されること
-        - 変更理由と判断metricが診断へ記録されること
+        - 変更理由、rolling判断metric、変更経過秒が診断へ記録されること
     """
     # Arrange
+    clock_values = iter((100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0))
     controller = AdaptiveVideoScanController(
         video_count=12,
         configured_workers="auto",
@@ -121,20 +122,23 @@ def test_auto_worker_count_changes_only_one_at_each_completion_boundary() -> Non
         decode_backend="nvdec",
         logical_cpu_count=24,
         initial_resource_sample=None,
+        clock=lambda: next(clock_values),
     )
 
     # Act
-    controller.observe_scan_completion(
-        reused=False,
-        input_seconds_per_wall_second=1.1,
-        resource_sample=_healthy_nvdec_sample(),
-    )
+    for _ in range(3):
+        controller.observe_scan_completion(
+            reused=False,
+            input_seconds_per_wall_second=1.1,
+            resource_sample=_healthy_nvdec_sample(),
+        )
     after_growth = controller.current_workers
-    controller.observe_scan_completion(
-        reused=False,
-        input_seconds_per_wall_second=1.0,
-        resource_sample=_pressure_sample(),
-    )
+    for _ in range(3):
+        controller.observe_scan_completion(
+            reused=False,
+            input_seconds_per_wall_second=1.0,
+            resource_sample=_pressure_sample(),
+        )
 
     # Assert
     assert after_growth == 4
@@ -145,7 +149,103 @@ def test_auto_worker_count_changes_only_one_at_each_completion_boundary() -> Non
         "gpu_headroom",
         "cpu_pressure",
     ]
-    assert changes[0]["metrics"]["decoder_percent"] == 40.0
+    assert changes[0]["elapsed_seconds"] == 3.0
+    assert changes[1]["elapsed_seconds"] == 6.0
+    assert changes[0]["metrics"]["rolling"]["decoder_percent"] == 40.0
+    assert controller.diagnostics["scan_wall_seconds"] == 6.0
+
+
+def test_single_resource_spike_does_not_reduce_workers() -> None:
+    """単発のresource spikeではworker数が変更されないこと。
+
+    Arrange:
+        - GPU余力sampleにより6 workerで開始したControllerが用意される
+    Act:
+        - 一度だけCPU pressure sampleが通知される
+    Assert:
+        - rolling windowがspikeを吸収しworker数が6のまま維持されること
+    """
+    # Arrange
+    controller = AdaptiveVideoScanController(
+        video_count=12,
+        configured_workers="auto",
+        auto_max_workers=6,
+        decode_backend="nvdec",
+        logical_cpu_count=24,
+        initial_resource_sample=_healthy_nvdec_sample(),
+    )
+
+    # Act
+    controller.observe_scan_completion(
+        reused=False,
+        input_seconds_per_wall_second=1.0,
+        resource_sample=_pressure_sample(),
+    )
+
+    # Assert
+    assert controller.current_workers == 6
+    assert controller.diagnostics["changes"] == []
+
+
+def test_sustained_disk_throughput_slowdown_reduces_workers() -> None:
+    """継続するdisk throughput低下でworker数が減らされること。
+
+    Arrange:
+        - 高いdisk throughputで6 workerを利用するControllerが用意される
+        - disk busyを伴う低throughput sampleが用意される
+    Act:
+        - 高throughputと低throughputがrolling windowへ順に通知される
+    Assert:
+        - 単発低下では変更されず継続低下後に5 workerへ減らされること
+        - disk throughput低下が変更理由と判断metricへ記録されること
+    """
+    # Arrange
+    controller = AdaptiveVideoScanController(
+        video_count=12,
+        configured_workers="auto",
+        auto_max_workers=6,
+        decode_backend="nvdec",
+        logical_cpu_count=24,
+        initial_resource_sample=_healthy_nvdec_sample(),
+    )
+    slow_disk = VideoScanResourceSample(
+        cpu_percent=45.0,
+        memory_percent=50.0,
+        decoder_percent=40.0,
+        gpu_percent=20.0,
+        vram_percent=22.0,
+        disk_busy_percent=80.0,
+        disk_read_mib_per_second=90.0,
+        disk_read_latency_ms=20.0,
+    )
+
+    # Act
+    for _ in range(2):
+        controller.observe_scan_completion(
+            reused=False,
+            input_seconds_per_wall_second=1.1,
+            resource_sample=_healthy_nvdec_sample(),
+        )
+    controller.observe_scan_completion(
+        reused=False,
+        input_seconds_per_wall_second=1.05,
+        resource_sample=slow_disk,
+    )
+    after_spike = controller.current_workers
+    controller.observe_scan_completion(
+        reused=False,
+        input_seconds_per_wall_second=1.0,
+        resource_sample=slow_disk,
+    )
+
+    # Assert
+    assert after_spike == 6
+    assert controller.current_workers == 5
+    changes = controller.diagnostics["changes"]
+    assert isinstance(changes, list)
+    assert changes[0]["reason"] == "disk_throughput_slowdown"
+    metrics = changes[0]["metrics"]
+    assert metrics["disk_throughput_ratio"] == pytest.approx(0.3)
 
 
 def test_missing_resource_sample_does_not_grow_above_conservative_limit() -> None:
@@ -258,11 +358,12 @@ def test_saturated_cpu_core_ratio_reduces_nvdec_workers() -> None:
     )
 
     # Act
-    controller.observe_scan_completion(
-        reused=False,
-        input_seconds_per_wall_second=1.1,
-        resource_sample=saturated,
-    )
+    for _ in range(2):
+        controller.observe_scan_completion(
+            reused=False,
+            input_seconds_per_wall_second=1.1,
+            resource_sample=saturated,
+        )
 
     # Assert
     assert controller.current_workers == 5
@@ -291,9 +392,10 @@ def test_unsafe_worker_upper_bound_is_rejected(
     Assert:
         - executor構築前にValueErrorが返されること
     """
-    # Arrange / Act / Assert
-    with pytest.raises(ValueError, match="32以下"):
-        AdaptiveVideoScanController(
+
+    # Arrange
+    def build_controller() -> AdaptiveVideoScanController:
+        return AdaptiveVideoScanController(
             video_count=40,
             configured_workers=configured_workers,
             auto_max_workers=auto_max_workers,
@@ -301,6 +403,14 @@ def test_unsafe_worker_upper_bound_is_rejected(
             logical_cpu_count=64,
             initial_resource_sample=_healthy_nvdec_sample(),
         )
+
+    # Act
+    def construct() -> AdaptiveVideoScanController:
+        return build_controller()
+
+    # Assert
+    with pytest.raises(ValueError, match="32以下"):
+        construct()
 
 
 def _healthy_nvdec_sample() -> VideoScanResourceSample:

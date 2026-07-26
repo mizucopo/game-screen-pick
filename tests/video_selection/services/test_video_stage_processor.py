@@ -1,5 +1,6 @@
 """Video Stage processorの統合style test。"""
 
+import json
 import os
 import signal
 import threading
@@ -31,6 +32,44 @@ def _configuration(input_folder: Path, output_folder: Path) -> EffectiveConfigur
         video_input_folder=input_folder,
         output_folder=output_folder,
     )
+
+
+def _semantic_stage_artifacts(root: Path) -> dict[Path, bytes]:
+    """run時間metricとmanifestを除いたCompleted Stage成果物を返す。"""
+    artifacts: dict[Path, bytes] = {}
+    for path in root.rglob("*"):
+        if not path.is_file() or path.name == "manifest.json":
+            continue
+        relative_path = path.relative_to(root)
+        if path.suffix != ".json":
+            artifacts[relative_path] = path.read_bytes()
+            continue
+        value: object = json.loads(path.read_text(encoding="utf-8"))
+        artifacts[relative_path] = json.dumps(
+            _without_runtime_metrics(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    return artifacts
+
+
+def _without_runtime_metrics(value: object) -> object:
+    """semantic artifactからrunごとに変わる処理時間だけを除く。"""
+    volatile_keys = {
+        "cpu_seconds",
+        "input_seconds_per_wall_second",
+        "wall_seconds",
+    }
+    if isinstance(value, dict):
+        return {
+            key: _without_runtime_metrics(item)
+            for key, item in value.items()
+            if isinstance(key, str) and key not in volatile_keys
+        }
+    if isinstance(value, list):
+        return [_without_runtime_metrics(item) for item in value]
+    return value
 
 
 def test_context_collection_is_the_third_source_local_video_stage(
@@ -433,6 +472,84 @@ def test_fixed_video_scan_workers_skip_resource_sampling(tmp_path: Path) -> None
     assert sample_calls == 0
 
 
+def test_fixed_three_and_auto_produce_identical_completed_stage_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """固定3とautoで同じCompleted Stage成果物が生成されること。
+
+    Arrange:
+        - 同じ4動画を持つ独立cacheの固定3用とauto用Video Setが用意される
+        - 24論理CPUとNVDEC余力を示すresource sampleが用意される
+    Act:
+        - 固定3とautoで各Video Setが別々に処理される
+    Assert:
+        - 全Completed Stage fingerprintとsemantic artifact bytesが一致すること
+    """
+    # Arrange
+    fixed_input = tmp_path / "fixed-videos"
+    auto_input = tmp_path / "auto-videos"
+    fixed_input.mkdir()
+    auto_input.mkdir()
+    for index in range(1, 5):
+        name = f"{index:02d}-video.mp4"
+        payload = f"video-{index}".encode()
+        (fixed_input / name).write_bytes(payload)
+        (auto_input / name).write_bytes(payload)
+    healthy = VideoScanResourceSample(
+        cpu_percent=45.0,
+        memory_percent=50.0,
+        decoder_percent=40.0,
+        gpu_percent=20.0,
+        vram_percent=22.0,
+        disk_busy_percent=40.0,
+        disk_read_mib_per_second=300.0,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        lambda: 24,
+    )
+    fixed_configuration = replace(
+        _configuration(fixed_input, tmp_path / "fixed-output"),
+        decode_backend="nvdec",
+        video_scan_workers=3,
+    )
+    auto_configuration = replace(
+        _configuration(auto_input, tmp_path / "auto-output"),
+        decode_backend="nvdec",
+        video_scan_workers="auto",
+        video_scan_auto_max_workers=6,
+    )
+
+    # Act
+    fixed_results = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+        resource_sampler=lambda: healthy,
+    ).process(discover_video_set(fixed_input), fixed_configuration)
+    auto_results = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+        resource_sampler=lambda: healthy,
+    ).process(discover_video_set(auto_input), auto_configuration)
+
+    # Assert
+    assert [
+        tuple(stage.fingerprint for stage in result.completed_stages)
+        for result in auto_results
+    ] == [
+        tuple(stage.fingerprint for stage in result.completed_stages)
+        for result in fixed_results
+    ]
+    fixed_stage_root = fixed_configuration.processing_cache_folder / "videos"
+    auto_stage_root = auto_configuration.processing_cache_folder / "videos"
+    fixed_artifacts = _semantic_stage_artifacts(fixed_stage_root)
+    auto_artifacts = _semantic_stage_artifacts(auto_stage_root)
+    assert auto_artifacts == fixed_artifacts
+
+
 def test_pressure_changes_admission_without_interrupting_active_scans(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -440,22 +557,22 @@ def test_pressure_changes_admission_without_interrupting_active_scans(
     """pressure時にactive scanを止めず次taskの投入だけが抑制されること。
 
     Arrange:
-        - 初期6 worker、7動画、先頭だけ完了可能な6本のactive scanが用意される
-        - 初期GPU余力の後にCPU pressureを返すresource sample列が用意される
+        - 初期6 worker、10動画、先頭3本だけ完了可能なactive scanが用意される
+        - 初期GPU余力の後に継続するCPU pressureを返すsample列が用意される
     Act:
-        - 先頭scanだけが完了されworker数の減少が待たれる
+        - 先頭3本のscanが完了されrolling worker数の減少が待たれる
     Assert:
-        - 7本目が開始されずactive scan cancellationも要求されないこと
+        - 9本目が開始されずactive scan cancellationも要求されないこと
         - 残りを解放するとVideo Orderどおり全結果が返されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
     input_folder.mkdir()
-    video_names = tuple(f"{index:02d}-video.mp4" for index in range(1, 8))
+    video_names = tuple(f"{index:02d}-video.mp4" for index in range(1, 11))
     for index, name in enumerate(video_names, start=1):
         (input_folder / name).write_bytes(f"video-{index}".encode())
     six_started = threading.Event()
-    release_first = threading.Event()
+    release_pressure_scans = threading.Event()
     release_rest = threading.Event()
     started_names: list[str] = []
     started_lock = threading.Lock()
@@ -465,8 +582,8 @@ def test_pressure_changes_admission_without_interrupting_active_scans(
             started_names.append(path.name)
             if len(started_names) == 6:
                 six_started.set()
-        if path.name == video_names[0]:
-            assert release_first.wait(timeout=5)
+        if path.name in video_names[:3]:
+            assert release_pressure_scans.wait(timeout=5)
         else:
             assert release_rest.wait(timeout=5)
 
@@ -522,7 +639,7 @@ def test_pressure_changes_admission_without_interrupting_active_scans(
     assert six_started.wait(timeout=5)
 
     # Act
-    release_first.set()
+    release_pressure_scans.set()
     deadline = time.monotonic() + 5
     while (
         processor.parallelism_diagnostics.get("final_workers") != 5
@@ -533,7 +650,7 @@ def test_pressure_changes_admission_without_interrupting_active_scans(
     # Assert
     assert processor.parallelism_diagnostics["final_workers"] == 5
     with started_lock:
-        assert video_names[-1] not in started_names
+        assert video_names[8] not in started_names
     assert runtime.cancel_video_scans_call_count == 0
 
     release_rest.set()

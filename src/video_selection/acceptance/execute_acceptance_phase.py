@@ -59,7 +59,7 @@ def execute_acceptance_phase(
     suite_root: Path,
 ) -> PhaseExecutionResult:
     """model freeze後からatomic publicationまでを測りsafe evidenceを返す。"""
-    if phase not in {"cold", "warm"}:
+    if phase not in {"fixed3", "cold", "warm"}:
         raise ValueError("Acceptance phaseが不正です")
     observer = AcceptanceRunObserver(ProgressStreamObserver())
     progress = RunProgressTracker(observer)
@@ -127,6 +127,8 @@ def execute_acceptance_phase(
             "requested_count": result.requested_count,
             "canonical_report_sha256": _file_digest(report_path),
             "normalized_result_digest": normalized_result_digest(report),
+            "stage_artifact_identity_digest": (stage_artifact_identity_digest(report)),
+            "video_scan_parallelism": video_scan_parallelism_diagnostics(report),
             "selection_stage_fingerprint": selection_stage.fingerprint.value,
             "video_set": _video_set_record(report),
             "speech_runtime_identity": _speech_runtime_identity(report),
@@ -354,6 +356,55 @@ def normalized_result_digest(report: Mapping[str, object]) -> str:
         separators=(",", ":"),
     ).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def stage_artifact_identity_digest(report: Mapping[str, object]) -> str:
+    """run診断を除いたCompleted Stage identity列のdigestを返す。"""
+    provenance = _mapping(
+        report.get("provenance"),
+        "canonical report provenance",
+    )
+    stages = provenance.get("stages")
+    if not isinstance(stages, list):
+        raise ValueError("Canonical reportのprovenance stagesが不正です")
+    identities = [
+        {
+            key: item
+            for key, item in _mapping(
+                value,
+                "canonical report provenance stage",
+            ).items()
+            if key not in _VOLATILE_STAGE_DIAGNOSTIC_KEYS
+        }
+        for value in stages
+    ]
+    canonical = json.dumps(
+        identities,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def video_scan_parallelism_diagnostics(
+    report: Mapping[str, object],
+) -> dict[str, object]:
+    """canonical reportからprivacy-safeなVideo Scan診断を返す。"""
+    provenance = _mapping(
+        report.get("provenance"),
+        "canonical report provenance",
+    )
+    runtime = _mapping(
+        provenance.get("runtime"),
+        "canonical report provenance runtime",
+    )
+    return dict(
+        _mapping(
+            runtime.get("video_scan_parallelism"),
+            "video_scan_parallelism",
+        )
+    )
 
 
 def _normalized_semantic_report(

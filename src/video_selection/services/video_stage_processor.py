@@ -55,6 +55,7 @@ from .refine_candidate_moments import (
     iter_refined_candidate_groups,
 )
 from .run_progress_tracker import RunProgressTracker
+from .sample_video_scan_resources_safely import sample_video_scan_resources_safely
 from .select_primary_video_stream import select_primary_video_stream
 from .validate_video_set_snapshot import (
     validate_video_set_snapshot_metadata,
@@ -495,10 +496,7 @@ class VideoStageProcessor:
 
     def _safe_resource_sample(self) -> VideoScanResourceSample | None:
         """resource取得失敗を安全側のsample欠落へ変換する。"""
-        try:
-            return self._resource_sampler()
-        except Exception:
-            return None
+        return sample_video_scan_resources_safely(self._resource_sampler)
 
     def _produce_extraction_artifact(
         self,

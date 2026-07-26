@@ -4,7 +4,7 @@
 
 ## Processing Stage
 
-Video Set内の全sourceをVideo Order順にprobeした後、独立した`scan-video`をbounded並列実行します。既定の`video_scan.workers = "auto"`では、CPU decodeはlogical CPU 8個につき1 workerの保守的上限を使います。NVDECはCPU・memory・NVIDIA Decoder・GPU・VRAM・diskとrolling処理速度を観測し、余力があればlogical CPU 4個につき1 worker、既定で最大6 workerまで使います。並列数はscan完了境界で1ずつ変更し、active scanを停止せず未開始taskの投入だけを調整します。resource sampleを取得できない場合は安全側のworker数を維持します。
+Video Set内の全sourceをVideo Order順にprobeした後、独立した`scan-video`をbounded並列実行します。既定の`video_scan.workers = "auto"`では、CPU decodeはlogical CPU 8個につき1 workerの保守的上限を使います。NVDECはCPU・memory・NVIDIA Decoder・GPU・VRAM・diskと1 streamあたりの処理速度をrolling windowで観測し、余力があればlogical CPU 4個につき1 worker、既定で最大6 workerまで使います。利用率は直近3 sample、disk throughputと処理速度のtrendは直近2 sample対その前の2 sampleで判断します。並列数はscan完了境界で1ずつ変更し、active scanを停止せず未開始taskの投入だけを調整します。resource sampleを取得できない場合は安全側のworker数を維持します。
 
 Video Order上の対象scanが確定した時点で、後続Videoのscanを続けながら、そのVideoの`extract-frame-candidates`と`collect-context`を開始します。downstream、結果、progress通知はVideo Order順であり、後続scanの完了順には依存しません。worker数と変更履歴はStage Fingerprintやcache identityへ含めず、privacy-safeなrun provenanceへだけ記録します。各Stage境界ではpath・device・inode・size・mtime・ctime snapshotを検査し、内容のwhole-file SHA-256はVideo Identity cache miss時だけ計算します。Video IdentityのSHA-256はdisk/CPU処理であり、NVDECへ移せません。
 

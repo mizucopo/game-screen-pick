@@ -393,6 +393,163 @@ def test_state_preserves_privacy_safe_performance_configuration(
     }
 
 
+def test_full_suite_compares_fixed_three_with_auto_before_warm_run(
+    tmp_path: Path,
+) -> None:
+    """full suiteで固定3とautoのtarget比較が自動判定されること。
+
+    Arrange:
+        - 固定3よりautoのVideo Scanが速く同一成果物を返すtargetが用意される
+    Act:
+        - full target suiteがhuman review待ちまで実行される
+    Assert:
+        - fixed3、auto cold、warmの順で実行されること
+        - fixed3 cacheがauto cold前に削除されること
+        - comparisonの全gateがacceptance recordで合格すること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[tuple[str, str | int]] = []
+
+    def execute(
+        phase: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> tuple[
+        int,
+        dict[str, object],
+        dict[str, object],
+        dict[str, object],
+    ]:
+        calls.append((phase, configuration.video_scan_workers))
+        marker = configuration.processing_cache_folder / "fixed3-marker"
+        if phase == "cold":
+            assert not marker.exists()
+        result = _successful_phase(configuration, phase)
+        record = result[1]
+        workers = 3 if phase == "fixed3" else 6
+        record["video_scan_parallelism"] = {
+            "mode": "fixed" if phase == "fixed3" else "auto",
+            "configured_workers": 3 if phase == "fixed3" else "auto",
+            "initial_workers": workers,
+            "peak_workers": workers,
+            "scan_wall_seconds": 120.0 if phase == "fixed3" else 80.0,
+        }
+        record["stage_artifact_identity_digest"] = "9" * 64
+        if phase == "fixed3":
+            marker.write_text("fixed", encoding="utf-8")
+        return result
+
+    runner = _runner(execute)
+
+    # Act
+    result = runner.run(profile_path=profile_path, suite="full")
+
+    # Assert
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "full"
+    state = read_json_object(suite_root / "acceptance-state.json")
+    record = read_json_object(suite_root / "acceptance.json")
+    assert result == 3
+    assert calls == [
+        ("fixed3", 3),
+        ("cold", "auto"),
+        ("warm", "auto"),
+    ]
+    assert state is not None
+    assert state["fixed3_cache_released"] is True
+    phases = state["phases"]
+    assert isinstance(phases, dict)
+    assert set(phases) == {"fixed3", "cold", "warm"}
+    assert record is not None
+    comparison = record["video_scan_parallelism_comparison"]
+    assert isinstance(comparison, dict)
+    assert comparison["passed"] is True
+    gates = record["automatic_gates"]
+    assert isinstance(gates, dict)
+    assert gates["video_scan_fixed_three_workers"] is True
+    assert gates["video_scan_auto_exceeded_three_workers"] is True
+    assert gates["video_scan_stage_artifacts_equal"] is True
+    assert gates["video_scan_resource_budget"] is True
+    assert gates["video_scan_wall_time_improved"] is True
+
+
+def test_interrupted_auto_cold_preserves_cache_after_fixed_three_release(
+    tmp_path: Path,
+) -> None:
+    """auto cold中断後に比較cache削除が再実行されないこと。
+
+    Arrange:
+        - fixed3完了後のauto cold初回だけinterruptするfull suiteが用意される
+    Act:
+        - full suiteが中断後に再開される
+    Assert:
+        - auto coldが残したcache markerを再開時に利用できること
+        - fixed3は再実行されずcold試行だけが累積されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    cold_interrupted = False
+
+    def execute(
+        phase: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> tuple[
+        int,
+        dict[str, object],
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        nonlocal cold_interrupted
+        calls.append(phase)
+        resume_marker = configuration.processing_cache_folder / "auto-resume-marker"
+        if phase == "cold" and not cold_interrupted:
+            cold_interrupted = True
+            resume_marker.parent.mkdir(parents=True, exist_ok=True)
+            resume_marker.write_text("preserve", encoding="utf-8")
+            return 130, _interrupted_phase(phase), None, None
+        if phase == "cold":
+            assert resume_marker.read_text(encoding="utf-8") == "preserve"
+        exit_code, record, report, artifact = _successful_phase(
+            configuration,
+            phase,
+        )
+        workers = 3 if phase == "fixed3" else 6
+        record["video_scan_parallelism"] = {
+            "mode": "fixed" if phase == "fixed3" else "auto",
+            "configured_workers": 3 if phase == "fixed3" else "auto",
+            "initial_workers": workers,
+            "peak_workers": workers,
+            "scan_wall_seconds": 120.0 if phase == "fixed3" else 80.0,
+        }
+        record["stage_artifact_identity_digest"] = "8" * 64
+        return exit_code, record, report, artifact
+
+    runner = _runner(execute)
+
+    # Act
+    interrupted = runner.run(profile_path=profile_path, suite="full")
+    resumed = runner.run(profile_path=profile_path, suite="full")
+
+    # Assert
+    state = read_json_object(
+        tmp_path / "artifacts" / "target-acceptance" / "full" / "acceptance-state.json"
+    )
+    assert interrupted == 130
+    assert resumed == 3
+    assert calls == ["fixed3", "cold", "cold", "warm"]
+    assert state is not None
+    phases = state["phases"]
+    assert isinstance(phases, dict)
+    cold = phases["cold"]
+    assert isinstance(cold, dict)
+    assert cold["attempt_count"] == 2
+    assert state["fixed3_cache_released"] is True
+
+
 def test_ollama_windows_binding_is_revalidated_after_model_resolution(
     tmp_path: Path,
 ) -> None:
@@ -1213,6 +1370,7 @@ def _runner(
         model_resolver=model_resolver or model_runtime.resolve_models,
         phase_executor=phase_executor,
         release_materializer=materialize,
+        full_materializer=materialize,
         storage_preflight=lambda _profile, _input_folder: {
             "input_video_bytes": 9,
             "input_video_count": 1,

@@ -7,6 +7,7 @@ from threading import RLock
 from ..models.prepared_video_scan import PreparedVideoScan
 from ..models.video_scan_resource_sample import VideoScanResourceSample
 from .adaptive_video_scan_controller import AdaptiveVideoScanController
+from .sample_video_scan_resources_safely import sample_video_scan_resources_safely
 
 ScanTask = Callable[[int], PreparedVideoScan]
 ResourceSampler = Callable[[], VideoScanResourceSample | None]
@@ -127,7 +128,4 @@ class AdaptiveVideoScanScheduler:
             self._fill_available_slots()
 
     def _safe_resource_sample(self) -> VideoScanResourceSample | None:
-        try:
-            return self._resource_sampler()
-        except Exception:
-            return None
+        return sample_video_scan_resources_safely(self._resource_sampler)

@@ -9,6 +9,8 @@ import pytest
 from src.video_selection.acceptance.execute_acceptance_phase import (
     execute_acceptance_phase,
     normalized_result_digest,
+    stage_artifact_identity_digest,
+    video_scan_parallelism_diagnostics,
 )
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.run_failure import RunFailure
@@ -184,6 +186,54 @@ def test_normalized_result_digest_excludes_run_specific_diagnostics() -> None:
 
     # Assert
     assert warm_digest == cold_digest
+
+
+def test_parallelism_evidence_keeps_stage_identity_separate_from_run_metrics() -> None:
+    """worker診断とStage artifact identityが別々の証拠として抽出されること。
+
+    Arrange:
+        - Video Scan parallelism診断とCompleted Stage列を持つreportが用意される
+    Act:
+        - parallelism診断とStage artifact identity digestが抽出される
+    Assert:
+        - 診断値が保持され、worker値を変えてもStage digestは変わらないこと
+    """
+    # Arrange
+    report = _canonical_report(
+        sha256="a" * 64,
+        width=1920,
+        height=1080,
+        size_bytes=1000,
+    )
+    provenance = report["provenance"]
+    assert isinstance(provenance, dict)
+    runtime = provenance["runtime"]
+    assert isinstance(runtime, dict)
+    runtime["video_scan_parallelism"] = {
+        "mode": "auto",
+        "configured_workers": "auto",
+        "initial_workers": 6,
+        "peak_workers": 6,
+        "scan_wall_seconds": 80.0,
+    }
+    changed = copy.deepcopy(report)
+    changed_provenance = changed["provenance"]
+    assert isinstance(changed_provenance, dict)
+    changed_runtime = changed_provenance["runtime"]
+    assert isinstance(changed_runtime, dict)
+    changed_parallelism = changed_runtime["video_scan_parallelism"]
+    assert isinstance(changed_parallelism, dict)
+    changed_parallelism["initial_workers"] = 3
+
+    # Act
+    diagnostics = video_scan_parallelism_diagnostics(report)
+    digest = stage_artifact_identity_digest(report)
+    changed_digest = stage_artifact_identity_digest(changed)
+
+    # Assert
+    assert diagnostics["initial_workers"] == 6
+    assert diagnostics["scan_wall_seconds"] == 80.0
+    assert changed_digest == digest
 
 
 @pytest.mark.parametrize("identity_key", ("execution_identity", "runtime_identity"))

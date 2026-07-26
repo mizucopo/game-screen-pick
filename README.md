@@ -3,7 +3,7 @@
 
 ## 動画入力版の設計と内部実装（公開前）
 
-複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、GPU/CPU余力に応じたVideo Scanの動的並列制御、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysis、embedded subtitle/audio STTからのContext Cue収集、Ollama/Hugging Faceのmodel lifecycleとrun単位のidentity freeze、共有Scene Catalog、Moment単位のCandidate Annotation、soft coverage・spoiler・動画横断diversityを扱う決定的な最終selector、固定WebP、`game-screen-pick/report@1.0.0`、gallery-first Markdown、atomic publisher、structured progress、RunFailure、Completed Stage単位の再開まで内部実装済みです。real runtimeを通すtarget acceptance harnessも内部用に利用できます。public CLI切り替えはIssue #190で行うため、次のproduction commandはまだ実行できません。
+複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、GPU/CPU余力のrolling metricに応じたVideo Scanの動的並列制御、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysis、embedded subtitle/audio STTからのContext Cue収集、Ollama/Hugging Faceのmodel lifecycleとrun単位のidentity freeze、共有Scene Catalog、Moment単位のCandidate Annotation、soft coverage・spoiler・動画横断diversityを扱う決定的な最終selector、固定WebP、`game-screen-pick/report@1.0.0`、gallery-first Markdown、atomic publisher、structured progress、RunFailure、Completed Stage単位の再開まで内部実装済みです。real runtimeを通すtarget acceptance harnessは、RTX 5090で固定3 workerとautoの成果物・resource・wall timeも比較します。public CLI切り替えはIssue #190で行うため、次のproduction commandはまだ実行できません。
 
 ```bash
 game-screen-pick \

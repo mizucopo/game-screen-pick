@@ -58,11 +58,15 @@ uv run task acceptance-target \
   --suite full
 ```
 
-modelの更新確認、download、capability検証とResolved Model Identityのfreezeはcold timer
-より前に行う。一回の起動でclean cacheのcold、同じVideo Set・設定・model identity・
-processing cacheを使うexact warmの順に実行する。性能予算超過は処理を途中でkillせず、
-完了後のgate failureにする。phase durationはatomic publicationまたはoperation failureで
-確定し、その後のresource monitor停止時間を含めない。
+modelの更新確認、download、capability検証とResolved Model Identityのfreezeは最初のphase
+timerより前に行う。releaseはclean cacheのcold、同じVideo Set・設定・model identity・
+processing cacheを使うexact warmの順に実行する。fullは固定3 workerのcold比較run、
+そのcacheを完全に削除したauto cold、auto coldのcacheを使うexact warmの3 phaseを順に
+実行する。固定3とautoは同じResolved Model Identityを使い、Stage artifact identity、
+resource予算、autoのpeak workerが3を超えたこと、Video Scan wall timeの改善を自動gateで
+比較する。性能予算超過は処理を途中でkillせず、完了後のgate failureにする。phase durationは
+atomic publicationまたはoperation failureで確定し、その後のresource monitor停止時間を
+含めない。
 
 新規suiteではmaterialize後かつmodel実行より前に、materialize済みsuite inputの合計byteと
 artifact filesystemの空き容量を測る。persistent cache 64 GiBとtemporary/staging 96 GiBの
@@ -74,9 +78,11 @@ resource samplingを不完全として扱う。
 
 coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
-full Video Setを再hashしない。fullの独立Video Scanは`video_scan.workers = "auto"`を使い、
-NVDECとresource余力がある24 logical CPU targetでは初期6 workerまで利用する。pressure時は
-scan完了境界で1 workerずつ減らし、active scanを止めず未開始taskの投入だけを抑制する。
+full Video Setを再hashしない。fullのauto coldに使う独立Video Scanは
+`video_scan.workers = "auto"`を要求し、NVDECとresource余力がある24 logical CPU targetでは
+初期6 workerまで利用する。CPU・Decoder・memory・VRAM・diskの直近3 sampleと、
+disk throughput・1 stream処理速度のtrendを使い、pressure時はscan完了境界で1 workerずつ
+減らし、active scanを止めず未開始taskの投入だけを抑制する。
 Video Order上の対象scanが確定した時点で、そのVideoの
 candidate extractionとcontext collectionを後続Videoのscanと重ねて開始する。background
 scan待機中もactive Stageとheartbeatを通知し、通常のscan失敗でも一次障害を保持したまま
@@ -131,6 +137,9 @@ reportまたは画像が削除・置換されていればreviewを集計しな�
 中断した場合は、review記入欄を除くcandidate bindingが同じ既存worksheetだけを再利用する。
 
 user interruptや計測済みoperation failureの未完了phaseはCompleted Stage cacheを保持する。
+fullの固定3比較が中断された場合も固定3 cacheから再開し、固定3が完了した後だけそのcacheを
+一度削除する。auto cold開始後は固定3 cache削除済みのdurable flagを保持するため、auto coldの
+中断・再開でauto cacheを再削除しない。
 再開後のphase recordでは、それ以前の試行を含む経過時間、cache/recompute count、Stage時間、
 storage/GPU aggregateを累積または保守的な最大値として集計するため、再開後の短い試行だけで
 性能を判定しない。user interruptで詳細計測を確定できなかった場合も経過時間を試行へ残し、
@@ -187,10 +196,10 @@ uv run task acceptance-target \
 
 | Exit | 意味 |
 |---:|---|
-| 0 | cold/warm、performance/resource/privacy、human qualityの全gateが合格 |
+| 0 | 必要なphase、parallelism比較、performance/resource/privacy、human qualityの全gateが合格 |
 | 1 | pipeline operationまたはperformance/resource/privacy/quality gateが不合格 |
 | 2 | CLI、profile、configuration、target preflightが不正 |
-| 3 | cold/warmと自動gateは合格したがhuman reviewが未完了 |
+| 3 | 必要なphaseと自動gateは合格したがhuman reviewが未完了 |
 | 130 | 計測済みuser interrupt。completed phaseとCompleted Stage cacheを保持し、再開時に試行計測を累積 |
 
 ## Artifactとprivacy
@@ -198,7 +207,7 @@ uv run task acceptance-target \
 `artifact_root`配下にはsuiteごとにphase output、durable state、private worksheet、
 `acceptance.json`を置く。recordにはcommit、target/runtime、Resolved Model Identity、
 実Faster Whisper adapter/backendのSpeech Runtime Identity、path非依存Video Set fingerprint、
-phase/cache/storage/GPU aggregate、gate aggregateだけを含める。canonical reportの各Stageも
+phase/cache/storage/GPU aggregate、固定3対autoのprivacy-safeな比較、gate aggregateだけを含める。canonical reportの各Stageも
 実semantic inputと推論診断からtool/model/contract参照、設定、validation、token数を記録する。
 performance比較用configurationには設定file digest、URLを含まないendpoint identity、
 privacy-safeな全実効performance設定を保存する。

@@ -868,11 +868,15 @@ def test_invalid_video_scan_environment_value_is_a_config_error(
     # Arrange
     environment = {environment_key: environment_value}
 
-    # Act / Assert
-    with pytest.raises(ConfigurationError) as error:
-        resolve_effective_configuration(
+    # Act
+    def resolve() -> EffectiveConfiguration:
+        return resolve_effective_configuration(
             video_input_folder=tmp_path / "videos",
             output_folder=tmp_path / "output",
             environ=environment,
         )
+
+    # Assert
+    with pytest.raises(ConfigurationError) as error:
+        resolve()
     assert error.value.exit_code == 2

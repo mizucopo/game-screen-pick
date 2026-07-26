@@ -5,6 +5,7 @@ import json
 import shutil
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -47,6 +48,9 @@ from .target_environment import (
     probe_target_environment,
     probe_windows_native_ollama,
 )
+from .video_scan_parallelism_comparison import (
+    build_video_scan_parallelism_comparison,
+)
 
 EnvironmentProbe = Callable[[], dict[str, object]]
 RevisionProbe = Callable[[Path], tuple[str, bool]]
@@ -62,7 +66,7 @@ SuiteMaterializer = Callable[
 ]
 StoragePreflight = Callable[[AcceptanceProfile, Path], dict[str, object]]
 
-_STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.0.0"
+_STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.1.0"
 
 
 class TargetSuiteRunner:
@@ -139,6 +143,12 @@ class TargetSuiteRunner:
             input_folder,
             suite_root / "outputs" / "warm",
         )
+        phase_configurations = _phase_configurations(
+            suite,
+            suite_root,
+            cold_configuration,
+            warm_configuration,
+        )
         if state is not None and state.get(
             "ollama_endpoint_identity"
         ) != _ollama_endpoint_identity(cold_configuration.ollama_host):
@@ -191,10 +201,7 @@ class TargetSuiteRunner:
 
         if _phases_completed(state) and state.get("worksheet_ready") is True:
             completed_phases = _mapping(state.get("phases"), "phases")
-            for phase, configuration in (
-                ("cold", cold_configuration),
-                ("warm", warm_configuration),
-            ):
+            for phase, configuration in phase_configurations:
                 load_completed_phase_report(
                     configuration=configuration,
                     phase_record=_mapping(
@@ -212,10 +219,13 @@ class TargetSuiteRunner:
         phases = _mapping(state.get("phases"), "phases")
         cold_report: dict[str, object] | None = None
         cold_selection: dict[str, object] | None = None
-        for phase, configuration in (
-            ("cold", cold_configuration),
-            ("warm", warm_configuration),
-        ):
+        for phase, configuration in phase_configurations:
+            if phase == "cold" and suite == "full":
+                _release_fixed_three_cache(
+                    state,
+                    cold_configuration.processing_cache_folder,
+                    state_path,
+                )
             existing = phases.get(phase)
             if (
                 isinstance(existing, dict)
@@ -332,6 +342,14 @@ class TargetSuiteRunner:
         phases = _mapping(state.get("phases"), "phases")
         cold = _mapping(phases.get("cold"), "cold phase")
         warm = _mapping(phases.get("warm"), "warm phase")
+        parallelism_comparison = (
+            None
+            if suite != "full"
+            else build_video_scan_parallelism_comparison(
+                _mapping(phases.get("fixed3"), "fixed3 phase"),
+                cold,
+            )
+        )
         revision = _mapping(state.get("source_revision"), "source_revision")
         record = build_acceptance_record(
             suite=suite,
@@ -348,6 +366,7 @@ class TargetSuiteRunner:
             cold=public_phase_record(cold),
             warm=public_phase_record(warm),
             human_quality=human_quality,
+            video_scan_parallelism_comparison=parallelism_comparison,
         )
         try:
             validate_acceptance_record_privacy(
@@ -455,6 +474,44 @@ def _configuration(
     )
 
 
+def _phase_configurations(
+    suite: str,
+    suite_root: Path,
+    cold: EffectiveConfiguration,
+    warm: EffectiveConfiguration,
+) -> tuple[tuple[str, EffectiveConfiguration], ...]:
+    if suite != "full":
+        return (("cold", cold), ("warm", warm))
+    if cold.video_scan_workers != "auto":
+        raise ValueError("Full acceptanceのVideo Scan workersにはautoが必要です")
+    fixed_three = replace(
+        cold,
+        output_folder=suite_root / "outputs" / "fixed3",
+        video_scan_workers=3,
+    )
+    return (
+        ("fixed3", fixed_three),
+        ("cold", cold),
+        ("warm", warm),
+    )
+
+
+def _release_fixed_three_cache(
+    state: dict[str, object],
+    cache_folder: Path,
+    state_path: Path,
+) -> None:
+    if state.get("fixed3_cache_released") is True:
+        return
+    phases = _mapping(state.get("phases"), "phases")
+    fixed_three = _mapping(phases.get("fixed3"), "fixed3 phase")
+    if fixed_three.get("operation_status") != "completed":
+        raise ValueError("Fixed3 comparison完了前にauto cacheを開始できません")
+    _remove_directory_strict(cache_folder, "Fixed3 comparison cache")
+    state["fixed3_cache_released"] = True
+    write_atomic_json(state_path, state)
+
+
 def _configuration_summary(
     configuration: EffectiveConfiguration,
     *,
@@ -560,10 +617,13 @@ def _phases_completed(state: Mapping[str, object]) -> bool:
     phases = state.get("phases")
     if not isinstance(phases, dict):
         return False
+    required_phases = (
+        ("fixed3", "cold", "warm") if state.get("suite") == "full" else ("cold", "warm")
+    )
     return all(
         isinstance(phases.get(phase), dict)
         and phases[phase].get("operation_status") == "completed"
-        for phase in ("cold", "warm")
+        for phase in required_phases
     )
 
 
