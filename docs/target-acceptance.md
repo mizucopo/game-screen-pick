@@ -35,6 +35,9 @@ profile schemaはstrictで、次だけを持つ。
 - `release_suite`: 合計duration、境界tolerance、relative source、start/end、scenario role
 - `full_scale_suite`: video count、合計duration、duration tolerance
 
+`artifact_root`は`input_root`自身またはその配下に置かない。full suiteのrecursive source
+discoveryへ生成済み匿名inputが混入する構成はprofile読込時に拒否される。
+
 Ollama host、model、STT device、選択枚数などをprofileへ複製しない。これらは
 `configuration_path`のTOMLを通常どおり読み、明示CLI、TOML、`OLLAMA_HOST`、組み込み
 既定値の優先順位で解決する。harnessが最優先で差し替えるのは、匿名化したsuite用
@@ -85,6 +88,9 @@ candidate extractionのCPU時間は所有threadと、そのStageが起動したr
 encoder subprocessだけを合算し、並列中の後続Video Scanを二重計上しない。
 Context Collection完了後はSpeech Runtime Identityを保持してSTT modelを明示closeし、
 GPU資源を解放してからOllama Vision推論を開始する。
+model capability probeは`keep_alive = 0`でOllama modelを解放してからphaseを開始する。
+Context Collection中にもOllama modelが常駐している場合、STT peakはsystem使用量からその
+`size_vram`を除いた非Ollama使用量として保守的に計上する。
 
 release intervalは全streamをFFmpeg stream copyした`scenario-001.mkv`形式の匿名clipに
 変換する。source metadataとchapterは引き継がず、FFmpegのbitexact format flagを使うため、
@@ -95,6 +101,9 @@ ffprobeの実測開始、終了、durationがprofileの許容差を超える場�
 durationへ正規化する。各release区間の境界だけでなく、全clipの正規化済み実測duration合計も
 profileの期待合計と同じtolerance内であることを検証する。full suiteはこの正規化済み経過
 durationを合算する。
+release/full双方のmaterialization manifestは、その生成・duration probeに使った
+FFmpeg/ffprobe versionとbuild capability identityへ固定する。tool identityが変わった
+materializationは再利用せず、`--reset-suite`後に現在toolで作り直す。
 確定済みrelease inputの再利用時はmanifest記載clipと対応videoの完全一致も検証する。
 materialize時間はphase予算に含めない。
 
@@ -193,8 +202,9 @@ performance比較用configurationには設定file digest、URLを含まないend
 privacy-safeな全実効performance設定を保存する。
 cold/warmの結果一致digestには、選定・棄却・near miss・Context Cue・警告を含むcanonical
 reportの全semantic resultと、公開WebPのpath、SHA-256、寸法、byte数を含める。run ID、
-timestamp、Stageのcache・retry・token・duration診断だけを除き、利用者に見える結果が異なる
-runを一致扱いしない。
+timestamp、Stageのcache・retry・token・duration診断、および同じexecution/runtime identityに
+付随するmodelの`local_identity_before_update`と`update_status`だけを除き、利用者に見える結果が
+異なるrunを一致扱いしない。
 absolute path、video名、media、raw Context Cue、prompt、model response、credential、個別human
 判定は含めない。
 

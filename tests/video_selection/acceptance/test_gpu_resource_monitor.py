@@ -32,7 +32,7 @@ def test_gpu_peaks_are_attributed_to_vision_and_stt_stages() -> None:
                 "ollama_size_vram_bytes": 8_000_000_000,
             },
             {
-                "system_used_mib": 5000,
+                "system_used_mib": 5000 + 8_000_000_000 // 1024**2,
                 "process_used_mib": 5000,
                 "ollama_size_bytes": 8_000_000_000,
                 "ollama_size_vram_bytes": 8_000_000_000,
@@ -56,12 +56,45 @@ def test_gpu_peaks_are_attributed_to_vision_and_stt_stages() -> None:
     # Assert
     assert result["process_gpu_baseline_mib"] == 10
     assert result["ollama_global_gpu_peak_mib"] == 12000
-    assert result["stt_global_gpu_peak_mib"] == 5000
+    assert result["stt_non_ollama_gpu_peak_mib"] == 5000
     assert result["ollama_model_size_bytes"] == 8_000_000_000
     assert result["ollama_model_size_vram_bytes"] == 8_000_000_000
     assert result["ollama_model_observed"] is True
     assert result["ollama_model_fully_resident"] is True
     assert result["resource_sampling_complete"] is True
+
+
+def test_stt_peak_excludes_concurrently_resident_ollama_vram() -> None:
+    """STT Stageのsystem peakから常駐Ollama model VRAMが除外されること。
+
+    Arrange:
+        - 8 GiBのOllama modelと5 GiBの非Ollama使用量を含むsampleが用意される
+    Act:
+        - Context Collection Stageでresource sampleが取得される
+    Assert:
+        - STT peakには非Ollama分の5 GiBだけが記録されること
+    """
+    # Arrange
+    ollama_vram_bytes = 8 * 1024**3
+    sample = {
+        "system_used_mib": 13 * 1024,
+        "process_used_mib": 5 * 1024,
+        "ollama_size_bytes": ollama_vram_bytes,
+        "ollama_size_vram_bytes": ollama_vram_bytes,
+    }
+    monitor = GpuResourceMonitor(
+        ollama_host="http://unused",
+        stage_provider=lambda: ProcessingStage.COLLECT_CONTEXT,
+        probe=lambda: sample,
+        interval_seconds=100,
+    )
+
+    # Act
+    monitor.start()
+    result = monitor.stop()
+
+    # Assert
+    assert result["stt_non_ollama_gpu_peak_mib"] == 5 * 1024
 
 
 def test_partial_ollama_offload_is_recorded_as_not_fully_resident() -> None:

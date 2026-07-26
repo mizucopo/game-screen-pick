@@ -162,7 +162,7 @@ def _build_record(
         "persistent_cache_bytes": 1024,
         "peak_additional_bytes": 2048,
         "ollama_global_gpu_peak_mib": 1000,
-        "stt_global_gpu_peak_mib": 1000,
+        "stt_non_ollama_gpu_peak_mib": 1000,
         "ollama_model_observed": True,
         "ollama_model_fully_resident": True,
         "resource_sampling_complete": True,

@@ -18,7 +18,7 @@ _MAXIMUM_INTEGER_METRICS = (
     "peak_additional_bytes",
     "system_global_gpu_peak_mib",
     "ollama_global_gpu_peak_mib",
-    "stt_global_gpu_peak_mib",
+    "stt_non_ollama_gpu_peak_mib",
     "ollama_model_size_bytes",
     "ollama_model_size_vram_bytes",
 )

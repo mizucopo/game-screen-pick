@@ -176,6 +176,7 @@ class OllamaModelStore:
                     "model": requirement.configured_name,
                     "stream": False,
                     "think": False,
+                    "keep_alive": 0,
                     "format": _STRUCTURED_OUTPUT_CAPABILITY_SCHEMA,
                     "options": {
                         "temperature": 0,

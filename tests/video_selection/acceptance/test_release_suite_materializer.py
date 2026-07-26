@@ -11,6 +11,7 @@ from src.video_selection.acceptance.release_interval import ReleaseInterval
 from src.video_selection.acceptance.release_suite_materializer import (
     ReleaseSuiteMaterializer,
 )
+from src.video_selection.models.media_runtime_identity import MediaRuntimeIdentity
 
 
 def test_anonymous_clips_preserve_all_streams_and_record_actual_boundaries(
@@ -49,6 +50,7 @@ def test_anonymous_clips_preserve_all_streams_and_record_actual_boundaries(
     materializer = ReleaseSuiteMaterializer(
         command_runner=run,
         media_probe=probe,
+        media_runtime_probe=_media_runtime,
     )
 
     # Act
@@ -109,6 +111,7 @@ def test_boundary_outside_tolerance_removes_partial_clips(tmp_path: Path) -> Non
         ReleaseSuiteMaterializer(
             command_runner=run,
             media_probe=probe,
+            media_runtime_probe=_media_runtime,
         ).materialize(profile, suite_root)
     assert not (suite_root / "work" / "input").exists()
 
@@ -173,6 +176,7 @@ def test_aggregate_measured_duration_must_remain_within_suite_tolerance(
         ReleaseSuiteMaterializer(
             command_runner=run,
             media_probe=probe,
+            media_runtime_probe=_media_runtime,
         ).materialize(profile, suite_root)
     assert not (suite_root / "work" / "input").exists()
 
@@ -210,6 +214,7 @@ def test_nonzero_source_start_offsets_ffmpeg_stop_timestamp(tmp_path: Path) -> N
     ReleaseSuiteMaterializer(
         command_runner=run,
         media_probe=probe,
+        media_runtime_probe=_media_runtime,
     ).materialize(profile, profile.artifact_root / "release")
 
     # Assert
@@ -250,6 +255,7 @@ def test_completed_materialization_is_reused_without_ffmpeg(tmp_path: Path) -> N
     materializer = ReleaseSuiteMaterializer(
         command_runner=run,
         media_probe=probe,
+        media_runtime_probe=_media_runtime,
     )
     suite_root = profile.artifact_root / "release"
     _, first = materializer.materialize(profile, suite_root)
@@ -260,6 +266,52 @@ def test_completed_materialization_is_reused_without_ffmpeg(tmp_path: Path) -> N
     # Assert
     assert call_count == 1
     assert second == first
+
+
+def test_completed_materialization_rejects_changed_media_runtime(
+    tmp_path: Path,
+) -> None:
+    """異なるMedia Runtimeで生成済みclipが再利用されないこと。
+
+    Arrange:
+        - 固定Media Runtimeで確定したrelease materializationが用意される
+    Act:
+        - 異なるFFmpeg/ffprobe build identityでresumeが試行される
+    Assert:
+        - Media Runtime不一致として既存clipの再利用が拒否されること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    profile.input_root.mkdir()
+    source = profile.input_root / "private-video.mkv"
+    source.write_bytes(b"source")
+
+    def run(command: list[str]) -> None:
+        Path(command[-1]).write_bytes(b"clip")
+
+    def probe(path: Path) -> dict[str, object]:
+        return {
+            "start": Fraction(0 if path == source else 8),
+            "duration": Fraction(100 if path == source else 1802),
+            "end": Fraction(100 if path == source else 1810),
+            "streams": (("video", "h264"),),
+        }
+
+    suite_root = profile.artifact_root / "release"
+    ReleaseSuiteMaterializer(
+        command_runner=run,
+        media_probe=probe,
+        media_runtime_probe=_media_runtime,
+    ).materialize(profile, suite_root)
+    changed_runtime_materializer = ReleaseSuiteMaterializer(
+        command_runner=run,
+        media_probe=probe,
+        media_runtime_probe=_changed_media_runtime,
+    )
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Media Runtime"):
+        changed_runtime_materializer.materialize(profile, suite_root)
 
 
 def test_stray_supported_clip_requires_reset(tmp_path: Path) -> None:
@@ -292,6 +344,7 @@ def test_stray_supported_clip_requires_reset(tmp_path: Path) -> None:
     materializer = ReleaseSuiteMaterializer(
         command_runner=run,
         media_probe=probe,
+        media_runtime_probe=_media_runtime,
     )
     suite_root = profile.artifact_root / "release"
     input_folder, _ = materializer.materialize(profile, suite_root)
@@ -324,3 +377,13 @@ def _profile(tmp_path: Path) -> AcceptanceProfile:
         full_duration_tolerance_seconds=Fraction(60),
         profile_digest="a" * 64,
     )
+
+
+def _media_runtime() -> MediaRuntimeIdentity:
+    """test用の固定Media Runtime Identityを返す。"""
+    return MediaRuntimeIdentity("7.1", "7.1", "a" * 64)
+
+
+def _changed_media_runtime() -> MediaRuntimeIdentity:
+    """test用の変更後Media Runtime Identityを返す。"""
+    return MediaRuntimeIdentity("7.2", "7.2", "c" * 64)

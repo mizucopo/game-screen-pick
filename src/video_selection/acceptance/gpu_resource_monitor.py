@@ -18,6 +18,7 @@ _VISION_STAGES = {
     ProcessingStage.BUILD_SCENE_CATALOG,
     ProcessingStage.ANNOTATE_CANDIDATE,
 }
+_MIB_BYTES = 1024**2
 
 
 class GpuResourceMonitor:
@@ -84,7 +85,7 @@ class GpuResourceMonitor:
                 "system_gpu_baseline_mib": self._system_baseline_mib,
                 "system_global_gpu_peak_mib": self._system_peak_mib,
                 "ollama_global_gpu_peak_mib": self._ollama_peak_mib,
-                "stt_global_gpu_peak_mib": self._stt_peak_mib,
+                "stt_non_ollama_gpu_peak_mib": self._stt_peak_mib,
                 "ollama_model_size_bytes": self._ollama_size_bytes,
                 "ollama_model_size_vram_bytes": self._ollama_size_vram_bytes,
                 "ollama_model_observed": self._ollama_model_observed,
@@ -135,7 +136,14 @@ class GpuResourceMonitor:
             if stage in _VISION_STAGES:
                 self._ollama_peak_mib = max(self._ollama_peak_mib, system)
             elif stage is ProcessingStage.COLLECT_CONTEXT:
-                self._stt_peak_mib = max(self._stt_peak_mib, system)
+                non_ollama_system = max(
+                    system - model_vram // _MIB_BYTES,
+                    0,
+                )
+                self._stt_peak_mib = max(
+                    self._stt_peak_mib,
+                    non_ollama_system,
+                )
 
 
 def _default_probe(ollama_host: str) -> GpuProbe:

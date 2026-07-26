@@ -42,6 +42,12 @@ _VOLATILE_STAGE_DIAGNOSTIC_KEYS = frozenset(
         "validation_failures",
     }
 )
+_VOLATILE_MODEL_LIFECYCLE_KEYS = frozenset(
+    {
+        "local_identity_before_update",
+        "update_status",
+    }
+)
 
 
 def execute_acceptance_phase(
@@ -360,12 +366,27 @@ def _normalized_semantic_report(
     stages = provenance.get("stages")
     if not isinstance(stages, list):
         raise ValueError("Canonical reportのprovenance stagesが不正です")
+    models = _mapping(
+        provenance.get("models"),
+        "canonical report provenance models",
+    )
     normalized = dict(report)
     normalized["run"] = {
         key: value for key, value in run.items() if key not in _VOLATILE_RUN_KEYS
     }
     normalized["provenance"] = {
         **provenance,
+        "models": {
+            role: {
+                key: item
+                for key, item in _mapping(
+                    model,
+                    "canonical report provenance model",
+                ).items()
+                if key not in _VOLATILE_MODEL_LIFECYCLE_KEYS
+            }
+            for role, model in models.items()
+        },
         "stages": [
             {
                 key: item

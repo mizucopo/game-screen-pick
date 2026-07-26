@@ -12,12 +12,17 @@ from typing import cast
 from ..services.discover_video_paths import discover_video_paths
 from .acceptance_profile import AcceptanceProfile
 from .atomic_json import read_json_object, write_atomic_json
+from .materialization_media_runtime import (
+    MediaRuntimeProbe,
+    media_runtime_identity_record,
+    probe_media_runtime_identity,
+)
 
 CommandRunner = Callable[[list[str]], None]
 MediaProbe = Callable[[Path], Mapping[str, object]]
 ContentDigester = Callable[[Path], str]
 
-_MATERIALIZATION_SCHEMA = "game-screen-pick/release-materialization@2.0.0"
+_MATERIALIZATION_SCHEMA = "game-screen-pick/release-materialization@3.0.0"
 
 
 class ReleaseSuiteMaterializer:
@@ -29,10 +34,12 @@ class ReleaseSuiteMaterializer:
         command_runner: CommandRunner | None = None,
         media_probe: MediaProbe | None = None,
         content_digester: ContentDigester | None = None,
+        media_runtime_probe: MediaRuntimeProbe = probe_media_runtime_identity,
     ) -> None:
         self._command_runner = command_runner or _run_command
         self._media_probe = media_probe or _probe_media
         self._content_digester = content_digester or _content_digest
+        self._media_runtime_probe = media_runtime_probe
 
     def materialize(
         self,
@@ -43,11 +50,13 @@ class ReleaseSuiteMaterializer:
         work_root = suite_root / "work"
         input_folder = work_root / "input"
         manifest_path = work_root / "release-materialization.json"
+        media_runtime = media_runtime_identity_record(self._media_runtime_probe())
         existing = read_json_object(manifest_path)
         if existing is not None:
             return input_folder, self._restore_existing(
                 profile,
                 input_folder,
+                media_runtime,
                 existing,
             )
         if input_folder.exists():
@@ -63,6 +72,7 @@ class ReleaseSuiteMaterializer:
             manifest = {
                 "schema": _MATERIALIZATION_SCHEMA,
                 "profile_digest": profile.profile_digest,
+                "media_runtime_identity": media_runtime,
                 "descriptor": descriptor,
             }
             write_atomic_json(manifest_path, manifest)
@@ -144,6 +154,7 @@ class ReleaseSuiteMaterializer:
         self,
         profile: AcceptanceProfile,
         input_folder: Path,
+        media_runtime: Mapping[str, str],
         manifest: dict[str, object],
     ) -> dict[str, object]:
         """同じprofileの確定済み匿名clipだけをresume用に再利用する。"""
@@ -151,10 +162,13 @@ class ReleaseSuiteMaterializer:
         if (
             manifest.get("schema") != _MATERIALIZATION_SCHEMA
             or manifest.get("profile_digest") != profile.profile_digest
+            or manifest.get("media_runtime_identity") != media_runtime
             or not isinstance(descriptor, dict)
             or not input_folder.is_dir()
         ):
-            raise ValueError("Release suite stateがprofileと一致しません")
+            raise ValueError(
+                "Release suite stateがprofileまたはMedia Runtimeと一致しません"
+            )
         clips = descriptor.get("clips")
         if not isinstance(clips, list) or len(clips) != len(profile.release_intervals):
             raise ValueError("Release suite clip manifestが不正です")

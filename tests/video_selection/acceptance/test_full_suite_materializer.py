@@ -10,6 +10,7 @@ from src.video_selection.acceptance.full_suite_materializer import (
     FullSuiteMaterializer,
 )
 from src.video_selection.acceptance.release_interval import ReleaseInterval
+from src.video_selection.models.media_runtime_identity import MediaRuntimeIdentity
 
 
 def test_full_sources_become_anonymous_symlinks_with_measured_duration(
@@ -32,12 +33,13 @@ def test_full_sources_become_anonymous_symlinks_with_measured_duration(
     (profile.input_root / "private-chapter-01.mkv").write_bytes(b"first")
     (profile.input_root / "private-chapter-02.mp4").write_bytes(b"second")
     materializer = FullSuiteMaterializer(
+        media_runtime_probe=_media_runtime,
         media_probe=lambda _path: {
             "start": Fraction(0),
             "duration": Fraction(50),
             "end": Fraction(50),
             "streams": (("video", "h264"),),
-        }
+        },
     )
 
     # Act
@@ -77,11 +79,12 @@ def test_changed_full_source_requires_reset(tmp_path: Path) -> None:
     first.write_bytes(b"first")
     second.write_bytes(b"second")
     materializer = FullSuiteMaterializer(
+        media_runtime_probe=_media_runtime,
         media_probe=lambda _path: {
             "start": Fraction(0),
             "duration": Fraction(50),
             "end": Fraction(50),
-        }
+        },
     )
     suite_root = profile.artifact_root / "full"
     materializer.materialize(profile, suite_root)
@@ -90,6 +93,46 @@ def test_changed_full_source_requires_reset(tmp_path: Path) -> None:
     # Act / Assert
     with pytest.raises(ValueError, match="source"):
         materializer.materialize(profile, suite_root)
+
+
+def test_completed_materialization_rejects_changed_media_runtime(
+    tmp_path: Path,
+) -> None:
+    """異なるMedia Runtimeで測定済みfull descriptorが再利用されないこと。
+
+    Arrange:
+        - 固定Media Runtimeで確定したfull materializationが用意される
+    Act:
+        - 異なるFFmpeg/ffprobe build identityでresumeが試行される
+    Assert:
+        - Media Runtime不一致として既存duration証拠の再利用が拒否されること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    profile.input_root.mkdir()
+    (profile.input_root / "private-chapter-01.mkv").write_bytes(b"first")
+    (profile.input_root / "private-chapter-02.mp4").write_bytes(b"second")
+
+    def probe(_path: Path) -> dict[str, object]:
+        return {
+            "start": Fraction(0),
+            "duration": Fraction(50),
+            "end": Fraction(50),
+        }
+
+    suite_root = profile.artifact_root / "full"
+    FullSuiteMaterializer(
+        media_probe=probe,
+        media_runtime_probe=_media_runtime,
+    ).materialize(profile, suite_root)
+    changed_runtime_materializer = FullSuiteMaterializer(
+        media_probe=probe,
+        media_runtime_probe=_changed_media_runtime,
+    )
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Media Runtime"):
+        changed_runtime_materializer.materialize(profile, suite_root)
 
 
 def test_nonzero_media_start_preserves_normalized_full_duration(
@@ -110,11 +153,12 @@ def test_nonzero_media_start_preserves_normalized_full_duration(
     (profile.input_root / "private-chapter-01.mkv").write_bytes(b"first")
     (profile.input_root / "private-chapter-02.mp4").write_bytes(b"second")
     materializer = FullSuiteMaterializer(
+        media_runtime_probe=_media_runtime,
         media_probe=lambda _path: {
             "start": Fraction(5),
             "duration": Fraction(50),
             "end": Fraction(55),
-        }
+        },
     )
 
     # Act
@@ -145,6 +189,7 @@ def test_repointed_anonymous_symlink_requires_reset(tmp_path: Path) -> None:
     first.write_bytes(b"first")
     second.write_bytes(b"second")
     materializer = FullSuiteMaterializer(
+        media_runtime_probe=_media_runtime,
         media_probe=lambda _path: {
             "start": Fraction(0),
             "duration": Fraction(50),
@@ -181,6 +226,7 @@ def test_stray_supported_video_requires_reset(tmp_path: Path) -> None:
     (profile.input_root / "private-chapter-01.mkv").write_bytes(b"first")
     (profile.input_root / "private-chapter-02.mp4").write_bytes(b"second")
     materializer = FullSuiteMaterializer(
+        media_runtime_probe=_media_runtime,
         media_probe=lambda _path: {
             "start": Fraction(0),
             "duration": Fraction(50),
@@ -216,6 +262,7 @@ def test_duration_mismatch_removes_partial_anonymous_view(tmp_path: Path) -> Non
     (profile.input_root / "private-chapter-02.mp4").write_bytes(b"second")
     suite_root = profile.artifact_root / "full"
     materializer = FullSuiteMaterializer(
+        media_runtime_probe=_media_runtime,
         media_probe=lambda _path: {
             "start": Fraction(0),
             "duration": Fraction(40),
@@ -263,7 +310,10 @@ def test_source_changed_during_probe_removes_partial_materialization(
         }
 
     suite_root = profile.artifact_root / "full"
-    materializer = FullSuiteMaterializer(media_probe=probe)
+    materializer = FullSuiteMaterializer(
+        media_probe=probe,
+        media_runtime_probe=_media_runtime,
+    )
 
     # Act
     with pytest.raises(ValueError, match="source"):
@@ -291,3 +341,13 @@ def _profile(tmp_path: Path) -> AcceptanceProfile:
         full_duration_tolerance_seconds=Fraction(0),
         profile_digest="b" * 64,
     )
+
+
+def _media_runtime() -> MediaRuntimeIdentity:
+    """test用の固定Media Runtime Identityを返す。"""
+    return MediaRuntimeIdentity("7.1", "7.1", "b" * 64)
+
+
+def _changed_media_runtime() -> MediaRuntimeIdentity:
+    """test用の変更後Media Runtime Identityを返す。"""
+    return MediaRuntimeIdentity("7.2", "7.2", "d" * 64)

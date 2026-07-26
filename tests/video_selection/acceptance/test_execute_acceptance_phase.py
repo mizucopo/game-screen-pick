@@ -139,6 +139,12 @@ def test_normalized_result_digest_excludes_run_specific_diagnostics() -> None:
     run["completed_at"] = "2026-07-26T01:00:01Z"
     provenance = warm["provenance"]
     assert isinstance(provenance, dict)
+    models = provenance["models"]
+    assert isinstance(models, dict)
+    scene_catalog = models["scene_catalog"]
+    assert isinstance(scene_catalog, dict)
+    scene_catalog["local_identity_before_update"] = "ollama:sha256:" + "a" * 64
+    scene_catalog["update_status"] = "unchanged"
     stages = provenance["stages"]
     assert isinstance(stages, list)
     stage = stages[0]
@@ -162,6 +168,44 @@ def test_normalized_result_digest_excludes_run_specific_diagnostics() -> None:
 
     # Assert
     assert warm_digest == cold_digest
+
+
+@pytest.mark.parametrize("identity_key", ("execution_identity", "runtime_identity"))
+def test_normalized_result_digest_retains_model_execution_and_runtime_identity(
+    identity_key: str,
+) -> None:
+    """model executionまたはruntime identityの差がdigestへ保持されること。
+
+    Arrange:
+        - 同じ結果と一つだけ異なるmodel execution/runtime identityを持つ
+          reportが用意される
+    Act:
+        - cold/changed reportのnormalized result digestが生成される
+    Assert:
+        - cache意味を変えるmodel identity差が一致扱いされないこと
+    """
+    # Arrange
+    cold = _canonical_report(
+        sha256="a" * 64,
+        width=1920,
+        height=1080,
+        size_bytes=1000,
+    )
+    changed = copy.deepcopy(cold)
+    provenance = changed["provenance"]
+    assert isinstance(provenance, dict)
+    models = provenance["models"]
+    assert isinstance(models, dict)
+    scene_catalog = models["scene_catalog"]
+    assert isinstance(scene_catalog, dict)
+    scene_catalog[identity_key] = "changed"
+
+    # Act
+    cold_digest = normalized_result_digest(cold)
+    changed_digest = normalized_result_digest(changed)
+
+    # Assert
+    assert changed_digest != cold_digest
 
 
 def test_phase_duration_excludes_resource_monitor_shutdown(
@@ -238,7 +282,7 @@ def test_phase_duration_excludes_resource_monitor_shutdown(
                 "system_gpu_baseline_mib": 0,
                 "system_global_gpu_peak_mib": 0,
                 "ollama_global_gpu_peak_mib": 0,
-                "stt_global_gpu_peak_mib": 0,
+                "stt_non_ollama_gpu_peak_mib": 0,
                 "ollama_model_size_bytes": 0,
                 "ollama_model_size_vram_bytes": 0,
                 "ollama_model_observed": False,
@@ -310,7 +354,17 @@ def _canonical_report(
             "selection": {"policy_version": "video-set-selection-v2"},
             "runtime": {"environment": "wsl2"},
             "tools": {"ffmpeg": "test"},
-            "models": {},
+            "models": {
+                "scene_catalog": {
+                    "store": "ollama",
+                    "configured_name": "vision:latest",
+                    "canonical_name": "vision:latest",
+                    "local_identity_before_update": None,
+                    "update_status": "bootstrapped",
+                    "execution_identity": "ollama:sha256:" + "a" * 64,
+                    "runtime_identity": "ollama:0.31.2",
+                }
+            },
             "contracts": {"report_schema": "1.0.0"},
             "stages": [
                 {

@@ -65,7 +65,7 @@ def build_acceptance_record(
         "persistent_cache_bytes": _PERSISTENT_CACHE_BYTES,
         "peak_additional_bytes": _PEAK_ADDITIONAL_BYTES,
         "ollama_global_gpu_peak_mib": _OLLAMA_GPU_MIB,
-        "stt_global_gpu_peak_mib": _STT_GPU_MIB,
+        "stt_non_ollama_gpu_peak_mib": _STT_GPU_MIB,
     }
     consistency = cold.get("normalized_result_digest") == warm.get(
         "normalized_result_digest"
@@ -96,9 +96,9 @@ def build_acceptance_record(
             _integer(warm, "ollama_global_gpu_peak_mib"),
         )
         <= _OLLAMA_GPU_MIB,
-        "stt_global_gpu_peak": max(
-            _integer(cold, "stt_global_gpu_peak_mib"),
-            _integer(warm, "stt_global_gpu_peak_mib"),
+        "stt_non_ollama_gpu_peak": max(
+            _integer(cold, "stt_non_ollama_gpu_peak_mib"),
+            _integer(warm, "stt_non_ollama_gpu_peak_mib"),
         )
         <= _STT_GPU_MIB,
         "ollama_model_fully_resident": (

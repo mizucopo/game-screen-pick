@@ -233,7 +233,7 @@ target動画から代表scenarioを固定し、合計約30分のintervalとし�
 | clean default profileのpersistent processing cache | 64 GiB以下 | model store/outputを除外 |
 | temporary/stagingを含むpeak追加容量 | 96 GiB以下 | persistent cache/model store/outputを除外 |
 | Ollama global GPU peak | 18 GiB以下 | 100% GPU、CPU offload不可 |
-| STT global GPU peak | 8 GiB以下 | CUDA profile |
+| STT non-Ollama global GPU peak | 8 GiB以下 | system使用量から同時常駐Ollama `size_vram`を除外 |
 
 旧fingerprint artifactの併存はclean profile予算から除くが、runはcache root全体の容量と警告を
 記録する。容量予算はacceptance gateであり、runtimeの強制quotaではない。OllamaとSTTの
@@ -241,6 +241,7 @@ GPU-heavy Stageは重ねない。GPU recordはprocess baseline、model `size_vra
 peakを分ける。Ollama `/api/ps`のmodel `size`と`size_vram`も比較し、coldでmodelが観測され、
 全量がGPU residentである場合だけ自動gateを合格させる。停止timeout内にbackground GPU
 probeまたはdisk samplerが終了しない場合もsampling incompleteとして不合格にする。
+model capability probeは`keep_alive = 0`でtimed phase前にOllama modelを解放する。
 
 既存prototypeの参考値は、#163の全scan約14時間見込み、heartbeat proxy約17 GB、#165の
 500 annotations約18〜20分見込み、#166の600秒STT 4.641秒/peak 5,196 MiB、#169の24-image

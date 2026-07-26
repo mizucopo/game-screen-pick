@@ -30,6 +30,29 @@ def test_release_interval_sum_must_match_expected_duration_within_tolerance(
         replace(profile, release_expected_total_duration=Fraction(70))
 
 
+@pytest.mark.parametrize("artifact_suffix", (Path(), Path("artifacts")))
+def test_artifact_root_cannot_equal_or_descend_from_input_root(
+    tmp_path: Path,
+    artifact_suffix: Path,
+) -> None:
+    """artifact rootがinput root自身または配下に置かれないこと。
+
+    Arrange:
+        - valid profileとinput root自身または子folderのartifact pathが用意される
+    Act:
+        - artifact rootを重ねたprofileの構築が試行される
+    Assert:
+        - recursive full source discoveryへ生成物が混入する構成として拒否されること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    artifact_root = profile.input_root / artifact_suffix
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Acceptance profile"):
+        replace(profile, artifact_root=artifact_root)
+
+
 def _profile(tmp_path: Path) -> AcceptanceProfile:
     """validな最小profileを返す。"""
     return AcceptanceProfile(

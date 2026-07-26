@@ -11,18 +11,29 @@ from typing import cast
 from ..services.discover_video_paths import discover_video_paths
 from .acceptance_profile import AcceptanceProfile
 from .atomic_json import read_json_object, write_atomic_json
+from .materialization_media_runtime import (
+    MediaRuntimeProbe,
+    media_runtime_identity_record,
+    probe_media_runtime_identity,
+)
 from .release_suite_materializer import _probe_media
 
 MediaProbe = Callable[[Path], Mapping[str, object]]
 
-_MATERIALIZATION_SCHEMA = "game-screen-pick/full-materialization@2.0.0"
+_MATERIALIZATION_SCHEMA = "game-screen-pick/full-materialization@3.0.0"
 
 
 class FullSuiteMaterializer:
     """full-scale sourceをcopyせず匿名・cache分離されたinput viewへ固定する。"""
 
-    def __init__(self, *, media_probe: MediaProbe | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        media_probe: MediaProbe | None = None,
+        media_runtime_probe: MediaRuntimeProbe = probe_media_runtime_identity,
+    ) -> None:
         self._media_probe = media_probe or _probe_media
+        self._media_runtime_probe = media_runtime_probe
 
     def materialize(
         self,
@@ -34,6 +45,7 @@ class FullSuiteMaterializer:
         if len(sources) != profile.full_expected_video_count:
             raise ValueError("Full suiteのVideo countがprofile期待値と一致しません")
         source_snapshot = _source_snapshot_fingerprint(sources)
+        media_runtime = media_runtime_identity_record(self._media_runtime_probe())
         work_root = suite_root / "work"
         input_folder = work_root / "input"
         manifest_path = work_root / "full-materialization.json"
@@ -44,6 +56,7 @@ class FullSuiteMaterializer:
                 input_folder,
                 sources,
                 source_snapshot,
+                media_runtime,
                 existing,
             )
         if input_folder.exists():
@@ -76,6 +89,7 @@ class FullSuiteMaterializer:
                 {
                     "schema": _MATERIALIZATION_SCHEMA,
                     "profile_digest": profile.profile_digest,
+                    "media_runtime_identity": media_runtime,
                     "descriptor": descriptor,
                 },
             )
@@ -90,16 +104,20 @@ def _restore_existing(
     input_folder: Path,
     sources: tuple[Path, ...],
     source_snapshot: str,
+    media_runtime: Mapping[str, str],
     manifest: dict[str, object],
 ) -> dict[str, object]:
     descriptor = manifest.get("descriptor")
     if (
         manifest.get("schema") != _MATERIALIZATION_SCHEMA
         or manifest.get("profile_digest") != profile.profile_digest
+        or manifest.get("media_runtime_identity") != media_runtime
         or not isinstance(descriptor, dict)
         or descriptor.get("source_snapshot_fingerprint") != source_snapshot
     ):
-        raise ValueError("Full suite stateがprofileまたはsourceと一致しません")
+        raise ValueError(
+            "Full suite stateがprofile、source、またはMedia Runtimeと一致しません"
+        )
     names = descriptor.get("anonymous_video_names")
     if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
         raise ValueError("Full suite匿名input manifestが不正です")

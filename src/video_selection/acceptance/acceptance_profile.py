@@ -34,6 +34,10 @@ class AcceptanceProfile:
             or not self.input_root.is_absolute()
             or not self.configuration_path.is_absolute()
             or not self.artifact_root.is_absolute()
+            or _artifact_root_is_within_input(
+                self.artifact_root,
+                self.input_root,
+            )
             or not self.release_intervals
             or self.release_expected_total_duration <= 0
             or self.release_boundary_tolerance_seconds < 0
@@ -49,3 +53,15 @@ class AcceptanceProfile:
         ):
             msg = "Acceptance profileのversion、path、suite期待値が不正です"
             raise ValueError(msg)
+
+
+def _artifact_root_is_within_input(artifact_root: Path, input_root: Path) -> bool:
+    try:
+        artifact_root.resolve(strict=False).relative_to(
+            input_root.resolve(strict=False)
+        )
+    except ValueError:
+        return False
+    except (OSError, RuntimeError):
+        return True
+    return True
