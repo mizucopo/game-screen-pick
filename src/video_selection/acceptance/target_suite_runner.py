@@ -26,6 +26,7 @@ from .execute_acceptance_phase import (
     PhaseExecutionResult,
     execute_acceptance_phase,
     load_completed_phase_evidence,
+    load_completed_phase_report,
     public_phase_record,
 )
 from .full_suite_materializer import FullSuiteMaterializer
@@ -173,6 +174,18 @@ class TargetSuiteRunner:
                 )
 
         if _phases_completed(state) and state.get("worksheet_ready") is True:
+            completed_phases = _mapping(state.get("phases"), "phases")
+            for phase, configuration in (
+                ("cold", cold_configuration),
+                ("warm", warm_configuration),
+            ):
+                load_completed_phase_report(
+                    configuration=configuration,
+                    phase_record=_mapping(
+                        completed_phases.get(phase),
+                        f"{phase} phase",
+                    ),
+                )
             return self._finalize(
                 profile,
                 suite_root,

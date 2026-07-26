@@ -43,7 +43,9 @@ def ensure_review_worksheet(
     rejected = [_rejected_review_entry(item) for item in rejected_value]
     if existing is not None:
         _require_worksheet_identity(existing, suite, suite_fingerprint)
-        expected_digest = _review_candidate_digest(selected, rejected)
+        expected_digest = review_candidate_digest(
+            {"selected": selected, "rejected": rejected}
+        )
         if review_candidate_digest(existing) != expected_digest:
             msg = "Human review worksheetのcandidate集合がcold evidenceと一致しません"
             raise ValueError(msg)

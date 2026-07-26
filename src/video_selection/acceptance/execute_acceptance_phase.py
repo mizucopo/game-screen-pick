@@ -4,7 +4,7 @@ import hashlib
 import json
 import time
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import cast
 
 from ..application.internal_run_controller import InternalRunController
@@ -93,7 +93,8 @@ def execute_acceptance_phase(
         return int(exit_code), phase_record, None, None
     if not isinstance(result, RunOutcome):
         raise AssertionError
-    report = _read_json_object(result.output_folder / "report.json")
+    report_path = result.output_folder / "report.json"
+    report = _read_json_object(report_path)
     selection_stage = next(
         stage
         for stage in reversed(result.completed_stages)
@@ -104,6 +105,7 @@ def execute_acceptance_phase(
             "operation_status": "completed",
             "selected_count": result.selected_count,
             "requested_count": result.requested_count,
+            "canonical_report_sha256": _file_digest(report_path),
             "normalized_result_digest": normalized_result_digest(report),
             "selection_stage_fingerprint": selection_stage.fingerprint.value,
             "video_set": _video_set_record(report),
@@ -123,22 +125,52 @@ def load_completed_phase_evidence(
     phase_record: Mapping[str, object],
 ) -> tuple[dict[str, object], dict[str, object]]:
     """durable output/cacheからcompleted phaseのworksheet sourceを復元する。"""
-    report = _read_json_object(configuration.output_folder / "report.json")
-    expected_digest = phase_record.get("normalized_result_digest")
-    if (
-        not isinstance(expected_digest, str)
-        or normalized_result_digest(report) != expected_digest
-    ):
-        raise ValueError("Completed phaseのcanonical report digestが一致しません")
+    report = load_completed_phase_report(
+        configuration=configuration,
+        phase_record=phase_record,
+    )
     return report, _selection_artifact(
         configuration.processing_cache_folder,
         phase_record,
     )
 
 
+def load_completed_phase_report(
+    *,
+    configuration: EffectiveConfiguration,
+    phase_record: Mapping[str, object],
+) -> dict[str, object]:
+    """durable canonical reportと公開画像がphase確定時のままか再検証する。"""
+    output_folder = configuration.output_folder
+    report_path = output_folder / "report.json"
+    if (
+        output_folder.is_symlink()
+        or not output_folder.is_dir()
+        or report_path.is_symlink()
+        or not report_path.is_file()
+    ):
+        raise ValueError("Completed phaseのcanonical report artifactがありません")
+    expected_report_digest = _fingerprint(
+        phase_record.get("canonical_report_sha256"),
+        "canonical report digest",
+    )
+    if _file_digest(report_path) != expected_report_digest:
+        raise ValueError("Completed phaseのcanonical report artifactが一致しません")
+    report = _read_json_object(report_path)
+    expected_digest = phase_record.get("normalized_result_digest")
+    if (
+        not isinstance(expected_digest, str)
+        or normalized_result_digest(report) != expected_digest
+    ):
+        raise ValueError("Completed phaseのcanonical report digestが一致しません")
+    _validate_selected_output_artifacts(report, output_folder)
+    return report
+
+
 def public_phase_record(value: Mapping[str, object]) -> dict[str, object]:
     """suite stateのphaseからrun-level Video Set重複値を除いて返す。"""
-    return {key: item for key, item in value.items() if key != "video_set"}
+    private_state_keys = {"canonical_report_sha256", "video_set"}
+    return {key: item for key, item in value.items() if key not in private_state_keys}
 
 
 def _selection_artifact(
@@ -205,6 +237,90 @@ def _read_json_object(path: Path) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ValueError("Acceptance phase artifactがobjectではありません")
     return cast(dict[str, object], value)
+
+
+def _validate_selected_output_artifacts(
+    report: Mapping[str, object],
+    output_folder: Path,
+) -> None:
+    """selected outputのpath、byte数、SHA-256をreportと照合する。"""
+    selected = report.get("selected")
+    if not isinstance(selected, list):
+        raise ValueError("Canonical reportのselectedが不正です")
+    observed_paths: set[str] = set()
+    for value in selected:
+        if not isinstance(value, dict):
+            raise ValueError("Canonical reportのselected recordが不正です")
+        output = value.get("output")
+        if not isinstance(output, dict):
+            raise ValueError("Canonical reportのselected outputが不正です")
+        relative_path = _selected_output_relative_path(output.get("relative_path"))
+        if relative_path in observed_paths:
+            raise ValueError("Canonical reportのselected output pathが重複しています")
+        observed_paths.add(relative_path)
+        artifact_path = _selected_output_artifact_path(
+            output_folder,
+            relative_path,
+        )
+        expected_bytes = output.get("bytes")
+        expected_digest = _fingerprint(
+            output.get("sha256"),
+            "selected output digest",
+        )
+        if (
+            not isinstance(expected_bytes, int)
+            or isinstance(expected_bytes, bool)
+            or expected_bytes < 0
+        ):
+            raise ValueError("Canonical reportのselected output bytesが不正です")
+        try:
+            actual_bytes = artifact_path.stat().st_size
+        except OSError:
+            raise ValueError(
+                "Completed phaseのselected output artifactを検証できません"
+            ) from None
+        if (
+            actual_bytes != expected_bytes
+            or _file_digest(artifact_path) != expected_digest
+        ):
+            raise ValueError("Completed phaseのselected output artifactが一致しません")
+
+
+def _selected_output_relative_path(value: object) -> str:
+    path = PurePosixPath(value) if isinstance(value, str) else None
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\\" in value
+        or path is None
+        or path.is_absolute()
+        or path.as_posix() != value
+        or ".." in path.parts
+    ):
+        raise ValueError("Canonical reportのselected output pathが不正です")
+    return value
+
+
+def _selected_output_artifact_path(
+    output_folder: Path,
+    relative_path: str,
+) -> Path:
+    path = output_folder
+    for part in PurePosixPath(relative_path).parts:
+        path /= part
+        if path.is_symlink():
+            raise ValueError("Completed phaseのselected output artifactが不正です")
+    if not path.is_file():
+        raise ValueError("Completed phaseのselected output artifactがありません")
+    return path
+
+
+def _file_digest(path: Path) -> str:
+    try:
+        with path.open("rb") as file:
+            return hashlib.file_digest(file, "sha256").hexdigest()
+    except OSError:
+        raise ValueError("Completed phase artifactを読み込めません") from None
 
 
 def normalized_result_digest(report: Mapping[str, object]) -> str:

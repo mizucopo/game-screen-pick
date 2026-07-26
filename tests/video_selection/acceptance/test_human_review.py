@@ -52,6 +52,42 @@ def test_pending_worksheet_contains_private_candidate_ids_and_stable_enums(
     assert path.is_file()
 
 
+def test_existing_generated_worksheet_resumes_with_same_candidate_binding(
+    tmp_path: Path,
+) -> None:
+    """state確定前に生成済みのworksheetが同じcold evidenceで再利用されること。
+
+    Arrange:
+        - pending review fieldを持つworksheetがatomicに生成済みである
+    Act:
+        - 同じcold reportとselection artifactでworksheet生成が再試行される
+    Assert:
+        - mutable review fieldを除く同じcandidate bindingとして再利用されること
+    """
+    # Arrange
+    path = tmp_path / "review.json"
+    first = ensure_review_worksheet(
+        path,
+        suite="release",
+        suite_fingerprint="a" * 64,
+        canonical_report=_report(),
+        selection_artifact=_selection_artifact(),
+    )
+
+    # Act
+    resumed = ensure_review_worksheet(
+        path,
+        suite="release",
+        suite_fingerprint="a" * 64,
+        canonical_report=_report(),
+        selection_artifact=_selection_artifact(),
+    )
+
+    # Assert
+    assert resumed == first
+    assert review_candidate_digest(resumed) == review_candidate_digest(first)
+
+
 def test_completed_review_is_aggregated_without_candidate_ids() -> None:
     """記入済みworksheetがquality gateのaggregateだけへ変換されること。
 

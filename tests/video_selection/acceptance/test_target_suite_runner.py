@@ -482,7 +482,7 @@ def test_resume_rejects_changed_completed_cold_report(tmp_path: Path) -> None:
     Act:
         - suiteがworksheet生成から再開される
     Assert:
-        - phase recordのdigest不一致として拒否されること
+        - phase確定時のcanonical report artifact不一致として拒否されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -508,7 +508,85 @@ def test_resume_rejects_changed_completed_cold_report(tmp_path: Path) -> None:
     write_atomic_json(report_path, report)
 
     # Act / Assert
-    with pytest.raises(ValueError, match="report digest"):
+    with pytest.raises(ValueError, match="canonical report artifact"):
+        runner.run(profile_path=profile_path, suite="release")
+
+
+def test_review_finalization_rejects_changed_completed_cold_report(
+    tmp_path: Path,
+) -> None:
+    """worksheet生成後に置換されたcold reportからreviewが確定されないこと。
+
+    Arrange:
+        - cold/warm完了後かつworksheet生成済みのresume stateが用意される
+        - cold reportがphase確定後に同じnormalized resultの別内容へ置換される
+    Act:
+        - human review待ちのsuiteが再開される
+    Assert:
+        - phase確定時のcanonical report artifact不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda phase, configuration, _models, _suite_root: _successful_phase(
+            configuration,
+            phase,
+        )
+    )
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    report_path = (
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "release"
+        / "outputs"
+        / "cold"
+        / "report.json"
+    )
+    report = read_json_object(report_path)
+    assert report is not None
+    report["tampered"] = True
+    write_atomic_json(report_path, report)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="canonical report artifact"):
+        runner.run(profile_path=profile_path, suite="release")
+
+
+def test_review_finalization_rejects_changed_selected_image(tmp_path: Path) -> None:
+    """worksheet生成後に置換されたselected画像からreviewが確定されないこと。
+
+    Arrange:
+        - cold/warm完了後かつworksheet生成済みのresume stateが用意される
+        - cold selected画像がphase確定後に別内容へ置換される
+    Act:
+        - human review待ちのsuiteが再開される
+    Assert:
+        - phase確定時のselected output artifact不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda phase, configuration, _models, _suite_root: _successful_phase(
+            configuration,
+            phase,
+        )
+    )
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    selected_path = (
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "release"
+        / "outputs"
+        / "cold"
+        / "images"
+        / "0001_gameplay.webp"
+    )
+    selected_path.write_bytes(b"replaced-webp")
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="selected output artifact"):
         runner.run(profile_path=profile_path, suite="release")
 
 
@@ -1087,17 +1165,32 @@ def _successful_phase(
 ]:
     """durable output/cacheも作る成功phase evidenceを返す。"""
     candidate_id = "frm_" + "1" * 64
+    image_bytes = b"selected-webp"
+    image_relative_path = "images/0001_gameplay.webp"
+    image_digest = hashlib.sha256(image_bytes).hexdigest()
     report: dict[str, object] = {
         "selected": [
             {
                 "image_id": candidate_id,
-                "output": {"relative_path": "images/0001_gameplay.webp"},
+                "output": {
+                    "relative_path": image_relative_path,
+                    "sha256": image_digest,
+                    "width": 1920,
+                    "height": 1080,
+                    "bytes": len(image_bytes),
+                },
             }
         ],
         "provenance": {"models": {}},
     }
     configuration.output_folder.mkdir(parents=True, exist_ok=True)
-    write_atomic_json(configuration.output_folder / "report.json", report)
+    image_path = configuration.output_folder / image_relative_path
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(image_bytes)
+    report_path = configuration.output_folder / "report.json"
+    write_atomic_json(report_path, report)
+    with report_path.open("rb") as file:
+        report_digest = hashlib.file_digest(file, "sha256").hexdigest()
     selection_semantic_input = {
         "requested_count": 1,
         "annotated_candidate_ids": [candidate_id, "frm_" + "2" * 64],
@@ -1151,6 +1244,7 @@ def _successful_phase(
         "ollama_model_fully_resident": True,
         "resource_sampling_complete": True,
         "speech_runtime_identity": "speech_" + "7" * 64,
+        "canonical_report_sha256": report_digest,
         "normalized_result_digest": normalized_result_digest(report),
         "selection_stage_fingerprint": selection_fingerprint.value,
         "video_set": {

@@ -104,6 +104,10 @@ modelが変わっていれば既存の完了stateを流用しない。同じ実�
 `Model Update Status`や更新前identityの違いはrun別診断であり、再利用可否を変えない。
 worksheet未生成から再開するときはcold reportをphase digestと照合し、selection artifactを
 Completed Stage manifest、artifact hash、semantic fingerprintで再検証する。
+worksheet生成済みのhuman review待ちから再開するときも、cold/warm双方のcanonical reportを
+phase確定時のfile hashと照合し、selected画像のpath、byte数、SHA-256を再検証する。phase確定後に
+reportまたは画像が削除・置換されていればreviewを集計しない。worksheet生成とstate確定の間で
+中断した場合は、review記入欄を除くcandidate bindingが同じ既存worksheetだけを再利用する。
 
 user interruptや計測済みoperation failureの未完了phaseはCompleted Stage cacheを保持する。
 再開後のphase recordでは、それ以前の試行を含む経過時間、cache/recompute count、Stage時間、
