@@ -795,7 +795,10 @@ def test_interrupt_does_not_start_queued_video_scans(
             RecordingRunObserver(),
         ).process(
             discover_video_set(input_folder),
-            _configuration(input_folder, tmp_path / "output"),
+            replace(
+                _configuration(input_folder, tmp_path / "output"),
+                video_scan_workers=3,
+            ),
         )
     interrupt_thread.join(timeout=1)
     assert not interrupt_thread.is_alive()
