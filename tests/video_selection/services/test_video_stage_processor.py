@@ -1055,7 +1055,10 @@ def test_primary_scan_failure_is_not_masked_by_sibling_cancellation(
             RecordingRunObserver(),
         ).process(
             discover_video_set(input_folder),
-            _configuration(input_folder, tmp_path / "output"),
+            replace(
+                _configuration(input_folder, tmp_path / "output"),
+                video_scan_workers=3,
+            ),
         )
 
     # Assert
