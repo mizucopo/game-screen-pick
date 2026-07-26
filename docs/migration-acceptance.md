@@ -208,7 +208,7 @@ target動画から代表scenarioを固定し、合計約30分のintervalとし�
 | clean processing cacheのcold | 20分以内 |
 | 同一Video Set/config/model identity、空の別Output Folderへのwarm | 3分以内 |
 | warmのunexpected Stage recompute | 0 |
-| warm result | normalized selected ID/order/model contentがcoldと同一 |
+| warm result | run固有診断を除くcanonical reportの全semantic resultがcoldと同一 |
 
 ### 50時間40分full-scale suite
 
@@ -230,7 +230,7 @@ target動画から代表scenarioを固定し、合計約30分のintervalとし�
 | Resource | Budget | Accounting |
 |---|---:|---|
 | clean default profileのpersistent processing cache | 64 GiB以下 | model store/outputを除外 |
-| temporary/stagingを含むpeak追加容量 | 96 GiB以下 | model store/outputを除外 |
+| temporary/stagingを含むpeak追加容量 | 96 GiB以下 | persistent cache/model store/outputを除外 |
 | Ollama global GPU peak | 18 GiB以下 | 100% GPU、CPU offload不可 |
 | STT global GPU peak | 8 GiB以下 | CUDA profile |
 

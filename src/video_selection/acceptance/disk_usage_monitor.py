@@ -9,7 +9,7 @@ SizeProbe = Callable[[Path], int]
 
 
 class DiskUsageMonitor:
-    """outputを除外してpersistent cacheとpeak追加容量を測る。"""
+    """persistent cacheとoutputを除外してpeak追加容量を測る。"""
 
     def __init__(
         self,
@@ -30,6 +30,7 @@ class DiskUsageMonitor:
         self._interval_seconds = interval_seconds
         self._join_timeout_seconds = join_timeout_seconds
         self._tree_size = tree_size_probe or _tree_size
+        self._uses_default_tree_size = tree_size_probe is None
         self._staging_size = staging_size_probe or _staging_size
         self._stop = Event()
         self._lock = Lock()
@@ -70,15 +71,31 @@ class DiskUsageMonitor:
             self._sample()
 
     def _sample(self) -> None:
-        size = self._tree_size(self._working_root) + self._staging_size(
-            self._output_parent
+        working_size = (
+            _tree_size(
+                self._working_root,
+                excluded_root=self._cache_folder,
+            )
+            if self._uses_default_tree_size
+            else max(
+                self._tree_size(self._working_root)
+                - self._tree_size(self._cache_folder),
+                0,
+            )
         )
+        size = working_size + self._staging_size(self._output_parent)
         with self._lock:
             self._peak_bytes = max(self._peak_bytes, size)
             self._sample_count += 1
 
 
-def _tree_size(root: Path) -> int:
+def _tree_size(
+    root: Path,
+    *,
+    excluded_root: Path | None = None,
+) -> int:
+    if excluded_root is not None and root == excluded_root:
+        return 0
     total = 0
     try:
         entries = tuple(os.scandir(root))
@@ -89,7 +106,10 @@ def _tree_size(root: Path) -> int:
             if entry.is_symlink():
                 total += entry.stat(follow_symlinks=False).st_size
             elif entry.is_dir(follow_symlinks=False):
-                total += _tree_size(Path(entry.path))
+                total += _tree_size(
+                    Path(entry.path),
+                    excluded_root=excluded_root,
+                )
             elif entry.is_file(follow_symlinks=False):
                 total += entry.stat(follow_symlinks=False).st_size
         except FileNotFoundError:

@@ -29,6 +29,19 @@ PhaseExecutionResult = tuple[
     dict[str, object] | None,
     dict[str, object] | None,
 ]
+_VOLATILE_RUN_KEYS = frozenset({"id", "started_at", "completed_at"})
+_VOLATILE_STAGE_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "attempt_count",
+        "cache_hits",
+        "cache_misses",
+        "duration_ms",
+        "eval_tokens",
+        "prompt_eval_tokens",
+        "recomputed_items",
+        "validation_failures",
+    }
+)
 
 
 def execute_acceptance_phase(
@@ -326,34 +339,7 @@ def _file_digest(path: Path) -> str:
 def normalized_result_digest(report: Mapping[str, object]) -> str:
     """cold/warm一致と永続証拠の再検証に使うdigestを返す。"""
 
-    selected = report.get("selected")
-    provenance = report.get("provenance")
-    if not isinstance(selected, list) or not isinstance(provenance, dict):
-        raise ValueError("Canonical reportのselected/provenanceが不正です")
-    normalized_selected: list[dict[str, object]] = []
-    for value in selected:
-        if not isinstance(value, dict):
-            raise ValueError("Canonical reportのselected recordが不正です")
-        output = value.get("output")
-        if not isinstance(output, dict):
-            raise ValueError("Canonical reportのselected outputが不正です")
-        normalized_selected.append(
-            {
-                "image_id": value.get("image_id"),
-                "selection_index": value.get("selection_index"),
-                "classification": value.get("classification"),
-                "annotation": value.get("annotation"),
-                "selection": value.get("selection"),
-                "output": {
-                    key: output.get(key)
-                    for key in ("sha256", "width", "height", "bytes")
-                },
-            }
-        )
-    normalized = {
-        "selected": normalized_selected,
-        "models": provenance.get("models"),
-    }
+    normalized = _normalized_semantic_report(report)
     canonical = json.dumps(
         normalized,
         ensure_ascii=False,
@@ -361,6 +347,38 @@ def normalized_result_digest(report: Mapping[str, object]) -> str:
         separators=(",", ":"),
     ).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _normalized_semantic_report(
+    report: Mapping[str, object],
+) -> dict[str, object]:
+    """run固有診断だけを除いたcanonical report全体を返す。"""
+    run = _mapping(report.get("run"), "canonical report run")
+    provenance = report.get("provenance")
+    if not isinstance(provenance, dict):
+        raise ValueError("Canonical reportのprovenanceが不正です")
+    stages = provenance.get("stages")
+    if not isinstance(stages, list):
+        raise ValueError("Canonical reportのprovenance stagesが不正です")
+    normalized = dict(report)
+    normalized["run"] = {
+        key: value for key, value in run.items() if key not in _VOLATILE_RUN_KEYS
+    }
+    normalized["provenance"] = {
+        **provenance,
+        "stages": [
+            {
+                key: item
+                for key, item in _mapping(
+                    value,
+                    "canonical report provenance stage",
+                ).items()
+                if key not in _VOLATILE_STAGE_DIAGNOSTIC_KEYS
+            }
+            for value in stages
+        ],
+    }
+    return normalized
 
 
 def _mapping(value: object, location: str) -> dict[str, object]:

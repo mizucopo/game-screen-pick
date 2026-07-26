@@ -59,7 +59,8 @@ processing cacheを使うexact warmの順に実行する。性能予算超過は
 新規suiteではmaterialize後かつmodel実行より前に、materialize済みsuite inputの合計byteと
 artifact filesystemの空き容量を測る。persistent cache 64 GiBとtemporary/staging 96 GiBの
 合計160 GiB未満なら長時間処理を開始せずpreflight failureにする。開始時の測定値はdurable
-stateとprivacy-safe recordへ保存する。
+stateとprivacy-safe recordへ保存する。persistent cacheは独立した64 GiB budgetだけへ計上し、
+temporary workとoutput stagingの96 GiB peakへ二重計上しない。確定済みoutputはpeakから除く。
 
 coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
@@ -181,8 +182,10 @@ phase/cache/storage/GPU aggregate、gate aggregateだけを含める。canonical
 実semantic inputと推論診断からtool/model/contract参照、設定、validation、token数を記録する。
 performance比較用configurationには設定file digest、URLを含まないendpoint identity、
 privacy-safeな全実効performance設定を保存する。
-cold/warmの結果一致digestには選定判断とmodel identityに加え、公開WebPのSHA-256、寸法、
-byte数を含め、同じ候補から異なる画像artifactが公開されたrunを一致扱いしない。
+cold/warmの結果一致digestには、選定・棄却・near miss・Context Cue・警告を含むcanonical
+reportの全semantic resultと、公開WebPのpath、SHA-256、寸法、byte数を含める。run ID、
+timestamp、Stageのcache・retry・token・duration診断だけを除き、利用者に見える結果が異なる
+runを一致扱いしない。
 absolute path、video名、media、raw Context Cue、prompt、model response、credential、個別human
 判定は含めない。
 

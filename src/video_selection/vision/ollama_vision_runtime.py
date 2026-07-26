@@ -530,9 +530,12 @@ class OllamaVisionRuntime:
 
         def parse_candidate(
             value: Mapping[str, object],
+            *,
+            count_as_candidate_response: bool,
         ) -> tuple[CandidateAnnotation, bool, bool, bool, bool, bool]:
             nonlocal candidate_response_count
-            candidate_response_count += 1
+            if count_as_candidate_response:
+                candidate_response_count += 1
             (
                 annotation,
                 redacted,
@@ -555,6 +558,16 @@ class OllamaVisionRuntime:
                 scene_is_combat,
             )
 
+        def parse_candidate_response(
+            value: Mapping[str, object],
+        ) -> tuple[CandidateAnnotation, bool, bool, bool, bool, bool]:
+            return parse_candidate(value, count_as_candidate_response=True)
+
+        def parse_candidate_relationship_repair(
+            value: Mapping[str, object],
+        ) -> tuple[CandidateAnnotation, bool, bool, bool, bool, bool]:
+            return parse_candidate(value, count_as_candidate_response=False)
+
         (
             (
                 annotation,
@@ -569,7 +582,7 @@ class OllamaVisionRuntime:
             stage_kind="candidate_annotation",
             request_fingerprint=_fingerprint(semantic_input),
             payload=_candidate_payload(request, catalog, model, num_ctx),
-            parser=parse_candidate,
+            parser=parse_candidate_response,
             model=model,
             image_count=len(request.frame_candidates),
             context_cue_count=len(request.context_cues),
@@ -579,6 +592,7 @@ class OllamaVisionRuntime:
                 request=request,
                 catalog=catalog,
             ),
+            candidate_relationship_repair_parser=parse_candidate_relationship_repair,
         )
         cinematic_letterbox_detected = has_cinematic_letterbox(
             annotation.candidate.image_bytes
@@ -797,13 +811,16 @@ class OllamaVisionRuntime:
         context_cue_count: int,
         candidate_request: CandidateAnnotationRequest | None = None,
         candidate_draft_validator: CandidateDraftValidator | None = None,
+        candidate_relationship_repair_parser: (
+            InferenceParser[InferenceValue] | None
+        ) = None,
     ) -> tuple[InferenceValue, VisionInferenceDiagnostics]:
-        """同じsemantic入力を最大2回実行しsafe diagnosticsを返す。"""
+        """同じsemantic入力を検証し、関係修復併用時だけ最大3 requestを許可する。"""
         started_at = time.monotonic()
         previous_validation_code: str | None = None
         repair_code: str | None = None
         candidate_relationship_draft: Mapping[str, object] | None = None
-        for attempt in (1, 2):
+        for attempt in (1, 2, 3):
             relationship_repair = candidate_relationship_draft is not None
             decoded: Mapping[str, object] | None = None
             try:
@@ -827,7 +844,13 @@ class OllamaVisionRuntime:
                         else stage_kind
                     ),
                 )
-                value = parser(
+                active_parser = (
+                    candidate_relationship_repair_parser
+                    if relationship_repair
+                    and candidate_relationship_repair_parser is not None
+                    else parser
+                )
+                value = active_parser(
                     _merge_candidate_relationship_repair(
                         candidate_relationship_draft,
                         decoded,
@@ -837,6 +860,18 @@ class OllamaVisionRuntime:
                     else decoded
                 )
             except VisionRuntimeError as error:
+                if (
+                    relationship_repair
+                    and stage_kind == "candidate_annotation"
+                    and error.validation_code
+                    == "candidate_annotation_dialogue_visibility_unverified"
+                    and attempt < 3
+                ):
+                    previous_validation_code = error.validation_code
+                    candidate_relationship_draft = None
+                    repair_code = _repair_validation_code(error)
+                    self._sleeper(error.retry_after_seconds)
+                    continue
                 if relationship_repair:
                     error = _relationship_repair_error(error)
                 elif (
@@ -848,7 +883,7 @@ class OllamaVisionRuntime:
                         candidate_draft_validator(decoded)
                     except VisionRuntimeError as draft_error:
                         error = draft_error
-                if attempt == 2 or error.reason not in _RETRYABLE_REASONS:
+                if attempt >= 2 or error.reason not in _RETRYABLE_REASONS:
                     raise VisionRuntimeError(
                         error.reason,
                         validation_code=error.validation_code,

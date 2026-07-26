@@ -1169,6 +1169,15 @@ def _successful_phase(
     image_relative_path = "images/0001_gameplay.webp"
     image_digest = hashlib.sha256(image_bytes).hexdigest()
     report: dict[str, object] = {
+        "run": {
+            "id": f"run_{phase}",
+            "status": "completed",
+            "started_at": "2026-07-26T00:00:00Z",
+            "completed_at": "2026-07-26T00:00:01Z",
+            "requested_image_count": 1,
+            "selected_image_count": 1,
+            "warnings": [],
+        },
         "selected": [
             {
                 "image_id": candidate_id,
@@ -1181,7 +1190,7 @@ def _successful_phase(
                 },
             }
         ],
-        "provenance": {"models": {}},
+        "provenance": {"models": {}, "stages": []},
     }
     configuration.output_folder.mkdir(parents=True, exist_ok=True)
     image_path = configuration.output_folder / image_relative_path

@@ -2665,6 +2665,84 @@ def test_relationship_repair_is_followed_by_combat_visibility_check() -> None:
     assert len(payloads) == 3
 
 
+def test_relationship_repair_does_not_replace_dialogue_visibility_recheck() -> None:
+    """関係修復が画面内台詞の独立再確認として数えられないこと。
+
+    Arrange:
+        - 文脈付き映画演出の台詞と、修復可能なSpoiler関係違反が返される
+        - 関係修復後の独立応答では画面内台詞がないと返される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 関係修復とは別の3回目で台詞が再確認され掲載不可になること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 2:
+            return _response(
+                {
+                    "frame_observations": [
+                        {
+                            "frame_id": "frame-a",
+                            "spoiler_evidence": "画面内に軽微な進行情報が見える",
+                        }
+                    ]
+                }
+            )
+        response = _frame_observation_payload(
+            (("frame-a", "exploration", "event_dialogue", "high", "dialogue"),)
+        )
+        observation = _first_frame_observation(response)
+        observation["cinematic_event_presentation"] = True
+        observation["spoiler_risk"] = "low"
+        observation["spoiler_evidence"] = (
+            "" if len(payloads) == 1 else "画面内に軽微な進行情報が見える"
+        )
+        if len(payloads) == 3:
+            observation["on_screen_dialogue_text_visible"] = False
+            observation["dialogue_text_presentation"] = "none"
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 3
+    assert diagnostics.validation_code == (
+        "candidate_annotation_dialogue_visibility_unverified"
+    )
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "spoiler_riskを変更しません" in second_prompt
+    third_prompt = _last_message(payloads[2])["content"]
+    assert isinstance(third_prompt, str)
+    assert "画面内台詞文字を画像だけに対して再確認" in third_prompt
+    assert len(payloads) == 3
+
+
 @pytest.mark.parametrize(
     ("transient_transition_effect", "expected_value"),
     ((False, "high"), (True, "none")),

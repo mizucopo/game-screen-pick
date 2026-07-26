@@ -7,7 +7,7 @@ from .model_runtime_identity import ModelRuntimeIdentity
 from .resolved_model_identity import ResolvedModelIdentity
 
 _SAFE_VALUE_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._:+/-]{0,255}")
-_MAX_AGGREGATE_ATTEMPT_COUNT = 14
+_MAX_AGGREGATE_ATTEMPT_COUNT = 15
 
 
 @dataclass(frozen=True)
