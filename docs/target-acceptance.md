@@ -11,10 +11,15 @@ CLIはIssue #190までscreenshot入力版のままであり、`acceptance-target
 - WSL2 Ubuntu 24.04内のPython 3.13以上
 - system FFmpeg / ffprobe 6.1.1以上
 - NVIDIA GeForce RTX 5090
-- 明示URLで接続するWindows native Ollama
+- Windowsの非loopback addressをhostに持つ明示URLで接続するWindows native Ollama
 
 host alias、WSL gateway、実際のmedia pathはrepositoryへ保存しない。別構成で動作しても、
 v2.0のfull-runtime合格を示すrecordはこのtargetでだけ生成する。
+preflightは設定hostの解決先がWindows interfaceであり、そのportのWindows側listenerを
+`ollama.exe`が所有することをmodel解決の前後で検証する。`localhost`やloopback addressは
+WSL内Ollamaとの区別を信頼できる形で固定できないため、通常実行で到達できてもtarget
+acceptanceでは受理しない。検証後のstateにはdeployment種別とprocess名だけを保存し、
+host、IP、process pathは保存しない。
 
 ## Private profile
 
@@ -61,6 +66,8 @@ artifact filesystemの空き容量を測る。persistent cache 64 GiBとtemporar
 合計160 GiB未満なら長時間処理を開始せずpreflight failureにする。開始時の測定値はdurable
 stateとprivacy-safe recordへ保存する。persistent cacheは独立した64 GiB budgetだけへ計上し、
 temporary workとoutput stagingの96 GiB peakへ二重計上しない。確定済みoutputはpeakから除く。
+background disk sampleが一度でも失敗した場合はerror件数を記録し、後続sampleと停止に成功しても
+resource samplingを不完全として扱う。
 
 coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
@@ -72,6 +79,8 @@ scan待機中もactive Stageとheartbeatを通知し、通常のscan失敗でも
 scanのprocess登録とcancellation要求は同じlockで直列化し、cancel後に新しいdecoderを開始しない。
 新規scan artifactは対象sourceのcontent snapshotを確定直前に再検証し、scan中に変更された
 bytesを元のVideo Fingerprint配下へ保存しない。
+full suiteの匿名symlinkとduration probeがすべて完了した後もsource stat snapshotを再検証し、
+materialize中に置換・変更されたsourceを古いsuite identityへ結び付けない。
 candidate extractionのCPU時間は所有threadと、そのStageが起動したrange decoder・proxy
 encoder subprocessだけを合算し、並列中の後続Video Scanを二重計上しない。
 Context Collection完了後はSpeech Runtime Identityを保持してSTT modelを明示closeし、

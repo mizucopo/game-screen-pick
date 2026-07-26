@@ -98,3 +98,54 @@ def test_blocked_sampler_marks_disk_evidence_incomplete_without_second_sample(
     # Assert
     assert result["disk_sampling_complete"] is False
     assert working_sample_count == 2
+
+
+def test_background_sample_error_marks_disk_evidence_incomplete(
+    tmp_path: Path,
+) -> None:
+    """background計測失敗が回復後も不完全証拠として残されること。
+
+    Arrange:
+        - 最初のbackground working tree計測だけがOSErrorになる
+    Act:
+        - error観測後にdisk monitorが停止される
+    Assert:
+        - samplerが停止して最終sampleに成功してもsampling incompleteになること
+        - sample error件数がrecordへ残されること
+    """
+    # Arrange
+    working = tmp_path / "work"
+    cache = working / "cache"
+    cache.mkdir(parents=True)
+    outputs = tmp_path / "outputs"
+    outputs.mkdir()
+    background_failed = Event()
+    working_sample_count = 0
+
+    def tree_size(path: Path) -> int:
+        nonlocal working_sample_count
+        if path == working:
+            working_sample_count += 1
+            if working_sample_count == 2:
+                background_failed.set()
+                raise OSError("transient traversal failure")
+        return 1
+
+    monitor = DiskUsageMonitor(
+        working_root=working,
+        output_parent=outputs,
+        cache_folder=cache,
+        interval_seconds=0.001,
+        tree_size_probe=tree_size,
+        staging_size_probe=lambda _path: 0,
+    )
+    monitor.start()
+    assert background_failed.wait(timeout=1)
+
+    # Act
+    result = monitor.stop()
+
+    # Assert
+    assert result["disk_sampling_complete"] is False
+    assert result["disk_sample_count"] == 2
+    assert result["disk_sample_error_count"] == 1

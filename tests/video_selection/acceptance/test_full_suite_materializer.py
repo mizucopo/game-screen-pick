@@ -229,6 +229,51 @@ def test_duration_mismatch_removes_partial_anonymous_view(tmp_path: Path) -> Non
     assert not (suite_root / "work" / "input").exists()
 
 
+def test_source_changed_during_probe_removes_partial_materialization(
+    tmp_path: Path,
+) -> None:
+    """probe中に変更されたfull sourceが確定stateへ保存されないこと。
+
+    Arrange:
+        - 最初のduration probe中に2本目のsourceを書き換えるprobeが用意される
+    Act:
+        - full suite materializationが試行される
+    Assert:
+        - source snapshot不一致として拒否されること
+        - partial inputとmanifestが残らないこと
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    profile.input_root.mkdir()
+    first = profile.input_root / "private-chapter-01.mkv"
+    second = profile.input_root / "private-chapter-02.mp4"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    probe_count = 0
+
+    def probe(_path: Path) -> dict[str, object]:
+        nonlocal probe_count
+        probe_count += 1
+        if probe_count == 1:
+            second.write_bytes(b"changed-second")
+        return {
+            "start": Fraction(0),
+            "duration": Fraction(50),
+            "end": Fraction(50),
+        }
+
+    suite_root = profile.artifact_root / "full"
+    materializer = FullSuiteMaterializer(media_probe=probe)
+
+    # Act
+    with pytest.raises(ValueError, match="source"):
+        materializer.materialize(profile, suite_root)
+
+    # Assert
+    assert not (suite_root / "work" / "input").exists()
+    assert not (suite_root / "work" / "full-materialization.json").exists()
+
+
 def _profile(tmp_path: Path) -> AcceptanceProfile:
     """2本100秒を期待するfull suite profileを返す。"""
     return AcceptanceProfile(

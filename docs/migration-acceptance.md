@@ -164,7 +164,8 @@ full-runtimeのv2.0 support targetは次に限定する。
 
 - Windows 11 Pro。
 - WSL2 Ubuntu 24.04内でPython applicationとsystem FFmpegを実行。
-- 明示URLでWindows native Ollamaへ接続。
+- Windowsの非loopback addressを指定した明示URLでWindows native Ollamaへ接続し、
+  Windows側の`ollama.exe`によるlistener所有をpreflightで検証。
 - NVIDIA GeForce RTX 5090上のCUDA STT。
 
 Ubuntu CIはunit/fake/FFmpeg integrationを保証する。native Linux、macOS、direct Windowsは

@@ -9,6 +9,7 @@ _SUMMED_INTEGER_METRICS = (
     "reuse_count",
     "unexpected_recompute_count",
     "disk_sample_count",
+    "disk_sample_error_count",
     "gpu_sample_count",
     "gpu_sample_error_count",
 )

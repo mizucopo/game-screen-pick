@@ -64,6 +64,7 @@ class FullSuiteMaterializer:
             ):
                 msg = "Full suiteの実測durationがprofile期待値と一致しません"
                 raise ValueError(msg)
+            _validate_source_snapshot(sources, source_snapshot)
             descriptor = {
                 "source_snapshot_fingerprint": source_snapshot,
                 "scenario_count": len(sources),
@@ -124,6 +125,7 @@ def _restore_existing(
             target_matches = False
         if not target_matches:
             raise ValueError("Full suite匿名inputが変更されています")
+    _validate_source_snapshot(sources, source_snapshot)
     return cast(dict[str, object], descriptor)
 
 
@@ -143,6 +145,18 @@ def _source_snapshot_fingerprint(sources: tuple[Path, ...]) -> str:
         )
     canonical = json.dumps(records, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _validate_source_snapshot(
+    sources: tuple[Path, ...],
+    expected_snapshot: str,
+) -> None:
+    try:
+        current_snapshot = _source_snapshot_fingerprint(sources)
+    except OSError:
+        raise ValueError("Full suite sourceがmaterialize中に変更されました") from None
+    if current_snapshot != expected_snapshot:
+        raise ValueError("Full suite sourceがmaterialize中に変更されました")
 
 
 def _probe_elapsed_duration(value: Mapping[str, object]) -> Fraction:

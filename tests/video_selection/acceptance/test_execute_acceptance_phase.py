@@ -202,6 +202,7 @@ def test_phase_duration_excludes_resource_monitor_shutdown(
             "persistent_cache_bytes": 0,
             "peak_additional_bytes": 0,
             "disk_sample_count": 1,
+            "disk_sample_error_count": 0,
         }
 
     monkeypatch.setattr(

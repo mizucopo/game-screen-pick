@@ -1,19 +1,27 @@
 """supported Windows 11/WSL2/Ubuntu/RTX target preflight。"""
 
+import ipaddress
 import json
 import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlsplit
 
 from ..media.ffmpeg_media_runtime import FfmpegMediaRuntime
 from .gpu_resource_monitor import find_nvidia_smi
 
 _WINDOWS_BUILD_MINIMUM = 22000
+
+HostAddressResolver = Callable[[str, int], tuple[str, ...]]
+WindowsOllamaBindingProbe = Callable[[int], Mapping[str, object]]
+IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
 def probe_target_environment() -> dict[str, object]:
@@ -61,6 +69,58 @@ def probe_target_environment() -> dict[str, object]:
         "ffmpeg": media.ffmpeg_version,
         "ffprobe": media.ffprobe_version,
         "media_runtime_capability_digest": media.build_capability_sha256,
+    }
+
+
+def probe_windows_native_ollama(
+    ollama_host: str,
+    *,
+    host_address_resolver: HostAddressResolver | None = None,
+    windows_binding_probe: WindowsOllamaBindingProbe | None = None,
+) -> dict[str, object]:
+    """設定endpointがWindowsのollama.exe listenerへ結び付くことを検証する。"""
+    try:
+        parsed = urlsplit(ollama_host)
+        hostname = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        raise ValueError("Ollama endpointからWindows bindingを解決できません") from None
+    if parsed.scheme not in {"http", "https"} or hostname is None:
+        raise ValueError("Ollama endpointからWindows bindingを解決できません")
+    resolver = host_address_resolver or _resolve_host_addresses
+    configured_addresses = _parse_ip_addresses(
+        resolver(hostname, port),
+        "Ollama endpoint address",
+    )
+    if not configured_addresses or any(
+        address.is_loopback or address.is_unspecified
+        for address in configured_addresses
+    ):
+        raise ValueError(
+            "Target acceptanceのOllama hostにはWindowsの非loopback addressが必要です"
+        )
+    binding_probe = windows_binding_probe or _windows_ollama_binding
+    binding = binding_probe(port)
+    windows_addresses = _parse_ip_addresses(
+        binding.get("windows_addresses"),
+        "Windows host address",
+    )
+    listener_addresses = _parse_ip_addresses(
+        binding.get("listener_addresses"),
+        "Windows Ollama listener",
+    )
+    if not configured_addresses.issubset(windows_addresses):
+        raise ValueError("設定Ollama endpointはWindows host addressではありません")
+    if not listener_addresses or not any(
+        address.is_unspecified or address in configured_addresses
+        for address in listener_addresses
+    ):
+        raise ValueError(
+            "設定Ollama endpointを所有するWindows ollama.exeが見つかりません"
+        )
+    return {
+        "deployment": "windows_native",
+        "listener_process": "ollama.exe",
     }
 
 
@@ -142,6 +202,71 @@ def _find_powershell() -> str:
     if wsl_executable.is_file():
         return str(wsl_executable)
     raise ValueError("Windows host identityを取得できません")
+
+
+def _windows_ollama_binding(port: int) -> dict[str, object]:
+    script = (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+        f"$port={port};"
+        "$listeners=@(Get-NetTCPConnection -State Listen -LocalPort $port "
+        "-ErrorAction Stop|Where-Object{"
+        "(Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue)."
+        "ProcessName -ieq 'ollama'}|"
+        "Select-Object -ExpandProperty LocalAddress);"
+        "$addresses=@(Get-NetIPAddress -ErrorAction Stop|"
+        "Where-Object{$_.AddressState -eq 'Preferred'}|"
+        "Select-Object -ExpandProperty IPAddress);"
+        "@{listener_addresses=$listeners;windows_addresses=$addresses}|"
+        "ConvertTo-Json -Compress -Depth 3"
+    )
+    try:
+        output = subprocess.run(
+            [
+                _find_powershell(),
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        value: object = json.loads(output)
+    except (OSError, subprocess.CalledProcessError, TypeError, ValueError):
+        raise ValueError("Windows Ollama listenerを取得できません") from None
+    if not isinstance(value, dict):
+        raise ValueError("Windows Ollama listenerが不正です")
+    return cast(dict[str, object], value)
+
+
+def _resolve_host_addresses(hostname: str, port: int) -> tuple[str, ...]:
+    try:
+        addresses = {
+            str(sockaddr[0])
+            for _family, _type, _protocol, _canonical, sockaddr in socket.getaddrinfo(
+                hostname,
+                port,
+                type=socket.SOCK_STREAM,
+            )
+        }
+    except OSError:
+        raise ValueError("Ollama endpoint addressを解決できません") from None
+    return tuple(sorted(addresses))
+
+
+def _parse_ip_addresses(value: object, label: str) -> frozenset[IpAddress]:
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(item, str) for item in value
+    ):
+        raise ValueError(f"{label}が不正です")
+    addresses: set[IpAddress] = set()
+    try:
+        for item in value:
+            addresses.add(ipaddress.ip_address(item.split("%", 1)[0]))
+    except ValueError:
+        raise ValueError(f"{label}が不正です") from None
+    return frozenset(addresses)
 
 
 def _gpu_identity() -> dict[str, object]:

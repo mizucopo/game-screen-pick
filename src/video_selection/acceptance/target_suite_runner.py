@@ -42,10 +42,15 @@ from .phase_attempt_metrics import (
     validate_phase_measurements,
 )
 from .release_suite_materializer import ReleaseSuiteMaterializer
-from .target_environment import probe_source_revision, probe_target_environment
+from .target_environment import (
+    probe_source_revision,
+    probe_target_environment,
+    probe_windows_native_ollama,
+)
 
 EnvironmentProbe = Callable[[], dict[str, object]]
 RevisionProbe = Callable[[Path], tuple[str, bool]]
+OllamaDeploymentProbe = Callable[[str], dict[str, object]]
 ModelResolver = Callable[[EffectiveConfiguration], ResolvedModels]
 PhaseExecutor = Callable[
     [str, EffectiveConfiguration, ResolvedModels, Path],
@@ -68,6 +73,7 @@ class TargetSuiteRunner:
         *,
         environment_probe: EnvironmentProbe = probe_target_environment,
         revision_probe: RevisionProbe = probe_source_revision,
+        ollama_deployment_probe: OllamaDeploymentProbe = probe_windows_native_ollama,
         model_resolver: ModelResolver | None = None,
         phase_executor: PhaseExecutor | None = None,
         release_materializer: SuiteMaterializer | None = None,
@@ -76,6 +82,7 @@ class TargetSuiteRunner:
     ) -> None:
         self._environment_probe = environment_probe
         self._revision_probe = revision_probe
+        self._ollama_deployment_probe = ollama_deployment_probe
         self._model_resolver = model_resolver or ModelLifecycleRuntime().resolve_models
         self._phase_executor = phase_executor or _execute_phase
         self._release_materializer = (
@@ -136,12 +143,21 @@ class TargetSuiteRunner:
             "ollama_endpoint_identity"
         ) != _ollama_endpoint_identity(cold_configuration.ollama_host):
             raise ValueError("Acceptance stateが現在のsuite identityと一致しません")
+        ollama_deployment = self._ollama_deployment_probe(
+            cold_configuration.ollama_host
+        )
+        target = {**target, "ollama": ollama_deployment}
         try:
             resolved_models = self._model_resolver(cold_configuration)
         except KeyboardInterrupt:
             return 130
         except Exception:
             return 1
+        if (
+            self._ollama_deployment_probe(cold_configuration.ollama_host)
+            != ollama_deployment
+        ):
+            raise ValueError("Windows Ollama bindingがmodel解決中に変更されました")
         identity = _identity(
             suite,
             profile,

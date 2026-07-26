@@ -66,7 +66,7 @@ Quality Score、model confidence、final score、soft coverage、eligible/select
 
 ## Retryとfailure
 
-各Ollama operationは同じsemantic入力で初回と一回のretryだけを行います。Candidate Annotation Stageは主推論に加えて、戦闘有無と戦闘可視性の二段階、それぞれの許可方向に対する独立再確認、戦闘構図の外周strip監査、または掲載境界専用確認を条件付きで含むため、Stage全体のdiagnosticsは合計1〜12 attemptになります。timeout、connection failure、HTTP 408/429/5xx、空・打ち切り応答、schema/domain validation failureがretry対象です。このHTTP分類は推論前の`/api/tags`確認にも適用します。429の`Retry-After`は秒数とHTTP-dateの両形式を解釈して最大30秒まで尊重し、その他は1秒待ちます。
+各Ollama operationは同じsemantic入力で初回と一回のretryだけを行います。Candidate Annotation Stageは主推論に加えて、関係修復、戦闘有無と戦闘可視性の二段階、それぞれの許可方向に対する独立再確認、戦闘構図の外周strip監査、または掲載境界専用確認を条件付きで含むため、Stage全体のdiagnosticsは合計1〜15 attemptになります。timeout、connection failure、HTTP 408/429/5xx、空・打ち切り応答、schema/domain validation failureがretry対象です。このHTTP分類は推論前の`/api/tags`確認にも適用します。429の`Retry-After`は秒数とHTTP-dateの両形式を解釈して最大30秒まで尊重し、その他は1秒待ちます。
 
 response/schema/domain validation retryではstable validation codeを追加し、raw responseを次promptへ戻しません。Scene Kind `other`のsceneは自由なslugが返っても、分類の逃げ先として正確な`other`、汎用表示名と汎用説明へ決定的に正規化します。Scene Catalogのdomain違反ではScene Kindの重複を許しつつScene Slugを一意にし、`other`のkind・role関係を満たす修正指示を再提示します。再試行でも非`other`のScene Slugだけが重複した場合は、入力順に`-2`、`-3`のsuffixを付けて決定的に一意化します。Scene Kind `other`が複数ある場合やその他のdomain違反は補正せず失敗します。Context Cueを持つCinematic Event Presentationまたは大きなevent portraitで画面内台詞文字ありと返された場合は、同じ画像とsemantic入力を使う主推論の一回のretryで、音声やContext Cueを根拠にせずDialogue Text Presentationを再確認します。再確認でも台詞文字ありなら有効な会話画面として保持し、文字表示なしなら静止eventへ正規化します。
 

@@ -265,6 +265,14 @@ class FfmpegMediaRuntime:
             ) from error
         finally:
             if process is not None:
+                if process.returncode is None:
+                    with suppress(ProcessLookupError):
+                        os.kill(process.pid, signal.SIGTERM)
+                    with suppress(ChildProcessError):
+                        wait_for_process(process)
+                if process.stderr is not None:
+                    with suppress(OSError):
+                        process.stderr.close()
                 with self._active_scan_lock:
                     self._active_scan_processes.discard(process)
         wall_seconds = time.monotonic() - started_at

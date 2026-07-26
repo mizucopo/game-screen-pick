@@ -17,6 +17,7 @@ from src.video_selection.acceptance.execute_acceptance_phase import (
 from src.video_selection.acceptance.target_suite_runner import (
     EnvironmentProbe,
     ModelResolver,
+    OllamaDeploymentProbe,
     PhaseExecutor,
     TargetSuiteRunner,
 )
@@ -382,6 +383,65 @@ def test_state_preserves_privacy_safe_performance_configuration(
     assert configuration["speech_chunk_seconds"] == 600.0
     assert configuration["speech_overlap_seconds"] == 5.0
     assert "ollama_host" not in configuration
+    target = state["target"]
+    assert isinstance(target, dict)
+    assert target["ollama"] == {
+        "deployment": "windows_native",
+        "listener_process": "ollama.exe",
+    }
+
+
+def test_ollama_windows_binding_is_revalidated_after_model_resolution(
+    tmp_path: Path,
+) -> None:
+    """model解決中に変わったWindows Ollama bindingが拒否されること。
+
+    Arrange:
+        - model解決前後で異なるdeployment証拠を返すprobeが用意される
+    Act:
+        - release suiteが開始される
+    Assert:
+        - phase開始前にbinding変更として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    probe_results: list[dict[str, object]] = [
+        {
+            "deployment": "windows_native",
+            "listener_process": "ollama.exe",
+        },
+        {
+            "deployment": "windows_native",
+            "listener_process": "replacement.exe",
+        },
+    ]
+    phase_calls: list[str] = []
+
+    def execute(
+        phase: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> tuple[
+        int,
+        dict[str, object],
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        phase_calls.append(phase)
+        return _successful_phase(configuration, phase)
+
+    runner = _runner(
+        execute,
+        ollama_deployment_probe=lambda _host: probe_results.pop(0),
+    )
+
+    # Act
+    with pytest.raises(ValueError, match="Windows Ollama binding"):
+        runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert phase_calls == []
 
 
 def test_finalization_rejects_review_with_truncated_candidate_set(
@@ -1116,6 +1176,7 @@ def _runner(
     model_identity_seed: str = "acceptance-runner",
     model_resolver: ModelResolver | None = None,
     environment_probe: EnvironmentProbe | None = None,
+    ollama_deployment_probe: OllamaDeploymentProbe | None = None,
 ) -> TargetSuiteRunner:
     """target外でもstate machineを検証できるdependency構成を返す。"""
     model_runtime = FakeModelRuntime(model_identity_seed)
@@ -1140,6 +1201,13 @@ def _runner(
             }
         ),
         revision_probe=lambda _path: ("a" * 40, False),
+        ollama_deployment_probe=ollama_deployment_probe
+        or (
+            lambda _host: {
+                "deployment": "windows_native",
+                "listener_process": "ollama.exe",
+            }
+        ),
         model_resolver=model_resolver or model_runtime.resolve_models,
         phase_executor=phase_executor,
         release_materializer=materialize,
@@ -1240,6 +1308,7 @@ def _successful_phase(
         "persistent_cache_bytes": 1024,
         "peak_additional_bytes": 2048,
         "disk_sample_count": 1,
+        "disk_sample_error_count": 0,
         "gpu_sample_count": 1,
         "gpu_sample_error_count": 0,
         "process_gpu_baseline_mib": 100,
@@ -1309,6 +1378,7 @@ def _interrupted_phase(phase: str) -> dict[str, object]:
         "persistent_cache_bytes": 1024,
         "peak_additional_bytes": 2048,
         "disk_sample_count": 1,
+        "disk_sample_error_count": 0,
         "gpu_sample_count": 1,
         "gpu_sample_error_count": 0,
         "process_gpu_baseline_mib": 100,

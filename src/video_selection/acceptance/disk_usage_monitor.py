@@ -36,6 +36,7 @@ class DiskUsageMonitor:
         self._lock = Lock()
         self._peak_bytes = 0
         self._sample_count = 0
+        self._sample_errors = 0
         self._thread: Thread | None = None
 
     def start(self) -> None:
@@ -59,11 +60,15 @@ class DiskUsageMonitor:
         with self._lock:
             peak_bytes = self._peak_bytes
             sample_count = self._sample_count
+            sample_errors = self._sample_errors
         return {
-            "disk_sampling_complete": sampler_stopped and sample_count > 0,
+            "disk_sampling_complete": (
+                sampler_stopped and sample_count > 0 and sample_errors == 0
+            ),
             "persistent_cache_bytes": self._tree_size(self._cache_folder),
             "peak_additional_bytes": peak_bytes,
             "disk_sample_count": sample_count,
+            "disk_sample_error_count": sample_errors,
         }
 
     def _run(self) -> None:
@@ -71,19 +76,24 @@ class DiskUsageMonitor:
             self._sample()
 
     def _sample(self) -> None:
-        working_size = (
-            _tree_size(
-                self._working_root,
-                excluded_root=self._cache_folder,
+        try:
+            working_size = (
+                _tree_size(
+                    self._working_root,
+                    excluded_root=self._cache_folder,
+                )
+                if self._uses_default_tree_size
+                else max(
+                    self._tree_size(self._working_root)
+                    - self._tree_size(self._cache_folder),
+                    0,
+                )
             )
-            if self._uses_default_tree_size
-            else max(
-                self._tree_size(self._working_root)
-                - self._tree_size(self._cache_folder),
-                0,
-            )
-        )
-        size = working_size + self._staging_size(self._output_parent)
+            size = working_size + self._staging_size(self._output_parent)
+        except Exception:
+            with self._lock:
+                self._sample_errors += 1
+            return
         with self._lock:
             self._peak_bytes = max(self._peak_bytes, size)
             self._sample_count += 1

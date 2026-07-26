@@ -1,10 +1,13 @@
 """system FFmpeg MediaRuntimeのintegration test。"""
 
+import signal
 import stat
 import struct
 import sys
+from collections.abc import Iterator
 from fractions import Fraction
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
@@ -15,6 +18,7 @@ from src.video_selection.models.media_runtime_error import MediaRuntimeError
 from src.video_selection.models.media_runtime_failure_reason import (
     MediaRuntimeFailureReason,
 )
+from src.video_selection.models.media_stream import MediaStream
 from src.video_selection.services.discover_video_set import discover_video_set
 from src.video_selection.services.video_stage_processor import VideoStageProcessor
 from tests.video_selection.fakes.fake_speech_runtime import FakeSpeechRuntime
@@ -615,6 +619,86 @@ def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
         with Image.open(heartbeat.image_path) as proxy:
             assert proxy.format == "JPEG"
             assert len(proxy.getexif()) == 0
+
+
+def test_scan_video_reaps_decoder_when_stderr_processing_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """stderr処理失敗時に実行中decoderが終了・回収されること。
+
+    Arrange:
+        - 一行返した後に失敗するstderrを持つ実行中FFmpeg processが用意される
+    Act:
+        - Video Scanが実行され、その後runtime全体のcancelが要求される
+    Assert:
+        - 失敗したprocessがSIGTERMされてwaitで回収されること
+        - active processから解除され、後続cancelで再度終了されないこと
+    """
+    # Arrange
+    process = MagicMock()
+    process.pid = 123
+    process.returncode = None
+
+    def failing_stderr() -> Iterator[str]:
+        yield "unrecognized stderr line\n"
+        raise ValueError("stderr processing failed")
+
+    process.stderr = failing_stderr()
+    killed: list[tuple[int, int]] = []
+    reaped: list[int] = []
+
+    def reap(active_process: object) -> tuple[int, float]:
+        assert active_process is process
+        reaped.append(process.pid)
+        process.returncode = -15
+        return -15, 0.0
+
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.subprocess.Popen",
+        lambda *_args, **_kwargs: process,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.os.kill",
+        lambda pid, sent_signal: killed.append((pid, sent_signal)),
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.wait_for_process",
+        reap,
+    )
+    runtime = FfmpegMediaRuntime()
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="h264",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=1000,
+        width=1280,
+        height=720,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+    )
+
+    # Act
+    with pytest.raises(ValueError, match="stderr processing failed"):
+        runtime.scan_video(
+            tmp_path / "source.mkv",
+            stream,
+            tmp_path / "scan-artifacts",
+            heartbeat_interval_seconds=1.0,
+            scene_change_threshold=0.25,
+            scene_min_interval_seconds=0.5,
+            decode_backend="cpu",
+        )
+    runtime.cancel_video_scans()
+
+    # Assert
+    assert killed == [(123, signal.SIGTERM)]
+    assert reaped == [123]
 
 
 def test_cancel_requested_before_scan_prevents_decoder_start(tmp_path: Path) -> None:
