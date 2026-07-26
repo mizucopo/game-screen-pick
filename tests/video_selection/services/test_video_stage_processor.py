@@ -334,7 +334,10 @@ def test_three_video_scans_run_concurrently(
         RecordingRunObserver(),
     ).process(
         discover_video_set(input_folder),
-        _configuration(input_folder, tmp_path / "output"),
+        replace(
+            _configuration(input_folder, tmp_path / "output"),
+            video_scan_workers=3,
+        ),
     )
 
     # Assert
@@ -683,7 +686,10 @@ def test_downstream_starts_while_later_video_scans_are_active(
         RecordingRunObserver(),
     ).process(
         discover_video_set(input_folder),
-        _configuration(input_folder, tmp_path / "output"),
+        replace(
+            _configuration(input_folder, tmp_path / "output"),
+            video_scan_workers=3,
+        ),
     )
 
     # Assert
