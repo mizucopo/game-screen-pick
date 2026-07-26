@@ -1,4 +1,4 @@
-"""Acceptance phase実行境界のtest。"""
+"""Acceptance Run Attempt実行境界のtest。"""
 
 import copy
 from pathlib import Path
@@ -6,9 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.video_selection.acceptance.execute_acceptance_phase import (
-    execute_acceptance_phase,
+from src.video_selection.acceptance.acceptance_run import (
+    execute_acceptance_run_attempt,
     normalized_result_digest,
+    video_scan_parallelism_diagnostics,
 )
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.run_failure import RunFailure
@@ -139,6 +140,22 @@ def test_normalized_result_digest_excludes_run_specific_diagnostics() -> None:
     run["completed_at"] = "2026-07-26T01:00:01Z"
     provenance = warm["provenance"]
     assert isinstance(provenance, dict)
+    cold_provenance = cold["provenance"]
+    assert isinstance(cold_provenance, dict)
+    cold_runtime = cold_provenance["runtime"]
+    warm_runtime = provenance["runtime"]
+    assert isinstance(cold_runtime, dict)
+    assert isinstance(warm_runtime, dict)
+    cold_runtime["video_scan_parallelism"] = {
+        "initial_workers": 6,
+        "final_workers": 5,
+        "changes": [{"reason": "cpu_pressure"}],
+    }
+    warm_runtime["video_scan_parallelism"] = {
+        "initial_workers": 6,
+        "final_workers": 6,
+        "changes": [],
+    }
     models = provenance["models"]
     assert isinstance(models, dict)
     scene_catalog = models["scene_catalog"]
@@ -168,6 +185,42 @@ def test_normalized_result_digest_excludes_run_specific_diagnostics() -> None:
 
     # Assert
     assert warm_digest == cold_digest
+
+
+def test_parallelism_evidence_is_extracted_from_run_metrics() -> None:
+    """worker診断がcanonical reportから抽出されること。
+
+    Arrange:
+        - Video Scan parallelism診断を持つreportが用意される
+    Act:
+        - parallelism診断が抽出される
+    Assert:
+        - 診断値が保持されること
+    """
+    # Arrange
+    report = _canonical_report(
+        sha256="a" * 64,
+        width=1920,
+        height=1080,
+        size_bytes=1000,
+    )
+    provenance = report["provenance"]
+    assert isinstance(provenance, dict)
+    runtime = provenance["runtime"]
+    assert isinstance(runtime, dict)
+    runtime["video_scan_parallelism"] = {
+        "mode": "auto",
+        "configured_workers": "auto",
+        "initial_workers": 6,
+        "peak_workers": 6,
+        "scan_wall_seconds": 80.0,
+    }
+    # Act
+    diagnostics = video_scan_parallelism_diagnostics(report)
+
+    # Assert
+    assert diagnostics["initial_workers"] == 6
+    assert diagnostics["scan_wall_seconds"] == 80.0
 
 
 @pytest.mark.parametrize("identity_key", ("execution_identity", "runtime_identity"))
@@ -208,16 +261,16 @@ def test_normalized_result_digest_retains_model_execution_and_runtime_identity(
     assert changed_digest != cold_digest
 
 
-def test_phase_duration_excludes_resource_monitor_shutdown(
+def test_run_attempt_duration_excludes_resource_monitor_shutdown(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """phase durationがresource monitor停止時間を含まず記録されること。
+    """run durationがresource monitor停止時間を含まず記録されること。
 
     Arrange:
         - pipeline完了時刻を20、monitor停止後時刻を100とするclockが用意される
     Act:
-        - operation failureになるAcceptance phaseが実行される
+        - operation failureになるAcceptance Run Attemptが実行される
     Assert:
         - 開始10からpipeline完了20までの10秒だけが記録されること
     """
@@ -227,7 +280,9 @@ def test_phase_duration_excludes_resource_monitor_shutdown(
         video_input_folder=tmp_path / "input",
         output_folder=tmp_path / "output",
     )
-    resolved_models = FakeModelRuntime("phase-timing").resolve_models(configuration)
+    resolved_models = FakeModelRuntime("run-attempt-timing").resolve_models(
+        configuration
+    )
     failure = RunFailure(
         reason_code="test_failure",
         exit_code=1,
@@ -250,28 +305,38 @@ def test_phase_duration_excludes_resource_monitor_shutdown(
         }
 
     monkeypatch.setattr(
-        "src.video_selection.acceptance.execute_acceptance_phase.time.monotonic",
+        "src.video_selection.acceptance.acceptance_run.time.monotonic",
         lambda: now[0],
     )
     monkeypatch.setattr(
-        "src.video_selection.acceptance.execute_acceptance_phase."
-        "build_real_application",
-        lambda *_args, **_kwargs: SimpleNamespace(run=lambda _configuration: None),
+        "src.video_selection.acceptance.acceptance_run.build_real_application",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            run=lambda _configuration: None,
+            video_scan_parallelism_diagnostics={
+                "mode": "auto",
+                "configured_workers": "auto",
+                "initial_workers": 3,
+                "final_workers": 4,
+                "peak_workers": 4,
+                "completed_scans": 2,
+                "scan_wall_seconds": 8.0,
+                "changes": [],
+            },
+        ),
     )
     monkeypatch.setattr(
-        "src.video_selection.acceptance.execute_acceptance_phase."
-        "InternalRunController.execute",
+        "src.video_selection.acceptance.acceptance_run.InternalRunController.execute",
         execute,
     )
     monkeypatch.setattr(
-        "src.video_selection.acceptance.execute_acceptance_phase.DiskUsageMonitor",
+        "src.video_selection.acceptance.acceptance_run.DiskUsageMonitor",
         lambda **_kwargs: SimpleNamespace(
             start=lambda: None,
             stop=stop_disk_monitor,
         ),
     )
     monkeypatch.setattr(
-        "src.video_selection.acceptance.execute_acceptance_phase.GpuResourceMonitor",
+        "src.video_selection.acceptance.acceptance_run.GpuResourceMonitor",
         lambda **_kwargs: SimpleNamespace(
             start=lambda: None,
             stop=lambda: {
@@ -292,17 +357,28 @@ def test_phase_duration_excludes_resource_monitor_shutdown(
     )
 
     # Act
-    exit_code, phase_record, report, selection_artifact = execute_acceptance_phase(
-        phase="cold",
-        configuration=configuration,
-        resolved_models=resolved_models,
-        suite_root=tmp_path / "suite",
+    exit_code, attempt_record, report, selection_artifact = (
+        execute_acceptance_run_attempt(
+            configuration=configuration,
+            resolved_models=resolved_models,
+            suite_root=tmp_path / "suite",
+        )
     )
 
     # Assert
     assert exit_code == 1
-    assert phase_record["duration_seconds"] == 10.0
-    assert phase_record["resource_sampling_complete"] is True
+    assert attempt_record["duration_seconds"] == 10.0
+    assert attempt_record["resource_sampling_complete"] is True
+    assert attempt_record["video_scan_parallelism"] == {
+        "mode": "auto",
+        "configured_workers": "auto",
+        "initial_workers": 3,
+        "final_workers": 4,
+        "peak_workers": 4,
+        "completed_scans": 2,
+        "scan_wall_seconds": 8.0,
+        "changes": [],
+    }
     assert report is None
     assert selection_artifact is None
     assert now[0] == 100.0

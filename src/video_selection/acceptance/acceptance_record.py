@@ -7,10 +7,16 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from ..models.report_value import string_looks_private
+from .acceptance_resource_budget import (
+    OLLAMA_GPU_MIB,
+    PEAK_ADDITIONAL_BYTES,
+    PERSISTENT_CACHE_BYTES,
+    STT_GPU_MIB,
+)
 from .atomic_json import write_atomic_json
 
-_RECORD_SCHEMA = "game-screen-pick/target-acceptance@1.0.0"
-_BASELINE_SCHEMA = "game-screen-pick/target-acceptance-baseline@1.0.0"
+_RECORD_SCHEMA = "game-screen-pick/target-acceptance@1.1.0"
+_BASELINE_SCHEMA = "game-screen-pick/target-acceptance-baseline@1.1.0"
 _DENIED_KEY_PARTS = (
     "absolute_path",
     "credential",
@@ -36,10 +42,6 @@ _BUDGETS: dict[str, dict[str, int]] = {
         "warm_seconds": 30 * 60,
     },
 }
-_PERSISTENT_CACHE_BYTES = 64 * 1024**3
-_PEAK_ADDITIONAL_BYTES = 96 * 1024**3
-_OLLAMA_GPU_MIB = 18 * 1024
-_STT_GPU_MIB = 8 * 1024
 
 
 def build_acceptance_record(
@@ -55,6 +57,7 @@ def build_acceptance_record(
     cold: Mapping[str, object],
     warm: Mapping[str, object],
     human_quality: Mapping[str, object],
+    video_scan_parallelism_comparison: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """phase metricsとquality aggregateからversioned acceptance recordを作る。"""
     if suite not in _BUDGETS:
@@ -62,10 +65,10 @@ def build_acceptance_record(
     budgets = {
         **_BUDGETS[suite],
         "warm_unexpected_recompute": 0,
-        "persistent_cache_bytes": _PERSISTENT_CACHE_BYTES,
-        "peak_additional_bytes": _PEAK_ADDITIONAL_BYTES,
-        "ollama_global_gpu_peak_mib": _OLLAMA_GPU_MIB,
-        "stt_non_ollama_gpu_peak_mib": _STT_GPU_MIB,
+        "persistent_cache_bytes": PERSISTENT_CACHE_BYTES,
+        "peak_additional_bytes": PEAK_ADDITIONAL_BYTES,
+        "ollama_global_gpu_peak_mib": OLLAMA_GPU_MIB,
+        "stt_non_ollama_gpu_peak_mib": STT_GPU_MIB,
     }
     consistency = cold.get("normalized_result_digest") == warm.get(
         "normalized_result_digest"
@@ -85,22 +88,22 @@ def build_acceptance_record(
             _integer(cold, "persistent_cache_bytes"),
             _integer(warm, "persistent_cache_bytes"),
         )
-        <= _PERSISTENT_CACHE_BYTES,
+        <= PERSISTENT_CACHE_BYTES,
         "peak_additional_storage": max(
             _integer(cold, "peak_additional_bytes"),
             _integer(warm, "peak_additional_bytes"),
         )
-        <= _PEAK_ADDITIONAL_BYTES,
+        <= PEAK_ADDITIONAL_BYTES,
         "ollama_global_gpu_peak": max(
             _integer(cold, "ollama_global_gpu_peak_mib"),
             _integer(warm, "ollama_global_gpu_peak_mib"),
         )
-        <= _OLLAMA_GPU_MIB,
+        <= OLLAMA_GPU_MIB,
         "stt_non_ollama_gpu_peak": max(
             _integer(cold, "stt_non_ollama_gpu_peak_mib"),
             _integer(warm, "stt_non_ollama_gpu_peak_mib"),
         )
-        <= _STT_GPU_MIB,
+        <= STT_GPU_MIB,
         "ollama_model_fully_resident": (
             _boolean(cold, "ollama_model_observed")
             and _boolean(cold, "ollama_model_fully_resident")
@@ -110,6 +113,24 @@ def build_acceptance_record(
             )
         ),
     }
+    if suite == "full":
+        if video_scan_parallelism_comparison is None:
+            raise ValueError("Full acceptanceにVideo Scan parallelism比較がありません")
+        comparison_gates = video_scan_parallelism_comparison.get("gates")
+        if not isinstance(comparison_gates, Mapping):
+            raise ValueError("Video Scan parallelism comparison gateが不正です")
+        automatic_gates.update(
+            {
+                f"video_scan_{name}": _comparison_gate(comparison_gates, name)
+                for name in (
+                    "fixed_three_workers",
+                    "auto_exceeded_three_workers",
+                    "stage_artifacts_equal",
+                    "resource_budget",
+                    "wall_time_improved",
+                )
+            }
+        )
     human_status = human_quality.get("status")
     automatic_passed = all(automatic_gates.values())
     status = (
@@ -119,7 +140,7 @@ def build_acceptance_record(
         if human_status == "passed"
         else "pending_human_review"
     )
-    return {
+    record: dict[str, object] = {
         "schema": _RECORD_SCHEMA,
         "status": status,
         "suite": suite,
@@ -145,6 +166,11 @@ def build_acceptance_record(
             "model_io": "omitted",
         },
     }
+    if video_scan_parallelism_comparison is not None:
+        record["video_scan_parallelism_comparison"] = dict(
+            video_scan_parallelism_comparison
+        )
+    return record
 
 
 def validate_acceptance_record_privacy(
@@ -175,6 +201,9 @@ def write_normalized_baseline(
         "phases": record.get("phases"),
         "budgets": record.get("budgets"),
         "automatic_gates": record.get("automatic_gates"),
+        "video_scan_parallelism_comparison": record.get(
+            "video_scan_parallelism_comparison"
+        ),
         "human_quality": record.get("human_quality"),
     }
     json_path = directory / "baseline.json"
@@ -257,4 +286,11 @@ def _string(value: Mapping[str, object], key: str) -> str:
     result = value.get(key)
     if not isinstance(result, str) or not result:
         raise ValueError(f"Acceptance phase metric {key}がstringではありません")
+    return result
+
+
+def _comparison_gate(value: Mapping[str, object], key: str) -> bool:
+    result = value.get(key)
+    if not isinstance(result, bool):
+        raise ValueError(f"Video Scan parallelism comparison gate {key}が不正です")
     return result

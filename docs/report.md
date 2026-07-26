@@ -32,6 +32,11 @@ Stage manifestの上流fingerprint、現在runで観測したcache hit/miss・�
 commit SHAを保持します。coldとwarmのreportは同じartifact identityでも、各runで実際に
 再計算または再利用された結果を別々に示します。`report.md`は短縮fingerprintと主要診断だけを
 表示します。
+`provenance.runtime.video_scan_parallelism`にはVideo Scanの設定mode、初期・最終・peak
+worker数、scan wall秒、完了境界で変更されたrun開始からの経過秒、変更理由、privacy-safeな
+latest/rolling CPU・memory・GPU・Decoder・VRAM・disk metric、disk throughput比と
+1 streamあたりの処理速度比を記録します。このrun固有の性能診断はStage Fingerprint、
+cache identity、cold/warmの正規化済み選定結果digestには含めません。
 Vision Stageの試行回数は推論診断のlogical attemptを正本とし、同じScene Catalogを後続batchで
 cache reuseした回数はcache hitへだけ計上します。
 

@@ -56,6 +56,8 @@ def test_adapter_passes_effective_configuration_to_application_boundary(
         config_path=config_path,
         image_count=60,
         recursive=False,
+        video_scan_workers=5,
+        video_scan_auto_max_workers=7,
         reset_cache=True,
         debug=True,
         environ={"OLLAMA_HOST": "http://env.example:11434"},
@@ -68,11 +70,14 @@ def test_adapter_passes_effective_configuration_to_application_boundary(
     assert configuration.image_count == 60
     assert configuration.recursive is False
     assert configuration.ollama_host == "http://toml.example:11434"
+    assert configuration.video_scan_workers == 5
+    assert configuration.video_scan_auto_max_workers == 7
     assert configuration.reset_cache is True
     assert configuration.debug is True
     assert configuration.source_for("selection.image_count") is ConfigurationSource.CLI
     assert configuration.source_for("input.recursive") is ConfigurationSource.CLI
     assert configuration.source_for("ollama.host") is ConfigurationSource.TOML
+    assert configuration.source_for("video_scan.workers") is ConfigurationSource.CLI
     assert configuration.source_for("reset_cache") is ConfigurationSource.CLI
     assert configuration.source_for("debug") is ConfigurationSource.CLI
 

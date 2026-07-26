@@ -5,12 +5,18 @@ import shutil
 import time
 from _thread import LockType
 from collections.abc import Callable
-from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, TimeoutError
+from concurrent.futures import (
+    CancelledError,
+    Future,
+    ThreadPoolExecutor,
+    TimeoutError,
+)
 from contextlib import suppress
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 from threading import Event, Lock
+from typing import cast
 
 from ..models.candidate_moment import CandidateMoment
 from ..models.effective_configuration import EffectiveConfiguration
@@ -21,7 +27,9 @@ from ..models.frame_candidate_extraction_metrics import (
 from ..models.media_probe import MediaProbe
 from ..models.media_runtime_identity import MediaRuntimeIdentity
 from ..models.media_stream import MediaStream
+from ..models.prepared_video_scan import PreparedVideoScan
 from ..models.processing_stage import VIDEO_STAGE_ORDER, ProcessingStage
+from ..models.video_scan_resource_sample import VideoScanResourceSample
 from ..models.video_scan_result import VideoScanResult
 from ..models.video_set import VideoSet
 from ..models.video_source import VideoSource
@@ -29,6 +37,8 @@ from ..models.video_stage_result import VideoStageResult
 from ..protocols.run_observer import RunObserver
 from ..protocols.speech_runtime import SpeechRuntime
 from ..protocols.video_stage_media_runtime import VideoStageMediaRuntime
+from .adaptive_video_scan_controller import AdaptiveVideoScanController
+from .adaptive_video_scan_scheduler import AdaptiveVideoScanScheduler
 from .analyze_neutral_images import (
     BLUR_REJECT_VARIANCE_MIN,
     NEUTRAL_ANALYSIS_ALGORITHM_VERSION,
@@ -45,11 +55,13 @@ from .refine_candidate_moments import (
     iter_refined_candidate_groups,
 )
 from .run_progress_tracker import RunProgressTracker
+from .sample_video_scan_resources_safely import sample_video_scan_resources_safely
 from .select_primary_video_stream import select_primary_video_stream
 from .validate_video_set_snapshot import (
     validate_video_set_snapshot_metadata,
     validate_video_source_snapshot,
 )
+from .video_scan_resource_sampler import VideoScanResourceSampler
 from .video_stage_artifacts import (
     restore_frame_candidate_extraction,
     restore_video_scan,
@@ -66,11 +78,8 @@ _CONTENT_REJECT_VERSION = "content-reject-v2"
 _DEDUPE_VERSION = "grayscale-64x36-mad-2-v1"
 _ENTITY_ID_VERSION = "video-entity-id-v1"
 _CANDIDATE_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
-_MAX_VIDEO_SCAN_WORKERS = 3
-_LOGICAL_CPUS_PER_VIDEO_SCAN_WORKER = 8
 _SCAN_PROGRESS_HEARTBEAT_SECONDS = 30.0
 
-PreparedVideoScan = tuple[bool, float]
 ProbedVideoSource = tuple[VideoSource, MediaProbe, MediaStream]
 
 
@@ -84,6 +93,7 @@ class VideoStageProcessor:
         observer: RunObserver,
         *,
         progress: RunProgressTracker | None = None,
+        resource_sampler: Callable[[], VideoScanResourceSample | None] | None = None,
     ) -> None:
         self._media_runtime = media_runtime
         self._context_processor = ContextStageProcessor(
@@ -94,6 +104,19 @@ class VideoStageProcessor:
         )
         self._observer = observer
         self._progress = progress
+        if resource_sampler is None:
+            system_sampler = VideoScanResourceSampler()
+            self._resource_sampler = system_sampler.sample
+        else:
+            self._resource_sampler = resource_sampler
+        self._parallelism_controller: AdaptiveVideoScanController | None = None
+
+    @property
+    def parallelism_diagnostics(self) -> dict[str, object]:
+        """cache identityと分離されたVideo Scan worker診断を返す。"""
+        if self._parallelism_controller is None:
+            return {}
+        return self._parallelism_controller.diagnostics
 
     def process(
         self,
@@ -105,74 +128,93 @@ class VideoStageProcessor:
         """scanを先行確定し各Video SourceをVideo Order順に組み立てる。"""
         validate_video_set_snapshot_metadata(video_set)
         resolved_runtime_identity = runtime_identity or self._media_runtime.preflight()
+        automatic_workers = configuration.video_scan_workers == "auto"
+        if automatic_workers:
+            # 初回procfs counterをprobe前に確定し、後続sampleが直前のhash負荷ではなく
+            # probe以降の差分CPU・disk値を観測できるようにする。
+            self._safe_resource_sample()
         probed_sources: list[ProbedVideoSource] = []
         for source in video_set.sources:
             validate_video_set_snapshot_metadata(video_set)
             probe = self._media_runtime.probe(source.path)
             probed_sources.append((source, probe, select_primary_video_stream(probe)))
-        worker_count = _video_scan_worker_count(len(probed_sources))
+        controller = AdaptiveVideoScanController(
+            video_count=len(probed_sources),
+            configured_workers=configuration.video_scan_workers,
+            auto_max_workers=configuration.video_scan_auto_max_workers,
+            decode_backend=configuration.decode_backend,
+            logical_cpu_count=os.cpu_count() or 1,
+            initial_resource_sample=(
+                self._safe_resource_sample() if automatic_workers else None
+            ),
+        )
+        self._parallelism_controller = controller
         results: list[VideoStageResult] = []
-        prepared_scans: list[Future[PreparedVideoScan]] = []
         scan_cancellation = Event()
         scan_cancellation_lock = Lock()
         primary_scan_failure: list[BaseException] = []
-        with ThreadPoolExecutor(
-            max_workers=worker_count,
-            thread_name_prefix="video-scan",
-        ) as executor:
-            try:
-                for source, _probe, primary_stream in probed_sources:
-                    prepared_scans.append(
-                        executor.submit(
-                            self._prepare_scan,
-                            scan_cancellation,
-                            scan_cancellation_lock,
-                            primary_scan_failure,
-                            video_set,
-                            source,
-                            primary_stream,
-                            configuration,
-                            resolved_runtime_identity,
-                        )
-                    )
-                for video_order, (probed, prepared_scan) in enumerate(
-                    zip(probed_sources, prepared_scans, strict=True),
-                    start=1,
-                ):
-                    source, probe, primary_stream = probed
-                    progress_started = self._start_scan_wait_progress(
-                        prepared_scan,
-                        source,
-                        video_order,
-                        len(probed_sources),
-                    )
-                    results.append(
-                        self._process_source(
-                            video_set,
-                            source,
-                            probe,
-                            primary_stream,
-                            self._await_prepared_scan(
-                                prepared_scan,
-                                emit_heartbeat=progress_started,
-                            ),
-                            video_order,
-                            configuration,
-                            resolved_runtime_identity,
-                            scan_progress_started=progress_started,
-                        )
-                    )
-            except (Exception, KeyboardInterrupt) as error:
-                for prepared_scan in prepared_scans:
-                    prepared_scan.cancel()
-                self._request_scan_cancellation(
-                    scan_cancellation,
-                    scan_cancellation_lock,
-                    primary_scan_failure,
+        try:
+            with ThreadPoolExecutor(
+                max_workers=controller.executor_capacity,
+                thread_name_prefix="video-scan",
+            ) as executor:
+                scheduler = AdaptiveVideoScanScheduler(
+                    executor,
+                    controller,
+                    lambda index: self._prepare_scan(
+                        scan_cancellation,
+                        scan_cancellation_lock,
+                        primary_scan_failure,
+                        video_set,
+                        probed_sources[index][0],
+                        probed_sources[index][2],
+                        configuration,
+                        resolved_runtime_identity,
+                    ),
+                    self._resource_sampler,
                 )
-                if primary_scan_failure and error is not primary_scan_failure[0]:
-                    raise primary_scan_failure[0] from error
-                raise
+                prepared_scans = scheduler.start(len(probed_sources))
+                try:
+                    for video_order, (probed, prepared_scan) in enumerate(
+                        zip(probed_sources, prepared_scans, strict=True),
+                        start=1,
+                    ):
+                        source, probe, primary_stream = probed
+                        progress_started = self._start_scan_wait_progress(
+                            prepared_scan,
+                            source,
+                            video_order,
+                            len(probed_sources),
+                        )
+                        results.append(
+                            self._process_source(
+                                video_set,
+                                source,
+                                probe,
+                                primary_stream,
+                                self._await_prepared_scan(
+                                    prepared_scan,
+                                    emit_heartbeat=progress_started,
+                                ),
+                                video_order,
+                                configuration,
+                                resolved_runtime_identity,
+                                scan_progress_started=progress_started,
+                            )
+                        )
+                except (Exception, KeyboardInterrupt) as error:
+                    self._request_scan_cancellation(
+                        scan_cancellation,
+                        scan_cancellation_lock,
+                        primary_scan_failure,
+                    )
+                    scheduler.cancel_pending()
+                    if primary_scan_failure and error is not primary_scan_failure[0]:
+                        raise primary_scan_failure[0] from error
+                    raise
+        except BaseException:
+            controller.finish_incomplete_attempt()
+            raise
         validate_video_set_snapshot_metadata(video_set)
         return tuple(results)
 
@@ -213,8 +255,8 @@ class VideoStageProcessor:
         scan_bundle = runner.adopt_prepared_bundle(
             ProcessingStage.SCAN_VIDEO,
             scan_input,
-            reused=prepared_scan[0],
-            duration_seconds=prepared_scan[1],
+            reused=prepared_scan.reused,
+            duration_seconds=prepared_scan.duration_seconds,
             progress_started_externally=scan_progress_started,
         )
         scan = restore_video_scan(scan_bundle.artifact, scan_bundle.root)
@@ -337,7 +379,18 @@ class VideoStageProcessor:
                 msg = "先行確定したVideo Scan artifactを検証できませんでした"
                 raise RuntimeError(msg)
             duration_seconds = max(time.monotonic() - started_at, 1e-9)
-            return (reused, duration_seconds)
+            return PreparedVideoScan(
+                reused=reused,
+                duration_seconds=duration_seconds,
+                input_seconds_per_wall_second=(
+                    None
+                    if reused
+                    else _metric_number(
+                        bundle.artifact,
+                        "input_seconds_per_wall_second",
+                    )
+                ),
+            )
         except (Exception, KeyboardInterrupt) as error:
             self._request_scan_cancellation(
                 scan_cancellation,
@@ -444,6 +497,10 @@ class VideoStageProcessor:
         if first_request:
             with suppress(Exception):
                 self._media_runtime.cancel_video_scans()
+
+    def _safe_resource_sample(self) -> VideoScanResourceSample | None:
+        """resource取得失敗を安全側のsample欠落へ変換する。"""
+        return sample_video_scan_resources_safely(self._resource_sampler)
 
     def _produce_extraction_artifact(
         self,
@@ -612,16 +669,17 @@ def _fraction_value(value: Fraction | None) -> dict[str, int] | None:
     return {"numerator": value.numerator, "denominator": value.denominator}
 
 
-def _video_scan_worker_count(video_count: int) -> int:
-    """CPU scanを過剰subscribeしないbounded worker数を返す。"""
-    logical_cpus = os.cpu_count() or 1
-    cpu_workers = max(1, logical_cpus // _LOGICAL_CPUS_PER_VIDEO_SCAN_WORKER)
-    return min(video_count, _MAX_VIDEO_SCAN_WORKERS, cpu_workers)
-
-
 def _artifact_metrics(artifact: dict[str, object]) -> dict[str, object]:
     metrics = artifact.get("metrics")
     if not isinstance(metrics, dict):
         msg = "Video Stage artifactにmetric objectがありません"
         raise ValueError(msg)
     return metrics
+
+
+def _metric_number(artifact: dict[str, object], key: str) -> float:
+    value = _artifact_metrics(artifact).get(key)
+    if type(value) not in {int, float}:
+        msg = f"Video Stage artifactの{key} metricが不正です"
+        raise ValueError(msg)
+    return float(cast(int | float, value))

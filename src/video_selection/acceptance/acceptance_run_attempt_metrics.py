@@ -1,4 +1,4 @@
-"""中断をまたぐAcceptance Phase Attemptの計測検証と集計。"""
+"""中断をまたぐAcceptance Run Attemptの計測検証と集計。"""
 
 from collections.abc import Mapping
 from typing import cast
@@ -46,11 +46,11 @@ def build_incomplete_interrupt_attempt(
         **dict.fromkeys(_MAXIMUM_INTEGER_METRICS, 0),
         **dict.fromkeys(_BASELINE_INTEGER_METRICS, 0),
     }
-    validate_phase_measurements(record)
+    validate_run_measurements(record)
     return record
 
 
-def validate_phase_measurements(record: Mapping[str, object]) -> None:
+def validate_run_measurements(record: Mapping[str, object]) -> None:
     """一試行を安全に累積できる完全な計測recordとして検証する。"""
     _measurement_number(record, "duration_seconds")
     for key in (
@@ -67,17 +67,17 @@ def validate_phase_measurements(record: Mapping[str, object]) -> None:
         "ollama_model_fully_resident",
     ):
         if not isinstance(record.get(key), bool):
-            raise ValueError(f"Acceptance phase metric {key}が不正です")
+            raise ValueError(f"Acceptance run metric {key}が不正です")
 
 
-def aggregate_phase_attempts(
+def aggregate_run_attempts(
     records: tuple[Mapping[str, object], ...],
 ) -> dict[str, object]:
     """全試行の作業量と保守的resource値を成功recordへ集約する。"""
     if not records:
-        raise ValueError("Acceptance phase attemptがありません")
+        raise ValueError("Acceptance run attemptがありません")
     for record in records:
-        validate_phase_measurements(record)
+        validate_run_measurements(record)
     aggregate = dict(records[-1])
     aggregate["attempt_count"] = len(records)
     aggregate["duration_seconds"] = sum(
@@ -109,9 +109,102 @@ def aggregate_phase_attempts(
     aggregate["ollama_model_fully_resident"] = bool(observed_records) and all(
         record["ollama_model_fully_resident"] is True for record in observed_records
     )
+    parallelism = _aggregate_video_scan_parallelism(records)
+    if parallelism is not None:
+        aggregate["video_scan_parallelism"] = parallelism
     aggregate.pop("failure_reason", None)
     aggregate.pop("failure_exit_code", None)
     return aggregate
+
+
+def _aggregate_video_scan_parallelism(
+    records: tuple[Mapping[str, object], ...],
+) -> dict[str, object] | None:
+    diagnostics = tuple(
+        value
+        for record in records
+        if isinstance(
+            value := record.get("video_scan_parallelism"),
+            dict,
+        )
+    )
+    if not diagnostics:
+        return None
+    if len(records) == 1:
+        return dict(diagnostics[0])
+    result = dict(diagnostics[-1])
+    for key in (
+        "mode",
+        "configured_workers",
+        "decode_backend",
+        "auto_max_workers",
+    ):
+        values = {str(item.get(key)) for item in diagnostics}
+        if len(values) != 1:
+            raise ValueError("Acceptance run Video Scan設定がattempt間で不一致です")
+    result["initial_workers"] = _parallelism_integer(
+        diagnostics[0],
+        "initial_workers",
+    )
+    result["final_workers"] = _parallelism_integer(
+        diagnostics[-1],
+        "final_workers",
+    )
+    result["peak_workers"] = max(
+        _parallelism_integer(item, "peak_workers") for item in diagnostics
+    )
+    result["completed_scans"] = sum(
+        _parallelism_nonnegative_integer(item, "completed_scans")
+        for item in diagnostics
+    )
+    result["scan_wall_seconds"] = round(
+        sum(_parallelism_number(item, "scan_wall_seconds") for item in diagnostics),
+        3,
+    )
+    result["attempt_count"] = len(records)
+    result["measurement_complete"] = len(diagnostics) == len(records)
+    changes: list[dict[str, object]] = []
+    elapsed_offset = 0.0
+    for attempt_index, item in enumerate(diagnostics, start=1):
+        values = item.get("changes", [])
+        if not isinstance(values, list) or any(
+            not isinstance(value, dict) for value in values
+        ):
+            raise ValueError("Acceptance run Video Scan changesが不正です")
+        for value in values:
+            change = dict(value)
+            elapsed = change.get("elapsed_seconds")
+            if isinstance(elapsed, int | float) and not isinstance(elapsed, bool):
+                change["elapsed_seconds"] = round(elapsed_offset + float(elapsed), 3)
+            change["attempt"] = attempt_index
+            changes.append(change)
+        elapsed_offset += _parallelism_number(item, "scan_wall_seconds")
+    result["changes"] = changes
+    return result
+
+
+def _parallelism_integer(value: Mapping[str, object], key: str) -> int:
+    result = value.get(key)
+    if not isinstance(result, int) or isinstance(result, bool) or result < 1:
+        raise ValueError(f"Acceptance run Video Scan {key}が不正です")
+    return result
+
+
+def _parallelism_nonnegative_integer(
+    value: Mapping[str, object],
+    key: str,
+) -> int:
+    result = value.get(key)
+    if not isinstance(result, int) or isinstance(result, bool) or result < 0:
+        raise ValueError(f"Acceptance run Video Scan {key}が不正です")
+    return result
+
+
+def _parallelism_number(value: Mapping[str, object], key: str) -> float:
+    result = value.get(key)
+    if not isinstance(result, int | float) or isinstance(result, bool) or result < 0:
+        raise ValueError(f"Acceptance run Video Scan {key}が不正です")
+    return float(result)
 
 
 def _sum_numeric_mappings(
@@ -139,14 +232,14 @@ def _sum_integer_mappings(
 def _measurement_number(record: Mapping[str, object], key: str) -> float:
     value = record.get(key)
     if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"Acceptance phase metric {key}が不正です")
+        raise ValueError(f"Acceptance run metric {key}が不正です")
     return float(value)
 
 
 def _measurement_integer(record: Mapping[str, object], key: str) -> int:
     value = record.get(key)
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"Acceptance phase metric {key}が不正です")
+        raise ValueError(f"Acceptance run metric {key}が不正です")
     return value
 
 
@@ -162,7 +255,7 @@ def _measurement_numeric_mapping(
         and item >= 0
         for name, item in value.items()
     ):
-        raise ValueError(f"Acceptance phase metric {key}が不正です")
+        raise ValueError(f"Acceptance run metric {key}が不正です")
     return {name: float(item) for name, item in value.items()}
 
 
@@ -178,5 +271,5 @@ def _measurement_integer_mapping(
         and item >= 0
         for name, item in value.items()
     ):
-        raise ValueError(f"Acceptance phase metric {key}が不正です")
+        raise ValueError(f"Acceptance run metric {key}が不正です")
     return cast(dict[str, int], value)

@@ -97,6 +97,75 @@ def test_catalog_cache_reuse_does_not_increase_inference_attempt_count(
     assert stage.attempt_count == 1
 
 
+def test_video_scan_parallelism_diagnostics_are_recorded_outside_stage_identity(
+    tmp_path: Path,
+) -> None:
+    """動的worker診断がStage identityと分離されたruntimeへ記録されること。
+
+    Arrange:
+        - 一つのCompleted Stageとprivacy-safeなworker診断が用意される
+    Act:
+        - canonical report provenanceが構築される
+    Assert:
+        - worker診断がruntimeへ記録されsemantic inputは変更されないこと
+    """
+    # Arrange
+    fingerprint = StageFingerprint("a" * 64)
+    semantic_input = {
+        "scan_algorithm": "video-scan-v2",
+        "media_runtime_identity": {
+            "ffmpeg_version": "6.1.1",
+            "ffprobe_version": "6.1.1",
+            "build_capability_sha256": "b" * 64,
+        },
+    }
+    completed = CompletedStage(
+        stage=ProcessingStage.SCAN_VIDEO,
+        fingerprint=fingerprint,
+        semantic_input=semantic_input,
+    )
+    event = ProgressEvent(
+        kind="stage_completed",
+        severity="info",
+        stage=ProcessingStage.SCAN_VIDEO,
+        stage_fingerprint=fingerprint.value,
+        cache_miss_count=1,
+        recompute_count=1,
+        elapsed_seconds=1.0,
+    )
+    diagnostics = {
+        "mode": "auto",
+        "initial_workers": 6,
+        "final_workers": 5,
+        "changes": [
+            {
+                "from_workers": 6,
+                "to_workers": 5,
+                "reason": "cpu_pressure",
+                "metrics": {"cpu_percent": 94.0},
+            }
+        ],
+    }
+    configuration = EffectiveConfiguration(
+        video_input_folder=tmp_path / "input",
+        output_folder=tmp_path / "output",
+    )
+
+    # Act
+    provenance = build_report_provenance(
+        (completed,),
+        (event,),
+        configuration,
+        {},
+        "fake-speech-runtime-v1",
+        video_scan_parallelism=diagnostics,
+    )
+
+    # Assert
+    assert provenance.runtime["video_scan_parallelism"] == diagnostics
+    assert completed.semantic_input == semantic_input
+
+
 def _catalog_event(
     fingerprint: StageFingerprint,
     *,

@@ -27,6 +27,8 @@ def resolve_effective_configuration(
     scene_hint: str | None = None,
     spoiler_sensitivity: str | None = None,
     similarity_threshold: float | None = None,
+    video_scan_workers: str | int | None = None,
+    video_scan_auto_max_workers: int | None = None,
     ollama_host: str | None = None,
     reset_cache: bool | None = None,
     debug: bool | None = None,
@@ -45,29 +47,37 @@ def resolve_effective_configuration(
     sources = dict.fromkeys(CONFIG_KEYS, ConfigurationSource.BUILT_IN)
     public_environment = os.environ if environ is None else environ
 
-    if (
-        ollama_host is None
-        and "ollama.host" not in toml_values
-        and (environment_host := public_environment.get("OLLAMA_HOST")) is not None
-    ):
-        values["ollama.host"] = validate_configuration_value(
-            "ollama.host",
-            environment_host,
-        )
-        sources["ollama.host"] = ConfigurationSource.ENVIRONMENT
-
-    for key, value in toml_values.items():
-        values[key] = value
-        sources[key] = ConfigurationSource.TOML
-
     cli_values: dict[str, object | None] = {
         "selection.image_count": image_count,
         "input.recursive": recursive,
         "selection.scene_hint": scene_hint,
         "selection.spoiler_sensitivity": spoiler_sensitivity,
         "selection.similarity_threshold": similarity_threshold,
+        "video_scan.workers": video_scan_workers,
+        "video_scan.auto_max_workers": video_scan_auto_max_workers,
         "ollama.host": ollama_host,
     }
+    environment_keys = {
+        "ollama.host": "OLLAMA_HOST",
+        "video_scan.workers": "GAME_SCREEN_PICK_VIDEO_SCAN_WORKERS",
+        "video_scan.auto_max_workers": ("GAME_SCREEN_PICK_VIDEO_SCAN_AUTO_MAX_WORKERS"),
+    }
+    for key, environment_key in environment_keys.items():
+        if cli_values[key] is not None or key in toml_values:
+            continue
+        environment_value = public_environment.get(environment_key)
+        if environment_value is None:
+            continue
+        values[key] = validate_configuration_value(
+            key,
+            _parse_environment_value(key, environment_value),
+        )
+        sources[key] = ConfigurationSource.ENVIRONMENT
+
+    for key, value in toml_values.items():
+        values[key] = value
+        sources[key] = ConfigurationSource.TOML
+
     for key, value in cli_values.items():
         if value is None:
             continue
@@ -120,6 +130,11 @@ def resolve_effective_configuration(
         max_frame_candidates=cast(
             int,
             values["frame_extraction.max_frame_candidates"],
+        ),
+        video_scan_workers=cast(str | int, values["video_scan.workers"]),
+        video_scan_auto_max_workers=cast(
+            int,
+            values["video_scan.auto_max_workers"],
         ),
         candidate_density_per_minute=cast(
             float,
@@ -189,4 +204,27 @@ def _resolve_action_flag(key: str, value: bool | None) -> bool:
             "CONFIG_INVALID_TYPE",
             f"{key}はbooleanである必要があります",
         )
+    return value
+
+
+def _parse_environment_value(key: str, value: str) -> object:
+    """公開環境変数の文字列をcanonical設定型へ変換する。"""
+    if key == "video_scan.workers":
+        if value == "auto":
+            return value
+        try:
+            return int(value)
+        except ValueError:
+            raise ConfigurationError(
+                "CONFIG_INVALID_TYPE",
+                "video_scan.workers環境変数はautoまたは整数である必要があります",
+            ) from None
+    if key == "video_scan.auto_max_workers":
+        try:
+            return int(value)
+        except ValueError:
+            raise ConfigurationError(
+                "CONFIG_INVALID_TYPE",
+                "video_scan.auto_max_workers環境変数は整数である必要があります",
+            ) from None
     return value

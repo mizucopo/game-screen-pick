@@ -18,6 +18,11 @@ decode_backend = "cpu"
 refinement_radius_seconds = 1.0
 max_frame_candidates = 3
 
+[video_scan]
+# "auto" または1以上32以下の固定worker数
+workers = "auto"
+auto_max_workers = 6
+
 [candidate_moments]
 density_per_minute = 2.0
 

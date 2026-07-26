@@ -1,11 +1,11 @@
-"""acceptance cold/warmで同じResolved Model identityを返すruntime。"""
+"""Acceptance Run間で同じResolved Model identityを返すruntime。"""
 
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.resolved_models import ResolvedModels
 
 
 class FrozenModelRuntime:
-    """事前解決済みmodel集合をphase内で再解決せず返す。"""
+    """事前解決済みmodel集合をrun内で再解決せず返す。"""
 
     def __init__(self, models: ResolvedModels) -> None:
         self._models = models
@@ -22,5 +22,5 @@ class FrozenModelRuntime:
         }
         actual = {item.role.value: item.configured_name for item in self._models.items}
         if configured != actual:
-            raise ValueError("Acceptance phaseのmodel設定がfreeze時から変化しました")
+            raise ValueError("Acceptance Runのmodel設定がfreeze時から変化しました")
         return self._models

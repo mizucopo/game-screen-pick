@@ -16,7 +16,7 @@ Effective Configurationは設定項目ごとに次の順で解決します。
 3. 環境変数
 4. 組み込み既定値
 
-公開する環境変数は`OLLAMA_HOST`だけです。したがって`[ollama].host`をTOMLへ明示すると、`OLLAMA_HOST`よりTOMLが優先されます。CLI booleanは未指定・true・falseを区別し、`--no-recursive`でTOMLの`recursive = true`を上書きできます。
+公開する環境変数は`OLLAMA_HOST`、`GAME_SCREEN_PICK_VIDEO_SCAN_WORKERS`、`GAME_SCREEN_PICK_VIDEO_SCAN_AUTO_MAX_WORKERS`です。したがって対応する値をTOMLへ明示すると環境変数よりTOMLが優先されます。CLI booleanは未指定・true・falseを区別し、`--no-recursive`でTOMLの`recursive = true`を上書きできます。
 
 未知のsection、key、型、enum、範囲外の値、未対応の`config_version`はexit 2のusage/config errorです。既知keyのtypoを無視しません。config error時は入力探索、network access、cache reset、output作成を行いません。
 
@@ -38,6 +38,8 @@ Effective Configurationは設定項目ごとに次の順で解決します。
 | `frame_extraction.decode_backend` | `cpu` / `nvdec` | `cpu` |
 | `frame_extraction.refinement_radius_seconds` | number、0以上 | `1.0` |
 | `frame_extraction.max_frame_candidates` | integer、1以上3以下 | `3` |
+| `video_scan.workers` | `auto` / integer、1以上32以下 | `auto` |
+| `video_scan.auto_max_workers` | integer、1以上32以下 | `6` |
 | `candidate_moments.density_per_minute` | number、0より大きい | `2.0` |
 | `context.language` | 空でないBCP 47相当のlanguage tag | `ja` |
 | `context.subtitle_stream_index` | integer、0以上、任意 | 自動選択 |
@@ -59,6 +61,18 @@ Effective Configurationは設定項目ごとに次の順で解決します。
 | `speech_to_text.overlap_seconds` | number、0以上かつchunk未満 | `5` |
 
 `decode_backend = "nvdec"`、STT device、compute typeはsyntaxだけでなくpreflightの実能力検査にも合格する必要があります。word timestamp、Video Time mapping、chunk overlapの所有規則、Context Cue reliability policyは設定で無効化できないdomain contractです。
+
+## Video Scanの動的並列制御
+
+`video_scan.workers = "auto"`が既定です。CPU decodeではlogical CPU 8個につき1 workerを上限とする保守的な初期値を使います。NVDECではCPU・memory・NVIDIA Decoder・GPU・VRAM・diskの初期sampleにpressureがあれば1 workerから開始し、正常時は同じ保守値から開始します。rolling metricに余力がある場合だけlogical CPU 4個につき1 workerまで増やします。既定の`auto_max_workers = 6`と24 logical CPUの組み合わせでは最大6 workerです。
+増加には直近のresource sampleに加え、disk throughputまたはlatencyの観測と
+1 stream処理速度のtrendが必要です。これらが欠ける間は保守的なworker数を維持します。
+
+並列数は一つの`scan-video`が完了した境界だけで1ずつ増減します。実行中のscanを止めたり再開したりせず、未開始taskの投入数だけを変えます。CPU、飽和logical core割合、memory、Decoder、GPU、VRAM、disk busy・read latencyは直近3 sampleの平均で判断します。disk read throughputと1 streamあたりの処理速度は直近2 sampleの平均を、その前の2 sampleの平均と比較します。単発のspikeや一時的な低負荷だけでは増減せず、継続するresource圧迫またはthroughput低下で減らし、直近windowの全sampleに余力がある場合だけ増やします。NVIDIA sampleを取得できないNVDEC環境では従来相当の保守的なCPU基準から開始し、sample欠落中は上限を増やしません。
+
+固定値を使う場合は`workers = 4`のように指定します。固定値ではresourceによる増減を行わず、動画件数だけを上限とします。将来のpublic CLIでは`--video-scan-workers auto|INTEGER`と`--video-scan-auto-max-workers INTEGER`、環境変数では`GAME_SCREEN_PICK_VIDEO_SCAN_WORKERS`と`GAME_SCREEN_PICK_VIDEO_SCAN_AUTO_MAX_WORKERS`で同じ値を上書きできます。
+
+初期・最終・peak worker数、Video Scan wall秒、変更時のrun開始からの経過秒、latest/rolling resource metric、throughput比は`report.json`の`provenance.runtime.video_scan_parallelism`へ記録します。path・device名・GPU serialは記録しません。worker数と履歴はVideo Order、選定結果、Completed Stage Fingerprint、cache identityへ含めません。
 
 ## モデルの役割
 

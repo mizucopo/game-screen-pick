@@ -1,4 +1,4 @@
-"""acceptance phase中のGPU resource sampler。"""
+"""Acceptance Run Attempt中のGPU resource sampler。"""
 
 import json
 import os

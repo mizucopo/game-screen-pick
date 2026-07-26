@@ -1,10 +1,11 @@
-"""cold/warm resume、record、human gateを所有するtarget suite runner。"""
+"""比較runとcold/warm phaseのresume、record、human gateを所有するrunner。"""
 
 import hashlib
 import json
 import shutil
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -14,21 +15,27 @@ from ..configuration.resolve_effective_configuration import (
 from ..model_runtime.model_lifecycle_runtime import ModelLifecycleRuntime
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.resolved_models import ResolvedModels
+from .acceptance_execution_step import AcceptanceExecutionStep
 from .acceptance_profile import AcceptanceProfile
 from .acceptance_record import (
     build_acceptance_record,
     validate_acceptance_record_privacy,
     write_normalized_baseline,
 )
+from .acceptance_run import (
+    AcceptanceRunAttemptExecutionResult,
+    execute_acceptance_run_attempt,
+    load_completed_run_evidence,
+    load_completed_run_report,
+    public_run_record,
+)
+from .acceptance_run_attempt_metrics import (
+    aggregate_run_attempts,
+    build_incomplete_interrupt_attempt,
+    validate_run_measurements,
+)
 from .acceptance_storage_preflight import preflight_acceptance_storage
 from .atomic_json import read_json_object, write_atomic_json
-from .execute_acceptance_phase import (
-    PhaseExecutionResult,
-    execute_acceptance_phase,
-    load_completed_phase_evidence,
-    load_completed_phase_report,
-    public_phase_record,
-)
 from .full_suite_materializer import FullSuiteMaterializer
 from .human_review import (
     ensure_review_worksheet,
@@ -36,25 +43,23 @@ from .human_review import (
     review_candidate_digest,
 )
 from .load_acceptance_profile import load_acceptance_profile
-from .phase_attempt_metrics import (
-    aggregate_phase_attempts,
-    build_incomplete_interrupt_attempt,
-    validate_phase_measurements,
-)
 from .release_suite_materializer import ReleaseSuiteMaterializer
 from .target_environment import (
     probe_source_revision,
     probe_target_environment,
     probe_windows_native_ollama,
 )
+from .video_scan_parallelism_comparison import (
+    build_video_scan_parallelism_comparison,
+)
 
 EnvironmentProbe = Callable[[], dict[str, object]]
 RevisionProbe = Callable[[Path], tuple[str, bool]]
 OllamaDeploymentProbe = Callable[[str], dict[str, object]]
 ModelResolver = Callable[[EffectiveConfiguration], ResolvedModels]
-PhaseExecutor = Callable[
-    [str, EffectiveConfiguration, ResolvedModels, Path],
-    PhaseExecutionResult,
+RunAttemptExecutor = Callable[
+    [EffectiveConfiguration, ResolvedModels, Path],
+    AcceptanceRunAttemptExecutionResult,
 ]
 SuiteMaterializer = Callable[
     [AcceptanceProfile, Path],
@@ -62,11 +67,11 @@ SuiteMaterializer = Callable[
 ]
 StoragePreflight = Callable[[AcceptanceProfile, Path], dict[str, object]]
 
-_STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.0.0"
+_STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.2.0"
 
 
 class TargetSuiteRunner:
-    """一回のsuiteでcold→exact warm→human gateをdurableに進める。"""
+    """比較run後にcold→exact warm→human gateをdurableに進める。"""
 
     def __init__(
         self,
@@ -75,7 +80,7 @@ class TargetSuiteRunner:
         revision_probe: RevisionProbe = probe_source_revision,
         ollama_deployment_probe: OllamaDeploymentProbe = probe_windows_native_ollama,
         model_resolver: ModelResolver | None = None,
-        phase_executor: PhaseExecutor | None = None,
+        run_attempt_executor: RunAttemptExecutor | None = None,
         release_materializer: SuiteMaterializer | None = None,
         full_materializer: SuiteMaterializer | None = None,
         storage_preflight: StoragePreflight = preflight_acceptance_storage,
@@ -84,7 +89,7 @@ class TargetSuiteRunner:
         self._revision_probe = revision_probe
         self._ollama_deployment_probe = ollama_deployment_probe
         self._model_resolver = model_resolver or ModelLifecycleRuntime().resolve_models
-        self._phase_executor = phase_executor or _execute_phase
+        self._run_attempt_executor = run_attempt_executor or _execute_run_attempt
         self._release_materializer = (
             release_materializer or ReleaseSuiteMaterializer().materialize
         )
@@ -101,7 +106,7 @@ class TargetSuiteRunner:
         reset_suite: bool = False,
         human_review_path: Path | None = None,
     ) -> int:
-        """suiteを未完了phaseから進めacceptance exit codeを返す。"""
+        """suiteを未完了runから進めacceptance exit codeを返す。"""
         if suite not in {"release", "full"}:
             raise ValueError("--suiteにはreleaseまたはfullが必要です")
         profile = load_acceptance_profile(profile_path)
@@ -115,8 +120,11 @@ class TargetSuiteRunner:
         commit, dirty = self._revision_probe(Path.cwd())
         if dirty:
             raise ValueError("Target acceptanceはclean Git revisionで実行してください")
-        if state is not None and state.get("active_phase") is not None:
-            raise ValueError("前回phaseの計測が未確定です。--reset-suiteが必要です")
+        if state is not None and (
+            state.get("active_phase") is not None
+            or state.get("active_comparison_run") is not None
+        ):
+            raise ValueError("前回runの計測が未確定です。--reset-suiteが必要です")
 
         target = self._environment_probe()
         input_folder, suite_descriptor = self._materialize(
@@ -138,6 +146,12 @@ class TargetSuiteRunner:
             profile,
             input_folder,
             suite_root / "outputs" / "warm",
+        )
+        execution_steps = _execution_steps(
+            suite,
+            suite_root,
+            cold_configuration,
+            warm_configuration,
         )
         if state is not None and state.get(
             "ollama_endpoint_identity"
@@ -181,6 +195,8 @@ class TargetSuiteRunner:
                 "storage_preflight": storage_preflight,
                 "phases": {},
             }
+            if suite == "full":
+                state["comparison_runs"] = {}
             write_atomic_json(state_path, state)
         else:
             _validate_state_identity(state, identity)
@@ -189,17 +205,17 @@ class TargetSuiteRunner:
                     "Acceptance stateが現在のtarget identityと一致しません"
                 )
 
-        if _phases_completed(state) and state.get("worksheet_ready") is True:
-            completed_phases = _mapping(state.get("phases"), "phases")
-            for phase, configuration in (
-                ("cold", cold_configuration),
-                ("warm", warm_configuration),
-            ):
-                load_completed_phase_report(
-                    configuration=configuration,
-                    phase_record=_mapping(
-                        completed_phases.get(phase),
-                        f"{phase} phase",
+        if _runs_completed(state) and state.get("worksheet_ready") is True:
+            for step in execution_steps:
+                completed_runs = _mapping(
+                    state.get(step.records_state_key),
+                    step.records_state_key,
+                )
+                load_completed_run_report(
+                    configuration=step.configuration,
+                    run_record=_mapping(
+                        completed_runs.get(step.name),
+                        f"{step.name} run",
                     ),
                 )
             return self._finalize(
@@ -209,73 +225,91 @@ class TargetSuiteRunner:
                 human_review_path=human_review_path,
             )
 
-        phases = _mapping(state.get("phases"), "phases")
         cold_report: dict[str, object] | None = None
         cold_selection: dict[str, object] | None = None
-        for phase, configuration in (
-            ("cold", cold_configuration),
-            ("warm", warm_configuration),
-        ):
-            existing = phases.get(phase)
+        for step in execution_steps:
+            runs = _mapping(
+                state.get(step.records_state_key),
+                step.records_state_key,
+            )
+            if step.is_cold_phase and suite == "full":
+                _release_fixed_three_cache(
+                    state,
+                    cold_configuration.processing_cache_folder,
+                    state_path,
+                )
+            existing = runs.get(step.name)
             if (
                 isinstance(existing, dict)
                 and existing.get("operation_status") == "completed"
             ):
                 continue
-            shutil.rmtree(configuration.output_folder, ignore_errors=True)
-            state["active_phase"] = phase
+            shutil.rmtree(step.configuration.output_folder, ignore_errors=True)
+            state[step.active_state_key] = step.name
             write_atomic_json(state_path, state)
-            phase_started_at = time.monotonic()
+            attempt_started_at = time.monotonic()
             try:
-                exit_code, record, report, selection = self._phase_executor(
-                    phase,
-                    configuration,
+                (
+                    exit_code,
+                    attempt_record,
+                    report,
+                    selection,
+                ) = self._run_attempt_executor(
+                    step.configuration,
                     resolved_models,
                     suite_root,
                 )
             except KeyboardInterrupt:
                 exit_code = 130
-                record = build_incomplete_interrupt_attempt(
-                    time.monotonic() - phase_started_at
+                attempt_record = build_incomplete_interrupt_attempt(
+                    time.monotonic() - attempt_started_at
                 )
                 report = None
                 selection = None
             except Exception:
                 state["last_failure"] = {
-                    "phase": phase,
+                    **step.failure_context,
                     "exit_code": 1,
-                    "reason": "phase_measurement_incomplete",
+                    "reason": "run_measurement_incomplete",
                 }
                 write_atomic_json(state_path, state)
                 return 1
-            validate_phase_measurements(record)
-            prior_attempts = _phase_attempts(state, phase)
-            state.pop("active_phase", None)
+            validate_run_measurements(attempt_record)
+            prior_attempts = _run_attempts(state, step)
+            state.pop(step.active_state_key, None)
             if exit_code != 0:
-                _store_phase_attempts(state, phase, (*prior_attempts, record))
+                _store_run_attempts(
+                    state,
+                    step,
+                    (*prior_attempts, attempt_record),
+                )
                 state["last_failure"] = {
-                    "phase": phase,
+                    **step.failure_context,
                     "exit_code": exit_code,
-                    "reason": record.get("failure_reason", "operation_failed"),
+                    "reason": attempt_record.get(
+                        "failure_reason",
+                        "operation_failed",
+                    ),
                 }
                 write_atomic_json(state_path, state)
                 return exit_code
-            if record.get("operation_status") != "completed":
-                raise ValueError("成功phaseの計測記録がcompletedではありません")
-            phases[phase] = aggregate_phase_attempts((*prior_attempts, record))
-            state["phases"] = phases
-            _clear_phase_attempts(state, phase)
+            if attempt_record.get("operation_status") != "completed":
+                raise ValueError("成功runの計測記録がcompletedではありません")
+            runs[step.name] = aggregate_run_attempts((*prior_attempts, attempt_record))
+            state[step.records_state_key] = runs
+            _clear_run_attempts(state, step)
             state.pop("last_failure", None)
             write_atomic_json(state_path, state)
-            if phase == "cold":
+            if step.is_cold_phase:
                 cold_report = report
                 cold_selection = selection
 
+        phases = _mapping(state.get("phases"), "phases")
         if cold_report is None or cold_selection is None:
             cold_phase = _mapping(phases.get("cold"), "cold phase")
-            cold_report, cold_selection = load_completed_phase_evidence(
+            cold_report, cold_selection = load_completed_run_evidence(
                 configuration=cold_configuration,
-                phase_record=cold_phase,
+                run_record=cold_phase,
             )
         cold_video_set = _mapping(
             _mapping(phases.get("cold"), "cold phase").get("video_set"),
@@ -332,6 +366,20 @@ class TargetSuiteRunner:
         phases = _mapping(state.get("phases"), "phases")
         cold = _mapping(phases.get("cold"), "cold phase")
         warm = _mapping(phases.get("warm"), "warm phase")
+        parallelism_comparison = (
+            None
+            if suite != "full"
+            else build_video_scan_parallelism_comparison(
+                _mapping(
+                    _mapping(
+                        state.get("comparison_runs"),
+                        "comparison_runs",
+                    ).get("fixed3"),
+                    "fixed3 comparison run",
+                ),
+                cold,
+            )
+        )
         revision = _mapping(state.get("source_revision"), "source_revision")
         record = build_acceptance_record(
             suite=suite,
@@ -345,9 +393,10 @@ class TargetSuiteRunner:
                 "storage_preflight",
             ),
             video_set=_mapping(state.get("video_set"), "video_set"),
-            cold=public_phase_record(cold),
-            warm=public_phase_record(warm),
+            cold=public_run_record(cold),
+            warm=public_run_record(warm),
             human_quality=human_quality,
+            video_scan_parallelism_comparison=parallelism_comparison,
         )
         try:
             validate_acceptance_record_privacy(
@@ -429,14 +478,12 @@ def _remove_directory_strict(path: Path, label: str) -> None:
         raise ValueError(f"{label}を完全に削除できません")
 
 
-def _execute_phase(
-    phase: str,
+def _execute_run_attempt(
     configuration: EffectiveConfiguration,
     resolved_models: ResolvedModels,
     suite_root: Path,
-) -> PhaseExecutionResult:
-    return execute_acceptance_phase(
-        phase=phase,
+) -> AcceptanceRunAttemptExecutionResult:
+    return execute_acceptance_run_attempt(
         configuration=configuration,
         resolved_models=resolved_models,
         suite_root=suite_root,
@@ -453,6 +500,50 @@ def _configuration(
         output_folder=output_folder,
         config_path=profile.configuration_path,
     )
+
+
+def _execution_steps(
+    suite: str,
+    suite_root: Path,
+    cold: EffectiveConfiguration,
+    warm: EffectiveConfiguration,
+) -> tuple[AcceptanceExecutionStep, ...]:
+    if suite != "full":
+        return (
+            AcceptanceExecutionStep("phase", "cold", cold),
+            AcceptanceExecutionStep("phase", "warm", warm),
+        )
+    if cold.video_scan_workers != "auto":
+        raise ValueError("Full acceptanceのVideo Scan workersにはautoが必要です")
+    fixed_three = replace(
+        cold,
+        output_folder=suite_root / "outputs" / "fixed3",
+        video_scan_workers=3,
+    )
+    return (
+        AcceptanceExecutionStep("comparison", "fixed3", fixed_three),
+        AcceptanceExecutionStep("phase", "cold", cold),
+        AcceptanceExecutionStep("phase", "warm", warm),
+    )
+
+
+def _release_fixed_three_cache(
+    state: dict[str, object],
+    cache_folder: Path,
+    state_path: Path,
+) -> None:
+    if state.get("fixed3_cache_released") is True:
+        return
+    comparison_runs = _mapping(state.get("comparison_runs"), "comparison_runs")
+    fixed_three = _mapping(
+        comparison_runs.get("fixed3"),
+        "fixed3 comparison run",
+    )
+    if fixed_three.get("operation_status") != "completed":
+        raise ValueError("Fixed3 comparison完了前にauto cacheを開始できません")
+    _remove_directory_strict(cache_folder, "Fixed3 comparison cache")
+    state["fixed3_cache_released"] = True
+    write_atomic_json(state_path, state)
 
 
 def _configuration_summary(
@@ -475,6 +566,8 @@ def _configuration_summary(
         "scene_change_threshold": configuration.scene_change_threshold,
         "scene_min_interval_seconds": configuration.scene_min_interval_seconds,
         "decode_backend": configuration.decode_backend,
+        "video_scan_workers": configuration.video_scan_workers,
+        "video_scan_auto_max_workers": (configuration.video_scan_auto_max_workers),
         "refinement_radius_seconds": configuration.refinement_radius_seconds,
         "max_frame_candidates": configuration.max_frame_candidates,
         "candidate_density_per_minute": configuration.candidate_density_per_minute,
@@ -554,54 +647,67 @@ def _validate_state_identity(
         raise ValueError("Acceptance stateが現在のsuite identityと一致しません")
 
 
-def _phases_completed(state: Mapping[str, object]) -> bool:
+def _runs_completed(state: Mapping[str, object]) -> bool:
     phases = state.get("phases")
     if not isinstance(phases, dict):
         return False
-    return all(
+    phases_completed = all(
         isinstance(phases.get(phase), dict)
         and phases[phase].get("operation_status") == "completed"
         for phase in ("cold", "warm")
     )
+    if not phases_completed or state.get("suite") != "full":
+        return phases_completed
+    comparison_runs = state.get("comparison_runs")
+    return (
+        isinstance(comparison_runs, dict)
+        and isinstance(comparison_runs.get("fixed3"), dict)
+        and comparison_runs["fixed3"].get("operation_status") == "completed"
+    )
 
 
-def _phase_attempts(
+def _run_attempts(
     state: Mapping[str, object],
-    phase: str,
+    step: AcceptanceExecutionStep,
 ) -> tuple[dict[str, object], ...]:
-    attempts = state.get("phase_attempts")
+    attempts = state.get(step.attempts_state_key)
     if attempts is None:
         return ()
-    attempts_by_phase = _mapping(attempts, "phase attempts")
-    values = attempts_by_phase.get(phase, [])
+    attempts_by_run = _mapping(attempts, step.attempts_label)
+    values = attempts_by_run.get(step.name, [])
     if not isinstance(values, list) or any(
         not isinstance(value, dict) for value in values
     ):
-        raise ValueError("Acceptance state phase attemptsが不正です")
+        raise ValueError(f"Acceptance state {step.attempts_label}が不正です")
     return tuple(cast(dict[str, object], value) for value in values)
 
 
-def _store_phase_attempts(
+def _store_run_attempts(
     state: dict[str, object],
-    phase: str,
+    step: AcceptanceExecutionStep,
     attempts: tuple[Mapping[str, object], ...],
 ) -> None:
-    existing = state.get("phase_attempts")
-    attempts_by_phase = {} if existing is None else _mapping(existing, "phase attempts")
-    attempts_by_phase[phase] = [dict(attempt) for attempt in attempts]
-    state["phase_attempts"] = attempts_by_phase
+    existing = state.get(step.attempts_state_key)
+    attempts_by_run = (
+        {} if existing is None else _mapping(existing, step.attempts_label)
+    )
+    attempts_by_run[step.name] = [dict(attempt) for attempt in attempts]
+    state[step.attempts_state_key] = attempts_by_run
 
 
-def _clear_phase_attempts(state: dict[str, object], phase: str) -> None:
-    existing = state.get("phase_attempts")
+def _clear_run_attempts(
+    state: dict[str, object],
+    step: AcceptanceExecutionStep,
+) -> None:
+    existing = state.get(step.attempts_state_key)
     if existing is None:
         return
-    attempts_by_phase = _mapping(existing, "phase attempts")
-    attempts_by_phase.pop(phase, None)
-    if attempts_by_phase:
-        state["phase_attempts"] = attempts_by_phase
+    attempts_by_run = _mapping(existing, step.attempts_label)
+    attempts_by_run.pop(step.name, None)
+    if attempts_by_run:
+        state[step.attempts_state_key] = attempts_by_run
     else:
-        state.pop("phase_attempts", None)
+        state.pop(step.attempts_state_key, None)
 
 
 def _forbidden_values(profile: AcceptanceProfile) -> tuple[str, ...]:

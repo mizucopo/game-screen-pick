@@ -89,9 +89,16 @@ class VideoSelectionApplication:
         self._observer = observer
         self._progress = progress
         self._clock = clock or _utc_now
+        self._video_scan_parallelism_diagnostics: dict[str, object] = {}
+
+    @property
+    def video_scan_parallelism_diagnostics(self) -> dict[str, object]:
+        """失敗時にも確定済みのVideo Scan並列診断を返す。"""
+        return dict(self._video_scan_parallelism_diagnostics)
 
     def run(self, configuration: EffectiveConfiguration) -> RunOutcome:
         """実Video Selection pipelineを実行しatomic outputを公開する。"""
+        self._video_scan_parallelism_diagnostics = {}
         started_at = self._clock()
         _validate_configuration_paths(configuration)
         identity_cache = VideoIdentityCache(configuration.processing_cache_folder)
@@ -118,16 +125,23 @@ class VideoSelectionApplication:
                 self._observer.legacy_cache_cleaned(diagnostic)
                 for source in video_set.sources:
                     identity_cache.store(source)
-                video_stage_results = VideoStageProcessor(
+                video_stage_processor = VideoStageProcessor(
                     self._media_runtime,
                     speech_runtime,
                     self._observer,
                     progress=self._progress,
-                ).process(
-                    video_set,
-                    configuration,
-                    runtime_identity=media_runtime_identity,
                 )
+                try:
+                    video_stage_results = video_stage_processor.process(
+                        video_set,
+                        configuration,
+                        runtime_identity=media_runtime_identity,
+                    )
+                finally:
+                    self._video_scan_parallelism_diagnostics = (
+                        video_stage_processor.parallelism_diagnostics
+                    )
+                video_scan_parallelism = self.video_scan_parallelism_diagnostics
                 speech_runtime_identity = speech_runtime.runtime_identity
             finally:
                 speech_runtime.close()
@@ -137,6 +151,7 @@ class VideoSelectionApplication:
                 video_stage_results,
                 resolved_models,
                 speech_runtime_identity,
+                video_scan_parallelism,
                 started_at,
             )
 
@@ -147,6 +162,7 @@ class VideoSelectionApplication:
         video_stage_results: tuple[VideoStageResult, ...],
         resolved_models: ResolvedModels,
         speech_runtime_identity: str,
+        video_scan_parallelism: Mapping[str, object],
         started_at: datetime,
     ) -> RunOutcome:
         """shortlistを必要分だけ注釈し選定結果をcanonicalに公開する。"""
@@ -316,6 +332,7 @@ class VideoSelectionApplication:
             completed_stages,
             vision_diagnostics,
             speech_runtime_identity,
+            video_scan_parallelism,
             started_at,
         )
 
@@ -390,6 +407,7 @@ class VideoSelectionApplication:
         completed_stages: tuple[CompletedStage, ...],
         vision_diagnostics: Mapping[str, VisionInferenceDiagnostics],
         speech_runtime_identity: str,
+        video_scan_parallelism: Mapping[str, object],
         started_at: datetime,
     ) -> RunOutcome:
         """Canonical Publication Requestを構築してOutput Folderへ公開する。"""
@@ -426,6 +444,7 @@ class VideoSelectionApplication:
                 configuration,
                 vision_diagnostics,
                 speech_runtime_identity,
+                video_scan_parallelism=video_scan_parallelism,
             ),
         )
         CanonicalOutputPublisher(

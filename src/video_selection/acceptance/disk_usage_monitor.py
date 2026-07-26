@@ -1,4 +1,4 @@
-"""acceptance phase中のcache/temp/staging容量sampler。"""
+"""Acceptance Run Attempt中のcache/temp/staging容量sampler。"""
 
 import os
 from collections.abc import Callable

@@ -1,4 +1,4 @@
-"""一つのacceptance phaseのProgress Event収集observer。"""
+"""一つのAcceptance Run AttemptのProgress Event収集observer。"""
 
 from threading import Lock
 
@@ -9,7 +9,7 @@ from ..models.progress_event import ProgressEvent
 from ..protocols.run_observer import RunObserver
 
 
-class AcceptanceRunObserver:
+class AcceptanceRunAttemptObserver:
     """rendererへforwardしつつrecord用のsafe event/countを収集する。"""
 
     def __init__(self, downstream: RunObserver | None = None) -> None:
@@ -57,8 +57,8 @@ class AcceptanceRunObserver:
         if self._downstream is not None:
             self._downstream.legacy_cache_cleaned(diagnostic)
 
-    def phase_metrics(self) -> dict[str, object]:
-        """pathやraw内容を含まないStage/cache aggregateを返す。"""
+    def attempt_metrics(self) -> dict[str, object]:
+        """pathやraw内容を含まない一試行のStage/cache aggregateを返す。"""
         cache_events = tuple(
             event for event in self.progress_events if event.kind == "cache"
         )

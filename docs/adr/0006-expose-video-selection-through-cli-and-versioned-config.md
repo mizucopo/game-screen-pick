@@ -27,11 +27,13 @@ The two positional paths define the discovery/cache owner and the atomic publica
 | `--scene-hint TEXT` | per-run Scene Hint |
 | `--spoiler-sensitivity low\|medium\|high` | soft Spoiler Penalty profile, default `medium` |
 | `--similarity-threshold FLOAT` | initial visual-similarity ceiling, default 0.72 |
+| `--video-scan-workers auto\|INTEGER` | adaptive mode or an explicit fixed Video Scan worker count |
+| `--video-scan-auto-max-workers INTEGER` | safe adaptive upper bound, default 6 |
 | `--ollama-host URL` | explicit Ollama endpoint override |
 | `--reset-cache` | reset this Video Input Folder's processing cache after safe preflight |
 | `--debug` | include a sanitized stack trace in failures |
 
-Model, extraction, context, and parallelism settings belong to TOML. There is no host/server autodiscovery and no runtime switch between Windows and WSL Ollama.
+Model, extraction, and context settings belong to TOML. Video Scan parallelism is normally configured in TOML but also has explicit operational CLI overrides. There is no host/server autodiscovery and no runtime switch between Windows and WSL Ollama.
 
 The screenshot CLI is not a compatibility surface for this replacement. In particular, `--num`, `--similarity`, and `--ollama-scene-hint` do not remain as aliases. Issue 170 owns the implementation migration and removal boundary.
 
@@ -43,14 +45,14 @@ Configuration is resolved independently for every key in this exact order:
 explicit CLI > explicit TOML > environment > built-in default
 ```
 
-Only `OLLAMA_HOST` is a public environment variable. An explicit `[ollama].host` therefore overrides `OLLAMA_HOST`. Boolean CLI values preserve an unspecified state so that an absent flag does not accidentally override TOML; `--recursive` and `--no-recursive` provide both explicit values.
+The public environment variables are `OLLAMA_HOST`, `GAME_SCREEN_PICK_VIDEO_SCAN_WORKERS`, and `GAME_SCREEN_PICK_VIDEO_SCAN_AUTO_MAX_WORKERS`. An explicit TOML value overrides its environment counterpart. Boolean CLI values preserve an unspecified state so that an absent flag does not accidentally override TOML; `--recursive` and `--no-recursive` provide both explicit values.
 
 TOML is read only when `--config` is supplied. There is no current-directory, home-directory, or input-folder discovery. The document must contain `config_version = "1.0.0"`. Unknown sections, keys, types, enum values, ranges, or config versions are fatal usage/config errors before input discovery, network access, cache reset, or output creation.
 
 The complete v1 schema and built-in defaults are published in [`docs/configuration.md`](../configuration.md) and [`docs/examples/video-selection.toml`](../examples/video-selection.toml). The main groups are:
 
 - `[input]` and `[selection]` for recursive discovery and run intent;
-- `[frame_extraction]` and `[candidate_moments]` for local Video Stage capacity;
+- `[frame_extraction]`, `[video_scan]`, and `[candidate_moments]` for local Video Stage operation and capacity;
 - `[context]` and `[speech_to_text]` for stream choice and STT operation;
 - `[ollama]` for endpoint, timeout, and parallel requests;
 - `[models]` and its three role tables for model lifecycle and operation-specific settings.

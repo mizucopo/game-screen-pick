@@ -31,7 +31,7 @@ profile schemaはstrictで、次だけを持つ。
 
 - `input_root`: full suiteのVideo Set rootとrelease intervalの基準root
 - `configuration_path`: 通常のVideo Selection TOML
-- `artifact_root`: suite state、phase output、private worksheetを置くprivate root
+- `artifact_root`: suite state、run output、private worksheetを置くprivate root
 - `release_suite`: 合計duration、境界tolerance、relative source、start/end、scenario role
 - `full_scale_suite`: video count、合計duration、duration tolerance
 
@@ -41,7 +41,7 @@ discoveryへ生成済み匿名inputが混入する構成はprofile読込時に�
 Ollama host、model、STT device、選択枚数などをprofileへ複製しない。これらは
 `configuration_path`のTOMLを通常どおり読み、明示CLI、TOML、`OLLAMA_HOST`、組み込み
 既定値の優先順位で解決する。harnessが最優先で差し替えるのは、匿名化したsuite用
-Video Input Folderとcold/warm別Output Folderだけである。
+Video Input Folderと固定3比較run・cold/warm別Output Folderだけである。
 
 ## 実行
 
@@ -58,11 +58,17 @@ uv run task acceptance-target \
   --suite full
 ```
 
-modelの更新確認、download、capability検証とResolved Model Identityのfreezeはcold timer
-より前に行う。一回の起動でclean cacheのcold、同じVideo Set・設定・model identity・
-processing cacheを使うexact warmの順に実行する。性能予算超過は処理を途中でkillせず、
-完了後のgate failureにする。phase durationはatomic publicationまたはoperation failureで
-確定し、その後のresource monitor停止時間を含めない。
+modelの更新確認、download、capability検証とResolved Model Identityのfreezeは最初のrun
+timerより前に行う。releaseはclean cacheのcold、同じVideo Set・設定・model identity・
+processing cacheを使うexact warmの順に実行する。fullは固定3 workerのcold比較runを
+先に実行し、そのcacheを完全に削除したauto cold、auto coldのcacheを使うexact warmの
+2 Acceptance Phaseを順に実行する。固定3比較を含めた合計3 runは同じResolved Model
+Identityを使い、実artifactの性能値だけを除いたcanonical content digest、
+resource予算、autoのpeak workerが3を超えたこと、Video Scan wall timeの改善を自動gateで
+比較する。性能予算超過は処理を途中でkillせず、完了後のgate failureにする。run durationは
+atomic publicationまたはoperation failureで確定し、その後のresource monitor停止時間を
+含めない。中断再開された比較runでは各Acceptance Run AttemptのVideo Scan wall秒を合算し、再開後に
+cache hitした残作業だけを短い実行として比較しない。
 
 新規suiteではmaterialize後かつmodel実行より前に、materialize済みsuite inputの合計byteと
 artifact filesystemの空き容量を測る。persistent cache 64 GiBとtemporary/staging 96 GiBの
@@ -74,8 +80,14 @@ resource samplingを不完全として扱う。
 
 coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
-full Video Setを再hashしない。fullの独立Video Scanはlogical CPU 8個につき1 worker、
-最大3 workerで並列実行する。Video Order上の対象scanが確定した時点で、そのVideoの
+full Video Setを再hashしない。fullのauto coldに使う独立Video Scanは
+`video_scan.workers = "auto"`を要求し、NVDECとresource余力がある24 logical CPU targetでは
+保守的な3 workerから開始し、rolling判断で最大6 workerまで利用する。
+開始時点でCPU・Decoder・memory・GPU・VRAM・disk pressureを検知した場合は1 workerへ抑制する。
+CPU・Decoder・memory・VRAM・diskの直近3 sampleと、
+disk throughput・1 stream処理速度のtrendを使い、pressure時はscan完了境界で1 workerずつ
+減らし、active scanを止めず未開始taskの投入だけを抑制する。
+Video Order上の対象scanが確定した時点で、そのVideoの
 candidate extractionとcontext collectionを後続Videoのscanと重ねて開始する。background
 scan待機中もactive Stageとheartbeatを通知し、通常のscan失敗でも一次障害を保持したまま
 待機中workerをcancelする。
@@ -88,7 +100,7 @@ candidate extractionのCPU時間は所有threadと、そのStageが起動したr
 encoder subprocessだけを合算し、並列中の後続Video Scanを二重計上しない。
 Context Collection完了後はSpeech Runtime Identityを保持してSTT modelを明示closeし、
 GPU資源を解放してからOllama Vision推論を開始する。
-model capability probeは`keep_alive = 0`でOllama modelを解放してからphaseを開始する。
+model capability probeは`keep_alive = 0`でOllama modelを解放してから最初のrunを開始する。
 Context Collection中にもOllama modelが常駐している場合、STT peakはsystem使用量からその
 `size_vram`を除いた非Ollama使用量として保守的に計上する。
 
@@ -105,15 +117,15 @@ release/full双方のmaterialization manifestは、その生成・duration probe
 FFmpeg/ffprobe versionとbuild capability identityへ固定する。tool identityが変わった
 materializationは再利用せず、`--reset-suite`後に現在toolで作り直す。
 確定済みrelease inputの再利用時はmanifest記載clipと対応videoの完全一致も検証する。
-materialize時間はphase予算に含めない。
+materialize時間はrun予算に含めない。
 
 ## Durable resumeとreset
 
-phase完了はsuite別の`acceptance-state.json`へatomicに確定する。中断後に同じcommandを
+Comparison Runとphaseの完了はsuite別の`acceptance-state.json`へatomicに確定する。中断後に同じcommandを
 実行すると、同じprofile、suite、設定、source snapshot、Resolved Model Identity、target
-identity、commitを検証し、未完了phaseだけを続行する。driver、FFmpeg、kernelなどtarget
+identity、commitを検証し、未完了runだけを続行する。driver、FFmpeg、kernelなどtarget
 probeの値が変わったstateは混在させない。completed coldを再実行してwarmへ戻したり、
-completed cold/warmを再実行したりしない。
+completed Comparison Runやcold/warmを再実行したりしない。
 設定file外の`OLLAMA_HOST`を含む実効endpointも、URLを公開しないdigestとしてsuite identityへ
 固定する。
 
@@ -128,13 +140,16 @@ phase確定時のfile hashと照合し、selected画像のpath、byte数、SHA-2
 reportまたは画像が削除・置換されていればreviewを集計しない。worksheet生成とstate確定の間で
 中断した場合は、review記入欄を除くcandidate bindingが同じ既存worksheetだけを再利用する。
 
-user interruptや計測済みoperation failureの未完了phaseはCompleted Stage cacheを保持する。
-再開後のphase recordでは、それ以前の試行を含む経過時間、cache/recompute count、Stage時間、
+user interruptや計測済みoperation failureの未完了runはCompleted Stage cacheを保持する。
+fullの固定3比較が中断された場合も固定3 cacheから再開し、固定3が完了した後だけそのcacheを
+一度削除する。auto cold開始後は固定3 cache削除済みのdurable flagを保持するため、auto coldの
+中断・再開でauto cacheを再削除しない。
+再開後のrun recordでは、それ以前の試行を含む経過時間、cache/recompute count、Stage時間、
 storage/GPU aggregateを累積または保守的な最大値として集計するため、再開後の短い試行だけで
 性能を判定しない。user interruptで詳細計測を確定できなかった場合も経過時間を試行へ残し、
 resource計測を不完全とする。Completed Stage cacheから再開できるが、そのsuiteは不完全な
 性能・resource根拠では合格しない。process強制終了などでinterrupt handler自体を通らず
-active phaseが残った場合は、安全な試行境界を復元できないため`--reset-suite`を要求する。
+active runが残った場合は、安全な試行境界を復元できないため`--reset-suite`を要求する。
 
 identityを変えた場合や意図的にcoldからやり直す場合だけ、対象suiteを明示的にresetする。
 
@@ -145,7 +160,8 @@ uv run task acceptance-target \
   --reset-suite
 ```
 
-`--reset-suite`は選んだsuiteのstate、phase output、worksheet、processing cacheを破棄する。
+`--reset-suite`は選んだsuiteのstate、run output、worksheet、
+processing cacheを破棄する。
 suite rootを完全に削除できない場合はpartial resetのまま続行せず失敗する。
 releaseとfullのartifactは混在しない。
 
@@ -185,18 +201,18 @@ uv run task acceptance-target \
 
 | Exit | 意味 |
 |---:|---|
-| 0 | cold/warm、performance/resource/privacy、human qualityの全gateが合格 |
+| 0 | 必要なphase、parallelism比較、performance/resource/privacy、human qualityの全gateが合格 |
 | 1 | pipeline operationまたはperformance/resource/privacy/quality gateが不合格 |
 | 2 | CLI、profile、configuration、target preflightが不正 |
-| 3 | cold/warmと自動gateは合格したがhuman reviewが未完了 |
-| 130 | 計測済みuser interrupt。completed phaseとCompleted Stage cacheを保持し、再開時に試行計測を累積 |
+| 3 | 必要なphaseと自動gateは合格したがhuman reviewが未完了 |
+| 130 | 計測済みuser interrupt。completed runとCompleted Stage cacheを保持し、再開時に試行計測を累積 |
 
 ## Artifactとprivacy
 
-`artifact_root`配下にはsuiteごとにphase output、durable state、private worksheet、
+`artifact_root`配下にはsuiteごとにrun output、durable state、private worksheet、
 `acceptance.json`を置く。recordにはcommit、target/runtime、Resolved Model Identity、
 実Faster Whisper adapter/backendのSpeech Runtime Identity、path非依存Video Set fingerprint、
-phase/cache/storage/GPU aggregate、gate aggregateだけを含める。canonical reportの各Stageも
+run/cache/storage/GPU aggregate、固定3対autoのprivacy-safeな比較、gate aggregateだけを含める。canonical reportの各Stageも
 実semantic inputと推論診断からtool/model/contract参照、設定、validation、token数を記録する。
 performance比較用configurationには設定file digest、URLを含まないendpoint identity、
 privacy-safeな全実効performance設定を保存する。
