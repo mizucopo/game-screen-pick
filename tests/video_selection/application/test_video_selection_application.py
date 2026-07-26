@@ -142,6 +142,8 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     assert provenance["runtime"]["speech_runtime_identity"] == (
         "fake-speech-runtime-v1"
     )
+    assert provenance["runtime"]["video_scan_parallelism"]["mode"] == "auto"
+    assert provenance["runtime"]["video_scan_parallelism"]["initial_workers"] == 1
     assert cold_scan["effective_settings"]["decode_backend"] == "cpu"
     assert cold_scan["tool_refs"] == ["ffmpeg"]
     assert cold_scan["contract_refs"] == ["video_scan"]

@@ -118,16 +118,18 @@ class VideoSelectionApplication:
                 self._observer.legacy_cache_cleaned(diagnostic)
                 for source in video_set.sources:
                     identity_cache.store(source)
-                video_stage_results = VideoStageProcessor(
+                video_stage_processor = VideoStageProcessor(
                     self._media_runtime,
                     speech_runtime,
                     self._observer,
                     progress=self._progress,
-                ).process(
+                )
+                video_stage_results = video_stage_processor.process(
                     video_set,
                     configuration,
                     runtime_identity=media_runtime_identity,
                 )
+                video_scan_parallelism = video_stage_processor.parallelism_diagnostics
                 speech_runtime_identity = speech_runtime.runtime_identity
             finally:
                 speech_runtime.close()
@@ -137,6 +139,7 @@ class VideoSelectionApplication:
                 video_stage_results,
                 resolved_models,
                 speech_runtime_identity,
+                video_scan_parallelism,
                 started_at,
             )
 
@@ -147,6 +150,7 @@ class VideoSelectionApplication:
         video_stage_results: tuple[VideoStageResult, ...],
         resolved_models: ResolvedModels,
         speech_runtime_identity: str,
+        video_scan_parallelism: Mapping[str, object],
         started_at: datetime,
     ) -> RunOutcome:
         """shortlistを必要分だけ注釈し選定結果をcanonicalに公開する。"""
@@ -316,6 +320,7 @@ class VideoSelectionApplication:
             completed_stages,
             vision_diagnostics,
             speech_runtime_identity,
+            video_scan_parallelism,
             started_at,
         )
 
@@ -390,6 +395,7 @@ class VideoSelectionApplication:
         completed_stages: tuple[CompletedStage, ...],
         vision_diagnostics: Mapping[str, VisionInferenceDiagnostics],
         speech_runtime_identity: str,
+        video_scan_parallelism: Mapping[str, object],
         started_at: datetime,
     ) -> RunOutcome:
         """Canonical Publication Requestを構築してOutput Folderへ公開する。"""
@@ -426,6 +432,7 @@ class VideoSelectionApplication:
                 configuration,
                 vision_diagnostics,
                 speech_runtime_identity,
+                video_scan_parallelism=video_scan_parallelism,
             ),
         )
         CanonicalOutputPublisher(

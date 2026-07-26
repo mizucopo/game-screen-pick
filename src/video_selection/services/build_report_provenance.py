@@ -18,6 +18,8 @@ def build_report_provenance(
     configuration: EffectiveConfiguration,
     vision_diagnostics: Mapping[str, VisionInferenceDiagnostics],
     speech_runtime_identity: str,
+    *,
+    video_scan_parallelism: Mapping[str, object] | None = None,
 ) -> ReportProvenance:
     """実semantic inputと診断をprivacy-safeなStage provenanceへ変換する。"""
     events_by_fingerprint: dict[str, list[ProgressEvent]] = {}
@@ -69,11 +71,14 @@ def build_report_provenance(
                 eval_tokens=None if diagnostics is None else diagnostics.eval_count,
             )
         )
+    runtime: dict[str, object] = {
+        "application": "video_selection",
+        "speech_runtime_identity": speech_runtime_identity,
+    }
+    if video_scan_parallelism is not None:
+        runtime["video_scan_parallelism"] = dict(video_scan_parallelism)
     return ReportProvenance(
-        runtime={
-            "application": "video_selection",
-            "speech_runtime_identity": speech_runtime_identity,
-        },
+        runtime=runtime,
         tools=_report_tools(completed_stages, speech_runtime_identity),
         contracts=_report_contracts(completed_stages),
         stages=tuple(stages),

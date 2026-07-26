@@ -139,6 +139,22 @@ def test_normalized_result_digest_excludes_run_specific_diagnostics() -> None:
     run["completed_at"] = "2026-07-26T01:00:01Z"
     provenance = warm["provenance"]
     assert isinstance(provenance, dict)
+    cold_provenance = cold["provenance"]
+    assert isinstance(cold_provenance, dict)
+    cold_runtime = cold_provenance["runtime"]
+    warm_runtime = provenance["runtime"]
+    assert isinstance(cold_runtime, dict)
+    assert isinstance(warm_runtime, dict)
+    cold_runtime["video_scan_parallelism"] = {
+        "initial_workers": 6,
+        "final_workers": 5,
+        "changes": [{"reason": "cpu_pressure"}],
+    }
+    warm_runtime["video_scan_parallelism"] = {
+        "initial_workers": 6,
+        "final_workers": 6,
+        "changes": [],
+    }
     models = provenance["models"]
     assert isinstance(models, dict)
     scene_catalog = models["scene_catalog"]

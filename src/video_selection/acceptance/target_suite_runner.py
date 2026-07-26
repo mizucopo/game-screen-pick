@@ -475,6 +475,8 @@ def _configuration_summary(
         "scene_change_threshold": configuration.scene_change_threshold,
         "scene_min_interval_seconds": configuration.scene_min_interval_seconds,
         "decode_backend": configuration.decode_backend,
+        "video_scan_workers": configuration.video_scan_workers,
+        "video_scan_auto_max_workers": (configuration.video_scan_auto_max_workers),
         "refinement_radius_seconds": configuration.refinement_radius_seconds,
         "max_frame_candidates": configuration.max_frame_candidates,
         "candidate_density_per_minute": configuration.candidate_density_per_minute,

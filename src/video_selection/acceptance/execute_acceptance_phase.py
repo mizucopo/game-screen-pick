@@ -30,6 +30,7 @@ PhaseExecutionResult = tuple[
     dict[str, object] | None,
 ]
 _VOLATILE_RUN_KEYS = frozenset({"id", "started_at", "completed_at"})
+_VOLATILE_RUNTIME_DIAGNOSTIC_KEYS = frozenset({"video_scan_parallelism"})
 _VOLATILE_STAGE_DIAGNOSTIC_KEYS = frozenset(
     {
         "attempt_count",
@@ -370,12 +371,21 @@ def _normalized_semantic_report(
         provenance.get("models"),
         "canonical report provenance models",
     )
+    runtime = _mapping(
+        provenance.get("runtime", {}),
+        "canonical report provenance runtime",
+    )
     normalized = dict(report)
     normalized["run"] = {
         key: value for key, value in run.items() if key not in _VOLATILE_RUN_KEYS
     }
     normalized["provenance"] = {
         **provenance,
+        "runtime": {
+            key: value
+            for key, value in runtime.items()
+            if key not in _VOLATILE_RUNTIME_DIAGNOSTIC_KEYS
+        },
         "models": {
             role: {
                 key: item

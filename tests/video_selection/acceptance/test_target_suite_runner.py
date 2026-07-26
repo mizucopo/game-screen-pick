@@ -378,6 +378,8 @@ def test_state_preserves_privacy_safe_performance_configuration(
     assert configuration["scene_catalog_num_ctx"] == 32768
     assert configuration["candidate_annotation_num_ctx"] == 32768
     assert configuration["max_frame_candidates"] == 3
+    assert configuration["video_scan_workers"] == "auto"
+    assert configuration["video_scan_auto_max_workers"] == 6
     assert configuration["ollama_max_parallel_requests"] == 1
     assert configuration["speech_to_text_beam_size"] == 5
     assert configuration["speech_chunk_seconds"] == 600.0

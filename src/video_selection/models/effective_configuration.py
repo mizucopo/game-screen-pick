@@ -24,6 +24,8 @@ class EffectiveConfiguration:
     decode_backend: str = "cpu"
     refinement_radius_seconds: float = 1.0
     max_frame_candidates: int = 3
+    video_scan_workers: str | int = "auto"
+    video_scan_auto_max_workers: int = 6
     candidate_density_per_minute: float = 2.0
     language: str = "ja"
     subtitle_stream_index: int | None = None

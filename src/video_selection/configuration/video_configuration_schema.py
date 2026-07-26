@@ -25,6 +25,8 @@ DEFAULT_VALUES: dict[str, object] = {
     "frame_extraction.decode_backend": "cpu",
     "frame_extraction.refinement_radius_seconds": 1.0,
     "frame_extraction.max_frame_candidates": 3,
+    "video_scan.workers": "auto",
+    "video_scan.auto_max_workers": 6,
     "candidate_moments.density_per_minute": 2.0,
     "context.language": "ja",
     "context.subtitle_stream_index": None,
@@ -67,6 +69,7 @@ _SECTION_KEYS = {
             "max_frame_candidates",
         }
     ),
+    "video_scan": frozenset({"workers", "auto_max_workers"}),
     "candidate_moments": frozenset({"density_per_minute"}),
     "context": frozenset({"language", "subtitle_stream_index", "audio_stream_index"}),
     "ollama": frozenset({"host", "timeout_seconds", "max_parallel_requests"}),
@@ -230,6 +233,20 @@ def validate_configuration_value(key: str, value: object) -> object:
         integer = _require_integer(key, value)
         if not 1 <= integer <= 3:
             raise _invalid_value(key, "1以上3以下である必要があります")
+        return integer
+
+    if key == "video_scan.workers":
+        if value == "auto":
+            return value
+        integer = _require_integer(key, value)
+        if not 1 <= integer <= 32:
+            raise _invalid_value(key, "autoまたは1以上32以下の整数が必要です")
+        return integer
+
+    if key == "video_scan.auto_max_workers":
+        integer = _require_integer(key, value)
+        if not 1 <= integer <= 32:
+            raise _invalid_value(key, "1以上32以下である必要があります")
         return integer
 
     if key in {

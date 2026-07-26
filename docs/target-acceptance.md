@@ -74,8 +74,10 @@ resource samplingを不完全として扱う。
 
 coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
-full Video Setを再hashしない。fullの独立Video Scanはlogical CPU 8個につき1 worker、
-最大3 workerで並列実行する。Video Order上の対象scanが確定した時点で、そのVideoの
+full Video Setを再hashしない。fullの独立Video Scanは`video_scan.workers = "auto"`を使い、
+NVDECとresource余力がある24 logical CPU targetでは初期6 workerまで利用する。pressure時は
+scan完了境界で1 workerずつ減らし、active scanを止めず未開始taskの投入だけを抑制する。
+Video Order上の対象scanが確定した時点で、そのVideoの
 candidate extractionとcontext collectionを後続Videoのscanと重ねて開始する。background
 scan待機中もactive Stageとheartbeatを通知し、通常のscan失敗でも一次障害を保持したまま
 待機中workerをcancelする。
