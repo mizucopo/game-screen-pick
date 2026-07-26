@@ -1,24 +1,25 @@
 """durable cold/warm target suite runnerのtest。"""
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
 
 from src.video_selection.acceptance.acceptance_profile import AcceptanceProfile
+from src.video_selection.acceptance.acceptance_run import (
+    AcceptanceRunAttemptExecutionResult,
+    normalized_result_digest,
+)
 from src.video_selection.acceptance.atomic_json import (
     read_json_object,
     write_atomic_json,
-)
-from src.video_selection.acceptance.execute_acceptance_phase import (
-    normalized_result_digest,
 )
 from src.video_selection.acceptance.target_suite_runner import (
     EnvironmentProbe,
     ModelResolver,
     OllamaDeploymentProbe,
-    PhaseExecutor,
     TargetSuiteRunner,
 )
 from src.video_selection.configuration.resolve_effective_configuration import (
@@ -41,7 +42,7 @@ def test_interrupt_after_cold_resumes_only_warm_then_waits_for_human_review(
     """cold完了後の中断がwarmだけを再開しworksheet完了までpendingになること。
 
     Arrange:
-        - warm初回だけinterruptするphase executorとrelease profileが用意される
+        - warm初回だけinterruptするRun Attempt executorとrelease profileが用意される
     Act:
         - suiteが中断、resume、human review完了の3回実行される
     Assert:
@@ -55,7 +56,7 @@ def test_interrupt_after_cold_resumes_only_warm_then_waits_for_human_review(
     warm_interrupted = False
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -66,11 +67,11 @@ def test_interrupt_after_cold_resumes_only_warm_then_waits_for_human_review(
         dict[str, object] | None,
     ]:
         nonlocal warm_interrupted
-        calls.append(phase)
-        if phase == "warm" and not warm_interrupted:
+        calls.append(run_name)
+        if run_name == "warm" and not warm_interrupted:
             warm_interrupted = True
-            return 130, _interrupted_phase(phase), None, None
-        return _successful_phase(configuration, phase)
+            return 130, _interrupted_run_attempt(run_name), None, None
+        return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute)
 
@@ -148,7 +149,7 @@ def test_reset_suite_discards_completed_state_and_runs_cold_again(
     calls: list[str] = []
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -158,8 +159,8 @@ def test_reset_suite_discards_completed_state_and_runs_cold_again(
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
-        calls.append(phase)
-        return _successful_phase(configuration, phase)
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute)
     first = runner.run(profile_path=profile_path, suite="release")
@@ -195,7 +196,7 @@ def test_reset_suite_fails_when_suite_root_survives_deletion(
     calls: list[str] = []
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -205,8 +206,8 @@ def test_reset_suite_fails_when_suite_root_survives_deletion(
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
-        calls.append(phase)
-        return _successful_phase(configuration, phase)
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute)
     assert runner.run(profile_path=profile_path, suite="release") == 3
@@ -242,9 +243,9 @@ def test_release_finalization_fails_when_private_work_survives_cleanup(
     # Arrange
     profile_path = _profile(tmp_path)
     runner = _runner(
-        lambda phase, configuration, _models, _suite_root: _successful_phase(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
     )
     monkeypatch.setattr(
@@ -286,9 +287,9 @@ def test_privacy_failure_also_reports_release_cleanup_failure(
     # Arrange
     profile_path = _profile(tmp_path)
     runner = _runner(
-        lambda phase, configuration, _models, _suite_root: _successful_phase(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
     )
 
@@ -337,9 +338,9 @@ def test_state_preserves_privacy_safe_performance_configuration(
     # Arrange
     profile_path = _profile(tmp_path)
     runner = _runner(
-        lambda phase, configuration, _models, _suite_root: _successful_phase(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
     )
 
@@ -412,7 +413,7 @@ def test_full_suite_compares_fixed_three_with_auto_before_warm_run(
     calls: list[tuple[str, str | int]] = []
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -422,22 +423,23 @@ def test_full_suite_compares_fixed_three_with_auto_before_warm_run(
         dict[str, object],
         dict[str, object],
     ]:
-        calls.append((phase, configuration.video_scan_workers))
+        calls.append((run_name, configuration.video_scan_workers))
+        fixed_three = configuration.video_scan_workers == 3
         marker = configuration.processing_cache_folder / "fixed3-marker"
-        if phase == "cold":
+        if run_name == "cold" and not fixed_three:
             assert not marker.exists()
-        result = _successful_phase(configuration, phase)
+        result = _successful_run_attempt(configuration, run_name)
         record = result[1]
-        workers = 3 if phase == "fixed3" else 6
+        workers = 3 if fixed_three else 6
         record["video_scan_parallelism"] = {
-            "mode": "fixed" if phase == "fixed3" else "auto",
-            "configured_workers": 3 if phase == "fixed3" else "auto",
-            "initial_workers": workers,
+            "mode": "fixed" if fixed_three else "auto",
+            "configured_workers": 3 if fixed_three else "auto",
+            "initial_workers": 3,
             "peak_workers": workers,
-            "scan_wall_seconds": 120.0 if phase == "fixed3" else 80.0,
+            "scan_wall_seconds": 120.0 if fixed_three else 80.0,
         }
-        record["stage_artifact_identity_digest"] = "9" * 64
-        if phase == "fixed3":
+        record["stage_artifact_content_digest"] = "9" * 64
+        if fixed_three:
             marker.write_text("fixed", encoding="utf-8")
         return result
 
@@ -460,7 +462,10 @@ def test_full_suite_compares_fixed_three_with_auto_before_warm_run(
     assert state["fixed3_cache_released"] is True
     phases = state["phases"]
     assert isinstance(phases, dict)
-    assert set(phases) == {"fixed3", "cold", "warm"}
+    assert set(phases) == {"cold", "warm"}
+    comparison_runs = state["comparison_runs"]
+    assert isinstance(comparison_runs, dict)
+    assert set(comparison_runs) == {"fixed3"}
     assert record is not None
     comparison = record["video_scan_parallelism_comparison"]
     assert isinstance(comparison, dict)
@@ -489,11 +494,11 @@ def test_interrupted_auto_cold_preserves_cache_after_fixed_three_release(
     """
     # Arrange
     profile_path = _profile(tmp_path)
-    calls: list[str] = []
+    calls: list[tuple[str, str | int]] = []
     cold_interrupted = False
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -504,28 +509,47 @@ def test_interrupted_auto_cold_preserves_cache_after_fixed_three_release(
         dict[str, object] | None,
     ]:
         nonlocal cold_interrupted
-        calls.append(phase)
+        calls.append((run_name, configuration.video_scan_workers))
+        fixed_three = configuration.video_scan_workers == 3
         resume_marker = configuration.processing_cache_folder / "auto-resume-marker"
-        if phase == "cold" and not cold_interrupted:
+        if run_name == "cold" and not fixed_three and not cold_interrupted:
             cold_interrupted = True
             resume_marker.parent.mkdir(parents=True, exist_ok=True)
             resume_marker.write_text("preserve", encoding="utf-8")
-            return 130, _interrupted_phase(phase), None, None
-        if phase == "cold":
+            interrupted_record = _interrupted_run_attempt(run_name)
+            interrupted_record["video_scan_parallelism"] = {
+                "mode": "auto",
+                "configured_workers": "auto",
+                "decode_backend": "nvdec",
+                "auto_max_workers": 6,
+                "initial_workers": 3,
+                "final_workers": 4,
+                "peak_workers": 4,
+                "completed_scans": 1,
+                "scan_wall_seconds": 20.0,
+                "changes": [],
+            }
+            return 130, interrupted_record, None, None
+        if run_name == "cold" and not fixed_three:
             assert resume_marker.read_text(encoding="utf-8") == "preserve"
-        exit_code, record, report, artifact = _successful_phase(
+        exit_code, record, report, artifact = _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
-        workers = 3 if phase == "fixed3" else 6
+        workers = 3 if fixed_three else 6
         record["video_scan_parallelism"] = {
-            "mode": "fixed" if phase == "fixed3" else "auto",
-            "configured_workers": 3 if phase == "fixed3" else "auto",
-            "initial_workers": workers,
+            "mode": "fixed" if fixed_three else "auto",
+            "configured_workers": 3 if fixed_three else "auto",
+            "decode_backend": "nvdec",
+            "auto_max_workers": 6,
+            "initial_workers": 3,
+            "final_workers": workers,
             "peak_workers": workers,
-            "scan_wall_seconds": 120.0 if phase == "fixed3" else 80.0,
+            "completed_scans": 1,
+            "scan_wall_seconds": 120.0 if fixed_three else 40.0,
+            "changes": [],
         }
-        record["stage_artifact_identity_digest"] = "8" * 64
+        record["stage_artifact_content_digest"] = "8" * 64
         return exit_code, record, report, artifact
 
     runner = _runner(execute)
@@ -540,13 +564,23 @@ def test_interrupted_auto_cold_preserves_cache_after_fixed_three_release(
     )
     assert interrupted == 130
     assert resumed == 3
-    assert calls == ["fixed3", "cold", "cold", "warm"]
+    assert calls == [
+        ("fixed3", 3),
+        ("cold", "auto"),
+        ("cold", "auto"),
+        ("warm", "auto"),
+    ]
     assert state is not None
     phases = state["phases"]
     assert isinstance(phases, dict)
     cold = phases["cold"]
     assert isinstance(cold, dict)
     assert cold["attempt_count"] == 2
+    parallelism = cold["video_scan_parallelism"]
+    assert isinstance(parallelism, dict)
+    assert parallelism["scan_wall_seconds"] == 60.0
+    assert parallelism["attempt_count"] == 2
+    assert parallelism["measurement_complete"] is True
     assert state["fixed3_cache_released"] is True
 
 
@@ -574,10 +608,10 @@ def test_ollama_windows_binding_is_revalidated_after_model_resolution(
             "listener_process": "replacement.exe",
         },
     ]
-    phase_calls: list[str] = []
+    run_calls: list[str] = []
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -587,8 +621,8 @@ def test_ollama_windows_binding_is_revalidated_after_model_resolution(
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
-        phase_calls.append(phase)
-        return _successful_phase(configuration, phase)
+        run_calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(
         execute,
@@ -600,7 +634,7 @@ def test_ollama_windows_binding_is_revalidated_after_model_resolution(
         runner.run(profile_path=profile_path, suite="release")
 
     # Assert
-    assert phase_calls == []
+    assert run_calls == []
 
 
 def test_finalization_rejects_review_with_truncated_candidate_set(
@@ -619,9 +653,9 @@ def test_finalization_rejects_review_with_truncated_candidate_set(
     # Arrange
     profile_path = _profile(tmp_path)
     runner = _runner(
-        lambda phase, configuration, _models, _suite_root: _successful_phase(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
     )
     assert runner.run(profile_path=profile_path, suite="release") == 3
@@ -663,7 +697,7 @@ def test_completed_phases_resume_worksheet_finalization_without_rerun(
     calls: list[str] = []
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -673,8 +707,8 @@ def test_completed_phases_resume_worksheet_finalization_without_rerun(
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
-        calls.append(phase)
-        return _successful_phase(configuration, phase)
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute)
     suite_root, _cold_configuration = _prepare_resume_without_worksheet(
@@ -706,9 +740,9 @@ def test_resume_rejects_changed_completed_cold_report(tmp_path: Path) -> None:
     # Arrange
     profile_path = _profile(tmp_path)
     runner = _runner(
-        lambda phase, configuration, _models, _suite_root: _successful_phase(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
     )
     _suite_root, cold_configuration = _prepare_resume_without_worksheet(
@@ -747,9 +781,9 @@ def test_review_finalization_rejects_changed_completed_cold_report(
     # Arrange
     profile_path = _profile(tmp_path)
     runner = _runner(
-        lambda phase, configuration, _models, _suite_root: _successful_phase(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
     )
     assert runner.run(profile_path=profile_path, suite="release") == 3
@@ -786,9 +820,9 @@ def test_review_finalization_rejects_changed_selected_image(tmp_path: Path) -> N
     # Arrange
     profile_path = _profile(tmp_path)
     runner = _runner(
-        lambda phase, configuration, _models, _suite_root: _successful_phase(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
     )
     assert runner.run(profile_path=profile_path, suite="release") == 3
@@ -825,9 +859,9 @@ def test_resume_rejects_changed_completed_selection_artifact(
     # Arrange
     profile_path = _profile(tmp_path)
     runner = _runner(
-        lambda phase, configuration, _models, _suite_root: _successful_phase(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
     )
     suite_root, cold_configuration = _prepare_resume_without_worksheet(
@@ -876,7 +910,7 @@ def test_completed_state_revalidates_current_suite_fingerprint(tmp_path: Path) -
     calls: list[str] = []
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -886,8 +920,8 @@ def test_completed_state_revalidates_current_suite_fingerprint(tmp_path: Path) -
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
-        calls.append(phase)
-        return _successful_phase(configuration, phase)
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
 
     assert _runner(execute).run(profile_path=profile_path, suite="release") == 3
 
@@ -918,7 +952,7 @@ def test_completed_state_revalidates_current_model_identity(tmp_path: Path) -> N
     calls: list[str] = []
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -928,8 +962,8 @@ def test_completed_state_revalidates_current_model_identity(tmp_path: Path) -> N
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
-        calls.append(phase)
-        return _successful_phase(configuration, phase)
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
 
     assert _runner(execute).run(profile_path=profile_path, suite="release") == 3
 
@@ -964,7 +998,7 @@ def test_completed_state_rejects_changed_environment_ollama_endpoint(
     calls: list[str] = []
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -974,8 +1008,8 @@ def test_completed_state_rejects_changed_environment_ollama_endpoint(
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
-        calls.append(phase)
-        return _successful_phase(configuration, phase)
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute)
     assert runner.run(profile_path=profile_path, suite="release") == 3
@@ -1029,7 +1063,7 @@ def test_completed_state_ignores_model_update_diagnostic_change(
         )
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -1039,8 +1073,8 @@ def test_completed_state_ignores_model_update_diagnostic_change(
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
-        calls.append(phase)
-        return _successful_phase(configuration, phase)
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute, model_resolver=resolve)
     assert runner.run(profile_path=profile_path, suite="release") == 3
@@ -1070,7 +1104,7 @@ def test_completed_state_rejects_changed_target_identity(tmp_path: Path) -> None
     target = {"os": "linux", "gpu_driver": "first"}
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -1080,8 +1114,8 @@ def test_completed_state_rejects_changed_target_identity(tmp_path: Path) -> None
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
-        calls.append(phase)
-        return _successful_phase(configuration, phase)
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute, environment_probe=lambda: dict(target))
     assert runner.run(profile_path=profile_path, suite="release") == 3
@@ -1117,7 +1151,7 @@ def test_incomplete_phase_removes_uncommitted_output_before_rerun(
     calls: list[str] = []
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -1127,9 +1161,9 @@ def test_incomplete_phase_removes_uncommitted_output_before_rerun(
         dict[str, object] | None,
         dict[str, object] | None,
     ]:
-        calls.append(phase)
+        calls.append(run_name)
         assert not (configuration.output_folder / "stale.json").exists()
-        return _successful_phase(configuration, phase)
+        return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute)
 
@@ -1147,7 +1181,7 @@ def test_interrupt_before_phase_record_can_retry_without_reset(
     """phase recordより前のuser interruptでも明示resetなしで再開されること。
 
     Arrange:
-        - phase executorが初回だけ記録を返す前にinterruptされるsuiteが用意される
+        - Run Attempt executorが初回だけ記録を返す前にinterruptされるsuiteが用意される
     Act:
         - suiteが中断後に同じstateから再開される
     Assert:
@@ -1160,7 +1194,7 @@ def test_interrupt_before_phase_record_can_retry_without_reset(
     interrupted_once = False
 
     def execute(
-        phase: str,
+        run_name: str,
         configuration: EffectiveConfiguration,
         _models: ResolvedModels,
         _suite_root: Path,
@@ -1171,11 +1205,11 @@ def test_interrupt_before_phase_record_can_retry_without_reset(
         dict[str, object] | None,
     ]:
         nonlocal interrupted_once
-        calls.append(phase)
+        calls.append(run_name)
         if not interrupted_once:
             interrupted_once = True
             raise KeyboardInterrupt
-        return _successful_phase(configuration, phase)
+        return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute)
 
@@ -1213,9 +1247,9 @@ def test_pending_refinalization_removes_previously_passing_baseline(
     # Arrange
     profile_path = _profile(tmp_path)
     runner = _runner(
-        lambda phase, configuration, _models, _suite_root: _successful_phase(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
     )
     assert runner.run(profile_path=profile_path, suite="release") == 3
@@ -1276,9 +1310,9 @@ def test_invalid_refinalization_preserves_previously_passing_baseline(
     # Arrange
     profile_path = _profile(tmp_path)
     runner = _runner(
-        lambda phase, configuration, _models, _suite_root: _successful_phase(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
             configuration,
-            phase,
+            run_name,
         )
     )
     assert runner.run(profile_path=profile_path, suite="release") == 3
@@ -1329,7 +1363,10 @@ def test_invalid_refinalization_preserves_previously_passing_baseline(
 
 
 def _runner(
-    phase_executor: PhaseExecutor,
+    labeled_run_attempt_executor: Callable[
+        [str, EffectiveConfiguration, ResolvedModels, Path],
+        AcceptanceRunAttemptExecutionResult,
+    ],
     *,
     suite_fingerprint: str = "d" * 64,
     model_identity_seed: str = "acceptance-runner",
@@ -1368,7 +1405,14 @@ def _runner(
             }
         ),
         model_resolver=model_resolver or model_runtime.resolve_models,
-        phase_executor=phase_executor,
+        run_attempt_executor=(
+            lambda configuration, models, suite_root: labeled_run_attempt_executor(
+                configuration.output_folder.name,
+                configuration,
+                models,
+                suite_root,
+            )
+        ),
         release_materializer=materialize,
         full_materializer=materialize,
         storage_preflight=lambda _profile, _input_folder: {
@@ -1382,23 +1426,23 @@ def _runner(
     )
 
 
-def _successful_phase(
+def _successful_run_attempt(
     configuration: EffectiveConfiguration,
-    phase: str,
+    run_name: str,
 ) -> tuple[
     int,
     dict[str, object],
     dict[str, object],
     dict[str, object],
 ]:
-    """durable output/cacheも作る成功phase evidenceを返す。"""
+    """durable output/cacheも作る成功Run Attempt evidenceを返す。"""
     candidate_id = "frm_" + "1" * 64
     image_bytes = b"selected-webp"
     image_relative_path = "images/0001_gameplay.webp"
     image_digest = hashlib.sha256(image_bytes).hexdigest()
     report: dict[str, object] = {
         "run": {
-            "id": f"run_{phase}",
+            "id": f"run_{run_name}",
             "status": "completed",
             "started_at": "2026-07-26T00:00:00Z",
             "completed_at": "2026-07-26T00:00:01Z",
@@ -1490,7 +1534,7 @@ def _successful_phase(
             "scenario_count": 1,
             "total_duration_seconds": "1",
         },
-        "phase_marker": phase,
+        "run_name_marker": run_name,
     }
     return 0, record, report, artifact
 
@@ -1500,7 +1544,7 @@ def _prepare_resume_without_worksheet(
     runner: TargetSuiteRunner,
     profile_path: Path,
 ) -> tuple[Path, EffectiveConfiguration]:
-    """完了phase evidenceを復元しworksheet直前のresume stateを返す。"""
+    """完了Phase evidenceを復元しworksheet直前のresume stateを返す。"""
     assert runner.run(profile_path=profile_path, suite="release") == 3
     suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
     state_path = suite_root / "acceptance-state.json"
@@ -1518,11 +1562,11 @@ def _prepare_resume_without_worksheet(
         config_path=tmp_path / "video-selection.toml",
         environ={},
     )
-    _successful_phase(cold_configuration, "cold")
+    _successful_run_attempt(cold_configuration, "cold")
     return suite_root, cold_configuration
 
 
-def _interrupted_phase(phase: str) -> dict[str, object]:
+def _interrupted_run_attempt(run_name: str) -> dict[str, object]:
     """resume時に累積される計測済みinterrupt evidenceを返す。"""
     return {
         "operation_status": "failed",
@@ -1551,7 +1595,7 @@ def _interrupted_phase(phase: str) -> dict[str, object]:
         "ollama_model_observed": True,
         "ollama_model_fully_resident": True,
         "resource_sampling_complete": True,
-        "phase_marker": phase,
+        "run_name_marker": run_name,
     }
 
 

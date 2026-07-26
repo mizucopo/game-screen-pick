@@ -18,13 +18,13 @@ def test_fixed_three_and_faster_auto_pass_all_comparison_gates() -> None:
         - 成果物、resource、worker利用、wall改善の全gateが合格すること
     """
     # Arrange
-    fixed = _phase_record(
+    fixed = _run_record(
         workers=3,
         mode="fixed",
         wall_seconds=120.0,
         artifact_digest="a" * 64,
     )
-    automatic = _phase_record(
+    automatic = _run_record(
         workers=6,
         mode="auto",
         wall_seconds=80.0,
@@ -55,7 +55,7 @@ def test_fixed_three_and_faster_auto_pass_all_comparison_gates() -> None:
                 "video_scan_parallelism": {
                     "mode": "auto",
                     "configured_workers": "auto",
-                    "initial_workers": 6,
+                    "initial_workers": 3,
                     "peak_workers": 6,
                     "scan_wall_seconds": 120.0,
                 }
@@ -64,7 +64,7 @@ def test_fixed_three_and_faster_auto_pass_all_comparison_gates() -> None:
             id="same-wall-time",
         ),
         pytest.param(
-            {"stage_artifact_identity_digest": "b" * 64},
+            {"stage_artifact_content_digest": "b" * 64},
             "stage_artifacts_equal",
             id="different-artifacts",
         ),
@@ -72,6 +72,20 @@ def test_fixed_three_and_faster_auto_pass_all_comparison_gates() -> None:
             {"resource_sampling_complete": False},
             "resource_budget",
             id="incomplete-resource-sampling",
+        ),
+        pytest.param(
+            {
+                "video_scan_parallelism": {
+                    "mode": "auto",
+                    "configured_workers": "auto",
+                    "initial_workers": 3,
+                    "peak_workers": 6,
+                    "scan_wall_seconds": 80.0,
+                    "measurement_complete": False,
+                }
+            },
+            "resource_budget",
+            id="incomplete-parallelism-measurement",
         ),
         pytest.param(
             {
@@ -102,14 +116,14 @@ def test_failed_comparison_dimension_is_reported(
         - 指定したgateと比較全体だけが不合格として記録されること
     """
     # Arrange
-    fixed = _phase_record(
+    fixed = _run_record(
         workers=3,
         mode="fixed",
         wall_seconds=120.0,
         artifact_digest="a" * 64,
     )
     automatic = {
-        **_phase_record(
+        **_run_record(
             workers=6,
             mode="auto",
             wall_seconds=80.0,
@@ -128,16 +142,16 @@ def test_failed_comparison_dimension_is_reported(
     assert comparison["passed"] is False
 
 
-def _phase_record(
+def _run_record(
     *,
     workers: int,
     mode: str,
     wall_seconds: float,
     artifact_digest: str,
 ) -> dict[str, object]:
-    """比較test用のprivacy-safe phase recordを返す。"""
+    """比較test用のprivacy-safe Acceptance Run recordを返す。"""
     return {
-        "stage_artifact_identity_digest": artifact_digest,
+        "stage_artifact_content_digest": artifact_digest,
         "resource_sampling_complete": True,
         "persistent_cache_bytes": 1024,
         "peak_additional_bytes": 2048,
@@ -146,7 +160,7 @@ def _phase_record(
         "video_scan_parallelism": {
             "mode": mode,
             "configured_workers": workers if mode == "fixed" else "auto",
-            "initial_workers": workers,
+            "initial_workers": 3,
             "peak_workers": workers,
             "scan_wall_seconds": wall_seconds,
         },

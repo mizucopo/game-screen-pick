@@ -89,9 +89,16 @@ class VideoSelectionApplication:
         self._observer = observer
         self._progress = progress
         self._clock = clock or _utc_now
+        self._video_scan_parallelism_diagnostics: dict[str, object] = {}
+
+    @property
+    def video_scan_parallelism_diagnostics(self) -> dict[str, object]:
+        """失敗時にも確定済みのVideo Scan並列診断を返す。"""
+        return dict(self._video_scan_parallelism_diagnostics)
 
     def run(self, configuration: EffectiveConfiguration) -> RunOutcome:
         """実Video Selection pipelineを実行しatomic outputを公開する。"""
+        self._video_scan_parallelism_diagnostics = {}
         started_at = self._clock()
         _validate_configuration_paths(configuration)
         identity_cache = VideoIdentityCache(configuration.processing_cache_folder)
@@ -124,12 +131,17 @@ class VideoSelectionApplication:
                     self._observer,
                     progress=self._progress,
                 )
-                video_stage_results = video_stage_processor.process(
-                    video_set,
-                    configuration,
-                    runtime_identity=media_runtime_identity,
-                )
-                video_scan_parallelism = video_stage_processor.parallelism_diagnostics
+                try:
+                    video_stage_results = video_stage_processor.process(
+                        video_set,
+                        configuration,
+                        runtime_identity=media_runtime_identity,
+                    )
+                finally:
+                    self._video_scan_parallelism_diagnostics = (
+                        video_stage_processor.parallelism_diagnostics
+                    )
+                video_scan_parallelism = self.video_scan_parallelism_diagnostics
                 speech_runtime_identity = speech_runtime.runtime_identity
             finally:
                 speech_runtime.close()

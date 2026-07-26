@@ -45,6 +45,7 @@ class AdaptiveVideoScanController:
             raise ValueError("Video Scan workersはautoまたは正の整数が必要です")
 
         self._mode = "auto" if configured_workers == "auto" else "fixed"
+        self._video_count = video_count
         self._configured_workers = configured_workers
         self._decode_backend = decode_backend
         self._auto_max_workers = auto_max_workers
@@ -67,14 +68,18 @@ class AdaptiveVideoScanController:
                 self._conservative_workers,
                 nvdec_capacity,
             )
-            self._current_workers = (
-                self._executor_capacity
-                if _has_nvdec_headroom(initial_resource_sample)
-                else self._conservative_workers
+            self._current_workers = _initial_auto_workers(
+                self._conservative_workers,
+                decode_backend,
+                initial_resource_sample,
             )
         else:
             self._executor_capacity = self._conservative_workers
-            self._current_workers = self._conservative_workers
+            self._current_workers = _initial_auto_workers(
+                self._conservative_workers,
+                decode_backend,
+                initial_resource_sample,
+            )
 
         self._initial_workers = self._current_workers
         self._peak_workers = self._current_workers
@@ -82,18 +87,9 @@ class AdaptiveVideoScanController:
         self._clock = clock
         self._started_at = clock()
         self._scan_wall_seconds = 0.0
-        self._resource_samples: list[VideoScanResourceSample] = (
-            [] if initial_resource_sample is None else [initial_resource_sample]
-        )
+        self._resource_samples: list[VideoScanResourceSample] = []
         self._rolling_speeds: list[float] = []
         self._disk_throughputs: list[float] = []
-        if (
-            initial_resource_sample is not None
-            and initial_resource_sample.disk_read_mib_per_second is not None
-        ):
-            self._disk_throughputs.append(
-                initial_resource_sample.disk_read_mib_per_second
-            )
         self._changes: list[dict[str, object]] = []
         self._initial_metrics = (
             None
@@ -190,6 +186,15 @@ class AdaptiveVideoScanController:
             }
         )
 
+    def finish_incomplete_attempt(self) -> None:
+        """未完了scanを停止し終えた時点までのattempt wall時間を確定する。"""
+        if self._completed_scans >= self._video_count:
+            return
+        self._scan_wall_seconds = round(
+            max(0.001, self._clock() - self._started_at),
+            3,
+        )
+
     def _pressure_reason(
         self,
         sample: VideoScanResourceSample | None,
@@ -209,23 +214,12 @@ class AdaptiveVideoScanController:
             return "resource_sample_incomplete"
         if rolling_sample is None:
             return None
-        thresholds = (
-            ("cpu_pressure", rolling_sample.cpu_percent, 90.0),
-            (
-                "cpu_core_pressure",
-                rolling_sample.cpu_saturated_core_percent,
-                30.0,
-            ),
-            ("memory_pressure", rolling_sample.memory_percent, 90.0),
-            ("decoder_pressure", rolling_sample.decoder_percent, 92.0),
-            ("gpu_pressure", rolling_sample.gpu_percent, 95.0),
-            ("vram_pressure", rolling_sample.vram_percent, 90.0),
-            ("disk_pressure", rolling_sample.disk_busy_percent, 92.0),
-            ("disk_latency", rolling_sample.disk_read_latency_ms, 50.0),
+        resource_reason = _resource_pressure_reason(
+            rolling_sample,
+            self._decode_backend,
         )
-        for reason, value, threshold in thresholds:
-            if value is not None and value >= threshold:
-                return reason
+        if resource_reason is not None:
+            return resource_reason
         disk_ratio = _trend_ratio(self._disk_throughputs)
         if (
             disk_ratio is not None
@@ -249,9 +243,11 @@ class AdaptiveVideoScanController:
             return False
         disk_ratio = _trend_ratio(self._disk_throughputs)
         speed_ratio = _trend_ratio(self._rolling_speeds)
-        if (
-            disk_ratio is not None and disk_ratio < _DISK_THROUGHPUT_SLOWDOWN_RATIO
-        ) or (speed_ratio is not None and speed_ratio < _SPEED_SLOWDOWN_RATIO):
+        if speed_ratio is None or speed_ratio < _SPEED_SLOWDOWN_RATIO:
+            return False
+        if disk_ratio is not None and disk_ratio < _DISK_THROUGHPUT_SLOWDOWN_RATIO:
+            return False
+        if not all(_has_disk_observation(item) for item in self._resource_samples):
             return False
         if self._decode_backend == "nvdec":
             return _has_nvdec_headroom(sample) and all(
@@ -263,6 +259,7 @@ class AdaptiveVideoScanController:
 
     def _record_speed(self, input_speed: float | None) -> None:
         if input_speed is None or input_speed <= 0:
+            self._rolling_speeds.clear()
             return
         self._rolling_speeds.append(input_speed)
         del self._rolling_speeds[:-_TREND_WINDOW]
@@ -272,6 +269,8 @@ class AdaptiveVideoScanController:
         sample: VideoScanResourceSample | None,
     ) -> None:
         if sample is None:
+            self._resource_samples.clear()
+            self._disk_throughputs.clear()
             return
         self._resource_samples.append(sample)
         del self._resource_samples[:-_RESOURCE_WINDOW]
@@ -371,6 +370,54 @@ def _has_cpu_headroom(sample: VideoScanResourceSample) -> bool:
         and _below_optional(sample.disk_busy_percent, 80.0)
         and _below_optional(sample.disk_read_latency_ms, 30.0)
     )
+
+
+def _has_disk_observation(sample: VideoScanResourceSample) -> bool:
+    return sample.disk_busy_percent is not None and (
+        sample.disk_read_mib_per_second is not None
+        or sample.disk_read_latency_ms is not None
+    )
+
+
+def _initial_auto_workers(
+    conservative_workers: int,
+    decode_backend: str,
+    sample: VideoScanResourceSample | None,
+) -> int:
+    if sample is None:
+        return conservative_workers
+    if _resource_pressure_reason(sample, decode_backend) is not None:
+        return 1
+    return conservative_workers
+
+
+def _resource_pressure_reason(
+    sample: VideoScanResourceSample,
+    decode_backend: str,
+) -> str | None:
+    thresholds = [
+        ("cpu_pressure", sample.cpu_percent, 90.0),
+        (
+            "cpu_core_pressure",
+            sample.cpu_saturated_core_percent,
+            30.0,
+        ),
+        ("memory_pressure", sample.memory_percent, 90.0),
+        ("disk_pressure", sample.disk_busy_percent, 92.0),
+        ("disk_latency", sample.disk_read_latency_ms, 50.0),
+    ]
+    if decode_backend == "nvdec":
+        thresholds.extend(
+            (
+                ("decoder_pressure", sample.decoder_percent, 92.0),
+                ("gpu_pressure", sample.gpu_percent, 95.0),
+                ("vram_pressure", sample.vram_percent, 90.0),
+            )
+        )
+    for reason, value, threshold in thresholds:
+        if _at_least(value, threshold):
+            return reason
+    return None
 
 
 def _nvdec_sample_complete(sample: VideoScanResourceSample) -> bool:

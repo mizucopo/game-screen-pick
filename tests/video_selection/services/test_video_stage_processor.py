@@ -11,6 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from src.video_selection.acceptance.completed_stage_artifact_digest import (
+    canonicalize_completed_stage_artifact_value,
+)
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.media_runtime_identity import MediaRuntimeIdentity
 from src.video_selection.models.processing_stage import ProcessingStage
@@ -46,30 +49,12 @@ def _semantic_stage_artifacts(root: Path) -> dict[Path, bytes]:
             continue
         value: object = json.loads(path.read_text(encoding="utf-8"))
         artifacts[relative_path] = json.dumps(
-            _without_runtime_metrics(value),
+            canonicalize_completed_stage_artifact_value(value),
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
     return artifacts
-
-
-def _without_runtime_metrics(value: object) -> object:
-    """semantic artifactからrunごとに変わる処理時間だけを除く。"""
-    volatile_keys = {
-        "cpu_seconds",
-        "input_seconds_per_wall_second",
-        "wall_seconds",
-    }
-    if isinstance(value, dict):
-        return {
-            key: _without_runtime_metrics(item)
-            for key, item in value.items()
-            if isinstance(key, str) and key not in volatile_keys
-        }
-    if isinstance(value, list):
-        return [_without_runtime_metrics(item) for item in value]
-    return value
 
 
 def test_context_collection_is_the_third_source_local_video_stage(
@@ -357,39 +342,24 @@ def test_three_video_scans_run_concurrently(
     assert all(7.0 <= result.scan.metrics.cpu_seconds < 8.0 for result in results)
 
 
-def test_nvdec_auto_runs_six_video_scans_when_gpu_has_headroom(
+def test_nvdec_auto_grows_to_six_workers_when_gpu_has_rolling_headroom(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """GPU余力のあるNVDEC環境で6本のVideo Scanが同時実行されること。
+    """GPU余力が継続するNVDEC環境で6 workerまで増加されること。
 
     Arrange:
-        - NVDEC、24論理CPU、auto上限6、GPU余力sampleと6動画が用意される
-        - 6 scanの開始を同期するbarrierが用意される
+        - NVDEC、24論理CPU、auto上限6、GPU余力sampleと12動画が用意される
     Act:
         - Video Stage processorが実行される
     Assert:
-        - 6件のscanが同時にactiveになること
-        - 初期worker数6がruntime診断へ記録されること
+        - 保守的な3 workerからrolling判断で6 workerまで増加されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
     input_folder.mkdir()
-    for index in range(1, 7):
+    for index in range(1, 13):
         (input_folder / f"{index:02d}-video.mp4").write_bytes(f"video-{index}".encode())
-    barrier = threading.Barrier(6)
-    active_count = 0
-    peak_count = 0
-    count_lock = threading.Lock()
-
-    def synchronize_scans(_path: Path) -> None:
-        nonlocal active_count, peak_count
-        with count_lock:
-            active_count += 1
-            peak_count = max(peak_count, active_count)
-        barrier.wait(timeout=3)
-        with count_lock:
-            active_count -= 1
 
     monkeypatch.setattr(
         "src.video_selection.services.video_stage_processor.os.cpu_count",
@@ -404,13 +374,6 @@ def test_nvdec_auto_runs_six_video_scans_when_gpu_has_headroom(
         disk_busy_percent=40.0,
         disk_read_mib_per_second=300.0,
     )
-    stale_sample = replace(sample, cpu_percent=95.0)
-    sample_count = 0
-
-    def sample_current_resources() -> VideoScanResourceSample:
-        nonlocal sample_count
-        sample_count += 1
-        return stale_sample if sample_count == 1 else sample
 
     configuration = replace(
         _configuration(input_folder, tmp_path / "output"),
@@ -418,19 +381,23 @@ def test_nvdec_auto_runs_six_video_scans_when_gpu_has_headroom(
         video_scan_workers="auto",
         video_scan_auto_max_workers=6,
     )
+    runtime = FakeVideoStageMediaRuntime(
+        on_scan_video=lambda _path: time.sleep(0.02),
+    )
     processor = VideoStageProcessor(
-        FakeVideoStageMediaRuntime(on_scan_video=synchronize_scans),
+        runtime,
         FakeSpeechRuntime(),
         RecordingRunObserver(),
-        resource_sampler=sample_current_resources,
+        resource_sampler=lambda: sample,
     )
 
     # Act
     processor.process(discover_video_set(input_folder), configuration)
 
     # Assert
-    assert peak_count == 6
-    assert processor.parallelism_diagnostics["initial_workers"] == 6
+    assert len(runtime.scan_calls) == 12
+    assert processor.parallelism_diagnostics["initial_workers"] == 3
+    assert processor.parallelism_diagnostics["peak_workers"] == 6
 
 
 def test_fixed_video_scan_workers_skip_resource_sampling(tmp_path: Path) -> None:
@@ -557,21 +524,20 @@ def test_pressure_changes_admission_without_interrupting_active_scans(
     """pressure時にactive scanを止めず次taskの投入だけが抑制されること。
 
     Arrange:
-        - 初期6 worker、10動画、先頭3本だけ完了可能なactive scanが用意される
-        - 初期GPU余力の後に継続するCPU pressureを返すsample列が用意される
+        - 3から6 workerへ増加できる15動画と、先頭6本だけ即時完了するscanが用意される
+        - 増加後の3本へ継続するCPU pressureを返すsample列が用意される
     Act:
-        - 先頭3本のscanが完了されrolling worker数の減少が待たれる
+        - rolling余力による増加後、pressure対象3本が完了される
     Assert:
-        - 9本目が開始されずactive scan cancellationも要求されないこと
+        - 14本目が開始されずactive scan cancellationも要求されないこと
         - 残りを解放するとVideo Orderどおり全結果が返されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
     input_folder.mkdir()
-    video_names = tuple(f"{index:02d}-video.mp4" for index in range(1, 11))
+    video_names = tuple(f"{index:02d}-video.mp4" for index in range(1, 16))
     for index, name in enumerate(video_names, start=1):
         (input_folder / name).write_bytes(f"video-{index}".encode())
-    six_started = threading.Event()
     release_pressure_scans = threading.Event()
     release_rest = threading.Event()
     started_names: list[str] = []
@@ -580,12 +546,12 @@ def test_pressure_changes_admission_without_interrupting_active_scans(
     def block_scans(path: Path) -> None:
         with started_lock:
             started_names.append(path.name)
-            if len(started_names) == 6:
-                six_started.set()
-        if path.name in video_names[:3]:
-            assert release_pressure_scans.wait(timeout=5)
+        if path.name in video_names[6:9]:
+            assert release_pressure_scans.wait(timeout=10)
+        elif path.name not in video_names[:6]:
+            assert release_rest.wait(timeout=10)
         else:
-            assert release_rest.wait(timeout=5)
+            time.sleep(0.2)
 
     healthy = VideoScanResourceSample(
         cpu_percent=45.0,
@@ -604,7 +570,7 @@ def test_pressure_changes_admission_without_interrupting_active_scans(
         nonlocal sample_count
         with sample_lock:
             sample_count += 1
-            return healthy if sample_count <= 2 else pressure
+            return healthy if sample_count <= 8 else pressure
 
     monkeypatch.setattr(
         "src.video_selection.services.video_stage_processor.os.cpu_count",
@@ -636,21 +602,27 @@ def test_pressure_changes_admission_without_interrupting_active_scans(
 
     processing_thread = threading.Thread(target=run_processor)
     processing_thread.start()
-    assert six_started.wait(timeout=5)
+    growth_deadline = time.monotonic() + 5
+    while (
+        processor.parallelism_diagnostics.get("peak_workers") != 6
+        and time.monotonic() < growth_deadline
+    ):
+        time.sleep(0.01)
+    assert processor.parallelism_diagnostics["peak_workers"] == 6
 
     # Act
     release_pressure_scans.set()
     deadline = time.monotonic() + 5
     while (
-        processor.parallelism_diagnostics.get("final_workers") != 5
+        processor.parallelism_diagnostics.get("final_workers") not in {1, 2, 3, 4, 5}
         and time.monotonic() < deadline
     ):
         time.sleep(0.01)
 
     # Assert
-    assert processor.parallelism_diagnostics["final_workers"] == 5
+    assert processor.parallelism_diagnostics["final_workers"] in {1, 2, 3, 4, 5}
     with started_lock:
-        assert video_names[8] not in started_names
+        assert video_names[14] not in started_names
     assert runtime.cancel_video_scans_call_count == 0
 
     release_rest.set()
@@ -738,18 +710,22 @@ def test_interrupt_cancels_active_video_scans(tmp_path: Path) -> None:
         raise KeyboardInterrupt
 
     runtime = FakeVideoStageMediaRuntime(on_scan_video=interrupt_scan)
+    processor = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    )
 
     # Act / Assert
     with pytest.raises(KeyboardInterrupt):
-        VideoStageProcessor(
-            runtime,
-            FakeSpeechRuntime(),
-            RecordingRunObserver(),
-        ).process(
+        processor.process(
             discover_video_set(input_folder),
             _configuration(input_folder, tmp_path / "output"),
         )
     assert runtime.cancel_video_scans_call_count == 1
+    scan_wall_seconds = processor.parallelism_diagnostics["scan_wall_seconds"]
+    assert isinstance(scan_wall_seconds, int | float)
+    assert scan_wall_seconds > 0
 
 
 def test_interrupt_does_not_start_queued_video_scans(

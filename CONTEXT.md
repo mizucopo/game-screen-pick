@@ -80,13 +80,21 @@ _Avoid_: public TOML, Effective Configuration, committed fixture, production def
 一回のtarget acceptanceで得たcommit、runtime/model identity、pathなしのVideo Set fingerprint、Stage時間、resource、cache、quality判定をversioned JSONとして保存する証拠。media、absolute path、raw text、prompt、model responseを含めない。
 _Avoid_: Canonical Selection Report, runtime log, baseline snapshot, raw benchmark output
 
-**Acceptance Phase**:
-target acceptanceでfresh processing cacheを測るcold、または同じcacheを使うexact warmの論理的な性能判定単位。中断後に再開された場合は複数のAcceptance Phase Attemptを持ち、全attemptの経過時間と作業量、保守的なresource peakをまとめて予算判定する。
-_Avoid_: Acceptance Phase Attempt, Processing Stage, one process lifetime
+**Acceptance Run**:
+Acceptance PhaseまたはAcceptance Comparison Runを総称する論理的な完了・集約単位。一つ以上のAcceptance Run Attemptを持ち、再開をまたぐ全試行を集約して完了recordと予算判定を確定する。
+_Avoid_: Acceptance Run Attempt, one process lifetime, Processing Stage, production run
 
-**Acceptance Phase Attempt**:
-一つのAcceptance Phaseについて、開始から正常終了、中断、またはoperation failureまで連続して計測された実行区間。Completed Stageを再利用してphaseを再開しても、それ以前のattemptを性能証拠から除外しない。
-_Avoid_: Acceptance Phase, retry inside model inference, Processing Stage
+**Acceptance Phase**:
+target acceptanceでfresh processing cacheを測るcold、または同じcacheを使うexact warmの論理的な性能判定単位。中断後に再開された場合は複数のAcceptance Run Attemptを持ち、全attemptの経過時間と作業量、保守的なresource peakをまとめて予算判定する。
+_Avoid_: Acceptance Comparison Run, Acceptance Run Attempt, Processing Stage, one process lifetime
+
+**Acceptance Comparison Run**:
+full target acceptanceで固定3 workerとauto coldを比較するため、fresh processing cache上で固定3 workerを使う独立run。coldと同じpipelineを実行するがAcceptance Phaseではなく、完了後にcacheを削除してauto cold Acceptance Phaseを開始する。
+_Avoid_: Acceptance Phase, benchmark fixture, warm run, production default
+
+**Acceptance Run Attempt**:
+一つのAcceptance PhaseまたはAcceptance Comparison Runについて、開始から正常終了、中断、またはoperation failureまで連続して計測された実行区間。Completed Stageを再利用してrunを再開しても、それ以前のattemptを性能証拠から除外しない。
+_Avoid_: Acceptance Run, Acceptance Phase, Acceptance Comparison Run, retry inside model inference, Processing Stage
 
 **Legacy Cache**:
 旧screenshot selectorが作成した認識可能なprocessing cache entry、またはmanifestから現行より古いversioned Candidate Annotation Stage Contractだと識別できるCompleted Stage。cache lock取得後に自動削除し、変換・保持・互換利用は行わない。現行contractの設定違いによるStage Fingerprint不一致、認識できない`videos/`・`video-sets/` entryは含まない。

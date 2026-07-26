@@ -47,7 +47,9 @@ def main(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="acceptance-target",
-        description="WSL2 supported targetでcold/warm acceptanceを実行します。",
+        description=(
+            "WSL2 supported targetで比較runとcold/warm acceptanceを実行します。"
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -65,7 +67,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reset-suite",
         action="store_true",
-        help="同じsuiteのdurable stateを明示的に破棄してcoldから再実行",
+        help="同じsuiteのdurable stateを明示的に破棄して先頭runから再実行",
     )
     parser.add_argument(
         "--human-review",

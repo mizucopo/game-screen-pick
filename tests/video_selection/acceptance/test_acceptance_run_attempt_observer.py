@@ -1,14 +1,14 @@
-"""acceptance phase observerのtest。"""
+"""Acceptance Run Attempt observerのtest。"""
 
-from src.video_selection.acceptance.acceptance_run_observer import (
-    AcceptanceRunObserver,
+from src.video_selection.acceptance.acceptance_run_attempt_observer import (
+    AcceptanceRunAttemptObserver,
 )
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.progress_event import ProgressEvent
 
 
-def test_phase_metrics_aggregate_cache_recompute_and_stage_duration() -> None:
-    """Progress Eventがpathなしのphase metricへ集計されること。
+def test_attempt_metrics_aggregate_cache_recompute_and_stage_duration() -> None:
+    """Progress Eventがpathなしのattempt metricへ集計されること。
 
     Arrange:
         - stage開始、cache、完了eventが用意される
@@ -19,7 +19,7 @@ def test_phase_metrics_aggregate_cache_recompute_and_stage_duration() -> None:
         - active Stageが完了後に解放されること
     """
     # Arrange
-    observer = AcceptanceRunObserver()
+    observer = AcceptanceRunAttemptObserver()
 
     # Act
     observer.observe(
@@ -55,7 +55,7 @@ def test_phase_metrics_aggregate_cache_recompute_and_stage_duration() -> None:
             reason_code="stage_completed",
         )
     )
-    metrics = observer.phase_metrics()
+    metrics = observer.attempt_metrics()
 
     # Assert
     assert observer.current_stage is None
@@ -66,7 +66,7 @@ def test_phase_metrics_aggregate_cache_recompute_and_stage_duration() -> None:
     assert metrics["stage_durations_seconds"] == {"scan-video": 3.5}
 
 
-def test_phase_metrics_include_interrupted_active_stage_duration() -> None:
+def test_attempt_metrics_include_interrupted_active_stage_duration() -> None:
     """中断時に実行中だったStageの経過時間も集計されること。
 
     Arrange:
@@ -77,7 +77,7 @@ def test_phase_metrics_include_interrupted_active_stage_duration() -> None:
         - 未完了scan-videoの2.5秒もStage時間へ含まれること
     """
     # Arrange
-    observer = AcceptanceRunObserver()
+    observer = AcceptanceRunAttemptObserver()
     events = (
         ProgressEvent(
             kind="stage_started",
@@ -98,7 +98,7 @@ def test_phase_metrics_include_interrupted_active_stage_duration() -> None:
     # Act
     for event in events:
         observer.observe(event)
-    metrics = observer.phase_metrics()
+    metrics = observer.attempt_metrics()
 
     # Assert
     assert observer.current_stage is None

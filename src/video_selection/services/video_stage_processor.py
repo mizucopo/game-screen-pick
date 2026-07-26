@@ -130,8 +130,8 @@ class VideoStageProcessor:
         resolved_runtime_identity = runtime_identity or self._media_runtime.preflight()
         automatic_workers = configuration.video_scan_workers == "auto"
         if automatic_workers:
-            # 初回procfs counterをprobe前に確定し、直前のhash負荷ではなく
-            # probe区間の差分CPU・disk値を初期worker判断へ使う。
+            # 初回procfs counterをprobe前に確定し、後続sampleが直前のhash負荷ではなく
+            # probe以降の差分CPU・disk値を観測できるようにする。
             self._safe_resource_sample()
         probed_sources: list[ProbedVideoSource] = []
         for source in video_set.sources:
@@ -153,64 +153,68 @@ class VideoStageProcessor:
         scan_cancellation = Event()
         scan_cancellation_lock = Lock()
         primary_scan_failure: list[BaseException] = []
-        with ThreadPoolExecutor(
-            max_workers=controller.executor_capacity,
-            thread_name_prefix="video-scan",
-        ) as executor:
-            scheduler = AdaptiveVideoScanScheduler(
-                executor,
-                controller,
-                lambda index: self._prepare_scan(
-                    scan_cancellation,
-                    scan_cancellation_lock,
-                    primary_scan_failure,
-                    video_set,
-                    probed_sources[index][0],
-                    probed_sources[index][2],
-                    configuration,
-                    resolved_runtime_identity,
-                ),
-                self._resource_sampler,
-            )
-            prepared_scans = scheduler.start(len(probed_sources))
-            try:
-                for video_order, (probed, prepared_scan) in enumerate(
-                    zip(probed_sources, prepared_scans, strict=True),
-                    start=1,
-                ):
-                    source, probe, primary_stream = probed
-                    progress_started = self._start_scan_wait_progress(
-                        prepared_scan,
-                        source,
-                        video_order,
-                        len(probed_sources),
-                    )
-                    results.append(
-                        self._process_source(
-                            video_set,
-                            source,
-                            probe,
-                            primary_stream,
-                            self._await_prepared_scan(
-                                prepared_scan,
-                                emit_heartbeat=progress_started,
-                            ),
-                            video_order,
-                            configuration,
-                            resolved_runtime_identity,
-                            scan_progress_started=progress_started,
-                        )
-                    )
-            except (Exception, KeyboardInterrupt) as error:
-                scheduler.cancel_pending()
-                self._request_scan_cancellation(
-                    scan_cancellation,
-                    scan_cancellation_lock,
-                    primary_scan_failure,
+        try:
+            with ThreadPoolExecutor(
+                max_workers=controller.executor_capacity,
+                thread_name_prefix="video-scan",
+            ) as executor:
+                scheduler = AdaptiveVideoScanScheduler(
+                    executor,
+                    controller,
+                    lambda index: self._prepare_scan(
+                        scan_cancellation,
+                        scan_cancellation_lock,
+                        primary_scan_failure,
+                        video_set,
+                        probed_sources[index][0],
+                        probed_sources[index][2],
+                        configuration,
+                        resolved_runtime_identity,
+                    ),
+                    self._resource_sampler,
                 )
-                if primary_scan_failure and error is not primary_scan_failure[0]:
-                    raise primary_scan_failure[0] from error
-                raise
+                prepared_scans = scheduler.start(len(probed_sources))
+                try:
+                    for video_order, (probed, prepared_scan) in enumerate(
+                        zip(probed_sources, prepared_scans, strict=True),
+                        start=1,
+                    ):
+                        source, probe, primary_stream = probed
+                        progress_started = self._start_scan_wait_progress(
+                            prepared_scan,
+                            source,
+                            video_order,
+                            len(probed_sources),
+                        )
+                        results.append(
+                            self._process_source(
+                                video_set,
+                                source,
+                                probe,
+                                primary_stream,
+                                self._await_prepared_scan(
+                                    prepared_scan,
+                                    emit_heartbeat=progress_started,
+                                ),
+                                video_order,
+                                configuration,
+                                resolved_runtime_identity,
+                                scan_progress_started=progress_started,
+                            )
+                        )
+                except (Exception, KeyboardInterrupt) as error:
+                    self._request_scan_cancellation(
+                        scan_cancellation,
+                        scan_cancellation_lock,
+                        primary_scan_failure,
+                    )
+                    scheduler.cancel_pending()
+                    if primary_scan_failure and error is not primary_scan_failure[0]:
+                        raise primary_scan_failure[0] from error
+                    raise
+        except BaseException:
+            controller.finish_incomplete_attempt()
+            raise
         validate_video_set_snapshot_metadata(video_set)
         return tuple(results)
 

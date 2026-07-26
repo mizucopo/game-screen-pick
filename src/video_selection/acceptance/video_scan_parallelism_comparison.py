@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from typing import cast
 
-from .acceptance_resource_budget import phase_resource_budget_passed
+from .acceptance_resource_budget import acceptance_run_resource_budget_passed
 
 
 def build_video_scan_parallelism_comparison(
@@ -29,11 +29,11 @@ def build_video_scan_parallelism_comparison(
     )
     fixed_artifact_digest = _digest(
         fixed_three,
-        "stage_artifact_identity_digest",
+        "stage_artifact_content_digest",
     )
     auto_artifact_digest = _digest(
         automatic,
-        "stage_artifact_identity_digest",
+        "stage_artifact_content_digest",
     )
     gates = {
         "fixed_three_workers": (
@@ -49,8 +49,10 @@ def build_video_scan_parallelism_comparison(
         ),
         "stage_artifacts_equal": fixed_artifact_digest == auto_artifact_digest,
         "resource_budget": (
-            phase_resource_budget_passed(fixed_three)
-            and phase_resource_budget_passed(automatic)
+            _measurement_complete(fixed_diagnostics)
+            and _measurement_complete(auto_diagnostics)
+            and acceptance_run_resource_budget_passed(fixed_three)
+            and acceptance_run_resource_budget_passed(automatic)
         ),
         "wall_time_improved": auto_wall < fixed_wall,
     }
@@ -96,3 +98,8 @@ def _digest(value: Mapping[str, object], key: str) -> str:
     ):
         raise ValueError(f"Video Scan comparison {key}がdigestではありません")
     return result
+
+
+def _measurement_complete(value: Mapping[str, object]) -> bool:
+    result = value.get("measurement_complete")
+    return result is None or result is True

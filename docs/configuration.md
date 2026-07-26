@@ -64,7 +64,9 @@ Effective Configurationは設定項目ごとに次の順で解決します。
 
 ## Video Scanの動的並列制御
 
-`video_scan.workers = "auto"`が既定です。CPU decodeではlogical CPU 8個につき1 workerを上限とする保守的な初期値を使います。NVDECではCPU・memory・NVIDIA Decoder・GPU・VRAM・diskの利用状況を取得でき、余力がある場合にlogical CPU 4個につき1 workerまで増やします。既定の`auto_max_workers = 6`と24 logical CPUの組み合わせでは最大6 workerです。
+`video_scan.workers = "auto"`が既定です。CPU decodeではlogical CPU 8個につき1 workerを上限とする保守的な初期値を使います。NVDECではCPU・memory・NVIDIA Decoder・GPU・VRAM・diskの初期sampleにpressureがあれば1 workerから開始し、正常時は同じ保守値から開始します。rolling metricに余力がある場合だけlogical CPU 4個につき1 workerまで増やします。既定の`auto_max_workers = 6`と24 logical CPUの組み合わせでは最大6 workerです。
+増加には直近のresource sampleに加え、disk throughputまたはlatencyの観測と
+1 stream処理速度のtrendが必要です。これらが欠ける間は保守的なworker数を維持します。
 
 並列数は一つの`scan-video`が完了した境界だけで1ずつ増減します。実行中のscanを止めたり再開したりせず、未開始taskの投入数だけを変えます。CPU、飽和logical core割合、memory、Decoder、GPU、VRAM、disk busy・read latencyは直近3 sampleの平均で判断します。disk read throughputと1 streamあたりの処理速度は直近2 sampleの平均を、その前の2 sampleの平均と比較します。単発のspikeや一時的な低負荷だけでは増減せず、継続するresource圧迫またはthroughput低下で減らし、直近windowの全sampleに余力がある場合だけ増やします。NVIDIA sampleを取得できないNVDEC環境では従来相当の保守的なCPU基準から開始し、sample欠落中は上限を増やしません。
 

@@ -1,4 +1,4 @@
-"""一つのcold/warm acceptance phaseを実pipelineで実行・計測する。"""
+"""Acceptance Runの一試行を実行し、完了成果物を検証する。"""
 
 import hashlib
 import json
@@ -18,12 +18,13 @@ from ..services.build_stage_fingerprint import build_stage_fingerprint
 from ..services.completed_stage_writer import CompletedStageWriter
 from ..services.progress_stream_observer import ProgressStreamObserver
 from ..services.run_progress_tracker import RunProgressTracker
-from .acceptance_run_observer import AcceptanceRunObserver
+from .acceptance_run_attempt_observer import AcceptanceRunAttemptObserver
 from .build_real_application import build_real_application
+from .completed_stage_artifact_digest import completed_stage_artifact_digest
 from .disk_usage_monitor import DiskUsageMonitor
 from .gpu_resource_monitor import GpuResourceMonitor
 
-PhaseExecutionResult = tuple[
+AcceptanceRunAttemptExecutionResult = tuple[
     int,
     dict[str, object],
     dict[str, object] | None,
@@ -51,17 +52,14 @@ _VOLATILE_MODEL_LIFECYCLE_KEYS = frozenset(
 )
 
 
-def execute_acceptance_phase(
+def execute_acceptance_run_attempt(
     *,
-    phase: str,
     configuration: EffectiveConfiguration,
     resolved_models: ResolvedModels,
     suite_root: Path,
-) -> PhaseExecutionResult:
-    """model freeze後からatomic publicationまでを測りsafe evidenceを返す。"""
-    if phase not in {"fixed3", "cold", "warm"}:
-        raise ValueError("Acceptance phaseが不正です")
-    observer = AcceptanceRunObserver(ProgressStreamObserver())
+) -> AcceptanceRunAttemptExecutionResult:
+    """model freeze後からatomic publicationまでの一試行を測定する。"""
+    observer = AcceptanceRunAttemptObserver(ProgressStreamObserver())
     progress = RunProgressTracker(observer)
     application = build_real_application(
         configuration,
@@ -86,13 +84,13 @@ def execute_acceptance_phase(
             lambda: application.run(configuration)
         )
     finally:
-        phase_completed_at = time.monotonic()
+        run_completed_at = time.monotonic()
         disk_metrics = disk_monitor.stop()
         gpu_metrics = gpu_monitor.stop()
-    duration_seconds = phase_completed_at - started_at
-    phase_record: dict[str, object] = {
+    duration_seconds = run_completed_at - started_at
+    attempt_record: dict[str, object] = {
         "duration_seconds": duration_seconds,
-        **observer.phase_metrics(),
+        **observer.attempt_metrics(),
         **disk_metrics,
         **gpu_metrics,
         "resource_sampling_complete": (
@@ -100,35 +98,52 @@ def execute_acceptance_phase(
             and gpu_metrics.get("resource_sampling_complete") is True
         ),
     }
+    application_parallelism = getattr(
+        application,
+        "video_scan_parallelism_diagnostics",
+        {},
+    )
+    if isinstance(application_parallelism, dict) and application_parallelism:
+        attempt_record["video_scan_parallelism"] = dict(application_parallelism)
     if exit_code != 0:
         if not isinstance(result, RunFailure):
             raise AssertionError
-        phase_record.update(
+        attempt_record.update(
             {
                 "operation_status": "failed",
                 "failure_reason": result.reason_code,
                 "failure_exit_code": result.exit_code,
             }
         )
-        return int(exit_code), phase_record, None, None
+        return int(exit_code), attempt_record, None, None
     if not isinstance(result, RunOutcome):
         raise AssertionError
     report_path = result.output_folder / "report.json"
     report = _read_json_object(report_path)
+    report_parallelism = video_scan_parallelism_diagnostics(report)
+    if (
+        isinstance(application_parallelism, dict)
+        and application_parallelism
+        and application_parallelism != report_parallelism
+    ):
+        raise ValueError("Video Scan parallelism診断がpublicationと一致しません")
     selection_stage = next(
         stage
         for stage in reversed(result.completed_stages)
         if stage.stage is ProcessingStage.SELECT_IMAGES
     )
-    phase_record.update(
+    attempt_record.update(
         {
             "operation_status": "completed",
             "selected_count": result.selected_count,
             "requested_count": result.requested_count,
             "canonical_report_sha256": _file_digest(report_path),
             "normalized_result_digest": normalized_result_digest(report),
-            "stage_artifact_identity_digest": (stage_artifact_identity_digest(report)),
-            "video_scan_parallelism": video_scan_parallelism_diagnostics(report),
+            "stage_artifact_content_digest": completed_stage_artifact_digest(
+                configuration.processing_cache_folder,
+                result.completed_stages,
+            ),
+            "video_scan_parallelism": report_parallelism,
             "selection_stage_fingerprint": selection_stage.fingerprint.value,
             "video_set": _video_set_record(report),
             "speech_runtime_identity": _speech_runtime_identity(report),
@@ -136,33 +151,33 @@ def execute_acceptance_phase(
     )
     selection_artifact = _selection_artifact(
         configuration.processing_cache_folder,
-        phase_record,
+        attempt_record,
     )
-    return 0, phase_record, report, selection_artifact
+    return 0, attempt_record, report, selection_artifact
 
 
-def load_completed_phase_evidence(
+def load_completed_run_evidence(
     *,
     configuration: EffectiveConfiguration,
-    phase_record: Mapping[str, object],
+    run_record: Mapping[str, object],
 ) -> tuple[dict[str, object], dict[str, object]]:
-    """durable output/cacheからcompleted phaseのworksheet sourceを復元する。"""
-    report = load_completed_phase_report(
+    """durable output/cacheからcompleted runのworksheet sourceを復元する。"""
+    report = load_completed_run_report(
         configuration=configuration,
-        phase_record=phase_record,
+        run_record=run_record,
     )
     return report, _selection_artifact(
         configuration.processing_cache_folder,
-        phase_record,
+        run_record,
     )
 
 
-def load_completed_phase_report(
+def load_completed_run_report(
     *,
     configuration: EffectiveConfiguration,
-    phase_record: Mapping[str, object],
+    run_record: Mapping[str, object],
 ) -> dict[str, object]:
-    """durable canonical reportと公開画像がphase確定時のままか再検証する。"""
+    """durable canonical reportと公開画像がrun確定時のままか再検証する。"""
     output_folder = configuration.output_folder
     report_path = output_folder / "report.json"
     if (
@@ -171,39 +186,39 @@ def load_completed_phase_report(
         or report_path.is_symlink()
         or not report_path.is_file()
     ):
-        raise ValueError("Completed phaseのcanonical report artifactがありません")
+        raise ValueError("Completed runのcanonical report artifactがありません")
     expected_report_digest = _fingerprint(
-        phase_record.get("canonical_report_sha256"),
+        run_record.get("canonical_report_sha256"),
         "canonical report digest",
     )
     if _file_digest(report_path) != expected_report_digest:
-        raise ValueError("Completed phaseのcanonical report artifactが一致しません")
+        raise ValueError("Completed runのcanonical report artifactが一致しません")
     report = _read_json_object(report_path)
-    expected_digest = phase_record.get("normalized_result_digest")
+    expected_digest = run_record.get("normalized_result_digest")
     if (
         not isinstance(expected_digest, str)
         or normalized_result_digest(report) != expected_digest
     ):
-        raise ValueError("Completed phaseのcanonical report digestが一致しません")
+        raise ValueError("Completed runのcanonical report digestが一致しません")
     _validate_selected_output_artifacts(report, output_folder)
     return report
 
 
-def public_phase_record(value: Mapping[str, object]) -> dict[str, object]:
-    """suite stateのphaseからrun-level Video Set重複値を除いて返す。"""
+def public_run_record(value: Mapping[str, object]) -> dict[str, object]:
+    """suite stateのrunからrun-level Video Set重複値を除いて返す。"""
     private_state_keys = {"canonical_report_sha256", "video_set"}
     return {key: item for key, item in value.items() if key not in private_state_keys}
 
 
 def _selection_artifact(
     cache_folder: Path,
-    phase_record: Mapping[str, object],
+    run_record: Mapping[str, object],
 ) -> dict[str, object]:
     fingerprint = _stage_fingerprint(
-        phase_record.get("selection_stage_fingerprint"),
+        run_record.get("selection_stage_fingerprint"),
         "selection fingerprint",
     )
-    video_set = _mapping(phase_record.get("video_set"), "Video Set")
+    video_set = _mapping(run_record.get("video_set"), "Video Set")
     subject_fingerprint = _fingerprint(
         video_set.get("fingerprint"),
         "Video Set fingerprint",
@@ -255,9 +270,9 @@ def _read_json_object(path: Path) -> dict[str, object]:
     try:
         value: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, TypeError, ValueError):
-        raise ValueError("Acceptance phase artifactを読み込めません") from None
+        raise ValueError("Acceptance run artifactを読み込めません") from None
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
-        raise ValueError("Acceptance phase artifactがobjectではありません")
+        raise ValueError("Acceptance run artifactがobjectではありません")
     return cast(dict[str, object], value)
 
 
@@ -299,13 +314,13 @@ def _validate_selected_output_artifacts(
             actual_bytes = artifact_path.stat().st_size
         except OSError:
             raise ValueError(
-                "Completed phaseのselected output artifactを検証できません"
+                "Completed runのselected output artifactを検証できません"
             ) from None
         if (
             actual_bytes != expected_bytes
             or _file_digest(artifact_path) != expected_digest
         ):
-            raise ValueError("Completed phaseのselected output artifactが一致しません")
+            raise ValueError("Completed runのselected output artifactが一致しません")
 
 
 def _selected_output_relative_path(value: object) -> str:
@@ -331,9 +346,9 @@ def _selected_output_artifact_path(
     for part in PurePosixPath(relative_path).parts:
         path /= part
         if path.is_symlink():
-            raise ValueError("Completed phaseのselected output artifactが不正です")
+            raise ValueError("Completed runのselected output artifactが不正です")
     if not path.is_file():
-        raise ValueError("Completed phaseのselected output artifactがありません")
+        raise ValueError("Completed runのselected output artifactがありません")
     return path
 
 
@@ -342,7 +357,7 @@ def _file_digest(path: Path) -> str:
         with path.open("rb") as file:
             return hashlib.file_digest(file, "sha256").hexdigest()
     except OSError:
-        raise ValueError("Completed phase artifactを読み込めません") from None
+        raise ValueError("Completed run artifactを読み込めません") from None
 
 
 def normalized_result_digest(report: Mapping[str, object]) -> str:
@@ -351,35 +366,6 @@ def normalized_result_digest(report: Mapping[str, object]) -> str:
     normalized = _normalized_semantic_report(report)
     canonical = json.dumps(
         normalized,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    return hashlib.sha256(canonical).hexdigest()
-
-
-def stage_artifact_identity_digest(report: Mapping[str, object]) -> str:
-    """run診断を除いたCompleted Stage identity列のdigestを返す。"""
-    provenance = _mapping(
-        report.get("provenance"),
-        "canonical report provenance",
-    )
-    stages = provenance.get("stages")
-    if not isinstance(stages, list):
-        raise ValueError("Canonical reportのprovenance stagesが不正です")
-    identities = [
-        {
-            key: item
-            for key, item in _mapping(
-                value,
-                "canonical report provenance stage",
-            ).items()
-            if key not in _VOLATILE_STAGE_DIAGNOSTIC_KEYS
-        }
-        for value in stages
-    ]
-    canonical = json.dumps(
-        identities,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -465,7 +451,7 @@ def _normalized_semantic_report(
 
 def _mapping(value: object, location: str) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
-        raise ValueError(f"Acceptance phase {location}がobjectではありません")
+        raise ValueError(f"Acceptance run {location}がobjectではありません")
     return cast(dict[str, object], value)
 
 
@@ -479,7 +465,7 @@ def _fingerprint(value: object, location: str) -> str:
         or len(value) != 64
         or any(character not in "0123456789abcdef" for character in value)
     ):
-        raise ValueError(f"Acceptance phase {location}が不正です")
+        raise ValueError(f"Acceptance run {location}が不正です")
     return value
 
 
