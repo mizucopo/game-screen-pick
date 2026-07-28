@@ -68,6 +68,7 @@ SuiteMaterializer = Callable[
 StoragePreflight = Callable[[AcceptanceProfile, Path], dict[str, object]]
 
 _STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.2.0"
+_VISIBLE_RAM_IDENTITY_TOLERANCE_BYTES = 1024**2
 
 
 class TargetSuiteRunner:
@@ -200,7 +201,7 @@ class TargetSuiteRunner:
             write_atomic_json(state_path, state)
         else:
             _validate_state_identity(state, identity)
-            if state.get("target") != target:
+            if not _target_identity_matches(state.get("target"), target):
                 raise ValueError(
                     "Acceptance stateが現在のtarget identityと一致しません"
                 )
@@ -645,6 +646,30 @@ def _validate_state_identity(
         state.get(key) != value for key, value in identity.items()
     ):
         raise ValueError("Acceptance stateが現在のsuite identityと一致しません")
+
+
+def _target_identity_matches(
+    stored: object,
+    current: Mapping[str, object],
+) -> bool:
+    """起動時の微小なvisible RAM差だけを許容してtargetを比較する。"""
+    if not isinstance(stored, Mapping) or set(stored) != set(current):
+        return False
+    stored_ram = stored.get("visible_ram_bytes")
+    current_ram = current.get("visible_ram_bytes")
+    if (
+        type(stored_ram) is not int
+        or type(current_ram) is not int
+        or stored_ram <= 0
+        or current_ram <= 0
+        or abs(stored_ram - current_ram) > _VISIBLE_RAM_IDENTITY_TOLERANCE_BYTES
+    ):
+        return False
+    return all(
+        stored.get(key) == value
+        for key, value in current.items()
+        if key != "visible_ram_bytes"
+    )
 
 
 def _runs_completed(state: Mapping[str, object]) -> bool:

@@ -126,6 +126,10 @@ Comparison Runとphaseの完了はsuite別の`acceptance-state.json`へatomicに
 identity、commitを検証し、未完了runだけを続行する。driver、FFmpeg、kernelなどtarget
 probeの値が変わったstateは混在させない。completed coldを再実行してwarmへ戻したり、
 completed Comparison Runやcold/warmを再実行したりしない。
+初回probeの`visible_ram_bytes`実測値はstateとAcceptance Recordへそのまま保持する一方、
+durable resumeではWSL2の起動ごとに生じるpage単位のRAM accounting差だけを吸収するため、
+保存値との差が1 MiB以内なら同じtargetとして扱う。1 MiBを超える差、field欠落、非整数値は
+target identity不一致とし、`visible_ram_bytes`以外のtarget fieldは完全一致を要求する。
 設定file外の`OLLAMA_HOST`を含む実効endpointも、URLを公開しないdigestとしてsuite identityへ
 固定する。
 

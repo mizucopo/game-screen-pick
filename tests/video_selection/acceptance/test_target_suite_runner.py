@@ -1101,7 +1101,11 @@ def test_completed_state_rejects_changed_target_identity(tmp_path: Path) -> None
     # Arrange
     profile_path = _profile(tmp_path)
     calls: list[str] = []
-    target = {"os": "linux", "gpu_driver": "first"}
+    target = {
+        "os": "linux",
+        "gpu_driver": "first",
+        "visible_ram_bytes": 32 * 1024**3,
+    }
 
     def execute(
         run_name: str,
@@ -1127,6 +1131,165 @@ def test_completed_state_rejects_changed_target_identity(tmp_path: Path) -> None
 
     # Assert
     assert "target identity" in str(error.value)
+    assert calls == ["cold", "warm"]
+
+
+@pytest.mark.parametrize(
+    "delta_bytes",
+    (-12 * 1024, -4 * 1024, -(1024**2), 1024**2),
+)
+def test_completed_state_accepts_boot_level_visible_ram_variation(
+    tmp_path: Path,
+    delta_bytes: int,
+) -> None:
+    """起動単位の微小なvisible RAM差で完了stateが再利用されること。
+
+    Arrange:
+        - 実測visible RAMを持つcold/warm完了stateが用意される
+    Act:
+        - 現在値だけが1 MiB以内で変動したtargetからsuiteが再開される
+    Assert:
+        - 初回実測値がstateに保持され、phase再実行なしで再開されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    initial_ram_bytes = 32 * 1024**3
+    target = {
+        "os": "linux",
+        "gpu_driver": "stable",
+        "visible_ram_bytes": initial_ram_bytes,
+    }
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute, environment_probe=lambda: dict(target))
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    state_path = (
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "release"
+        / "acceptance-state.json"
+    )
+    state = read_json_object(state_path)
+    assert state is not None
+    stored_target = state["target"]
+    assert isinstance(stored_target, dict)
+    assert stored_target["visible_ram_bytes"] == initial_ram_bytes
+    target["visible_ram_bytes"] = initial_ram_bytes + delta_bytes
+
+    # Act
+    resumed = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert resumed == 3
+    assert calls == ["cold", "warm"]
+    resumed_state = read_json_object(state_path)
+    assert resumed_state is not None
+    resumed_target = resumed_state["target"]
+    assert isinstance(resumed_target, dict)
+    assert resumed_target["visible_ram_bytes"] == initial_ram_bytes
+
+
+@pytest.mark.parametrize(
+    "delta_bytes",
+    (-(1024**2) - 1, 1024**2 + 1),
+)
+def test_completed_state_rejects_meaningful_visible_ram_change(
+    tmp_path: Path,
+    delta_bytes: int,
+) -> None:
+    """1 MiBを超えるvisible RAM差がtarget変更として拒否されること。
+
+    Arrange:
+        - 実測visible RAMを持つcold/warm完了stateが用意される
+    Act:
+        - 現在値が1 MiBを超えて変わったtargetからsuiteが再開される
+    Assert:
+        - target identity不一致としてphase再実行前に拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    initial_ram_bytes = 32 * 1024**3
+    target = {
+        "os": "linux",
+        "gpu_driver": "stable",
+        "visible_ram_bytes": initial_ram_bytes,
+    }
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute, environment_probe=lambda: dict(target))
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    target["visible_ram_bytes"] = initial_ram_bytes + delta_bytes
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="target identity"):
+        runner.run(profile_path=profile_path, suite="release")
+    assert calls == ["cold", "warm"]
+
+
+@pytest.mark.parametrize(
+    "invalid_value",
+    (None, True, "34359738368", "missing"),
+)
+def test_completed_state_rejects_invalid_visible_ram_identity(
+    tmp_path: Path,
+    invalid_value: object,
+) -> None:
+    """欠落または非整数のvisible RAM identityが拒否されること。
+
+    Arrange:
+        - 正の整数のvisible RAMを持つcold/warm完了stateが用意される
+    Act:
+        - 現在targetのRAM fieldが欠落または不正型へ変更される
+    Assert:
+        - target identity不一致としてphase再実行前に拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    target: dict[str, object] = {
+        "os": "linux",
+        "gpu_driver": "stable",
+        "visible_ram_bytes": 32 * 1024**3,
+    }
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute, environment_probe=lambda: dict(target))
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    if invalid_value == "missing":
+        target.pop("visible_ram_bytes")
+    else:
+        target["visible_ram_bytes"] = invalid_value
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="target identity"):
+        runner.run(profile_path=profile_path, suite="release")
     assert calls == ["cold", "warm"]
 
 
@@ -1394,6 +1557,7 @@ def _runner(
                 "host_os": "windows_11_pro",
                 "environment": "wsl2",
                 "gpu": "rtx_5090",
+                "visible_ram_bytes": 32 * 1024**3,
             }
         ),
         revision_probe=lambda _path: ("a" * 40, False),
