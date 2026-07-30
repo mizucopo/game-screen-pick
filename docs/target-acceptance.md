@@ -40,6 +40,9 @@ profile schemaはstrictで、次だけを持つ。
 
 `artifact_root`は`input_root`自身またはその配下に置かない。full suiteのrecursive source
 discoveryへ生成済み匿名inputが混入する構成はprofile読込時に拒否される。
+さらに`input_root`、`configuration_path`、private profile自身を、
+`<artifact_root>/target-acceptance/<suite>`自身またはその配下に置かない。
+`--reset-suite`とrelease work cleanupが利用者のsourceを削除し得る配置は、削除前に拒否される。
 
 Ollama host、model、STT device、選択枚数などをprofileへ複製しない。これらは
 `configuration_path`のTOMLを通常どおり読み、明示CLI、TOML、`OLLAMA_HOST`、組み込み
@@ -89,8 +92,9 @@ sample内で一時的な失敗を一度だけ即時再試行する。再試行�
 coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
 full Video Setを再hashしない。fullのauto coldに使う独立Video Scanは
-`video_scan.workers = "auto"`を要求し、NVDECとresource余力がある24 logical CPU targetでは
-保守的な3 workerから開始し、rolling判断で最大6 workerまで利用する。
+`video_scan.workers = "auto"`かつ`video_scan.auto_max_workers >= 4`を要求する。
+固定3比較を静的に超えられない上限は長時間runの前に拒否する。NVDECとresource余力がある
+24 logical CPU targetでは保守的な3 workerから開始し、rolling判断で最大6 workerまで利用する。
 開始時点でCPU・Decoder・memory・GPU・VRAM・disk pressureを検知した場合は1 workerへ抑制する。
 CPU・Decoder・memory・VRAM・diskの直近3 sampleと、
 disk throughput・1 stream処理速度のtrendを使い、pressure時はscan完了境界で1 workerずつ
@@ -139,7 +143,9 @@ durable resumeではWSL2の起動ごとに生じるpage単位のRAM accounting�
 保存値との差が1 MiB以内なら同じtargetとして扱う。1 MiBを超える差、field欠落、非整数値は
 target identity不一致とし、`visible_ram_bytes`以外のtarget fieldは完全一致を要求する。
 設定file外の`OLLAMA_HOST`を含む実効endpointも、URLを公開しないdigestとしてsuite identityへ
-固定する。
+固定する。TOML bytesだけでなく、環境変数と組み込み既定値を解決した全実効設定の
+privacy-safe summaryもdigestへ固定する。再開時にscan worker上限などの実効値が変わっていれば、
+coldと異なる設定でwarmを実行せずsuite identity不一致として拒否する。
 
 完了済みphaseからhuman reviewを再開する場合も、現在のsourceをmaterializeし直してsuite
 fingerprintを照合し、Resolved Model Identityを再解決してからrecordを確定する。入力または
@@ -175,6 +181,7 @@ uv run task acceptance-target \
 `--reset-suite`は選んだsuiteのstate、run output、worksheet、
 processing cacheを破棄する。
 suite rootを完全に削除できない場合はpartial resetのまま続行せず失敗する。
+input root、通常設定、private profileがsuite root内にある場合も、sourceを削除する前に失敗する。
 releaseとfullのartifactは混在しない。
 
 ## Human review

@@ -181,6 +181,9 @@ artifact rootと、relative video path、start/end Video Time、scenario roleだ
 [`docs/examples/target-acceptance.toml`](examples/target-acceptance.toml)のschema/templateだけを
 置く。生成したtemporary clipはrun終了後に削除する。実行、durable resume、private worksheet、
 終了code、baseline承認は[Target acceptance](target-acceptance.md)を参照する。
+input root、通常設定、private profileはsuite削除対象directoryの外に置き、resetやrelease
+cleanupより前に重複を拒否する。durable stateはTOML digestに加え、環境変数と既定値を解決した
+全実効設定のprivacy-safe summary digestへ固定し、cold/warm間の設定変更を受理しない。
 
 各runはversioned `acceptance.json`を生成し、release/Issue artifactとして保管する。次を
 記録する。
@@ -218,6 +221,8 @@ target動画から代表scenarioを固定し、合計約30分のintervalとし�
 
 12 videos、合計50時間40分の全体を、reference PCを他用途で使わず実行する。IMP-13前と、
 抽出/cache/parallelismの性能へ影響する変更時だけ必須とする。
+full比較は`video_scan.workers = "auto"`かつ`video_scan.auto_max_workers >= 4`を要求し、
+固定3を超えられない上限は長時間runの開始前に拒否する。
 
 設計時に確認したtarget inputは1,124,448,879,219 bytes、対象driveの空きは
 5,976,873,041,920 bytesだった。これは固定identityや将来の合格値にはせず、各runのpreflightで

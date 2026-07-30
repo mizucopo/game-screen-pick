@@ -67,7 +67,7 @@ SuiteMaterializer = Callable[
 ]
 StoragePreflight = Callable[[AcceptanceProfile, Path], dict[str, object]]
 
-_STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.2.0"
+_STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.3.0"
 _VISIBLE_RAM_IDENTITY_TOLERANCE_BYTES = 1024**2
 
 
@@ -113,6 +113,7 @@ class TargetSuiteRunner:
         profile = load_acceptance_profile(profile_path)
         _validate_profile_files(profile)
         suite_root = profile.artifact_root / "target-acceptance" / suite
+        _validate_suite_source_paths(profile_path, profile, suite_root)
         if reset_suite:
             _remove_directory_strict(suite_root, "Acceptance suite")
         state_path = suite_root / "acceptance-state.json"
@@ -148,15 +149,25 @@ class TargetSuiteRunner:
             input_folder,
             suite_root / "outputs" / "warm",
         )
+        configuration_summary = _configuration_summary(
+            cold_configuration,
+            configuration_digest=configuration_digest,
+        )
+        effective_configuration_digest = _effective_configuration_digest(
+            configuration_summary
+        )
         execution_steps = _execution_steps(
             suite,
             suite_root,
             cold_configuration,
             warm_configuration,
         )
-        if state is not None and state.get(
-            "ollama_endpoint_identity"
-        ) != _ollama_endpoint_identity(cold_configuration.ollama_host):
+        if state is not None and (
+            state.get("ollama_endpoint_identity")
+            != _ollama_endpoint_identity(cold_configuration.ollama_host)
+            or state.get("effective_configuration_digest")
+            != effective_configuration_digest
+        ):
             raise ValueError("Acceptance stateが現在のsuite identityと一致しません")
         ollama_deployment = self._ollama_deployment_probe(
             cold_configuration.ollama_host
@@ -178,6 +189,7 @@ class TargetSuiteRunner:
             profile,
             configuration_digest,
             cold_configuration,
+            effective_configuration_digest,
             suite_descriptor,
             resolved_models,
             commit,
@@ -188,10 +200,7 @@ class TargetSuiteRunner:
                 **identity,
                 "source_revision": {"commit": commit, "dirty": False},
                 "target": target,
-                "configuration": _configuration_summary(
-                    cold_configuration,
-                    configuration_digest=configuration_digest,
-                ),
+                "configuration": configuration_summary,
                 "models": resolved_models.provenance(),
                 "storage_preflight": storage_preflight,
                 "phases": {},
@@ -516,6 +525,10 @@ def _execution_steps(
         )
     if cold.video_scan_workers != "auto":
         raise ValueError("Full acceptanceのVideo Scan workersにはautoが必要です")
+    if cold.video_scan_auto_max_workers <= 3:
+        raise ValueError(
+            "Full acceptanceのVideo Scan auto max workersには4以上が必要です"
+        )
     fixed_three = replace(
         cold,
         output_folder=suite_root / "outputs" / "fixed3",
@@ -597,11 +610,25 @@ def _configuration_summary(
     }
 
 
+def _effective_configuration_digest(
+    summary: Mapping[str, object],
+) -> str:
+    payload = json.dumps(
+        summary,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(
+        b"game-screen-pick/effective-configuration@1\0" + payload
+    ).hexdigest()
+
+
 def _identity(
     suite: str,
     profile: AcceptanceProfile,
     configuration_digest: str,
     configuration: EffectiveConfiguration,
+    effective_configuration_digest: str,
     descriptor: Mapping[str, object],
     models: ResolvedModels,
     commit: str,
@@ -621,6 +648,7 @@ def _identity(
         "suite": suite,
         "profile_digest": profile.profile_digest,
         "configuration_digest": configuration_digest,
+        "effective_configuration_digest": effective_configuration_digest,
         "ollama_endpoint_identity": _ollama_endpoint_identity(
             configuration.ollama_host
         ),
@@ -636,6 +664,37 @@ def _validate_profile_files(profile: AcceptanceProfile) -> None:
     if not profile.configuration_path.is_file():
         raise ValueError("Acceptance configurationが存在しません")
     profile.artifact_root.mkdir(parents=True, exist_ok=True)
+
+
+def _validate_suite_source_paths(
+    profile_path: Path,
+    profile: AcceptanceProfile,
+    suite_root: Path,
+) -> None:
+    protected_paths = (
+        ("Acceptance input root", profile.input_root),
+        ("Acceptance configuration", profile.configuration_path),
+        ("Acceptance profile", profile_path),
+    )
+    for label, path in protected_paths:
+        if _path_is_within(path, suite_root):
+            raise ValueError(f"{label}はsuite削除対象directory内に置けません")
+
+
+def _path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        path_variants = (path.absolute(), path.resolve(strict=False))
+        parent_variants = (parent.absolute(), parent.resolve(strict=False))
+    except (OSError, RuntimeError):
+        return True
+    for candidate in path_variants:
+        for root in parent_variants:
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                continue
+            return True
+    return False
 
 
 def _validate_state_identity(

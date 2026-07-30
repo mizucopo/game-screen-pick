@@ -226,6 +226,85 @@ def test_reset_suite_fails_when_suite_root_survives_deletion(
     assert calls == ["cold", "warm"]
 
 
+@pytest.mark.parametrize(
+    "protected_source",
+    ("input_root", "configuration_path", "profile_path"),
+)
+def test_suite_sources_inside_reset_root_are_rejected_before_deletion(
+    tmp_path: Path,
+    protected_source: str,
+) -> None:
+    """suite削除対象内の入力・設定sourceが削除前に拒否されること。
+
+    Arrange:
+        - input root、通常設定、private profileのいずれかがsuite root内に置かれる
+    Act:
+        - reset_suite=trueでrelease suiteが実行される
+    Assert:
+        - sourceが残ったまま削除対象との重複として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    suite_root.mkdir(parents=True)
+    profile_text = profile_path.read_text(encoding="utf-8")
+    if protected_source == "input_root":
+        protected_path = suite_root / "user-input"
+        protected_path.mkdir()
+        (protected_path / "source.mkv").write_bytes(b"source")
+        old_line = next(
+            line for line in profile_text.splitlines() if line.startswith("input_root")
+        )
+        profile_path.write_text(
+            profile_text.replace(
+                old_line,
+                f'input_root = "{protected_path}"',
+                1,
+            ),
+            encoding="utf-8",
+        )
+    elif protected_source == "configuration_path":
+        protected_path = suite_root / "video-selection.toml"
+        protected_path.write_bytes((tmp_path / "video-selection.toml").read_bytes())
+        old_line = next(
+            line
+            for line in profile_text.splitlines()
+            if line.startswith("configuration_path")
+        )
+        profile_path.write_text(
+            profile_text.replace(
+                old_line,
+                f'configuration_path = "{protected_path}"',
+                1,
+            ),
+            encoding="utf-8",
+        )
+    else:
+        protected_path = suite_root / "target.toml"
+        protected_path.write_text(profile_text, encoding="utf-8")
+        profile_path = protected_path
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="suite削除対象"):
+        _runner(execute).run(
+            profile_path=profile_path,
+            suite="release",
+            reset_suite=True,
+        )
+    assert protected_path.exists()
+    assert calls == []
+
+
 def test_release_finalization_fails_when_private_work_survives_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -392,6 +471,39 @@ def test_state_preserves_privacy_safe_performance_configuration(
         "deployment": "windows_native",
         "listener_process": "ollama.exe",
     }
+
+
+def test_full_suite_rejects_auto_cap_that_cannot_exceed_three(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """3以下のauto worker上限がfull run開始前に拒否されること。
+
+    Arrange:
+        - auto worker上限が3のfull suite設定が用意される
+    Act:
+        - full target suiteが実行される
+    Assert:
+        - fixed3比較を超えられない設定としてrun開始前に拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    monkeypatch.setenv("GAME_SCREEN_PICK_VIDEO_SCAN_AUTO_MAX_WORKERS", "3")
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="4以上"):
+        _runner(execute).run(profile_path=profile_path, suite="full")
+    assert calls == []
 
 
 def test_full_suite_compares_fixed_three_with_auto_before_warm_run(
@@ -1028,6 +1140,54 @@ def test_completed_state_rejects_changed_environment_ollama_endpoint(
     # Act / Assert
     with pytest.raises(ValueError, match="suite identity"):
         runner.run(profile_path=profile_path, suite="release")
+    assert calls == ["cold", "warm"]
+
+
+def test_completed_state_rejects_changed_environment_scan_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """環境変数由来の実効scan設定が変わったstateは再利用されないこと。
+
+    Arrange:
+        - TOMLにscan上限を持たず環境変数値6で完了したsuiteが用意される
+    Act:
+        - auto worker上限を5へ変えてsuiteが再開される
+    Assert:
+        - privacy-safeな実効設定identity不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    monkeypatch.setenv("GAME_SCREEN_PICK_VIDEO_SCAN_AUTO_MAX_WORKERS", "6")
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    state = read_json_object(
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "release"
+        / "acceptance-state.json"
+    )
+    monkeypatch.setenv("GAME_SCREEN_PICK_VIDEO_SCAN_AUTO_MAX_WORKERS", "5")
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="suite identity"):
+        runner.run(profile_path=profile_path, suite="release")
+    assert state is not None
+    effective_digest = state["effective_configuration_digest"]
+    assert isinstance(effective_digest, str)
+    assert len(effective_digest) == 64
     assert calls == ["cold", "warm"]
 
 
