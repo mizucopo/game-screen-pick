@@ -3,6 +3,8 @@
 import math
 from fractions import Fraction
 
+import cv2
+import numpy as np
 import pytest
 
 from src.video_selection.models.blog_candidate import BlogCandidate
@@ -13,12 +15,16 @@ from src.video_selection.models.candidate_annotation import (
     ExplanationValue,
     SpoilerRisk,
 )
+from src.video_selection.models.decoded_video_frame import DecodedVideoFrame
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.neutral_image_analysis import NeutralImageAnalysis
 from src.video_selection.models.neutral_image_metrics import NeutralImageMetrics
 from src.video_selection.models.scene_catalog_entry import SceneSelectionRole
 from src.video_selection.models.video_set_selection_result import (
     VideoSetSelectionResult,
+)
+from src.video_selection.services.analyze_neutral_images import (
+    analyze_neutral_images,
 )
 from src.video_selection.services.select_video_set_images import (
     SpoilerSensitivity,
@@ -55,6 +61,20 @@ def _metrics() -> NeutralImageMetrics:
         dominant_tone_ratio=0.2,
         information_score=0.8,
         visibility_score=0.9,
+    )
+
+
+def _decoded_frame(source_pts: int, rgb: np.ndarray) -> DecodedVideoFrame:
+    height, width = rgb.shape[:2]
+    return DecodedVideoFrame(
+        stream_index=0,
+        pts=source_pts,
+        duration_ts=1,
+        time_base=Fraction(1, 10),
+        width=width,
+        height=height,
+        pixel_format="rgb24",
+        pixels=rgb.astype(np.uint8).tobytes(),
     )
 
 
@@ -314,6 +334,93 @@ def test_visual_near_duplicate_is_rejected_even_when_selection_is_short() -> Non
     assert rejection.reason_code == "visual_near_duplicate"
     assert rejection.nearest_selected_image_id == first.identifier
     assert rejection.similarity == pytest.approx(0.996)
+
+
+def test_analyzed_distinct_types_coexist_without_duplicate_filling_shortfall() -> None:
+    """異なるgameplayとmenuが共存し重複画像で穴埋めされないこと。
+
+    Arrange:
+        - edge方向分布は近いが色・輝度・配置が異なる2種類のframeが用意される
+        - 各frameが有用なgameplay候補とmenu候補に注釈される
+        - gameplayと同じ画素を持つ重複候補が用意される
+    Act:
+        - Neutral Image Analysisの視覚特徴でVideo Set selectorが実行される
+    Assert:
+        - 2候補がVisual Near-Duplicateにされず同時に選択されること
+        - 重複候補が要求枚数の不足を埋めないこと
+    """
+    # Arrange
+    rows, columns = np.indices((256, 256))
+    gameplay_mask = ((rows // 32 + columns // 32) % 2).astype(bool)
+    gameplay_rgb = np.empty((256, 256, 3), dtype=np.uint8)
+    gameplay_rgb[gameplay_mask] = (210, 45, 35)
+    gameplay_rgb[~gameplay_mask] = (25, 70, 180)
+    menu_rgb = np.full((256, 256, 3), (25, 90, 45), dtype=np.uint8)
+    for center_y in (24, 72, 120, 168, 216):
+        for center_x in (24, 72, 120, 168, 216):
+            cv2.rectangle(
+                menu_rgb,
+                (center_x - 12, center_y - 12),
+                (center_x + 12, center_y + 12),
+                (235, 210, 80),
+                -1,
+            )
+    gameplay_analysis, menu_analysis = analyze_neutral_images(
+        (
+            _decoded_frame(0, gameplay_rgb),
+            _decoded_frame(1, menu_rgb),
+        )
+    )
+    duplicate_analysis = analyze_neutral_images(
+        (_decoded_frame(2, gameplay_rgb.copy()),)
+    )[0]
+    gameplay = _candidate(
+        "1",
+        quality=0.9,
+        feature=gameplay_analysis.visual_feature,
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    menu = _candidate(
+        "2",
+        quality=0.8,
+        feature=menu_analysis.visual_feature,
+        progress=Fraction(8, 10),
+        blog_image_type="menu",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    duplicate = _candidate(
+        "3",
+        quality=0.7,
+        feature=duplicate_analysis.visual_feature,
+        progress=Fraction(9, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (menu, duplicate, gameplay),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        gameplay.identifier,
+        menu.identifier,
+    ]
+    assert result.shortfall is True
+    assert result.blog_image_type_actuals["normal_gameplay"] == 1
+    assert result.blog_image_type_actuals["menu"] == 1
+    assert len(result.rejected) == 1
+    assert result.rejected[0].candidate.identifier == duplicate.identifier
+    assert result.rejected[0].reason_code == "visual_near_duplicate"
 
 
 def test_automatic_relaxation_does_not_select_redundant_gameplay_frame() -> None:

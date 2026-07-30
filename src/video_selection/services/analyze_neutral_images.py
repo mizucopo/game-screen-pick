@@ -13,7 +13,7 @@ from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.neutral_image_analysis import NeutralImageAnalysis
 from ..models.neutral_image_metrics import NeutralImageMetrics
 
-NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v5"
+NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v6"
 BLUR_REJECT_VARIANCE_MIN = 12.0
 _CLIPPED_WHITE_THRESHOLD = 235
 _SOFT_WHITE_THRESHOLD = 230
@@ -182,9 +182,9 @@ def _measure_frame(
     feature = _safe_l2_normalize(
         np.concatenate(
             (
-                cv2.normalize(hsv_hist, hsv_hist).flatten(),
-                cv2.normalize(luminance_hist, luminance_hist).flatten(),
-                edge_hist.astype(np.float32),
+                _safe_l2_normalize(hsv_hist.flatten()),
+                _safe_l2_normalize(luminance_hist.flatten()),
+                _safe_l2_normalize(edge_hist.astype(np.float32)),
             )
         ).astype(np.float32)
     )

@@ -218,6 +218,35 @@ def test_visual_feature_is_l2_normalized_and_temporal_transition_is_rejected() -
     assert analyses[1].reject_reason is ContentRejectReason.TEMPORAL_TRANSITION
 
 
+def test_visual_feature_components_have_equal_l2_contribution() -> None:
+    """HSV・輝度・edge成分が等しいL2寄与で結合されること。
+
+    Arrange:
+        - 全視覚特徴成分が非zeroになる高情報frameが用意される
+    Act:
+        - model-free Neutral Image Analysisが実行される
+    Assert:
+        - 各成分の二乗L2寄与が全体の3分の1ずつを担うこと
+    """
+    # Arrange
+    frame = _frame(0, _checkerboard())
+
+    # Act
+    analysis = analyze_neutral_images((frame,))[0]
+    feature = np.asarray(analysis.visual_feature)
+    component_norms = (
+        np.linalg.norm(feature[:64]),
+        np.linalg.norm(feature[64:96]),
+        np.linalg.norm(feature[96:]),
+    )
+
+    # Assert
+    expected_component_norm = 1 / np.sqrt(3)
+    assert component_norms == pytest.approx(
+        (expected_component_norm,) * 3,
+    )
+
+
 def test_temporal_transition_requires_exact_native_frame_adjacency() -> None:
     """離れたsampleがtemporal transitionの前後frameにされないこと。
 

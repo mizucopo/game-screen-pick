@@ -45,7 +45,7 @@ Timeline Segmentは0、scene signalのVideo Time、Video Durationを境界とす
 - Frame Candidate Proxy: 長辺960px以下、FFmpeg MJPEG `q:v=3`、source metadataなし
 - 元解像度RGB frame: cacheしない。公開時にexact PTSから再抽出し、選択画像1枚ごとの固定WebPだけをDurable Work Unitとして保存する
 
-Neutral Image AnalysisはOpenCV/NumPyの画質metricsとL2正規化済みHSV・輝度・edge特徴だけを使い、CLIPやHugging Face modelをloadしません。stable reject reasonは次の6種類です。
+Neutral Image AnalysisはOpenCV/NumPyの画質metricsとHSV・輝度・edge特徴だけを使い、各特徴成分を個別にL2正規化して等しく結合します。解像度や勾配量のscale差で一成分が他成分を消失させず、CLIPやHugging Face modelもloadしません。stable reject reasonは次の6種類です。
 
 - `blackout`
 - `whiteout`

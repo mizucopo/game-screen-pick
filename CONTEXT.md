@@ -521,7 +521,7 @@ _Avoid_: free-text rejection, Content Reject Reason, Ollama Stage Failure
 _Avoid_: final selected score, model confidence, regenerated explanation
 
 **Neutral Image Analysis**:
-sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。画像の内容分類ではなく、blog candidate判定や動画横断のcosine similarity判定の土台になる。明確な無効frameには絶対条件を使い、純白だけでなく主対象を覆う大きな連結白領域、画面全体では小さくても中央の主対象を覆う連結した白い発光、画面の大半を覆う低情報の淡い白もwhiteoutにする。構造が判別できる明るいmenuは明るさだけで除外しない。暗いgameなど入力特性にはRefinement Window Group内の分布を使う。Transition Frameには同一streamとtime baseでdurationどおりに連続するnative frameだけの前後関係を使い、0.25秒以内に画面の一部から大半へ拡大または縮小する淡い明領域もtemporal transitionにする。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
+sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。各視覚特徴成分は尺度差によって他成分を消失させないよう個別に正規化して等しく組み合わせ、画像の内容分類ではなくblog candidate判定や動画横断のcosine similarity判定の土台にする。明確な無効frameには絶対条件を使い、純白だけでなく主対象を覆う大きな連結白領域、画面全体では小さくても中央の主対象を覆う連結した白い発光、画面の大半を覆う低情報の淡い白もwhiteoutにする。構造が判別できる明るいmenuは明るさだけで除外しない。暗いgameなど入力特性にはRefinement Window Group内の分布を使う。Transition Frameには同一streamとtime baseでdurationどおりに連続するnative frameだけの前後関係を使い、0.25秒以内に画面の一部から大半へ拡大または縮小する淡い明領域もtemporal transitionにする。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
 _Avoid_: scene classification, selection intent, CLIP embedding, model-dependent feature
 
 **Content Reject Reason**:
