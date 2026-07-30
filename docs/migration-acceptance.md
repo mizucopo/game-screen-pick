@@ -241,6 +241,9 @@ GPU-heavy Stageは重ねない。GPU recordはprocess baseline、model `size_vra
 peakを分ける。Ollama `/api/ps`のmodel `size`と`size_vram`も比較し、coldでmodelが観測され、
 全量がGPU residentである場合だけ自動gateを合格させる。停止timeout内にbackground GPU
 probeまたはdisk samplerが終了しない場合もsampling incompleteとして不合格にする。
+process GPU baselineはrun開始時に一度だけ取得し、継続sampleではsystem GPU memoryだけを
+`nvidia-smi`から取得する。各queryは2秒でtimeoutし、GPU sampleは一時的な失敗を同じsample
+内で一度だけ即時再試行する。再試行も失敗したsampleはsampling incompleteとして不合格にする。
 model capability probeは`keep_alive = 0`でtimed phase前にOllama modelを解放する。
 
 既存prototypeの参考値は、#163の全scan約14時間見込み、heartbeat proxy約17 GB、#165の

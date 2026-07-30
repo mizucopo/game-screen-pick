@@ -19,6 +19,7 @@ _VISION_STAGES = {
     ProcessingStage.ANNOTATE_CANDIDATE,
 }
 _MIB_BYTES = 1024**2
+_NVIDIA_SMI_TIMEOUT_SECONDS = 2
 
 
 class GpuResourceMonitor:
@@ -103,13 +104,21 @@ class GpuResourceMonitor:
             self._sample(is_baseline=False)
 
     def _sample(self, *, is_baseline: bool) -> None:
-        try:
-            sample = self._probe()
-            system = _non_negative_integer(sample, "system_used_mib")
-            process = _non_negative_integer(sample, "process_used_mib")
-            model_size = _non_negative_integer(sample, "ollama_size_bytes")
-            model_vram = _non_negative_integer(sample, "ollama_size_vram_bytes")
-        except Exception:
+        for attempt in range(2):
+            try:
+                sample = self._probe()
+                system = _non_negative_integer(sample, "system_used_mib")
+                process = _non_negative_integer(sample, "process_used_mib")
+                model_size = _non_negative_integer(sample, "ollama_size_bytes")
+                model_vram = _non_negative_integer(
+                    sample,
+                    "ollama_size_vram_bytes",
+                )
+                break
+            except Exception:
+                if attempt == 0:
+                    continue
+        else:
             with self._lock:
                 self._sample_errors += 1
             return
@@ -148,16 +157,19 @@ class GpuResourceMonitor:
 
 def _default_probe(ollama_host: str) -> GpuProbe:
     command = find_nvidia_smi()
+    process_baseline: int | None = None
 
     def probe() -> Mapping[str, int]:
+        nonlocal process_baseline
         system = _query_integer(
             [command, "--query-gpu=memory.used", "--format=csv,noheader,nounits"]
         )
-        process = _query_current_process_memory(command)
+        if process_baseline is None:
+            process_baseline = _query_current_process_memory(command)
         model_size, model_vram = _query_ollama_sizes(ollama_host)
         return {
             "system_used_mib": system,
-            "process_used_mib": process,
+            "process_used_mib": process_baseline,
             "ollama_size_bytes": model_size,
             "ollama_size_vram_bytes": model_vram,
         }
@@ -177,7 +189,13 @@ def find_nvidia_smi() -> str:
 
 
 def _query_integer(command: list[str]) -> int:
-    process = subprocess.run(command, check=True, capture_output=True, text=True)
+    process = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=_NVIDIA_SMI_TIMEOUT_SECONDS,
+    )
     values = [
         int(line.strip())
         for line in process.stdout.splitlines()
@@ -198,6 +216,7 @@ def _query_current_process_memory(command: str) -> int:
         check=True,
         capture_output=True,
         text=True,
+        timeout=_NVIDIA_SMI_TIMEOUT_SECONDS,
     )
     total = 0
     for line in process.stdout.splitlines():

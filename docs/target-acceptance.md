@@ -77,6 +77,11 @@ stateとprivacy-safe recordへ保存する。persistent cacheは独立した64 G
 temporary workとoutput stagingの96 GiB peakへ二重計上しない。確定済みoutputはpeakから除く。
 background disk sampleが一度でも失敗した場合はerror件数を記録し、後続sampleと停止に成功しても
 resource samplingを不完全として扱う。
+GPU sampleはsystem GPU memoryを継続測定する一方、process GPU memoryはrun開始時の
+baselineとして一度だけ取得する。各`nvidia-smi` queryには2秒のtimeoutを設け、同じGPU
+sample内で一時的な失敗を一度だけ即時再試行する。再試行も失敗したsample、または停止timeout
+内に終了しないbackground probeが一つでもあれば、error件数を記録してresource samplingを
+不完全として扱う。
 
 coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
