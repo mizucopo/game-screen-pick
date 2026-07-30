@@ -173,7 +173,8 @@ def test_legacy_cleanup_failure_is_fatal_and_new_cache_is_untouched(
 
     monkeypatch.setattr(shutil, "rmtree", fail_legacy_delete)
 
-    # Act / Assert
+    # Act
+    # Assert
     with (
         InputFolderLock(input_folder) as input_lock,
         pytest.raises(PermissionError, match="injected legacy"),
@@ -215,7 +216,8 @@ def test_write_preflight_failure_does_not_delete_legacy_cache(
 
     monkeypatch.setattr(Path, "write_bytes", fail_write_probe)
 
-    # Act / Assert
+    # Act
+    # Assert
     with (
         InputFolderLock(input_folder) as input_lock,
         pytest.raises(PermissionError, match="injected cache write"),
@@ -286,7 +288,8 @@ def test_cache_preparation_requires_the_matching_active_input_lock(
     input_lock = InputFolderLock(input_folder)
     cache_folder = input_folder / ".game-screen-pick" / "cache"
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(RuntimeError, match="Input Lock"):
         prepare_processing_cache(
             cache_folder,

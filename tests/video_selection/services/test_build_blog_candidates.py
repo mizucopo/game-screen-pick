@@ -106,7 +106,8 @@ def test_annotation_must_match_request_moment(tmp_path: Path) -> None:
     scene_catalog = publication.scene_catalog
     assert scene_catalog is not None
 
-    # Act / Assert
+    # Act
+    # Assert
     try:
         build_blog_candidates(
             requests,

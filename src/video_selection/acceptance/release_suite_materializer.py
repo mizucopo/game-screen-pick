@@ -23,6 +23,7 @@ from .materialization_media_runtime import (
 )
 from .release_interval import ReleaseInterval
 from .source_snapshot_fingerprint import acceptance_source_snapshot_fingerprint
+from .suite_owned_directory import validate_suite_owned_directory_chain
 
 CommandRunner = Callable[[list[str]], None]
 MediaProbe = Callable[[Path], Mapping[str, object]]
@@ -60,6 +61,12 @@ class ReleaseSuiteMaterializer:
         checkpoint_root = work_root / "interval-checkpoints"
         manifest_path = work_root / "release-materialization.json"
         context_path = work_root / "release-materialization-context.json"
+        validate_suite_owned_directory_chain(
+            suite_root,
+            work_root,
+            input_folder,
+            suite_label="Release",
+        )
         source_snapshot = acceptance_source_snapshot_fingerprint(profile, "release")
         existing = _read_materialization_manifest(manifest_path)
         if existing is not None and _manifest_descriptor_is_valid(profile, existing):
@@ -427,6 +434,7 @@ class ReleaseSuiteMaterializer:
             manifest.get("schema") != _MATERIALIZATION_SCHEMA
             or manifest.get("profile_digest") != profile.profile_digest
             or not isinstance(descriptor, dict)
+            or input_folder.is_symlink()
             or not input_folder.is_dir()
         ):
             raise ValueError("Release suite stateがprofileと一致しません")

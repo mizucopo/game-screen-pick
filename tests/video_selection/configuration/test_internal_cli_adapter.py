@@ -108,7 +108,8 @@ def test_adapter_rejects_config_before_calling_application(
     ) -> RunOutcome:
         pytest.fail("application境界は呼ばれないこと")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ConfigurationError) as error:
         run_internal_cli_adapter(
             forbidden_application_run,

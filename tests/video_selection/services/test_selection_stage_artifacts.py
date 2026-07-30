@@ -72,6 +72,7 @@ def test_selection_artifact_rejects_changed_candidate_set() -> None:
     )
     artifact = serialize_video_set_selection_result(selection)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="candidate集合"):
         restore_video_set_selection_result(artifact, (first,))

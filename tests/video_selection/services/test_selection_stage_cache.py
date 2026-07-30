@@ -187,7 +187,8 @@ def test_index_permission_failure_does_not_trigger_recovery_or_overwrite(
 
     monkeypatch.setattr(Path, "read_text", deny_index_read)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(PermissionError, match="injected index permission failure"):
         cache.read(request_fingerprint)
     assert index_path.read_bytes() == original_bytes

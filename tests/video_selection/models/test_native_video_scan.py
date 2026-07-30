@@ -17,14 +17,17 @@ def test_partition_without_owned_signals_is_valid() -> None:
     Assert:
         - 空signal列を持つ1 decode結果として受理されること
     """
-    # Arrange / Act
+    # Arrange
+    heartbeats = ()
+
+    # Act
     scan = NativeVideoScan(
         stream_index=0,
         origin_pts=10,
         last_frame_pts=19,
         last_frame_duration_ts=1,
         time_base=Fraction(1, 10),
-        heartbeats=(),
+        heartbeats=heartbeats,
         scene_frames=(),
         wall_seconds=1.0,
         cpu_seconds=0.5,
@@ -46,12 +49,16 @@ def test_partition_with_reversed_timeline_is_rejected() -> None:
     Assert:
         - 不正なtimingとして拒否されること
     """
-    # Arrange / Act / Assert
-    with pytest.raises(ValueError, match="timingまたはmetric"):
+    # Arrange
+    origin_pts = 20
+    last_frame_pts = 10
+
+    # Act
+    with pytest.raises(ValueError) as error:
         NativeVideoScan(
             stream_index=0,
-            origin_pts=20,
-            last_frame_pts=10,
+            origin_pts=origin_pts,
+            last_frame_pts=last_frame_pts,
             last_frame_duration_ts=1,
             time_base=Fraction(1, 10),
             heartbeats=(),
@@ -60,3 +67,6 @@ def test_partition_with_reversed_timeline_is_rejected() -> None:
             cpu_seconds=0.5,
             decode_pass_count=1,
         )
+
+    # Assert
+    assert "timingまたはmetric" in str(error.value)

@@ -756,7 +756,8 @@ def test_interrupt_cancels_active_video_scans(tmp_path: Path) -> None:
         RecordingRunObserver(),
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(KeyboardInterrupt):
         processor.process(
             discover_video_set(input_folder),
@@ -827,7 +828,8 @@ def test_interrupt_does_not_start_queued_video_scans(
     )
     interrupt_thread.start()
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(KeyboardInterrupt):
         VideoStageProcessor(
             runtime,
@@ -876,7 +878,8 @@ def test_scan_failure_cancels_queued_sibling_scans(
     )
     runtime = FakeVideoStageMediaRuntime(on_scan_video=fail_first_scan)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(OSError, match="injected scan failure"):
         VideoStageProcessor(
             runtime,
@@ -1718,7 +1721,8 @@ def test_candidate_proxy_permission_failure_preserves_completed_stage(
     monkeypatch.setattr(Path, "lstat", deny_domain_type_check)
     retry_runtime = FakeVideoStageMediaRuntime()
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(PermissionError, match="injected proxy permission failure"):
         VideoStageProcessor(
             retry_runtime,
@@ -1757,7 +1761,8 @@ def test_metadata_change_is_checked_before_video_stage(
 
     runtime = FakeVideoStageMediaRuntime(on_preflight=rewrite_second_source)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
         VideoStageProcessor(
             runtime,

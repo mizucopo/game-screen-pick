@@ -58,7 +58,8 @@ def test_unknown_profile_key_is_rejected(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="strict schema"):
         load_acceptance_profile(path)
 
@@ -80,7 +81,8 @@ def test_release_interval_cannot_escape_input_root(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Release interval"):
         load_acceptance_profile(path)
 

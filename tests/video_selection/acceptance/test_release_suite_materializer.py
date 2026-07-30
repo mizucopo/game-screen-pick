@@ -110,7 +110,8 @@ def test_boundary_outside_tolerance_removes_partial_clips(tmp_path: Path) -> Non
 
     suite_root = profile.artifact_root / "release"
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="実測境界"):
         ReleaseSuiteMaterializer(
             command_runner=run,
@@ -175,7 +176,8 @@ def test_aggregate_measured_duration_must_remain_within_suite_tolerance(
 
     suite_root = profile.artifact_root / "release"
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="実測合計duration"):
         ReleaseSuiteMaterializer(
             command_runner=run,
@@ -276,6 +278,68 @@ def test_completed_materialization_is_reused_without_ffmpeg(tmp_path: Path) -> N
     # Assert
     assert call_count == 1
     assert second == first
+
+
+@pytest.mark.parametrize("linked_component", ["suite", "work", "input"])
+def test_completed_materialization_rejects_symlinked_suite_owned_ancestor(
+    tmp_path: Path,
+    linked_component: str,
+) -> None:
+    """確定済みrelease inputのsuite-owned ancestorがsymlinkなら拒否されること。
+
+    Arrange:
+        - 確定済みrelease materializationが用意される
+        - suite、work、inputのいずれかが外部directoryへのsymlinkへ置換される
+    Act:
+        - 同じmaterializationの復元が試行される
+    Assert:
+        - resetを要求して外部directoryを変更せず拒否されること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    profile.input_root.mkdir()
+    source = profile.input_root / "private-video.mkv"
+    source.write_bytes(b"source")
+
+    def run(command: list[str]) -> None:
+        Path(command[-1]).write_bytes(b"clip")
+
+    def probe(path: Path) -> dict[str, object]:
+        return {
+            "start": Fraction(0 if path == source else 8),
+            "duration": Fraction(100 if path == source else 1802),
+            "end": Fraction(100 if path == source else 1810),
+            "streams": (("video", "h264"),),
+        }
+
+    materializer = ReleaseSuiteMaterializer(
+        command_runner=run,
+        media_probe=probe,
+        media_runtime_probe=_media_runtime,
+    )
+    suite_root = profile.artifact_root / "release"
+    input_folder, _descriptor = materializer.materialize(profile, suite_root)
+    linked_path = {
+        "suite": suite_root,
+        "work": suite_root / "work",
+        "input": input_folder,
+    }[linked_component]
+    external_path = tmp_path / f"external-{linked_component}"
+    linked_path.rename(external_path)
+    linked_path.symlink_to(external_path, target_is_directory=True)
+    protected_clip = {
+        "suite": external_path / "work" / "input" / "scenario-001.mkv",
+        "work": external_path / "input" / "scenario-001.mkv",
+        "input": external_path / "scenario-001.mkv",
+    }[linked_component]
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        materializer.materialize(profile, suite_root)
+
+    # Assert
+    assert "--reset-suite" in str(error.value)
+    assert protected_clip.read_bytes() == b"clip"
 
 
 def test_completed_interval_survives_later_interval_failure(
@@ -536,7 +600,8 @@ def test_stray_supported_clip_requires_reset(tmp_path: Path) -> None:
     input_folder, _ = materializer.materialize(profile, suite_root)
     (input_folder / "scenario-999.mkv").write_bytes(b"stray")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="匿名input"):
         materializer.materialize(profile, suite_root)
 
@@ -857,7 +922,8 @@ def test_failed_runtime_replacement_preserves_previous_interval_checkpoint(
         Path(command[-1]).write_bytes(b"new-partial")
         raise OSError("injected replacement failure")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(OSError, match="injected replacement failure"):
         ReleaseSuiteMaterializer(
             command_runner=fail_new,

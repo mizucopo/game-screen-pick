@@ -57,7 +57,8 @@ def test_insufficient_capacity_is_rejected_before_execution(tmp_path: Path) -> N
     profile = _profile(tmp_path, (b"video",))
     available = REQUIRED_ARTIFACT_CAPACITY_BYTES - 1
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="容量が不足"):
         preflight_acceptance_storage(
             profile,

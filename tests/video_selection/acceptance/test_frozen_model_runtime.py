@@ -51,7 +51,8 @@ def test_changed_model_selector_is_rejected(tmp_path: Path) -> None:
         scene_catalog_model="changed:latest",
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="freeze"):
         FrozenModelRuntime(models).resolve_models(changed)
 

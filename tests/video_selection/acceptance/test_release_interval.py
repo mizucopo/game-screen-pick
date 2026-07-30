@@ -17,8 +17,11 @@ def test_positive_private_interval_exposes_expected_duration() -> None:
     Assert:
         - 60秒のexpected durationが返されること
     """
-    # Arrange / Act
-    interval = ReleaseInterval("chapter/video.mkv", Fraction(10), Fraction(70), "event")
+    # Arrange
+    source_path = "chapter/video.mkv"
+
+    # Act
+    interval = ReleaseInterval(source_path, Fraction(10), Fraction(70), "event")
 
     # Assert
     assert interval.expected_duration == Fraction(60)
@@ -34,6 +37,12 @@ def test_parent_segment_is_rejected() -> None:
     Assert:
         - path contract違反としてValueErrorになること
     """
-    # Arrange / Act / Assert
-    with pytest.raises(ValueError, match="Release interval"):
-        ReleaseInterval("../video.mkv", Fraction(0), Fraction(1), "event")
+    # Arrange
+    source_path = "../video.mkv"
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        ReleaseInterval(source_path, Fraction(0), Fraction(1), "event")
+
+    # Assert
+    assert "Release interval" in str(error.value)

@@ -95,7 +95,8 @@ def test_changed_full_source_requires_reset(tmp_path: Path) -> None:
     materializer.materialize(profile, suite_root)
     first.write_bytes(b"changed")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="source"):
         materializer.materialize(profile, suite_root)
 
@@ -143,6 +144,63 @@ def test_completed_materialization_reuses_descriptor_after_media_runtime_change(
 
     # Assert
     assert second == first
+
+
+@pytest.mark.parametrize("linked_component", ["suite", "work", "input"])
+def test_completed_materialization_rejects_symlinked_suite_owned_ancestor(
+    tmp_path: Path,
+    linked_component: str,
+) -> None:
+    """確定済みfull inputのsuite-owned ancestorがsymlinkなら拒否されること。
+
+    Arrange:
+        - 確定済みfull materializationが用意される
+        - suite、work、inputのいずれかが外部directoryへのsymlinkへ置換される
+    Act:
+        - 同じmaterializationの復元が試行される
+    Assert:
+        - resetを要求して外部directoryを変更せず拒否されること
+    """
+    # Arrange
+    profile = _profile(tmp_path)
+    profile.input_root.mkdir()
+    (profile.input_root / "private-chapter-01.mkv").write_bytes(b"first")
+    (profile.input_root / "private-chapter-02.mp4").write_bytes(b"second")
+
+    def probe(_path: Path) -> dict[str, object]:
+        return {
+            "start": Fraction(0),
+            "duration": Fraction(50),
+            "end": Fraction(50),
+        }
+
+    materializer = FullSuiteMaterializer(
+        media_probe=probe,
+        media_runtime_probe=_media_runtime,
+    )
+    suite_root = profile.artifact_root / "full"
+    input_folder, _descriptor = materializer.materialize(profile, suite_root)
+    linked_path = {
+        "suite": suite_root,
+        "work": suite_root / "work",
+        "input": input_folder,
+    }[linked_component]
+    external_path = tmp_path / f"external-{linked_component}"
+    linked_path.rename(external_path)
+    linked_path.symlink_to(external_path, target_is_directory=True)
+    protected_clip = {
+        "suite": external_path / "work" / "input" / "scenario-001.mkv",
+        "work": external_path / "input" / "scenario-001.mkv",
+        "input": external_path / "scenario-001.mkv",
+    }[linked_component]
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        materializer.materialize(profile, suite_root)
+
+    # Assert
+    assert "--reset-suite" in str(error.value)
+    assert protected_clip.is_symlink()
 
 
 def test_same_size_and_mtime_replacement_reuses_completed_materialization(
@@ -453,7 +511,8 @@ def test_duration_mismatch_preserves_completed_source_checkpoints(
         },
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="duration"):
         materializer.materialize(profile, suite_root)
     input_folder = suite_root / "work" / "input"
@@ -763,7 +822,8 @@ def test_failed_runtime_replacement_preserves_previous_source_checkpoints(
     def fail_probe(_path: Path) -> dict[str, object]:
         raise OSError("injected replacement failure")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(OSError, match="injected replacement failure"):
         FullSuiteMaterializer(
             media_probe=fail_probe,

@@ -635,7 +635,8 @@ def test_runtime_preflight_failure_preserves_cache_requested_for_reset(
         progress=progress,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(RuntimeError, match="preflight failed"):
         application.run(configuration)
     assert cache_sentinel.read_text(encoding="utf-8") == "keep"
@@ -689,7 +690,8 @@ def test_media_preflight_failure_preserves_recognized_legacy_cache(
         progress=progress,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(RuntimeError, match="media preflight failed"):
         application.run(configuration)
     assert legacy_artifact.read_text(encoding="utf-8") == "keep"

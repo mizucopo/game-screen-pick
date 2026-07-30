@@ -186,7 +186,8 @@ def test_duplicate_video_source_ids_are_rejected_before_publication(
         encoding="utf-8",
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Video Source IDが重複"):
         validate_canonical_selection_report(report, output_folder, request)
 
@@ -349,7 +350,8 @@ def test_publication_faults_leave_no_output_folder(
         if actual == checkpoint:
             raise error
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(type(error), match=str(error)):
         CanonicalOutputPublisher(
             FakeVideoStageMediaRuntime(),
@@ -443,7 +445,8 @@ def test_completed_output_permission_failure_never_deletes_publication(
 
     monkeypatch.setattr(Path, "read_text", deny_report_read)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(PermissionError, match="injected output permission failure"):
         load_validated_canonical_selection_report(output_folder)
     after = {
@@ -490,7 +493,8 @@ def test_completed_image_type_permission_failure_never_deletes_publication(
 
     monkeypatch.setattr(Path, "lstat", deny_image_lstat)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(
         PermissionError,
         match="injected image type permission failure",
@@ -528,7 +532,8 @@ def test_schema_or_renderer_mismatch_leaves_no_output_folder(
         path = staging_folder / artifact
         path.write_text("{}\n" if artifact.endswith("json") else "broken\n")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Canonical Selection Report"):
         CanonicalOutputPublisher(
             FakeVideoStageMediaRuntime(),
@@ -567,7 +572,8 @@ def test_unknown_nested_field_is_rejected_by_exact_producer_schema(
             encoding="utf-8",
         )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="schema不一致"):
         CanonicalOutputPublisher(
             FakeVideoStageMediaRuntime(),
@@ -636,7 +642,8 @@ def test_directory_rename_failure_preserves_only_completed_moved_output(
             source.rename(destination)
         raise OSError("directory rename failed")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(OSError, match="directory rename failed"):
         CanonicalOutputPublisher(
             FakeVideoStageMediaRuntime(),
@@ -664,7 +671,8 @@ def test_nonempty_output_is_rejected_before_frame_extraction(tmp_path: Path) -> 
     (output_folder / "existing.txt").write_text("existing", encoding="utf-8")
     runtime = FakeVideoStageMediaRuntime()
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="存在しないか空"):
         CanonicalOutputPublisher(runtime).publish(request)
     assert runtime.extracted_original_frame_calls == []
@@ -828,7 +836,8 @@ def test_completed_publication_with_different_semantics_is_preserved_and_rejecte
         ),
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="意味結果と一致しません"):
         CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(changed_request)
     after = {
@@ -996,7 +1005,8 @@ def test_atomic_rename_unavailable_fails_before_frame_extraction(
         fail_rename,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(OSError, match="atomic directory rename"):
         CanonicalOutputPublisher(runtime).publish(request)
     assert runtime.extracted_original_frame_calls == []

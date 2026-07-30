@@ -22,6 +22,7 @@ from .source_snapshot_fingerprint import (
     acceptance_source_paths,
     source_snapshot_fingerprint,
 )
+from .suite_owned_directory import validate_suite_owned_directory_chain
 
 MediaProbe = Callable[[Path], Mapping[str, object]]
 
@@ -57,6 +58,12 @@ class FullSuiteMaterializer:
         checkpoint_root = work_root / "source-checkpoints"
         manifest_path = work_root / "full-materialization.json"
         context_path = work_root / "full-materialization-context.json"
+        validate_suite_owned_directory_chain(
+            suite_root,
+            work_root,
+            input_folder,
+            suite_label="Full",
+        )
         existing = _read_materialization_manifest(manifest_path)
         if existing is not None and _manifest_descriptor_is_valid(
             profile,
@@ -267,7 +274,7 @@ def _restore_existing(
     paths = tuple(input_folder / name for name in names)
     if len(paths) != profile.full_expected_video_count or len(paths) != len(sources):
         raise ValueError("Full suite匿名inputが変更されています")
-    if not input_folder.is_dir():
+    if input_folder.is_symlink() or not input_folder.is_dir():
         raise ValueError("Full suite匿名inputが変更されています")
     actual_names = tuple(
         path.relative_to(input_folder).as_posix()

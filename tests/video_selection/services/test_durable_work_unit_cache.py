@@ -185,7 +185,8 @@ def test_artifact_permission_failure_preserves_completed_work_unit(
 
     monkeypatch.setattr(Path, "read_bytes", deny_artifact_read)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(PermissionError, match="injected permission failure"):
         cache.resolve("unit", {}, produce)
     assert producer_calls == 0
@@ -224,7 +225,8 @@ def test_validator_permission_failure_preserves_completed_work_unit(
     def deny_validation(_bundle: DurableWorkUnitBundle) -> None:
         raise PermissionError("injected validator permission failure")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(
         PermissionError,
         match="injected validator permission failure",

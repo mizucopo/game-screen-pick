@@ -97,7 +97,8 @@ def test_same_exact_anchor_merges_heartbeat_and_scene_evidence() -> None:
         - 一つのMomentが両方のevidenceを持つこと
         - IDがmom_と64桁SHA-256で構成されること
     """
-    # Arrange / Act
+    # Arrange
+    # Act
     discovery = discover_candidate_moments(
         video_fingerprint="b" * 64,
         timeline=_timeline(),

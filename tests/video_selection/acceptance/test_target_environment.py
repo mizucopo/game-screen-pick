@@ -57,7 +57,8 @@ def test_loopback_ollama_endpoint_is_not_accepted_as_windows_binding() -> None:
     # Arrange
     endpoint = "http://localhost:11434"
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="非loopback"):
         target_environment.probe_windows_native_ollama(
             endpoint,
@@ -82,7 +83,8 @@ def test_non_windows_ollama_endpoint_address_is_rejected() -> None:
         "windows_addresses": ["192.0.2.10"],
     }
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Windows host address"):
         target_environment.probe_windows_native_ollama(
             "http://wsl-service.example:11434",
@@ -112,7 +114,8 @@ def test_multiple_nvidia_gpus_are_rejected(
         ),
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="単一のNVIDIA GPU"):
         target_environment.probe_target_environment()
 

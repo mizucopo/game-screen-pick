@@ -203,7 +203,8 @@ def test_nonfinite_scan_wall_time_is_rejected(scan_wall_seconds: float) -> None:
         artifact_digest="a" * 64,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="正のnumber"):
         build_video_scan_parallelism_comparison(fixed, automatic)
 

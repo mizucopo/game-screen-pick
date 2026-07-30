@@ -28,7 +28,8 @@ def test_complete_domain_graph_is_accepted(tmp_path: Path) -> None:
     Assert:
         - run IDとVideo Set selectionが保持されること
     """
-    # Arrange / Act
+    # Arrange
+    # Act
     request = build_canonical_publication_request(tmp_path)
 
     # Assert
@@ -51,7 +52,8 @@ def test_requested_count_mismatch_is_rejected(tmp_path: Path) -> None:
     request = build_canonical_publication_request(tmp_path)
     configuration = replace(request.configuration, image_count=3)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="runまたはVideo Set"):
         replace(request, configuration=configuration)
 
@@ -73,7 +75,8 @@ def test_context_cue_from_another_video_source_is_rejected(tmp_path: Path) -> No
     context = replace(stage.context, cues=(cue,))
     changed_stage = replace(stage, context=context)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Context Cueが不正"):
         replace(request, video_stage_results=(changed_stage,))
 
@@ -123,6 +126,7 @@ def test_scene_catalog_is_required_when_candidate_is_annotated(tmp_path: Path) -
     # Arrange
     request = build_canonical_publication_request(tmp_path)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Scene Catalog"):
         replace(request, scene_catalog=None)

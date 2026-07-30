@@ -248,6 +248,66 @@ def test_interrupted_cold_resumes_after_ollama_runtime_change_without_reset(
     assert runtime_identities == ["ollama:fake-1", "ollama:fake-2"]
 
 
+def test_resume_rechecks_storage_before_starting_remaining_workload(
+    tmp_path: Path,
+) -> None:
+    """中断後の再開前に現在のartifact空き容量が再検査されること。
+
+    Arrange:
+        - 初回preflight後にcoldが中断されたrelease suiteが用意される
+        - 再開時のpreflightだけが容量不足を返す
+    Act:
+        - 同じsuiteの再開が試行される
+    Assert:
+        - 保存済みpreflightを再利用せず容量不足で停止されること
+        - 残りのrunが開始されないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    run_calls: list[str] = []
+    preflight_calls = 0
+
+    def execute(
+        run_name: str,
+        _configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        run_calls.append(run_name)
+        if len(run_calls) == 1:
+            return 130, _interrupted_run_attempt(run_name), None, None
+        pytest.fail("容量不足を検出した後にrunを開始してはならない")
+
+    def storage_preflight(
+        _profile: AcceptanceProfile,
+        _input_folder: Path,
+    ) -> dict[str, object]:
+        nonlocal preflight_calls
+        preflight_calls += 1
+        if preflight_calls == 2:
+            raise ValueError("Acceptance artifact容量が不足しています")
+        return {
+            "input_video_bytes": 9,
+            "input_video_count": 1,
+            "artifact_available_bytes": 200 * 1024**3,
+            "required_artifact_capacity_bytes": 160 * 1024**3,
+            "persistent_cache_budget_bytes": 64 * 1024**3,
+            "peak_additional_budget_bytes": 96 * 1024**3,
+        }
+
+    runner = _runner(execute, storage_preflight=storage_preflight)
+    assert runner.run(profile_path=profile_path, suite="release") == 130
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert "容量が不足" in str(error.value)
+    assert preflight_calls == 2
+    assert run_calls == ["cold"]
+
+
 def test_abandoned_active_phase_is_recovered_without_reset(
     tmp_path: Path,
 ) -> None:
@@ -729,7 +789,8 @@ def test_reset_suite_fails_when_suite_root_survives_deletion(
         lambda _path: None,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="完全に削除"):
         runner.run(
             profile_path=profile_path,
@@ -807,7 +868,8 @@ def test_suite_sources_inside_reset_root_are_rejected_before_deletion(
         calls.append(run_name)
         return _successful_run_attempt(configuration, run_name)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="suite削除対象"):
         _runner(execute).run(
             profile_path=profile_path,
@@ -1023,7 +1085,8 @@ def test_full_suite_rejects_auto_cap_that_cannot_exceed_three(
         calls.append(run_name)
         return _successful_run_attempt(configuration, run_name)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="4 worker以上"):
         _runner(execute).run(profile_path=profile_path, suite="full")
     assert calls == []
@@ -1062,7 +1125,8 @@ def test_full_suite_rejects_cpu_backend_with_three_worker_capacity(
         calls.append(run_name)
         return _successful_run_attempt(configuration, run_name)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="4 worker以上"):
         _runner(execute).run(profile_path=profile_path, suite="full")
     assert calls == []
@@ -1100,7 +1164,8 @@ def test_full_suite_rejects_scenario_count_below_four(
         calls.append(run_name)
         return _successful_run_attempt(configuration, run_name)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="4 worker以上"):
         _runner(execute).run(profile_path=profile_path, suite="full")
     assert calls == []
@@ -1716,7 +1781,8 @@ def test_finalization_rejects_review_with_truncated_candidate_set(
     worksheet["rejected"] = []
     write_atomic_json(worksheet_path, worksheet)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="candidate集合"):
         runner.run(
             profile_path=profile_path,
@@ -1805,7 +1871,8 @@ def test_resume_rejects_changed_completed_cold_report(tmp_path: Path) -> None:
     selected_item["image_id"] = "frm_" + "3" * 64
     write_atomic_json(report_path, report)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="canonical report artifact"):
         runner.run(profile_path=profile_path, suite="release")
 
@@ -1840,7 +1907,8 @@ def test_resume_rejects_changed_completed_warm_report(tmp_path: Path) -> None:
     report["tampered"] = True
     write_atomic_json(report_path, report)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="canonical report artifact"):
         runner.run(profile_path=profile_path, suite="release")
 
@@ -1881,7 +1949,8 @@ def test_review_finalization_rejects_changed_completed_cold_report(
     report["tampered"] = True
     write_atomic_json(report_path, report)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="canonical report artifact"):
         runner.run(profile_path=profile_path, suite="release")
 
@@ -1959,7 +2028,8 @@ def test_review_finalization_rejects_changed_selected_image(tmp_path: Path) -> N
     )
     selected_path.write_bytes(b"replaced-webp")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="selected output artifact"):
         runner.run(profile_path=profile_path, suite="release")
 
@@ -2011,7 +2081,8 @@ def test_resume_rejects_changed_completed_selection_artifact(
     artifact["rejected"] = []
     write_atomic_json(artifact_path, artifact)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="integrity"):
         runner.run(profile_path=profile_path, suite="release")
 
@@ -2047,7 +2118,8 @@ def test_completed_state_revalidates_current_source_snapshot(tmp_path: Path) -> 
     assert _runner(execute).run(profile_path=profile_path, suite="release") == 3
     (tmp_path / "private-input" / "source.mkv").write_bytes(b"changed-source")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError) as error:
         _runner(execute).run(
             profile_path=profile_path,
@@ -2791,7 +2863,8 @@ def test_baseline_failure_cannot_commit_passed_state(
         fail_baseline,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(type(failure)):
         runner.run(profile_path=profile_path, suite="release")
     state = read_json_object(suite_root / "acceptance-state.json")
@@ -2864,7 +2937,8 @@ def test_invalid_refinalization_preserves_previously_passing_baseline(
     invalid_path = tmp_path / "invalid-review.json"
     write_atomic_json(invalid_path, worksheet)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="candidate集合"):
         runner.run(
             profile_path=profile_path,
@@ -2886,6 +2960,11 @@ def _runner(
     environment_probe: EnvironmentProbe | None = None,
     ollama_deployment_probe: OllamaDeploymentProbe | None = None,
     materialization_calls: list[str] | None = None,
+    storage_preflight: Callable[
+        [AcceptanceProfile, Path],
+        dict[str, object],
+    ]
+    | None = None,
 ) -> TargetSuiteRunner:
     """target外でもstate machineを検証できるdependency構成を返す。"""
     model_runtime = FakeModelRuntime(model_identity_seed)
@@ -2940,14 +3019,17 @@ def _runner(
         ),
         release_materializer=materialize,
         full_materializer=materialize,
-        storage_preflight=lambda _profile, _input_folder: {
-            "input_video_bytes": 9,
-            "input_video_count": 1,
-            "artifact_available_bytes": 200 * 1024**3,
-            "required_artifact_capacity_bytes": 160 * 1024**3,
-            "persistent_cache_budget_bytes": 64 * 1024**3,
-            "peak_additional_budget_bytes": 96 * 1024**3,
-        },
+        storage_preflight=storage_preflight
+        or (
+            lambda _profile, _input_folder: {
+                "input_video_bytes": 9,
+                "input_video_count": 1,
+                "artifact_available_bytes": 200 * 1024**3,
+                "required_artifact_capacity_bytes": 160 * 1024**3,
+                "persistent_cache_budget_bytes": 64 * 1024**3,
+                "peak_additional_budget_bytes": 96 * 1024**3,
+            }
+        ),
     )
 
 

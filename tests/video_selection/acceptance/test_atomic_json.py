@@ -36,7 +36,8 @@ def test_permission_failure_is_not_treated_as_corrupt_json(
 
     monkeypatch.setattr(Path, "read_text", deny_state_read)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(PermissionError, match="injected permission failure"):
         read_json_object(path)
     assert original_read_text(path, encoding="utf-8") == '{"status":"completed"}\n'

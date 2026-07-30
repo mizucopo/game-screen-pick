@@ -25,7 +25,8 @@ def test_pending_worksheet_contains_private_candidate_ids_and_stable_enums(
         - selected/rejected IDとstable reasonがworksheetだけに保持されること
         - 未記入worksheetがpending_human_reviewになること
     """
-    # Arrange / Act
+    # Arrange
+    # Act
     path = tmp_path / "review.json"
     worksheet = ensure_review_worksheet(
         path,
@@ -247,7 +248,8 @@ def test_review_rejects_candidate_set_changed_after_generation(tmp_path: Path) -
     expected_digest = review_candidate_digest(worksheet)
     worksheet["rejected"] = []
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="candidate集合"):
         evaluate_human_review(
             worksheet,

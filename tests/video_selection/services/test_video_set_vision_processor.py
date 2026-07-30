@@ -271,7 +271,8 @@ def test_completed_annotations_survive_first_middle_last_failure(
     )
     models = FakeModelRuntime("vision-model").resolve_models(configuration)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(RuntimeError, match="fake raw response"):
         VideoSetVisionProcessor(
             first_runtime,

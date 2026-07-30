@@ -85,7 +85,8 @@ def test_partially_offloaded_ollama_model_fails_automatic_gate() -> None:
     Assert:
         - fully resident gateがfalseでstatusがfailedになること
     """
-    # Arrange / Act
+    # Arrange
+    # Act
     record = _build_record(
         human_quality={"status": "passed", "gates": {}},
         cold_overrides={"ollama_model_fully_resident": False},
@@ -109,12 +110,18 @@ def test_invalid_phase_duration_is_rejected(duration_seconds: float) -> None:
     Assert:
         - 非負の有限numberではないmetricとして拒否されること
     """
-    # Arrange / Act / Assert
-    with pytest.raises(ValueError, match="非負の有限number"):
+    # Arrange
+    cold_overrides = {"duration_seconds": duration_seconds}
+
+    # Act
+    with pytest.raises(ValueError) as error:
         _build_record(
             human_quality={"status": "passed", "gates": {}},
-            cold_overrides={"duration_seconds": duration_seconds},
+            cold_overrides=cold_overrides,
         )
+
+    # Assert
+    assert "非負の有限number" in str(error.value)
 
 
 def test_actual_paths_and_video_names_are_rejected_from_record() -> None:
@@ -135,7 +142,8 @@ def test_actual_paths_and_video_names_are_rejected_from_record() -> None:
     assert isinstance(target, dict)
     target["location"] = "/mnt/g/private/movie"
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="private value"):
         validate_acceptance_record_privacy(
             record,

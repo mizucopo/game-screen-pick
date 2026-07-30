@@ -84,11 +84,12 @@ atomic publicationまたはoperation failureで確定し、その後のresource 
 含めない。中断再開された比較runでは各Acceptance Run AttemptのVideo Scan wall秒を合算し、再開後に
 cache hitした残作業だけを短い実行として比較しない。
 
-新規suiteではmaterialize後かつmodel実行より前に、materialize済みsuite inputの合計byteと
-artifact filesystemの空き容量を測る。persistent cache 64 GiBとtemporary/staging 96 GiBの
-合計160 GiB未満なら長時間処理を開始せずpreflight failureにする。開始時の測定値はdurable
-stateとprivacy-safe recordへ保存する。persistent cacheは独立した64 GiB budgetだけへ計上し、
-temporary workとoutput stagingの96 GiB peakへ二重計上しない。確定済みoutputはpeakから除く。
+新規suiteと未完了suiteの各起動ではmaterialize後かつmodel実行より前に、materialize済みsuite
+inputの合計byteとartifact filesystemの現在の空き容量を測り直す。persistent cache 64 GiBと
+temporary/staging 96 GiBの合計160 GiB未満なら、再開時も長時間処理を開始せずpreflight
+failureにする。最新の測定値はdurable stateとprivacy-safe recordへ保存する。persistent
+cacheは独立した64 GiB budgetだけへ計上し、temporary workとoutput stagingの96 GiB peakへ
+二重計上しない。確定済みoutputはpeakから除く。
 background disk sampleが一度でも失敗した場合はerror件数を記録し、後続sampleと停止に成功しても
 resource samplingを不完全として扱う。
 GPU sampleはsystem GPU memoryを継続測定する一方、process GPU memoryはrun開始時の
@@ -265,8 +266,9 @@ uv run task acceptance-target \
 `parallelism-baseline`はfull suiteだけで利用できる。`cache-reuse`に必要なFresh Processingの
 cacheが既にない場合は、空cacheを再利用測定として扱わず`fresh-processing`を要求する。
 いずれもmaterialized inputとsuite間で共有するVideo Identity cacheは保持する。
-削除対象にsymbolic link、不正なfile種別、削除失敗がある場合はstateを変更せず追加runを
-開始しない。`--reset-suite`との同時指定は拒否する。
+suite root、work、materialized inputのいずれかがsymbolic linkの場合は外部pathを辿らず、
+`--reset-suite`を要求する。削除対象にsymbolic link、不正なfile種別、削除失敗がある場合も
+stateを変更せず追加runを開始しない。`--reset-suite`との同時指定は拒否する。
 
 `--reset-suite`は選んだsuiteのstate、run output、worksheet、
 processing cacheを破棄する。release/full suiteの親にある共有Video Identity cacheは保持し、

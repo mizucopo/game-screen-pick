@@ -21,7 +21,8 @@ def test_same_input_folder_lock_is_rejected_without_waiting(tmp_path: Path) -> N
     input_folder = tmp_path / "videos"
     input_folder.mkdir()
 
-    # Act / Assert
+    # Act
+    # Assert
     with (
         InputFolderLock(input_folder),
         pytest.raises(RuntimeError, match="既に実行中"),

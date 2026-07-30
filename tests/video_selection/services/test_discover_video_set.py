@@ -212,7 +212,8 @@ def test_duplicate_video_content_is_rejected_with_relative_paths(
     (input_folder / "chapter-01.mp4").write_bytes(b"duplicate")
     (input_folder / "chapter-02.mp4").write_bytes(b"duplicate")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError) as error:
         discover_video_set(input_folder)
     assert "Duplicate Video" in str(error.value)
@@ -241,7 +242,8 @@ def test_snapshot_validation_rejects_video_changes_before_cache_commit(
     video_set = discover_video_set(input_folder)
     video_path.write_bytes(b"after-content")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
         validate_video_set_snapshot(video_set)
 

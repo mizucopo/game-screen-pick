@@ -218,7 +218,8 @@ def test_fault_before_atomic_commit_leaves_no_completed_stage(
         fault_injector=inject_fault,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(OSError, match=f"injected {checkpoint}"):
         writer.write(stage, fingerprint, (), semantic_input, {"value": "fresh"})
     stage_root = cache_folder / "video-sets" / subject_fingerprint / stage.value
@@ -321,7 +322,8 @@ def test_artifact_permission_failure_preserves_completed_stage(
 
     monkeypatch.setattr(Path, "read_bytes", deny_artifact_read)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(PermissionError, match="injected permission failure"):
         writer.write_artifacts(
             stage,
@@ -378,7 +380,8 @@ def test_validator_permission_failure_preserves_completed_stage(
     def deny_validation(_bundle: CompletedStageBundle) -> None:
         raise PermissionError("injected validator permission failure")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(
         PermissionError,
         match="injected validator permission failure",
@@ -527,7 +530,8 @@ def test_rename_failure_leaves_no_partial_completed_stage(
         subject_fingerprint=subject_fingerprint,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(OSError, match="injected rename failure"):
         writer.write(stage, fingerprint, (), semantic_input, {"value": "fresh"})
     stage_root = cache_folder / "video-sets" / subject_fingerprint / stage.value
@@ -581,7 +585,8 @@ def test_artifact_or_manifest_write_failure_is_not_reusable(
         subject_fingerprint=subject_fingerprint,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(type(failure), match=str(failure)):
         writer.write(stage, fingerprint, (), semantic_input, {"value": "fresh"})
     stage_root = cache_folder / "videos" / subject_fingerprint / stage.value

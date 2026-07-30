@@ -43,14 +43,17 @@ def test_frame_duration_builds_gapless_timeline_with_later_boundary_ownership() 
         - 3区間が0から1秒をgapとoverlapなしで覆うこと
         - 0.25秒境界が後側区間に所属すること
     """
-    # Arrange / Act
+    # Arrange
+    scene_pts = (350, 850, 1100)
+
+    # Act
     timeline = build_exact_timeline(
         video_fingerprint="a" * 64,
         stream=_stream(),
         origin_pts=100,
         last_frame_pts=850,
         last_frame_duration_ts=250,
-        scene_pts=(350, 850, 1100),
+        scene_pts=scene_pts,
     )
 
     # Assert
@@ -75,10 +78,13 @@ def test_stream_duration_is_used_only_when_last_frame_duration_is_missing() -> N
     Assert:
         - stream終端からoriginを引いた3/4秒がVideo Durationになること
     """
-    # Arrange / Act
+    # Arrange
+    stream = _stream(start_pts=100, duration_ts=1000)
+
+    # Act
     timeline = build_exact_timeline(
         video_fingerprint="b" * 64,
-        stream=_stream(start_pts=100, duration_ts=1000),
+        stream=stream,
         origin_pts=350,
         last_frame_pts=850,
         last_frame_duration_ts=None,
@@ -99,13 +105,19 @@ def test_timeline_without_exact_positive_end_fails_fast() -> None:
     Assert:
         - floatやframe間隔で推測されず失敗すること
     """
-    # Arrange / Act / Assert
-    with pytest.raises(ValueError, match="Video Duration"):
+    # Arrange
+    stream = _stream()
+
+    # Act
+    with pytest.raises(ValueError) as error:
         build_exact_timeline(
             video_fingerprint="c" * 64,
-            stream=_stream(),
+            stream=stream,
             origin_pts=0,
             last_frame_pts=1000,
             last_frame_duration_ts=None,
             scene_pts=(),
         )
+
+    # Assert
+    assert "Video Duration" in str(error.value)

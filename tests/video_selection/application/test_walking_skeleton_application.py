@@ -781,7 +781,8 @@ def test_stage_failure_leaves_output_unpublished(tmp_path: Path) -> None:
         image_count=1,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(RuntimeError, match="fake vision failure"):
         application.run(configuration)
     assert not output_folder.exists()
@@ -872,7 +873,8 @@ def test_invalid_output_folder_is_rejected_before_cache_side_effects(
         observer=RecordingRunObserver(),
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Output Folderは存在しないか空"):
         application.run(
             EffectiveConfiguration(

@@ -613,7 +613,8 @@ def test_invalid_toml_is_an_exit_two_error_before_side_effects(
     video_input_folder = tmp_path / "videos"
     output_folder = tmp_path / "output"
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ConfigurationError) as error:
         resolve_effective_configuration(
             video_input_folder=video_input_folder,
@@ -651,7 +652,8 @@ def test_invalid_document_shape_is_an_exit_two_error(
     config_path = tmp_path / "video-selection.toml"
     config_path.write_text(document, encoding="utf-8")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ConfigurationError) as error:
         resolve_effective_configuration(
             video_input_folder=tmp_path / "videos",
@@ -745,7 +747,8 @@ def test_credentials_are_excluded_from_errors_and_provenance(tmp_path: Path) -> 
         "HF_TOKEN": secret,
     }
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ConfigurationError) as error:
         resolve_effective_configuration(
             video_input_folder=tmp_path / "videos",

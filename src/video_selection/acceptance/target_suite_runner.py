@@ -304,7 +304,7 @@ class TargetSuiteRunner:
         target = self._environment_probe()
         storage_preflight = (
             self._storage_preflight(profile, input_folder)
-            if state is None
+            if state is None or not _runs_completed(state)
             else _mapping(state.get("storage_preflight"), "storage_preflight")
         )
         _validate_full_scan_capacity(

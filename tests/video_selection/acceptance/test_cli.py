@@ -21,7 +21,8 @@ def test_cli_requires_explicit_suite(tmp_path: Path) -> None:
     # Arrange
     arguments = ["--profile", str(tmp_path / "target.toml")]
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(SystemExit) as error:
         main(arguments)
     assert error.value.code == 2

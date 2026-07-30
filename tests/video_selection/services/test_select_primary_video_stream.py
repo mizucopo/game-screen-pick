@@ -78,6 +78,7 @@ def test_media_without_motion_video_stream_is_rejected() -> None:
         streams=(_video_stream(0, is_attached_picture=True),),
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Primary Video Stream"):
         select_primary_video_stream(probe)

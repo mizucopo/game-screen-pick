@@ -36,7 +36,8 @@ def test_processing_stage_cannot_complete_out_of_order(tmp_path: Path) -> None:
         subject_fingerprint="a" * 64,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(
         ValueError,
         match="expected=discover-video-set, actual=extract-frame-candidates",
@@ -184,7 +185,8 @@ def test_snapshot_validation_failure_prevents_stage_cache_mutation(
         before_stage=reject_changed_snapshot,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
         runner.complete(
             ProcessingStage.DISCOVER_VIDEO_SET,
@@ -499,7 +501,8 @@ def test_restore_permission_failure_preserves_completed_stage(
     def deny_restore(_artifact: dict[str, object]) -> object:
         raise PermissionError("injected restore permission failure")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(PermissionError, match="injected restore permission failure"):
         second.reuse(
             ProcessingStage.DISCOVER_VIDEO_SET,
