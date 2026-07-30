@@ -14,7 +14,7 @@
 | CTranslate2 | 4.8.1 | configured device / compute typeの初期化 |
 | CUDA user-space libraries | CUDA 12 cuBLAS 12.8.4.1、CUDA Runtime 12.8.90、cuDNN 9.10.2.21 | faster-whisperによる実推論 |
 
-新しいversionは許可しますが、実際のtool/runtime versionは関係するStage Fingerprintとprovenanceへ記録します。version番号だけで能力を推測せず、処理開始前に必要なoperationを検査します。
+新しいversionは許可しますが、実際に使用したtool/runtime versionは関係するStage Fingerprintとprovenanceへ記録します。subtitle・audio streamがなくSTTを呼び出さなかったrunではSpeech Runtime Identityを意味結果へ含めません。version番号だけで能力を推測せず、処理開始前に必要なoperationを検査します。
 
 Linux x86_64ではfaster-whisper / CTranslate2が要求するCUDA 12 cuBLASとcuDNN 9をproject dependencyとして導入します。Torchは同じCUDA 12 namespaceを共有する2.9.1以上2.11未満へ制約し、CUDA 13 wheelとの混在を避けます。lock済みversionは`uv.lock`を正とします。
 
@@ -58,34 +58,45 @@ PRでは通常quality checkと別のUbuntu 24.04 jobとして実行されます�
 
 処理前に、CLI/TOML、入力・出力path、Video Set snapshot、cache書き込み、同一inputの非待機lock、外部tool、stream、model解決と能力を検査します。異常時はcache処理やOutput Folder公開を始めません。不存在・動画なし・Duplicate Video・不正なOutput Folderなど、実行前に利用者が修正できる入力不備はexit 2と`fix_configuration`で返します。fingerprint計算中を含む実行時のsnapshot変更やI/O障害はoperation failureとしてexit 1にし、usage errorへ分類しません。
 
-`--reset-cache`は上記の安全なpreflightとlock取得が成功した後に、`<VIDEO_INPUT_FOLDER>/.game-screen-pick/cache/`全体だけを削除します。Output Folder、Ollama model store、Hugging Face model cacheには触れません。Stage単位またはVideo単位の手動reset、自動削除、保持期限、容量上限はv1に含めません。
+`--reset-cache`は上記の安全なpreflightとlock取得が成功した後に、`<VIDEO_INPUT_FOLDER>/.game-screen-pick/cache/`と`<VIDEO_INPUT_FOLDER>/.game-screen-pick/video-identities/`を削除します。Output Folder、Ollama model store、Hugging Face model cacheには触れません。Stage単位またはVideo単位の手動reset、自動削除、保持期限、容量上限はv1に含めません。
 
 ## processing cache基盤
 
-Input Lockは`<VIDEO_INPUT_FOLDER>/.game-screen-pick/input.lock`でVideo Input Folder単位に取得します。待機queueは作らず、同じinputの別runが保持中なら即時に失敗します。lockはVideo Set discovery後から、cache準備、全Processing Stage、Output Folder公開の終了まで保持します。cache missのVideo Identityはstat-content-statでwhole-file SHA-256を計算し、lock取得後にpath非依存cacheへatomic保存します。同じdevice・inode・size・mtime・ctimeではidentityを再利用し、lock取得直後、media probe、各Stage、Vision batch、publisher前後でmetadataを再検査します。これにより通常の書換えを拒否しつつ、1 TiB級Video Setをexact warmで再hashしません。
+Input Lockは`<VIDEO_INPUT_FOLDER>/.game-screen-pick/input.lock`でVideo Input Folder単位に取得します。待機queueは作らず、同じinputの別runが保持中なら即時に失敗します。lockはVideo Set discovery前に取得し、model・runtime・media preflight、identity discovery、cache準備、全Processing Stage、Output Folder公開の終了まで保持します。
 
-processing cacheはcontent-addressedな次のnamespaceを使います。
+cache missのVideo Identityはstat-content-statでwhole-file SHA-256を計算し、動画1本が確定するたびに専用cacheへatomic保存します。engine version、入力rootと相対pathから作るprivacy-safeなlogical source key、size、`mtime_ns`が一致する場合はidentityを再利用します。device、inode、ctimeは判定に使いません。lock取得後、media probe、各Stage、Vision batch、publisher前後でpath・size・mtimeを再検査します。同じsize・mtimeへ意図的に内容を書き換えた場合は検知できないため、入力管理者がmtimeを正しく更新する契約です。これにより1 TiB級Video SetをStageごと、process再起動ごと、acceptanceのprocessing cache切替ごとに再hashしません。
+
+Video Identity cacheとprocessing cacheは寿命を分離した次のnamespaceを使います。
 
 ```text
-<VIDEO_INPUT_FOLDER>/.game-screen-pick/cache/
-├── video-identities/<STAT_SIGNATURE_SHA256>.json
-├── videos/<VIDEO_FINGERPRINT>/<STAGE>/<STAGE_FINGERPRINT>/
-└── video-sets/<VIDEO_SET_FINGERPRINT>/<STAGE>/<STAGE_FINGERPRINT>/
+<VIDEO_INPUT_FOLDER>/.game-screen-pick/
+├── input.lock
+├── video-identities/<LOGICAL_SOURCE_KEY>.json
+└── cache/
+    ├── work-units/<SUBJECT>/<OPERATION>/<WORK_UNIT_FINGERPRINT>/
+    ├── videos/<VIDEO_FINGERPRINT>/<STAGE>/<STAGE_FINGERPRINT>/
+    └── video-sets/<VIDEO_SET_FINGERPRINT>/<STAGE>/<STAGE_FINGERPRINT>/
 ```
 
-Video Identity entryはstat signatureとwhole-file SHA-256だけを保持し、absolute/relative pathやvideo名を含みません。各Stage folderには`artifact.json`と`manifest.json`を置きます。manifestはschema、Stageとsubjectの完全fingerprint、上流fingerprint、Stage固有の正規化済み入力、artifactの相対path・byte数・SHA-256、timezone付き完了日時を保持し、absolute pathを含みません。artifactを書いた後にmanifestを作り、temporary directoryをrenameして一括公開します。manifestまたはartifactが欠ける、hashやmetadataが一致しない、symlinkであるなどのpartial・破損Stageはcache hitにせず再計算します。
+Video Identity entryはengine version、privacy-safeなlogical source key、size、mtime、whole-file SHA-256を保持し、absolute/relative pathやvideo名を含みません。各Completed StageとDurable Work Unitには`artifact.json`と`manifest.json`を置きます。manifestはschema、subject・operation・engine・semantic inputのfingerprint、artifactの相対path・byte数・SHA-256、timezone付き完了日時を保持し、absolute pathを含みません。artifactとmanifestをfsyncした後にtemporary directoryをrenameし、parent directoryもfsyncして一括公開します。manifestまたはartifactが欠ける、hashやmetadataが一致しない、symlinkであるなどのpartial・破損entryはcache hitにせず、その最小単位だけを再計算します。
 
-通常実行ではcacheの書込検査とInput Lock取得後に、認識済みLegacy Cacheの`neutral-analysis/`と`ollama-scenes.json`だけを自動削除します。削除件数と内容byte数をstructured diagnosticへ記録し、削除失敗はfatalです。新しい`videos/`、`video-sets/`、未知のentry、Output Folder、model storeは保持します。Legacy Cacheを変換または再利用する互換layerはありません。
+通常実行ではcacheの書込検査とInput Lock取得後に、認識済みLegacy Cacheの`neutral-analysis/`、`ollama-scenes.json`、旧processing cache内の`video-identities/`だけを自動削除します。削除件数と内容byte数をstructured diagnosticへ記録し、削除失敗はfatalです。新しい`videos/`、`video-sets/`、`work-units/`、独立した`video-identities/`、未知のentry、Output Folder、model storeは保持します。Legacy Cacheを変換または再利用する互換layerはありません。
 
 ## 自動再開
 
 通常実行は常に再開可能です。`--resume`はありません。
 
 - 完了manifestと成果物がatomicに確定したCompleted Stageだけを再利用します。
-- 中断・失敗したStageの部分成果物は再利用しません。認識可能なtemporary StageはInput Lock取得後に削除し、そのStageから再実行します。Completed Stageと未知のdirectoryは削除しません。
+- Stage内では、動画1本のidentity、15分のVideo Scan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、STT chunk、選択WebP 1枚をDurable Work Unitとして個別に再利用します。
+- 中断・失敗した最小Work Unitの未確定成果物は再利用しません。認識可能なtemporary entryだけを削除し、そのWork Unitから再実行します。健全な兄弟Work Unit、Completed Stage、未知のdirectoryは削除しません。
 - 同じVideoのVideo StageはpathやVideo Orderが変わっても再利用できます。
 - Videoの追加・削除・並べ替えでは再利用可能なVideo Stageを残し、Video Set Stageだけを新しいVideo Set Fingerprintで再実行します。
 - model identity、prompt、schema、policy、Stage固有設定が変わった場合は影響するStageだけを再計算します。
+- Ollama server/modelの変更はVideo Identity、Video Scan、Frame Candidate、STTを失効させません。STT modelの変更もVideo ScanとFrame Candidateを失効させません。
+- atomic rename済みの完成Canonical Outputは全artifactとsemantic digestを検証し、一致時はbyte変更なしで再利用します。不完全または異なる既存outputを黙って上書きしません。
+- Permission、mount、transient I/O access failureはlocal corruptionとして扱いません。読めないCompleted Stage、Work Unit、Canonical Outputを削除・上書きせず、access failureを返します。
+
+同じ意味入力から再開した場合、選択Candidate ID、選択順、公開WebP bytes、canonical reportの意味内容を中断なしの実行と一致させます。attempt時刻、経過時間、resource sample、cache hit/recompute件数は運用診断であり、この出力不変条件には含めません。詳細な処理順と失効表は[Pipelineと安全な再開](pipeline-resume.md)を参照してください。
 
 同じVideo Input Folderの同時実行は即時エラーです。異なるinput folderは並行実行できます。
 
@@ -119,7 +130,7 @@ TTYでは更新型表示、redirect/CIでは一行event logにします。`stder
 
 最外周のrun controllerがStageの型付き例外を`RunFailure`へ正規化し、stable reason code、allowlistで許可した安全な観測値、修復方法、再実行時に再利用できるcacheを示します。未知の例外は`internal_error`とし、元の例外は内部causeとしてだけ保持します。通常はstack traceを表示しません。`--debug`時だけ安全化済みstack traceを加えますが、credential、環境変数一覧、絶対path、prompt本文、raw model response、Context Cue本文は出しません。
 
-Ctrl+Cはfailureではなく`run_interrupted`、reason `user_interrupt`、exit 130として扱います。並列Video Scanでは未開始のscanを取り消してから実行中のscanを終了し、割り込み後に新しいscanを開始しません。処理中のpartial Stageは再利用しません。
+Ctrl+Cはfailureではなく`run_interrupted`、reason `user_interrupt`、exit 130として扱います。並列Video Scanでは未開始のscanを取り消してから実行中のscanを終了し、割り込み後に新しいscanを開始しません。処理中だった最小Work Unitだけは次回再計算し、それ以前にatomic確定したpartition、group、chunk、画像は再利用します。
 
 fatal errorではOutput Folderを公開しません。Selection Shortfallと、検証済みlocal modelを使えたmodel更新不能はexit 0の`completed_with_warnings`として理由をatomicに公開します。後者は`model_update_unavailable`と対象roleを`report.json`へ記録し、model storeのpathやtokenは含めません。
 

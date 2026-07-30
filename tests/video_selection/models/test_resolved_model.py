@@ -44,7 +44,6 @@ def test_model_resolution_separates_semantics_from_diagnostics(tmp_path: Path) -
 
     # Assert
     assert semantic_input == {
-        "configured_name": "alias/model",
         "execution_identity": "hf:" + "b" * 40,
         "runtime_identity": "huggingface-hub:0.36.2",
         "store": "hugging_face",
@@ -84,3 +83,43 @@ def test_model_role_store_mismatch_is_rejected() -> None:
             runtime_identity=ModelRuntimeIdentity(ModelStoreKind.OLLAMA, "0.31.2"),
             artifact_location=None,
         )
+
+
+def test_configured_alias_does_not_change_semantic_model_identity() -> None:
+    """同じartifact/runtimeを指すalias変更でStage依存が変わらないこと。
+
+    Arrange:
+        - configured nameだけが異なる同一Ollama identityのmodelが用意される
+    Act:
+        - 両modelのsemantic inputが取得される
+    Assert:
+        - semantic inputは一致しaliasはprovenanceだけに保持されること
+    """
+    # Arrange
+    identity = ResolvedModelIdentity(
+        ModelStoreKind.OLLAMA,
+        "sha256:" + "a" * 64,
+    )
+    runtime = ModelRuntimeIdentity(ModelStoreKind.OLLAMA, "0.31.2")
+
+    def model(alias: str) -> ResolvedModel:
+        return ResolvedModel(
+            role=ModelRole.SCENE_CATALOG,
+            configured_name=alias,
+            canonical_name="registry/model:latest",
+            local_identity_before_update=identity,
+            update_status=ModelUpdateStatus.NOT_REQUESTED,
+            execution_identity=identity,
+            runtime_identity=runtime,
+            artifact_location=None,
+        )
+
+    # Act
+    first = model("registry/model").semantic_input()
+    second_model = model("registry/model:latest")
+    second = second_model.semantic_input()
+
+    # Assert
+    assert first == second
+    assert "configured_name" not in first
+    assert second_model.provenance()["configured_name"] == "registry/model:latest"

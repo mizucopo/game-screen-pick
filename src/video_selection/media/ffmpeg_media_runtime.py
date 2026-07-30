@@ -11,6 +11,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 from threading import Lock
@@ -26,6 +27,7 @@ from ..models.media_stream import MediaStream
 from ..models.native_video_scan import NativeVideoScan
 from ..models.pcm_audio_chunk import PcmAudioChunk
 from ..models.scanned_video_frame import ScannedVideoFrame
+from ..services.select_scene_signal_frames import select_scene_signal_frames
 from .ffmpeg_pcm_reader import iter_pcm_audio_chunks
 from .ffmpeg_subtitle_reader import read_embedded_subtitle_events
 from .ffmpeg_video_reader import iter_decoded_video_frames
@@ -55,11 +57,15 @@ _REQUIRED_FILTERS = frozenset(
         "aresample",
         "asetnsamples",
         "asetpts",
+        "asettb",
         "ashowinfo",
+        "atrim",
+        "concat",
         "format",
         "nullsink",
         "scale",
         "select",
+        "setpts",
         "showinfo",
         "split",
     }
@@ -196,14 +202,87 @@ class FfmpegMediaRuntime:
         decode_backend: str,
     ) -> NativeVideoScan:
         """一回のdecodeをheartbeat、scene、timeline timingへ分岐する。"""
+        scan = self._execute_video_scan(
+            media_path,
+            stream,
+            artifact_folder,
+            start_pts=None,
+            end_pts=None,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            scene_change_threshold=scene_change_threshold,
+            scene_min_interval_seconds=scene_min_interval_seconds,
+            decode_backend=decode_backend,
+        )
+        selected_scenes = select_scene_signal_frames(
+            scan.scene_frames,
+            scene_min_interval_seconds,
+        )
+        if not scan.heartbeats:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.DECODER_FAILURE,
+                "Video Scanにheartbeat frameがありません",
+            )
+        selected_paths = {frame.image_path for frame in selected_scenes}
+        for frame in scan.scene_frames:
+            if frame.image_path not in selected_paths:
+                frame.image_path.unlink()
+        return replace(scan, scene_frames=selected_scenes)
+
+    def scan_video_partition(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        artifact_folder: Path,
+        *,
+        start_pts: int,
+        end_pts: int | None,
+        heartbeat_interval_seconds: float,
+        scene_change_threshold: float,
+        scene_min_interval_seconds: float,
+        decode_backend: str,
+    ) -> NativeVideoScan:
+        """固定半開PTS区間または指定PTSからEOFまでを一回decodeする。"""
+        if end_pts is not None and start_pts >= end_pts:
+            msg = "Video Scan partitionのPTS rangeが不正です"
+            raise ValueError(msg)
+        return self._execute_video_scan(
+            media_path,
+            stream,
+            artifact_folder,
+            start_pts=start_pts,
+            end_pts=end_pts,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            scene_change_threshold=scene_change_threshold,
+            scene_min_interval_seconds=scene_min_interval_seconds,
+            decode_backend=decode_backend,
+        )
+
+    def _execute_video_scan(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        artifact_folder: Path,
+        *,
+        start_pts: int | None,
+        end_pts: int | None,
+        heartbeat_interval_seconds: float,
+        scene_change_threshold: float,
+        scene_min_interval_seconds: float,
+        decode_backend: str,
+    ) -> NativeVideoScan:
+        """同じscan algorithmを全体または固定partitionへ適用する。"""
         _validate_scan_configuration(
             heartbeat_interval_seconds,
             scene_change_threshold,
             scene_min_interval_seconds,
             decode_backend,
         )
-        if stream.kind != "video" or stream.time_base is None:
-            msg = "Video Scanにはexact time baseを持つvideo streamが必要です"
+        if (
+            stream.kind != "video"
+            or stream.time_base is None
+            or stream.start_pts is None
+        ):
+            msg = "Video Scanにはexact start PTSとtime baseが必要です"
             raise ValueError(msg)
         heartbeat_folder = artifact_folder / "heartbeats"
         scene_folder = artifact_folder / ".scene-proxies"
@@ -218,6 +297,8 @@ class FfmpegMediaRuntime:
             scene_change_threshold,
             scene_min_interval_seconds,
             decode_backend,
+            start_pts=start_pts,
+            end_pts=end_pts,
         )
         started_at = time.monotonic()
         timeline_first: tuple[int, int | None, int, int] | None = None
@@ -287,8 +368,8 @@ class FfmpegMediaRuntime:
                 MediaRuntimeFailureReason.DECODER_FAILURE,
                 "Video Scanに表示可能frameがありません",
             )
-        heartbeat_files = tuple(sorted(heartbeat_folder.glob("*.jpg")))
-        scene_files = tuple(sorted(scene_folder.glob("*.jpg")))
+        heartbeat_files = _remove_scan_proxy_sentinel(heartbeat_folder)
+        scene_files = _remove_scan_proxy_sentinel(scene_folder)
         if len(heartbeat_files) != len(heartbeat_metadata) or len(scene_files) != len(
             scene_metadata
         ):
@@ -301,18 +382,13 @@ class FfmpegMediaRuntime:
             heartbeat_files,
             stream.time_base,
         )
-        scenes_with_dummy = _scanned_frames(
-            scene_metadata,
-            scene_files,
-            stream.time_base,
-        )
-        if not scenes_with_dummy:
-            raise MediaRuntimeError(
-                MediaRuntimeFailureReason.DECODER_FAILURE,
-                "Video Scanのscene分析枝を初期化できませんでした",
+        scene_frames = tuple(
+            _scanned_frames(
+                scene_metadata,
+                scene_files,
+                stream.time_base,
             )
-        scenes_with_dummy[0].image_path.unlink()
-        scene_frames = tuple(scenes_with_dummy[1:])
+        )
         origin_pts, _origin_duration, _origin_width, _origin_height = timeline_first
         last_pts, last_duration, _last_width, _last_height = timeline_last
         return NativeVideoScan(
@@ -633,6 +709,91 @@ class FfmpegMediaRuntime:
                 "audio streamをPCMへdecodeできませんでした",
             ) from error
 
+    def extract_pcm_audio_chunk(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        media_origin: Fraction,
+        sample_rate: int,
+        sample_start: int,
+        maximum_sample_count: int,
+    ) -> PcmAudioChunk | None:
+        """一つのcanonical sample rangeだけを入力seek付きで抽出する。"""
+        if (
+            stream.kind != "audio"
+            or stream.start_pts is None
+            or stream.time_base is None
+            or sample_rate < 1
+            or sample_start < 0
+            or maximum_sample_count < 1
+        ):
+            msg = "PCM Audio rangeのstreamまたはsample設定が不正です"
+            raise ValueError(msg)
+        stream_origin = stream.start_pts * stream.time_base
+        relative_start = (
+            stream_origin - media_origin + Fraction(sample_start, sample_rate)
+        )
+        if relative_start < 0:
+            msg = "PCM Audio rangeがmedia originより前です"
+            raise ValueError(msg)
+        input_options = (
+            ()
+            if relative_start == 0
+            else ("-ss", _ffmpeg_number(float(relative_start)))
+        )
+        absolute_start_pts = round(stream_origin * sample_rate) + sample_start
+        audio_filter = (
+            f"aresample={sample_rate}:async=0,"
+            "aformat=sample_fmts=s16:channel_layouts=mono,"
+            f"atrim=end_sample={maximum_sample_count},"
+            f"asetnsamples=n={maximum_sample_count}:p=0,"
+            f"asettb=expr=1/{sample_rate},"
+            "asetpts=N,ashowinfo"
+        )
+        command = self._decode_command_prefix(
+            media_path,
+            stream.index,
+            input_options=input_options,
+        )
+        command.extend(
+            [
+                "-vn",
+                "-sn",
+                "-dn",
+                "-af",
+                audio_filter,
+                "-t",
+                _ffmpeg_number(maximum_sample_count / sample_rate),
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "pipe:1",
+            ]
+        )
+        try:
+            chunks = tuple(
+                iter_pcm_audio_chunks(
+                    command,
+                    stream.index,
+                    sample_rate,
+                    initial_sample_start=sample_start,
+                )
+            )
+        except _DECODE_ERRORS as error:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED,
+                "audio sample rangeをPCMへdecodeできませんでした",
+            ) from error
+        if not chunks:
+            return None
+        if len(chunks) != 1 or chunks[0].sample_count > maximum_sample_count:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED,
+                "audio sample rangeがcanonical chunkへ収まりません",
+            )
+        return replace(chunks[0], pts=absolute_start_pts)
+
     def read_embedded_subtitles(
         self,
         media_path: Path,
@@ -747,7 +908,13 @@ class FfmpegMediaRuntime:
         scene_change_threshold: float,
         scene_min_interval_seconds: float,
         decode_backend: str,
+        *,
+        start_pts: int | None,
+        end_pts: int | None,
     ) -> list[str]:
+        if stream.start_pts is None:
+            msg = "Video Scanにはstream start PTSが必要です"
+            raise ValueError(msg)
         command = [
             self._ffmpeg_executable,
             "-y",
@@ -765,31 +932,89 @@ class FfmpegMediaRuntime:
             command.extend(["-hwaccel", "cuda"])
         elif stream.codec_name == "av1":
             command.extend(["-c:v", "libdav1d"])
+        if start_pts is not None:
+            if stream.time_base is None or stream.start_pts is None:
+                msg = "Video Scan partitionにはstream timingが必要です"
+                raise ValueError(msg)
+            relative_start = (start_pts - stream.start_pts) * stream.time_base
+            if relative_start < 0:
+                msg = "Video Scan partitionがstream originより前です"
+                raise ValueError(msg)
+            required_preroll = (
+                max(
+                    _FRAME_RANGE_SEEK_PADDING,
+                    Fraction(str(heartbeat_interval_seconds)),
+                    Fraction(str(scene_min_interval_seconds)),
+                )
+                + _FRAME_RANGE_END_PADDING
+            )
+            seek_padding = min(required_preroll, relative_start)
+            command.extend(
+                [
+                    "-ss",
+                    _ffmpeg_number(float(relative_start - seek_padding)),
+                ]
+            )
+            if end_pts is not None:
+                read_seconds = (
+                    seek_padding
+                    + (end_pts - start_pts) * stream.time_base
+                    + _FRAME_RANGE_END_PADDING
+                )
+                command.extend(["-t", _ffmpeg_number(float(read_seconds))])
         command.extend(["-i", str(media_path)])
         heartbeat_interval = _ffmpeg_number(heartbeat_interval_seconds)
         scene_threshold = _ffmpeg_number(scene_change_threshold)
-        scene_interval = _ffmpeg_number(scene_min_interval_seconds)
+        partition_filter = _scan_partition_filter(start_pts, end_pts)
+        ownership_filter = "" if partition_filter is None else f"{partition_filter},"
+        source_graph = (
+            f"[0:{stream.index}]split=5[timeline_source]"
+            "[heartbeat_source][heartbeat_sentinel_source]"
+            "[scene_source][scene_sentinel_source]"
+        )
+        heartbeat_filter = _canonical_heartbeat_filter(
+            stream.start_pts,
+            heartbeat_interval,
+        )
         graph = ";".join(
             (
-                f"[0:{stream.index}]split=3[timeline_source]"
-                "[heartbeat_source][scene_source]",
-                "[timeline_source]showinfo@timeline,nullsink",
+                source_graph,
+                (f"[timeline_source]{ownership_filter}showinfo@timeline,nullsink"),
                 (
                     "[heartbeat_source]"
-                    "select='isnan(prev_selected_t)+"
-                    f"gte(t-prev_selected_t,{heartbeat_interval})',"
+                    f"{heartbeat_filter},"
+                    f"{ownership_filter}"
                     f"{_bounded_scale_filter(960)},"
-                    "format=yuvj420p,showinfo@heartbeat[heartbeat_output]"
+                    "format=yuvj420p,showinfo@heartbeat,"
+                    "setpts=PTS-STARTPTS[heartbeat_actual]"
+                ),
+                (
+                    "[heartbeat_sentinel_source]"
+                    f"{ownership_filter}"
+                    "select='eq(n,0)',"
+                    f"{_bounded_scale_filter(960)},"
+                    "format=yuvj420p,setpts=PTS-STARTPTS[heartbeat_sentinel]"
+                ),
+                (
+                    "[heartbeat_sentinel][heartbeat_actual]"
+                    "concat=n=2:v=1:a=0[heartbeat_output]"
                 ),
                 (
                     "[scene_source]"
                     f"{_bounded_scale_filter(320)},"
-                    "select='eq(n,0)+gte(n,1)*"
-                    f"gt(scene,{scene_threshold})*"
-                    "(isnan(prev_selected_t)+"
-                    f"gte(t-prev_selected_t,{scene_interval}))',"
-                    "format=yuvj420p,showinfo@scene[scene_output]"
+                    f"select='gt(scene,{scene_threshold})',"
+                    f"{ownership_filter}"
+                    "format=yuvj420p,showinfo@scene,"
+                    "setpts=PTS-STARTPTS[scene_actual]"
                 ),
+                (
+                    "[scene_sentinel_source]"
+                    f"{ownership_filter}"
+                    "select='eq(n,0)',"
+                    f"{_bounded_scale_filter(320)},"
+                    "format=yuvj420p,setpts=PTS-STARTPTS[scene_sentinel]"
+                ),
+                ("[scene_sentinel][scene_actual]concat=n=2:v=1:a=0[scene_output]"),
             )
         )
         command.extend(
@@ -997,6 +1222,27 @@ def _scale_filter(max_dimension: int) -> str:
     )
 
 
+def _scan_partition_filter(
+    start_pts: int | None,
+    end_pts: int | None,
+) -> str | None:
+    if start_pts is None:
+        return None
+    if end_pts is None:
+        return f"select='gte(pts\\,{start_pts})'"
+    return f"select='gte(pts\\,{start_pts})*lt(pts\\,{end_pts})'"
+
+
+def _canonical_heartbeat_filter(
+    origin_pts: int,
+    heartbeat_interval: str,
+) -> str:
+    """global time bucketごとの先頭frameをpartition非依存に選ぶ。"""
+    current_bucket = f"floor((pts-{origin_pts})*TB/{heartbeat_interval})"
+    previous_bucket = f"floor((prev_pts-{origin_pts})*TB/{heartbeat_interval})"
+    return f"select='isnan(prev_pts)+gt({current_bucket},{previous_bucket})'"
+
+
 def _media_origin(probe: MediaProbe) -> Fraction:
     origins = tuple(
         stream.start_pts * stream.time_base
@@ -1036,6 +1282,18 @@ def _bounded_scale_filter(max_dimension: int) -> str:
         f"scale=w='min(iw,{max_dimension})':h='min(ih,{max_dimension})':"
         "force_original_aspect_ratio=decrease:force_divisible_by=2"
     )
+
+
+def _remove_scan_proxy_sentinel(folder: Path) -> tuple[Path, ...]:
+    """空signalも成功させる先頭sentinelを削除し実proxyだけを返す。"""
+    files = tuple(sorted(folder.glob("*.jpg")))
+    if not files:
+        raise MediaRuntimeError(
+            MediaRuntimeFailureReason.DECODER_FAILURE,
+            "Video Scanのproxy sentinelが生成されませんでした",
+        )
+    files[0].unlink()
+    return files[1:]
 
 
 def _ffmpeg_number(value: float) -> str:

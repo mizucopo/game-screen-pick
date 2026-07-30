@@ -1,6 +1,7 @@
 """media container probeのsemantic result。"""
 
 from dataclasses import dataclass
+from fractions import Fraction
 
 from .media_stream import MediaStream
 
@@ -11,3 +12,4 @@ class MediaProbe:
 
     format_names: tuple[str, ...]
     streams: tuple[MediaStream, ...]
+    duration: Fraction | None = None

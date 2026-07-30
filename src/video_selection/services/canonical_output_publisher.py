@@ -11,17 +11,21 @@ from pathlib import Path
 from ..models.canonical_publication_request import CanonicalPublicationRequest
 from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.frame_candidate import FrameCandidate
+from ..models.processing_stage import ProcessingStage
 from ..models.selected_image_artifact import SelectedImageArtifact
 from ..models.video_stage_result import VideoStageResult
+from ..protocols.run_observer import RunObserver
 from ..protocols.selected_frame_media_runtime import SelectedFrameMediaRuntime
 from .build_canonical_selection_report import build_canonical_selection_report
 from .build_selected_image_output_paths import build_selected_image_output_paths
-from .encode_selected_webp import encode_selected_webp
+from .canonical_report_semantic_digest import canonical_report_semantic_digest
 from .render_human_selection_report import render_human_selection_report
+from .selected_image_checkpoint import SelectedImageCheckpoint
 from .serialize_canonical_selection_report import (
     serialize_canonical_selection_report,
 )
 from .validate_canonical_selection_report import (
+    load_validated_canonical_selection_report,
     validate_canonical_selection_report,
 )
 from .validate_output_folder import validate_output_folder
@@ -42,22 +46,37 @@ class CanonicalOutputPublisher:
         fault_injector: PublicationFaultInjector | None = None,
         directory_renamer: DirectoryRenamer | None = None,
         completion_clock: CompletionClock | None = None,
+        observer: RunObserver | None = None,
     ) -> None:
         self._media_runtime = media_runtime
         self._fault_injector = fault_injector or _ignore_fault
         self._directory_renamer = directory_renamer or _rename_directory
         self._completion_clock = completion_clock
+        self._observer = observer
+        self._reused_completed_publication = False
+
+    @property
+    def reused_completed_publication(self) -> bool:
+        """既存の検証済みCanonical outputを変更せず返したか示す。"""
+        return self._reused_completed_publication
 
     def publish(
         self,
         request: CanonicalPublicationRequest,
     ) -> dict[str, object]:
         """WebP、Canonical JSON、Markdownを検証してatomicに公開する。"""
+        self._reused_completed_publication = False
         output_folder = request.configuration.output_folder
         validate_video_set_snapshot_metadata(request.video_set)
-        validate_output_folder(request.video_set.input_folder, output_folder)
+        validate_output_folder(
+            request.video_set.input_folder,
+            output_folder,
+            allow_completed_canonical_output=True,
+        )
         output_folder.parent.mkdir(parents=True, exist_ok=True)
         if output_folder.exists():
+            if any(output_folder.iterdir()):
+                return self._reuse_completed_publication(request, output_folder)
             output_folder.rmdir()
         _verify_atomic_directory_rename(output_folder.parent, output_folder.name)
         staging_folder = Path(
@@ -79,9 +98,48 @@ class CanonicalOutputPublisher:
             return report
         except BaseException:
             if not staging_folder.exists() and output_folder.exists():
-                _remove_failed_publication(output_folder)
+                try:
+                    load_validated_canonical_selection_report(output_folder)
+                except ValueError:
+                    _remove_failed_publication(output_folder)
             shutil.rmtree(staging_folder, ignore_errors=True)
             raise
+
+    def _reuse_completed_publication(
+        self,
+        request: CanonicalPublicationRequest,
+        output_folder: Path,
+    ) -> dict[str, object]:
+        """検証済み完成outputが今回の意味結果と同じ場合だけ再利用する。"""
+        completed_report = load_validated_canonical_selection_report(output_folder)
+        staging_folder = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output_folder.name}.",
+                suffix=".staging",
+                dir=output_folder.parent,
+            )
+        )
+        try:
+            current_report = self._prepare_and_validate(request, staging_folder)
+            validate_video_set_snapshot_metadata(request.video_set)
+            validate_canonical_selection_report(
+                completed_report,
+                output_folder,
+                request,
+                allow_model_update_diagnostic_mismatch=True,
+            )
+            if canonical_report_semantic_digest(
+                completed_report
+            ) != canonical_report_semantic_digest(current_report):
+                msg = (
+                    "Output Folderの完成済みCanonical outputが"
+                    "今回の意味結果と一致しません"
+                )
+                raise ValueError(msg)
+            self._reused_completed_publication = True
+            return completed_report
+        finally:
+            shutil.rmtree(staging_folder, ignore_errors=True)
 
     def _prepare_and_validate(
         self,
@@ -98,16 +156,32 @@ class CanonicalOutputPublisher:
             self._fault_injector("before-image-write", staging_folder)
             frame = selected.candidate.annotation.candidate
             stage = _stage_for_frame(frame, stages)
-            decoded = self._extract_original_frame(frame, stage)
             relative_path = paths[selected.candidate.identifier]
-            artifacts.append(
-                encode_selected_webp(
-                    selected.candidate.identifier,
-                    decoded,
-                    staging_folder / relative_path,
-                    relative_path,
-                )
+            checkpoint = SelectedImageCheckpoint(
+                request.configuration.processing_cache_folder,
+                source_fingerprint=stage.source.fingerprint,
+                validate_source=lambda: validate_video_set_snapshot_metadata(
+                    request.video_set
+                ),
+                observer=self._observer,
             )
+
+            def extract_selected_frame(
+                frame: FrameCandidate = frame,
+                stage: VideoStageResult = stage,
+            ) -> DecodedVideoFrame:
+                return self._extract_original_frame(frame, stage)
+
+            artifact, content = checkpoint.resolve(
+                frame,
+                scan_stage_fingerprint=_scan_stage_fingerprint(stage),
+                relative_path=relative_path,
+                extract_frame=extract_selected_frame,
+            )
+            output_path = staging_folder / relative_path
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(content)
+            artifacts.append(artifact)
         if self._completion_clock is not None:
             request = replace(request, completed_at=self._completion_clock())
         report = build_canonical_selection_report(request, tuple(artifacts))
@@ -167,6 +241,18 @@ def _stage_for_frame(
     if fingerprint is None:
         raise ValueError("Selected ImageにVideo Fingerprintがありません")
     return stages[fingerprint]
+
+
+def _scan_stage_fingerprint(stage: VideoStageResult) -> str:
+    matches = tuple(
+        item.fingerprint.value
+        for item in stage.completed_stages
+        if item.stage is ProcessingStage.SCAN_VIDEO
+    )
+    if len(matches) != 1:
+        msg = "Selected Image checkpointに一つのScan Stageが必要です"
+        raise ValueError(msg)
+    return matches[0]
 
 
 def _flush_staging_tree(staging_folder: Path) -> None:

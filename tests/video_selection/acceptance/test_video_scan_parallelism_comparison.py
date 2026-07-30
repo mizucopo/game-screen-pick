@@ -142,6 +142,36 @@ def test_failed_comparison_dimension_is_reported(
     assert comparison["passed"] is False
 
 
+@pytest.mark.parametrize("scan_wall_seconds", [float("nan"), float("inf")])
+def test_nonfinite_scan_wall_time_is_rejected(scan_wall_seconds: float) -> None:
+    """非有限Video Scan時間が並列改善として受理されないこと。
+
+    Arrange:
+        - 非有限wall timeを持つauto runが用意される
+    Act:
+        - fixed3とautoの並列比較が構築される
+    Assert:
+        - 正の有限numberではない値として拒否されること
+    """
+    # Arrange
+    fixed = _run_record(
+        workers=3,
+        mode="fixed",
+        wall_seconds=100.0,
+        artifact_digest="a" * 64,
+    )
+    automatic = _run_record(
+        workers=6,
+        mode="auto",
+        wall_seconds=scan_wall_seconds,
+        artifact_digest="a" * 64,
+    )
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="正のnumber"):
+        build_video_scan_parallelism_comparison(fixed, automatic)
+
+
 def _run_record(
     *,
     workers: int,

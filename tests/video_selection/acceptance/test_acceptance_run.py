@@ -261,6 +261,55 @@ def test_normalized_result_digest_retains_model_execution_and_runtime_identity(
     assert changed_digest != cold_digest
 
 
+def test_normalized_result_digest_ignores_unused_model_identity() -> None:
+    """Stageから参照されないmodel identityの差が意味結果へ含まれないこと。
+
+    Arrange:
+        - Scene Catalogだけを使用し、未使用STT modelを持つreportが用意される
+    Act:
+        - 未使用STT model identityだけが異なるreportのdigestが生成される
+    Assert:
+        - 両方のnormalized result digestが一致すること
+    """
+    # Arrange
+    cold = _canonical_report(
+        sha256="a" * 64,
+        width=1920,
+        height=1080,
+        size_bytes=1000,
+    )
+    changed = copy.deepcopy(cold)
+    for report in (cold, changed):
+        provenance = report["provenance"]
+        assert isinstance(provenance, dict)
+        models = provenance["models"]
+        assert isinstance(models, dict)
+        models["speech_to_text"] = {
+            "store": "hugging_face",
+            "configured_name": "whisper-large-v3",
+            "canonical_name": "whisper-large-v3",
+            "local_identity_before_update": None,
+            "update_status": "bootstrapped",
+            "execution_identity": "hf:" + "a" * 40,
+            "runtime_identity": "hf:1.2.1",
+        }
+    changed_provenance = changed["provenance"]
+    assert isinstance(changed_provenance, dict)
+    changed_models = changed_provenance["models"]
+    assert isinstance(changed_models, dict)
+    changed_speech = changed_models["speech_to_text"]
+    assert isinstance(changed_speech, dict)
+    changed_speech["execution_identity"] = "hf:" + "b" * 40
+    changed_speech["runtime_identity"] = "hf:1.3.0"
+
+    # Act
+    cold_digest = normalized_result_digest(cold)
+    changed_digest = normalized_result_digest(changed)
+
+    # Assert
+    assert changed_digest == cold_digest
+
+
 def test_run_attempt_duration_excludes_resource_monitor_shutdown(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -455,7 +504,7 @@ def _canonical_report(
                     "validation_failures": 0,
                     "effective_settings": {"requested_image_count": 1},
                     "tool_refs": [],
-                    "model_refs": [],
+                    "model_refs": ["scene_catalog"],
                     "contract_refs": [],
                     "duration_ms": 100,
                     "prompt_eval_tokens": 10,

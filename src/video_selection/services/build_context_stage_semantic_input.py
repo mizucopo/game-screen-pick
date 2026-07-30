@@ -4,12 +4,14 @@ import hashlib
 import json
 from fractions import Fraction
 
+from ..models.checkpoint_operation import CheckpointOperation
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.media_runtime_identity import MediaRuntimeIdentity
 from ..models.media_stream import MediaStream
 from ..models.video_scan_result import VideoScanResult
 from ..models.video_source import VideoSource
 from ..protocols.speech_runtime import SpeechRuntime
+from .checkpoint_version import checkpoint_version
 from .normalize_context_language import normalize_context_language
 
 _CONTEXT_POLICY_VERSION = "context-collection-v2"
@@ -39,9 +41,32 @@ def build_context_stage_semantic_input(
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
+    checkpoint_contracts = {
+        **(
+            {
+                "embedded_subtitle_stream": checkpoint_version(
+                    CheckpointOperation.EMBEDDED_SUBTITLE_STREAM
+                )
+            }
+            if subtitle_stream is not None
+            else {}
+        ),
+        **(
+            {
+                "pcm_audio_chunk": checkpoint_version(
+                    CheckpointOperation.PCM_AUDIO_CHUNK
+                ),
+                "speech_recognition_chunk": checkpoint_version(
+                    CheckpointOperation.SPEECH_RECOGNITION_CHUNK
+                ),
+            }
+            if use_stt
+            else {}
+        ),
+    }
     return {
         "policy_version": _CONTEXT_POLICY_VERSION,
-        "subtitle_extraction_version": _SUBTITLE_EXTRACTION_VERSION,
+        "checkpoint_contracts": checkpoint_contracts,
         "video_fingerprint": source.fingerprint,
         "timeline_contract": "exact-video-time-v1",
         "timeline_digest": timeline_digest,
@@ -49,11 +74,24 @@ def build_context_stage_semantic_input(
         "subtitle_stream_index": configuration.subtitle_stream_index,
         "selected_subtitle_stream": _subtitle_stream_value(subtitle_stream),
         "selected_audio_stream": _audio_stream_value(audio_stream),
-        "media_runtime_identity": {
-            "ffmpeg_version": media_runtime_identity.ffmpeg_version,
-            "ffprobe_version": media_runtime_identity.ffprobe_version,
-            "build_capability_sha256": (media_runtime_identity.build_capability_sha256),
-        },
+        **(
+            {"subtitle_extraction_version": _SUBTITLE_EXTRACTION_VERSION}
+            if subtitle_stream is not None
+            else {}
+        ),
+        **(
+            {
+                "media_runtime_identity": {
+                    "ffmpeg_version": media_runtime_identity.ffmpeg_version,
+                    "ffprobe_version": media_runtime_identity.ffprobe_version,
+                    "build_capability_sha256": (
+                        media_runtime_identity.build_capability_sha256
+                    ),
+                }
+            }
+            if subtitle_stream is not None or use_stt
+            else {}
+        ),
         **(
             {
                 "audio_stream_index": configuration.audio_stream_index,

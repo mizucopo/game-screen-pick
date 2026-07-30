@@ -32,7 +32,6 @@ def test_annotations_are_mapped_to_source_role_progress_and_global_rank(
     requests = build_candidate_annotation_requests(
         publication.video_stage_results,
         selection_intent="ブログ本文を説明できる画像を選ぶ",
-        similarity_threshold=0.72,
     )
     annotations_by_moment = {
         item.candidate.annotation.candidate_moment_id: item.candidate.annotation
@@ -99,7 +98,6 @@ def test_annotation_must_match_request_moment(tmp_path: Path) -> None:
     requests = build_candidate_annotation_requests(
         publication.video_stage_results,
         selection_intent="ブログ本文を説明できる画像を選ぶ",
-        similarity_threshold=0.72,
     )
     annotations = (
         *(item.candidate.annotation for item in publication.selection_result.selected),

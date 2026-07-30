@@ -1,5 +1,6 @@
 """一回のVision推論のprivacy-safe診断。"""
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -73,6 +74,7 @@ class VisionInferenceDiagnostics:
             or not 1 <= self.attempt_count <= _MAX_AGGREGATE_ATTEMPT_COUNT
             or any(value < 0 for value in counts)
             or any(value is not None and value < 0 for value in optional_counts)
+            or not math.isfinite(self.duration_seconds)
             or self.duration_seconds < 0
             or _SAFE_VALUE_PATTERN.fullmatch(self.model_name) is None
             or not canonical_identity_pair

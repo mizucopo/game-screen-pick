@@ -1,5 +1,6 @@
 """中断をまたぐAcceptance Run Attemptの計測検証と集計。"""
 
+import math
 from collections.abc import Mapping
 from typing import cast
 
@@ -30,6 +31,7 @@ _BASELINE_INTEGER_METRICS = (
 
 def build_incomplete_interrupt_attempt(
     duration_seconds: float,
+    recovered_metrics: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """詳細計測を確定できないuser interruptを保守的な試行として返す。"""
     record: dict[str, object] = {
@@ -46,6 +48,17 @@ def build_incomplete_interrupt_attempt(
         **dict.fromkeys(_MAXIMUM_INTEGER_METRICS, 0),
         **dict.fromkeys(_BASELINE_INTEGER_METRICS, 0),
     }
+    if recovered_metrics is not None:
+        for key in (
+            "cache_hit_count",
+            "cache_miss_count",
+            "reuse_count",
+            "unexpected_recompute_count",
+            "stage_durations_seconds",
+            "completed_stage_counts",
+        ):
+            if key in recovered_metrics:
+                record[key] = recovered_metrics[key]
     validate_run_measurements(record)
     return record
 
@@ -80,6 +93,7 @@ def aggregate_run_attempts(
         validate_run_measurements(record)
     aggregate = dict(records[-1])
     aggregate["attempt_count"] = len(records)
+    aggregate["attempts"] = [dict(record) for record in records]
     aggregate["duration_seconds"] = sum(
         _measurement_number(record, "duration_seconds") for record in records
     )
@@ -133,6 +147,7 @@ def _aggregate_video_scan_parallelism(
     if len(records) == 1:
         return dict(diagnostics[0])
     result = dict(diagnostics[-1])
+    contexts_are_equal = True
     for key in (
         "mode",
         "configured_workers",
@@ -141,7 +156,7 @@ def _aggregate_video_scan_parallelism(
     ):
         values = {str(item.get(key)) for item in diagnostics}
         if len(values) != 1:
-            raise ValueError("Acceptance run Video Scan設定がattempt間で不一致です")
+            contexts_are_equal = False
     result["initial_workers"] = _parallelism_integer(
         diagnostics[0],
         "initial_workers",
@@ -162,7 +177,9 @@ def _aggregate_video_scan_parallelism(
         3,
     )
     result["attempt_count"] = len(records)
-    result["measurement_complete"] = len(diagnostics) == len(records)
+    result["measurement_complete"] = (
+        len(diagnostics) == len(records) and contexts_are_equal
+    )
     changes: list[dict[str, object]] = []
     elapsed_offset = 0.0
     for attempt_index, item in enumerate(diagnostics, start=1):
@@ -202,7 +219,12 @@ def _parallelism_nonnegative_integer(
 
 def _parallelism_number(value: Mapping[str, object], key: str) -> float:
     result = value.get(key)
-    if not isinstance(result, int | float) or isinstance(result, bool) or result < 0:
+    if (
+        not isinstance(result, int | float)
+        or isinstance(result, bool)
+        or not math.isfinite(result)
+        or result < 0
+    ):
         raise ValueError(f"Acceptance run Video Scan {key}が不正です")
     return float(result)
 
@@ -231,7 +253,12 @@ def _sum_integer_mappings(
 
 def _measurement_number(record: Mapping[str, object], key: str) -> float:
     value = record.get(key)
-    if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
+    if (
+        not isinstance(value, int | float)
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+    ):
         raise ValueError(f"Acceptance run metric {key}が不正です")
     return float(value)
 
@@ -252,6 +279,7 @@ def _measurement_numeric_mapping(
         isinstance(name, str)
         and isinstance(item, int | float)
         and not isinstance(item, bool)
+        and math.isfinite(item)
         and item >= 0
         for name, item in value.items()
     ):

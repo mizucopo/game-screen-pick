@@ -1,5 +1,6 @@
 """固定3 workerとautoのtarget実測をprivacy-safeに比較する。"""
 
+import math
 from collections.abc import Mapping
 from typing import cast
 
@@ -77,7 +78,12 @@ def _mapping(value: object, location: str) -> dict[str, object]:
 
 def _positive_number(value: Mapping[str, object], key: str) -> float:
     result = value.get(key)
-    if not isinstance(result, int | float) or isinstance(result, bool) or result <= 0:
+    if (
+        not isinstance(result, int | float)
+        or isinstance(result, bool)
+        or not math.isfinite(result)
+        or result <= 0
+    ):
         raise ValueError(f"Video Scan comparison {key}が正のnumberではありません")
     return float(result)
 

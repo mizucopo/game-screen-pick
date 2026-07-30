@@ -32,6 +32,12 @@ Stage manifestの上流fingerprint、現在runで観測したcache hit/miss・�
 commit SHAを保持します。coldとwarmのreportは同じartifact identityでも、各runで実際に
 再計算または再利用された結果を別々に示します。`report.md`は短縮fingerprintと主要診断だけを
 表示します。
+tool/runtime identityとStage参照は実際にそのStageが使用した依存だけを記録します。
+subtitle・audio streamがなくSTTを呼び出さなかった場合、Speech Runtime Identityと
+`speech_to_text` tool参照は省略され、未使用runtimeの更新はsemantic reportを変えません。
+全roleのmodel解決履歴は診断用にreportへ残しますが、再開時のsemantic digestはStageの
+`model_refs`から実際に参照されたroleだけを比較します。未使用modelの更新確認やidentity変更で
+完成済みoutputを拒否しません。
 `provenance.runtime.video_scan_parallelism`にはVideo Scanの設定mode、初期・最終・peak
 worker数、scan wall秒、完了境界で変更されたrun開始からの経過秒、変更理由、privacy-safeな
 latest/rolling CPU・memory・GPU・Decoder・VRAM・disk metric、disk throughput比と
@@ -57,6 +63,6 @@ Spoiler Riskは常時表示しますが、`none`以外の短いevidence summary�
 
 Selection Shortfallはwarning付き正常成果物として選択済みsubsetを公開します。model更新が利用不能でも完全でload可能なlocal artifactを再検査できた場合は、`model_update_unavailable`と対象roleをwarningとして公開します。それ以外のfatal error、schema不正、renderer失敗、成果物不一致ではOutput Folderを公開しません。
 
-publisherはartifact生成前に同じparent内のdirectory renameをprobeし、元動画のpath・device・inode・size・mtime・ctime snapshotを開始時と最終rename直前に再検証します。hidden sibling staging内のfileとdirectoryをflushし、schema・画像hash／寸法／path・JSON serialization・Markdown再render・privacy・layoutを検証してから一回だけfinal renameを行い、そのparent directoryもflushします。renameの前後を含む失敗時はstagingとfinal Output Folderを除去します。
+publisherはartifact生成前に同じparent内のdirectory renameをprobeし、元動画のpath・size・`mtime_ns` snapshotを開始時と最終rename直前に再検証します。選択画像1枚ごとの元frame抽出と固定WebP encodeはDurable Work Unitへ確定し、再開時も同じbytesを新しいstagingへcopyします。hidden sibling staging内のfileとdirectoryをflushし、schema・画像hash／寸法／path・JSON serialization・Markdown再render・privacy・layoutを検証してから一回だけfinal renameを行い、そのparent directoryもflushします。通常の例外ではstagingとrename済みの未返却finalを除去します。SIGKILLなどでhandlerを通らずfinalだけが残った場合は、全artifactと内部関係を再検証し、今回のreportから運用診断を除いたsemantic digestが一致する場合だけ既存folderをbyte変更なしで正常成果物として返します。不一致時は既存folderを保持したまま拒否します。
 
 完全なfield、命名、時刻、near miss、schema evolution、atomic publication契約は[ADR 0005](adr/0005-publish-video-selection-artifacts-atomically.md)を参照してください。

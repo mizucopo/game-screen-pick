@@ -33,7 +33,7 @@ def read_json_object(path: Path) -> dict[str, object] | None:
         value: object = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
-    except (OSError, TypeError, ValueError):
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
         raise ValueError("Acceptance JSON stateが破損しています") from None
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ValueError("Acceptance JSON stateにはobjectが必要です")

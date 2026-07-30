@@ -6,31 +6,35 @@
 
 Video Set内の全sourceをVideo Order順にprobeした後、独立した`scan-video`をbounded並列実行します。既定の`video_scan.workers = "auto"`では、CPU decodeはlogical CPU 8個につき1 workerの保守的上限を使います。NVDECはCPU・memory・NVIDIA Decoder・GPU・VRAM・diskの初期sampleにpressureがあれば1 worker、正常時は同じ保守値から開始します。その後は各resourceと1 streamあたりの処理速度をrolling windowで観測し、余力があればlogical CPU 4個につき1 worker、既定で最大6 workerまで使います。利用率は直近3 sample、disk throughputと処理速度のtrendは直近2 sample対その前の2 sampleで判断します。並列数はscan完了境界で1ずつ変更し、active scanを停止せず未開始taskの投入だけを調整します。resource sample、disk観測、またはstream速度trendを取得できない場合は増加せず、安全側のworker数を維持します。
 
-Video Order上の対象scanが確定した時点で、後続Videoのscanを続けながら、そのVideoの`extract-frame-candidates`と`collect-context`を開始します。downstream、結果、progress通知はVideo Order順であり、後続scanの完了順には依存しません。worker数と変更履歴はStage Fingerprintやcache identityへ含めず、privacy-safeなrun provenanceへだけ記録します。各Stage境界ではpath・device・inode・size・mtime・ctime snapshotを検査し、内容のwhole-file SHA-256はVideo Identity cache miss時だけ計算します。Video IdentityのSHA-256はdisk/CPU処理であり、NVDECへ移せません。
+Video Order上の対象scanが確定した時点で、後続Videoのscanを続けながら、そのVideoの`extract-frame-candidates`と`collect-context`を開始します。downstream、結果、progress通知はVideo Order順であり、後続scanの完了順には依存しません。worker数と変更履歴はStage Fingerprintやcache identityへ含めず、privacy-safeなrun provenanceへだけ記録します。各Stage境界ではpath・size・`mtime_ns` snapshotを検査し、内容のwhole-file SHA-256はVideo Identity cache miss時だけ計算します。device、inode、ctimeは再利用判定に使いません。Video IdentityのSHA-256はdisk/CPU処理であり、NVDECへ移せません。
 
-Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行中のscanへ終了を要求します。割り込み後に待機中のscanを新しく開始せず、Completed Stageとして確定していない成果物は次回runで再計算します。
+Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行中のscanへ終了を要求します。割り込み後に待機中のscanを新しく開始しません。Completed Stageが未確定でも、atomicに確定済みのscan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、STT chunkは次回runで再利用し、実行中だった最小Work Unitだけを再計算します。
 
 1. `scan-video`
    - `attached_pic`を除外し、default disposition、stream indexの順でPrimary Video Streamを決めます。
-   - 一回のnative decodeを、1秒heartbeat、320px scene signal、全frame timingへ分岐します。
+   - exact stream timingを15分の固定PTS partitionへ分け、各partitionの一回のnative decodeを、1秒heartbeat、320px scene signal、全frame timingへ分岐します。streamの`duration_ts`がないcontainerでは、ffprobeのcontainer durationを有理数のままstream tickへ切り上げ、partition開始点の個数だけを決めます。最後のpartitionは開始PTSからEOFまでを対象にします。
+   - 各partitionをDurable Work Unitとしてatomicに確定します。cold runと再開runが同じpartition境界を使うため、再開の有無でtimeline、scene signal、Candidate IDを変えません。
    - heartbeat/scene proxyは1件ずつRGB decode・測定して解放し、全proxyのRGBを同時保持しません。
-   - Heartbeat Proxy、scene signalの時刻、exact timeline、scan metricをatomicに確定します。
+   - partitionをPTS順に集約し、Heartbeat Proxy、scene signalの時刻、exact timeline、scan metricをCompleted Stageとしてatomicに確定します。
 2. `extract-frame-candidates`
    - timeline順の単調windowでscene近傍のheartbeat品質を参照し、density windowごとに最大1件のCandidate Momentを発見します。
    - Moment前後のnative frameだけをrange scanで取り出します。独立rangeは入力順を保ったまま、logical CPU数に応じて最大4 workerで並列decodeします。
    - 同時に保持するdecode結果はworker数以下へ制限します。重なるMoment windowを一つのRefinement Window Groupとして順次処理し、選抜proxyを書いた時点でそのgroupのRGB frameを解放します。
+   - 各Refinement Window Groupのproxyと解析結果をDurable Work Unitとしてatomicに確定し、PTS順に親Stageへ集約します。
    - group内でmodel-free Neutral Image Analysis、無効frame除外、Moment内deduplication、多様性選抜を行います。
    - Frame Candidate Proxyと抽出metricをatomicに確定します。
 3. `collect-context`
    - embedded text subtitleを優先し、選ばれなかった場合だけaudio STTを実行します。forced subtitleの場合はsubtitleとSTTの両方を保持します。
+   - embedded text subtitleは選択stream全体を一つのDurable Work Unitとして確定し、再開時に再抽出しません。
+   - audioを16 kHz mono PCMへ変換するsample rangeと、overlapを含むPCM chunkごとのSpeech Recognition Resultを別々のDurable Work Unitとしてatomicに確定します。STT modelだけが変わった場合はPCMを保持し、未完了または失効した認識chunkだけを再推論します。
    - subtitle packet PTSまたは16 kHz PCM sample gridをexact Video Timeへ対応付け、Context Cueとsource別outcomeをatomicに確定します。
    - Frame CandidateやCandidate Momentを入力にせず、Context Cueだけで候補を生成したり、視覚的に不適格なframeを適格化したりしません。
 
-Video Stage cacheはVideo Fingerprintごとに`<VIDEO_INPUT_FOLDER>/.game-screen-pick/cache/videos/`へ保存されます。動画のrenameやVideo Order変更はfingerprintに含まれないため、同じ内容の動画では再利用されます。
+Completed Video StageはVideo Fingerprintごとに`<VIDEO_INPUT_FOLDER>/.game-screen-pick/cache/videos/`、Stage内の最小checkpointは`cache/work-units/`へ保存されます。動画のrenameやVideo Order変更はStage fingerprintに含まれないため、同じ内容の動画では再利用されます。詳細は[Pipelineと安全な再開](pipeline-resume.md)を参照してください。
 
 ## Exact timeline
 
-Video Timeは整数source PTSとstream time baseから導出し、最初の表示frameを0とします。Video Durationは最終表示frameの`PTS + duration_ts`を優先し、取得できない場合だけstreamのexactな`start_pts + duration_ts`を使います。float秒、平均fps、frame間隔からは推測しません。
+Video Timeは整数source PTSとstream time baseから導出し、最初の表示frameを0とします。Video Durationは最終表示frameの`PTS + duration_ts`を優先し、取得できない場合だけstreamのexactな`start_pts + duration_ts`を使います。container durationはpartition開始点を不足させないためのhintに限り、Video Durationやframe時刻には使いません。float秒、平均fps、frame間隔からは推測しません。
 
 Timeline Segmentは0、scene signalのVideo Time、Video Durationを境界とする半開区間です。scene境界は後側のsegmentに属し、全segmentが`[0, Video Duration)`をgapやoverlapなく覆います。
 
@@ -39,7 +43,7 @@ Timeline Segmentは0、scene signalのVideo Time、Video Durationを境界とす
 - Heartbeat Proxy: 長辺960px以下、FFmpeg MJPEG `q:v=3`、source metadataなし
 - scene signal画像: 長辺320px以下。Scan Proxy Analysis後に削除し、Completed Stageには時刻と解析結果だけを残す
 - Frame Candidate Proxy: 長辺960px以下、FFmpeg MJPEG `q:v=3`、source metadataなし
-- 元解像度frame: cacheしない。公開時にexact PTSから再抽出する
+- 元解像度RGB frame: cacheしない。公開時にexact PTSから再抽出し、選択画像1枚ごとの固定WebPだけをDurable Work Unitとして保存する
 
 Neutral Image AnalysisはOpenCV/NumPyの画質metricsとL2正規化済みHSV・輝度・edge特徴だけを使い、CLIPやHugging Face modelをloadしません。stable reject reasonは次の6種類です。
 
@@ -79,15 +83,15 @@ STT結果は正の時間幅を持ち、平均log probabilityが-0.8以上かつ�
 - Ollama、STT、model lifecycle設定
 - source path、filename、Video Order
 
-Completed Stage manifestは`artifact.json`を含む全artifactの相対path、byte数、SHA-256を記録します。JPEGが1件でも欠損・破損した場合はStage全体を再利用せず、上流の健全なStageを残して再計算します。
+Completed Stage manifestは`artifact.json`を含む全artifactの相対path、byte数、SHA-256を記録します。JPEGが1件でも欠損・破損した場合は親Stageを直接再利用しません。健全なscan partitionまたはRefinement Window Groupが残っていればそれらから親Stageを再集約し、破損した最小Work Unitだけを再計算します。
 
 ## Metric
 
-`scan-video`はexact duration、wall/CPU秒、処理速度、decode backend、decode pass数、heartbeat件数・容量・最大/p95 gap、scene signal件数、segment件数を記録します。
+`scan-video`はexact duration、wall/CPU秒、処理速度、decode backend、decode partition数、heartbeat件数・容量・最大/p95 gap、scene signal件数、segment件数を記録します。
 
 `extract-frame-candidates`はwall/CPU秒、density上限と実Moment数、native frame件数、reason別reject件数、dedupe件数、0-frame Moment件数、Frame Candidate件数・容量を記録します。両Stageのwall時間はartifact構築まで、CPU時間はcurrent processのPython/OpenCV/NumPyとFFmpeg child processの合計です。cache hitでは初回計算時のmetricを復元し、metric値はStage Fingerprintに含めません。
 
-`collect-context`は選択・試行したsourceごとに`available`、`absent`、`no_context`、`no_speech`、`low_reliability`とstable reason、Cue件数、除外件数を記録します。ambiguous stream、unsupported subtitle、decode/STT失敗、PCM gridまたは範囲外・逆転時刻のtimestamp drift、一部chunkの`chunk_failed`はfatalであり、先に成功したCueを含むpartial manifestを公開しません。
+`collect-context`は選択・試行したsourceごとに`available`、`absent`、`no_context`、`no_speech`、`low_reliability`とstable reason、Cue件数、除外件数を記録します。ambiguous stream、unsupported subtitle、decode/STT失敗、PCM gridまたは範囲外・逆転時刻のtimestamp drift、一部chunkの`chunk_failed`はfatalであり、先に成功したCueを含むpartial Completed Stage manifestを公開しません。ただし検証済みSpeech Recognition chunk checkpointは保持し、次回runでは失敗chunkだけを再実行します。
 
 ## 検証
 

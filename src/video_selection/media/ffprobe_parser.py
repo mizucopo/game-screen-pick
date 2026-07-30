@@ -29,6 +29,7 @@ def parse_media_probe(document: object) -> MediaProbe:
     return MediaProbe(
         format_names=tuple(format_name.split(",")),
         streams=tuple(_parse_stream(item) for item in raw_streams),
+        duration=_optional_duration(raw_format.get("duration")),
     )
 
 
@@ -108,5 +109,22 @@ def _optional_fraction(value: object) -> Fraction | None:
         raise ValueError(msg) from error
     if parsed <= 0:
         msg = "ffprobe time_baseは正である必要があります"
+        raise ValueError(msg)
+    return parsed
+
+
+def _optional_duration(value: object) -> Fraction | None:
+    if value is None or value == "N/A":
+        return None
+    if not isinstance(value, str):
+        msg = "ffprobe format durationが不正です"
+        raise ValueError(msg)
+    try:
+        parsed = Fraction(value)
+    except (ValueError, ZeroDivisionError) as error:
+        msg = "ffprobe format durationが不正です"
+        raise ValueError(msg) from error
+    if parsed <= 0:
+        msg = "ffprobe format durationは正である必要があります"
         raise ValueError(msg)
     return parsed

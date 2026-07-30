@@ -13,6 +13,7 @@ from src.video_selection.models.vision_inference_diagnostics import (
 from src.video_selection.services.build_report_provenance import (
     build_report_provenance,
 )
+from src.video_selection.services.stage_version import stage_version
 
 
 def test_catalog_cache_reuse_does_not_increase_inference_attempt_count(
@@ -86,7 +87,6 @@ def test_catalog_cache_reuse_does_not_increase_inference_attempt_count(
         events,
         configuration,
         {fingerprint.value: diagnostics},
-        "fake-speech-runtime-v1",
     )
 
     # Assert
@@ -95,6 +95,9 @@ def test_catalog_cache_reuse_does_not_increase_inference_attempt_count(
     assert stage.cache_misses == 1
     assert stage.recomputed_items == 1
     assert stage.attempt_count == 1
+    assert stage.effective_settings["engine_version"] == stage_version(
+        ProcessingStage.BUILD_SCENE_CATALOG
+    )
 
 
 def test_video_scan_parallelism_diagnostics_are_recorded_outside_stage_identity(
@@ -157,13 +160,106 @@ def test_video_scan_parallelism_diagnostics_are_recorded_outside_stage_identity(
         (event,),
         configuration,
         {},
-        "fake-speech-runtime-v1",
         video_scan_parallelism=diagnostics,
     )
 
     # Assert
     assert provenance.runtime["video_scan_parallelism"] == diagnostics
     assert completed.semantic_input == semantic_input
+
+
+def test_unused_speech_runtime_is_omitted_from_context_provenance(
+    tmp_path: Path,
+) -> None:
+    """Context入力がない場合に未使用STT runtimeがprovenanceへ混入しないこと。
+
+    Arrange:
+        - subtitle・audio依存を持たないContext Completed Stageが用意される
+    Act:
+        - 異なるSpeech Runtime Identityでprovenanceが構築される
+    Assert:
+        - 両provenanceが一致し、STT toolとruntime identityが省略されること
+    """
+    # Arrange
+    fingerprint = StageFingerprint("c" * 64)
+    completed = CompletedStage(
+        stage=ProcessingStage.COLLECT_CONTEXT,
+        fingerprint=fingerprint,
+        semantic_input={"policy_version": "context-collection-v1"},
+    )
+    event = _context_event(fingerprint)
+    configuration = EffectiveConfiguration(
+        video_input_folder=tmp_path / "input",
+        output_folder=tmp_path / "output",
+    )
+
+    # Act
+    first = build_report_provenance(
+        (completed,),
+        (event,),
+        configuration,
+        {},
+    )
+    second = build_report_provenance(
+        (completed,),
+        (event,),
+        configuration,
+        {},
+    )
+
+    # Assert
+    assert first == second
+    assert first.runtime == {"application": "video_selection"}
+    assert first.tools == {"video_selection": "application-v1"}
+    assert first.stages[0].tool_refs == ("video_selection",)
+
+
+def test_used_speech_runtime_is_recorded_in_context_provenance(
+    tmp_path: Path,
+) -> None:
+    """音声Contextで使用されたSTT・FFmpeg identityが記録されること。
+
+    Arrange:
+        - mediaとSTT依存を持つContext Completed Stageが用意される
+    Act:
+        - provenanceが構築される
+    Assert:
+        - runtime、tool registry、Stage参照へ使用identityが記録されること
+    """
+    # Arrange
+    fingerprint = StageFingerprint("d" * 64)
+    completed = CompletedStage(
+        stage=ProcessingStage.COLLECT_CONTEXT,
+        fingerprint=fingerprint,
+        semantic_input={
+            "policy_version": "context-collection-v1",
+            "media_runtime_identity": {
+                "ffmpeg_version": "6.1.1",
+                "ffprobe_version": "6.1.1",
+                "build_capability_sha256": "e" * 64,
+            },
+            "speech_runtime_identity": "speech-runtime-a",
+        },
+    )
+    event = _context_event(fingerprint)
+    configuration = EffectiveConfiguration(
+        video_input_folder=tmp_path / "input",
+        output_folder=tmp_path / "output",
+    )
+
+    # Act
+    provenance = build_report_provenance(
+        (completed,),
+        (event,),
+        configuration,
+        {},
+    )
+
+    # Assert
+    assert provenance.runtime["speech_runtime_identity"] == "speech-runtime-a"
+    assert provenance.tools["speech_to_text"] == "speech-runtime-a"
+    assert "ffmpeg" in provenance.tools
+    assert provenance.stages[0].tool_refs == ("ffmpeg", "speech_to_text")
 
 
 def _catalog_event(
@@ -184,5 +280,18 @@ def _catalog_event(
         cache_miss_count=cache_miss_count,
         reuse_count=reuse_count,
         recompute_count=recompute_count,
+        elapsed_seconds=1.0,
+    )
+
+
+def _context_event(fingerprint: StageFingerprint) -> ProgressEvent:
+    """一つのContext完了eventを返す。"""
+    return ProgressEvent(
+        kind="stage_completed",
+        severity="info",
+        stage=ProcessingStage.COLLECT_CONTEXT,
+        stage_fingerprint=fingerprint.value,
+        cache_miss_count=1,
+        recompute_count=1,
         elapsed_seconds=1.0,
     )

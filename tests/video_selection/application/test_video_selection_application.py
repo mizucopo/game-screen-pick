@@ -1,5 +1,6 @@
 """実Processorを接続するVideo Selection Applicationのtest。"""
 
+import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import replace
@@ -147,9 +148,8 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     assert warm_scan["recomputed_items"] == 0
     assert warm_scan["attempt_count"] == 1
     provenance = cold_report["provenance"]
-    assert provenance["runtime"]["speech_runtime_identity"] == (
-        "fake-speech-runtime-v1"
-    )
+    assert "speech_runtime_identity" not in provenance["runtime"]
+    assert "speech_to_text" not in provenance["tools"]
     assert provenance["runtime"]["video_scan_parallelism"]["mode"] == "auto"
     assert provenance["runtime"]["video_scan_parallelism"]["initial_workers"] == 1
     assert cold_scan["effective_settings"]["decode_backend"] == "cpu"
@@ -157,7 +157,7 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     assert cold_scan["contract_refs"] == ["video_scan"]
     assert cold_extraction["tool_refs"] == ["ffmpeg"]
     assert cold_extraction["contract_refs"] == ["frame_candidate_extraction"]
-    assert cold_context["tool_refs"] == ["ffmpeg"]
+    assert cold_context["tool_refs"] == ["video_selection"]
     assert cold_context["model_refs"] == []
     assert cold_context["contract_refs"] == ["context_collection"]
     assert cold_catalog["tool_refs"] == ["ollama"]
@@ -173,6 +173,304 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     ]
     assert cold_selection["tool_refs"] == ["video_selection"]
     assert cold_selection["contract_refs"] == ["video_set_selection_policy"]
+
+
+def test_restart_after_atomic_publication_reuses_exact_output(
+    tmp_path: Path,
+) -> None:
+    """atomic公開後に呼出元が中断されても同じoutputで正常終了されること。
+
+    Arrange:
+        - 一つのVideo Sourceが最後まで処理されCanonical outputが公開される
+        - 呼出元の完了記録だけが失われ同じ設定でapplicationが再起動される
+    Act:
+        - 同じOutput Folderを指定したrunが再実行される
+    Assert:
+        - 全StageとSelected WebP checkpointが再利用されること
+        - 公開済みreportと画像のbyteが変更されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter.mkv").write_bytes(b"video-content")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+        image_count=1,
+    )
+    first_outcome = _application(
+        FakeVideoStageMediaRuntime(),
+        EchoStructuredVisionRuntime(),
+    ).run(configuration)
+    before = {
+        path.relative_to(first_outcome.output_folder): path.read_bytes()
+        for path in first_outcome.output_folder.rglob("*")
+        if path.is_file()
+    }
+    resumed_media = FakeVideoStageMediaRuntime()
+    resumed_vision = EchoStructuredVisionRuntime()
+
+    # Act
+    resumed_outcome = _application(
+        resumed_media,
+        resumed_vision,
+    ).run(configuration)
+
+    # Assert
+    after = {
+        path.relative_to(resumed_outcome.output_folder): path.read_bytes()
+        for path in resumed_outcome.output_folder.rglob("*")
+        if path.is_file()
+    }
+    assert resumed_outcome.status is first_outcome.status
+    assert resumed_outcome.selected_count == first_outcome.selected_count
+    assert resumed_outcome.reused_completed_publication is True
+    assert resumed_media.scan_calls == []
+    assert resumed_media.range_calls == []
+    assert resumed_media.extracted_original_frame_calls == []
+    assert resumed_vision.scene_catalog_calls == []
+    assert resumed_vision.candidate_annotation_calls == []
+    assert after == before
+    assert not tuple(tmp_path.glob(".output.*.staging"))
+
+
+def test_restart_reuses_exact_output_after_unused_speech_dependency_update(
+    tmp_path: Path,
+) -> None:
+    """未使用STT依存が更新されても完成済みoutputがbyte変更なしで再利用されること。
+
+    Arrange:
+        - subtitle・audioのない動画でCanonical outputが公開される
+        - STT modelとSpeech Runtimeだけが更新された再起動runが用意される
+    Act:
+        - 同じOutput Folderを指定して再実行される
+    Assert:
+        - 完成済みpublicationが再利用され全output byteが保持されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter.mkv").write_bytes(b"video-content")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+        image_count=1,
+    )
+    first_outcome = _application(
+        FakeVideoStageMediaRuntime(),
+        EchoStructuredVisionRuntime(),
+        speech_identity_seed="speech-model-a",
+        speech_runtime_identity="speech-runtime-a",
+    ).run(configuration)
+    before = {
+        path.relative_to(first_outcome.output_folder): path.read_bytes()
+        for path in first_outcome.output_folder.rglob("*")
+        if path.is_file()
+    }
+
+    # Act
+    resumed_outcome = _application(
+        FakeVideoStageMediaRuntime(),
+        EchoStructuredVisionRuntime(),
+        speech_identity_seed="speech-model-b",
+        speech_runtime_identity="speech-runtime-b",
+    ).run(configuration)
+
+    # Assert
+    after = {
+        path.relative_to(resumed_outcome.output_folder): path.read_bytes()
+        for path in resumed_outcome.output_folder.rglob("*")
+        if path.is_file()
+    }
+    assert resumed_outcome.reused_completed_publication is True
+    assert after == before
+
+
+def test_hash_consistent_corrupt_selection_cache_is_locally_recomputed(
+    tmp_path: Path,
+) -> None:
+    """hash整合した決定不一致Selectionだけが破棄され再選定されること。
+
+    Arrange:
+        - 正常runのSelection scoreが算術整合を保った別値へ書き換えられる
+        - manifestのartifact hashも書き換え後の内容へ一致させられる
+    Act:
+        - 同じ入力と別Output Folderでapplicationが再実行される
+    Assert:
+        - Video、Context、Visionの健全なcheckpointが再利用されること
+        - Selectionだけが再計算され中断なしと同じ選択結果と画像が公開されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter.mkv").write_bytes(b"video-content")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "first-output",
+        image_count=1,
+    )
+    first_outcome = _application(
+        FakeVideoStageMediaRuntime(),
+        EchoStructuredVisionRuntime(),
+    ).run(configuration)
+    first_report = json.loads(
+        (first_outcome.output_folder / "report.json").read_text(encoding="utf-8")
+    )
+    selection_stage_folders = tuple(
+        (configuration.processing_cache_folder / "video-sets").glob(
+            f"*/{ProcessingStage.SELECT_IMAGES.value}/*"
+        )
+    )
+    assert len(selection_stage_folders) == 1
+    selection_stage_folder = selection_stage_folders[0]
+    artifact_path = selection_stage_folder / "artifact.json"
+    manifest_path = selection_stage_folder / "manifest.json"
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    score = artifact["selected"][0]["score"]
+    score["base_utility"] += 0.25
+    score["marginal_utility"] += 0.25
+    artifact_bytes = (
+        json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    artifact_path.write_bytes(artifact_bytes)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifact_record = next(
+        item for item in manifest["artifacts"] if item["path"] == "artifact.json"
+    )
+    artifact_record["size_bytes"] = len(artifact_bytes)
+    artifact_record["sha256"] = hashlib.sha256(artifact_bytes).hexdigest()
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    resumed_media = FakeVideoStageMediaRuntime()
+    resumed_vision = EchoStructuredVisionRuntime()
+    resumed_observer = RecordingRunObserver()
+    resumed_progress = RunProgressTracker(resumed_observer)
+    resumed_progress.start_run()
+
+    # Act
+    resumed_outcome = _application(
+        resumed_media,
+        resumed_vision,
+        observer=resumed_observer,
+        progress=resumed_progress,
+    ).run(
+        replace(
+            configuration,
+            output_folder=tmp_path / "resumed-output",
+        )
+    )
+
+    # Assert
+    resumed_report = json.loads(
+        (resumed_outcome.output_folder / "report.json").read_text(encoding="utf-8")
+    )
+    assert resumed_media.scan_calls == []
+    assert resumed_media.range_calls == []
+    assert resumed_vision.scene_catalog_calls == []
+    assert resumed_vision.candidate_annotation_calls == []
+    assert resumed_report["selected"] == first_report["selected"]
+    first_images = {
+        path.name: path.read_bytes()
+        for path in (first_outcome.output_folder / "images").glob("*.webp")
+    }
+    resumed_images = {
+        path.name: path.read_bytes()
+        for path in (resumed_outcome.output_folder / "images").glob("*.webp")
+    }
+    assert resumed_images == first_images
+    selection_events = tuple(
+        event
+        for event in resumed_observer.progress_events
+        if event.kind == "cache" and event.stage is ProcessingStage.SELECT_IMAGES
+    )
+    assert len(selection_events) == 1
+    assert selection_events[0].recompute_count == 1
+
+
+def test_similarity_threshold_change_reuses_vision_and_recomputes_selection(
+    tmp_path: Path,
+) -> None:
+    """類似度閾値変更がVisionまで遡らず最終選定だけを失効させること。
+
+    Arrange:
+        - 一つのVideo Sourceを既定類似度閾値で完了したrunが用意される
+    Act:
+        - 同じcacheで類似度閾値だけを変更して再実行される
+    Assert:
+        - Video StageとVision推論は再利用されること
+        - Select Images Stageだけが異なるfingerprintで再計算されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter.mkv").write_bytes(b"video-content")
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "first-output",
+        image_count=1,
+        similarity_threshold=0.72,
+    )
+    first_outcome = _application(
+        FakeVideoStageMediaRuntime(),
+        EchoStructuredVisionRuntime(),
+    ).run(configuration)
+    changed_media = FakeVideoStageMediaRuntime()
+    changed_vision = EchoStructuredVisionRuntime()
+    changed_observer = RecordingRunObserver()
+    changed_progress = RunProgressTracker(changed_observer)
+    changed_progress.start_run()
+
+    # Act
+    changed_outcome = _application(
+        changed_media,
+        changed_vision,
+        observer=changed_observer,
+        progress=changed_progress,
+    ).run(
+        replace(
+            configuration,
+            output_folder=tmp_path / "changed-output",
+            similarity_threshold=0.90,
+        )
+    )
+
+    # Assert
+    first_report = json.loads(
+        (first_outcome.output_folder / "report.json").read_text(encoding="utf-8")
+    )
+    changed_report = json.loads(
+        (changed_outcome.output_folder / "report.json").read_text(encoding="utf-8")
+    )
+    first_stages = {
+        stage["name"]: stage["fingerprint"]
+        for stage in first_report["provenance"]["stages"]
+    }
+    changed_stages = {
+        stage["name"]: stage["fingerprint"]
+        for stage in changed_report["provenance"]["stages"]
+    }
+    assert changed_media.scan_calls == []
+    assert changed_media.range_calls == []
+    assert changed_vision.scene_catalog_calls == []
+    assert changed_vision.candidate_annotation_calls == []
+    assert (
+        changed_stages["build_scene_catalog_001"]
+        == first_stages["build_scene_catalog_001"]
+    )
+    assert (
+        changed_stages["annotate_candidate_001"]
+        == first_stages["annotate_candidate_001"]
+    )
+    assert changed_stages["select_images_001"] != first_stages["select_images_001"]
+    selection_cache_events = tuple(
+        event
+        for event in changed_observer.progress_events
+        if event.kind == "cache" and event.stage is ProcessingStage.SELECT_IMAGES
+    )
+    assert len(selection_cache_events) == 1
+    assert selection_cache_events[0].recompute_count == 1
 
 
 def test_report_timestamps_cover_the_pipeline_lifecycle(tmp_path: Path) -> None:
@@ -271,10 +569,7 @@ def test_speech_runtime_is_closed_before_vision_inference(tmp_path: Path) -> Non
     )
     assert close_states_at_vision == [True]
     assert speech_runtime.close_call_count == 1
-    assert (
-        report["provenance"]["runtime"]["speech_runtime_identity"]
-        == "speech-runtime-before-close"
-    )
+    assert "speech_runtime_identity" not in report["provenance"]["runtime"]
 
 
 @pytest.mark.parametrize("failure_point", ("model", "speech", "media"))
@@ -502,6 +797,8 @@ def _application(
     observer: RecordingRunObserver | None = None,
     progress: RunProgressTracker | None = None,
     clock: Callable[[], datetime] | None = None,
+    speech_identity_seed: str = "speech-model",
+    speech_runtime_identity: str = "fake-speech-runtime-v1",
 ) -> VideoSelectionApplication:
     """実Processorをtest fake境界へ接続する。"""
     actual_observer = observer or RecordingRunObserver()
@@ -510,9 +807,13 @@ def _application(
         actual_progress.start_run()
     return VideoSelectionApplication(
         media_runtime=media_runtime,
-        model_runtime=FakeModelRuntime("application-test"),
+        model_runtime=FakeModelRuntime(
+            "application-test",
+            speech_identity_seed=speech_identity_seed,
+        ),
         speech_runtime_factory=lambda model, _configuration: FakeSpeechRuntime(
-            resolved_model_identity=model.execution_identity.identifier
+            runtime_identity=speech_runtime_identity,
+            resolved_model_identity=model.execution_identity.identifier,
         ),
         vision_runtime=vision_runtime,
         observer=actual_observer,

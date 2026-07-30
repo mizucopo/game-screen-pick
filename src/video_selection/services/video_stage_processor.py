@@ -19,6 +19,8 @@ from threading import Event, Lock
 from typing import cast
 
 from ..models.candidate_moment import CandidateMoment
+from ..models.checkpoint_operation import CheckpointOperation
+from ..models.durable_work_unit_bundle import DurableWorkUnitBundle
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.frame_candidate_extraction import FrameCandidateExtraction
 from ..models.frame_candidate_extraction_metrics import (
@@ -27,8 +29,10 @@ from ..models.frame_candidate_extraction_metrics import (
 from ..models.media_probe import MediaProbe
 from ..models.media_runtime_identity import MediaRuntimeIdentity
 from ..models.media_stream import MediaStream
+from ..models.native_video_scan import NativeVideoScan
 from ..models.prepared_video_scan import PreparedVideoScan
 from ..models.processing_stage import VIDEO_STAGE_ORDER, ProcessingStage
+from ..models.scanned_video_frame import ScannedVideoFrame
 from ..models.video_scan_resource_sample import VideoScanResourceSample
 from ..models.video_scan_result import VideoScanResult
 from ..models.video_set import VideoSet
@@ -46,9 +50,11 @@ from .analyze_neutral_images import (
 from .build_refinement_pts_ranges import build_refinement_pts_ranges
 from .build_stage_fingerprint import build_stage_fingerprint
 from .build_video_scan_result import build_video_scan_result
+from .checkpoint_version import checkpoint_version
 from .completed_stage_writer import CompletedStageWriter
 from .context_stage_processor import ContextStageProcessor
 from .discover_candidate_moments import discover_candidate_moments
+from .durable_work_unit_cache import DurableWorkUnitCache
 from .processing_stage_runner import ProcessingStageRunner
 from .refine_candidate_moments import (
     combine_refined_candidate_groups,
@@ -57,9 +63,14 @@ from .refine_candidate_moments import (
 from .run_progress_tracker import RunProgressTracker
 from .sample_video_scan_resources_safely import sample_video_scan_resources_safely
 from .select_primary_video_stream import select_primary_video_stream
+from .select_scene_signal_frames import select_scene_signal_frames
 from .validate_video_set_snapshot import (
     validate_video_set_snapshot_metadata,
     validate_video_source_snapshot,
+)
+from .video_scan_partition_artifacts import (
+    restore_video_scan_partition,
+    serialize_video_scan_partition,
 )
 from .video_scan_resource_sampler import VideoScanResourceSampler
 from .video_stage_artifacts import (
@@ -69,18 +80,31 @@ from .video_stage_artifacts import (
     serialize_video_scan,
 )
 
-_SCAN_ALGORITHM_VERSION = "video-scan-v2"
+_SCAN_ALGORITHM_VERSION = "video-scan-v4"
+_SCAN_PARTITION_CHECKPOINT_VERSION = checkpoint_version(
+    CheckpointOperation.VIDEO_SCAN_PARTITION
+)
+_SCAN_PARTITION_SECONDS = 900.0
 _TIMELINE_ALGORITHM_VERSION = "exact-timeline-v1"
 _SCAN_PROXY_ANALYSIS_VERSION = "scan-proxy-analysis-v1"
 _HEARTBEAT_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
 _CANDIDATE_EXTRACTION_VERSION = "frame-candidate-extraction-v3"
+_REFINEMENT_GROUP_CHECKPOINT_VERSION = checkpoint_version(
+    CheckpointOperation.FRAME_REFINEMENT_GROUP
+)
 _CONTENT_REJECT_VERSION = "content-reject-v2"
 _DEDUPE_VERSION = "grayscale-64x36-mad-2-v1"
 _ENTITY_ID_VERSION = "video-entity-id-v1"
 _CANDIDATE_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
 _SCAN_PROGRESS_HEARTBEAT_SECONDS = 30.0
 
-ProbedVideoSource = tuple[VideoSource, MediaProbe, MediaStream]
+ScanPartitionDuration = tuple[str, int]
+ProbedVideoSource = tuple[
+    VideoSource,
+    MediaProbe,
+    MediaStream,
+    ScanPartitionDuration,
+]
 
 
 class VideoStageProcessor:
@@ -137,7 +161,18 @@ class VideoStageProcessor:
         for source in video_set.sources:
             validate_video_set_snapshot_metadata(video_set)
             probe = self._media_runtime.probe(source.path)
-            probed_sources.append((source, probe, select_primary_video_stream(probe)))
+            primary_stream = select_primary_video_stream(probe)
+            probed_sources.append(
+                (
+                    source,
+                    probe,
+                    primary_stream,
+                    _resolve_scan_partition_duration(
+                        primary_stream,
+                        probe.duration,
+                    ),
+                )
+            )
         controller = AdaptiveVideoScanController(
             video_count=len(probed_sources),
             configured_workers=configuration.video_scan_workers,
@@ -168,6 +203,7 @@ class VideoStageProcessor:
                         video_set,
                         probed_sources[index][0],
                         probed_sources[index][2],
+                        probed_sources[index][3],
                         configuration,
                         resolved_runtime_identity,
                     ),
@@ -179,7 +215,12 @@ class VideoStageProcessor:
                         zip(probed_sources, prepared_scans, strict=True),
                         start=1,
                     ):
-                        source, probe, primary_stream = probed
+                        (
+                            source,
+                            probe,
+                            primary_stream,
+                            scan_partition_duration,
+                        ) = probed
                         progress_started = self._start_scan_wait_progress(
                             prepared_scan,
                             source,
@@ -192,6 +233,7 @@ class VideoStageProcessor:
                                 source,
                                 probe,
                                 primary_stream,
+                                scan_partition_duration,
                                 self._await_prepared_scan(
                                     prepared_scan,
                                     emit_heartbeat=progress_started,
@@ -224,6 +266,7 @@ class VideoStageProcessor:
         source: VideoSource,
         probe: MediaProbe,
         primary_stream: MediaStream,
+        scan_partition_duration: ScanPartitionDuration,
         prepared_scan: PreparedVideoScan,
         video_order: int,
         configuration: EffectiveConfiguration,
@@ -251,6 +294,7 @@ class VideoStageProcessor:
             primary_stream,
             runtime_identity,
             configuration,
+            scan_partition_duration,
         )
         scan_bundle = runner.adopt_prepared_bundle(
             ProcessingStage.SCAN_VIDEO,
@@ -259,7 +303,12 @@ class VideoStageProcessor:
             duration_seconds=prepared_scan.duration_seconds,
             progress_started_externally=scan_progress_started,
         )
-        scan = restore_video_scan(scan_bundle.artifact, scan_bundle.root)
+        scan = _restore_scan_for_source(
+            scan_bundle.artifact,
+            scan_bundle.root,
+            primary_stream,
+            configuration.decode_backend,
+        )
         discovery = discover_candidate_moments(
             video_fingerprint=source.fingerprint,
             timeline=scan.timeline,
@@ -277,23 +326,45 @@ class VideoStageProcessor:
         extraction_bundle = runner.reuse_bundle(
             ProcessingStage.EXTRACT_FRAME_CANDIDATES,
             extraction_input,
+            validate_bundle=lambda value: _restore_extraction_for_source(
+                value.artifact,
+                value.root,
+                source,
+                scan,
+                discovery.moments,
+                discovery.density_cap,
+            ),
         )
         if extraction_bundle is None:
             extraction_bundle = runner.complete_artifacts(
                 ProcessingStage.EXTRACT_FRAME_CANDIDATES,
                 extraction_input,
                 lambda stage_root: self._produce_extraction_artifact(
+                    video_set,
                     source,
                     scan,
                     discovery.density_cap,
                     discovery.moments,
                     configuration,
+                    extraction_input,
                     stage_root,
                 ),
+                validate_bundle=lambda value: _restore_extraction_for_source(
+                    value.artifact,
+                    value.root,
+                    source,
+                    scan,
+                    discovery.moments,
+                    discovery.density_cap,
+                ),
             )
-        extraction, extraction_metrics = restore_frame_candidate_extraction(
+        extraction, extraction_metrics = _restore_extraction_for_source(
             extraction_bundle.artifact,
             extraction_bundle.root,
+            source,
+            scan,
+            discovery.moments,
+            discovery.density_cap,
         )
         context = self._context_processor.process(
             video_set=video_set,
@@ -323,6 +394,7 @@ class VideoStageProcessor:
         video_set: VideoSet,
         source: VideoSource,
         primary_stream: MediaStream,
+        scan_partition_duration: ScanPartitionDuration,
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
     ) -> PreparedVideoScan:
@@ -335,6 +407,7 @@ class VideoStageProcessor:
                 primary_stream,
                 runtime_identity,
                 configuration,
+                scan_partition_duration,
             )
             fingerprint = build_stage_fingerprint(
                 ProcessingStage.SCAN_VIDEO,
@@ -353,6 +426,23 @@ class VideoStageProcessor:
                 (),
                 semantic_input,
             )
+            if bundle is not None:
+                try:
+                    _restore_scan_for_source(
+                        bundle.artifact,
+                        bundle.root,
+                        primary_stream,
+                        configuration.decode_backend,
+                    )
+                except (
+                    FileNotFoundError,
+                    IsADirectoryError,
+                    NotADirectoryError,
+                    TypeError,
+                    ValueError,
+                ):
+                    writer.discard(ProcessingStage.SCAN_VIDEO, fingerprint)
+                    bundle = None
             reused = bundle is not None
             if bundle is None:
                 writer.write_artifacts(
@@ -365,8 +455,16 @@ class VideoStageProcessor:
                         video_set,
                         source,
                         primary_stream,
+                        scan_partition_duration[1],
                         configuration,
+                        semantic_input,
                         stage_root,
+                    ),
+                    validate_bundle=lambda value: _restore_scan_for_source(
+                        value.artifact,
+                        value.root,
+                        primary_stream,
+                        configuration.decode_backend,
                     ),
                 )
                 bundle = writer.read_bundle(
@@ -406,22 +504,92 @@ class VideoStageProcessor:
         video_set: VideoSet,
         source: VideoSource,
         primary_stream: MediaStream,
+        scan_partition_duration_ts: int,
         configuration: EffectiveConfiguration,
+        scan_input: dict[str, object],
         stage_root: Path,
     ) -> dict[str, object]:
-        """single-decode scanを実行しscene一時画像を除去する。"""
+        """固定partitionを個別確定しVideo Scanへ安定順で集約する。"""
         if scan_cancellation.is_set():
             raise CancelledError
         thread_cpu_before = time.thread_time()
         started_at = time.monotonic()
-        native_scan = self._media_runtime.scan_video(
-            source.path,
-            primary_stream,
+        checkpoint_cache = DurableWorkUnitCache(
+            configuration.processing_cache_folder,
+            subject_fingerprint=source.fingerprint,
+            operation=CheckpointOperation.VIDEO_SCAN_PARTITION,
+            observer=self._observer,
+        )
+        partitions: list[NativeVideoScan] = []
+        for partition_index, (start_pts, end_pts) in enumerate(
+            _build_scan_partitions(
+                primary_stream,
+                scan_partition_duration_ts,
+            ),
+            start=1,
+        ):
+            if scan_cancellation.is_set():
+                raise CancelledError
+            partition_input = {
+                "parent_stage_semantic_input": scan_input,
+                "partition_index": partition_index,
+                "start_pts": start_pts,
+                "end_pts": end_pts,
+            }
+
+            def produce_partition(
+                checkpoint_root: Path,
+                start_pts: int = start_pts,
+                end_pts: int | None = end_pts,
+            ) -> dict[str, object]:
+                return self._produce_scan_partition(
+                    video_set,
+                    source,
+                    primary_stream,
+                    configuration,
+                    checkpoint_root,
+                    start_pts,
+                    end_pts,
+                )
+
+            def validate_partition(
+                value: DurableWorkUnitBundle,
+                stream: MediaStream = primary_stream,
+                start_pts: int = start_pts,
+                end_pts: int | None = end_pts,
+            ) -> None:
+                _restore_scan_partition_for_range(
+                    value.artifact,
+                    value.root,
+                    stream,
+                    start_pts,
+                    end_pts,
+                )
+
+            bundle, _reused = checkpoint_cache.resolve(
+                (
+                    f"pts-{start_pts}-eof"
+                    if end_pts is None
+                    else f"pts-{start_pts}-{end_pts}"
+                ),
+                partition_input,
+                produce_partition,
+                validate_bundle=validate_partition,
+            )
+            partitions.append(
+                _restore_scan_partition_for_range(
+                    bundle.artifact,
+                    bundle.root,
+                    primary_stream,
+                    start_pts,
+                    end_pts,
+                )
+            )
+            validate_video_source_snapshot(video_set, source)
+        native_scan = _materialize_video_scan_partitions(
+            tuple(partitions),
             stage_root,
-            heartbeat_interval_seconds=configuration.heartbeat_interval_seconds,
-            scene_change_threshold=configuration.scene_change_threshold,
-            scene_min_interval_seconds=configuration.scene_min_interval_seconds,
-            decode_backend=configuration.decode_backend,
+            configuration.scene_min_interval_seconds,
         )
         try:
             scan = build_video_scan_result(
@@ -445,6 +613,47 @@ class VideoStageProcessor:
         )
         validate_video_source_snapshot(video_set, source)
         return artifact
+
+    def _produce_scan_partition(
+        self,
+        video_set: VideoSet,
+        source: VideoSource,
+        stream: MediaStream,
+        configuration: EffectiveConfiguration,
+        checkpoint_root: Path,
+        start_pts: int,
+        end_pts: int | None,
+    ) -> dict[str, object]:
+        """一つのscan partitionとscene proxyをcheckpointへ確定する。"""
+        scan = self._media_runtime.scan_video_partition(
+            source.path,
+            stream,
+            checkpoint_root,
+            start_pts=start_pts,
+            end_pts=end_pts,
+            heartbeat_interval_seconds=configuration.heartbeat_interval_seconds,
+            scene_change_threshold=configuration.scene_change_threshold,
+            scene_min_interval_seconds=configuration.scene_min_interval_seconds,
+            decode_backend=configuration.decode_backend,
+        )
+        temporary_scene_folder = checkpoint_root / ".scene-proxies"
+        scene_folder = checkpoint_root / "scene-proxies"
+        temporary_scene_folder.replace(scene_folder)
+        persisted_scan = replace(
+            scan,
+            scene_frames=tuple(
+                replace(
+                    frame,
+                    image_path=scene_folder / frame.image_path.name,
+                )
+                for frame in scan.scene_frames
+            ),
+        )
+        validate_video_source_snapshot(video_set, source)
+        return serialize_video_scan_partition(
+            persisted_scan,
+            checkpoint_root,
+        )
 
     def _start_scan_wait_progress(
         self,
@@ -504,14 +713,16 @@ class VideoStageProcessor:
 
     def _produce_extraction_artifact(
         self,
+        video_set: VideoSet,
         source: VideoSource,
         scan: VideoScanResult,
         density_cap: int,
         moments: tuple[CandidateMoment, ...],
         configuration: EffectiveConfiguration,
+        extraction_input: dict[str, object],
         stage_root: Path,
     ) -> dict[str, object]:
-        """native refinementとcandidate proxy確定を実行する。"""
+        """Refinement Window Groupごとに確定して安定順に集約する。"""
         thread_cpu_before = time.thread_time()
         child_cpu_seconds = 0.0
         child_cpu_lock = Lock()
@@ -527,36 +738,74 @@ class VideoStageProcessor:
             moments,
             configuration.refinement_radius_seconds,
         )
-        frames = (
-            self._media_runtime.scan_video_frame_ranges(
-                source.path,
-                scan.primary_stream.index,
-                pts_ranges,
-                960,
-                cpu_seconds_recorder=record_child_cpu_seconds,
-            )
-            if pts_ranges
-            else iter(())
-        )
-        groups = iter_refined_candidate_groups(
-            video_fingerprint=source.fingerprint,
-            timeline=scan.timeline,
-            moments=moments,
-            frames=frames,
-            refinement_radius_seconds=configuration.refinement_radius_seconds,
-            max_frame_candidates=configuration.max_frame_candidates,
+        checkpoint_cache = DurableWorkUnitCache(
+            configuration.processing_cache_folder,
+            subject_fingerprint=source.fingerprint,
+            operation=CheckpointOperation.FRAME_REFINEMENT_GROUP,
+            observer=self._observer,
         )
         encoded_groups: list[FrameCandidateExtraction] = []
-        for group in groups:
-            encoded_groups.append(
-                self._encode_candidate_group(
-                    group,
-                    stage_root,
+        for start_pts, end_pts in pts_ranges:
+            group_moments = tuple(
+                moment for moment in moments if start_pts <= moment.source_pts < end_pts
+            )
+            unit_input = {
+                "parent_stage_semantic_input": extraction_input,
+                "pts_range": [start_pts, end_pts],
+                "moment_ids": [moment.identifier for moment in group_moments],
+            }
+
+            def produce_refinement_group(
+                checkpoint_root: Path,
+                start_pts: int = start_pts,
+                end_pts: int = end_pts,
+                group_moments: tuple[CandidateMoment, ...] = group_moments,
+            ) -> dict[str, object]:
+                return self._produce_refinement_group(
+                    video_set,
+                    source,
+                    scan,
+                    group_moments,
+                    start_pts,
+                    end_pts,
+                    configuration,
+                    checkpoint_root,
                     record_child_cpu_seconds,
                 )
+
+            def validate_refinement_group(
+                value: DurableWorkUnitBundle,
+                group_moments: tuple[CandidateMoment, ...] = group_moments,
+                start_pts: int = start_pts,
+                end_pts: int = end_pts,
+            ) -> None:
+                _restore_refinement_group(
+                    value.artifact,
+                    value.root,
+                    source,
+                    scan,
+                    group_moments,
+                    start_pts,
+                    end_pts,
+                )
+
+            bundle, _reused = checkpoint_cache.resolve(
+                f"pts-{start_pts}-{end_pts}",
+                unit_input,
+                produce_refinement_group,
+                validate_bundle=validate_refinement_group,
             )
-            # 次groupのdecode前に選抜前RGBへの最後の参照を解放する。
-            del group
+            validate_video_source_snapshot(video_set, source)
+            restored = _restore_refinement_group(
+                bundle.artifact,
+                bundle.root,
+                source,
+                scan,
+                group_moments,
+                start_pts,
+                end_pts,
+            )
+            encoded_groups.append(_materialize_candidate_group(restored, stage_root))
         extraction = combine_refined_candidate_groups(moments, tuple(encoded_groups))
         metrics = FrameCandidateExtractionMetrics(
             wall_seconds=0.0,
@@ -579,6 +828,52 @@ class VideoStageProcessor:
         artifact_metrics["wall_seconds"] = wall_seconds
         artifact_metrics["cpu_seconds"] = cpu_seconds
         return artifact
+
+    def _produce_refinement_group(
+        self,
+        video_set: VideoSet,
+        source: VideoSource,
+        scan: VideoScanResult,
+        moments: tuple[CandidateMoment, ...],
+        start_pts: int,
+        end_pts: int,
+        configuration: EffectiveConfiguration,
+        checkpoint_root: Path,
+        child_cpu_recorder: Callable[[float], None],
+    ) -> dict[str, object]:
+        """一つのRefinement Window Groupをdecode、解析、encodeする。"""
+        frames = self._media_runtime.scan_video_frame_ranges(
+            source.path,
+            scan.primary_stream.index,
+            ((start_pts, end_pts),),
+            960,
+            cpu_seconds_recorder=child_cpu_recorder,
+        )
+        groups = tuple(
+            iter_refined_candidate_groups(
+                video_fingerprint=source.fingerprint,
+                timeline=scan.timeline,
+                moments=moments,
+                frames=frames,
+                refinement_radius_seconds=configuration.refinement_radius_seconds,
+                max_frame_candidates=configuration.max_frame_candidates,
+            )
+        )
+        if len(groups) != 1:
+            msg = "Refinement Window Groupは一つの結果を生成する必要があります"
+            raise RuntimeError(msg)
+        encoded = self._encode_candidate_group(
+            groups[0],
+            checkpoint_root,
+            child_cpu_recorder,
+        )
+        validate_video_source_snapshot(video_set, source)
+        metrics = _extraction_metrics(encoded, density_cap=len(moments))
+        return serialize_frame_candidate_extraction(
+            encoded,
+            metrics,
+            checkpoint_root,
+        )
 
     def _encode_candidate_group(
         self,
@@ -611,11 +906,258 @@ class VideoStageProcessor:
         return replace(group, candidates=tuple(encoded_candidates))
 
 
+def _build_scan_partitions(
+    stream: MediaStream,
+    duration_ts: int,
+) -> tuple[tuple[int, int | None], ...]:
+    """probe durationを固定区間へ分け、最後だけEOFまで開く。"""
+    if (
+        stream.kind != "video"
+        or stream.time_base is None
+        or stream.start_pts is None
+        or duration_ts <= 0
+    ):
+        msg = "再開可能なVideo Scanにはstart PTSと正のdurationが必要です"
+        raise ValueError(msg)
+    step_value = Fraction(str(_SCAN_PARTITION_SECONDS)) / stream.time_base
+    step_pts = max(1, step_value.numerator // step_value.denominator)
+    hinted_end = stream.start_pts + duration_ts
+    starts = tuple(range(stream.start_pts, hinted_end, step_pts))
+    if not starts:
+        msg = "Video Scan partitionを構築できませんでした"
+        raise ValueError(msg)
+    return tuple(
+        (
+            start,
+            None if index == len(starts) - 1 else starts[index + 1],
+        )
+        for index, start in enumerate(starts)
+    )
+
+
+def _materialize_video_scan_partitions(
+    partitions: tuple[NativeVideoScan, ...],
+    stage_root: Path,
+    scene_min_interval_seconds: float,
+) -> NativeVideoScan:
+    """partition checkpointをstable順に親Stageへmaterializeする。"""
+    if not partitions:
+        msg = "Video Scanには1件以上のpartitionが必要です"
+        raise ValueError(msg)
+    first = partitions[0]
+    previous_last_pts: int | None = None
+    for partition in partitions:
+        if (
+            partition.stream_index != first.stream_index
+            or partition.time_base != first.time_base
+            or (
+                previous_last_pts is not None
+                and partition.origin_pts <= previous_last_pts
+            )
+        ):
+            msg = "Video Scan partitionの順序またはstream timingが不正です"
+            raise ValueError(msg)
+        previous_last_pts = partition.last_frame_pts
+    heartbeats = _materialize_scanned_frames(
+        tuple(frame for partition in partitions for frame in partition.heartbeats),
+        stage_root / "heartbeats",
+    )
+    if not heartbeats:
+        msg = "Video Scan partition全体にheartbeatがありません"
+        raise ValueError(msg)
+    scene_candidates = tuple(
+        frame for partition in partitions for frame in partition.scene_frames
+    )
+    scene_frames = _materialize_scanned_frames(
+        select_scene_signal_frames(
+            scene_candidates,
+            scene_min_interval_seconds,
+        ),
+        stage_root / ".scene-proxies",
+    )
+    last = partitions[-1]
+    return NativeVideoScan(
+        stream_index=first.stream_index,
+        origin_pts=first.origin_pts,
+        last_frame_pts=last.last_frame_pts,
+        last_frame_duration_ts=last.last_frame_duration_ts,
+        time_base=first.time_base,
+        heartbeats=heartbeats,
+        scene_frames=scene_frames,
+        wall_seconds=sum(partition.wall_seconds for partition in partitions),
+        cpu_seconds=sum(partition.cpu_seconds for partition in partitions),
+        decode_pass_count=sum(partition.decode_pass_count for partition in partitions),
+    )
+
+
+def _restore_scan_partition_for_range(
+    artifact: dict[str, object],
+    checkpoint_root: Path,
+    stream: MediaStream,
+    start_pts: int,
+    end_pts: int | None,
+) -> NativeVideoScan:
+    """partition artifactが要求したstreamと半開区間に属するか検証する。"""
+    partition = restore_video_scan_partition(artifact, checkpoint_root)
+    if (
+        stream.time_base is None
+        or partition.stream_index != stream.index
+        or partition.time_base != stream.time_base
+        or partition.origin_pts < start_pts
+        or (
+            end_pts is not None
+            and (partition.origin_pts >= end_pts or partition.last_frame_pts >= end_pts)
+        )
+    ):
+        raise ValueError("Video Scan partitionの要求PTS rangeが不正です")
+    return partition
+
+
+def _restore_scan_for_source(
+    artifact: dict[str, object],
+    stage_root: Path,
+    expected_stream: MediaStream,
+    expected_decode_backend: str,
+) -> VideoScanResult:
+    """親Scan artifactを現在probeのstreamとdecode契約へ照合する。"""
+    scan = restore_video_scan(artifact, stage_root)
+    if (
+        scan.primary_stream != expected_stream
+        or scan.metrics.decode_backend != expected_decode_backend
+    ):
+        raise ValueError("Video Scan artifactのsource streamが不正です")
+    return scan
+
+
+def _restore_refinement_group(
+    artifact: dict[str, object],
+    checkpoint_root: Path,
+    source: VideoSource,
+    scan: VideoScanResult,
+    expected_moments: tuple[CandidateMoment, ...],
+    start_pts: int,
+    end_pts: int,
+) -> FrameCandidateExtraction:
+    """Refinement artifactが要求MomentとPTS rangeだけを所有するか検証する。"""
+    extraction, metrics = restore_frame_candidate_extraction(
+        artifact,
+        checkpoint_root,
+    )
+    expected_moment_values = tuple(
+        (
+            moment.identifier,
+            moment.source_pts,
+            moment.anchor_time,
+            moment.timeline_segment_id,
+            moment.evidence,
+            moment.proxy_quality_score,
+        )
+        for moment in expected_moments
+    )
+    actual_moment_values = tuple(
+        (
+            moment.identifier,
+            moment.source_pts,
+            moment.anchor_time,
+            moment.timeline_segment_id,
+            moment.evidence,
+            moment.proxy_quality_score,
+        )
+        for moment in extraction.moments
+    )
+    if actual_moment_values != expected_moment_values or metrics.density_cap != len(
+        expected_moments
+    ):
+        raise ValueError("Refinement GroupのCandidate Momentが不正です")
+    for candidate in extraction.candidates:
+        if (
+            candidate.video_fingerprint != source.fingerprint
+            or candidate.stream_index != scan.primary_stream.index
+            or candidate.origin_pts != scan.timeline.origin_pts
+            or candidate.time_base != scan.timeline.time_base
+            or candidate.source_pts is None
+            or not start_pts <= candidate.source_pts < end_pts
+        ):
+            raise ValueError("Refinement GroupのFrame Candidateが不正です")
+    return extraction
+
+
+def _restore_extraction_for_source(
+    artifact: dict[str, object],
+    stage_root: Path,
+    source: VideoSource,
+    scan: VideoScanResult,
+    expected_moments: tuple[CandidateMoment, ...],
+    expected_density_cap: int,
+) -> tuple[FrameCandidateExtraction, FrameCandidateExtractionMetrics]:
+    """親Extraction artifactを現在のMomentとsourceへ照合する。"""
+    extraction, metrics = restore_frame_candidate_extraction(
+        artifact,
+        stage_root,
+    )
+    expected_moment_values = tuple(
+        (
+            moment.identifier,
+            moment.source_pts,
+            moment.anchor_time,
+            moment.timeline_segment_id,
+            moment.evidence,
+            moment.proxy_quality_score,
+        )
+        for moment in expected_moments
+    )
+    actual_moment_values = tuple(
+        (
+            moment.identifier,
+            moment.source_pts,
+            moment.anchor_time,
+            moment.timeline_segment_id,
+            moment.evidence,
+            moment.proxy_quality_score,
+        )
+        for moment in extraction.moments
+    )
+    if (
+        actual_moment_values != expected_moment_values
+        or metrics.density_cap != expected_density_cap
+    ):
+        raise ValueError("Frame Candidate Extraction artifactのMomentが不正です")
+    for candidate in extraction.candidates:
+        if (
+            candidate.video_fingerprint != source.fingerprint
+            or candidate.stream_index != scan.primary_stream.index
+            or candidate.origin_pts != scan.timeline.origin_pts
+            or candidate.time_base != scan.timeline.time_base
+        ):
+            raise ValueError("Frame Candidate Extraction artifactのsourceが不正です")
+    return extraction, metrics
+
+
+def _materialize_scanned_frames(
+    frames: tuple[ScannedVideoFrame, ...],
+    output_folder: Path,
+) -> tuple[ScannedVideoFrame, ...]:
+    """checkpoint proxy列を親Stageのstable index pathへ複製する。"""
+    output_folder.mkdir(parents=True, exist_ok=True)
+    materialized: list[ScannedVideoFrame] = []
+    previous_pts: int | None = None
+    for index, frame in enumerate(frames, start=1):
+        if previous_pts is not None and frame.source_pts <= previous_pts:
+            msg = "Video Scan partition proxyのPTS順序が不正です"
+            raise ValueError(msg)
+        output_path = output_folder / f"{index:012d}.jpg"
+        output_path.write_bytes(frame.image_path.read_bytes())
+        materialized.append(replace(frame, image_path=output_path))
+        previous_pts = frame.source_pts
+    return tuple(materialized)
+
+
 def _scan_semantic_input(
     source: VideoSource,
     stream: MediaStream,
     runtime_identity: MediaRuntimeIdentity,
     configuration: EffectiveConfiguration,
+    scan_partition_duration: ScanPartitionDuration,
 ) -> dict[str, object]:
     return {
         "video_fingerprint": source.fingerprint,
@@ -623,6 +1165,8 @@ def _scan_semantic_input(
             "index": stream.index,
             "codec_name": stream.codec_name,
             "time_base": _fraction_value(stream.time_base),
+            "start_pts": stream.start_pts,
+            "duration_ts": stream.duration_ts,
             "width": stream.width,
             "height": stream.height,
         },
@@ -637,9 +1181,41 @@ def _scan_semantic_input(
         "scene_min_interval_seconds": configuration.scene_min_interval_seconds,
         "heartbeat_proxy_contract": _HEARTBEAT_PROXY_CONTRACT,
         "scan_algorithm": _SCAN_ALGORITHM_VERSION,
+        "scan_partition_contract": {
+            "version": _SCAN_PARTITION_CHECKPOINT_VERSION,
+            "seconds": _SCAN_PARTITION_SECONDS,
+            "last_partition": "open-ended-eof",
+            "duration_hint": {
+                "source": scan_partition_duration[0],
+                "duration_ts": scan_partition_duration[1],
+            },
+        },
         "timeline_algorithm": _TIMELINE_ALGORITHM_VERSION,
         "scan_proxy_analysis": _SCAN_PROXY_ANALYSIS_VERSION,
     }
+
+
+def _resolve_scan_partition_duration(
+    stream: MediaStream,
+    container_duration: Fraction | None,
+) -> ScanPartitionDuration:
+    """partition開始点だけに使う正のduration hintをstream tickで返す。"""
+    if stream.kind != "video" or stream.time_base is None or stream.start_pts is None:
+        msg = "再開可能なVideo Scanにはvideo streamのstart PTSとtime baseが必要です"
+        raise ValueError(msg)
+    if stream.duration_ts is not None and stream.duration_ts > 0:
+        return ("stream", stream.duration_ts)
+    if container_duration is None or container_duration <= 0:
+        msg = "再開可能なVideo Scanにはstreamまたはcontainerの正のdurationが必要です"
+        raise ValueError(msg)
+    duration_ticks = container_duration / stream.time_base
+    duration_ts = (
+        duration_ticks.numerator + duration_ticks.denominator - 1
+    ) // duration_ticks.denominator
+    if duration_ts <= 0:
+        msg = "Video Scanのcontainer durationをstream tickへ変換できませんでした"
+        raise ValueError(msg)
+    return ("container", duration_ts)
 
 
 def _extraction_semantic_input(
@@ -654,6 +1230,9 @@ def _extraction_semantic_input(
         "refinement_radius_seconds": configuration.refinement_radius_seconds,
         "max_frame_candidates": configuration.max_frame_candidates,
         "candidate_extraction_algorithm": _CANDIDATE_EXTRACTION_VERSION,
+        "refinement_group_contract": {
+            "version": _REFINEMENT_GROUP_CHECKPOINT_VERSION,
+        },
         "neutral_analysis_algorithm": NEUTRAL_ANALYSIS_ALGORITHM_VERSION,
         "blur_reject_variance_min": BLUR_REJECT_VARIANCE_MIN,
         "content_reject_algorithm": _CONTENT_REJECT_VERSION,
@@ -683,3 +1262,39 @@ def _metric_number(artifact: dict[str, object], key: str) -> float:
         msg = f"Video Stage artifactの{key} metricが不正です"
         raise ValueError(msg)
     return float(cast(int | float, value))
+
+
+def _materialize_candidate_group(
+    group: FrameCandidateExtraction,
+    stage_root: Path,
+) -> FrameCandidateExtraction:
+    """checkpoint proxyを親Stageへstable pathでmaterializeする。"""
+    materialized = []
+    for candidate in group.candidates:
+        proxy_path = stage_root / "candidates" / f"{candidate.identifier}.jpg"
+        proxy_path.parent.mkdir(parents=True, exist_ok=True)
+        proxy_path.write_bytes(candidate.image_bytes)
+        materialized.append(replace(candidate, proxy_path=proxy_path))
+    return replace(group, candidates=tuple(materialized))
+
+
+def _extraction_metrics(
+    extraction: FrameCandidateExtraction,
+    *,
+    density_cap: int,
+) -> FrameCandidateExtractionMetrics:
+    """Work Unit artifact用の意味的件数を構築する。"""
+    return FrameCandidateExtractionMetrics(
+        wall_seconds=0.0,
+        cpu_seconds=0.0,
+        density_cap=density_cap,
+        actual_moment_count=len(extraction.moments),
+        native_frame_count=extraction.native_frame_count,
+        reject_breakdown=extraction.reject_breakdown,
+        deduplicated_frame_count=extraction.deduplicated_frame_count,
+        zero_frame_moment_count=extraction.zero_frame_moment_count,
+        frame_candidate_count=len(extraction.candidates),
+        frame_candidate_bytes=sum(
+            len(candidate.image_bytes) for candidate in extraction.candidates
+        ),
+    )

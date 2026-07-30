@@ -19,6 +19,7 @@ from src.video_selection.services.serialize_canonical_selection_report import (
     serialize_canonical_selection_report,
 )
 from src.video_selection.services.validate_canonical_selection_report import (
+    load_validated_canonical_selection_report,
     validate_canonical_selection_report,
 )
 from tests.video_selection.fakes.canonical_publication_factory import (
@@ -324,10 +325,6 @@ def test_non_aligned_source_pts_context_cue_uses_exact_offset_fallback(
         ("before-markdown-render", RuntimeError("renderer failed")),
         ("before-flush", OSError("flush failed")),
         ("before-rename", OSError("rename failed")),
-        (
-            "after-rename-before-parent-flush",
-            OSError("parent directory flush failed"),
-        ),
     ],
 )
 def test_publication_faults_leave_no_output_folder(
@@ -360,6 +357,151 @@ def test_publication_faults_leave_no_output_folder(
         ).publish(request)
     assert not request.configuration.output_folder.exists()
     assert not tuple(tmp_path.glob(".output.*.staging"))
+
+
+def test_fault_after_final_rename_preserves_reusable_completed_output(
+    tmp_path: Path,
+) -> None:
+    """final rename後のflush失敗でも完成済みoutputが次回再利用されること。
+
+    Arrange:
+        - final rename直後に親directory flush失敗を注入するpublisherが用意される
+    Act:
+        - 初回失敗後に同じPublication Requestが再実行される
+    Assert:
+        - rename済みの検証済みoutputが削除されないこと
+        - 次回runで全artifactがbyte変更なしに再利用されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+
+    def fail_after_rename(checkpoint: str, _folder: Path) -> None:
+        if checkpoint == "after-rename-before-parent-flush":
+            raise OSError("parent directory flush failed")
+
+    with pytest.raises(OSError, match="parent directory flush failed"):
+        CanonicalOutputPublisher(
+            FakeVideoStageMediaRuntime(),
+            fault_injector=fail_after_rename,
+        ).publish(request)
+    output_folder = request.configuration.output_folder
+    before = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    retry_runtime = FakeVideoStageMediaRuntime()
+
+    # Act
+    publisher = CanonicalOutputPublisher(retry_runtime)
+    publisher.publish(request)
+
+    # Assert
+    after = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    assert publisher.reused_completed_publication is True
+    assert after == before
+    assert retry_runtime.extracted_original_frame_calls == []
+
+
+def test_completed_output_permission_failure_never_deletes_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """完成Outputのaccess障害が破損修復へ変換されないこと。
+
+    Arrange:
+        - 検証済みCanonical Outputとreportだけを拒否するfilesystem障害が用意される
+    Act:
+        - 完成Outputが再検証される
+    Assert:
+        - PermissionErrorが返され全artifact bytesが保持されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request)
+    output_folder = request.configuration.output_folder
+    before = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    report_path = output_folder / "report.json"
+    original_read_text = Path.read_text
+
+    def deny_report_read(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if path == report_path:
+            raise PermissionError("injected output permission failure")
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", deny_report_read)
+
+    # Act / Assert
+    with pytest.raises(PermissionError, match="injected output permission failure"):
+        load_validated_canonical_selection_report(output_folder)
+    after = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
+def test_completed_image_type_permission_failure_never_deletes_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """完成画像のtype検査access障害でOutputが削除されないこと。
+
+    Arrange:
+        - 検証済みCanonical Outputと画像lstatだけを拒否する障害が用意される
+    Act:
+        - 完成Outputが再検証される
+    Assert:
+        - PermissionErrorが返され全artifact bytesが保持されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request)
+    output_folder = request.configuration.output_folder
+    before = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    image_path = next((output_folder / "images").glob("*.webp"))
+    original_lstat = Path.lstat
+
+    def deny_image_lstat(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> os.stat_result:
+        if path == image_path:
+            raise PermissionError("injected image type permission failure")
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", deny_image_lstat)
+
+    # Act / Assert
+    with pytest.raises(
+        PermissionError,
+        match="injected image type permission failure",
+    ):
+        load_validated_canonical_selection_report(output_folder)
+    after = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
 
 
 @pytest.mark.parametrize("artifact", ["report.json", "report.md"])
@@ -467,12 +609,16 @@ def test_publication_uses_one_final_directory_rename(tmp_path: Path) -> None:
     assert destination == request.configuration.output_folder
 
 
-@pytest.mark.parametrize("move_before_failure", [False, True])
-def test_directory_rename_failure_leaves_no_output_folder(
+@pytest.mark.parametrize(
+    ("move_before_failure", "output_is_preserved"),
+    [(False, False), (True, True)],
+)
+def test_directory_rename_failure_preserves_only_completed_moved_output(
     tmp_path: Path,
     move_before_failure: bool,
+    output_is_preserved: bool,
 ) -> None:
-    """実rename境界が移動前後に失敗してもfinal成果物が除去されること。
+    """実rename境界の失敗で移動済み完成成果物だけが保持されること。
 
     Arrange:
         - staging移動前または移動直後に失敗するdirectory renamerが用意される
@@ -480,7 +626,7 @@ def test_directory_rename_failure_leaves_no_output_folder(
         - Canonical Output Publisherが実行される
     Assert:
         - rename errorが呼出元へ返されること
-        - final Output Folderとstaging Folderが残されないこと
+        - 移動前はoutputがなく、移動後は検証済みoutputが保持されること
     """
     # Arrange
     request = build_canonical_publication_request(tmp_path)
@@ -496,7 +642,7 @@ def test_directory_rename_failure_leaves_no_output_folder(
             FakeVideoStageMediaRuntime(),
             directory_renamer=fail_rename,
         ).publish(request)
-    assert not request.configuration.output_folder.exists()
+    assert request.configuration.output_folder.exists() is output_is_preserved
     assert not tuple(tmp_path.glob(".output.*.staging"))
 
 
@@ -550,6 +696,280 @@ def test_empty_output_is_removed_and_replaced_by_atomic_publication(
     assert len(tuple((output_folder / "images").glob("*.webp"))) == 1
 
 
+def test_completed_publication_is_reused_without_changing_output(
+    tmp_path: Path,
+) -> None:
+    """公開後の完了記録前に中断されても同じoutputがそのまま再利用されること。
+
+    Arrange:
+        - atomic publicationまで完了したCanonical outputが用意される
+        - 呼出元だけが完了を記録できず同じrequestが再実行される
+    Act:
+        - 同じOutput FolderへCanonical Output Publisherが再実行される
+    Assert:
+        - 既存reportが正常結果として返されること
+        - 全artifact byteが変更されずframeも再抽出されないこと
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    first_report = CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(
+        request
+    )
+    output_folder = request.configuration.output_folder
+    before = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    retry_runtime = FakeVideoStageMediaRuntime()
+
+    # Act
+    resumed_publisher = CanonicalOutputPublisher(retry_runtime)
+    resumed_report = resumed_publisher.publish(request)
+
+    # Assert
+    after = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    assert resumed_report == first_report
+    assert resumed_publisher.reused_completed_publication is True
+    assert after == before
+    assert retry_runtime.extracted_original_frame_calls == []
+    assert not tuple(tmp_path.glob(".output.*.staging"))
+
+
+@pytest.mark.parametrize("first_update_is_unavailable", [False, True])
+def test_completed_publication_is_reused_across_model_update_diagnostics(
+    tmp_path: Path,
+    first_update_is_unavailable: bool,
+) -> None:
+    """model更新確認結果だけが変わっても完成済みoutputが再利用されること。
+
+    Arrange:
+        - 同じ実行model identityで更新確認の成否だけが異なるrequestが用意される
+        - 一方のrequestで完成したCanonical outputが用意される
+    Act:
+        - もう一方の更新確認結果を持つrequestでpublicationが再実行される
+    Assert:
+        - 完成済みreportと全artifact byteがそのまま返されること
+        - selected frameが再抽出されないこと
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path, shortfall=False)
+    unavailable = frozenset({ModelRole.CANDIDATE_ANNOTATION})
+    first_models = FakeModelRuntime(
+        "canonical-publication",
+        unavailable_roles=unavailable if first_update_is_unavailable else frozenset(),
+    ).resolve_models(request.configuration)
+    first_request = replace(request, resolved_models=first_models)
+    first_report = CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(
+        first_request
+    )
+    output_folder = request.configuration.output_folder
+    before = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    retry_models = FakeModelRuntime(
+        "canonical-publication",
+        unavailable_roles=frozenset() if first_update_is_unavailable else unavailable,
+    ).resolve_models(request.configuration)
+    retry_request = replace(request, resolved_models=retry_models)
+    retry_runtime = FakeVideoStageMediaRuntime()
+    publisher = CanonicalOutputPublisher(retry_runtime)
+
+    # Act
+    resumed_report = publisher.publish(retry_request)
+
+    # Assert
+    after = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    assert resumed_report == first_report
+    assert publisher.reused_completed_publication is True
+    assert after == before
+    assert retry_runtime.extracted_original_frame_calls == []
+    assert not tuple(tmp_path.glob(".output.*.staging"))
+
+
+def test_completed_publication_with_different_semantics_is_preserved_and_rejected(
+    tmp_path: Path,
+) -> None:
+    """既存outputと異なる意味結果が上書きされず明示的に拒否されること。
+
+    Arrange:
+        - similarity設定0.72で完成したCanonical outputが用意される
+        - 同じOutput Folderへsimilarity設定0.80のrequestが用意される
+    Act:
+        - 変更後requestでCanonical Output Publisherが実行される
+    Assert:
+        - 意味結果の不一致が返されること
+        - 既存artifactが一byteも変更されないこと
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request)
+    output_folder = request.configuration.output_folder
+    before = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    changed_request = replace(
+        request,
+        configuration=replace(
+            request.configuration,
+            similarity_threshold=0.80,
+        ),
+    )
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="意味結果と一致しません"):
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(changed_request)
+    after = {
+        path.relative_to(output_folder): path.read_bytes()
+        for path in output_folder.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert not tuple(tmp_path.glob(".output.*.staging"))
+
+
+def test_completed_selected_image_survives_later_image_failure(
+    tmp_path: Path,
+) -> None:
+    """後続画像の公開失敗後もencode済みSelected Imageが再利用されること。
+
+    Arrange:
+        - 2枚選定され、2枚目の処理開始前だけ失敗するpublisherが用意される
+    Act:
+        - 初回失敗後に同じPublication Requestが再実行される
+    Assert:
+        - retryでは2枚目だけが元動画から再抽出されること
+        - 最終Output Folderへ2枚とも完全に公開されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path, shortfall=False)
+    fault_count = 0
+
+    def fail_second_image(checkpoint: str, _staging: Path) -> None:
+        nonlocal fault_count
+        if checkpoint != "before-image-write":
+            return
+        fault_count += 1
+        if fault_count == 2:
+            raise OSError("injected second image failure")
+
+    first_runtime = FakeVideoStageMediaRuntime()
+    with pytest.raises(OSError, match="injected second image failure"):
+        CanonicalOutputPublisher(
+            first_runtime,
+            fault_injector=fail_second_image,
+        ).publish(request)
+    retry_runtime = FakeVideoStageMediaRuntime()
+
+    # Act
+    CanonicalOutputPublisher(retry_runtime).publish(request)
+
+    # Assert
+    assert first_runtime.extracted_original_frame_calls == [
+        (request.video_set.sources[0].path, 0, 15)
+    ]
+    assert retry_runtime.extracted_original_frame_calls == [
+        (request.video_set.sources[0].path, 0, 30)
+    ]
+    published_images = tuple(
+        (request.configuration.output_folder / "images").glob("*.webp")
+    )
+    assert len(published_images) == 2
+
+
+def test_resumed_publication_matches_uninterrupted_semantic_output(
+    tmp_path: Path,
+) -> None:
+    """画像途中から再開しても中断なしと同じ公開outputになること。
+
+    Arrange:
+        - 同じ意味入力を持つ中断なし用と再開用のPublication Requestが用意される
+        - 再開用publisherは2枚目の開始前に一度だけ失敗する
+    Act:
+        - 中断なしrunと、失敗後に再開したrunがそれぞれ公開される
+    Assert:
+        - report全体、選択ID・順序、全WebP bytesが一致すること
+        - 再開時に確定済み1枚目を元動画から再抽出しないこと
+    """
+    # Arrange
+    clean_root = tmp_path / "clean"
+    resumed_root = tmp_path / "resumed"
+    clean_root.mkdir()
+    resumed_root.mkdir()
+    clean_request = build_canonical_publication_request(
+        clean_root,
+        shortfall=False,
+    )
+    resumed_request = build_canonical_publication_request(
+        resumed_root,
+        shortfall=False,
+    )
+    CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(clean_request)
+    image_attempt = 0
+
+    def fail_second_image(checkpoint: str, _staging: Path) -> None:
+        nonlocal image_attempt
+        if checkpoint != "before-image-write":
+            return
+        image_attempt += 1
+        if image_attempt == 2:
+            raise OSError("injected publication interruption")
+
+    with pytest.raises(OSError, match="injected publication interruption"):
+        CanonicalOutputPublisher(
+            FakeVideoStageMediaRuntime(),
+            fault_injector=fail_second_image,
+        ).publish(resumed_request)
+    retry_runtime = FakeVideoStageMediaRuntime()
+
+    # Act
+    CanonicalOutputPublisher(retry_runtime).publish(resumed_request)
+
+    # Assert
+    clean_report = json.loads(
+        (clean_request.configuration.output_folder / "report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    resumed_report = json.loads(
+        (resumed_request.configuration.output_folder / "report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert resumed_report == clean_report
+    assert [item["image_id"] for item in resumed_report["selected"]] == [
+        item["image_id"] for item in clean_report["selected"]
+    ]
+    clean_images = {
+        path.relative_to(clean_request.configuration.output_folder): path.read_bytes()
+        for path in (clean_request.configuration.output_folder / "images").glob(
+            "*.webp"
+        )
+    }
+    resumed_images = {
+        path.relative_to(resumed_request.configuration.output_folder): path.read_bytes()
+        for path in (resumed_request.configuration.output_folder / "images").glob(
+            "*.webp"
+        )
+    }
+    assert resumed_images == clean_images
+    assert retry_runtime.extracted_original_frame_calls == [
+        (resumed_request.video_set.sources[0].path, 0, 30)
+    ]
+
+
 def test_atomic_rename_unavailable_fails_before_frame_extraction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -583,18 +1003,17 @@ def test_atomic_rename_unavailable_fails_before_frame_extraction(
     assert not request.configuration.output_folder.exists()
 
 
-def test_same_stat_video_set_change_before_rename_discards_staging(
+def test_same_size_and_mtime_video_set_change_is_accepted_by_metadata_contract(
     tmp_path: Path,
 ) -> None:
-    """frame抽出後の同一stat内容変更がfinal rename前に検知されること。
+    """frame抽出後もsizeとmtimeが同じsourceは同一snapshotと扱われること。
 
     Arrange:
-        - validation checkpointでsize、inode、mtimeを保って書き換えるfaultが用意される
+        - validation checkpointでsizeとmtimeを保って書き換えるfaultが用意される
     Act:
         - Canonical Output Publisherが実行される
     Assert:
-        - Video Set snapshot変更として失敗すること
-        - final Output Folderとstaging Folderが残らないこと
+        - metadata-only snapshot契約に従ってpublicationが完了されること
     """
     # Arrange
     request = build_canonical_publication_request(tmp_path)
@@ -609,13 +1028,14 @@ def test_same_stat_video_set_change_before_rename_discards_staging(
                 ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
             )
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="Video Set snapshotが変更"):
-        CanonicalOutputPublisher(
-            FakeVideoStageMediaRuntime(),
-            fault_injector=mutate_source,
-        ).publish(request)
-    assert not request.configuration.output_folder.exists()
+    # Act
+    CanonicalOutputPublisher(
+        FakeVideoStageMediaRuntime(),
+        fault_injector=mutate_source,
+    ).publish(request)
+
+    # Assert
+    assert request.configuration.output_folder.is_dir()
     assert not tuple(tmp_path.glob(".output.*.staging"))
 
 

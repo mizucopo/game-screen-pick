@@ -20,6 +20,9 @@ from src.video_selection.models.media_runtime_failure_reason import (
 )
 from src.video_selection.models.media_stream import MediaStream
 from src.video_selection.services.discover_video_set import discover_video_set
+from src.video_selection.services.select_scene_signal_frames import (
+    select_scene_signal_frames,
+)
 from src.video_selection.services.video_stage_processor import VideoStageProcessor
 from tests.video_selection.fakes.fake_speech_runtime import FakeSpeechRuntime
 from tests.video_selection.fakes.recording_run_observer import RecordingRunObserver
@@ -90,13 +93,17 @@ elif "-muxers" in arguments:
 elif "-filters" in arguments:
     print(" ... aformat")
     print(" ... aresample")
+    print(" ... asettb")
     print("T.C asetnsamples")
     print(" ... asetpts")
     print(" ... ashowinfo")
+    print(" ... atrim")
+    print(" ... concat")
     print(" ... format")
     print(" ... nullsink")
     print("..C scale")
     print(" ... select")
+    print(" ... setpts")
     print(" ... showinfo")
     print(" ... split")
 else:
@@ -621,6 +628,128 @@ def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
             assert len(proxy.getexif()) == 0
 
 
+def test_scan_video_partitions_match_uninterrupted_scan(
+    tmp_path: Path,
+) -> None:
+    """partitionの再集約結果が連続Video Scanと同一になること。
+
+    Arrange:
+        - scene境界を持つ3秒動画と中央PTSのpartition境界が用意される
+    Act:
+        - 動画全体と、有限range + EOF rangeの二通りでscanされる
+    Assert:
+        - timeline端点、heartbeat、scene signal、proxy bytesが一致すること
+    """
+    # Arrange
+    video_path = generate_scene_change_video(tmp_path / "partition-scenes.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    boundary_offset = Fraction(3, 2) / stream.time_base
+    assert boundary_offset.denominator == 1
+    boundary_pts = stream.start_pts + boundary_offset.numerator
+
+    # Act
+    uninterrupted = runtime.scan_video(
+        video_path,
+        stream,
+        tmp_path / "uninterrupted",
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+    first = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "partition-first",
+        start_pts=stream.start_pts,
+        end_pts=boundary_pts,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+    second = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "partition-second",
+        start_pts=boundary_pts,
+        end_pts=None,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert first.origin_pts == uninterrupted.origin_pts
+    assert second.last_frame_pts == uninterrupted.last_frame_pts
+    assert second.last_frame_duration_ts == uninterrupted.last_frame_duration_ts
+    partition_heartbeats = (*first.heartbeats, *second.heartbeats)
+    partition_scenes = select_scene_signal_frames(
+        (*first.scene_frames, *second.scene_frames),
+        0.5,
+    )
+    assert [
+        (frame.source_pts, frame.image_path.read_bytes())
+        for frame in partition_heartbeats
+    ] == [
+        (frame.source_pts, frame.image_path.read_bytes())
+        for frame in uninterrupted.heartbeats
+    ]
+    assert [
+        (frame.source_pts, frame.image_path.read_bytes()) for frame in partition_scenes
+    ] == [
+        (frame.source_pts, frame.image_path.read_bytes())
+        for frame in uninterrupted.scene_frames
+    ]
+
+
+def test_scan_partition_allows_no_owned_heartbeat_or_scene(
+    tmp_path: Path,
+) -> None:
+    """signal ownershipが0件の正当なpartitionが成功されること。
+
+    Arrange:
+        - heartbeat bucket途中の1秒区間とsceneを選ばないthresholdが用意される
+    Act:
+        - 有限partitionが実FFmpegでscanされる
+    Assert:
+        - timeline端点はありheartbeatとsceneは空で返されること
+    """
+    # Arrange
+    video_path = generate_scene_change_video(tmp_path / "empty-signals.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    start_offset = Fraction(1) / stream.time_base
+    end_offset = Fraction(2) / stream.time_base
+    assert start_offset.denominator == 1
+    assert end_offset.denominator == 1
+
+    # Act
+    scan = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "empty-signal-partition",
+        start_pts=stream.start_pts + start_offset.numerator,
+        end_pts=stream.start_pts + end_offset.numerator,
+        heartbeat_interval_seconds=10.0,
+        scene_change_threshold=1.0,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert scan.origin_pts >= stream.start_pts + start_offset.numerator
+    assert scan.last_frame_pts < stream.start_pts + end_offset.numerator
+    assert scan.heartbeats == ()
+    assert scan.scene_frames == ()
+
+
 def test_scan_video_reaps_decoder_when_stderr_processing_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1114,6 +1243,61 @@ def test_scan_pcm_audio_returns_contiguous_sample_grid(tmp_path: Path) -> None:
         for (value,) in struct.iter_unpack("<h", chunk.pcm_bytes)
     ]
     assert sum(abs(value) for value in samples) / len(samples) > 100
+
+
+def test_extract_pcm_audio_chunks_returns_canonical_seek_ranges(
+    tmp_path: Path,
+) -> None:
+    """seek付きrange抽出がgapのないcanonical PCM gridを返すこと。
+
+    Arrange:
+        - 3秒のAAC audio streamと4,000 sample ownershipが用意される
+    Act:
+        - EOFまでrangeごとに独立したFFmpeg processで抽出される
+    Assert:
+        - 48,000 sampleが連続gridとして返され各rangeが非無音であること
+    """
+    # Arrange
+    video_path = generate_stream_matrix_video(tmp_path / "range-streams.mkv")
+    runtime = FfmpegMediaRuntime()
+    probe = runtime.probe(video_path)
+    stream = probe.streams[1]
+    origins = tuple(
+        item.start_pts * item.time_base
+        for item in probe.streams
+        if item.start_pts is not None and item.time_base is not None
+    )
+    media_origin = min(origins)
+
+    # Act
+    chunks = []
+    sample_start = 0
+    while True:
+        chunk = runtime.extract_pcm_audio_chunk(
+            video_path,
+            stream,
+            media_origin,
+            16_000,
+            sample_start,
+            4_000,
+        )
+        if chunk is None:
+            break
+        chunks.append(chunk)
+        if chunk.sample_count < 4_000:
+            break
+        sample_start += 4_000
+
+    # Assert
+    assert sum(chunk.sample_count for chunk in chunks) == 48_000
+    assert [chunk.sample_start for chunk in chunks] == list(range(0, 48_000, 4_000))
+    assert all(
+        chunk.pts * chunk.time_base
+        == stream.start_pts * stream.time_base + Fraction(chunk.sample_start, 16_000)
+        for chunk in chunks
+        if stream.start_pts is not None and stream.time_base is not None
+    )
+    assert all(any(chunk.pcm_bytes) for chunk in chunks)
 
 
 def test_scan_pcm_audio_normalizes_quantized_packet_pts_to_sample_grid(

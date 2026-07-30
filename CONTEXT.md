@@ -17,8 +17,8 @@ _Avoid_: Video Set, Output Folder, cache key
 _Avoid_: Stage lock, waiting queue, global lock, cache artifact
 
 **Video Set Snapshot Validation**:
-Input Lock取得直後とOutput Folder公開直前にはVideo Set全体のpath、stat、内容を、各Video Sourceのmedia probe前と各Video Stage直前にはVideo Set全体のpath、statと対象Video Sourceの内容を発見時snapshotへ照合する不変性検査。変更済みsourceからstream metadataを取得せず、Stageごとに全動画を再hashする検査とは区別する。
-_Avoid_: cache artifact validation, full-set hash per Video Stage, Input Lock
+Video Identity確定後に、Video Set全体のpath順、file size、`mtime_ns`を発見時snapshotへ照合する不変性検査。Input Lock取得後、各Video Sourceのmedia probe前、Work UnitとCompleted Stageの確定前、Output Folder公開前に実行し、Stageごとのwhole-file再hash、device・inode・ctimeの照合とは区別する。同じsize・mtimeへ意図的に内容を書き換えた場合は検知しない運用上のtrade-offを持つ。
+_Avoid_: cache artifact validation, full-set hash per Video Stage, inode validation, Input Lock
 
 **Video Set Fingerprint**:
 Video Setの構成とVideo Orderをcacheやreportで参照するための、順序付きVideo Fingerprint列から導出される安定した識別子。
@@ -35,6 +35,10 @@ _Avoid_: input file path, ordered Video Set member, path-based identity
 **Video Identity**:
 動画内容によって決まる、個々の Video の安定した同一性。ファイル名、配置、更新日時が変わっても内容が同じなら維持され、内容が変われば新しい identity になる。
 _Avoid_: file path, filename, mtime, Video Order
+
+**Video Identity Cache Entry**:
+一つのlogical sourceについて、identity engine version、入力rootと相対pathから導出したprivacy-safe key、file size、`mtime_ns`、whole-file SHA-256をatomicに保持するlookup hint。動画1本のhash確定直後に保存し、processing cacheのcold/reset境界から寿命を分離する。Video Identityそのものではなく、raw path、video名、device、inode、ctimeを保持しない。
+_Avoid_: Video Identity, stat-only identity, processing Stage, absolute path record
 
 **Duplicate Video**:
 一つのVideo Set内で、複数のpathが同じVideo Identityを指している入力不整合。
@@ -93,11 +97,15 @@ full target acceptanceで固定3 workerとauto coldを比較するため、fresh
 _Avoid_: Acceptance Phase, benchmark fixture, warm run, production default
 
 **Acceptance Run Attempt**:
-一つのAcceptance PhaseまたはAcceptance Comparison Runについて、開始から正常終了、中断、またはoperation failureまで連続して計測された実行区間。Completed Stageを再利用してrunを再開しても、それ以前のattemptを性能証拠から除外しない。
+一つのAcceptance PhaseまたはAcceptance Comparison Runについて、開始から正常終了、中断、またはoperation failureまで連続して計測された実行区間。Completed Stageを再利用してrunを再開しても、それ以前のattemptを性能証拠から除外しない。process強制終了時もactive markerとAcceptance Attempt Journalから`process_abandoned`として閉じる。
 _Avoid_: Acceptance Run, Acceptance Phase, Acceptance Comparison Run, retry inside model inference, Processing Stage
 
+**Acceptance Attempt Journal**:
+activeなAcceptance Run Attemptのexecution context、cache・reuse・recompute件数、Stage aggregate、Work Unitごとのresolutionを、Progress Event境界でatomicに更新するprivacy-safeな回復記録。process強制終了後はCompleted Stage、Durable Work Unit、Video Identityの確定manifestと照合してkill直前の作業量を回復する。resource samplerの未確定sampleを捏造せず、attempt完了後に削除する。
+_Avoid_: Acceptance Record, pipeline checkpoint, raw progress log, resource sample database
+
 **Legacy Cache**:
-旧screenshot selectorが作成した認識可能なprocessing cache entry、またはmanifestから現行より古いversioned Candidate Annotation Stage Contractだと識別できるCompleted Stage。cache lock取得後に自動削除し、変換・保持・互換利用は行わない。現行contractの設定違いによるStage Fingerprint不一致、認識できない`videos/`・`video-sets/` entryは含まない。
+旧screenshot selectorが作成した認識可能なprocessing cache entry、旧processing cache内の`video-identities/`、またはmanifestから現行より古いversioned Candidate Annotation Stage Contractだと識別できるCompleted Stage。cache lock取得後に自動削除し、変換・保持・互換利用は行わない。現行の独立Video Identity cache、現行contractの設定違いによるStage Fingerprint不一致、認識できない`videos/`・`video-sets/`・`work-units/` entryは含まない。
 _Avoid_: old model store, fingerprint mismatch alone, user output, unknown directory
 
 **Stage Fingerprint**:
@@ -156,16 +164,24 @@ _Avoid_: model fallback, cache reset, model identity, notification-only update c
 成果物と完了manifestがatomicに確定し、再利用できる Processing Stage。完了manifestのない部分成果物は含まない。
 _Avoid_: partial cache, in-progress stage, progress checkpoint
 
+**Durable Work Unit**:
+長時間のProcessing Stageを構成する最小の再計算可能単位。engine version、stable key、semantic inputからfingerprintを作り、artifactとmanifestの全fileをfsyncした後にatomic renameで確定する。Video Identity 1本、Video Scan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、Speech Recognition chunk、Selected Image WebPが該当し、親Completed Stageが未確定または破損しても健全な兄弟unitを再利用する。integrityだけでなくdomain schema・件数・参照も復元時に検証し、不正なfingerprintだけを修復する。
+_Avoid_: progress sample, arbitrary loop iteration, partial Stage, mutable scratch file
+
+**Resume Output Invariance**:
+同じsemantic inputから中断後に再開したrunが、中断なしのrunと同じ選択Candidate ID、選択順、公開WebP bytes、canonical reportの意味内容を返す契約。attempt時刻、経過時間、resource sample、cache hit/recompute件数などの運用診断は含めない。cold runとresume runで同じ固定partitionと安定集約順を使い、worker数や完了順をsemantic identityへ混ぜない。atomic rename済みの完成Canonical Outputは自己検証とsemantic digest一致後にbyte変更なしで再利用する。
+_Avoid_: bit-identical operational telemetry, cache performance equality, unvalidated output reuse
+
 **Recognized Partial Stage**:
-Completed Stageとして確定する前に中断・失敗したことをcache構造から安全に識別できる一時成果物。再利用せず、Input Lock取得後に削除して同じProcessing Stageを再計算する。
-_Avoid_: Completed Stage, Legacy Cache, unknown directory, resume checkpoint
+Completed StageまたはDurable Work Unitとして確定する前に中断・失敗したことをcache構造から安全に識別できる専用temporary成果物。再利用せず、Input Lock取得後にその対象だけを削除して再計算する。確定済み兄弟Work Unitは削除しない。
+_Avoid_: Completed Stage, Durable Work Unit, Legacy Cache, unknown directory
 
 **Video Stage**:
-一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysis、Context Cue収集を所有する。複数Videoでは独立したscanをbounded workerで並列実行し、Video Order上の対象scanが確定した時点で後続Videoのscanを続けながら、そのVideoのcandidate extractionとcontext collectionを順序どおり進める。中断時は未開始scanを取り消してから実行中scanへ終了を要求し、中断後に新しいscanを開始しない。resultとprogressはVideo Order順に確定し、Video Orderはfingerprintへ含めない。
+一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysis、Context Cue収集を所有し、scan partition、Refinement Window Group、Speech Recognition chunkをDurable Work Unitとして確定する。複数Videoでは独立したscanをbounded workerで並列実行し、Video Order上の対象scanが確定した時点で後続Videoのscanを続けながら、そのVideoのcandidate extractionとcontext collectionを順序どおり進める。中断時は未開始scanを取り消してから実行中scanへ終了を要求し、中断後に新しいscanを開始しない。resultとprogressはVideo Order順に確定し、Video Orderとworker数はfingerprintへ含めない。
 _Avoid_: Video Set Stage, cross-video selection, whole-run stage
 
 **Video Scan Stage**:
-一つのVideo Sourceを一度decodeして、heartbeat proxy、scene signal metadata、exact timeline、scan metricをCompleted Stageとして確定するVideo Stage。FingerprintにはVideo Fingerprint、選択video stream、Media Runtime Identity、decode backend、heartbeat/scene設定、proxy contract、scan/timeline algorithm versionだけを含める。metricにはexact duration、wall/CPU時間、処理速度、decode backend、heartbeat件数/bytes/gap、scene signal件数、Timeline Segment数を残すがfingerprintへ含めない。後続の密度、refinement、最大Frame Candidate数、Neutral Image Analysisだけが変わった場合も再利用できる。
+一つのVideo Sourceをexact stream timingから15分の固定PTS partitionへ分け、各partitionを一度decodeしてDurable Work Unitとして確定し、heartbeat proxy、scene signal metadata、exact timeline、scan metricを安定順にCompleted Stageへ集約するVideo Stage。streamの`duration_ts`がない場合だけ、ffprobeのcontainer durationを有理数としてstream tickへ切り上げ、partition開始点の個数を決めるhintにする。Video Durationやframe時刻には使わない。最後のpartitionは開始PTSからEOFまでを対象にする。FingerprintにはVideo Fingerprint、選択video stream、partition duration hint、Media Runtime Identity、decode backend、heartbeat/scene設定、partition・proxy・scan・timeline algorithm versionだけを含める。metricにはexact duration、wall/CPU時間、処理速度、decode backend、partition数、heartbeat件数/bytes/gap、scene signal件数、Timeline Segment数を残すがfingerprintへ含めない。後続の密度、refinement、最大Frame Candidate数、Neutral Image Analysisだけが変わった場合も再利用できる。
 _Avoid_: Frame Refinement, Candidate Annotation, Video Set Stage
 
 **Primary Video Stream**:
@@ -177,11 +193,11 @@ Video Scan Stageがnative heartbeatごとに永続化する、長辺960px、FFmp
 _Avoid_: scene signal image, Frame Candidate, selected output
 
 **Frame Candidate Extraction Stage**:
-Video Scan Stageを上流にして、Candidate Moment Density、Frame Refinement、Neutral Image AnalysisをCompleted Stageとして確定するVideo Stage。FingerprintにはVideo Fingerprint、上流Stage Fingerprint、density、refinement半径、最大Frame Candidate数、Neutral Analysis/reject/dedupe/ID/proxyのalgorithm versionだけを含める。metricにはwall/CPU時間、density上限/実Moment数、refinement frame数、reason別reject、dedupe、0-frame Moment、Frame Candidate件数/bytesを残すがfingerprintへ含めない。heartbeat/scene設定やdecode結果を独自に作り直さない。
+Video Scan Stageを上流にして、Candidate Moment Density、Frame Refinement、Neutral Image AnalysisをCompleted Stageとして確定するVideo Stage。merge済みRefinement Window Groupごとにrange decode、解析、proxyをDurable Work Unitとして確定し、PTS順に集約する。FingerprintにはVideo Fingerprint、上流Stage Fingerprint、density、refinement半径、最大Frame Candidate数、Neutral Analysis/reject/dedupe/ID/proxyのalgorithm versionだけを含める。metricにはwall/CPU時間、density上限/実Moment数、refinement frame数、reason別reject、dedupe、0-frame Moment、Frame Candidate件数/bytesを残すがfingerprintへ含めない。heartbeat/scene設定やdecode結果を独自に作り直さない。
 _Avoid_: full video scan, Context Cue extraction, final selection
 
 **Context Collection Stage**:
-Frame Candidate Extraction Stageの後に実行し、一つのVideo SourceからContext CueをCompleted Stageとして確定する3番目のVideo Stage。Video Scan Stageのexact timelineとVideo Durationだけを時間基準として使い、Frame Candidate、Candidate Moment、候補密度、refinementの成果物や設定には依存しない。FingerprintにはVideo Fingerprint、exact timeline digestとcontract version、選択stream metadata、stream選択・抽出policyと関連設定、Media Runtime Identity、Cue生成policy versionを含め、STTを実行した場合だけSpeech Runtime Identity、Resolved Model Identity、STT・chunk・VAD設定を加える。model更新時刻と`auto_upgrade`は実行identityが同じなら含めない。Context Cueは後続のVideo Set Stageで集約され、Candidate Momentを生成せずframeの適格性も変更しない。
+Frame Candidate Extraction Stageの後に実行し、一つのVideo SourceからContext CueをCompleted Stageとして確定する3番目のVideo Stage。Video Scan Stageのexact timelineとVideo Durationだけを時間基準として使い、Frame Candidate、Candidate Moment、候補密度、refinementの成果物や設定には依存しない。STTを使う場合はoverlapを含むPCM chunkごとのSpeech Recognition ResultをDurable Work Unitとして確定し、sample順に集約する。FingerprintにはVideo Fingerprint、exact timeline digestとcontract version、選択stream metadata、stream選択・抽出policyと関連設定、Media Runtime Identity、Cue生成policy versionを含め、STTを実行した場合だけSpeech Runtime Identity、Resolved Model Identity、STT・chunk・VAD設定を加える。model更新時刻と`auto_upgrade`は実行identityが同じなら含めない。Context Cueは後続のVideo Set Stageで集約され、Candidate Momentを生成せずframeの適格性も変更しない。
 _Avoid_: Video Set context collection, candidate-generating subtitle stage, candidate-dependent context cache
 
 **Collected Context**:
@@ -344,6 +360,10 @@ _Avoid_: stable image identity, scene-local index, source filename
 Video Set selectorが選択画像へ固定で使う、元frameの解像度を維持した非可逆WebP quality 95。埋め込みmetadataは除去し、v1では利用者設定による形式やqualityの変更を許可しない。
 _Avoid_: PNG default, configurable image format, resized thumbnail, source metadata copy
 
+**Selected Image Checkpoint**:
+最終選定済みFrame Candidate一件について、exact source PTSから再抽出した元解像度frameをSelected Image Encodingへ変換し、WebP bytes、寸法、SHA-256をDurable Work Unitとして確定した非公開artifact。final publicationが未確定なら同じbytesを新しいstagingへ安定順でcopyし、完成Canonical Outputが検証できる場合は既存outputを変更しない。
+_Avoid_: Frame Candidate Proxy, mutable output image, partial output checkpoint, original RGB cache
+
 **Report Source Path**:
 Human Selection Reportとmachine-readable reportが元動画を追跡するために示す、Video Input Folderを基準に`/`区切りへ正規化した相対path。`..`を含めず、Video OrderとVideo Source IDを併記し、Video Identityには使わない。
 _Avoid_: absolute path, basename-only path, Video Fingerprint, path-based identity
@@ -357,12 +377,12 @@ machine-readable reportが処理した動画内容を厳密に示す、algorithm
 _Avoid_: truncated digest in report.json, report.md fingerprint, file stat, path hash
 
 **Output Folder**:
-選択画像を`images/`、Human Selection Reportを`report.md`、machine-readable reportを`report.json`へ書き出す実行ごとの保存先。処理開始前に空であり、input folderと同一または相互の配下であってはならない。
-_Avoid_: append destination, overwrite target, resumable output
+選択画像を`images/`、Human Selection Reportを`report.md`、machine-readable reportを`report.json`へ書き出す実行ごとの保存先。input folderと同一または相互の配下にできず、新規公開時は未作成または空である必要がある。既存の非空folderは、Canonical Outputのschema、artifact、layout、privacyと今回のsemantic digestがすべて一致する場合だけ終端の再開状態としてbyte変更なしで受理し、異なる完成成果物や利用者fileは削除・上書きしない。
+_Avoid_: append destination, blind overwrite target, unvalidated resume folder
 
 **Atomic Output Publication**:
-存在しないOutput Folderと同じ親filesystem上の隠しstaging Folderへ全画像、machine-readable report、Human Selection Reportを生成・検証・flushした後、directory renameを1回だけ行う公開境界。既存の空Output Folderは事前検証後に取り除き、fatal errorではOutput Folderを公開しない。Selection Shortfallはwarning付き正常成果物として公開し、atomic rename非対応時は処理前に失敗する。
-_Avoid_: file-by-file publication, completion marker fallback, partially visible output, cross-filesystem staging
+存在しないOutput Folderと同じ親filesystem上の隠しstaging Folderへ全画像、machine-readable report、Human Selection Reportを生成・検証・flushした後、directory renameを1回だけ行う公開境界。既存の空Output Folderは事前検証後に取り除き、fatal errorではOutput Folderを公開しない。rename後にprocessが強制終了してfinal folderだけが残った場合は、自己完結検証とsemantic digest一致を通して完成済みpublicationとして再利用する。Selection Shortfallはwarning付き正常成果物として公開し、atomic rename非対応時は処理前に失敗する。
+_Avoid_: file-by-file publication, unchecked completion marker, partially visible output, cross-filesystem staging
 
 **Human Selection Report**:
 選択画像と採用理由をgallery-firstで確認でき、末尾のappendixからshortfall、near miss、score内訳、Stage provenanceを追える`report.md`。source videoとVideo Timeは各画像に示すが、動画別の長大なtimelineを主構造にはしない。

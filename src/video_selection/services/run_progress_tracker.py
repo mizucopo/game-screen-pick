@@ -171,6 +171,7 @@ class RunProgressTracker:
         reuse_count: int,
         recompute_count: int,
         reason_code: str,
+        stage_fingerprint: StageFingerprint | None = None,
     ) -> None:
         """active Stageのcache lookupと実処理結果を通知する。"""
         event = self._stage_event(
@@ -181,6 +182,9 @@ class RunProgressTracker:
             cache_miss_count=cache_miss_count,
             reuse_count=reuse_count,
             recompute_count=recompute_count,
+            stage_fingerprint=(
+                None if stage_fingerprint is None else stage_fingerprint.value
+            ),
         )
         self._stage_cache_hit_count += cache_hit_count
         self._stage_cache_miss_count += cache_miss_count

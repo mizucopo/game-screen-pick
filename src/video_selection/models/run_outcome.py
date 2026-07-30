@@ -16,3 +16,4 @@ class RunOutcome:
     requested_count: int
     selected_count: int
     completed_stages: tuple[CompletedStage, ...]
+    reused_completed_publication: bool = False

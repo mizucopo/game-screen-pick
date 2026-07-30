@@ -68,7 +68,13 @@ class SelectionStageCache:
             return None
         try:
             value: object = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, TypeError, ValueError):
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            NotADirectoryError,
+            TypeError,
+            ValueError,
+        ):
             return None
         if not isinstance(value, dict) or not all(
             isinstance(key, str) for key in value
@@ -129,7 +135,7 @@ class SelectionStageCache:
             return None
         try:
             stage_folders = tuple(self._stage_root.iterdir())
-        except OSError:
+        except (FileNotFoundError, NotADirectoryError):
             return None
         matches: list[tuple[dict[str, object], CompletedStage]] = []
         for stage_folder in stage_folders:
@@ -158,7 +164,13 @@ class SelectionStageCache:
             return None
         try:
             value: object = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, TypeError, ValueError):
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            NotADirectoryError,
+            TypeError,
+            ValueError,
+        ):
             return None
         if not isinstance(value, dict) or not all(
             isinstance(key, str) for key in value
@@ -250,6 +262,19 @@ class SelectionStageCache:
             temporary.replace(path)
         finally:
             temporary.unlink(missing_ok=True)
+
+    def discard(
+        self,
+        request_fingerprint: StageFingerprint,
+        completed: CompletedStage,
+    ) -> None:
+        """不正な選定Stageと対応する認識済みindexだけを削除する。"""
+        self._writer.discard(completed.stage, completed.fingerprint)
+        index_path = self._index_root / f"{request_fingerprint.value}.json"
+        if index_path.is_symlink() or index_path.is_file():
+            index_path.unlink()
+        elif index_path.exists():
+            raise ValueError("Selection cache indexが通常fileではありません")
 
 
 def _is_fingerprint(value: object) -> bool:
