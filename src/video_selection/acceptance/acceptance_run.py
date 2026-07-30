@@ -22,6 +22,9 @@ from ..services.completed_stage_writer import CompletedStageWriter
 from ..services.progress_stream_observer import ProgressStreamObserver
 from ..services.render_human_selection_report import render_human_selection_report
 from ..services.run_progress_tracker import RunProgressTracker
+from ..services.validate_canonical_selection_report import (
+    validate_canonical_selection_output_layout,
+)
 from .acceptance_attempt_journal import AcceptanceAttemptJournal
 from .acceptance_run_attempt_observer import AcceptanceRunAttemptObserver
 from .build_real_application import build_real_application
@@ -198,6 +201,7 @@ def load_completed_run_report(
         raise ValueError("Completed runのcanonical report digestが一致しません")
     _validate_completed_markdown(report, output_folder, run_record)
     _validate_selected_output_artifacts(report, output_folder)
+    validate_canonical_selection_output_layout(report, output_folder)
     return report
 
 

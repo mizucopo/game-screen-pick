@@ -47,7 +47,8 @@ discoveryへ生成済み匿名inputが混入する構成はprofile読込時に�
 Ollama host、model、STT device、選択枚数などをprofileへ複製しない。これらは
 `configuration_path`のTOMLを通常どおり読み、明示CLI、TOML、`OLLAMA_HOST`、組み込み
 既定値の優先順位で解決する。harnessが最優先で差し替えるのは、匿名化したsuite用
-Video Input Folderと固定3比較run・cold/warm別Output Folderだけである。
+Video Input FolderとParallelism Baseline・Fresh Processing・Cache Reuse別Output Folder
+だけである。
 
 ## 実行
 
@@ -65,10 +66,17 @@ uv run task acceptance-target \
 ```
 
 modelの更新確認、download、capability検証とResolved Model Identityのfreezeは最初のrun
-timerより前に行う。releaseはclean cacheのcold、同じVideo Set・設定・model identity・
-processing cacheを使うexact warmの順に実行する。fullは固定3 workerのcold比較runを
-先に実行し、そのcacheを完全に削除したauto cold、auto coldのcacheを使うexact warmの
-2 Acceptance Phaseを順に実行する。固定3比較を含めた合計3 runは同じResolved Model
+timerより前に行う。利用者向けのrun名と役割は次のとおり。
+
+| run名 | 役割 | suite |
+|---|---|---|
+| Parallelism Baseline (`parallelism-baseline`) | 固定3 workerで自動並列化の比較基準を測る | fullのみ |
+| Fresh Processing (`fresh-processing`) | processing cacheなしで本処理を測る | release / full |
+| Cache Reuse (`cache-reuse`) | Fresh Processingと同じcacheで再利用性能と結果一致を測る | release / full |
+
+releaseはFresh Processing、Cache Reuseの順に実行する。fullはParallelism Baselineを
+先に実行し、そのcacheを完全に削除したFresh Processing、Fresh Processingのcacheを使う
+Cache Reuseの順に実行する。Parallelism Baselineを含めた合計3 runは同じResolved Model
 Identityを使い、実artifactの性能値だけを除いたcanonical content digest、
 resource予算、autoのpeak workerが3を超えたこと、Video Scan wall timeの改善を自動gateで
 比較する。性能予算超過は処理を途中でkillせず、完了後のgate failureにする。run durationは
@@ -89,11 +97,12 @@ sample内で一時的な失敗を一度だけ即時再試行する。再試行�
 内に終了しないbackground probeが一つでもあれば、error件数を記録してresource samplingを
 不完全として扱う。
 
-coldのVideo Identity cache missではwhole-file SHA-256を動画1本ずつatomicに確定する。
-exact warm、固定3からauto coldへのprocessing cache切替、process再起動は、engine version、
+Fresh ProcessingのVideo Identity cache missではwhole-file SHA-256を動画1本ずつatomicに
+確定する。Cache Reuse、Parallelism BaselineからFresh Processingへのprocessing cache切替、
+process再起動は、engine version、
 privacy-safeなlogical source key、size、mtimeが一致するidentityを再利用し、1 TiB級
 full Video Setを再hashしない。device、inode、ctimeはidentity cacheの再利用判定に使わない。
-fullのauto coldに使う独立Video Scanは
+fullのFresh Processingに使う独立Video Scanは
 `video_scan.workers = "auto"`かつ`video_scan.auto_max_workers >= 4`を要求する。
 さらにbackend、targetのlogical CPU数、実scenario数、設定上限から本番controllerと同じ
 schedulable capacityを算出し、4 worker未満なら長時間runの前に拒否する。
@@ -154,16 +163,24 @@ materialize時間はrun予算に含めない。
 
 Comparison Runとphaseの完了はsuite別の`acceptance-state.json`へatomicに確定する。中断後に
 同じcommandを実行すると、profile、suite、materialize済みsourceのsuite fingerprintを
-検証し、未完了runだけを続行する。completed coldを再実行してwarmへ戻したり、completed
-Comparison Runやcold/warmを再実行したりしない。ただしfixed3完了後かつauto cold開始前に
-Video Scan Comparison Contextが変わった場合だけ、旧fixed3 outputとprocessing cacheを
-破棄してfixed3を現在contextで再測定する。共有Video Identity cacheは保持する。
+検証し、未完了runだけを続行する。完了済みFresh ProcessingやCache Reuse、
+Parallelism Baselineを暗黙に再実行しない。ただしParallelism Baseline完了後かつ
+Fresh Processing開始前に
+Video Scan Comparison Contextが変わった場合だけ、旧Parallelism Baseline outputと
+processing cacheを
+破棄してParallelism Baselineを現在contextで再測定する。共有Video Identity cacheは保持する。
 
 Video Scan Comparison Contextはsource revision、実効configuration/model/endpoint identity、
-target runtimeから作り、boot単位で微小に変わるvisible RAMは除外する。fixed3とauto coldの
-全attemptが同じcontextの場合だけwall time改善gateを評価する。auto coldが一度でも開始された
+target runtimeから作り、boot単位で微小に変わるvisible RAMは除外する。Parallelism Baselineと
+Fresh Processingの全attemptが同じcontextの場合だけwall time改善gateを評価する。
+Fresh Processingが一度でも開始された
 後にcontextが変わった場合は、新旧環境の性能証拠を混在させず、追加runを始める前に
-`--reset-suite`を要求する。
+`--reset-run parallelism-baseline`を要求する。
+
+releaseではFresh Processing完了後かつCache Reuse開始前にAcceptance Evidence Contextが
+変わった場合、Fresh Processing以降だけを自動的に破棄し、現在contextで再測定する。
+Cache Reuseが一度でも開始された後にcontextが変わった場合は証拠を混在させず、
+`--reset-run fresh-processing`を要求する。
 
 未完了suiteでは、現在のcommit、実効設定、Ollama endpoint、Resolved Model Identity、
 runtime/target probeを新しいexecution contextとして記録する。以前のcontextとの差は
@@ -174,23 +191,26 @@ privacy-safeなhistoryへ残すが、suite全体の再開拒否やcache全削除
 新しいcontextで再計算されたStage以降だけを新しい依存関係へ接続する。
 
 完了済みrunからhuman reviewまたはfinalizationを再開する場合は、記録済みsourceの
-size・mtime・suffix snapshot fingerprintを現在値と照合する。releaseのprivate clipは
-cleanup後に再materializeしない。保存済みcold/warm reportと選択画像は確定時のhash、
-size、semantic evidenceで再検証する。この経路では現在のcommit、GPU/driver/kernel、
+size・mtime・suffix snapshot fingerprintを現在値と照合する。releaseのprivate clipが
+合格確定時にcleanup済みなら再materializeしない。保存済みFresh Processing／Cache Reuseの
+reportと選択画像は確定時のhash、size、semantic evidenceで再検証する。この経路では現在の
+commit、GPU/driver/kernel、
 Ollama deployment、server version、Resolved Model Identityをprobeまたは再解決しない。
 完了済み成果物の意味内容と記録済みprovenanceを、後から更新されたruntimeで置き換えない。
-worksheet未生成から再開するときはcold reportをphase digestと照合し、selection artifactを
+worksheet未生成から再開するときはFresh Processing reportをphase digestと照合し、
+selection artifactを
 Completed Stage manifest、artifact hash、semantic fingerprintで再検証する。
-worksheet生成済みのhuman review待ちから再開するときも、cold/warm双方のcanonical reportを
+worksheet生成済みのhuman review待ちから再開するときも、Fresh Processing／Cache Reuse双方の
+canonical reportを
 phase確定時のfile hashと照合し、`report.md`の決定的projection、selected画像のpath、byte数、
 SHA-256を再検証する。phase確定後にJSON、Markdownまたは画像が削除・置換されていればreviewを
 集計しない。worksheet生成とstate確定の間で中断した場合は、review記入欄を除くcandidate
 bindingが同じ既存worksheetだけを再利用する。
 
 user interruptや計測済みoperation failureの未完了runはCompleted Stage cacheを保持する。
-fullの固定3比較が中断された場合も固定3 cacheから再開し、固定3が完了した後だけそのcacheを
-一度削除する。auto cold開始後は固定3 cache削除済みのdurable flagを保持するため、auto coldの
-中断・再開でauto cacheを再削除しない。
+fullのParallelism Baselineが中断された場合も同じcacheから再開し、完了した後だけそのcacheを
+一度削除する。Fresh Processing開始後は基準測定cache削除済みのdurable flagを保持するため、
+中断・再開でFresh Processingのcacheを再削除しない。
 Select Images Completed Stageのatomic確定後、request index保存前に中断した場合は、
 Stage manifest内のrequest fingerprintとartifact integrityから一意な完了Stageを回復し、
 indexを再構築してrecomputeではなくcache reuseとして記録する。
@@ -209,14 +229,44 @@ kill後も残ったVideo Identity、Durable Work Unit、Completed Stage manifest
 確定直前の作業量も回復し、markerを消して新しいattemptから自動再開する。`--reset-suite`や
 最初からの再処理は要求しない。
 
-identityを変えた場合や意図的にcoldからやり直す場合だけ、対象suiteを明示的にresetする。
+identityを変えた場合や意図的に特定runからやり直す場合だけ、対象runまたはsuiteを
+明示的にresetする。
 
 ```bash
+uv run task acceptance-target \
+  --profile /absolute/private/target-acceptance.toml \
+  --suite full \
+  --reset-run parallelism-baseline
+
+uv run task acceptance-target \
+  --profile /absolute/private/target-acceptance.toml \
+  --suite release \
+  --reset-run fresh-processing
+
+uv run task acceptance-target \
+  --profile /absolute/private/target-acceptance.toml \
+  --suite release \
+  --reset-run cache-reuse
+
 uv run task acceptance-target \
   --profile /absolute/private/target-acceptance.toml \
   --suite release \
   --reset-suite
 ```
+
+`--reset-run`は指定runと、それに依存する後続runだけを再測定する。
+
+| 指定値 | 破棄して再測定するrun | processing cache |
+|---|---|---|
+| `parallelism-baseline` | Parallelism Baseline、Fresh Processing、Cache Reuse | 破棄 |
+| `fresh-processing` | Fresh Processing、Cache Reuse | 破棄 |
+| `cache-reuse` | Cache Reuseのみ | Fresh Processingのcacheを保持 |
+
+`parallelism-baseline`はfull suiteだけで利用できる。`cache-reuse`に必要なFresh Processingの
+cacheが既にない場合は、空cacheを再利用測定として扱わず`fresh-processing`を要求する。
+いずれもmaterialized inputとsuite間で共有するVideo Identity cacheは保持する。
+削除対象にsymbolic link、不正なfile種別、削除失敗がある場合はstateを変更せず追加runを
+開始しない。`--reset-suite`との同時指定は拒否する。
 
 `--reset-suite`は選んだsuiteのstate、run output、worksheet、
 processing cacheを破棄する。release/full suiteの親にある共有Video Identity cacheは保持し、
@@ -227,7 +277,7 @@ releaseとfullのartifactは混在しない。
 
 ## Human review
 
-cold/warmと自動gateが完了すると、次のprivate worksheetが生成される。
+Fresh Processing、Cache Reuseと自動gateが完了すると、次のprivate worksheetが生成される。
 
 ```text
 <artifact_root>/target-acceptance/<suite>/review-worksheet.json
@@ -235,7 +285,8 @@ cold/warmと自動gateが完了すると、次のprivate worksheetが生成さ�
 
 target上のphase outputとmediaを確認し、各selected entryのpending値をworksheet記載の
 stable enumへ置き換える。`reviewer`とtimezone-aware ISO 8601形式の`completed_at`も記入する。
-selected/rejected candidate ID、selected output relative path、rejection reasonはcold phaseの
+selected/rejected candidate ID、selected output relative path、rejection reasonは
+Fresh Processingの
 候補集合へdigestで固定されるため、追加・削除・書き換えない。`--human-review`で別fileを
 渡す場合も、このimmutable集合が一致しなければ集計されない。
 
@@ -272,25 +323,29 @@ uv run task acceptance-target \
 `artifact_root`配下にはsuiteごとにrun output、durable state、private worksheet、
 `acceptance.json`を置く。recordにはcommit、target/runtime、Resolved Model Identity、
 STT実行時だけ実adapter/backendのSpeech Runtime Identity、path非依存Video Set fingerprint、
-run/cache/storage/GPU aggregate、固定3対autoのprivacy-safeな比較、gate aggregateだけを含める。canonical reportの各Stageも
+run/cache/storage/GPU aggregate、Parallelism Baseline対自動並列化のprivacy-safeな比較、
+gate aggregateだけを含める。canonical reportの各Stageも
 実semantic inputと推論診断からtool/model/contract参照、設定、validation、token数を記録する。
-STTを呼び出さなかったphaseでは`runtime.speech_to_text`を`null`として明示し、cold/warmの
+STTを呼び出さなかったphaseでは`runtime.speech_to_text`を`null`として明示し、
+Fresh Processing／Cache Reuseの
 両方が未使用ならSpeech Runtime consistency gateを合格とする。Acceptance Recordとbaselineの
 schemaはこのnullable契約を追加した`1.2.0`とする。
 performance比較用configurationには設定file digest、URLを含まないendpoint identity、
 privacy-safeな全実効performance設定を保存する。
-cold/warmの結果一致digestには、選定・棄却・near miss・Context Cue・警告を含むcanonical
-reportの全semantic resultと、公開WebPのpath、SHA-256、寸法、byte数を含める。run ID、
+Fresh Processing／Cache Reuseの結果一致digestには、選定・棄却・near miss・Context Cue・
+警告を含むcanonical reportの全semantic resultと、公開WebPのpath、SHA-256、寸法、byte数を
+含める。run ID、
 timestamp、Stageのcache・retry・token・duration診断、および同じexecution/runtime identityに
 付随するmodelの`local_identity_before_update`と`update_status`だけを除き、利用者に見える結果が
 異なるrunを一致扱いしない。
 absolute path、video名、media、raw Context Cue、prompt、model response、credential、個別human
 判定は含めない。
 
-releaseのtemporary clipとprocessing cacheはcold/warmおよびrecord生成後、合格・不合格・
-review pendingのいずれでも削除する。完全に削除できない場合はpassingまたはreview pendingを
-確定せず、`release_cleanup_failed`で受入不合格にする。phase output、state、worksheet、
-recordは保持する。
+releaseのtemporary clipとprocessing cacheは、再測定可能性が残るhuman review pendingまたは
+自動gate不合格の間はprivate artifact rootへ保持する。human reviewを含む全gateの合格確定時に
+削除し、完全に削除できない場合はpassingを確定せず`release_cleanup_failed`で受入不合格にする。
+privacy gate自体が不合格の場合は直ちにcleanupを試みる。保持中のprivate workを明示的に
+破棄する場合は`--reset-suite`を使う。phase output、state、worksheet、recordは保持する。
 
 合格時は同じsuite directoryの`baseline/baseline.json`と`baseline/baseline.md`へ、source
 commitを除いた正規化baselineを生成する。再評価がpendingまたは不合格なら、以前のpassing

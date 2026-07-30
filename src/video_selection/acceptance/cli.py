@@ -6,9 +6,13 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TextIO
 
+from .acceptance_run_reset import ACCEPTANCE_RUN_RESETS, AcceptanceRunReset
 from .target_suite_runner import TargetSuiteRunner
 
-RunTargetSuite = Callable[[Path, str, bool, Path | None], int]
+RunTargetSuite = Callable[
+    [Path, str, bool, AcceptanceRunReset | None, Path | None],
+    int,
+]
 
 _EXIT_CODES = {0, 1, 2, 3, 130}
 
@@ -28,6 +32,7 @@ def main(
             arguments.profile,
             arguments.suite,
             arguments.reset_suite,
+            arguments.reset_run,
             arguments.human_review,
         )
     except KeyboardInterrupt:
@@ -64,10 +69,21 @@ def _parser() -> argparse.ArgumentParser:
         choices=("release", "full"),
         help="実行する固定suite",
     )
-    parser.add_argument(
+    reset_group = parser.add_mutually_exclusive_group()
+    reset_group.add_argument(
         "--reset-suite",
         action="store_true",
         help="同じsuiteのdurable stateを明示的に破棄して先頭runから再実行",
+    )
+    reset_group.add_argument(
+        "--reset-run",
+        choices=ACCEPTANCE_RUN_RESETS,
+        help=(
+            "指定runと依存する後続runだけを再測定: "
+            "parallelism-baseline（fullの並列基準）、"
+            "fresh-processing（cacheなし本処理）、"
+            "cache-reuse（同一cache再利用）"
+        ),
     )
     parser.add_argument(
         "--human-review",
@@ -82,12 +98,14 @@ def _run_target_suite(
     profile_path: Path,
     suite: str,
     reset_suite: bool,
+    reset_run: AcceptanceRunReset | None,
     human_review_path: Path | None,
 ) -> int:
     return TargetSuiteRunner().run(
         profile_path=profile_path,
         suite=suite,
         reset_suite=reset_suite,
+        reset_run=reset_run,
         human_review_path=human_review_path,
     )
 

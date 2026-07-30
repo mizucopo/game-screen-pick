@@ -191,3 +191,69 @@ def test_index_permission_failure_does_not_trigger_recovery_or_overwrite(
     with pytest.raises(PermissionError, match="injected index permission failure"):
         cache.read(request_fingerprint)
     assert index_path.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("operation", ("read", "record", "discard"))
+def test_symlinked_index_ancestor_is_rejected_before_cache_access(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    """symlink化されたindex祖先を経由するcache操作が拒否されること。
+
+    Arrange:
+        - 確定済みSelect Images Stageと外部directoryを指す`.indexes`が用意される
+    Act:
+        - request indexのread、record、discardのいずれかが実行される
+    Assert:
+        - symlinkとして拒否され外部directoryとCompleted Stageが変更されないこと
+    """
+    # Arrange
+    video_set_fingerprint = "1" * 64
+    request_fingerprint = StageFingerprint("2" * 64)
+    upstream = (StageFingerprint("3" * 64),)
+    semantic_input = {
+        "selection_request_fingerprint": request_fingerprint.value,
+        "requested_count": 1,
+    }
+    stage_fingerprint = build_stage_fingerprint(
+        ProcessingStage.SELECT_IMAGES,
+        upstream,
+        semantic_input,
+    )
+    writer = CompletedStageWriter(
+        tmp_path,
+        subject_namespace="video-sets",
+        subject_fingerprint=video_set_fingerprint,
+    )
+    completed = writer.write(
+        ProcessingStage.SELECT_IMAGES,
+        stage_fingerprint,
+        upstream,
+        semantic_input,
+        {"schema": "selection-test"},
+    )
+    external = tmp_path.parent / f"{tmp_path.name}-external-index"
+    external.mkdir()
+    (tmp_path / ".indexes").symlink_to(external, target_is_directory=True)
+    cache = SelectionStageCache(
+        tmp_path,
+        video_set_fingerprint=video_set_fingerprint,
+    )
+
+    # Act
+    with pytest.raises(ValueError, match="symbolic link"):
+        if operation == "read":
+            cache.read(request_fingerprint)
+        elif operation == "record":
+            cache.record(request_fingerprint, completed)
+        else:
+            cache.discard(request_fingerprint, completed)
+
+    # Assert
+    assert tuple(external.iterdir()) == ()
+    assert writer.read(
+        ProcessingStage.SELECT_IMAGES,
+        stage_fingerprint,
+        upstream,
+        semantic_input,
+    ) == {"schema": "selection-test"}

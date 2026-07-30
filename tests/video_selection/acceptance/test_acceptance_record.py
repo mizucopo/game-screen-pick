@@ -168,6 +168,73 @@ def test_passed_record_generates_normalized_json_and_markdown(tmp_path: Path) ->
     assert "Normalized digest" in markdown_path.read_text(encoding="utf-8")
 
 
+def test_normalized_baseline_removes_nested_attempt_source_revisions(
+    tmp_path: Path,
+) -> None:
+    """attempt内のsource revision差がbaselineから除外されること。
+
+    Arrange:
+        - cold/warm attemptのcommitだけが異なる2つの合格recordが用意される
+    Act:
+        - 各recordからnormalized baselineが生成される
+    Assert:
+        - nested source revisionを含まず両baselineのbytesが一致すること
+    """
+    # Arrange
+    record = _build_record(
+        human_quality={"status": "passed", "gates": {"quality": True}},
+    )
+    phases = record["phases"]
+    assert isinstance(phases, dict)
+    for phase_name in ("cold", "warm"):
+        phase = phases[phase_name]
+        assert isinstance(phase, dict)
+        phase["attempts"] = [
+            {
+                "execution_context": {
+                    "source_revision": {"commit": "1" * 40, "dirty": False},
+                    "identity": {
+                        "commit": "1" * 40,
+                        "configuration_digest": "a" * 64,
+                    },
+                }
+            }
+        ]
+    first_directory = tmp_path / "first"
+    second_directory = tmp_path / "second"
+
+    # Act
+    first_json, _first_markdown = write_normalized_baseline(
+        record,
+        first_directory,
+    )
+    for phase_name in ("cold", "warm"):
+        phase = phases[phase_name]
+        assert isinstance(phase, dict)
+        attempts = phase["attempts"]
+        assert isinstance(attempts, list)
+        attempt = attempts[0]
+        assert isinstance(attempt, dict)
+        context = attempt["execution_context"]
+        assert isinstance(context, dict)
+        source_revision = context["source_revision"]
+        identity = context["identity"]
+        assert isinstance(source_revision, dict)
+        assert isinstance(identity, dict)
+        source_revision["commit"] = "2" * 40
+        identity["commit"] = "2" * 40
+    second_json, _second_markdown = write_normalized_baseline(
+        record,
+        second_directory,
+    )
+
+    # Assert
+    first_bytes = first_json.read_bytes()
+    assert first_bytes == second_json.read_bytes()
+    assert b"source_revision" not in first_bytes
+    assert b'"commit"' not in first_bytes
+
+
 def test_unused_speech_runtime_is_explicit_and_consistent() -> None:
     """cold/warmでSTT未実行の場合もacceptance recordが生成されること。
 

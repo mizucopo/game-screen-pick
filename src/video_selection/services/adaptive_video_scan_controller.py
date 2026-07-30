@@ -165,6 +165,7 @@ class AdaptiveVideoScanController:
         elif (
             reason is None
             and self._current_workers < self._executor_capacity
+            and self._remaining_scans_can_fill_growth()
             and self._has_growth_headroom(rolling_sample)
         ):
             self._current_workers += 1
@@ -185,6 +186,11 @@ class AdaptiveVideoScanController:
                 "metrics": metrics,
             }
         )
+
+    def _remaining_scans_can_fill_growth(self) -> bool:
+        """増加後のworker数を未完了scanで実際に満たせるか返す。"""
+        remaining_scans = self._video_count - self._completed_scans
+        return remaining_scans >= self._current_workers + 1
 
     def finish_incomplete_attempt(self) -> None:
         """未完了scanを停止し終えた時点までのattempt wall時間を確定する。"""

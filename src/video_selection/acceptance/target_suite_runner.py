@@ -41,6 +41,7 @@ from .acceptance_run_attempt_metrics import (
     build_incomplete_interrupt_attempt,
     validate_run_measurements,
 )
+from .acceptance_run_reset import ACCEPTANCE_RUN_RESETS, AcceptanceRunReset
 from .acceptance_storage_preflight import preflight_acceptance_storage
 from .atomic_json import read_json_object, write_atomic_json
 from .full_suite_materializer import FullSuiteMaterializer
@@ -58,6 +59,7 @@ from .target_environment import (
     probe_windows_native_ollama,
 )
 from .video_scan_parallelism_comparison import (
+    acceptance_run_matches_evidence_context,
     build_video_scan_parallelism_comparison,
     video_scan_run_matches_comparison_context,
 )
@@ -113,11 +115,18 @@ class TargetSuiteRunner:
         profile_path: Path,
         suite: str,
         reset_suite: bool = False,
+        reset_run: AcceptanceRunReset | None = None,
         human_review_path: Path | None = None,
     ) -> int:
         """suiteを未完了runから進めacceptance exit codeを返す。"""
         if suite not in {"release", "full"}:
             raise ValueError("--suiteにはreleaseまたはfullが必要です")
+        if reset_run is not None and reset_run not in ACCEPTANCE_RUN_RESETS:
+            raise ValueError("--reset-runの対象が不正です")
+        if reset_suite and reset_run is not None:
+            raise ValueError("--reset-suiteと--reset-runは同時指定できません")
+        if reset_run == "parallelism-baseline" and suite != "full":
+            raise ValueError("parallelism-baseline resetはfull suiteだけで利用できます")
         profile = load_acceptance_profile(profile_path)
         _validate_profile_files(profile)
         suite_root = profile.artifact_root / "target-acceptance" / suite
@@ -131,10 +140,16 @@ class TargetSuiteRunner:
         state = read_json_object(state_path)
         if state is None:
             attempt_journal.clear()
+        if reset_run == "cache-reuse":
+            _validate_cache_reuse_reset_prerequisites(
+                state,
+                suite_root / "work" / "input" / ".game-screen-pick" / "cache",
+            )
         configuration_digest = _content_digest(profile.configuration_path)
         identity_cache_folder = suite_root.parent / "video-identities"
         if (
             state is not None
+            and reset_run is None
             and _runs_completed(state)
             and state.get("worksheet_ready") is True
             and _is_sha256(state.get("materialization_source_snapshot_fingerprint"))
@@ -252,6 +267,17 @@ class TargetSuiteRunner:
                 attempt_journal,
             )
             attempt_journal.clear()
+            if reset_run is not None:
+                _reset_acceptance_run_suffix(
+                    reset_run=reset_run,
+                    state=state,
+                    execution_steps=execution_steps,
+                    suite_root=suite_root,
+                    processing_cache_folder=(
+                        cold_configuration.processing_cache_folder
+                    ),
+                    state_path=state_path,
+                )
             if _runs_completed(state) and state.get("worksheet_ready") is True:
                 for step in execution_steps:
                     completed_runs = _mapping(
@@ -351,6 +377,15 @@ class TargetSuiteRunner:
             suite=suite,
             state=state,
             execution_context=execution_context,
+            suite_root=suite_root,
+            cache_folder=cold_configuration.processing_cache_folder,
+            state_path=state_path,
+        )
+        _reconcile_release_evidence_context(
+            suite=suite,
+            state=state,
+            execution_context=execution_context,
+            execution_steps=execution_steps,
             suite_root=suite_root,
             cache_folder=cold_configuration.processing_cache_folder,
             state_path=state_path,
@@ -616,7 +651,11 @@ class TargetSuiteRunner:
                 return 1
             write_atomic_json(suite_root / "acceptance-state.json", state)
             return 1
-        if not _cleanup_release_work(suite, suite_root, state):
+        if record["status"] == "passed" and not _cleanup_release_work(
+            suite,
+            suite_root,
+            state,
+        ):
             return 1
         state_path = suite_root / "acceptance-state.json"
         state["acceptance_status"] = "finalizing"
@@ -647,12 +686,91 @@ class TargetSuiteRunner:
             with suppress(Exception):
                 write_atomic_json(state_path, state)
             raise
-        return (
-            0
-            if record["status"] == "passed"
-            else 3
-            if record["status"] == "pending_human_review"
-            else 1
+        if record["status"] == "passed":
+            return 0
+        if record["status"] == "pending_human_review":
+            return 3
+        return 1
+
+
+def _reset_acceptance_run_suffix(
+    *,
+    reset_run: AcceptanceRunReset,
+    state: dict[str, object],
+    execution_steps: tuple[AcceptanceExecutionStep, ...],
+    suite_root: Path,
+    processing_cache_folder: Path,
+    state_path: Path,
+) -> None:
+    """指定runと依存する後続runだけをstateとartifactから破棄する。"""
+    reset_names = {
+        "parallelism-baseline": {"fixed3", "cold", "warm"},
+        "fresh-processing": {"cold", "warm"},
+        "cache-reuse": {"warm"},
+    }[reset_run]
+    reset_steps = tuple(step for step in execution_steps if step.name in reset_names)
+    for step in reset_steps:
+        _remove_directory_strict(
+            step.configuration.output_folder,
+            f"{reset_run} Acceptance output",
+        )
+    if "cold" in reset_names:
+        _remove_directory_strict(
+            processing_cache_folder,
+            f"{reset_run} processing cache",
+        )
+        _remove_file_strict(
+            suite_root / "review-worksheet.json",
+            "Acceptance review worksheet",
+        )
+    _remove_file_strict(
+        suite_root / "acceptance.json",
+        "Acceptance record",
+    )
+    _remove_directory_strict(
+        suite_root / "baseline",
+        "Acceptance baseline",
+    )
+
+    for step in reset_steps:
+        records = state.get(step.records_state_key)
+        if isinstance(records, dict):
+            records.pop(step.name, None)
+        attempts = state.get(step.attempts_state_key)
+        if isinstance(attempts, dict):
+            attempts.pop(step.name, None)
+        if state.get(step.active_state_key) == step.name:
+            state.pop(step.active_state_key, None)
+            state.pop(_active_attempt_started_key(step), None)
+            state.pop(_active_attempt_id_key(step), None)
+            state.pop(_active_attempt_context_key(step), None)
+    if reset_run == "parallelism-baseline":
+        state.pop("fixed3_cache_released", None)
+    if "cold" in reset_names:
+        state.pop("worksheet_ready", None)
+        state.pop("review_candidate_digest", None)
+        state.pop("video_set", None)
+    state.pop("acceptance_status", None)
+    state.pop("last_failure", None)
+    write_atomic_json(state_path, state)
+
+
+def _validate_cache_reuse_reset_prerequisites(
+    state: dict[str, object] | None,
+    processing_cache_folder: Path,
+) -> None:
+    """本処理の完了recordと実cacheがある場合だけ再利用resetを許可する。"""
+    phases = state.get("phases") if state is not None else None
+    fresh_processing = phases.get("cold") if isinstance(phases, dict) else None
+    if (
+        not isinstance(fresh_processing, dict)
+        or fresh_processing.get("operation_status") != "completed"
+        or processing_cache_folder.is_symlink()
+        or not processing_cache_folder.is_dir()
+    ):
+        raise ValueError(
+            "cache-reuse resetに必要な本処理cacheがありません。"
+            "--reset-run fresh-processingで本処理から再測定してください"
         )
 
 
@@ -693,6 +811,20 @@ def _remove_directory_strict(path: Path, label: str) -> None:
         shutil.rmtree(path)
     except OSError:
         raise ValueError(f"{label}を完全に削除できません") from None
+    if path.exists() or path.is_symlink():
+        raise ValueError(f"{label}を完全に削除できません")
+
+
+def _remove_file_strict(path: Path, label: str) -> None:
+    """suite-owned regular fileだけを削除し外部参照を辿らない。"""
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{label}が通常fileではありません")
+    try:
+        path.unlink()
+    except OSError:
+        raise ValueError(f"{label}を削除できません") from None
     if path.exists() or path.is_symlink():
         raise ValueError(f"{label}を完全に削除できません")
 
@@ -811,6 +943,72 @@ def _release_fixed_three_cache(
     write_atomic_json(state_path, state)
 
 
+def _reconcile_release_evidence_context(
+    *,
+    suite: str,
+    state: dict[str, object],
+    execution_context: Mapping[str, object],
+    execution_steps: tuple[AcceptanceExecutionStep, ...],
+    suite_root: Path,
+    cache_folder: Path,
+    state_path: Path,
+) -> None:
+    """releaseの本処理とcache再利用を同じEvidence Contextへ揃える。"""
+    if suite != "release" or _runs_completed(state):
+        return
+    phases = _mapping(state.get("phases"), "phases")
+    fresh_processing = phases.get("cold")
+    if (
+        not isinstance(fresh_processing, dict)
+        or fresh_processing.get("operation_status") != "completed"
+    ):
+        return
+    fresh_processing_matches = acceptance_run_matches_evidence_context(
+        fresh_processing,
+        execution_context,
+    )
+    reuse_attempts = state.get("phase_attempts")
+    raw_reuse_attempts = (
+        reuse_attempts.get("warm") if isinstance(reuse_attempts, dict) else None
+    )
+    reuse_started = isinstance(phases.get("warm"), dict) or (
+        isinstance(raw_reuse_attempts, list) and bool(raw_reuse_attempts)
+    )
+    if reuse_started:
+        reuse_matches = (
+            isinstance(raw_reuse_attempts, list)
+            and bool(raw_reuse_attempts)
+            and acceptance_run_matches_evidence_context(
+                {"attempts": raw_reuse_attempts},
+                execution_context,
+            )
+        )
+        if not fresh_processing_matches or not reuse_matches:
+            raise ValueError(
+                "Cache reuse開始後にAcceptance Evidence Contextが変更されました。"
+                "--reset-run fresh-processingで本処理から再測定してください"
+            )
+        return
+    if fresh_processing_matches:
+        return
+    _reset_acceptance_run_suffix(
+        reset_run="fresh-processing",
+        state=state,
+        execution_steps=execution_steps,
+        suite_root=suite_root,
+        processing_cache_folder=cache_folder,
+        state_path=state_path,
+    )
+    remeasurement_count = state.get("fresh_processing_remeasurement_count", 0)
+    if not isinstance(remeasurement_count, int) or isinstance(
+        remeasurement_count,
+        bool,
+    ):
+        raise ValueError("Fresh processing再測定回数が不正です")
+    state["fresh_processing_remeasurement_count"] = remeasurement_count + 1
+    write_atomic_json(state_path, state)
+
+
 def _reconcile_full_comparison_context(
     *,
     suite: str,
@@ -841,8 +1039,9 @@ def _reconcile_full_comparison_context(
             execution_context,
         ):
             raise ValueError(
-                "Auto cold開始後にVideo Scan Comparison Contextが変更されました。"
-                "--reset-suiteでfull suiteを再測定してください"
+                "Fresh Processing開始後にVideo Scan Comparison Contextが"
+                "変更されました。--reset-run parallelism-baselineで"
+                "並列基準から再測定してください"
             )
         return
     if fixed_three_matches:

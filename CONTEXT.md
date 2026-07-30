@@ -37,7 +37,7 @@ _Avoid_: input file path, ordered Video Set member, path-based identity
 _Avoid_: file path, filename, mtime, Video Order
 
 **Video Identity Cache Entry**:
-一つのlogical sourceについて、identity engine version、入力rootと相対pathから導出したprivacy-safe key、file size、`mtime_ns`、whole-file SHA-256をatomicに保持するlookup hint。動画1本のhash確定直後に保存し、processing cacheのcold/reset境界から寿命を分離する。Video Identityそのものではなく、raw path、video名、device、inode、ctimeを保持しない。
+一つのlogical sourceについて、identity engine version、入力rootと相対pathから導出したprivacy-safe key、file size、`mtime_ns`、whole-file SHA-256をatomicに保持するlookup hint。動画1本のhash確定直後に保存し、processing cacheのFresh Processing/reset境界から寿命を分離する。Video Identityそのものではなく、raw path、video名、device、inode、ctimeを保持しない。
 _Avoid_: Video Identity, stat-only identity, processing Stage, absolute path record
 
 **Duplicate Video**:
@@ -89,15 +89,19 @@ Acceptance PhaseまたはAcceptance Comparison Runを総称する論理的な完
 _Avoid_: Acceptance Run Attempt, one process lifetime, Processing Stage, production run
 
 **Acceptance Phase**:
-target acceptanceでfresh processing cacheを測るcold、または同じcacheを使うexact warmの論理的な性能判定単位。中断後に再開された場合は複数のAcceptance Run Attemptを持ち、全attemptの経過時間と作業量、保守的なresource peakをまとめて予算判定する。
+target acceptanceでcacheなしの本処理を測るFresh Processing、または同じcacheを使うCache Reuseの論理的な性能判定単位。中断後に再開された場合は複数のAcceptance Run Attemptを持ち、全attemptの経過時間と作業量、保守的なresource peakをまとめて予算判定する。
 _Avoid_: Acceptance Comparison Run, Acceptance Run Attempt, Processing Stage, one process lifetime
 
 **Acceptance Comparison Run**:
-full target acceptanceで固定3 workerとauto coldを比較するため、fresh processing cache上で固定3 workerを使う独立run。coldと同じpipelineを実行するがAcceptance Phaseではなく、完了後にcacheを削除してauto cold Acceptance Phaseを開始する。
-_Avoid_: Acceptance Phase, benchmark fixture, warm run, production default
+full target acceptanceで固定workerと自動並列化を比較するParallelism Baseline。fresh processing cache上で固定3 workerを使う独立runであり、Fresh Processingと同じpipelineを実行するがAcceptance Phaseではない。完了後にcacheを削除してFresh Processingを開始する。
+_Avoid_: Acceptance Phase, benchmark fixture, Cache Reuse, production default
+
+**Acceptance Run Reset**:
+target acceptanceの論理runと、その結果に依存する後続runだけを破棄して再測定する明示操作。利用者向け対象は`parallelism-baseline`、`fresh-processing`、`cache-reuse`であり、materialized inputと共有Video Identity cacheは保持する。`fresh-processing`はprocessing cacheも破棄し、`cache-reuse`は本処理cacheが残っている場合だけそれを保持して再測定する。
+_Avoid_: suite全体reset, Processing Stage reset, cache migration, automatic Stage invalidation
 
 **Video Scan Comparison Context**:
-固定3 Comparison Runとauto coldのwall timeを同一条件の証拠として比較するために共有する、source revision・実効設定/model identity・target runtimeを正規化したprivacy-safe identity。bootごとのvisible RAM差は含めず、両runの全attemptで一致するものだけを同一比較として扱う。
+Parallelism BaselineとFresh Processingのwall timeを同一条件の証拠として比較するために共有する、source revision・実効設定/model identity・target runtimeを正規化したprivacy-safe identity。bootごとのvisible RAM差は含めず、両runの全attemptで一致するものだけを同一比較として扱う。
 _Avoid_: Acceptance Run execution context, raw host snapshot, Stage artifact digest
 
 **Acceptance Run Attempt**:
@@ -173,7 +177,7 @@ _Avoid_: partial cache, in-progress stage, progress checkpoint
 _Avoid_: progress sample, arbitrary loop iteration, partial Stage, mutable scratch file
 
 **Resume Output Invariance**:
-同じsemantic inputから中断後に再開したrunが、中断なしのrunと同じ選択Candidate ID、選択順、公開WebP bytes、canonical reportの意味内容を返す契約。attempt時刻、経過時間、resource sample、cache hit/recompute件数などの運用診断は含めない。cold runとresume runで同じ固定partitionと安定集約順を使い、worker数や完了順をsemantic identityへ混ぜない。atomic rename済みの完成Canonical Outputは自己検証とsemantic digest一致後にbyte変更なしで再利用する。
+同じsemantic inputから中断後に再開したrunが、中断なしのrunと同じ選択Candidate ID、選択順、公開WebP bytes、canonical reportの意味内容を返す契約。attempt時刻、経過時間、resource sample、cache hit/recompute件数などの運用診断は含めない。初回runとresume runで同じ固定partitionと安定集約順を使い、worker数や完了順をsemantic identityへ混ぜない。atomic rename済みの完成Canonical Outputは自己検証とsemantic digest一致後にbyte変更なしで再利用する。
 _Avoid_: bit-identical operational telemetry, cache performance equality, unvalidated output reuse
 
 **Recognized Partial Stage**:

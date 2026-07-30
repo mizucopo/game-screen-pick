@@ -42,16 +42,17 @@ def test_cli_passes_profile_suite_reset_and_review_to_runner(
     # Arrange
     profile = tmp_path / "target.toml"
     review = tmp_path / "review.json"
-    captured: list[tuple[Path, str, bool, Path | None]] = []
+    captured: list[tuple[Path, str, bool, str | None, Path | None]] = []
 
     def run_target_suite(
         profile_path: Path,
         suite: str,
         reset_suite: bool,
+        reset_run: str | None,
         human_review_path: Path | None,
     ) -> int:
         captured.append(
-            (profile_path, suite, reset_suite, human_review_path),
+            (profile_path, suite, reset_suite, reset_run, human_review_path),
         )
         return 3
 
@@ -71,7 +72,82 @@ def test_cli_passes_profile_suite_reset_and_review_to_runner(
 
     # Assert
     assert result == 3
-    assert captured == [(profile, "full", True, review)]
+    assert captured == [(profile, "full", True, None, review)]
+
+
+def test_cli_passes_user_facing_run_reset_to_runner(tmp_path: Path) -> None:
+    """利用者向けrun reset名がrunnerへ渡されること。
+
+    Arrange:
+        - fresh processingだけをresetするrelease CLI引数が用意される
+    Act:
+        - 注入されたtarget runnerが実行される
+    Assert:
+        - `fresh-processing`が変更されずrunnerへ渡されること
+    """
+    # Arrange
+    profile = tmp_path / "target.toml"
+    captured: list[tuple[Path, str, bool, str | None, Path | None]] = []
+
+    def run_target_suite(
+        profile_path: Path,
+        suite: str,
+        reset_suite: bool,
+        reset_run: str | None,
+        human_review_path: Path | None,
+    ) -> int:
+        captured.append(
+            (profile_path, suite, reset_suite, reset_run, human_review_path),
+        )
+        return 3
+
+    # Act
+    result = main(
+        [
+            "--profile",
+            str(profile),
+            "--suite",
+            "release",
+            "--reset-run",
+            "fresh-processing",
+        ],
+        run_target_suite=run_target_suite,
+    )
+
+    # Assert
+    assert result == 3
+    assert captured == [
+        (profile, "release", False, "fresh-processing", None),
+    ]
+
+
+def test_cli_rejects_suite_and_run_reset_together(tmp_path: Path) -> None:
+    """suite全体resetとrun resetの同時指定が拒否されること。
+
+    Arrange:
+        - `--reset-suite`と`--reset-run`を併記した引数が用意される
+    Act:
+        - target acceptance CLIの解析が実行される
+    Assert:
+        - runner実行前にSystemExit 2になること
+    """
+    # Arrange
+    arguments = [
+        "--profile",
+        str(tmp_path / "target.toml"),
+        "--suite",
+        "full",
+        "--reset-suite",
+        "--reset-run",
+        "parallelism-baseline",
+    ]
+
+    # Act
+    with pytest.raises(SystemExit) as error:
+        main(arguments)
+
+    # Assert
+    assert error.value.code == 2
 
 
 def test_cli_maps_validation_interrupt_and_operation_failures() -> None:
@@ -92,6 +168,7 @@ def test_cli_maps_validation_interrupt_and_operation_failures() -> None:
         _profile: Path,
         _suite: str,
         _reset: bool,
+        _reset_run: str | None,
         _review: Path | None,
     ) -> int:
         raise ValueError("profile schema mismatch")
@@ -100,6 +177,7 @@ def test_cli_maps_validation_interrupt_and_operation_failures() -> None:
         _profile: Path,
         _suite: str,
         _reset: bool,
+        _reset_run: str | None,
         _review: Path | None,
     ) -> int:
         raise KeyboardInterrupt
@@ -108,6 +186,7 @@ def test_cli_maps_validation_interrupt_and_operation_failures() -> None:
         _profile: Path,
         _suite: str,
         _reset: bool,
+        _reset_run: str | None,
         _review: Path | None,
     ) -> int:
         raise RuntimeError("private operation detail")

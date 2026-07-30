@@ -200,7 +200,7 @@ Target Acceptance:
 ```text
 <SUITE_ROOT>/
 ├── acceptance-state.json
-├── outputs/{fixed3,cold,warm}/
+├── outputs/{fixed3,cold,warm}/      # schema互換用の内部key
 └── work/
     ├── active-attempt.json
     ├── input/
@@ -212,11 +212,15 @@ Target Acceptance:
     └── full-materialization.json
 ```
 
-Video Identity cacheはprocessing cacheと寿命を分離します。固定3比較からauto coldへ
-processing cacheを切り替えても、動画内容が同じならSHA-256をやり直しません。通常CLIの
+Video Identity cacheはprocessing cacheと寿命を分離します。Parallelism Baselineから
+Fresh Processingへprocessing cacheを切り替えても、動画内容が同じならSHA-256を
+やり直しません。通常CLIの
 明示的な`--reset-cache`だけはprocessing cacheとVideo Identity cacheの両方を削除します。
 target acceptanceの`--reset-suite`はsuite stateを削除しますが、suite間で共有する
 Video Identity cacheは保持します。
+利用者が実行単位だけを再測定するときは`--reset-run`へ
+`parallelism-baseline`、`fresh-processing`、`cache-reuse`のいずれかを指定します。
+内部artifact keyの`fixed3`、`cold`、`warm`をCLIへ指定しません。
 
 Video Identity entryとcheckpoint manifestはabsolute path、動画名、model store path、
 credentialを保存しません。Identity lookupはengine version、入力rootと相対pathから作る
@@ -252,9 +256,11 @@ journalと確定manifestを照合してkill直前までの作業量を回復し�
 `process_abandoned`として閉じて新attemptを開始します。完成済みCanonical Outputは削除せず
 同じ意味結果ならそのまま使い、不完全なsuite-owned outputだけを除去します。
 
-cold/warmとreview worksheetが確定したrelease suiteは、privacy cleanup済みの匿名clipを
-再生成しません。stateに記録したsourceのsize・mtime・suffix snapshotを現在値と軽量照合し、
-公開済みreport・画像を確定時のhashで検証してhuman reviewまたはfinalizationだけを続けます。
+Fresh Processing、Cache Reuseとreview worksheetが確定しても、review pendingまたは
+自動gate不合格のrelease suiteは実行単位resetに備えてprivate workを保持します。human reviewを
+含む全gateが合格してprivacy cleanupされた後は匿名clipを再生成しません。stateに記録した
+sourceのsize・mtime・suffix snapshotを現在値と軽量照合し、公開済みreport・画像を確定時の
+hashで検証してfinalizationだけを続けます。
 
 中断前の経過時間と作業量は性能判定から除外しません。resource samplingが不完全なsuiteを
 誤って合格にはしませんが、`--reset-suite`やVideo Identityからのやり直しは要求しません。

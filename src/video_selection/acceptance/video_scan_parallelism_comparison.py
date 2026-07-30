@@ -87,6 +87,17 @@ def video_scan_run_matches_comparison_context(
     execution_context: Mapping[str, object],
 ) -> bool:
     """runの全attemptが現在のVideo Scan Comparison Contextと一致するか返す。"""
+    return acceptance_run_matches_evidence_context(
+        run_record,
+        execution_context,
+    )
+
+
+def acceptance_run_matches_evidence_context(
+    run_record: Mapping[str, object],
+    execution_context: Mapping[str, object],
+) -> bool:
+    """runの全attemptが現在のAcceptance Evidence Contextと一致するか返す。"""
     try:
         expected = _video_scan_comparison_context(execution_context)
         contexts = _run_execution_contexts(run_record)

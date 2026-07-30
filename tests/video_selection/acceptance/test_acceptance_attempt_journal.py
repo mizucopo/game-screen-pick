@@ -337,7 +337,7 @@ def test_permission_failure_does_not_replace_existing_journal(
 
     monkeypatch.setattr(Path, "lstat", fail_journal_lstat)
 
-    # Act / Assert
+    # Act
     with pytest.raises(PermissionError, match="injected journal permission failure"):
         _ = journal.exists
     with pytest.raises(PermissionError, match="injected journal permission failure"):
@@ -348,4 +348,6 @@ def test_permission_failure_does_not_replace_existing_journal(
             started_at_epoch_seconds=2.0,
             execution_context={},
         )
+
+    # Assert
     assert journal_path.read_bytes() == before

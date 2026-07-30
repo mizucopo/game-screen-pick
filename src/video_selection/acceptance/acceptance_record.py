@@ -193,23 +193,30 @@ def write_normalized_baseline(
     """承認済みrecordからcommit可能なnormalized JSON/Markdownを生成する。"""
     if record.get("status") != "passed":
         raise ValueError("合格済みacceptance recordだけをbaseline化できます")
-    normalized = {
-        "schema": _BASELINE_SCHEMA,
-        "suite": record.get("suite"),
-        "target": record.get("target"),
-        "configuration": record.get("configuration"),
-        "models": record.get("models"),
-        "runtime": record.get("runtime"),
-        "storage_preflight": record.get("storage_preflight"),
-        "video_set": record.get("video_set"),
-        "phases": record.get("phases"),
-        "budgets": record.get("budgets"),
-        "automatic_gates": record.get("automatic_gates"),
-        "video_scan_parallelism_comparison": record.get(
-            "video_scan_parallelism_comparison"
-        ),
-        "human_quality": record.get("human_quality"),
-    }
+    normalized_value = _normalize_baseline_value(
+        {
+            "schema": _BASELINE_SCHEMA,
+            "suite": record.get("suite"),
+            "target": record.get("target"),
+            "configuration": record.get("configuration"),
+            "models": record.get("models"),
+            "runtime": record.get("runtime"),
+            "storage_preflight": record.get("storage_preflight"),
+            "video_set": record.get("video_set"),
+            "phases": record.get("phases"),
+            "budgets": record.get("budgets"),
+            "automatic_gates": record.get("automatic_gates"),
+            "video_scan_parallelism_comparison": record.get(
+                "video_scan_parallelism_comparison"
+            ),
+            "human_quality": record.get("human_quality"),
+        },
+        within_execution_context=False,
+        parent_key=None,
+    )
+    if not isinstance(normalized_value, dict):
+        raise AssertionError("Normalized baselineがobjectではありません")
+    normalized = normalized_value
     json_path = directory / "baseline.json"
     markdown_path = directory / "baseline.md"
     write_atomic_json(json_path, normalized)
@@ -221,6 +228,47 @@ def write_normalized_baseline(
         _render_baseline_markdown(normalized, digest),
     )
     return json_path, markdown_path
+
+
+def _normalize_baseline_value(
+    value: object,
+    *,
+    within_execution_context: bool,
+    parent_key: str | None,
+) -> object:
+    """baselineからattempt固有のsource revisionだけを除いて複製する。"""
+    if isinstance(value, Mapping):
+        normalized: dict[str, object] = {}
+        for key, child in value.items():
+            if not isinstance(key, str):
+                raise ValueError("Acceptance baselineのkeyが文字列ではありません")
+            child_within_execution_context = (
+                within_execution_context or key == "execution_context"
+            )
+            if child_within_execution_context and key == "source_revision":
+                continue
+            if (
+                within_execution_context
+                and parent_key == "identity"
+                and key == "commit"
+            ):
+                continue
+            normalized[key] = _normalize_baseline_value(
+                child,
+                within_execution_context=child_within_execution_context,
+                parent_key=key,
+            )
+        return normalized
+    if isinstance(value, list):
+        return [
+            _normalize_baseline_value(
+                item,
+                within_execution_context=within_execution_context,
+                parent_key=parent_key,
+            )
+            for item in value
+        ]
+    return value
 
 
 def _write_atomic_text(path: Path, value: str) -> None:

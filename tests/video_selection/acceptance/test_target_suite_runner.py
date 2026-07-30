@@ -16,6 +16,7 @@ from src.video_selection.acceptance.acceptance_run import (
     AcceptanceRunAttemptExecutionResult,
     normalized_result_digest,
 )
+from src.video_selection.acceptance.acceptance_run_reset import AcceptanceRunReset
 from src.video_selection.acceptance.atomic_json import (
     read_json_object,
     write_atomic_json,
@@ -382,6 +383,314 @@ def test_reset_suite_discards_completed_state_and_runs_cold_again(
     assert identity_marker.read_text(encoding="utf-8") == "durable"
 
 
+@pytest.mark.parametrize(
+    ("reset_run", "expected_calls", "processing_cache_preserved"),
+    (
+        pytest.param(
+            "parallelism-baseline",
+            ["fixed3", "cold", "warm"],
+            False,
+            id="parallelism-baseline",
+        ),
+        pytest.param(
+            "fresh-processing",
+            ["cold", "warm"],
+            False,
+            id="fresh-processing",
+        ),
+        pytest.param(
+            "cache-reuse",
+            ["warm"],
+            True,
+            id="cache-reuse",
+        ),
+    ),
+)
+def test_reset_run_reexecutes_only_the_requested_dependency_suffix(
+    tmp_path: Path,
+    reset_run: AcceptanceRunReset,
+    expected_calls: list[str],
+    processing_cache_preserved: bool,
+) -> None:
+    """指定runと依存する後続runだけが安全に再実行されること。
+
+    Arrange:
+        - 基準測定、本処理、cache再利用が完了したfull suiteが用意される
+        - materialized入力、processing cache、Video Identity cacheへ印が置かれる
+    Act:
+        - 利用者向け名称で一つのrun resetが実行される
+    Assert:
+        - 依存suffixだけが再実行され、入力とVideo Identityが保持されること
+        - cache再利用だけのresetではprocessing cacheも保持されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        result = _successful_run_attempt(configuration, run_name)
+        record = result[1]
+        fixed_three = configuration.video_scan_workers == 3
+        record["video_scan_parallelism"] = {
+            "mode": "fixed" if fixed_three else "auto",
+            "configured_workers": 3 if fixed_three else "auto",
+            "initial_workers": 3,
+            "peak_workers": 3 if fixed_three else 6,
+            "scan_wall_seconds": 120.0 if fixed_three else 80.0,
+        }
+        record["stage_artifact_content_digest"] = "9" * 64
+        return result
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="full") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "full"
+    input_marker = suite_root / "work" / "input" / "scenario-001.mkv"
+    processing_marker = (
+        suite_root
+        / "work"
+        / "input"
+        / ".game-screen-pick"
+        / "cache"
+        / "processing-marker"
+    )
+    processing_marker.parent.mkdir(parents=True, exist_ok=True)
+    processing_marker.write_text("processing", encoding="utf-8")
+    identity_marker = suite_root.parent / "video-identities" / "identity-marker"
+    identity_marker.parent.mkdir(parents=True, exist_ok=True)
+    identity_marker.write_text("identity", encoding="utf-8")
+    calls.clear()
+
+    # Act
+    result = runner.run(
+        profile_path=profile_path,
+        suite="full",
+        reset_run=reset_run,
+    )
+
+    # Assert
+    assert result == 3
+    assert calls == expected_calls
+    assert input_marker.read_bytes() == b"anonymous"
+    assert identity_marker.read_text(encoding="utf-8") == "identity"
+    assert processing_marker.exists() is processing_cache_preserved
+
+
+def test_release_cache_reuse_reset_preserves_fresh_processing_cache(
+    tmp_path: Path,
+) -> None:
+    """Review待ちreleaseで本処理cacheだけを使って再利用測定されること。
+
+    Arrange:
+        - 本処理がprocessing cacheへ印を残すrelease suiteが用意される
+        - 本処理とcache再利用が完了してhuman review待ちになる
+    Act:
+        - cache-reuseだけがresetされて同じsuiteが再実行される
+    Assert:
+        - 本処理を再実行せず、保持されたprocessing cacheで再利用測定されること
+        - 合格確定前のprivate workが安全な再開のため保持されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    processing_marker: Path | None = None
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        nonlocal processing_marker
+        calls.append(run_name)
+        marker = configuration.processing_cache_folder / "fresh-processing-marker"
+        if run_name == "cold":
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("fresh-processing", encoding="utf-8")
+            processing_marker = marker
+        else:
+            assert marker.read_text(encoding="utf-8") == "fresh-processing"
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    assert processing_marker is not None
+
+    # Act
+    result = runner.run(
+        profile_path=profile_path,
+        suite="release",
+        reset_run="cache-reuse",
+    )
+
+    # Assert
+    assert result == 3
+    assert calls == ["cold", "warm", "warm"]
+    assert processing_marker.read_text(encoding="utf-8") == "fresh-processing"
+
+
+def test_cache_reuse_reset_rejects_missing_fresh_processing_cache(
+    tmp_path: Path,
+) -> None:
+    """本処理cacheがない再利用resetがrun開始前に拒否されること。
+
+    Arrange:
+        - 合格確定時のcleanupまで完了したrelease suiteが用意される
+    Act:
+        - cache-reuseだけのresetが試行される
+    Assert:
+        - materializationとrunを再開せずfresh-processing resetが案内されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    materialization_calls: list[str] = []
+    runner = _runner(execute, materialization_calls=materialization_calls)
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    worksheet_path = suite_root / "review-worksheet.json"
+    _complete_review_worksheet(worksheet_path)
+    assert (
+        runner.run(
+            profile_path=profile_path,
+            suite="release",
+            human_review_path=worksheet_path,
+        )
+        == 0
+    )
+    assert not (suite_root / "work").exists()
+    calls.clear()
+    materialization_calls.clear()
+
+    # Act
+    with pytest.raises(ValueError, match="fresh-processing"):
+        runner.run(
+            profile_path=profile_path,
+            suite="release",
+            reset_run="cache-reuse",
+        )
+
+    # Assert
+    assert calls == []
+    assert materialization_calls == []
+
+
+def test_reset_run_stops_before_state_change_when_suffix_deletion_fails(
+    tmp_path: Path,
+) -> None:
+    """依存suffixを完全に削除できないresetがstateを変更しないこと。
+
+    Arrange:
+        - 全run完了済みfull suiteのcache再利用outputが外部symlinkへ置換される
+    Act:
+        - 本処理からのresetが試行される
+    Assert:
+        - 外部directoryを削除せず、state変更と追加runを開始しないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        result = _successful_run_attempt(configuration, run_name)
+        fixed_three = configuration.video_scan_workers == 3
+        result[1]["video_scan_parallelism"] = {
+            "mode": "fixed" if fixed_three else "auto",
+            "configured_workers": 3 if fixed_three else "auto",
+            "initial_workers": 3,
+            "peak_workers": 3 if fixed_three else 6,
+            "scan_wall_seconds": 120.0 if fixed_three else 80.0,
+        }
+        result[1]["stage_artifact_content_digest"] = "9" * 64
+        return result
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="full") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "full"
+    state_path = suite_root / "acceptance-state.json"
+    state_before = read_json_object(state_path)
+    assert state_before is not None
+    warm_output = suite_root / "outputs" / "warm"
+    shutil.rmtree(warm_output)
+    external_output = tmp_path / "external-output"
+    external_output.mkdir()
+    external_marker = external_output / "keep"
+    external_marker.write_text("external", encoding="utf-8")
+    warm_output.symlink_to(external_output, target_is_directory=True)
+    calls.clear()
+
+    # Act
+    with pytest.raises(ValueError, match="symbolic link"):
+        runner.run(
+            profile_path=profile_path,
+            suite="full",
+            reset_run="fresh-processing",
+        )
+
+    # Assert
+    assert read_json_object(state_path) == state_before
+    assert external_marker.read_text(encoding="utf-8") == "external"
+    assert calls == []
+
+
+def test_release_rejects_parallelism_baseline_reset(tmp_path: Path) -> None:
+    """release suiteに存在しない並列基準resetが拒否されること。
+
+    Arrange:
+        - release profileと未呼出のrun executorが用意される
+    Act:
+        - parallelism baseline reset付きでrelease suiteが実行される
+    Assert:
+        - run開始前に対象不在として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute)
+
+    # Act
+    with pytest.raises(ValueError, match="full suite"):
+        runner.run(
+            profile_path=profile_path,
+            suite="release",
+            reset_run="parallelism-baseline",
+        )
+
+    # Assert
+    assert calls == []
+
+
 def test_reset_suite_fails_when_suite_root_survives_deletion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -516,10 +825,10 @@ def test_release_finalization_fails_when_private_work_survives_cleanup(
     """private workを削除できないrelease finalizationが不合格になること。
 
     Arrange:
-        - cold/warmが完了するrelease suiteが用意される
+        - cold/warmとhuman reviewが完了するrelease suiteが用意される
         - 削除してもworkを残すfilesystem境界が用意される
     Act:
-        - human review待ちまでrelease suiteが実行される
+        - passing recordのfinalizationが実行される
     Assert:
         - cleanup failureとしてexit 1になりpassing recordが生成されないこと
     """
@@ -531,17 +840,25 @@ def test_release_finalization_fails_when_private_work_survives_cleanup(
             run_name,
         )
     )
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    worksheet_path = suite_root / "review-worksheet.json"
+    _complete_review_worksheet(worksheet_path)
     monkeypatch.setattr(
         "src.video_selection.acceptance.target_suite_runner.shutil.rmtree",
         lambda _path, *_args, **_kwargs: None,
     )
 
     # Act
-    result = runner.run(profile_path=profile_path, suite="release")
+    result = runner.run(
+        profile_path=profile_path,
+        suite="release",
+        human_review_path=worksheet_path,
+    )
 
     # Assert
-    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
     state = read_json_object(suite_root / "acceptance-state.json")
+    record = read_json_object(suite_root / "acceptance.json")
     assert result == 1
     assert state is not None
     assert state["acceptance_status"] == "failed"
@@ -551,7 +868,8 @@ def test_release_finalization_fails_when_private_work_survives_cleanup(
         "reason": "release_cleanup_failed",
     }
     assert (suite_root / "work").is_dir()
-    assert not (suite_root / "acceptance.json").exists()
+    assert record is not None
+    assert record["status"] == "pending_human_review"
 
 
 def test_privacy_failure_also_reports_release_cleanup_failure(
@@ -1078,18 +1396,18 @@ def test_full_suite_remeasures_fixed_three_after_context_change_before_auto_cold
     assert recorded_target["cpu"] == "changed"
 
 
-def test_full_suite_requires_reset_after_context_change_once_auto_cold_started(
+def test_full_suite_requires_baseline_reset_after_fresh_processing_started(
     tmp_path: Path,
 ) -> None:
-    """auto cold開始後のcontext変更では比較証拠の混在が拒否されること。
+    """本処理開始後のcontext変更では並列基準からのresetが要求されること。
 
     Arrange:
-        - fixed3完了後にauto coldが中断されたfull suiteが用意される
+        - 並列基準完了後に本処理が中断されたfull suiteが用意される
         - 再開前にtarget CPU identityが変更される
     Act:
         - full suiteの再開が試行される
     Assert:
-        - 追加runを開始せずreset-suiteが必要として拒否されること
+        - 追加runを開始せずparallelism-baseline resetが要求されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -1157,8 +1475,158 @@ def test_full_suite_requires_reset_after_context_change_once_auto_cold_started(
 
     # Assert
     assert interrupted == 130
-    assert "--reset-suite" in str(error.value)
+    assert "--reset-run parallelism-baseline" in str(error.value)
     assert calls == [("fixed3", 3), ("cold", "auto")]
+
+
+def test_release_remeasures_fresh_processing_after_context_change_before_reuse(
+    tmp_path: Path,
+) -> None:
+    """cache再利用開始前のcontext変更で本処理だけが再測定されること。
+
+    Arrange:
+        - 本処理だけが旧contextで完了したrelease suiteが用意される
+        - cache再利用開始前にtarget CPU identityが変更される
+    Act:
+        - release suiteが現在contextから再開される
+    Assert:
+        - 旧processing cacheを破棄して本処理、cache再利用の順で実行されること
+        - materialized入力とVideo Identity cacheが保持されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    target = {
+        "host_os": "windows_11_pro",
+        "environment": "wsl2",
+        "cpu": "initial",
+        "gpu": "rtx_5090",
+        "logical_cpu_count": 24,
+        "visible_ram_bytes": 32 * 1024**3,
+    }
+    old_cache_marker: Path | None = None
+    identity_marker: Path | None = None
+    verify_reset = False
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        if verify_reset and calls == ["cold"]:
+            assert old_cache_marker is not None
+            assert not old_cache_marker.exists()
+            assert identity_marker is not None
+            assert identity_marker.read_text(encoding="utf-8") == "identity"
+            assert (
+                configuration.video_input_folder / "scenario-001.mkv"
+            ).read_bytes() == b"anonymous"
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute, environment_probe=lambda: dict(target))
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state_path = suite_root / "acceptance-state.json"
+    state = read_json_object(state_path)
+    assert state is not None
+    phases = state["phases"]
+    assert isinstance(phases, dict)
+    phases.pop("warm")
+    state["worksheet_ready"] = False
+    state.pop("review_candidate_digest", None)
+    write_atomic_json(state_path, state)
+    shutil.rmtree(suite_root / "outputs" / "warm")
+    (suite_root / "review-worksheet.json").unlink()
+    (suite_root / "acceptance.json").unlink()
+    input_marker = suite_root / "work" / "input" / "scenario-001.mkv"
+    input_marker.parent.mkdir(parents=True, exist_ok=True)
+    input_marker.write_bytes(b"anonymous")
+    old_cache_marker = (
+        input_marker.parent / ".game-screen-pick" / "cache" / "old-context"
+    )
+    old_cache_marker.parent.mkdir(parents=True, exist_ok=True)
+    old_cache_marker.write_text("old", encoding="utf-8")
+    identity_marker = suite_root.parent / "video-identities" / "identity-marker"
+    identity_marker.parent.mkdir(parents=True, exist_ok=True)
+    identity_marker.write_text("identity", encoding="utf-8")
+    calls.clear()
+    target["cpu"] = "changed"
+    verify_reset = True
+
+    # Act
+    result = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert result == 3
+    assert calls == ["cold", "warm"]
+    assert identity_marker.read_text(encoding="utf-8") == "identity"
+
+
+def test_release_requires_fresh_reset_after_context_change_once_reuse_started(
+    tmp_path: Path,
+) -> None:
+    """cache再利用開始後のcontext変更で追加runが拒否されること。
+
+    Arrange:
+        - 本処理完了後にcache再利用attemptが始まったrelease suiteが用意される
+        - 再開前にtarget CPU identityが変更される
+    Act:
+        - release suiteの再開が試行される
+    Assert:
+        - 追加runを開始せずfresh processing resetが要求されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    target = {
+        "host_os": "windows_11_pro",
+        "environment": "wsl2",
+        "cpu": "initial",
+        "gpu": "rtx_5090",
+        "logical_cpu_count": 24,
+        "visible_ram_bytes": 32 * 1024**3,
+    }
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute, environment_probe=lambda: dict(target))
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state_path = suite_root / "acceptance-state.json"
+    state = read_json_object(state_path)
+    assert state is not None
+    phases = state["phases"]
+    assert isinstance(phases, dict)
+    warm = phases.pop("warm")
+    assert isinstance(warm, dict)
+    warm_attempts = warm["attempts"]
+    assert isinstance(warm_attempts, list)
+    state["phase_attempts"] = {"warm": warm_attempts}
+    state["worksheet_ready"] = False
+    state.pop("review_candidate_digest", None)
+    write_atomic_json(state_path, state)
+    shutil.rmtree(suite_root / "outputs" / "warm")
+    (suite_root / "review-worksheet.json").unlink()
+    (suite_root / "acceptance.json").unlink()
+    calls.clear()
+    target["cpu"] = "changed"
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert "--reset-run fresh-processing" in str(error.value)
+    assert calls == []
 
 
 def test_ollama_windows_binding_is_revalidated_after_model_resolution(
@@ -1794,18 +2262,18 @@ def test_completed_state_finalization_does_not_resolve_models_again(
     assert calls == ["cold", "warm"]
 
 
-def test_completed_release_state_does_not_rematerialize_cleaned_private_work(
+def test_completed_release_state_does_not_rematerialize_retained_private_work(
     tmp_path: Path,
 ) -> None:
-    """完了済みrelease stateの再確認でprivate clipが再生成されないこと。
+    """Review待ちrelease stateの再確認でprivate workが再生成されないこと。
 
     Arrange:
-        - cold/warm完了とworksheet生成後にprivate workが削除されたsuiteが用意される
+        - cold/warm完了とworksheet生成後にprivate workを保持するsuiteが用意される
     Act:
         - human review待ちの同じrelease suiteが再実行される
     Assert:
         - 完了stateと公開成果物からfinalizationだけが再開されること
-        - 削除済みrelease materializationが再実行されないこと
+        - 保持済みrelease materializationが再実行されないこと
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -1827,7 +2295,7 @@ def test_completed_release_state_does_not_rematerialize_cleaned_private_work(
     )
     assert runner.run(profile_path=profile_path, suite="release") == 3
     suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
-    assert not (suite_root / "work").exists()
+    assert (suite_root / "work").is_dir()
 
     # Act
     resumed = runner.run(profile_path=profile_path, suite="release")
@@ -1836,7 +2304,7 @@ def test_completed_release_state_does_not_rematerialize_cleaned_private_work(
     assert resumed == 3
     assert phase_calls == ["cold", "warm"]
     assert materialization_calls == ["release"]
-    assert not (suite_root / "work").exists()
+    assert (suite_root / "work").is_dir()
 
 
 def test_completed_state_keeps_recorded_target_after_environment_change(
@@ -2616,7 +3084,7 @@ def _prepare_resume_without_worksheet(
     write_atomic_json(state_path, state)
     (suite_root / "review-worksheet.json").unlink()
     input_folder = suite_root / "work" / "input"
-    input_folder.mkdir(parents=True)
+    input_folder.mkdir(parents=True, exist_ok=True)
     (input_folder / "scenario-001.mkv").write_bytes(b"anonymous")
     cold_configuration = resolve_effective_configuration(
         video_input_folder=input_folder,
@@ -2626,6 +3094,30 @@ def _prepare_resume_without_worksheet(
     )
     _successful_run_attempt(cold_configuration, "cold")
     return suite_root, cold_configuration
+
+
+def _complete_review_worksheet(worksheet_path: Path) -> None:
+    """Test用worksheetを全gate合格として完了する。"""
+    worksheet = read_json_object(worksheet_path)
+    assert worksheet is not None
+    worksheet["reviewer"] = "reviewer"
+    worksheet["completed_at"] = "2026-07-17T00:00:00+00:00"
+    selected = worksheet["selected"]
+    assert isinstance(selected, list)
+    selected_item = selected[0]
+    assert isinstance(selected_item, dict)
+    selected_item.update(
+        {
+            "visual_quality": "pass",
+            "blog_usable": "yes",
+            "annotation_consistency": "consistent",
+            "context_overrode_visual_invalidity": "no",
+        }
+    )
+    checks = worksheet["suite_checks"]
+    assert isinstance(checks, dict)
+    checks["spoiler_monotonicity"] = "pass"
+    write_atomic_json(worksheet_path, worksheet)
 
 
 def _interrupted_run_attempt(run_name: str) -> dict[str, object]:

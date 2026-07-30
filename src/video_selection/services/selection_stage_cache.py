@@ -49,6 +49,7 @@ class SelectionStageCache:
         request_fingerprint: StageFingerprint,
     ) -> tuple[dict[str, object], CompletedStage] | None:
         """選定前fingerprintに対応する検証済みartifactとStageを復元する。"""
+        self._validate_index_root()
         indexed = self._read_index(request_fingerprint)
         if indexed is not None:
             return indexed
@@ -227,6 +228,7 @@ class SelectionStageCache:
         completed: CompletedStage,
     ) -> None:
         """確定済みSelect Images Stageへのindexをatomicに保存する。"""
+        self._validate_index_root()
         if completed.stage is not ProcessingStage.SELECT_IMAGES:
             raise ValueError("Selection cacheにはSelect Images Stageが必要です")
         if (
@@ -241,6 +243,7 @@ class SelectionStageCache:
         ):
             raise ValueError("Selection cache Stage identityが一致しません")
         self._index_root.mkdir(parents=True, exist_ok=True)
+        self._validate_index_root()
         path = self._index_root / f"{request_fingerprint.value}.json"
         temporary = self._index_root / (
             f".{request_fingerprint.value}.{uuid4().hex}.tmp"
@@ -269,12 +272,30 @@ class SelectionStageCache:
         completed: CompletedStage,
     ) -> None:
         """不正な選定Stageと対応する認識済みindexだけを削除する。"""
+        self._validate_index_root()
         self._writer.discard(completed.stage, completed.fingerprint)
         index_path = self._index_root / f"{request_fingerprint.value}.json"
         if index_path.is_symlink() or index_path.is_file():
             index_path.unlink()
         elif index_path.exists():
             raise ValueError("Selection cache indexが通常fileではありません")
+
+    def _validate_index_root(self) -> None:
+        """index rootまでの既存componentが通常directoryであることを要求する。"""
+        indexes_root = self._cache_folder / ".indexes"
+        video_sets_root = indexes_root / "video-sets"
+        subject_root = video_sets_root / self._video_set_fingerprint
+        components = (
+            indexes_root,
+            video_sets_root,
+            subject_root,
+            self._index_root,
+        )
+        for component in components:
+            if component.is_symlink():
+                raise ValueError("Selection cache index祖先がsymbolic linkです")
+            if component.exists() and not component.is_dir():
+                raise ValueError("Selection cache index祖先がdirectoryではありません")
 
 
 def _is_fingerprint(value: object) -> bool:

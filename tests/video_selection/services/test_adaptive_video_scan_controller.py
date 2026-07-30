@@ -49,6 +49,41 @@ def test_nvdec_auto_grows_to_six_workers_after_rolling_gpu_headroom() -> None:
     assert controller.diagnostics["mode"] == "auto"
 
 
+def test_auto_does_not_count_growth_after_all_scans_completed() -> None:
+    """未完了scanを投入できない増加がpeak workerへ記録されないこと。
+
+    Arrange:
+        - 初期3 workerで4動画を処理するGPU余力付きControllerが用意される
+    Act:
+        - 4件すべてのscan完了境界が通知される
+    Assert:
+        - 実際に4並列で走らないためworker数とpeakが3のままになること
+    """
+    # Arrange
+    sample = _healthy_nvdec_sample()
+    controller = AdaptiveVideoScanController(
+        video_count=4,
+        configured_workers="auto",
+        auto_max_workers=6,
+        decode_backend="nvdec",
+        logical_cpu_count=24,
+        initial_resource_sample=sample,
+    )
+
+    # Act
+    for _ in range(4):
+        controller.observe_scan_completion(
+            reused=False,
+            input_seconds_per_wall_second=1.1,
+            resource_sample=sample,
+        )
+
+    # Assert
+    assert controller.current_workers == 3
+    assert controller.diagnostics["peak_workers"] == 3
+    assert controller.diagnostics["changes"] == []
+
+
 @pytest.mark.parametrize(
     "change",
     [

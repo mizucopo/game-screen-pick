@@ -9,6 +9,7 @@ import pytest
 
 from src.video_selection.acceptance.acceptance_run import (
     execute_acceptance_run_attempt,
+    load_completed_run_report,
     normalized_result_digest,
     video_scan_parallelism_diagnostics,
 )
@@ -449,6 +450,61 @@ def test_completed_attempt_records_unused_speech_runtime_when_stt_is_not_invoked
     assert exit_code == 0
     assert attempt_record["operation_status"] == "completed"
     assert attempt_record["speech_runtime_identity"] is None
+
+
+def test_completed_run_rejects_untracked_output_artifact(tmp_path: Path) -> None:
+    """未追跡artifactを含むcompleted outputが再利用されないこと。
+
+    Arrange:
+        - hashが一致するreport、Markdown、selected画像と未追跡fileが用意される
+    Act:
+        - completed Acceptance Runの公開成果物が再検証される
+    Assert:
+        - canonical layout不一致として拒否されること
+    """
+    # Arrange
+    output_folder = tmp_path / "output"
+    image_bytes = b"selected-image"
+    image_digest = hashlib.sha256(image_bytes).hexdigest()
+    report = _canonical_report(
+        sha256=image_digest,
+        width=1920,
+        height=1080,
+        size_bytes=len(image_bytes),
+    )
+    image_path = output_folder / "images" / "0001_exploration.webp"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(image_bytes)
+    write_atomic_json(output_folder / "report.json", report)
+    markdown_path = output_folder / "report.md"
+    markdown_path.write_text("canonical report\n", encoding="utf-8")
+    (output_folder / "private-note.txt").write_text(
+        "must not be published",
+        encoding="utf-8",
+    )
+    run_record = {
+        "canonical_report_sha256": hashlib.sha256(
+            (output_folder / "report.json").read_bytes()
+        ).hexdigest(),
+        "canonical_markdown_sha256": hashlib.sha256(
+            markdown_path.read_bytes()
+        ).hexdigest(),
+        "normalized_result_digest": normalized_result_digest(report),
+    }
+    configuration = EffectiveConfiguration(
+        video_input_folder=tmp_path / "input",
+        output_folder=output_folder,
+    )
+
+    # Act
+    with pytest.raises(ValueError, match="layout"):
+        load_completed_run_report(
+            configuration=configuration,
+            run_record=run_record,
+        )
+
+    # Assert
+    assert (output_folder / "private-note.txt").is_file()
 
 
 def test_run_attempt_duration_excludes_resource_monitor_shutdown(

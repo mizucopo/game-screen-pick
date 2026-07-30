@@ -106,7 +106,7 @@ reason code、artifact schemaなどの意味を検証する。
 - Scene Catalog/Candidate Annotationのschema/domain failureと一回だけのretry。
 - Video横断selection、spoiler感度、soft coverage、visual/temporal diversity、shortfall。
 - empty/absent Output Folder、staging validation、atomic rename、cross-artifact一致。
-- cold、exact warm、部分的fingerprint変更、model identity更新、Ctrl+C再開。
+- Fresh Processing、Cache Reuse、部分的fingerprint変更、model identity更新、Ctrl+C再開。
 
 ## Fault injectionと再開
 
@@ -180,11 +180,13 @@ target preflightは`nvidia-smi`がちょうど1台のRTX 5090だけを返すこ�
 target-onlyのuntracked profileはinput root、通常設定を指すconfiguration path、private
 artifact rootと、relative video path、start/end Video Time、scenario roleだけを保持する。repositoryには
 [`docs/examples/target-acceptance.toml`](examples/target-acceptance.toml)のschema/templateだけを
-置く。生成したtemporary clipはrun終了後に削除する。実行、durable resume、private worksheet、
+置く。生成したtemporary clipはreview pendingまたは自動gate不合格の再測定中はprivate
+artifact rootへ保持し、全gate合格時に削除する。実行、durable resume、private worksheet、
 終了code、baseline承認は[Target acceptance](target-acceptance.md)を参照する。
 input root、通常設定、private profileはsuite削除対象directoryの外に置き、resetやrelease
 cleanupより前に重複を拒否する。durable stateはTOML digestに加え、環境変数と既定値を解決した
-全実効設定のprivacy-safe summary digestへ固定し、cold/warm間の設定変更を受理しない。
+全実効設定のprivacy-safe summary digestへ固定し、Fresh Processing／Cache Reuse間の
+設定変更を受理しない。
 
 各runはversioned `acceptance.json`を生成し、release/Issue artifactとして保管する。次を
 記録する。
@@ -193,7 +195,7 @@ cleanupより前に重複を拒否する。durable stateはTOML digestに加え�
 - OS/WSL、CPU、RAM、GPU/driver/CUDA、FFmpeg、Ollama、STT runtime。
 - 実際に解決された完全なmodel identityと更新結果。
 - pathを含まないVideo Set fingerprint、対象duration、scenario count。
-- Stage時間、cold/warm、cache hit/miss/recompute、cache byte。
+- Stage時間、Fresh Processing／Cache Reuse、cache hit/miss/recompute、cache byte。
 - Ollama/STTのprocess baseline、model `size_vram`、global GPU peak。
 - quality gateの集計とhuman reviewer判定。
 
@@ -203,7 +205,7 @@ repositoryへcommitする。通常runのrecordはartifactに留める。
 
 ## 性能予算
 
-model download/update時間はすべてのrun予算から除外する。cold timerはResolved Model
+model download/update時間はすべてのrun予算から除外する。Fresh Processing timerはResolved Model
 Identityをfreezeした後からatomic publicationまでを測る。予算超過はacceptance failureであり、
 runtimeを途中killするtimeoutではない。
 
@@ -213,10 +215,10 @@ target動画から代表scenarioを固定し、合計約30分のintervalとし�
 
 | Metric | Budget |
 |---|---:|
-| clean processing cacheのcold | 20分以内 |
-| 同一Video Set/config/model identity、空の別Output Folderへのwarm | 3分以内 |
-| warmのunexpected Stage recompute | 0 |
-| warm result | run固有診断を除くcanonical reportの全semantic resultがcoldと同一 |
+| Fresh Processing | 20分以内 |
+| 同一Video Set/config/model identity、空の別Output FolderへのCache Reuse | 3分以内 |
+| Cache Reuseのunexpected Stage recompute | 0 |
+| Cache Reuse result | run固有診断を除くcanonical reportの全semantic resultがFresh Processingと同一 |
 
 ### 50時間40分full-scale suite
 
@@ -232,9 +234,9 @@ backend、logical CPU数、実scenario数、設定上限から算出したschedu
 
 | Metric | Budget |
 |---|---:|
-| cold | 24時間以内 |
-| exact warm | 30分以内 |
-| warmのunexpected Stage recompute | 0 |
+| Fresh Processing | 24時間以内 |
+| Cache Reuse | 30分以内 |
+| Cache Reuseのunexpected Stage recompute | 0 |
 
 ### Resource budget
 
@@ -248,7 +250,8 @@ backend、logical CPU数、実scenario数、設定上限から算出したschedu
 旧fingerprint artifactの併存はclean profile予算から除くが、runはcache root全体の容量と警告を
 記録する。容量予算はacceptance gateであり、runtimeの強制quotaではない。OllamaとSTTの
 GPU-heavy Stageは重ねない。GPU recordはprocess baseline、model `size_vram`、system全体の
-peakを分ける。Ollama `/api/ps`のmodel `size`と`size_vram`も比較し、coldでmodelが観測され、
+peakを分ける。Ollama `/api/ps`のmodel `size`と`size_vram`も比較し、Fresh Processingで
+modelが観測され、
 全量がGPU residentである場合だけ自動gateを合格させる。停止timeout内にbackground GPU
 probeまたはdisk samplerが終了しない場合もsampling incompleteとして不合格にする。
 process GPU baselineはrun開始時に一度だけ取得し、継続sampleではsystem GPU memoryだけを
@@ -264,12 +267,13 @@ Ollama global peak 14,629 MiBである。これはbudgetの代わりではなく
 ## Result consistencyとhuman quality gate
 
 fake E2Eのgoldenはselected ID/order、reason code、JSON、Markdownの正規化結果を完全一致
-させる。real cold runではschema、enum、reference、count、Stage、privacyを検証する。同じcacheの
-warm runではnormalized selected ID/orderとcache済みmodel contentをcoldと完全一致させる。
-processing cacheをresetしたcold runではmodel wordingやslugの差を許す。model identityが
+させる。real Fresh Processingではschema、enum、reference、count、Stage、privacyを検証する。
+同じcacheのCache Reuseではnormalized selected ID/orderとcache済みmodel contentを
+Fresh Processingと完全一致させる。processing cacheをresetしたFresh Processingではmodel
+wordingやslugの差を許す。model identityが
 変わったときはraw response snapshotを更新せず、human acceptanceで新baselineを承認する。
 Select Images Stage確定後にrequest indexだけが欠落した場合は、完了manifestとartifactを
-integrity検証してindexを再構築し、warm recomputeとして誤計上しない。
+integrity検証してindexを再構築し、Cache Reuseのrecomputeとして誤計上しない。
 passing baselineはJSONとMarkdownのdurable publication、acceptance record、stateの順に確定し、
 途中失敗時は`passed`ではなくfinalization failureをdurable stateへ残す。
 
@@ -309,7 +313,7 @@ public cutoverの最終gateは次の全部である。
 
 1. IMP-01〜IMP-12がmerge済みでrequired checksがgreen。
 2. 追跡マトリクスにorphan requirementがない。
-3. 30分cold/warm、full-scale cold/warm、cache/GPU budgetを満たす。
+3. 30分とfull-scaleのFresh Processing／Cache Reuse、cache/GPU budgetを満たす。
 4. human quality gateを満たし、acceptance artifactが保存済み。
 5. IMP-13のlegacy grep、CLI/help、README、version、package smoke testがgreen。
 6. screenshot/videoの混在状態がなく、一度のmergeでpublic stateが切り替わる。
@@ -329,7 +333,7 @@ truthであり、実装Issue、test、cutover checklistのどれにも紐付か�
 | CFG-001 | #169, ADR 0006 | CLI > TOML > env > default、unknown設定はfail-fast | unit/contract | IMP-02 | yes |
 | INP-001 | #162 |自然順Video Set、content identity、duplicate拒否 | fake E2E + real fs | IMP-03 | yes |
 | INP-002 | #162, #215 | lock後だけcache mutation、partial entry非再利用、健全な最小Work Unit再利用 | fault matrix | IMP-03, IMP-11 | yes |
-| CACHE-001 | #162, #169 | Stage Fingerprint一致だけ再利用しwarm recompute 0 | fake/target warm | IMP-03, IMP-12 | yes |
+| CACHE-001 | #162, #169 | Stage Fingerprint一致だけ再利用しCache Reuseのrecompute 0 | fake/target Cache Reuse | IMP-03, IMP-12 | yes |
 | CACHE-002 | #170 | recognized legacyだけ自動削除し、失敗はfatal | temp legacy tree + permission fault | IMP-03, IMP-13 | yes |
 | MED-001 | #163 | heartbeat/scene signal/refinementの意味結果 | generated CFR/VFR | IMP-04, IMP-05 | yes |
 | MED-002 | #163, #164 | source PTS/time baseから正確なVideo Timeを得る | real FFmpeg VFR | IMP-04, IMP-05 | yes |
@@ -353,8 +357,8 @@ truthであり、実装Issue、test、cutover checklistのどれにも紐付か�
 | TEST-001 | #170 | `test`はexternal-free、`test-ffmpeg`はrequired | CI configuration | IMP-01, IMP-04 | yes |
 | ACC-001 | #170 | supported WSL2 targetでreal runtimeを検証 | untracked target profile | IMP-12 | yes |
 | ACC-002 | #168〜170 | versioned acceptance recordにpath/raw dataがない | schema/privacy contract | IMP-12 | yes |
-| PERF-001 | #170 | 30分cold ≤20m、warm ≤3m、recompute 0 | target release suite | IMP-12 | yes |
-| PERF-002 | #170 | full cold ≤24h、warm ≤30m、recompute 0 | 12-video full suite | IMP-12 | yes |
+| PERF-001 | #170 | 30分Fresh Processing ≤20m、Cache Reuse ≤3m、recompute 0 | target release suite | IMP-12 | yes |
+| PERF-002 | #170 | full Fresh Processing ≤24h、Cache Reuse ≤30m、recompute 0 | 12-video full suite | IMP-12 | yes |
 | PERF-003 | #170 | cache ≤64 GiB、peak追加≤96 GiB | target metrics | IMP-12 | yes |
 | PERF-004 | #166, #169, #170 | Ollama≤18 GiB、STT≤8 GiB、GPU stage非重複 | system GPU metrics | IMP-11, IMP-12 | yes |
 | QUAL-001 | #163〜168, #170 | invalid/near-duplicate selected 0、usable ≥90% | human review | IMP-12 | yes |

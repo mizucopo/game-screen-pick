@@ -46,7 +46,7 @@ def validate_canonical_selection_report(
         _validate_images(report, staging_folder)
         _validate_markdown(report, staging_folder)
         _validate_privacy(report, staging_folder, request)
-        _validate_staging_layout(report, staging_folder)
+        validate_canonical_selection_output_layout(report, staging_folder)
     except PermissionError:
         raise
     except (
@@ -81,7 +81,7 @@ def load_validated_canonical_selection_report(
         _validate_images(report, output_folder)
         _validate_markdown(report, output_folder)
         _validate_published_strings_are_private_safe(report)
-        _validate_staging_layout(report, output_folder)
+        validate_canonical_selection_output_layout(report, output_folder)
         return report
     except PermissionError:
         raise
@@ -503,7 +503,11 @@ def _published_free_text(report: dict[str, object]) -> list[str]:
     return values
 
 
-def _validate_staging_layout(report: dict[str, object], staging_folder: Path) -> None:
+def validate_canonical_selection_output_layout(
+    report: dict[str, object],
+    staging_folder: Path,
+) -> None:
+    """reportが参照するartifactだけでcanonical outputが構成されることを検証する。"""
     expected = {
         "images",
         "report.json",

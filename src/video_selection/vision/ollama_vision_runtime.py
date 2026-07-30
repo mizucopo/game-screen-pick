@@ -534,8 +534,6 @@ class OllamaVisionRuntime:
             count_as_candidate_response: bool,
         ) -> tuple[CandidateAnnotation, bool, bool, bool, bool, bool]:
             nonlocal candidate_response_count
-            if count_as_candidate_response:
-                candidate_response_count += 1
             (
                 annotation,
                 redacted,
@@ -545,6 +543,8 @@ class OllamaVisionRuntime:
                 requires_publication_verification,
                 scene_is_combat,
             ) = _parse_candidate_annotation(value, request, catalog)
+            if count_as_candidate_response:
+                candidate_response_count += 1
             if requires_dialogue_verification and candidate_response_count == 1:
                 raise _domain_error(
                     "candidate_annotation_dialogue_visibility_unverified"
@@ -566,7 +566,7 @@ class OllamaVisionRuntime:
         def parse_candidate_relationship_repair(
             value: Mapping[str, object],
         ) -> tuple[CandidateAnnotation, bool, bool, bool, bool, bool]:
-            return parse_candidate(value, count_as_candidate_response=False)
+            return parse_candidate(value, count_as_candidate_response=True)
 
         (
             (
@@ -861,8 +861,7 @@ class OllamaVisionRuntime:
                 )
             except VisionRuntimeError as error:
                 if (
-                    relationship_repair
-                    and stage_kind == "candidate_annotation"
+                    stage_kind == "candidate_annotation"
                     and error.validation_code
                     == "candidate_annotation_dialogue_visibility_unverified"
                     and attempt < 3

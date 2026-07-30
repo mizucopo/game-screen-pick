@@ -1683,6 +1683,72 @@ def test_contextual_cinematic_dialogue_is_visually_rechecked(
     assert "weakまたはstrongなら入力内IDを1件以上" in second_prompt
 
 
+def test_invalid_candidate_response_does_not_count_as_dialogue_verification() -> None:
+    """parse不能な応答が画面内台詞の独立確認として数えられないこと。
+
+    Arrange:
+        - 未知frameを返す初回応答と画面内台詞を初めて主張する2回目が用意される
+        - 3回目では画像上に台詞文字がないと訂正される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - parse成功した応答だけが数えられ3回目の独立確認結果が採用されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (("frame-a", "exploration", "event_dialogue", "high", "dialogue"),)
+        )
+        observation = _first_frame_observation(response)
+        if len(payloads) == 1:
+            observation["frame_id"] = "foreign-frame"
+        else:
+            visible = len(payloads) == 2
+            observation.update(
+                {
+                    "cinematic_event_presentation": True,
+                    "on_screen_dialogue_text_visible": visible,
+                    "dialogue_text_presentation": (
+                        "dialogue_box" if visible else "none"
+                    ),
+                }
+            )
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 3
+    assert diagnostics.validation_code == (
+        "candidate_annotation_dialogue_visibility_unverified"
+    )
+    assert len(payloads) == 3
+
+
 @pytest.mark.parametrize(
     (
         "confirmed_opponent_visibility",
