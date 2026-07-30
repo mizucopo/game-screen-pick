@@ -93,8 +93,10 @@ coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。
 確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
 full Video Setを再hashしない。fullのauto coldに使う独立Video Scanは
 `video_scan.workers = "auto"`かつ`video_scan.auto_max_workers >= 4`を要求する。
-固定3比較を静的に超えられない上限は長時間runの前に拒否する。NVDECとresource余力がある
-24 logical CPU targetでは保守的な3 workerから開始し、rolling判断で最大6 workerまで利用する。
+さらにbackend、targetのlogical CPU数、実scenario数、設定上限から本番controllerと同じ
+schedulable capacityを算出し、4 worker未満なら長時間runの前に拒否する。
+NVDECとresource余力がある24 logical CPU targetでは保守的な3 workerから開始し、
+rolling判断で最大6 workerまで利用する。
 開始時点でCPU・Decoder・memory・GPU・VRAM・disk pressureを検知した場合は1 workerへ抑制する。
 CPU・Decoder・memory・VRAM・diskの直近3 sampleと、
 disk throughput・1 stream処理速度のtrendを使い、pressure時はscan完了境界で1 workerずつ
@@ -162,6 +164,9 @@ user interruptや計測済みoperation failureの未完了runはCompleted Stage 
 fullの固定3比較が中断された場合も固定3 cacheから再開し、固定3が完了した後だけそのcacheを
 一度削除する。auto cold開始後は固定3 cache削除済みのdurable flagを保持するため、auto coldの
 中断・再開でauto cacheを再削除しない。
+Select Images Completed Stageのatomic確定後、request index保存前に中断した場合は、
+Stage manifest内のrequest fingerprintとartifact integrityから一意な完了Stageを回復し、
+indexを再構築してrecomputeではなくcache reuseとして記録する。
 再開後のrun recordでは、それ以前の試行を含む経過時間、cache/recompute count、Stage時間、
 storage/GPU aggregateを累積または保守的な最大値として集計するため、再開後の短い試行だけで
 性能を判定しない。user interruptで詳細計測を確定できなかった場合も経過時間を試行へ残し、
@@ -251,6 +256,9 @@ recordは保持する。
 合格時は同じsuite directoryの`baseline/baseline.json`と`baseline/baseline.md`へ、source
 commitを除いた正規化baselineを生成する。再評価がpendingまたは不合格なら、以前のpassing
 baselineを削除する。ただし新しいworksheet、candidate集合、acceptance record、privacyを
-検証できるまでは既存のpassing baselineを保持する。通常runではtarget artifactに留める。Issue #190の
+検証できるまでは既存のpassing baselineを保持する。canonical artifact更新前にstateを
+`finalizing`へ遷移し、JSONとMarkdownをatomicかつdurableに公開してからacceptance record、
+最後に`passed` stateを確定する。途中のIO失敗やuser interruptは`failed` stateへ残し、
+baselineのない`passed`を公開しない。通常runではtarget artifactに留める。Issue #190の
 cutoverまたはperformance contract変更時だけprivacy検査済みの両fileをreviewし、専用PRで
 repositoryへ取り込む。実値入りprofileとprivate worksheetは一緒にcopyしない。

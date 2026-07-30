@@ -501,7 +501,84 @@ def test_full_suite_rejects_auto_cap_that_cannot_exceed_three(
         return _successful_run_attempt(configuration, run_name)
 
     # Act / Assert
-    with pytest.raises(ValueError, match="4以上"):
+    with pytest.raises(ValueError, match="4 worker以上"):
+        _runner(execute).run(profile_path=profile_path, suite="full")
+    assert calls == []
+
+
+def test_full_suite_rejects_cpu_backend_with_three_worker_capacity(
+    tmp_path: Path,
+) -> None:
+    """24 logical CPUで3 workerまでのCPU decode構成が事前拒否されること。
+
+    Arrange:
+        - auto上限6でもCPU decodeにより最大3 workerとなるfull suiteが用意される
+    Act:
+        - full target suiteが実行される
+    Assert:
+        - 4 workerへ到達不能としてrun開始前に拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    configuration_path = tmp_path / "video-selection.toml"
+    configuration_path.write_text(
+        configuration_path.read_text(encoding="utf-8").replace(
+            'decode_backend = "nvdec"',
+            'decode_backend = "cpu"',
+        ),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="4 worker以上"):
+        _runner(execute).run(profile_path=profile_path, suite="full")
+    assert calls == []
+
+
+def test_full_suite_rejects_scenario_count_below_four(
+    tmp_path: Path,
+) -> None:
+    """4未満のVideo数で4 workerへ到達不能なfull構成が事前拒否されること。
+
+    Arrange:
+        - NVDECとauto上限6でもVideo数が3のfull suiteが用意される
+    Act:
+        - full target suiteが実行される
+    Assert:
+        - 4 workerへ到達不能としてrun開始前に拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    profile_path.write_text(
+        profile_path.read_text(encoding="utf-8").replace(
+            "expected_video_count = 12",
+            "expected_video_count = 3",
+        ),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="4 worker以上"):
         _runner(execute).run(profile_path=profile_path, suite="full")
     assert calls == []
 
@@ -1617,6 +1694,79 @@ def test_pending_refinalization_removes_previously_passing_baseline(
     assert not (suite_root / "baseline").exists()
 
 
+@pytest.mark.parametrize(
+    "failure",
+    (OSError("baseline disk failure"), KeyboardInterrupt()),
+)
+def test_baseline_failure_cannot_commit_passed_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+) -> None:
+    """baseline生成失敗時にpassed stateが先行確定されないこと。
+
+    Arrange:
+        - cold/warmとpassing human reviewが完了したrelease suiteが用意される
+        - baseline生成境界でIO失敗またはuser interruptが発生する
+    Act:
+        - passing recordのfinalizationが実行される
+    Assert:
+        - stateがfailedとなりpassed recordとbaselineが公開されないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
+            configuration, run_name
+        )
+    )
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    worksheet_path = suite_root / "review-worksheet.json"
+    worksheet = read_json_object(worksheet_path)
+    assert worksheet is not None
+    worksheet["reviewer"] = "reviewer"
+    worksheet["completed_at"] = "2026-07-17T00:00:00+00:00"
+    selected = worksheet["selected"]
+    assert isinstance(selected, list)
+    selected_item = selected[0]
+    assert isinstance(selected_item, dict)
+    selected_item.update(
+        {
+            "visual_quality": "pass",
+            "blog_usable": "yes",
+            "annotation_consistency": "consistent",
+            "context_overrode_visual_invalidity": "no",
+        }
+    )
+    checks = worksheet["suite_checks"]
+    assert isinstance(checks, dict)
+    checks["spoiler_monotonicity"] = "pass"
+    write_atomic_json(worksheet_path, worksheet)
+
+    def fail_baseline(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(
+        "src.video_selection.acceptance.target_suite_runner.write_normalized_baseline",
+        fail_baseline,
+    )
+
+    # Act / Assert
+    with pytest.raises(type(failure)):
+        runner.run(profile_path=profile_path, suite="release")
+    state = read_json_object(suite_root / "acceptance-state.json")
+    record = read_json_object(suite_root / "acceptance.json")
+    assert state is not None
+    assert state["acceptance_status"] == "failed"
+    last_failure = state["last_failure"]
+    assert isinstance(last_failure, dict)
+    assert last_failure["reason"] == "acceptance_finalization_failed"
+    assert record is not None
+    assert record["status"] == "pending_human_review"
+    assert not (suite_root / "baseline").exists()
+
+
 def test_invalid_refinalization_preserves_previously_passing_baseline(
     tmp_path: Path,
 ) -> None:
@@ -1704,11 +1854,13 @@ def _runner(
         profile: AcceptanceProfile,
         suite_root: Path,
     ) -> tuple[Path, dict[str, object]]:
-        del profile
         input_folder = suite_root / "work" / "input"
         input_folder.mkdir(parents=True, exist_ok=True)
         (input_folder / "scenario-001.mkv").write_bytes(b"anonymous")
-        return input_folder, {"suite_fingerprint": suite_fingerprint}
+        return input_folder, {
+            "suite_fingerprint": suite_fingerprint,
+            "scenario_count": profile.full_expected_video_count,
+        }
 
     return TargetSuiteRunner(
         environment_probe=environment_probe
@@ -1717,6 +1869,7 @@ def _runner(
                 "host_os": "windows_11_pro",
                 "environment": "wsl2",
                 "gpu": "rtx_5090",
+                "logical_cpu_count": 24,
                 "visible_ram_bytes": 32 * 1024**3,
             }
         ),
@@ -1929,7 +2082,9 @@ def _profile(tmp_path: Path, *, include_ollama_host: bool = True) -> Path:
     input_root.mkdir()
     (input_root / "source.mkv").write_bytes(b"source")
     configuration = tmp_path / "video-selection.toml"
-    configuration_text = 'config_version = "1.0.0"\n'
+    configuration_text = (
+        'config_version = "1.0.0"\n\n[frame_extraction]\ndecode_backend = "nvdec"\n'
+    )
     if include_ollama_host:
         configuration_text += '\n[ollama]\nhost = "http://127.0.0.1:11434"\n'
     configuration.write_text(configuration_text, encoding="utf-8")
@@ -1951,7 +2106,7 @@ end = "PT1S"
 scenario_role = "test"
 
 [full_scale_suite]
-expected_video_count = 1
+expected_video_count = 12
 expected_total_duration = "PT1S"
 duration_tolerance_seconds = 0
 ''',

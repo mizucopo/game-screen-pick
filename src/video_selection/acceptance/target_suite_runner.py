@@ -5,6 +5,7 @@ import json
 import shutil
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -15,6 +16,7 @@ from ..configuration.resolve_effective_configuration import (
 from ..model_runtime.model_lifecycle_runtime import ModelLifecycleRuntime
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.resolved_models import ResolvedModels
+from ..services.adaptive_video_scan_controller import AdaptiveVideoScanController
 from .acceptance_execution_step import AcceptanceExecutionStep
 from .acceptance_profile import AcceptanceProfile
 from .acceptance_record import (
@@ -155,6 +157,12 @@ class TargetSuiteRunner:
         )
         effective_configuration_digest = _effective_configuration_digest(
             configuration_summary
+        )
+        _validate_full_scan_capacity(
+            suite,
+            cold_configuration,
+            target,
+            suite_descriptor,
         )
         execution_steps = _execution_steps(
             suite,
@@ -431,13 +439,35 @@ class TargetSuiteRunner:
             return 1
         if not _cleanup_release_work(suite, suite_root, state):
             return 1
-        _remove_directory_strict(suite_root / "baseline", "Acceptance baseline")
-        write_atomic_json(suite_root / "acceptance.json", record)
-        state["acceptance_status"] = record["status"]
-        state.pop("last_failure", None)
-        write_atomic_json(suite_root / "acceptance-state.json", state)
-        if record["status"] == "passed":
-            write_normalized_baseline(record, suite_root / "baseline")
+        state_path = suite_root / "acceptance-state.json"
+        state["acceptance_status"] = "finalizing"
+        state["last_failure"] = {
+            "phase": "acceptance_finalization",
+            "exit_code": 1,
+            "reason": "acceptance_finalization_in_progress",
+        }
+        write_atomic_json(state_path, state)
+        try:
+            _remove_directory_strict(
+                suite_root / "baseline",
+                "Acceptance baseline",
+            )
+            if record["status"] == "passed":
+                write_normalized_baseline(record, suite_root / "baseline")
+            write_atomic_json(suite_root / "acceptance.json", record)
+            state["acceptance_status"] = record["status"]
+            state.pop("last_failure", None)
+            write_atomic_json(state_path, state)
+        except BaseException as error:
+            state["acceptance_status"] = "failed"
+            state["last_failure"] = {
+                "phase": "acceptance_finalization",
+                "exit_code": 130 if isinstance(error, KeyboardInterrupt) else 1,
+                "reason": "acceptance_finalization_failed",
+            }
+            with suppress(Exception):
+                write_atomic_json(state_path, state)
+            raise
         return (
             0
             if record["status"] == "passed"
@@ -523,12 +553,6 @@ def _execution_steps(
             AcceptanceExecutionStep("phase", "cold", cold),
             AcceptanceExecutionStep("phase", "warm", warm),
         )
-    if cold.video_scan_workers != "auto":
-        raise ValueError("Full acceptanceのVideo Scan workersにはautoが必要です")
-    if cold.video_scan_auto_max_workers <= 3:
-        raise ValueError(
-            "Full acceptanceのVideo Scan auto max workersには4以上が必要です"
-        )
     fixed_three = replace(
         cold,
         output_folder=suite_root / "outputs" / "fixed3",
@@ -539,6 +563,38 @@ def _execution_steps(
         AcceptanceExecutionStep("phase", "cold", cold),
         AcceptanceExecutionStep("phase", "warm", warm),
     )
+
+
+def _validate_full_scan_capacity(
+    suite: str,
+    configuration: EffectiveConfiguration,
+    target: Mapping[str, object],
+    descriptor: Mapping[str, object],
+) -> None:
+    if suite != "full":
+        return
+    if configuration.video_scan_workers != "auto":
+        raise ValueError("Full acceptanceのVideo Scan workersにはautoが必要です")
+    scenario_count = _positive_integer(
+        descriptor.get("scenario_count"),
+        "Full suite scenario count",
+    )
+    logical_cpu_count = _positive_integer(
+        target.get("logical_cpu_count"),
+        "Target logical CPU count",
+    )
+    controller = AdaptiveVideoScanController(
+        video_count=scenario_count,
+        configured_workers=configuration.video_scan_workers,
+        auto_max_workers=configuration.video_scan_auto_max_workers,
+        decode_backend=configuration.decode_backend,
+        logical_cpu_count=logical_cpu_count,
+        initial_resource_sample=None,
+    )
+    if controller.executor_capacity <= 3:
+        raise ValueError(
+            "Full acceptanceのVideo Scan schedulable capacityには4 worker以上が必要です"
+        )
 
 
 def _release_fixed_three_cache(
@@ -837,4 +893,10 @@ def _string(value: object) -> str:
 def _boolean(value: object) -> bool:
     if not isinstance(value, bool):
         raise ValueError("Acceptance state valueがbooleanではありません")
+    return value
+
+
+def _positive_integer(value: object, label: str) -> int:
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{label}が正の整数ではありません")
     return value

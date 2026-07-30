@@ -2,9 +2,11 @@
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from uuid import uuid4
 
 from ..models.report_value import string_looks_private
 from .acceptance_resource_budget import (
@@ -212,11 +214,29 @@ def write_normalized_baseline(
     digest = hashlib.sha256(
         json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    markdown_path.write_text(
+    _write_atomic_text(
+        markdown_path,
         _render_baseline_markdown(normalized, digest),
-        encoding="utf-8",
     )
     return json_path, markdown_path
+
+
+def _write_atomic_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+    try:
+        with temporary.open("w", encoding="utf-8") as file:
+            file.write(value)
+            file.flush()
+            os.fsync(file.fileno())
+        temporary.replace(path)
+        descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _render_baseline_markdown(record: Mapping[str, object], digest: str) -> str:

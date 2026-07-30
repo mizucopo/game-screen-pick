@@ -61,3 +61,60 @@ def test_request_fingerprint_restores_verified_completed_selection(
     artifact, restored_completed = restored
     assert artifact == {"schema": "selection-test"}
     assert restored_completed == completed
+
+
+def test_missing_request_index_is_rebuilt_from_completed_selection(
+    tmp_path: Path,
+) -> None:
+    """欠落したrequest indexが確定済みSelect Imagesから再構築されること。
+
+    Arrange:
+        - index未保存のままatomic確定されたSelect Images Stageが用意される
+    Act:
+        - 選定前request fingerprintでcacheが検索される
+    Assert:
+        - 検証済みartifactが復元されrequest indexも再構築されること
+    """
+    # Arrange
+    video_set_fingerprint = "a" * 64
+    request_fingerprint = StageFingerprint("b" * 64)
+    upstream = (StageFingerprint("c" * 64),)
+    semantic_input = {
+        "selection_request_fingerprint": request_fingerprint.value,
+        "requested_count": 1,
+    }
+    stage_fingerprint = build_stage_fingerprint(
+        ProcessingStage.SELECT_IMAGES,
+        upstream,
+        semantic_input,
+    )
+    completed = CompletedStageWriter(
+        tmp_path,
+        subject_namespace="video-sets",
+        subject_fingerprint=video_set_fingerprint,
+    ).write(
+        ProcessingStage.SELECT_IMAGES,
+        stage_fingerprint,
+        upstream,
+        semantic_input,
+        {"schema": "selection-test"},
+    )
+    cache = SelectionStageCache(
+        tmp_path,
+        video_set_fingerprint=video_set_fingerprint,
+    )
+
+    # Act
+    restored = cache.read(request_fingerprint)
+
+    # Assert
+    assert restored == ({"schema": "selection-test"}, completed)
+    index_path = (
+        tmp_path
+        / ".indexes"
+        / "video-sets"
+        / video_set_fingerprint
+        / ProcessingStage.SELECT_IMAGES.value
+        / f"{request_fingerprint.value}.json"
+    )
+    assert index_path.is_file()

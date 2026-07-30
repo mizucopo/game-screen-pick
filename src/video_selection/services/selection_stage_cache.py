@@ -30,6 +30,12 @@ class SelectionStageCache:
             subject_namespace="video-sets",
             subject_fingerprint=video_set_fingerprint,
         )
+        self._stage_root = (
+            cache_folder
+            / "video-sets"
+            / video_set_fingerprint
+            / ProcessingStage.SELECT_IMAGES.value
+        )
         self._index_root = (
             cache_folder
             / ".indexes"
@@ -42,7 +48,21 @@ class SelectionStageCache:
         self,
         request_fingerprint: StageFingerprint,
     ) -> tuple[dict[str, object], CompletedStage] | None:
-        """選定前fingerprintに対応する検証済みartifactとStageを返す。"""
+        """選定前fingerprintに対応する検証済みartifactとStageを復元する。"""
+        indexed = self._read_index(request_fingerprint)
+        if indexed is not None:
+            return indexed
+        recovered = self._recover_completed_selection(request_fingerprint)
+        if recovered is None:
+            return None
+        self.record(request_fingerprint, recovered[1])
+        return recovered
+
+    def _read_index(
+        self,
+        request_fingerprint: StageFingerprint,
+    ) -> tuple[dict[str, object], CompletedStage] | None:
+        """request indexが指すCompleted Stageをintegrity検証する。"""
         path = self._index_root / f"{request_fingerprint.value}.json"
         if path.is_symlink():
             return None
@@ -75,6 +95,95 @@ class SelectionStageCache:
             typed_semantic_input.get("selection_request_fingerprint")
             != request_fingerprint.value
             or build_stage_fingerprint(
+                ProcessingStage.SELECT_IMAGES,
+                upstream,
+                typed_semantic_input,
+            )
+            != stage_fingerprint
+        ):
+            return None
+        artifact = self._writer.read(
+            ProcessingStage.SELECT_IMAGES,
+            stage_fingerprint,
+            upstream,
+            typed_semantic_input,
+        )
+        if artifact is None:
+            return None
+        return (
+            artifact,
+            CompletedStage(
+                ProcessingStage.SELECT_IMAGES,
+                stage_fingerprint,
+                upstream,
+                typed_semantic_input,
+            ),
+        )
+
+    def _recover_completed_selection(
+        self,
+        request_fingerprint: StageFingerprint,
+    ) -> tuple[dict[str, object], CompletedStage] | None:
+        """欠落indexをsemantic inputが一致するCompleted Stageから回復する。"""
+        if self._stage_root.is_symlink():
+            return None
+        try:
+            stage_folders = tuple(self._stage_root.iterdir())
+        except OSError:
+            return None
+        matches: list[tuple[dict[str, object], CompletedStage]] = []
+        for stage_folder in stage_folders:
+            restored = self._read_completed_stage_folder(
+                stage_folder,
+                request_fingerprint,
+            )
+            if restored is not None:
+                matches.append(restored)
+        return matches[0] if len(matches) == 1 else None
+
+    def _read_completed_stage_folder(
+        self,
+        stage_folder: Path,
+        request_fingerprint: StageFingerprint,
+    ) -> tuple[dict[str, object], CompletedStage] | None:
+        """一つのStage folderをindex候補として完全検証する。"""
+        if (
+            stage_folder.is_symlink()
+            or not stage_folder.is_dir()
+            or not _is_fingerprint(stage_folder.name)
+        ):
+            return None
+        manifest_path = stage_folder / "manifest.json"
+        if manifest_path.is_symlink():
+            return None
+        try:
+            value: object = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return None
+        if not isinstance(value, dict) or not all(
+            isinstance(key, str) for key in value
+        ):
+            return None
+        manifest = cast(dict[str, object], value)
+        raw_upstream = manifest.get("upstream_stage_fingerprints")
+        semantic_input = manifest.get("semantic_input")
+        if (
+            not isinstance(raw_upstream, list)
+            or not all(_is_fingerprint(item) for item in raw_upstream)
+            or not isinstance(semantic_input, dict)
+            or not all(isinstance(key, str) for key in semantic_input)
+        ):
+            return None
+        typed_semantic_input = cast(dict[str, object], semantic_input)
+        if (
+            typed_semantic_input.get("selection_request_fingerprint")
+            != request_fingerprint.value
+        ):
+            return None
+        upstream = tuple(StageFingerprint(cast(str, item)) for item in raw_upstream)
+        stage_fingerprint = StageFingerprint(stage_folder.name)
+        if (
+            build_stage_fingerprint(
                 ProcessingStage.SELECT_IMAGES,
                 upstream,
                 typed_semantic_input,

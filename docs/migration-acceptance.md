@@ -222,7 +222,8 @@ target動画から代表scenarioを固定し、合計約30分のintervalとし�
 12 videos、合計50時間40分の全体を、reference PCを他用途で使わず実行する。IMP-13前と、
 抽出/cache/parallelismの性能へ影響する変更時だけ必須とする。
 full比較は`video_scan.workers = "auto"`かつ`video_scan.auto_max_workers >= 4`を要求し、
-固定3を超えられない上限は長時間runの開始前に拒否する。
+backend、logical CPU数、実scenario数、設定上限から算出したschedulable capacityが4未満の
+構成も、固定3を超えられないため長時間runの開始前に拒否する。
 
 設計時に確認したtarget inputは1,124,448,879,219 bytes、対象driveの空きは
 5,976,873,041,920 bytesだった。これは固定identityや将来の合格値にはせず、各runのpreflightで
@@ -266,6 +267,10 @@ fake E2Eのgoldenはselected ID/order、reason code、JSON、Markdownの正規�
 warm runではnormalized selected ID/orderとcache済みmodel contentをcoldと完全一致させる。
 processing cacheをresetしたcold runではmodel wordingやslugの差を許す。model identityが
 変わったときはraw response snapshotを更新せず、human acceptanceで新baselineを承認する。
+Select Images Stage確定後にrequest indexだけが欠落した場合は、完了manifestとartifactを
+integrity検証してindexを再構築し、warm recomputeとして誤計上しない。
+passing baselineはJSONとMarkdownのdurable publication、acceptance record、stateの順に確定し、
+途中失敗時は`passed`ではなくfinalization failureをdurable stateへ残す。
 
 30分suiteとfull-scale suiteの両方で次を満たす。
 

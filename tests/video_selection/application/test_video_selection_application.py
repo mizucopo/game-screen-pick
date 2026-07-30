@@ -63,6 +63,13 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
 
     # Act
     cold = cold_application.run(configuration)
+    selection_indexes = tuple(
+        (configuration.processing_cache_folder / ".indexes" / "video-sets").rglob(
+            "*.json"
+        )
+    )
+    assert len(selection_indexes) == 1
+    selection_indexes[0].unlink()
     monkeypatch.setattr(
         "src.video_selection.application.video_selection_application."
         "select_from_shortlist_batches",
@@ -117,6 +124,7 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     assert len(warm_selection_cache) == 1
     assert warm_selection_cache[0].reuse_count == 1
     assert warm_selection_cache[0].recompute_count == 0
+    assert selection_indexes[0].is_file()
     cold_stages = {
         stage["name"]: stage for stage in cold_report["provenance"]["stages"]
     }
