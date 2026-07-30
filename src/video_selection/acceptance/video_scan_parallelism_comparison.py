@@ -6,6 +6,14 @@ from typing import cast
 
 from .acceptance_resource_budget import acceptance_run_resource_budget_passed
 
+_COMPARISON_IDENTITY_KEYS = (
+    "configuration_digest",
+    "effective_configuration_digest",
+    "ollama_endpoint_identity",
+    "model_identity_digest",
+    "commit",
+)
+
 
 def build_video_scan_parallelism_comparison(
     fixed_three: Mapping[str, object],
@@ -37,6 +45,10 @@ def build_video_scan_parallelism_comparison(
         "stage_artifact_content_digest",
     )
     gates = {
+        "execution_context_equal": video_scan_runs_share_comparison_context(
+            fixed_three,
+            automatic,
+        ),
         "fixed_three_workers": (
             fixed_diagnostics.get("mode") == "fixed"
             and fixed_diagnostics.get("configured_workers") == 3
@@ -67,6 +79,86 @@ def build_video_scan_parallelism_comparison(
         "auto_peak_workers": _integer(auto_diagnostics, "peak_workers"),
         "gates": gates,
         "passed": all(gates.values()),
+    }
+
+
+def video_scan_run_matches_comparison_context(
+    run_record: Mapping[str, object],
+    execution_context: Mapping[str, object],
+) -> bool:
+    """runの全attemptが現在のVideo Scan Comparison Contextと一致するか返す。"""
+    try:
+        expected = _video_scan_comparison_context(execution_context)
+        contexts = _run_execution_contexts(run_record)
+        return all(
+            _video_scan_comparison_context(context) == expected for context in contexts
+        )
+    except ValueError:
+        return False
+
+
+def video_scan_runs_share_comparison_context(
+    *run_records: Mapping[str, object],
+) -> bool:
+    """全runの全attemptが同じVideo Scan Comparison Contextか返す。"""
+    try:
+        contexts = tuple(
+            context
+            for run_record in run_records
+            for context in _run_execution_contexts(run_record)
+        )
+        if not contexts:
+            return False
+        expected = _video_scan_comparison_context(contexts[0])
+        return all(
+            _video_scan_comparison_context(context) == expected
+            for context in contexts[1:]
+        )
+    except ValueError:
+        return False
+
+
+def _run_execution_contexts(
+    run_record: Mapping[str, object],
+) -> tuple[dict[str, object], ...]:
+    attempts = run_record.get("attempts")
+    if isinstance(attempts, list) and attempts:
+        return tuple(
+            _mapping(
+                _mapping(attempt, "run attempt").get("execution_context"),
+                "run attempt execution_context",
+            )
+            for attempt in attempts
+        )
+    return (
+        _mapping(
+            run_record.get("execution_context"),
+            "run execution_context",
+        ),
+    )
+
+
+def _video_scan_comparison_context(
+    execution_context: Mapping[str, object],
+) -> dict[str, object]:
+    identity = _mapping(
+        execution_context.get("identity"),
+        "execution context identity",
+    )
+    source_revision = _mapping(
+        execution_context.get("source_revision"),
+        "execution context source_revision",
+    )
+    target = _mapping(
+        execution_context.get("target"),
+        "execution context target",
+    )
+    return {
+        "identity": {key: identity.get(key) for key in _COMPARISON_IDENTITY_KEYS},
+        "source_revision": source_revision,
+        "target": {
+            key: value for key, value in target.items() if key != "visible_ram_bytes"
+        },
     }
 
 

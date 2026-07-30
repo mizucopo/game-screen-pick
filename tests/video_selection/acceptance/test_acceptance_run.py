@@ -1,6 +1,7 @@
 """Acceptance Run Attempt実行境界のtest。"""
 
 import copy
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,8 +12,16 @@ from src.video_selection.acceptance.acceptance_run import (
     normalized_result_digest,
     video_scan_parallelism_diagnostics,
 )
+from src.video_selection.acceptance.atomic_json import write_atomic_json
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
+from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.run_failure import RunFailure
+from src.video_selection.models.run_outcome import RunOutcome
+from src.video_selection.models.run_status import RunStatus
+from src.video_selection.services.build_stage_fingerprint import (
+    build_stage_fingerprint,
+)
+from src.video_selection.services.completed_stage_writer import CompletedStageWriter
 from tests.video_selection.fakes.fake_model_runtime import FakeModelRuntime
 
 
@@ -308,6 +317,138 @@ def test_normalized_result_digest_ignores_unused_model_identity() -> None:
 
     # Assert
     assert changed_digest == cold_digest
+
+
+def test_completed_attempt_records_unused_speech_runtime_when_stt_is_not_invoked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """STT未実行の正常runがSpeech Runtime Identityなしで確定されること。
+
+    Arrange:
+        - subtitleまたはaudioを使わずSpeech Runtime Identityを省略したreportが用意される
+    Act:
+        - Acceptance Run Attemptが正常完了される
+    Assert:
+        - STT未使用がnullとして記録され、operationが失敗しないこと
+    """
+    # Arrange
+    configuration = EffectiveConfiguration(
+        video_input_folder=tmp_path / "input",
+        output_folder=tmp_path / "output",
+    )
+    resolved_models = FakeModelRuntime("unused-speech-runtime").resolve_models(
+        configuration
+    )
+    source_fingerprint = "1" * 64
+    video_set_fingerprint = hashlib.sha256()
+    video_set_fingerprint.update(b"game-screen-pick/video-set-fingerprint@1\0")
+    video_set_fingerprint.update(bytes.fromhex(source_fingerprint))
+    subject_fingerprint = video_set_fingerprint.hexdigest()
+    parallelism = {
+        "mode": "auto",
+        "configured_workers": "auto",
+        "initial_workers": 3,
+        "peak_workers": 4,
+        "scan_wall_seconds": 8.0,
+    }
+    report = _canonical_report(
+        sha256="a" * 64,
+        width=1920,
+        height=1080,
+        size_bytes=1000,
+    )
+    report["video_set"] = {
+        "sources": [{"fingerprint": {"value": source_fingerprint}}],
+        "duration": {"exact_seconds": "1"},
+    }
+    provenance = report["provenance"]
+    assert isinstance(provenance, dict)
+    provenance["runtime"] = {"video_scan_parallelism": parallelism}
+    configuration.output_folder.mkdir(parents=True)
+    write_atomic_json(configuration.output_folder / "report.json", report)
+    (configuration.output_folder / "report.md").write_text(
+        "canonical report\n",
+        encoding="utf-8",
+    )
+    selection_semantic_input = {"requested_count": 1}
+    selection_fingerprint = build_stage_fingerprint(
+        ProcessingStage.SELECT_IMAGES,
+        (),
+        selection_semantic_input,
+    )
+    selection_stage = CompletedStageWriter(
+        configuration.processing_cache_folder,
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+    ).write(
+        ProcessingStage.SELECT_IMAGES,
+        selection_fingerprint,
+        (),
+        selection_semantic_input,
+        {"rejected": []},
+    )
+    outcome = RunOutcome(
+        output_folder=configuration.output_folder,
+        status=RunStatus.COMPLETED,
+        requested_count=1,
+        selected_count=1,
+        completed_stages=(selection_stage,),
+    )
+    monkeypatch.setattr(
+        "src.video_selection.acceptance.acceptance_run.build_real_application",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            run=lambda _configuration: outcome,
+            video_scan_parallelism_diagnostics=parallelism,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.video_selection.acceptance.acceptance_run.DiskUsageMonitor",
+        lambda **_kwargs: SimpleNamespace(
+            start=lambda: None,
+            stop=lambda: {
+                "disk_sampling_complete": True,
+                "persistent_cache_bytes": 0,
+                "peak_additional_bytes": 0,
+                "disk_sample_count": 1,
+                "disk_sample_error_count": 0,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "src.video_selection.acceptance.acceptance_run.GpuResourceMonitor",
+        lambda **_kwargs: SimpleNamespace(
+            start=lambda: None,
+            stop=lambda: {
+                "resource_sampling_complete": True,
+                "gpu_sample_count": 1,
+                "gpu_sample_error_count": 0,
+                "process_gpu_baseline_mib": 0,
+                "system_gpu_baseline_mib": 0,
+                "system_global_gpu_peak_mib": 0,
+                "ollama_global_gpu_peak_mib": 0,
+                "stt_non_ollama_gpu_peak_mib": 0,
+                "ollama_model_size_bytes": 0,
+                "ollama_model_size_vram_bytes": 0,
+                "ollama_model_observed": False,
+                "ollama_model_fully_resident": False,
+            },
+        ),
+    )
+
+    # Act
+    exit_code, attempt_record, _report, _selection_artifact = (
+        execute_acceptance_run_attempt(
+            configuration=configuration,
+            resolved_models=resolved_models,
+            suite_root=tmp_path / "suite",
+        )
+    )
+
+    # Assert
+    assert exit_code == 0
+    assert attempt_record["operation_status"] == "completed"
+    assert attempt_record["speech_runtime_identity"] is None
 
 
 def test_run_attempt_duration_excludes_resource_monitor_shutdown(

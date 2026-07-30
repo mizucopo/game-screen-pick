@@ -25,9 +25,12 @@ def test_release_interval_sum_must_match_expected_duration_within_tolerance(
     # Arrange
     profile = _profile(tmp_path)
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="Acceptance profile"):
+    # Act
+    with pytest.raises(ValueError) as error:
         replace(profile, release_expected_total_duration=Fraction(70))
+
+    # Assert
+    assert "Acceptance profile" in str(error.value)
 
 
 @pytest.mark.parametrize("artifact_suffix", (Path(), Path("artifacts")))
@@ -48,9 +51,12 @@ def test_artifact_root_cannot_equal_or_descend_from_input_root(
     profile = _profile(tmp_path)
     artifact_root = profile.input_root / artifact_suffix
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="Acceptance profile"):
+    # Act
+    with pytest.raises(ValueError) as error:
         replace(profile, artifact_root=artifact_root)
+
+    # Assert
+    assert "Acceptance profile" in str(error.value)
 
 
 def _profile(tmp_path: Path) -> AcceptanceProfile:

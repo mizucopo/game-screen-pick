@@ -1,6 +1,7 @@
 """durable cold/warm target suite runnerのtest。"""
 
 import hashlib
+import shutil
 from collections.abc import Callable
 from dataclasses import fields, replace
 from pathlib import Path
@@ -983,6 +984,183 @@ def test_interrupted_auto_cold_preserves_cache_after_fixed_three_release(
     assert state["fixed3_cache_released"] is True
 
 
+def test_full_suite_remeasures_fixed_three_after_context_change_before_auto_cold(
+    tmp_path: Path,
+) -> None:
+    """auto cold開始前のcontext変更ではfixed3だけが再測定されること。
+
+    Arrange:
+        - fixed3だけが完了し、Video Identity cacheが残るfull suiteが用意される
+        - auto cold開始前にtarget CPU identityが変更される
+    Act:
+        - full suiteが現在contextから再開される
+    Assert:
+        - fixed3だけが現在contextで再測定されてからcold/warmが実行されること
+        - durable Video Identity cacheが保持されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[tuple[str, str | int]] = []
+    target = {
+        "host_os": "windows_11_pro",
+        "environment": "wsl2",
+        "cpu": "initial",
+        "gpu": "rtx_5090",
+        "logical_cpu_count": 24,
+        "visible_ram_bytes": 32 * 1024**3,
+    }
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append((run_name, configuration.video_scan_workers))
+        fixed_three = configuration.video_scan_workers == 3
+        identity_marker = (
+            configuration.durable_video_identity_cache_folder / "identity-marker"
+        )
+        if fixed_three and calls.count(("fixed3", 3)) == 2:
+            assert identity_marker.read_text(encoding="utf-8") == "durable"
+        result = _successful_run_attempt(configuration, run_name)
+        record = result[1]
+        workers = 3 if fixed_three else 6
+        record["video_scan_parallelism"] = {
+            "mode": "fixed" if fixed_three else "auto",
+            "configured_workers": 3 if fixed_three else "auto",
+            "initial_workers": 3,
+            "peak_workers": workers,
+            "scan_wall_seconds": 120.0 if fixed_three else 80.0,
+        }
+        record["stage_artifact_content_digest"] = "9" * 64
+        if fixed_three:
+            identity_marker.parent.mkdir(parents=True, exist_ok=True)
+            identity_marker.write_text("durable", encoding="utf-8")
+        return result
+
+    runner = _runner(execute, environment_probe=lambda: dict(target))
+    assert runner.run(profile_path=profile_path, suite="full") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "full"
+    state_path = suite_root / "acceptance-state.json"
+    state = read_json_object(state_path)
+    assert state is not None
+    state["phases"] = {}
+    state["worksheet_ready"] = False
+    state.pop("review_candidate_digest", None)
+    write_atomic_json(state_path, state)
+    (suite_root / "review-worksheet.json").unlink()
+    for phase in ("cold", "warm"):
+        shutil.rmtree(suite_root / "outputs" / phase)
+    calls.clear()
+    target["cpu"] = "changed"
+
+    # Act
+    result = runner.run(profile_path=profile_path, suite="full")
+
+    # Assert
+    assert result == 3
+    assert calls == [
+        ("fixed3", 3),
+        ("cold", "auto"),
+        ("warm", "auto"),
+    ]
+    resumed_state = read_json_object(state_path)
+    assert resumed_state is not None
+    comparison_runs = resumed_state["comparison_runs"]
+    assert isinstance(comparison_runs, dict)
+    fixed_three = comparison_runs["fixed3"]
+    assert isinstance(fixed_three, dict)
+    execution_context = fixed_three["execution_context"]
+    assert isinstance(execution_context, dict)
+    recorded_target = execution_context["target"]
+    assert isinstance(recorded_target, dict)
+    assert recorded_target["cpu"] == "changed"
+
+
+def test_full_suite_requires_reset_after_context_change_once_auto_cold_started(
+    tmp_path: Path,
+) -> None:
+    """auto cold開始後のcontext変更では比較証拠の混在が拒否されること。
+
+    Arrange:
+        - fixed3完了後にauto coldが中断されたfull suiteが用意される
+        - 再開前にtarget CPU identityが変更される
+    Act:
+        - full suiteの再開が試行される
+    Assert:
+        - 追加runを開始せずreset-suiteが必要として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[tuple[str, str | int]] = []
+    target = {
+        "host_os": "windows_11_pro",
+        "environment": "wsl2",
+        "cpu": "initial",
+        "gpu": "rtx_5090",
+        "logical_cpu_count": 24,
+        "visible_ram_bytes": 32 * 1024**3,
+    }
+    cold_interrupted = False
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        nonlocal cold_interrupted
+        calls.append((run_name, configuration.video_scan_workers))
+        fixed_three = configuration.video_scan_workers == 3
+        if run_name == "cold" and not fixed_three and not cold_interrupted:
+            cold_interrupted = True
+            interrupted = _interrupted_run_attempt(run_name)
+            interrupted["video_scan_parallelism"] = {
+                "mode": "auto",
+                "configured_workers": "auto",
+                "decode_backend": "nvdec",
+                "auto_max_workers": 6,
+                "initial_workers": 3,
+                "final_workers": 4,
+                "peak_workers": 4,
+                "completed_scans": 1,
+                "scan_wall_seconds": 20.0,
+                "changes": [],
+            }
+            return 130, interrupted, None, None
+        result = _successful_run_attempt(configuration, run_name)
+        record = result[1]
+        workers = 3 if fixed_three else 6
+        record["video_scan_parallelism"] = {
+            "mode": "fixed" if fixed_three else "auto",
+            "configured_workers": 3 if fixed_three else "auto",
+            "decode_backend": "nvdec",
+            "auto_max_workers": 6,
+            "initial_workers": 3,
+            "final_workers": workers,
+            "peak_workers": workers,
+            "completed_scans": 1,
+            "scan_wall_seconds": 120.0 if fixed_three else 80.0,
+            "changes": [],
+        }
+        record["stage_artifact_content_digest"] = "8" * 64
+        return result
+
+    runner = _runner(execute, environment_probe=lambda: dict(target))
+    interrupted = runner.run(profile_path=profile_path, suite="full")
+    target["cpu"] = "changed"
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        runner.run(profile_path=profile_path, suite="full")
+
+    # Assert
+    assert interrupted == 130
+    assert "--reset-suite" in str(error.value)
+    assert calls == [("fixed3", 3), ("cold", "auto")]
+
+
 def test_ollama_windows_binding_is_revalidated_after_model_resolution(
     tmp_path: Path,
 ) -> None:
@@ -1238,6 +1416,47 @@ def test_review_finalization_rejects_changed_completed_cold_report(
     # Act / Assert
     with pytest.raises(ValueError, match="canonical report artifact"):
         runner.run(profile_path=profile_path, suite="release")
+
+
+def test_review_finalization_rejects_changed_completed_cold_markdown(
+    tmp_path: Path,
+) -> None:
+    """worksheet生成後に変更されたMarkdownからreviewが確定されないこと。
+
+    Arrange:
+        - cold/warm完了後かつworksheet生成済みのresume stateが用意される
+        - cold report.mdがphase確定後に変更される
+    Act:
+        - human review待ちのsuiteが再開される
+    Assert:
+        - phase確定時のMarkdown artifact不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
+            configuration,
+            run_name,
+        )
+    )
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    markdown_path = (
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "release"
+        / "outputs"
+        / "cold"
+        / "report.md"
+    )
+    markdown_path.write_text("tampered report\n", encoding="utf-8")
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert "Markdown artifact" in str(error.value)
 
 
 def test_review_finalization_rejects_changed_selected_image(tmp_path: Path) -> None:
@@ -2310,6 +2529,10 @@ def _successful_run_attempt(
     write_atomic_json(report_path, report)
     with report_path.open("rb") as file:
         report_digest = hashlib.file_digest(file, "sha256").hexdigest()
+    markdown_path = configuration.output_folder / "report.md"
+    markdown_path.write_text("canonical report\n", encoding="utf-8")
+    with markdown_path.open("rb") as file:
+        markdown_digest = hashlib.file_digest(file, "sha256").hexdigest()
     selection_semantic_input = {
         "requested_count": 1,
         "annotated_candidate_ids": [candidate_id, "frm_" + "2" * 64],
@@ -2365,6 +2588,7 @@ def _successful_run_attempt(
         "resource_sampling_complete": True,
         "speech_runtime_identity": "speech_" + "7" * 64,
         "canonical_report_sha256": report_digest,
+        "canonical_markdown_sha256": markdown_digest,
         "normalized_result_digest": normalized_result_digest(report),
         "selection_stage_fingerprint": selection_fingerprint.value,
         "video_set": {

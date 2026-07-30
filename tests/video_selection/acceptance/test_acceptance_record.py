@@ -168,6 +168,36 @@ def test_passed_record_generates_normalized_json_and_markdown(tmp_path: Path) ->
     assert "Normalized digest" in markdown_path.read_text(encoding="utf-8")
 
 
+def test_unused_speech_runtime_is_explicit_and_consistent() -> None:
+    """cold/warmでSTT未実行の場合もacceptance recordが生成されること。
+
+    Arrange:
+        - Speech Runtime Identityが両phaseでnullのSTT未実行結果が用意される
+    Act:
+        - acceptance recordが構築される
+    Assert:
+        - STT未使用がnullで公開され、runtime consistency gateが合格すること
+    """
+    # Arrange
+    unused_runtime = {"speech_runtime_identity": None}
+
+    # Act
+    record = _build_record(
+        human_quality={"status": "pending_human_review", "gates": {}},
+        cold_overrides=unused_runtime,
+        warm_overrides=unused_runtime,
+    )
+
+    # Assert
+    assert record["runtime"] == {"speech_to_text": None}
+    consistency = record["consistency"]
+    assert isinstance(consistency, dict)
+    assert consistency["speech_runtime_identity_equal"] is True
+    gates = record["automatic_gates"]
+    assert isinstance(gates, dict)
+    assert gates["speech_runtime_identity_consistency"] is True
+
+
 def _build_record(
     *,
     human_quality: Mapping[str, object],

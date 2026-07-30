@@ -20,6 +20,7 @@ from ..services.canonical_report_semantic_digest import (
 )
 from ..services.completed_stage_writer import CompletedStageWriter
 from ..services.progress_stream_observer import ProgressStreamObserver
+from ..services.render_human_selection_report import render_human_selection_report
 from ..services.run_progress_tracker import RunProgressTracker
 from .acceptance_attempt_journal import AcceptanceAttemptJournal
 from .acceptance_run_attempt_observer import AcceptanceRunAttemptObserver
@@ -111,6 +112,7 @@ def execute_acceptance_run_attempt(
     if not isinstance(result, RunOutcome):
         raise AssertionError
     report_path = result.output_folder / "report.json"
+    markdown_path = result.output_folder / "report.md"
     report = _read_json_object(report_path)
     report_parallelism = video_scan_parallelism_diagnostics(report)
     if (
@@ -131,6 +133,7 @@ def execute_acceptance_run_attempt(
             "selected_count": result.selected_count,
             "requested_count": result.requested_count,
             "canonical_report_sha256": _file_digest(report_path),
+            "canonical_markdown_sha256": _file_digest(markdown_path),
             "normalized_result_digest": normalized_result_digest(report),
             "stage_artifact_content_digest": completed_stage_artifact_digest(
                 configuration.processing_cache_folder,
@@ -193,14 +196,45 @@ def load_completed_run_report(
         or normalized_result_digest(report) != expected_digest
     ):
         raise ValueError("Completed runのcanonical report digestが一致しません")
+    _validate_completed_markdown(report, output_folder, run_record)
     _validate_selected_output_artifacts(report, output_folder)
     return report
 
 
 def public_run_record(value: Mapping[str, object]) -> dict[str, object]:
     """suite stateのrunからrun-level Video Set重複値を除いて返す。"""
-    private_state_keys = {"canonical_report_sha256", "video_set"}
+    private_state_keys = {
+        "canonical_markdown_sha256",
+        "canonical_report_sha256",
+        "video_set",
+    }
     return {key: item for key, item in value.items() if key not in private_state_keys}
+
+
+def _validate_completed_markdown(
+    report: dict[str, object],
+    output_folder: Path,
+    run_record: Mapping[str, object],
+) -> None:
+    """完了時hashまたは決定的projectionから公開Markdownを再検証する。"""
+    markdown_path = output_folder / "report.md"
+    if markdown_path.is_symlink() or not markdown_path.is_file():
+        raise ValueError("Completed runのMarkdown artifactがありません")
+    expected_digest = run_record.get("canonical_markdown_sha256")
+    if expected_digest is not None:
+        if _file_digest(markdown_path) != _fingerprint(
+            expected_digest,
+            "canonical Markdown digest",
+        ):
+            raise ValueError("Completed runのMarkdown artifactが一致しません")
+        return
+    try:
+        actual = markdown_path.read_text(encoding="utf-8")
+        expected = render_human_selection_report(report)
+    except (OSError, KeyError, TypeError, ValueError):
+        raise ValueError("Completed runのMarkdown artifactを検証できません") from None
+    if actual != expected:
+        raise ValueError("Completed runのMarkdown artifactが一致しません")
 
 
 def _selection_artifact(
@@ -433,7 +467,7 @@ def _video_set_record(report: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _speech_runtime_identity(report: Mapping[str, object]) -> str:
+def _speech_runtime_identity(report: Mapping[str, object]) -> str | None:
     provenance = report.get("provenance")
     if not isinstance(provenance, dict):
         raise ValueError("Canonical reportのprovenanceが不正です")
@@ -441,6 +475,8 @@ def _speech_runtime_identity(report: Mapping[str, object]) -> str:
     if not isinstance(runtime, dict):
         raise ValueError("Canonical reportのruntime provenanceが不正です")
     identity = runtime.get("speech_runtime_identity")
+    if identity is None and "speech_runtime_identity" not in runtime:
+        return None
     if not isinstance(identity, str) or not identity:
-        raise ValueError("Canonical reportにSpeech Runtime Identityがありません")
+        raise ValueError("Canonical reportのSpeech Runtime Identityが不正です")
     return identity

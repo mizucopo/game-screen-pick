@@ -36,6 +36,7 @@ def test_fixed_three_and_faster_auto_pass_all_comparison_gates() -> None:
 
     # Assert
     assert comparison["gates"] == {
+        "execution_context_equal": True,
         "fixed_three_workers": True,
         "auto_exceeded_three_workers": True,
         "stage_artifacts_equal": True,
@@ -45,6 +46,41 @@ def test_fixed_three_and_faster_auto_pass_all_comparison_gates() -> None:
     assert comparison["passed"] is True
     assert comparison["wall_time_improvement_seconds"] == 40.0
     assert comparison["wall_time_improvement_ratio"] == pytest.approx(1 / 3)
+
+
+def test_different_execution_contexts_fail_the_comparison() -> None:
+    """異なるtarget execution contextのwall timeが比較されないこと。
+
+    Arrange:
+        - CPU identityだけが異なるfixed3とauto runが用意される
+    Act:
+        - Video Scan parallelism比較が構築される
+    Assert:
+        - execution context gateと比較全体が不合格になること
+    """
+    # Arrange
+    fixed = _run_record(
+        workers=3,
+        mode="fixed",
+        wall_seconds=120.0,
+        artifact_digest="a" * 64,
+    )
+    automatic = _run_record(
+        workers=6,
+        mode="auto",
+        wall_seconds=80.0,
+        artifact_digest="a" * 64,
+    )
+    automatic["execution_context"] = _execution_context(cpu="changed")
+
+    # Act
+    comparison = build_video_scan_parallelism_comparison(fixed, automatic)
+
+    # Assert
+    gates = comparison["gates"]
+    assert isinstance(gates, dict)
+    assert gates["execution_context_equal"] is False
+    assert comparison["passed"] is False
 
 
 @pytest.mark.parametrize(
@@ -181,6 +217,7 @@ def _run_record(
 ) -> dict[str, object]:
     """比較test用のprivacy-safe Acceptance Run recordを返す。"""
     return {
+        "execution_context": _execution_context(),
         "stage_artifact_content_digest": artifact_digest,
         "resource_sampling_complete": True,
         "persistent_cache_bytes": 1024,
@@ -194,4 +231,24 @@ def _run_record(
             "peak_workers": workers,
             "scan_wall_seconds": wall_seconds,
         },
+    }
+
+
+def _execution_context(*, cpu: str = "stable") -> dict[str, object]:
+    """比較test用のprivacy-safe execution contextを返す。"""
+    return {
+        "identity": {
+            "effective_configuration_digest": "a" * 64,
+            "ollama_endpoint_identity": "b" * 64,
+            "model_identity_digest": "c" * 64,
+            "commit": "d" * 40,
+        },
+        "source_revision": {"commit": "d" * 40, "dirty": False},
+        "target": {
+            "cpu": cpu,
+            "logical_cpu_count": 24,
+            "visible_ram_bytes": 64 * 1024**3,
+        },
+        "configuration": {},
+        "models": {},
     }

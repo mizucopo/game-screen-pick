@@ -96,6 +96,10 @@ _Avoid_: Acceptance Comparison Run, Acceptance Run Attempt, Processing Stage, on
 full target acceptanceで固定3 workerとauto coldを比較するため、fresh processing cache上で固定3 workerを使う独立run。coldと同じpipelineを実行するがAcceptance Phaseではなく、完了後にcacheを削除してauto cold Acceptance Phaseを開始する。
 _Avoid_: Acceptance Phase, benchmark fixture, warm run, production default
 
+**Video Scan Comparison Context**:
+固定3 Comparison Runとauto coldのwall timeを同一条件の証拠として比較するために共有する、source revision・実効設定/model identity・target runtimeを正規化したprivacy-safe identity。bootごとのvisible RAM差は含めず、両runの全attemptで一致するものだけを同一比較として扱う。
+_Avoid_: Acceptance Run execution context, raw host snapshot, Stage artifact digest
+
 **Acceptance Run Attempt**:
 一つのAcceptance PhaseまたはAcceptance Comparison Runについて、開始から正常終了、中断、またはoperation failureまで連続して計測された実行区間。Completed Stageを再利用してrunを再開しても、それ以前のattemptを性能証拠から除外しない。process強制終了時もactive markerとAcceptance Attempt Journalから`process_abandoned`として閉じる。
 _Avoid_: Acceptance Run, Acceptance Phase, Acceptance Comparison Run, retry inside model inference, Processing Stage

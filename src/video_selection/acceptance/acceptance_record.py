@@ -18,8 +18,8 @@ from .acceptance_resource_budget import (
 )
 from .atomic_json import write_atomic_json
 
-_RECORD_SCHEMA = "game-screen-pick/target-acceptance@1.1.0"
-_BASELINE_SCHEMA = "game-screen-pick/target-acceptance-baseline@1.1.0"
+_RECORD_SCHEMA = "game-screen-pick/target-acceptance@1.2.0"
+_BASELINE_SCHEMA = "game-screen-pick/target-acceptance-baseline@1.2.0"
 _DENIED_KEY_PARTS = (
     "absolute_path",
     "credential",
@@ -76,8 +76,8 @@ def build_acceptance_record(
     consistency = cold.get("normalized_result_digest") == warm.get(
         "normalized_result_digest"
     )
-    cold_speech_runtime = _string(cold, "speech_runtime_identity")
-    warm_speech_runtime = _string(warm, "speech_runtime_identity")
+    cold_speech_runtime = _optional_string(cold, "speech_runtime_identity")
+    warm_speech_runtime = _optional_string(warm, "speech_runtime_identity")
     speech_runtime_consistency = cold_speech_runtime == warm_speech_runtime
     automatic_gates = {
         "cold_duration": _number(cold, "duration_seconds") <= budgets["cold_seconds"],
@@ -126,6 +126,7 @@ def build_acceptance_record(
             {
                 f"video_scan_{name}": _comparison_gate(comparison_gates, name)
                 for name in (
+                    "execution_context_equal",
                     "fixed_three_workers",
                     "auto_exceeded_three_workers",
                     "stage_artifacts_equal",
@@ -314,6 +315,17 @@ def _string(value: Mapping[str, object], key: str) -> str:
     result = value.get(key)
     if not isinstance(result, str) or not result:
         raise ValueError(f"Acceptance phase metric {key}がstringではありません")
+    return result
+
+
+def _optional_string(value: Mapping[str, object], key: str) -> str | None:
+    result = value.get(key)
+    if result is None:
+        return None
+    if not isinstance(result, str) or not result:
+        raise ValueError(
+            f"Acceptance phase metric {key}がstringまたはnullではありません"
+        )
     return result
 
 

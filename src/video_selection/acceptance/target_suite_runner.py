@@ -59,6 +59,7 @@ from .target_environment import (
 )
 from .video_scan_parallelism_comparison import (
     build_video_scan_parallelism_comparison,
+    video_scan_run_matches_comparison_context,
 )
 
 EnvironmentProbe = Callable[[], dict[str, object]]
@@ -345,6 +346,14 @@ class TargetSuiteRunner:
             target=target,
             configuration=configuration_summary,
             models=resolved_models.provenance(),
+        )
+        _reconcile_full_comparison_context(
+            suite=suite,
+            state=state,
+            execution_context=execution_context,
+            suite_root=suite_root,
+            cache_folder=cold_configuration.processing_cache_folder,
+            state_path=state_path,
         )
         cold_report: dict[str, object] | None = None
         cold_selection: dict[str, object] | None = None
@@ -800,6 +809,107 @@ def _release_fixed_three_cache(
     _remove_directory_strict(cache_folder, "Fixed3 comparison cache")
     state["fixed3_cache_released"] = True
     write_atomic_json(state_path, state)
+
+
+def _reconcile_full_comparison_context(
+    *,
+    suite: str,
+    state: dict[str, object],
+    execution_context: Mapping[str, object],
+    suite_root: Path,
+    cache_folder: Path,
+    state_path: Path,
+) -> None:
+    """fixed3とauto coldを同じVideo Scan Comparison Contextへ揃える。"""
+    if suite != "full" or _runs_completed(state):
+        return
+    comparison_runs = _mapping(state.get("comparison_runs"), "comparison_runs")
+    fixed_three = comparison_runs.get("fixed3")
+    if (
+        not isinstance(fixed_three, dict)
+        or fixed_three.get("operation_status") != "completed"
+    ):
+        return
+    fixed_three_matches = video_scan_run_matches_comparison_context(
+        fixed_three,
+        execution_context,
+    )
+    cold_started = _auto_cold_started(state)
+    if cold_started:
+        if not fixed_three_matches or not _auto_cold_matches_comparison_context(
+            state,
+            execution_context,
+        ):
+            raise ValueError(
+                "Auto cold開始後にVideo Scan Comparison Contextが変更されました。"
+                "--reset-suiteでfull suiteを再測定してください"
+            )
+        return
+    if fixed_three_matches:
+        return
+    _remove_directory_strict(
+        suite_root / "outputs" / "fixed3",
+        "旧contextのFixed3 comparison output",
+    )
+    _remove_directory_strict(
+        cache_folder,
+        "旧contextのFixed3 comparison cache",
+    )
+    comparison_runs.pop("fixed3", None)
+    state["comparison_runs"] = comparison_runs
+    comparison_attempts = state.get("comparison_run_attempts")
+    if isinstance(comparison_attempts, dict):
+        comparison_attempts.pop("fixed3", None)
+    state.pop("fixed3_cache_released", None)
+    remeasurement_count = state.get("fixed3_remeasurement_count", 0)
+    if not isinstance(remeasurement_count, int) or isinstance(
+        remeasurement_count,
+        bool,
+    ):
+        raise ValueError("Fixed3 comparison再測定回数が不正です")
+    state["fixed3_remeasurement_count"] = remeasurement_count + 1
+    write_atomic_json(state_path, state)
+
+
+def _auto_cold_started(state: Mapping[str, object]) -> bool:
+    phases = state.get("phases")
+    if isinstance(phases, dict) and isinstance(phases.get("cold"), dict):
+        return True
+    attempts = state.get("phase_attempts")
+    return (
+        isinstance(attempts, dict)
+        and isinstance(attempts.get("cold"), list)
+        and bool(attempts["cold"])
+    )
+
+
+def _auto_cold_matches_comparison_context(
+    state: Mapping[str, object],
+    execution_context: Mapping[str, object],
+) -> bool:
+    phases = state.get("phases")
+    if (
+        isinstance(phases, dict)
+        and isinstance(cold := phases.get("cold"), dict)
+        and not video_scan_run_matches_comparison_context(
+            cold,
+            execution_context,
+        )
+    ):
+        return False
+    attempts = state.get("phase_attempts")
+    if (
+        isinstance(attempts, dict)
+        and isinstance(cold_attempts := attempts.get("cold"), list)
+        and cold_attempts
+    ):
+        if any(not isinstance(attempt, dict) for attempt in cold_attempts):
+            return False
+        return video_scan_run_matches_comparison_context(
+            {"attempts": cold_attempts},
+            execution_context,
+        )
+    return True
 
 
 def _configuration_summary(

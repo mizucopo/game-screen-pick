@@ -155,7 +155,15 @@ materialize時間はrun予算に含めない。
 Comparison Runとphaseの完了はsuite別の`acceptance-state.json`へatomicに確定する。中断後に
 同じcommandを実行すると、profile、suite、materialize済みsourceのsuite fingerprintを
 検証し、未完了runだけを続行する。completed coldを再実行してwarmへ戻したり、completed
-Comparison Runやcold/warmを再実行したりしない。
+Comparison Runやcold/warmを再実行したりしない。ただしfixed3完了後かつauto cold開始前に
+Video Scan Comparison Contextが変わった場合だけ、旧fixed3 outputとprocessing cacheを
+破棄してfixed3を現在contextで再測定する。共有Video Identity cacheは保持する。
+
+Video Scan Comparison Contextはsource revision、実効configuration/model/endpoint identity、
+target runtimeから作り、boot単位で微小に変わるvisible RAMは除外する。fixed3とauto coldの
+全attemptが同じcontextの場合だけwall time改善gateを評価する。auto coldが一度でも開始された
+後にcontextが変わった場合は、新旧環境の性能証拠を混在させず、追加runを始める前に
+`--reset-suite`を要求する。
 
 未完了suiteでは、現在のcommit、実効設定、Ollama endpoint、Resolved Model Identity、
 runtime/target probeを新しいexecution contextとして記録する。以前のcontextとの差は
@@ -174,9 +182,10 @@ Ollama deployment、server version、Resolved Model Identityをprobeまたは再
 worksheet未生成から再開するときはcold reportをphase digestと照合し、selection artifactを
 Completed Stage manifest、artifact hash、semantic fingerprintで再検証する。
 worksheet生成済みのhuman review待ちから再開するときも、cold/warm双方のcanonical reportを
-phase確定時のfile hashと照合し、selected画像のpath、byte数、SHA-256を再検証する。phase確定後に
-reportまたは画像が削除・置換されていればreviewを集計しない。worksheet生成とstate確定の間で
-中断した場合は、review記入欄を除くcandidate bindingが同じ既存worksheetだけを再利用する。
+phase確定時のfile hashと照合し、`report.md`の決定的projection、selected画像のpath、byte数、
+SHA-256を再検証する。phase確定後にJSON、Markdownまたは画像が削除・置換されていればreviewを
+集計しない。worksheet生成とstate確定の間で中断した場合は、review記入欄を除くcandidate
+bindingが同じ既存worksheetだけを再利用する。
 
 user interruptや計測済みoperation failureの未完了runはCompleted Stage cacheを保持する。
 fullの固定3比較が中断された場合も固定3 cacheから再開し、固定3が完了した後だけそのcacheを
@@ -262,9 +271,12 @@ uv run task acceptance-target \
 
 `artifact_root`配下にはsuiteごとにrun output、durable state、private worksheet、
 `acceptance.json`を置く。recordにはcommit、target/runtime、Resolved Model Identity、
-実Faster Whisper adapter/backendのSpeech Runtime Identity、path非依存Video Set fingerprint、
+STT実行時だけ実adapter/backendのSpeech Runtime Identity、path非依存Video Set fingerprint、
 run/cache/storage/GPU aggregate、固定3対autoのprivacy-safeな比較、gate aggregateだけを含める。canonical reportの各Stageも
 実semantic inputと推論診断からtool/model/contract参照、設定、validation、token数を記録する。
+STTを呼び出さなかったphaseでは`runtime.speech_to_text`を`null`として明示し、cold/warmの
+両方が未使用ならSpeech Runtime consistency gateを合格とする。Acceptance Recordとbaselineの
+schemaはこのnullable契約を追加した`1.2.0`とする。
 performance比較用configurationには設定file digest、URLを含まないendpoint identity、
 privacy-safeな全実効performance設定を保存する。
 cold/warmの結果一致digestには、選定・棄却・near miss・Context Cue・警告を含むcanonical
