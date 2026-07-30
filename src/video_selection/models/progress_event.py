@@ -37,6 +37,7 @@ class ProgressEvent:
     severity: ProgressSeverity
     stage: ProcessingStage | None = None
     stage_fingerprint: str | None = None
+    work_unit_fingerprint: str | None = None
     stage_index: int | None = None
     stage_count: int | None = None
     video_order: int | None = None
@@ -82,6 +83,11 @@ class ProgressEvent:
             or _STAGE_FINGERPRINT.fullmatch(self.stage_fingerprint) is None
         ):
             msg = "Stage fingerprintはStage付きの完全SHA-256である必要があります"
+            raise ValueError(msg)
+        if self.work_unit_fingerprint is not None and (
+            _STAGE_FINGERPRINT.fullmatch(self.work_unit_fingerprint) is None
+        ):
+            msg = "Work Unit fingerprintは完全SHA-256である必要があります"
             raise ValueError(msg)
 
 

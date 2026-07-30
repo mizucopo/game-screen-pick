@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.stage_fingerprint import StageFingerprint
 from src.video_selection.services.build_stage_fingerprint import (
@@ -118,3 +120,74 @@ def test_missing_request_index_is_rebuilt_from_completed_selection(
         / f"{request_fingerprint.value}.json"
     )
     assert index_path.is_file()
+
+
+def test_index_permission_failure_does_not_trigger_recovery_or_overwrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """indexのaccess障害がcache missや再構築へ変換されないこと。
+
+    Arrange:
+        - 確定済みSelection Stageと対応indexが用意される
+        - indexの読込だけがPermissionErrorになる
+    Act:
+        - request fingerprintでcacheが検索される
+    Assert:
+        - access障害が返されindex bytesが保持されること
+    """
+    # Arrange
+    video_set_fingerprint = "d" * 64
+    request_fingerprint = StageFingerprint("e" * 64)
+    upstream = (StageFingerprint("f" * 64),)
+    semantic_input = {
+        "selection_request_fingerprint": request_fingerprint.value,
+        "requested_count": 1,
+    }
+    stage_fingerprint = build_stage_fingerprint(
+        ProcessingStage.SELECT_IMAGES,
+        upstream,
+        semantic_input,
+    )
+    completed = CompletedStageWriter(
+        tmp_path,
+        subject_namespace="video-sets",
+        subject_fingerprint=video_set_fingerprint,
+    ).write(
+        ProcessingStage.SELECT_IMAGES,
+        stage_fingerprint,
+        upstream,
+        semantic_input,
+        {"schema": "selection-test"},
+    )
+    cache = SelectionStageCache(
+        tmp_path,
+        video_set_fingerprint=video_set_fingerprint,
+    )
+    cache.record(request_fingerprint, completed)
+    index_path = (
+        tmp_path
+        / ".indexes"
+        / "video-sets"
+        / video_set_fingerprint
+        / ProcessingStage.SELECT_IMAGES.value
+        / f"{request_fingerprint.value}.json"
+    )
+    original_read_text = Path.read_text
+    original_bytes = index_path.read_bytes()
+
+    def deny_index_read(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if path == index_path:
+            raise PermissionError("injected index permission failure")
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", deny_index_read)
+
+    # Act / Assert
+    with pytest.raises(PermissionError, match="injected index permission failure"):
+        cache.read(request_fingerprint)
+    assert index_path.read_bytes() == original_bytes

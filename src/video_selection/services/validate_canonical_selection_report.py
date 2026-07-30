@@ -3,13 +3,14 @@
 import hashlib
 import json
 import math
+import stat
 from fractions import Fraction
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
 from jsonschema import Draft202012Validator
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from ..models.candidate_annotation import candidate_annotation_free_text_is_safe
 from ..models.canonical_publication_request import CanonicalPublicationRequest
@@ -25,6 +26,8 @@ def validate_canonical_selection_report(
     report: dict[str, object],
     staging_folder: Path,
     request: CanonicalPublicationRequest,
+    *,
+    allow_model_update_diagnostic_mismatch: bool = False,
 ) -> None:
     """schema、画像、JSON、Markdown、privacyの公開前整合を検証する。"""
     try:
@@ -32,18 +35,74 @@ def validate_canonical_selection_report(
         _validate_schema(report_from_disk)
         _validate_schema(report)
         _validate_json_artifact(report, report_from_disk, staging_folder)
-        _validate_report_relationships(report, request)
+        _validate_intrinsic_report_relationships(report)
+        _validate_report_relationships(
+            report,
+            request,
+            allow_model_update_diagnostic_mismatch=(
+                allow_model_update_diagnostic_mismatch
+            ),
+        )
         _validate_images(report, staging_folder)
         _validate_markdown(report, staging_folder)
         _validate_privacy(report, staging_folder, request)
         _validate_staging_layout(report, staging_folder)
-    except (AssertionError, KeyError, OSError, TypeError, ValueError) as error:
+    except PermissionError:
+        raise
+    except (
+        AssertionError,
+        FileNotFoundError,
+        IsADirectoryError,
+        KeyError,
+        NotADirectoryError,
+        UnidentifiedImageError,
+        TypeError,
+        ValueError,
+    ) as error:
         if isinstance(error, ValueError) and str(error).startswith(
             "Canonical Selection Report"
         ):
             raise
         msg = f"Canonical Selection Reportの検証に失敗しました: {error}"
         raise ValueError(msg) from error
+    except OSError:
+        raise
+
+
+def load_validated_canonical_selection_report(
+    output_folder: Path,
+) -> dict[str, object]:
+    """公開済みfolderを自己完結したCanonical outputとして再検証する。"""
+    try:
+        report = _read_json_artifact(output_folder)
+        _validate_schema(report)
+        _validate_json_artifact(report, report, output_folder)
+        _validate_intrinsic_report_relationships(report)
+        _validate_images(report, output_folder)
+        _validate_markdown(report, output_folder)
+        _validate_published_strings_are_private_safe(report)
+        _validate_staging_layout(report, output_folder)
+        return report
+    except PermissionError:
+        raise
+    except (
+        AssertionError,
+        FileNotFoundError,
+        IsADirectoryError,
+        KeyError,
+        NotADirectoryError,
+        UnidentifiedImageError,
+        TypeError,
+        ValueError,
+    ) as error:
+        if isinstance(error, ValueError) and str(error).startswith(
+            "Canonical Selection Report"
+        ):
+            raise
+        msg = f"Canonical Selection Reportの検証に失敗しました: {error}"
+        raise ValueError(msg) from error
+    except OSError:
+        raise
 
 
 def _validate_schema(report: dict[str, object]) -> None:
@@ -98,7 +157,35 @@ def _reject_json_constant(value: str) -> object:
 def _validate_report_relationships(
     report: dict[str, object],
     request: CanonicalPublicationRequest,
+    *,
+    allow_model_update_diagnostic_mismatch: bool,
 ) -> None:
+    """reportと今回のPublication Requestとの関係を検証する。"""
+    run = _mapping(report["run"])
+    warnings = _mapping_list(run["warnings"])
+    selected = _mapping_list(report["selected"])
+    rejection_summary = _mapping(report["rejection_summary"])
+    warning_codes = [str(item["code"]) for item in warnings]
+    selection = request.selection_result
+    if (
+        ("selection_shortfall" in warning_codes) != selection.shortfall
+        or run["requested_image_count"] != selection.requested_count
+        or rejection_summary["by_reason"] != selection.rejection_counts
+        or [str(item["image_id"]) for item in selected]
+        != [item.candidate.identifier for item in selection.selected]
+    ):
+        raise ValueError("Canonical Selection Reportのselection countが一致しません")
+    _validate_warning_relationships(
+        warnings,
+        request,
+        allow_model_update_diagnostic_mismatch=(allow_model_update_diagnostic_mismatch),
+    )
+
+
+def _validate_intrinsic_report_relationships(
+    report: dict[str, object],
+) -> None:
+    """外部requestなしでCanonical report内部の参照と件数を検証する。"""
     run = _mapping(report["run"])
     warnings = _mapping_list(run["warnings"])
     selected = _mapping_list(report["selected"])
@@ -107,26 +194,21 @@ def _validate_report_relationships(
     rejection_summary = _mapping(report["rejection_summary"])
     warning_codes = [str(item["code"]) for item in warnings]
     expected_status = "completed_with_warnings" if warnings else "completed"
-    selection = request.selection_result
     if (
         run["status"] != expected_status
         or len(warning_codes) != len(set(warning_codes))
-        or ("selection_shortfall" in warning_codes) != selection.shortfall
-        or run["requested_image_count"] != selection.requested_count
         or len(selected) != run["selected_image_count"]
         or len(selected) != selection_summary["selected"]
         or _mapping(selection_summary["shortfall"])["requested"]
-        != selection.requested_count
+        != run["requested_image_count"]
         or _mapping(selection_summary["shortfall"])["selected"] != len(selected)
         or len(near_misses)
         > _mapping(report["near_miss_publication"])["json_limit_for_this_run"]
         or rejection_summary["total"] != selection_summary["not_selected"]
         or rejection_summary["total"]
         != sum(cast(dict[str, int], rejection_summary["by_reason"]).values())
-        or rejection_summary["by_reason"] != selection.rejection_counts
     ):
         raise ValueError("Canonical Selection Reportのselection countが一致しません")
-    _validate_warning_relationships(warnings, request)
     selected_ids = {str(item["image_id"]) for item in selected}
     if len(selected_ids) != len(selected):
         raise ValueError(
@@ -193,6 +275,8 @@ def _validate_report_relationships(
 def _validate_warning_relationships(
     warnings: list[dict[str, Any]],
     request: CanonicalPublicationRequest,
+    *,
+    allow_model_update_diagnostic_mismatch: bool,
 ) -> None:
     """warning codeとdomain resultの対応を検証する。"""
     by_code = {str(item["code"]): item for item in warnings}
@@ -205,6 +289,8 @@ def _validate_warning_relationships(
             "Canonical Selection ReportのSelection Shortfall warningが不正です"
         )
     unavailable = by_code.get("model_update_unavailable")
+    if allow_model_update_diagnostic_mismatch:
+        return
     expected_roles = [
         role.value for role in request.resolved_models.unavailable_roles()
     ]
@@ -322,7 +408,7 @@ def _validate_images(report: dict[str, object], staging_folder: Path) -> None:
                 "Canonical Selection ReportのSelected Image filenameが不正です"
             )
         image_path = staging_folder / expected_path
-        if image_path.is_symlink() or not image_path.is_file():
+        if not _is_regular_file(image_path):
             raise ValueError(
                 "Canonical Selection ReportのSelected Imageが見つかりません"
             )
@@ -383,6 +469,13 @@ def _validate_privacy(
         raise ValueError(
             "Canonical Selection Reportに非公開pathまたはContext Cueがあります"
         )
+    _validate_published_strings_are_private_safe(report)
+
+
+def _validate_published_strings_are_private_safe(
+    report: dict[str, object],
+) -> None:
+    """公開reportに絶対pathやendpointらしい文字列がないことを検証する。"""
     for value in _all_strings(report):
         if string_looks_private(value):
             raise ValueError(
@@ -450,3 +543,12 @@ def _mapping(value: object) -> dict[str, Any]:
 
 def _mapping_list(value: object) -> list[dict[str, Any]]:
     return cast(list[dict[str, Any]], value)
+
+
+def _is_regular_file(path: Path) -> bool:
+    """欠損だけをFalseとし、access failureをcorruptionへ変換しない。"""
+    try:
+        mode = path.lstat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return stat.S_ISREG(mode)

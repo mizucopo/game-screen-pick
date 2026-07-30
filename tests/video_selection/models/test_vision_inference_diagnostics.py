@@ -127,11 +127,35 @@ def test_attempt_count_above_aggregate_limit_is_rejected() -> None:
         )
 
 
+@pytest.mark.parametrize("duration_seconds", (float("nan"), float("inf")))
+def test_nonfinite_duration_is_rejected(duration_seconds: float) -> None:
+    """非有限のVision推論時間が拒否されること。
+
+    Arrange:
+        - NaNまたはInfinityのdurationが用意される
+    Act:
+        - Vision推論診断が構築される
+    Assert:
+        - 不正な診断として拒否されること
+    """
+    # Arrange
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Vision inference diagnostics"):
+        _diagnostics(
+            "ollama:sha256:" + "a" * 64,
+            "ollama:0.31.2",
+            duration_seconds=duration_seconds,
+        )
+
+
 def _diagnostics(
     model_identity: str,
     runtime_identity: str,
     *,
     attempt_count: int = 1,
+    duration_seconds: float = 0.1,
 ) -> VisionInferenceDiagnostics:
     return VisionInferenceDiagnostics(
         request_fingerprint="c" * 64,
@@ -147,7 +171,7 @@ def _diagnostics(
         validation_code=None,
         image_count=1,
         context_cue_count=0,
-        duration_seconds=0.1,
+        duration_seconds=duration_seconds,
         prompt_eval_count=10,
         eval_count=5,
         done_reason="stop",

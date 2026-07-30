@@ -1,11 +1,13 @@
 """MediaRuntimeのsemantic port。"""
 
 from collections.abc import Callable, Iterator
+from fractions import Fraction
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.embedded_subtitle import EmbeddedSubtitle
+from ..models.empty_video_scan_partition import EmptyVideoScanPartition
 from ..models.media_probe import MediaProbe
 from ..models.media_runtime_identity import MediaRuntimeIdentity
 from ..models.media_stream import MediaStream
@@ -55,6 +57,22 @@ class MediaRuntime(Protocol):
     ) -> NativeVideoScan:
         """一回のdecodeからheartbeat、scene、timeline端点を返す。"""
 
+    def scan_video_partition(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        artifact_folder: Path,
+        *,
+        media_origin: Fraction,
+        start_pts: int,
+        end_pts: int | None,
+        heartbeat_interval_seconds: float,
+        scene_change_threshold: float,
+        scene_min_interval_seconds: float,
+        decode_backend: str,
+    ) -> NativeVideoScan | EmptyVideoScanPartition:
+        """固定半開PTS区間または末尾区間を一回decodeする。"""
+
     def cancel_video_scans(self) -> None:
         """実行中のVideo Scan subprocessを終了させる。"""
 
@@ -92,6 +110,17 @@ class MediaRuntime(Protocol):
         frame_sample_count: int,
     ) -> Iterator[PcmAudioChunk]:
         """選択audioを連続PCM sample gridとして返す。"""
+
+    def extract_pcm_audio_chunk(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        media_origin: Fraction,
+        sample_rate: int,
+        sample_start: int,
+        maximum_sample_count: int,
+    ) -> PcmAudioChunk | None:
+        """canonical sample rangeだけをseek付きでPCMへ抽出する。"""
 
     def read_embedded_subtitles(
         self,

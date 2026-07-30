@@ -21,7 +21,7 @@ def test_recognized_legacy_cache_is_deleted_and_new_cache_is_preserved(
     """認識済みlegacyだけが削除され新cacheとunknown entryが保持されること。
 
     Arrange:
-        - legacy二種、新cache二種、unknown entryがcache rootに用意される
+        - legacy三種、新cache三種、unknown entryがcache rootに用意される
     Act:
         - Input Lock内でprocessing cacheが準備される
     Assert:
@@ -35,8 +35,12 @@ def test_recognized_legacy_cache_is_deleted_and_new_cache_is_preserved(
     (neutral_cache / "one.json").write_bytes(b"1234")
     legacy_scene = cache_folder / "ollama-scenes.json"
     legacy_scene.write_bytes(b"123456")
+    legacy_identities = cache_folder / "video-identities"
+    legacy_identities.mkdir()
+    (legacy_identities / "entry.json").write_bytes(b"12345")
     (cache_folder / "videos" / "fingerprint").mkdir(parents=True)
     (cache_folder / "video-sets" / "fingerprint").mkdir(parents=True)
+    (cache_folder / "work-units" / "fingerprint").mkdir(parents=True)
     (cache_folder / "unknown" / "keep").mkdir(parents=True)
 
     # Act
@@ -48,12 +52,14 @@ def test_recognized_legacy_cache_is_deleted_and_new_cache_is_preserved(
         )
 
     # Assert
-    assert diagnostic.removed_entry_count == 2
-    assert diagnostic.removed_bytes == 10
+    assert diagnostic.removed_entry_count == 3
+    assert diagnostic.removed_bytes == 15
     assert not neutral_cache.exists()
     assert not legacy_scene.exists()
+    assert not legacy_identities.exists()
     assert (cache_folder / "videos" / "fingerprint").is_dir()
     assert (cache_folder / "video-sets" / "fingerprint").is_dir()
+    assert (cache_folder / "work-units" / "fingerprint").is_dir()
     assert (cache_folder / "unknown" / "keep").is_dir()
 
 

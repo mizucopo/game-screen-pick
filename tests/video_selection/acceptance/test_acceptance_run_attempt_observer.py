@@ -103,3 +103,49 @@ def test_attempt_metrics_include_interrupted_active_stage_duration() -> None:
     # Assert
     assert observer.current_stage is None
     assert metrics["stage_durations_seconds"] == {"scan-video": 2.5}
+
+
+def test_stage_checkpoint_resolution_advances_from_miss_to_recomputed() -> None:
+    """Stage fingerprintのmiss開始が確定後にrecomputedへ更新されること。
+
+    Arrange:
+        - durable snapshot writerと一つのStage fingerprintが用意される
+    Act:
+        - 同じStageのmiss eventとrecompute eventが順に観測される
+    Assert:
+        - 最後のsnapshotがStageをrecomputedとして保持すること
+    """
+    # Arrange
+    snapshots: list[dict[str, str]] = []
+    observer = AcceptanceRunAttemptObserver(
+        snapshot_writer=lambda _metrics, resolutions: snapshots.append(resolutions)
+    )
+    fingerprint = "a" * 64
+
+    # Act
+    observer.observe(
+        ProgressEvent(
+            kind="cache",
+            severity="info",
+            stage=ProcessingStage.SCAN_VIDEO,
+            stage_fingerprint=fingerprint,
+            cache_miss_count=1,
+            reason_code="cache_miss",
+        )
+    )
+    observer.observe(
+        ProgressEvent(
+            kind="cache",
+            severity="info",
+            stage=ProcessingStage.SCAN_VIDEO,
+            stage_fingerprint=fingerprint,
+            recompute_count=1,
+            reason_code="stage_recomputed",
+        )
+    )
+
+    # Assert
+    assert snapshots == [
+        {fingerprint: "miss_started"},
+        {fingerprint: "recomputed"},
+    ]

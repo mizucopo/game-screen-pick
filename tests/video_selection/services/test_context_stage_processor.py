@@ -1,11 +1,14 @@
 """Context Collection Stageの統合style test。"""
 
+import hashlib
+import json
 import traceback
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
+from src.video_selection.models.checkpoint_operation import CheckpointOperation
 from src.video_selection.models.context_stage_error import ContextStageError
 from src.video_selection.models.context_stage_failure_reason import (
     ContextStageFailureReason,
@@ -30,6 +33,8 @@ from src.video_selection.models.video_duration import VideoDuration
 from src.video_selection.models.video_scan_metrics import VideoScanMetrics
 from src.video_selection.models.video_scan_result import VideoScanResult
 from src.video_selection.models.video_timeline import VideoTimeline
+from src.video_selection.services.build_context_cue_id import build_context_cue_id
+from src.video_selection.services.checkpoint_version import checkpoint_version
 from src.video_selection.services.context_stage_processor import ContextStageProcessor
 from src.video_selection.services.discover_video_set import discover_video_set
 from src.video_selection.services.run_progress_tracker import RunProgressTracker
@@ -38,6 +43,29 @@ from tests.video_selection.fakes.fake_video_stage_media_runtime import (
     FakeVideoStageMediaRuntime,
 )
 from tests.video_selection.fakes.recording_run_observer import RecordingRunObserver
+
+
+def _rewrite_hash_consistent_artifact(
+    checkpoint_folder: Path,
+    artifact: dict[str, object],
+) -> None:
+    """artifactとmanifest recordを同じ破損内容へ揃えて書き換える。"""
+    artifact_path = checkpoint_folder / "artifact.json"
+    manifest_path = checkpoint_folder / "manifest.json"
+    artifact_bytes = (
+        json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    artifact_path.write_bytes(artifact_bytes)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifact_record = next(
+        item for item in manifest["artifacts"] if item["path"] == "artifact.json"
+    )
+    artifact_record["size_bytes"] = len(artifact_bytes)
+    artifact_record["sha256"] = hashlib.sha256(artifact_bytes).hexdigest()
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_non_forced_text_subtitle_is_preferred_without_running_stt(
@@ -137,6 +165,125 @@ def test_non_forced_text_subtitle_is_preferred_without_running_stt(
         ("available", "context_extracted")
     ]
     assert speech_runtime.transcribe_calls == []
+
+
+def test_hash_consistent_wrong_context_parent_reuses_subtitle_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """別動画を指す親Contextだけが破棄されsubtitle checkpointから修復されること。
+
+    Arrange:
+        - subtitle Cueを持つ親Contextと子checkpointが正常に確定される
+        - 親Cueの動画fingerprintとIDがhash整合を保って別動画へ改変される
+    Act:
+        - 同じVideo SourceのContext Stageが再実行される
+    Assert:
+        - 親Contextだけが再構築されsubtitle抽出は再実行されないこと
+        - 修復後の意味的なContext結果が初回結果と一致すること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    source = video_set.sources[0]
+    probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            _stream(0, "video", "ffv1", is_default=True),
+            _stream(2, "subtitle", "subrip", language="jpn", is_default=True),
+        ),
+    )
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+        language="ja",
+    )
+    initial = ContextStageProcessor(
+        FakeVideoStageMediaRuntime(
+            media_probe=probe,
+            embedded_subtitles=(
+                EmbeddedSubtitle(
+                    stream_index=2,
+                    pts=125,
+                    duration_ts=20,
+                    time_base=Fraction(1, 10),
+                    text="千年の物語が始まる",
+                ),
+            ),
+        ),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        source=source,
+        probe=probe,
+        scan=_scan(),
+        configuration=configuration,
+        media_runtime_identity=MediaRuntimeIdentity(
+            "6.1.1-test",
+            "6.1.1-test",
+            "0" * 64,
+        ),
+    )
+    context_root = (
+        configuration.processing_cache_folder
+        / "videos"
+        / source.fingerprint
+        / "collect-context"
+    )
+    context_folder = next(
+        path
+        for path in context_root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    )
+    artifact = json.loads(
+        (context_folder / "artifact.json").read_text(encoding="utf-8")
+    )
+    cue = artifact["cues"][0]
+    wrong_fingerprint = "b" * 64
+    cue["video_fingerprint"] = wrong_fingerprint
+    cue["id"] = build_context_cue_id(
+        video_fingerprint=wrong_fingerprint,
+        source_kind=cue["source_kind"],
+        stream_index=cue["stream_index"],
+        start=Fraction(
+            cue["start"]["numerator"],
+            cue["start"]["denominator"],
+        ),
+        end=Fraction(
+            cue["end"]["numerator"],
+            cue["end"]["denominator"],
+        ),
+        text=cue["text"],
+    )
+    _rewrite_hash_consistent_artifact(context_folder, artifact)
+    retry_runtime = FakeVideoStageMediaRuntime(media_probe=probe)
+
+    # Act
+    repaired = ContextStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        source=source,
+        probe=probe,
+        scan=_scan(),
+        configuration=configuration,
+        media_runtime_identity=MediaRuntimeIdentity(
+            "6.1.1-test",
+            "6.1.1-test",
+            "0" * 64,
+        ),
+    )
+
+    # Assert
+    assert retry_runtime.subtitle_calls == []
+    assert repaired.cues == initial.cues
+    assert repaired.outcomes == initial.outcomes
+    assert repaired.rejected_speech_diagnostics == (initial.rejected_speech_diagnostics)
+    assert repaired.equivalence_groups == initial.equivalence_groups
 
 
 def test_stt_chunk_emits_external_work_start_event(tmp_path: Path) -> None:
@@ -275,6 +422,12 @@ def test_empty_non_forced_subtitle_is_no_context_without_stt_fallback(
         ("no_context", "no_subtitle_events")
     ]
     assert speech_runtime.transcribe_calls == []
+    assert result.completed_stage is not None
+    assert result.completed_stage.semantic_input["checkpoint_contracts"] == {
+        "embedded_subtitle_stream": checkpoint_version(
+            CheckpointOperation.EMBEDDED_SUBTITLE_STREAM
+        )
+    }
 
 
 def test_audio_stt_is_used_when_text_subtitle_is_absent(tmp_path: Path) -> None:
@@ -841,6 +994,143 @@ def test_partial_stt_failure_is_fatal_without_publishing_context(
     assert not tuple(context_root.rglob("manifest.json"))
 
 
+def test_completed_stt_chunk_survives_later_chunk_failure(
+    tmp_path: Path,
+) -> None:
+    """後続STT chunk失敗後も完了済みchunkが再利用されること。
+
+    Arrange:
+        - 2 chunkの2件目だけ初回に失敗するSpeech Runtimeが用意される
+    Act:
+        - 初回失敗後に同じContext Collectionが再実行される
+    Assert:
+        - retryでは2件目だけがSpeech Runtimeへ渡されること
+        - 中断なしと同じCue ID、本文、時刻が生成されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    source = video_set.sources[0]
+    audio_stream = _stream(
+        1,
+        "audio",
+        "pcm_s16le",
+        language="jpn",
+        is_default=True,
+        start_pts=100,
+    )
+    probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(_stream(0, "video", "ffv1", is_default=True), audio_stream),
+    )
+    chunks = tuple(
+        PcmAudioChunk(
+            stream_index=1,
+            sample_start=sample_start,
+            sample_count=16000,
+            sample_rate=16000,
+            channel_count=1,
+            sample_format="s16le",
+            pts=160000 + sample_start,
+            time_base=Fraction(1, 16000),
+            pcm_bytes=b"\x00\x00" * 16000,
+        )
+        for sample_start in (0, 16000)
+    )
+    first_recognition = SpeechRecognitionResult(
+        vad_speech_detected=True,
+        segments=(
+            SpeechSegment(
+                words=(SpeechWord("最初の台詞", 0, 8000, 0.9),),
+                average_log_probability=-0.2,
+            ),
+        ),
+    )
+    second_recognition = SpeechRecognitionResult(
+        vad_speech_detected=True,
+        segments=(
+            SpeechSegment(
+                words=(SpeechWord("次の台詞", 0, 8000, 0.9),),
+                average_log_probability=-0.2,
+            ),
+        ),
+    )
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "output",
+        language="ja",
+        speech_chunk_seconds=1.0,
+        speech_overlap_seconds=0.0,
+    )
+    runtime_identity = MediaRuntimeIdentity(
+        "6.1.1-test",
+        "6.1.1-test",
+        "0" * 64,
+    )
+    with pytest.raises(ContextStageError):
+        ContextStageProcessor(
+            FakeVideoStageMediaRuntime(
+                media_probe=probe,
+                pcm_audio_chunks=chunks,
+            ),
+            FakeSpeechRuntime(
+                (first_recognition,),
+                error_on_call=1,
+            ),
+            RecordingRunObserver(),
+        ).process(
+            video_set=video_set,
+            source=source,
+            probe=probe,
+            scan=_scan(),
+            configuration=configuration,
+            media_runtime_identity=runtime_identity,
+        )
+    retry_speech_runtime = FakeSpeechRuntime((second_recognition,))
+    retry_media_runtime = FakeVideoStageMediaRuntime(
+        media_probe=probe,
+        pcm_audio_chunks=chunks,
+    )
+
+    # Act
+    resumed = ContextStageProcessor(
+        retry_media_runtime,
+        retry_speech_runtime,
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        source=source,
+        probe=probe,
+        scan=_scan(),
+        configuration=configuration,
+        media_runtime_identity=runtime_identity,
+    )
+
+    # Assert
+    assert [
+        (chunk.sample_start, chunk.sample_count)
+        for chunk in retry_speech_runtime.transcribe_calls
+    ] == [(16000, 16000)]
+    assert retry_media_runtime.audio_chunk_calls == []
+    assert [(cue.identifier, cue.text, cue.start, cue.end) for cue in resumed.cues] == [
+        (
+            resumed.cues[0].identifier,
+            "最初の台詞",
+            Fraction(0),
+            Fraction(1, 2),
+        ),
+        (
+            resumed.cues[1].identifier,
+            "次の台詞",
+            Fraction(1),
+            Fraction(3, 2),
+        ),
+    ]
+    assert resumed.outcomes[-1].processed_chunk_count == 2
+
+
 def test_first_stt_chunk_failure_is_stt_analysis_failed(tmp_path: Path) -> None:
     """最初のSTT chunk失敗がpartial failureと区別されること。
 
@@ -1183,9 +1473,9 @@ def test_no_context_streams_are_normal_and_ignore_unused_speech_identity(
         scan=_scan(),
         configuration=configuration,
         media_runtime_identity=MediaRuntimeIdentity(
-            "6.1.1-test",
-            "6.1.1-test",
-            "0" * 64,
+            "8.0-test",
+            "8.0-test",
+            "9" * 64,
         ),
     )
 
@@ -1296,6 +1586,12 @@ def test_resolved_model_identity_change_invalidates_stt_context_cache(
         first_result.completed_stage.fingerprint
         != second_result.completed_stage.fingerprint
     )
+    assert second_result.completed_stage.semantic_input["checkpoint_contracts"] == {
+        "pcm_audio_chunk": checkpoint_version(CheckpointOperation.PCM_AUDIO_CHUNK),
+        "speech_recognition_chunk": checkpoint_version(
+            CheckpointOperation.SPEECH_RECOGNITION_CHUNK
+        ),
+    }
 
 
 def test_stt_cache_uses_resolved_identity_instead_of_configured_model_name(
@@ -2060,6 +2356,8 @@ def test_discontinuous_pcm_grid_is_reported_as_timestamp_drift(
                 video_input_folder=input_folder,
                 output_folder=tmp_path / "output",
                 language="ja",
+                speech_chunk_seconds=1.0,
+                speech_overlap_seconds=0.0,
             ),
             media_runtime_identity=MediaRuntimeIdentity(
                 "6.1.1-test",

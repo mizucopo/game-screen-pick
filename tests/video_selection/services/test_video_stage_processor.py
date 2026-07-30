@@ -1,12 +1,15 @@
 """Video Stage processorの統合style test。"""
 
+import hashlib
 import json
 import os
+import shutil
 import signal
 import threading
 import time
 from concurrent.futures import CancelledError
 from dataclasses import replace
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -14,12 +17,16 @@ import pytest
 from src.video_selection.acceptance.completed_stage_artifact_digest import (
     canonicalize_completed_stage_artifact_value,
 )
+from src.video_selection.models.checkpoint_operation import CheckpointOperation
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
+from src.video_selection.models.media_probe import MediaProbe
 from src.video_selection.models.media_runtime_identity import MediaRuntimeIdentity
+from src.video_selection.models.media_stream import MediaStream
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.video_scan_resource_sample import (
     VideoScanResourceSample,
 )
+from src.video_selection.services.checkpoint_version import checkpoint_version
 from src.video_selection.services.discover_video_set import discover_video_set
 from src.video_selection.services.run_progress_tracker import RunProgressTracker
 from src.video_selection.services.video_stage_processor import VideoStageProcessor
@@ -55,6 +62,29 @@ def _semantic_stage_artifacts(root: Path) -> dict[Path, bytes]:
             separators=(",", ":"),
         ).encode()
     return artifacts
+
+
+def _rewrite_hash_consistent_artifact(
+    checkpoint_folder: Path,
+    artifact: dict[str, object],
+) -> None:
+    """artifactとmanifest recordを同じ破損内容へ揃えて書き換える。"""
+    artifact_path = checkpoint_folder / "artifact.json"
+    manifest_path = checkpoint_folder / "manifest.json"
+    artifact_bytes = (
+        json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    artifact_path.write_bytes(artifact_bytes)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifact_record = next(
+        item for item in manifest["artifacts"] if item["path"] == "artifact.json"
+    )
+    artifact_record["size_bytes"] = len(artifact_bytes)
+    artifact_record["sha256"] = hashlib.sha256(artifact_bytes).hexdigest()
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_context_collection_is_the_third_source_local_video_stage(
@@ -95,6 +125,10 @@ def test_context_collection_is_the_third_source_local_video_stage(
         ("absent", "no_subtitle_stream"),
         ("absent", "no_audio_stream"),
     ]
+    assert result.completed_stages[1].semantic_input["refinement_group_contract"] == {
+        "version": checkpoint_version(CheckpointOperation.FRAME_REFINEMENT_GROUP)
+    }
+    assert result.completed_stages[2].semantic_input["checkpoint_contracts"] == {}
 
 
 def test_video_stage_progress_follows_video_order_with_monotonic_stage_index(
@@ -1013,6 +1047,526 @@ def test_completed_parallel_scans_survive_first_middle_last_video_failure(
     assert len(results) == 3
 
 
+def test_completed_scan_partition_survives_later_partition_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """後続scan partition失敗後も完了済みpartitionが再利用されること。
+
+    Arrange:
+        - 2秒動画を1秒partitionへ分割し、2件目だけ初回に失敗させる
+    Act:
+        - 初回失敗後に同じVideo SourceのVideo Stageが再実行される
+    Assert:
+        - retryでは未完了の末尾partitionだけがdecodeされること
+        - 再開結果と中断なし結果のtimeline、proxy、candidateが一致すること
+    """
+    # Arrange
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor._SCAN_PARTITION_SECONDS",
+        1.0,
+    )
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    configuration = _configuration(input_folder, tmp_path / "output")
+    scan_call_count = 0
+
+    def fail_second_partition(_path: Path) -> None:
+        nonlocal scan_call_count
+        scan_call_count += 1
+        if scan_call_count == 2:
+            raise OSError("injected second scan partition failure")
+
+    failing_runtime = FakeVideoStageMediaRuntime(on_scan_video=fail_second_partition)
+    with pytest.raises(
+        OSError,
+        match="injected second scan partition failure",
+    ):
+        VideoStageProcessor(
+            failing_runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(video_set, configuration)
+    retry_runtime = FakeVideoStageMediaRuntime()
+
+    # Act
+    resumed = VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+    uninterrupted_input = tmp_path / "uninterrupted-videos"
+    uninterrupted_input.mkdir()
+    (uninterrupted_input / "video.mp4").write_bytes(b"video-content")
+    uninterrupted = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(uninterrupted_input),
+        _configuration(uninterrupted_input, tmp_path / "uninterrupted-output"),
+    )[0]
+
+    # Assert
+    assert [
+        (start, end) for _path, start, end in failing_runtime.scan_partition_calls
+    ] == [(0, 10), (10, None)]
+    assert [
+        (start, end) for _path, start, end in retry_runtime.scan_partition_calls
+    ] == [(10, None)]
+    assert resumed.scan.timeline == uninterrupted.scan.timeline
+    assert tuple(
+        (heartbeat.source_pts, heartbeat.proxy_path.read_bytes())
+        for heartbeat in resumed.scan.heartbeats
+    ) == tuple(
+        (heartbeat.source_pts, heartbeat.proxy_path.read_bytes())
+        for heartbeat in uninterrupted.scan.heartbeats
+    )
+    assert resumed.scan.scene_signals == uninterrupted.scan.scene_signals
+    assert tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in resumed.extraction.candidates
+    ) == tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in uninterrupted.extraction.candidates
+    )
+    assert resumed.scan.metrics.decode_pass_count == 2
+
+
+def test_hash_consistent_wrong_scan_partition_recomputes_only_that_partition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """要求範囲と違うScan partitionだけが破棄され再decodeされること。
+
+    Arrange:
+        - 2 partitionと親Scan Stageが正常に確定される
+        - 後半partitionのoriginだけがhash整合を保って前半範囲へ改変される
+        - 親Scan Stageが失われ子partitionからの再集約が必要になる
+    Act:
+        - 同じVideo SourceのVideo Stageが再実行される
+    Assert:
+        - 健全な前半partitionが保持され後半partitionだけが再計算されること
+        - 修復結果のtimelineとcandidateが元の結果と一致すること
+    """
+    # Arrange
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor._SCAN_PARTITION_SECONDS",
+        1.0,
+    )
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    configuration = _configuration(input_folder, tmp_path / "output")
+    initial = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+    partition_root = (
+        configuration.processing_cache_folder
+        / "work-units"
+        / video_set.sources[0].fingerprint
+        / "video-scan-partition"
+    )
+    partition_folders = tuple(
+        path
+        for path in partition_root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    )
+    assert len(partition_folders) == 2
+    second_folder = next(
+        path
+        for path in partition_folders
+        if json.loads((path / "artifact.json").read_text(encoding="utf-8"))[
+            "origin_pts"
+        ]
+        == 10
+    )
+    second_artifact = json.loads(
+        (second_folder / "artifact.json").read_text(encoding="utf-8")
+    )
+    second_artifact["origin_pts"] = 0
+    _rewrite_hash_consistent_artifact(second_folder, second_artifact)
+    shutil.rmtree(
+        configuration.processing_cache_folder
+        / "videos"
+        / video_set.sources[0].fingerprint
+        / ProcessingStage.SCAN_VIDEO.value
+    )
+    retry_runtime = FakeVideoStageMediaRuntime()
+
+    # Act
+    repaired = VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+
+    # Assert
+    assert [
+        (start, end) for _path, start, end in retry_runtime.scan_partition_calls
+    ] == [(10, None)]
+    assert repaired.scan.timeline == initial.scan.timeline
+    assert tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in repaired.extraction.candidates
+    ) == tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in initial.extraction.candidates
+    )
+
+
+def test_hash_consistent_wrong_parent_scan_reuses_scan_partitions(
+    tmp_path: Path,
+) -> None:
+    """別streamを指す親Scanだけが破棄されpartitionから修復されること。
+
+    Arrange:
+        - 親Scanと子partitionが正常に確定される
+        - 親Scanのstream indexがhash整合を保って別streamへ改変される
+    Act:
+        - 同じVideo SourceのVideo Stageが再実行される
+    Assert:
+        - 親Scanだけが再構築されpartition decodeは再実行されないこと
+        - 修復後の意味的なStage成果物が初回結果と一致すること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    source = video_set.sources[0]
+    configuration = _configuration(input_folder, tmp_path / "output")
+    VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)
+    scan_root = (
+        configuration.processing_cache_folder
+        / "videos"
+        / source.fingerprint
+        / ProcessingStage.SCAN_VIDEO.value
+    )
+    scan_folder = next(
+        path
+        for path in scan_root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    )
+    expected_artifacts = _semantic_stage_artifacts(scan_folder)
+    artifact = json.loads((scan_folder / "artifact.json").read_text(encoding="utf-8"))
+    artifact["primary_stream"]["index"] = 99
+    _rewrite_hash_consistent_artifact(scan_folder, artifact)
+    retry_runtime = FakeVideoStageMediaRuntime()
+
+    # Act
+    VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)
+
+    # Assert
+    assert retry_runtime.scan_partition_calls == []
+    assert _semantic_stage_artifacts(scan_folder) == expected_artifacts
+
+
+def test_container_duration_only_schedules_fixed_scan_partitions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """stream duration欠落時もcontainer durationで固定partitionが作られること。
+
+    Arrange:
+        - stream durationがなく2秒のcontainer durationを持つ動画が用意される
+        - Video Scan partitionが1秒へ設定される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - container durationがstream tickへ変換され2件のpartitionが処理されること
+        - 最後のpartitionがEOFまで開かれること
+    """
+    # Arrange
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor._SCAN_PARTITION_SECONDS",
+        1.0,
+    )
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=None,
+                width=64,
+                height=48,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+        duration=Fraction(2),
+    )
+    runtime = FakeVideoStageMediaRuntime(media_probe=media_probe)
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert [(start, end) for _path, start, end in runtime.scan_partition_calls] == [
+        (0, 10),
+        (10, None),
+    ]
+    assert result.scan.metrics.decode_pass_count == 2
+
+
+def test_duration_hint_tail_does_not_require_an_empty_scan_partition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """最終frameを越えるduration hintで空の末尾partitionが要求されないこと。
+
+    Arrange:
+        - 実frameより0.1秒長い2.1秒のcontainer duration hintが用意される
+        - 1秒partitionと、3回目のdecodeを拒否するMedia Runtimeが用意される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - 完全区間1件と、その次のopen-ended区間だけが処理されること
+    """
+    # Arrange
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor._SCAN_PARTITION_SECONDS",
+        1.0,
+    )
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=None,
+                width=64,
+                height=48,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+        duration=Fraction(21, 10),
+    )
+    scan_attempt_count = 0
+
+    def reject_empty_tail(_path: Path) -> None:
+        nonlocal scan_attempt_count
+        scan_attempt_count += 1
+        if scan_attempt_count == 3:
+            raise AssertionError("空の末尾partitionをdecodeしてはいけません")
+
+    runtime = FakeVideoStageMediaRuntime(
+        media_probe=media_probe,
+        on_scan_video=reject_empty_tail,
+    )
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert [(start, end) for _path, start, end in runtime.scan_partition_calls] == [
+        (0, 10),
+        (10, None),
+    ]
+    assert result.scan.metrics.decode_pass_count == 2
+
+
+def test_overstated_container_duration_stops_after_confirmed_video_eof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """長いcontainer tailが映像EOF後の必須partitionを増やさないこと。
+
+    Arrange:
+        - 実frameが約1秒で終わり4秒のcontainer durationを持つ動画が用意される
+        - Video Scan partitionが1秒へ設定される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - 最初の空区間からEOFまでが確認され、後続境界が処理されないこと
+        - 映像frameを持つpartitionのtimelineが失われないこと
+    """
+    # Arrange
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor._SCAN_PARTITION_SECONDS",
+        1.0,
+    )
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=None,
+                width=64,
+                height=48,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+        duration=Fraction(4),
+    )
+    video_set = discover_video_set(input_folder)
+    configuration = _configuration(input_folder, tmp_path / "output")
+    runtime = FakeVideoStageMediaRuntime(media_probe=media_probe)
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+    shutil.rmtree(
+        configuration.processing_cache_folder
+        / "videos"
+        / video_set.sources[0].fingerprint
+        / ProcessingStage.SCAN_VIDEO.value
+    )
+    retry_runtime = FakeVideoStageMediaRuntime(media_probe=media_probe)
+    repaired = VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+
+    # Assert
+    assert [(start, end) for _path, start, end in runtime.scan_partition_calls] == [
+        (0, 10),
+        (10, 20),
+        (20, 30),
+        (20, None),
+    ]
+    assert result.scan.timeline.origin_pts == 0
+    assert result.scan.timeline.duration.seconds == 2
+    assert retry_runtime.scan_partition_calls == []
+    assert repaired.scan.timeline == result.scan.timeline
+
+
+def test_empty_partition_preserves_frames_after_a_long_timestamp_gap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """空partition後のframeがEOF確認scanで保持されること。
+
+    Arrange:
+        - 0秒と40秒にframeを持ち50秒のcontainer durationを持つ動画が用意される
+        - Video Scan partitionが10秒へ設定される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - 10秒からの空区間が検出され、同じ開始点からEOFまでscanされること
+        - 40秒の後半frameがscan結果に保持されること
+    """
+    # Arrange
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor._SCAN_PARTITION_SECONDS",
+        10.0,
+    )
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=None,
+                width=64,
+                height=48,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+        duration=Fraction(50),
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        media_probe=media_probe,
+        distant_moments=True,
+        scan_frame_pts=(0, 400),
+    )
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert [(start, end) for _path, start, end in runtime.scan_partition_calls] == [
+        (0, 100),
+        (100, 200),
+        (100, None),
+    ]
+    assert [frame.source_pts for frame in result.scan.heartbeats] == [0, 400]
+    assert result.scan.timeline.duration.seconds == 41
+
+
 def test_primary_scan_failure_is_not_masked_by_sibling_cancellation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1082,7 +1636,8 @@ def test_corrupt_candidate_proxy_recomputes_only_candidate_stage(
     Act:
         - 同じVideo Identityと設定でVideo Stageが再実行される
     Assert:
-        - scanは再利用されcandidate抽出だけが再実行されること
+        - scanと健全なRefinement Work Unitは再利用されること
+        - candidate抽出StageだけがWork Unitから再構築されること
         - 破損bytesが新しいMJPEG proxyへ置き換えられること
     """
     # Arrange
@@ -1110,10 +1665,68 @@ def test_corrupt_candidate_proxy_recomputes_only_candidate_stage(
 
     # Assert
     assert repair_runtime.scan_calls == []
-    assert [path.name for path in repair_runtime.range_calls] == ["video.mp4"]
+    assert repair_runtime.range_calls == []
     repaired_proxy_path = repaired_result.extraction.candidates[0].proxy_path
     assert repaired_proxy_path is not None
     assert repaired_proxy_path.read_bytes() != b"corrupt-proxy"
+
+
+def test_candidate_proxy_permission_failure_preserves_completed_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """candidate proxyのaccess障害でCompleted Stageが削除されないこと。
+
+    Arrange:
+        - scanとcandidate抽出がCompleted Stageとして確定済みである
+        - manifest整合確認後のproxy type検査だけがPermissionErrorになる
+    Act:
+        - 同じVideo Identityと設定でVideo Stageが再実行される
+    Assert:
+        - access障害が返されcandidate再抽出が開始されないこと
+        - 確定済みproxy bytesが変更されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    configuration = _configuration(input_folder, tmp_path / "output")
+    video_set = discover_video_set(input_folder)
+    initial_result = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+    proxy_path = initial_result.extraction.candidates[0].proxy_path
+    assert proxy_path is not None
+    original_bytes = proxy_path.read_bytes()
+    original_lstat = Path.lstat
+    proxy_lstat_count = 0
+
+    def deny_domain_type_check(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> os.stat_result:
+        nonlocal proxy_lstat_count
+        if path == proxy_path:
+            proxy_lstat_count += 1
+            if proxy_lstat_count == 2:
+                raise PermissionError("injected proxy permission failure")
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", deny_domain_type_check)
+    retry_runtime = FakeVideoStageMediaRuntime()
+
+    # Act / Assert
+    with pytest.raises(PermissionError, match="injected proxy permission failure"):
+        VideoStageProcessor(
+            retry_runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(video_set, configuration)
+    assert retry_runtime.range_calls == []
+    assert proxy_path.read_bytes() == original_bytes
 
 
 def test_metadata_change_is_checked_before_video_stage(
@@ -1192,6 +1805,222 @@ def test_refinement_is_streamed_between_distant_moment_groups(
     # Assert
     assert len(result.extraction.moments) == 2
     assert all(moment.frame_candidate_ids for moment in result.extraction.moments)
+
+
+def test_completed_refinement_group_survives_later_group_failure(
+    tmp_path: Path,
+) -> None:
+    """後続group失敗後も完了済みRefinement Window Groupが再利用されること。
+
+    Arrange:
+        - 離れた2 groupの2件目だけ初回に失敗するruntimeが用意される
+    Act:
+        - 初回失敗後に同じVideo Sourceのcandidate抽出が再実行される
+    Assert:
+        - retryでは未完了の2件目だけがdecodeされること
+        - 再開結果が中断なしの結果と同じcandidate IDと画像bytesになること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    configuration = _configuration(input_folder, tmp_path / "output")
+    video_set = discover_video_set(input_folder)
+    range_call_count = 0
+
+    def fail_second_group(_path: Path) -> None:
+        nonlocal range_call_count
+        range_call_count += 1
+        if range_call_count == 2:
+            raise OSError("injected second refinement group failure")
+
+    failing_runtime = FakeVideoStageMediaRuntime(
+        distant_moments=True,
+        on_scan_video_frame_ranges=fail_second_group,
+    )
+    with pytest.raises(
+        OSError,
+        match="injected second refinement group failure",
+    ):
+        VideoStageProcessor(
+            failing_runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(video_set, configuration)
+    retry_runtime = FakeVideoStageMediaRuntime(distant_moments=True)
+
+    # Act
+    resumed = VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+    uninterrupted_input = tmp_path / "uninterrupted-videos"
+    uninterrupted_input.mkdir()
+    (uninterrupted_input / "video.mp4").write_bytes(b"video-content")
+    uninterrupted_configuration = _configuration(
+        uninterrupted_input,
+        tmp_path / "uninterrupted-output",
+    )
+    uninterrupted = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(distant_moments=True),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(uninterrupted_input),
+        uninterrupted_configuration,
+    )[0]
+
+    # Assert
+    assert len(failing_runtime.range_pts_calls) == 2
+    assert retry_runtime.range_pts_calls == [failing_runtime.range_pts_calls[1]]
+    assert tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in resumed.extraction.candidates
+    ) == tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in uninterrupted.extraction.candidates
+    )
+
+
+def test_hash_consistent_wrong_refinement_group_recomputes_only_that_group(
+    tmp_path: Path,
+) -> None:
+    """要求Momentと違うRefinement Groupだけが再decodeされること。
+
+    Arrange:
+        - 離れた2 groupと親Extraction Stageが正常に確定される
+        - 先頭groupのMoment IDがhash整合を保って別IDへ改変される
+        - 親Extraction Stageが失われ子groupからの再集約が必要になる
+    Act:
+        - 同じVideo SourceのVideo Stageが再実行される
+    Assert:
+        - 改変groupだけが再計算され健全な兄弟groupが保持されること
+        - 修復後のCandidate IDと画像bytesが元の結果と一致すること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    configuration = _configuration(input_folder, tmp_path / "output")
+    initial_runtime = FakeVideoStageMediaRuntime(distant_moments=True)
+    initial = VideoStageProcessor(
+        initial_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+    group_root = (
+        configuration.processing_cache_folder
+        / "work-units"
+        / video_set.sources[0].fingerprint
+        / "frame-refinement-group"
+    )
+    group_folders = tuple(
+        path
+        for path in group_root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    )
+    assert len(group_folders) == 2
+    first_folder = min(
+        group_folders,
+        key=lambda path: json.loads(
+            (path / "artifact.json").read_text(encoding="utf-8")
+        )["moments"][0]["source_pts"],
+    )
+    first_manifest = json.loads(
+        (first_folder / "manifest.json").read_text(encoding="utf-8")
+    )
+    affected_range = tuple(first_manifest["semantic_input"]["pts_range"])
+    first_artifact = json.loads(
+        (first_folder / "artifact.json").read_text(encoding="utf-8")
+    )
+    first_artifact["moments"][0]["id"] = "mom_" + "f" * 64
+    _rewrite_hash_consistent_artifact(first_folder, first_artifact)
+    shutil.rmtree(
+        configuration.processing_cache_folder
+        / "videos"
+        / video_set.sources[0].fingerprint
+        / ProcessingStage.EXTRACT_FRAME_CANDIDATES.value
+    )
+    retry_runtime = FakeVideoStageMediaRuntime(distant_moments=True)
+
+    # Act
+    repaired = VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+
+    # Assert
+    assert retry_runtime.scan_calls == []
+    assert retry_runtime.range_pts_calls == [(affected_range,)]
+    assert tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in repaired.extraction.candidates
+    ) == tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in initial.extraction.candidates
+    )
+
+
+def test_hash_consistent_wrong_parent_extraction_reuses_refinement_groups(
+    tmp_path: Path,
+) -> None:
+    """別動画を指す親Extractionだけが破棄され子groupから修復されること。
+
+    Arrange:
+        - 親Extractionと子refinement groupが正常に確定される
+        - 親candidateの動画fingerprintがhash整合を保って改変される
+    Act:
+        - 同じVideo SourceのVideo Stageが再実行される
+    Assert:
+        - 親Extractionだけが再構築されscanとrefinementは再実行されないこと
+        - 修復後の意味的なStage成果物が初回結果と一致すること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    source = video_set.sources[0]
+    configuration = _configuration(input_folder, tmp_path / "output")
+    VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)
+    extraction_root = (
+        configuration.processing_cache_folder
+        / "videos"
+        / source.fingerprint
+        / ProcessingStage.EXTRACT_FRAME_CANDIDATES.value
+    )
+    extraction_folder = next(
+        path
+        for path in extraction_root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    )
+    expected_artifacts = _semantic_stage_artifacts(extraction_folder)
+    artifact = json.loads(
+        (extraction_folder / "artifact.json").read_text(encoding="utf-8")
+    )
+    assert artifact["candidates"]
+    artifact["candidates"][0]["video_fingerprint"] = "b" * 64
+    _rewrite_hash_consistent_artifact(extraction_folder, artifact)
+    retry_runtime = FakeVideoStageMediaRuntime()
+
+    # Act
+    VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)
+
+    # Assert
+    assert retry_runtime.scan_partition_calls == []
+    assert retry_runtime.range_calls == []
+    assert _semantic_stage_artifacts(extraction_folder) == expected_artifacts
 
 
 def test_runtime_build_identity_change_recomputes_scan_stage(tmp_path: Path) -> None:

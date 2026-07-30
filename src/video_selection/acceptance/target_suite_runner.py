@@ -9,6 +9,7 @@ from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
+from uuid import uuid4
 
 from ..configuration.resolve_effective_configuration import (
     resolve_effective_configuration,
@@ -17,6 +18,10 @@ from ..model_runtime.model_lifecycle_runtime import ModelLifecycleRuntime
 from ..models.effective_configuration import EffectiveConfiguration
 from ..models.resolved_models import ResolvedModels
 from ..services.adaptive_video_scan_controller import AdaptiveVideoScanController
+from ..services.validate_canonical_selection_report import (
+    load_validated_canonical_selection_report,
+)
+from .acceptance_attempt_journal import AcceptanceAttemptJournal
 from .acceptance_execution_step import AcceptanceExecutionStep
 from .acceptance_profile import AcceptanceProfile
 from .acceptance_record import (
@@ -46,6 +51,7 @@ from .human_review import (
 )
 from .load_acceptance_profile import load_acceptance_profile
 from .release_suite_materializer import ReleaseSuiteMaterializer
+from .source_snapshot_fingerprint import acceptance_source_snapshot_fingerprint
 from .target_environment import (
     probe_source_revision,
     probe_target_environment,
@@ -70,7 +76,6 @@ SuiteMaterializer = Callable[
 StoragePreflight = Callable[[AcceptanceProfile, Path], dict[str, object]]
 
 _STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.3.0"
-_VISIBLE_RAM_IDENTITY_TOLERANCE_BYTES = 1024**2
 
 
 class TargetSuiteRunner:
@@ -119,37 +124,84 @@ class TargetSuiteRunner:
         if reset_suite:
             _remove_directory_strict(suite_root, "Acceptance suite")
         state_path = suite_root / "acceptance-state.json"
+        attempt_journal = AcceptanceAttemptJournal(
+            suite_root / "work" / "active-attempt.json"
+        )
         state = read_json_object(state_path)
+        if state is None:
+            attempt_journal.clear()
         configuration_digest = _content_digest(profile.configuration_path)
-        commit, dirty = self._revision_probe(Path.cwd())
-        if dirty:
-            raise ValueError("Target acceptanceはclean Git revisionで実行してください")
-        if state is not None and (
-            state.get("active_phase") is not None
-            or state.get("active_comparison_run") is not None
+        identity_cache_folder = suite_root.parent / "video-identities"
+        if (
+            state is not None
+            and _runs_completed(state)
+            and state.get("worksheet_ready") is True
+            and _is_sha256(state.get("materialization_source_snapshot_fingerprint"))
         ):
-            raise ValueError("前回runの計測が未確定です。--reset-suiteが必要です")
-
-        target = self._environment_probe()
+            _validate_completed_state_identity(
+                state,
+                suite,
+                profile,
+                acceptance_source_snapshot_fingerprint(profile, suite),
+            )
+            input_folder = suite_root / "work" / "input"
+            cold_configuration = _configuration(
+                profile,
+                input_folder,
+                suite_root / "outputs" / "cold",
+                identity_cache_folder,
+            )
+            warm_configuration = _configuration(
+                profile,
+                input_folder,
+                suite_root / "outputs" / "warm",
+                identity_cache_folder,
+            )
+            execution_steps = _execution_steps(
+                suite,
+                suite_root,
+                cold_configuration,
+                warm_configuration,
+            )
+            if any(
+                state.get(step.active_state_key) is not None for step in execution_steps
+            ):
+                raise ValueError("完了済みAcceptance stateにactive runがあります")
+            attempt_journal.clear()
+            for step in execution_steps:
+                completed_runs = _mapping(
+                    state.get(step.records_state_key),
+                    step.records_state_key,
+                )
+                load_completed_run_report(
+                    configuration=step.configuration,
+                    run_record=_mapping(
+                        completed_runs.get(step.name),
+                        f"{step.name} run",
+                    ),
+                )
+            return self._finalize(
+                profile,
+                suite_root,
+                state,
+                human_review_path=human_review_path,
+            )
         input_folder, suite_descriptor = self._materialize(
             profile,
             suite,
             suite_root,
         )
-        storage_preflight = (
-            self._storage_preflight(profile, input_folder)
-            if state is None
-            else _mapping(state.get("storage_preflight"), "storage_preflight")
-        )
         cold_configuration = _configuration(
             profile,
             input_folder,
             suite_root / "outputs" / "cold",
+            identity_cache_folder,
         )
         warm_configuration = _configuration(
             profile,
             input_folder,
             suite_root / "outputs" / "warm",
+            identity_cache_folder,
         )
         configuration_summary = _configuration_summary(
             cold_configuration,
@@ -158,25 +210,82 @@ class TargetSuiteRunner:
         effective_configuration_digest = _effective_configuration_digest(
             configuration_summary
         )
-        _validate_full_scan_capacity(
-            suite,
-            cold_configuration,
-            target,
-            suite_descriptor,
-        )
         execution_steps = _execution_steps(
             suite,
             suite_root,
             cold_configuration,
             warm_configuration,
         )
-        if state is not None and (
-            state.get("ollama_endpoint_identity")
-            != _ollama_endpoint_identity(cold_configuration.ollama_host)
-            or state.get("effective_configuration_digest")
-            != effective_configuration_digest
-        ):
-            raise ValueError("Acceptance stateが現在のsuite identityと一致しません")
+        descriptor_fingerprint = suite_descriptor.get(
+            "suite_fingerprint",
+            suite_descriptor.get("source_snapshot_fingerprint"),
+        )
+        materialization_source_snapshot = suite_descriptor.get(
+            "source_snapshot_fingerprint"
+        )
+        if not isinstance(descriptor_fingerprint, str):
+            raise ValueError("Suite materialization fingerprintがありません")
+        if not _is_sha256(materialization_source_snapshot):
+            raise ValueError("Suite source snapshot fingerprintがありません")
+        if state is not None:
+            if "materialization_source_snapshot_fingerprint" not in state:
+                state["materialization_source_snapshot_fingerprint"] = (
+                    materialization_source_snapshot
+                )
+                write_atomic_json(state_path, state)
+            _validate_state_identity(
+                state,
+                {
+                    "suite": suite,
+                    "profile_digest": profile.profile_digest,
+                    "suite_fingerprint": descriptor_fingerprint,
+                    "materialization_source_snapshot_fingerprint": (
+                        materialization_source_snapshot
+                    ),
+                },
+            )
+            _recover_abandoned_attempt(
+                state,
+                execution_steps,
+                state_path,
+                attempt_journal,
+            )
+            attempt_journal.clear()
+            if _runs_completed(state) and state.get("worksheet_ready") is True:
+                for step in execution_steps:
+                    completed_runs = _mapping(
+                        state.get(step.records_state_key),
+                        step.records_state_key,
+                    )
+                    load_completed_run_report(
+                        configuration=step.configuration,
+                        run_record=_mapping(
+                            completed_runs.get(step.name),
+                            f"{step.name} run",
+                        ),
+                    )
+                return self._finalize(
+                    profile,
+                    suite_root,
+                    state,
+                    human_review_path=human_review_path,
+                )
+
+        commit, dirty = self._revision_probe(Path.cwd())
+        if dirty:
+            raise ValueError("Target acceptanceはclean Git revisionで実行してください")
+        target = self._environment_probe()
+        storage_preflight = (
+            self._storage_preflight(profile, input_folder)
+            if state is None
+            else _mapping(state.get("storage_preflight"), "storage_preflight")
+        )
+        _validate_full_scan_capacity(
+            suite,
+            cold_configuration,
+            target,
+            suite_descriptor,
+        )
         ollama_deployment = self._ollama_deployment_probe(
             cold_configuration.ollama_host
         )
@@ -218,31 +327,25 @@ class TargetSuiteRunner:
             write_atomic_json(state_path, state)
         else:
             _validate_state_identity(state, identity)
-            if not _target_identity_matches(state.get("target"), target):
-                raise ValueError(
-                    "Acceptance stateが現在のtarget identityと一致しません"
+            if not _runs_completed(state):
+                _refresh_execution_context(
+                    state,
+                    identity=identity,
+                    source_revision={"commit": commit, "dirty": False},
+                    target=target,
+                    configuration=configuration_summary,
+                    models=resolved_models.provenance(),
+                    storage_preflight=storage_preflight,
                 )
+                write_atomic_json(state_path, state)
 
-        if _runs_completed(state) and state.get("worksheet_ready") is True:
-            for step in execution_steps:
-                completed_runs = _mapping(
-                    state.get(step.records_state_key),
-                    step.records_state_key,
-                )
-                load_completed_run_report(
-                    configuration=step.configuration,
-                    run_record=_mapping(
-                        completed_runs.get(step.name),
-                        f"{step.name} run",
-                    ),
-                )
-            return self._finalize(
-                profile,
-                suite_root,
-                state,
-                human_review_path=human_review_path,
-            )
-
+        execution_context = _attempt_execution_context(
+            identity=identity,
+            source_revision={"commit": commit, "dirty": False},
+            target=target,
+            configuration=configuration_summary,
+            models=resolved_models.provenance(),
+        )
         cold_report: dict[str, object] | None = None
         cold_selection: dict[str, object] | None = None
         for step in execution_steps:
@@ -261,10 +364,26 @@ class TargetSuiteRunner:
                 isinstance(existing, dict)
                 and existing.get("operation_status") == "completed"
             ):
+                load_completed_run_report(
+                    configuration=step.configuration,
+                    run_record=cast(dict[str, object], existing),
+                )
                 continue
-            shutil.rmtree(step.configuration.output_folder, ignore_errors=True)
+            _remove_invalid_attempt_output(step.configuration.output_folder)
+            attempt_id = uuid4().hex
+            attempt_started_at_epoch = time.time()
             state[step.active_state_key] = step.name
+            state[_active_attempt_started_key(step)] = attempt_started_at_epoch
+            state[_active_attempt_id_key(step)] = attempt_id
+            state[_active_attempt_context_key(step)] = execution_context
             write_atomic_json(state_path, state)
+            attempt_journal.start(
+                attempt_id=attempt_id,
+                step_kind=step.kind,
+                step_name=step.name,
+                started_at_epoch_seconds=attempt_started_at_epoch,
+                execution_context=execution_context,
+            )
             attempt_started_at = time.monotonic()
             try:
                 (
@@ -279,22 +398,71 @@ class TargetSuiteRunner:
                 )
             except KeyboardInterrupt:
                 exit_code = 130
+                recovered = attempt_journal.recover(
+                    attempt_id=attempt_id,
+                    step_kind=step.kind,
+                    step_name=step.name,
+                    processing_cache_folder=(
+                        step.configuration.processing_cache_folder
+                    ),
+                    video_identity_cache_folder=(
+                        step.configuration.durable_video_identity_cache_folder
+                    ),
+                )
                 attempt_record = build_incomplete_interrupt_attempt(
-                    time.monotonic() - attempt_started_at
+                    time.monotonic() - attempt_started_at,
+                    None if recovered is None else recovered[0],
                 )
                 report = None
                 selection = None
             except Exception:
+                prior_attempts = _run_attempts(state, step)
+                recovered = attempt_journal.recover(
+                    attempt_id=attempt_id,
+                    step_kind=step.kind,
+                    step_name=step.name,
+                    processing_cache_folder=(
+                        step.configuration.processing_cache_folder
+                    ),
+                    video_identity_cache_folder=(
+                        step.configuration.durable_video_identity_cache_folder
+                    ),
+                )
+                abandoned_attempt = build_incomplete_interrupt_attempt(
+                    time.monotonic() - attempt_started_at,
+                    None if recovered is None else recovered[0],
+                )
+                abandoned_attempt["failure_reason"] = "process_abandoned"
+                abandoned_attempt["failure_exit_code"] = 1
+                abandoned_attempt["attempt_id"] = attempt_id
+                abandoned_attempt["execution_context"] = (
+                    execution_context if recovered is None else recovered[1]
+                )
+                _store_run_attempts(
+                    state,
+                    step,
+                    (*prior_attempts, abandoned_attempt),
+                )
+                state.pop(step.active_state_key, None)
+                state.pop(_active_attempt_started_key(step), None)
+                state.pop(_active_attempt_id_key(step), None)
+                state.pop(_active_attempt_context_key(step), None)
                 state["last_failure"] = {
                     **step.failure_context,
                     "exit_code": 1,
                     "reason": "run_measurement_incomplete",
                 }
                 write_atomic_json(state_path, state)
+                attempt_journal.clear()
                 return 1
+            attempt_record["attempt_id"] = attempt_id
+            attempt_record["execution_context"] = execution_context
             validate_run_measurements(attempt_record)
             prior_attempts = _run_attempts(state, step)
             state.pop(step.active_state_key, None)
+            state.pop(_active_attempt_started_key(step), None)
+            state.pop(_active_attempt_id_key(step), None)
+            state.pop(_active_attempt_context_key(step), None)
             if exit_code != 0:
                 _store_run_attempts(
                     state,
@@ -310,6 +478,7 @@ class TargetSuiteRunner:
                     ),
                 }
                 write_atomic_json(state_path, state)
+                attempt_journal.clear()
                 return exit_code
             if attempt_record.get("operation_status") != "completed":
                 raise ValueError("成功runの計測記録がcompletedではありません")
@@ -318,6 +487,7 @@ class TargetSuiteRunner:
             _clear_run_attempts(state, step)
             state.pop("last_failure", None)
             write_atomic_json(state_path, state)
+            attempt_journal.clear()
             if step.is_cold_phase:
                 cold_report = report
                 cold_selection = selection
@@ -518,6 +688,18 @@ def _remove_directory_strict(path: Path, label: str) -> None:
         raise ValueError(f"{label}を完全に削除できません")
 
 
+def _remove_invalid_attempt_output(output_folder: Path) -> None:
+    """完成済みCanonical outputを保持し、不完全なsuite-owned outputだけ除く。"""
+    if not output_folder.exists() and not output_folder.is_symlink():
+        return
+    if output_folder.is_symlink() or not output_folder.is_dir():
+        raise ValueError("Acceptance Output Folderがdirectoryではありません")
+    try:
+        load_validated_canonical_selection_report(output_folder)
+    except ValueError:
+        _remove_directory_strict(output_folder, "不完全なAcceptance Output Folder")
+
+
 def _execute_run_attempt(
     configuration: EffectiveConfiguration,
     resolved_models: ResolvedModels,
@@ -534,11 +716,15 @@ def _configuration(
     profile: AcceptanceProfile,
     input_folder: Path,
     output_folder: Path,
+    identity_cache_folder: Path,
 ) -> EffectiveConfiguration:
-    return resolve_effective_configuration(
-        video_input_folder=input_folder,
-        output_folder=output_folder,
-        config_path=profile.configuration_path,
+    return replace(
+        resolve_effective_configuration(
+            video_input_folder=input_folder,
+            output_folder=output_folder,
+            config_path=profile.configuration_path,
+        ),
+        video_identity_cache_folder=identity_cache_folder,
     )
 
 
@@ -693,8 +879,11 @@ def _identity(
         "suite_fingerprint",
         descriptor.get("source_snapshot_fingerprint"),
     )
+    materialization_source_snapshot = descriptor.get("source_snapshot_fingerprint")
     if not isinstance(descriptor_fingerprint, str):
         raise ValueError("Suite materialization fingerprintがありません")
+    if not _is_sha256(materialization_source_snapshot):
+        raise ValueError("Suite source snapshot fingerprintがありません")
     models_json = json.dumps(
         models.semantic_input(),
         sort_keys=True,
@@ -709,6 +898,9 @@ def _identity(
             configuration.ollama_host
         ),
         "suite_fingerprint": descriptor_fingerprint,
+        "materialization_source_snapshot_fingerprint": (
+            materialization_source_snapshot
+        ),
         "model_identity_digest": hashlib.sha256(models_json).hexdigest(),
         "commit": commit,
     }
@@ -757,34 +949,214 @@ def _validate_state_identity(
     state: Mapping[str, object],
     identity: Mapping[str, object],
 ) -> None:
+    stable_keys = (
+        "suite",
+        "profile_digest",
+        "suite_fingerprint",
+        "materialization_source_snapshot_fingerprint",
+    )
     if state.get("schema") != _STATE_SCHEMA or any(
-        state.get(key) != value for key, value in identity.items()
+        state.get(key) != identity.get(key) for key in stable_keys
     ):
         raise ValueError("Acceptance stateが現在のsuite identityと一致しません")
 
 
-def _target_identity_matches(
-    stored: object,
-    current: Mapping[str, object],
-) -> bool:
-    """起動時の微小なvisible RAM差だけを許容してtargetを比較する。"""
-    if not isinstance(stored, Mapping) or set(stored) != set(current):
-        return False
-    stored_ram = stored.get("visible_ram_bytes")
-    current_ram = current.get("visible_ram_bytes")
+def _validate_completed_state_identity(
+    state: Mapping[str, object],
+    suite: str,
+    profile: AcceptanceProfile,
+    current_source_snapshot: str,
+) -> None:
+    """materialization削除後も検証できる完了済みsuite identityを確認する。"""
+    suite_fingerprint = state.get("suite_fingerprint")
+    if not _is_sha256(suite_fingerprint):
+        raise ValueError("Acceptance stateのsuite fingerprintが不正です")
+    recorded_source_snapshot = state.get("materialization_source_snapshot_fingerprint")
     if (
-        type(stored_ram) is not int
-        or type(current_ram) is not int
-        or stored_ram <= 0
-        or current_ram <= 0
-        or abs(stored_ram - current_ram) > _VISIBLE_RAM_IDENTITY_TOLERANCE_BYTES
+        not _is_sha256(recorded_source_snapshot)
+        or recorded_source_snapshot != current_source_snapshot
     ):
-        return False
-    return all(
-        stored.get(key) == value
-        for key, value in current.items()
-        if key != "visible_ram_bytes"
+        raise ValueError("Acceptance stateのsource snapshotが変更されています")
+    _validate_state_identity(
+        state,
+        {
+            "suite": suite,
+            "profile_digest": profile.profile_digest,
+            "suite_fingerprint": suite_fingerprint,
+            "materialization_source_snapshot_fingerprint": (recorded_source_snapshot),
+        },
     )
+
+
+def _refresh_execution_context(
+    state: dict[str, object],
+    *,
+    identity: Mapping[str, object],
+    source_revision: Mapping[str, object],
+    target: Mapping[str, object],
+    configuration: Mapping[str, object],
+    models: Mapping[str, object],
+    storage_preflight: Mapping[str, object],
+) -> None:
+    """未完了suiteの実行依存を現在attemptへ更新する。"""
+    mutable_identity_keys = (
+        "configuration_digest",
+        "effective_configuration_digest",
+        "ollama_endpoint_identity",
+        "model_identity_digest",
+        "commit",
+    )
+    previous = {key: state.get(key) for key in mutable_identity_keys}
+    current = {key: identity.get(key) for key in mutable_identity_keys}
+    if previous != current:
+        history = state.get("execution_context_changes")
+        changes = history if isinstance(history, list) else []
+        changes.append(
+            {
+                "previous": previous,
+                "current": current,
+            }
+        )
+        state["execution_context_changes"] = changes
+    state.update(current)
+    state["source_revision"] = dict(source_revision)
+    state["target"] = dict(target)
+    state["configuration"] = dict(configuration)
+    state["models"] = {
+        key: dict(value) if isinstance(value, dict) else value
+        for key, value in models.items()
+    }
+    state["storage_preflight"] = dict(storage_preflight)
+
+
+def _attempt_execution_context(
+    *,
+    identity: Mapping[str, object],
+    source_revision: Mapping[str, object],
+    target: Mapping[str, object],
+    configuration: Mapping[str, object],
+    models: Mapping[str, object],
+) -> dict[str, object]:
+    """一つのattemptでfreezeされたprivacy-safe実行依存を返す。"""
+    mutable_identity_keys = (
+        "configuration_digest",
+        "effective_configuration_digest",
+        "ollama_endpoint_identity",
+        "model_identity_digest",
+        "commit",
+    )
+    return {
+        "identity": {key: identity.get(key) for key in mutable_identity_keys},
+        "source_revision": dict(source_revision),
+        "target": dict(target),
+        "configuration": dict(configuration),
+        "models": {
+            key: dict(value) if isinstance(value, dict) else value
+            for key, value in models.items()
+        },
+    }
+
+
+def _recover_abandoned_attempt(
+    state: dict[str, object],
+    steps: tuple[AcceptanceExecutionStep, ...],
+    state_path: Path,
+    attempt_journal: AcceptanceAttemptJournal,
+) -> None:
+    """process終了で残ったactive markerを保守的なattemptへ閉じる。"""
+    active_steps = tuple(
+        step for step in steps if state.get(step.active_state_key) is not None
+    )
+    if not active_steps:
+        return
+    if len(active_steps) != 1:
+        raise ValueError("複数のAcceptance Runが同時にactiveです")
+    step = active_steps[0]
+    active_name = state.get(step.active_state_key)
+    if active_name != step.name:
+        raise ValueError("Acceptance active runが現在のexecution planと一致しません")
+    started_at = state.get(_active_attempt_started_key(step))
+    duration_seconds = (
+        max(0.0, time.time() - float(started_at))
+        if isinstance(started_at, int | float) and not isinstance(started_at, bool)
+        else 0.0
+    )
+    attempt_id_value = state.get(_active_attempt_id_key(step))
+    attempt_id = (
+        attempt_id_value
+        if isinstance(attempt_id_value, str) and attempt_id_value
+        else f"legacy-{step.kind}-{step.name}"
+    )
+    context_value = state.get(_active_attempt_context_key(step))
+    execution_context = (
+        dict(context_value)
+        if isinstance(context_value, dict)
+        else _attempt_execution_context(
+            identity=state,
+            source_revision=_mapping(
+                state.get("source_revision"),
+                "source_revision",
+            ),
+            target=_mapping(state.get("target"), "target"),
+            configuration=_mapping(
+                state.get("configuration"),
+                "configuration",
+            ),
+            models=_mapping(state.get("models"), "models"),
+        )
+    )
+    recovered = (
+        attempt_journal.recover(
+            attempt_id=attempt_id,
+            step_kind=step.kind,
+            step_name=step.name,
+            processing_cache_folder=step.configuration.processing_cache_folder,
+            video_identity_cache_folder=(
+                step.configuration.durable_video_identity_cache_folder
+            ),
+        )
+        if attempt_journal.exists and not attempt_id.startswith("legacy-")
+        else None
+    )
+    recovered_metrics = None if recovered is None else recovered[0]
+    if recovered is not None:
+        execution_context = recovered[1]
+    attempt = build_incomplete_interrupt_attempt(
+        duration_seconds,
+        recovered_metrics,
+    )
+    attempt["failure_reason"] = "process_abandoned"
+    attempt["failure_exit_code"] = 1
+    attempt["attempt_id"] = attempt_id
+    attempt["execution_context"] = execution_context
+    _store_run_attempts(
+        state,
+        step,
+        (*_run_attempts(state, step), attempt),
+    )
+    state.pop(step.active_state_key, None)
+    state.pop(_active_attempt_started_key(step), None)
+    state.pop(_active_attempt_id_key(step), None)
+    state.pop(_active_attempt_context_key(step), None)
+    state["last_failure"] = {
+        **step.failure_context,
+        "exit_code": 1,
+        "reason": "process_abandoned",
+    }
+    write_atomic_json(state_path, state)
+    attempt_journal.clear()
+
+
+def _active_attempt_started_key(step: AcceptanceExecutionStep) -> str:
+    return f"{step.active_state_key}_started_at_epoch_seconds"
+
+
+def _active_attempt_id_key(step: AcceptanceExecutionStep) -> str:
+    return f"{step.active_state_key}_attempt_id"
+
+
+def _active_attempt_context_key(step: AcceptanceExecutionStep) -> str:
+    return f"{step.active_state_key}_execution_context"
 
 
 def _runs_completed(state: Mapping[str, object]) -> bool:
@@ -900,3 +1272,11 @@ def _positive_integer(value: object, label: str) -> int:
     if type(value) is not int or value < 1:
         raise ValueError(f"{label}が正の整数ではありません")
     return value
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )

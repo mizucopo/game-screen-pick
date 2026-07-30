@@ -2,6 +2,21 @@
 
 from typing import Any, cast
 
+_BLOG_IMAGE_TYPE_ORDER = (
+    "normal_gameplay",
+    "event",
+    "menu",
+    "title",
+    "other",
+)
+_TOOL_ORDER = (
+    "ffmpeg",
+    "ffprobe",
+    "ollama",
+    "faster_whisper",
+    "ctranslate2",
+)
+
 
 def render_human_selection_report(report: dict[str, object]) -> str:
     """検証対象のreport objectだけから決定的なMarkdownを返す。"""
@@ -44,7 +59,8 @@ def render_human_selection_report(report: dict[str, object]) -> str:
         )
     )
     image_types = _mapping(selection_summary["blog_image_type"])
-    for name, counts_value in image_types.items():
+    for name in _ordered_mapping_keys(image_types, _BLOG_IMAGE_TYPE_ORDER):
+        counts_value = image_types[name]
         counts = _mapping(counts_value)
         lines.append(f"| {name} | {counts['target']} | {counts['actual']} |")
     lines.extend(("", "## Selected images", ""))
@@ -164,7 +180,8 @@ def render_human_selection_report(report: dict[str, object]) -> str:
     schema = _mapping(report["schema"])
     lines.append(f"- Report schema: `{schema['name']}@{schema['version']}`")
     models = _mapping(provenance["models"])
-    for role, model_value in models.items():
+    for role in sorted(models):
+        model_value = models[role]
         model = _mapping(model_value)
         lines.append(
             f"- {role}: `{model['configured_name']}` @ "
@@ -172,7 +189,8 @@ def render_human_selection_report(report: dict[str, object]) -> str:
             f"({model['update_status']})"
         )
     tools = _mapping(provenance["tools"])
-    for name, version in tools.items():
+    for name in _ordered_mapping_keys(tools, _TOOL_ORDER):
+        version = tools[name]
         lines.append(f"- {name}: `{version}`")
     lines.extend(
         (
@@ -298,3 +316,13 @@ def _mapping(value: object) -> dict[str, Any]:
 
 def _mapping_list(value: object) -> list[dict[str, Any]]:
     return cast(list[dict[str, Any]], value)
+
+
+def _ordered_mapping_keys(
+    value: dict[str, Any],
+    preferred_order: tuple[str, ...],
+) -> tuple[str, ...]:
+    """既知keyを契約順、未知keyを辞書順で返す。"""
+    preferred = tuple(key for key in preferred_order if key in value)
+    remaining = tuple(sorted(set(value) - set(preferred)))
+    return (*preferred, *remaining)

@@ -14,6 +14,7 @@ _CONTEXT_RADIUS_SECONDS = Fraction(15)
 _CONTEXT_CUE_LIMIT = 3
 _CUE_SELECTION_POLICY_VERSION = "nearby-context-v1"
 _SCENE_CATALOG_REPRESENTATIVE_LIMIT = 24
+_ANNOTATION_DIVERSITY_THRESHOLD = 0.72
 
 type AnnotationShortlistItem = tuple[
     int,
@@ -29,15 +30,10 @@ def build_candidate_annotation_requests(
     video_stage_results: tuple[VideoStageResult, ...],
     *,
     selection_intent: str,
-    similarity_threshold: float,
 ) -> tuple[CandidateAnnotationRequest, ...]:
     """各Momentを一つのlocal代表へ絞りvisual diversity順に並べる。"""
-    if (
-        not selection_intent.strip()
-        or not math.isfinite(similarity_threshold)
-        or not 0 <= similarity_threshold <= 1
-    ):
-        msg = "Selection shortlistの意図またはsimilarity thresholdが不正です"
+    if not selection_intent.strip():
+        msg = "Selection shortlistの意図が不正です"
         raise ValueError(msg)
     total_duration = sum(
         (result.scan.timeline.duration.seconds for result in video_stage_results),
@@ -86,7 +82,7 @@ def build_candidate_annotation_requests(
 
     base_order = sorted(candidates, key=_shortlist_base_key)
     ordered = _unique_representative_frames(
-        _diverse_prefix(base_order, similarity_threshold)
+        _diverse_prefix(base_order, _ANNOTATION_DIVERSITY_THRESHOLD)
     )
     return tuple(
         CandidateAnnotationRequest(

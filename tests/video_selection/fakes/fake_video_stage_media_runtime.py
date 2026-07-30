@@ -10,6 +10,9 @@ import numpy as np
 
 from src.video_selection.models.decoded_video_frame import DecodedVideoFrame
 from src.video_selection.models.embedded_subtitle import EmbeddedSubtitle
+from src.video_selection.models.empty_video_scan_partition import (
+    EmptyVideoScanPartition,
+)
 from src.video_selection.models.media_probe import MediaProbe
 from src.video_selection.models.media_runtime_identity import MediaRuntimeIdentity
 from src.video_selection.models.media_stream import MediaStream
@@ -30,6 +33,7 @@ class FakeVideoStageMediaRuntime:
         on_cancel_video_scans: Callable[[], None] | None = None,
         on_scan_video_frame_ranges: Callable[[Path], None] | None = None,
         distant_moments: bool = False,
+        scan_frame_pts: tuple[int, ...] | None = None,
         require_streaming_refinement: bool = False,
         cpu_burn_seconds: float = 0.0,
         reported_scan_wall_seconds: float = 0.1,
@@ -42,7 +46,9 @@ class FakeVideoStageMediaRuntime:
         zero_valid_frames: bool = False,
     ) -> None:
         self.scan_calls: list[Path] = []
+        self.scan_partition_calls: list[tuple[Path, int, int | None]] = []
         self.range_calls: list[Path] = []
+        self.range_pts_calls: list[tuple[tuple[int, int], ...]] = []
         self.call_order: list[tuple[str, str]] = []
         self._runtime_identity = runtime_identity or MediaRuntimeIdentity(
             "6.1.1-test",
@@ -54,6 +60,11 @@ class FakeVideoStageMediaRuntime:
         self._on_cancel_video_scans = on_cancel_video_scans
         self._on_scan_video_frame_ranges = on_scan_video_frame_ranges
         self._distant_moments = distant_moments
+        if scan_frame_pts is not None and (
+            not scan_frame_pts or tuple(sorted(set(scan_frame_pts))) != scan_frame_pts
+        ):
+            raise ValueError("scan_frame_ptsは昇順で重複しない必要があります")
+        self._scan_frame_pts = scan_frame_pts
         self._require_streaming_refinement = require_streaming_refinement
         self._cpu_burn_seconds = cpu_burn_seconds
         self._reported_scan_wall_seconds = reported_scan_wall_seconds
@@ -69,6 +80,7 @@ class FakeVideoStageMediaRuntime:
         self._candidate_proxy_write_count = 0
         self.subtitle_calls: list[tuple[Path, int]] = []
         self.audio_calls: list[tuple[Path, int, int, int]] = []
+        self.audio_chunk_calls: list[tuple[Path, int, int, int, int]] = []
         self.extracted_frame_calls: list[tuple[Path, int, int, int]] = []
         self.extracted_original_frame_calls: list[tuple[Path, int, int]] = []
         self.cancel_video_scans_call_count = 0
@@ -91,7 +103,7 @@ class FakeVideoStageMediaRuntime:
                     codec_name="ffv1",
                     time_base=Fraction(1, 10),
                     start_pts=0,
-                    duration_ts=20,
+                    duration_ts=500 if self._distant_moments else 20,
                     width=64,
                     height=48,
                     sample_rate=None,
@@ -119,6 +131,40 @@ class FakeVideoStageMediaRuntime:
             raise self._audio_error
         yield from self._pcm_audio_chunks
 
+    def extract_pcm_audio_chunk(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        media_origin: Fraction,
+        sample_rate: int,
+        sample_start: int,
+        maximum_sample_count: int,
+    ) -> PcmAudioChunk | None:
+        """指定sample rangeに対応する固定PCM chunkを返す。"""
+        del media_origin
+        self.audio_chunk_calls.append(
+            (
+                media_path,
+                stream.index,
+                sample_rate,
+                sample_start,
+                maximum_sample_count,
+            )
+        )
+        if self._audio_error is not None:
+            raise self._audio_error
+        return next(
+            (
+                chunk
+                for chunk in self._pcm_audio_chunks
+                if chunk.stream_index == stream.index
+                and chunk.sample_rate == sample_rate
+                and chunk.sample_start >= sample_start
+                and chunk.sample_count <= maximum_sample_count
+            ),
+            None,
+        )
+
     def read_embedded_subtitles(
         self,
         media_path: Path,
@@ -140,6 +186,64 @@ class FakeVideoStageMediaRuntime:
         decode_backend: str,
     ) -> NativeVideoScan:
         """2件のheartbeatと1件の一時scene frameを生成する。"""
+        scan = self._scan_video_range(
+            media_path,
+            stream,
+            artifact_folder,
+            start_pts=None,
+            end_pts=None,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            scene_change_threshold=scene_change_threshold,
+            scene_min_interval_seconds=scene_min_interval_seconds,
+            decode_backend=decode_backend,
+        )
+        if isinstance(scan, EmptyVideoScanPartition):
+            raise AssertionError("全体scanには1件以上のframeが必要です")
+        return scan
+
+    def scan_video_partition(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        artifact_folder: Path,
+        *,
+        media_origin: Fraction,
+        start_pts: int,
+        end_pts: int | None,
+        heartbeat_interval_seconds: float,
+        scene_change_threshold: float,
+        scene_min_interval_seconds: float,
+        decode_backend: str,
+    ) -> NativeVideoScan | EmptyVideoScanPartition:
+        """指定PTS区間の決定的なscan結果を生成する。"""
+        del media_origin
+        self.scan_partition_calls.append((media_path, start_pts, end_pts))
+        return self._scan_video_range(
+            media_path,
+            stream,
+            artifact_folder,
+            start_pts=start_pts,
+            end_pts=end_pts,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            scene_change_threshold=scene_change_threshold,
+            scene_min_interval_seconds=scene_min_interval_seconds,
+            decode_backend=decode_backend,
+        )
+
+    def _scan_video_range(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        artifact_folder: Path,
+        *,
+        start_pts: int | None,
+        end_pts: int | None,
+        heartbeat_interval_seconds: float,
+        scene_change_threshold: float,
+        scene_min_interval_seconds: float,
+        decode_backend: str,
+    ) -> NativeVideoScan | EmptyVideoScanPartition:
+        """全体または指定PTS区間のfake scanを実行する。"""
         del (
             heartbeat_interval_seconds,
             scene_change_threshold,
@@ -155,23 +259,69 @@ class FakeVideoStageMediaRuntime:
         scene_folder = artifact_folder / ".scene-proxies"
         heartbeat_folder.mkdir(parents=True)
         scene_folder.mkdir()
-        heartbeat_pts = (0, 400) if self._distant_moments else (0, 10)
-        last_frame_pts = 490 if self._distant_moments else 10
+        range_start = 0 if start_pts is None else start_pts
+        available_heartbeat_pts: tuple[int, ...]
+        if self._scan_frame_pts is None:
+            available_heartbeat_pts = (0, 400) if self._distant_moments else (0, 10)
+            available_last_frame_pts = 490 if self._distant_moments else 10
+            has_owned_frame = range_start <= available_last_frame_pts
+            origin_pts = range_start
+        else:
+            available_heartbeat_pts = tuple(
+                pts
+                for pts in self._scan_frame_pts
+                if pts >= range_start and (end_pts is None or pts < end_pts)
+            )
+            has_owned_frame = bool(available_heartbeat_pts)
+            available_last_frame_pts = (
+                available_heartbeat_pts[-1] if available_heartbeat_pts else range_start
+            )
+            origin_pts = (
+                available_heartbeat_pts[0] if available_heartbeat_pts else range_start
+            )
+        if not has_owned_frame:
+            return EmptyVideoScanPartition(
+                stream_index=stream.index,
+                start_pts=range_start,
+                end_pts=end_pts,
+                time_base=Fraction(1, 10),
+                wall_seconds=self._reported_scan_wall_seconds,
+                cpu_seconds=self._reported_scan_cpu_seconds,
+                decode_pass_count=1,
+            )
+        heartbeat_pts: tuple[int, ...] = available_heartbeat_pts
+        if self._scan_frame_pts is None:
+            heartbeat_pts = tuple(
+                pts
+                for pts in available_heartbeat_pts
+                if pts >= range_start and (end_pts is None or pts < end_pts)
+            )
+            last_frame_pts = (
+                available_last_frame_pts
+                if end_pts is None
+                else min(available_last_frame_pts, end_pts - 1)
+            )
+        else:
+            last_frame_pts = available_last_frame_pts
         last_frame_duration_ts = 10
         heartbeats = tuple(
             self._write_scan_frame(heartbeat_folder / f"{pts:012d}.jpg", pts)
             for pts in heartbeat_pts
         )
-        scene_pts = heartbeat_pts[-1]
-        scenes = (
-            self._write_scan_frame(
-                scene_folder / f"{scene_pts:012d}.jpg",
-                scene_pts,
-            ),
+        available_scene_pts = available_heartbeat_pts[-1]
+        scene_pts = (
+            (available_scene_pts,)
+            if available_scene_pts >= range_start
+            and (end_pts is None or available_scene_pts < end_pts)
+            else ()
+        )
+        scenes = tuple(
+            self._write_scan_frame(scene_folder / f"{pts:012d}.jpg", pts)
+            for pts in scene_pts
         )
         return NativeVideoScan(
             stream_index=stream.index,
-            origin_pts=0,
+            origin_pts=origin_pts,
             last_frame_pts=last_frame_pts,
             last_frame_duration_ts=last_frame_duration_ts,
             time_base=Fraction(1, 10),
@@ -200,6 +350,7 @@ class FakeVideoStageMediaRuntime:
         """range内のnative test frameを返す。"""
         del max_dimension
         self.range_calls.append(media_path)
+        self.range_pts_calls.append(pts_ranges)
         self.call_order.append(("refine", media_path.name))
         if self._on_scan_video_frame_ranges is not None:
             self._on_scan_video_frame_ranges(media_path)

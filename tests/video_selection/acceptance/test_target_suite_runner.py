@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from src.video_selection.acceptance.acceptance_attempt_journal import (
+    AcceptanceAttemptJournal,
+)
 from src.video_selection.acceptance.acceptance_profile import AcceptanceProfile
 from src.video_selection.acceptance.acceptance_run import (
     AcceptanceRunAttemptExecutionResult,
@@ -15,6 +18,9 @@ from src.video_selection.acceptance.acceptance_run import (
 from src.video_selection.acceptance.atomic_json import (
     read_json_object,
     write_atomic_json,
+)
+from src.video_selection.acceptance.source_snapshot_fingerprint import (
+    acceptance_source_snapshot_fingerprint,
 )
 from src.video_selection.acceptance.target_suite_runner import (
     EnvironmentProbe,
@@ -32,8 +38,17 @@ from src.video_selection.models.resolved_models import ResolvedModels
 from src.video_selection.services.build_stage_fingerprint import (
     build_stage_fingerprint,
 )
+from src.video_selection.services.canonical_output_publisher import (
+    CanonicalOutputPublisher,
+)
 from src.video_selection.services.completed_stage_writer import CompletedStageWriter
+from tests.video_selection.fakes.canonical_publication_factory import (
+    build_canonical_publication_request,
+)
 from tests.video_selection.fakes.fake_model_runtime import FakeModelRuntime
+from tests.video_selection.fakes.fake_video_stage_media_runtime import (
+    FakeVideoStageMediaRuntime,
+)
 
 
 def test_interrupt_after_cold_resumes_only_warm_then_waits_for_human_review(
@@ -132,6 +147,181 @@ def test_interrupt_after_cold_resumes_only_warm_then_waits_for_human_review(
     assert not (suite_root / "work").exists()
 
 
+def test_interrupted_cold_resumes_after_ollama_runtime_change_without_reset(
+    tmp_path: Path,
+) -> None:
+    """Ollama runtime変更後も未完了coldが明示resetなしで再開されること。
+
+    Arrange:
+        - cold初回が中断され、同じmodel digestのOllama runtimeだけが更新される
+    Act:
+        - 同じsuiteが新しいruntime identityで再開される
+    Assert:
+        - suite全体のidentity不一致にせずcoldとwarmが実行されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    interrupted = False
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        nonlocal interrupted
+        calls.append(run_name)
+        if run_name == "cold" and not interrupted:
+            interrupted = True
+            return 130, _interrupted_run_attempt(run_name), None, None
+        return _successful_run_attempt(configuration, run_name)
+
+    first_models = FakeModelRuntime("stable-model").resolve_models
+
+    def changed_runtime_models(
+        configuration: EffectiveConfiguration,
+    ) -> ResolvedModels:
+        resolved = FakeModelRuntime("stable-model").resolve_models(configuration)
+        return ResolvedModels(
+            tuple(
+                replace(
+                    item,
+                    runtime_identity=replace(
+                        item.runtime_identity,
+                        version="fake-2",
+                    ),
+                )
+                for item in resolved.items
+            )
+        )
+
+    assert (
+        _runner(execute, model_resolver=first_models).run(
+            profile_path=profile_path,
+            suite="release",
+        )
+        == 130
+    )
+
+    # Act
+    resumed = _runner(
+        execute,
+        model_resolver=changed_runtime_models,
+    ).run(
+        profile_path=profile_path,
+        suite="release",
+    )
+
+    # Assert
+    assert resumed == 3
+    assert calls == ["cold", "cold", "warm"]
+    state = read_json_object(
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "release"
+        / "acceptance-state.json"
+    )
+    assert state is not None
+    phases = state["phases"]
+    assert isinstance(phases, dict)
+    cold = phases["cold"]
+    assert isinstance(cold, dict)
+    attempts = cold["attempts"]
+    assert isinstance(attempts, list)
+    assert len(attempts) == 2
+    runtime_identities: list[str] = []
+    for attempt in attempts:
+        assert isinstance(attempt, dict)
+        context = attempt["execution_context"]
+        assert isinstance(context, dict)
+        models = context["models"]
+        assert isinstance(models, dict)
+        scene_catalog = models["scene_catalog"]
+        assert isinstance(scene_catalog, dict)
+        runtime_identity = scene_catalog["runtime_identity"]
+        assert isinstance(runtime_identity, str)
+        runtime_identities.append(runtime_identity)
+    assert runtime_identities == ["ollama:fake-1", "ollama:fake-2"]
+
+
+def test_abandoned_active_phase_is_recovered_without_reset(
+    tmp_path: Path,
+) -> None:
+    """process異常終了でactive phaseが残ってもsuiteが再開されること。
+
+    Arrange:
+        - cold executorが計測record確定前に一度だけ異常終了するsuiteが用意される
+    Act:
+        - `--reset-suite`なしで同じsuiteが再実行される
+    Assert:
+        - active markerが回復されcoldとwarmがCompleted workから続行されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    failed = False
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        nonlocal failed
+        calls.append(run_name)
+        if not failed:
+            failed = True
+            AcceptanceAttemptJournal(
+                _suite_root / "work" / "active-attempt.json"
+            ).record_snapshot(
+                {
+                    "cache_hit_count": 2,
+                    "cache_miss_count": 1,
+                    "reuse_count": 2,
+                    "unexpected_recompute_count": 1,
+                    "stage_durations_seconds": {"scan-video": 3.0},
+                    "completed_stage_counts": {"scan-video": 1},
+                },
+                {"1" * 64: "recomputed"},
+            )
+            raise RuntimeError("simulated process loss")
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="release") == 1
+
+    # Act
+    resumed = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert resumed == 1
+    assert calls == ["cold", "cold", "warm"]
+    state = read_json_object(
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "release"
+        / "acceptance-state.json"
+    )
+    assert state is not None
+    assert state.get("active_phase") is None
+    phases = state["phases"]
+    assert isinstance(phases, dict)
+    cold = phases["cold"]
+    assert isinstance(cold, dict)
+    attempts = cold["attempts"]
+    assert isinstance(attempts, list)
+    first_attempt = attempts[0]
+    assert isinstance(first_attempt, dict)
+    assert first_attempt["cache_hit_count"] == 2
+    assert first_attempt["cache_miss_count"] == 1
+    assert first_attempt["reuse_count"] == 2
+    assert first_attempt["unexpected_recompute_count"] == 1
+    assert first_attempt["stage_durations_seconds"] == {"scan-video": 3.0}
+
+
 def test_reset_suite_discards_completed_state_and_runs_cold_again(
     tmp_path: Path,
 ) -> None:
@@ -160,10 +350,22 @@ def test_reset_suite_discards_completed_state_and_runs_cold_again(
         dict[str, object] | None,
     ]:
         calls.append(run_name)
+        assert configuration.durable_video_identity_cache_folder == (
+            tmp_path / "artifacts" / "target-acceptance" / "video-identities"
+        )
         return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute)
     first = runner.run(profile_path=profile_path, suite="release")
+    identity_marker = (
+        tmp_path
+        / "artifacts"
+        / "target-acceptance"
+        / "video-identities"
+        / "identity-marker"
+    )
+    identity_marker.parent.mkdir(parents=True, exist_ok=True)
+    identity_marker.write_text("durable", encoding="utf-8")
 
     # Act
     second = runner.run(
@@ -176,6 +378,7 @@ def test_reset_suite_discards_completed_state_and_runs_cold_again(
     assert first == 3
     assert second == 3
     assert calls == ["cold", "warm", "cold", "warm"]
+    assert identity_marker.read_text(encoding="utf-8") == "durable"
 
 
 def test_reset_suite_fails_when_suite_root_survives_deletion(
@@ -444,6 +647,7 @@ def test_state_preserves_privacy_safe_performance_configuration(
         "output_folder",
         "scene_hint",
         "ollama_host",
+        "video_identity_cache_folder",
         "provenance",
     }
     assert set(configuration) == safe_configuration_fields | {
@@ -615,8 +819,12 @@ def test_full_suite_compares_fixed_three_with_auto_before_warm_run(
         calls.append((run_name, configuration.video_scan_workers))
         fixed_three = configuration.video_scan_workers == 3
         marker = configuration.processing_cache_folder / "fixed3-marker"
+        identity_marker = (
+            configuration.durable_video_identity_cache_folder / "identity-marker"
+        )
         if run_name == "cold" and not fixed_three:
             assert not marker.exists()
+            assert identity_marker.read_text(encoding="utf-8") == "durable"
         result = _successful_run_attempt(configuration, run_name)
         record = result[1]
         workers = 3 if fixed_three else 6
@@ -630,6 +838,8 @@ def test_full_suite_compares_fixed_three_with_auto_before_warm_run(
         record["stage_artifact_content_digest"] = "9" * 64
         if fixed_three:
             marker.write_text("fixed", encoding="utf-8")
+            identity_marker.parent.mkdir(parents=True, exist_ok=True)
+            identity_marker.write_text("durable", encoding="utf-8")
         return result
 
     runner = _runner(execute)
@@ -954,6 +1164,41 @@ def test_resume_rejects_changed_completed_cold_report(tmp_path: Path) -> None:
         runner.run(profile_path=profile_path, suite="release")
 
 
+def test_resume_rejects_changed_completed_warm_report(tmp_path: Path) -> None:
+    """完了warm成果物が再検証されずworksheet生成へ進まないこと。
+
+    Arrange:
+        - cold/warm完了後かつworksheet未生成のresume stateが用意される
+        - warm reportがphase確定後に変更される
+    Act:
+        - suiteがworksheet生成から再開される
+    Assert:
+        - warmのcanonical report artifact不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    runner = _runner(
+        lambda run_name, configuration, _models, _suite_root: _successful_run_attempt(
+            configuration,
+            run_name,
+        )
+    )
+    suite_root, _cold_configuration = _prepare_resume_without_worksheet(
+        tmp_path,
+        runner,
+        profile_path,
+    )
+    report_path = suite_root / "outputs" / "warm" / "report.json"
+    report = read_json_object(report_path)
+    assert report is not None
+    report["tampered"] = True
+    write_atomic_json(report_path, report)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="canonical report artifact"):
+        runner.run(profile_path=profile_path, suite="release")
+
+
 def test_review_finalization_rejects_changed_completed_cold_report(
     tmp_path: Path,
 ) -> None:
@@ -1084,15 +1329,15 @@ def test_resume_rejects_changed_completed_selection_artifact(
         runner.run(profile_path=profile_path, suite="release")
 
 
-def test_completed_state_revalidates_current_suite_fingerprint(tmp_path: Path) -> None:
-    """完了済みstateでも現在のsuite fingerprintが再検証されること。
+def test_completed_state_revalidates_current_source_snapshot(tmp_path: Path) -> None:
+    """完了済みstateでも現在のsource snapshotが軽量に再検証されること。
 
     Arrange:
-        - cold/warm完了後にmaterializerのsuite fingerprintが変化する
+        - cold/warm完了後にprivate sourceのsize・mtimeが変化する
     Act:
         - human review待ちのsuiteが再開される
     Assert:
-        - phaseを再実行せずidentity不一致として拒否されること
+        - materializationとphaseを再実行せずsnapshot不一致として拒否されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -1113,28 +1358,30 @@ def test_completed_state_revalidates_current_suite_fingerprint(tmp_path: Path) -
         return _successful_run_attempt(configuration, run_name)
 
     assert _runner(execute).run(profile_path=profile_path, suite="release") == 3
+    (tmp_path / "private-input" / "source.mkv").write_bytes(b"changed-source")
 
-    # Act
+    # Act / Assert
     with pytest.raises(ValueError) as error:
-        _runner(execute, suite_fingerprint="c" * 64).run(
+        _runner(execute).run(
             profile_path=profile_path,
             suite="release",
         )
 
-    # Assert
-    assert "suite identity" in str(error.value)
+    assert "source snapshot" in str(error.value)
     assert calls == ["cold", "warm"]
 
 
-def test_completed_state_revalidates_current_model_identity(tmp_path: Path) -> None:
-    """完了済みstateでも現在のResolved Model Identityが再検証されること。
+def test_completed_state_keeps_recorded_model_identity_after_runtime_update(
+    tmp_path: Path,
+) -> None:
+    """完了済みstateが現在のmodel更新で無効化されないこと。
 
     Arrange:
         - cold/warm完了後にmodel resolverのexecution identityが変化する
     Act:
         - human review待ちのsuiteが再開される
     Assert:
-        - phaseを再実行せずidentity不一致として拒否されること
+        - phaseを再実行せず記録済み成果のhuman review待ちが維持されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -1157,29 +1404,28 @@ def test_completed_state_revalidates_current_model_identity(tmp_path: Path) -> N
     assert _runner(execute).run(profile_path=profile_path, suite="release") == 3
 
     # Act
-    with pytest.raises(ValueError) as error:
-        _runner(execute, model_identity_seed="changed-model").run(
-            profile_path=profile_path,
-            suite="release",
-        )
+    resumed = _runner(execute, model_identity_seed="changed-model").run(
+        profile_path=profile_path,
+        suite="release",
+    )
 
     # Assert
-    assert "suite identity" in str(error.value)
+    assert resumed == 3
     assert calls == ["cold", "warm"]
 
 
-def test_completed_state_rejects_changed_environment_ollama_endpoint(
+def test_completed_state_ignores_current_ollama_endpoint_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """環境変数由来Ollama endpointが変わったstateは再利用されないこと。
+    """完了後のOllama endpoint変更が記録済み成果を無効化しないこと。
 
     Arrange:
         - TOMLにhostを持たずOLLAMA_HOSTで完了したsuiteが用意される
     Act:
         - OLLAMA_HOSTを別endpointへ変えてsuiteが再開される
     Assert:
-        - privacy-safeなsuite identity不一致として拒否されること
+        - phaseを再実行せずhuman review待ちが維持されること
     """
     # Arrange
     profile_path = _profile(tmp_path, include_ollama_host=False)
@@ -1214,24 +1460,26 @@ def test_completed_state_rejects_changed_environment_ollama_endpoint(
     assert state["ollama_endpoint_identity"] != "http://first.example:11434"
     monkeypatch.setenv("OLLAMA_HOST", "http://second.example:11434")
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="suite identity"):
-        runner.run(profile_path=profile_path, suite="release")
+    # Act
+    resumed = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert resumed == 3
     assert calls == ["cold", "warm"]
 
 
-def test_completed_state_rejects_changed_environment_scan_configuration(
+def test_completed_state_ignores_current_scan_configuration_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """環境変数由来の実効scan設定が変わったstateは再利用されないこと。
+    """完了後の実効scan設定変更が記録済み成果を無効化しないこと。
 
     Arrange:
         - TOMLにscan上限を持たず環境変数値6で完了したsuiteが用意される
     Act:
         - auto worker上限を5へ変えてsuiteが再開される
     Assert:
-        - privacy-safeな実効設定identity不一致として拒否されること
+        - phaseを再実行せず記録済み設定と成果が維持されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -1258,9 +1506,11 @@ def test_completed_state_rejects_changed_environment_scan_configuration(
     )
     monkeypatch.setenv("GAME_SCREEN_PICK_VIDEO_SCAN_AUTO_MAX_WORKERS", "5")
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="suite identity"):
-        runner.run(profile_path=profile_path, suite="release")
+    # Act
+    resumed = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert resumed == 3
     assert state is not None
     effective_digest = state["effective_configuration_digest"]
     assert isinstance(effective_digest, str)
@@ -1268,17 +1518,17 @@ def test_completed_state_rejects_changed_environment_scan_configuration(
     assert calls == ["cold", "warm"]
 
 
-def test_completed_state_ignores_model_update_diagnostic_change(
+def test_completed_state_finalization_does_not_resolve_models_again(
     tmp_path: Path,
 ) -> None:
-    """同じ実行identityのmodel更新診断変更では完了stateが再利用されること。
+    """完了済みstateのfinalizationで現在のmodelが再解決されないこと。
 
     Arrange:
-        - 初回はnot_requested、再開時はunchangedとなる同一Resolved Modelが用意される
+        - 解決回数を記録するModel Resolverでcold/warmが完了される
     Act:
         - cold/warm完了後のhuman review待ちsuiteが再開される
     Assert:
-        - phaseを再実行せずpending human reviewのまま再開されること
+        - model解決とphaseを再実行せずhuman review待ちが維持されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -1321,19 +1571,66 @@ def test_completed_state_ignores_model_update_diagnostic_change(
 
     # Assert
     assert resumed == 3
-    assert resolution_count == 2
+    assert resolution_count == 1
     assert calls == ["cold", "warm"]
 
 
-def test_completed_state_rejects_changed_target_identity(tmp_path: Path) -> None:
-    """target環境が変わった完了stateは再利用されないこと。
+def test_completed_release_state_does_not_rematerialize_cleaned_private_work(
+    tmp_path: Path,
+) -> None:
+    """完了済みrelease stateの再確認でprivate clipが再生成されないこと。
+
+    Arrange:
+        - cold/warm完了とworksheet生成後にprivate workが削除されたsuiteが用意される
+    Act:
+        - human review待ちの同じrelease suiteが再実行される
+    Assert:
+        - 完了stateと公開成果物からfinalizationだけが再開されること
+        - 削除済みrelease materializationが再実行されないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    phase_calls: list[str] = []
+    materialization_calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        phase_calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(
+        execute,
+        materialization_calls=materialization_calls,
+    )
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    assert not (suite_root / "work").exists()
+
+    # Act
+    resumed = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert resumed == 3
+    assert phase_calls == ["cold", "warm"]
+    assert materialization_calls == ["release"]
+    assert not (suite_root / "work").exists()
+
+
+def test_completed_state_keeps_recorded_target_after_environment_change(
+    tmp_path: Path,
+) -> None:
+    """完了後のtarget環境変更が記録済み成果を無効化しないこと。
 
     Arrange:
         - cold/warm完了後にdriver identityが変わるtarget probeが用意される
     Act:
         - 同じprofileとsourceでsuiteが再開される
     Assert:
-        - target identity不一致として既存stateの再利用が拒否されること
+        - phaseを再実行せず記録済みtargetのhuman review待ちが維持されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -1363,11 +1660,10 @@ def test_completed_state_rejects_changed_target_identity(tmp_path: Path) -> None
     target["gpu_driver"] = "changed"
 
     # Act
-    with pytest.raises(ValueError) as error:
-        runner.run(profile_path=profile_path, suite="release")
+    resumed = runner.run(profile_path=profile_path, suite="release")
 
     # Assert
-    assert "target identity" in str(error.value)
+    assert resumed == 3
     assert calls == ["cold", "warm"]
 
 
@@ -1440,18 +1736,18 @@ def test_completed_state_accepts_boot_level_visible_ram_variation(
     "delta_bytes",
     (-(1024**2) - 1, 1024**2 + 1),
 )
-def test_completed_state_rejects_meaningful_visible_ram_change(
+def test_completed_state_keeps_recorded_visible_ram_after_large_change(
     tmp_path: Path,
     delta_bytes: int,
 ) -> None:
-    """1 MiBを超えるvisible RAM差がtarget変更として拒否されること。
+    """完了後の大きなvisible RAM差が記録済み成果を無効化しないこと。
 
     Arrange:
         - 実測visible RAMを持つcold/warm完了stateが用意される
     Act:
         - 現在値が1 MiBを超えて変わったtargetからsuiteが再開される
     Assert:
-        - target identity不一致としてphase再実行前に拒否されること
+        - phaseを再実行せず記録済みtargetが維持されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -1476,9 +1772,11 @@ def test_completed_state_rejects_meaningful_visible_ram_change(
     assert runner.run(profile_path=profile_path, suite="release") == 3
     target["visible_ram_bytes"] = initial_ram_bytes + delta_bytes
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="target identity"):
-        runner.run(profile_path=profile_path, suite="release")
+    # Act
+    resumed = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert resumed == 3
     assert calls == ["cold", "warm"]
 
 
@@ -1486,18 +1784,18 @@ def test_completed_state_rejects_meaningful_visible_ram_change(
     "invalid_value",
     (None, True, "34359738368", "missing"),
 )
-def test_completed_state_rejects_invalid_visible_ram_identity(
+def test_completed_state_ignores_invalid_current_visible_ram(
     tmp_path: Path,
     invalid_value: object,
 ) -> None:
-    """欠落または非整数のvisible RAM identityが拒否されること。
+    """完了後の現在RAM probe異常が記録済み成果を無効化しないこと。
 
     Arrange:
         - 正の整数のvisible RAMを持つcold/warm完了stateが用意される
     Act:
         - 現在targetのRAM fieldが欠落または不正型へ変更される
     Assert:
-        - target identity不一致としてphase再実行前に拒否されること
+        - phaseを再実行せず記録済みtargetが維持されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -1524,19 +1822,21 @@ def test_completed_state_rejects_invalid_visible_ram_identity(
     else:
         target["visible_ram_bytes"] = invalid_value
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="target identity"):
-        runner.run(profile_path=profile_path, suite="release")
+    # Act
+    resumed = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert resumed == 3
     assert calls == ["cold", "warm"]
 
 
-def test_incomplete_phase_removes_uncommitted_output_before_rerun(
+def test_incomplete_phase_removes_invalid_output_before_rerun(
     tmp_path: Path,
 ) -> None:
-    """phase state未確定の既存outputが再実行前に削除されること。
+    """phase state未確定の不正outputが再実行前に削除されること。
 
     Arrange:
-        - cold phase recordなしでatomic publicationだけが残ったsuiteが用意される
+        - cold phase recordなしで不完全なoutputだけが残ったsuiteが用意される
     Act:
         - release suiteが実行される
     Assert:
@@ -1563,6 +1863,58 @@ def test_incomplete_phase_removes_uncommitted_output_before_rerun(
     ]:
         calls.append(run_name)
         assert not (configuration.output_folder / "stale.json").exists()
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute)
+
+    # Act
+    result = runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert result == 3
+    assert calls == ["cold", "warm"]
+
+
+def test_completed_publication_survives_missing_phase_record(
+    tmp_path: Path,
+) -> None:
+    """phase記録前に終了しても検証済みCanonical outputが保持されること。
+
+    Arrange:
+        - cold phase stateを持たずatomic publicationだけが完了したsuiteが用意される
+    Act:
+        - release suiteが同じcold Output Folderから再開される
+    Assert:
+        - executor開始時に完成済みreportとMarkdownが保持されていること
+        - coldとwarmがそのまま完了されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    output_folder = suite_root / "outputs" / "cold"
+    publication_root = tmp_path / "completed-publication"
+    publication_root.mkdir()
+    request = build_canonical_publication_request(publication_root)
+    request = replace(
+        request,
+        configuration=replace(
+            request.configuration,
+            output_folder=output_folder,
+        ),
+    )
+    CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        if run_name == "cold":
+            assert (configuration.output_folder / "report.json").is_file()
+            assert (configuration.output_folder / "report.md").is_file()
         return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute)
@@ -1846,6 +2198,7 @@ def _runner(
     model_resolver: ModelResolver | None = None,
     environment_probe: EnvironmentProbe | None = None,
     ollama_deployment_probe: OllamaDeploymentProbe | None = None,
+    materialization_calls: list[str] | None = None,
 ) -> TargetSuiteRunner:
     """target外でもstate machineを検証できるdependency構成を返す。"""
     model_runtime = FakeModelRuntime(model_identity_seed)
@@ -1854,11 +2207,19 @@ def _runner(
         profile: AcceptanceProfile,
         suite_root: Path,
     ) -> tuple[Path, dict[str, object]]:
+        if materialization_calls is not None:
+            materialization_calls.append(suite_root.name)
         input_folder = suite_root / "work" / "input"
         input_folder.mkdir(parents=True, exist_ok=True)
         (input_folder / "scenario-001.mkv").write_bytes(b"anonymous")
         return input_folder, {
             "suite_fingerprint": suite_fingerprint,
+            "source_snapshot_fingerprint": (
+                acceptance_source_snapshot_fingerprint(
+                    profile,
+                    suite_root.name,
+                )
+            ),
             "scenario_count": profile.full_expected_video_count,
         }
 

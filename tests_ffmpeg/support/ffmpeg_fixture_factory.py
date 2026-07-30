@@ -88,6 +88,43 @@ def generate_nonzero_start_video(output_path: Path) -> Path:
     return output_path
 
 
+def generate_delayed_video_with_audio(output_path: Path) -> Path:
+    """audioより2秒遅く始まる15秒のvideo streamを生成する。"""
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x48:rate=2:duration=15",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=17",
+            "-filter_complex",
+            "[0:v]setpts=PTS+2/TB[video]",
+            "-map",
+            "[video]",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "ffv1",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "pcm_s16le",
+            str(output_path),
+        ],
+        check=True,
+    )
+    return output_path
+
+
 def generate_vfr_video(output_path: Path) -> Path:
     """不均一なsource PTSを持つVFR test patternを生成する。"""
     subprocess.run(

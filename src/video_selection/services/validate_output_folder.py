@@ -2,9 +2,18 @@
 
 from pathlib import Path
 
+from .validate_canonical_selection_report import (
+    load_validated_canonical_selection_report,
+)
 
-def validate_output_folder(input_folder: Path, output_folder: Path) -> None:
-    """inputと分離された未作成または空のOutput Folderを検証する。"""
+
+def validate_output_folder(
+    input_folder: Path,
+    output_folder: Path,
+    *,
+    allow_completed_canonical_output: bool = False,
+) -> None:
+    """inputと分離された未作成、空、または検証済みOutputを検証する。"""
     normalized_input = input_folder.resolve(strict=False)
     normalized_output = output_folder.resolve(strict=False)
     if (
@@ -21,9 +30,20 @@ def validate_output_folder(input_folder: Path, output_folder: Path) -> None:
     _validate_output_parent(output_folder)
     if not output_folder.exists():
         return
-    if not output_folder.is_dir() or any(output_folder.iterdir()):
+    if not output_folder.is_dir():
         msg = f"Output Folderは存在しないか空である必要があります: {output_folder}"
         raise ValueError(msg)
+    if not any(output_folder.iterdir()):
+        return
+    if allow_completed_canonical_output:
+        try:
+            load_validated_canonical_selection_report(output_folder)
+        except ValueError:
+            pass
+        else:
+            return
+    msg = f"Output Folderは存在しないか空である必要があります: {output_folder}"
+    raise ValueError(msg)
 
 
 def _validate_output_parent(output_folder: Path) -> None:

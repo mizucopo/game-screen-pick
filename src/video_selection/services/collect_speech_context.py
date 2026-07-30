@@ -25,6 +25,8 @@ from .build_context_cue_id import build_context_cue_id
 from .external_work_monitor import ExternalWorkMonitor
 from .iter_overlapping_pcm_chunks import iter_overlapping_pcm_chunks
 from .normalize_context_language import normalize_context_language
+from .pcm_audio_checkpoint import PcmAudioCheckpoint
+from .speech_recognition_checkpoint import SpeechRecognitionCheckpoint
 
 _AUDIO_SAMPLE_RATE = 16000
 _WORD_GAP_SECONDS = Fraction(3, 2)
@@ -39,8 +41,11 @@ def collect_speech_context(
     source: VideoSource,
     scan: VideoScanResult,
     stream: MediaStream,
+    media_origin: Fraction,
     configuration: EffectiveConfiguration,
     external_work_monitor: ExternalWorkMonitor | None = None,
+    recognition_checkpoint: SpeechRecognitionCheckpoint | None = None,
+    pcm_checkpoint: PcmAudioCheckpoint | None = None,
 ) -> ContextStageResult:
     """選択audioをSTTしCue、低reliability診断、outcomeを返す。"""
     chunk_samples = int(configuration.speech_chunk_seconds * _AUDIO_SAMPLE_RATE)
@@ -51,14 +56,40 @@ def collect_speech_context(
     detected_speech = False
     processed_chunk_count = 0
     speech_language = normalize_context_language(configuration.language)
-    source_chunks = _iter_validated_pcm_chunks(
-        media_runtime.scan_pcm_audio(
+
+    def extract_pcm_chunk(
+        sample_start: int,
+        maximum_sample_count: int,
+    ) -> PcmAudioChunk | None:
+        chunk = media_runtime.extract_pcm_audio_chunk(
             source.path,
-            stream.index,
+            stream,
+            media_origin,
             _AUDIO_SAMPLE_RATE,
-            frame_sample_count,
-        ),
-        stream,
+            sample_start,
+            maximum_sample_count,
+        )
+        if chunk is None:
+            return None
+        return next(
+            _iter_validated_pcm_chunks(
+                (chunk,),
+                stream,
+            )
+        )
+
+    source_chunks = (
+        _iter_validated_pcm_chunks(
+            media_runtime.scan_pcm_audio(
+                source.path,
+                stream.index,
+                _AUDIO_SAMPLE_RATE,
+                frame_sample_count,
+            ),
+            stream,
+        )
+        if pcm_checkpoint is None
+        else pcm_checkpoint.resolve(extract_pcm_chunk)
     )
     overlapping_chunks = iter_overlapping_pcm_chunks(
         source_chunks,
@@ -75,14 +106,31 @@ def collect_speech_context(
                 vad_filter=configuration.speech_vad_filter,
                 beam_size=configuration.speech_to_text_beam_size,
             )
-            recognition = (
-                transcribe()
+            monitored_transcribe = (
+                transcribe
                 if external_work_monitor is None
-                else external_work_monitor.run(
+                else partial(
+                    external_work_monitor.run,
                     transcribe,
                     reason_code="speech_recognition_started",
                 )
             )
+            recognition = (
+                monitored_transcribe()
+                if recognition_checkpoint is None
+                else recognition_checkpoint.resolve(
+                    chunk,
+                    monitored_transcribe,
+                )
+            )
+        except ValueError as error:
+            if str(error) == "timestamp_drift":
+                raise
+            raise ContextStageError(
+                ContextStageFailureReason.CHUNK_FAILED
+                if processed_chunk_count > 0
+                else ContextStageFailureReason.STT_ANALYSIS_FAILED
+            ) from None
         except Exception:
             raise ContextStageError(
                 ContextStageFailureReason.CHUNK_FAILED

@@ -15,6 +15,7 @@ from .completed_stage_writer import (
     CacheNamespace,
     CompletedStageWriter,
     FaultInjector,
+    StageBundleValidator,
 )
 from .run_progress_tracker import RunProgressTracker
 
@@ -113,9 +114,20 @@ class ProcessingStageRunner:
             semantic_input,
         )
         if artifact is None:
-            self._record_cache_miss()
+            self._record_cache_miss(fingerprint)
             return None
-        restored = restore(artifact)
+        try:
+            restored = restore(artifact)
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            NotADirectoryError,
+            TypeError,
+            ValueError,
+        ):
+            self._writer.discard(stage, fingerprint)
+            self._record_cache_miss(fingerprint)
+            return None
         self._record_completion(
             CompletedStage(
                 stage=stage,
@@ -134,6 +146,7 @@ class ProcessingStageRunner:
         produce_artifacts: ArtifactProducer,
         *,
         upstream_stages: tuple[ProcessingStage, ...] | None = None,
+        validate_bundle: StageBundleValidator | None = None,
     ) -> CompletedStageBundle:
         """複数artifactを生成して次のStageを確定する。"""
         upstream_fingerprints, fingerprint = self._prepare_stage(
@@ -147,6 +160,7 @@ class ProcessingStageRunner:
             upstream_fingerprints,
             semantic_input,
             produce_artifacts,
+            validate_bundle=validate_bundle,
         )
         bundle = self._writer.read_bundle(
             stage,
@@ -166,6 +180,7 @@ class ProcessingStageRunner:
         semantic_input: Mapping[str, object],
         *,
         upstream_stages: tuple[ProcessingStage, ...] | None = None,
+        validate_bundle: StageBundleValidator | None = None,
     ) -> CompletedStageBundle | None:
         """検証済みCompleted Stage bundleがあれば完了扱いにする。"""
         upstream_fingerprints, fingerprint = self._prepare_stage(
@@ -180,8 +195,21 @@ class ProcessingStageRunner:
             semantic_input,
         )
         if bundle is None:
-            self._record_cache_miss()
+            self._record_cache_miss(fingerprint)
             return None
+        if validate_bundle is not None:
+            try:
+                validate_bundle(bundle)
+            except (
+                FileNotFoundError,
+                IsADirectoryError,
+                NotADirectoryError,
+                TypeError,
+                ValueError,
+            ):
+                self._writer.discard(stage, fingerprint)
+                self._record_cache_miss(fingerprint)
+                return None
         self._record_completion(
             CompletedStage(
                 stage=stage,
@@ -220,7 +248,7 @@ class ProcessingStageRunner:
             msg = "先行確定されたCompleted Stage artifactを検証できませんでした"
             raise RuntimeError(msg)
         if not reused:
-            self._record_cache_miss()
+            self._record_cache_miss(fingerprint)
         self._record_completion(
             CompletedStage(
                 stage=stage,
@@ -311,6 +339,7 @@ class ProcessingStageRunner:
                 reuse_count=1 if reused else 0,
                 recompute_count=0 if reused else 1,
                 reason_code="cache_reused" if reused else "stage_recomputed",
+                stage_fingerprint=completed_stage.fingerprint,
             )
             self._progress.complete_stage(
                 duration_seconds,
@@ -339,7 +368,7 @@ class ProcessingStageRunner:
         )
         self._progress_stage = stage
 
-    def _record_cache_miss(self) -> None:
+    def _record_cache_miss(self, fingerprint: StageFingerprint) -> None:
         if self._progress is None or self._cache_miss_observed:
             return
         self._progress.cache_observed(
@@ -348,6 +377,7 @@ class ProcessingStageRunner:
             reuse_count=0,
             recompute_count=0,
             reason_code="cache_miss",
+            stage_fingerprint=fingerprint,
         )
         self._cache_miss_observed = True
 

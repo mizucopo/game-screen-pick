@@ -98,6 +98,25 @@ def test_partially_offloaded_ollama_model_fails_automatic_gate() -> None:
     assert record["status"] == "failed"
 
 
+@pytest.mark.parametrize("duration_seconds", [float("nan"), float("inf"), -1.0])
+def test_invalid_phase_duration_is_rejected(duration_seconds: float) -> None:
+    """非有限または負のphase時間が合格判定へ使われないこと。
+
+    Arrange:
+        - 不正なcold phase durationが用意される
+    Act:
+        - acceptance recordが構築される
+    Assert:
+        - 非負の有限numberではないmetricとして拒否されること
+    """
+    # Arrange / Act / Assert
+    with pytest.raises(ValueError, match="非負の有限number"):
+        _build_record(
+            human_quality={"status": "passed", "gates": {}},
+            cold_overrides={"duration_seconds": duration_seconds},
+        )
+
+
 def test_actual_paths_and_video_names_are_rejected_from_record() -> None:
     """actual pathまたはprivate video名がacceptance recordへ混入すると拒否されること。
 

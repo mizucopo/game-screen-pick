@@ -336,6 +336,7 @@ class VideoSetVisionProcessor:
             reuse_count=1 if reused else 0,
             recompute_count=0 if reused else 1,
             reason_code="cache_reused" if reused else "stage_recomputed",
+            stage_fingerprint=fingerprint,
         )
         self._progress.complete_stage(stage_fingerprint=fingerprint)
 
@@ -376,6 +377,7 @@ def _execute_cached_vision_stage(
         upstream_fingerprints,
         semantic_input,
         produce,
+        validate_bundle=lambda value: restore(value.artifact),
     )
     if generated is not None:
         return generated, completed, False

@@ -449,3 +449,61 @@ def test_processing_stage_runner_records_recompute_duration_for_eta(
     # Assert
     event = observer.progress_events[-1]
     assert (event.estimation_state, event.eta_seconds) == ("available", 10.0)
+
+
+def test_restore_permission_failure_preserves_completed_stage(
+    tmp_path: Path,
+) -> None:
+    """restoreのaccess障害でCompleted Stageが削除されないこと。
+
+    Arrange:
+        - 一つのCompleted Stageを確定したrunnerが用意される
+    Act:
+        - 次のrunnerでrestoreだけがPermissionErrorになる
+    Assert:
+        - access障害が返され、Completed Stageが保持されること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "9" * 64
+    semantic_input = {"video_set": "stable"}
+    first = ProcessingStageRunner(
+        cache_folder,
+        RecordingRunObserver(),
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+        stage_order=(ProcessingStage.DISCOVER_VIDEO_SET,),
+    )
+    completed = first.complete(
+        ProcessingStage.DISCOVER_VIDEO_SET,
+        semantic_input,
+        {"value": "stable"},
+    )
+    artifact_path = (
+        cache_folder
+        / "video-sets"
+        / subject_fingerprint
+        / ProcessingStage.DISCOVER_VIDEO_SET.value
+        / completed.fingerprint.value
+        / "artifact.json"
+    )
+    original_bytes = artifact_path.read_bytes()
+    second = ProcessingStageRunner(
+        cache_folder,
+        RecordingRunObserver(),
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+        stage_order=(ProcessingStage.DISCOVER_VIDEO_SET,),
+    )
+
+    def deny_restore(_artifact: dict[str, object]) -> object:
+        raise PermissionError("injected restore permission failure")
+
+    # Act / Assert
+    with pytest.raises(PermissionError, match="injected restore permission failure"):
+        second.reuse(
+            ProcessingStage.DISCOVER_VIDEO_SET,
+            semantic_input,
+            deny_restore,
+        )
+    assert artifact_path.read_bytes() == original_bytes

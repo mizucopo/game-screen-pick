@@ -89,9 +89,11 @@ sample内で一時的な失敗を一度だけ即時再試行する。再試行�
 内に終了しないbackground probeが一つでもあれば、error件数を記録してresource samplingを
 不完全として扱う。
 
-coldのVideo Identity cache missではwhole-file SHA-256を一度計算する。exact warmはcoldで
-確定したpath非依存identityをdevice、inode、size、mtime、ctime一致時だけ再利用し、1 TiB級
-full Video Setを再hashしない。fullのauto coldに使う独立Video Scanは
+coldのVideo Identity cache missではwhole-file SHA-256を動画1本ずつatomicに確定する。
+exact warm、固定3からauto coldへのprocessing cache切替、process再起動は、engine version、
+privacy-safeなlogical source key、size、mtimeが一致するidentityを再利用し、1 TiB級
+full Video Setを再hashしない。device、inode、ctimeはidentity cacheの再利用判定に使わない。
+fullのauto coldに使う独立Video Scanは
 `video_scan.workers = "auto"`かつ`video_scan.auto_max_workers >= 4`を要求する。
 さらにbackend、targetのlogical CPU数、実scenario数、設定上限から本番controllerと同じ
 schedulable capacityを算出し、4 worker未満なら長時間runの前に拒否する。
@@ -127,32 +129,48 @@ ffprobeの実測開始、終了、durationがprofileの許容差を超える場�
 durationへ正規化する。各release区間の境界だけでなく、全clipの正規化済み実測duration合計も
 profileの期待合計と同じtolerance内であることを検証する。full suiteはこの正規化済み経過
 durationを合算する。
-release/full双方のmaterialization manifestは、その生成・duration probeに使った
-FFmpeg/ffprobe versionとbuild capability identityへ固定する。tool identityが変わった
-materializationは再利用せず、`--reset-suite`後に現在toolで作り直す。
-確定済みrelease inputの再利用時はmanifest記載clipと対応videoの完全一致も検証する。
+releaseはintervalごと、fullはsource symlinkとdurationごとにcheckpointをatomic確定する。
+各checkpoint自身が確定時のMedia Runtime Identityを持つ。同じidentityで中断した場合、
+完了済みunitを保持して未完了unitだけを続行する。materialization contextが欠損・破損しても
+contextだけを再構築し、identityとartifactを検証できる完了済みunitは保持する。
+未完成materializationのFFmpeg/ffprobe versionまたはbuild capability identityが変わった
+場合は、安定した順序で旧identityのunitだけを現在toolへ置き換える。全unitが現在identityへ
+揃うまで終端manifestを公開しないため、旧・新toolの混在はpipeline outputへ到達しない。
+置換途中で再び中断しても現在identityへ置換済みのunitを再利用する。pipelineの
+Video IdentityやProcessing Stage cacheを全削除せず、`--reset-suite`も要求しない。
+各置換は検証済みartifactとpending checkpointを先にdurable化し、固定名artifactのatomic
+切替後にpendingをcheckpointへ昇格する。artifact切替とcheckpoint確定の間でprocess、
+WSL2、Windowsが停止しても、次回はpendingからそのunitを確定できる。置換前の失敗では
+旧artifactと旧checkpointを変更しない。
+
+全unitとmanifestまで完成したmaterializationは終端成果物として扱う。後からtool identityが
+変わっても再probe・再生成せず、sourceのsize・mtime、匿名file集合、symlink target、
+release clipのwhole-file SHA-256、duration descriptorを再検証して同じdescriptorを返す。
+終端manifest自体が欠損・破損していても、全unit checkpointが同じ記録済みruntimeで健全なら、
+現在のFFmpeg/ffprobeをprobeする前にmanifestを再構築する。
 materialize時間はrun予算に含めない。
 
 ## Durable resumeとreset
 
-Comparison Runとphaseの完了はsuite別の`acceptance-state.json`へatomicに確定する。中断後に同じcommandを
-実行すると、同じprofile、suite、設定、source snapshot、Resolved Model Identity、target
-identity、commitを検証し、未完了runだけを続行する。driver、FFmpeg、kernelなどtarget
-probeの値が変わったstateは混在させない。completed coldを再実行してwarmへ戻したり、
-completed Comparison Runやcold/warmを再実行したりしない。
-初回probeの`visible_ram_bytes`実測値はstateとAcceptance Recordへそのまま保持する一方、
-durable resumeではWSL2の起動ごとに生じるpage単位のRAM accounting差だけを吸収するため、
-保存値との差が1 MiB以内なら同じtargetとして扱う。1 MiBを超える差、field欠落、非整数値は
-target identity不一致とし、`visible_ram_bytes`以外のtarget fieldは完全一致を要求する。
-設定file外の`OLLAMA_HOST`を含む実効endpointも、URLを公開しないdigestとしてsuite identityへ
-固定する。TOML bytesだけでなく、環境変数と組み込み既定値を解決した全実効設定の
-privacy-safe summaryもdigestへ固定する。再開時にscan worker上限などの実効値が変わっていれば、
-coldと異なる設定でwarmを実行せずsuite identity不一致として拒否する。
+Comparison Runとphaseの完了はsuite別の`acceptance-state.json`へatomicに確定する。中断後に
+同じcommandを実行すると、profile、suite、materialize済みsourceのsuite fingerprintを
+検証し、未完了runだけを続行する。completed coldを再実行してwarmへ戻したり、completed
+Comparison Runやcold/warmを再実行したりしない。
 
-完了済みphaseからhuman reviewを再開する場合も、現在のsourceをmaterializeし直してsuite
-fingerprintを照合し、Resolved Model Identityを再解決してからrecordを確定する。入力または
-modelが変わっていれば既存の完了stateを流用しない。同じ実行identityに対する
-`Model Update Status`や更新前identityの違いはrun別診断であり、再利用可否を変えない。
+未完了suiteでは、現在のcommit、実効設定、Ollama endpoint、Resolved Model Identity、
+runtime/target probeを新しいexecution contextとして記録する。以前のcontextとの差は
+privacy-safeなhistoryへ残すが、suite全体の再開拒否やcache全削除の理由にはしない。
+各Completed StageとDurable Work Unitのsemantic fingerprintが、FFmpeg、STT、Ollama、
+設定、algorithmの変更を影響範囲へ局所化する。たとえばOllama versionまたはmodel identityが
+変わっても、Video Identity、Video Scan、Frame Candidate、STT checkpointは保持する。
+新しいcontextで再計算されたStage以降だけを新しい依存関係へ接続する。
+
+完了済みrunからhuman reviewまたはfinalizationを再開する場合は、記録済みsourceの
+size・mtime・suffix snapshot fingerprintを現在値と照合する。releaseのprivate clipは
+cleanup後に再materializeしない。保存済みcold/warm reportと選択画像は確定時のhash、
+size、semantic evidenceで再検証する。この経路では現在のcommit、GPU/driver/kernel、
+Ollama deployment、server version、Resolved Model Identityをprobeまたは再解決しない。
+完了済み成果物の意味内容と記録済みprovenanceを、後から更新されたruntimeで置き換えない。
 worksheet未生成から再開するときはcold reportをphase digestと照合し、selection artifactを
 Completed Stage manifest、artifact hash、semantic fingerprintで再検証する。
 worksheet生成済みのhuman review待ちから再開するときも、cold/warm双方のcanonical reportを
@@ -167,12 +185,20 @@ fullの固定3比較が中断された場合も固定3 cacheから再開し、�
 Select Images Completed Stageのatomic確定後、request index保存前に中断した場合は、
 Stage manifest内のrequest fingerprintとartifact integrityから一意な完了Stageを回復し、
 indexを再構築してrecomputeではなくcache reuseとして記録する。
+Canonical Outputのatomic rename後、phase record確定前に中断した場合は、既存folderのschema、
+JSON・Markdown、選択画像hash、layout、privacyを再検証する。新attemptが作るsemantic reportと
+一致すれば既存outputを一byteも変更せず再利用し、不完全なsuite-owned outputだけを除去する。
+異なるexecution contextで意味結果が変わる場合も、完成済みoutputを黙って上書きしない。
 再開後のrun recordでは、それ以前の試行を含む経過時間、cache/recompute count、Stage時間、
 storage/GPU aggregateを累積または保守的な最大値として集計するため、再開後の短い試行だけで
 性能を判定しない。user interruptで詳細計測を確定できなかった場合も経過時間を試行へ残し、
 resource計測を不完全とする。Completed Stage cacheから再開できるが、そのsuiteは不完全な
 性能・resource根拠では合格しない。process強制終了などでinterrupt handler自体を通らず
-active runが残った場合は、安全な試行境界を復元できないため`--reset-suite`を要求する。
+active run markerが残った場合は、次回起動時に経過時間を保守的な`process_abandoned`
+attemptとして確定する。active attempt journalのexecution context、cache resolutionと、
+kill後も残ったVideo Identity、Durable Work Unit、Completed Stage manifestを照合して
+確定直前の作業量も回復し、markerを消して新しいattemptから自動再開する。`--reset-suite`や
+最初からの再処理は要求しない。
 
 identityを変えた場合や意図的にcoldからやり直す場合だけ、対象suiteを明示的にresetする。
 
@@ -184,7 +210,8 @@ uv run task acceptance-target \
 ```
 
 `--reset-suite`は選んだsuiteのstate、run output、worksheet、
-processing cacheを破棄する。
+processing cacheを破棄する。release/full suiteの親にある共有Video Identity cacheは保持し、
+同じmaterialize済み動画のSHA-256を再計算しない。
 suite rootを完全に削除できない場合はpartial resetのまま続行せず失敗する。
 input root、通常設定、private profileがsuite root内にある場合も、sourceを削除する前に失敗する。
 releaseとfullのartifactは混在しない。

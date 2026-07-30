@@ -1,10 +1,14 @@
 """Video Stage domain resultとCompleted Stage JSONを相互変換する。"""
 
+import math
+import stat
 from collections.abc import Mapping
 from dataclasses import asdict
 from fractions import Fraction
 from pathlib import Path, PurePosixPath
 from typing import cast
+
+from PIL import Image, UnidentifiedImageError
 
 from ..models.candidate_moment import CandidateMoment, MomentEvidence
 from ..models.content_reject_reason import ContentRejectReason
@@ -117,7 +121,7 @@ def restore_video_scan(
         )
         for item in _mapping_list(artifact.get("scene_signals"))
     )
-    return VideoScanResult(
+    result = VideoScanResult(
         primary_stream=_restore_stream(_mapping(artifact.get("primary_stream"))),
         timeline=timeline,
         heartbeats=heartbeats,
@@ -145,6 +149,8 @@ def restore_video_scan(
             ),
         ),
     )
+    _validate_video_scan_result(result)
+    return result
 
 
 def serialize_frame_candidate_extraction(
@@ -225,6 +231,7 @@ def restore_frame_candidate_extraction(
         frame_candidate_count=_integer(metrics_value.get("frame_candidate_count")),
         frame_candidate_bytes=_integer(metrics_value.get("frame_candidate_bytes")),
     )
+    _validate_frame_candidate_extraction(extraction, metrics)
     return extraction, metrics
 
 
@@ -347,7 +354,7 @@ def _restore_candidate(
     stage_root: Path,
 ) -> FrameCandidate:
     proxy_path = _artifact_path(stage_root, value.get("proxy_path"))
-    return FrameCandidate(
+    candidate = FrameCandidate(
         identifier=_string(value.get("id")),
         image_bytes=proxy_path.read_bytes(),
         video_fingerprint=_string(value.get("video_fingerprint")),
@@ -359,6 +366,8 @@ def _restore_candidate(
         analysis=_restore_analysis(_mapping(value.get("analysis"))),
         proxy_path=proxy_path,
     )
+    _validate_jpeg_proxy(proxy_path)
+    return candidate
 
 
 def _serialize_fraction(value: Fraction) -> dict[str, int]:
@@ -388,7 +397,7 @@ def _artifact_path(root: Path, value: object) -> Path:
         msg = "Video Stage artifact pathが不正です"
         raise ValueError(msg)
     path = root.joinpath(*relative.parts)
-    if not path.is_file() or path.is_symlink():
+    if not _is_regular_file(path):
         msg = "Video Stage proxy artifactがありません"
         raise ValueError(msg)
     return path
@@ -477,3 +486,185 @@ def _required_analysis(
         msg = "Frame CandidateにNeutral Image Analysisがありません"
         raise ValueError(msg)
     return value
+
+
+def _validate_video_scan_result(scan: VideoScanResult) -> None:
+    """hash整合だけでは検出できないScan内部の参照と件数を検証する。"""
+    stream = scan.primary_stream
+    timeline = scan.timeline
+    metrics = scan.metrics
+    if (
+        stream.kind != "video"
+        or stream.time_base is None
+        or stream.start_pts is None
+        or stream.width is None
+        or stream.height is None
+        or stream.time_base != timeline.time_base
+        or timeline.origin_pts < stream.start_pts
+        or metrics.input_duration != timeline.duration.seconds
+        or metrics.decode_backend not in {"cpu", "nvdec"}
+        or metrics.decode_pass_count < 1
+        or metrics.heartbeat_count != len(scan.heartbeats)
+        or metrics.scene_signal_count != len(scan.scene_signals)
+        or metrics.timeline_segment_count != len(timeline.segments)
+        or metrics.heartbeat_bytes
+        != sum(item.proxy_path.stat().st_size for item in scan.heartbeats)
+    ):
+        raise ValueError("Video Scan artifactの内部関係が不正です")
+    numeric_metrics = (
+        metrics.wall_seconds,
+        metrics.cpu_seconds,
+        metrics.input_seconds_per_wall_second,
+        metrics.heartbeat_max_gap_seconds,
+        metrics.heartbeat_p95_gap_seconds,
+    )
+    if any(not math.isfinite(value) or value < 0 for value in numeric_metrics):
+        raise ValueError("Video Scan artifactのmetricが不正です")
+    expected_rate = (
+        float(timeline.duration.seconds) / metrics.wall_seconds
+        if metrics.wall_seconds > 0
+        else 0.0
+    )
+    if not math.isclose(
+        metrics.input_seconds_per_wall_second,
+        expected_rate,
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    ):
+        raise ValueError("Video Scan artifactのthroughput metricが不正です")
+    _validate_scan_signals(scan.heartbeats, timeline)
+    _validate_scan_signals(scan.scene_signals, timeline)
+    for heartbeat in scan.heartbeats:
+        _validate_jpeg_proxy(heartbeat.proxy_path)
+
+
+def _validate_scan_signals(
+    signals: tuple[object, ...],
+    timeline: VideoTimeline,
+) -> None:
+    """HeartbeatまたはScene Signalのexact時刻と安定順を検証する。"""
+    previous_pts: int | None = None
+    for signal in signals:
+        source_pts = getattr(signal, "source_pts", None)
+        video_time = getattr(signal, "video_time", None)
+        if (
+            not isinstance(source_pts, int)
+            or isinstance(source_pts, bool)
+            or not isinstance(video_time, Fraction)
+            or video_time
+            != Fraction(source_pts - timeline.origin_pts) * timeline.time_base
+            or not 0 <= video_time < timeline.duration.seconds
+            or (previous_pts is not None and source_pts <= previous_pts)
+        ):
+            raise ValueError("Video Scan artifactのsignal timingが不正です")
+        previous_pts = source_pts
+
+
+def _validate_frame_candidate_extraction(
+    extraction: FrameCandidateExtraction,
+    metrics: FrameCandidateExtractionMetrics,
+) -> None:
+    """Candidate、Moment、診断件数のcross-referenceを検証する。"""
+    moment_ids = tuple(item.identifier for item in extraction.moments)
+    candidate_ids = tuple(item.identifier for item in extraction.candidates)
+    referenced_ids = tuple(
+        candidate_id
+        for moment in extraction.moments
+        for candidate_id in moment.frame_candidate_ids
+    )
+    if (
+        len(moment_ids) != len(set(moment_ids))
+        or len(candidate_ids) != len(set(candidate_ids))
+        or any(
+            len(moment.frame_candidate_ids) != len(set(moment.frame_candidate_ids))
+            for moment in extraction.moments
+        )
+        or set(referenced_ids) != set(candidate_ids)
+        or tuple(
+            sorted(
+                extraction.candidates,
+                key=lambda item: _required_fraction(item.video_time),
+            )
+        )
+        != extraction.candidates
+        or extraction.zero_frame_moment_count
+        != sum(not moment.frame_candidate_ids for moment in extraction.moments)
+        or metrics.density_cap < len(extraction.moments)
+        or metrics.actual_moment_count != len(extraction.moments)
+        or metrics.native_frame_count != extraction.native_frame_count
+        or metrics.reject_breakdown != extraction.reject_breakdown
+        or metrics.deduplicated_frame_count != extraction.deduplicated_frame_count
+        or metrics.zero_frame_moment_count != extraction.zero_frame_moment_count
+        or metrics.frame_candidate_count != len(extraction.candidates)
+        or metrics.frame_candidate_bytes
+        != sum(len(candidate.image_bytes) for candidate in extraction.candidates)
+    ):
+        raise ValueError("Frame Candidate Extraction artifactの内部関係が不正です")
+    if (
+        not math.isfinite(metrics.wall_seconds)
+        or not math.isfinite(metrics.cpu_seconds)
+        or metrics.wall_seconds < 0
+        or metrics.cpu_seconds < 0
+    ):
+        raise ValueError("Frame Candidate Extraction artifactのmetricが不正です")
+    common_identity: tuple[str, int, int, Fraction] | None = None
+    for candidate in extraction.candidates:
+        analysis = _required_analysis(candidate.analysis)
+        video_fingerprint = candidate.video_fingerprint
+        stream_index = candidate.stream_index
+        source_pts = candidate.source_pts
+        origin_pts = candidate.origin_pts
+        time_base = candidate.time_base
+        video_time = candidate.video_time
+        if (
+            video_fingerprint is None
+            or stream_index is None
+            or source_pts is None
+            or origin_pts is None
+            or time_base is None
+            or video_time is None
+            or not candidate.identifier.startswith("frm_")
+            or len(candidate.identifier) != 68
+            or any(
+                character not in "0123456789abcdef"
+                for character in candidate.identifier[4:]
+            )
+            or video_time != Fraction(source_pts - origin_pts) * time_base
+            or analysis.source_pts != source_pts
+            or not math.isfinite(analysis.quality_score)
+            or len(analysis.visual_feature) != 112
+            or any(not math.isfinite(value) for value in analysis.visual_feature)
+            or len(analysis.grayscale_signature) != 64 * 36
+            or any(
+                not math.isfinite(value) for value in asdict(analysis.metrics).values()
+            )
+        ):
+            raise ValueError("Frame Candidate Extraction artifactが不正です")
+        identity = (video_fingerprint, stream_index, origin_pts, time_base)
+        if common_identity is None:
+            common_identity = identity
+        elif identity != common_identity:
+            raise ValueError("Frame Candidate Extraction artifactのsourceが不正です")
+
+
+def _validate_jpeg_proxy(path: Path) -> None:
+    """Completed Stage proxyが完全なJPEGか検証する。"""
+    try:
+        with Image.open(path) as image:
+            valid = image.format == "JPEG" and image.width > 0 and image.height > 0
+            image.verify()
+    except PermissionError:
+        raise
+    except (OSError, UnidentifiedImageError):
+        valid = False
+    if not valid:
+        raise ValueError("Video Stage proxy JPEGが不正です")
+
+
+def _is_regular_file(path: Path) -> bool:
+    """欠損だけをFalseとし、access failureをcorruptionへ変換しない。"""
+    try:
+        mode = path.lstat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return stat.S_ISREG(mode)

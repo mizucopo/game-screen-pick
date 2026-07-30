@@ -15,9 +15,13 @@ from ..models.run_failure import RunFailure
 from ..models.run_outcome import RunOutcome
 from ..models.stage_fingerprint import StageFingerprint
 from ..services.build_stage_fingerprint import build_stage_fingerprint
+from ..services.canonical_report_semantic_digest import (
+    canonical_report_semantic_digest,
+)
 from ..services.completed_stage_writer import CompletedStageWriter
 from ..services.progress_stream_observer import ProgressStreamObserver
 from ..services.run_progress_tracker import RunProgressTracker
+from .acceptance_attempt_journal import AcceptanceAttemptJournal
 from .acceptance_run_attempt_observer import AcceptanceRunAttemptObserver
 from .build_real_application import build_real_application
 from .completed_stage_artifact_digest import completed_stage_artifact_digest
@@ -30,26 +34,6 @@ AcceptanceRunAttemptExecutionResult = tuple[
     dict[str, object] | None,
     dict[str, object] | None,
 ]
-_VOLATILE_RUN_KEYS = frozenset({"id", "started_at", "completed_at"})
-_VOLATILE_RUNTIME_DIAGNOSTIC_KEYS = frozenset({"video_scan_parallelism"})
-_VOLATILE_STAGE_DIAGNOSTIC_KEYS = frozenset(
-    {
-        "attempt_count",
-        "cache_hits",
-        "cache_misses",
-        "duration_ms",
-        "eval_tokens",
-        "prompt_eval_tokens",
-        "recomputed_items",
-        "validation_failures",
-    }
-)
-_VOLATILE_MODEL_LIFECYCLE_KEYS = frozenset(
-    {
-        "local_identity_before_update",
-        "update_status",
-    }
-)
 
 
 def execute_acceptance_run_attempt(
@@ -59,7 +43,15 @@ def execute_acceptance_run_attempt(
     suite_root: Path,
 ) -> AcceptanceRunAttemptExecutionResult:
     """model freeze後からatomic publicationまでの一試行を測定する。"""
-    observer = AcceptanceRunAttemptObserver(ProgressStreamObserver())
+    attempt_journal = AcceptanceAttemptJournal(
+        suite_root / "work" / "active-attempt.json"
+    )
+    observer = AcceptanceRunAttemptObserver(
+        ProgressStreamObserver(),
+        snapshot_writer=(
+            attempt_journal.record_snapshot if attempt_journal.exists else None
+        ),
+    )
     progress = RunProgressTracker(observer)
     application = build_real_application(
         configuration,
@@ -122,7 +114,8 @@ def execute_acceptance_run_attempt(
     report = _read_json_object(report_path)
     report_parallelism = video_scan_parallelism_diagnostics(report)
     if (
-        isinstance(application_parallelism, dict)
+        not result.reused_completed_publication
+        and isinstance(application_parallelism, dict)
         and application_parallelism
         and application_parallelism != report_parallelism
     ):
@@ -362,15 +355,7 @@ def _file_digest(path: Path) -> str:
 
 def normalized_result_digest(report: Mapping[str, object]) -> str:
     """cold/warm一致と永続証拠の再検証に使うdigestを返す。"""
-
-    normalized = _normalized_semantic_report(report)
-    canonical = json.dumps(
-        normalized,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    return hashlib.sha256(canonical).hexdigest()
+    return canonical_report_semantic_digest(report)
 
 
 def video_scan_parallelism_diagnostics(
@@ -391,62 +376,6 @@ def video_scan_parallelism_diagnostics(
             "video_scan_parallelism",
         )
     )
-
-
-def _normalized_semantic_report(
-    report: Mapping[str, object],
-) -> dict[str, object]:
-    """run固有診断だけを除いたcanonical report全体を返す。"""
-    run = _mapping(report.get("run"), "canonical report run")
-    provenance = report.get("provenance")
-    if not isinstance(provenance, dict):
-        raise ValueError("Canonical reportのprovenanceが不正です")
-    stages = provenance.get("stages")
-    if not isinstance(stages, list):
-        raise ValueError("Canonical reportのprovenance stagesが不正です")
-    models = _mapping(
-        provenance.get("models"),
-        "canonical report provenance models",
-    )
-    runtime = _mapping(
-        provenance.get("runtime", {}),
-        "canonical report provenance runtime",
-    )
-    normalized = dict(report)
-    normalized["run"] = {
-        key: value for key, value in run.items() if key not in _VOLATILE_RUN_KEYS
-    }
-    normalized["provenance"] = {
-        **provenance,
-        "runtime": {
-            key: value
-            for key, value in runtime.items()
-            if key not in _VOLATILE_RUNTIME_DIAGNOSTIC_KEYS
-        },
-        "models": {
-            role: {
-                key: item
-                for key, item in _mapping(
-                    model,
-                    "canonical report provenance model",
-                ).items()
-                if key not in _VOLATILE_MODEL_LIFECYCLE_KEYS
-            }
-            for role, model in models.items()
-        },
-        "stages": [
-            {
-                key: item
-                for key, item in _mapping(
-                    value,
-                    "canonical report provenance stage",
-                ).items()
-                if key not in _VOLATILE_STAGE_DIAGNOSTIC_KEYS
-            }
-            for value in stages
-        ],
-    }
-    return normalized
 
 
 def _mapping(value: object, location: str) -> dict[str, object]:

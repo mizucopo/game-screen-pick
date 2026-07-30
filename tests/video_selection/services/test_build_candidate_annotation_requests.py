@@ -75,7 +75,6 @@ def test_local_quality_representative_drives_shortlist_and_annotation_input(
     requests = build_candidate_annotation_requests(
         (result,),
         selection_intent="ブログ本文を説明できる画像を選ぶ",
-        similarity_threshold=0.72,
     )
     representatives = select_scene_catalog_representatives(requests)
 
@@ -139,7 +138,6 @@ def test_ties_follow_video_order_time_moment_and_frame_id(tmp_path: Path) -> Non
     requests = build_candidate_annotation_requests(
         (first, second),
         selection_intent="ブログ本文を説明できる画像を選ぶ",
-        similarity_threshold=0.72,
     )
     representatives = select_scene_catalog_representatives(requests)
 
@@ -223,7 +221,6 @@ def test_annotation_shortlist_skips_shared_representative_frames(
     requests = build_candidate_annotation_requests(
         (result,),
         selection_intent="ブログ本文を説明できる画像を選ぶ",
-        similarity_threshold=1.0,
     )
 
     # Assert
@@ -291,7 +288,6 @@ def test_context_uses_nearby_equivalence_representatives_and_global_progress(
     requests = build_candidate_annotation_requests(
         (first, second),
         selection_intent="ブログ本文を説明できる画像を選ぶ",
-        similarity_threshold=0.72,
     )
     target = next(
         request
@@ -424,9 +420,6 @@ def _stage_result(
         fingerprint=digest * 64,
         size_bytes=1,
         modified_at_ns=1,
-        changed_at_ns=1,
-        device=1,
-        inode=int(digest),
     )
     return VideoStageResult(
         source=source,

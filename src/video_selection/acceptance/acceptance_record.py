@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -283,15 +284,22 @@ def _validate_private_value(
 
 def _number(value: Mapping[str, object], key: str) -> float:
     result = value.get(key)
-    if not isinstance(result, int | float) or isinstance(result, bool):
-        raise ValueError(f"Acceptance phase metric {key}がnumberではありません")
+    if (
+        not isinstance(result, int | float)
+        or isinstance(result, bool)
+        or not math.isfinite(result)
+        or result < 0
+    ):
+        raise ValueError(
+            f"Acceptance phase metric {key}が非負の有限numberではありません"
+        )
     return float(result)
 
 
 def _integer(value: Mapping[str, object], key: str) -> int:
     result = value.get(key)
-    if not isinstance(result, int) or isinstance(result, bool):
-        raise ValueError(f"Acceptance phase metric {key}がintegerではありません")
+    if not isinstance(result, int) or isinstance(result, bool) or result < 0:
+        raise ValueError(f"Acceptance phase metric {key}が非負integerではありません")
     return result
 
 

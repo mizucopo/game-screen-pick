@@ -10,6 +10,7 @@ from ..models.progress_event import ProgressEvent
 from ..models.report_provenance import ReportProvenance
 from ..models.report_stage_provenance import ReportStageProvenance
 from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
+from .stage_version import stage_version
 
 
 def build_report_provenance(
@@ -17,7 +18,6 @@ def build_report_provenance(
     completed_stage_events: tuple[ProgressEvent, ...],
     configuration: EffectiveConfiguration,
     vision_diagnostics: Mapping[str, VisionInferenceDiagnostics],
-    speech_runtime_identity: str,
     *,
     video_scan_parallelism: Mapping[str, object] | None = None,
 ) -> ReportProvenance:
@@ -71,15 +71,15 @@ def build_report_provenance(
                 eval_tokens=None if diagnostics is None else diagnostics.eval_count,
             )
         )
-    runtime: dict[str, object] = {
-        "application": "video_selection",
-        "speech_runtime_identity": speech_runtime_identity,
-    }
+    speech_runtime_identity = _used_speech_runtime_identity(completed_stages)
+    runtime: dict[str, object] = {"application": "video_selection"}
+    if speech_runtime_identity is not None:
+        runtime["speech_runtime_identity"] = speech_runtime_identity
     if video_scan_parallelism is not None:
         runtime["video_scan_parallelism"] = dict(video_scan_parallelism)
     return ReportProvenance(
         runtime=runtime,
-        tools=_report_tools(completed_stages, speech_runtime_identity),
+        tools=_report_tools(completed_stages),
         contracts=_report_contracts(completed_stages),
         stages=tuple(stages),
     )
@@ -87,7 +87,6 @@ def build_report_provenance(
 
 def _report_tools(
     completed_stages: tuple[CompletedStage, ...],
-    speech_runtime_identity: str,
 ) -> dict[str, str]:
     """Completed Stage semantic inputから実tool identity registryを返す。"""
     media_identities: set[str] = set()
@@ -101,10 +100,10 @@ def _report_tools(
             runtime_identity = model.get("runtime_identity")
             if isinstance(runtime_identity, str):
                 ollama_identities.add(runtime_identity)
-    tools = {
-        "video_selection": "application-v1",
-        "speech_to_text": speech_runtime_identity,
-    }
+    tools = {"video_selection": "application-v1"}
+    speech_runtime_identity = _used_speech_runtime_identity(completed_stages)
+    if speech_runtime_identity is not None:
+        tools["speech_to_text"] = speech_runtime_identity
     if media_identities:
         tools["ffmpeg"] = _single_identity(media_identities, "FFmpeg")
     if ollama_identities:
@@ -166,6 +165,7 @@ def _stage_effective_settings(
             "scene_min_interval_seconds",
             "heartbeat_proxy_contract",
             "scan_algorithm",
+            "scan_partition_contract",
             "timeline_algorithm",
             "scan_proxy_analysis",
         ),
@@ -174,6 +174,7 @@ def _stage_effective_settings(
             "refinement_radius_seconds",
             "max_frame_candidates",
             "candidate_extraction_algorithm",
+            "refinement_group_contract",
             "neutral_analysis_algorithm",
             "blur_reject_variance_min",
             "content_reject_algorithm",
@@ -184,6 +185,7 @@ def _stage_effective_settings(
         ProcessingStage.COLLECT_CONTEXT: (
             "policy_version",
             "subtitle_extraction_version",
+            "checkpoint_contracts",
             "timeline_contract",
             "language",
             "subtitle_stream_index",
@@ -203,10 +205,13 @@ def _stage_effective_settings(
             "similarity_threshold",
         ),
     }
-    settings = {
-        key: semantic_input[key]
-        for key in keys_by_stage.get(completed.stage, ())
-        if key in semantic_input
+    settings: dict[str, object] = {
+        "engine_version": stage_version(completed.stage),
+        **{
+            key: semantic_input[key]
+            for key in keys_by_stage.get(completed.stage, ())
+            if key in semantic_input
+        },
     }
     if completed.stage in {
         ProcessingStage.BUILD_SCENE_CATALOG,
@@ -225,12 +230,14 @@ def _stage_effective_settings(
         generation = semantic_input.get("generation_options")
         if isinstance(generation, Mapping):
             settings["generation_options"] = dict(generation)
-    if completed.stage is ProcessingStage.SELECT_IMAGES and not settings:
-        settings = {
-            "requested_count": configuration.image_count,
-            "spoiler_sensitivity": configuration.spoiler_sensitivity,
-            "similarity_threshold": configuration.similarity_threshold,
-        }
+    if completed.stage is ProcessingStage.SELECT_IMAGES and len(settings) == 1:
+        settings.update(
+            {
+                "requested_count": configuration.image_count,
+                "spoiler_sensitivity": configuration.spoiler_sensitivity,
+                "similarity_threshold": configuration.similarity_threshold,
+            }
+        )
     return settings
 
 
@@ -242,11 +249,12 @@ def _stage_tool_refs(completed: CompletedStage) -> tuple[str, ...]:
     }:
         return ("ffmpeg",)
     if completed.stage is ProcessingStage.COLLECT_CONTEXT:
-        return (
-            ("ffmpeg", "speech_to_text")
-            if "speech_runtime_identity" in completed.semantic_input
-            else ("ffmpeg",)
-        )
+        refs: list[str] = []
+        if "media_runtime_identity" in completed.semantic_input:
+            refs.append("ffmpeg")
+        if "speech_runtime_identity" in completed.semantic_input:
+            refs.append("speech_to_text")
+        return tuple(refs) or ("video_selection",)
     if completed.stage in {
         ProcessingStage.BUILD_SCENE_CATALOG,
         ProcessingStage.ANNOTATE_CANDIDATE,
@@ -300,3 +308,21 @@ def _single_identity(values: set[str], label: str) -> str:
     if len(values) != 1:
         raise ValueError(f"{label} identityがrun内で一致しません")
     return next(iter(values))
+
+
+def _used_speech_runtime_identity(
+    completed_stages: tuple[CompletedStage, ...],
+) -> str | None:
+    """実際にSTTを使ったContext Stageの単一runtime identityを返す。"""
+    values: set[str] = set()
+    for completed in completed_stages:
+        if (
+            completed.stage is not ProcessingStage.COLLECT_CONTEXT
+            or "speech_runtime_identity" not in completed.semantic_input
+        ):
+            continue
+        value = completed.semantic_input["speech_runtime_identity"]
+        if not isinstance(value, str):
+            raise ValueError("Speech Runtime identityが不正です")
+        values.add(value)
+    return None if not values else _single_identity(values, "Speech Runtime")

@@ -67,6 +67,11 @@ def _remove_recognized_legacy_cache(
         removed_bytes += ollama_scenes.stat().st_size
         ollama_scenes.unlink()
         removed_entry_count += 1
+    legacy_video_identities = cache_folder / "video-identities"
+    if legacy_video_identities.is_dir() and not legacy_video_identities.is_symlink():
+        removed_bytes += _directory_content_bytes(legacy_video_identities)
+        shutil.rmtree(legacy_video_identities)
+        removed_entry_count += 1
     annotation_diagnostic = _remove_legacy_candidate_annotation_cache(cache_folder)
     removed_entry_count += annotation_diagnostic.removed_entry_count
     removed_bytes += annotation_diagnostic.removed_bytes
