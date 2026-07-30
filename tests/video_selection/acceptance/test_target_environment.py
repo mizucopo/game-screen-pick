@@ -91,19 +91,63 @@ def test_non_windows_ollama_endpoint_address_is_rejected() -> None:
         )
 
 
-def test_rtx_5090_is_selected_from_multiple_gpu_rows(
+def test_multiple_nvidia_gpus_are_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """複数GPUのnvidia-smi出力からRTX 5090行が選択されること。
+    """複数NVIDIA GPU構成がsupported targetとして拒否されること。
 
     Arrange:
         - RTX 4090とRTX 5090を含むsupported WSL2 targetが用意される
     Act:
         - target environmentがprobeされる
     Assert:
-        - RTX 5090のidentityとmemoryが返されること
+        - 実workloadを記録対象GPUへ固定できない構成として拒否されること
     """
     # Arrange
+    _prepare_supported_target(
+        monkeypatch,
+        (
+            "NVIDIA GeForce RTX 4090, 590.1, 24564\n"
+            "NVIDIA GeForce RTX 5090, 590.1, 32607\n"
+        ),
+    )
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="単一のNVIDIA GPU"):
+        target_environment.probe_target_environment()
+
+
+def test_single_rtx_5090_is_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """単一RTX 5090構成のidentityがsupported targetとして返されること。
+
+    Arrange:
+        - RTX 5090だけを含むsupported WSL2 targetが用意される
+    Act:
+        - target environmentがprobeされる
+    Assert:
+        - 唯一のRTX 5090のidentityとmemoryが返されること
+    """
+    # Arrange
+    _prepare_supported_target(
+        monkeypatch,
+        "NVIDIA GeForce RTX 5090, 590.1, 32607\n",
+    )
+
+    # Act
+    result = target_environment.probe_target_environment()
+
+    # Assert
+    assert result["gpu"] == "NVIDIA GeForce RTX 5090"
+    assert result["gpu_memory_total_mib"] == 32607
+    assert result["nvidia_driver"] == "590.1"
+
+
+def _prepare_supported_target(
+    monkeypatch: pytest.MonkeyPatch,
+    gpu_output: str,
+) -> None:
     monkeypatch.setattr(platform, "system", lambda: "Linux")
     monkeypatch.setattr(
         platform,
@@ -127,10 +171,7 @@ def test_rtx_5090_is_selected_from_multiple_gpu_rows(
         lambda *_args, **_kwargs: subprocess.CompletedProcess(
             args=(),
             returncode=0,
-            stdout=(
-                "NVIDIA GeForce RTX 4090, 590.1, 24564\n"
-                "NVIDIA GeForce RTX 5090, 590.1, 32607\n"
-            ),
+            stdout=gpu_output,
         ),
     )
     monkeypatch.setattr(
@@ -145,14 +186,6 @@ def test_rtx_5090_is_selected_from_multiple_gpu_rows(
         "_visible_ram_bytes",
         lambda: 64 * 1024**3,
     )
-
-    # Act
-    result = target_environment.probe_target_environment()
-
-    # Assert
-    assert result["gpu"] == "NVIDIA GeForce RTX 5090"
-    assert result["gpu_memory_total_mib"] == 32607
-    assert result["nvidia_driver"] == "590.1"
 
 
 class _MediaRuntime:

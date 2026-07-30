@@ -287,10 +287,9 @@ def _gpu_identity() -> dict[str, object]:
     rows = tuple(_parse_gpu_row(line) for line in output.splitlines() if line.strip())
     if not rows:
         raise ValueError("NVIDIA GPU identityが不正です")
-    return next(
-        (row for row in rows if "RTX 5090" in cast(str, row["name"])),
-        rows[0],
-    )
+    if len(rows) != 1:
+        raise ValueError("Target acceptanceには単一のNVIDIA GPU構成が必要です")
+    return rows[0]
 
 
 def _parse_gpu_row(line: str) -> dict[str, object]:

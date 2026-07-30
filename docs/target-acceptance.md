@@ -10,11 +10,14 @@ CLIはIssue #190までscreenshot入力版のままであり、`acceptance-target
 - Windows 11 Pro host
 - WSL2 Ubuntu 24.04内のPython 3.13以上
 - system FFmpeg / ffprobe 6.1.1以上
-- NVIDIA GeForce RTX 5090
+- NVIDIA GPUとしてNVIDIA GeForce RTX 5090が1台だけ搭載されたhost
 - Windowsの非loopback addressをhostに持つ明示URLで接続するWindows native Ollama
 
 host alias、WSL gateway、実際のmedia pathはrepositoryへ保存しない。別構成で動作しても、
 v2.0のfull-runtime合格を示すrecordはこのtargetでだけ生成する。
+preflightは`nvidia-smi`がちょうど1台のRTX 5090だけを返すことを要求する。複数NVIDIA
+GPU構成では、FFmpeg、faster-whisper、Windows native Ollama、resource samplerが同じGPUを
+使うことを一意に証明できないため、RTX 5090を含んでいても受理しない。
 preflightは設定hostの解決先がWindows interfaceであり、そのportのWindows側listenerを
 `ollama.exe`が所有することをmodel解決の前後で検証する。`localhost`やloopback addressは
 WSL内Ollamaとの区別を信頼できる形で固定できないため、通常実行で到達できてもtarget

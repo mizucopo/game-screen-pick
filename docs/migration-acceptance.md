@@ -166,12 +166,15 @@ full-runtimeのv2.0 support targetは次に限定する。
 - WSL2 Ubuntu 24.04内でPython applicationとsystem FFmpegを実行。
 - Windowsの非loopback addressを指定した明示URLでWindows native Ollamaへ接続し、
   Windows側の`ollama.exe`によるlistener所有をpreflightで検証。
-- NVIDIA GeForce RTX 5090上のCUDA STT。
+- NVIDIA GPUとして1台だけ搭載されたGeForce RTX 5090上のCUDA STT。
 
 Ubuntu CIはunit/fake/FFmpeg integrationを保証する。native Linux、macOS、direct Windowsは
 動く可能性があっても、v2.0のfull E2E保証対象ではない。Macからの`ssh winpc`は任意の
 orchestrationにすぎず、repositoryやproduction commandへhost alias、gateway、target media
 pathをhard-codeしない。
+target preflightは`nvidia-smi`がちょうど1台のRTX 5090だけを返すことを要求する。
+複数NVIDIA GPU構成では、FFmpeg、faster-whisper、Windows native Ollama、resource samplerを
+記録対象GPUへ一意に固定できないため、RTX 5090が含まれていても受理しない。
 
 target-onlyのuntracked profileはinput root、通常設定を指すconfiguration path、private
 artifact rootと、relative video path、start/end Video Time、scenario roleだけを保持する。repositoryには
