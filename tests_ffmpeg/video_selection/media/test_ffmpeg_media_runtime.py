@@ -1029,8 +1029,8 @@ def test_cancel_requested_before_scan_prevents_decoder_start(tmp_path: Path) -> 
     stream = runtime.probe(video_path).streams[0]
     runtime.cancel_video_scans()
 
-    # Act / Assert
-    with pytest.raises(MediaRuntimeError, match="cancel"):
+    # Act
+    with pytest.raises(MediaRuntimeError) as exc_info:
         runtime.scan_video(
             video_path,
             stream,
@@ -1040,6 +1040,9 @@ def test_cancel_requested_before_scan_prevents_decoder_start(tmp_path: Path) -> 
             scene_min_interval_seconds=0.5,
             decode_backend="cpu",
         )
+
+    # Assert
+    assert "cancel" in str(exc_info.value)
 
 
 def test_extract_video_frame_returns_exact_requested_pts(tmp_path: Path) -> None:
