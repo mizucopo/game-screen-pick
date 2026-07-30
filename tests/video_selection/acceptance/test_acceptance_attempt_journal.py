@@ -1,6 +1,7 @@
 """AcceptanceAttemptJournalのprocess kill回復test。"""
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -301,3 +302,50 @@ def test_nonfinite_journal_metric_is_rejected(tmp_path: Path) -> None:
             step_name="cold",
             processing_cache_folder=tmp_path / "cache",
         )
+
+
+def test_permission_failure_does_not_replace_existing_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """journalのaccess障害が不存在扱いされず既存bytesが保持されること。
+
+    Arrange:
+        - 確定済みjournalと、そのpathだけ失敗するlstatが用意される
+    Act:
+        - 存在確認と新attempt開始が試行される
+    Assert:
+        - PermissionErrorが保持され既存journalが置換されないこと
+    """
+    # Arrange
+    journal_path = tmp_path / "work" / "active-attempt.json"
+    journal = AcceptanceAttemptJournal(journal_path)
+    journal.start(
+        attempt_id="attempt-1",
+        step_kind="phase",
+        step_name="cold",
+        started_at_epoch_seconds=1.0,
+        execution_context={},
+    )
+    before = journal_path.read_bytes()
+    original_lstat = Path.lstat
+
+    def fail_journal_lstat(path: Path) -> os.stat_result:
+        if path == journal_path:
+            raise PermissionError("injected journal permission failure")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_journal_lstat)
+
+    # Act / Assert
+    with pytest.raises(PermissionError, match="injected journal permission failure"):
+        _ = journal.exists
+    with pytest.raises(PermissionError, match="injected journal permission failure"):
+        journal.start(
+            attempt_id="attempt-2",
+            step_kind="phase",
+            step_name="cold",
+            started_at_epoch_seconds=2.0,
+            execution_context={},
+        )
+    assert journal_path.read_bytes() == before

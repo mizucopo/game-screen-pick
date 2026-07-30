@@ -2,6 +2,7 @@
 
 import json
 import math
+import stat
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +24,7 @@ class AcceptanceAttemptJournal:
     @property
     def exists(self) -> bool:
         """確定済みjournalが存在するか返す。"""
-        return self._path.is_file() and not self._path.is_symlink()
+        return _regular_file_exists(self._path)
 
     def start(
         self,
@@ -35,7 +36,7 @@ class AcceptanceAttemptJournal:
         execution_context: Mapping[str, object],
     ) -> None:
         """pipeline開始前のattempt identityを確定する。"""
-        if self._path.exists():
+        if _regular_file_exists(self._path):
             raise ValueError("Acceptance attempt journalが既に存在します")
         write_atomic_json(
             self._path,
@@ -347,3 +348,14 @@ def _is_sha256(value: object) -> bool:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _regular_file_exists(path: Path) -> bool:
+    """欠損だけを不存在とし、access障害や非通常fileを隠さない。"""
+    try:
+        mode = path.lstat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    if not stat.S_ISREG(mode):
+        raise ValueError("Acceptance attempt journalが通常fileではありません")
+    return True
