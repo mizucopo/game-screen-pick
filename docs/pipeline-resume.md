@@ -66,9 +66,9 @@ Annotation以降だけへ伝播します。
 
 Video Scanはcold runと再開runの両方で同じ15分固定partitionを使います。streamに
 `duration_ts`がない場合だけ、ffprobeのcontainer durationを有理数としてstream tickへ
-切り上げ、partition開始点の個数を決めます。このhintをVideo Durationやframe時刻には
-使いません。最後のpartitionはprobeの丸めで末尾frameを失わないよう、開始PTSからEOFまで
-を対象にします。
+切り上げ、完全な15分区間の境界を決めます。このhintをVideo Durationやframe時刻には
+使いません。15分未満の端数は独立partitionにせず、最後のpartitionを直前の境界から
+EOFまで開くことで、probeの丸めによる末尾frameの欠落と空partitionの必須化を防ぎます。
 並列workerの完了順ではなくVideo OrderとWork Unit keyの安定順で集約します。
 
 ## Target Acceptanceのmaterialization

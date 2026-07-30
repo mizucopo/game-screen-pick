@@ -30,6 +30,7 @@ from tests_ffmpeg.support.ffmpeg_fixture_factory import (
     generate_av1_aac_video,
     generate_cfr_video,
     generate_corrupt_video,
+    generate_delayed_video_with_audio,
     generate_nonzero_start_video,
     generate_odd_dimension_video,
     generate_quantized_audio,
@@ -664,6 +665,7 @@ def test_scan_video_partitions_match_uninterrupted_scan(
         video_path,
         stream,
         tmp_path / "partition-first",
+        media_origin=stream.start_pts * stream.time_base,
         start_pts=stream.start_pts,
         end_pts=boundary_pts,
         heartbeat_interval_seconds=1.0,
@@ -675,6 +677,7 @@ def test_scan_video_partitions_match_uninterrupted_scan(
         video_path,
         stream,
         tmp_path / "partition-second",
+        media_origin=stream.start_pts * stream.time_base,
         start_pts=boundary_pts,
         end_pts=None,
         heartbeat_interval_seconds=1.0,
@@ -735,6 +738,7 @@ def test_scan_partition_allows_no_owned_heartbeat_or_scene(
         video_path,
         stream,
         tmp_path / "empty-signal-partition",
+        media_origin=stream.start_pts * stream.time_base,
         start_pts=stream.start_pts + start_offset.numerator,
         end_pts=stream.start_pts + end_offset.numerator,
         heartbeat_interval_seconds=10.0,
@@ -748,6 +752,59 @@ def test_scan_partition_allows_no_owned_heartbeat_or_scene(
     assert scan.last_frame_pts < stream.start_pts + end_offset.numerator
     assert scan.heartbeats == ()
     assert scan.scene_frames == ()
+
+
+def test_scan_partition_seeks_from_media_origin_when_video_starts_later(
+    tmp_path: Path,
+) -> None:
+    """遅延video streamの有限partitionがmedia origin基準でseekされること。
+
+    Arrange:
+        - audioより2秒遅く始まるvideoと後半の1秒partitionが用意される
+    Act:
+        - container全体のmedia originを指定してpartition scanが実行される
+    Assert:
+        - 要求した半開PTS区間のvideo frameが返されること
+    """
+    # Arrange
+    video_path = generate_delayed_video_with_audio(tmp_path / "delayed-video.mkv")
+    runtime = FfmpegMediaRuntime()
+    probe = runtime.probe(video_path)
+    stream = next(item for item in probe.streams if item.kind == "video")
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    origins = tuple(
+        item.start_pts * item.time_base
+        for item in probe.streams
+        if item.start_pts is not None and item.time_base is not None
+    )
+    media_origin = min(origins)
+    start_offset = Fraction(10) / stream.time_base
+    end_offset = Fraction(11) / stream.time_base
+    assert start_offset.denominator == 1
+    assert end_offset.denominator == 1
+    start_pts = stream.start_pts + start_offset.numerator
+    end_pts = stream.start_pts + end_offset.numerator
+
+    # Act
+    scan = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "delayed-video-partition",
+        media_origin=media_origin,
+        start_pts=start_pts,
+        end_pts=end_pts,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=1.0,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert media_origin == 0
+    assert stream.start_pts * stream.time_base == 2
+    assert scan.origin_pts >= start_pts
+    assert scan.last_frame_pts < end_pts
 
 
 def test_scan_video_reaps_decoder_when_stderr_processing_fails(

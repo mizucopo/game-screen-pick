@@ -1340,6 +1340,81 @@ def test_container_duration_only_schedules_fixed_scan_partitions(
     assert result.scan.metrics.decode_pass_count == 2
 
 
+def test_duration_hint_tail_does_not_require_an_empty_scan_partition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """最終frameを越えるduration hintで空の末尾partitionが要求されないこと。
+
+    Arrange:
+        - 実frameより0.1秒長い2.1秒のcontainer duration hintが用意される
+        - 1秒partitionと、3回目のdecodeを拒否するMedia Runtimeが用意される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - 完全区間1件と、その次のopen-ended区間だけが処理されること
+    """
+    # Arrange
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor._SCAN_PARTITION_SECONDS",
+        1.0,
+    )
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=None,
+                width=64,
+                height=48,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+        duration=Fraction(21, 10),
+    )
+    scan_attempt_count = 0
+
+    def reject_empty_tail(_path: Path) -> None:
+        nonlocal scan_attempt_count
+        scan_attempt_count += 1
+        if scan_attempt_count == 3:
+            raise AssertionError("空の末尾partitionをdecodeしてはいけません")
+
+    runtime = FakeVideoStageMediaRuntime(
+        media_probe=media_probe,
+        on_scan_video=reject_empty_tail,
+    )
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert [(start, end) for _path, start, end in runtime.scan_partition_calls] == [
+        (0, 10),
+        (10, None),
+    ]
+    assert result.scan.metrics.decode_pass_count == 2
+
+
 def test_primary_scan_failure_is_not_masked_by_sibling_cancellation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

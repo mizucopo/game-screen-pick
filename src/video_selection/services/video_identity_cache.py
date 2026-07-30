@@ -85,6 +85,7 @@ class VideoIdentityCache:
             raise RuntimeError("Video Identity cache rootにsymbolic linkは使えません")
         if self._root.exists() and not self._root.is_dir():
             raise RuntimeError("Video Identity cacheには通常directoryが必要です")
+        self._root_prepared = False
         if self._root.exists():
             shutil.rmtree(self._root)
 

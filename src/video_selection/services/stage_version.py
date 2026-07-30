@@ -4,7 +4,7 @@ from ..models.processing_stage import ProcessingStage
 
 _STAGE_VERSIONS = {
     ProcessingStage.DISCOVER_VIDEO_SET: "video-set-discovery-v1",
-    ProcessingStage.SCAN_VIDEO: "video-scan-v4",
+    ProcessingStage.SCAN_VIDEO: "video-scan-v5",
     ProcessingStage.EXTRACT_FRAME_CANDIDATES: "frame-candidate-extraction-v3",
     ProcessingStage.COLLECT_CONTEXT: "context-collection-v4",
     ProcessingStage.RESOLVE_MODELS: "model-resolution-v1",

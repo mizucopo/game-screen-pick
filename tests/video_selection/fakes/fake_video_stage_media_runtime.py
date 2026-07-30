@@ -195,6 +195,7 @@ class FakeVideoStageMediaRuntime:
         stream: MediaStream,
         artifact_folder: Path,
         *,
+        media_origin: Fraction,
         start_pts: int,
         end_pts: int | None,
         heartbeat_interval_seconds: float,
@@ -203,6 +204,7 @@ class FakeVideoStageMediaRuntime:
         decode_backend: str,
     ) -> NativeVideoScan:
         """指定PTS区間の決定的なscan結果を生成する。"""
+        del media_origin
         self.scan_partition_calls.append((media_path, start_pts, end_pts))
         return self._scan_video_range(
             media_path,

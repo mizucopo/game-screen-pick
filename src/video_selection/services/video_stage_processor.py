@@ -80,7 +80,7 @@ from .video_stage_artifacts import (
     serialize_video_scan,
 )
 
-_SCAN_ALGORITHM_VERSION = "video-scan-v4"
+_SCAN_ALGORITHM_VERSION = "video-scan-v5"
 _SCAN_PARTITION_CHECKPOINT_VERSION = checkpoint_version(
     CheckpointOperation.VIDEO_SCAN_PARTITION
 )
@@ -103,6 +103,7 @@ ProbedVideoSource = tuple[
     VideoSource,
     MediaProbe,
     MediaStream,
+    Fraction,
     ScanPartitionDuration,
 ]
 
@@ -167,6 +168,7 @@ class VideoStageProcessor:
                     source,
                     probe,
                     primary_stream,
+                    _media_origin(probe),
                     _resolve_scan_partition_duration(
                         primary_stream,
                         probe.duration,
@@ -204,6 +206,7 @@ class VideoStageProcessor:
                         probed_sources[index][0],
                         probed_sources[index][2],
                         probed_sources[index][3],
+                        probed_sources[index][4],
                         configuration,
                         resolved_runtime_identity,
                     ),
@@ -219,6 +222,7 @@ class VideoStageProcessor:
                             source,
                             probe,
                             primary_stream,
+                            media_origin,
                             scan_partition_duration,
                         ) = probed
                         progress_started = self._start_scan_wait_progress(
@@ -233,6 +237,7 @@ class VideoStageProcessor:
                                 source,
                                 probe,
                                 primary_stream,
+                                media_origin,
                                 scan_partition_duration,
                                 self._await_prepared_scan(
                                     prepared_scan,
@@ -266,6 +271,7 @@ class VideoStageProcessor:
         source: VideoSource,
         probe: MediaProbe,
         primary_stream: MediaStream,
+        media_origin: Fraction,
         scan_partition_duration: ScanPartitionDuration,
         prepared_scan: PreparedVideoScan,
         video_order: int,
@@ -292,6 +298,7 @@ class VideoStageProcessor:
         scan_input = _scan_semantic_input(
             source,
             primary_stream,
+            media_origin,
             runtime_identity,
             configuration,
             scan_partition_duration,
@@ -394,6 +401,7 @@ class VideoStageProcessor:
         video_set: VideoSet,
         source: VideoSource,
         primary_stream: MediaStream,
+        media_origin: Fraction,
         scan_partition_duration: ScanPartitionDuration,
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
@@ -405,6 +413,7 @@ class VideoStageProcessor:
             semantic_input = _scan_semantic_input(
                 source,
                 primary_stream,
+                media_origin,
                 runtime_identity,
                 configuration,
                 scan_partition_duration,
@@ -455,6 +464,7 @@ class VideoStageProcessor:
                         video_set,
                         source,
                         primary_stream,
+                        media_origin,
                         scan_partition_duration[1],
                         configuration,
                         semantic_input,
@@ -504,6 +514,7 @@ class VideoStageProcessor:
         video_set: VideoSet,
         source: VideoSource,
         primary_stream: MediaStream,
+        media_origin: Fraction,
         scan_partition_duration_ts: int,
         configuration: EffectiveConfiguration,
         scan_input: dict[str, object],
@@ -546,6 +557,7 @@ class VideoStageProcessor:
                     video_set,
                     source,
                     primary_stream,
+                    media_origin,
                     configuration,
                     checkpoint_root,
                     start_pts,
@@ -619,6 +631,7 @@ class VideoStageProcessor:
         video_set: VideoSet,
         source: VideoSource,
         stream: MediaStream,
+        media_origin: Fraction,
         configuration: EffectiveConfiguration,
         checkpoint_root: Path,
         start_pts: int,
@@ -629,6 +642,7 @@ class VideoStageProcessor:
             source.path,
             stream,
             checkpoint_root,
+            media_origin=media_origin,
             start_pts=start_pts,
             end_pts=end_pts,
             heartbeat_interval_seconds=configuration.heartbeat_interval_seconds,
@@ -923,6 +937,8 @@ def _build_scan_partitions(
     step_pts = max(1, step_value.numerator // step_value.denominator)
     hinted_end = stream.start_pts + duration_ts
     starts = tuple(range(stream.start_pts, hinted_end, step_pts))
+    if len(starts) > 1 and duration_ts % step_pts != 0:
+        starts = starts[:-1]
     if not starts:
         msg = "Video Scan partitionを構築できませんでした"
         raise ValueError(msg)
@@ -1155,6 +1171,7 @@ def _materialize_scanned_frames(
 def _scan_semantic_input(
     source: VideoSource,
     stream: MediaStream,
+    media_origin: Fraction,
     runtime_identity: MediaRuntimeIdentity,
     configuration: EffectiveConfiguration,
     scan_partition_duration: ScanPartitionDuration,
@@ -1170,6 +1187,7 @@ def _scan_semantic_input(
             "width": stream.width,
             "height": stream.height,
         },
+        "media_origin": _fraction_value(media_origin),
         "media_runtime_identity": {
             "ffmpeg_version": runtime_identity.ffmpeg_version,
             "ffprobe_version": runtime_identity.ffprobe_version,
@@ -1216,6 +1234,19 @@ def _resolve_scan_partition_duration(
         msg = "Video Scanのcontainer durationをstream tickへ変換できませんでした"
         raise ValueError(msg)
     return ("container", duration_ts)
+
+
+def _media_origin(probe: MediaProbe) -> Fraction:
+    """全streamのうち最も早いexact開始timestampを返す。"""
+    origins = tuple(
+        stream.start_pts * stream.time_base
+        for stream in probe.streams
+        if stream.start_pts is not None and stream.time_base is not None
+    )
+    if not origins:
+        msg = "Video Scanにはmedia streamの開始PTSが必要です"
+        raise ValueError(msg)
+    return min(origins)
 
 
 def _extraction_semantic_input(

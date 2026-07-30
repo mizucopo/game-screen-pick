@@ -325,3 +325,39 @@ def test_symlinked_identity_cache_fails_before_reading_video(
     # Assert
     assert first.sources[0].fingerprint == hashlib.sha256(b"stable-video").hexdigest()
     assert digest_call_count == 0
+
+
+def test_reset_cache_instance_can_resolve_identity_again(tmp_path: Path) -> None:
+    """resetされた同じcache instanceでidentityが再確定されること。
+
+    Arrange:
+        - 一つのidentityを確定済みのVideo Identity cacheが用意される
+    Act:
+        - cacheがresetされ、同じinstanceでsourceが再解決される
+    Assert:
+        - cache rootが再作成され、同じfingerprintが再確定されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    video_path = input_folder / "chapter.mp4"
+    video_path.write_bytes(b"stable-video")
+    identity_cache_root = tmp_path / "video-identities"
+    cache = VideoIdentityCache(identity_cache_root)
+    first_fingerprint, _first_stat, first_reused = cache.resolve(
+        input_folder,
+        video_path,
+    )
+
+    # Act
+    cache.reset()
+    second_fingerprint, _second_stat, second_reused = cache.resolve(
+        input_folder,
+        video_path,
+    )
+
+    # Assert
+    assert first_reused is False
+    assert second_reused is False
+    assert second_fingerprint == first_fingerprint
+    assert len(tuple(identity_cache_root.glob("*.json"))) == 1

@@ -206,6 +206,7 @@ class FfmpegMediaRuntime:
             media_path,
             stream,
             artifact_folder,
+            media_origin=None,
             start_pts=None,
             end_pts=None,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
@@ -234,6 +235,7 @@ class FfmpegMediaRuntime:
         stream: MediaStream,
         artifact_folder: Path,
         *,
+        media_origin: Fraction,
         start_pts: int,
         end_pts: int | None,
         heartbeat_interval_seconds: float,
@@ -249,6 +251,7 @@ class FfmpegMediaRuntime:
             media_path,
             stream,
             artifact_folder,
+            media_origin=media_origin,
             start_pts=start_pts,
             end_pts=end_pts,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
@@ -263,6 +266,7 @@ class FfmpegMediaRuntime:
         stream: MediaStream,
         artifact_folder: Path,
         *,
+        media_origin: Fraction | None,
         start_pts: int | None,
         end_pts: int | None,
         heartbeat_interval_seconds: float,
@@ -297,6 +301,7 @@ class FfmpegMediaRuntime:
             scene_change_threshold,
             scene_min_interval_seconds,
             decode_backend,
+            media_origin=media_origin,
             start_pts=start_pts,
             end_pts=end_pts,
         )
@@ -909,6 +914,7 @@ class FfmpegMediaRuntime:
         scene_min_interval_seconds: float,
         decode_backend: str,
         *,
+        media_origin: Fraction | None,
         start_pts: int | None,
         end_pts: int | None,
     ) -> list[str]:
@@ -933,12 +939,16 @@ class FfmpegMediaRuntime:
         elif stream.codec_name == "av1":
             command.extend(["-c:v", "libdav1d"])
         if start_pts is not None:
-            if stream.time_base is None or stream.start_pts is None:
+            if (
+                stream.time_base is None
+                or stream.start_pts is None
+                or media_origin is None
+            ):
                 msg = "Video Scan partitionにはstream timingが必要です"
                 raise ValueError(msg)
-            relative_start = (start_pts - stream.start_pts) * stream.time_base
+            relative_start = start_pts * stream.time_base - media_origin
             if relative_start < 0:
-                msg = "Video Scan partitionがstream originより前です"
+                msg = "Video Scan partitionがmedia originより前です"
                 raise ValueError(msg)
             required_preroll = (
                 max(

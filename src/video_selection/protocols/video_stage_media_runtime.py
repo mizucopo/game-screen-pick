@@ -42,6 +42,7 @@ class VideoStageMediaRuntime(Protocol):
         stream: MediaStream,
         artifact_folder: Path,
         *,
+        media_origin: Fraction,
         start_pts: int,
         end_pts: int | None,
         heartbeat_interval_seconds: float,
