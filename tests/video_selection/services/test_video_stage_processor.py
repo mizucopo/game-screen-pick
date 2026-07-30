@@ -419,7 +419,7 @@ def test_nvdec_auto_grows_to_six_workers_when_gpu_has_rolling_headroom(
         video_scan_auto_max_workers=6,
     )
     runtime = FakeVideoStageMediaRuntime(
-        on_scan_video=lambda _path: time.sleep(0.02),
+        on_scan_video=lambda _path: time.sleep(0.2),
     )
     processor = VideoStageProcessor(
         runtime,
