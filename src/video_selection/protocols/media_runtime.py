@@ -7,6 +7,7 @@ from typing import Protocol, runtime_checkable
 
 from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.embedded_subtitle import EmbeddedSubtitle
+from ..models.empty_video_scan_partition import EmptyVideoScanPartition
 from ..models.media_probe import MediaProbe
 from ..models.media_runtime_identity import MediaRuntimeIdentity
 from ..models.media_stream import MediaStream
@@ -69,7 +70,7 @@ class MediaRuntime(Protocol):
         scene_change_threshold: float,
         scene_min_interval_seconds: float,
         decode_backend: str,
-    ) -> NativeVideoScan:
+    ) -> NativeVideoScan | EmptyVideoScanPartition:
         """固定半開PTS区間または末尾区間を一回decodeする。"""
 
     def cancel_video_scans(self) -> None:

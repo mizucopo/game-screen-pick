@@ -4,7 +4,7 @@ from ..models.checkpoint_operation import CheckpointOperation
 
 _CHECKPOINT_VERSIONS = {
     CheckpointOperation.VIDEO_IDENTITY: "video-identity-engine-v2",
-    CheckpointOperation.VIDEO_SCAN_PARTITION: "video-scan-partition-v3",
+    CheckpointOperation.VIDEO_SCAN_PARTITION: "video-scan-partition-v4",
     CheckpointOperation.FRAME_REFINEMENT_GROUP: "frame-refinement-group-v1",
     CheckpointOperation.PCM_AUDIO_CHUNK: "pcm-audio-range-v2",
     CheckpointOperation.SPEECH_RECOGNITION_CHUNK: "speech-recognition-chunk-v1",

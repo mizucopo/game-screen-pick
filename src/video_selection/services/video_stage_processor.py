@@ -22,6 +22,7 @@ from ..models.candidate_moment import CandidateMoment
 from ..models.checkpoint_operation import CheckpointOperation
 from ..models.durable_work_unit_bundle import DurableWorkUnitBundle
 from ..models.effective_configuration import EffectiveConfiguration
+from ..models.empty_video_scan_partition import EmptyVideoScanPartition
 from ..models.frame_candidate_extraction import FrameCandidateExtraction
 from ..models.frame_candidate_extraction_metrics import (
     FrameCandidateExtractionMetrics,
@@ -80,7 +81,7 @@ from .video_stage_artifacts import (
     serialize_video_scan,
 )
 
-_SCAN_ALGORITHM_VERSION = "video-scan-v5"
+_SCAN_ALGORITHM_VERSION = "video-scan-v6"
 _SCAN_PARTITION_CHECKPOINT_VERSION = checkpoint_version(
     CheckpointOperation.VIDEO_SCAN_PARTITION
 )
@@ -99,6 +100,7 @@ _CANDIDATE_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
 _SCAN_PROGRESS_HEARTBEAT_SECONDS = 30.0
 
 ScanPartitionDuration = tuple[str, int]
+VideoScanPartition = NativeVideoScan | EmptyVideoScanPartition
 ProbedVideoSource = tuple[
     VideoSource,
     MediaProbe,
@@ -531,7 +533,7 @@ class VideoStageProcessor:
             operation=CheckpointOperation.VIDEO_SCAN_PARTITION,
             observer=self._observer,
         )
-        partitions: list[NativeVideoScan] = []
+        partitions: list[VideoScanPartition] = []
         for partition_index, (start_pts, end_pts) in enumerate(
             _build_scan_partitions(
                 primary_stream,
@@ -541,63 +543,38 @@ class VideoStageProcessor:
         ):
             if scan_cancellation.is_set():
                 raise CancelledError
-            partition_input = {
-                "parent_stage_semantic_input": scan_input,
-                "partition_index": partition_index,
-                "start_pts": start_pts,
-                "end_pts": end_pts,
-            }
-
-            def produce_partition(
-                checkpoint_root: Path,
-                start_pts: int = start_pts,
-                end_pts: int | None = end_pts,
-            ) -> dict[str, object]:
-                return self._produce_scan_partition(
-                    video_set,
-                    source,
-                    primary_stream,
-                    media_origin,
-                    configuration,
-                    checkpoint_root,
-                    start_pts,
-                    end_pts,
-                )
-
-            def validate_partition(
-                value: DurableWorkUnitBundle,
-                stream: MediaStream = primary_stream,
-                start_pts: int = start_pts,
-                end_pts: int | None = end_pts,
-            ) -> None:
-                _restore_scan_partition_for_range(
-                    value.artifact,
-                    value.root,
-                    stream,
-                    start_pts,
-                    end_pts,
-                )
-
-            bundle, _reused = checkpoint_cache.resolve(
-                (
-                    f"pts-{start_pts}-eof"
-                    if end_pts is None
-                    else f"pts-{start_pts}-{end_pts}"
-                ),
-                partition_input,
-                produce_partition,
-                validate_bundle=validate_partition,
+            partition = self._resolve_scan_partition_checkpoint(
+                checkpoint_cache,
+                video_set,
+                source,
+                primary_stream,
+                media_origin,
+                configuration,
+                scan_input,
+                partition_index,
+                start_pts,
+                end_pts,
             )
-            partitions.append(
-                _restore_scan_partition_for_range(
-                    bundle.artifact,
-                    bundle.root,
-                    primary_stream,
-                    start_pts,
-                    end_pts,
-                )
-            )
-            validate_video_source_snapshot(video_set, source)
+            partitions.append(partition)
+            if isinstance(partition, EmptyVideoScanPartition):
+                if end_pts is not None:
+                    if scan_cancellation.is_set():
+                        raise CancelledError
+                    partitions.append(
+                        self._resolve_scan_partition_checkpoint(
+                            checkpoint_cache,
+                            video_set,
+                            source,
+                            primary_stream,
+                            media_origin,
+                            configuration,
+                            scan_input,
+                            partition_index,
+                            start_pts,
+                            None,
+                        )
+                    )
+                break
         native_scan = _materialize_video_scan_partitions(
             tuple(partitions),
             stage_root,
@@ -626,6 +603,68 @@ class VideoStageProcessor:
         validate_video_source_snapshot(video_set, source)
         return artifact
 
+    def _resolve_scan_partition_checkpoint(
+        self,
+        checkpoint_cache: DurableWorkUnitCache,
+        video_set: VideoSet,
+        source: VideoSource,
+        stream: MediaStream,
+        media_origin: Fraction,
+        configuration: EffectiveConfiguration,
+        scan_input: dict[str, object],
+        partition_index: int,
+        start_pts: int,
+        end_pts: int | None,
+    ) -> VideoScanPartition:
+        """一つのframe有無を含むscan partition checkpointを解決する。"""
+        partition_input = {
+            "parent_stage_semantic_input": scan_input,
+            "partition_index": partition_index,
+            "start_pts": start_pts,
+            "end_pts": end_pts,
+        }
+
+        def produce_partition(checkpoint_root: Path) -> dict[str, object]:
+            return self._produce_scan_partition(
+                video_set,
+                source,
+                stream,
+                media_origin,
+                configuration,
+                checkpoint_root,
+                start_pts,
+                end_pts,
+            )
+
+        def validate_partition(value: DurableWorkUnitBundle) -> None:
+            _restore_scan_partition_for_range(
+                value.artifact,
+                value.root,
+                stream,
+                start_pts,
+                end_pts,
+            )
+
+        bundle, _reused = checkpoint_cache.resolve(
+            (
+                f"pts-{start_pts}-eof"
+                if end_pts is None
+                else f"pts-{start_pts}-{end_pts}"
+            ),
+            partition_input,
+            produce_partition,
+            validate_bundle=validate_partition,
+        )
+        partition = _restore_scan_partition_for_range(
+            bundle.artifact,
+            bundle.root,
+            stream,
+            start_pts,
+            end_pts,
+        )
+        validate_video_source_snapshot(video_set, source)
+        return partition
+
     def _produce_scan_partition(
         self,
         video_set: VideoSet,
@@ -650,6 +689,11 @@ class VideoStageProcessor:
             scene_min_interval_seconds=configuration.scene_min_interval_seconds,
             decode_backend=configuration.decode_backend,
         )
+        if isinstance(scan, EmptyVideoScanPartition):
+            shutil.rmtree(checkpoint_root / "heartbeats", ignore_errors=True)
+            shutil.rmtree(checkpoint_root / ".scene-proxies", ignore_errors=True)
+            validate_video_source_snapshot(video_set, source)
+            return serialize_video_scan_partition(scan, checkpoint_root)
         temporary_scene_folder = checkpoint_root / ".scene-proxies"
         scene_folder = checkpoint_root / "scene-proxies"
         temporary_scene_folder.replace(scene_folder)
@@ -952,7 +996,7 @@ def _build_scan_partitions(
 
 
 def _materialize_video_scan_partitions(
-    partitions: tuple[NativeVideoScan, ...],
+    partitions: tuple[VideoScanPartition, ...],
     stage_root: Path,
     scene_min_interval_seconds: float,
 ) -> NativeVideoScan:
@@ -960,29 +1004,37 @@ def _materialize_video_scan_partitions(
     if not partitions:
         msg = "Video Scanには1件以上のpartitionが必要です"
         raise ValueError(msg)
-    first = partitions[0]
+    framed_partitions = tuple(
+        partition for partition in partitions if isinstance(partition, NativeVideoScan)
+    )
+    if not framed_partitions:
+        msg = "Video Scan partition全体に表示可能frameがありません"
+        raise ValueError(msg)
+    first = framed_partitions[0]
+    if any(
+        partition.stream_index != first.stream_index
+        or partition.time_base != first.time_base
+        for partition in partitions
+    ):
+        msg = "Video Scan partitionのstream timingが不正です"
+        raise ValueError(msg)
     previous_last_pts: int | None = None
-    for partition in partitions:
-        if (
-            partition.stream_index != first.stream_index
-            or partition.time_base != first.time_base
-            or (
-                previous_last_pts is not None
-                and partition.origin_pts <= previous_last_pts
-            )
-        ):
+    for partition in framed_partitions:
+        if previous_last_pts is not None and partition.origin_pts <= previous_last_pts:
             msg = "Video Scan partitionの順序またはstream timingが不正です"
             raise ValueError(msg)
         previous_last_pts = partition.last_frame_pts
     heartbeats = _materialize_scanned_frames(
-        tuple(frame for partition in partitions for frame in partition.heartbeats),
+        tuple(
+            frame for partition in framed_partitions for frame in partition.heartbeats
+        ),
         stage_root / "heartbeats",
     )
     if not heartbeats:
         msg = "Video Scan partition全体にheartbeatがありません"
         raise ValueError(msg)
     scene_candidates = tuple(
-        frame for partition in partitions for frame in partition.scene_frames
+        frame for partition in framed_partitions for frame in partition.scene_frames
     )
     scene_frames = _materialize_scanned_frames(
         select_scene_signal_frames(
@@ -991,7 +1043,7 @@ def _materialize_video_scan_partitions(
         ),
         stage_root / ".scene-proxies",
     )
-    last = partitions[-1]
+    last = framed_partitions[-1]
     return NativeVideoScan(
         stream_index=first.stream_index,
         origin_pts=first.origin_pts,
@@ -1012,9 +1064,19 @@ def _restore_scan_partition_for_range(
     stream: MediaStream,
     start_pts: int,
     end_pts: int | None,
-) -> NativeVideoScan:
+) -> VideoScanPartition:
     """partition artifactが要求したstreamと半開区間に属するか検証する。"""
     partition = restore_video_scan_partition(artifact, checkpoint_root)
+    if isinstance(partition, EmptyVideoScanPartition):
+        if (
+            stream.time_base is None
+            or partition.stream_index != stream.index
+            or partition.time_base != stream.time_base
+            or partition.start_pts != start_pts
+            or partition.end_pts != end_pts
+        ):
+            raise ValueError("空Video Scan partitionの要求PTS rangeが不正です")
+        return partition
     if (
         stream.time_base is None
         or partition.stream_index != stream.index

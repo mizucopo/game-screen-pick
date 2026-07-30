@@ -1415,6 +1415,158 @@ def test_duration_hint_tail_does_not_require_an_empty_scan_partition(
     assert result.scan.metrics.decode_pass_count == 2
 
 
+def test_overstated_container_duration_stops_after_confirmed_video_eof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """長いcontainer tailが映像EOF後の必須partitionを増やさないこと。
+
+    Arrange:
+        - 実frameが約1秒で終わり4秒のcontainer durationを持つ動画が用意される
+        - Video Scan partitionが1秒へ設定される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - 最初の空区間からEOFまでが確認され、後続境界が処理されないこと
+        - 映像frameを持つpartitionのtimelineが失われないこと
+    """
+    # Arrange
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor._SCAN_PARTITION_SECONDS",
+        1.0,
+    )
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=None,
+                width=64,
+                height=48,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+        duration=Fraction(4),
+    )
+    video_set = discover_video_set(input_folder)
+    configuration = _configuration(input_folder, tmp_path / "output")
+    runtime = FakeVideoStageMediaRuntime(media_probe=media_probe)
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+    shutil.rmtree(
+        configuration.processing_cache_folder
+        / "videos"
+        / video_set.sources[0].fingerprint
+        / ProcessingStage.SCAN_VIDEO.value
+    )
+    retry_runtime = FakeVideoStageMediaRuntime(media_probe=media_probe)
+    repaired = VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+
+    # Assert
+    assert [(start, end) for _path, start, end in runtime.scan_partition_calls] == [
+        (0, 10),
+        (10, 20),
+        (20, 30),
+        (20, None),
+    ]
+    assert result.scan.timeline.origin_pts == 0
+    assert result.scan.timeline.duration.seconds == 2
+    assert retry_runtime.scan_partition_calls == []
+    assert repaired.scan.timeline == result.scan.timeline
+
+
+def test_empty_partition_preserves_frames_after_a_long_timestamp_gap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """空partition後のframeがEOF確認scanで保持されること。
+
+    Arrange:
+        - 0秒と40秒にframeを持ち50秒のcontainer durationを持つ動画が用意される
+        - Video Scan partitionが10秒へ設定される
+    Act:
+        - Video Stage processorが実行される
+    Assert:
+        - 10秒からの空区間が検出され、同じ開始点からEOFまでscanされること
+        - 40秒の後半frameがscan結果に保持されること
+    """
+    # Arrange
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor._SCAN_PARTITION_SECONDS",
+        10.0,
+    )
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mkv").write_bytes(b"video-content")
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=None,
+                width=64,
+                height=48,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+        duration=Fraction(50),
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        media_probe=media_probe,
+        distant_moments=True,
+        scan_frame_pts=(0, 400),
+    )
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert [(start, end) for _path, start, end in runtime.scan_partition_calls] == [
+        (0, 100),
+        (100, 200),
+        (100, None),
+    ]
+    assert [frame.source_pts for frame in result.scan.heartbeats] == [0, 400]
+    assert result.scan.timeline.duration.seconds == 41
+
+
 def test_primary_scan_failure_is_not_masked_by_sibling_cancellation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -12,7 +12,7 @@ Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行�
 
 1. `scan-video`
    - `attached_pic`を除外し、default disposition、stream indexの順でPrimary Video Streamを決めます。
-   - exact stream timingを15分の固定PTS partitionへ分け、各partitionの一回のnative decodeを、1秒heartbeat、320px scene signal、全frame timingへ分岐します。streamの`duration_ts`がないcontainerでは、ffprobeのcontainer durationを有理数のままstream tickへ切り上げ、完全な15分区間の境界だけを決めます。15分未満の端数は独立partitionにせず、最後のpartitionを直前の境界からEOFまで開きます。
+   - exact stream timingを15分の固定PTS partitionへ分け、各partitionの一回のnative decodeを、1秒heartbeat、320px scene signal、全frame timingへ分岐します。streamの`duration_ts`がないcontainerでは、ffprobeのcontainer durationを有理数のままstream tickへ切り上げ、完全な15分区間の境界だけを決めます。15分未満の端数は独立partitionにせず、最後のpartitionを直前の境界からEOFまで開きます。過大なcontainer tailで空partitionへ到達した場合は、その空結果を確定して同じ開始PTSからEOFまでを確認します。後半frameがなければ後続境界を止め、timestamp gap後にframeがあれば最終partitionとして保持します。
    - 各partitionをDurable Work Unitとしてatomicに確定します。cold runと再開runが同じpartition境界を使うため、再開の有無でtimeline、scene signal、Candidate IDを変えません。
    - heartbeat/scene proxyは1件ずつRGB decode・測定して解放し、全proxyのRGBを同時保持しません。
    - partitionをPTS順に集約し、Heartbeat Proxy、scene signalの時刻、exact timeline、scan metricをCompleted Stageとしてatomicに確定します。

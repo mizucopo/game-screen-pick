@@ -27,3 +27,23 @@ def test_every_checkpoint_operation_has_an_explicit_version(
     # Assert
     assert version
     assert version != "walking-skeleton-0"
+
+
+def test_video_scan_partition_has_empty_result_checkpoint_version() -> None:
+    """Video Scan partitionに空結果対応版のversionが付与されること。
+
+    Arrange:
+        - Video Scan partition Checkpoint Operationが用意される
+    Act:
+        - Checkpoint versionが解決される
+    Assert:
+        - 空結果artifact contract固有のversionが返されること
+    """
+    # Arrange
+    operation = CheckpointOperation.VIDEO_SCAN_PARTITION
+
+    # Act
+    version = checkpoint_version(operation)
+
+    # Assert
+    assert version == "video-scan-partition-v4"

@@ -14,11 +14,15 @@ from PIL import Image
 
 from src.video_selection.media.ffmpeg_media_runtime import FfmpegMediaRuntime
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
+from src.video_selection.models.empty_video_scan_partition import (
+    EmptyVideoScanPartition,
+)
 from src.video_selection.models.media_runtime_error import MediaRuntimeError
 from src.video_selection.models.media_runtime_failure_reason import (
     MediaRuntimeFailureReason,
 )
 from src.video_selection.models.media_stream import MediaStream
+from src.video_selection.models.native_video_scan import NativeVideoScan
 from src.video_selection.services.discover_video_set import discover_video_set
 from src.video_selection.services.select_scene_signal_frames import (
     select_scene_signal_frames,
@@ -687,6 +691,8 @@ def test_scan_video_partitions_match_uninterrupted_scan(
     )
 
     # Assert
+    assert isinstance(first, NativeVideoScan)
+    assert isinstance(second, NativeVideoScan)
     assert first.origin_pts == uninterrupted.origin_pts
     assert second.last_frame_pts == uninterrupted.last_frame_pts
     assert second.last_frame_duration_ts == uninterrupted.last_frame_duration_ts
@@ -748,6 +754,7 @@ def test_scan_partition_allows_no_owned_heartbeat_or_scene(
     )
 
     # Assert
+    assert isinstance(scan, NativeVideoScan)
     assert scan.origin_pts >= stream.start_pts + start_offset.numerator
     assert scan.last_frame_pts < stream.start_pts + end_offset.numerator
     assert scan.heartbeats == ()
@@ -801,10 +808,129 @@ def test_scan_partition_seeks_from_media_origin_when_video_starts_later(
     )
 
     # Assert
+    assert isinstance(scan, NativeVideoScan)
     assert media_origin == 0
     assert stream.start_pts * stream.time_base == 2
     assert scan.origin_pts >= start_pts
     assert scan.last_frame_pts < end_pts
+
+
+def test_scan_partition_returns_empty_result_after_video_eof(
+    tmp_path: Path,
+) -> None:
+    """映像EOF後の成功した有限scanが空partitionとして返されること。
+
+    Arrange:
+        - 3秒で終了するvideoと4秒から5秒の半開PTS区間が用意される
+    Act:
+        - EOF後のpartition scanが実FFmpegで実行される
+    Assert:
+        - decoder failureではなく要求rangeに対応する空partitionが返されること
+    """
+    # Arrange
+    video_path = generate_scene_change_video(tmp_path / "empty-after-eof.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    start_offset = Fraction(4) / stream.time_base
+    end_offset = Fraction(5) / stream.time_base
+    assert start_offset.denominator == 1
+    assert end_offset.denominator == 1
+    start_pts = stream.start_pts + start_offset.numerator
+    end_pts = stream.start_pts + end_offset.numerator
+
+    # Act
+    scan = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "empty-after-eof",
+        media_origin=stream.start_pts * stream.time_base,
+        start_pts=start_pts,
+        end_pts=end_pts,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=1.0,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert isinstance(scan, EmptyVideoScanPartition)
+    assert scan.start_pts == start_pts
+    assert scan.end_pts == end_pts
+
+
+def test_scan_partition_does_not_treat_unparsed_proxy_output_as_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """proxyがあるtiming解析異常が空partitionとして扱われないこと。
+
+    Arrange:
+        - proxyを生成するが解釈不能なstderrだけを返す成功processが用意される
+    Act:
+        - 有限partition scanが実行される
+    Assert:
+        - EOF確定ではなくdecoder failureが返されること
+    """
+    # Arrange
+    artifact_folder = tmp_path / "unparsed-partition"
+    process = MagicMock()
+    process.pid = 123
+    process.returncode = None
+    process.stderr.__iter__.return_value = iter(["unrecognized showinfo output\n"])
+
+    def start_process(*_args: object, **_kwargs: object) -> MagicMock:
+        heartbeat_folder = artifact_folder / "heartbeats"
+        (heartbeat_folder / "000000000001.jpg").write_bytes(b"proxy")
+        return process
+
+    def reap(_process: object) -> tuple[int, float]:
+        process.returncode = 0
+        return 0, 0.01
+
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.subprocess.Popen",
+        start_process,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.wait_for_process",
+        reap,
+    )
+    runtime = FfmpegMediaRuntime()
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="h264",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=3000,
+        width=1280,
+        height=720,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+    )
+
+    # Act
+    with pytest.raises(MediaRuntimeError) as caught:
+        runtime.scan_video_partition(
+            tmp_path / "source.mkv",
+            stream,
+            artifact_folder,
+            media_origin=Fraction(0),
+            start_pts=1000,
+            end_pts=2000,
+            heartbeat_interval_seconds=1.0,
+            scene_change_threshold=0.3,
+            scene_min_interval_seconds=0.5,
+            decode_backend="cpu",
+        )
+
+    # Assert
+    assert "timing" in str(caught.value)
 
 
 def test_scan_video_reaps_decoder_when_stderr_processing_fails(

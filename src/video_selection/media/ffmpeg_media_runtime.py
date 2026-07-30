@@ -19,6 +19,7 @@ from typing import NoReturn
 
 from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.embedded_subtitle import EmbeddedSubtitle
+from ..models.empty_video_scan_partition import EmptyVideoScanPartition
 from ..models.media_probe import MediaProbe
 from ..models.media_runtime_error import MediaRuntimeError
 from ..models.media_runtime_failure_reason import MediaRuntimeFailureReason
@@ -214,6 +215,11 @@ class FfmpegMediaRuntime:
             scene_min_interval_seconds=scene_min_interval_seconds,
             decode_backend=decode_backend,
         )
+        if isinstance(scan, EmptyVideoScanPartition):
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.DECODER_FAILURE,
+                "Video Scanに表示可能frameがありません",
+            )
         selected_scenes = select_scene_signal_frames(
             scan.scene_frames,
             scene_min_interval_seconds,
@@ -242,7 +248,7 @@ class FfmpegMediaRuntime:
         scene_change_threshold: float,
         scene_min_interval_seconds: float,
         decode_backend: str,
-    ) -> NativeVideoScan:
+    ) -> NativeVideoScan | EmptyVideoScanPartition:
         """固定半開PTS区間または指定PTSからEOFまでを一回decodeする。"""
         if end_pts is not None and start_pts >= end_pts:
             msg = "Video Scan partitionのPTS rangeが不正です"
@@ -273,7 +279,7 @@ class FfmpegMediaRuntime:
         scene_change_threshold: float,
         scene_min_interval_seconds: float,
         decode_backend: str,
-    ) -> NativeVideoScan:
+    ) -> NativeVideoScan | EmptyVideoScanPartition:
         """同じscan algorithmを全体または固定partitionへ適用する。"""
         _validate_scan_configuration(
             heartbeat_interval_seconds,
@@ -369,6 +375,21 @@ class FfmpegMediaRuntime:
                 f"Video ScanのFFmpeg decodeに失敗しました\n{detail}",
             )
         if timeline_first is None or timeline_last is None:
+            if start_pts is not None:
+                if any(heartbeat_folder.iterdir()) or any(scene_folder.iterdir()):
+                    raise MediaRuntimeError(
+                        MediaRuntimeFailureReason.DECODER_FAILURE,
+                        "Video Scanのproxyに対応するtimingを解析できませんでした",
+                    )
+                return EmptyVideoScanPartition(
+                    stream_index=stream.index,
+                    start_pts=start_pts,
+                    end_pts=end_pts,
+                    time_base=stream.time_base,
+                    wall_seconds=wall_seconds,
+                    cpu_seconds=cpu_seconds,
+                    decode_pass_count=1,
+                )
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.DECODER_FAILURE,
                 "Video Scanに表示可能frameがありません",

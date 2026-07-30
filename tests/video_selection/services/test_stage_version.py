@@ -63,7 +63,7 @@ def test_scan_video_has_partition_resume_stage_version() -> None:
     version = stage_version(stage)
 
     # Assert
-    assert version == "video-scan-v5"
+    assert version == "video-scan-v6"
 
 
 def test_resolve_models_has_model_resolution_stage_version() -> None:

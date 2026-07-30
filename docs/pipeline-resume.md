@@ -69,6 +69,9 @@ Video Scanはcold runと再開runの両方で同じ15分固定partitionを使い
 切り上げ、完全な15分区間の境界を決めます。このhintをVideo Durationやframe時刻には
 使いません。15分未満の端数は独立partitionにせず、最後のpartitionを直前の境界から
 EOFまで開くことで、probeの丸めによる末尾frameの欠落と空partitionの必須化を防ぎます。
+別streamの長いtailにより完全な15分境界まで過大評価された場合は、最初の空partitionも
+checkpointへ確定し、同じ開始PTSからEOFまでを一度だけ確認します。EOF確認も空なら後続境界を
+処理せず、後半frameがあればtimestamp gapとしてそのtailを最終partitionへ保持します。
 並列workerの完了順ではなくVideo OrderとWork Unit keyの安定順で集約します。
 
 ## Target Acceptanceのmaterialization

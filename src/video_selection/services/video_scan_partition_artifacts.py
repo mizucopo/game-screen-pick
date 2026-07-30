@@ -8,19 +8,36 @@ from typing import cast
 
 from PIL import Image, UnidentifiedImageError
 
+from ..models.empty_video_scan_partition import EmptyVideoScanPartition
 from ..models.native_video_scan import NativeVideoScan
 from ..models.scanned_video_frame import ScannedVideoFrame
 
-_SCHEMA = "game-screen-pick/video-scan-partition@1.0.0"
+_SCHEMA = "game-screen-pick/video-scan-partition@2.0.0"
 
 
 def serialize_video_scan_partition(
-    scan: NativeVideoScan,
+    scan: NativeVideoScan | EmptyVideoScanPartition,
     checkpoint_root: Path,
 ) -> dict[str, object]:
     """一つのscan partitionをpath非依存artifactへ変換する。"""
+    metrics = {
+        "wall_seconds": scan.wall_seconds,
+        "cpu_seconds": scan.cpu_seconds,
+        "decode_pass_count": scan.decode_pass_count,
+    }
+    if isinstance(scan, EmptyVideoScanPartition):
+        return {
+            "schema": _SCHEMA,
+            "status": "empty",
+            "stream_index": scan.stream_index,
+            "start_pts": scan.start_pts,
+            "end_pts": scan.end_pts,
+            "time_base": _fraction_value(scan.time_base),
+            "metrics": metrics,
+        }
     return {
         "schema": _SCHEMA,
+        "status": "frames",
         "stream_index": scan.stream_index,
         "origin_pts": scan.origin_pts,
         "last_frame_pts": scan.last_frame_pts,
@@ -32,23 +49,33 @@ def serialize_video_scan_partition(
         "scene_frames": [
             _frame_value(frame, checkpoint_root) for frame in scan.scene_frames
         ],
-        "metrics": {
-            "wall_seconds": scan.wall_seconds,
-            "cpu_seconds": scan.cpu_seconds,
-            "decode_pass_count": scan.decode_pass_count,
-        },
+        "metrics": metrics,
     }
 
 
 def restore_video_scan_partition(
     artifact: Mapping[str, object],
     checkpoint_root: Path,
-) -> NativeVideoScan:
+) -> NativeVideoScan | EmptyVideoScanPartition:
     """検証済みcheckpointから一つのscan partitionを復元する。"""
     if artifact.get("schema") != _SCHEMA:
         msg = "Video Scan partition artifact schemaが不正です"
         raise ValueError(msg)
     metrics = _mapping(artifact.get("metrics"))
+    status = _string(artifact.get("status"))
+    if status == "empty":
+        return EmptyVideoScanPartition(
+            stream_index=_integer(artifact.get("stream_index")),
+            start_pts=_integer(artifact.get("start_pts")),
+            end_pts=_optional_integer(artifact.get("end_pts")),
+            time_base=_fraction(artifact.get("time_base")),
+            wall_seconds=_number(metrics.get("wall_seconds")),
+            cpu_seconds=_number(metrics.get("cpu_seconds")),
+            decode_pass_count=_integer(metrics.get("decode_pass_count")),
+        )
+    if status != "frames":
+        msg = "Video Scan partition artifact statusが不正です"
+        raise ValueError(msg)
     return NativeVideoScan(
         stream_index=_integer(artifact.get("stream_index")),
         origin_pts=_integer(artifact.get("origin_pts")),
