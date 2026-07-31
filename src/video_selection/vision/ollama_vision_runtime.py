@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from fractions import Fraction
 from functools import partial
-from typing import Literal, TypeVar, cast
+from typing import Literal, TypeAlias, TypeVar, cast
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -137,6 +137,12 @@ StageKind = Literal[
 ]
 ResponseStageKind = StageKind | Literal["candidate_annotation_relationship_repair"]
 OpponentBodyFraming = Literal["complete", "edge_cropped", "occluded", "absent"]
+CombatVisibilityObservation: TypeAlias = tuple[
+    CharacterBodyVisibility,
+    CharacterBodyVisibility,
+    OpponentBodyFraming,
+    bool,
+]
 
 
 def _generation_options(num_ctx: int) -> dict[str, int]:
@@ -651,8 +657,6 @@ class OllamaVisionRuntime:
                 )
             if not combat_encounter_visible and combat_scene:
                 annotation = replace(annotation, explanation_value="none")
-            if combat_encounter_visible:
-                annotation = replace(annotation, combat_action=True)
             requires_combat_verification = combat_encounter_visible
         requires_noncombat_visibility_verification = (
             requires_combat_encounter_verification
@@ -1886,7 +1890,7 @@ def _parse_combat_encounter_verification(value: Mapping[str, object]) -> bool:
 
 def _parse_combat_visibility_verification(
     value: Mapping[str, object],
-) -> tuple[CharacterBodyVisibility, OpponentBodyFraming, bool]:
+) -> CombatVisibilityObservation:
     """専用schemaの全fieldを検証し、掲載境界に必要な観測だけを返す。"""
     if set(value) != _COMBAT_VISIBILITY_VERIFICATION_KEYS:
         raise _schema_error("combat_visibility_verification_schema_invalid")
@@ -1907,7 +1911,12 @@ def _parse_combat_visibility_verification(
         or not isinstance(effect_only_frame, bool)
     ):
         raise _schema_error("combat_visibility_verification_schema_invalid")
-    return opponent_body_visibility, opponent_body_framing, effect_only_frame
+    return (
+        player_body_visibility,
+        opponent_body_visibility,
+        opponent_body_framing,
+        effect_only_frame,
+    )
 
 
 def _parse_combat_visibility_edge_audit(value: Mapping[str, object]) -> bool:
@@ -2567,30 +2576,49 @@ def _merge_candidate_diagnostics(
 
 
 def _is_publishable_combat_visibility(
-    observation: tuple[CharacterBodyVisibility, OpponentBodyFraming, bool],
+    observation: CombatVisibilityObservation,
 ) -> bool:
-    """敵本体が明瞭で構図内に収まりeffectだけではない場合だけ許可する。"""
-    opponent_body_visibility, opponent_body_framing, effect_only_frame = observation
+    """playerと敵本体が見え、敵が構図内に収まる場合だけ許可する。"""
+    (
+        player_body_visibility,
+        opponent_body_visibility,
+        opponent_body_framing,
+        effect_only_frame,
+    ) = observation
     return (
-        opponent_body_visibility == "clear"
+        player_body_visibility != "absent"
+        and opponent_body_visibility == "clear"
         and opponent_body_framing == "complete"
         and not effect_only_frame
     )
 
 
 def _is_consistent_noncombat_or_publishable_combat_visibility(
-    first: tuple[CharacterBodyVisibility, OpponentBodyFraming, bool],
-    confirmation: tuple[CharacterBodyVisibility, OpponentBodyFraming, bool],
+    first: CombatVisibilityObservation,
+    confirmation: CombatVisibilityObservation,
 ) -> bool:
     """二回とも敵不在、または二回とも掲載可能な戦闘の場合だけ許可する。"""
     observations = (first, confirmation)
     opponent_is_observed = any(
         opponent_body_visibility != "absent" or opponent_body_framing != "absent"
-        for opponent_body_visibility, opponent_body_framing, _ in observations
+        for (
+            _player_body_visibility,
+            opponent_body_visibility,
+            opponent_body_framing,
+            _effect_only_frame,
+        ) in observations
     )
     if opponent_is_observed:
         return all(_is_publishable_combat_visibility(item) for item in observations)
-    return all(not effect_only_frame for _, _, effect_only_frame in observations)
+    return all(
+        not effect_only_frame
+        for (
+            _player_body_visibility,
+            _opponent_body_visibility,
+            _opponent_body_framing,
+            effect_only_frame,
+        ) in observations
+    )
 
 
 def _sum_optional_counts(left: int | None, right: int | None) -> int | None:

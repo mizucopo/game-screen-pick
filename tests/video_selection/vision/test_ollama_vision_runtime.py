@@ -2077,7 +2077,7 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 戦闘有無と敵可視性が別々に確認され、掲載不可にされること
+        - 戦闘有無と敵可視性が別々に確認され、掲載・通常戦闘対象外にされること
     """
     # Arrange
     payloads: list[Mapping[str, object]] = []
@@ -2135,7 +2135,7 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
 
     # Assert
     assert annotation.explanation_value == "none"
-    assert annotation.combat_action is True
+    assert annotation.combat_action is False
     assert diagnostics.attempt_count == 3
     assert diagnostics.validation_code is None
     routing_schema = payloads[1]["format"]
@@ -2153,6 +2153,80 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
     visibility_prompt = _last_message(payloads[2])["content"]
     assert isinstance(visibility_prompt, str)
     assert "opponent_body_framing" in visibility_prompt
+
+
+def test_enemy_status_without_visible_player_does_not_mark_combat_action() -> None:
+    """敵status UIだけの場面が通常戦闘として注釈されないこと。
+
+    Arrange:
+        - 主推論が非戦闘としたrecurring gameplay actionが用意される
+        - 敵status UIで戦闘と判定されるがplayer本体不在の可視性応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - playerと敵の戦闘を直接確認できず掲載価値とcombat actionが無効になること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            response = _frame_observation_payload(
+                (("frame-a", "exploration", "gameplay_action", "high", "hud"),)
+            )
+            observation = _first_frame_observation(response)
+            observation["combat_action"] = False
+            observation["opponent_body_visibility"] = "absent"
+            return _response(response)
+        if len(payloads) == 2:
+            return _response(
+                _combat_encounter_payload(
+                    visible=True,
+                    evidence="enemy_status_ui",
+                )
+            )
+        if len(payloads) == 5:
+            return _response(_combat_visibility_edge_audit_payload())
+        return _response(
+            {
+                "effect_screen_coverage": "under_quarter",
+                "largest_foreground_element": "opponent_body",
+                "player_body_visibility": "absent",
+                "opponent_body_visibility": "clear",
+                "opponent_body_framing": "complete",
+                "effect_overlaps_combatant_body": "none",
+                "effect_only_frame": False,
+            }
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog_with_recurring_exploration(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert annotation.combat_action is False
+    assert diagnostics.attempt_count == 3
+    assert len(payloads) == 3
 
 
 def test_noncombat_recurring_action_is_cross_checked_by_visibility() -> None:

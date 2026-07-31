@@ -333,7 +333,7 @@ Candidate Annotationの主推論が掲載可能な非戦闘としたScene Kind `
 _Avoid_: combat visibility, contextual combat classification, final selection
 
 **Combat Visibility Verification**:
-Candidate Annotationの主推論が掲載可能とした戦闘、Combat Encounter Verificationで戦闘と確認されたframe、またはScene Kind `combat`以外でCombat Encounter Verificationの対象になった`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeかをstrict enumで観測する。戦闘と確認済みの場合、攻撃相手本体が`partial`・`absent`、構図が`edge_cropped`・`occluded`・`absent`、またはエフェクトだけならExplanation Valueを`none`に下げる。最初の確認が掲載可能なら、先の回答を推測しない別promptで同じ画素を独立再確認し、二回とも攻撃相手本体が`clear`、構図が`complete`、かつエフェクトだけではない場合だけCombat Visibility Edge Auditへ進む。Scene Kind `combat`以外で戦闘有無が二回とも否定された場合は可視性を必ず二回確認し、両方で敵本体が不在かつエフェクトだけではない場合、または両方で掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
+Candidate Annotationの主推論が掲載可能とした戦闘、Combat Encounter Verificationで戦闘と確認されたframe、またはScene Kind `combat`以外でCombat Encounter Verificationの対象になった`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeかをstrict enumで観測する。戦闘と確認済みの場合、player本体が`absent`、攻撃相手本体が`partial`・`absent`、構図が`edge_cropped`・`occluded`・`absent`、またはエフェクトだけならExplanation Valueを`none`に下げる。最初の確認が掲載可能なら、先の回答を推測しない別promptで同じ画素を独立再確認し、二回ともplayer本体が`clear`または`partial`、攻撃相手本体が`clear`、構図が`complete`、かつエフェクトだけではない場合だけCombat Visibility Edge Auditへ進む。Scene Kind `combat`以外で戦闘有無が二回とも否定された場合は可視性を必ず二回確認し、両方で敵本体が不在かつエフェクトだけではない場合、または両方で掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。Combat Encounter Verificationが敵status UIだけから戦闘とした場合も、player本体と攻撃相手本体の可視性が一致するまで`combat_action`へ昇格しない。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
 _Avoid_: second Candidate Annotation, contextual combat classification, final selection
 
 **Combat Visibility Edge Audit**:
@@ -469,7 +469,7 @@ _Avoid_: hard quota, overflow penalty, guaranteed title image
 _Avoid_: Blog Image Type, Scene Kind, free-form scene name, final eligibility
 
 **Conditional Coverage Minimum**:
-要求枚数が10枚以上で、Explanation Valueと既存の適格性を満たすSelection Coverage Facet候補が存在する場合だけ、`ordinary_combat`と`event`を各最低1枚選ぶ決定的なVideo Set selectorの境界。現在passで選べない候補は後続similarity passまで枠を保持するが、終端でも重複、title上限、Spoiler Monotonicity Guardなどの制約に反する場合、または有効候補がなければ枠を他候補へ解放する。終端で解放した場合は選択済み画像を保持し、設定されたbase similarity ceilingから残りの通常選定を再開する。残り枚数はBlog Image Type Soft CoverageとMarginal Selection Utilityで動的に配分し、Selection Shortfallを低品質候補で埋めない。
+要求枚数が10枚以上で、Explanation Valueと既存の適格性を満たすSelection Coverage Facet候補が存在する場合だけ、`ordinary_combat`と`event`を各最低1枚選ぶ決定的なVideo Set selectorの境界。現在passで選べない候補は後続similarity passまで枠を保持する。候補が同じrecurring gameplayの既選択Variant Groupに属し、別の未代表Groupが選択の前提になる場合は、最低枠を残せる範囲でその前提Groupを先に選ぶ。終端でも重複、title上限、Spoiler Monotonicity Guardなどの制約に反する場合、または有効候補がなければ枠を他候補へ解放する。終端で解放した場合は選択済み画像を保持し、設定されたbase similarity ceilingから残りの通常選定を再開する。残り枚数はBlog Image Type Soft CoverageとMarginal Selection Utilityで動的に配分し、Selection Shortfallを低品質候補で埋めない。
 _Avoid_: fixed quota, output count guarantee, per-video minimum, invalid fallback
 
 **Explanation Value**:

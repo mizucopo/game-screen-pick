@@ -221,8 +221,21 @@ def _select_with_major_spoiler_limit(
                 for candidate, score in evaluated
                 if candidate.annotation.selection_coverage_facet in unmet_facets
             ]
+            coverage_prerequisites = _conditional_coverage_prerequisites(
+                evaluated,
+                remaining,
+                selected,
+                unmet_facets,
+                variant_groups,
+                similarity_passes[-1],
+                major_spoiler_limit,
+            )
             if required_coverage_candidates:
                 evaluated = required_coverage_candidates
+            elif coverage_prerequisites and (
+                len(selected) + len(unmet_facets) < requested_count
+            ):
+                evaluated = coverage_prerequisites
             elif unmet_facets and _has_remaining_coverage_candidate(
                 remaining,
                 unmet_facets,
@@ -403,6 +416,54 @@ def _has_remaining_coverage_candidate(
         and _has_explanation_value(candidate)
         for candidate in remaining
     )
+
+
+def _conditional_coverage_prerequisites(
+    evaluated: list[tuple[BlogCandidate, SelectionScore]],
+    remaining: list[BlogCandidate],
+    selected: list[SelectedBlogImage],
+    unmet_facets: set[SelectionCoverageFacet],
+    variant_groups: Mapping[str, str],
+    terminal_similarity_ceiling: float,
+    major_spoiler_limit: int | None,
+) -> list[tuple[BlogCandidate, SelectionScore]]:
+    """最低候補と同じgroupを再選択する前に必要な未代表groupを返す。"""
+    prerequisite_ids: set[str] = set()
+    for coverage_candidate in remaining:
+        if (
+            coverage_candidate.annotation.selection_coverage_facet not in unmet_facets
+            or not _has_explanation_value(coverage_candidate)
+            or coverage_candidate.scene_selection_role != "recurring_gameplay"
+            or _major_spoiler_limit_reached(
+                coverage_candidate,
+                selected,
+                major_spoiler_limit,
+            )
+        ):
+            continue
+        nearest = _nearest_selected_similarity(coverage_candidate, selected)
+        if nearest is not None and nearest > terminal_similarity_ceiling:
+            continue
+        selected_groups = {
+            item.variant_group_id
+            for item in selected
+            if item.candidate.annotation.scene_slug
+            == coverage_candidate.annotation.scene_slug
+        }
+        if variant_groups[coverage_candidate.identifier] not in selected_groups:
+            continue
+        prerequisite_ids.update(
+            candidate.identifier
+            for candidate, _score_value in evaluated
+            if candidate.annotation.scene_slug
+            == coverage_candidate.annotation.scene_slug
+            and variant_groups[candidate.identifier] not in selected_groups
+        )
+    return [
+        (candidate, score)
+        for candidate, score in evaluated
+        if candidate.identifier in prerequisite_ids
+    ]
 
 
 def _score(
