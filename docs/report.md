@@ -15,14 +15,14 @@ output/
 ```
 
 - `images/`: 元frame解像度、lossy WebP quality 95、metadata除去済みの選択画像
-- `report.json`: `game-screen-pick/report@1.1.0`の唯一のmachine-readable正本
+- `report.json`: `game-screen-pick/report@2.0.0`の唯一のmachine-readable正本
 - `report.md`: 検証済みJSON objectだけから決定的に作るgallery-firstの人間向けreport
 
 画像名は全体選択順、Scene Slug、Frame Candidate IDの短縮digestから作ります。安定identityはfilenameではなく、完全なFrame Candidate IDです。
 
 Video Source IDは通常、whole-file SHA-256の先頭12文字を使います。同じVideo Set内でそのprefixが衝突した場合は、衝突したsourceだけを64文字の完全digestへ拡張し、一意性を保ちます。
 
-producerが検証する厳密なschema実体は[`report-1.1.0.schema.json`](../src/video_selection/schemas/report-1.1.0.schema.json)です。readerは同じmajorの将来minor field／enumを保持できるcompatibility gateを別に持ち、producerの厳密検証とは分離しています。report schema versionはpackage versionから独立します。
+producerが検証する現行の厳密なschema実体は[`report-2.0.0.schema.json`](../src/video_selection/schemas/report-2.0.0.schema.json)です。履歴schemaの[`report-1.0.0.schema.json`](../src/video_selection/schemas/report-1.0.0.schema.json)も保持します。readerは対応major 1・2の将来minor field／enumを保持できるcompatibility gateを別に持ち、producerの厳密検証とは分離しています。report schema versionはpackage versionから独立します。
 
 `selection_summary.conditional_coverage`は、要求枚数10枚以上で適用される`ordinary_combat`と`event`について、有効候補数、条件付き最低数、選択実績、未充足枠を他候補へ解放したかを記録します。最低枠のためにExplanation Valueが`none`の候補や重複画像を選ぶことはありません。
 

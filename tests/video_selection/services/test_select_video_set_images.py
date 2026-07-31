@@ -950,6 +950,101 @@ def test_missing_event_minimum_is_reallocated_without_invalid_event() -> None:
     }
 
 
+def test_impossible_minimum_restarts_unrestricted_selection_at_base_ceiling() -> None:
+    """最低枠解放後の通常選定が設定済みsimilarity ceilingから再開されること。
+
+    Arrange:
+        - 通常戦闘と終端ceilingでも重複するイベント候補が用意される
+        - base ceilingでは重複する高utility候補と、適格な代替候補9件が用意される
+    Act:
+        - 10枚のVideo Set選定が実行される
+    Assert:
+        - 不可能なイベント最低枠が解放され、base ceilingから通常選定されること
+        - 高utilityな類似候補で適格な代替候補が押し出されないこと
+    """
+    # Arrange
+    feature_count = 10
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    ordinary_combat = _candidate(
+        "0",
+        quality=1.0,
+        feature=unit_feature(0),
+        progress=Fraction(1, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_action=True,
+    )
+    impossible_event = _candidate(
+        "1",
+        quality=0.1,
+        feature=unit_feature(0),
+        progress=Fraction(2, 100),
+        blog_image_type="event",
+        explanation_value="low",
+        context_relevance="none",
+    )
+    relaxed_only_candidate = _candidate(
+        "2",
+        quality=0.99,
+        feature=(0.9, math.sqrt(1 - 0.9**2), *(0.0 for _ in range(8))),
+        progress=Fraction(3, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    base_eligible_candidates = tuple(
+        _candidate(
+            digest,
+            quality=0.5,
+            feature=unit_feature(index),
+            progress=Fraction(index + 3, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="medium",
+            context_relevance="none",
+        )
+        for index, digest in enumerate("3456789ab", start=1)
+    )
+
+    # Act
+    result = select_video_set_images(
+        (
+            ordinary_combat,
+            impossible_event,
+            relaxed_only_candidate,
+            *base_eligible_candidates,
+        ),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    assert len(result.selected) == 10
+    assert ordinary_combat.identifier in selected_ids
+    assert impossible_event.identifier not in selected_ids
+    assert relaxed_only_candidate.identifier not in selected_ids
+    assert {candidate.identifier for candidate in base_eligible_candidates}.issubset(
+        selected_ids
+    )
+    assert result.final_similarity_ceiling == 0.72
+    assert result.selection_coverage_reallocated == {
+        "ordinary_combat": False,
+        "event": True,
+    }
+    relaxed_rejection = next(
+        item
+        for item in result.rejected
+        if item.candidate.identifier == relaxed_only_candidate.identifier
+    )
+    assert relaxed_rejection.reason_code == "similarity_ceiling"
+    assert relaxed_rejection.similarity == pytest.approx(0.9)
+
+
 def test_higher_spoiler_sensitivity_never_increases_major_spoilers() -> None:
     """感度上昇で同じ候補集合のMajor Spoiler選択数が増えないこと。
 

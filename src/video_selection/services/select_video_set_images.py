@@ -155,8 +155,14 @@ def _select_with_major_spoiler_limit(
     counterfactual_scores: dict[str, SelectionScore] = {}
     final_similarity_ceiling = similarity_threshold
     similarity_passes = _similarity_passes(similarity_threshold)
-    for similarity_pass in similarity_passes:
+    similarity_pass_index = 0
+    while similarity_pass_index < len(similarity_passes):
+        similarity_pass = similarity_passes[similarity_pass_index]
+        is_terminal_similarity_pass = (
+            similarity_pass_index == len(similarity_passes) - 1
+        )
         final_similarity_ceiling = similarity_pass
+        restart_unrestricted_selection = False
         while remaining and len(selected) < requested_count:
             scored = [
                 (
@@ -217,11 +223,18 @@ def _select_with_major_spoiler_limit(
             ]
             if required_coverage_candidates:
                 evaluated = required_coverage_candidates
-            elif (
-                unmet_facets
-                and similarity_pass != similarity_passes[-1]
-                and _has_remaining_coverage_candidate(remaining, unmet_facets)
+            elif unmet_facets and _has_remaining_coverage_candidate(
+                remaining,
+                unmet_facets,
             ):
+                if not is_terminal_similarity_pass:
+                    break
+                for facet in unmet_facets:
+                    conditional_minimums[facet] = 0
+                for remaining_candidate in remaining:
+                    counterfactual_scores.pop(remaining_candidate.identifier, None)
+                similarity_pass_index = 0
+                restart_unrestricted_selection = True
                 break
             candidate, score = min(
                 evaluated,
@@ -271,6 +284,9 @@ def _select_with_major_spoiler_limit(
             remaining.remove(candidate)
         if len(selected) >= requested_count:
             break
+        if restart_unrestricted_selection:
+            continue
+        similarity_pass_index += 1
     rejected = [
         _rejection(
             candidate,

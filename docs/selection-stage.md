@@ -35,7 +35,7 @@ Explanation Valueが`none`の候補はCounterfactual Selection Scoreまで計算
 
 要求枚数が10枚以上なら、説明価値と既存の適格性を満たす候補がある場合に限り、`ordinary_combat`と`event`をそれぞれ最低1枚選びます。`ordinary_combat`は`normal_gameplay`のうち、画像から戦闘が直接観測され、Spoiler Riskが汎用戦闘を示す`none`の候補です。固有boss戦、探索、移動、障害物破壊はこのfacetに含めません。`event`はBlog Image Typeが`event`の候補です。
 
-未充足facetの適格候補を通常のutility候補より先に比較し、現在のsimilarity passでは選べなくても後続passが残る間は枠を保持します。終端passでも重複、spoiler guardなどの既存制約に反する場合、または有効候補が存在しない場合は枠を解放します。残り枚数は固定内訳にせず、従来のMarginal Selection Utilityと候補供給に応じて動的に配分します。
+未充足facetの適格候補を通常のutility候補より先に比較し、現在のsimilarity passでは選べなくても後続passが残る間は枠を保持します。終端passでも重複、spoiler guardなどの既存制約に反する場合、または有効候補が存在しない場合は枠を解放します。終端で枠を解放した場合は選択済み画像を保持し、設定されたbase similarity ceilingから残りの通常選定を再開します。これにより、最低枠の可否確認にだけ使った緩和ceilingで類似画像が代替候補を押し出しません。残り枚数は固定内訳にせず、従来のMarginal Selection Utilityと候補供給に応じて動的に配分します。
 
 ## Spoilerと単調性
 

@@ -77,7 +77,7 @@ Requested 2 / selected 1。 all_candidate_moments_exhausted=`true`。
 
 ### Model and tool provenance
 
-- Report schema: `game-screen-pick/report@1.1.0`
+- Report schema: `game-screen-pick/report@2.0.0`
 - candidate_annotation: `qwen3-vl:8b-instruct` @ `ollama:sha256:81bf…` (not_requested)
 - scene_catalog: `qwen3-vl:8b-instruct` @ `ollama:sha256:81bf…` (not_requested)
 - speech_to_text: `dropbox-dash/faster-whisper-large-v3-turbo` @ `hf:b866f3b8500eb44…` (not_requested)

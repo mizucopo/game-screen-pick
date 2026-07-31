@@ -23,7 +23,7 @@ from .report_time import (
 )
 
 REPORT_SCHEMA_NAME = "game-screen-pick/report"
-REPORT_SCHEMA_VERSION = "1.1.0"
+REPORT_SCHEMA_VERSION = "2.0.0"
 SELECTION_POLICY_VERSION = "video-set-selection-v3"
 SELECTION_EXPLANATION_RENDERER = "selection-explanation-ja-v1"
 
@@ -49,7 +49,7 @@ def build_canonical_selection_report(
     request: CanonicalPublicationRequest,
     image_artifacts: tuple[SelectedImageArtifact, ...],
 ) -> dict[str, object]:
-    """画像artifactを含むreport@1.1.0 objectを返す。"""
+    """画像artifactを含むreport@2.0.0 objectを返す。"""
     selection = request.selection_result
     artifacts_by_id = {item.image_id: item for item in image_artifacts}
     selected_ids = {item.candidate.identifier for item in selection.selected}

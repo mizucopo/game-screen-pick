@@ -70,7 +70,7 @@ def test_selected_webp_and_reports_are_published_from_one_canonical_object(
     assert report_from_disk == report
     assert report["schema"] == {
         "name": "game-screen-pick/report",
-        "version": "1.1.0",
+        "version": "2.0.0",
     }
     assert report["run"]["status"] == "completed_with_warnings"
     assert report["run"]["warnings"] == [
@@ -625,7 +625,7 @@ def test_schema_or_renderer_mismatch_leaves_no_output_folder(
 def test_unknown_nested_field_is_rejected_by_exact_producer_schema(
     tmp_path: Path,
 ) -> None:
-    """report@1.1.0の既知objectへ追加された未知fieldが拒否されること。
+    """report@2.0.0の既知objectへ追加された未知fieldが拒否されること。
 
     Arrange:
         - validation直前にVideo Time契約へ未知fieldを追加するfaultが用意される
@@ -645,7 +645,7 @@ def test_unknown_nested_field_is_rejected_by_exact_producer_schema(
         report = cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
         video_set = cast(dict[str, Any], report["video_set"])
         time_contract = cast(dict[str, Any], video_set["time_contract"])
-        time_contract["future_field"] = "not-in-report-1.1.0"
+        time_contract["future_field"] = "not-in-report-2.0.0"
         path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://game-screen-pick.local/schemas/report-1.1.0.schema.json",
-  "title": "game-screen-pick Canonical Selection Report 1.1.0",
+  "$id": "https://game-screen-pick.local/schemas/report-1.0.0.schema.json",
+  "title": "game-screen-pick Canonical Selection Report 1.0.0",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -25,7 +25,7 @@
       "required": ["name", "version"],
       "properties": {
         "name": {"const": "game-screen-pick/report"},
-        "version": {"const": "1.1.0"}
+        "version": {"const": "1.0.0"}
       }
     },
     "run": {
@@ -283,7 +283,7 @@
     "selectionSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["candidate_moments", "moments_without_valid_frame", "candidate_annotations", "candidate_annotation_failures", "selected", "not_selected", "final_similarity_ceiling", "shortlist_expansion_count", "shortfall", "blog_image_type", "conditional_coverage"],
+      "required": ["candidate_moments", "moments_without_valid_frame", "candidate_annotations", "candidate_annotation_failures", "selected", "not_selected", "final_similarity_ceiling", "shortlist_expansion_count", "shortfall", "blog_image_type"],
       "properties": {
         "candidate_moments": {"type": "integer", "minimum": 0},
         "moments_without_valid_frame": {"type": "integer", "minimum": 0},
@@ -314,39 +314,7 @@
             "title": {"$ref": "#/$defs/targetActual"},
             "other": {"$ref": "#/$defs/targetActual"}
           }
-        },
-        "conditional_coverage": {
-          "$ref": "#/$defs/conditionalCoverage"
         }
-      }
-    },
-    "conditionalCoverage": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["applies", "minimum_requested_image_count", "facets"],
-      "properties": {
-        "applies": {"type": "boolean"},
-        "minimum_requested_image_count": {"const": 10},
-        "facets": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["ordinary_combat", "event"],
-          "properties": {
-            "ordinary_combat": {"$ref": "#/$defs/conditionalCoverageFacet"},
-            "event": {"$ref": "#/$defs/conditionalCoverageFacet"}
-          }
-        }
-      }
-    },
-    "conditionalCoverageFacet": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["eligible", "minimum", "actual", "reallocated"],
-      "properties": {
-        "eligible": {"type": "integer", "minimum": 0},
-        "minimum": {"type": "integer", "minimum": 0, "maximum": 1},
-        "actual": {"type": "integer", "minimum": 0},
-        "reallocated": {"type": "boolean"}
       }
     },
     "targetActual": {

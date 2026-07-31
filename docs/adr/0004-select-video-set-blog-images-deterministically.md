@@ -127,7 +127,7 @@ Marginal Selection Utility =
   - Temporal Diversity Penalty
 ```
 
-While an applicable conditional minimum is unmet, the selector compares eligible candidates belonging to unmet facets before the unrestricted pool. If such a candidate is blocked only by the current similarity pass, it preserves room through later passes. At the terminal pass an unsatisfiable minimum is released. The selector otherwise chooses the highest value and recomputes all coverage and temporal terms before choosing the next image. Ties are resolved by:
+While an applicable conditional minimum is unmet, the selector compares eligible candidates belonging to unmet facets before the unrestricted pool. If such a candidate is blocked only by the current similarity pass, it preserves room through later passes. At the terminal pass an unsatisfiable minimum is released; selected images are retained and unrestricted selection restarts from the configured base similarity ceiling. The selector otherwise chooses the highest value and recomputes all coverage and temporal terms before choosing the next image. Ties are resolved by:
 
 1. lower Spoiler Penalty;
 2. higher Quality Score;

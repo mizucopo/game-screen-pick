@@ -105,7 +105,7 @@ Context Cue records retain their source timestamp basis. When container cue timi
 
 ## Canonical JSON structure
 
-The contract started at `game-screen-pick/report@1.0.0`. The current additive producer is `game-screen-pick/report@1.1.0`, which adds conditional-coverage diagnostics while retaining major version 1:
+The contract started at `game-screen-pick/report@1.0.0`. The current producer is `game-screen-pick/report@2.0.0`; it adds required conditional-coverage diagnostics and therefore increments the major version. The immutable `report-1.0.0.schema.json` remains available beside the current schema:
 
 | Field | Purpose |
 |---|---|

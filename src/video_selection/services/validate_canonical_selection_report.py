@@ -120,7 +120,7 @@ def _validate_schema(report: dict[str, object]) -> None:
 
 @lru_cache(maxsize=1)
 def _schema_validator() -> Draft202012Validator:
-    schema_path = Path(__file__).parent.parent / "schemas" / "report-1.1.0.schema.json"
+    schema_path = Path(__file__).parent.parent / "schemas" / "report-2.0.0.schema.json"
     schema_value: object = json.loads(schema_path.read_text(encoding="utf-8"))
     if not isinstance(schema_value, dict):
         raise ValueError("Canonical Selection Report schemaがJSON objectではありません")
