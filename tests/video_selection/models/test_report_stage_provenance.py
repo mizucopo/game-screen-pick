@@ -35,8 +35,11 @@ def test_privacy_safe_stage_diagnostics_are_accepted() -> None:
     Assert:
         - 設定とtoken件数が変更されず保持されること
     """
-    # Arrange / Act
-    stage = _stage(prompt_eval_tokens=42, eval_tokens=7)
+    # Arrange
+    prompt_eval_tokens = 42
+
+    # Act
+    stage = _stage(prompt_eval_tokens=prompt_eval_tokens, eval_tokens=7)
 
     # Assert
     assert stage.effective_settings == {"requested_image_count": 10}
@@ -54,6 +57,12 @@ def test_absolute_path_in_effective_settings_is_rejected() -> None:
     Assert:
         - 非公開pathを含む設定として拒否されること
     """
-    # Arrange / Act / Assert
-    with pytest.raises(ValueError, match="絶対path"):
-        _stage(effective_settings={"cache_root": "/private/cache"})
+    # Arrange
+    effective_settings = {"cache_root": "/private/cache"}
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        _stage(effective_settings=effective_settings)
+
+    # Assert
+    assert "絶対path" in str(error.value)

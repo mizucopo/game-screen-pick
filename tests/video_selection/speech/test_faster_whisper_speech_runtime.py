@@ -92,6 +92,56 @@ def test_pcm_is_transcribed_to_integer_sample_word_timestamps() -> None:
     assert output_segment.words[0].probability == 0.9
 
 
+def test_zero_duration_backend_token_is_preserved_as_sample_boundary() -> None:
+    """量子化で同一点になったword tokenのsample境界が保持されること。
+
+    Arrange:
+        - startとendが同じfaster-whisper word tokenが用意される
+    Act:
+        - SpeechRuntimeでword timestamp付きtranscriptionが実行される
+    Assert:
+        - tokenが推測で延長されず同じ整数sample境界として返されること
+    """
+    # Arrange
+    segment = SimpleNamespace(
+        words=(SimpleNamespace(word="者", start=0.5, end=0.5, probability=0.9),),
+        avg_logprob=-0.4,
+        no_speech_prob=0.1,
+    )
+    runtime = FasterWhisperSpeechRuntime(
+        FakeFasterWhisperModel(
+            (segment,),
+            SimpleNamespace(language="ja", duration_after_vad=1.0),
+        ),
+        runtime_identity="speech-runtime:test",
+        resolved_model_identity="hf:" + "a" * 40,
+    )
+    pcm = PcmAudioChunk(
+        stream_index=1,
+        sample_start=0,
+        sample_count=16000,
+        sample_rate=16000,
+        channel_count=1,
+        sample_format="s16le",
+        pts=0,
+        time_base=Fraction(1, 16000),
+        pcm_bytes=b"\x00\x00" * 16000,
+    )
+
+    # Act
+    result = runtime.transcribe(
+        pcm,
+        language="ja",
+        vad_filter=True,
+        beam_size=5,
+    )
+
+    # Assert
+    word = result.segments[0].words[0]
+    assert word.start_sample == 8000
+    assert word.end_sample == 8000
+
+
 def test_resolved_local_model_is_loaded_without_backend_download(
     tmp_path: Path,
 ) -> None:
@@ -203,6 +253,57 @@ def test_runtime_identity_changes_with_gpu_runtime_capability(
 
     # Assert
     assert first.runtime_identity != second.runtime_identity
+
+
+def test_close_unloads_backend_model_and_rejects_later_transcription() -> None:
+    """closeでCTranslate2 modelがunloadされ以降の認識が拒否されること。
+
+    Arrange:
+        - unload呼出しを記録するbackendを持つfaster-whisper modelが用意される
+    Act:
+        - Speech Runtimeがcloseされた後にtranscriptionが要求される
+    Assert:
+        - backend modelが一度unloadされること
+        - close後のtranscriptionが拒否されること
+    """
+    # Arrange
+    unload_calls: list[str] = []
+    model = FakeFasterWhisperModel(
+        (),
+        SimpleNamespace(language="ja", duration_after_vad=0.0),
+        backend=SimpleNamespace(
+            unload_model=lambda: unload_calls.append("unloaded"),
+        ),
+    )
+    runtime = FasterWhisperSpeechRuntime(
+        model,
+        runtime_identity="speech-runtime:test",
+        resolved_model_identity="hf:" + "a" * 40,
+    )
+    pcm = PcmAudioChunk(
+        stream_index=1,
+        sample_start=0,
+        sample_count=1,
+        sample_rate=16000,
+        channel_count=1,
+        sample_format="s16le",
+        pts=0,
+        time_base=Fraction(1, 16000),
+        pcm_bytes=b"\x00\x00",
+    )
+
+    # Act
+    runtime.close()
+
+    # Assert
+    assert unload_calls == ["unloaded"]
+    with pytest.raises(RuntimeError, match="close"):
+        runtime.transcribe(
+            pcm,
+            language="ja",
+            vad_filter=True,
+            beam_size=5,
+        )
 
 
 def test_transcription_waits_for_shared_gpu_lease() -> None:

@@ -534,7 +534,7 @@
           "additionalProperties": false,
           "required": ["policy_version", "spoiler_sensitivity", "blog_image_type_target", "similarity_base", "similarity_final"],
           "properties": {
-            "policy_version": {"const": "video-set-selection-v1"},
+            "policy_version": {"type": "string", "pattern": "^video-set-selection-v[1-9][0-9]*$"},
             "spoiler_sensitivity": {"enum": ["low", "medium", "high"]},
             "blog_image_type_target": {
               "type": "object",

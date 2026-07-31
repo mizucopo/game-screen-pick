@@ -12,16 +12,17 @@ class SceneCatalog:
     scenes: tuple[SceneCatalogEntry, ...]
 
     def __post_init__(self) -> None:
-        """scene数、slug一意性、other roleを検証する。"""
+        """scene数、slug一意性、otherのkindとroleを検証する。"""
         slugs = tuple(scene.slug for scene in self.scenes)
         other_scenes = tuple(scene for scene in self.scenes if scene.slug == "other")
         if (
             not 3 <= len(self.scenes) <= 8
             or len(slugs) != len(set(slugs))
             or len(other_scenes) != 1
+            or other_scenes[0].scene_kind != "other"
             or other_scenes[0].selection_role != "ordinary"
         ):
-            msg = "Scene Catalogのscene数、slug、other roleが不正です"
+            msg = "Scene Catalogのscene数、slug、other kind・roleが不正です"
             raise ValueError(msg)
 
     @property

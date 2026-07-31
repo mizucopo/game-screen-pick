@@ -2,18 +2,24 @@
 
 import hashlib
 import json
+import os
 import re
-import resource
+import signal
 import subprocess
 import time
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import suppress
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
+from threading import Lock
 from typing import NoReturn
 
 from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.embedded_subtitle import EmbeddedSubtitle
+from ..models.empty_video_scan_partition import EmptyVideoScanPartition
 from ..models.media_probe import MediaProbe
 from ..models.media_runtime_error import MediaRuntimeError
 from ..models.media_runtime_failure_reason import MediaRuntimeFailureReason
@@ -22,10 +28,12 @@ from ..models.media_stream import MediaStream
 from ..models.native_video_scan import NativeVideoScan
 from ..models.pcm_audio_chunk import PcmAudioChunk
 from ..models.scanned_video_frame import ScannedVideoFrame
+from ..services.select_scene_signal_frames import select_scene_signal_frames
 from .ffmpeg_pcm_reader import iter_pcm_audio_chunks
 from .ffmpeg_subtitle_reader import read_embedded_subtitle_events
 from .ffmpeg_video_reader import iter_decoded_video_frames
 from .ffprobe_parser import parse_media_probe
+from .wait_for_process import wait_for_process
 
 _VERSION_PATTERN = re.compile(r"^(?:ffmpeg|ffprobe) version (?P<version>\S+)")
 _SEMANTIC_VERSION_PATTERN = re.compile(
@@ -49,11 +57,16 @@ _REQUIRED_FILTERS = frozenset(
         "aformat",
         "aresample",
         "asetnsamples",
+        "asetpts",
+        "asettb",
         "ashowinfo",
+        "atrim",
+        "concat",
         "format",
         "nullsink",
         "scale",
         "select",
+        "setpts",
         "showinfo",
         "split",
     }
@@ -68,6 +81,10 @@ _SHOWINFO_BRANCH_PATTERN = re.compile(r"showinfo@(?P<branch>timeline|heartbeat|s
 _SHOWINFO_PTS_PATTERN = re.compile(r"\bpts:\s*(-?\d+)")
 _SHOWINFO_DURATION_PATTERN = re.compile(r"\bduration:\s*(-?\d+)")
 _SHOWINFO_SIZE_PATTERN = re.compile(r"\bs:(\d+)x(\d+)")
+_FRAME_RANGE_SEEK_PADDING = Fraction(1)
+_FRAME_RANGE_END_PADDING = Fraction(1, 10)
+_MAX_FRAME_RANGE_WORKERS = 4
+_LOGICAL_CPUS_PER_FRAME_RANGE_WORKER = 4
 
 
 class FfmpegMediaRuntime:
@@ -80,6 +97,9 @@ class FfmpegMediaRuntime:
     ) -> None:
         self._ffmpeg_executable = ffmpeg_executable
         self._ffprobe_executable = ffprobe_executable
+        self._active_scan_lock = Lock()
+        self._active_scan_processes: set[subprocess.Popen[str]] = set()
+        self._video_scan_cancellation_requested = False
 
     def preflight(self) -> MediaRuntimeIdentity:
         """両toolのversionを解決してidentityを返す。"""
@@ -183,14 +203,96 @@ class FfmpegMediaRuntime:
         decode_backend: str,
     ) -> NativeVideoScan:
         """一回のdecodeをheartbeat、scene、timeline timingへ分岐する。"""
+        scan = self._execute_video_scan(
+            media_path,
+            stream,
+            artifact_folder,
+            media_origin=None,
+            start_pts=None,
+            end_pts=None,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            scene_change_threshold=scene_change_threshold,
+            scene_min_interval_seconds=scene_min_interval_seconds,
+            decode_backend=decode_backend,
+        )
+        if isinstance(scan, EmptyVideoScanPartition):
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.DECODER_FAILURE,
+                "Video Scanに表示可能frameがありません",
+            )
+        selected_scenes = select_scene_signal_frames(
+            scan.scene_frames,
+            scene_min_interval_seconds,
+        )
+        if not scan.heartbeats:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.DECODER_FAILURE,
+                "Video Scanにheartbeat frameがありません",
+            )
+        selected_paths = {frame.image_path for frame in selected_scenes}
+        for frame in scan.scene_frames:
+            if frame.image_path not in selected_paths:
+                frame.image_path.unlink()
+        return replace(scan, scene_frames=selected_scenes)
+
+    def scan_video_partition(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        artifact_folder: Path,
+        *,
+        media_origin: Fraction,
+        start_pts: int,
+        end_pts: int | None,
+        heartbeat_interval_seconds: float,
+        scene_change_threshold: float,
+        scene_min_interval_seconds: float,
+        decode_backend: str,
+    ) -> NativeVideoScan | EmptyVideoScanPartition:
+        """固定半開PTS区間または指定PTSからEOFまでを一回decodeする。"""
+        if end_pts is not None and start_pts >= end_pts:
+            msg = "Video Scan partitionのPTS rangeが不正です"
+            raise ValueError(msg)
+        return self._execute_video_scan(
+            media_path,
+            stream,
+            artifact_folder,
+            media_origin=media_origin,
+            start_pts=start_pts,
+            end_pts=end_pts,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            scene_change_threshold=scene_change_threshold,
+            scene_min_interval_seconds=scene_min_interval_seconds,
+            decode_backend=decode_backend,
+        )
+
+    def _execute_video_scan(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        artifact_folder: Path,
+        *,
+        media_origin: Fraction | None,
+        start_pts: int | None,
+        end_pts: int | None,
+        heartbeat_interval_seconds: float,
+        scene_change_threshold: float,
+        scene_min_interval_seconds: float,
+        decode_backend: str,
+    ) -> NativeVideoScan | EmptyVideoScanPartition:
+        """同じscan algorithmを全体または固定partitionへ適用する。"""
         _validate_scan_configuration(
             heartbeat_interval_seconds,
             scene_change_threshold,
             scene_min_interval_seconds,
             decode_backend,
         )
-        if stream.kind != "video" or stream.time_base is None:
-            msg = "Video Scanにはexact time baseを持つvideo streamが必要です"
+        if (
+            stream.kind != "video"
+            or stream.time_base is None
+            or stream.start_pts is None
+        ):
+            msg = "Video Scanにはexact start PTSとtime baseが必要です"
             raise ValueError(msg)
         heartbeat_folder = artifact_folder / "heartbeats"
         scene_folder = artifact_folder / ".scene-proxies"
@@ -205,21 +307,31 @@ class FfmpegMediaRuntime:
             scene_change_threshold,
             scene_min_interval_seconds,
             decode_backend,
+            media_origin=media_origin,
+            start_pts=start_pts,
+            end_pts=end_pts,
         )
-        usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
         started_at = time.monotonic()
         timeline_first: tuple[int, int | None, int, int] | None = None
         timeline_last: tuple[int, int | None, int, int] | None = None
         heartbeat_metadata: list[tuple[int, int | None, int, int]] = []
         scene_metadata: list[tuple[int, int | None, int, int]] = []
         stderr_tail: deque[str] = deque(maxlen=80)
+        process: subprocess.Popen[str] | None = None
         try:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            with self._active_scan_lock:
+                if self._video_scan_cancellation_requested:
+                    raise MediaRuntimeError(
+                        MediaRuntimeFailureReason.DECODER_FAILURE,
+                        "Video Scanは開始前にcancelされました",
+                    )
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                self._active_scan_processes.add(process)
             if process.stderr is None:
                 msg = "FFmpeg scan stderrを開始できません"
                 raise RuntimeError(msg)
@@ -237,20 +349,25 @@ class FfmpegMediaRuntime:
                     heartbeat_metadata.append(metadata)
                 else:
                     scene_metadata.append(metadata)
-            return_code = process.wait()
+            return_code, cpu_seconds = wait_for_process(process)
         except OSError as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.DECODER_FAILURE,
                 "Video ScanのFFmpeg processを開始できませんでした",
             ) from error
+        finally:
+            if process is not None:
+                if process.returncode is None:
+                    with suppress(ProcessLookupError):
+                        os.kill(process.pid, signal.SIGTERM)
+                    with suppress(ChildProcessError):
+                        wait_for_process(process)
+                if process.stderr is not None:
+                    with suppress(OSError):
+                        process.stderr.close()
+                with self._active_scan_lock:
+                    self._active_scan_processes.discard(process)
         wall_seconds = time.monotonic() - started_at
-        usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
-        cpu_seconds = (
-            usage_after.ru_utime
-            - usage_before.ru_utime
-            + usage_after.ru_stime
-            - usage_before.ru_stime
-        )
         if return_code != 0:
             detail = "\n".join(stderr_tail)
             raise MediaRuntimeError(
@@ -258,12 +375,27 @@ class FfmpegMediaRuntime:
                 f"Video ScanのFFmpeg decodeに失敗しました\n{detail}",
             )
         if timeline_first is None or timeline_last is None:
+            if start_pts is not None:
+                if any(heartbeat_folder.iterdir()) or any(scene_folder.iterdir()):
+                    raise MediaRuntimeError(
+                        MediaRuntimeFailureReason.DECODER_FAILURE,
+                        "Video Scanのproxyに対応するtimingを解析できませんでした",
+                    )
+                return EmptyVideoScanPartition(
+                    stream_index=stream.index,
+                    start_pts=start_pts,
+                    end_pts=end_pts,
+                    time_base=stream.time_base,
+                    wall_seconds=wall_seconds,
+                    cpu_seconds=cpu_seconds,
+                    decode_pass_count=1,
+                )
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.DECODER_FAILURE,
                 "Video Scanに表示可能frameがありません",
             )
-        heartbeat_files = tuple(sorted(heartbeat_folder.glob("*.jpg")))
-        scene_files = tuple(sorted(scene_folder.glob("*.jpg")))
+        heartbeat_files = _remove_scan_proxy_sentinel(heartbeat_folder)
+        scene_files = _remove_scan_proxy_sentinel(scene_folder)
         if len(heartbeat_files) != len(heartbeat_metadata) or len(scene_files) != len(
             scene_metadata
         ):
@@ -276,18 +408,13 @@ class FfmpegMediaRuntime:
             heartbeat_files,
             stream.time_base,
         )
-        scenes_with_dummy = _scanned_frames(
-            scene_metadata,
-            scene_files,
-            stream.time_base,
-        )
-        if not scenes_with_dummy:
-            raise MediaRuntimeError(
-                MediaRuntimeFailureReason.DECODER_FAILURE,
-                "Video Scanのscene分析枝を初期化できませんでした",
+        scene_frames = tuple(
+            _scanned_frames(
+                scene_metadata,
+                scene_files,
+                stream.time_base,
             )
-        scenes_with_dummy[0].image_path.unlink()
-        scene_frames = tuple(scenes_with_dummy[1:])
+        )
         origin_pts, _origin_duration, _origin_width, _origin_height = timeline_first
         last_pts, last_duration, _last_width, _last_height = timeline_last
         return NativeVideoScan(
@@ -303,12 +430,23 @@ class FfmpegMediaRuntime:
             decode_pass_count=1,
         )
 
+    def cancel_video_scans(self) -> None:
+        """実行中のVideo Scan FFmpeg processへ終了要求を送る。"""
+        with self._active_scan_lock:
+            self._video_scan_cancellation_requested = True
+            processes = tuple(self._active_scan_processes)
+        for process in processes:
+            with suppress(OSError):
+                os.kill(process.pid, signal.SIGTERM)
+
     def scan_video_frame_ranges(
         self,
         media_path: Path,
         stream_index: int,
         pts_ranges: tuple[tuple[int, int], ...],
         max_dimension: int,
+        *,
+        cpu_seconds_recorder: Callable[[float], None] | None = None,
     ) -> Iterator[DecodedVideoFrame]:
         """半開PTS rangeの和集合にあるnative RGB24 frameだけを返す。"""
         if (
@@ -318,20 +456,57 @@ class FfmpegMediaRuntime:
         ):
             msg = "PTS rangeとmax_dimensionが不正です"
             raise ValueError(msg)
-        expressions = [
-            f"gte(pts\\,{start})*lt(pts\\,{end})" for start, end in pts_ranges
-        ]
-        frame_filter = f"select='{'+'.join(expressions)}'," + _scale_filter(
-            max_dimension
-        )
-        command = self._video_decode_command(
-            media_path,
-            stream_index,
-            frame_filter,
-        )
+        probe = self.probe(media_path)
         try:
-            yield from iter_decoded_video_frames(command, stream_index)
-        except _DECODE_ERRORS as error:
+            stream = next(
+                item
+                for item in probe.streams
+                if item.index == stream_index and item.kind == "video"
+            )
+            if stream.time_base is None or stream.start_pts is None:
+                msg = "Frame Refinementには開始PTSを持つvideo streamが必要です"
+                raise ValueError(msg)
+            media_origin = _media_origin(probe)
+            commands = tuple(
+                self._video_range_decode_command(
+                    media_path,
+                    stream,
+                    start,
+                    end,
+                    media_origin,
+                    max_dimension,
+                )
+                for start, end in pts_ranges
+            )
+            worker_count = _frame_range_worker_count(len(commands))
+            with ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="frame-range-decode",
+            ) as executor:
+                command_iterator = iter(commands)
+                pending: deque[Future[tuple[DecodedVideoFrame, ...]]] = deque()
+                for _ in range(worker_count):
+                    pending.append(
+                        executor.submit(
+                            _decode_video_frame_range,
+                            next(command_iterator),
+                            stream_index,
+                            cpu_seconds_recorder,
+                        )
+                    )
+                while pending:
+                    yield from pending.popleft().result()
+                    command = next(command_iterator, None)
+                    if command is not None:
+                        pending.append(
+                            executor.submit(
+                                _decode_video_frame_range,
+                                command,
+                                stream_index,
+                                cpu_seconds_recorder,
+                            )
+                        )
+        except (*_DECODE_ERRORS, StopIteration) as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
                 "指定されたPTS rangeのnative frameを抽出できませんでした",
@@ -377,16 +552,31 @@ class FfmpegMediaRuntime:
         pts: int,
         frame_filter: str,
     ) -> DecodedVideoFrame:
-        """指定filterでexact PTSのRGB24 frameを一つだけ返す。"""
-        command = self._video_decode_command(
-            media_path,
-            stream_index,
-            frame_filter,
-            frame_limit=1,
-        )
+        """入力seek後に指定filterでexact PTSのRGB24 frameを一つだけ返す。"""
         try:
+            probe = self.probe(media_path)
+            stream = next(
+                item
+                for item in probe.streams
+                if item.index == stream_index and item.kind == "video"
+            )
+            if stream.time_base is None or stream.start_pts is None:
+                msg = "Exact Frame Extractionには開始PTSが必要です"
+                raise ValueError(msg)
+            input_options = self._exact_frame_input_options(
+                stream,
+                pts,
+                _media_origin(probe),
+            )
+            command = self._video_decode_command(
+                media_path,
+                stream_index,
+                frame_filter,
+                frame_limit=1,
+                input_options=input_options,
+            )
             frames = tuple(iter_decoded_video_frames(command, stream_index))
-        except _DECODE_ERRORS as error:
+        except (*_DECODE_ERRORS, StopIteration) as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
                 "指定されたvideo frameを抽出できませんでした",
@@ -398,13 +588,37 @@ class FfmpegMediaRuntime:
             )
         return frames[0]
 
+    @staticmethod
+    def _exact_frame_input_options(
+        stream: MediaStream,
+        pts: int,
+        media_origin: Fraction,
+    ) -> tuple[str, ...]:
+        """Exact PTSの直前からdecodeするinput seek範囲を返す。"""
+        if stream.time_base is None:
+            msg = "Exact Frame Extraction streamのtime baseがありません"
+            raise ValueError(msg)
+        relative_target = pts * stream.time_base - media_origin
+        if relative_target < 0:
+            msg = "Exact Frame Extraction PTSがmedia originより前です"
+            raise ValueError(msg)
+        seek_padding = min(_FRAME_RANGE_SEEK_PADDING, relative_target)
+        seek_seconds = relative_target - seek_padding
+        read_seconds = seek_padding + _FRAME_RANGE_END_PADDING
+        return (
+            "-ss",
+            _ffmpeg_number(float(seek_seconds)),
+            "-t",
+            _ffmpeg_number(float(read_seconds)),
+        )
+
     def write_mjpeg_proxy(
         self,
         frame: DecodedVideoFrame,
         output_path: Path,
         *,
         quality: int,
-    ) -> None:
+    ) -> float:
         """RGB24 artifactをFFmpeg MJPEGへmetadataなしで保存する。"""
         if not 1 <= quality <= 31:
             msg = "FFmpeg MJPEG qualityは1以上31以下である必要があります"
@@ -439,18 +653,43 @@ class FfmpegMediaRuntime:
             "yuvj420p",
             str(output_path),
         ]
+        process: subprocess.Popen[bytes] | None = None
         try:
-            subprocess.run(
+            process = subprocess.Popen(
                 command,
-                input=frame.pixels,
-                check=True,
-                capture_output=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
-        except (OSError, subprocess.CalledProcessError) as error:
+            if process.stdin is None or process.stderr is None:
+                raise RuntimeError("Frame Candidate Proxy pipeを開始できません")
+            process.stdin.write(frame.pixels)
+            process.stdin.close()
+            stderr = process.stderr.read()
+            return_code, cpu_seconds = wait_for_process(process)
+            if return_code != 0:
+                raise subprocess.CalledProcessError(
+                    return_code,
+                    command,
+                    stderr=stderr,
+                )
+            return cpu_seconds
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
                 "Frame Candidate ProxyをMJPEGへencodeできませんでした",
             ) from error
+        finally:
+            if process is not None:
+                if process.returncode is None:
+                    with suppress(ProcessLookupError):
+                        os.kill(process.pid, signal.SIGTERM)
+                    with suppress(ChildProcessError):
+                        wait_for_process(process)
+                if process.stdin is not None:
+                    process.stdin.close()
+                if process.stderr is not None:
+                    process.stderr.close()
 
     def scan_pcm_audio(
         self,
@@ -466,7 +705,8 @@ class FfmpegMediaRuntime:
         audio_filter = (
             f"aresample={sample_rate}:async=0,"
             "aformat=sample_fmts=s16:channel_layouts=mono,"
-            f"asetnsamples=n={frame_sample_count}:p=0,ashowinfo"
+            f"asetnsamples=n={frame_sample_count}:p=0,"
+            "asetpts=N/SR/TB+STARTPTS,ashowinfo"
         )
         command = self._decode_command_prefix(media_path, stream_index)
         command.extend(
@@ -494,6 +734,91 @@ class FfmpegMediaRuntime:
                 MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED,
                 "audio streamをPCMへdecodeできませんでした",
             ) from error
+
+    def extract_pcm_audio_chunk(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        media_origin: Fraction,
+        sample_rate: int,
+        sample_start: int,
+        maximum_sample_count: int,
+    ) -> PcmAudioChunk | None:
+        """一つのcanonical sample rangeだけを入力seek付きで抽出する。"""
+        if (
+            stream.kind != "audio"
+            or stream.start_pts is None
+            or stream.time_base is None
+            or sample_rate < 1
+            or sample_start < 0
+            or maximum_sample_count < 1
+        ):
+            msg = "PCM Audio rangeのstreamまたはsample設定が不正です"
+            raise ValueError(msg)
+        stream_origin = stream.start_pts * stream.time_base
+        relative_start = (
+            stream_origin - media_origin + Fraction(sample_start, sample_rate)
+        )
+        if relative_start < 0:
+            msg = "PCM Audio rangeがmedia originより前です"
+            raise ValueError(msg)
+        input_options = (
+            ()
+            if relative_start == 0
+            else ("-ss", _ffmpeg_number(float(relative_start)))
+        )
+        absolute_start_pts = round(stream_origin * sample_rate) + sample_start
+        audio_filter = (
+            f"aresample={sample_rate}:async=0,"
+            "aformat=sample_fmts=s16:channel_layouts=mono,"
+            f"atrim=end_sample={maximum_sample_count},"
+            f"asetnsamples=n={maximum_sample_count}:p=0,"
+            f"asettb=expr=1/{sample_rate},"
+            "asetpts=N,ashowinfo"
+        )
+        command = self._decode_command_prefix(
+            media_path,
+            stream.index,
+            input_options=input_options,
+        )
+        command.extend(
+            [
+                "-vn",
+                "-sn",
+                "-dn",
+                "-af",
+                audio_filter,
+                "-t",
+                _ffmpeg_number(maximum_sample_count / sample_rate),
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "pipe:1",
+            ]
+        )
+        try:
+            chunks = tuple(
+                iter_pcm_audio_chunks(
+                    command,
+                    stream.index,
+                    sample_rate,
+                    initial_sample_start=sample_start,
+                )
+            )
+        except _DECODE_ERRORS as error:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED,
+                "audio sample rangeをPCMへdecodeできませんでした",
+            ) from error
+        if not chunks:
+            return None
+        if len(chunks) != 1 or chunks[0].sample_count > maximum_sample_count:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED,
+                "audio sample rangeがcanonical chunkへ収まりません",
+            )
+        return replace(chunks[0], pts=absolute_start_pts)
 
     def read_embedded_subtitles(
         self,
@@ -536,8 +861,13 @@ class FfmpegMediaRuntime:
         stream_index: int,
         frame_filter: str,
         frame_limit: int | None = None,
+        input_options: tuple[str, ...] = (),
     ) -> list[str]:
-        command = self._decode_command_prefix(media_path, stream_index)
+        command = self._decode_command_prefix(
+            media_path,
+            stream_index,
+            input_options=input_options,
+        )
         command.extend(["-an", "-sn", "-dn", "-vf", frame_filter])
         if frame_limit is not None:
             command.extend(["-frames:v", str(frame_limit)])
@@ -554,6 +884,46 @@ class FfmpegMediaRuntime:
         )
         return command
 
+    def _video_range_decode_command(
+        self,
+        media_path: Path,
+        stream: MediaStream,
+        start_pts: int,
+        end_pts: int,
+        media_origin: Fraction,
+        max_dimension: int,
+    ) -> list[str]:
+        """一つの半開PTS rangeだけを入力seek付きでdecodeする。"""
+        if stream.time_base is None:
+            msg = "Frame Refinement streamのtime baseがありません"
+            raise ValueError(msg)
+        relative_start = start_pts * stream.time_base - media_origin
+        if relative_start < 0:
+            msg = "Frame Refinement rangeがmedia originより前です"
+            raise ValueError(msg)
+        seek_padding = min(_FRAME_RANGE_SEEK_PADDING, relative_start)
+        seek_seconds = relative_start - seek_padding
+        read_seconds = (
+            seek_padding
+            + (end_pts - start_pts) * stream.time_base
+            + _FRAME_RANGE_END_PADDING
+        )
+        frame_filter = (
+            f"select='gte(pts\\,{start_pts})*lt(pts\\,{end_pts})',"
+            + _scale_filter(max_dimension)
+        )
+        return self._video_decode_command(
+            media_path,
+            stream.index,
+            frame_filter,
+            input_options=(
+                "-ss",
+                _ffmpeg_number(float(seek_seconds)),
+                "-t",
+                _ffmpeg_number(float(read_seconds)),
+            ),
+        )
+
     def _composite_scan_command(
         self,
         media_path: Path,
@@ -564,7 +934,14 @@ class FfmpegMediaRuntime:
         scene_change_threshold: float,
         scene_min_interval_seconds: float,
         decode_backend: str,
+        *,
+        media_origin: Fraction | None,
+        start_pts: int | None,
+        end_pts: int | None,
     ) -> list[str]:
+        if stream.start_pts is None:
+            msg = "Video Scanにはstream start PTSが必要です"
+            raise ValueError(msg)
         command = [
             self._ffmpeg_executable,
             "-y",
@@ -582,31 +959,93 @@ class FfmpegMediaRuntime:
             command.extend(["-hwaccel", "cuda"])
         elif stream.codec_name == "av1":
             command.extend(["-c:v", "libdav1d"])
+        if start_pts is not None:
+            if (
+                stream.time_base is None
+                or stream.start_pts is None
+                or media_origin is None
+            ):
+                msg = "Video Scan partitionにはstream timingが必要です"
+                raise ValueError(msg)
+            relative_start = start_pts * stream.time_base - media_origin
+            if relative_start < 0:
+                msg = "Video Scan partitionがmedia originより前です"
+                raise ValueError(msg)
+            required_preroll = (
+                max(
+                    _FRAME_RANGE_SEEK_PADDING,
+                    Fraction(str(heartbeat_interval_seconds)),
+                    Fraction(str(scene_min_interval_seconds)),
+                )
+                + _FRAME_RANGE_END_PADDING
+            )
+            seek_padding = min(required_preroll, relative_start)
+            command.extend(
+                [
+                    "-ss",
+                    _ffmpeg_number(float(relative_start - seek_padding)),
+                ]
+            )
+            if end_pts is not None:
+                read_seconds = (
+                    seek_padding
+                    + (end_pts - start_pts) * stream.time_base
+                    + _FRAME_RANGE_END_PADDING
+                )
+                command.extend(["-t", _ffmpeg_number(float(read_seconds))])
         command.extend(["-i", str(media_path)])
         heartbeat_interval = _ffmpeg_number(heartbeat_interval_seconds)
         scene_threshold = _ffmpeg_number(scene_change_threshold)
-        scene_interval = _ffmpeg_number(scene_min_interval_seconds)
+        partition_filter = _scan_partition_filter(start_pts, end_pts)
+        ownership_filter = "" if partition_filter is None else f"{partition_filter},"
+        source_graph = (
+            f"[0:{stream.index}]split=5[timeline_source]"
+            "[heartbeat_source][heartbeat_sentinel_source]"
+            "[scene_source][scene_sentinel_source]"
+        )
+        heartbeat_filter = _canonical_heartbeat_filter(
+            stream.start_pts,
+            heartbeat_interval,
+        )
         graph = ";".join(
             (
-                f"[0:{stream.index}]split=3[timeline_source]"
-                "[heartbeat_source][scene_source]",
-                "[timeline_source]showinfo@timeline,nullsink",
+                source_graph,
+                (f"[timeline_source]{ownership_filter}showinfo@timeline,nullsink"),
                 (
                     "[heartbeat_source]"
-                    "select='isnan(prev_selected_t)+"
-                    f"gte(t-prev_selected_t,{heartbeat_interval})',"
+                    f"{heartbeat_filter},"
+                    f"{ownership_filter}"
                     f"{_bounded_scale_filter(960)},"
-                    "format=yuvj420p,showinfo@heartbeat[heartbeat_output]"
+                    "format=yuvj420p,showinfo@heartbeat,"
+                    "setpts=PTS-STARTPTS[heartbeat_actual]"
+                ),
+                (
+                    "[heartbeat_sentinel_source]"
+                    f"{ownership_filter}"
+                    "select='eq(n,0)',"
+                    f"{_bounded_scale_filter(960)},"
+                    "format=yuvj420p,setpts=PTS-STARTPTS[heartbeat_sentinel]"
+                ),
+                (
+                    "[heartbeat_sentinel][heartbeat_actual]"
+                    "concat=n=2:v=1:a=0[heartbeat_output]"
                 ),
                 (
                     "[scene_source]"
                     f"{_bounded_scale_filter(320)},"
-                    "select='eq(n,0)+gte(n,1)*"
-                    f"gt(scene,{scene_threshold})*"
-                    "(isnan(prev_selected_t)+"
-                    f"gte(t-prev_selected_t,{scene_interval}))',"
-                    "format=yuvj420p,showinfo@scene[scene_output]"
+                    f"select='gt(scene,{scene_threshold})',"
+                    f"{ownership_filter}"
+                    "format=yuvj420p,showinfo@scene,"
+                    "setpts=PTS-STARTPTS[scene_actual]"
                 ),
+                (
+                    "[scene_sentinel_source]"
+                    f"{ownership_filter}"
+                    "select='eq(n,0)',"
+                    f"{_bounded_scale_filter(320)},"
+                    "format=yuvj420p,setpts=PTS-STARTPTS[scene_sentinel]"
+                ),
+                ("[scene_sentinel][scene_actual]concat=n=2:v=1:a=0[scene_output]"),
             )
         )
         command.extend(
@@ -639,6 +1078,8 @@ class FfmpegMediaRuntime:
         self,
         media_path: Path,
         stream_index: int,
+        *,
+        input_options: tuple[str, ...] = (),
     ) -> list[str]:
         return [
             self._ffmpeg_executable,
@@ -651,6 +1092,7 @@ class FfmpegMediaRuntime:
             "-err_detect",
             "explode",
             "-copyts",
+            *input_options,
             "-i",
             str(media_path),
             "-map",
@@ -811,11 +1253,78 @@ def _scale_filter(max_dimension: int) -> str:
     )
 
 
+def _scan_partition_filter(
+    start_pts: int | None,
+    end_pts: int | None,
+) -> str | None:
+    if start_pts is None:
+        return None
+    if end_pts is None:
+        return f"select='gte(pts\\,{start_pts})'"
+    return f"select='gte(pts\\,{start_pts})*lt(pts\\,{end_pts})'"
+
+
+def _canonical_heartbeat_filter(
+    origin_pts: int,
+    heartbeat_interval: str,
+) -> str:
+    """global time bucketごとの先頭frameをpartition非依存に選ぶ。"""
+    current_bucket = f"floor((pts-{origin_pts})*TB/{heartbeat_interval})"
+    previous_bucket = f"floor((prev_pts-{origin_pts})*TB/{heartbeat_interval})"
+    return f"select='isnan(prev_pts)+gt({current_bucket},{previous_bucket})'"
+
+
+def _media_origin(probe: MediaProbe) -> Fraction:
+    origins = tuple(
+        stream.start_pts * stream.time_base
+        for stream in probe.streams
+        if stream.start_pts is not None and stream.time_base is not None
+    )
+    if not origins:
+        msg = "media streamに開始PTSがありません"
+        raise ValueError(msg)
+    return min(origins)
+
+
+def _frame_range_worker_count(range_count: int) -> int:
+    """CPU decodeを過剰subscribeしないbounded worker数を返す。"""
+    logical_cpus = os.cpu_count() or 1
+    cpu_workers = max(1, logical_cpus // _LOGICAL_CPUS_PER_FRAME_RANGE_WORKER)
+    return min(range_count, _MAX_FRAME_RANGE_WORKERS, cpu_workers)
+
+
+def _decode_video_frame_range(
+    command: list[str],
+    stream_index: int,
+    cpu_seconds_recorder: Callable[[float], None] | None,
+) -> tuple[DecodedVideoFrame, ...]:
+    """一つのrangeをworker内で完結させ順序付きframeを返す。"""
+    return tuple(
+        iter_decoded_video_frames(
+            command,
+            stream_index,
+            cpu_seconds_recorder=cpu_seconds_recorder,
+        )
+    )
+
+
 def _bounded_scale_filter(max_dimension: int) -> str:
     return (
         f"scale=w='min(iw,{max_dimension})':h='min(ih,{max_dimension})':"
         "force_original_aspect_ratio=decrease:force_divisible_by=2"
     )
+
+
+def _remove_scan_proxy_sentinel(folder: Path) -> tuple[Path, ...]:
+    """空signalも成功させる先頭sentinelを削除し実proxyだけを返す。"""
+    files = tuple(sorted(folder.glob("*.jpg")))
+    if not files:
+        raise MediaRuntimeError(
+            MediaRuntimeFailureReason.DECODER_FAILURE,
+            "Video Scanのproxy sentinelが生成されませんでした",
+        )
+    files[0].unlink()
+    return files[1:]
 
 
 def _ffmpeg_number(value: float) -> str:

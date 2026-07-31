@@ -52,7 +52,8 @@ def test_unknown_major_is_rejected() -> None:
         "schema": {"name": "game-screen-pick/report", "version": "2.0.0"}
     }
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="未対応major"):
         validate_report_schema_compatibility(report)
 

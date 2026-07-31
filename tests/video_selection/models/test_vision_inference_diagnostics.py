@@ -78,9 +78,84 @@ def test_noncanonical_or_mismatched_diagnostic_identity_is_rejected(
         _diagnostics(model_identity, runtime_identity)
 
 
+@pytest.mark.parametrize(
+    "attempt_count",
+    (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+)
+def test_aggregate_candidate_attempt_count_is_accepted(attempt_count: int) -> None:
+    """注釈と専用確認を集約した推論回数が受理されること。
+
+    Arrange:
+        - relationship repairを含む注釈と全専用確認の3回から15回が用意される
+    Act:
+        - Vision推論診断が構築される
+    Assert:
+        - 集約された推論回数が変更されず保持されること
+    """
+    # Arrange
+
+    # Act
+    diagnostics = _diagnostics(
+        "ollama:sha256:" + "a" * 64,
+        "ollama:0.31.2",
+        attempt_count=attempt_count,
+    )
+
+    # Assert
+    assert diagnostics.attempt_count == attempt_count
+
+
+def test_attempt_count_above_aggregate_limit_is_rejected() -> None:
+    """集約上限を超える推論回数が拒否されること。
+
+    Arrange:
+        - 注釈と全専用確認の合計上限を超える16回が用意される
+    Act:
+        - Vision推論診断が構築される
+    Assert:
+        - 不正な診断として拒否されること
+    """
+    # Arrange
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Vision inference diagnostics"):
+        _diagnostics(
+            "ollama:sha256:" + "a" * 64,
+            "ollama:0.31.2",
+            attempt_count=16,
+        )
+
+
+@pytest.mark.parametrize("duration_seconds", (float("nan"), float("inf")))
+def test_nonfinite_duration_is_rejected(duration_seconds: float) -> None:
+    """非有限のVision推論時間が拒否されること。
+
+    Arrange:
+        - NaNまたはInfinityのdurationが用意される
+    Act:
+        - Vision推論診断が構築される
+    Assert:
+        - 不正な診断として拒否されること
+    """
+    # Arrange
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Vision inference diagnostics"):
+        _diagnostics(
+            "ollama:sha256:" + "a" * 64,
+            "ollama:0.31.2",
+            duration_seconds=duration_seconds,
+        )
+
+
 def _diagnostics(
     model_identity: str,
     runtime_identity: str,
+    *,
+    attempt_count: int = 1,
+    duration_seconds: float = 0.1,
 ) -> VisionInferenceDiagnostics:
     return VisionInferenceDiagnostics(
         request_fingerprint="c" * 64,
@@ -92,11 +167,11 @@ def _diagnostics(
         stage_contract_version="stage-v1",
         retry_policy_version="retry-v1",
         cache_hit=False,
-        attempt_count=1,
+        attempt_count=attempt_count,
         validation_code=None,
         image_count=1,
         context_cue_count=0,
-        duration_seconds=0.1,
+        duration_seconds=duration_seconds,
         prompt_eval_count=10,
         eval_count=5,
         done_reason="stop",

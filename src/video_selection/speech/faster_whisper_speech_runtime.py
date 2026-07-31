@@ -1,5 +1,6 @@
 """faster-whisperをSpeechRuntimeへ変換するadapter。"""
 
+import gc
 import hashlib
 import json
 import math
@@ -45,7 +46,7 @@ class FasterWhisperSpeechRuntime:
         resolved_model_identity: str,
         gpu_coordinator: GpuWorkCoordinator | None = None,
     ) -> None:
-        self._model = model
+        self._model: FasterWhisperModel | None = model
         self._runtime_identity = runtime_identity
         self._resolved_model_identity = resolved_model_identity
         self._gpu_coordinator = gpu_coordinator
@@ -105,6 +106,18 @@ class FasterWhisperSpeechRuntime:
             return operation()
         return self._gpu_coordinator.run("speech_to_text", operation)
 
+    def close(self) -> None:
+        """CTranslate2 modelを明示unloadしてGPU資源への参照を解放する。"""
+        model = self._model
+        if model is None:
+            return
+        backend = getattr(model, "model", None)
+        unload_model = getattr(backend, "unload_model", None)
+        if callable(unload_model):
+            unload_model()
+        self._model = None
+        gc.collect()
+
     def _transcribe(
         self,
         chunk: PcmAudioChunk,
@@ -114,9 +127,12 @@ class FasterWhisperSpeechRuntime:
         beam_size: int,
     ) -> SpeechRecognitionResult:
         """model呼び出しとlazy segment変換を一つのGPU workとして実行する。"""
+        model = self._model
+        if model is None:
+            raise RuntimeError("Speech Runtimeは既にcloseされています")
         waveform = np.frombuffer(chunk.pcm_bytes, dtype="<i2").astype(np.float32)
         waveform /= 32768.0
-        segments, info = self._model.transcribe(
+        segments, info = model.transcribe(
             waveform,
             language=language,
             vad_filter=vad_filter,
@@ -164,7 +180,7 @@ def _convert_word(
     text = _string_attribute(word, "word")
     start_sample = _timestamp_sample(word, "start", sample_rate)
     end_sample = _timestamp_sample(word, "end", sample_rate)
-    if start_sample < 0 or end_sample <= start_sample or end_sample > sample_count:
+    if start_sample < 0 or end_sample < start_sample or end_sample > sample_count:
         msg = "faster-whisper word timestampがPCM chunk範囲外です"
         raise ValueError(msg)
     return SpeechWord(

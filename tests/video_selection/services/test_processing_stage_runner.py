@@ -36,7 +36,8 @@ def test_processing_stage_cannot_complete_out_of_order(tmp_path: Path) -> None:
         subject_fingerprint="a" * 64,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(
         ValueError,
         match="expected=discover-video-set, actual=extract-frame-candidates",
@@ -184,7 +185,8 @@ def test_snapshot_validation_failure_prevents_stage_cache_mutation(
         before_stage=reject_changed_snapshot,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
         runner.complete(
             ProcessingStage.DISCOVER_VIDEO_SET,
@@ -343,7 +345,8 @@ def test_processing_stage_runner_emits_cache_and_completion_events(
     Act:
         - cache lookup後に一つのProcessing Stageが確定される
     Assert:
-        - miss、recompute、Stage完了が同じStage番号で通知されること
+        - missが一度だけ数えられrecompute、Stage完了へ集約されること
+        - Stage完了eventが実際のfingerprintを持つこと
     """
     # Arrange
     observer = RecordingRunObserver()
@@ -388,8 +391,11 @@ def test_processing_stage_runner_emits_cache_and_completion_events(
         ("run_started", None, 0, 0, 0, 0),
         ("stage_started", 1, 0, 0, 0, 0),
         ("cache", 1, 0, 1, 0, 0),
-        ("cache", 1, 0, 1, 0, 1),
-        ("stage_completed", 1, 0, 0, 0, 0),
+        ("cache", 1, 0, 0, 0, 1),
+        ("stage_completed", 1, 0, 1, 0, 1),
+    )
+    assert progress.completed_stage_events[0].stage_fingerprint == (
+        runner.completed_stages[0].fingerprint.value
     )
 
 
@@ -445,3 +451,62 @@ def test_processing_stage_runner_records_recompute_duration_for_eta(
     # Assert
     event = observer.progress_events[-1]
     assert (event.estimation_state, event.eta_seconds) == ("available", 10.0)
+
+
+def test_restore_permission_failure_preserves_completed_stage(
+    tmp_path: Path,
+) -> None:
+    """restoreのaccess障害でCompleted Stageが削除されないこと。
+
+    Arrange:
+        - 一つのCompleted Stageを確定したrunnerが用意される
+    Act:
+        - 次のrunnerでrestoreだけがPermissionErrorになる
+    Assert:
+        - access障害が返され、Completed Stageが保持されること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "9" * 64
+    semantic_input = {"video_set": "stable"}
+    first = ProcessingStageRunner(
+        cache_folder,
+        RecordingRunObserver(),
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+        stage_order=(ProcessingStage.DISCOVER_VIDEO_SET,),
+    )
+    completed = first.complete(
+        ProcessingStage.DISCOVER_VIDEO_SET,
+        semantic_input,
+        {"value": "stable"},
+    )
+    artifact_path = (
+        cache_folder
+        / "video-sets"
+        / subject_fingerprint
+        / ProcessingStage.DISCOVER_VIDEO_SET.value
+        / completed.fingerprint.value
+        / "artifact.json"
+    )
+    original_bytes = artifact_path.read_bytes()
+    second = ProcessingStageRunner(
+        cache_folder,
+        RecordingRunObserver(),
+        subject_namespace="video-sets",
+        subject_fingerprint=subject_fingerprint,
+        stage_order=(ProcessingStage.DISCOVER_VIDEO_SET,),
+    )
+
+    def deny_restore(_artifact: dict[str, object]) -> object:
+        raise PermissionError("injected restore permission failure")
+
+    # Act
+    # Assert
+    with pytest.raises(PermissionError, match="injected restore permission failure"):
+        second.reuse(
+            ProcessingStage.DISCOVER_VIDEO_SET,
+            semantic_input,
+            deny_restore,
+        )
+    assert artifact_path.read_bytes() == original_bytes

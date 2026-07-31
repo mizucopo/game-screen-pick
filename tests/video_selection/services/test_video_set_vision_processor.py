@@ -42,6 +42,7 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     Assert:
         - 2回目はCatalogとAnnotationをすべて独立cacheから復元すること
         - raw Context Cue、prompt body、raw response、reasoningがcacheされないこと
+        - Scene Kindと全生成条件・監査versionがfingerprint入力へ保存されること
     """
     # Arrange
     video_set, configuration = _video_set_and_configuration(tmp_path)
@@ -106,6 +107,63 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     assert '"messages"' not in cache_text
     assert '"raw_response"' not in cache_text
     assert '"reasoning"' not in cache_text
+    assert '"scene_kind": "exploration"' in cache_text
+    assert '"seed": 0' in cache_text
+    assert '"combat_visibility_edge_audit_prompt_version"' in cache_text
+    assert '"combat_visibility_edge_strip_version"' in cache_text
+    assert '"cinematic_letterbox_detection_version"' in cache_text
+    assert '"candidate_annotation_relationship_repair_prompt_version"' in cache_text
+    assert '"candidate_annotation_relationship_repair_schema_version"' in cache_text
+    assert (
+        '"candidate_annotation_relationship_repair_stage_contract_version"'
+        in cache_text
+    )
+    assert '"candidate_annotation_relationship_repair_num_predict": 1024' in cache_text
+    assert (
+        '"candidate_annotation_relationship_repair_evidence_max_length": 160'
+        in cache_text
+    )
+
+
+def test_batch_boundary_rejects_metadata_change_after_annotation(
+    tmp_path: Path,
+) -> None:
+    """Annotation中のmetadata変更がbatch完了時に拒否されること。
+
+    Arrange:
+        - Annotation中にsource内容とmetadataを書き換えるruntimeが用意される
+    Act:
+        - 一つのCandidate Annotation batchが処理される
+    Assert:
+        - batch結果が返されずVideo Set snapshot変更として拒否されること
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    request = _requests()[0]
+    source_path = video_set.sources[0].path
+
+    def mutate_source() -> None:
+        source_path.write_bytes(b"mutated-video-with-new-size")
+
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        (_annotations(_requests())[0],),
+        on_candidate_annotation=mutate_source,
+    )
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
+        VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+            video_set=video_set,
+            representatives=request.frame_candidates,
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=(request,),
+            configuration=configuration,
+            resolved_models=models,
+        )
+    assert len(runtime.candidate_annotation_calls) == 1
 
 
 def test_same_catalog_fingerprint_runs_inference_once_under_lock(
@@ -213,7 +271,8 @@ def test_completed_annotations_survive_first_middle_last_failure(
     )
     models = FakeModelRuntime("vision-model").resolve_models(configuration)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(RuntimeError, match="fake raw response"):
         VideoSetVisionProcessor(
             first_runtime,
@@ -684,9 +743,11 @@ def _moment(seed: str, frame_id: str, time: Fraction) -> CandidateMoment:
 def _catalog() -> SceneCatalog:
     return SceneCatalog(
         (
-            SceneCatalogEntry("exploration", "探索", "フィールド探索", "ordinary"),
-            SceneCatalogEntry("climax", "終盤", "重要な対決", "cinematic"),
-            SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
+            SceneCatalogEntry(
+                "exploration", "探索", "フィールド探索", "exploration", "ordinary"
+            ),
+            SceneCatalogEntry("climax", "終盤", "重要な対決", "event", "cinematic"),
+            SceneCatalogEntry("other", "その他", "分類不能", "other", "ordinary"),
         )
     )
 

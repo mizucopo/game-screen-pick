@@ -24,6 +24,8 @@ class EffectiveConfiguration:
     decode_backend: str = "cpu"
     refinement_radius_seconds: float = 1.0
     max_frame_candidates: int = 3
+    video_scan_workers: str | int = "auto"
+    video_scan_auto_max_workers: int = 6
     candidate_density_per_minute: float = 2.0
     language: str = "ja"
     subtitle_stream_index: int | None = None
@@ -45,6 +47,10 @@ class EffectiveConfiguration:
     speech_overlap_seconds: float = 5.0
     reset_cache: bool = False
     debug: bool = False
+    video_identity_cache_folder: Path | None = field(
+        default=None,
+        repr=False,
+    )
     provenance: tuple[tuple[str, ConfigurationSource], ...] = field(
         default=(),
         repr=False,
@@ -60,6 +66,13 @@ class EffectiveConfiguration:
     def processing_cache_folder(self) -> Path:
         """Video Input Folderが所有するprocessing cacheを返す。"""
         return self.video_input_folder / ".game-screen-pick" / "cache"
+
+    @property
+    def durable_video_identity_cache_folder(self) -> Path:
+        """Processing Stage cacheと寿命を分離したidentity cacheを返す。"""
+        return self.video_identity_cache_folder or (
+            self.video_input_folder / ".game-screen-pick" / "video-identities"
+        )
 
     def source_for(self, key: str) -> ConfigurationSource:
         """canonical keyに採用された設定sourceを返す。"""

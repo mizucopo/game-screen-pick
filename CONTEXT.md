@@ -17,8 +17,8 @@ _Avoid_: Video Set, Output Folder, cache key
 _Avoid_: Stage lock, waiting queue, global lock, cache artifact
 
 **Video Set Snapshot Validation**:
-Input Lock取得直後とOutput Folder公開直前にはVideo Set全体のpath、stat、内容を、各Video Sourceのmedia probe前と各Video Stage直前にはVideo Set全体のpath、statと対象Video Sourceの内容を発見時snapshotへ照合する不変性検査。変更済みsourceからstream metadataを取得せず、Stageごとに全動画を再hashする検査とは区別する。
-_Avoid_: cache artifact validation, full-set hash per Video Stage, Input Lock
+Video Identity確定後に、Video Set全体のpath順、file size、`mtime_ns`を発見時snapshotへ照合する不変性検査。Input Lock取得後、各Video Sourceのmedia probe前、Work UnitとCompleted Stageの確定前、Output Folder公開前に実行し、Stageごとのwhole-file再hash、device・inode・ctimeの照合とは区別する。同じsize・mtimeへ意図的に内容を書き換えた場合は検知しない運用上のtrade-offを持つ。
+_Avoid_: cache artifact validation, full-set hash per Video Stage, inode validation, Input Lock
 
 **Video Set Fingerprint**:
 Video Setの構成とVideo Orderをcacheやreportで参照するための、順序付きVideo Fingerprint列から導出される安定した識別子。
@@ -35,6 +35,10 @@ _Avoid_: input file path, ordered Video Set member, path-based identity
 **Video Identity**:
 動画内容によって決まる、個々の Video の安定した同一性。ファイル名、配置、更新日時が変わっても内容が同じなら維持され、内容が変われば新しい identity になる。
 _Avoid_: file path, filename, mtime, Video Order
+
+**Video Identity Cache Entry**:
+一つのlogical sourceについて、identity engine version、入力rootと相対pathから導出したprivacy-safe key、file size、`mtime_ns`、whole-file SHA-256をatomicに保持するlookup hint。動画1本のhash確定直後に保存し、processing cacheのFresh Processing/reset境界から寿命を分離する。Video Identityそのものではなく、raw path、video名、device、inode、ctimeを保持しない。
+_Avoid_: Video Identity, stat-only identity, processing Stage, absolute path record
 
 **Duplicate Video**:
 一つのVideo Set内で、複数のpathが同じVideo Identityを指している入力不整合。
@@ -80,9 +84,37 @@ _Avoid_: public TOML, Effective Configuration, committed fixture, production def
 一回のtarget acceptanceで得たcommit、runtime/model identity、pathなしのVideo Set fingerprint、Stage時間、resource、cache、quality判定をversioned JSONとして保存する証拠。media、absolute path、raw text、prompt、model responseを含めない。
 _Avoid_: Canonical Selection Report, runtime log, baseline snapshot, raw benchmark output
 
+**Acceptance Run**:
+Acceptance PhaseまたはAcceptance Comparison Runを総称する論理的な完了・集約単位。一つ以上のAcceptance Run Attemptを持ち、再開をまたぐ全試行を集約して完了recordと予算判定を確定する。
+_Avoid_: Acceptance Run Attempt, one process lifetime, Processing Stage, production run
+
+**Acceptance Phase**:
+target acceptanceでcacheなしの本処理を測るFresh Processing、または同じcacheを使うCache Reuseの論理的な性能判定単位。中断後に再開された場合は複数のAcceptance Run Attemptを持ち、全attemptの経過時間と作業量、保守的なresource peakをまとめて予算判定する。
+_Avoid_: Acceptance Comparison Run, Acceptance Run Attempt, Processing Stage, one process lifetime
+
+**Acceptance Comparison Run**:
+full target acceptanceで固定workerと自動並列化を比較するParallelism Baseline。fresh processing cache上で固定3 workerを使う独立runであり、Fresh Processingと同じpipelineを実行するがAcceptance Phaseではない。完了後にcacheを削除してFresh Processingを開始する。
+_Avoid_: Acceptance Phase, benchmark fixture, Cache Reuse, production default
+
+**Acceptance Run Reset**:
+target acceptanceの論理runと、その結果に依存する後続runだけを破棄して再測定する明示操作。利用者向け対象は`parallelism-baseline`、`fresh-processing`、`cache-reuse`であり、materialized inputと共有Video Identity cacheは保持する。`fresh-processing`はprocessing cacheも破棄し、`cache-reuse`は本処理cacheが残っている場合だけそれを保持して再測定する。
+_Avoid_: suite全体reset, Processing Stage reset, cache migration, automatic Stage invalidation
+
+**Video Scan Comparison Context**:
+Parallelism BaselineとFresh Processingのwall timeを同一条件の証拠として比較するために共有する、source revision・実効設定/model identity・target runtimeを正規化したprivacy-safe identity。bootごとのvisible RAM差は含めず、両runの全attemptで一致するものだけを同一比較として扱う。
+_Avoid_: Acceptance Run execution context, raw host snapshot, Stage artifact digest
+
+**Acceptance Run Attempt**:
+一つのAcceptance PhaseまたはAcceptance Comparison Runについて、開始から正常終了、中断、またはoperation failureまで連続して計測された実行区間。Completed Stageを再利用してrunを再開しても、それ以前のattemptを性能証拠から除外しない。process強制終了時もactive markerとAcceptance Attempt Journalから`process_abandoned`として閉じる。
+_Avoid_: Acceptance Run, Acceptance Phase, Acceptance Comparison Run, retry inside model inference, Processing Stage
+
+**Acceptance Attempt Journal**:
+activeなAcceptance Run Attemptのexecution context、cache・reuse・recompute件数、Stage aggregate、Work Unitごとのresolutionを、Progress Event境界でatomicに更新するprivacy-safeな回復記録。process強制終了後はCompleted Stage、Durable Work Unit、Video Identityの確定manifestと照合してkill直前の作業量を回復する。resource samplerの未確定sampleを捏造せず、attempt完了後に削除する。
+_Avoid_: Acceptance Record, pipeline checkpoint, raw progress log, resource sample database
+
 **Legacy Cache**:
-旧screenshot selectorが作成した認識可能なprocessing cache entry。cache lock取得後に自動削除し、変換・保持・互換利用は行わない。新しい`videos/`と`video-sets/`は含まない。
-_Avoid_: old model store, old Stage Fingerprint, user output, unknown directory
+旧screenshot selectorが作成した認識可能なprocessing cache entry、旧processing cache内の`video-identities/`、またはmanifestから現行より古いversioned Candidate Annotation Stage Contractだと識別できるCompleted Stage。cache lock取得後に自動削除し、変換・保持・互換利用は行わない。現行の独立Video Identity cache、現行contractの設定違いによるStage Fingerprint不一致、認識できない`videos/`・`video-sets/`・`work-units/` entryは含まない。
+_Avoid_: old model store, fingerprint mismatch alone, user output, unknown directory
 
 **Stage Fingerprint**:
 Processing Stage の成果物に影響する上流成果物と、そのStage固有の設定・versionだけから導出される識別子。
@@ -140,16 +172,24 @@ _Avoid_: model fallback, cache reset, model identity, notification-only update c
 成果物と完了manifestがatomicに確定し、再利用できる Processing Stage。完了manifestのない部分成果物は含まない。
 _Avoid_: partial cache, in-progress stage, progress checkpoint
 
+**Durable Work Unit**:
+長時間のProcessing Stageを構成する最小の再計算可能単位。engine version、stable key、semantic inputからfingerprintを作り、artifactとmanifestの全fileをfsyncした後にatomic renameで確定する。Video Identity 1本、Video Scan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、Speech Recognition chunk、Selected Image WebPが該当し、親Completed Stageが未確定または破損しても健全な兄弟unitを再利用する。integrityだけでなくdomain schema・件数・参照も復元時に検証し、不正なfingerprintだけを修復する。
+_Avoid_: progress sample, arbitrary loop iteration, partial Stage, mutable scratch file
+
+**Resume Output Invariance**:
+同じsemantic inputから中断後に再開したrunが、中断なしのrunと同じ選択Candidate ID、選択順、公開WebP bytes、canonical reportの意味内容を返す契約。attempt時刻、経過時間、resource sample、cache hit/recompute件数などの運用診断は含めない。初回runとresume runで同じ固定partitionと安定集約順を使い、worker数や完了順をsemantic identityへ混ぜない。atomic rename済みの完成Canonical Outputは自己検証とsemantic digest一致後にbyte変更なしで再利用する。
+_Avoid_: bit-identical operational telemetry, cache performance equality, unvalidated output reuse
+
 **Recognized Partial Stage**:
-Completed Stageとして確定する前に中断・失敗したことをcache構造から安全に識別できる一時成果物。再利用せず、Input Lock取得後に削除して同じProcessing Stageを再計算する。
-_Avoid_: Completed Stage, Legacy Cache, unknown directory, resume checkpoint
+Completed StageまたはDurable Work Unitとして確定する前に中断・失敗したことをcache構造から安全に識別できる専用temporary成果物。再利用せず、Input Lock取得後にその対象だけを削除して再計算する。確定済み兄弟Work Unitは削除しない。
+_Avoid_: Completed Stage, Durable Work Unit, Legacy Cache, unknown directory
 
 **Video Stage**:
-一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysis、Context Cue収集を所有する。複数VideoはVideo Order順に各Videoのscan、candidate extraction、context collectionを直列実行し、Video Orderは実行順にだけ使ってfingerprintへ含めない。
+一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysis、Context Cue収集を所有し、scan partition、Refinement Window Group、Speech Recognition chunkをDurable Work Unitとして確定する。複数Videoでは独立したscanをbounded workerで並列実行し、Video Order上の対象scanが確定した時点で後続Videoのscanを続けながら、そのVideoのcandidate extractionとcontext collectionを順序どおり進める。中断時は未開始scanを取り消してから実行中scanへ終了を要求し、中断後に新しいscanを開始しない。resultとprogressはVideo Order順に確定し、Video Orderとworker数はfingerprintへ含めない。
 _Avoid_: Video Set Stage, cross-video selection, whole-run stage
 
 **Video Scan Stage**:
-一つのVideo Sourceを一度decodeして、heartbeat proxy、scene signal metadata、exact timeline、scan metricをCompleted Stageとして確定するVideo Stage。FingerprintにはVideo Fingerprint、選択video stream、Media Runtime Identity、decode backend、heartbeat/scene設定、proxy contract、scan/timeline algorithm versionだけを含める。metricにはexact duration、wall/CPU時間、処理速度、decode backend、heartbeat件数/bytes/gap、scene signal件数、Timeline Segment数を残すがfingerprintへ含めない。後続の密度、refinement、最大Frame Candidate数、Neutral Image Analysisだけが変わった場合も再利用できる。
+一つのVideo Sourceをexact stream timingから15分の固定PTS partitionへ分け、各partitionを一度decodeしてDurable Work Unitとして確定し、heartbeat proxy、scene signal metadata、exact timeline、scan metricを安定順にCompleted Stageへ集約するVideo Stage。streamの`duration_ts`がない場合だけ、ffprobeのcontainer durationを有理数としてstream tickへ切り上げ、partition開始点の個数を決めるhintにする。Video Durationやframe時刻には使わない。最後のpartitionは開始PTSからEOFまでを対象にする。FingerprintにはVideo Fingerprint、選択video stream、partition duration hint、Media Runtime Identity、decode backend、heartbeat/scene設定、partition・proxy・scan・timeline algorithm versionだけを含める。metricにはexact duration、wall/CPU時間、処理速度、decode backend、partition数、heartbeat件数/bytes/gap、scene signal件数、Timeline Segment数を残すがfingerprintへ含めない。後続の密度、refinement、最大Frame Candidate数、Neutral Image Analysisだけが変わった場合も再利用できる。
 _Avoid_: Frame Refinement, Candidate Annotation, Video Set Stage
 
 **Primary Video Stream**:
@@ -161,11 +201,11 @@ Video Scan Stageがnative heartbeatごとに永続化する、長辺960px、FFmp
 _Avoid_: scene signal image, Frame Candidate, selected output
 
 **Frame Candidate Extraction Stage**:
-Video Scan Stageを上流にして、Candidate Moment Density、Frame Refinement、Neutral Image AnalysisをCompleted Stageとして確定するVideo Stage。FingerprintにはVideo Fingerprint、上流Stage Fingerprint、density、refinement半径、最大Frame Candidate数、Neutral Analysis/reject/dedupe/ID/proxyのalgorithm versionだけを含める。metricにはwall/CPU時間、density上限/実Moment数、refinement frame数、reason別reject、dedupe、0-frame Moment、Frame Candidate件数/bytesを残すがfingerprintへ含めない。heartbeat/scene設定やdecode結果を独自に作り直さない。
+Video Scan Stageを上流にして、Candidate Moment Density、Frame Refinement、Neutral Image AnalysisをCompleted Stageとして確定するVideo Stage。merge済みRefinement Window Groupごとにrange decode、解析、proxyをDurable Work Unitとして確定し、PTS順に集約する。FingerprintにはVideo Fingerprint、上流Stage Fingerprint、density、refinement半径、最大Frame Candidate数、Neutral Analysis/reject/dedupe/ID/proxyのalgorithm versionだけを含める。metricにはwall/CPU時間、density上限/実Moment数、refinement frame数、reason別reject、dedupe、0-frame Moment、Frame Candidate件数/bytesを残すがfingerprintへ含めない。heartbeat/scene設定やdecode結果を独自に作り直さない。
 _Avoid_: full video scan, Context Cue extraction, final selection
 
 **Context Collection Stage**:
-Frame Candidate Extraction Stageの後に実行し、一つのVideo SourceからContext CueをCompleted Stageとして確定する3番目のVideo Stage。Video Scan Stageのexact timelineとVideo Durationだけを時間基準として使い、Frame Candidate、Candidate Moment、候補密度、refinementの成果物や設定には依存しない。FingerprintにはVideo Fingerprint、exact timeline digestとcontract version、選択stream metadata、stream選択・抽出policyと関連設定、Media Runtime Identity、Cue生成policy versionを含め、STTを実行した場合だけSpeech Runtime Identity、Resolved Model Identity、STT・chunk・VAD設定を加える。model更新時刻と`auto_upgrade`は実行identityが同じなら含めない。Context Cueは後続のVideo Set Stageで集約され、Candidate Momentを生成せずframeの適格性も変更しない。
+Frame Candidate Extraction Stageの後に実行し、一つのVideo SourceからContext CueをCompleted Stageとして確定する3番目のVideo Stage。Video Scan Stageのexact timelineとVideo Durationだけを時間基準として使い、Frame Candidate、Candidate Moment、候補密度、refinementの成果物や設定には依存しない。STTを使う場合はoverlapを含むPCM chunkごとのSpeech Recognition ResultをDurable Work Unitとして確定し、sample順に集約する。FingerprintにはVideo Fingerprint、exact timeline digestとcontract version、選択stream metadata、stream選択・抽出policyと関連設定、Media Runtime Identity、Cue生成policy versionを含め、STTを実行した場合だけSpeech Runtime Identity、Resolved Model Identity、STT・chunk・VAD設定を加える。model更新時刻と`auto_upgrade`は実行identityが同じなら含めない。Context Cueは後続のVideo Set Stageで集約され、Candidate Momentを生成せずframeの適格性も変更しない。
 _Avoid_: Video Set context collection, candidate-generating subtitle stage, candidate-dependent context cache
 
 **Collected Context**:
@@ -257,8 +297,12 @@ algorithm名、Video Fingerprint、frame自身のVideo Timeの既約分数をcan
 _Avoid_: output filename, selection index, source path
 
 **Representative Frame**:
-Selection Shortlist内の一つのCandidate Momentが参照する1から3件のFrame Candidateから、Candidate Annotationがブログ上の意味を最も表すものとして選んだframe。画像品質の再評価や最終採用を意味しない。
-_Avoid_: highest Quality Score, selected output, Frame Refinement
+Selection Shortlist内の一つのCandidate Momentが参照する1から3件のFrame Candidateから、Candidate Annotationより前にNeutral Image AnalysisのQuality Score、Frame Candidate IDの順で決定的に一つへ確定したframe。同じrefinement window内で画面状態が切り替わっても、Vision推論へ複数画像を渡して内容とIDを混同させない境界になる。最終採用を意味しない。
+_Avoid_: model-selected output, selected output, Frame Refinement
+
+**Candidate Frame Observation**:
+Candidate Annotationの主Ollama推論が、一つのFrame Candidateだけを対象に返すstrict enum中心の意味観測。Scene Slug、Scene Catalog Match、画面内容、画面全体の主用途を表すInterface Kind、会話eventの大きな人物立ち絵・胸像の有無、黒帯・HUDのない固定camera・人物配置から分かるCinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、具体的な動作・判別可能な人物または敵の有無、戦闘かどうか、player本体・攻撃相手本体それぞれの`clear`・`partial`・`absent`、一時的な光・爆発・煙だけが主内容か、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskとevidenceを持つ。Dialogue Text Presentationは`none`、`dialogue_box`、`speech_bubble`、`subtitle_overlay`、`other`のいずれかで、画面内台詞文字の有無と必ず一致する。音声やContext Cueの会話文を画面内台詞にしない。手紙・手記・日誌・記録を読む画面はInterface Kind `document`として観測する。戦闘HUDだけではInterface Kindを`other_interface`にせず、人物portrait、空の台詞欄、説明文、目的表示、menu項目を台詞として扱わない。会話eventの大きな人物立ち絵・胸像と、画面隅の小さな常設HUD portraitを区別する。通常の戦闘・探索HUDをCinematic Event Presentationにしない。Portrait、HUD、文字、影、発光、移動軌跡を人物・player・攻撃相手の本体として数えない。上下両端の太い暗色帯は画素から決定的に補助検知し、Scene Catalogや主推論がeventを`other`へ誤分類しても掲載境界監査を省略しない。Representative Frame、最終score、適格性、最終採否は決めない。
+_Avoid_: Candidate Annotation artifact, Representative Frame, model-selected output
 
 **Cross-Video Diversity**:
 Video Set全体で、視覚的に重複するframeや進行上の一部へ偏ったframeを最終選定から抑える性質。特定のVideo Sourceへ採用枠を保証するものではない。
@@ -273,12 +317,32 @@ _Avoid_: per-video position, story importance, spoiler score, selection quota
 _Avoid_: late-video penalty, timeline bucket quota, per-video quota
 
 **Scene Catalog Representative Set**:
-Video Set全体のNeutral Image Analysisから、品質、見た目の多様性、頻出patternを表すFrame Candidateを最大24件選んだScene Catalog専用の入力集合。Selection Shortlistと要求出力枚数から独立し、要求枚数の変更だけではScene Catalogを変えない。
+Video Set全体のNeutral Image Analysisから、品質、見た目の多様性、頻出patternを表すFrame Candidateを最大24件選んだScene Catalog専用の入力集合。Frame Candidate IDは集合内で一意とし、Selection Shortlistと要求出力枚数から独立するため、要求枚数の変更だけではScene Catalogを変えない。
 _Avoid_: Selection Shortlist, selected output, per-video representatives
 
 **Candidate Annotation**:
-Selection Shortlist内の一つのCandidate Momentについて、1から3件の有効なFrame Candidate、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、Representative Frameと意味情報を構造化して返すVideo Set StageのOllama評価。画像品質、最終score、soft coverage、最終採否は決めない。
+Selection Shortlist内の一つのCandidate Momentについて、Neutral Image Analysisで先に確定した一つのRepresentative Frame、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、主Ollama推論でID付きCandidate Frame Observationを評価するVideo Set Stage。各観測はScene Slug、Scene Catalog Match、画面内容、Interface Kind、会話eventの大きな人物立ち絵・胸像の有無、Cinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、動作・人物または敵の有無、戦闘かどうか、player・攻撃相手それぞれの本体可視性、一時的な光・爆発・煙だけが主内容か、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。音声やContext Cueの会話文は画面内台詞文字とScene Catalog Matchの根拠に使わない。Blog Image Type、公開用要約と理由は観測からlocalに決定し、Scene Catalog MatchがfalseならScene Slugを`other`へ正規化し、具体的なScene Display Nameを要約に使わない。具体的なInterface Kindは曖昧な画面内容分類より優先する一方、動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として上書きに使わない。大きなevent人物立ち絵またはCinematic Event Presentationと画面内台詞文字を持つ会話eventも、汎用的な`other_interface`より優先する。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正し、`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、攻撃相手本体が`clear`でない戦闘、一時的な光・爆発・煙だけが主内容のframe、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化する。主推論が非戦闘とした掲載可能なScene Kind `combat`のgameplay、または`recurring_gameplay` actionにはCombat Encounter Verificationを追加し、最初の非戦闘判定を独立再確認する。Scene Kind `combat`で二回とも戦闘を確認できなければExplanation Valueを`none`にする。それ以外の`recurring_gameplay` actionは戦闘有無の結果にかかわらずCombat Visibility Verificationへ進め、二回の敵本体観測がともに敵不在、または掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。掲載価値ありとした非戦闘の地図または`cinematic` sceneにはPublication Boundary Verificationを追加し、一時的な遷移effectと、台詞も動作もないevent導入の直接観測を適格性境界に優先する。最終score、soft coverage、最終採否は決めない。
 _Avoid_: Candidate Scoring, Frame Refinement, Neutral Image Analysis, final selection
+
+**Candidate Annotation Relationship Repair**:
+Candidate Annotationの主推論がschemaには適合するがContext Cue参照またはSpoiler Evidenceの関係だけに違反したとき、分類と他の観測を凍結し、違反した従属fieldだけを一度修復してAnnotation全体を再検証する境界。
+_Avoid_: second Candidate Annotation, classification retry, deterministic fallback, silent candidate drop
+
+**Combat Encounter Verification**:
+Candidate Annotationの主推論が掲載可能な非戦闘としたScene Kind `combat`のgameplay、または`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。敵・boss固有の名前とHP・status bar、または戦うplayer・相手本体から戦闘の有無を確認する。敵本体が画面外・画面端・エフェクト内でも敵status UIがあれば戦闘とし、Combat Visibility Verificationへ進める。player自身の通常HUD、portrait、操作button、minimapだけでは戦闘にしない。最初の確認が非戦闘なら、先の回答を推測しない別promptで同じ画素を独立再確認する。Scene Kind `combat`で二回とも非戦闘なら、戦闘sceneとして説明できないframeとしてExplanation Valueを`none`にする。それ以外の`recurring_gameplay` actionではCombat Visibility Verificationへ進め、敵本体の直接観測との不一致を検出する。
+_Avoid_: combat visibility, contextual combat classification, final selection
+
+**Combat Visibility Verification**:
+Candidate Annotationの主推論が掲載可能とした戦闘、Combat Encounter Verificationで戦闘と確認されたframe、またはScene Kind `combat`以外でCombat Encounter Verificationの対象になった`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeかをstrict enumで観測する。戦闘と確認済みの場合、攻撃相手本体が`partial`・`absent`、構図が`edge_cropped`・`occluded`・`absent`、またはエフェクトだけならExplanation Valueを`none`に下げる。最初の確認が掲載可能なら、先の回答を推測しない別promptで同じ画素を独立再確認し、二回とも攻撃相手本体が`clear`、構図が`complete`、かつエフェクトだけではない場合だけCombat Visibility Edge Auditへ進む。Scene Kind `combat`以外で戦闘有無が二回とも否定された場合は可視性を必ず二回確認し、両方で敵本体が不在かつエフェクトだけではない場合、または両方で掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
+_Avoid_: second Candidate Annotation, contextual combat classification, final selection
+
+**Combat Visibility Edge Audit**:
+二回のCombat Visibility Verificationがともに掲載可能としたRepresentative Frame一枚だけに対し、上端・下端・左端・右端それぞれの外周30%をlocalで切り出し、4枚を一度に渡して実行する最終の条件付きOllama推論。各stripについて攻撃相手本体が判別可能か、その主要な輪郭が元画像の実際の外端へ到達するかだけを専用strict schemaで直接観測する。敵名、HP bar、光、攻撃effect、影、背景、診断用の内側crop境界を敵本体の外端到達に数えない。どれか一辺で敵本体の存在と実際の外端への到達がともに確認された場合はExplanation Valueを`none`に下げる。二回の可視性確認と外周strip監査のすべてを通った場合だけ掲載価値を保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
+_Avoid_: generic effect threshold, second Candidate Annotation, final selection
+
+**Publication Boundary Verification**:
+Candidate Annotationの主推論が掲載可能とした非戦闘の地図、Scene Selection Roleが`cinematic`の場面、または画素から上下両端の太い暗色帯が検知されたRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。一時的な遷移effectの有無・種類・画面占有率、上下の黒帯、event用の人物配置、画面内台詞文字、人物の具体的な動作、主内容の可読性をstrict enumで観測する。画素検知した黒帯はmodelの見落としより優先する。一時的な遷移effectがある場合、または上下の黒帯とevent用の人物配置があり画面内台詞も具体的な動作もない場合はExplanation Valueを`none`に下げるが、Scene Slug、画面内容、Spoiler Risk、説明文を変更しない。地図の雲、cursor、選択marker、常設UIは遷移effectにしない。
+_Avoid_: second Candidate Annotation, contextual event classification, final selection
 
 **Scene**:
 ブログ用の画像選択で使う、画像内容を表すカテゴリ。ゲームジャンルや入力画像群に応じて決まる。
@@ -287,6 +351,10 @@ _Avoid_: play/event density bucket, fixed category
 **Scene Slug**:
 scene を表す小文字英数字の安定名。出力ファイル名、レポート、カテゴリ集計に使われる。
 _Avoid_: localized category name
+
+**Scene Kind**:
+Scene Catalogが各sceneへ付ける機械判定可能な内容種別。値は`combat`、`exploration`、`interface`、`event`、`other`で、自由なScene Slugや表示名から戦闘などの意味を推測しないために使う。`other` sceneのScene Kindは必ず`other`とする。
+_Avoid_: Scene Slug naming convention, Scene Selection Role, per-frame content kind
 
 **Scene-numbered Output Name**:
 既存の画像入力selectorが選択画像に付ける、scene slugとscene内連番からなる出力ファイル名。Video Set selectorではSelected Image Output Nameに置き換える。
@@ -299,6 +367,10 @@ _Avoid_: stable image identity, scene-local index, source filename
 **Selected Image Encoding**:
 Video Set selectorが選択画像へ固定で使う、元frameの解像度を維持した非可逆WebP quality 95。埋め込みmetadataは除去し、v1では利用者設定による形式やqualityの変更を許可しない。
 _Avoid_: PNG default, configurable image format, resized thumbnail, source metadata copy
+
+**Selected Image Checkpoint**:
+最終選定済みFrame Candidate一件について、exact source PTSから再抽出した元解像度frameをSelected Image Encodingへ変換し、WebP bytes、寸法、SHA-256をDurable Work Unitとして確定した非公開artifact。final publicationが未確定なら同じbytesを新しいstagingへ安定順でcopyし、完成Canonical Outputが検証できる場合は既存outputを変更しない。
+_Avoid_: Frame Candidate Proxy, mutable output image, partial output checkpoint, original RGB cache
 
 **Report Source Path**:
 Human Selection Reportとmachine-readable reportが元動画を追跡するために示す、Video Input Folderを基準に`/`区切りへ正規化した相対path。`..`を含めず、Video OrderとVideo Source IDを併記し、Video Identityには使わない。
@@ -313,12 +385,12 @@ machine-readable reportが処理した動画内容を厳密に示す、algorithm
 _Avoid_: truncated digest in report.json, report.md fingerprint, file stat, path hash
 
 **Output Folder**:
-選択画像を`images/`、Human Selection Reportを`report.md`、machine-readable reportを`report.json`へ書き出す実行ごとの保存先。処理開始前に空であり、input folderと同一または相互の配下であってはならない。
-_Avoid_: append destination, overwrite target, resumable output
+選択画像を`images/`、Human Selection Reportを`report.md`、machine-readable reportを`report.json`へ書き出す実行ごとの保存先。input folderと同一または相互の配下にできず、新規公開時は未作成または空である必要がある。既存の非空folderは、Canonical Outputのschema、artifact、layout、privacyと今回のsemantic digestがすべて一致する場合だけ終端の再開状態としてbyte変更なしで受理し、異なる完成成果物や利用者fileは削除・上書きしない。
+_Avoid_: append destination, blind overwrite target, unvalidated resume folder
 
 **Atomic Output Publication**:
-存在しないOutput Folderと同じ親filesystem上の隠しstaging Folderへ全画像、machine-readable report、Human Selection Reportを生成・検証・flushした後、directory renameを1回だけ行う公開境界。既存の空Output Folderは事前検証後に取り除き、fatal errorではOutput Folderを公開しない。Selection Shortfallはwarning付き正常成果物として公開し、atomic rename非対応時は処理前に失敗する。
-_Avoid_: file-by-file publication, completion marker fallback, partially visible output, cross-filesystem staging
+存在しないOutput Folderと同じ親filesystem上の隠しstaging Folderへ全画像、machine-readable report、Human Selection Reportを生成・検証・flushした後、directory renameを1回だけ行う公開境界。既存の空Output Folderは事前検証後に取り除き、fatal errorではOutput Folderを公開しない。rename後にprocessが強制終了してfinal folderだけが残った場合は、自己完結検証とsemantic digest一致を通して完成済みpublicationとして再利用する。Selection Shortfallはwarning付き正常成果物として公開し、atomic rename非対応時は処理前に失敗する。
+_Avoid_: file-by-file publication, unchecked completion marker, partially visible output, cross-filesystem staging
 
 **Human Selection Report**:
 選択画像と採用理由をgallery-firstで確認でき、末尾のappendixからshortfall、near miss、score内訳、Stage provenanceを追える`report.md`。source videoとVideo Timeは各画像に示すが、動画別の長大なtimelineを主構造にはしない。
@@ -357,8 +429,12 @@ scene を人が読みやすいように表す日本語名。ブログ用の画�
 _Avoid_: filename prefix, report key
 
 **Scene Catalog**:
-Scene Catalog Representative Setから作る、一つのVideo Setを横断して共有するsceneとScene Selection Roleの一覧。3から8個のsceneと分類の逃げ先である`other`で構成され、Videoごとには分割しない。
+Scene Catalog Representative Setから作る、一つのVideo Setを横断して共有するscene、Scene Kind、Scene Selection Roleの一覧。3から8個のsceneと分類の逃げ先である`other`で構成され、Videoごとには分割しない。Scene Slug、Scene Display Name、Scene Descriptionは、一部の代表画像だけの場所・固有人物・物語上の結果をscene全体へ断定せず、そのsceneへ後から分類される画像で再利用できる視覚・操作上の役割を表す。Scene Kind `other`のsceneは自由なslugや具体的な表示名が返っても、slugを`other`、表示名を「その他」、説明を汎用の分類逃げ先へ正規化する。Scene Kindは複数sceneで重複できるが、Scene Slugはcatalog内で一意とする。domain再試行でも非`other`のScene Slugだけが重複した場合は、入力順の数値suffixで決定的に一意化する。
 _Avoid_: fixed scene list, free-form per-image labels, per-video catalog
+
+**Scene Catalog Match**:
+Candidate Frameの画素だけから、選択したScene Catalog entryのScene Display NameとScene Descriptionに含まれる具体的な場所・人物・出来事まで裏付けられること。Scene Kindや会話・戦闘という大分類だけが合う場合、音声・Context Cue・Video Set Progressで補わなければ合わない場合は不一致とする。不一致のCandidate AnnotationはScene Slugを`other`へ正規化し、具体的なScene Display Nameを使わず画面内容だけの要約を公開する。
+_Avoid_: Scene Kind match, Context Cue relevance, image quality, selection eligibility
 
 **Scene Description**:
 画像がその scene に分類された理由を、ブログ用の画像選択に役立つように短く説明する文章。
@@ -377,7 +453,7 @@ _Avoid_: fixed scene list, selection rule
 _Avoid_: image analysis setting, cache option
 
 **Blog Image Type**:
-Representative Frameがブログ内で主に果たす説明上の役割。値は`normal_gameplay`、`event`、`menu`、`title`、`other`で、操作可否ではなく画面とCandidate Momentの主目的からCandidate Annotationが付与する。探索や戦闘に短い台詞・HUD表示が重なったものは`normal_gameplay`、会話や演出そのものが主体なら`event`として扱い、最終的なsoft coverageは決定的なVideo Set selectorが扱う。
+Representative Frameがブログ内で主に果たす説明上の役割。値は`normal_gameplay`、`event`、`menu`、`title`、`other`で、操作可否ではなくCandidate Frame Observationの画面内容からCandidate Annotation Stageが決定的に導出する。探索や戦闘に短い台詞・HUD表示が重なったものは`normal_gameplay`、会話や演出そのものが主体なら`event`として扱い、最終的なsoft coverageは決定的なVideo Set selectorが扱う。
 _Avoid_: Scene, Scene Selection Role, hard quota, final selection
 
 **Blog Image Type Soft Coverage**:
@@ -389,7 +465,7 @@ _Avoid_: hard quota, per-video quota, Cinematic Soft Cap, guaranteed title image
 _Avoid_: hard quota, overflow penalty, guaranteed title image
 
 **Explanation Value**:
-Representative FrameとそのCandidate Momentがブログ本文でplayや出来事を説明できる度合い。値は`none`、`low`、`medium`、`high`で、Candidate Annotationが意味評価として付与するが、最終scoreや採否そのものではない。
+Representative FrameとそのCandidate Momentがブログ本文でplayや出来事を説明できる度合い。値は`none`、`low`、`medium`、`high`で、Candidate Annotationが意味評価として付与する。`none`はCandidate Annotation自体の失敗やmodelによる最終採否ではないが、決定的selectorが要求枚数の穴埋めに使わない適格性境界になる。
 _Avoid_: Quality Score, model confidence, final selection score
 
 **Screen Text Kind**:
@@ -437,7 +513,7 @@ Candidate Annotationが完了し、Representative Frameと最終選定に必要�
 _Avoid_: all Candidate Moments, Selection Shortlist, selected output
 
 **Selection Shortlist**:
-有効なFrame Candidateを持つCandidate Momentのうち、Neutral Image Analysisによる品質と見た目の多様性から、Candidate Annotationへ進めるものをVideo Set全体でlocalに絞った集合。
+有効なFrame Candidateを持つCandidate Momentのうち、Neutral Image Analysisによる品質と見た目の多様性から、Candidate Annotationへ進めるものをVideo Set全体でlocalに絞った集合。複数Momentが同じRepresentative Frameを共有する場合は決定済みshortlist順の最初のMomentだけを残し、後続の一意なFrameを持つMomentの探索を続けるため、集合内のFrame Candidate IDは一意になる。
 _Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
 
 **Selection Shortfall**:
@@ -445,7 +521,7 @@ _Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
 _Avoid_: Candidate Annotation failure, silent omission, fabricated output, invalid-frame fallback
 
 **Selection Rejection Reason**:
-未採用Blog Candidateの主因を表すstable enum。`title_limit`、`visual_near_duplicate`、`similarity_ceiling`、`spoiler_monotonicity_guard`、`lower_marginal_utility`を持ち、model自由文や例外messageから推測しない。
+未採用Blog Candidateの主因を表すstable enum。`title_limit`、`visual_near_duplicate`、`similarity_ceiling`、`spoiler_monotonicity_guard`、`lower_marginal_utility`を持つ。Explanation Valueが`none`の候補はCounterfactual Selection Scoreを保持した`lower_marginal_utility`として説明し、model自由文や例外messageから理由を推測しない。
 _Avoid_: free-text rejection, Content Reject Reason, Ollama Stage Failure
 
 **Counterfactual Selection Score**:
@@ -453,7 +529,7 @@ _Avoid_: free-text rejection, Content Reject Reason, Ollama Stage Failure
 _Avoid_: final selected score, model confidence, regenerated explanation
 
 **Neutral Image Analysis**:
-sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。画像の内容分類ではなく、blog candidate判定や動画横断のcosine similarity判定の土台になる。明確な無効frameには絶対条件、暗いgameなど入力特性にはRefinement Window Group内の分布、Transition Frameには同一streamとtime baseでdurationどおりに連続するnative frameだけの前後関係を使う。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
+sceneやSelection Intent、modelに依存せず、Frame Candidateそのものから得られる画質metrics、Quality Score、正規化済みHSV・輝度・edge視覚特徴。各視覚特徴成分は尺度差によって他成分を消失させないよう個別に正規化して等しく組み合わせ、画像の内容分類ではなくblog candidate判定や動画横断のcosine similarity判定の土台にする。明確な無効frameには絶対条件を使い、純白だけでなく主対象を覆う大きな連結白領域、画面全体では小さくても中央の主対象を覆う連結した白い発光、画面の大半を覆う低情報の淡い白もwhiteoutにする。構造が判別できる明るいmenuは明るさだけで除外しない。暗いgameなど入力特性にはRefinement Window Group内の分布を使う。Transition Frameには同一streamとtime baseでdurationどおりに連続するnative frameだけの前後関係を使い、0.25秒以内に画面の一部から大半へ拡大または縮小する淡い明領域もtemporal transitionにする。CLIPやHugging Face model identityをVideo Stageへ持ち込まない。
 _Avoid_: scene classification, selection intent, CLIP embedding, model-dependent feature
 
 **Content Reject Reason**:
@@ -489,7 +565,7 @@ _Avoid_: recurring gameplay variant, same scene, temporal neighbor
 _Avoid_: scene, duplicate file
 
 **Ollama Stage Failure**:
-Scene CatalogまたはCandidate Annotationが、同じsemantic入力による初回と1回の再試行後もtransport、schema、domain validationを完了できなかった状態。`other`への分類とは区別し、fallbackや失敗Candidateの除外で処理を継続せず、最終選定とoutput公開を中止する。
+Scene Catalog、Candidate Annotationの主推論、Combat Encounter Verification、Combat Visibility Verification、またはPublication Boundary Verificationが、それぞれ同じsemantic入力による初回と1回の再試行後もtransport、schema、domain validationを完了できなかった状態。`other`への分類とは区別し、fallbackや失敗Candidateの除外で処理を継続せず、最終選定とoutput公開を中止する。
 _Avoid_: other scene, silent exclusion, catalog fallback, partial output
 
 **Resumable Run**:

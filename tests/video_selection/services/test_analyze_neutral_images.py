@@ -100,6 +100,94 @@ def test_smooth_blurred_frame_is_rejected_without_model_inference() -> None:
     assert analysis.reject_reason is ContentRejectReason.BLUR
 
 
+def test_large_white_effects_are_rejected_without_pure_white_frame() -> None:
+    """主対象を覆う白い発光と白いveilがwhiteoutとして除外されること。
+
+    Arrange:
+        - 中央を白い発光が覆うframeと、画面の大半が淡い白になるframeが用意される
+    Act:
+        - Neutral Image Analysisが実行される
+    Assert:
+        - 完全な白一色でなくても両方がwhiteoutとして除外されること
+    """
+    # Arrange
+    central_flash = cv2.resize(
+        _checkerboard(),
+        (960, 540),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    central_flash[90:450, 180:780] = 250
+    soft_white_veil = np.full((540, 960, 3), 232, dtype=np.uint8)
+    soft_white_veil[:, 900:] = cv2.resize(
+        _checkerboard(),
+        (60, 540),
+        interpolation=cv2.INTER_NEAREST,
+    )
+
+    # Act
+    analyses = analyze_neutral_images(
+        (
+            _frame(0, central_flash),
+            _frame(10, soft_white_veil),
+        )
+    )
+
+    # Assert
+    assert [item.reject_reason for item in analyses] == [
+        ContentRejectReason.WHITEOUT,
+        ContentRejectReason.WHITEOUT,
+    ]
+
+
+def test_compact_central_flash_is_rejected_without_rejecting_visible_scene() -> None:
+    """主対象を覆う中央発光が画面全体の白飛びでなくても除外されること。
+
+    Arrange:
+        - 情報のあるscene中央だけを連結した白い発光が覆うframeが用意される
+    Act:
+        - model-free Neutral Image Analysisが実行される
+    Assert:
+        - 背景が見えていても中央発光がwhiteoutとして除外されること
+    """
+    # Arrange
+    central_flash = cv2.resize(
+        _checkerboard(),
+        (960, 540),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    central_flash[230:310, 330:630] = 250
+
+    # Act
+    analysis = analyze_neutral_images((_frame(0, central_flash),))[0]
+
+    # Assert
+    assert analysis.reject_reason is ContentRejectReason.WHITEOUT
+
+
+def test_bright_menu_with_distinct_structure_remains_eligible() -> None:
+    """明るくても構造が判別できるmenu frameが除外されないこと。
+
+    Arrange:
+        - 淡い背景へ濃い罫線と区画を持つmenu風frameが用意される
+    Act:
+        - Neutral Image Analysisが実行される
+    Assert:
+        - 明るさだけを理由にwhiteoutとして除外されないこと
+    """
+    # Arrange
+    menu = np.full((540, 960, 3), 250, dtype=np.uint8)
+    for row in range(60, 500, 55):
+        cv2.line(menu, (80, row), (880, row), (45, 55, 65), 4)
+    cv2.rectangle(menu, (610, 80), (880, 430), (35, 70, 110), 8)
+
+    # Act
+    analysis = analyze_neutral_images((_frame(0, menu),))[0]
+
+    # Assert
+    assert analysis.reject_reason is None
+    assert analysis.eligible
+
+
 def test_visual_feature_is_l2_normalized_and_temporal_transition_is_rejected() -> None:
     """model-free視覚特徴と前後関係から遷移frameが解析されること。
 
@@ -130,6 +218,35 @@ def test_visual_feature_is_l2_normalized_and_temporal_transition_is_rejected() -
     assert analyses[1].reject_reason is ContentRejectReason.TEMPORAL_TRANSITION
 
 
+def test_visual_feature_components_have_equal_l2_contribution() -> None:
+    """HSV・輝度・edge成分が等しいL2寄与で結合されること。
+
+    Arrange:
+        - 全視覚特徴成分が非zeroになる高情報frameが用意される
+    Act:
+        - model-free Neutral Image Analysisが実行される
+    Assert:
+        - 各成分の二乗L2寄与が全体の3分の1ずつを担うこと
+    """
+    # Arrange
+    frame = _frame(0, _checkerboard())
+
+    # Act
+    analysis = analyze_neutral_images((frame,))[0]
+    feature = np.asarray(analysis.visual_feature)
+    component_norms = (
+        np.linalg.norm(feature[:64]),
+        np.linalg.norm(feature[64:96]),
+        np.linalg.norm(feature[96:]),
+    )
+
+    # Assert
+    expected_component_norm = 1 / np.sqrt(3)
+    assert component_norms == pytest.approx(
+        (expected_component_norm,) * 3,
+    )
+
+
 def test_temporal_transition_requires_exact_native_frame_adjacency() -> None:
     """離れたsampleがtemporal transitionの前後frameにされないこと。
 
@@ -154,3 +271,62 @@ def test_temporal_transition_requires_exact_native_frame_adjacency() -> None:
 
     # Assert
     assert analyses[1].reject_reason is not ContentRejectReason.TEMPORAL_TRANSITION
+
+
+def test_expanding_soft_bright_sweep_is_rejected_as_temporal_transition() -> None:
+    """短時間に拡大する淡い白の移動演出が遷移frameとして除外されること。
+
+    Arrange:
+        - 情報のある背景を淡い白領域が連続3frameで急速に覆う場面が用意される
+    Act:
+        - 前後関係を使うNeutral Image Analysisが実行される
+    Assert:
+        - 純白でなくても移動演出中の3frameがすべて除外されること
+    """
+    # Arrange
+    detailed = cv2.resize(
+        _checkerboard(),
+        (960, 540),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    sweep_frames = []
+    for covered_width in (100, 660, 900):
+        swept = detailed.copy()
+        swept[:, :covered_width] = 225
+        sweep_frames.append(swept)
+
+    # Act
+    analyses = analyze_neutral_images(
+        tuple(_frame(index, frame) for index, frame in enumerate(sweep_frames))
+    )
+
+    # Assert
+    assert [item.reject_reason for item in analyses] == [
+        ContentRejectReason.TEMPORAL_TRANSITION,
+        ContentRejectReason.TEMPORAL_TRANSITION,
+        ContentRejectReason.TEMPORAL_TRANSITION,
+    ]
+
+
+def test_static_bright_interface_is_not_a_soft_bright_sweep() -> None:
+    """静止した明るいinterfaceが移動演出として誤除外されないこと。
+
+    Arrange:
+        - 広い淡色領域と濃い罫線を持つ同一menu frameが連続して用意される
+    Act:
+        - 前後関係を使うNeutral Image Analysisが実行される
+    Assert:
+        - 明るい領域が変化しないframeはすべて有効なままであること
+    """
+    # Arrange
+    menu = np.full((540, 960, 3), 225, dtype=np.uint8)
+    for row in range(50, 500, 50):
+        cv2.line(menu, (60, row), (900, row), (40, 55, 70), 5)
+    cv2.rectangle(menu, (600, 70), (900, 450), (30, 65, 100), 10)
+    frames = tuple(_frame(index, menu) for index in range(3))
+
+    # Act
+    analyses = analyze_neutral_images(frames)
+
+    # Assert
+    assert all(item.reject_reason is None for item in analyses)

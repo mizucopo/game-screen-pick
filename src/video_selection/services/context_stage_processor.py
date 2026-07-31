@@ -1,6 +1,7 @@
 """一つのVideo SourceのContext Collection Stage。"""
 
 from dataclasses import replace
+from fractions import Fraction
 
 from ..models.context_cue import ContextCue
 from ..models.context_cue_provenance import ContextCueProvenance
@@ -32,12 +33,18 @@ from .build_context_stage_semantic_input import (
 )
 from .collect_speech_context import collect_speech_context
 from .context_stage_artifacts import restore_context_stage, serialize_context_stage
+from .embedded_subtitle_checkpoint import EmbeddedSubtitleCheckpoint
 from .external_work_monitor import ExternalWorkMonitor
+from .pcm_audio_checkpoint import PcmAudioCheckpoint
 from .processing_stage_runner import ProcessingStageRunner
 from .run_progress_tracker import RunProgressTracker
 from .select_context_audio_stream import select_context_audio_stream
 from .select_context_subtitle_stream import select_context_subtitle_stream
-from .validate_video_set_snapshot import validate_video_source_snapshot
+from .speech_recognition_checkpoint import SpeechRecognitionCheckpoint
+from .validate_video_set_snapshot import (
+    validate_video_set_snapshot_metadata,
+    validate_video_source_snapshot,
+)
 
 
 class ContextStageProcessor:
@@ -101,7 +108,7 @@ class ContextStageProcessor:
             self._observer,
             subject_namespace="videos",
             subject_fingerprint=source.fingerprint,
-            before_stage=lambda: validate_video_source_snapshot(video_set, source),
+            before_stage=lambda: validate_video_set_snapshot_metadata(video_set),
             stage_order=(ProcessingStage.COLLECT_CONTEXT,),
             progress=self._progress,
             video_order=video_set.sources.index(source) + 1,
@@ -112,17 +119,24 @@ class ContextStageProcessor:
         cached = runner.reuse(
             ProcessingStage.COLLECT_CONTEXT,
             semantic_input,
-            restore_context_stage,
+            lambda artifact: restore_context_stage(
+                artifact,
+                expected_video_fingerprint=source.fingerprint,
+                video_duration=scan.timeline.duration.seconds,
+            ),
         )
         if cached is not None:
             return replace(cached, completed_stage=runner.completed_stages[0])
         try:
             result = self._collect(
+                video_set,
                 source,
+                probe,
                 scan,
                 subtitle_stream,
                 audio_stream,
                 configuration,
+                semantic_input,
             )
         except ValueError as error:
             if str(error) != "timestamp_drift":
@@ -134,20 +148,29 @@ class ContextStageProcessor:
             result,
             equivalence_groups=build_context_cue_equivalence_groups(result.cues),
         )
+        artifact = serialize_context_stage(result)
+        restore_context_stage(
+            artifact,
+            expected_video_fingerprint=source.fingerprint,
+            video_duration=scan.timeline.duration.seconds,
+        )
         completed = runner.complete(
             ProcessingStage.COLLECT_CONTEXT,
             semantic_input,
-            serialize_context_stage(result),
+            artifact,
         )
         return replace(result, completed_stage=completed)
 
     def _collect(
         self,
+        video_set: VideoSet,
         source: VideoSource,
+        probe: MediaProbe,
         scan: VideoScanResult,
         subtitle_stream: MediaStream | None,
         audio_stream: MediaStream | None,
         configuration: EffectiveConfiguration,
+        context_semantic_input: dict[str, object],
     ) -> ContextStageResult:
         cues: list[ContextCue] = []
         outcomes: list[ContextSourceOutcome] = []
@@ -161,12 +184,27 @@ class ContextStageProcessor:
                 )
             )
         else:
-            subtitle_cues = tuple(
-                _subtitle_cue(source, scan, subtitle_stream, event)
-                for event in self._media_runtime.read_embedded_subtitles(
+            subtitle_events = EmbeddedSubtitleCheckpoint(
+                configuration.processing_cache_folder,
+                source_fingerprint=source.fingerprint,
+                stream_index=subtitle_stream.index,
+                extraction_semantic_input=_subtitle_extraction_semantic_input(
+                    context_semantic_input
+                ),
+                validate_source=lambda: validate_video_source_snapshot(
+                    video_set,
+                    source,
+                ),
+                observer=self._observer,
+            ).resolve(
+                lambda: self._media_runtime.read_embedded_subtitles(
                     source.path,
                     subtitle_stream.index,
                 )
+            )
+            subtitle_cues = tuple(
+                _subtitle_cue(source, scan, subtitle_stream, event)
+                for event in subtitle_events
             )
             cues.extend(subtitle_cues)
             subtitle_status: ContextSourceStatus = (
@@ -202,8 +240,42 @@ class ContextStageProcessor:
             source=source,
             scan=scan,
             stream=audio_stream,
+            media_origin=_media_origin(probe),
             configuration=configuration,
             external_work_monitor=self._external_work_monitor,
+            pcm_checkpoint=PcmAudioCheckpoint(
+                configuration.processing_cache_folder,
+                source_fingerprint=source.fingerprint,
+                stream_index=audio_stream.index,
+                sample_rate=16000,
+                frame_sample_count=int(
+                    (
+                        configuration.speech_chunk_seconds
+                        - configuration.speech_overlap_seconds
+                    )
+                    * 16000
+                ),
+                extraction_semantic_input=_pcm_extraction_semantic_input(
+                    context_semantic_input
+                ),
+                validate_source=lambda: validate_video_source_snapshot(
+                    video_set,
+                    source,
+                ),
+                observer=self._observer,
+            ),
+            recognition_checkpoint=SpeechRecognitionCheckpoint(
+                configuration.processing_cache_folder,
+                source_fingerprint=source.fingerprint,
+                recognition_semantic_input=_speech_recognition_semantic_input(
+                    context_semantic_input
+                ),
+                validate_source=lambda: validate_video_source_snapshot(
+                    video_set,
+                    source,
+                ),
+                observer=self._observer,
+            ),
         )
         cues.extend(speech_result.cues)
         outcomes.extend(speech_result.outcomes)
@@ -212,6 +284,65 @@ class ContextStageProcessor:
             outcomes=tuple(outcomes),
             rejected_speech_diagnostics=(speech_result.rejected_speech_diagnostics),
         )
+
+
+def _pcm_extraction_semantic_input(
+    context_semantic_input: dict[str, object],
+) -> dict[str, object]:
+    """STT modelに依存しないPCM extraction入力だけを選ぶ。"""
+    keys = (
+        "video_fingerprint",
+        "selected_audio_stream",
+        "media_runtime_identity",
+        "speech_chunk_seconds",
+        "speech_overlap_seconds",
+    )
+    return {key: context_semantic_input[key] for key in keys}
+
+
+def _subtitle_extraction_semantic_input(
+    context_semantic_input: dict[str, object],
+) -> dict[str, object]:
+    """STTに依存しないsubtitle extraction入力だけを選ぶ。"""
+    keys = (
+        "subtitle_extraction_version",
+        "video_fingerprint",
+        "selected_subtitle_stream",
+        "media_runtime_identity",
+    )
+    return {key: context_semantic_input[key] for key in keys}
+
+
+def _speech_recognition_semantic_input(
+    context_semantic_input: dict[str, object],
+) -> dict[str, object]:
+    """字幕・Cue groupingに依存しないSpeech Recognition入力だけを選ぶ。"""
+    keys = (
+        "video_fingerprint",
+        "language",
+        "selected_audio_stream",
+        "speech_runtime_identity",
+        "resolved_model_identity",
+        "speech_device",
+        "speech_compute_type",
+        "speech_beam_size",
+        "speech_vad_filter",
+        "speech_chunk_seconds",
+        "speech_overlap_seconds",
+    )
+    return {key: context_semantic_input[key] for key in keys}
+
+
+def _media_origin(probe: MediaProbe) -> Fraction:
+    """全streamのうち最も早いexact開始timestampを返す。"""
+    origins = tuple(
+        stream.start_pts * stream.time_base
+        for stream in probe.streams
+        if stream.start_pts is not None and stream.time_base is not None
+    )
+    if not origins:
+        raise ValueError("timestamp_drift")
+    return min(origins)
 
 
 def _subtitle_cue(

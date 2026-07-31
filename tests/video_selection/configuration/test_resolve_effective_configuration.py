@@ -573,6 +573,18 @@ def test_recursive_absence_and_explicit_false_are_distinguished(
             id="invalid-range",
         ),
         pytest.param(
+            "[video_scan]\nworkers = 0\n",
+            id="invalid-video-scan-workers-range",
+        ),
+        pytest.param(
+            '[video_scan]\nworkers = "dynamic"\n',
+            id="invalid-video-scan-workers-enum",
+        ),
+        pytest.param(
+            "[video_scan]\nauto_max_workers = 33\n",
+            id="invalid-video-scan-auto-max",
+        ),
+        pytest.param(
             "[speech_to_text]\nchunk_seconds = 5\noverlap_seconds = 5\n",
             id="invalid-cross-constraint",
         ),
@@ -601,7 +613,8 @@ def test_invalid_toml_is_an_exit_two_error_before_side_effects(
     video_input_folder = tmp_path / "videos"
     output_folder = tmp_path / "output"
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ConfigurationError) as error:
         resolve_effective_configuration(
             video_input_folder=video_input_folder,
@@ -639,7 +652,8 @@ def test_invalid_document_shape_is_an_exit_two_error(
     config_path = tmp_path / "video-selection.toml"
     config_path.write_text(document, encoding="utf-8")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ConfigurationError) as error:
         resolve_effective_configuration(
             video_input_folder=tmp_path / "videos",
@@ -733,7 +747,8 @@ def test_credentials_are_excluded_from_errors_and_provenance(tmp_path: Path) -> 
         "HF_TOKEN": secret,
     }
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ConfigurationError) as error:
         resolve_effective_configuration(
             video_input_folder=tmp_path / "videos",
@@ -751,3 +766,118 @@ def test_credentials_are_excluded_from_errors_and_provenance(tmp_path: Path) -> 
     )
     assert secret not in repr(configuration.provenance)
     assert configuration.source_for("ollama.host") is ConfigurationSource.ENVIRONMENT
+
+
+def test_video_scan_worker_configuration_uses_documented_precedence(
+    tmp_path: Path,
+) -> None:
+    """Video Scan worker設定がCLI、TOML、環境変数、既定値の順で解決されること。
+
+    Arrange:
+        - worker数とauto上限についてTOML値、環境変数値、CLI値が用意される
+    Act:
+        - sourceの異なるEffective Configurationが解決される
+    Assert:
+        - 各keyで利用可能な最上位sourceの値とsource名が保持されること
+    """
+    # Arrange
+    config_path = tmp_path / "video-selection.toml"
+    config_path.write_text(
+        'config_version = "1.0.0"\n[video_scan]\nworkers = 4\nauto_max_workers = 8\n',
+        encoding="utf-8",
+    )
+    environment = {
+        "GAME_SCREEN_PICK_VIDEO_SCAN_WORKERS": "5",
+        "GAME_SCREEN_PICK_VIDEO_SCAN_AUTO_MAX_WORKERS": "7",
+    }
+    video_input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+
+    # Act
+    built_in = resolve_effective_configuration(
+        video_input_folder=video_input_folder,
+        output_folder=output_folder,
+        environ={},
+    )
+    from_environment = resolve_effective_configuration(
+        video_input_folder=video_input_folder,
+        output_folder=output_folder,
+        environ=environment,
+    )
+    from_toml = resolve_effective_configuration(
+        video_input_folder=video_input_folder,
+        output_folder=output_folder,
+        config_path=config_path,
+        environ=environment,
+    )
+    from_cli = resolve_effective_configuration(
+        video_input_folder=video_input_folder,
+        output_folder=output_folder,
+        config_path=config_path,
+        video_scan_workers="auto",
+        video_scan_auto_max_workers=6,
+        environ=environment,
+    )
+
+    # Assert
+    assert (built_in.video_scan_workers, built_in.video_scan_auto_max_workers) == (
+        "auto",
+        6,
+    )
+    assert (
+        from_environment.video_scan_workers,
+        from_environment.video_scan_auto_max_workers,
+    ) == (5, 7)
+    assert from_environment.source_for("video_scan.workers") is (
+        ConfigurationSource.ENVIRONMENT
+    )
+    assert from_toml.video_scan_workers == 4
+    assert from_toml.video_scan_auto_max_workers == 8
+    assert from_toml.source_for("video_scan.workers") is ConfigurationSource.TOML
+    assert from_cli.video_scan_workers == "auto"
+    assert from_cli.video_scan_auto_max_workers == 6
+    assert from_cli.source_for("video_scan.workers") is ConfigurationSource.CLI
+
+
+@pytest.mark.parametrize(
+    ("environment_key", "environment_value"),
+    [
+        pytest.param(
+            "GAME_SCREEN_PICK_VIDEO_SCAN_WORKERS",
+            "dynamic",
+            id="workers-enum",
+        ),
+        pytest.param(
+            "GAME_SCREEN_PICK_VIDEO_SCAN_AUTO_MAX_WORKERS",
+            "0",
+            id="auto-max-range",
+        ),
+    ],
+)
+def test_invalid_video_scan_environment_value_is_a_config_error(
+    tmp_path: Path,
+    environment_key: str,
+    environment_value: str,
+) -> None:
+    """不正なVideo Scan環境変数が副作用前のconfig errorにされること。
+
+    Arrange:
+        - 型または範囲が不正なVideo Scan環境変数が用意される
+    Act:
+        - Effective Configurationの解決が試行される
+    Assert:
+        - exit 2相当のConfigurationErrorが返されること
+    """
+    # Arrange
+    environment = {environment_key: environment_value}
+
+    # Act
+    with pytest.raises(ConfigurationError) as error:
+        resolve_effective_configuration(
+            video_input_folder=tmp_path / "videos",
+            output_folder=tmp_path / "output",
+            environ=environment,
+        )
+
+    # Assert
+    assert error.value.exit_code == 2

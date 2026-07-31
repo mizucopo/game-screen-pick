@@ -28,21 +28,47 @@ from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 from ..models.vision_stage_result import VisionStageResult
 from ..protocols.run_observer import RunObserver
 from ..protocols.vision_runtime import VisionRuntime
+from ..vision.detect_cinematic_letterbox import (
+    CINEMATIC_LETTERBOX_DETECTION_VERSION,
+)
 from ..vision.vision_contract import (
     CANDIDATE_ANNOTATION_PROMPT_VERSION,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_EVIDENCE_MAX_LENGTH,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_NUM_PREDICT,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_SCHEMA_VERSION,
+    CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_STAGE_CONTRACT_VERSION,
     CANDIDATE_ANNOTATION_SCHEMA_VERSION,
     CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+    COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION,
+    COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION,
+    COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION,
+    COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION,
+    COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION,
+    COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION,
+    COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION,
+    COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION,
+    COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA_VERSION,
+    COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION,
+    COMBAT_VISIBILITY_EDGE_STRIP_VERSION,
+    COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION,
+    COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION,
+    COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION,
+    PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION,
+    PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION,
+    PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION,
     RETRY_POLICY_VERSION,
     SCENE_CATALOG_PROMPT_VERSION,
     SCENE_CATALOG_SCHEMA_VERSION,
     SCENE_CATALOG_STAGE_CONTRACT_VERSION,
+    VISION_GENERATION_SEED,
 )
 from .build_stage_fingerprint import build_stage_fingerprint
 from .completed_stage_writer import CompletedStageWriter
 from .external_work_monitor import ExternalWorkMonitor
 from .run_progress_tracker import RunProgressTracker
 from .snapshot_frame_candidates import snapshot_frame_candidates
-from .validate_video_set_snapshot import validate_video_set_snapshot
+from .validate_video_set_snapshot import validate_video_set_snapshot_metadata
 from .vision_stage_artifacts import (
     restore_candidate_annotation,
     restore_scene_catalog,
@@ -51,6 +77,56 @@ from .vision_stage_artifacts import (
 )
 
 VisionStageValue = TypeVar("VisionStageValue")
+
+
+def plan_vision_stage_fingerprints(
+    *,
+    video_set: VideoSet,
+    representatives: tuple[FrameCandidate, ...],
+    representative_source_fingerprints: tuple[StageFingerprint, ...],
+    annotation_requests: tuple[CandidateAnnotationRequest, ...],
+    configuration: EffectiveConfiguration,
+    resolved_models: ResolvedModels,
+) -> tuple[StageFingerprint, ...]:
+    """推論せずCatalogと全Annotationの入力fingerprintを計画する。"""
+    selection_intent = _validate_inputs(
+        representatives,
+        representative_source_fingerprints,
+        annotation_requests,
+    )
+    catalog_request = SceneCatalogRequest(
+        representatives=representatives,
+        selection_intent=selection_intent,
+        scene_hint=configuration.scene_hint,
+    )
+    catalog_fingerprint = build_stage_fingerprint(
+        ProcessingStage.BUILD_SCENE_CATALOG,
+        representative_source_fingerprints,
+        _catalog_semantic_input(
+            video_set,
+            catalog_request,
+            resolved_models.for_role(ModelRole.SCENE_CATALOG),
+            configuration.scene_catalog_num_ctx,
+        ),
+    )
+    annotation_model = resolved_models.for_role(ModelRole.CANDIDATE_ANNOTATION)
+    return (
+        catalog_fingerprint,
+        *(
+            build_stage_fingerprint(
+                ProcessingStage.ANNOTATE_CANDIDATE,
+                (catalog_fingerprint,),
+                _annotation_semantic_input(
+                    video_set,
+                    request,
+                    catalog_fingerprint,
+                    annotation_model,
+                    configuration.candidate_annotation_num_ctx,
+                ),
+            )
+            for request in annotation_requests
+        ),
+    )
 
 
 class VideoSetVisionProcessor:
@@ -98,7 +174,7 @@ class VideoSetVisionProcessor:
             selection_intent=selection_intent,
             scene_hint=configuration.scene_hint,
         )
-        validate_video_set_snapshot(video_set)
+        validate_video_set_snapshot_metadata(video_set)
         catalog, catalog_diagnostics, catalog_stage = self._catalog_stage(
             writer,
             video_set,
@@ -111,7 +187,7 @@ class VideoSetVisionProcessor:
         annotation_diagnostics: list[VisionInferenceDiagnostics] = []
         completed_stages = [catalog_stage]
         for request in annotation_requests:
-            validate_video_set_snapshot(video_set)
+            validate_video_set_snapshot_metadata(video_set)
             annotation, diagnostics, completed = self._annotation_stage(
                 writer,
                 video_set,
@@ -124,13 +200,15 @@ class VideoSetVisionProcessor:
             annotations.append(annotation)
             annotation_diagnostics.append(diagnostics)
             completed_stages.append(completed)
-        return VisionStageResult(
+        result = VisionStageResult(
             catalog=catalog,
             annotations=tuple(annotations),
             catalog_diagnostics=catalog_diagnostics,
             annotation_diagnostics=tuple(annotation_diagnostics),
             completed_stages=tuple(completed_stages),
         )
+        validate_video_set_snapshot_metadata(video_set)
+        return result
 
     def _catalog_stage(
         self,
@@ -170,7 +248,7 @@ class VideoSetVisionProcessor:
             restore=restore_scene_catalog,
             artifact_label="Scene Catalog",
         )
-        self._complete_progress_stage(reused)
+        self._complete_progress_stage(reused, completed.fingerprint)
         self._observer.stage_completed(completed)
         return catalog, diagnostics, completed
 
@@ -232,7 +310,7 @@ class VideoSetVisionProcessor:
             ),
             artifact_label="Candidate Annotation",
         )
-        self._complete_progress_stage(reused)
+        self._complete_progress_stage(reused, completed.fingerprint)
         self._observer.stage_completed(completed)
         return annotation, diagnostics, completed
 
@@ -244,7 +322,11 @@ class VideoSetVisionProcessor:
         if self._progress is not None:
             self._progress.start_stage(stage, work_unit_kind=work_unit_kind)
 
-    def _complete_progress_stage(self, reused: bool) -> None:
+    def _complete_progress_stage(
+        self,
+        reused: bool,
+        fingerprint: StageFingerprint,
+    ) -> None:
         if self._progress is None:
             return
         self._progress.record_work_sample("reuse" if reused else "recompute")
@@ -254,8 +336,9 @@ class VideoSetVisionProcessor:
             reuse_count=1 if reused else 0,
             recompute_count=0 if reused else 1,
             reason_code="cache_reused" if reused else "stage_recomputed",
+            stage_fingerprint=fingerprint,
         )
-        self._progress.complete_stage()
+        self._progress.complete_stage(stage_fingerprint=fingerprint)
 
     def _run_external(
         self,
@@ -294,6 +377,7 @@ def _execute_cached_vision_stage(
         upstream_fingerprints,
         semantic_input,
         produce,
+        validate_bundle=lambda value: restore(value.artifact),
     )
     if generated is not None:
         return generated, completed, False
@@ -384,7 +468,12 @@ def _catalog_semantic_input(
         "selection_intent": request.selection_intent,
         "scene_hint": request.scene_hint,
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
-        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "generation_options": {
+            "temperature": 0,
+            "stream": False,
+            "think": False,
+            "seed": VISION_GENERATION_SEED,
+        },
         "prompt_version": SCENE_CATALOG_PROMPT_VERSION,
         "schema_version": SCENE_CATALOG_SCHEMA_VERSION,
         "stage_contract_version": SCENE_CATALOG_STAGE_CONTRACT_VERSION,
@@ -418,10 +507,88 @@ def _annotation_semantic_input(
         "video_set_progress": _fraction_value(request.video_set_progress),
         "selection_intent": request.selection_intent,
         "model": {**model.semantic_input(), "num_ctx": num_ctx},
-        "generation_options": {"temperature": 0, "stream": False, "think": False},
+        "generation_options": {
+            "temperature": 0,
+            "stream": False,
+            "think": False,
+            "seed": VISION_GENERATION_SEED,
+        },
         "prompt_version": CANDIDATE_ANNOTATION_PROMPT_VERSION,
         "schema_version": CANDIDATE_ANNOTATION_SCHEMA_VERSION,
         "stage_contract_version": CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION,
+        "candidate_annotation_relationship_repair_prompt_version": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION
+        ),
+        "candidate_annotation_relationship_repair_schema_version": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_SCHEMA_VERSION
+        ),
+        "candidate_annotation_relationship_repair_stage_contract_version": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_STAGE_CONTRACT_VERSION
+        ),
+        "candidate_annotation_relationship_repair_num_predict": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_NUM_PREDICT
+        ),
+        "candidate_annotation_relationship_repair_evidence_max_length": (
+            CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_EVIDENCE_MAX_LENGTH
+        ),
+        "combat_encounter_verification_prompt_version": (
+            COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION
+        ),
+        "combat_encounter_verification_schema_version": (
+            COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_encounter_verification_stage_contract_version": (
+            COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "combat_encounter_confirmation_prompt_version": (
+            COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION
+        ),
+        "combat_encounter_confirmation_schema_version": (
+            COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_encounter_confirmation_stage_contract_version": (
+            COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION
+        ),
+        "combat_visibility_verification_prompt_version": (
+            COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION
+        ),
+        "combat_visibility_verification_schema_version": (
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_visibility_verification_stage_contract_version": (
+            COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "combat_visibility_confirmation_prompt_version": (
+            COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION
+        ),
+        "combat_visibility_confirmation_schema_version": (
+            COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "combat_visibility_confirmation_stage_contract_version": (
+            COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION
+        ),
+        "combat_visibility_edge_audit_prompt_version": (
+            COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION
+        ),
+        "combat_visibility_edge_audit_schema_version": (
+            COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA_VERSION
+        ),
+        "combat_visibility_edge_audit_stage_contract_version": (
+            COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION
+        ),
+        "combat_visibility_edge_strip_version": (COMBAT_VISIBILITY_EDGE_STRIP_VERSION),
+        "publication_boundary_verification_prompt_version": (
+            PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION
+        ),
+        "publication_boundary_verification_schema_version": (
+            PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA_VERSION
+        ),
+        "publication_boundary_verification_stage_contract_version": (
+            PUBLICATION_BOUNDARY_VERIFICATION_STAGE_CONTRACT_VERSION
+        ),
+        "cinematic_letterbox_detection_version": (
+            CINEMATIC_LETTERBOX_DETECTION_VERSION
+        ),
         "retry_policy_version": RETRY_POLICY_VERSION,
     }
 

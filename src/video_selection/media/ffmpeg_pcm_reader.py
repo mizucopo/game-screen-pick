@@ -21,6 +21,8 @@ def iter_pcm_audio_chunks(
     command: list[str],
     stream_index: int,
     sample_rate: int,
+    *,
+    initial_sample_start: int = 0,
 ) -> Iterator[PcmAudioChunk]:
     """一つのFFmpeg processから連続PCM chunkを順次返す。"""
     process = subprocess.Popen(
@@ -44,6 +46,7 @@ def iter_pcm_audio_chunks(
             metadata_queue,
             stream_index,
             sample_rate,
+            initial_sample_start,
         )
         return_code = process.wait()
         stderr_thread.join()
@@ -86,8 +89,9 @@ def _read_chunks(
     metadata_queue: queue.Queue[_MetadataItem],
     stream_index: int,
     sample_rate: int,
+    initial_sample_start: int,
 ) -> Iterator[PcmAudioChunk]:
-    sample_start = 0
+    sample_start = initial_sample_start
     while True:
         metadata = metadata_queue.get()
         if isinstance(metadata, BaseException):

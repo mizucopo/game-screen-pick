@@ -3,7 +3,7 @@
 
 ## 動画入力版の設計と内部実装（公開前）
 
-複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysis、embedded subtitle/audio STTからのContext Cue収集、Ollama/Hugging Faceのmodel lifecycleとrun単位のidentity freeze、共有Scene Catalog、Moment単位のCandidate Annotation、soft coverage・spoiler・動画横断diversityを扱う決定的な最終selector、固定WebP、`game-screen-pick/report@1.0.0`、gallery-first Markdown、atomic publisher、structured progress、RunFailure、Completed Stage単位の再開まで内部実装済みです。Video Set applicationへのcanonical publisher接続とpublic CLI切り替えは後続Issueで行うため、このcommandはまだ実行できません。
+複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、GPU/CPU余力のrolling metricに応じたVideo Scanの動的並列制御、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysis、embedded subtitle/audio STTからのContext Cue収集、Ollama/Hugging Faceのmodel lifecycleとrun単位のidentity freeze、共有Scene Catalog、Moment単位のCandidate Annotation、soft coverage・spoiler・動画横断diversityを扱う決定的な最終selector、固定WebP、`game-screen-pick/report@1.0.0`、gallery-first Markdown、atomic publisher、structured progress、RunFailure、動画identity・15分scan partition・refinement group・subtitle stream・PCM range・STT chunk・公開画像1枚まで細分化したDurable Work Unit単位の再開まで内部実装済みです。同じ意味入力からの再開では、選択ID・順序・公開画像bytesを変えず、atomic公開済みoutputも完全検証後にそのまま再利用します。real runtimeを通すtarget acceptance harnessは、RTX 5090でParallelism Baselineと自動並列化の成果物・resource・wall timeも比較します。再測定は`parallelism-baseline`、`fresh-processing`、`cache-reuse`の実行単位でresetできます。public CLI切り替えはIssue #190で行うため、次のproduction commandはまだ実行できません。
 
 ```bash
 game-screen-pick \
@@ -13,9 +13,10 @@ game-screen-pick \
   <OUTPUT_FOLDER>
 ```
 
-最低runtimeはPython 3.13、FFmpeg/ffprobe 6.1.1、Ollama server 0.31.2、faster-whisper 1.2.1、CTranslate2 4.8.1です。Windows 11 + WSL2ではWindows native Ollamaへ明示URLで接続し、Windows/WSLのserverを自動切替しません。
+最低runtimeはPython 3.13、FFmpeg/ffprobe 6.1.1、Ollama server 0.31.2、faster-whisper 1.2.1、CTranslate2 4.8.1です。Windows 11 + WSL2のtarget acceptanceでは、Windowsの非loopback addressを指定した明示URLでWindows native Ollamaへ接続し、Windows/WSLのserverを自動切替しません。
 
 - [動画入力とCLI](docs/video-input.md)
+- [Pipelineの処理順・checkpoint・安全な再開](docs/pipeline-resume.md)
 - [動画単位のscan、timeline、Frame Candidate、Context Cue cache](docs/video-stage.md)
 - [共有Scene CatalogとCandidate Annotation Stage](docs/vision-stage.md)
 - [決定的なVideo Set最終選定Stage](docs/selection-stage.md)
@@ -23,6 +24,7 @@ game-screen-pick \
 - [runtime、cache、進捗、エラー、WSL2運用](docs/operations.md)
 - [選択画像とreport](docs/report.md)
 - [移行、統合検証、性能受け入れ](docs/migration-acceptance.md)
+- [supported targetでのacceptance実行](docs/target-acceptance.md)
 - [完全な設定例](docs/examples/video-selection.toml)
 
 ## 現在の実装について

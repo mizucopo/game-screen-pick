@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal, cast, get_args
 
 from .frame_candidate import FrameCandidate
+from .report_value import string_looks_private
 
 BlogImageType = Literal["normal_gameplay", "event", "menu", "title", "other"]
 ExplanationValue = Literal["none", "low", "medium", "high"]
@@ -60,6 +61,8 @@ def candidate_annotation_free_text_is_safe(
     raw_context_texts: tuple[str, ...],
 ) -> bool:
     """公開・cache対象の自由文にContext Cue本文が逐語再出力されないことを検証する。"""
+    if any(string_looks_private(item) for item in annotation_texts):
+        return False
     normalized_annotations = tuple(
         _normalize_verbatim_text(item) for item in annotation_texts
     )
@@ -81,6 +84,31 @@ def candidate_annotation_free_text_is_safe(
         ):
             return False
     return True
+
+
+def privacy_safe_candidate_text(
+    generated: str,
+    fallback: str,
+    raw_context_texts: tuple[str, ...],
+) -> tuple[str, bool]:
+    """生成文を1行化し、非公開形式とContext Cueをfield単位で安全化する。"""
+    normalized_generated = _single_line_text(generated)
+    normalized_fallback = _single_line_text(fallback)
+    if candidate_annotation_free_text_is_safe(
+        (normalized_generated,),
+        raw_context_texts,
+    ):
+        return normalized_generated, False
+    if normalized_fallback and candidate_annotation_free_text_is_safe(
+        (normalized_fallback,), raw_context_texts
+    ):
+        return normalized_fallback, True
+    return "［…］", True
+
+
+def _single_line_text(value: str) -> str:
+    """公開自由文の空白を内容順を保った一行へ正規化する。"""
+    return " ".join(value.split())
 
 
 def _normalize_verbatim_text(value: str) -> str:

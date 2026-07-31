@@ -67,7 +67,6 @@ class ResolvedModel:
     def semantic_input(self) -> dict[str, object]:
         """model依存Stageのrole局所fingerprint入力を返す。"""
         return {
-            "configured_name": self.configured_name,
             "execution_identity": self.execution_identity.identifier,
             "runtime_identity": self.runtime_identity.identifier,
             "store": self.execution_identity.store_kind.value,

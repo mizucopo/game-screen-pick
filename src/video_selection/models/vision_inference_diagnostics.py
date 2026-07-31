@@ -1,5 +1,6 @@
 """一回のVision推論のprivacy-safe診断。"""
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -7,11 +8,12 @@ from .model_runtime_identity import ModelRuntimeIdentity
 from .resolved_model_identity import ResolvedModelIdentity
 
 _SAFE_VALUE_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._:+/-]{0,255}")
+_MAX_AGGREGATE_ATTEMPT_COUNT = 15
 
 
 @dataclass(frozen=True)
 class VisionInferenceDiagnostics:
-    """再現に必要なidentity、回数、token、durationだけを保持する。"""
+    """再現に必要なidentity、logical operationの回数、token、durationを保持する。"""
 
     request_fingerprint: str
     model_name: str
@@ -69,9 +71,10 @@ class VisionInferenceDiagnostics:
                 value is not None and _SAFE_VALUE_PATTERN.fullmatch(value) is None
                 for value in optional_safe_values
             )
-            or self.attempt_count not in {1, 2}
+            or not 1 <= self.attempt_count <= _MAX_AGGREGATE_ATTEMPT_COUNT
             or any(value < 0 for value in counts)
             or any(value is not None and value < 0 for value in optional_counts)
+            or not math.isfinite(self.duration_seconds)
             or self.duration_seconds < 0
             or _SAFE_VALUE_PATTERN.fullmatch(self.model_name) is None
             or not canonical_identity_pair

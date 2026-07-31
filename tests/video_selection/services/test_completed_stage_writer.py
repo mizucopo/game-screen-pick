@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from src.video_selection.models.completed_stage_bundle import CompletedStageBundle
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.services.build_stage_fingerprint import (
     build_stage_fingerprint,
@@ -163,7 +164,7 @@ def test_completed_manifest_describes_content_addressed_artifact(
     assert manifest["schema"] == "game-screen-pick/completed-stage@1.0.0"
     assert manifest["status"] == "completed"
     assert manifest["stage"] == stage.value
-    assert manifest["stage_version"] == "walking-skeleton-0"
+    assert manifest["stage_version"] == "video-set-discovery-v1"
     assert manifest["stage_fingerprint"] == fingerprint.value
     assert manifest["subject"] == {
         "namespace": "videos",
@@ -217,7 +218,8 @@ def test_fault_before_atomic_commit_leaves_no_completed_stage(
         fault_injector=inject_fault,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(OSError, match=f"injected {checkpoint}"):
         writer.write(stage, fingerprint, (), semantic_input, {"value": "fresh"})
     stage_root = cache_folder / "video-sets" / subject_fingerprint / stage.value
@@ -270,6 +272,130 @@ def test_fault_after_rename_keeps_reusable_completed_stage(tmp_path: Path) -> No
 
     # Assert
     assert restored == {"value": "committed"}
+
+
+def test_artifact_permission_failure_preserves_completed_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一時的な読込権限失敗でCompleted Stageが削除されないこと。
+
+    Arrange:
+        - 完全なCompleted Stageとartifactだけを拒否する障害が用意される
+    Act:
+        - 同じStageの再確定が試行される
+    Assert:
+        - producerは実行されず既存artifact bytesが保持されること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "4" * 64
+    stage = ProcessingStage.SCAN_VIDEO
+    semantic_input = {"value": "stable"}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+    writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="videos",
+        subject_fingerprint=subject_fingerprint,
+    )
+    writer.write(stage, fingerprint, (), semantic_input, {"value": "stable"})
+    artifact_path = (
+        cache_folder
+        / "videos"
+        / subject_fingerprint
+        / stage.value
+        / fingerprint.value
+        / "artifact.json"
+    )
+    original_read_bytes = Path.read_bytes
+    producer_calls = 0
+
+    def deny_artifact_read(path: Path) -> bytes:
+        if path == artifact_path:
+            raise PermissionError("injected permission failure")
+        return original_read_bytes(path)
+
+    def produce(_folder: Path) -> dict[str, object]:
+        nonlocal producer_calls
+        producer_calls += 1
+        return {"value": "replacement"}
+
+    monkeypatch.setattr(Path, "read_bytes", deny_artifact_read)
+
+    # Act
+    # Assert
+    with pytest.raises(PermissionError, match="injected permission failure"):
+        writer.write_artifacts(
+            stage,
+            fingerprint,
+            (),
+            semantic_input,
+            produce,
+        )
+    assert producer_calls == 0
+    assert original_read_bytes(artifact_path) == b'{\n  "value": "stable"\n}\n'
+
+
+def test_validator_permission_failure_preserves_completed_stage(
+    tmp_path: Path,
+) -> None:
+    """validatorのaccess障害でCompleted Stageが削除されないこと。
+
+    Arrange:
+        - 完全なCompleted StageとPermissionErrorになるvalidatorが用意される
+    Act:
+        - 同じfingerprintのStage確定が再試行される
+    Assert:
+        - access障害が返され、producerとartifact bytesが変更されないこと
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "1" * 64
+    stage = ProcessingStage.EXTRACT_FRAME_CANDIDATES
+    semantic_input = {"algorithm": "stable"}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+    writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="videos",
+        subject_fingerprint=subject_fingerprint,
+    )
+    producer_calls = 0
+
+    def produce(_stage_folder: Path) -> dict[str, object]:
+        nonlocal producer_calls
+        producer_calls += 1
+        return {"schema": "valid"}
+
+    writer.write_artifacts(stage, fingerprint, (), semantic_input, produce)
+    artifact_path = (
+        cache_folder
+        / "videos"
+        / subject_fingerprint
+        / stage.value
+        / fingerprint.value
+        / "artifact.json"
+    )
+    original_bytes = artifact_path.read_bytes()
+
+    def deny_validation(_bundle: CompletedStageBundle) -> None:
+        raise PermissionError("injected validator permission failure")
+
+    # Act
+    # Assert
+    with pytest.raises(
+        PermissionError,
+        match="injected validator permission failure",
+    ):
+        writer.write_artifacts(
+            stage,
+            fingerprint,
+            (),
+            semantic_input,
+            produce,
+            validate_bundle=deny_validation,
+        )
+    assert producer_calls == 1
+    assert artifact_path.read_bytes() == original_bytes
 
 
 @pytest.mark.parametrize("stage", tuple(ProcessingStage))
@@ -404,7 +530,8 @@ def test_rename_failure_leaves_no_partial_completed_stage(
         subject_fingerprint=subject_fingerprint,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(OSError, match="injected rename failure"):
         writer.write(stage, fingerprint, (), semantic_input, {"value": "fresh"})
     stage_root = cache_folder / "video-sets" / subject_fingerprint / stage.value
@@ -458,7 +585,8 @@ def test_artifact_or_manifest_write_failure_is_not_reusable(
         subject_fingerprint=subject_fingerprint,
     )
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(type(failure), match=str(failure)):
         writer.write(stage, fingerprint, (), semantic_input, {"value": "fresh"})
     stage_root = cache_folder / "videos" / subject_fingerprint / stage.value
@@ -528,3 +656,80 @@ def test_multi_artifact_stage_requires_every_artifact_to_be_intact(
 
     # Assert
     assert writer.read_bundle(stage, fingerprint, (), semantic_input) is None
+
+
+def test_domain_invalid_completed_stage_is_rebuilt_under_same_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """hash整合性があってもdomain不正なCompleted Stageが再構築されること。
+
+    Arrange:
+        - validator付きで一つのCompleted Stageが確定される
+        - artifact schemaと対応manifest hashが不正schemaへ更新される
+    Act:
+        - 同じfingerprintがvalidator付きで再度確定される
+    Assert:
+        - 不正Stageだけが削除されproducerから再構築されること
+    """
+    # Arrange
+    cache_folder = tmp_path / "cache"
+    subject_fingerprint = "6" * 64
+    stage = ProcessingStage.EXTRACT_FRAME_CANDIDATES
+    semantic_input = {"algorithm": "candidate-v1"}
+    fingerprint = build_stage_fingerprint(stage, (), semantic_input)
+    writer = CompletedStageWriter(
+        cache_folder,
+        subject_namespace="videos",
+        subject_fingerprint=subject_fingerprint,
+    )
+    calls = 0
+
+    def produce(_stage_folder: Path) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {"schema": "valid", "call": calls}
+
+    def validate(bundle: CompletedStageBundle) -> None:
+        if bundle.artifact.get("schema") != "valid":
+            raise ValueError("domain invalid")
+
+    writer.write_artifacts(
+        stage,
+        fingerprint,
+        (),
+        semantic_input,
+        produce,
+        validate_bundle=validate,
+    )
+    stage_folder = (
+        cache_folder / "videos" / subject_fingerprint / stage.value / fingerprint.value
+    )
+    invalid_bytes = b'{"call":1,"schema":"invalid"}'
+    (stage_folder / "artifact.json").write_bytes(invalid_bytes)
+    manifest_path = stage_folder / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifact_record = next(
+        item for item in manifest["artifacts"] if item["path"] == "artifact.json"
+    )
+    artifact_record["size_bytes"] = len(invalid_bytes)
+    artifact_record["sha256"] = hashlib.sha256(invalid_bytes).hexdigest()
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    # Act
+    writer.write_artifacts(
+        stage,
+        fingerprint,
+        (),
+        semantic_input,
+        produce,
+        validate_bundle=validate,
+    )
+    restored = writer.read_bundle(stage, fingerprint, (), semantic_input)
+
+    # Assert
+    assert calls == 2
+    assert restored is not None
+    assert restored.artifact == {"schema": "valid", "call": 2}

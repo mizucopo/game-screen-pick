@@ -1,6 +1,7 @@
 """確定済みProcessing Stage。"""
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from .processing_stage import ProcessingStage
 from .stage_fingerprint import StageFingerprint
@@ -12,3 +13,9 @@ class CompletedStage:
 
     stage: ProcessingStage
     fingerprint: StageFingerprint
+    upstream_fingerprints: tuple[StageFingerprint, ...] = ()
+    semantic_input: Mapping[str, object] = field(
+        default_factory=dict,
+        compare=False,
+        repr=False,
+    )

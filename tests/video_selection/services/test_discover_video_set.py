@@ -1,8 +1,10 @@
 """Video Set discoveryのtest。"""
 
+import hashlib
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
@@ -210,7 +212,8 @@ def test_duplicate_video_content_is_rejected_with_relative_paths(
     (input_folder / "chapter-01.mp4").write_bytes(b"duplicate")
     (input_folder / "chapter-02.mp4").write_bytes(b"duplicate")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError) as error:
         discover_video_set(input_folder)
     assert "Duplicate Video" in str(error.value)
@@ -239,22 +242,23 @@ def test_snapshot_validation_rejects_video_changes_before_cache_commit(
     video_set = discover_video_set(input_folder)
     video_path.write_bytes(b"after-content")
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
         validate_video_set_snapshot(video_set)
 
 
-def test_snapshot_validation_rejects_same_stat_content_rewrite(
+def test_snapshot_validation_accepts_rewrite_with_same_size_and_mtime(
     tmp_path: Path,
 ) -> None:
-    """stat signatureが維持された内容変更もsnapshot不一致になること。
+    """同じsize・mtimeへ戻された内容変更を受入trade-offとして許容すること。
 
     Arrange:
-        - 発見済みvideoと同じsize・inode・mtimeを保つ別内容が用意される
+        - 発見済みvideoと同じsize・mtimeへ戻した別内容が用意される
     Act:
         - Video Set snapshot validationが実行される
     Assert:
-        - content fingerprint不一致として変更errorが返されること
+        - file所有者が受け入れたmetadata基準により正常終了すること
     """
     # Arrange
     input_folder = tmp_path / "videos"
@@ -270,12 +274,43 @@ def test_snapshot_validation_rejects_same_stat_content_rewrite(
     )
     rewritten_stat = video_path.stat()
     assert (
-        rewritten_stat.st_dev,
-        rewritten_stat.st_ino,
         rewritten_stat.st_size,
         rewritten_stat.st_mtime_ns,
-    ) == video_set.sources[0].stat_signature
+    ) == video_set.sources[0].snapshot_signature
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="Video Set snapshotが変更されました"):
-        validate_video_set_snapshot(video_set)
+    # Act
+    validate_video_set_snapshot(video_set)
+
+    # Assert
+    assert video_path.read_bytes() == b"after!"
+
+
+def test_snapshot_validation_does_not_rehash_video_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Video Identity確定後のsnapshot検証でwhole-file hashされないこと。
+
+    Arrange:
+        - whole-file SHA-256で発見済みのVideo Setが用意される
+    Act:
+        - file digestを禁止してsnapshot validationが実行される
+    Assert:
+        - sizeとmtimeの検証だけで正常終了すること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "chapter.mp4").write_bytes(b"stable-video")
+    video_set = discover_video_set(input_folder)
+
+    def reject_digest(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("snapshot validationで動画を再hashしてはいけません")
+
+    monkeypatch.setattr(hashlib, "file_digest", reject_digest)
+
+    # Act
+    validate_video_set_snapshot(video_set)
+
+    # Assert
+    assert video_set.sources[0].size_bytes == len(b"stable-video")

@@ -96,6 +96,7 @@ def test_progress_event_rejects_unsafe_or_inconsistent_observation(
     }
     values.update(overrides)
 
-    # Act / Assert
+    # Act
+    # Assert
     with pytest.raises(ValueError, match=message):
         ProgressEvent(**values)  # type: ignore[arg-type]

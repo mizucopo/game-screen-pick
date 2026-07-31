@@ -36,12 +36,15 @@ def test_registry_references_are_validated_as_one_provenance_graph() -> None:
     Assert:
         - Stage graphとregistry値が保持されること
     """
-    # Arrange / Act
+    # Arrange
+    stage = _stage()
+
+    # Act
     provenance = ReportProvenance(
         runtime={"os": "linux"},
         tools={"ffmpeg": "6.1.1"},
         contracts={"selection_policy": "v1"},
-        stages=(_stage(),),
+        stages=(stage,),
     )
 
     # Assert
@@ -59,11 +62,17 @@ def test_unresolved_tool_reference_is_rejected() -> None:
     Assert:
         - 解決不能なregistry参照として拒否されること
     """
-    # Arrange / Act / Assert
-    with pytest.raises(ValueError, match="registry参照"):
+    # Arrange
+    stage = _stage()
+
+    # Act
+    with pytest.raises(ValueError) as error:
         ReportProvenance(
             runtime={"os": "linux"},
             tools={"ffprobe": "6.1.1"},
             contracts={"selection_policy": "v1"},
-            stages=(_stage(),),
+            stages=(stage,),
         )
+
+    # Assert
+    assert "registry参照" in str(error.value)

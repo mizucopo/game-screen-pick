@@ -263,6 +263,7 @@ Context Cue の抽出は Video Stage の再利用可能成果物にする。Stag
 | `no_speech` | `vad_no_speech` | 音声はあるが VAD で発話なし | 非 fatal。正常な空結果 |
 | `no_speech` | `asr_no_speech` | VAD passage はあるが ASR heuristic で発話なし | 非 fatal。正常な空結果、診断を保存 |
 | `low_reliability` | `asr_below_policy_threshold` | raw text はあるが usable cue が0件 | 非 fatal。raw text は診断へ隔離し、画像評価へ渡さない |
+| `low_reliability` | `asr_zero_duration` | word group 全体が量子化で同一点 | 非 fatal。時刻を補間せず幅0の診断へ隔離する |
 | `failed` | `ambiguous_audio_stream` / `ambiguous_subtitle_stream` | 自動選択の最上位候補が複数 | fatal。stream 指定を要求 |
 | `failed` | `timestamp_drift` | cue text はあるが時刻ずれが許容値超過 | fatal。時刻付き文脈として公開しない |
 | `failed` | `chunk_failed` | 一部 chunk の抽出・解析が失敗 | fatal。成功分だけを partial publish しない |
@@ -292,10 +293,10 @@ preflight 後も、存在する track に対する次の失敗は当該実行を
 timestamp は次を全て満たす必要がある。
 
 - subtitle は packet PTS と time base から rational Video Time へ写像できる。
-- STT word は有限で `0 <= start < end <= Video Duration` に収まり、global 時刻を 16 kHz sample index へ丸めて戻した差が1 sample 以下である。
+- STT word は有限で `0 <= start <= end <= Video Duration` に収まり、global 時刻を 16 kHz sample index へ丸めて戻した差が1 sample 以下である。正の幅を持つgroupだけをCueにし、group全体が同一点なら補間せず`asr_zero_duration`診断へ隔離する。
 - decoded chunk の観測 origin と、宣言済み resample 補正を含む期待 origin の差が1 output sample 以下である。
 
-これらを満たさない値を clip や推測で救済せず `timestamp_drift` とする。ASR が推定する発話境界そのものは source PTS と同精度とはみなさず、`timestamp_basis` で区別する。
+範囲外、逆転、sample grid不一致をclipや推測で救済せず`timestamp_drift`とする。幅0のgroupも推測では救済せず、非公開diagnosticとして後段から除外する。ASR が推定する発話境界そのものは source PTS と同精度とはみなさず、`timestamp_basis` で区別する。
 
 一方、特定動画に audio / subtitle track がないこと、audio はあっても発話がないこと、ASR が低信頼であることは失敗ではない。
 

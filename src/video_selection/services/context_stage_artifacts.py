@@ -1,5 +1,6 @@
 """Context Stage ResultとCompleted Stage JSONの相互変換。"""
 
+import math
 from collections.abc import Mapping
 from fractions import Fraction
 from typing import Literal, cast
@@ -22,8 +23,28 @@ from ..models.context_source_outcome import (
 )
 from ..models.context_stage_result import ContextStageResult
 from ..models.rejected_speech_diagnostic import RejectedSpeechDiagnostic
+from .build_context_cue_equivalence_groups import (
+    build_context_cue_equivalence_groups,
+)
+from .build_context_cue_id import build_context_cue_id
 
 _SCHEMA = "game-screen-pick/context-collection@1.0.0"
+_SOURCE_KINDS = frozenset({"embedded_subtitle", "speech_to_text"})
+_TIMESTAMP_BASES = frozenset(
+    {"source_pts", "container_text_ms", "asr_sample_grid_estimate"}
+)
+_OUTCOME_CONTRACTS = {
+    ("embedded_subtitle", "available", "context_extracted"),
+    ("embedded_subtitle", "absent", "no_subtitle_stream"),
+    ("embedded_subtitle", "no_context", "no_subtitle_events"),
+    ("speech_to_text", "available", "context_extracted"),
+    ("speech_to_text", "available", "context_extracted_with_rejections"),
+    ("speech_to_text", "absent", "no_audio_stream"),
+    ("speech_to_text", "low_reliability", "asr_below_policy_threshold"),
+    ("speech_to_text", "low_reliability", "asr_zero_duration"),
+    ("speech_to_text", "no_speech", "asr_no_speech"),
+    ("speech_to_text", "no_speech", "vad_no_speech"),
+}
 
 
 def serialize_context_stage(result: ContextStageResult) -> dict[str, object]:
@@ -84,12 +105,17 @@ def serialize_context_stage(result: ContextStageResult) -> dict[str, object]:
     }
 
 
-def restore_context_stage(artifact: Mapping[str, object]) -> ContextStageResult:
+def restore_context_stage(
+    artifact: Mapping[str, object],
+    *,
+    expected_video_fingerprint: str | None = None,
+    video_duration: Fraction | None = None,
+) -> ContextStageResult:
     """検証済みartifactからContext Stage Resultを復元する。"""
     if artifact.get("schema") != _SCHEMA:
         msg = "Context Collection artifact schemaが不正です"
         raise ValueError(msg)
-    return ContextStageResult(
+    result = ContextStageResult(
         cues=tuple(_restore_cue(item) for item in _mapping_list(artifact.get("cues"))),
         outcomes=tuple(
             _restore_outcome(item) for item in _mapping_list(artifact.get("outcomes"))
@@ -106,6 +132,12 @@ def restore_context_stage(artifact: Mapping[str, object]) -> ContextStageResult:
             for item in _mapping_list(artifact.get("equivalence_groups"))
         ),
     )
+    _validate_context_stage_result(
+        result,
+        expected_video_fingerprint=expected_video_fingerprint,
+        video_duration=video_duration,
+    )
+    return result
 
 
 def _restore_cue(value: Mapping[str, object]) -> ContextCue:
@@ -309,7 +341,271 @@ def _boolean(value: object) -> bool:
 
 
 def _number(value: object) -> float:
-    if not isinstance(value, int | float) or isinstance(value, bool):
+    if (
+        not isinstance(value, int | float)
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+    ):
         msg = "Context artifact numberが不正です"
         raise ValueError(msg)
     return float(value)
+
+
+def _validate_context_stage_result(
+    result: ContextStageResult,
+    *,
+    expected_video_fingerprint: str | None,
+    video_duration: Fraction | None,
+) -> None:
+    """Cue、outcome、diagnostic、equivalenceのcross-referenceを検証する。"""
+    if expected_video_fingerprint is not None and not _is_sha256(
+        expected_video_fingerprint
+    ):
+        raise ValueError("Context artifactのexpected Video Fingerprintが不正です")
+    if video_duration is not None and video_duration <= 0:
+        raise ValueError("Context artifactのVideo Durationが不正です")
+    cue_ids: set[str] = set()
+    cue_counts = dict.fromkeys(_SOURCE_KINDS, 0)
+    for cue in result.cues:
+        _validate_cue(
+            cue,
+            expected_video_fingerprint=expected_video_fingerprint,
+            video_duration=video_duration,
+        )
+        if cue.identifier in cue_ids:
+            raise ValueError("Context artifactのCue IDが重複しています")
+        cue_ids.add(cue.identifier)
+        cue_counts[cue.source_kind] += 1
+
+    outcomes_by_source: dict[str, ContextSourceOutcome] = {}
+    for outcome in result.outcomes:
+        _validate_outcome(outcome)
+        if outcome.source_kind in outcomes_by_source:
+            raise ValueError("Context artifactのsource outcomeが重複しています")
+        outcomes_by_source[outcome.source_kind] = outcome
+    if "embedded_subtitle" not in outcomes_by_source:
+        raise ValueError("Context artifactにsubtitle outcomeがありません")
+    for source_kind, cue_count in cue_counts.items():
+        source_outcome = outcomes_by_source.get(source_kind)
+        if cue_count > 0 and source_outcome is None:
+            raise ValueError("Context artifactのCueに対応するoutcomeがありません")
+        if source_outcome is not None and source_outcome.cue_count != cue_count:
+            raise ValueError("Context artifactのCue countが一致しません")
+
+    for diagnostic in result.rejected_speech_diagnostics:
+        _validate_rejected_speech_diagnostic(
+            diagnostic,
+            video_duration=video_duration,
+        )
+    speech_outcome = outcomes_by_source.get("speech_to_text")
+    rejected_count = len(result.rejected_speech_diagnostics)
+    if (rejected_count > 0 and speech_outcome is None) or (
+        speech_outcome is not None and speech_outcome.rejected_count != rejected_count
+    ):
+        raise ValueError("Context artifactのrejected countが一致しません")
+    if speech_outcome is not None and speech_outcome.status == "low_reliability":
+        reasons = {item.reason_code for item in result.rejected_speech_diagnostics}
+        reasons_are_consistent = (
+            reasons == {"asr_zero_duration"}
+            if speech_outcome.reason_code == "asr_zero_duration"
+            else "asr_below_policy_threshold" in reasons
+            and reasons <= {"asr_below_policy_threshold", "asr_zero_duration"}
+        )
+        if not reasons_are_consistent:
+            raise ValueError("Context artifactのrejected reasonが一致しません")
+
+    expected_groups = build_context_cue_equivalence_groups(result.cues)
+    if result.equivalence_groups != expected_groups:
+        raise ValueError("Context artifactのequivalence groupが不正です")
+
+
+def _validate_cue(
+    cue: ContextCue,
+    *,
+    expected_video_fingerprint: str | None,
+    video_duration: Fraction | None,
+) -> None:
+    if (
+        cue.source_kind not in _SOURCE_KINDS
+        or cue.timestamp_basis not in _TIMESTAMP_BASES
+        or cue.reliability != "usable"
+        or not _is_sha256(cue.video_fingerprint)
+        or (
+            expected_video_fingerprint is not None
+            and cue.video_fingerprint != expected_video_fingerprint
+        )
+        or cue.stream_index < 0
+        or cue.start < 0
+        or cue.end <= cue.start
+        or (video_duration is not None and cue.end > video_duration)
+        or not cue.text
+        or cue.text != cue.text.strip()
+        or cue.identifier
+        != build_context_cue_id(
+            video_fingerprint=cue.video_fingerprint,
+            source_kind=cue.source_kind,
+            stream_index=cue.stream_index,
+            start=cue.start,
+            end=cue.end,
+            text=cue.text,
+        )
+    ):
+        raise ValueError("Context artifactのCue domainが不正です")
+    _validate_cue_diagnostics(cue)
+    _validate_provenance(cue.provenance, cue.source_kind)
+
+
+def _validate_cue_diagnostics(cue: ContextCue) -> None:
+    diagnostics = cue.diagnostics
+    if cue.source_kind == "embedded_subtitle":
+        if diagnostics is not None or cue.timestamp_basis not in {
+            "source_pts",
+            "container_text_ms",
+        }:
+            raise ValueError("Context artifactのsubtitle Cueが不正です")
+        return
+    if diagnostics is None or cue.timestamp_basis != "asr_sample_grid_estimate":
+        raise ValueError("Context artifactのspeech Cueが不正です")
+    if not math.isfinite(diagnostics.average_log_probability):
+        raise ValueError("Context artifactのspeech scoreが不正です")
+    _validate_probability(diagnostics.no_speech_probability)
+    for value in diagnostics.word_probabilities:
+        _validate_probability(value)
+
+
+def _validate_provenance(
+    provenance: ContextCueProvenance | None,
+    source_kind: str,
+) -> None:
+    if (
+        provenance is None
+        or not provenance.codec_name
+        or provenance.source_time_base <= 0
+        or provenance.language_source not in {"stream_metadata", "speech_recognition"}
+    ):
+        raise ValueError("Context artifactのCue provenanceが不正です")
+    if source_kind == "embedded_subtitle":
+        if (
+            provenance.language_source != "stream_metadata"
+            or provenance.chunk_sample_start is not None
+            or provenance.chunk_sample_end is not None
+            or provenance.speech_runtime_identity is not None
+            or provenance.resolved_model_identity is not None
+            or provenance.device is not None
+            or provenance.compute_type is not None
+        ):
+            raise ValueError("Context artifactのsubtitle provenanceが不正です")
+        return
+    if (
+        provenance.language_source not in {"stream_metadata", "speech_recognition"}
+        or provenance.chunk_sample_start is None
+        or provenance.chunk_sample_end is None
+        or provenance.chunk_sample_start < 0
+        or provenance.chunk_sample_end <= provenance.chunk_sample_start
+        or not provenance.speech_runtime_identity
+        or not provenance.resolved_model_identity
+        or not provenance.device
+        or not provenance.compute_type
+    ):
+        raise ValueError("Context artifactのspeech provenanceが不正です")
+
+
+def _validate_outcome(outcome: ContextSourceOutcome) -> None:
+    counts = (
+        outcome.cue_count,
+        outcome.rejected_count,
+        outcome.processed_chunk_count,
+    )
+    if (
+        (
+            outcome.source_kind,
+            outcome.status,
+            outcome.reason_code,
+        )
+        not in _OUTCOME_CONTRACTS
+        or (outcome.stream_index is not None and outcome.stream_index < 0)
+        or any(value < 0 for value in counts)
+        or (
+            outcome.status == "absent"
+            and (
+                outcome.stream_index is not None
+                or outcome.cue_count != 0
+                or outcome.rejected_count != 0
+                or outcome.processed_chunk_count != 0
+            )
+        )
+        or (outcome.status != "absent" and outcome.stream_index is None)
+        or (
+            outcome.status in {"no_context", "no_speech", "low_reliability"}
+            and outcome.cue_count != 0
+        )
+        or (outcome.status == "available" and outcome.cue_count < 1)
+        or (
+            outcome.source_kind == "embedded_subtitle"
+            and (outcome.rejected_count != 0 or outcome.processed_chunk_count != 0)
+        )
+        or (
+            outcome.source_kind == "speech_to_text"
+            and outcome.reason_code == "context_extracted"
+            and outcome.rejected_count != 0
+        )
+        or (
+            outcome.source_kind == "speech_to_text"
+            and outcome.reason_code == "context_extracted_with_rejections"
+            and outcome.rejected_count < 1
+        )
+        or (
+            outcome.source_kind == "speech_to_text"
+            and outcome.status == "low_reliability"
+            and outcome.rejected_count < 1
+        )
+        or (
+            outcome.source_kind == "speech_to_text"
+            and outcome.status == "no_speech"
+            and outcome.rejected_count != 0
+        )
+    ):
+        raise ValueError("Context artifactのsource outcomeが不正です")
+
+
+def _validate_rejected_speech_diagnostic(
+    diagnostic: RejectedSpeechDiagnostic,
+    *,
+    video_duration: Fraction | None,
+) -> None:
+    if (
+        diagnostic.stream_index < 0
+        or diagnostic.start < 0
+        or diagnostic.end < diagnostic.start
+        or (video_duration is not None and diagnostic.end > video_duration)
+        or diagnostic.reason_code
+        not in {"asr_below_policy_threshold", "asr_zero_duration"}
+        or diagnostic.reliability != "low"
+        or not math.isfinite(diagnostic.average_log_probability)
+        or (
+            diagnostic.reason_code == "asr_zero_duration"
+            and diagnostic.end != diagnostic.start
+        )
+        or (
+            diagnostic.reason_code == "asr_below_policy_threshold"
+            and diagnostic.end <= diagnostic.start
+        )
+    ):
+        raise ValueError("Context artifactのrejected diagnosticが不正です")
+    _validate_probability(diagnostic.no_speech_probability)
+    for value in diagnostic.word_probabilities:
+        _validate_probability(value)
+    _validate_provenance(diagnostic.provenance, "speech_to_text")
+
+
+def _validate_probability(value: float | None) -> None:
+    if value is not None and (not math.isfinite(value) or not 0 <= value <= 1):
+        raise ValueError("Context artifactのprobabilityが不正です")
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )

@@ -9,9 +9,16 @@ from numpy.typing import NDArray
 class FakeFasterWhisperModel:
     """固定segmentを返しwaveformとoptionを記録するboundary fake。"""
 
-    def __init__(self, segments: tuple[object, ...], info: object) -> None:
+    def __init__(
+        self,
+        segments: tuple[object, ...],
+        info: object,
+        *,
+        backend: object | None = None,
+    ) -> None:
         self._segments = segments
         self._info = info
+        self.model = backend
         self.audio: NDArray[np.float32] | None = None
         self.options: dict[str, object] | None = None
 

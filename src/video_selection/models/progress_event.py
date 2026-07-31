@@ -26,6 +26,7 @@ ProgressSeverity = Literal["info", "warning", "error"]
 EstimationState = Literal["unavailable", "estimating", "available"]
 
 _STABLE_CODE = re.compile(r"[a-z][a-z0-9_-]*\Z")
+_STAGE_FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -35,6 +36,8 @@ class ProgressEvent:
     kind: ProgressEventKind
     severity: ProgressSeverity
     stage: ProcessingStage | None = None
+    stage_fingerprint: str | None = None
+    work_unit_fingerprint: str | None = None
     stage_index: int | None = None
     stage_count: int | None = None
     video_order: int | None = None
@@ -75,6 +78,17 @@ class ProgressEvent:
             _validate_relative_path(self.video_relative_path)
         _validate_stable_code("work unit", self.work_unit_kind)
         _validate_stable_code("reason", self.reason_code)
+        if self.stage_fingerprint is not None and (
+            self.stage is None
+            or _STAGE_FINGERPRINT.fullmatch(self.stage_fingerprint) is None
+        ):
+            msg = "Stage fingerprintはStage付きの完全SHA-256である必要があります"
+            raise ValueError(msg)
+        if self.work_unit_fingerprint is not None and (
+            _STAGE_FINGERPRINT.fullmatch(self.work_unit_fingerprint) is None
+        ):
+            msg = "Work Unit fingerprintは完全SHA-256である必要があります"
+            raise ValueError(msg)
 
 
 def _validate_position(label: str, index: int | None, total: int | None) -> None:

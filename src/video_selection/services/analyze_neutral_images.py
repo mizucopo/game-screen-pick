@@ -13,8 +13,20 @@ from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.neutral_image_analysis import NeutralImageAnalysis
 from ..models.neutral_image_metrics import NeutralImageMetrics
 
-NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v2"
+NEUTRAL_ANALYSIS_ALGORITHM_VERSION = "neutral-image-analysis-v6"
 BLUR_REJECT_VARIANCE_MIN = 12.0
+_CLIPPED_WHITE_THRESHOLD = 235
+_SOFT_WHITE_THRESHOLD = 230
+_TRANSITION_BRIGHT_THRESHOLD = 220
+_BRIGHT_SWEEP_WINDOW = Fraction(1, 4)
+_BRIGHT_SWEEP_AFFECTED_REGION_MIN = 0.08
+_BRIGHT_SWEEP_LOW_REGION_MAX = 0.20
+_BRIGHT_SWEEP_DOMINANT_REGION_MIN = 0.60
+_BRIGHT_SWEEP_REGION_CHANGE_MIN = 0.45
+_CENTRAL_FLASH_CLIPPED_RATIO_MIN = 0.04
+_CENTRAL_FLASH_CLIPPED_RATIO_MAX = 0.25
+_CENTRAL_FLASH_CENTER_RATIO_MIN = 0.15
+_CENTRAL_FLASH_REGION_RATIO_MIN = 0.035
 _QUALITY_WEIGHTS = {
     "blur_score": 0.165,
     "contrast": 0.145,
@@ -64,6 +76,11 @@ def analyze_neutral_images(
         )
         for index, (raw, feature, signature) in enumerate(raw_rows)
     ]
+    _apply_expanding_bright_sweep_rejections(
+        analyses,
+        frame_timings,
+        raw_rows,
+    )
     _apply_temporal_rejections(analyses, frame_timings)
     _apply_relative_fade_rejections(analyses)
     return tuple(analyses)
@@ -103,6 +120,30 @@ def _measure_frame(
     luminance_p5, luminance_p95 = np.percentile(gray_flat, [5, 95])
     dominant_tone_hist = np.bincount(gray_flat // 16, minlength=16)
     brightness = float(cv2.mean(gray)[0])
+    clipped_white = gray >= _CLIPPED_WHITE_THRESHOLD
+    clipped_white_ratio = float(np.mean(clipped_white))
+    height, width = gray.shape
+    center_clipped_white_ratio = float(
+        np.mean(
+            clipped_white[
+                height // 4 : height - height // 4,
+                width // 4 : width - width // 4,
+            ]
+        )
+    )
+    largest_clipped_white_region_ratio = (
+        _largest_connected_region_ratio(clipped_white)
+        if clipped_white_ratio >= _CENTRAL_FLASH_CLIPPED_RATIO_MIN
+        else 0.0
+    )
+    soft_white_ratio = float(np.mean(gray >= _SOFT_WHITE_THRESHOLD))
+    transition_bright = gray >= _TRANSITION_BRIGHT_THRESHOLD
+    transition_bright_ratio = float(np.mean(transition_bright))
+    largest_transition_bright_region_ratio = (
+        _largest_connected_region_ratio(transition_bright)
+        if transition_bright_ratio >= _BRIGHT_SWEEP_AFFECTED_REGION_MIN
+        else 0.0
+    )
     raw = {
         "blur_score": float(laplacian.var()),
         "brightness": brightness,
@@ -122,6 +163,13 @@ def _measure_frame(
         "near_black_ratio": float(np.mean(gray_flat <= 12)),
         "near_white_ratio": float(np.mean(gray_flat >= 243)),
         "dominant_tone_ratio": float(dominant_tone_hist.max() / gray_size),
+        "clipped_white_ratio": clipped_white_ratio,
+        "center_clipped_white_ratio": center_clipped_white_ratio,
+        "largest_clipped_white_region_ratio": (largest_clipped_white_region_ratio),
+        "soft_white_ratio": soft_white_ratio,
+        "largest_transition_bright_region_ratio": (
+            largest_transition_bright_region_ratio
+        ),
     }
     hsv_hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256])
     luminance_hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
@@ -134,9 +182,9 @@ def _measure_frame(
     feature = _safe_l2_normalize(
         np.concatenate(
             (
-                cv2.normalize(hsv_hist, hsv_hist).flatten(),
-                cv2.normalize(luminance_hist, luminance_hist).flatten(),
-                edge_hist.astype(np.float32),
+                _safe_l2_normalize(hsv_hist.flatten()),
+                _safe_l2_normalize(luminance_hist.flatten()),
+                _safe_l2_normalize(edge_hist.astype(np.float32)),
             )
         ).astype(np.float32)
     )
@@ -223,6 +271,27 @@ def _absolute_reject_reason(
     ):
         return ContentRejectReason.WHITEOUT
     if (
+        raw["clipped_white_ratio"] >= 0.25
+        and raw["clipped_white_ratio"] <= 0.65
+        and raw["center_clipped_white_ratio"] >= 0.50
+        and raw["largest_clipped_white_region_ratio"] >= 0.20
+    ):
+        return ContentRejectReason.WHITEOUT
+    if (
+        raw["clipped_white_ratio"] >= _CENTRAL_FLASH_CLIPPED_RATIO_MIN
+        and raw["clipped_white_ratio"] < _CENTRAL_FLASH_CLIPPED_RATIO_MAX
+        and raw["center_clipped_white_ratio"] >= _CENTRAL_FLASH_CENTER_RATIO_MIN
+        and raw["largest_clipped_white_region_ratio"] >= _CENTRAL_FLASH_REGION_RATIO_MIN
+    ):
+        return ContentRejectReason.WHITEOUT
+    if (
+        raw["soft_white_ratio"] >= 0.85
+        and raw["dominant_tone_ratio"] >= 0.85
+        and raw["luminance_entropy"] <= 2.0
+        and raw["edge_density"] <= 0.02
+    ):
+        return ContentRejectReason.WHITEOUT
+    if (
         raw["dominant_tone_ratio"] >= 0.97
         and raw["luminance_range"] <= 20
         and raw["contrast"] <= 10
@@ -231,6 +300,16 @@ def _absolute_reject_reason(
     if raw["blur_score"] < BLUR_REJECT_VARIANCE_MIN and raw["edge_density"] < 0.03:
         return ContentRejectReason.BLUR
     return None
+
+
+def _largest_connected_region_ratio(mask: np.ndarray) -> float:
+    component_count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8),
+        connectivity=8,
+    )
+    if component_count <= 1:
+        return 0.0
+    return float(stats[1:, cv2.CC_STAT_AREA].max() / mask.size)
 
 
 def _apply_temporal_rejections(
@@ -261,6 +340,53 @@ def _apply_temporal_rejections(
             previous.metrics.visibility_score,
             following.metrics.visibility_score,
         ):
+            analyses[index] = replace(
+                current,
+                reject_reason=ContentRejectReason.TEMPORAL_TRANSITION,
+            )
+
+
+def _apply_expanding_bright_sweep_rejections(
+    analyses: list[NeutralImageAnalysis],
+    frame_timings: list[_FrameTiming],
+    raw_rows: list[tuple[dict[str, float], np.ndarray, bytes]],
+) -> None:
+    """短時間に画面を覆う淡い連結領域の拡大・縮小を遷移として除外する。"""
+    region_ratios = [
+        row[0]["largest_transition_bright_region_ratio"] for row in raw_rows
+    ]
+    rejected_indices: set[int] = set()
+    for start in range(len(analyses)):
+        end = start
+        while end + 1 < len(analyses) and _are_adjacent(
+            frame_timings[end],
+            frame_timings[end + 1],
+        ):
+            start_timing = frame_timings[start]
+            next_timing = frame_timings[end + 1]
+            elapsed = (next_timing[1] - start_timing[1]) * start_timing[3]
+            if elapsed > _BRIGHT_SWEEP_WINDOW:
+                break
+            end += 1
+        affected = [
+            index
+            for index in range(start, end + 1)
+            if region_ratios[index] >= _BRIGHT_SWEEP_AFFECTED_REGION_MIN
+        ]
+        if len(affected) < 3:
+            continue
+        affected_ratios = [region_ratios[index] for index in affected]
+        minimum = min(affected_ratios)
+        maximum = max(affected_ratios)
+        if (
+            minimum <= _BRIGHT_SWEEP_LOW_REGION_MAX
+            and maximum >= _BRIGHT_SWEEP_DOMINANT_REGION_MIN
+            and maximum - minimum >= _BRIGHT_SWEEP_REGION_CHANGE_MIN
+        ):
+            rejected_indices.update(affected)
+    for index in rejected_indices:
+        current = analyses[index]
+        if current.reject_reason is None:
             analyses[index] = replace(
                 current,
                 reject_reason=ContentRejectReason.TEMPORAL_TRANSITION,

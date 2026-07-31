@@ -39,10 +39,14 @@ def test_exact_seconds_keeps_integer_zeroes_and_nonterminating_fraction() -> Non
     Assert:
         - 整数、有限小数、既約分数として正確に返されること
     """
-    # Arrange / Act / Assert
-    assert exact_seconds_string(Fraction(10)) == "10"
-    assert exact_seconds_string(Fraction(5, 4)) == "1.25"
-    assert exact_seconds_string(Fraction(1, 3)) == "1/3"
+    # Arrange
+    values = (Fraction(10), Fraction(5, 4), Fraction(1, 3))
+
+    # Act
+    results = tuple(exact_seconds_string(value) for value in values)
+
+    # Assert
+    assert results == ("10", "1.25", "1/3")
 
 
 def test_rational_value_is_reduced_by_fraction_boundary() -> None:

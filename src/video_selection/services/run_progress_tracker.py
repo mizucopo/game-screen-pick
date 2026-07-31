@@ -10,6 +10,7 @@ from ..models.progress_event import (
     ProgressEventKind,
     ProgressSeverity,
 )
+from ..models.stage_fingerprint import StageFingerprint
 from ..protocols.run_observer import RunObserver
 from .stage_eta_estimator import StageEtaEstimator, WorkDisposition
 
@@ -36,7 +37,17 @@ class RunProgressTracker:
         self._video_count: int | None = None
         self._video_relative_path: str | None = None
         self._work_unit_kind: str | None = None
+        self._stage_cache_hit_count = 0
+        self._stage_cache_miss_count = 0
+        self._stage_reuse_count = 0
+        self._stage_recompute_count = 0
+        self._completed_stage_events: list[ProgressEvent] = []
         self._eta_estimator = StageEtaEstimator()
+
+    @property
+    def completed_stage_events(self) -> tuple[ProgressEvent, ...]:
+        """fingerprint付きで確定したStageのrun別観測値を返す。"""
+        return tuple(self._completed_stage_events)
 
     def start_run(self) -> None:
         """runを開始して最初のeventを発行する。"""
@@ -160,27 +171,50 @@ class RunProgressTracker:
         reuse_count: int,
         recompute_count: int,
         reason_code: str,
+        stage_fingerprint: StageFingerprint | None = None,
     ) -> None:
         """active Stageのcache lookupと実処理結果を通知する。"""
-        self._observer.observe(
-            self._stage_event(
-                kind="cache",
-                reason_code=reason_code,
-                elapsed_seconds=self._stage_elapsed(),
-                cache_hit_count=cache_hit_count,
-                cache_miss_count=cache_miss_count,
-                reuse_count=reuse_count,
-                recompute_count=recompute_count,
-            )
+        event = self._stage_event(
+            kind="cache",
+            reason_code=reason_code,
+            elapsed_seconds=self._stage_elapsed(),
+            cache_hit_count=cache_hit_count,
+            cache_miss_count=cache_miss_count,
+            reuse_count=reuse_count,
+            recompute_count=recompute_count,
+            stage_fingerprint=(
+                None if stage_fingerprint is None else stage_fingerprint.value
+            ),
         )
+        self._stage_cache_hit_count += cache_hit_count
+        self._stage_cache_miss_count += cache_miss_count
+        self._stage_reuse_count += reuse_count
+        self._stage_recompute_count += recompute_count
+        self._observer.observe(event)
 
-    def complete_stage(self) -> None:
+    def complete_stage(
+        self,
+        duration_seconds: float | None = None,
+        *,
+        stage_fingerprint: StageFingerprint | None = None,
+    ) -> None:
         """active Stageを完了して次のStage開始を許可する。"""
         event = self._stage_event(
             kind="stage_completed",
             reason_code="stage_completed",
-            elapsed_seconds=self._stage_elapsed(),
+            elapsed_seconds=(
+                self._stage_elapsed() if duration_seconds is None else duration_seconds
+            ),
+            cache_hit_count=self._stage_cache_hit_count,
+            cache_miss_count=self._stage_cache_miss_count,
+            reuse_count=self._stage_reuse_count,
+            recompute_count=self._stage_recompute_count,
+            stage_fingerprint=(
+                None if stage_fingerprint is None else stage_fingerprint.value
+            ),
         )
+        if stage_fingerprint is not None:
+            self._completed_stage_events.append(event)
         self._observer.observe(event)
         self._clear_active_stage()
 
@@ -217,6 +251,7 @@ class RunProgressTracker:
         cache_miss_count: int = 0,
         reuse_count: int = 0,
         recompute_count: int = 0,
+        stage_fingerprint: str | None = None,
         estimation_state: EstimationState = "unavailable",
         eta_seconds: float | None = None,
     ) -> ProgressEvent:
@@ -227,6 +262,7 @@ class RunProgressTracker:
             kind=kind,
             severity=severity,
             stage=self._active_stage,
+            stage_fingerprint=stage_fingerprint,
             stage_index=self._stage_index,
             stage_count=self._stage_count,
             video_order=self._video_order,
@@ -299,3 +335,7 @@ class RunProgressTracker:
         self._video_count = None
         self._video_relative_path = None
         self._work_unit_kind = None
+        self._stage_cache_hit_count = 0
+        self._stage_cache_miss_count = 0
+        self._stage_reuse_count = 0
+        self._stage_recompute_count = 0

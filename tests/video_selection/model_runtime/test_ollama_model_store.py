@@ -101,6 +101,7 @@ def test_local_pull_and_capability_use_documented_ollama_api() -> None:
     capability_payload = capability_requests[0][2]
     assert capability_payload is not None
     assert capability_payload["model"] == "qwen3-vl:8b-instruct"
+    assert capability_payload["keep_alive"] == 0
     assert capability_payload["options"] == {
         "temperature": 0,
         "num_ctx": 32768,

@@ -3,9 +3,12 @@
 
 profile_version = "1.0.0"
 input_root = "<absolute-path-on-supported-target>"
+configuration_path = "<absolute-path-to-video-selection-toml>"
+artifact_root = "<absolute-private-artifact-root>"
 
 [release_suite]
 expected_total_duration = "PT30M"
+boundary_tolerance_seconds = 5
 
 [[release_suite.intervals]]
 relative_video_path = "<relative-video-path>"
@@ -28,9 +31,4 @@ scenario_role = "late-game-spoiler-check"
 [full_scale_suite]
 expected_video_count = 12
 expected_total_duration = "PT50H40M"
-
-[privacy]
-retain_temporary_clips = false
-record_absolute_paths = false
-record_media_or_raw_text = false
-
+duration_tolerance_seconds = 60

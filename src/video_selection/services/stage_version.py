@@ -1,20 +1,23 @@
-"""Processing Stageごとのalgorithm version。"""
+"""Processing Stageごとのalgorithm version registry。"""
 
 from ..models.processing_stage import ProcessingStage
 
+_STAGE_VERSIONS = {
+    ProcessingStage.DISCOVER_VIDEO_SET: "video-set-discovery-v1",
+    ProcessingStage.SCAN_VIDEO: "video-scan-v6",
+    ProcessingStage.EXTRACT_FRAME_CANDIDATES: "frame-candidate-extraction-v3",
+    ProcessingStage.COLLECT_CONTEXT: "context-collection-v4",
+    ProcessingStage.RESOLVE_MODELS: "model-resolution-v1",
+    ProcessingStage.BUILD_SCENE_CATALOG: "scene-catalog-v1",
+    ProcessingStage.ANNOTATE_CANDIDATE: "candidate-annotation-v1",
+    ProcessingStage.ANNOTATE_CANDIDATES: "candidate-annotations-v1",
+    ProcessingStage.SELECT_IMAGES: "video-set-selection-v2",
+}
+
+if set(_STAGE_VERSIONS) != set(ProcessingStage):
+    raise RuntimeError("全Processing Stageに明示的なversion登録が必要です")
+
 
 def stage_version(stage: ProcessingStage) -> str:
-    """Stage Fingerprintとmanifestへ使うversionを返す。"""
-    if stage is ProcessingStage.SCAN_VIDEO:
-        return "video-scan-v1"
-    if stage is ProcessingStage.EXTRACT_FRAME_CANDIDATES:
-        return "frame-candidate-extraction-v1"
-    if stage is ProcessingStage.COLLECT_CONTEXT:
-        return "context-collection-v1"
-    if stage is ProcessingStage.RESOLVE_MODELS:
-        return "model-resolution-v1"
-    if stage is ProcessingStage.BUILD_SCENE_CATALOG:
-        return "scene-catalog-v1"
-    if stage is ProcessingStage.ANNOTATE_CANDIDATE:
-        return "candidate-annotation-v1"
-    return "walking-skeleton-0"
+    """Stage Fingerprintとmanifestへ使う明示versionを返す。"""
+    return _STAGE_VERSIONS[stage]

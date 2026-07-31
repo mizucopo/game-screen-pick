@@ -16,9 +16,11 @@ def test_catalog_requires_unique_scenes_and_ordinary_other() -> None:
     """
     # Arrange
     scenes = (
-        SceneCatalogEntry("exploration", "探索", "フィールド探索", "ordinary"),
-        SceneCatalogEntry("battle", "戦闘", "通常戦闘", "recurring_gameplay"),
-        SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
+        SceneCatalogEntry(
+            "exploration", "探索", "フィールド探索", "exploration", "ordinary"
+        ),
+        SceneCatalogEntry("battle", "戦闘", "通常戦闘", "combat", "recurring_gameplay"),
+        SceneCatalogEntry("other", "その他", "分類不能", "other", "ordinary"),
     )
 
     # Act
@@ -27,27 +29,37 @@ def test_catalog_requires_unique_scenes_and_ordinary_other() -> None:
     # Assert
     assert catalog.slugs == ("exploration", "battle", "other")
     assert catalog.for_slug("battle").display_name == "戦闘"
+    assert catalog.for_slug("battle").scene_kind == "combat"
 
 
 @pytest.mark.parametrize(
     "scenes",
     [
         (
-            SceneCatalogEntry("battle", "戦闘", "通常戦闘", "ordinary"),
-            SceneCatalogEntry("battle", "戦闘2", "別の戦闘", "cinematic"),
-            SceneCatalogEntry("other", "その他", "分類不能", "ordinary"),
+            SceneCatalogEntry("battle", "戦闘", "通常戦闘", "combat", "ordinary"),
+            SceneCatalogEntry("battle", "戦闘2", "別の戦闘", "combat", "cinematic"),
+            SceneCatalogEntry("other", "その他", "分類不能", "other", "ordinary"),
         ),
         (
-            SceneCatalogEntry("exploration", "探索", "フィールド探索", "ordinary"),
-            SceneCatalogEntry("battle", "戦闘", "通常戦闘", "ordinary"),
-            SceneCatalogEntry("other", "その他", "分類不能", "cinematic"),
+            SceneCatalogEntry(
+                "exploration", "探索", "フィールド探索", "exploration", "ordinary"
+            ),
+            SceneCatalogEntry("battle", "戦闘", "通常戦闘", "combat", "ordinary"),
+            SceneCatalogEntry("other", "その他", "分類不能", "other", "cinematic"),
+        ),
+        (
+            SceneCatalogEntry(
+                "exploration", "探索", "フィールド探索", "exploration", "ordinary"
+            ),
+            SceneCatalogEntry("battle", "戦闘", "通常戦闘", "combat", "ordinary"),
+            SceneCatalogEntry("other", "その他", "分類不能", "exploration", "ordinary"),
         ),
     ],
 )
 def test_invalid_catalog_domain_is_rejected(
     scenes: tuple[SceneCatalogEntry, ...],
 ) -> None:
-    """slug重複またはordinaryでないotherが拒否されること。
+    """slug重複またはkind・roleが不正なotherが拒否されること。
 
     Arrange:
         - domain contractに違反するscene列が用意される

@@ -13,8 +13,6 @@ class VideoSource:
     fingerprint: str
     size_bytes: int
     modified_at_ns: int
-    device: int
-    inode: int
 
     def __post_init__(self) -> None:
         """安全な相対pathとSHA-256 fingerprintを検証する。"""
@@ -33,6 +31,6 @@ class VideoSource:
             raise ValueError(msg)
 
     @property
-    def stat_signature(self) -> tuple[int, int, int, int]:
-        """実行中の内容変更検知に使う発見時statを返す。"""
-        return (self.device, self.inode, self.size_bytes, self.modified_at_ns)
+    def snapshot_signature(self) -> tuple[int, int]:
+        """再開と実行中検査に使うsizeとmtimeを返す。"""
+        return self.size_bytes, self.modified_at_ns

@@ -3,6 +3,8 @@
 import math
 from fractions import Fraction
 
+import cv2
+import numpy as np
 import pytest
 
 from src.video_selection.models.blog_candidate import BlogCandidate
@@ -13,12 +15,16 @@ from src.video_selection.models.candidate_annotation import (
     ExplanationValue,
     SpoilerRisk,
 )
+from src.video_selection.models.decoded_video_frame import DecodedVideoFrame
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.neutral_image_analysis import NeutralImageAnalysis
 from src.video_selection.models.neutral_image_metrics import NeutralImageMetrics
 from src.video_selection.models.scene_catalog_entry import SceneSelectionRole
 from src.video_selection.models.video_set_selection_result import (
     VideoSetSelectionResult,
+)
+from src.video_selection.services.analyze_neutral_images import (
+    analyze_neutral_images,
 )
 from src.video_selection.services.select_video_set_images import (
     SpoilerSensitivity,
@@ -55,6 +61,20 @@ def _metrics() -> NeutralImageMetrics:
         dominant_tone_ratio=0.2,
         information_score=0.8,
         visibility_score=0.9,
+    )
+
+
+def _decoded_frame(source_pts: int, rgb: np.ndarray) -> DecodedVideoFrame:
+    height, width = rgb.shape[:2]
+    return DecodedVideoFrame(
+        stream_index=0,
+        pts=source_pts,
+        duration_ts=1,
+        time_base=Fraction(1, 10),
+        width=width,
+        height=height,
+        pixel_format="rgb24",
+        pixels=rgb.astype(np.uint8).tobytes(),
     )
 
 
@@ -307,13 +327,201 @@ def test_visual_near_duplicate_is_rejected_even_when_selection_is_short() -> Non
     # Assert
     assert [item.candidate.identifier for item in result.selected] == [first.identifier]
     assert result.shortfall is True
-    assert result.final_similarity_ceiling == 0.98
+    assert result.final_similarity_ceiling == 0.97
     assert len(result.rejected) == 1
     rejection = result.rejected[0]
     assert rejection.candidate.identifier == second.identifier
     assert rejection.reason_code == "visual_near_duplicate"
     assert rejection.nearest_selected_image_id == first.identifier
     assert rejection.similarity == pytest.approx(0.996)
+
+
+def test_analyzed_distinct_types_coexist_without_duplicate_filling_shortfall() -> None:
+    """異なるgameplayとmenuが共存し重複画像で穴埋めされないこと。
+
+    Arrange:
+        - edge方向分布は近いが色・輝度・配置が異なる2種類のframeが用意される
+        - 各frameが有用なgameplay候補とmenu候補に注釈される
+        - gameplayと同じ画素を持つ重複候補が用意される
+    Act:
+        - Neutral Image Analysisの視覚特徴でVideo Set selectorが実行される
+    Assert:
+        - 2候補がVisual Near-Duplicateにされず同時に選択されること
+        - 重複候補が要求枚数の不足を埋めないこと
+    """
+    # Arrange
+    rows, columns = np.indices((256, 256))
+    gameplay_mask = ((rows // 32 + columns // 32) % 2).astype(bool)
+    gameplay_rgb = np.empty((256, 256, 3), dtype=np.uint8)
+    gameplay_rgb[gameplay_mask] = (210, 45, 35)
+    gameplay_rgb[~gameplay_mask] = (25, 70, 180)
+    menu_rgb = np.full((256, 256, 3), (25, 90, 45), dtype=np.uint8)
+    for center_y in (24, 72, 120, 168, 216):
+        for center_x in (24, 72, 120, 168, 216):
+            cv2.rectangle(
+                menu_rgb,
+                (center_x - 12, center_y - 12),
+                (center_x + 12, center_y + 12),
+                (235, 210, 80),
+                -1,
+            )
+    gameplay_analysis, menu_analysis = analyze_neutral_images(
+        (
+            _decoded_frame(0, gameplay_rgb),
+            _decoded_frame(1, menu_rgb),
+        )
+    )
+    duplicate_analysis = analyze_neutral_images(
+        (_decoded_frame(2, gameplay_rgb.copy()),)
+    )[0]
+    gameplay = _candidate(
+        "1",
+        quality=0.9,
+        feature=gameplay_analysis.visual_feature,
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    menu = _candidate(
+        "2",
+        quality=0.8,
+        feature=menu_analysis.visual_feature,
+        progress=Fraction(8, 10),
+        blog_image_type="menu",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    duplicate = _candidate(
+        "3",
+        quality=0.7,
+        feature=duplicate_analysis.visual_feature,
+        progress=Fraction(9, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (menu, duplicate, gameplay),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        gameplay.identifier,
+        menu.identifier,
+    ]
+    assert result.shortfall is True
+    assert result.blog_image_type_actuals["normal_gameplay"] == 1
+    assert result.blog_image_type_actuals["menu"] == 1
+    assert len(result.rejected) == 1
+    assert result.rejected[0].candidate.identifier == duplicate.identifier
+    assert result.rejected[0].reason_code == "visual_near_duplicate"
+
+
+def test_automatic_relaxation_does_not_select_redundant_gameplay_frame() -> None:
+    """自動緩和で視覚的に冗長なgameplay画像が穴埋めされないこと。
+
+    Arrange:
+        - 同じ戦闘をほぼ同じ構図で示すsimilarity 0.973の2候補が用意される
+        - 組み込み既定値から2枚の選定が要求される
+    Act:
+        - selectorが自動similarity passの終端まで実行される
+    Assert:
+        - 2枚目が選択されず、0.97の終端でSelection Shortfallになること
+    """
+    # Arrange
+    first = _candidate(
+        "7",
+        quality=0.9,
+        feature=(1.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+    redundant = _candidate(
+        "8",
+        quality=0.8,
+        feature=(0.973, math.sqrt(1 - 0.973**2)),
+        progress=Fraction(8, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (redundant, first),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [first.identifier]
+    assert result.shortfall is True
+    assert result.final_similarity_ceiling == 0.97
+    assert result.rejected[0].reason_code == "similarity_ceiling"
+    assert result.rejected[0].similarity == pytest.approx(0.973)
+
+
+def test_candidate_without_explanation_value_does_not_fill_shortfall() -> None:
+    """説明価値のない候補で要求枚数が穴埋めされないこと。
+
+    Arrange:
+        - 説明価値がある候補と、高品質でも説明価値がない候補が用意される
+        - 2枚の選定が要求される
+    Act:
+        - Video Set selectorが終端similarity passまで実行される
+    Assert:
+        - 説明価値がある候補だけが選択されSelection Shortfallになること
+        - 説明価値がない候補がstable reason付きで未採用になること
+    """
+    # Arrange
+    meaningful = _candidate(
+        "9",
+        quality=0.7,
+        feature=(1.0, 0.0),
+        progress=Fraction(1, 10),
+        blog_image_type="normal_gameplay",
+        explanation_value="medium",
+        context_relevance="none",
+    )
+    meaningless = _candidate(
+        "a",
+        quality=0.99,
+        feature=(0.0, 1.0),
+        progress=Fraction(9, 10),
+        blog_image_type="other",
+        explanation_value="none",
+        context_relevance="strong",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (meaningless, meaningful),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        meaningful.identifier
+    ]
+    assert result.shortfall is True
+    assert len(result.rejected) == 1
+    assert result.rejected[0].candidate.identifier == meaningless.identifier
+    assert result.rejected[0].reason_code == "lower_marginal_utility"
 
 
 def test_recurring_gameplay_expands_only_after_each_variant_group() -> None:
@@ -357,7 +565,7 @@ def test_recurring_gameplay_expands_only_after_each_variant_group() -> None:
         feature=(0.9, 0.0, math.sqrt(1 - 0.9**2)),
         progress=Fraction(45, 100),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
         scene_selection_role="recurring_gameplay",
         scene_slug="battle",
@@ -380,7 +588,7 @@ def test_recurring_gameplay_expands_only_after_each_variant_group() -> None:
     first_selected, other_selected, expanded = result.selected
     assert first_selected.variant_group_id == expanded.variant_group_id
     assert other_selected.variant_group_id != expanded.variant_group_id
-    assert expanded.score.similarity_pass == 0.98
+    assert expanded.score.similarity_pass == 0.97
     assert "recurring_gameplay_variant" in expanded.reason_codes
 
 
@@ -402,7 +610,7 @@ def test_spoiler_guarded_group_does_not_block_recurring_variant_expansion() -> N
         feature=(1.0, 0.0, 0.0),
         progress=Fraction(1, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
         scene_selection_role="recurring_gameplay",
         scene_slug="battle",
@@ -413,7 +621,7 @@ def test_spoiler_guarded_group_does_not_block_recurring_variant_expansion() -> N
         feature=(0.96, math.sqrt(1 - 0.96**2), 0.0),
         progress=Fraction(9, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
         scene_selection_role="recurring_gameplay",
         scene_slug="battle",
@@ -424,7 +632,7 @@ def test_spoiler_guarded_group_does_not_block_recurring_variant_expansion() -> N
         feature=(0.0, 1.0, 0.0),
         progress=Fraction(1, 10),
         blog_image_type="event",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
         spoiler_risk="high",
         scene_selection_role="recurring_gameplay",
@@ -436,7 +644,7 @@ def test_spoiler_guarded_group_does_not_block_recurring_variant_expansion() -> N
         feature=(0.0, 0.97, math.sqrt(1 - 0.97**2)),
         progress=Fraction(9, 10),
         blog_image_type="event",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
         spoiler_risk="high",
     )
@@ -805,10 +1013,10 @@ def test_exact_utility_tie_uses_stable_video_order_and_records_tie_break() -> No
 
 
 def test_similarity_above_terminal_ceiling_is_counted_separately() -> None:
-    """0.98超の候補がVisual Near-Duplicateとは別理由で集計されること。
+    """0.97超の候補がVisual Near-Duplicateとは別理由で集計されること。
 
     Arrange:
-        - cosine similarityが0.98超0.995以下のordinary候補が2件ある
+        - cosine similarityが0.97超0.995以下のordinary候補が2件ある
         - 2枚の選定が要求される
     Act:
         - selectorが終端similarity passまで実行される
@@ -846,7 +1054,7 @@ def test_similarity_above_terminal_ceiling_is_counted_separately() -> None:
 
     # Assert
     assert result.shortfall is True
-    assert result.final_similarity_ceiling == 0.98
+    assert result.final_similarity_ceiling == 0.97
     assert result.rejection_counts == {"similarity_ceiling": 1}
     rejection = result.rejected[0]
     assert rejection.reason_code == "similarity_ceiling"
@@ -858,7 +1066,7 @@ def test_rejection_uses_pass_that_satisfied_request() -> None:
     """要求数を満たした実際のpassでsimilarity rejectionが説明されること。
 
     Arrange:
-        - base passで選ばれる2候補とbase超0.98以下の高utility候補がある
+        - base passで選ばれる2候補とbase超0.97以下の高utility候補がある
     Act:
         - base passで2枚の選定が満たされる
     Assert:
@@ -889,7 +1097,7 @@ def test_rejection_uses_pass_that_satisfied_request() -> None:
         feature=(0.0, 1.0),
         progress=Fraction(9, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
     )
 
@@ -927,7 +1135,7 @@ def test_rejections_are_ordered_by_counterfactual_utility() -> None:
         feature=(1.0, 0.0, 0.0),
         progress=Fraction(1, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
     )
     stronger_near_miss = _candidate(
@@ -936,7 +1144,7 @@ def test_rejections_are_ordered_by_counterfactual_utility() -> None:
         feature=(0.0, 1.0, 0.0),
         progress=Fraction(5, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
     )
     weaker_near_miss = _candidate(
@@ -945,7 +1153,7 @@ def test_rejections_are_ordered_by_counterfactual_utility() -> None:
         feature=(0.0, 0.0, 1.0),
         progress=Fraction(9, 10),
         blog_image_type="normal_gameplay",
-        explanation_value="none",
+        explanation_value="low",
         context_relevance="none",
     )
 
@@ -964,4 +1172,4 @@ def test_rejections_are_ordered_by_counterfactual_utility() -> None:
     ]
     assert [
         round(item.counterfactual_score.marginal_utility, 2) for item in result.rejected
-    ] == [0.66, 0.17]
+    ] == [0.74, 0.25]

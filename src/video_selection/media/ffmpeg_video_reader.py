@@ -1,14 +1,18 @@
 """showinfo付きimage pipeをstreaming Decoded Video Frameへ変換する。"""
 
+import os
 import queue
 import re
+import signal
 import subprocess
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import suppress
 from fractions import Fraction
 from typing import IO, TypeAlias
 
 from ..models.decoded_video_frame import DecodedVideoFrame
+from .wait_for_process import wait_for_process
 
 _TIME_BASE_PATTERN = re.compile(r"config in time_base:\s*(\d+)/(\d+)")
 _PTS_PATTERN = re.compile(r"\bpts:\s*(-?\d+)")
@@ -22,6 +26,8 @@ _MetadataItem: TypeAlias = _FrameMetadata | BaseException | None
 def iter_decoded_video_frames(
     command: list[str],
     stream_index: int,
+    *,
+    cpu_seconds_recorder: Callable[[float], None] | None = None,
 ) -> Iterator[DecodedVideoFrame]:
     """一つのFFmpeg processからPTSとRGB24 frameを順次返す。"""
     process = subprocess.Popen(
@@ -39,20 +45,28 @@ def iter_decoded_video_frames(
         daemon=True,
     )
     stderr_thread.start()
+    process_waited = False
     try:
         yield from _read_frames(
             process.stdout,
             metadata_queue,
             stream_index,
         )
-        return_code = process.wait()
+        return_code, cpu_seconds = wait_for_process(process)
+        process_waited = True
+        if cpu_seconds_recorder is not None:
+            cpu_seconds_recorder(cpu_seconds)
         stderr_thread.join()
         if return_code != 0:
             raise subprocess.CalledProcessError(return_code, command)
     finally:
-        if process.poll() is None:
-            process.terminate()
-            process.wait()
+        if not process_waited:
+            with suppress(ProcessLookupError):
+                os.kill(process.pid, signal.SIGTERM)
+            with suppress(ChildProcessError):
+                _return_code, cpu_seconds = wait_for_process(process)
+                if cpu_seconds_recorder is not None:
+                    cpu_seconds_recorder(cpu_seconds)
         stderr_thread.join()
         process.stdout.close()
         process.stderr.close()

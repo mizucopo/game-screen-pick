@@ -17,10 +17,16 @@ def test_image_count_must_be_positive(tmp_path: Path) -> None:
     Assert:
         - image_countのvalidation errorが返されること
     """
-    # Arrange / Act / Assert
-    with pytest.raises(ValueError, match="image_count"):
+    # Arrange
+    image_count = 0
+
+    # Act
+    with pytest.raises(ValueError) as error:
         EffectiveConfiguration(
             video_input_folder=tmp_path / "videos",
             output_folder=tmp_path / "output",
-            image_count=0,
+            image_count=image_count,
         )
+
+    # Assert
+    assert "image_count" in str(error.value)

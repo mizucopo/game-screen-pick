@@ -38,12 +38,12 @@ game-screen-pick [OPTIONS] <VIDEO_INPUT_FOLDER> <OUTPUT_FOLDER>
 - 既定ではroot直下だけを探索し、recursive時だけ子directoryを探索します。
 - directory symlinkは辿りません。対応拡張子を持つfile symlinkは許可し、link先の内容を処理します。
 - Video Orderは入力rootからの正規化済み相対pathの自然順です。mtimeやfilesystem列挙順は使いません。
-- Video Identityはfile全体のSHA-256で決まります。renameやmtime変更では変わらず、内容変更時だけ変わります。
+- Video Identityはfile全体のSHA-256で決まります。renameやmtime変更では変わらず、内容変更時だけ変わります。cache missではstat-content-statの順に全体を読み、動画1本のSHA-256が確定するたびにpathを含まないVideo Identity cacheへatomic保存します。後続動画の失敗やprocess再起動で、確定済み動画を再hashしません。
 - Video Set FingerprintはVideo OrderどおりのVideo Fingerprint列から決まり、input rootや設定値を含みません。
 - 対応動画0本、壊れた動画、同一内容の重複動画は、cacheやoutputを作る前に実行全体を失敗させます。
-- 発見後にpath、内容、size、mtime、inodeが変化した場合はsnapshot不一致としてrunを中止します。全体内容はInput Lock取得直後と公開直前、対象動画の内容はmedia probe前と各Video Stage直前に検査します。
+- 発見後にpath、size、`mtime_ns`が変化した場合はsnapshot不一致としてrunを中止します。Video Identity cacheはengine version、入力rootと相対pathから作るprivacy-safeなlogical source key、size、`mtime_ns`が一致する場合だけwhole-file SHA-256を再利用します。device、inode、ctimeは判定に使いません。Input Lock取得後、media probe、各Video Stage、Vision batch、publisherのstaging開始時・final rename直前は同じmetadataを検査し、同じ大容量fileをStageごとに再hashしません。同じsize・mtimeへ意図的に内容を書き換えた場合は検知できないため、入力管理者がmtimeを正しく更新することを契約とします。通常CLIの`--reset-cache`ではidentityも再計算されます。
 
-入力と出力は同一pathにも相互の親子にもできません。`OUTPUT_FOLDER`は存在しないか空である必要があり、途中処理や再開には使いません。
+入力と出力は同一pathにも相互の親子にもできません。新しい`OUTPUT_FOLDER`は存在しないか空である必要があります。atomic rename後に完了記録だけが失われた場合に限り、既存の非空folderをCanonical Outputとして完全検証し、今回のsemantic digestと一致すれば一byteも変更せず再利用します。不正なfolderや異なる意味結果は削除・上書きせず拒否します。
 
 ## 例
 
@@ -55,4 +55,4 @@ game-screen-pick \
   ./output/elliot-blog-images
 ```
 
-設定値と優先順位は[設定](configuration.md)、cache、進捗、エラー、WSL2運用は[運用](operations.md)、成果物は[report](report.md)を参照してください。
+設定値と優先順位は[設定](configuration.md)、処理順と安全な再開は[Pipelineと安全な再開](pipeline-resume.md)、cache、進捗、エラー、WSL2運用は[運用](operations.md)、成果物は[report](report.md)を参照してください。

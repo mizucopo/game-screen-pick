@@ -15,10 +15,13 @@ def test_relative_webp_with_complete_identity_is_accepted() -> None:
     Assert:
         - relative pathとbyte数が保持されること
     """
-    # Arrange / Act
+    # Arrange
+    relative_path = "images/0001_test_aaaaaaaaaaaa.webp"
+
+    # Act
     artifact = SelectedImageArtifact(
         image_id="frm_" + "a" * 64,
-        relative_path="images/0001_test_aaaaaaaaaaaa.webp",
+        relative_path=relative_path,
         sha256="b" * 64,
         width=3840,
         height=2160,
@@ -40,13 +43,19 @@ def test_parent_segment_in_image_path_is_rejected() -> None:
     Assert:
         - 公開path契約違反として拒否されること
     """
-    # Arrange / Act / Assert
-    with pytest.raises(ValueError, match="path"):
+    # Arrange
+    relative_path = "images/../outside.webp"
+
+    # Act
+    with pytest.raises(ValueError) as error:
         SelectedImageArtifact(
             image_id="frm_" + "a" * 64,
-            relative_path="images/../outside.webp",
+            relative_path=relative_path,
             sha256="b" * 64,
             width=1,
             height=1,
             size_bytes=1,
         )
+
+    # Assert
+    assert "path" in str(error.value)

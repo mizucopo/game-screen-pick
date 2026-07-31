@@ -1,21 +1,32 @@
 """system FFmpeg MediaRuntimeのintegration test。"""
 
+import signal
 import stat
 import struct
 import sys
+from collections.abc import Iterator
 from fractions import Fraction
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
 
 from src.video_selection.media.ffmpeg_media_runtime import FfmpegMediaRuntime
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
+from src.video_selection.models.empty_video_scan_partition import (
+    EmptyVideoScanPartition,
+)
 from src.video_selection.models.media_runtime_error import MediaRuntimeError
 from src.video_selection.models.media_runtime_failure_reason import (
     MediaRuntimeFailureReason,
 )
+from src.video_selection.models.media_stream import MediaStream
+from src.video_selection.models.native_video_scan import NativeVideoScan
 from src.video_selection.services.discover_video_set import discover_video_set
+from src.video_selection.services.select_scene_signal_frames import (
+    select_scene_signal_frames,
+)
 from src.video_selection.services.video_stage_processor import VideoStageProcessor
 from tests.video_selection.fakes.fake_speech_runtime import FakeSpeechRuntime
 from tests.video_selection.fakes.recording_run_observer import RecordingRunObserver
@@ -23,7 +34,10 @@ from tests_ffmpeg.support.ffmpeg_fixture_factory import (
     generate_av1_aac_video,
     generate_cfr_video,
     generate_corrupt_video,
+    generate_delayed_video_with_audio,
+    generate_nonzero_start_video,
     generate_odd_dimension_video,
+    generate_quantized_audio,
     generate_scene_change_video,
     generate_stream_matrix_video,
     generate_vfr_video,
@@ -84,12 +98,17 @@ elif "-muxers" in arguments:
 elif "-filters" in arguments:
     print(" ... aformat")
     print(" ... aresample")
+    print(" ... asettb")
     print("T.C asetnsamples")
+    print(" ... asetpts")
     print(" ... ashowinfo")
+    print(" ... atrim")
+    print(" ... concat")
     print(" ... format")
     print(" ... nullsink")
     print("..C scale")
     print(" ... select")
+    print(" ... setpts")
     print(" ... showinfo")
     print(" ... split")
 else:
@@ -592,6 +611,7 @@ def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
 
     # Assert
     assert scan.decode_pass_count == 1
+    assert scan.cpu_seconds > 0
     assert scan.origin_pts == 0
     assert scan.last_frame_duration_ts is not None
     assert stream.time_base is not None
@@ -611,6 +631,418 @@ def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
         with Image.open(heartbeat.image_path) as proxy:
             assert proxy.format == "JPEG"
             assert len(proxy.getexif()) == 0
+
+
+def test_scan_video_partitions_match_uninterrupted_scan(
+    tmp_path: Path,
+) -> None:
+    """partitionの再集約結果が連続Video Scanと同一になること。
+
+    Arrange:
+        - scene境界を持つ3秒動画と中央PTSのpartition境界が用意される
+    Act:
+        - 動画全体と、有限range + EOF rangeの二通りでscanされる
+    Assert:
+        - timeline端点、heartbeat、scene signal、proxy bytesが一致すること
+    """
+    # Arrange
+    video_path = generate_scene_change_video(tmp_path / "partition-scenes.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    boundary_offset = Fraction(3, 2) / stream.time_base
+    assert boundary_offset.denominator == 1
+    boundary_pts = stream.start_pts + boundary_offset.numerator
+
+    # Act
+    uninterrupted = runtime.scan_video(
+        video_path,
+        stream,
+        tmp_path / "uninterrupted",
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+    first = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "partition-first",
+        media_origin=stream.start_pts * stream.time_base,
+        start_pts=stream.start_pts,
+        end_pts=boundary_pts,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+    second = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "partition-second",
+        media_origin=stream.start_pts * stream.time_base,
+        start_pts=boundary_pts,
+        end_pts=None,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert isinstance(first, NativeVideoScan)
+    assert isinstance(second, NativeVideoScan)
+    assert first.origin_pts == uninterrupted.origin_pts
+    assert second.last_frame_pts == uninterrupted.last_frame_pts
+    assert second.last_frame_duration_ts == uninterrupted.last_frame_duration_ts
+    partition_heartbeats = (*first.heartbeats, *second.heartbeats)
+    partition_scenes = select_scene_signal_frames(
+        (*first.scene_frames, *second.scene_frames),
+        0.5,
+    )
+    assert [
+        (frame.source_pts, frame.image_path.read_bytes())
+        for frame in partition_heartbeats
+    ] == [
+        (frame.source_pts, frame.image_path.read_bytes())
+        for frame in uninterrupted.heartbeats
+    ]
+    assert [
+        (frame.source_pts, frame.image_path.read_bytes()) for frame in partition_scenes
+    ] == [
+        (frame.source_pts, frame.image_path.read_bytes())
+        for frame in uninterrupted.scene_frames
+    ]
+
+
+def test_scan_partition_allows_no_owned_heartbeat_or_scene(
+    tmp_path: Path,
+) -> None:
+    """signal ownershipが0件の正当なpartitionが成功されること。
+
+    Arrange:
+        - heartbeat bucket途中の1秒区間とsceneを選ばないthresholdが用意される
+    Act:
+        - 有限partitionが実FFmpegでscanされる
+    Assert:
+        - timeline端点はありheartbeatとsceneは空で返されること
+    """
+    # Arrange
+    video_path = generate_scene_change_video(tmp_path / "empty-signals.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    start_offset = Fraction(1) / stream.time_base
+    end_offset = Fraction(2) / stream.time_base
+    assert start_offset.denominator == 1
+    assert end_offset.denominator == 1
+
+    # Act
+    scan = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "empty-signal-partition",
+        media_origin=stream.start_pts * stream.time_base,
+        start_pts=stream.start_pts + start_offset.numerator,
+        end_pts=stream.start_pts + end_offset.numerator,
+        heartbeat_interval_seconds=10.0,
+        scene_change_threshold=1.0,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert isinstance(scan, NativeVideoScan)
+    assert scan.origin_pts >= stream.start_pts + start_offset.numerator
+    assert scan.last_frame_pts < stream.start_pts + end_offset.numerator
+    assert scan.heartbeats == ()
+    assert scan.scene_frames == ()
+
+
+def test_scan_partition_seeks_from_media_origin_when_video_starts_later(
+    tmp_path: Path,
+) -> None:
+    """遅延video streamの有限partitionがmedia origin基準でseekされること。
+
+    Arrange:
+        - audioより2秒遅く始まるvideoと後半の1秒partitionが用意される
+    Act:
+        - container全体のmedia originを指定してpartition scanが実行される
+    Assert:
+        - 要求した半開PTS区間のvideo frameが返されること
+    """
+    # Arrange
+    video_path = generate_delayed_video_with_audio(tmp_path / "delayed-video.mkv")
+    runtime = FfmpegMediaRuntime()
+    probe = runtime.probe(video_path)
+    stream = next(item for item in probe.streams if item.kind == "video")
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    origins = tuple(
+        item.start_pts * item.time_base
+        for item in probe.streams
+        if item.start_pts is not None and item.time_base is not None
+    )
+    media_origin = min(origins)
+    start_offset = Fraction(10) / stream.time_base
+    end_offset = Fraction(11) / stream.time_base
+    assert start_offset.denominator == 1
+    assert end_offset.denominator == 1
+    start_pts = stream.start_pts + start_offset.numerator
+    end_pts = stream.start_pts + end_offset.numerator
+
+    # Act
+    scan = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "delayed-video-partition",
+        media_origin=media_origin,
+        start_pts=start_pts,
+        end_pts=end_pts,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=1.0,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert isinstance(scan, NativeVideoScan)
+    assert media_origin == 0
+    assert stream.start_pts * stream.time_base == 2
+    assert scan.origin_pts >= start_pts
+    assert scan.last_frame_pts < end_pts
+
+
+def test_scan_partition_returns_empty_result_after_video_eof(
+    tmp_path: Path,
+) -> None:
+    """映像EOF後の成功した有限scanが空partitionとして返されること。
+
+    Arrange:
+        - 3秒で終了するvideoと4秒から5秒の半開PTS区間が用意される
+    Act:
+        - EOF後のpartition scanが実FFmpegで実行される
+    Assert:
+        - decoder failureではなく要求rangeに対応する空partitionが返されること
+    """
+    # Arrange
+    video_path = generate_scene_change_video(tmp_path / "empty-after-eof.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    start_offset = Fraction(4) / stream.time_base
+    end_offset = Fraction(5) / stream.time_base
+    assert start_offset.denominator == 1
+    assert end_offset.denominator == 1
+    start_pts = stream.start_pts + start_offset.numerator
+    end_pts = stream.start_pts + end_offset.numerator
+
+    # Act
+    scan = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "empty-after-eof",
+        media_origin=stream.start_pts * stream.time_base,
+        start_pts=start_pts,
+        end_pts=end_pts,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=1.0,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert isinstance(scan, EmptyVideoScanPartition)
+    assert scan.start_pts == start_pts
+    assert scan.end_pts == end_pts
+
+
+def test_scan_partition_does_not_treat_unparsed_proxy_output_as_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """proxyがあるtiming解析異常が空partitionとして扱われないこと。
+
+    Arrange:
+        - proxyを生成するが解釈不能なstderrだけを返す成功processが用意される
+    Act:
+        - 有限partition scanが実行される
+    Assert:
+        - EOF確定ではなくdecoder failureが返されること
+    """
+    # Arrange
+    artifact_folder = tmp_path / "unparsed-partition"
+    process = MagicMock()
+    process.pid = 123
+    process.returncode = None
+    process.stderr.__iter__.return_value = iter(["unrecognized showinfo output\n"])
+
+    def start_process(*_args: object, **_kwargs: object) -> MagicMock:
+        heartbeat_folder = artifact_folder / "heartbeats"
+        (heartbeat_folder / "000000000001.jpg").write_bytes(b"proxy")
+        return process
+
+    def reap(_process: object) -> tuple[int, float]:
+        process.returncode = 0
+        return 0, 0.01
+
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.subprocess.Popen",
+        start_process,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.wait_for_process",
+        reap,
+    )
+    runtime = FfmpegMediaRuntime()
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="h264",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=3000,
+        width=1280,
+        height=720,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+    )
+
+    # Act
+    with pytest.raises(MediaRuntimeError) as caught:
+        runtime.scan_video_partition(
+            tmp_path / "source.mkv",
+            stream,
+            artifact_folder,
+            media_origin=Fraction(0),
+            start_pts=1000,
+            end_pts=2000,
+            heartbeat_interval_seconds=1.0,
+            scene_change_threshold=0.3,
+            scene_min_interval_seconds=0.5,
+            decode_backend="cpu",
+        )
+
+    # Assert
+    assert "timing" in str(caught.value)
+
+
+def test_scan_video_reaps_decoder_when_stderr_processing_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """stderr処理失敗時に実行中decoderが終了・回収されること。
+
+    Arrange:
+        - 一行返した後に失敗するstderrを持つ実行中FFmpeg processが用意される
+    Act:
+        - Video Scanが実行され、その後runtime全体のcancelが要求される
+    Assert:
+        - 失敗したprocessがSIGTERMされてwaitで回収されること
+        - active processから解除され、後続cancelで再度終了されないこと
+    """
+    # Arrange
+    process = MagicMock()
+    process.pid = 123
+    process.returncode = None
+
+    def failing_stderr() -> Iterator[str]:
+        yield "unrecognized stderr line\n"
+        raise ValueError("stderr processing failed")
+
+    process.stderr = failing_stderr()
+    killed: list[tuple[int, int]] = []
+    reaped: list[int] = []
+
+    def reap(active_process: object) -> tuple[int, float]:
+        assert active_process is process
+        reaped.append(process.pid)
+        process.returncode = -15
+        return -15, 0.0
+
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.subprocess.Popen",
+        lambda *_args, **_kwargs: process,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.os.kill",
+        lambda pid, sent_signal: killed.append((pid, sent_signal)),
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.wait_for_process",
+        reap,
+    )
+    runtime = FfmpegMediaRuntime()
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="h264",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=1000,
+        width=1280,
+        height=720,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+    )
+
+    # Act
+    with pytest.raises(ValueError, match="stderr processing failed"):
+        runtime.scan_video(
+            tmp_path / "source.mkv",
+            stream,
+            tmp_path / "scan-artifacts",
+            heartbeat_interval_seconds=1.0,
+            scene_change_threshold=0.25,
+            scene_min_interval_seconds=0.5,
+            decode_backend="cpu",
+        )
+    runtime.cancel_video_scans()
+
+    # Assert
+    assert killed == [(123, signal.SIGTERM)]
+    assert reaped == [123]
+
+
+def test_cancel_requested_before_scan_prevents_decoder_start(tmp_path: Path) -> None:
+    """cancel後に新しいVideo Scan decoderが開始されないこと。
+
+    Arrange:
+        - probe済みVideo Sourceとcancel済みMedia Runtimeが用意される
+    Act:
+        - 同じruntimeでVideo Scan開始が要求される
+    Assert:
+        - decoder開始前のcancellationとして拒否されること
+    """
+    # Arrange
+    video_path = generate_cfr_video(tmp_path / "cancel-before-scan.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+    runtime.cancel_video_scans()
+
+    # Act
+    with pytest.raises(MediaRuntimeError) as exc_info:
+        runtime.scan_video(
+            video_path,
+            stream,
+            tmp_path / "cancelled-scan",
+            heartbeat_interval_seconds=1.0,
+            scene_change_threshold=0.25,
+            scene_min_interval_seconds=0.5,
+            decode_backend="cpu",
+        )
+
+    # Assert
+    assert "cancel" in str(exc_info.value)
 
 
 def test_extract_video_frame_returns_exact_requested_pts(tmp_path: Path) -> None:
@@ -674,6 +1106,50 @@ def test_extract_original_video_frame_preserves_odd_source_dimensions(
     assert len(frame.pixels) == 65 * 49 * 3
 
 
+def test_extract_original_video_frame_seek_preserves_late_nonzero_frame(
+    tmp_path: Path,
+) -> None:
+    """入力seek後も遅い非ゼロPTSの元寸法frameが完全一致すること。
+
+    Arrange:
+        - 5秒開始のVideo Sourceと先頭decode済みの8秒frameが用意される
+    Act:
+        - 8秒の元寸法frameがexact PTS指定で再抽出される
+    Assert:
+        - PTS、time base、寸法、RGB pixelが先頭decode結果と一致すること
+    """
+    # Arrange
+    video_path = generate_nonzero_start_video(tmp_path / "nonzero-original.mkv")
+    runtime = FfmpegMediaRuntime()
+    expected = next(
+        frame
+        for frame in runtime.scan_video_frames(video_path, 0, 64)
+        if Fraction(frame.pts) * frame.time_base == Fraction(8)
+    )
+
+    # Act
+    actual = runtime.extract_original_video_frame(
+        video_path,
+        stream_index=0,
+        pts=expected.pts,
+    )
+
+    # Assert
+    assert (
+        actual.pts,
+        actual.time_base,
+        actual.width,
+        actual.height,
+        actual.pixels,
+    ) == (
+        expected.pts,
+        expected.time_base,
+        expected.width,
+        expected.height,
+        expected.pixels,
+    )
+
+
 def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
     tmp_path: Path,
 ) -> None:
@@ -689,6 +1165,7 @@ def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
     # Arrange
     video_path = generate_vfr_video(tmp_path / "vfr-ranges.mkv")
     runtime = FfmpegMediaRuntime()
+    decoder_cpu_seconds: list[float] = []
 
     # Act
     frames = tuple(
@@ -697,11 +1174,53 @@ def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
             stream_index=0,
             pts_ranges=((0, 1), (750, 1001)),
             max_dimension=64,
+            cpu_seconds_recorder=decoder_cpu_seconds.append,
         )
     )
 
     # Assert
     assert [frame.pts for frame in frames] == [0, 750, 1000]
+    assert sum(decoder_cpu_seconds) > 0
+
+
+def test_scan_video_frame_ranges_seek_preserves_nonzero_source_frames(
+    tmp_path: Path,
+) -> None:
+    """分離rangeへのinput seek後も非ゼロPTSとRGB frameが保持されること。
+
+    Arrange:
+        - 5秒開始で4fpsのVideo Sourceと分離した2 rangeが用意される
+        - 全frameを先頭からdecodeした比較結果が用意される
+    Act:
+        - 複数rangeだけがinput seek付きでscanされる
+    Assert:
+        - range内のPTSとRGB pixelが先頭decode結果と完全一致すること
+    """
+    # Arrange
+    video_path = generate_nonzero_start_video(tmp_path / "nonzero-start.mkv")
+    runtime = FfmpegMediaRuntime()
+    all_frames = tuple(runtime.scan_video_frames(video_path, 0, 64))
+    ranges = ((6000, 6500), (8000, 8750))
+    expected = tuple(
+        frame
+        for frame in all_frames
+        if any(start <= frame.pts < end for start, end in ranges)
+    )
+
+    # Act
+    actual = tuple(
+        runtime.scan_video_frame_ranges(
+            video_path,
+            stream_index=0,
+            pts_ranges=ranges,
+            max_dimension=64,
+        )
+    )
+
+    # Assert
+    assert [(frame.pts, frame.pixels) for frame in actual] == [
+        (frame.pts, frame.pixels) for frame in expected
+    ]
 
 
 def test_write_mjpeg_proxy_encodes_selected_rgb_frame_without_source_metadata(
@@ -723,13 +1242,14 @@ def test_write_mjpeg_proxy_encodes_selected_rgb_frame_without_source_metadata(
     proxy_path = tmp_path / "candidate.jpg"
 
     # Act
-    runtime.write_mjpeg_proxy(frame, proxy_path, quality=3)
+    encoder_cpu_seconds = runtime.write_mjpeg_proxy(frame, proxy_path, quality=3)
 
     # Assert
     with Image.open(proxy_path) as proxy:
         assert proxy.format == "JPEG"
         assert proxy.size == (64, 48)
         assert len(proxy.getexif()) == 0
+    assert encoder_cpu_seconds > 0
 
 
 def test_real_cfr_vfr_video_stage_preserves_exact_timeline_and_scene_boundaries(
@@ -909,6 +1429,96 @@ def test_scan_pcm_audio_returns_contiguous_sample_grid(tmp_path: Path) -> None:
         for (value,) in struct.iter_unpack("<h", chunk.pcm_bytes)
     ]
     assert sum(abs(value) for value in samples) / len(samples) > 100
+
+
+def test_extract_pcm_audio_chunks_returns_canonical_seek_ranges(
+    tmp_path: Path,
+) -> None:
+    """seek付きrange抽出がgapのないcanonical PCM gridを返すこと。
+
+    Arrange:
+        - 3秒のAAC audio streamと4,000 sample ownershipが用意される
+    Act:
+        - EOFまでrangeごとに独立したFFmpeg processで抽出される
+    Assert:
+        - 48,000 sampleが連続gridとして返され各rangeが非無音であること
+    """
+    # Arrange
+    video_path = generate_stream_matrix_video(tmp_path / "range-streams.mkv")
+    runtime = FfmpegMediaRuntime()
+    probe = runtime.probe(video_path)
+    stream = probe.streams[1]
+    origins = tuple(
+        item.start_pts * item.time_base
+        for item in probe.streams
+        if item.start_pts is not None and item.time_base is not None
+    )
+    media_origin = min(origins)
+
+    # Act
+    chunks = []
+    sample_start = 0
+    while True:
+        chunk = runtime.extract_pcm_audio_chunk(
+            video_path,
+            stream,
+            media_origin,
+            16_000,
+            sample_start,
+            4_000,
+        )
+        if chunk is None:
+            break
+        chunks.append(chunk)
+        if chunk.sample_count < 4_000:
+            break
+        sample_start += 4_000
+
+    # Assert
+    assert sum(chunk.sample_count for chunk in chunks) == 48_000
+    assert [chunk.sample_start for chunk in chunks] == list(range(0, 48_000, 4_000))
+    assert all(
+        chunk.pts * chunk.time_base
+        == stream.start_pts * stream.time_base + Fraction(chunk.sample_start, 16_000)
+        for chunk in chunks
+        if stream.start_pts is not None and stream.time_base is not None
+    )
+    assert all(any(chunk.pcm_bytes) for chunk in chunks)
+
+
+def test_scan_pcm_audio_normalizes_quantized_packet_pts_to_sample_grid(
+    tmp_path: Path,
+) -> None:
+    """packet PTSの量子化ずれが連続PCM sample gridへ正規化されること。
+
+    Arrange:
+        - 後半packet PTSが3 output sampleずれるaudio fixtureが用意される
+    Act:
+        - packet境界をまたぐ17,000 sample単位でPCMがscanされる
+    Assert:
+        - stream開始PTSとsample indexから連続chunk PTSが生成されること
+    """
+    # Arrange
+    audio_path = generate_quantized_audio(tmp_path / "quantized-audio.mkv")
+    runtime = FfmpegMediaRuntime()
+
+    # Act
+    chunks = tuple(
+        runtime.scan_pcm_audio(
+            audio_path,
+            stream_index=0,
+            sample_rate=16_000,
+            frame_sample_count=17_000,
+        )
+    )
+
+    # Assert
+    assert [chunk.sample_start for chunk in chunks] == [0, 17_000]
+    assert [chunk.sample_count for chunk in chunks] == [17_000, 15_000]
+    assert all(
+        chunk.pts * chunk.time_base == Fraction(chunk.sample_start, 16_000)
+        for chunk in chunks
+    )
 
 
 def test_read_embedded_subtitles_preserves_packet_pts_and_text(
