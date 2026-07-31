@@ -10,6 +10,9 @@ from ..models.report_stage_provenance import ReportStageProvenance
 from ..models.selected_blog_image import SelectedBlogImage
 from ..models.selected_image_artifact import SelectedImageArtifact
 from ..models.selection_score import SelectionScore
+from ..models.video_set_selection_result import (
+    CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT,
+)
 from ..models.video_stage_result import VideoStageResult
 from .build_video_source_ids import build_video_source_ids
 from .report_time import (
@@ -20,8 +23,8 @@ from .report_time import (
 )
 
 REPORT_SCHEMA_NAME = "game-screen-pick/report"
-REPORT_SCHEMA_VERSION = "1.0.0"
-SELECTION_POLICY_VERSION = "video-set-selection-v2"
+REPORT_SCHEMA_VERSION = "1.1.0"
+SELECTION_POLICY_VERSION = "video-set-selection-v3"
 SELECTION_EXPLANATION_RENDERER = "selection-explanation-ja-v1"
 
 _REASON_LABELS = {
@@ -32,6 +35,8 @@ _REASON_LABELS = {
     "event_coverage": "event coverage",
     "menu_coverage": "menu coverage",
     "title_first_image_bonus": "最初のtitle bonus",
+    "ordinary_combat_minimum_coverage": "通常戦闘の条件付き最低coverage",
+    "event_minimum_coverage": "eventの条件付き最低coverage",
     "recurring_gameplay_variant": "recurring gameplayの状態差",
     "low_spoiler_penalty_applied": "low spoiler penalty適用後のutility",
     "medium_spoiler_penalty_applied": "medium spoiler penalty適用後のutility",
@@ -44,7 +49,7 @@ def build_canonical_selection_report(
     request: CanonicalPublicationRequest,
     image_artifacts: tuple[SelectedImageArtifact, ...],
 ) -> dict[str, object]:
-    """画像artifactを含むreport@1.0.0 objectを返す。"""
+    """画像artifactを含むreport@1.1.0 objectを返す。"""
     selection = request.selection_result
     artifacts_by_id = {item.image_id: item for item in image_artifacts}
     selected_ids = {item.candidate.identifier for item in selection.selected}
@@ -281,6 +286,25 @@ def _selection_summary(request: CanonicalPublicationRequest) -> dict[str, object
         }
         for name in selection.blog_image_type_targets
     }
+    eligible = selection.selection_coverage_eligible_counts
+    minimums = selection.selection_coverage_minimums
+    actuals = selection.selection_coverage_actuals
+    reallocated = selection.selection_coverage_reallocated
+    conditional_coverage = {
+        "applies": (
+            selection.requested_count >= CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT
+        ),
+        "minimum_requested_image_count": (CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT),
+        "facets": {
+            facet: {
+                "eligible": eligible[facet],
+                "minimum": minimums[facet],
+                "actual": actuals[facet],
+                "reallocated": reallocated[facet],
+            }
+            for facet in eligible
+        },
+    }
     return {
         "candidate_moments": moment_count,
         "moments_without_valid_frame": zero_frame_count,
@@ -298,6 +322,7 @@ def _selection_summary(request: CanonicalPublicationRequest) -> dict[str, object
             ),
         },
         "blog_image_type": image_types,
+        "conditional_coverage": conditional_coverage,
     }
 
 

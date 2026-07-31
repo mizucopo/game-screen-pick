@@ -9,11 +9,18 @@ from fractions import Fraction
 from typing import Literal
 
 from ..models.blog_candidate import BlogCandidate
+from ..models.candidate_annotation import (
+    SELECTION_COVERAGE_FACETS,
+    SelectionCoverageFacet,
+)
 from ..models.rejected_blog_candidate import RejectedBlogCandidate
 from ..models.selected_blog_image import SelectedBlogImage
 from ..models.selection_rejection_reason import SelectionRejectionReason
 from ..models.selection_score import SelectionScore
-from ..models.video_set_selection_result import VideoSetSelectionResult
+from ..models.video_set_selection_result import (
+    CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT,
+    VideoSetSelectionResult,
+)
 
 SpoilerSensitivity = Literal["low", "medium", "high"]
 
@@ -137,12 +144,18 @@ def _select_with_major_spoiler_limit(
     """一つの感度とMajor Spoiler上限でgreedy選定する。"""
     targets = _coverage_targets(requested_count)
     actuals = dict.fromkeys((*_COVERAGE_TYPES, "title", "other"), 0)
+    conditional_minimums = _conditional_coverage_minimums(
+        candidates,
+        requested_count,
+    )
+    conditional_actuals = dict.fromkeys(SELECTION_COVERAGE_FACETS, 0)
     variant_groups = _assign_variant_groups(candidates)
     selected: list[SelectedBlogImage] = []
     remaining = list(candidates)
     counterfactual_scores: dict[str, SelectionScore] = {}
     final_similarity_ceiling = similarity_threshold
-    for similarity_pass in _similarity_passes(similarity_threshold):
+    similarity_passes = _similarity_passes(similarity_threshold)
+    for similarity_pass in similarity_passes:
         final_similarity_ceiling = similarity_pass
         while remaining and len(selected) < requested_count:
             scored = [
@@ -192,9 +205,33 @@ def _select_with_major_spoiler_limit(
             ]
             if not evaluated:
                 break
+            unmet_facets = {
+                facet
+                for facet in SELECTION_COVERAGE_FACETS
+                if conditional_actuals[facet] < conditional_minimums[facet]
+            }
+            required_coverage_candidates = [
+                (candidate, score)
+                for candidate, score in evaluated
+                if candidate.annotation.selection_coverage_facet in unmet_facets
+            ]
+            if required_coverage_candidates:
+                evaluated = required_coverage_candidates
+            elif (
+                unmet_facets
+                and similarity_pass != similarity_passes[-1]
+                and _has_remaining_coverage_candidate(remaining, unmet_facets)
+            ):
+                break
             candidate, score = min(
                 evaluated,
                 key=lambda item: _selection_key(item[0], item[1]),
+            )
+            selected_coverage_facet = candidate.annotation.selection_coverage_facet
+            minimum_coverage_facet = (
+                selected_coverage_facet
+                if selected_coverage_facet in unmet_facets
+                else None
             )
             tie_break_applied = any(
                 other.identifier != candidate.identifier
@@ -222,12 +259,15 @@ def _select_with_major_spoiler_limit(
                             == candidate.annotation.scene_slug
                         },
                         tie_break_applied,
+                        minimum_coverage_facet,
                     ),
                     variant_group_id=variant_groups[candidate.identifier],
                     tie_break_applied=tie_break_applied,
                 )
             )
             actuals[candidate.annotation.blog_image_type] += 1
+            if selected_coverage_facet is not None:
+                conditional_actuals[selected_coverage_facet] += 1
             remaining.remove(candidate)
         if len(selected) >= requested_count:
             break
@@ -320,6 +360,33 @@ def _coverage_targets(requested_count: int) -> dict[str, int]:
     }
     targets.update({"title": 0, "other": 0})
     return targets
+
+
+def _conditional_coverage_minimums(
+    candidates: tuple[BlogCandidate, ...],
+    requested_count: int,
+) -> dict[SelectionCoverageFacet, int]:
+    """要求10枚以上で有効候補があるfacetだけ最低1枚にする。"""
+    minimums = dict.fromkeys(SELECTION_COVERAGE_FACETS, 0)
+    if requested_count < CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT:
+        return minimums
+    for candidate in candidates:
+        facet = candidate.annotation.selection_coverage_facet
+        if facet is not None and _has_explanation_value(candidate):
+            minimums[facet] = 1
+    return minimums
+
+
+def _has_remaining_coverage_candidate(
+    remaining: list[BlogCandidate],
+    unmet_facets: set[SelectionCoverageFacet],
+) -> bool:
+    """後続similarity passで再評価すべき最低coverage候補が残るかを返す。"""
+    return any(
+        candidate.annotation.selection_coverage_facet in unmet_facets
+        and _has_explanation_value(candidate)
+        for candidate in remaining
+    )
 
 
 def _score(
@@ -498,6 +565,7 @@ def _reason_codes(
     score: SelectionScore,
     is_variant_expansion: bool,
     tie_break_applied: bool,
+    minimum_coverage_facet: SelectionCoverageFacet | None,
 ) -> tuple[str, ...]:
     annotation = candidate.annotation
     reasons: list[str] = []
@@ -513,6 +581,8 @@ def _reason_codes(
             if annotation.blog_image_type == "title"
             else f"{annotation.blog_image_type}_coverage"
         )
+    if minimum_coverage_facet is not None:
+        reasons.append(f"{minimum_coverage_facet}_minimum_coverage")
     if is_variant_expansion and candidate.scene_selection_role == "recurring_gameplay":
         reasons.append("recurring_gameplay_variant")
     if score.spoiler_penalty > 0:

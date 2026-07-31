@@ -11,6 +11,7 @@
 - 選択時のsimilarity passと最も近い選択画像とのcosine similarity
 - Variant Group、stable reason code、tie-break使用有無
 - Blog Image Typeの目標と実績
+- 通常戦闘・イベントの有効候補数、条件付き最低数、実績、再配分
 - 未採用候補のstable rejection、blocking ID、Counterfactual Selection Score
 - Selection Shortfall、最終similarity ceiling、Major Spoiler件数境界
 
@@ -28,9 +29,13 @@ Selection Base Utilityは次の固定式です。
 
 Explanation Valueは`none=0`、`low=1/3`、`medium=2/3`、`high=1`、Context Cue Relevanceは`unavailable/none=0`、`weak=0.5`、`strong=1`へ変換します。
 
-Explanation Valueが`none`の候補はCounterfactual Selection Scoreまで計算しますが、要求枚数を満たすための選択対象にはしません。これはCandidate Annotationに最終採否を委ねる処理ではなく、検証済みenumへ`video-set-selection-v2`が適用する決定的な適格性境界です。未採用理由は既存の`lower_marginal_utility`として公開され、shortfallでも穴埋めしません。
+Explanation Valueが`none`の候補はCounterfactual Selection Scoreまで計算しますが、要求枚数を満たすための選択対象にはしません。これはCandidate Annotationに最終採否を委ねる処理ではなく、検証済みenumへ`video-set-selection-v3`が適用する決定的な適格性境界です。未採用理由は既存の`lower_marginal_utility`として公開され、shortfallでも穴埋めしません。
 
 要求枚数に対する`normal_gameplay=70%`、`event=25%`、`menu=5%`の目標は最大剰余法で丸めます。同率はこのtype順です。目標未達候補へ`+0.10`、最初のtitleへ`+0.05`を加えますが、超過を減点せず、候補が偏っていてもhard quotaにしません。titleだけは最大1枚です。
+
+要求枚数が10枚以上なら、説明価値と既存の適格性を満たす候補がある場合に限り、`ordinary_combat`と`event`をそれぞれ最低1枚選びます。`ordinary_combat`は`normal_gameplay`のうち、画像から戦闘が直接観測され、Spoiler Riskが汎用戦闘を示す`none`の候補です。固有boss戦、探索、移動、障害物破壊はこのfacetに含めません。`event`はBlog Image Typeが`event`の候補です。
+
+未充足facetの適格候補を通常のutility候補より先に比較し、現在のsimilarity passでは選べなくても後続passが残る間は枠を保持します。終端passでも重複、spoiler guardなどの既存制約に反する場合、または有効候補が存在しない場合は枠を解放します。残り枚数は固定内訳にせず、従来のMarginal Selection Utilityと候補供給に応じて動的に配分します。
 
 ## Spoilerと単調性
 
@@ -70,6 +75,6 @@ Video Orderや後半位置そのものへの加点・減点、動画ごとの最
 - `spoiler_monotonicity_guard`
 - `lower_marginal_utility`
 
-内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v2`としてCompleted Stageへ確定する。選定前cache keyには、Video Stage、全候補に対して計画したCatalog／Annotation Stage fingerprint、設定、batch境界を含める。warm runはこのkeyをselector実行前に検索し、coldで実際に使用したbatch境界までCatalog／Annotationをcacheから復元した後、score、reason、coverageを含む選定結果をartifactから結び直す。selectorを実行したrunをcache reuseとして数えない。
+内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v3`としてCompleted Stageへ確定する。選定前cache keyには、Video Stage、全候補に対して計画したCatalog／Annotation Stage fingerprint、設定、batch境界を含める。warm runはこのkeyをselector実行前に検索し、coldで実際に使用したbatch境界までCatalog／Annotationをcacheから復元した後、score、reason、coverageを含む選定結果をartifactから結び直す。selectorを実行したrunをcache reuseとして数えない。
 
 旧first-N fakeはwalking-skeleton専用applicationへ隔離され、public CLIはIssue #190までscreenshot入力のままである。

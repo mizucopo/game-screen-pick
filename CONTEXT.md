@@ -464,6 +464,14 @@ _Avoid_: hard quota, per-video quota, Cinematic Soft Cap, guaranteed title image
 最大剰余法で丸めたBlog Image Type Soft Coverageの目標枚数へ未達の`normal_gameplay`、`event`、`menu`候補に0.10、まだtitleを選んでいないときの`title`候補に0.05を加えるsoft bonus。目標到達後はbonusを外すだけで、type超過へのpenaltyや`other`の予約枠は設けない。
 _Avoid_: hard quota, overflow penalty, guaranteed title image
 
+**Selection Coverage Facet**:
+要求枚数10枚以上の条件付き最低coverageに使う、Blog Candidateの画像内根拠に基づく役割。`ordinary_combat`と`event`を持つ。`ordinary_combat`はBlog Image Typeが`normal_gameplay`、Candidate Annotationで戦闘が直接観測済み、かつSpoiler Riskが汎用戦闘を示す`none`の場合だけ導出し、固有boss戦、探索、移動、障害物破壊を含めない。`event`はBlog Image Type `event`から導出する。Explanation Valueや最終適格性はこのfacet自体に含めない。
+_Avoid_: Blog Image Type, Scene Kind, free-form scene name, final eligibility
+
+**Conditional Coverage Minimum**:
+要求枚数が10枚以上で、Explanation Valueと既存の適格性を満たすSelection Coverage Facet候補が存在する場合だけ、`ordinary_combat`と`event`を各最低1枚選ぶ決定的なVideo Set selectorの境界。現在passで選べない候補は後続similarity passまで枠を保持するが、終端でも重複、title上限、Spoiler Monotonicity Guardなどの制約に反する場合、または有効候補がなければ枠を他候補へ解放する。残り枚数はBlog Image Type Soft CoverageとMarginal Selection Utilityで動的に配分し、Selection Shortfallを低品質候補で埋めない。
+_Avoid_: fixed quota, output count guarantee, per-video minimum, invalid fallback
+
 **Explanation Value**:
 Representative FrameとそのCandidate Momentがブログ本文でplayや出来事を説明できる度合い。値は`none`、`low`、`medium`、`high`で、Candidate Annotationが意味評価として付与する。`none`はCandidate Annotation自体の失敗やmodelによる最終採否ではないが、決定的selectorが要求枚数の穴埋めに使わない適格性境界になる。
 _Avoid_: Quality Score, model confidence, final selection score
@@ -505,7 +513,7 @@ Blog Candidate単体の有用性を0から1で表す決定的な値。Quality Sc
 _Avoid_: final selection score, model confidence, diversity bonus, spoiler-adjusted utility
 
 **Marginal Selection Utility**:
-greedyなVideo Set selectorが次の1枚を選ぶたびに再計算する値。Selection Base UtilityからSpoiler PenaltyとTemporal Diversity Penaltyを引き、Blog Image Type Coverage Bonusを加える。視覚類似度はutilityではなく適格条件として扱い、同点はSpoiler Penalty、Quality Score、選択済み画像との最大視覚類似度、Video Order、Video Time、Frame Candidate IDの順で解消する。
+greedyなVideo Set selectorが次の1枚を選ぶたびに再計算する値。Selection Base UtilityからSpoiler PenaltyとTemporal Diversity Penaltyを引き、Blog Image Type Coverage Bonusを加える。Conditional Coverage Minimumが未充足なら対象facet候補の中でこのutilityを比較し、最低枠を満たした後または解放後は全適格候補を比較する。視覚類似度はutilityではなく適格条件として扱い、同点はSpoiler Penalty、Quality Score、選択済み画像との最大視覚類似度、Video Order、Video Time、Frame Candidate IDの順で解消する。
 _Avoid_: static candidate score, Ollama output, global optimization result
 
 **Blog Candidate**:

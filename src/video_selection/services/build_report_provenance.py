@@ -116,7 +116,7 @@ def _report_contracts(
 ) -> dict[str, str]:
     """Stage semantic inputから実行されたcontract versionを登録する。"""
     contracts = {
-        "video_set_selection_policy": "video-set-selection-v2",
+        "video_set_selection_policy": "video-set-selection-v3",
         "nearby_context_policy": "nearby-context-v1",
     }
     specifications = (

@@ -573,6 +573,10 @@ def test_recursive_absence_and_explicit_false_are_distinguished(
             id="invalid-range",
         ),
         pytest.param(
+            "[selection]\nimage_count = 9\n",
+            id="image-count-below-public-minimum",
+        ),
+        pytest.param(
             "[video_scan]\nworkers = 0\n",
             id="invalid-video-scan-workers-range",
         ),
@@ -662,6 +666,36 @@ def test_invalid_document_shape_is_an_exit_two_error(
             environ={},
         )
     assert error.value.exit_code == 2
+
+
+def test_cli_image_count_below_ten_is_rejected_before_side_effects(
+    tmp_path: Path,
+) -> None:
+    """CLIの要求枚数が10未満ならapplication実行前に拒否されること。
+
+    Arrange:
+        - 9枚を要求するCLI値と未作成の入出力folderが用意される
+    Act:
+        - Effective Configurationの解決が試行される
+    Assert:
+        - exit 2相当の設定errorとなりcacheとoutputが作成されないこと
+    """
+    # Arrange
+    video_input_folder = tmp_path / "videos"
+    output_folder = tmp_path / "output"
+
+    # Act
+    # Assert
+    with pytest.raises(ConfigurationError, match="10以上") as error:
+        resolve_effective_configuration(
+            video_input_folder=video_input_folder,
+            output_folder=output_folder,
+            image_count=9,
+            environ={},
+        )
+    assert error.value.exit_code == 2
+    assert not output_folder.exists()
+    assert not (video_input_folder / ".game-screen-pick").exists()
 
 
 def test_only_explicit_config_path_is_loaded(

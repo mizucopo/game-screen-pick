@@ -66,7 +66,7 @@ def test_report_schema_version_is_independent_from_package_version() -> None:
     Act:
         - 両方のversionが読み取られる
     Assert:
-        - report schemaが1.0.0のままpackage versionとは異なること
+        - report schemaが1.1.0でpackage versionとは異なること
     """
     # Arrange
     project_root = Path(__file__).parents[3]
@@ -78,5 +78,5 @@ def test_report_schema_version_is_independent_from_package_version() -> None:
     package_version = project["project"]["version"]
 
     # Assert
-    assert REPORT_SCHEMA_VERSION == "1.0.0"
+    assert REPORT_SCHEMA_VERSION == "1.1.0"
     assert package_version != REPORT_SCHEMA_VERSION

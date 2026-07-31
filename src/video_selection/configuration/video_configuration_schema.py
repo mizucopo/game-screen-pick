@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from .configuration_error import ConfigurationError
 
 CONFIG_VERSION = "1.0.0"
+MINIMUM_IMAGE_COUNT = 10
 
 DEFAULT_VALUES: dict[str, object] = {
     "config_version": CONFIG_VERSION,
@@ -94,7 +95,6 @@ _BOOL_KEYS = frozenset(
 )
 _POSITIVE_INTEGER_KEYS = frozenset(
     {
-        "selection.image_count",
         "ollama.max_parallel_requests",
         "models.speech_to_text.beam_size",
     }
@@ -192,6 +192,12 @@ def validate_configuration_value(key: str, value: object) -> object:
         if type(value) is not bool:
             raise _invalid_type(key, "boolean")
         return value
+
+    if key == "selection.image_count":
+        integer = _require_integer(key, value)
+        if integer < MINIMUM_IMAGE_COUNT:
+            raise _invalid_value(key, f"{MINIMUM_IMAGE_COUNT}以上である必要があります")
+        return integer
 
     if key in _POSITIVE_INTEGER_KEYS:
         integer = _require_integer(key, value)

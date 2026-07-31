@@ -651,6 +651,8 @@ class OllamaVisionRuntime:
                 )
             if not combat_encounter_visible and combat_scene:
                 annotation = replace(annotation, explanation_value="none")
+            if combat_encounter_visible:
+                annotation = replace(annotation, combat_action=True)
             requires_combat_verification = combat_encounter_visible
         requires_noncombat_visibility_verification = (
             requires_combat_encounter_verification
@@ -752,6 +754,8 @@ class OllamaVisionRuntime:
                 visibility_is_acceptable = not opponent_reaches_outer_edge
             if not visibility_is_acceptable:
                 annotation = replace(annotation, explanation_value="none")
+            elif combat_is_consistently_publishable:
+                annotation = replace(annotation, combat_action=True)
         if annotation.explanation_value != "none" and requires_publication_verification:
             verification_input = _publication_boundary_verification_semantic_input(
                 annotation.candidate,
@@ -1852,6 +1856,7 @@ def _parse_candidate_annotation(
                 supporting_context_cue_ids=typed_cue_ids,
                 spoiler_risk=selected.spoiler_risk,
                 spoiler_evidence=spoiler_evidence,
+                combat_action=selected.combat_action,
             ),
             free_text_redacted,
             requires_dialogue_verification,

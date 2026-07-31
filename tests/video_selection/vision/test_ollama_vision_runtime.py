@@ -1830,6 +1830,7 @@ def test_publishable_combat_visibility_is_visually_rechecked(
 
     # Assert
     assert annotation.explanation_value == expected_value
+    assert annotation.combat_action is True
     assert diagnostics.attempt_count == expected_attempt_count
     assert diagnostics.validation_code is None
     verification_schema = payloads[1]["format"]
@@ -1925,6 +1926,7 @@ def test_clean_combat_visibility_is_confirmed_before_publication() -> None:
 
     # Assert
     assert annotation.explanation_value == "none"
+    assert annotation.combat_action is True
     assert diagnostics.attempt_count == 3
     confirmation_prompt = _last_message(payloads[2])["content"]
     assert isinstance(confirmation_prompt, str)
@@ -2133,6 +2135,7 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
 
     # Assert
     assert annotation.explanation_value == "none"
+    assert annotation.combat_action is True
     assert diagnostics.attempt_count == 3
     assert diagnostics.validation_code is None
     routing_schema = payloads[1]["format"]

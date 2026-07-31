@@ -120,7 +120,7 @@ def _validate_schema(report: dict[str, object]) -> None:
 
 @lru_cache(maxsize=1)
 def _schema_validator() -> Draft202012Validator:
-    schema_path = Path(__file__).parent.parent / "schemas" / "report-1.0.0.schema.json"
+    schema_path = Path(__file__).parent.parent / "schemas" / "report-1.1.0.schema.json"
     schema_value: object = json.loads(schema_path.read_text(encoding="utf-8"))
     if not isinstance(schema_value, dict):
         raise ValueError("Canonical Selection Report schemaがJSON objectではありません")
@@ -167,10 +167,24 @@ def _validate_report_relationships(
     rejection_summary = _mapping(report["rejection_summary"])
     warning_codes = [str(item["code"]) for item in warnings]
     selection = request.selection_result
+    conditional_coverage = _mapping(
+        _mapping(report["selection_summary"])["conditional_coverage"]
+    )
+    conditional_facets = _mapping(conditional_coverage["facets"])
+    expected_conditional_facets = {
+        facet: {
+            "eligible": selection.selection_coverage_eligible_counts[facet],
+            "minimum": selection.selection_coverage_minimums[facet],
+            "actual": selection.selection_coverage_actuals[facet],
+            "reallocated": selection.selection_coverage_reallocated[facet],
+        }
+        for facet in selection.selection_coverage_eligible_counts
+    }
     if (
         ("selection_shortfall" in warning_codes) != selection.shortfall
         or run["requested_image_count"] != selection.requested_count
         or rejection_summary["by_reason"] != selection.rejection_counts
+        or conditional_facets != expected_conditional_facets
         or [str(item["image_id"]) for item in selected]
         != [item.candidate.identifier for item in selection.selected]
     ):
@@ -209,6 +223,23 @@ def _validate_intrinsic_report_relationships(
         != sum(cast(dict[str, int], rejection_summary["by_reason"]).values())
     ):
         raise ValueError("Canonical Selection Reportのselection countが一致しません")
+    conditional_coverage = _mapping(selection_summary["conditional_coverage"])
+    conditional_facets = _mapping(conditional_coverage["facets"])
+    applies = bool(conditional_coverage["applies"])
+    if applies != (int(run["requested_image_count"]) >= 10):
+        raise ValueError("Canonical Selection Reportの条件付きcoverageが不正です")
+    for facet_value in conditional_facets.values():
+        facet = _mapping(facet_value)
+        eligible = int(facet["eligible"])
+        minimum = int(facet["minimum"])
+        actual = int(facet["actual"])
+        reallocated = bool(facet["reallocated"])
+        if (
+            minimum != int(applies and eligible > 0)
+            or actual > eligible
+            or reallocated != (applies and actual == 0)
+        ):
+            raise ValueError("Canonical Selection Reportの条件付きcoverageが不正です")
     selected_ids = {str(item["image_id"]) for item in selected}
     if len(selected_ids) != len(selected):
         raise ValueError(

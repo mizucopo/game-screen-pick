@@ -1,3 +1,5 @@
+import pytest
+
 from src.video_selection.models.candidate_annotation import CandidateAnnotation
 from src.video_selection.models.frame_candidate import FrameCandidate
 
@@ -38,3 +40,72 @@ def test_major_spoiler_requires_safe_evidence_summary() -> None:
     assert not hasattr(annotation, "quality_score")
     assert not hasattr(annotation, "final_score")
     assert not hasattr(annotation, "selected")
+
+
+def test_generic_combat_and_event_expose_distinct_selection_coverage_facets() -> None:
+    """通常戦闘とイベントから条件付きcoverage facetが導出されること。
+
+    Arrange:
+        - genericな通常戦闘、固有boss戦、イベントのannotationが用意される
+    Act:
+        - 各annotationのSelection Coverage Facetが読み出される
+    Assert:
+        - genericな通常戦闘とイベントだけが対応facetを返すこと
+    """
+    # Arrange
+    candidate = FrameCandidate(identifier="frame-1", image_bytes=b"image")
+    ordinary_combat = CandidateAnnotation(
+        candidate=candidate,
+        summary="通常戦闘",
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        combat_action=True,
+    )
+    boss_combat = CandidateAnnotation(
+        candidate=candidate,
+        summary="固有boss戦",
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        combat_action=True,
+        spoiler_risk="medium",
+        spoiler_evidence="固有bossが表示される",
+    )
+    event = CandidateAnnotation(
+        candidate=candidate,
+        summary="イベント",
+        blog_image_type="event",
+        explanation_value="high",
+    )
+
+    # Act
+    ordinary_facet = ordinary_combat.selection_coverage_facet
+    boss_facet = boss_combat.selection_coverage_facet
+    event_facet = event.selection_coverage_facet
+
+    # Assert
+    assert ordinary_facet == "ordinary_combat"
+    assert boss_facet is None
+    assert event_facet == "event"
+
+
+def test_combat_action_requires_a_boolean() -> None:
+    """戦闘の直接観測がboolean以外ならannotationが拒否されること。
+
+    Arrange:
+        - 文字列のcombat_actionを持つannotation入力が用意される
+    Act:
+        - Candidate Annotationの構築が試行される
+    Assert:
+        - domain field不正として拒否されること
+    """
+    # Arrange
+    candidate = FrameCandidate(identifier="frame-1", image_bytes=b"image")
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="domain field"):
+        CandidateAnnotation(
+            candidate=candidate,
+            summary="通常戦闘",
+            combat_action="true",  # type: ignore[arg-type]
+        )

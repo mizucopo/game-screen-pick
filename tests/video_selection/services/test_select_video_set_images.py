@@ -91,6 +91,7 @@ def _candidate(
     scene_selection_role: SceneSelectionRole = "ordinary",
     scene_slug: str | None = None,
     video_order: int = 0,
+    combat_action: bool = False,
 ) -> BlogCandidate:
     frame = FrameCandidate(
         identifier="frm_" + digest_character * 64,
@@ -127,6 +128,7 @@ def _candidate(
         spoiler_evidence=(
             "重大な物語情報が画像に示される" if spoiler_risk != "none" else ""
         ),
+        combat_action=combat_action,
     )
     return BlogCandidate(
         annotation=annotation,
@@ -781,6 +783,171 @@ def test_soft_coverage_allows_event_overflow_when_other_types_are_absent() -> No
     assert all(
         "event_coverage" not in item.reason_codes for item in result.selected[1:]
     )
+
+
+def test_available_ordinary_combat_and_event_each_receive_one_minimum_slot() -> None:
+    """10枚以上の要求で通常戦闘とイベントが最低1枚ずつ選択されること。
+
+    Arrange:
+        - 低utilityだが有効な通常戦闘とイベントが各1件用意される
+        - より高utilityな通常play候補が10件用意される
+    Act:
+        - 10枚のVideo Set選定が実行される
+    Assert:
+        - 通常戦闘とイベントが各1枚選択され、残り8枚が動的に選択されること
+        - 条件付き最低coverageの候補数、最低数、実績、理由が記録されること
+    """
+    # Arrange
+    feature_count = 12
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    ordinary_combat = _candidate(
+        "0",
+        quality=0.1,
+        feature=unit_feature(0),
+        progress=Fraction(1, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="low",
+        context_relevance="none",
+        combat_action=True,
+    )
+    event = _candidate(
+        "1",
+        quality=0.1,
+        feature=unit_feature(1),
+        progress=Fraction(2, 100),
+        blog_image_type="event",
+        explanation_value="low",
+        context_relevance="none",
+    )
+    higher_utility = tuple(
+        _candidate(
+            digest,
+            quality=0.9,
+            feature=unit_feature(index),
+            progress=Fraction(index + 1, 20),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+        )
+        for index, digest in enumerate("23456789ab", start=2)
+    )
+
+    # Act
+    result = select_video_set_images(
+        (*higher_utility, event, ordinary_combat),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    assert len(result.selected) == 10
+    assert ordinary_combat.identifier in selected_ids
+    assert event.identifier in selected_ids
+    assert result.selection_coverage_eligible_counts == {
+        "ordinary_combat": 1,
+        "event": 1,
+    }
+    assert result.selection_coverage_minimums == {
+        "ordinary_combat": 1,
+        "event": 1,
+    }
+    assert result.selection_coverage_actuals == {
+        "ordinary_combat": 1,
+        "event": 1,
+    }
+    assert result.selection_coverage_reallocated == {
+        "ordinary_combat": False,
+        "event": False,
+    }
+    reason_codes = {reason for item in result.selected for reason in item.reason_codes}
+    assert "ordinary_combat_minimum_coverage" in reason_codes
+    assert "event_minimum_coverage" in reason_codes
+
+
+def test_missing_event_minimum_is_reallocated_without_invalid_event() -> None:
+    """有効なイベントがない最低枠が他の有効候補へ再配分されること。
+
+    Arrange:
+        - 有効な通常戦闘1件と説明価値のないイベント1件が用意される
+        - 十分な通常play候補が用意される
+    Act:
+        - 10枚のVideo Set選定が実行される
+    Assert:
+        - 通常戦闘が最低1枚選択され、無効イベントなしで10枚に到達すること
+        - イベント最低数が0となり再配分済みとして記録されること
+    """
+    # Arrange
+    feature_count = 12
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    ordinary_combat = _candidate(
+        "0",
+        quality=0.1,
+        feature=unit_feature(0),
+        progress=Fraction(1, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="low",
+        context_relevance="none",
+        combat_action=True,
+    )
+    invalid_event = _candidate(
+        "1",
+        quality=1.0,
+        feature=unit_feature(1),
+        progress=Fraction(2, 100),
+        blog_image_type="event",
+        explanation_value="none",
+        context_relevance="none",
+    )
+    other_candidates = tuple(
+        _candidate(
+            digest,
+            quality=0.9,
+            feature=unit_feature(index),
+            progress=Fraction(index + 1, 20),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+        )
+        for index, digest in enumerate("23456789ab", start=2)
+    )
+
+    # Act
+    result = select_video_set_images(
+        (*other_candidates, invalid_event, ordinary_combat),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    assert len(result.selected) == 10
+    assert ordinary_combat.identifier in selected_ids
+    assert invalid_event.identifier not in selected_ids
+    assert result.selection_coverage_eligible_counts == {
+        "ordinary_combat": 1,
+        "event": 0,
+    }
+    assert result.selection_coverage_minimums == {
+        "ordinary_combat": 1,
+        "event": 0,
+    }
+    assert result.selection_coverage_actuals == {
+        "ordinary_combat": 1,
+        "event": 0,
+    }
+    assert result.selection_coverage_reallocated == {
+        "ordinary_combat": False,
+        "event": True,
+    }
 
 
 def test_higher_spoiler_sensitivity_never_increases_major_spoilers() -> None:

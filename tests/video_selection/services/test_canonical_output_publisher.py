@@ -70,7 +70,7 @@ def test_selected_webp_and_reports_are_published_from_one_canonical_object(
     assert report_from_disk == report
     assert report["schema"] == {
         "name": "game-screen-pick/report",
-        "version": "1.0.0",
+        "version": "1.1.0",
     }
     assert report["run"]["status"] == "completed_with_warnings"
     assert report["run"]["warnings"] == [
@@ -157,6 +157,85 @@ def test_colliding_digest_prefixes_expand_only_affected_output_names(
     ]
     assert report["run"]["status"] == "completed"
     assert report["run"]["warnings"] == []
+
+
+def test_conditional_coverage_counts_and_reallocation_are_published(
+    tmp_path: Path,
+) -> None:
+    """条件付きcoverageの候補数、最低数、実績、再配分が公開されること。
+
+    Arrange:
+        - 通常戦闘が選択済みでイベントが未採用の10枚要求結果が用意される
+    Act:
+        - Canonical Selection Reportが公開される
+    Assert:
+        - 通常戦闘の最低枠達成とイベント枠の再配分がJSONへ記録されること
+        - 同じ値がMarkdownへ投影されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    selection = request.selection_result
+    selected = selection.selected[0]
+    rejected = selection.rejected[0]
+    selected_candidate = replace(
+        selected.candidate,
+        annotation=replace(
+            selected.candidate.annotation,
+            combat_action=True,
+        ),
+    )
+    event_candidate = replace(
+        rejected.candidate,
+        annotation=replace(
+            rejected.candidate.annotation,
+            blog_image_type="event",
+        ),
+    )
+    request = replace(
+        request,
+        configuration=replace(request.configuration, image_count=10),
+        selection_result=replace(
+            selection,
+            selected=(replace(selected, candidate=selected_candidate),),
+            rejected=(replace(rejected, candidate=event_candidate),),
+            requested_count=10,
+        ),
+    )
+
+    # Act
+    report = cast(
+        dict[str, Any],
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request),
+    )
+
+    # Assert
+    coverage = cast(
+        dict[str, Any],
+        cast(dict[str, Any], report["selection_summary"])["conditional_coverage"],
+    )
+    assert coverage == {
+        "applies": True,
+        "minimum_requested_image_count": 10,
+        "facets": {
+            "ordinary_combat": {
+                "eligible": 1,
+                "minimum": 1,
+                "actual": 1,
+                "reallocated": False,
+            },
+            "event": {
+                "eligible": 1,
+                "minimum": 1,
+                "actual": 0,
+                "reallocated": True,
+            },
+        },
+    }
+    markdown = (request.configuration.output_folder / "report.md").read_text(
+        encoding="utf-8"
+    )
+    assert "| ordinary_combat | 1 | 1 | 1 | `false` |" in markdown
+    assert "| event | 1 | 1 | 0 | `true` |" in markdown
 
 
 def test_duplicate_video_source_ids_are_rejected_before_publication(
@@ -546,7 +625,7 @@ def test_schema_or_renderer_mismatch_leaves_no_output_folder(
 def test_unknown_nested_field_is_rejected_by_exact_producer_schema(
     tmp_path: Path,
 ) -> None:
-    """report@1.0.0の既知objectへ追加された未知fieldが拒否されること。
+    """report@1.1.0の既知objectへ追加された未知fieldが拒否されること。
 
     Arrange:
         - validation直前にVideo Time契約へ未知fieldを追加するfaultが用意される
@@ -566,7 +645,7 @@ def test_unknown_nested_field_is_rejected_by_exact_producer_schema(
         report = cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
         video_set = cast(dict[str, Any], report["video_set"])
         time_contract = cast(dict[str, Any], video_set["time_contract"])
-        time_contract["future_field"] = "not-in-report-1.0.0"
+        time_contract["future_field"] = "not-in-report-1.1.0"
         path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

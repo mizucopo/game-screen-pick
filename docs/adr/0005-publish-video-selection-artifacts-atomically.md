@@ -105,7 +105,7 @@ Context Cue records retain their source timestamp basis. When container cue timi
 
 ## Canonical JSON structure
 
-The top-level `game-screen-pick/report@1.0.0` object contains:
+The contract started at `game-screen-pick/report@1.0.0`. The current additive producer is `game-screen-pick/report@1.1.0`, which adds conditional-coverage diagnostics while retaining major version 1:
 
 | Field | Purpose |
 |---|---|
@@ -113,7 +113,7 @@ The top-level `game-screen-pick/report@1.0.0` object contains:
 | `run` | run ID, status, UTC timestamps, requested and selected counts, warnings |
 | `artifacts` | relative artifact paths, image, publication, and projection contracts |
 | `video_set` | Video Set identity, time policy, ordered sources, exact durations |
-| `selection_summary` | candidate funnel, final similarity pass, shortfall, type targets and actuals |
+| `selection_summary` | candidate funnel, final similarity pass, shortfall, type targets and actuals, conditional-coverage counts and reallocation |
 | `rejection_summary` | counts for every unselected reason |
 | `selected` | complete selected-image records in selection order |
 | `near_miss_publication` | deterministic bound and ordering policy |
