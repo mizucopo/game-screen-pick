@@ -1086,9 +1086,11 @@ def test_full_suite_rejects_auto_cap_that_cannot_exceed_three(
         return _successful_run_attempt(configuration, run_name)
 
     # Act
-    # Assert
-    with pytest.raises(ValueError, match="4 worker以上"):
+    with pytest.raises(ValueError) as exc_info:
         _runner(execute).run(profile_path=profile_path, suite="full")
+
+    # Assert
+    assert "4 worker以上" in str(exc_info.value)
     assert calls == []
 
 
@@ -1126,9 +1128,11 @@ def test_full_suite_rejects_cpu_backend_with_three_worker_capacity(
         return _successful_run_attempt(configuration, run_name)
 
     # Act
-    # Assert
-    with pytest.raises(ValueError, match="4 worker以上"):
+    with pytest.raises(ValueError) as exc_info:
         _runner(execute).run(profile_path=profile_path, suite="full")
+
+    # Assert
+    assert "4 worker以上" in str(exc_info.value)
     assert calls == []
 
 
@@ -1165,9 +1169,52 @@ def test_full_suite_rejects_scenario_count_below_four(
         return _successful_run_attempt(configuration, run_name)
 
     # Act
-    # Assert
-    with pytest.raises(ValueError, match="4 worker以上"):
+    with pytest.raises(ValueError) as exc_info:
         _runner(execute).run(profile_path=profile_path, suite="full")
+
+    # Assert
+    assert "4 worker以上" in str(exc_info.value)
+    assert calls == []
+
+
+def test_full_suite_rejects_scenario_count_before_first_reachable_growth(
+    tmp_path: Path,
+) -> None:
+    """初回growthに必要なVideo数を満たさないfull構成が事前拒否されること。
+
+    Arrange:
+        - 最大6 workerでもrolling判断後に4 workerを満たせない7動画が用意される
+    Act:
+        - full target suiteが実行される
+    Assert:
+        - 長時間のrun開始前に4 workerへ到達不能として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    profile_path.write_text(
+        profile_path.read_text(encoding="utf-8").replace(
+            "expected_video_count = 12",
+            "expected_video_count = 7",
+        ),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    # Act
+    with pytest.raises(ValueError) as exc_info:
+        _runner(execute).run(profile_path=profile_path, suite="full")
+
+    # Assert
+    assert "4 worker以上" in str(exc_info.value)
     assert calls == []
 
 

@@ -918,9 +918,10 @@ def _validate_full_scan_capacity(
         logical_cpu_count=logical_cpu_count,
         initial_resource_sample=None,
     )
-    if controller.executor_capacity <= 3:
+    if controller.maximum_reachable_workers <= 3:
         raise ValueError(
-            "Full acceptanceのVideo Scan schedulable capacityには4 worker以上が必要です"
+            "Full acceptanceのVideo Scanでは実際に4 worker以上へ"
+            "到達できるVideo数が必要です"
         )
 
 

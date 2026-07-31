@@ -85,6 +85,44 @@ def test_auto_does_not_count_growth_after_all_scans_completed() -> None:
 
 
 @pytest.mark.parametrize(
+    ("video_count", "expected_workers"),
+    [
+        pytest.param(7, 3, id="growth-window-not-reachable"),
+        pytest.param(8, 4, id="first-growth-reachable"),
+        pytest.param(12, 6, id="capacity-reachable"),
+    ],
+)
+def test_auto_reports_maximum_reachable_workers(
+    video_count: int,
+    expected_workers: int,
+) -> None:
+    """完了境界と残りscan数から到達可能な最大worker数が報告されること。
+
+    Arrange:
+        - 24論理CPUのNVDEC auto ControllerがVideo数ごとに用意される
+    Act:
+        - 理想的なresource余力で到達可能な最大worker数が取得される
+    Assert:
+        - growth windowと未完了scan数を満たすworker数だけが返されること
+    """
+    # Arrange
+    controller = AdaptiveVideoScanController(
+        video_count=video_count,
+        configured_workers="auto",
+        auto_max_workers=6,
+        decode_backend="nvdec",
+        logical_cpu_count=24,
+        initial_resource_sample=None,
+    )
+
+    # Act
+    reachable_workers = controller.maximum_reachable_workers
+
+    # Assert
+    assert reachable_workers == expected_workers
+
+
+@pytest.mark.parametrize(
     "change",
     [
         pytest.param({"cpu_percent": 90.0}, id="cpu"),

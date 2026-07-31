@@ -105,8 +105,10 @@ privacy-safeなlogical source key、size、mtimeが一致するidentityを再利
 full Video Setを再hashしない。device、inode、ctimeはidentity cacheの再利用判定に使わない。
 fullのFresh Processingに使う独立Video Scanは
 `video_scan.workers = "auto"`かつ`video_scan.auto_max_workers >= 4`を要求する。
-さらにbackend、targetのlogical CPU数、実scenario数、設定上限から本番controllerと同じ
-schedulable capacityを算出し、4 worker未満なら長時間runの前に拒否する。
+さらにbackend、targetのlogical CPU数、実scenario数、設定上限、rolling判断を開始できる
+完了数、増加後のworkerを満たす未完了scan数から、本番controllerと同じ到達可能な最大worker数を
+算出し、4 worker未満なら長時間runの前に拒否する。24 logical CPUのNVDEC targetで
+保守的な3 workerから開始する場合、最初に4 workerへ増やすには最低8 scenarioが必要になる。
 NVDECとresource余力がある24 logical CPU targetでは保守的な3 workerから開始し、
 rolling判断で最大6 workerまで利用する。
 開始時点でCPU・Decoder・memory・GPU・VRAM・disk pressureを検知した場合は1 workerへ抑制する。

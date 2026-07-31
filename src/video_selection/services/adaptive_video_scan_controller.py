@@ -108,6 +108,23 @@ class AdaptiveVideoScanController:
         return self._executor_capacity
 
     @property
+    def maximum_reachable_workers(self) -> int:
+        """継続的な余力がある場合に構造上到達できる最大worker数を返す。"""
+        if self._mode == "fixed":
+            return self._current_workers
+        workers = self._initial_workers
+        completed_scans = _TREND_WINDOW
+        while workers < self._executor_capacity:
+            if not self._unfinished_scans_can_fill_workers(
+                completed_scans=completed_scans,
+                workers=workers + 1,
+            ):
+                break
+            workers += 1
+            completed_scans += 1
+        return workers
+
+    @property
     def resource_sampling_enabled(self) -> bool:
         """worker数を自動調整するrunかを返す。"""
         return self._mode == "auto"
@@ -189,8 +206,19 @@ class AdaptiveVideoScanController:
 
     def _remaining_scans_can_fill_growth(self) -> bool:
         """増加後のworker数を未完了scanで実際に満たせるか返す。"""
-        remaining_scans = self._video_count - self._completed_scans
-        return remaining_scans >= self._current_workers + 1
+        return self._unfinished_scans_can_fill_workers(
+            completed_scans=self._completed_scans,
+            workers=self._current_workers + 1,
+        )
+
+    def _unfinished_scans_can_fill_workers(
+        self,
+        *,
+        completed_scans: int,
+        workers: int,
+    ) -> bool:
+        """指定worker数を未完了scanで実際に満たせるか返す。"""
+        return self._video_count - completed_scans >= workers
 
     def finish_incomplete_attempt(self) -> None:
         """未完了scanを停止し終えた時点までのattempt wall時間を確定する。"""

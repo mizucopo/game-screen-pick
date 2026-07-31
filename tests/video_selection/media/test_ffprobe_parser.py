@@ -53,7 +53,8 @@ def test_non_positive_container_duration_is_rejected() -> None:
     }
 
     # Act
-    with pytest.raises(ValueError, match="format durationは正"):
+    with pytest.raises(ValueError) as exc_info:
         parse_media_probe(document)
 
     # Assert
+    assert "format durationは正" in str(exc_info.value)

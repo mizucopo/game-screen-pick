@@ -225,8 +225,10 @@ target動画から代表scenarioを固定し、合計約30分のintervalとし�
 12 videos、合計50時間40分の全体を、reference PCを他用途で使わず実行する。IMP-13前と、
 抽出/cache/parallelismの性能へ影響する変更時だけ必須とする。
 full比較は`video_scan.workers = "auto"`かつ`video_scan.auto_max_workers >= 4`を要求し、
-backend、logical CPU数、実scenario数、設定上限から算出したschedulable capacityが4未満の
-構成も、固定3を超えられないため長時間runの開始前に拒否する。
+backend、logical CPU数、実scenario数、設定上限、rolling判断開始までの完了数、増加後の
+workerを満たす未完了scan数から算出した到達可能な最大worker数が4未満の構成も、
+固定3を超えられないため長時間runの開始前に拒否する。24 logical CPUのNVDEC targetで
+3 workerから開始する場合、最初に4 workerへ増やすには最低8 scenarioが必要になる。
 
 設計時に確認したtarget inputは1,124,448,879,219 bytes、対象driveの空きは
 5,976,873,041,920 bytesだった。これは固定identityや将来の合格値にはせず、各runのpreflightで
