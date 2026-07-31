@@ -15,6 +15,9 @@ from src.video_selection.models.model_role import ModelRole
 from src.video_selection.services.canonical_output_publisher import (
     CanonicalOutputPublisher,
 )
+from src.video_selection.services.render_human_selection_report import (
+    render_human_selection_report,
+)
 from src.video_selection.services.serialize_canonical_selection_report import (
     serialize_canonical_selection_report,
 )
@@ -486,6 +489,99 @@ def test_fault_after_final_rename_preserves_reusable_completed_output(
     assert publisher.reused_completed_publication is True
     assert after == before
     assert retry_runtime.extracted_original_frame_calls == []
+
+
+def test_reader_revalidates_historical_report_with_its_major_schema(
+    tmp_path: Path,
+) -> None:
+    """履歴reportが対応major固有のschemaとprojectionで再検証されること。
+
+    Arrange:
+        - report@2の完成outputから追加fieldを除いた履歴report@1が用意される
+    Act:
+        - 完成Canonical Outputのreader検証が実行される
+    Assert:
+        - report@1として再検証され同じobjectが返されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    report = cast(
+        dict[str, Any],
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request),
+    )
+    output_folder = request.configuration.output_folder
+    cast(dict[str, Any], report["schema"])["version"] = "1.0.0"
+    cast(dict[str, Any], report["selection_summary"]).pop("conditional_coverage")
+    report_value = cast(dict[str, object], report)
+    (output_folder / "report.json").write_text(
+        serialize_canonical_selection_report(report_value),
+        encoding="utf-8",
+    )
+    markdown_path = output_folder / "report.md"
+    current_markdown = markdown_path.read_text(encoding="utf-8")
+    summary, coverage_and_later = current_markdown.split(
+        "\nConditional coverage:",
+        maxsplit=1,
+    )
+    _coverage, selected_and_later = coverage_and_later.split(
+        "\n## Selected images",
+        maxsplit=1,
+    )
+    markdown_path.write_text(
+        (summary + "\n## Selected images" + selected_and_later).replace(
+            "game-screen-pick/report@2.0.0",
+            "game-screen-pick/report@1.0.0",
+        ),
+        encoding="utf-8",
+    )
+
+    # Act
+    loaded = load_validated_canonical_selection_report(output_folder)
+
+    # Assert
+    assert loaded == report
+
+
+def test_reader_accepts_future_minor_unknown_fields_and_enum_values(
+    tmp_path: Path,
+) -> None:
+    """対応majorの将来minorにある未知fieldとenum値が保持されること。
+
+    Arrange:
+        - report@2の完成outputへ将来minor、未知field、未知enum値が追加される
+    Act:
+        - 完成Canonical Outputのreader検証が実行される
+    Assert:
+        - 未知値を失わず同じobjectが返されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    report = cast(
+        dict[str, Any],
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request),
+    )
+    output_folder = request.configuration.output_folder
+    cast(dict[str, Any], report["schema"])["version"] = "2.1.0"
+    report["future_field"] = {"future_enum": "new_value"}
+    selected = cast(list[dict[str, Any]], report["selected"])
+    cast(dict[str, Any], selected[0]["classification"])["blog_image_type"] = (
+        "future_gameplay"
+    )
+    report_value = cast(dict[str, object], report)
+    (output_folder / "report.json").write_text(
+        serialize_canonical_selection_report(report_value),
+        encoding="utf-8",
+    )
+    (output_folder / "report.md").write_text(
+        render_human_selection_report(report_value),
+        encoding="utf-8",
+    )
+
+    # Act
+    loaded = load_validated_canonical_selection_report(output_folder)
+
+    # Assert
+    assert loaded == report
 
 
 def test_completed_output_permission_failure_never_deletes_publication(

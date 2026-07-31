@@ -22,7 +22,7 @@ output/
 
 Video Source IDは通常、whole-file SHA-256の先頭12文字を使います。同じVideo Set内でそのprefixが衝突した場合は、衝突したsourceだけを64文字の完全digestへ拡張し、一意性を保ちます。
 
-producerが検証する現行の厳密なschema実体は[`report-2.0.0.schema.json`](../src/video_selection/schemas/report-2.0.0.schema.json)です。履歴schemaの[`report-1.0.0.schema.json`](../src/video_selection/schemas/report-1.0.0.schema.json)も保持します。readerは対応major 1・2の将来minor field／enumを保持できるcompatibility gateを別に持ち、producerの厳密検証とは分離しています。report schema versionはpackage versionから独立します。
+producerが検証する現行の厳密なschema実体は[`report-2.0.0.schema.json`](../src/video_selection/schemas/report-2.0.0.schema.json)です。履歴schemaの[`report-1.0.0.schema.json`](../src/video_selection/schemas/report-1.0.0.schema.json)も保持します。readerはschema identityを確認して対応major 1・2の基準schemaを選び、既知の必須構造を検証しながら将来minorの追加field／文字列enum値を保持します。report@1には存在しない条件付きcoverageのJSON関係とMarkdown sectionを要求しません。このreader検証はproducerの厳密な現行2.0検証とは分離し、report schema versionもpackage versionから独立します。
 
 `selection_summary.conditional_coverage`は、要求枚数10枚以上で適用される`ordinary_combat`と`event`について、有効候補数、条件付き最低数、選択実績、未充足枠を他候補へ解放したかを記録します。最低枠のためにExplanation Valueが`none`の候補や重複画像を選ぶことはありません。
 

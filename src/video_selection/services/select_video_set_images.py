@@ -231,7 +231,17 @@ def _select_with_major_spoiler_limit(
                 major_spoiler_limit,
             )
             if required_coverage_candidates:
-                evaluated = required_coverage_candidates
+                feasible_coverage_candidates = (
+                    _coverage_candidates_preserving_joint_feasibility(
+                        required_coverage_candidates,
+                        remaining,
+                        selected,
+                        unmet_facets,
+                        similarity_passes[-1],
+                        major_spoiler_limit,
+                    )
+                )
+                evaluated = feasible_coverage_candidates or required_coverage_candidates
             elif coverage_prerequisites and (
                 len(selected) + len(unmet_facets) < requested_count
             ):
@@ -416,6 +426,94 @@ def _has_remaining_coverage_candidate(
         and _has_explanation_value(candidate)
         for candidate in remaining
     )
+
+
+def _coverage_candidates_preserving_joint_feasibility(
+    required_candidates: list[tuple[BlogCandidate, SelectionScore]],
+    remaining: list[BlogCandidate],
+    selected: list[SelectedBlogImage],
+    unmet_facets: set[SelectionCoverageFacet],
+    terminal_similarity_ceiling: float,
+    major_spoiler_limit: int | None,
+) -> list[tuple[BlogCandidate, SelectionScore]]:
+    """他の未充足facetと両立する最低候補だけを返す。"""
+    if len(unmet_facets) <= 1:
+        return required_candidates
+    return [
+        (candidate, score)
+        for candidate, score in required_candidates
+        if _has_joint_coverage_completion(
+            remaining,
+            selected,
+            (candidate,),
+            unmet_facets - {candidate.annotation.selection_coverage_facet},
+            terminal_similarity_ceiling,
+            major_spoiler_limit,
+        )
+    ]
+
+
+def _has_joint_coverage_completion(
+    remaining: list[BlogCandidate],
+    selected: list[SelectedBlogImage],
+    chosen: tuple[BlogCandidate, ...],
+    unassigned_facets: set[SelectionCoverageFacet],
+    terminal_similarity_ceiling: float,
+    major_spoiler_limit: int | None,
+) -> bool:
+    """選択済み最低候補と両立する残りfacetの組合せがあるかを返す。"""
+    if not unassigned_facets:
+        return True
+    facet = min(unassigned_facets)
+    for candidate in remaining:
+        if (
+            candidate.annotation.selection_coverage_facet != facet
+            or candidate in chosen
+            or not _coverage_combination_candidate_is_eligible(
+                candidate,
+                selected,
+                chosen,
+                terminal_similarity_ceiling,
+                major_spoiler_limit,
+            )
+        ):
+            continue
+        if _has_joint_coverage_completion(
+            remaining,
+            selected,
+            (*chosen, candidate),
+            unassigned_facets - {facet},
+            terminal_similarity_ceiling,
+            major_spoiler_limit,
+        ):
+            return True
+    return False
+
+
+def _coverage_combination_candidate_is_eligible(
+    candidate: BlogCandidate,
+    selected: list[SelectedBlogImage],
+    chosen: tuple[BlogCandidate, ...],
+    terminal_similarity_ceiling: float,
+    major_spoiler_limit: int | None,
+) -> bool:
+    """最低枠の組合せ候補が終端制約と両立するかを返す。"""
+    if not _has_explanation_value(candidate):
+        return False
+    nearest = _nearest_selected_similarity(candidate, selected)
+    if nearest is not None and nearest > terminal_similarity_ceiling:
+        return False
+    if any(
+        _cosine_similarity(candidate, other) > terminal_similarity_ceiling
+        for other in chosen
+    ):
+        return False
+    if major_spoiler_limit is None:
+        return True
+    major_spoiler_count = sum(
+        item.candidate.annotation.spoiler_risk == "high" for item in selected
+    ) + sum(item.annotation.spoiler_risk == "high" for item in (*chosen, candidate))
+    return major_spoiler_count <= major_spoiler_limit
 
 
 def _conditional_coverage_prerequisites(

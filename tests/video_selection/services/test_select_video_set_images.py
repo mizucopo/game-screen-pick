@@ -1045,6 +1045,89 @@ def test_impossible_minimum_restarts_unrestricted_selection_at_base_ceiling() ->
     assert relaxed_rejection.similarity == pytest.approx(0.9)
 
 
+def test_compatible_minimum_combination_is_preserved() -> None:
+    """全facetを満たせる互換候補の組合せが高utility候補より優先されること。
+
+    Arrange:
+        - 唯一のイベントと終端ceilingで重複する高utility通常戦闘が用意される
+        - イベントと互換性のある低utility通常戦闘と通常候補8件が用意される
+    Act:
+        - 10枚のVideo Set選定が実行される
+    Assert:
+        - 互換性のある通常戦闘とイベントが選択されること
+        - 両方の最低coverageが再配分されないこと
+    """
+    # Arrange
+    feature_count = 10
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    incompatible_combat = _candidate(
+        "0",
+        quality=1.0,
+        feature=unit_feature(0),
+        progress=Fraction(1, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_action=True,
+    )
+    event = _candidate(
+        "1",
+        quality=0.4,
+        feature=unit_feature(0),
+        progress=Fraction(2, 100),
+        blog_image_type="event",
+        explanation_value="medium",
+        context_relevance="none",
+    )
+    compatible_combat = _candidate(
+        "2",
+        quality=0.8,
+        feature=unit_feature(1),
+        progress=Fraction(3, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_action=True,
+    )
+    unrestricted = tuple(
+        _candidate(
+            digest,
+            quality=0.7,
+            feature=unit_feature(index),
+            progress=Fraction(index + 3, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+        )
+        for index, digest in enumerate("3456789a", start=2)
+    )
+
+    # Act
+    result = select_video_set_images(
+        (incompatible_combat, event, compatible_combat, *unrestricted),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    assert compatible_combat.identifier in selected_ids
+    assert event.identifier in selected_ids
+    assert incompatible_combat.identifier not in selected_ids
+    assert result.selection_coverage_actuals == {
+        "ordinary_combat": 1,
+        "event": 1,
+    }
+    assert result.selection_coverage_reallocated == {
+        "ordinary_combat": False,
+        "event": False,
+    }
+
+
 def test_variant_prerequisite_advances_while_minimum_slot_is_reserved() -> None:
     """未代表Variant Groupが先行し実現可能な最低coverageが保持されること。
 

@@ -417,7 +417,7 @@ machine-readable reportで各Processing Stageのstatus、完全なStage Fingerpr
 _Avoid_: host path dump, secret-bearing config, raw prompt, raw response, stack trace
 
 **Report Schema Version**:
-machine-readable reportの`game-screen-pick/report`契約を表すSemantic Version。初版は`1.0.0`とし、breaking changeはmajor、optional fieldまたはenum値の追加はminor、構造を変えない修正はpatchにする。同じmajorのreaderは未知fieldと未知enum値で失敗せず、未知majorだけを拒否する。過去schemaと既存reportは書き換えない。
+machine-readable reportの`game-screen-pick/report`契約を表すSemantic Version。初版は`1.0.0`とし、breaking changeはmajor、optional fieldまたはenum値の追加はminor、構造を変えない修正はpatchにする。readerはschema identityから対応majorの履歴schemaを選び、既知の必須構造を検証しながら同じmajorの追加fieldと文字列enum値を保持し、未知majorだけを拒否する。major固有の関係とMarkdown sectionを別majorへ強制せず、producerだけが現行schemaを厳密検証する。過去schemaと既存reportは書き換えない。
 _Avoid_: unversioned JSON, Markdown parser contract, automatic report migration, breaking minor change
 
 **Report Near Miss Set**:
@@ -469,7 +469,7 @@ _Avoid_: hard quota, overflow penalty, guaranteed title image
 _Avoid_: Blog Image Type, Scene Kind, free-form scene name, final eligibility
 
 **Conditional Coverage Minimum**:
-要求枚数が10枚以上で、Explanation Valueと既存の適格性を満たすSelection Coverage Facet候補が存在する場合だけ、`ordinary_combat`と`event`を各最低1枚選ぶ決定的なVideo Set selectorの境界。現在passで選べない候補は後続similarity passまで枠を保持する。候補が同じrecurring gameplayの既選択Variant Groupに属し、別の未代表Groupが選択の前提になる場合は、最低枠を残せる範囲でその前提Groupを先に選ぶ。終端でも重複、title上限、Spoiler Monotonicity Guardなどの制約に反する場合、または有効候補がなければ枠を他候補へ解放する。終端で解放した場合は選択済み画像を保持し、設定されたbase similarity ceilingから残りの通常選定を再開する。残り枚数はBlog Image Type Soft CoverageとMarginal Selection Utilityで動的に配分し、Selection Shortfallを低品質候補で埋めない。
+要求枚数が10枚以上で、Explanation Valueと既存の適格性を満たすSelection Coverage Facet候補が存在する場合だけ、`ordinary_combat`と`event`を各最低1枚選ぶ決定的なVideo Set selectorの境界。複数facetが未充足なら、終端similarity ceilingで各facetから1件ずつ選べる互換組合せを保持し、別facetの実現可能な最低枠を壊す高utility候補を先に選ばない。現在passで選べない候補は後続similarity passまで枠を保持する。候補が同じrecurring gameplayの既選択Variant Groupに属し、別の未代表Groupが選択の前提になる場合は、最低枠を残せる範囲でその前提Groupを先に選ぶ。終端でも重複、title上限、Spoiler Monotonicity Guardなどの制約に反する場合、または有効候補がなければ枠を他候補へ解放する。終端で解放した場合は選択済み画像を保持し、設定されたbase similarity ceilingから残りの通常選定を再開する。残り枚数はBlog Image Type Soft CoverageとMarginal Selection Utilityで動的に配分し、Selection Shortfallを低品質候補で埋めない。
 _Avoid_: fixed quota, output count guarantee, per-video minimum, invalid fallback
 
 **Explanation Value**:

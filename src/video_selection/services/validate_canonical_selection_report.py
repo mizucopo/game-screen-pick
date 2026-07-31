@@ -20,6 +20,9 @@ from .report_time import display_report_time, exact_seconds_string
 from .serialize_canonical_selection_report import (
     serialize_canonical_selection_report,
 )
+from .validate_report_schema_compatibility import (
+    validate_report_schema_compatibility,
+)
 
 
 def validate_canonical_selection_report(
@@ -75,7 +78,8 @@ def load_validated_canonical_selection_report(
     """公開済みfolderを自己完結したCanonical outputとして再検証する。"""
     try:
         report = _read_json_artifact(output_folder)
-        _validate_schema(report)
+        report_schema_major = validate_report_schema_compatibility(report)
+        _validate_reader_schema(report, report_schema_major)
         _validate_json_artifact(report, report, output_folder)
         _validate_intrinsic_report_relationships(report)
         _validate_images(report, output_folder)
@@ -118,15 +122,74 @@ def _validate_schema(report: dict[str, object]) -> None:
         )
 
 
+def _validate_reader_schema(
+    report: dict[str, object],
+    report_schema_major: int,
+) -> None:
+    """対応majorの既知構造を検証し、minor追加fieldとenum値を許可する。"""
+    errors = sorted(
+        _reader_schema_validator(report_schema_major).iter_errors(report),
+        key=lambda item: tuple(str(part) for part in item.absolute_path),
+    )
+    if errors:
+        error = errors[0]
+        location = ".".join(str(item) for item in error.absolute_path) or "root"
+        raise ValueError(
+            f"Canonical Selection Report schema不一致: {location}: {error.message}"
+        )
+
+
 @lru_cache(maxsize=1)
 def _schema_validator() -> Draft202012Validator:
-    schema_path = Path(__file__).parent.parent / "schemas" / "report-2.0.0.schema.json"
+    schema = _load_schema("2.0.0")
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema)
+
+
+@lru_cache(maxsize=2)
+def _reader_schema_validator(major: int) -> Draft202012Validator:
+    schema = _reader_compatible_schema(_load_schema(f"{major}.0.0"))
+    schema_properties = cast(dict[str, Any], schema["properties"])
+    schema_identity = cast(dict[str, Any], schema_properties["schema"])
+    identity_properties = cast(dict[str, Any], schema_identity["properties"])
+    version = cast(dict[str, Any], identity_properties["version"])
+    version.pop("const")
+    version["type"] = "string"
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema)
+
+
+def _load_schema(version: str) -> dict[str, Any]:
+    schema_path = (
+        Path(__file__).parent.parent / "schemas" / f"report-{version}.schema.json"
+    )
     schema_value: object = json.loads(schema_path.read_text(encoding="utf-8"))
     if not isinstance(schema_value, dict):
         raise ValueError("Canonical Selection Report schemaがJSON objectではありません")
-    schema = cast(dict[str, Any], schema_value)
-    Draft202012Validator.check_schema(schema)
-    return Draft202012Validator(schema)
+    return cast(dict[str, Any], schema_value)
+
+
+def _reader_compatible_schema(value: object) -> Any:
+    """既知構造を残し、対応major内の追加fieldと文字列enum追加を許可する。"""
+    if isinstance(value, dict):
+        schema = {key: _reader_compatible_schema(child) for key, child in value.items()}
+        if schema.get("additionalProperties") is False:
+            schema["additionalProperties"] = True
+        one_of = schema.pop("oneOf", None)
+        if isinstance(one_of, list):
+            schema["anyOf"] = one_of
+        enum = schema.get("enum")
+        if (
+            isinstance(enum, list)
+            and enum
+            and all(isinstance(item, str) for item in enum)
+        ):
+            schema.pop("enum")
+            schema["type"] = "string"
+        return schema
+    if isinstance(value, list):
+        return [_reader_compatible_schema(item) for item in value]
+    return value
 
 
 def _validate_json_artifact(
@@ -223,23 +286,26 @@ def _validate_intrinsic_report_relationships(
         != sum(cast(dict[str, int], rejection_summary["by_reason"]).values())
     ):
         raise ValueError("Canonical Selection Reportのselection countが一致しません")
-    conditional_coverage = _mapping(selection_summary["conditional_coverage"])
-    conditional_facets = _mapping(conditional_coverage["facets"])
-    applies = bool(conditional_coverage["applies"])
-    if applies != (int(run["requested_image_count"]) >= 10):
-        raise ValueError("Canonical Selection Reportの条件付きcoverageが不正です")
-    for facet_value in conditional_facets.values():
-        facet = _mapping(facet_value)
-        eligible = int(facet["eligible"])
-        minimum = int(facet["minimum"])
-        actual = int(facet["actual"])
-        reallocated = bool(facet["reallocated"])
-        if (
-            minimum != int(applies and eligible > 0)
-            or actual > eligible
-            or reallocated != (applies and actual == 0)
-        ):
+    if "conditional_coverage" in selection_summary:
+        conditional_coverage = _mapping(selection_summary["conditional_coverage"])
+        conditional_facets = _mapping(conditional_coverage["facets"])
+        applies = bool(conditional_coverage["applies"])
+        if applies != (int(run["requested_image_count"]) >= 10):
             raise ValueError("Canonical Selection Reportの条件付きcoverageが不正です")
+        for facet_value in conditional_facets.values():
+            facet = _mapping(facet_value)
+            eligible = int(facet["eligible"])
+            minimum = int(facet["minimum"])
+            actual = int(facet["actual"])
+            reallocated = bool(facet["reallocated"])
+            if (
+                minimum != int(applies and eligible > 0)
+                or actual > eligible
+                or reallocated != (applies and actual == 0)
+            ):
+                raise ValueError(
+                    "Canonical Selection Reportの条件付きcoverageが不正です"
+                )
     selected_ids = {str(item["image_id"]) for item in selected}
     if len(selected_ids) != len(selected):
         raise ValueError(

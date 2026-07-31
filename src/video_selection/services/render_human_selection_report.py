@@ -64,31 +64,32 @@ def render_human_selection_report(report: dict[str, object]) -> str:
         counts_value = image_types[name]
         counts = _mapping(counts_value)
         lines.append(f"| {name} | {counts['target']} | {counts['actual']} |")
-    conditional_coverage = _mapping(selection_summary["conditional_coverage"])
-    lines.extend(
-        (
-            "",
+    if "conditional_coverage" in selection_summary:
+        conditional_coverage = _mapping(selection_summary["conditional_coverage"])
+        lines.extend(
             (
-                "Conditional coverage: "
-                f"`applies={str(conditional_coverage['applies']).lower()}` "
-                "(requested >= "
-                f"{conditional_coverage['minimum_requested_image_count']})"
-            ),
-            "",
-            "| Coverage facet | Eligible | Minimum | Actual | Reallocated |",
-            "|---|---:|---:|---:|---|",
+                "",
+                (
+                    "Conditional coverage: "
+                    f"`applies={str(conditional_coverage['applies']).lower()}` "
+                    "(requested >= "
+                    f"{conditional_coverage['minimum_requested_image_count']})"
+                ),
+                "",
+                "| Coverage facet | Eligible | Minimum | Actual | Reallocated |",
+                "|---|---:|---:|---:|---|",
+            )
         )
-    )
-    coverage_facets = _mapping(conditional_coverage["facets"])
-    for name in _ordered_mapping_keys(
-        coverage_facets,
-        _CONDITIONAL_COVERAGE_ORDER,
-    ):
-        counts = _mapping(coverage_facets[name])
-        lines.append(
-            f"| {name} | {counts['eligible']} | {counts['minimum']} | "
-            f"{counts['actual']} | `{str(counts['reallocated']).lower()}` |"
-        )
+        coverage_facets = _mapping(conditional_coverage["facets"])
+        for name in _ordered_mapping_keys(
+            coverage_facets,
+            _CONDITIONAL_COVERAGE_ORDER,
+        ):
+            counts = _mapping(coverage_facets[name])
+            lines.append(
+                f"| {name} | {counts['eligible']} | {counts['minimum']} | "
+                f"{counts['actual']} | `{str(counts['reallocated']).lower()}` |"
+            )
     lines.extend(("", "## Selected images", ""))
     sources = {item["id"]: item for item in _mapping_list(video_set["sources"])}
     for item in selected:

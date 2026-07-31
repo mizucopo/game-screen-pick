@@ -208,7 +208,7 @@ The canonical schema name is `game-screen-pick/report`, starting at `1.0.0`, and
 - minor: optional field or enum value addition;
 - patch: documentation, constraints, or producer fixes that do not change instance structure.
 
-Readers reject an unsupported major version. Within a supported major, readers do not fail on unknown fields or enum strings and preserve raw unknown enum values when displaying them. Historical schemas remain available, reports are immutable, and the producer does not rewrite or automatically migrate old reports.
+Readers reject an unsupported major version. For a supported major, the reader selects that major's retained baseline schema, validates its known required structure, and allows additional fields and string enum values introduced by later minor versions. Version-specific relationships and Markdown sections absent from an older major are not imposed on it. The producer continues to validate new output against the exact current schema. Historical schemas remain available, reports are immutable, and the producer does not rewrite or automatically migrate old reports.
 
 ## Atomic publication and failure
 
