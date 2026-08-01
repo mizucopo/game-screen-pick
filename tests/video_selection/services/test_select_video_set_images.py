@@ -1045,6 +1045,93 @@ def test_impossible_minimum_restarts_unrestricted_selection_at_base_ceiling() ->
     assert relaxed_rejection.similarity == pytest.approx(0.9)
 
 
+def test_satisfied_relaxed_minimum_restarts_unrestricted_selection_at_base() -> None:
+    """緩和passで最低枠達成後の通常選定がbase ceilingへ戻ること。
+
+    Arrange:
+        - 通常戦闘と終端passだけで両立するイベントが用意される
+        - 緩和時だけ選べる高utility候補とbase適格候補8件が用意される
+    Act:
+        - 10枚のVideo Set選定が実行される
+    Assert:
+        - イベント最低枠を保持してbase ceilingから通常選定が再開されること
+        - 緩和時だけの候補よりbase適格候補8件が選択されること
+    """
+    # Arrange
+    feature_count = 10
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    ordinary_combat = _candidate(
+        "0",
+        quality=1.0,
+        feature=unit_feature(0),
+        progress=Fraction(1, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_action=True,
+    )
+    event = _candidate(
+        "1",
+        quality=0.3,
+        feature=(0.9, math.sqrt(1 - 0.9**2), *(0.0 for _ in range(8))),
+        progress=Fraction(2, 100),
+        blog_image_type="event",
+        explanation_value="medium",
+        context_relevance="none",
+    )
+    relaxed_only_candidate = _candidate(
+        "2",
+        quality=0.99,
+        feature=(0.9, -math.sqrt(1 - 0.9**2), *(0.0 for _ in range(8))),
+        progress=Fraction(3, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    base_eligible_candidates = tuple(
+        _candidate(
+            digest,
+            quality=0.5,
+            feature=unit_feature(index),
+            progress=Fraction(index + 3, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="medium",
+            context_relevance="none",
+        )
+        for index, digest in enumerate("3456789a", start=2)
+    )
+
+    # Act
+    result = select_video_set_images(
+        (
+            ordinary_combat,
+            event,
+            relaxed_only_candidate,
+            *base_eligible_candidates,
+        ),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    assert ordinary_combat.identifier in selected_ids
+    assert event.identifier in selected_ids
+    assert relaxed_only_candidate.identifier not in selected_ids
+    assert {candidate.identifier for candidate in base_eligible_candidates}.issubset(
+        selected_ids
+    )
+    assert result.final_similarity_ceiling == 0.72
+    assert result.selection_coverage_reallocated == {
+        "ordinary_combat": False,
+        "event": False,
+    }
+
+
 def test_compatible_minimum_combination_is_preserved() -> None:
     """全facetを満たせる互換候補の組合せが高utility候補より優先されること。
 
@@ -1118,6 +1205,97 @@ def test_compatible_minimum_combination_is_preserved() -> None:
     assert compatible_combat.identifier in selected_ids
     assert event.identifier in selected_ids
     assert incompatible_combat.identifier not in selected_ids
+    assert result.selection_coverage_actuals == {
+        "ordinary_combat": 1,
+        "event": 1,
+    }
+    assert result.selection_coverage_reallocated == {
+        "ordinary_combat": False,
+        "event": False,
+    }
+
+
+def test_joint_feasibility_reserves_variant_prerequisite_cost() -> None:
+    """Variant Group前提が残り枠を超える最低枠の組合せが除外されること。
+
+    Arrange:
+        - 高utility通常戦闘とイベントが同じVariant Groupに属する
+        - 同じsceneに未代表Groupが9件あり、別Groupの通常戦闘も用意される
+    Act:
+        - 10枚のVideo Set選定が実行される
+    Assert:
+        - 追加9枠を要する高utility通常戦闘ではなく別Group候補が選ばれること
+        - 通常戦闘とイベントの最低枠が両方満たされること
+    """
+    # Arrange
+    feature_count = 11
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    expensive_combat = _candidate(
+        "0",
+        quality=1.0,
+        feature=unit_feature(0),
+        progress=Fraction(1, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+        combat_action=True,
+    )
+    event = _candidate(
+        "1",
+        quality=0.8,
+        feature=(0.96, math.sqrt(1 - 0.96**2), *(0.0 for _ in range(9))),
+        progress=Fraction(2, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+    compatible_combat = _candidate(
+        "2",
+        quality=0.7,
+        feature=unit_feature(2),
+        progress=Fraction(3, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+        combat_action=True,
+    )
+    other_groups = tuple(
+        _candidate(
+            digest,
+            quality=0.6,
+            feature=unit_feature(index),
+            progress=Fraction(index + 3, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+            scene_selection_role="recurring_gameplay",
+            scene_slug="battle",
+        )
+        for index, digest in enumerate("3456789a", start=3)
+    )
+
+    # Act
+    result = select_video_set_images(
+        (expensive_combat, event, compatible_combat, *other_groups),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    assert compatible_combat.identifier in selected_ids
+    assert event.identifier in selected_ids
+    assert expensive_combat.identifier not in selected_ids
     assert result.selection_coverage_actuals == {
         "ordinary_combat": 1,
         "event": 1,
@@ -1398,6 +1576,78 @@ def test_shortlist_expansion_recomputes_selection_from_full_expanded_pool() -> N
     assert result.annotated_candidate_count == 3
     assert result.shortlist_expansion_count == 1
     assert result.all_candidate_moments_exhausted is False
+
+
+def test_shortlist_expands_for_an_undiscovered_conditional_facet() -> None:
+    """要求枚数到達後も未発見の条件付きfacetを探してbatchが拡張されること。
+
+    Arrange:
+        - 初期batchに通常戦闘1件を含む選択可能な通常画像10件が用意される
+        - 次のbatchに有効なイベント1件が用意される
+    Act:
+        - lazyなSelection Shortlist batch列から10枚が選定される
+    Assert:
+        - 次batchまで拡張されイベント最低枠が満たされること
+        - 通常戦闘とイベントの最低枠が再配分されないこと
+    """
+    # Arrange
+    feature_count = 11
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    ordinary_combat = _candidate(
+        "0",
+        quality=0.9,
+        feature=unit_feature(0),
+        progress=Fraction(1, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_action=True,
+    )
+    initial_gameplay = tuple(
+        _candidate(
+            digest,
+            quality=0.8,
+            feature=unit_feature(index),
+            progress=Fraction(index + 1, 20),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+        )
+        for index, digest in enumerate("123456789", start=1)
+    )
+    event = _candidate(
+        "a",
+        quality=0.1,
+        feature=unit_feature(10),
+        progress=Fraction(9, 10),
+        blog_image_type="event",
+        explanation_value="low",
+        context_relevance="none",
+    )
+
+    # Act
+    result = select_from_shortlist_batches(
+        ((ordinary_combat, *initial_gameplay), (event,)),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    assert event.identifier in selected_ids
+    assert result.shortlist_expansion_count == 1
+    assert result.selection_coverage_actuals == {
+        "ordinary_combat": 1,
+        "event": 1,
+    }
+    assert result.selection_coverage_reallocated == {
+        "ordinary_combat": False,
+        "event": False,
+    }
 
 
 def test_exact_utility_tie_uses_stable_video_order_and_records_tie_break() -> None:

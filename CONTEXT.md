@@ -469,7 +469,7 @@ _Avoid_: hard quota, overflow penalty, guaranteed title image
 _Avoid_: Blog Image Type, Scene Kind, free-form scene name, final eligibility
 
 **Conditional Coverage Minimum**:
-要求枚数が10枚以上で、Explanation Valueと既存の適格性を満たすSelection Coverage Facet候補が存在する場合だけ、`ordinary_combat`と`event`を各最低1枚選ぶ決定的なVideo Set selectorの境界。複数facetが未充足なら、終端similarity ceilingで各facetから1件ずつ選べる互換組合せを保持し、別facetの実現可能な最低枠を壊す高utility候補を先に選ばない。現在passで選べない候補は後続similarity passまで枠を保持する。候補が同じrecurring gameplayの既選択Variant Groupに属し、別の未代表Groupが選択の前提になる場合は、最低枠を残せる範囲でその前提Groupを先に選ぶ。終端でも重複、title上限、Spoiler Monotonicity Guardなどの制約に反する場合、または有効候補がなければ枠を他候補へ解放する。終端で解放した場合は選択済み画像を保持し、設定されたbase similarity ceilingから残りの通常選定を再開する。残り枚数はBlog Image Type Soft CoverageとMarginal Selection Utilityで動的に配分し、Selection Shortfallを低品質候補で埋めない。
+要求枚数が10枚以上で、Explanation Valueと既存の適格性を満たすSelection Coverage Facet候補が存在する場合だけ、`ordinary_combat`と`event`を各最低1枚選ぶ決定的なVideo Set selectorの境界。複数facetが未充足なら、終端similarity ceilingで各facetから1件ずつ選べ、必要な未代表Variant Groupの代表を含めても残り出力枠へ収まる互換組合せを保持し、別facetの実現可能な最低枠を壊す高utility候補を先に選ばない。現在passで選べない候補は後続similarity passまで枠を保持する。候補が同じrecurring gameplayの既選択Variant Groupに属し、別の未代表Groupが選択の前提になる場合は、最低枠を残せる範囲でその前提Groupを先に選ぶ。終端でも重複、title上限、Spoiler Monotonicity Guardなどの制約に反する場合、または有効候補がなければ枠を他候補へ解放する。終端で解放した場合、または緩和ceilingで最後の最低枠を満たした場合は、選択済み画像を保持し、設定されたbase similarity ceilingから残りの通常選定を再開する。要求枚数10枚以上では、既知facetが未発見または未充足の間もSelection Shortlistを拡張し、全Candidate Momentを使い切るまで候補を探索する。残り枚数はBlog Image Type Soft CoverageとMarginal Selection Utilityで動的に配分し、Selection Shortfallを低品質候補で埋めない。
 _Avoid_: fixed quota, output count guarantee, per-video minimum, invalid fallback
 
 **Explanation Value**:

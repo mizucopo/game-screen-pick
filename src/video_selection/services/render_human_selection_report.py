@@ -81,10 +81,7 @@ def render_human_selection_report(report: dict[str, object]) -> str:
             )
         )
         coverage_facets = _mapping(conditional_coverage["facets"])
-        for name in _ordered_mapping_keys(
-            coverage_facets,
-            _CONDITIONAL_COVERAGE_ORDER,
-        ):
+        for name in _CONDITIONAL_COVERAGE_ORDER:
             counts = _mapping(coverage_facets[name])
             lines.append(
                 f"| {name} | {counts['eligible']} | {counts['minimum']} | "

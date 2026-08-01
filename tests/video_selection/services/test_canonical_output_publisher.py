@@ -568,12 +568,19 @@ def test_reader_accepts_future_minor_unknown_fields_and_enum_values(
         "future_gameplay"
     )
     report_value = cast(dict[str, object], report)
-    (output_folder / "report.json").write_text(
-        serialize_canonical_selection_report(report_value),
-        encoding="utf-8",
-    )
     (output_folder / "report.md").write_text(
         render_human_selection_report(report_value),
+        encoding="utf-8",
+    )
+    conditional_coverage = cast(
+        dict[str, Any],
+        cast(dict[str, Any], report["selection_summary"])["conditional_coverage"],
+    )
+    cast(dict[str, Any], conditional_coverage["facets"])["future_facet"] = {
+        "future_metadata": "new_value"
+    }
+    (output_folder / "report.json").write_text(
+        serialize_canonical_selection_report(report_value),
         encoding="utf-8",
     )
 

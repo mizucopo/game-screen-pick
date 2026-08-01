@@ -12,7 +12,10 @@ from typing import Any, cast
 from jsonschema import Draft202012Validator
 from PIL import Image, UnidentifiedImageError
 
-from ..models.candidate_annotation import candidate_annotation_free_text_is_safe
+from ..models.candidate_annotation import (
+    SELECTION_COVERAGE_FACETS,
+    candidate_annotation_free_text_is_safe,
+)
 from ..models.canonical_publication_request import CanonicalPublicationRequest
 from ..models.report_value import string_looks_private
 from .render_human_selection_report import render_human_selection_report
@@ -292,8 +295,8 @@ def _validate_intrinsic_report_relationships(
         applies = bool(conditional_coverage["applies"])
         if applies != (int(run["requested_image_count"]) >= 10):
             raise ValueError("Canonical Selection Reportの条件付きcoverageが不正です")
-        for facet_value in conditional_facets.values():
-            facet = _mapping(facet_value)
+        for facet_name in SELECTION_COVERAGE_FACETS:
+            facet = _mapping(conditional_facets[facet_name])
             eligible = int(facet["eligible"])
             minimum = int(facet["minimum"])
             actual = int(facet["actual"])

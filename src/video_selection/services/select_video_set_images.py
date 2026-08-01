@@ -2,7 +2,7 @@
 
 import hashlib
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from fractions import Fraction
@@ -84,7 +84,7 @@ def select_from_shortlist_batches(
             similarity_threshold=similarity_threshold,
         )
         expansion_count = batch_index
-        if not last_result.shortfall:
+        if _shortlist_selection_is_complete(last_result):
             return replace(
                 last_result,
                 shortlist_expansion_count=expansion_count,
@@ -101,6 +101,19 @@ def select_from_shortlist_batches(
         last_result,
         shortlist_expansion_count=expansion_count,
         all_candidate_moments_exhausted=True,
+    )
+
+
+def _shortlist_selection_is_complete(result: VideoSetSelectionResult) -> bool:
+    """要求数と適用中の条件付き最低枠が充足されたかを返す。"""
+    if result.shortfall:
+        return False
+    if result.requested_count < CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT:
+        return True
+    return all(
+        result.selection_coverage_eligible_counts[facet] > 0
+        and not result.selection_coverage_reallocated[facet]
+        for facet in SELECTION_COVERAGE_FACETS
     )
 
 
@@ -236,9 +249,12 @@ def _select_with_major_spoiler_limit(
                         required_coverage_candidates,
                         remaining,
                         selected,
+                        actuals,
+                        variant_groups,
                         unmet_facets,
                         similarity_passes[-1],
                         major_spoiler_limit,
+                        requested_count - len(selected),
                     )
                 )
                 evaluated = feasible_coverage_candidates or required_coverage_candidates
@@ -305,6 +321,20 @@ def _select_with_major_spoiler_limit(
             if selected_coverage_facet is not None:
                 conditional_actuals[selected_coverage_facet] += 1
             remaining.remove(candidate)
+            if (
+                minimum_coverage_facet is not None
+                and all(
+                    conditional_actuals[facet] >= conditional_minimums[facet]
+                    for facet in SELECTION_COVERAGE_FACETS
+                )
+                and similarity_pass_index > 0
+                and len(selected) < requested_count
+            ):
+                for remaining_candidate in remaining:
+                    counterfactual_scores.pop(remaining_candidate.identifier, None)
+                similarity_pass_index = 0
+                restart_unrestricted_selection = True
+                break
         if len(selected) >= requested_count:
             break
         if restart_unrestricted_selection:
@@ -432,9 +462,12 @@ def _coverage_candidates_preserving_joint_feasibility(
     required_candidates: list[tuple[BlogCandidate, SelectionScore]],
     remaining: list[BlogCandidate],
     selected: list[SelectedBlogImage],
+    actuals: Mapping[str, int],
+    variant_groups: Mapping[str, str],
     unmet_facets: set[SelectionCoverageFacet],
     terminal_similarity_ceiling: float,
     major_spoiler_limit: int | None,
+    available_slots: int,
 ) -> list[tuple[BlogCandidate, SelectionScore]]:
     """他の未充足facetと両立する最低候補だけを返す。"""
     if len(unmet_facets) <= 1:
@@ -446,9 +479,12 @@ def _coverage_candidates_preserving_joint_feasibility(
             remaining,
             selected,
             (candidate,),
+            actuals,
+            variant_groups,
             unmet_facets - {candidate.annotation.selection_coverage_facet},
             terminal_similarity_ceiling,
             major_spoiler_limit,
+            available_slots,
         )
     ]
 
@@ -457,13 +493,25 @@ def _has_joint_coverage_completion(
     remaining: list[BlogCandidate],
     selected: list[SelectedBlogImage],
     chosen: tuple[BlogCandidate, ...],
+    actuals: Mapping[str, int],
+    variant_groups: Mapping[str, str],
     unassigned_facets: set[SelectionCoverageFacet],
     terminal_similarity_ceiling: float,
     major_spoiler_limit: int | None,
+    available_slots: int,
 ) -> bool:
     """選択済み最低候補と両立する残りfacetの組合せがあるかを返す。"""
     if not unassigned_facets:
-        return True
+        return _coverage_combination_fits_variant_budget(
+            remaining,
+            selected,
+            chosen,
+            actuals,
+            variant_groups,
+            terminal_similarity_ceiling,
+            major_spoiler_limit,
+            available_slots,
+        )
     facet = min(unassigned_facets)
     for candidate in remaining:
         if (
@@ -482,12 +530,87 @@ def _has_joint_coverage_completion(
             remaining,
             selected,
             (*chosen, candidate),
+            actuals,
+            variant_groups,
             unassigned_facets - {facet},
             terminal_similarity_ceiling,
             major_spoiler_limit,
+            available_slots,
         ):
             return True
     return False
+
+
+def _coverage_combination_fits_variant_budget(
+    remaining: list[BlogCandidate],
+    selected: list[SelectedBlogImage],
+    chosen: tuple[BlogCandidate, ...],
+    actuals: Mapping[str, int],
+    variant_groups: Mapping[str, str],
+    terminal_similarity_ceiling: float,
+    major_spoiler_limit: int | None,
+    available_slots: int,
+) -> bool:
+    """最低候補と必要なVariant Group代表が残り枠へ収まるかを返す。"""
+    selected_groups_by_scene: dict[str, set[str]] = defaultdict(set)
+    for item in selected:
+        selected_groups_by_scene[item.candidate.annotation.scene_slug].add(
+            item.variant_group_id
+        )
+    chosen_group_counts = Counter(
+        (
+            candidate.annotation.scene_slug,
+            variant_groups[candidate.identifier],
+        )
+        for candidate in chosen
+        if candidate.scene_selection_role == "recurring_gameplay"
+    )
+    repeated_groups = {
+        (scene_slug, group_id)
+        for (scene_slug, group_id), count in chosen_group_counts.items()
+        if count > 1 or group_id in selected_groups_by_scene[scene_slug]
+    }
+    if not repeated_groups:
+        return len(chosen) <= available_slots
+
+    represented_groups_by_scene = {
+        scene_slug: set(group_ids)
+        for scene_slug, group_ids in selected_groups_by_scene.items()
+    }
+    for candidate in chosen:
+        represented_groups_by_scene.setdefault(
+            candidate.annotation.scene_slug,
+            set(),
+        ).add(variant_groups[candidate.identifier])
+
+    repeated_scenes = {scene_slug for scene_slug, _group_id in repeated_groups}
+    chosen_ids = {candidate.identifier for candidate in chosen}
+    chosen_title_count = sum(
+        candidate.annotation.blog_image_type == "title" for candidate in chosen
+    )
+    prerequisite_groups: set[tuple[str, str]] = set()
+    for candidate in remaining:
+        scene_slug = candidate.annotation.scene_slug
+        group_id = variant_groups[candidate.identifier]
+        if (
+            candidate.identifier in chosen_ids
+            or scene_slug not in repeated_scenes
+            or group_id in represented_groups_by_scene[scene_slug]
+            or (
+                candidate.annotation.blog_image_type == "title"
+                and actuals["title"] + chosen_title_count >= 1
+            )
+            or not _coverage_combination_candidate_is_eligible(
+                candidate,
+                selected,
+                chosen,
+                terminal_similarity_ceiling,
+                major_spoiler_limit,
+            )
+        ):
+            continue
+        prerequisite_groups.add((scene_slug, group_id))
+    return len(chosen) + len(prerequisite_groups) <= available_slots
 
 
 def _coverage_combination_candidate_is_eligible(
