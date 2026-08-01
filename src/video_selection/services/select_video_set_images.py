@@ -110,9 +110,10 @@ def _shortlist_selection_is_complete(result: VideoSetSelectionResult) -> bool:
         return False
     if result.requested_count < CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT:
         return True
+    eligible_counts = result.selection_coverage_eligible_counts
+    reallocated = result.selection_coverage_reallocated
     return all(
-        result.selection_coverage_eligible_counts[facet] > 0
-        and not result.selection_coverage_reallocated[facet]
+        eligible_counts[facet] > 0 and not reallocated[facet]
         for facet in SELECTION_COVERAGE_FACETS
     )
 
@@ -565,12 +566,12 @@ def _coverage_combination_fits_variant_budget(
         for candidate in chosen
         if candidate.scene_selection_role == "recurring_gameplay"
     )
-    repeated_groups = {
-        (scene_slug, group_id)
+    repeated_scenes = {
+        scene_slug
         for (scene_slug, group_id), count in chosen_group_counts.items()
         if count > 1 or group_id in selected_groups_by_scene[scene_slug]
     }
-    if not repeated_groups:
+    if not repeated_scenes:
         return len(chosen) <= available_slots
 
     represented_groups_by_scene = {
@@ -583,7 +584,6 @@ def _coverage_combination_fits_variant_budget(
             set(),
         ).add(variant_groups[candidate.identifier])
 
-    repeated_scenes = {scene_slug for scene_slug, _group_id in repeated_groups}
     chosen_ids = {candidate.identifier for candidate in chosen}
     chosen_title_count = sum(
         candidate.annotation.blog_image_type == "title" for candidate in chosen
