@@ -779,13 +779,11 @@ class OllamaVisionRuntime:
             if not visibility_is_acceptable:
                 annotation = replace(annotation, explanation_value="none")
             elif combat_is_consistently_publishable:
+                if verified_combat_encounter_kind == "not_combat":
+                    verified_combat_encounter_kind = "uncertain"
                 annotation = replace(
                     annotation,
-                    combat_encounter_kind=(
-                        verified_combat_encounter_kind
-                        if verified_combat_encounter_kind != "not_combat"
-                        else "uncertain"
-                    ),
+                    combat_encounter_kind=verified_combat_encounter_kind,
                 )
         if annotation.explanation_value != "none" and requires_publication_verification:
             verification_input = _publication_boundary_verification_semantic_input(
@@ -1908,11 +1906,12 @@ def _parse_combat_encounter_verification(
         raise _schema_error("combat_encounter_verification_schema_invalid")
     combat_encounter_kind = value.get("combat_encounter_kind")
     combat_encounter_evidence = value.get("combat_encounter_evidence")
+    combat_is_visible = combat_encounter_kind != "not_combat"
+    evidence_is_present = combat_encounter_evidence != "none"
     if (
         combat_encounter_kind not in COMBAT_ENCOUNTER_KINDS
         or combat_encounter_evidence not in _COMBAT_ENCOUNTER_EVIDENCE
-        or (combat_encounter_kind != "not_combat")
-        != (combat_encounter_evidence != "none")
+        or combat_is_visible != evidence_is_present
     ):
         raise _schema_error("combat_encounter_verification_schema_invalid")
     return combat_encounter_kind
