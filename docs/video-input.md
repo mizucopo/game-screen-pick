@@ -17,7 +17,7 @@ game-screen-pick [OPTIONS] <VIDEO_INPUT_FOLDER> <OUTPUT_FOLDER>
 
 | Option | 意味 | CLI未指定時 |
 |---|---|---|
-| `-n, --image-count INTEGER` | 要求する画像枚数 | Effective Configurationで解決。組み込み既定値100 |
+| `-n, --image-count INTEGER` | 要求する画像枚数。10以上 | Effective Configurationで解決。組み込み既定値100 |
 | `-r, --recursive` | 子directoryも探索する | TOML、組み込み既定値`false`へ委譲 |
 | `--no-recursive` | CLIから再帰探索を明示的に無効化する | TOML、組み込み既定値へ委譲 |
 | `--config PATH` | 読み込むTOMLを明示する | configを読まない |

@@ -333,7 +333,7 @@ Candidate Annotationの主推論が掲載可能な非戦闘としたScene Kind `
 _Avoid_: combat visibility, contextual combat classification, final selection
 
 **Combat Visibility Verification**:
-Candidate Annotationの主推論が掲載可能とした戦闘、Combat Encounter Verificationで戦闘と確認されたframe、またはScene Kind `combat`以外でCombat Encounter Verificationの対象になった`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeかをstrict enumで観測する。戦闘と確認済みの場合、攻撃相手本体が`partial`・`absent`、構図が`edge_cropped`・`occluded`・`absent`、またはエフェクトだけならExplanation Valueを`none`に下げる。最初の確認が掲載可能なら、先の回答を推測しない別promptで同じ画素を独立再確認し、二回とも攻撃相手本体が`clear`、構図が`complete`、かつエフェクトだけではない場合だけCombat Visibility Edge Auditへ進む。Scene Kind `combat`以外で戦闘有無が二回とも否定された場合は可視性を必ず二回確認し、両方で敵本体が不在かつエフェクトだけではない場合、または両方で掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
+Candidate Annotationの主推論が掲載可能とした戦闘、Combat Encounter Verificationで戦闘と確認されたframe、またはScene Kind `combat`以外でCombat Encounter Verificationの対象になった`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeかをstrict enumで観測する。戦闘と確認済みの場合、player本体が`absent`、攻撃相手本体が`partial`・`absent`、構図が`edge_cropped`・`occluded`・`absent`、またはエフェクトだけならExplanation Valueを`none`に下げる。最初の確認が掲載可能なら、先の回答を推測しない別promptで同じ画素を独立再確認し、二回ともplayer本体が`clear`または`partial`、攻撃相手本体が`clear`、構図が`complete`、かつエフェクトだけではない場合だけCombat Visibility Edge Auditへ進む。Scene Kind `combat`以外で戦闘有無が二回とも否定された場合は可視性を必ず二回確認し、両方で敵本体が不在かつエフェクトだけではない場合、または両方で掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。Combat Encounter Verificationが敵status UIだけから戦闘とした場合も、player本体と攻撃相手本体の可視性が一致するまで`combat_action`へ昇格しない。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
 _Avoid_: second Candidate Annotation, contextual combat classification, final selection
 
 **Combat Visibility Edge Audit**:
@@ -417,7 +417,7 @@ machine-readable reportで各Processing Stageのstatus、完全なStage Fingerpr
 _Avoid_: host path dump, secret-bearing config, raw prompt, raw response, stack trace
 
 **Report Schema Version**:
-machine-readable reportの`game-screen-pick/report`契約を表すSemantic Version。初版は`1.0.0`とし、breaking changeはmajor、optional fieldまたはenum値の追加はminor、構造を変えない修正はpatchにする。同じmajorのreaderは未知fieldと未知enum値で失敗せず、未知majorだけを拒否する。過去schemaと既存reportは書き換えない。
+machine-readable reportの`game-screen-pick/report`契約を表すSemantic Version。初版は`1.0.0`とし、breaking changeはmajor、optional fieldまたはenum値の追加はminor、構造を変えない修正はpatchにする。readerはschema identityから対応majorの履歴schemaを選び、既知の必須構造を検証しながら同じmajorの追加fieldと文字列enum値を保持し、未知majorだけを拒否する。major固有の関係とMarkdown sectionを別majorへ強制せず、producerだけが現行schemaを厳密検証する。過去schemaと既存reportは書き換えない。
 _Avoid_: unversioned JSON, Markdown parser contract, automatic report migration, breaking minor change
 
 **Report Near Miss Set**:
@@ -464,6 +464,14 @@ _Avoid_: hard quota, per-video quota, Cinematic Soft Cap, guaranteed title image
 最大剰余法で丸めたBlog Image Type Soft Coverageの目標枚数へ未達の`normal_gameplay`、`event`、`menu`候補に0.10、まだtitleを選んでいないときの`title`候補に0.05を加えるsoft bonus。目標到達後はbonusを外すだけで、type超過へのpenaltyや`other`の予約枠は設けない。
 _Avoid_: hard quota, overflow penalty, guaranteed title image
 
+**Selection Coverage Facet**:
+要求枚数10枚以上の条件付き最低coverageに使う、Blog Candidateの画像内根拠に基づく役割。`ordinary_combat`と`event`を持つ。`ordinary_combat`はBlog Image Typeが`normal_gameplay`、Candidate Annotationで戦闘が直接観測済み、かつSpoiler Riskが汎用戦闘を示す`none`の場合だけ導出し、固有boss戦、探索、移動、障害物破壊を含めない。`event`はBlog Image Type `event`から導出する。Explanation Valueや最終適格性はこのfacet自体に含めない。
+_Avoid_: Blog Image Type, Scene Kind, free-form scene name, final eligibility
+
+**Conditional Coverage Minimum**:
+要求枚数が10枚以上で、Explanation Valueと既存の適格性を満たすSelection Coverage Facet候補が存在する場合だけ、`ordinary_combat`と`event`を各最低1枚選ぶ決定的なVideo Set selectorの境界。複数facetが未充足なら、終端similarity ceilingで各facetから1件ずつ選べ、必要な未代表Variant Groupの代表を含めても残り出力枠へ収まる互換組合せを保持し、別facetの実現可能な最低枠を壊す高utility候補を先に選ばない。現在passで選べない候補は後続similarity passまで枠を保持する。候補が同じrecurring gameplayの既選択Variant Groupに属し、別の未代表Groupが選択の前提になる場合は、最低枠を残せる範囲でその前提Groupを先に選ぶ。終端でも重複、title上限、Spoiler Monotonicity Guardなどの制約に反する場合、または有効候補がなければ枠を他候補へ解放する。終端で解放した場合、または緩和ceilingで最後の最低枠を満たした場合は、選択済み画像を保持し、設定されたbase similarity ceilingから残りの通常選定を再開する。要求枚数10枚以上では、既知facetが未発見または未充足の間もSelection Shortlistを拡張し、全Candidate Momentを使い切るまで候補を探索する。残り枚数はBlog Image Type Soft CoverageとMarginal Selection Utilityで動的に配分し、Selection Shortfallを低品質候補で埋めない。
+_Avoid_: fixed quota, output count guarantee, per-video minimum, invalid fallback
+
 **Explanation Value**:
 Representative FrameとそのCandidate Momentがブログ本文でplayや出来事を説明できる度合い。値は`none`、`low`、`medium`、`high`で、Candidate Annotationが意味評価として付与する。`none`はCandidate Annotation自体の失敗やmodelによる最終採否ではないが、決定的selectorが要求枚数の穴埋めに使わない適格性境界になる。
 _Avoid_: Quality Score, model confidence, final selection score
@@ -505,7 +513,7 @@ Blog Candidate単体の有用性を0から1で表す決定的な値。Quality Sc
 _Avoid_: final selection score, model confidence, diversity bonus, spoiler-adjusted utility
 
 **Marginal Selection Utility**:
-greedyなVideo Set selectorが次の1枚を選ぶたびに再計算する値。Selection Base UtilityからSpoiler PenaltyとTemporal Diversity Penaltyを引き、Blog Image Type Coverage Bonusを加える。視覚類似度はutilityではなく適格条件として扱い、同点はSpoiler Penalty、Quality Score、選択済み画像との最大視覚類似度、Video Order、Video Time、Frame Candidate IDの順で解消する。
+greedyなVideo Set selectorが次の1枚を選ぶたびに再計算する値。Selection Base UtilityからSpoiler PenaltyとTemporal Diversity Penaltyを引き、Blog Image Type Coverage Bonusを加える。Conditional Coverage Minimumが未充足なら対象facet候補の中でこのutilityを比較し、最低枠を満たした後または解放後は全適格候補を比較する。視覚類似度はutilityではなく適格条件として扱い、同点はSpoiler Penalty、Quality Score、選択済み画像との最大視覚類似度、Video Order、Video Time、Frame Candidate IDの順で解消する。
 _Avoid_: static candidate score, Ollama output, global optimization result
 
 **Blog Candidate**:

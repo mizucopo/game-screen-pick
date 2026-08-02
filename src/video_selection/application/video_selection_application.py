@@ -49,6 +49,7 @@ from ..services.select_video_set_images import (
     SpoilerSensitivity,
     select_from_shortlist_batches,
     select_video_set_images,
+    shortlist_selection_is_complete,
 )
 from ..services.selection_stage_artifacts import (
     restore_video_set_selection_result,
@@ -670,12 +671,16 @@ def _validate_selection_decision(
                 break
         if expected_expansion_count < 0:
             raise ValueError("Video Set Selection cacheのbatch境界が不正です")
-    if expected.shortfall and len(candidates) != request_count:
-        raise ValueError("Video Set Selection cacheが途中shortfallで停止しています")
+    selection_is_complete = shortlist_selection_is_complete(expected)
+    all_candidates_consumed = len(candidates) == request_count
+    if not selection_is_complete and not all_candidates_consumed:
+        raise ValueError("Video Set Selection cacheが途中で拡張を停止しています")
     expected = replace(
         expected,
         shortlist_expansion_count=expected_expansion_count,
-        all_candidate_moments_exhausted=expected.shortfall,
+        all_candidate_moments_exhausted=(
+            not selection_is_complete and all_candidates_consumed
+        ),
     )
     if selection != expected:
         raise ValueError("Video Set Selection cacheの決定結果が不正です")

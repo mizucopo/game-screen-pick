@@ -152,8 +152,8 @@
   },
   "provenance": {
     "contracts": {
-      "report_schema": "1.0.0",
-      "video_set_selection_policy": "video-set-selection-v2"
+      "report_schema": "2.0.0",
+      "video_set_selection_policy": "video-set-selection-v3"
     },
     "models": {
       "candidate_annotation": {
@@ -197,7 +197,7 @@
         "menu": 0.05,
         "normal_gameplay": 0.7
       },
-      "policy_version": "video-set-selection-v2",
+      "policy_version": "video-set-selection-v3",
       "similarity_base": 0.72,
       "similarity_final": 0.98,
       "spoiler_sensitivity": "medium"
@@ -259,7 +259,7 @@
   },
   "schema": {
     "name": "game-screen-pick/report",
-    "version": "1.0.0"
+    "version": "2.0.0"
   },
   "selected": [
     {
@@ -357,6 +357,24 @@
     "candidate_annotation_failures": 0,
     "candidate_annotations": 2,
     "candidate_moments": 2,
+    "conditional_coverage": {
+      "applies": false,
+      "facets": {
+        "event": {
+          "actual": 0,
+          "eligible": 0,
+          "minimum": 0,
+          "reallocated": false
+        },
+        "ordinary_combat": {
+          "actual": 0,
+          "eligible": 0,
+          "minimum": 0,
+          "reallocated": false
+        }
+      },
+      "minimum_requested_image_count": 10
+    },
     "final_similarity_ceiling": 0.98,
     "moments_without_valid_frame": 0,
     "not_selected": 1,

@@ -13,6 +13,7 @@ ExplanationValue = Literal["none", "low", "medium", "high"]
 ScreenTextKind = Literal["none", "dialogue", "menu", "title", "hud", "other"]
 ContextCueRelevance = Literal["unavailable", "none", "weak", "strong"]
 SpoilerRisk = Literal["none", "low", "medium", "high"]
+SelectionCoverageFacet = Literal["ordinary_combat", "event"]
 
 BLOG_IMAGE_TYPES = cast(tuple[BlogImageType, ...], get_args(BlogImageType))
 EXPLANATION_VALUES = cast(tuple[ExplanationValue, ...], get_args(ExplanationValue))
@@ -22,6 +23,10 @@ CONTEXT_CUE_RELEVANCES = cast(
     get_args(ContextCueRelevance),
 )
 SPOILER_RISKS = cast(tuple[SpoilerRisk, ...], get_args(SpoilerRisk))
+SELECTION_COVERAGE_FACETS = cast(
+    tuple[SelectionCoverageFacet, ...],
+    get_args(SelectionCoverageFacet),
+)
 
 _MIN_VERBATIM_SPAN_LENGTH = 6
 _MIN_VERBATIM_CUE_LENGTH = 3
@@ -137,6 +142,7 @@ class CandidateAnnotation:
     supporting_context_cue_ids: tuple[str, ...] = ()
     spoiler_risk: SpoilerRisk = "none"
     spoiler_evidence: str = ""
+    combat_action: bool = False
 
     def __post_init__(self) -> None:
         """domain enum、所属ID、evidenceの整合を検証する。"""
@@ -160,6 +166,7 @@ class CandidateAnnotation:
             or self.screen_text_kind not in SCREEN_TEXT_KINDS
             or self.context_relevance not in CONTEXT_CUE_RELEVANCES
             or self.spoiler_risk not in SPOILER_RISKS
+            or not isinstance(self.combat_action, bool)
             or not candidate_annotation_relationships_are_valid(
                 self.context_relevance,
                 self.supporting_context_cue_ids,
@@ -169,3 +176,16 @@ class CandidateAnnotation:
         ):
             msg = "Candidate Annotationのdomain fieldが不正です"
             raise ValueError(msg)
+
+    @property
+    def selection_coverage_facet(self) -> SelectionCoverageFacet | None:
+        """条件付き最低coverageに使う画像内根拠のある役割を返す。"""
+        if self.blog_image_type == "event":
+            return "event"
+        if (
+            self.blog_image_type == "normal_gameplay"
+            and self.combat_action
+            and self.spoiler_risk == "none"
+        ):
+            return "ordinary_combat"
+        return None

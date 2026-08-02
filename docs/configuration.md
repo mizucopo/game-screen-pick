@@ -28,7 +28,7 @@ Effective Configurationは設定項目ごとに次の順で解決します。
 |---|---|---|
 | `config_version` | exact string `1.0.0`、必須 | なし |
 | `input.recursive` | boolean | `false` |
-| `selection.image_count` | integer、1以上 | `100` |
+| `selection.image_count` | integer、10以上 | `100` |
 | `selection.scene_hint` | 空でないstring、任意 | なし |
 | `selection.spoiler_sensitivity` | `low` / `medium` / `high` | `medium` |
 | `selection.similarity_threshold` | number、0以上0.98以下 | `0.72` |
@@ -61,6 +61,8 @@ Effective Configurationは設定項目ごとに次の順で解決します。
 | `speech_to_text.overlap_seconds` | number、0以上かつchunk未満 | `5` |
 
 `decode_backend = "nvdec"`、STT device、compute typeはsyntaxだけでなくpreflightの実能力検査にも合格する必要があります。word timestamp、Video Time mapping、chunk overlapの所有規則、Context Cue reliability policyは設定で無効化できないdomain contractです。
+
+`selection.image_count`の10枚下限は、通常戦闘とイベントの条件付き最低coverageを有効にしたうえで残りを動的配分できる公開境界です。CLIの`--image-count`だけでなく、明示TOMLを含めて優先順位を解決した値へ適用します。有効候補不足時の出力枚数を10枚へ水増しする規則ではなく、その場合はSelection Shortfallになります。
 
 ## Video Scanの動的並列制御
 

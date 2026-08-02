@@ -84,6 +84,15 @@ Fractional targets use the largest-remainder method. Equal remainders are resolv
 
 An eligible `normal_gameplay`, `event`, or `menu` candidate receives a `+0.10` Blog Image Type Coverage Bonus while the selected count for its type is below target. The bonus becomes zero at target; exceeding a target has no penalty. `other` never receives a coverage bonus. `title` receives `+0.05` until one title is selected, after which every further title candidate is ineligible. This is a hard maximum of one title, not a guaranteed title slot.
 
+## Conditional minimum coverage
+
+The public Effective Configuration requires `N >= 10`. At that size, the selector applies a conditional minimum of one selected image to each of these facets when an eligible candidate exists:
+
+- `ordinary_combat`: `normal_gameplay` with directly observed combat action and Spoiler Risk `none`. Named or unique boss fights, exploration, movement, and obstacle interactions do not qualify.
+- `event`: Blog Image Type `event`.
+
+Explanation Value, visual eligibility, the title maximum, existing duplicate boundaries, and the Spoiler Monotonicity Guard remain stronger than these minimums. A missing or still-ineligible facet releases its slot rather than filling it with a poor image. After satisfiable minimums are met, all remaining slots use the normal utility policy; the resulting proportions are therefore dynamic rather than a fixed quota.
+
 ## Temporal and visual diversity
 
 Video Set Progress concatenates Video Durations in Video Order and normalizes a Candidate Moment's cumulative time to `[0, 1)`. It is used only for temporal diversity, not as quality or spoiler evidence.
@@ -118,7 +127,7 @@ Marginal Selection Utility =
   - Temporal Diversity Penalty
 ```
 
-The selector chooses the highest value and recomputes all coverage and temporal terms before choosing the next image. Ties are resolved by:
+While an applicable conditional minimum is unmet, the selector compares eligible candidates belonging to unmet facets before the unrestricted pool. When multiple facets remain unmet, it first retains only candidates that participate in at least one jointly compatible terminal-ceiling choice containing one candidate per unmet facet and all Variant Group representatives required by that choice within the remaining output capacity; a locally higher-utility choice cannot make another feasible minimum unsatisfiable. If a candidate in an already represented recurring-gameplay Variant Group first requires another group from that scene to be represented, that eligible prerequisite advances while enough output capacity remains reserved for every unmet minimum. If a minimum candidate is blocked only by the current similarity pass, it preserves room through later passes. At the terminal pass an unsatisfiable minimum is released; selected images are retained and unrestricted selection restarts from the configured base similarity ceiling. Satisfying the final minimum on a relaxed pass performs the same base-ceiling restart before filling unrestricted slots. The selector otherwise chooses the highest value and recomputes all coverage and temporal terms before choosing the next image. Ties are resolved by:
 
 1. lower Spoiler Penalty;
 2. higher Quality Score;
@@ -131,7 +140,7 @@ Selection starts at the normal similarity ceiling and preserves selected images 
 
 ## Shortfall and failure
 
-If the current annotated Selection Shortlist cannot produce `N` images at the terminal similarity ceiling, the Video Set Stage extends it in deterministic local shortlist order, completes Candidate Annotation for the added Candidate Moments, and recomputes selection. Batch sizing and operational limits belong to the runtime-capacity design.
+If the current annotated Selection Shortlist cannot produce `N` images at the terminal similarity ceiling, the Video Set Stage extends it in deterministic local shortlist order, completes Candidate Annotation for the added Candidate Moments, and recomputes selection. For `N >= 10`, it also extends while a known conditional facet has not yet been discovered or its minimum remains unsatisfied. Expansion stops when the output and known minima are complete or all valid Candidate Moments are exhausted. Batch sizing and operational limits belong to the runtime-capacity design.
 
 After all valid Candidate Moments are exhausted, selecting fewer than `N` images is a Selection Shortfall. The run publishes the selected images, completes successfully with a warning, and reports requested count, selected count, the final similarity pass, and reason counts. It never fills a shortfall with:
 
@@ -152,9 +161,9 @@ With `N=10`, default Spoiler Sensitivity `medium`, no selected images, and all c
 | B | useful late normal gameplay | 0.916 | +0.10 | 0 | **1.016** |
 | D | explanatory mid-game event | 0.821 | +0.10 | 0 | **0.921** |
 | C | late major-spoiler event | 0.902 | +0.10 | -0.10 | **0.902** |
-| A | ordinary early gameplay | 0.741 | +0.10 | 0 | **0.841** |
+| A | ordinary early combat | 0.741 | +0.10 | 0 | **0.841** |
 
-The first-step order is B, D, C, A. Late position does not lower B, while C's soft spoiler penalty does not force it below an ordinary early image. After choosing B at progress 0.82, C at progress 0.84 receives a 0.064 temporal penalty, so the next order becomes D at 0.921, A at 0.841, then C at 0.838.
+Because `N=10`, D and A satisfy the two conditional facets and are selected before the unrestricted pool, in D then A utility order. B remains the strongest unrestricted candidate. Late position does not lower B, while C's soft spoiler penalty does not make it a hard rejection.
 
 If seven gameplay and one event image have already been selected for `N=10`, a gameplay candidate at 0.86 remains 0.86, an event candidate at 0.79 becomes 0.89 from coverage, and a gameplay candidate at 0.92 remains 0.92. Coverage helps the under-target event without overruling a clearly stronger gameplay image.
 
@@ -162,6 +171,6 @@ If seven gameplay and one event image have already been selected for `N=10`, a g
 
 Changing requested count, Spoiler Sensitivity, penalty weights, or coverage targets can reuse Candidate Annotation because these inputs affect only deterministic final selection. The selection-policy version must still be part of the final selection stage fingerprint.
 
-The report must retain enough diagnostic data to reproduce each decision: utility components, type targets and actuals, spoiler setting and penalty, the monotonicity count limit, progress distance and temporal penalty, visual threshold/pass, nearest selected similarity, Variant Group behavior, tie-break use, and Selection Shortfall reasons. Unselected candidates retain their best observed counterfactual utility and one stable rejection code. The exact public report schema is decided with the CLI/config/report contract.
+The report must retain enough diagnostic data to reproduce each decision: utility components, type targets and actuals, conditional-facet eligible/minimum/actual counts and reallocation, spoiler setting and penalty, the monotonicity count limit, progress distance and temporal penalty, visual threshold/pass, nearest selected similarity, Variant Group behavior, tie-break use, and Selection Shortfall reasons. Unselected candidates retain their best observed counterfactual utility and one stable rejection code. The exact public report schema is decided with the CLI/config/report contract.
 
 Greedy selection is intentionally preferred over a global optimizer: it is deterministic, incremental, and reportable, while still allowing coverage and temporal effects to react after each selected image.
