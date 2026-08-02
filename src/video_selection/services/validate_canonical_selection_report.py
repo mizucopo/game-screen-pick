@@ -84,7 +84,10 @@ def load_validated_canonical_selection_report(
         report_schema_major = validate_report_schema_compatibility(report)
         _validate_reader_schema(report, report_schema_major)
         _validate_json_artifact(report, report, output_folder)
-        _validate_intrinsic_report_relationships(report)
+        _validate_intrinsic_report_relationships(
+            report,
+            allow_unknown_run_status=True,
+        )
         _validate_images(report, output_folder)
         _validate_markdown(report, output_folder)
         _validate_published_strings_are_private_safe(report)
@@ -264,6 +267,8 @@ def _validate_report_relationships(
 
 def _validate_intrinsic_report_relationships(
     report: dict[str, object],
+    *,
+    allow_unknown_run_status: bool = False,
 ) -> None:
     """外部requestなしでCanonical report内部の参照と件数を検証する。"""
     run = _mapping(report["run"])
@@ -274,8 +279,13 @@ def _validate_intrinsic_report_relationships(
     rejection_summary = _mapping(report["rejection_summary"])
     warning_codes = [str(item["code"]) for item in warnings]
     expected_status = "completed_with_warnings" if warnings else "completed"
+    run_status = str(run["status"])
+    status_is_valid = run_status == expected_status or (
+        allow_unknown_run_status
+        and run_status not in {"completed", "completed_with_warnings"}
+    )
     if (
-        run["status"] != expected_status
+        not status_is_valid
         or len(warning_codes) != len(set(warning_codes))
         or len(selected) != run["selected_image_count"]
         or len(selected) != selection_summary["selected"]

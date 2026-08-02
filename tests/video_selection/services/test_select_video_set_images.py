@@ -15,6 +15,7 @@ from src.video_selection.models.candidate_annotation import (
     CandidateAnnotation,
     ContextCueRelevance,
     ExplanationValue,
+    SelectionCoverageFacet,
     SpoilerRisk,
 )
 from src.video_selection.models.decoded_video_frame import DecodedVideoFrame
@@ -30,6 +31,7 @@ from src.video_selection.services.analyze_neutral_images import (
 )
 from src.video_selection.services.select_video_set_images import (
     SpoilerSensitivity,
+    select_completable_coverage_prerequisites,
     select_from_shortlist_batches,
     select_video_set_images,
 )
@@ -1468,6 +1470,132 @@ def test_joint_feasibility_collapses_spoiler_limited_variant_prerequisites() -> 
     assert "ordinary_combat_minimum_coverage" in repeated_selection.reason_codes
     assert result.major_spoiler_limit == 1
     assert result.major_spoiler_selected_count == 1
+
+
+def test_prerequisites_preserve_a_completable_coverage_path() -> None:
+    """残り枠へ収まる最低coverage経路の前提候補だけが保持されること。
+
+    Arrange:
+        - 選択済みGroupを再利用するイベント経路が二つ用意される
+        - 一方は高utilityの未代表Group 8件、他方は低utilityの1件を必要とする
+        - 前提とイベントに使える残り枠が2件だけ用意される
+    Act:
+        - 選択可能な前提候補から完了可能な経路が抽出される
+    Assert:
+        - 2枠へ収まる低utility前提だけが保持されること
+        - 収まらない経路の高utility前提が混入しないこと
+    """
+    # Arrange
+    feature_count = 10
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    selected_candidates = tuple(
+        _candidate(
+            f"selected-{scene}",
+            quality=0.8,
+            feature=unit_feature(0),
+            progress=Fraction(index + 1, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+            scene_selection_role="recurring_gameplay",
+            scene_slug=scene,
+        )
+        for index, scene in enumerate(("infeasible", "feasible"))
+    )
+    selected = [
+        select_video_set_images(
+            (candidate,),
+            requested_count=1,
+            spoiler_sensitivity="medium",
+            similarity_threshold=0.72,
+        ).selected[0]
+        for candidate in selected_candidates
+    ]
+    events = tuple(
+        _candidate(
+            f"event-{scene}",
+            quality=0.8,
+            feature=(0.96, math.sqrt(1 - 0.96**2), *(0.0 for _ in range(8))),
+            progress=Fraction(index + 3, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            scene_selection_role="recurring_gameplay",
+            scene_slug=scene,
+        )
+        for index, scene in enumerate(("infeasible", "feasible"))
+    )
+    infeasible_prerequisites = tuple(
+        _candidate(
+            f"infeasible-prerequisite-{index}",
+            quality=1.0,
+            feature=unit_feature(index),
+            progress=Fraction(index + 5, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+            scene_selection_role="recurring_gameplay",
+            scene_slug="infeasible",
+        )
+        for index in range(2, 10)
+    )
+    feasible_prerequisite = _candidate(
+        "feasible-prerequisite",
+        quality=0.1,
+        feature=unit_feature(2),
+        progress=Fraction(15, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="low",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="feasible",
+    )
+    prerequisites = (*infeasible_prerequisites, feasible_prerequisite)
+    evaluated = [
+        (
+            candidate,
+            select_video_set_images(
+                (candidate,),
+                requested_count=1,
+                spoiler_sensitivity="medium",
+                similarity_threshold=0.72,
+            )
+            .selected[0]
+            .score,
+        )
+        for candidate in prerequisites
+    ]
+    variant_groups = {
+        events[0].identifier: selected[0].variant_group_id,
+        events[1].identifier: selected[1].variant_group_id,
+        **{
+            candidate.identifier: f"variant_infeasible_{index}"
+            for index, candidate in enumerate(infeasible_prerequisites)
+        },
+        feasible_prerequisite.identifier: "variant_feasible_prerequisite",
+    }
+    unmet_facets: set[SelectionCoverageFacet] = {"event"}
+
+    # Act
+    result = select_completable_coverage_prerequisites(
+        evaluated,
+        [*events, *prerequisites],
+        selected,
+        {"title": 0},
+        unmet_facets,
+        variant_groups,
+        0.97,
+        None,
+        2,
+    )
+
+    # Assert
+    assert [candidate.identifier for candidate, _score in result] == [
+        feasible_prerequisite.identifier
+    ]
 
 
 def test_variant_prerequisite_advances_while_minimum_slot_is_reserved() -> None:

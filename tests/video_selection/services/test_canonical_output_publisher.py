@@ -562,6 +562,7 @@ def test_reader_accepts_future_minor_unknown_fields_and_enum_values(
     )
     output_folder = request.configuration.output_folder
     cast(dict[str, Any], report["schema"])["version"] = "2.1.0"
+    cast(dict[str, Any], report["run"])["status"] = "completed_with_diagnostics"
     report["future_field"] = {"future_enum": "new_value"}
     selected = cast(list[dict[str, Any]], report["selected"])
     cast(dict[str, Any], selected[0]["classification"])["blog_image_type"] = (

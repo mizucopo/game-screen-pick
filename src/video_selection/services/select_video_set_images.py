@@ -235,14 +235,16 @@ def _select_with_major_spoiler_limit(
                 for candidate, score in evaluated
                 if candidate.annotation.selection_coverage_facet in unmet_facets
             ]
-            coverage_prerequisites = _conditional_coverage_prerequisites(
+            coverage_prerequisites = select_completable_coverage_prerequisites(
                 evaluated,
                 remaining,
                 selected,
+                actuals,
                 unmet_facets,
                 variant_groups,
                 similarity_passes[-1],
                 major_spoiler_limit,
+                requested_count - len(selected),
             )
             if required_coverage_candidates:
                 feasible_coverage_candidates = (
@@ -747,20 +749,23 @@ def _coverage_combination_candidate_is_eligible(
     return major_spoiler_count <= major_spoiler_limit
 
 
-def _conditional_coverage_prerequisites(
+def select_completable_coverage_prerequisites(
     evaluated: list[tuple[BlogCandidate, SelectionScore]],
     remaining: list[BlogCandidate],
     selected: list[SelectedBlogImage],
+    actuals: Mapping[str, int],
     unmet_facets: set[SelectionCoverageFacet],
     variant_groups: Mapping[str, str],
     terminal_similarity_ceiling: float,
     major_spoiler_limit: int | None,
+    available_slots: int,
 ) -> list[tuple[BlogCandidate, SelectionScore]]:
-    """最低候補と同じgroupを再選択する前に必要な未代表groupを返す。"""
+    """完了可能な最低候補経路に必要な未代表groupだけを返す。"""
     prerequisite_ids: set[str] = set()
     for coverage_candidate in remaining:
+        coverage_facet = coverage_candidate.annotation.selection_coverage_facet
         if (
-            coverage_candidate.annotation.selection_coverage_facet not in unmet_facets
+            coverage_facet not in unmet_facets
             or not _has_explanation_value(coverage_candidate)
             or coverage_candidate.scene_selection_role != "recurring_gameplay"
             or _major_spoiler_limit_reached(
@@ -781,13 +786,32 @@ def _conditional_coverage_prerequisites(
         }
         if variant_groups[coverage_candidate.identifier] not in selected_groups:
             continue
-        prerequisite_ids.update(
-            candidate.identifier
-            for candidate, _score_value in evaluated
-            if candidate.annotation.scene_slug
-            == coverage_candidate.annotation.scene_slug
-            and variant_groups[candidate.identifier] not in selected_groups
-        )
+        for candidate, _score_value in evaluated:
+            if (
+                candidate.annotation.scene_slug
+                != coverage_candidate.annotation.scene_slug
+                or variant_groups[candidate.identifier] in selected_groups
+                or not _coverage_combination_candidate_is_eligible(
+                    coverage_candidate,
+                    selected,
+                    (candidate,),
+                    terminal_similarity_ceiling,
+                    major_spoiler_limit,
+                )
+                or not _has_joint_coverage_completion(
+                    remaining,
+                    selected,
+                    (candidate, coverage_candidate),
+                    actuals,
+                    variant_groups,
+                    unmet_facets - {coverage_facet},
+                    terminal_similarity_ceiling,
+                    major_spoiler_limit,
+                    available_slots,
+                )
+            ):
+                continue
+            prerequisite_ids.add(candidate.identifier)
     return [
         (candidate, score)
         for candidate, score in evaluated
