@@ -1,7 +1,9 @@
 """決定的なVideo Set selectorのtest。"""
 
+import hashlib
 import math
 from fractions import Fraction
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -93,10 +95,15 @@ def _candidate(
     video_order: int = 0,
     combat_action: bool = False,
 ) -> BlogCandidate:
+    digest = (
+        digest_character * 64
+        if len(digest_character) == 1 and digest_character in "0123456789abcdef"
+        else hashlib.sha256(digest_character.encode()).hexdigest()
+    )
     frame = FrameCandidate(
-        identifier="frm_" + digest_character * 64,
+        identifier="frm_" + digest,
         image_bytes=digest_character.encode(),
-        video_fingerprint=digest_character * 64,
+        video_fingerprint=digest,
         stream_index=0,
         source_pts=int(progress * 1000),
         origin_pts=0,
@@ -113,16 +120,14 @@ def _candidate(
     )
     annotation = CandidateAnnotation(
         candidate=frame,
-        candidate_moment_id="mom_" + digest_character * 64,
+        candidate_moment_id="mom_" + digest,
         summary=f"candidate {digest_character}",
         scene_slug=scene_slug or "scene-" + digest_character,
         blog_image_type=blog_image_type,
         explanation_value=explanation_value,
         context_relevance=context_relevance,
         supporting_context_cue_ids=(
-            ("cue_" + digest_character * 64,)
-            if context_relevance in {"weak", "strong"}
-            else ()
+            ("cue_" + digest,) if context_relevance in {"weak", "strong"} else ()
         ),
         spoiler_risk=spoiler_risk,
         spoiler_evidence=(
@@ -135,7 +140,87 @@ def _candidate(
         scene_selection_role=scene_selection_role,
         video_order=video_order,
         video_set_progress=progress,
-        shortlist_rank=ord(digest_character),
+        shortlist_rank=(
+            ord(digest_character) if len(digest_character) == 1 else int(digest[:8], 16)
+        ),
+    )
+
+
+def _hard_limit_variant_candidates(
+    hard_limit: Literal["title", "spoiler"],
+) -> tuple[BlogCandidate, ...]:
+    """hard limitで相互排他になるVariant Group候補集合を返す。"""
+    feature_count = 19
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    repeated_combat = _candidate(
+        f"repeated-combat-{hard_limit}",
+        quality=0.9,
+        feature=unit_feature(0),
+        progress=Fraction(1, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+        combat_action=True,
+    )
+    event = _candidate(
+        f"event-{hard_limit}",
+        quality=0.8,
+        feature=(0.96, math.sqrt(1 - 0.96**2), *(0.0 for _ in range(17))),
+        progress=Fraction(2, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="battle",
+    )
+    alternative_combat = _candidate(
+        f"alternative-combat-{hard_limit}",
+        quality=0.1,
+        feature=unit_feature(2),
+        progress=Fraction(3, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_action=True,
+    )
+    prerequisite_groups = tuple(
+        _candidate(
+            f"{hard_limit}-group-{index}",
+            quality=0.1,
+            feature=unit_feature(index),
+            progress=Fraction(index + 1, 100),
+            blog_image_type=("title" if hard_limit == "title" else "normal_gameplay"),
+            explanation_value="high",
+            context_relevance="none",
+            spoiler_risk="high" if hard_limit == "spoiler" else "none",
+            scene_selection_role="recurring_gameplay",
+            scene_slug="battle",
+        )
+        for index in range(3, 12)
+    )
+    fillers = tuple(
+        _candidate(
+            f"{hard_limit}-filler-{index}",
+            quality=1.0,
+            feature=unit_feature(index),
+            progress=Fraction(index + 1, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+        )
+        for index in range(12, 19)
+    )
+    return (
+        repeated_combat,
+        event,
+        alternative_combat,
+        *prerequisite_groups,
+        *fillers,
     )
 
 
@@ -1304,6 +1389,85 @@ def test_joint_feasibility_reserves_variant_prerequisite_cost() -> None:
         "ordinary_combat": False,
         "event": False,
     }
+
+
+def test_joint_feasibility_collapses_title_limited_variant_prerequisites() -> None:
+    """Title上限で無効になるVariant Groupが前提枠へ重複計上されないこと。
+
+    Arrange:
+        - 高utility通常戦闘とイベントが同じVariant Groupに属する
+        - 同じsceneにtitleだけを持つ未代表Groupが9件用意される
+        - 別sceneに低utility通常戦闘と通常候補7件が用意される
+    Act:
+        - 10枚のVideo Set選定が実行される
+    Assert:
+        - title 1枚で残りtitle Groupが無効になり高utilityの最低枠候補が選ばれること
+        - 低utility通常戦闘に最低枠が置き換えられないこと
+    """
+    # Arrange
+    candidates = _hard_limit_variant_candidates("title")
+    repeated_combat, event, alternative_combat = candidates[:3]
+
+    # Act
+    result = select_video_set_images(
+        candidates,
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    repeated_selection = next(
+        item
+        for item in result.selected
+        if item.candidate.identifier == repeated_combat.identifier
+    )
+    assert repeated_combat.identifier in selected_ids
+    assert event.identifier in selected_ids
+    assert alternative_combat.identifier not in selected_ids
+    assert "ordinary_combat_minimum_coverage" in repeated_selection.reason_codes
+    assert result.blog_image_type_actuals["title"] == 1
+
+
+def test_joint_feasibility_collapses_spoiler_limited_variant_prerequisites() -> None:
+    """Spoiler上限で無効になるVariant Groupが前提枠へ重複計上されないこと。
+
+    Arrange:
+        - 高utility通常戦闘とイベントが同じVariant Groupに属する
+        - 同じsceneにMajor Spoilerだけを持つ未代表Groupが9件用意される
+        - low感度の選定でMajor Spoiler上限が1枚になる候補順が用意される
+    Act:
+        - medium感度で10枚のVideo Set選定が実行される
+    Assert:
+        - Major Spoiler 1枚で残りGroupが無効になり高utilityの最低枠候補が選ばれること
+        - 低utility通常戦闘に最低枠が置き換えられないこと
+    """
+    # Arrange
+    candidates = _hard_limit_variant_candidates("spoiler")
+    repeated_combat, event, alternative_combat = candidates[:3]
+
+    # Act
+    result = select_video_set_images(
+        candidates,
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    repeated_selection = next(
+        item
+        for item in result.selected
+        if item.candidate.identifier == repeated_combat.identifier
+    )
+    assert repeated_combat.identifier in selected_ids
+    assert event.identifier in selected_ids
+    assert alternative_combat.identifier not in selected_ids
+    assert "ordinary_combat_minimum_coverage" in repeated_selection.reason_codes
+    assert result.major_spoiler_limit == 1
+    assert result.major_spoiler_selected_count == 1
 
 
 def test_variant_prerequisite_advances_while_minimum_slot_is_reserved() -> None:

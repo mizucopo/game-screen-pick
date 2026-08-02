@@ -12,9 +12,19 @@ import pytest
 from src.video_selection.application.video_selection_application import (
     VideoSelectionApplication,
 )
+from src.video_selection.models.blog_candidate import BlogCandidate
+from src.video_selection.models.candidate_annotation import CandidateAnnotation
+from src.video_selection.models.candidate_annotation_request import (
+    CandidateAnnotationRequest,
+)
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.run_status import RunStatus
+from src.video_selection.models.scene_catalog import SceneCatalog
+from src.video_selection.models.video_stage_result import VideoStageResult
+from src.video_selection.services.build_blog_candidates import (
+    build_blog_candidates as build_actual_blog_candidates,
+)
 from src.video_selection.services.run_progress_tracker import RunProgressTracker
 from tests.video_selection.fakes.echo_structured_vision_runtime import (
     EchoStructuredVisionRuntime,
@@ -173,6 +183,118 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     ]
     assert cold_selection["tool_refs"] == ["video_selection"]
     assert cold_selection["contract_refs"] == ["video_set_selection_policy"]
+
+
+def test_full_exhausted_selection_with_reallocated_coverage_reuses_warm_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """最低枠再配分後に全候補を消費したSelection cacheが再利用されること。
+
+    Arrange:
+        - 条件付き最低枠候補を含まない相互に異なるCandidate 10件が用意される
+        - 要求10枚のcold runで全Candidateが選ばれ最低枠が再配分される
+    Act:
+        - 同じcacheと別Output Folderでwarm runが実行される
+    Assert:
+        - 全Candidate消費済みのSelection cacheが破棄されず再利用されること
+        - warm runでVision推論とSelectionが再計算されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    for index in range(5):
+        (input_folder / f"chapter-{index}.mkv").write_bytes(
+            f"video-content-{index}".encode()
+        )
+    configuration = EffectiveConfiguration(
+        video_input_folder=input_folder,
+        output_folder=tmp_path / "cold-output",
+        image_count=10,
+        candidate_density_per_minute=3.0,
+    )
+
+    def build_distinct_blog_candidates(
+        requests: tuple[CandidateAnnotationRequest, ...],
+        annotations: tuple[CandidateAnnotation, ...],
+        scene_catalog: SceneCatalog,
+        video_stage_results: tuple[VideoStageResult, ...],
+        *,
+        shortlist_rank_offset: int = 0,
+    ) -> tuple[BlogCandidate, ...]:
+        candidates = build_actual_blog_candidates(
+            requests,
+            annotations,
+            scene_catalog,
+            video_stage_results,
+            shortlist_rank_offset=shortlist_rank_offset,
+        )
+        result: list[BlogCandidate] = []
+        for index, candidate in enumerate(candidates, start=shortlist_rank_offset):
+            analysis = candidate.annotation.candidate.analysis
+            if analysis is None:
+                msg = "test CandidateにNeutral Image Analysisがありません"
+                raise AssertionError(msg)
+            feature = tuple(float(position == index) for position in range(24))
+            frame = replace(
+                candidate.annotation.candidate,
+                analysis=replace(analysis, visual_feature=feature),
+            )
+            annotation = replace(candidate.annotation, candidate=frame)
+            result.append(replace(candidate, annotation=annotation))
+        return tuple(result)
+
+    monkeypatch.setattr(
+        "src.video_selection.application.video_selection_application."
+        "build_blog_candidates",
+        build_distinct_blog_candidates,
+    )
+    cold = _application(
+        FakeVideoStageMediaRuntime(distant_moments=True),
+        EchoStructuredVisionRuntime(),
+    ).run(configuration)
+    warm_vision = EchoStructuredVisionRuntime()
+    warm_observer = RecordingRunObserver()
+    warm_progress = RunProgressTracker(warm_observer)
+    warm_progress.start_run()
+
+    # Act
+    warm = _application(
+        FakeVideoStageMediaRuntime(distant_moments=True),
+        warm_vision,
+        observer=warm_observer,
+        progress=warm_progress,
+    ).run(replace(configuration, output_folder=tmp_path / "warm-output"))
+
+    # Assert
+    cold_report = json.loads(
+        (cold.output_folder / "report.json").read_text(encoding="utf-8")
+    )
+    warm_report = json.loads(
+        (warm.output_folder / "report.json").read_text(encoding="utf-8")
+    )
+    assert cold.selected_count == 10
+    conditional_facets = cold_report["selection_summary"]["conditional_coverage"][
+        "facets"
+    ]
+    assert {
+        facet: values["reallocated"] for facet, values in conditional_facets.items()
+    } == {"event": True, "ordinary_combat": True}
+    assert (
+        cold_report["selection_summary"]["shortfall"]["all_candidate_moments_exhausted"]
+        is True
+    )
+    assert warm_report["selected"] == cold_report["selected"]
+    assert warm_vision.scene_catalog_calls == []
+    assert warm_vision.candidate_annotation_calls == []
+    selection_events = tuple(
+        event
+        for event in warm_observer.progress_events
+        if event.kind == "cache" and event.stage is ProcessingStage.SELECT_IMAGES
+    )
+    assert len(selection_events) == 1
+    assert selection_events[0].reuse_count == 1
+    assert selection_events[0].recompute_count == 0
 
 
 def test_restart_after_atomic_publication_reuses_exact_output(

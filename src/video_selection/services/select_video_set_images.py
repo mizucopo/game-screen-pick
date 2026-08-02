@@ -84,7 +84,7 @@ def select_from_shortlist_batches(
             similarity_threshold=similarity_threshold,
         )
         expansion_count = batch_index
-        if _shortlist_selection_is_complete(last_result):
+        if shortlist_selection_is_complete(last_result):
             return replace(
                 last_result,
                 shortlist_expansion_count=expansion_count,
@@ -104,7 +104,7 @@ def select_from_shortlist_batches(
     )
 
 
-def _shortlist_selection_is_complete(result: VideoSetSelectionResult) -> bool:
+def shortlist_selection_is_complete(result: VideoSetSelectionResult) -> bool:
     """要求数と適用中の条件付き最低枠が充足されたかを返す。"""
     if result.shortfall:
         return False
@@ -588,7 +588,7 @@ def _coverage_combination_fits_variant_budget(
     chosen_title_count = sum(
         candidate.annotation.blog_image_type == "title" for candidate in chosen
     )
-    prerequisite_groups: set[tuple[str, str]] = set()
+    prerequisite_groups: dict[tuple[str, str], list[BlogCandidate]] = defaultdict(list)
     for candidate in remaining:
         scene_slug = candidate.annotation.scene_slug
         group_id = variant_groups[candidate.identifier]
@@ -609,8 +609,116 @@ def _coverage_combination_fits_variant_budget(
             )
         ):
             continue
-        prerequisite_groups.add((scene_slug, group_id))
-    return len(chosen) + len(prerequisite_groups) <= available_slots
+        prerequisite_groups[(scene_slug, group_id)].append(candidate)
+    prerequisite_count = _minimum_variant_prerequisite_count(
+        tuple(
+            tuple(group_candidates)
+            for _key, group_candidates in sorted(prerequisite_groups.items())
+        ),
+        selected,
+        chosen,
+        actuals,
+        major_spoiler_limit,
+    )
+    return (
+        prerequisite_count is not None
+        and len(chosen) + prerequisite_count <= available_slots
+    )
+
+
+def _minimum_variant_prerequisite_count(
+    candidate_groups: tuple[tuple[BlogCandidate, ...], ...],
+    selected: list[SelectedBlogImage],
+    chosen: tuple[BlogCandidate, ...],
+    actuals: Mapping[str, int],
+    major_spoiler_limit: int | None,
+) -> int | None:
+    """hard limitで無効になるGroupを除いた最小の代表数を返す。"""
+    title_capacity = max(
+        0,
+        1
+        - actuals["title"]
+        - sum(candidate.annotation.blog_image_type == "title" for candidate in chosen),
+    )
+    if major_spoiler_limit is None:
+        major_spoiler_capacity = None
+    else:
+        major_spoiler_capacity = max(
+            0,
+            major_spoiler_limit
+            - sum(item.candidate.annotation.spoiler_risk == "high" for item in selected)
+            - sum(candidate.annotation.spoiler_risk == "high" for candidate in chosen),
+        )
+    group_options = tuple(
+        frozenset(
+            (
+                candidate.annotation.blog_image_type == "title",
+                major_spoiler_capacity is not None
+                and candidate.annotation.spoiler_risk == "high",
+            )
+            for candidate in candidates
+        )
+        for candidates in candidate_groups
+    )
+    high_usage_targets: Iterable[int] = (
+        (0,) if major_spoiler_capacity is None else range(major_spoiler_capacity + 1)
+    )
+    minimum: int | None = None
+    for title_usage in range(title_capacity + 1):
+        for high_usage in high_usage_targets:
+            title_remains_available = title_usage < title_capacity
+            high_remains_available = (
+                major_spoiler_capacity is None or high_usage < major_spoiler_capacity
+            )
+            mandatory_groups = tuple(
+                any(
+                    (not uses_title or title_remains_available)
+                    and (not uses_high_spoiler or high_remains_available)
+                    for uses_title, uses_high_spoiler in options
+                )
+                for options in group_options
+            )
+            cost = _minimum_group_selection_cost(
+                group_options,
+                mandatory_groups,
+                title_usage,
+                high_usage,
+            )
+            if cost is not None and (minimum is None or cost < minimum):
+                minimum = cost
+    return minimum
+
+
+def _minimum_group_selection_cost(
+    group_options: tuple[frozenset[tuple[bool, bool]], ...],
+    mandatory_groups: tuple[bool, ...],
+    title_usage_target: int,
+    high_usage_target: int,
+) -> int | None:
+    """指定hard limit状態へ到達する最小Group選択数を返す。"""
+    costs: dict[tuple[int, int], int] = {(0, 0): 0}
+    for options, mandatory in zip(group_options, mandatory_groups, strict=True):
+        next_costs: dict[tuple[int, int], int] = {}
+        for usage, cost in costs.items():
+            if not mandatory:
+                next_costs[usage] = min(next_costs.get(usage, cost), cost)
+            for uses_title, uses_high_spoiler in options:
+                next_usage = (
+                    usage[0] + int(uses_title),
+                    usage[1] + int(uses_high_spoiler),
+                )
+                if (
+                    next_usage[0] > title_usage_target
+                    or next_usage[1] > high_usage_target
+                ):
+                    continue
+                next_cost = cost + 1
+                next_costs[next_usage] = min(
+                    next_costs.get(next_usage, next_cost),
+                    next_cost,
+                )
+        costs = next_costs
+    return costs.get((title_usage_target, high_usage_target))
 
 
 def _coverage_combination_candidate_is_eligible(
