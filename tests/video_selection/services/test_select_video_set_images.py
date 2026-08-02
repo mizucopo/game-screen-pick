@@ -18,6 +18,7 @@ from src.video_selection.models.candidate_annotation import (
     SelectionCoverageFacet,
     SpoilerRisk,
 )
+from src.video_selection.models.combat_encounter_kind import CombatEncounterKind
 from src.video_selection.models.decoded_video_frame import DecodedVideoFrame
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.neutral_image_analysis import NeutralImageAnalysis
@@ -95,7 +96,7 @@ def _candidate(
     scene_selection_role: SceneSelectionRole = "ordinary",
     scene_slug: str | None = None,
     video_order: int = 0,
-    combat_action: bool = False,
+    combat_encounter_kind: CombatEncounterKind = "not_combat",
 ) -> BlogCandidate:
     digest = (
         digest_character * 64
@@ -135,7 +136,7 @@ def _candidate(
         spoiler_evidence=(
             "重大な物語情報が画像に示される" if spoiler_risk != "none" else ""
         ),
-        combat_action=combat_action,
+        combat_encounter_kind=combat_encounter_kind,
     )
     return BlogCandidate(
         annotation=annotation,
@@ -167,7 +168,7 @@ def _hard_limit_variant_candidates(
         context_relevance="none",
         scene_selection_role="recurring_gameplay",
         scene_slug="battle",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     event = _candidate(
         f"event-{hard_limit}",
@@ -188,7 +189,7 @@ def _hard_limit_variant_candidates(
         blog_image_type="normal_gameplay",
         explanation_value="high",
         context_relevance="none",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     prerequisite_groups = tuple(
         _candidate(
@@ -898,7 +899,8 @@ def test_available_ordinary_combat_and_event_each_receive_one_minimum_slot() -> 
         blog_image_type="normal_gameplay",
         explanation_value="low",
         context_relevance="none",
-        combat_action=True,
+        spoiler_risk="medium",
+        combat_encounter_kind="ordinary",
     )
     event = _candidate(
         "1",
@@ -982,7 +984,7 @@ def test_missing_event_minimum_is_reallocated_without_invalid_event() -> None:
         blog_image_type="normal_gameplay",
         explanation_value="low",
         context_relevance="none",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     invalid_event = _candidate(
         "1",
@@ -1063,7 +1065,7 @@ def test_impossible_minimum_restarts_unrestricted_selection_at_base_ceiling() ->
         blog_image_type="normal_gameplay",
         explanation_value="high",
         context_relevance="none",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     impossible_event = _candidate(
         "1",
@@ -1158,7 +1160,7 @@ def test_satisfied_relaxed_minimum_restarts_unrestricted_selection_at_base() -> 
         blog_image_type="normal_gameplay",
         explanation_value="high",
         context_relevance="none",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     event = _candidate(
         "1",
@@ -1245,7 +1247,7 @@ def test_compatible_minimum_combination_is_preserved() -> None:
         blog_image_type="normal_gameplay",
         explanation_value="high",
         context_relevance="none",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     event = _candidate(
         "1",
@@ -1264,7 +1266,7 @@ def test_compatible_minimum_combination_is_preserved() -> None:
         blog_image_type="normal_gameplay",
         explanation_value="high",
         context_relevance="none",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     unrestricted = tuple(
         _candidate(
@@ -1330,7 +1332,7 @@ def test_joint_feasibility_reserves_variant_prerequisite_cost() -> None:
         context_relevance="none",
         scene_selection_role="recurring_gameplay",
         scene_slug="battle",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     event = _candidate(
         "1",
@@ -1353,7 +1355,7 @@ def test_joint_feasibility_reserves_variant_prerequisite_cost() -> None:
         context_relevance="none",
         scene_selection_role="recurring_gameplay",
         scene_slug="battle",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     other_groups = tuple(
         _candidate(
@@ -1627,7 +1629,7 @@ def test_variant_prerequisite_advances_while_minimum_slot_is_reserved() -> None:
         context_relevance="none",
         scene_selection_role="recurring_gameplay",
         scene_slug="battle",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     event = _candidate(
         "1",
@@ -1896,7 +1898,7 @@ def test_shortlist_expands_for_an_undiscovered_conditional_facet() -> None:
         blog_image_type="normal_gameplay",
         explanation_value="high",
         context_relevance="none",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
     )
     initial_gameplay = tuple(
         _candidate(

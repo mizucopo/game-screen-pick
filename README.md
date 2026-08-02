@@ -5,6 +5,8 @@
 
 複数のゲーム録画を一つのVideo Setとして扱う次期interfaceは、次の一つのcommandへ置き換える設計です。探索・content identity・Input Lock・Completed Stage cache、system FFmpeg/ffprobeを閉じ込めるMediaRuntimeに加え、GPU/CPU余力のrolling metricに応じたVideo Scanの動的並列制御、動画単位のscan、exact timeline、Candidate Moment、native frame refinement、model-free Neutral Image Analysis、embedded subtitle/audio STTからのContext Cue収集、Ollama/Hugging Faceのmodel lifecycleとrun単位のidentity freeze、共有Scene Catalog、Moment単位のCandidate Annotation、soft coverage・通常戦闘とイベントの条件付き最低coverage・spoiler・動画横断diversityを扱う決定的な最終selector、固定WebP、`game-screen-pick/report@2.0.0`、gallery-first Markdown、atomic publisher、structured progress、RunFailure、動画identity・15分scan partition・refinement group・subtitle stream・PCM range・STT chunk・公開画像1枚まで細分化したDurable Work Unit単位の再開まで内部実装済みです。同じ意味入力からの再開では、選択ID・順序・公開画像bytesを変えず、atomic公開済みoutputも完全検証後にそのまま再利用します。real runtimeを通すtarget acceptance harnessは、RTX 5090でParallelism Baselineと自動並列化の成果物・resource・wall timeも比較します。再測定は`parallelism-baseline`、`fresh-processing`、`cache-reuse`の実行単位でresetできます。public CLI切り替えはIssue #190で行うため、次のproduction commandはまだ実行できません。
 
+通常戦闘の最低coverageは、Candidate AnnotationのCombat Encounter Kindが`ordinary`の候補だけを対象にします。`major`と`uncertain`は対象外で、Spoiler Riskは物語上のネタバレ評価として独立して扱います。詳細は[共有Scene CatalogとCandidate Annotation Stage](docs/vision-stage.md)と[決定的なVideo Set最終選定Stage](docs/selection-stage.md)を参照してください。
+
 ```bash
 game-screen-pick \
   --config ./video-selection.toml \

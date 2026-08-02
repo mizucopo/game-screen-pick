@@ -61,12 +61,12 @@ under its own penalty values and the immediately lower profile's count limit.
 
 Risk boundaries are:
 
-- `none`: generic exploration, combat, and ordinary UI.
+- `none`: exploration, combat, and UI that reveal no meaningful story information.
 - `low`: minor progression facts such as an ordinary place, item, or quest.
-- `medium`: a named boss, unique late-game area, important quest outcome, or new form.
+- `medium`: a named boss, unique late-game area, important quest outcome, or new form when the image reveals meaningful story progress.
 - `high`: an ending, final-boss identity or form, major-character fate, betrayal, culprit or true identity, or central story reveal.
 
-`high` requires concrete semantic evidence from the image, screen-text role, or Context Cue. Video Order and late Video Set Progress alone never raise risk.
+`high` requires concrete semantic evidence from the image, screen-text role, or Context Cue. Enemy names, HP/status bars, Combat Encounter Kind, Video Order, and late Video Set Progress alone never raise risk.
 
 ## Blog Image Type soft coverage
 
@@ -88,7 +88,7 @@ An eligible `normal_gameplay`, `event`, or `menu` candidate receives a `+0.10` B
 
 The public Effective Configuration requires `N >= 10`. At that size, the selector applies a conditional minimum of one selected image to each of these facets when an eligible candidate exists:
 
-- `ordinary_combat`: `normal_gameplay` with directly observed combat action and Spoiler Risk `none`. Named or unique boss fights, exploration, movement, and obstacle interactions do not qualify.
+- `ordinary_combat`: `normal_gameplay` whose Combat Encounter Kind is `ordinary`. `major` and `uncertain` combat, exploration, movement, and obstacle interactions do not qualify. Spoiler Risk evaluates story disclosure independently and does not classify the encounter.
 - `event`: Blog Image Type `event`.
 
 Explanation Value, visual eligibility, the title maximum, existing duplicate boundaries, and the Spoiler Monotonicity Guard remain stronger than these minimums. A missing or still-ineligible facet releases its slot rather than filling it with a poor image. After satisfiable minimums are met, all remaining slots use the normal utility policy; the resulting proportions are therefore dynamic rather than a fixed quota.

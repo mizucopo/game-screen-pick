@@ -1180,7 +1180,12 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
     ]
     assert observation_properties["visible_action"] == {"type": "boolean"}
     assert observation_properties["visible_character_or_enemy"] == {"type": "boolean"}
-    assert observation_properties["combat_action"] == {"type": "boolean"}
+    assert observation_properties["combat_encounter_kind"]["enum"] == [
+        "not_combat",
+        "ordinary",
+        "major",
+        "uncertain",
+    ]
     assert observation_properties["player_body_visibility"]["enum"] == [
         "clear",
         "partial",
@@ -1248,7 +1253,9 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     assert "dialogue_text_presentation" in prompt
     assert "visible_action" in prompt
     assert "visible_character_or_enemy" in prompt
-    assert "combat_action" in prompt
+    assert "combat_encounter_kind" in prompt
+    assert "敵名やHP・status barだけではmajorにしません" in prompt
+    assert "spoiler_riskとは独立" in prompt
     assert "player_body_visibility" in prompt
     assert "opponent_body_visibility" in prompt
     assert "effect_only_frame" in prompt
@@ -1583,7 +1590,7 @@ def test_combat_without_visible_opponent_has_no_explanation_value() -> None:
     observation = _first_frame_observation(response)
     observation.update(
         {
-            "combat_action": True,
+            "combat_encounter_kind": "ordinary",
             "player_body_visibility": "clear",
             "opponent_body_visibility": "absent",
             "effect_only_frame": False,
@@ -1793,11 +1800,13 @@ def test_publishable_combat_visibility_is_visually_rechecked(
         assert payload is not None
         payloads.append(payload)
         if len(payloads) == 1:
-            return _response(
-                _frame_observation_payload(
-                    (("frame-a", "battle", "gameplay_action", "high", "hud"),)
-                )
+            response = _frame_observation_payload(
+                (("frame-a", "battle", "gameplay_action", "high", "hud"),)
             )
+            observation = _first_frame_observation(response)
+            observation["spoiler_risk"] = "medium"
+            observation["spoiler_evidence"] = "物語上の進行情報が画面に示される"
+            return _response(response)
         if len(payloads) == 4:
             return _response(_combat_visibility_edge_audit_payload())
         return _response(
@@ -1831,6 +1840,8 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     # Assert
     assert annotation.explanation_value == expected_value
     assert annotation.combat_action is True
+    assert annotation.combat_encounter_kind == "ordinary"
+    assert annotation.spoiler_risk == "medium"
     assert diagnostics.attempt_count == expected_attempt_count
     assert diagnostics.validation_code is None
     verification_schema = payloads[1]["format"]
@@ -2095,7 +2106,7 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
                 (("frame-a", "exploration", "gameplay_action", "high", "hud"),)
             )
             observation = _first_frame_observation(response)
-            observation["combat_action"] = False
+            observation["combat_encounter_kind"] = "not_combat"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) == 2:
@@ -2143,7 +2154,7 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
     routing_properties = routing_schema.get("properties")
     assert isinstance(routing_properties, Mapping)
     assert set(routing_properties) == {
-        "combat_encounter_visible",
+        "combat_encounter_kind",
         "combat_encounter_evidence",
     }
     routing_prompt = _last_message(payloads[1])["content"]
@@ -2182,7 +2193,7 @@ def test_enemy_status_without_visible_player_does_not_mark_combat_action() -> No
                 (("frame-a", "exploration", "gameplay_action", "high", "hud"),)
             )
             observation = _first_frame_observation(response)
-            observation["combat_action"] = False
+            observation["combat_encounter_kind"] = "not_combat"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) == 2:
@@ -2320,7 +2331,7 @@ def test_unconfirmed_combat_scene_has_no_explanation_value() -> None:
                 (("frame-a", "battle", "gameplay_action", "high", "hud"),)
             )
             observation = _first_frame_observation(response)
-            observation["combat_action"] = False
+            observation["combat_encounter_kind"] = "not_combat"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) <= 3:
@@ -2376,7 +2387,7 @@ def test_missed_combat_is_rejected_by_visibility_cross_check() -> None:
                 (("frame-a", "exploration", "gameplay_action", "high", "hud"),)
             )
             observation = _first_frame_observation(response)
-            observation["combat_action"] = False
+            observation["combat_encounter_kind"] = "not_combat"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) <= 3:
@@ -2441,7 +2452,7 @@ def test_negative_combat_encounter_is_confirmed_before_visibility_routing() -> N
                 (("frame-a", "battle", "gameplay_action", "high", "hud"),)
             )
             observation = _first_frame_observation(response)
-            observation["combat_action"] = False
+            observation["combat_encounter_kind"] = "not_combat"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) == 2:
@@ -2516,11 +2527,11 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
                 (("frame-a", "battle", "gameplay_action", "high", "hud"),)
             )
             observation = _first_frame_observation(response)
-            observation["combat_action"] = False
+            observation["combat_encounter_kind"] = "not_combat"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) == 2:
-            return _response({"combat_encounter_visible": True})
+            return _response({"combat_encounter_kind": "ordinary"})
         if len(payloads) == 3:
             return _response(
                 _combat_encounter_payload(
@@ -2689,7 +2700,7 @@ def test_dialogue_and_combat_visibility_are_rechecked_separately() -> None:
         observation = _first_frame_observation(response)
         observation["cinematic_event_presentation"] = True
         observation["visible_action"] = True
-        observation["combat_action"] = True
+        observation["combat_encounter_kind"] = "ordinary"
         observation["opponent_body_visibility"] = "clear"
         if len(payloads) == 2:
             observation["on_screen_dialogue_text_visible"] = False
@@ -4585,8 +4596,12 @@ def _frame_observation_payload(
                 "visible_action": content_kind in {"gameplay_action", "event_action"},
                 "visible_character_or_enemy": content_kind
                 not in {"map", "save", "tutorial_help", "title"},
-                "combat_action": scene_slug == "battle"
-                and content_kind in {"gameplay_action", "event_action"},
+                "combat_encounter_kind": (
+                    "ordinary"
+                    if scene_slug == "battle"
+                    and content_kind in {"gameplay_action", "event_action"}
+                    else "not_combat"
+                ),
                 "player_body_visibility": (
                     "clear"
                     if content_kind not in {"map", "save", "tutorial_help", "title"}
@@ -4642,9 +4657,18 @@ def _publication_boundary_payload(
     }
 
 
-def _combat_encounter_payload(*, visible: bool, evidence: str) -> dict[str, object]:
+def _combat_encounter_payload(
+    *,
+    visible: bool,
+    evidence: str,
+    combat_encounter_kind: str | None = None,
+) -> dict[str, object]:
     return {
-        "combat_encounter_visible": visible,
+        "combat_encounter_kind": (
+            combat_encounter_kind
+            if combat_encounter_kind is not None
+            else ("ordinary" if visible else "not_combat")
+        ),
         "combat_encounter_evidence": evidence,
     }
 

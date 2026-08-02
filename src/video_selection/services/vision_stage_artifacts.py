@@ -15,6 +15,7 @@ from ..models.candidate_annotation import (
     candidate_annotation_relationships_are_valid,
 )
 from ..models.candidate_annotation_request import CandidateAnnotationRequest
+from ..models.combat_encounter_kind import COMBAT_ENCOUNTER_KINDS
 from ..models.scene_catalog import SceneCatalog
 from ..models.scene_catalog_entry import (
     SCENE_SELECTION_ROLES,
@@ -25,7 +26,7 @@ from ..models.scene_kind import SCENE_KINDS, SceneKind
 from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 
 _CATALOG_SCHEMA = "game-screen-pick/scene-catalog@2.0.0"
-_ANNOTATION_SCHEMA = "game-screen-pick/candidate-annotation@2.0.0"
+_ANNOTATION_SCHEMA = "game-screen-pick/candidate-annotation@3.0.0"
 
 
 def serialize_scene_catalog(
@@ -74,7 +75,7 @@ def serialize_candidate_annotation(
             "supporting_context_cue_ids": list(annotation.supporting_context_cue_ids),
             "spoiler_risk": annotation.spoiler_risk,
             "spoiler_evidence": annotation.spoiler_evidence,
-            "combat_action": annotation.combat_action,
+            "combat_encounter_kind": annotation.combat_encounter_kind,
         },
         "diagnostics": _diagnostics_value(diagnostics),
     }
@@ -106,7 +107,7 @@ def restore_candidate_annotation(
     raw_cue_ids = annotation.get("supporting_context_cue_ids")
     spoiler_risk = annotation.get("spoiler_risk")
     spoiler_evidence = annotation.get("spoiler_evidence")
-    combat_action = annotation.get("combat_action")
+    combat_encounter_kind = annotation.get("combat_encounter_kind")
     frames = {item.identifier: item for item in request.frame_candidates}
     available_cue_ids = tuple(item.identifier for item in request.context_cues)
     if (
@@ -125,12 +126,13 @@ def restore_candidate_annotation(
         or not all(isinstance(item, str) for item in raw_cue_ids)
         or spoiler_risk not in SPOILER_RISKS
         or not isinstance(spoiler_evidence, str)
-        or not isinstance(combat_action, bool)
+        or combat_encounter_kind not in COMBAT_ENCOUNTER_KINDS
     ):
         raise ValueError("Candidate Annotation artifact domainが不正です")
     typed_context_relevance = context_relevance
     typed_cue_ids = tuple(cast(list[str], raw_cue_ids))
     typed_spoiler_risk = spoiler_risk
+    typed_combat_encounter_kind = combat_encounter_kind
     if (
         not candidate_annotation_relationships_are_valid(
             typed_context_relevance,
@@ -162,7 +164,7 @@ def restore_candidate_annotation(
         supporting_context_cue_ids=typed_cue_ids,
         spoiler_risk=typed_spoiler_risk,
         spoiler_evidence=spoiler_evidence,
-        combat_action=combat_action,
+        combat_encounter_kind=typed_combat_encounter_kind,
     )
     diagnostics = _restore_diagnostics(artifact.get("diagnostics"))
     return restored, replace(diagnostics, cache_hit=True)

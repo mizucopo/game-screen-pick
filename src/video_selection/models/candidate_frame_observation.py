@@ -12,6 +12,7 @@ from .candidate_annotation import (
     ScreenTextKind,
     SpoilerRisk,
 )
+from .combat_encounter_kind import COMBAT_ENCOUNTER_KINDS, CombatEncounterKind
 from .frame_candidate import FrameCandidate
 from .scene_catalog_entry import is_valid_scene_slug
 
@@ -120,7 +121,7 @@ class CandidateFrameObservation:
     dialogue_text_presentation: DialogueTextPresentation
     visible_action: bool
     visible_character_or_enemy: bool
-    combat_action: bool
+    combat_encounter_kind: CombatEncounterKind
     player_body_visibility: CharacterBodyVisibility
     opponent_body_visibility: CharacterBodyVisibility
     effect_only_frame: bool
@@ -146,7 +147,7 @@ class CandidateFrameObservation:
             or self.visible_dialogue_text != (self.dialogue_text_presentation != "none")
             or not isinstance(self.visible_action, bool)
             or not isinstance(self.visible_character_or_enemy, bool)
-            or not isinstance(self.combat_action, bool)
+            or self.combat_encounter_kind not in COMBAT_ENCOUNTER_KINDS
             or self.player_body_visibility not in CHARACTER_BODY_VISIBILITIES
             or self.opponent_body_visibility not in CHARACTER_BODY_VISIBILITIES
             or not isinstance(self.effect_only_frame, bool)
@@ -160,6 +161,11 @@ class CandidateFrameObservation:
         ):
             msg = "Candidate Frame Observationのdomain fieldが不正です"
             raise ValueError(msg)
+
+    @property
+    def combat_action(self) -> bool:
+        """画像内で戦闘が観測されたかを戦闘種別から返す。"""
+        return self.combat_encounter_kind != "not_combat"
 
     @property
     def blog_image_type(self) -> BlogImageType:
