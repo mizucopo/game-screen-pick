@@ -24,21 +24,31 @@ class FakeStructuredVisionRuntime:
         *,
         fail_scene_catalog: bool = False,
         failure_moment_id: str | None = None,
+        failure_frame_id: str | None = None,
         reject_all_calls: bool = False,
         scene_catalog_call_started: Event | None = None,
         release_scene_catalog_call: Event | None = None,
         on_candidate_annotation: Callable[[], None] | None = None,
+        on_candidate_annotation_request: (
+            Callable[[CandidateAnnotationRequest], None] | None
+        ) = None,
     ) -> None:
         self._catalog = catalog
         self._annotations = {
-            annotation.candidate_moment_id: annotation for annotation in annotations
+            (
+                annotation.candidate_moment_id,
+                annotation.candidate.identifier,
+            ): annotation
+            for annotation in annotations
         }
         self._fail_scene_catalog = fail_scene_catalog
         self._failure_moment_id = failure_moment_id
+        self._failure_frame_id = failure_frame_id
         self._reject_all_calls = reject_all_calls
         self._scene_catalog_call_started = scene_catalog_call_started
         self._release_scene_catalog_call = release_scene_catalog_call
         self._on_candidate_annotation = on_candidate_annotation
+        self._on_candidate_annotation_request = on_candidate_annotation_request
         self.scene_catalog_calls: list[SceneCatalogRequest] = []
         self.candidate_annotation_calls: list[CandidateAnnotationRequest] = []
 
@@ -81,9 +91,19 @@ class FakeStructuredVisionRuntime:
         self.candidate_annotation_calls.append(request)
         if self._on_candidate_annotation is not None:
             self._on_candidate_annotation()
-        if request.moment.identifier == self._failure_moment_id:
+        if self._on_candidate_annotation_request is not None:
+            self._on_candidate_annotation_request(request)
+        if (
+            request.moment.identifier == self._failure_moment_id
+            or request.frame_candidates[0].identifier == self._failure_frame_id
+        ):
             raise RuntimeError("fake raw response: chain of thought")
-        annotation = self._annotations[request.moment.identifier]
+        annotation = self._annotations[
+            (
+                request.moment.identifier,
+                request.frame_candidates[0].identifier,
+            )
+        ]
         return annotation, replace(
             _diagnostics(
                 model,

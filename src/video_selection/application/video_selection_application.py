@@ -65,6 +65,7 @@ from ..services.video_set_vision_processor import (
     plan_vision_stage_fingerprints,
 )
 from ..services.video_stage_processor import VideoStageProcessor
+from ..vision.vision_contract import COMBAT_REPRESENTATIVE_FALLBACK_POLICY_VERSION
 
 _SELECTION_INTENT = "ブログ本文を説明できる画像を選ぶ"
 _INITIAL_ANNOTATION_MINIMUM = 24
@@ -584,7 +585,10 @@ def _selection_request_fingerprint(
 ) -> StageFingerprint:
     """selector実行前に全依存入力を識別するfingerprintを返す。"""
     semantic_input = {
-        "request_contract": "preselection-input-v1",
+        "request_contract": "preselection-input-v2",
+        "combat_representative_fallback_policy_version": (
+            COMBAT_REPRESENTATIVE_FALLBACK_POLICY_VERSION
+        ),
         "requested_count": configuration.image_count,
         "spoiler_sensitivity": configuration.spoiler_sensitivity,
         "similarity_threshold": configuration.similarity_threshold,

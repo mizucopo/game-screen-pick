@@ -2,6 +2,8 @@
 
 import hashlib
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 from typing import TypeVar
@@ -77,6 +79,35 @@ from .vision_stage_artifacts import (
 )
 
 VisionStageValue = TypeVar("VisionStageValue")
+type _AnnotationStageResult = tuple[
+    CandidateAnnotation,
+    VisionInferenceDiagnostics,
+    CompletedStage,
+]
+type _CachedAnnotationStageResult = tuple[
+    CandidateAnnotation,
+    VisionInferenceDiagnostics,
+    CompletedStage,
+    bool,
+]
+_EXPLANATION_PRIORITY = {"none": 0, "low": 1, "medium": 2, "high": 3}
+_CONTENT_PRIORITY = {
+    "document": 0,
+    "tutorial_help": 0,
+    "event_setup": 0,
+    "gameplay_idle": 1,
+    "save": 2,
+    "map": 3,
+    "other_interface": 3,
+    "other": 4,
+    "shop": 4,
+    "title": 4,
+    "event_action": 5,
+    "gameplay_action": 5,
+    "event_dialogue": 6,
+}
+_VISIBILITY_PRIORITY = {"absent": 0, "partial": 1, "clear": 2}
+_OBSTRUCTION_PRIORITY = {"severe": 0, "partial": 1, "none": 2}
 
 
 def plan_vision_stage_fingerprints(
@@ -118,19 +149,20 @@ def plan_vision_stage_fingerprints(
                 (catalog_fingerprint,),
                 _annotation_semantic_input(
                     video_set,
-                    request,
+                    frame_request,
                     catalog_fingerprint,
                     annotation_model,
                     configuration.candidate_annotation_num_ctx,
                 ),
             )
             for request in annotation_requests
+            for frame_request in _single_frame_annotation_requests(request)
         ),
     )
 
 
 class VideoSetVisionProcessor:
-    """VisionRuntimeとMoment単位atomic cacheを一つの深いmoduleに保つ。"""
+    """VisionRuntimeとFrame単位atomic cacheを一つの深いmoduleに保つ。"""
 
     def __init__(
         self,
@@ -188,18 +220,41 @@ class VideoSetVisionProcessor:
         completed_stages = [catalog_stage]
         for request in annotation_requests:
             validate_video_set_snapshot_metadata(video_set)
-            annotation, diagnostics, completed = self._annotation_stage(
+            frame_requests = _single_frame_annotation_requests(request)
+            primary, primary_diagnostics, primary_completed = self._annotation_stage(
                 writer,
                 video_set,
-                request,
+                frame_requests[0],
                 catalog,
                 catalog_stage.fingerprint,
                 annotation_model,
                 configuration.candidate_annotation_num_ctx,
             )
-            annotations.append(annotation)
-            annotation_diagnostics.append(diagnostics)
-            completed_stages.append(completed)
+            frame_annotations = [primary]
+            annotation_diagnostics.append(primary_diagnostics)
+            completed_stages.append(primary_completed)
+            if (
+                primary.combat_action
+                and primary.explanation_value == "none"
+                and len(frame_requests) > 1
+            ):
+                fallback_results = self._fallback_annotation_stages(
+                    writer=writer,
+                    video_set=video_set,
+                    requests=frame_requests[1:],
+                    catalog=catalog,
+                    catalog_fingerprint=catalog_stage.fingerprint,
+                    model=annotation_model,
+                    num_ctx=configuration.candidate_annotation_num_ctx,
+                    max_parallel_requests=configuration.ollama_max_parallel_requests,
+                )
+                for fallback, diagnostics, completed in fallback_results:
+                    frame_annotations.append(fallback)
+                    annotation_diagnostics.append(diagnostics)
+                    completed_stages.append(completed)
+            annotations.append(
+                _select_representative_annotation(tuple(frame_annotations))
+            )
         result = VisionStageResult(
             catalog=catalog,
             annotations=tuple(annotations),
@@ -261,40 +316,175 @@ class VideoSetVisionProcessor:
         catalog_fingerprint: StageFingerprint,
         model: ResolvedModel,
         num_ctx: int,
-    ) -> tuple[CandidateAnnotation, VisionInferenceDiagnostics, CompletedStage]:
-        """一つのCandidate Momentだけを独立Stageとして扱う。"""
-        semantic_input = _annotation_semantic_input(
+    ) -> _AnnotationStageResult:
+        """一つのFrame Candidateだけを独立Stageとして扱う。"""
+        self._start_progress_stage(
+            ProcessingStage.ANNOTATE_CANDIDATE,
+            "candidate",
+        )
+        annotation, diagnostics, completed, reused = self._execute_annotation_stage(
+            writer=writer,
+            video_set=video_set,
+            request=request,
+            catalog=catalog,
+            catalog_fingerprint=catalog_fingerprint,
+            model=model,
+            num_ctx=num_ctx,
+            monitor_external=True,
+        )
+        self._complete_progress_stage(reused, completed.fingerprint)
+        self._observer.stage_completed(completed)
+        return annotation, diagnostics, completed
+
+    def _fallback_annotation_stages(
+        self,
+        *,
+        writer: CompletedStageWriter,
+        video_set: VideoSet,
+        requests: tuple[CandidateAnnotationRequest, ...],
+        catalog: SceneCatalog,
+        catalog_fingerprint: StageFingerprint,
+        model: ResolvedModel,
+        num_ctx: int,
+        max_parallel_requests: int,
+    ) -> tuple[_AnnotationStageResult, ...]:
+        """同一Momentの代替frameを独立cacheのままbounded並列評価する。"""
+        self._start_progress_stage(
+            ProcessingStage.ANNOTATE_CANDIDATE,
+            "candidate",
+        )
+        results: list[_CachedAnnotationStageResult | Exception | None] = [None] * len(
+            requests
+        )
+        pending: list[tuple[int, CandidateAnnotationRequest]] = []
+        for index, request in enumerate(requests):
+            cached = _restore_cached_annotation_stage(
+                writer=writer,
+                video_set=video_set,
+                request=request,
+                catalog=catalog,
+                catalog_fingerprint=catalog_fingerprint,
+                model=model,
+                num_ctx=num_ctx,
+            )
+            if cached is None:
+                pending.append((index, request))
+            else:
+                results[index] = cached
+
+        def execute_pending() -> None:
+            with ThreadPoolExecutor(
+                max_workers=min(max_parallel_requests, len(pending)),
+                thread_name_prefix="candidate-fallback",
+            ) as executor:
+                futures = {
+                    index: executor.submit(
+                        self._execute_annotation_stage,
+                        writer=writer,
+                        video_set=video_set,
+                        request=request,
+                        catalog=catalog,
+                        catalog_fingerprint=catalog_fingerprint,
+                        model=model,
+                        num_ctx=num_ctx,
+                        monitor_external=False,
+                    )
+                    for index, request in pending
+                }
+                for index, future in futures.items():
+                    try:
+                        results[index] = future.result()
+                    except Exception as error:  # noqa: BLE001
+                        results[index] = error
+
+        if pending:
+            self._run_external(
+                execute_pending,
+                reason_code="candidate_annotation_inference_started",
+            )
+
+        completed_results: list[_CachedAnnotationStageResult] = []
+        failures: list[Exception] = []
+        for result in results:
+            if result is None:
+                raise AssertionError("fallback annotation結果が確定していません")
+            if isinstance(result, Exception):
+                failures.append(result)
+                continue
+            annotation, diagnostics, completed, reused = result
+            completed_results.append((annotation, diagnostics, completed, reused))
+        for index, (_annotation, diagnostics, completed, reused) in enumerate(
+            completed_results
+        ):
+            if index:
+                self._start_progress_stage(
+                    ProcessingStage.ANNOTATE_CANDIDATE,
+                    "candidate",
+                )
+            duration_seconds = None if reused else diagnostics.duration_seconds
+            self._complete_progress_stage(
+                reused,
+                completed.fingerprint,
+                duration_seconds=duration_seconds,
+            )
+            self._observer.stage_completed(completed)
+        if failures:
+            if completed_results:
+                self._start_progress_stage(
+                    ProcessingStage.ANNOTATE_CANDIDATE,
+                    "candidate",
+                )
+            raise failures[0]
+        return tuple(
+            (annotation, diagnostics, completed)
+            for annotation, diagnostics, completed, _reused in completed_results
+        )
+
+    def _execute_annotation_stage(
+        self,
+        *,
+        writer: CompletedStageWriter,
+        video_set: VideoSet,
+        request: CandidateAnnotationRequest,
+        catalog: SceneCatalog,
+        catalog_fingerprint: StageFingerprint,
+        model: ResolvedModel,
+        num_ctx: int,
+        monitor_external: bool,
+    ) -> _CachedAnnotationStageResult:
+        """一枚のannotationを生成または復元しprogressには触れず返す。"""
+        semantic_input, upstream, fingerprint = _annotation_stage_definition(
             video_set,
             request,
             catalog_fingerprint,
             model,
             num_ctx,
         )
-        upstream = (catalog_fingerprint,)
-        fingerprint = build_stage_fingerprint(
-            ProcessingStage.ANNOTATE_CANDIDATE,
-            upstream,
-            semantic_input,
-        )
 
         def generate() -> tuple[CandidateAnnotation, VisionInferenceDiagnostics]:
-            generated = self._run_external(
-                lambda: self._runtime.annotate_candidate(
+            def operation() -> tuple[
+                CandidateAnnotation,
+                VisionInferenceDiagnostics,
+            ]:
+                return self._runtime.annotate_candidate(
                     request,
                     catalog,
                     model,
                     num_ctx=num_ctx,
-                ),
-                reason_code="candidate_annotation_inference_started",
+                )
+
+            generated = (
+                self._run_external(
+                    operation,
+                    reason_code="candidate_annotation_inference_started",
+                )
+                if monitor_external
+                else operation()
             )
-            annotation, diagnostics = generated
+            annotation, _diagnostics = generated
             _validate_runtime_annotation(annotation, request, catalog)
             return generated
 
-        self._start_progress_stage(
-            ProcessingStage.ANNOTATE_CANDIDATE,
-            "candidate",
-        )
         (annotation, diagnostics), completed, reused = _execute_cached_vision_stage(
             writer=writer,
             stage=ProcessingStage.ANNOTATE_CANDIDATE,
@@ -310,9 +500,7 @@ class VideoSetVisionProcessor:
             ),
             artifact_label="Candidate Annotation",
         )
-        self._complete_progress_stage(reused, completed.fingerprint)
-        self._observer.stage_completed(completed)
-        return annotation, diagnostics, completed
+        return annotation, diagnostics, completed, reused
 
     def _start_progress_stage(
         self,
@@ -326,10 +514,35 @@ class VideoSetVisionProcessor:
         self,
         reused: bool,
         fingerprint: StageFingerprint,
+        *,
+        duration_seconds: float | None = None,
     ) -> None:
         if self._progress is None:
             return
-        self._progress.record_work_sample("reuse" if reused else "recompute")
+        self._record_progress_stage_result(
+            reused,
+            fingerprint,
+            duration_seconds=duration_seconds,
+        )
+        self._progress.complete_stage(
+            duration_seconds,
+            stage_fingerprint=fingerprint,
+        )
+
+    def _record_progress_stage_result(
+        self,
+        reused: bool,
+        fingerprint: StageFingerprint,
+        *,
+        duration_seconds: float | None = None,
+    ) -> None:
+        """active progress Stageへ一つのcache結果を記録する。"""
+        if self._progress is None:
+            return
+        self._progress.record_work_sample(
+            "reuse" if reused else "recompute",
+            duration_seconds=duration_seconds,
+        )
         self._progress.cache_observed(
             cache_hit_count=1 if reused else 0,
             cache_miss_count=0 if reused else 1,
@@ -338,7 +551,6 @@ class VideoSetVisionProcessor:
             reason_code="cache_reused" if reused else "stage_recomputed",
             stage_fingerprint=fingerprint,
         )
-        self._progress.complete_stage(stage_fingerprint=fingerprint)
 
     def _run_external(
         self,
@@ -349,6 +561,80 @@ class VideoSetVisionProcessor:
         if self._external_work is None:
             return operation()
         return self._external_work.run(operation, reason_code=reason_code)
+
+
+def _annotation_stage_definition(
+    video_set: VideoSet,
+    request: CandidateAnnotationRequest,
+    catalog_fingerprint: StageFingerprint,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> tuple[dict[str, object], tuple[StageFingerprint, ...], StageFingerprint]:
+    """一枚のCandidate Annotation Stage identityを返す。"""
+    semantic_input = _annotation_semantic_input(
+        video_set,
+        request,
+        catalog_fingerprint,
+        model,
+        num_ctx,
+    )
+    upstream = (catalog_fingerprint,)
+    return (
+        semantic_input,
+        upstream,
+        build_stage_fingerprint(
+            ProcessingStage.ANNOTATE_CANDIDATE,
+            upstream,
+            semantic_input,
+        ),
+    )
+
+
+def _restore_cached_annotation_stage(
+    *,
+    writer: CompletedStageWriter,
+    video_set: VideoSet,
+    request: CandidateAnnotationRequest,
+    catalog: SceneCatalog,
+    catalog_fingerprint: StageFingerprint,
+    model: ResolvedModel,
+    num_ctx: int,
+) -> _CachedAnnotationStageResult | None:
+    """有効な一枚annotation cacheを並列処理前に復元する。"""
+    semantic_input, upstream, fingerprint = _annotation_stage_definition(
+        video_set,
+        request,
+        catalog_fingerprint,
+        model,
+        num_ctx,
+    )
+    artifact = writer.read(
+        ProcessingStage.ANNOTATE_CANDIDATE,
+        fingerprint,
+        upstream,
+        semantic_input,
+    )
+    if artifact is None:
+        return None
+    try:
+        annotation, diagnostics = restore_candidate_annotation(
+            artifact,
+            request,
+            catalog,
+        )
+    except (TypeError, ValueError):
+        return None
+    return (
+        annotation,
+        diagnostics,
+        CompletedStage(
+            ProcessingStage.ANNOTATE_CANDIDATE,
+            fingerprint,
+            upstream,
+            semantic_input,
+        ),
+        True,
+    )
 
 
 def _execute_cached_vision_stage(
@@ -454,6 +740,72 @@ def _validate_runtime_annotation(
         )
     ):
         raise ValueError("VisionRuntimeがrequest外のCandidate Annotationを返しました")
+
+
+def _single_frame_annotation_requests(
+    request: CandidateAnnotationRequest,
+) -> tuple[CandidateAnnotationRequest, ...]:
+    """Moment共通入力を保ちframeごとの独立requestへ分ける。"""
+    return tuple(
+        replace(
+            request,
+            moment=replace(
+                request.moment,
+                frame_candidate_ids=(frame.identifier,),
+            ),
+            frame_candidates=(frame,),
+        )
+        for frame in request.frame_candidates
+    )
+
+
+def _select_representative_annotation(
+    annotations: tuple[CandidateAnnotation, ...],
+) -> CandidateAnnotation:
+    """戦闘fallback結果から説明価値と中立画質でRepresentativeを確定する。"""
+    primary = annotations[0]
+    eligible = tuple(
+        annotation
+        for annotation in annotations
+        if annotation.combat_action and annotation.explanation_value != "none"
+    )
+    if not eligible:
+        return primary
+    return min(eligible, key=_representative_annotation_key)
+
+
+def _representative_annotation_key(
+    annotation: CandidateAnnotation,
+) -> tuple[int, int, int, int, int, float, str]:
+    """説明価値、内容、可視性、遮蔽、Neutral品質の比較keyを返す。"""
+    evidence = annotation.representative_frame_evidence
+    content_priority = (
+        0 if evidence is None else _CONTENT_PRIORITY[evidence.content_kind]
+    )
+    opponent_priority = (
+        0
+        if evidence is None
+        else _VISIBILITY_PRIORITY[evidence.opponent_body_visibility]
+    )
+    subject_priority = (
+        0
+        if evidence is None
+        else _VISIBILITY_PRIORITY[evidence.primary_subject_visibility]
+    )
+    obstruction_priority = (
+        0 if evidence is None else _OBSTRUCTION_PRIORITY[evidence.transient_obstruction]
+    )
+    analysis = annotation.candidate.analysis
+    quality_score = 0.0 if analysis is None else analysis.quality_score
+    return (
+        -_EXPLANATION_PRIORITY[annotation.explanation_value],
+        -content_priority,
+        -opponent_priority,
+        -subject_priority,
+        -obstruction_priority,
+        -quality_score,
+        annotation.candidate.identifier,
+    )
 
 
 def _catalog_semantic_input(

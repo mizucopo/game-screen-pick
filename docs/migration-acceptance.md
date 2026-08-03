@@ -168,6 +168,7 @@ full-runtimeのv2.0 support targetは次に限定する。
 - Windowsの非loopback addressを指定した明示URLでWindows native Ollamaへ接続し、
   Windows側の`ollama.exe`によるlistener所有をpreflightで検証。
 - NVIDIA GPUとして1台だけ搭載されたGeForce RTX 5090上のCUDA STT。
+- privateな通常設定で`ollama.max_parallel_requests = 2`を明示し、独立した戦闘fallback画像を最大2件並列評価。
 
 Ubuntu CIはunit/fake/FFmpeg integrationを保証する。native Linux、macOS、direct Windowsは
 動く可能性があっても、v2.0のfull E2E保証対象ではない。Macからの`ssh winpc`は任意の

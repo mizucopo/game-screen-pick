@@ -19,23 +19,35 @@ from .combat_encounter_basis import (
 )
 from .combat_encounter_kind import COMBAT_ENCOUNTER_KINDS, CombatEncounterKind
 from .frame_candidate import FrameCandidate
+from .representative_frame_evidence import (
+    CANDIDATE_FRAME_CONTENT_KINDS as CANDIDATE_FRAME_CONTENT_KINDS,
+)
+from .representative_frame_evidence import (
+    CHARACTER_BODY_VISIBILITIES as CHARACTER_BODY_VISIBILITIES,
+)
+from .representative_frame_evidence import (
+    PRIMARY_SUBJECT_VISIBILITIES as PRIMARY_SUBJECT_VISIBILITIES,
+)
+from .representative_frame_evidence import (
+    TRANSIENT_OBSTRUCTIONS as TRANSIENT_OBSTRUCTIONS,
+)
+from .representative_frame_evidence import (
+    CandidateFrameContentKind as CandidateFrameContentKind,
+)
+from .representative_frame_evidence import (
+    CharacterBodyVisibility as CharacterBodyVisibility,
+)
+from .representative_frame_evidence import (
+    PrimarySubjectVisibility as PrimarySubjectVisibility,
+)
+from .representative_frame_evidence import (
+    RepresentativeFrameEvidence,
+)
+from .representative_frame_evidence import (
+    TransientObstruction as TransientObstruction,
+)
 from .scene_catalog_entry import is_valid_scene_slug
 
-CandidateFrameContentKind = Literal[
-    "gameplay_action",
-    "gameplay_idle",
-    "event_dialogue",
-    "event_action",
-    "event_setup",
-    "document",
-    "shop",
-    "map",
-    "save",
-    "tutorial_help",
-    "other_interface",
-    "title",
-    "other",
-]
 CandidateInterfaceKind = Literal[
     "none",
     "document",
@@ -46,9 +58,6 @@ CandidateInterfaceKind = Literal[
     "other_interface",
     "title",
 ]
-PrimarySubjectVisibility = Literal["clear", "partial", "absent"]
-TransientObstruction = Literal["none", "partial", "severe"]
-CharacterBodyVisibility = Literal["clear", "partial", "absent"]
 DialogueTextPresentation = Literal[
     "none",
     "dialogue_box",
@@ -57,25 +66,9 @@ DialogueTextPresentation = Literal[
     "other",
 ]
 
-CANDIDATE_FRAME_CONTENT_KINDS = cast(
-    tuple[CandidateFrameContentKind, ...],
-    get_args(CandidateFrameContentKind),
-)
 CANDIDATE_INTERFACE_KINDS = cast(
     tuple[CandidateInterfaceKind, ...],
     get_args(CandidateInterfaceKind),
-)
-PRIMARY_SUBJECT_VISIBILITIES = cast(
-    tuple[PrimarySubjectVisibility, ...],
-    get_args(PrimarySubjectVisibility),
-)
-TRANSIENT_OBSTRUCTIONS = cast(
-    tuple[TransientObstruction, ...],
-    get_args(TransientObstruction),
-)
-CHARACTER_BODY_VISIBILITIES = cast(
-    tuple[CharacterBodyVisibility, ...],
-    get_args(CharacterBodyVisibility),
 )
 DIALOGUE_TEXT_PRESENTATIONS = cast(
     tuple[DialogueTextPresentation, ...],
@@ -177,6 +170,16 @@ class CandidateFrameObservation:
     def combat_action(self) -> bool:
         """画像内で戦闘が観測されたかを戦闘種別から返す。"""
         return self.combat_encounter_kind != "not_combat"
+
+    @property
+    def representative_frame_evidence(self) -> RepresentativeFrameEvidence:
+        """localなRepresentative Frame比較に必要な観測だけを返す。"""
+        return RepresentativeFrameEvidence(
+            content_kind=self.effective_content_kind,
+            primary_subject_visibility=self.primary_subject_visibility,
+            opponent_body_visibility=self.opponent_body_visibility,
+            transient_obstruction=self.transient_obstruction,
+        )
 
     @property
     def blog_image_type(self) -> BlogImageType:

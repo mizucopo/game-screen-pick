@@ -50,6 +50,12 @@ Ollama host、model、STT device、選択枚数などをprofileへ複製しな�
 Video Input FolderとParallelism Baseline・Fresh Processing・Cache Reuse別Output Folder
 だけである。
 
+supported RTX 5090 targetでは、`configuration_path`が指すprivate TOMLへ
+`ollama.max_parallel_requests = 2`を明示する。これはCombat Representative Fallbackの
+最大2枚を別request・別conversation contextで同時評価するtarget profileであり、repositoryの
+組み込み既定値`1`は変更しない。Candidate Annotation frameごとのCompleted Stageにより、
+片方が失敗しても成功済みframeを保持し、次回は未完了frameだけを再実行する。
+
 ## 実行
 
 30分release suiteとfull suiteは必ず明示する。`--suite`を省略するとexit 2になり、
