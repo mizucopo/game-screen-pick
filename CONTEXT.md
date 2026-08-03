@@ -489,7 +489,7 @@ _Avoid_: hard quota, per-video quota, Cinematic Soft Cap, guaranteed title image
 _Avoid_: hard quota, overflow penalty, guaranteed title image
 
 **Selection Coverage Facet**:
-要求枚数10枚以上の条件付き最低coverageに使う、Blog Candidateの画像内根拠に基づく役割。`ordinary_combat`と`event`を持つ。`ordinary_combat`はBlog Image Typeが`normal_gameplay`で、Combat Encounter Kindが`ordinary`かつ対応する`ordinary_*`のCombat Encounter Basisがある場合だけ導出し、`major`、`uncertain`、探索、移動、障害物破壊を含めない。Spoiler Riskは物語上のネタバレ評価であり、このfacetの戦闘種別判定には使わない。`event`はBlog Image Type `event`から導出する。Explanation Valueや最終適格性はこのfacet自体に含めない。
+要求枚数10枚以上の条件付き最低coverageに使う、Blog Candidateの画像内根拠に基づく役割。`ordinary_combat`と`event`を持つ。`ordinary_combat`はBlog Image Typeが`normal_gameplay`で、Combat Encounter Kindが`ordinary`かつ対応する`ordinary_*`のCombat Encounter Basisがある場合だけ導出し、`major`、`uncertain`、探索、移動、障害物破壊を含めない。Spoiler Riskは物語上のネタバレ評価であり、このfacetの戦闘種別判定には使わない。`event`はBlog Image Type `event`から導出するが、Screen Text KindまたはRepresentative Frame Evidenceがtitleを示す誤分類候補は含めない。Explanation Valueや最終適格性はこのfacet自体に含めない。
 _Avoid_: Blog Image Type, Scene Kind, free-form scene name, final eligibility
 
 **Conditional Coverage Minimum**:
@@ -594,7 +594,7 @@ Blog Image Type、Scene Slug、Variant Groupの分類境界をまたいでも、
 _Avoid_: global similarity threshold, Variant Group, duplicate filename, model confidence
 
 **Combat Encounter Group**:
-Semantic Duplicate Groupのうち、同一Video Source内で時系列に連続する`major`戦闘候補を同じ遭遇として扱うまとまり。全Blog CandidateのVideo Time順を基準にし、非`major`候補を遭遇境界としてからScene Slugの連続runへ分ける。同じSlugに前後を挟まれた単発の誤分類は両側15秒以内のときだけ同じ遭遇へ吸収する。別の主要戦闘runまたは非主要場面を挟んだ同名Slugは別遭遇として保持する。同じGroupでは異なる構図や技でも代表1枚を上限とし、未代表の別遭遇や通常戦闘を優先する。
+Semantic Duplicate Groupのうち、同一Video Source内で時系列に連続する`major`戦闘候補を同じ遭遇として扱うまとまり。全Candidate Momentのsource別時系列を境界検知に使い、同じGroupへ入った注釈済み候補間に未注釈Momentがあれば、そのMomentを含む決定的な後続batchまでShortlistを拡張する。全Blog CandidateのVideo Time順を基準にし、非`major`候補を遭遇境界としてからScene Slugの連続runへ分ける。同じSlugに前後を挟まれた単発の誤分類は両側15秒以内のときだけ同じ遭遇へ吸収する。別の主要戦闘runまたは非主要場面を挟んだ同名Slugは別遭遇として保持する。同じGroupでは異なる構図や技でも代表1枚を上限とし、未代表の別遭遇や通常戦闘を優先する。
 _Avoid_: boss name truth, all major combat in one video, Combat Encounter Kind, Variant Group
 
 **Semantic Duplicate Basis**:

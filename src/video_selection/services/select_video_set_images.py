@@ -25,6 +25,7 @@ from ..models.video_set_selection_result import (
 from .assign_semantic_duplicate_groups import assign_semantic_duplicate_groups
 
 SpoilerSensitivity = Literal["low", "medium", "high"]
+type CandidateMomentTimelines = Mapping[tuple[int, str], tuple[str, ...]]
 
 _EXPLANATION_VALUES = {
     "none": 0.0,
@@ -66,11 +67,13 @@ _SIMILARITY_REJECTION_REASONS = frozenset(
 def select_from_shortlist_batches(
     batches: Iterable[tuple[BlogCandidate, ...]],
     *,
+    candidate_moment_timelines: CandidateMomentTimelines,
     requested_count: int,
     spoiler_sensitivity: SpoilerSensitivity,
     similarity_threshold: float,
 ) -> VideoSetSelectionResult:
     """注釈済みShortlist batchを不足時だけ追加して全体を再選定する。"""
+    _validate_candidate_moment_timelines(candidate_moment_timelines)
     accumulated: list[BlogCandidate] = []
     last_result: VideoSetSelectionResult | None = None
     expansion_count = 0
@@ -86,7 +89,10 @@ def select_from_shortlist_batches(
             similarity_threshold=similarity_threshold,
         )
         expansion_count = batch_index
-        if shortlist_selection_is_complete(last_result):
+        if shortlist_selection_can_stop(
+            last_result,
+            candidate_moment_timelines,
+        ):
             return replace(
                 last_result,
                 shortlist_expansion_count=expansion_count,
@@ -106,6 +112,80 @@ def select_from_shortlist_batches(
     )
 
 
+def _validate_candidate_moment_timelines(
+    timelines: CandidateMomentTimelines,
+) -> None:
+    """source別時系列に重複しないCandidate Moment IDだけがあることを検証する。"""
+    moment_ids = tuple(
+        moment_id for timeline in timelines.values() for moment_id in timeline
+    )
+    if len(moment_ids) != len(set(moment_ids)) or any(
+        not moment_id.startswith("mom_") or len(moment_id) != 68
+        for moment_id in moment_ids
+    ):
+        raise ValueError("Candidate Moment時系列が不正です")
+
+
+def _combat_encounter_boundaries_are_observed(
+    result: VideoSetSelectionResult,
+    timelines: CandidateMomentTimelines,
+) -> bool:
+    """主要戦闘Groupの両端間に未注釈Momentがないことを返す。"""
+    candidates = (
+        *(item.candidate for item in result.selected),
+        *(item.candidate for item in result.rejected),
+    )
+    annotated_by_source: dict[tuple[int, str], set[str]] = defaultdict(set)
+    for candidate in candidates:
+        source_key = _candidate_timeline_key(candidate)
+        moment_id = candidate.annotation.candidate_moment_id
+        if moment_id is None or moment_id not in timelines.get(source_key, ()):
+            raise ValueError("注釈済みCandidateが完全時系列にありません")
+        annotated_by_source[source_key].add(moment_id)
+
+    groups: dict[str, list[BlogCandidate]] = defaultdict(list)
+    for item in result.selected:
+        if (
+            item.semantic_group_id is not None
+            and item.semantic_group_basis == "combat_encounter_sequence"
+        ):
+            groups[item.semantic_group_id].append(item.candidate)
+    for rejected_item in result.rejected:
+        if (
+            rejected_item.semantic_group_id is not None
+            and rejected_item.semantic_group_basis == "combat_encounter_sequence"
+        ):
+            groups[rejected_item.semantic_group_id].append(rejected_item.candidate)
+
+    for members in groups.values():
+        source_keys = {_candidate_timeline_key(member) for member in members}
+        if len(source_keys) != 1:
+            raise ValueError("主要戦闘Groupが複数sourceにまたがっています")
+        source_key = next(iter(source_keys))
+        timeline = timelines.get(source_key)
+        if timeline is None:
+            raise ValueError("主要戦闘Groupの完全時系列がありません")
+        positions = {moment_id: index for index, moment_id in enumerate(timeline)}
+        member_positions: list[int] = []
+        for member in members:
+            moment_id = member.annotation.candidate_moment_id
+            if moment_id is None or moment_id not in positions:
+                raise ValueError("主要戦闘Groupが完全時系列にありません")
+            member_positions.append(positions[moment_id])
+        interval = timeline[min(member_positions) : max(member_positions) + 1]
+        if not set(interval).issubset(annotated_by_source[source_key]):
+            return False
+    return True
+
+
+def _candidate_timeline_key(candidate: BlogCandidate) -> tuple[int, str]:
+    """候補が属するVideo Source時系列のkeyを返す。"""
+    fingerprint = candidate.annotation.candidate.video_fingerprint
+    if fingerprint is None:
+        raise ValueError("Blog CandidateにVideo Fingerprintがありません")
+    return candidate.video_order, fingerprint
+
+
 def shortlist_selection_is_complete(result: VideoSetSelectionResult) -> bool:
     """要求数と適用中の条件付き最低枠が充足されたかを返す。"""
     if result.shortfall:
@@ -117,6 +197,19 @@ def shortlist_selection_is_complete(result: VideoSetSelectionResult) -> bool:
     return all(
         eligible_counts[facet] > 0 and not reallocated[facet]
         for facet in SELECTION_COVERAGE_FACETS
+    )
+
+
+def shortlist_selection_can_stop(
+    result: VideoSetSelectionResult,
+    candidate_moment_timelines: CandidateMomentTimelines,
+) -> bool:
+    """要求、最低枠、主要戦闘の観測済み境界が確定したかを返す。"""
+    return shortlist_selection_is_complete(
+        result
+    ) and _combat_encounter_boundaries_are_observed(
+        result,
+        candidate_moment_timelines,
     )
 
 

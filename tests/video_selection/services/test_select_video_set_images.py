@@ -181,6 +181,32 @@ def _candidate(
     )
 
 
+def _candidate_moment_timelines(
+    candidates: tuple[BlogCandidate, ...],
+) -> dict[tuple[int, str], tuple[str, ...]]:
+    """候補集合からsource別の完全なCandidate Moment時系列を返す。"""
+    grouped: dict[tuple[int, str], list[BlogCandidate]] = {}
+    for candidate in candidates:
+        fingerprint = candidate.annotation.candidate.video_fingerprint
+        assert fingerprint is not None
+        grouped.setdefault((candidate.video_order, fingerprint), []).append(candidate)
+    timelines: dict[tuple[int, str], tuple[str, ...]] = {}
+    for key, values in grouped.items():
+        moment_ids: list[str] = []
+        for item in sorted(
+            values,
+            key=lambda item: (
+                item.annotation.candidate.video_time,
+                item.annotation.candidate_moment_id,
+            ),
+        ):
+            moment_id = item.annotation.candidate_moment_id
+            assert moment_id is not None
+            moment_ids.append(moment_id)
+        timelines[key] = tuple(moment_ids)
+    return timelines
+
+
 def _hard_limit_variant_candidates(
     hard_limit: Literal["title", "spoiler"],
 ) -> tuple[BlogCandidate, ...]:
@@ -1887,6 +1913,9 @@ def test_shortlist_expansion_recomputes_selection_from_full_expanded_pool() -> N
     # Act
     result = select_from_shortlist_batches(
         ((initial,), (gameplay, event)),
+        candidate_moment_timelines=_candidate_moment_timelines(
+            (initial, gameplay, event)
+        ),
         requested_count=2,
         spoiler_sensitivity="medium",
         similarity_threshold=0.72,
@@ -1959,6 +1988,9 @@ def test_shortlist_expands_for_an_undiscovered_conditional_facet() -> None:
     # Act
     result = select_from_shortlist_batches(
         ((ordinary_combat, *initial_gameplay), (event,)),
+        candidate_moment_timelines=_candidate_moment_timelines(
+            (ordinary_combat, *initial_gameplay, event)
+        ),
         requested_count=10,
         spoiler_sensitivity="medium",
         similarity_threshold=0.72,
@@ -1976,6 +2008,164 @@ def test_shortlist_expands_for_an_undiscovered_conditional_facet() -> None:
         "ordinary_combat": False,
         "event": False,
     }
+
+
+def test_shortlist_expands_until_combat_encounter_boundary_is_observed() -> None:
+    """未注釈Momentが主要戦闘Group内に残る間は選定が確定されないこと。
+
+    Arrange:
+        - 同じsource・Scene Slugの主要戦闘2件が初期batchに用意される
+        - 2件の間にある非戦闘Momentだけが後続batchに用意される
+        - 初期batchだけでも要求枚数は満たせる
+    Act:
+        - 完全なCandidate Moment時系列付きでlazy batch選定が実行される
+    Assert:
+        - 後続batchまで注釈され別遭遇の主要戦闘2件が選択されること
+    """
+    # Arrange
+    source_fingerprint = "a" * 64
+    first_encounter = _candidate(
+        "hidden-boundary-first",
+        quality=0.99,
+        feature=(1.0, 0.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-boss",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    boundary = _candidate(
+        "hidden-boundary-event",
+        quality=0.10,
+        feature=(0.0, 1.0, 0.0, 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="event",
+        explanation_value="none",
+        context_relevance="none",
+        scene_slug="story-event",
+        video_fingerprint=source_fingerprint,
+    )
+    second_encounter = _candidate(
+        "hidden-boundary-second",
+        quality=0.98,
+        feature=(0.0, 0.0, 1.0, 0.0),
+        progress=Fraction(30, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-boss",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    filler = _candidate(
+        "hidden-boundary-filler",
+        quality=0.10,
+        feature=(0.0, 0.0, 0.0, 1.0),
+        progress=Fraction(80, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="exploration",
+        video_fingerprint=source_fingerprint,
+    )
+    all_candidates = (first_encounter, boundary, second_encounter, filler)
+
+    # Act
+    result = select_from_shortlist_batches(
+        ((first_encounter, second_encounter, filler), (boundary,)),
+        candidate_moment_timelines=_candidate_moment_timelines(all_candidates),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        first_encounter.identifier,
+        second_encounter.identifier,
+    }
+    assert result.annotated_candidate_count == 4
+    assert result.shortlist_expansion_count == 1
+
+
+def test_title_semantics_do_not_complete_event_minimum_before_real_event() -> None:
+    """eventへ誤分類されたタイトルでevent最低枠が充足されないこと。
+
+    Arrange:
+        - 通常戦闘、eventへ誤分類されたタイトル、通常画像8件が初期batchにある
+        - 実際のevent候補が後続batchにある
+    Act:
+        - 10枚のlazy batch選定が実行される
+    Assert:
+        - 後続batchまで注釈され実際のeventが最低枠として選択されること
+        - タイトルがevent最低枠の実績へ数えられないこと
+    """
+    # Arrange
+    feature_count = 11
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    ordinary_combat = _candidate(
+        "title-facet-combat",
+        quality=0.95,
+        feature=unit_feature(0),
+        progress=Fraction(1, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="ordinary",
+    )
+    misclassified_title = _candidate(
+        "title-facet-misclassified",
+        quality=0.94,
+        feature=unit_feature(1),
+        progress=Fraction(2, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        screen_text_kind="title",
+        content_kind="title",
+    )
+    gameplay = tuple(
+        _candidate(
+            f"title-facet-gameplay-{index}",
+            quality=0.80 - index / 100,
+            feature=unit_feature(index + 2),
+            progress=Fraction(index + 2, 20),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+        )
+        for index in range(8)
+    )
+    event = _candidate(
+        "title-facet-real-event",
+        quality=0.90,
+        feature=unit_feature(10),
+        progress=Fraction(90, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    all_candidates = (ordinary_combat, misclassified_title, *gameplay, event)
+
+    # Act
+    result = select_from_shortlist_batches(
+        ((ordinary_combat, misclassified_title, *gameplay), (event,)),
+        candidate_moment_timelines=_candidate_moment_timelines(all_candidates),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    assert event.identifier in selected_ids
+    assert result.shortlist_expansion_count == 1
+    assert result.selection_coverage_actuals["event"] == 1
 
 
 def test_exact_utility_tie_uses_stable_video_order_and_records_tie_break() -> None:

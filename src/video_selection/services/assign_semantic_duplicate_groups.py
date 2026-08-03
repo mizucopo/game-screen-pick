@@ -60,14 +60,7 @@ def assign_semantic_duplicate_groups(
 
 def _has_title_semantics(candidate: BlogCandidate) -> bool:
     """分類名または画像内根拠がタイトル画面を示すかを返す。"""
-    annotation = candidate.annotation
-    evidence = annotation.representative_frame_evidence
-    return (
-        annotation.blog_image_type == "title"
-        or annotation.screen_text_kind == "title"
-        or evidence is not None
-        and evidence.content_kind == "title"
-    )
+    return candidate.annotation.has_title_semantics
 
 
 def _combat_encounter_groups(

@@ -127,7 +127,7 @@ CLIPモデルの初回ロード前にも、画像読み込みやチャンク準�
 - `scene_description`: ブログ画像選択に役立つ短い説明文
 - `scene_selection_role`: `ordinary`、`cinematic`、`recurring_gameplay` のいずれか。`cinematic` は合計で控えめに、`recurring_gameplay` は通常プレイの状態差を拾いやすく扱います
 - `variant_group`: 同じscene内でブログ上の役割が重複する差分画像のまとまり
-- `semantic_duplicate_group`: Scene SlugやVariant Groupの分類揺れをまたいで同じtitle、主要戦闘遭遇、近接した同役割画面を示す候補のまとまり。次期Video Set selectorでは要求枚数不足時も代表1枚だけを選びます
+- `semantic_duplicate_group`: Scene SlugやVariant Groupの分類揺れをまたいで同じtitle、主要戦闘遭遇、近接した同役割画面を示す候補のまとまり。Video Set selectorは要求枚数不足時も代表1枚だけを選び、主要戦闘候補間に未注釈Momentがあれば遭遇境界を確認するまでShortlistを拡張します
 
 ### 類似度フィルタリング
 

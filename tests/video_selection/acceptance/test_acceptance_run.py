@@ -673,7 +673,7 @@ def _canonical_report(
         "near_misses": [],
         "context_cues": [],
         "provenance": {
-            "selection": {"policy_version": "video-set-selection-v4"},
+            "selection": {"policy_version": "video-set-selection-v5"},
             "runtime": {"environment": "wsl2"},
             "tools": {"ffmpeg": "test"},
             "models": {
