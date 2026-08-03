@@ -79,6 +79,17 @@ from .vision_stage_artifacts import (
 )
 
 VisionStageValue = TypeVar("VisionStageValue")
+type _AnnotationStageResult = tuple[
+    CandidateAnnotation,
+    VisionInferenceDiagnostics,
+    CompletedStage,
+]
+type _CachedAnnotationStageResult = tuple[
+    CandidateAnnotation,
+    VisionInferenceDiagnostics,
+    CompletedStage,
+    bool,
+]
 _EXPLANATION_PRIORITY = {"none": 0, "low": 1, "medium": 2, "high": 3}
 _CONTENT_PRIORITY = {
     "document": 0,
@@ -151,7 +162,7 @@ def plan_vision_stage_fingerprints(
 
 
 class VideoSetVisionProcessor:
-    """VisionRuntimeとMoment単位atomic cacheを一つの深いmoduleに保つ。"""
+    """VisionRuntimeとFrame単位atomic cacheを一つの深いmoduleに保つ。"""
 
     def __init__(
         self,
@@ -305,7 +316,7 @@ class VideoSetVisionProcessor:
         catalog_fingerprint: StageFingerprint,
         model: ResolvedModel,
         num_ctx: int,
-    ) -> tuple[CandidateAnnotation, VisionInferenceDiagnostics, CompletedStage]:
+    ) -> _AnnotationStageResult:
         """一つのFrame Candidateだけを独立Stageとして扱う。"""
         self._start_progress_stage(
             ProcessingStage.ANNOTATE_CANDIDATE,
@@ -336,25 +347,15 @@ class VideoSetVisionProcessor:
         model: ResolvedModel,
         num_ctx: int,
         max_parallel_requests: int,
-    ) -> tuple[
-        tuple[CandidateAnnotation, VisionInferenceDiagnostics, CompletedStage],
-        ...,
-    ]:
+    ) -> tuple[_AnnotationStageResult, ...]:
         """同一Momentの代替frameを独立cacheのままbounded並列評価する。"""
         self._start_progress_stage(
             ProcessingStage.ANNOTATE_CANDIDATE,
             "candidate",
         )
-        results: list[
-            tuple[
-                CandidateAnnotation,
-                VisionInferenceDiagnostics,
-                CompletedStage,
-                bool,
-            ]
-            | Exception
-            | None
-        ] = [None] * len(requests)
+        results: list[_CachedAnnotationStageResult | Exception | None] = [None] * len(
+            requests
+        )
         pending: list[tuple[int, CandidateAnnotationRequest]] = []
         for index, request in enumerate(requests):
             cached = _restore_cached_annotation_stage(
@@ -402,14 +403,7 @@ class VideoSetVisionProcessor:
                 reason_code="candidate_annotation_inference_started",
             )
 
-        completed_results: list[
-            tuple[
-                CandidateAnnotation,
-                VisionInferenceDiagnostics,
-                CompletedStage,
-                bool,
-            ]
-        ] = []
+        completed_results: list[_CachedAnnotationStageResult] = []
         failures: list[Exception] = []
         for result in results:
             if result is None:
@@ -428,16 +422,11 @@ class VideoSetVisionProcessor:
                     "candidate",
                 )
             duration_seconds = None if reused else diagnostics.duration_seconds
-            self._record_progress_stage_result(
+            self._complete_progress_stage(
                 reused,
                 completed.fingerprint,
                 duration_seconds=duration_seconds,
             )
-            if self._progress is not None:
-                self._progress.complete_stage(
-                    duration_seconds,
-                    stage_fingerprint=completed.fingerprint,
-                )
             self._observer.stage_completed(completed)
         if failures:
             if completed_results:
@@ -462,12 +451,7 @@ class VideoSetVisionProcessor:
         model: ResolvedModel,
         num_ctx: int,
         monitor_external: bool,
-    ) -> tuple[
-        CandidateAnnotation,
-        VisionInferenceDiagnostics,
-        CompletedStage,
-        bool,
-    ]:
+    ) -> _CachedAnnotationStageResult:
         """一枚のannotationを生成または復元しprogressには触れず返す。"""
         semantic_input, upstream, fingerprint = _annotation_stage_definition(
             video_set,
@@ -530,11 +514,20 @@ class VideoSetVisionProcessor:
         self,
         reused: bool,
         fingerprint: StageFingerprint,
+        *,
+        duration_seconds: float | None = None,
     ) -> None:
         if self._progress is None:
             return
-        self._record_progress_stage_result(reused, fingerprint)
-        self._progress.complete_stage(stage_fingerprint=fingerprint)
+        self._record_progress_stage_result(
+            reused,
+            fingerprint,
+            duration_seconds=duration_seconds,
+        )
+        self._progress.complete_stage(
+            duration_seconds,
+            stage_fingerprint=fingerprint,
+        )
 
     def _record_progress_stage_result(
         self,
@@ -606,15 +599,7 @@ def _restore_cached_annotation_stage(
     catalog_fingerprint: StageFingerprint,
     model: ResolvedModel,
     num_ctx: int,
-) -> (
-    tuple[
-        CandidateAnnotation,
-        VisionInferenceDiagnostics,
-        CompletedStage,
-        bool,
-    ]
-    | None
-):
+) -> _CachedAnnotationStageResult | None:
     """有効な一枚annotation cacheを並列処理前に復元する。"""
     semantic_input, upstream, fingerprint = _annotation_stage_definition(
         video_set,
