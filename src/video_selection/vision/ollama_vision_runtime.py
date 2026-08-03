@@ -48,6 +48,10 @@ from ..models.candidate_frame_observation import (
     PrimarySubjectVisibility,
     TransientObstruction,
 )
+from ..models.combat_encounter_kind import (
+    COMBAT_ENCOUNTER_KINDS,
+    CombatEncounterKind,
+)
 from ..models.frame_candidate import FrameCandidate
 from ..models.model_artifact import ModelArtifact
 from ..models.model_artifact_invalid_error import ModelArtifactInvalidError
@@ -188,7 +192,7 @@ _FRAME_OBSERVATION_KEYS = {
     "dialogue_text_presentation",
     "visible_action",
     "visible_character_or_enemy",
-    "combat_action",
+    "combat_encounter_kind",
     "player_body_visibility",
     "opponent_body_visibility",
     "effect_only_frame",
@@ -215,7 +219,7 @@ _COMBAT_VISIBILITY_EDGE_OBSERVATION_KEYS = {
     "opponent_body_reaches_outer_edge",
 }
 _COMBAT_ENCOUNTER_VERIFICATION_KEYS = {
-    "combat_encounter_visible",
+    "combat_encounter_kind",
     "combat_encounter_evidence",
 }
 _COMBAT_ENCOUNTER_EVIDENCE = {
@@ -321,13 +325,18 @@ _CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION = (
 )
 _COMBAT_ENCOUNTER_VERIFICATION_INSTRUCTION = (
     "この画像1枚に実際に見える画素だけを観測してください。音声、前後場面、"
-    "説明文は使いません。combat_encounter_visibleは、敵またはboss固有の名前と"
-    "HP・status barがある、またはplayer本体と攻撃相手本体が戦闘中だと画面から"
-    "分かる場合にtrueです。敵本体が画面端で切れる、エフェクトに隠れる、画面外に"
-    "いる場合でも、敵・boss固有の名前とHP・status barがあればtrueです。player自身の"
-    "通常HP、portrait、操作button、minimapだけではfalseです。"
+    "説明文は使いません。combat_encounter_kindはnot_combat、ordinary、major、"
+    "uncertainから選びます。敵またはboss固有の名前とHP・status barがある、または"
+    "player本体と攻撃相手本体が戦闘中だと画面から分かる場合はnot_combat以外です。"
+    "敵本体が画面端で切れる、エフェクトに隠れる、画面外にいる場合でも、敵固有の"
+    "名前とHP・status barがあれば戦闘です。player自身の通常HP、portrait、操作button、"
+    "minimapだけならnot_combatです。ordinaryは主要戦闘を示す直接根拠がない戦闘、"
+    "majorはboss専用表示、特別な演出や構図、通常敵と明確に異なる相手などの直接根拠が"
+    "ある戦闘、uncertainは戦闘は見えるが両者を判別できない場合です。"
+    "敵名やHP・status barだけではmajorにしません。combat_encounter_kindは物語上の"
+    "spoiler_riskとは独立して決めます。"
     "combat_encounter_evidenceはnone、enemy_status_ui、opposing_bodies、bothから"
-    "選びます。combat_encounter_visibleがfalseならnone、trueならnone以外です。"
+    "選びます。not_combatならnone、それ以外ならnone以外です。"
 )
 _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION = (
     "この画像1枚に実際に見える画素だけを観測してください。音声、前後場面、"
@@ -411,7 +420,12 @@ _CANDIDATE_ANNOTATION_SEMANTICS = (
     "会話・event用に人物やNPCを並べた構図など、通常操作ではなくeventやcutsceneの"
     "提示だと画面自体から分かる場合だけtrueです。通常の戦闘・探索HUD、操作中の"
     "gameplay、画面隅の常設portraitはfalseです。\n"
-    "combat_actionはplayerと敵が戦っている場面だけtrueです。"
+    "combat_encounter_kindはnot_combat・ordinary・major・uncertainから選びます。"
+    "not_combatは戦闘が見えない場面、ordinaryは主要戦闘を示す直接根拠がない戦闘、"
+    "majorはboss専用表示、特別な演出や構図、通常敵と明確に異なる相手など主要戦闘の"
+    "直接根拠がある戦闘、uncertainは戦闘は見えるがordinaryかmajorか判別できない"
+    "場面です。敵名やHP・status barだけではmajorにしません。"
+    "combat_encounter_kindは物語上のspoiler_riskとは独立して決めます。"
     "player_body_visibilityとopponent_body_visibilityは、操作するplayer本体と攻撃する"
     "相手本体の輪郭・姿勢が明瞭ならclear、一部が隠れるならpartial、本体を判別"
     "できなければabsentです。portrait、HUD、文字、光、hit effect、影を本体に"
@@ -607,13 +621,14 @@ class OllamaVisionRuntime:
             annotation.explanation_value != "none" and cinematic_letterbox_detected
         )
         combat_scene = scene_is_combat
+        verified_combat_encounter_kind = annotation.combat_encounter_kind
         if requires_combat_encounter_verification:
             verification_input = _combat_encounter_verification_semantic_input(
                 annotation.candidate,
                 model,
                 num_ctx,
             )
-            combat_encounter_visible, verification_diagnostics = self._infer(
+            verified_combat_encounter_kind, verification_diagnostics = self._infer(
                 stage_kind="combat_encounter_verification",
                 request_fingerprint=_fingerprint(verification_input),
                 payload=_combat_encounter_verification_payload(
@@ -630,14 +645,17 @@ class OllamaVisionRuntime:
                 diagnostics,
                 verification_diagnostics,
             )
-            if not combat_encounter_visible:
+            if verified_combat_encounter_kind == "not_combat":
                 confirmation_input = _combat_encounter_verification_semantic_input(
                     annotation.candidate,
                     model,
                     num_ctx,
                     independently_confirm=True,
                 )
-                combat_encounter_visible, confirmation_diagnostics = self._infer(
+                (
+                    verified_combat_encounter_kind,
+                    confirmation_diagnostics,
+                ) = self._infer(
                     stage_kind="combat_encounter_confirmation",
                     request_fingerprint=_fingerprint(confirmation_input),
                     payload=_combat_encounter_verification_payload(
@@ -655,9 +673,11 @@ class OllamaVisionRuntime:
                     diagnostics,
                     confirmation_diagnostics,
                 )
-            if not combat_encounter_visible and combat_scene:
+            if verified_combat_encounter_kind == "not_combat" and combat_scene:
                 annotation = replace(annotation, explanation_value="none")
-            requires_combat_verification = combat_encounter_visible
+            requires_combat_verification = (
+                verified_combat_encounter_kind != "not_combat"
+            )
         requires_noncombat_visibility_verification = (
             requires_combat_encounter_verification
             and not requires_combat_verification
@@ -759,7 +779,12 @@ class OllamaVisionRuntime:
             if not visibility_is_acceptable:
                 annotation = replace(annotation, explanation_value="none")
             elif combat_is_consistently_publishable:
-                annotation = replace(annotation, combat_action=True)
+                if verified_combat_encounter_kind == "not_combat":
+                    verified_combat_encounter_kind = "uncertain"
+                annotation = replace(
+                    annotation,
+                    combat_encounter_kind=verified_combat_encounter_kind,
+                )
         if annotation.explanation_value != "none" and requires_publication_verification:
             verification_input = _publication_boundary_verification_semantic_input(
                 annotation.candidate,
@@ -1860,7 +1885,7 @@ def _parse_candidate_annotation(
                 supporting_context_cue_ids=typed_cue_ids,
                 spoiler_risk=selected.spoiler_risk,
                 spoiler_evidence=spoiler_evidence,
-                combat_action=selected.combat_action,
+                combat_encounter_kind=selected.combat_encounter_kind,
             ),
             free_text_redacted,
             requires_dialogue_verification,
@@ -1873,19 +1898,23 @@ def _parse_candidate_annotation(
         raise _domain_error("candidate_annotation_domain_invalid") from None
 
 
-def _parse_combat_encounter_verification(value: Mapping[str, object]) -> bool:
-    """戦闘有無と根拠enumの関係を検証して戦闘有無だけを返す。"""
+def _parse_combat_encounter_verification(
+    value: Mapping[str, object],
+) -> CombatEncounterKind:
+    """戦闘種別と根拠enumの関係を検証して戦闘種別を返す。"""
     if set(value) != _COMBAT_ENCOUNTER_VERIFICATION_KEYS:
         raise _schema_error("combat_encounter_verification_schema_invalid")
-    combat_encounter_visible = value.get("combat_encounter_visible")
+    combat_encounter_kind = value.get("combat_encounter_kind")
     combat_encounter_evidence = value.get("combat_encounter_evidence")
+    combat_is_visible = combat_encounter_kind != "not_combat"
+    evidence_is_present = combat_encounter_evidence != "none"
     if (
-        not isinstance(combat_encounter_visible, bool)
+        combat_encounter_kind not in COMBAT_ENCOUNTER_KINDS
         or combat_encounter_evidence not in _COMBAT_ENCOUNTER_EVIDENCE
-        or combat_encounter_visible != (combat_encounter_evidence != "none")
+        or combat_is_visible != evidence_is_present
     ):
         raise _schema_error("combat_encounter_verification_schema_invalid")
-    return combat_encounter_visible
+    return combat_encounter_kind
 
 
 def _parse_combat_visibility_verification(
@@ -2026,7 +2055,7 @@ def _parse_candidate_frame_observations(
         dialogue_text_presentation = raw_observation.get("dialogue_text_presentation")
         visible_action = raw_observation.get("visible_action")
         visible_character_or_enemy = raw_observation.get("visible_character_or_enemy")
-        combat_action = raw_observation.get("combat_action")
+        combat_encounter_kind = raw_observation.get("combat_encounter_kind")
         player_body_visibility = raw_observation.get("player_body_visibility")
         opponent_body_visibility = raw_observation.get("opponent_body_visibility")
         effect_only_frame = raw_observation.get("effect_only_frame")
@@ -2048,7 +2077,7 @@ def _parse_candidate_frame_observations(
             or dialogue_text_presentation not in DIALOGUE_TEXT_PRESENTATIONS
             or not isinstance(visible_action, bool)
             or not isinstance(visible_character_or_enemy, bool)
-            or not isinstance(combat_action, bool)
+            or combat_encounter_kind not in COMBAT_ENCOUNTER_KINDS
             or player_body_visibility not in CHARACTER_BODY_VISIBILITIES
             or opponent_body_visibility not in CHARACTER_BODY_VISIBILITIES
             or not isinstance(effect_only_frame, bool)
@@ -2089,7 +2118,10 @@ def _parse_candidate_frame_observations(
                     ),
                     visible_action=visible_action,
                     visible_character_or_enemy=visible_character_or_enemy,
-                    combat_action=combat_action,
+                    combat_encounter_kind=cast(
+                        CombatEncounterKind,
+                        combat_encounter_kind,
+                    ),
                     player_body_visibility=cast(
                         CharacterBodyVisibility,
                         player_body_visibility,

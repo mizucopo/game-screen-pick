@@ -5,6 +5,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Literal, cast, get_args
 
+from .combat_encounter_kind import COMBAT_ENCOUNTER_KINDS, CombatEncounterKind
 from .frame_candidate import FrameCandidate
 from .report_value import string_looks_private
 
@@ -142,7 +143,7 @@ class CandidateAnnotation:
     supporting_context_cue_ids: tuple[str, ...] = ()
     spoiler_risk: SpoilerRisk = "none"
     spoiler_evidence: str = ""
-    combat_action: bool = False
+    combat_encounter_kind: CombatEncounterKind = "not_combat"
 
     def __post_init__(self) -> None:
         """domain enum、所属ID、evidenceの整合を検証する。"""
@@ -166,7 +167,7 @@ class CandidateAnnotation:
             or self.screen_text_kind not in SCREEN_TEXT_KINDS
             or self.context_relevance not in CONTEXT_CUE_RELEVANCES
             or self.spoiler_risk not in SPOILER_RISKS
-            or not isinstance(self.combat_action, bool)
+            or self.combat_encounter_kind not in COMBAT_ENCOUNTER_KINDS
             or not candidate_annotation_relationships_are_valid(
                 self.context_relevance,
                 self.supporting_context_cue_ids,
@@ -178,14 +179,18 @@ class CandidateAnnotation:
             raise ValueError(msg)
 
     @property
+    def combat_action(self) -> bool:
+        """画像内で戦闘が観測されたかを戦闘種別から返す。"""
+        return self.combat_encounter_kind != "not_combat"
+
+    @property
     def selection_coverage_facet(self) -> SelectionCoverageFacet | None:
         """条件付き最低coverageに使う画像内根拠のある役割を返す。"""
         if self.blog_image_type == "event":
             return "event"
         if (
             self.blog_image_type == "normal_gameplay"
-            and self.combat_action
-            and self.spoiler_risk == "none"
+            and self.combat_encounter_kind == "ordinary"
         ):
             return "ordinary_combat"
         return None

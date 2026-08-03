@@ -12,6 +12,7 @@ from src.video_selection.models.candidate_frame_observation import (
     CandidateInterfaceKind,
     CharacterBodyVisibility,
 )
+from src.video_selection.models.combat_encounter_kind import CombatEncounterKind
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.neutral_image_analysis import NeutralImageAnalysis
 from src.video_selection.models.neutral_image_metrics import NeutralImageMetrics
@@ -151,7 +152,7 @@ def test_combat_with_clear_opponent_is_selected_over_obscured_combat() -> None:
         "event_action",
         quality=0.90,
         explanation_value="high",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
         player_body_visibility="clear",
         opponent_body_visibility="partial",
     )
@@ -160,7 +161,7 @@ def test_combat_with_clear_opponent_is_selected_over_obscured_combat() -> None:
         "event_action",
         quality=0.80,
         explanation_value="medium",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
         player_body_visibility="partial",
         opponent_body_visibility="clear",
     )
@@ -187,7 +188,7 @@ def _observation(
     visible_dialogue_text: bool | None = None,
     visible_action: bool | None = None,
     visible_character_or_enemy: bool = True,
-    combat_action: bool = False,
+    combat_encounter_kind: CombatEncounterKind = "not_combat",
     player_body_visibility: CharacterBodyVisibility = "clear",
     opponent_body_visibility: CharacterBodyVisibility = "absent",
 ) -> CandidateFrameObservation:
@@ -249,7 +250,7 @@ def _observation(
             else visible_action
         ),
         visible_character_or_enemy=visible_character_or_enemy,
-        combat_action=combat_action,
+        combat_encounter_kind=combat_encounter_kind,
         player_body_visibility=player_body_visibility,
         opponent_body_visibility=opponent_body_visibility,
         effect_only_frame=False,

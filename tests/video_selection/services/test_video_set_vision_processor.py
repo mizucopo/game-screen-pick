@@ -95,6 +95,7 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     assert warm_result.catalog == cold_result.catalog
     assert warm_result.annotations == cold_result.annotations
     assert warm_result.annotations[0].combat_action is True
+    assert warm_result.annotations[0].combat_encounter_kind == "ordinary"
     assert cold_result.catalog_diagnostics.cache_hit is False
     assert all(not item.cache_hit for item in cold_result.annotation_diagnostics)
     assert warm_result.catalog_diagnostics.cache_hit is True
@@ -109,7 +110,8 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     assert '"raw_response"' not in cache_text
     assert '"reasoning"' not in cache_text
     assert '"scene_kind": "exploration"' in cache_text
-    assert '"combat_action": true' in cache_text
+    assert '"combat_encounter_kind": "ordinary"' in cache_text
+    assert '"combat_action"' not in cache_text
     assert '"seed": 0' in cache_text
     assert '"combat_visibility_edge_audit_prompt_version"' in cache_text
     assert '"combat_visibility_edge_strip_version"' in cache_text
@@ -769,7 +771,7 @@ def _annotations(
             screen_text_kind="hud",
             context_relevance="unavailable",
             spoiler_risk="none",
-            combat_action=True,
+            combat_encounter_kind="ordinary",
         ),
         CandidateAnnotation(
             candidate=requests[1].frame_candidates[0],

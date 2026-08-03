@@ -42,15 +42,16 @@ def test_major_spoiler_requires_safe_evidence_summary() -> None:
     assert not hasattr(annotation, "selected")
 
 
-def test_generic_combat_and_event_expose_distinct_selection_coverage_facets() -> None:
+def test_ordinary_combat_and_event_expose_distinct_selection_coverage_facets() -> None:
     """通常戦闘とイベントから条件付きcoverage facetが導出されること。
 
     Arrange:
-        - genericな通常戦闘、固有boss戦、イベントのannotationが用意される
+        - Spoiler Riskを独立に持つ通常戦闘、主要戦闘、判別不能戦闘が用意される
+        - イベントのannotationが用意される
     Act:
         - 各annotationのSelection Coverage Facetが読み出される
     Assert:
-        - genericな通常戦闘とイベントだけが対応facetを返すこと
+        - 通常戦闘とイベントだけが対応facetを返すこと
     """
     # Arrange
     candidate = FrameCandidate(identifier="frame-1", image_bytes=b"image")
@@ -59,16 +60,23 @@ def test_generic_combat_and_event_expose_distinct_selection_coverage_facets() ->
         summary="通常戦闘",
         blog_image_type="normal_gameplay",
         explanation_value="high",
-        combat_action=True,
+        combat_encounter_kind="ordinary",
+        spoiler_risk="medium",
+        spoiler_evidence="物語上の進行情報が表示される",
     )
-    boss_combat = CandidateAnnotation(
+    major_combat = CandidateAnnotation(
         candidate=candidate,
-        summary="固有boss戦",
+        summary="主要戦闘",
         blog_image_type="normal_gameplay",
         explanation_value="high",
-        combat_action=True,
-        spoiler_risk="medium",
-        spoiler_evidence="固有bossが表示される",
+        combat_encounter_kind="major",
+    )
+    uncertain_combat = CandidateAnnotation(
+        candidate=candidate,
+        summary="判別不能な戦闘",
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        combat_encounter_kind="uncertain",
     )
     event = CandidateAnnotation(
         candidate=candidate,
@@ -79,20 +87,26 @@ def test_generic_combat_and_event_expose_distinct_selection_coverage_facets() ->
 
     # Act
     ordinary_facet = ordinary_combat.selection_coverage_facet
-    boss_facet = boss_combat.selection_coverage_facet
+    major_facet = major_combat.selection_coverage_facet
+    uncertain_facet = uncertain_combat.selection_coverage_facet
     event_facet = event.selection_coverage_facet
 
     # Assert
     assert ordinary_facet == "ordinary_combat"
-    assert boss_facet is None
+    assert major_facet is None
+    assert uncertain_facet is None
     assert event_facet == "event"
+    assert ordinary_combat.combat_action is True
+    assert major_combat.combat_action is True
+    assert uncertain_combat.combat_action is True
+    assert event.combat_action is False
 
 
-def test_combat_action_requires_a_boolean() -> None:
-    """戦闘の直接観測がboolean以外ならannotationが拒否されること。
+def test_combat_encounter_kind_requires_a_known_value() -> None:
+    """未知のCombat Encounter Kindならannotationが拒否されること。
 
     Arrange:
-        - 文字列のcombat_actionを持つannotation入力が用意される
+        - 未知のcombat_encounter_kindを持つannotation入力が用意される
     Act:
         - Candidate Annotationの構築が試行される
     Assert:
@@ -107,5 +121,5 @@ def test_combat_action_requires_a_boolean() -> None:
         CandidateAnnotation(
             candidate=candidate,
             summary="通常戦闘",
-            combat_action="true",  # type: ignore[arg-type]
+            combat_encounter_kind="boss",  # type: ignore[arg-type]
         )

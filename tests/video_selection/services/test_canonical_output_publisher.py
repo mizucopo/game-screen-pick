@@ -184,7 +184,7 @@ def test_conditional_coverage_counts_and_reallocation_are_published(
         selected.candidate,
         annotation=replace(
             selected.candidate.annotation,
-            combat_action=True,
+            combat_encounter_kind="ordinary",
         ),
     )
     event_candidate = replace(
