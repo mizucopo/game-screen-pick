@@ -1093,10 +1093,10 @@ def _rejection(
         selected,
         semantic_groups,
     )
-    if candidate.annotation.blog_image_type == "title" and selected_title is not None:
-        reason = SelectionRejectionReason.TITLE_LIMIT
-    elif semantic_blocker is not None:
+    if semantic_blocker is not None:
         reason = SelectionRejectionReason.SEMANTIC_DUPLICATE
+    elif candidate.annotation.blog_image_type == "title" and selected_title is not None:
+        reason = SelectionRejectionReason.TITLE_LIMIT
     elif (
         nearest_similarity is not None
         and nearest_similarity > _VISUAL_NEAR_DUPLICATE_THRESHOLD

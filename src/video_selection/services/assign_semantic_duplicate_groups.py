@@ -39,7 +39,7 @@ def assign_semantic_duplicate_groups(
     )
     if title_candidates:
         groups.append((_TITLE_SEMANTICS_BASIS, title_candidates))
-    groups.extend(_combat_encounter_groups(eligible_candidates))
+    groups.extend(_combat_encounter_groups(candidates))
     groups.extend(_visual_role_similarity_groups(eligible_candidates))
 
     group_ids: dict[str, str] = {}
@@ -77,11 +77,7 @@ def _combat_encounter_groups(
     by_source: dict[tuple[int, str], list[BlogCandidate]] = defaultdict(list)
     for candidate in candidates:
         fingerprint = candidate.annotation.candidate.video_fingerprint
-        if (
-            candidate.annotation.combat_encounter_kind == "major"
-            and not _has_title_semantics(candidate)
-            and fingerprint is not None
-        ):
+        if fingerprint is not None:
             by_source[(candidate.video_order, fingerprint)].append(candidate)
 
     for source_key in sorted(by_source):
@@ -92,30 +88,48 @@ def _combat_encounter_groups(
                 item.identifier,
             ),
         )
-        runs = _scene_runs(ordered)
-        effective_slugs = [run[0].annotation.scene_slug for run in runs]
-        for index in range(1, len(runs) - 1):
-            if (
-                len(runs[index]) == 1
-                and effective_slugs[index - 1] == effective_slugs[index + 1]
-                and _is_nearby_scene_blip(
-                    runs[index - 1][-1],
-                    runs[index][0],
-                    runs[index + 1][0],
-                )
+        major_block: list[BlogCandidate] = []
+        for candidate in ordered:
+            annotation = candidate.annotation
+            if annotation.combat_encounter_kind == "major" and not _has_title_semantics(
+                candidate
             ):
-                effective_slugs[index] = effective_slugs[index - 1]
+                if annotation.explanation_value != "none":
+                    major_block.append(candidate)
+                continue
+            yield from _groups_within_major_block(major_block)
+            major_block = []
+        yield from _groups_within_major_block(major_block)
 
-        encounter: list[BlogCandidate] = []
-        current_slug: str | None = None
-        for run, effective_slug in zip(runs, effective_slugs, strict=True):
-            if encounter and effective_slug != current_slug:
-                yield _COMBAT_ENCOUNTER_BASIS, tuple(encounter)
-                encounter = []
-            encounter.extend(run)
-            current_slug = effective_slug
-        if encounter:
+
+def _groups_within_major_block(
+    candidates: list[BlogCandidate],
+) -> Iterable[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]]:
+    """非主要場面で区切られたblockをScene Slugごとの遭遇へ分ける。"""
+    runs = _scene_runs(candidates)
+    effective_slugs = [run[0].annotation.scene_slug for run in runs]
+    for index in range(1, len(runs) - 1):
+        if (
+            len(runs[index]) == 1
+            and effective_slugs[index - 1] == effective_slugs[index + 1]
+            and _is_nearby_scene_blip(
+                runs[index - 1][-1],
+                runs[index][0],
+                runs[index + 1][0],
+            )
+        ):
+            effective_slugs[index] = effective_slugs[index - 1]
+
+    encounter: list[BlogCandidate] = []
+    current_slug: str | None = None
+    for run, effective_slug in zip(runs, effective_slugs, strict=True):
+        if encounter and effective_slug != current_slug:
             yield _COMBAT_ENCOUNTER_BASIS, tuple(encounter)
+            encounter = []
+        encounter.extend(run)
+        current_slug = effective_slug
+    if encounter:
+        yield _COMBAT_ENCOUNTER_BASIS, tuple(encounter)
 
 
 def _visual_role_similarity_groups(

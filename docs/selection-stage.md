@@ -60,7 +60,7 @@ ADR 0004の表に従うSpoiler Penaltyは候補単体へのsoft penaltyです。
 Group判定は次の互いに重ならない根拠を使います。
 
 - `title_semantics`: Blog Image Type、Screen Text Kind、Representative Frame Evidenceのいずれかがtitleを示す候補をVideo Set全体で一つにする。`event`などへの誤分類でも既存のtitle最大1枚を回避できない。
-- `combat_encounter_sequence`: 同じVideo Sourceの`major`候補をVideo Time順に並べ、Scene Slugの連続runを遭遇境界にする。同じSlugに挟まれた1件だけのSlug揺れは、前後がそれぞれ15秒以内の場合だけ同じrunへ吸収する。別の主要戦闘runを挟んで同じSlugが再登場した場合は別遭遇にする。
+- `combat_encounter_sequence`: 同じVideo Sourceの全候補をVideo Time順に並べ、非`major`候補で遭遇を区切ってから、`major`候補をScene Slugの連続runへ分ける。同じSlugに挟まれた1件だけのSlug揺れは、前後がそれぞれ15秒以内の場合だけ同じrunへ吸収する。別の主要戦闘runまたは非主要場面を挟んで同じSlugが再登場した場合は別遭遇にする。
 - `visual_role_similarity`: titleでも`major`でもない候補について、同じVideo Source、30秒以内、同じRepresentative Frame content kind、同じCombat Encounter Kind、Neutral視覚類似度0.93以上をすべて満たす組だけを完全結合のGroupにする。`recurring_gameplay`ではさらに、独立評価された画像summaryのUnicode・大小文字・句読点を正規化した値が一致する場合だけ畳み、異なる技・敵・結果の説明を維持する。
 
 Semantic Group IDはbasisと全memberのFrame Candidate IDから決定的に作ります。選択代表には`semantic_group_representative`、除外候補には`semantic_duplicate`、blocking selected ID、同じGroup IDとbasisを記録します。Group判定は自由文の固有名を正解として扱わず、Neutral特徴だけで異なる敵をまとめることもしません。

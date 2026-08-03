@@ -800,7 +800,7 @@ def test_second_title_is_rejected_with_counterfactual_score() -> None:
         - Video Set selectorが終端passまで実行される
     Assert:
         - titleは1件だけ選択されSelection Shortfallになること
-        - 2件目へtitle limit、blocking ID、制約前の数値内訳が返されること
+        - 2件目へsemantic duplicate、blocking ID、制約前の数値内訳が返されること
     """
     # Arrange
     best = _candidate(
@@ -835,8 +835,9 @@ def test_second_title_is_rejected_with_counterfactual_score() -> None:
     assert result.shortfall is True
     assert len(result.rejected) == 1
     rejection = result.rejected[0]
-    assert rejection.reason_code == "title_limit"
+    assert rejection.reason_code == "semantic_duplicate"
     assert rejection.blocked_by_image_id == best.identifier
+    assert rejection.semantic_group_basis == "title_semantics"
     assert rejection.nearest_selected_image_id is None
     assert rejection.counterfactual_score.base_utility == pytest.approx(0.81)
     assert rejection.counterfactual_score.coverage_bonus == 0.05
@@ -2330,6 +2331,78 @@ def test_same_major_combat_encounter_selects_only_the_best_representative() -> N
     assert "semantic_group_representative" in encounter_representative.reason_codes
     assert encounter_representative.semantic_group_id is not None
     assert encounter_representative.semantic_group_basis == "combat_encounter_sequence"
+
+
+def test_non_major_candidate_splits_repeated_major_combat_scene_slug() -> None:
+    """非主要場面を挟む同名Scene Slugが別の主要戦闘として維持されること。
+
+    Arrange:
+        - 同じVideo SourceとScene Slugを持つ主要戦闘候補2件がある
+        - 2件の間に非主要の探索候補がある
+    Act:
+        - 3枚の選定が要求される
+    Assert:
+        - 非主要候補が遭遇境界となり3件すべてが選択されること
+        - 主要戦闘2件が同じSemantic Duplicate Groupへ割り当てられないこと
+    """
+    # Arrange
+    source_fingerprint = "4" * 64
+    first_encounter = _candidate(
+        "first-repeated-major-encounter",
+        quality=0.90,
+        feature=(1.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-boss",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    exploration = _candidate(
+        "between-major-encounters",
+        quality=0.80,
+        feature=(0.0, 1.0, 0.0),
+        progress=Fraction(30, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="exploration",
+        video_fingerprint=source_fingerprint,
+    )
+    second_encounter = _candidate(
+        "second-repeated-major-encounter",
+        quality=0.85,
+        feature=(0.0, 0.0, 1.0),
+        progress=Fraction(60, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-boss",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+
+    # Act
+    result = select_video_set_images(
+        (second_encounter, exploration, first_encounter),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        first_encounter.identifier,
+        exploration.identifier,
+        second_encounter.identifier,
+    }
+    encounter_groups = {
+        item.semantic_group_id
+        for item in result.selected
+        if item.candidate.annotation.combat_encounter_kind == "major"
+    }
+    assert encounter_groups == {None}
 
 
 def test_title_semantics_limit_applies_across_blog_image_type_misclassification() -> (

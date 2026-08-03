@@ -594,7 +594,7 @@ Blog Image Type、Scene Slug、Variant Groupの分類境界をまたいでも、
 _Avoid_: global similarity threshold, Variant Group, duplicate filename, model confidence
 
 **Combat Encounter Group**:
-Semantic Duplicate Groupのうち、同一Video Source内で時系列に連続する`major`戦闘候補を同じ遭遇として扱うまとまり。Scene Slugの連続runを境界にし、同じSlugに前後を挟まれた単発の誤分類は両側15秒以内のときだけ同じ遭遇へ吸収する。別の主要戦闘runを挟んだ同名Slugは別遭遇として保持する。同じGroupでは異なる構図や技でも代表1枚を上限とし、未代表の別遭遇や通常戦闘を優先する。
+Semantic Duplicate Groupのうち、同一Video Source内で時系列に連続する`major`戦闘候補を同じ遭遇として扱うまとまり。全Blog CandidateのVideo Time順を基準にし、非`major`候補を遭遇境界としてからScene Slugの連続runへ分ける。同じSlugに前後を挟まれた単発の誤分類は両側15秒以内のときだけ同じ遭遇へ吸収する。別の主要戦闘runまたは非主要場面を挟んだ同名Slugは別遭遇として保持する。同じGroupでは異なる構図や技でも代表1枚を上限とし、未代表の別遭遇や通常戦闘を優先する。
 _Avoid_: boss name truth, all major combat in one video, Combat Encounter Kind, Variant Group
 
 **Semantic Duplicate Basis**:
