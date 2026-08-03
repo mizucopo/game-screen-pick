@@ -22,13 +22,19 @@ conversation context. Independent requests may run concurrently up to
 `ollama.max_parallel_requests`; the built-in default remains `1`, while the supported
 RTX 5090 target profile uses `2`.
 
+The shortlist reserves every Primary Representative Frame before assigning fallback
+frames in deterministic shortlist order. A Frame Candidate ID therefore belongs to
+only one annotation request, without allowing an earlier fallback to displace a
+later moment's primary.
+
 Every per-frame result is an atomic Completed Stage. If any required inference fails,
 the Candidate Moment is not aggregated: successful sibling results remain reusable,
 and a resumed run retries only the failed or unfinished frame before comparing all
 observations. The final Representative Frame is selected locally and deterministically
 by explanation value, blog-relevant content, subject visibility, transient
 obstruction, Neutral Image Analysis quality, and Frame Candidate ID. No alternative
-is forced when every observation has Explanation Value `none`.
+is forced when every observation has Explanation Value `none`, and a non-combat
+observation is never eligible to replace the combat primary.
 
 The per-frame cache identity includes the image, context, model, prompt, schema, and
 runtime contract, but not the fallback aggregation policy or scheduling order. A

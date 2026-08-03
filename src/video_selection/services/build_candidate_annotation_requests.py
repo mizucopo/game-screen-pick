@@ -82,8 +82,10 @@ def build_candidate_annotation_requests(
         elapsed += duration
 
     base_order = sorted(candidates, key=_shortlist_base_key)
-    ordered = _unique_representative_frames(
-        _diverse_prefix(base_order, _ANNOTATION_DIVERSITY_THRESHOLD)
+    ordered = _reserve_unique_fallback_frames(
+        _unique_representative_frames(
+            _diverse_prefix(base_order, _ANNOTATION_DIVERSITY_THRESHOLD)
+        )
     )
     return tuple(
         CandidateAnnotationRequest(
@@ -192,6 +194,38 @@ def _unique_representative_frames(
             continue
         result.append(item)
         seen_identifiers.add(identifier)
+    return tuple(result)
+
+
+def _reserve_unique_fallback_frames(
+    items: tuple[AnnotationShortlistItem, ...],
+) -> tuple[AnnotationShortlistItem, ...]:
+    """全Primaryを優先しfallback frameをshortlist全体で一意にする。"""
+    reserved_identifiers = {item[4].identifier for item in items}
+    result: list[AnnotationShortlistItem] = []
+    for video_order, stage, moment, frames, primary, progress in items:
+        unique_frames = [primary]
+        for frame in frames[1:]:
+            if frame.identifier in reserved_identifiers:
+                continue
+            unique_frames.append(frame)
+            reserved_identifiers.add(frame.identifier)
+        normalized_frames = tuple(unique_frames)
+        result.append(
+            (
+                video_order,
+                stage,
+                replace(
+                    moment,
+                    frame_candidate_ids=tuple(
+                        frame.identifier for frame in normalized_frames
+                    ),
+                ),
+                normalized_frames,
+                primary,
+                progress,
+            )
+        )
     return tuple(result)
 
 

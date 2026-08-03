@@ -517,6 +517,53 @@ def test_combat_fallback_keeps_primary_when_every_frame_has_no_explanation(
     assert result.annotations == (annotations[0],)
 
 
+def test_combat_fallback_does_not_select_noncombat_annotation(
+    tmp_path: Path,
+) -> None:
+    """説明価値が高くても非戦闘frameが戦闘Representativeにされないこと。
+
+    Arrange:
+        - 説明価値なしの戦闘Primary、低い説明価値の戦闘frame、
+          高い説明価値の非戦闘frameが用意される
+    Act:
+        - Combat Representative Fallbackが実行される
+    Assert:
+        - 戦闘を示す代替frameだけからRepresentativeが選択されること
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    request, original_annotations = _combat_fallback_fixture()
+    combat_fallback = original_annotations[1]
+    noncombat_fallback = replace(
+        original_annotations[2],
+        blog_image_type="event",
+        explanation_value="high",
+        combat_encounter_kind="not_combat",
+        combat_encounter_basis="none",
+    )
+    annotations = (
+        original_annotations[0],
+        combat_fallback,
+        noncombat_fallback,
+    )
+
+    # Act
+    result = VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(_catalog(), annotations),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=(request.frame_candidates[0],),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=FakeModelRuntime("vision-model").resolve_models(configuration),
+    )
+
+    # Assert
+    assert result.annotations == (combat_fallback,)
+
+
 def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     tmp_path: Path,
 ) -> None:

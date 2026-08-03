@@ -284,6 +284,72 @@ def test_annotation_shortlist_skips_shared_representative_frames(
     ]
 
 
+def test_annotation_requests_reserve_frame_ids_globally_with_primary_priority(
+    tmp_path: Path,
+) -> None:
+    """Primaryが優先予約されfallbackを含む全requestでFrame IDが一意になること。
+
+    Arrange:
+        - 他MomentのPrimaryと共有fallbackを候補に持つ3つのMomentが用意される
+    Act:
+        - Candidate Annotation requestが構築される
+    Assert:
+        - 各Primaryが保持されること
+        - 共有fallbackはshortlist順の最初のMomentだけへ割り当てられること
+        - 全requestを通じてFrame Candidate IDが重複しないこと
+    """
+    # Arrange
+    first_primary = _frame("a", quality=0.95, feature=(1.0, 0.0), second=1)
+    second_primary = _frame("b", quality=0.90, feature=(0.0, 1.0), second=2)
+    third_primary = _frame("c", quality=0.85, feature=(-1.0, 0.0), second=3)
+    shared_fallback = _frame("d", quality=0.75, feature=(0.0, -1.0), second=4)
+    result = _stage_result(
+        tmp_path,
+        "1",
+        duration=10,
+        moments=(
+            _moment(
+                "1",
+                Fraction(1),
+                (
+                    first_primary.identifier,
+                    third_primary.identifier,
+                    shared_fallback.identifier,
+                ),
+            ),
+            _moment(
+                "2",
+                Fraction(2),
+                (second_primary.identifier, shared_fallback.identifier),
+            ),
+            _moment("3", Fraction(3), (third_primary.identifier,)),
+        ),
+        candidates=(
+            first_primary,
+            second_primary,
+            third_primary,
+            shared_fallback,
+        ),
+    )
+
+    # Act
+    requests = build_candidate_annotation_requests(
+        (result,),
+        selection_intent="ブログ本文を説明できる画像を選ぶ",
+    )
+
+    # Assert
+    assert tuple(request.frame_candidates for request in requests) == (
+        (first_primary, shared_fallback),
+        (second_primary,),
+        (third_primary,),
+    )
+    frame_ids = tuple(
+        frame.identifier for request in requests for frame in request.frame_candidates
+    )
+    assert len(frame_ids) == len(set(frame_ids))
+
+
 def test_context_uses_nearby_equivalence_representatives_and_global_progress(
     tmp_path: Path,
 ) -> None:

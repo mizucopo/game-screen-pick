@@ -7,6 +7,8 @@
 
 通常戦闘の最低coverageは、Candidate AnnotationのCombat Encounter Kindが`ordinary`で、一般敵の群れ・編成または通常遭遇を示す積極的なCombat Encounter Basisがある候補だけを対象にします。Primary Representative Frameが戦闘を示す一方でExplanation Value `none`になった場合だけ、同じCandidate Momentの残り最大2枚を別request・別contextで独立評価し、説明価値、画面内容、敵と主対象の視認性、遮蔽、Neutral品質からRepresentative Frameを決定します。独立requestは`ollama.max_parallel_requests`まで並列化し、一部失敗時は成功済みframeを保存して再開時に未完了分だけを処理します。主推論が戦闘とした候補も画像一枚だけのCombat Encounter Verificationで種別と根拠を再確認し、主推論の`ordinary`判定だけでは最低coverageへ数えません。主要戦闘の根拠がないことや、敵名・HP barだけでは`ordinary`にしません。通常・主要どちらの積極的根拠もない戦闘は`uncertain`となり、`major`とともに最低coverageの対象外です。Spoiler Riskは物語上のネタバレ評価として独立して扱います。詳細は[共有Scene CatalogとCandidate Annotation Stage](docs/vision-stage.md)と[決定的なVideo Set最終選定Stage](docs/selection-stage.md)を参照してください。
 
+Combat Representative Fallbackでは、説明価値があっても非戦闘と確定した代替frameを戦闘Representativeにしません。またSelection Shortlist内の全Primaryを先に予約し、代替Frame Candidate IDをshortlist順で一度だけ割り当てるため、複数Momentが同じ出力frameへ集約されません。
+
 ```bash
 game-screen-pick \
   --config ./video-selection.toml \

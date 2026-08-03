@@ -305,7 +305,7 @@ Candidate Momentを最終的に代表する一つのFrame Candidate。通常はP
 _Avoid_: Primary Representative Frame, selected output, Frame Refinement
 
 **Combat Representative Fallback**:
-戦闘を示すPrimary Representative Frameが説明価値を持たないCandidate Momentで、同じMoment内の別Frame CandidateをRepresentative Frame候補として扱う境界。非戦闘カテゴリや別Candidate Momentのframeを補充せず、通常戦闘coverageのために不適格な画像を採用する処理とも区別する。
+戦闘を示すPrimary Representative Frameが説明価値を持たないCandidate Momentで、同じMoment内の別Frame Candidateを独立評価し、戦闘を示して説明価値を持つ結果だけをRepresentative Frame候補として扱う境界。非戦闘カテゴリや別Candidate Momentのframeを補充せず、通常戦闘coverageのために不適格な画像を採用する処理とも区別する。
 _Avoid_: multi-frame annotation, cross-moment substitution, ordinary-combat quota
 
 **Candidate Frame Observation**:
@@ -334,6 +334,7 @@ _Avoid_: Selection Shortlist, selected output, per-video representatives
 
 **Candidate Annotation**:
 Selection Shortlist内の一つのCandidate Momentについて、Primary Representative Frame、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、主Ollama推論でID付きCandidate Frame Observationを評価するVideo Set Stage。Primary Representative Frameが戦闘を示す一方でExplanation Valueが`none`になった場合だけ、同じCandidate Moment内の残り最大2件を一枚ずつ独立評価し、すべての成功した観測から決定的にRepresentative Frameを確定する。推論の失敗は画像の不適格性とみなさずCandidate Momentを未確定のままにし、全frameが`none`の場合は代替frameを強制採用しない。各観測はScene Slug、Scene Catalog Match、画面内容、Interface Kind、会話eventの大きな人物立ち絵・胸像の有無、Cinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、動作・人物または敵の有無、Combat Encounter KindとCombat Encounter Basis、player・攻撃相手それぞれの本体可視性、一時的な光・爆発・煙だけが主内容か、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。音声やContext Cueの会話文は画面内台詞文字とScene Catalog Matchの根拠に使わない。Blog Image Type、公開用要約と理由は観測からlocalに決定し、Scene Catalog MatchがfalseならScene Slugを`other`へ正規化し、具体的なScene Display Nameを要約に使わない。具体的なInterface Kindは曖昧な画面内容分類より優先する一方、動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として上書きに使わない。大きなevent人物立ち絵またはCinematic Event Presentationと画面内台詞文字を持つ会話eventも、汎用的な`other_interface`より優先する。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正し、`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、攻撃相手本体が`clear`でない戦闘、一時的な光・爆発・煙だけが主内容のframe、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化する。主推論が掲載可能とした戦闘と、非戦闘とした掲載可能なScene Kind `combat`のgameplayまたは`recurring_gameplay` actionにはCombat Encounter Verificationを追加する。主推論の戦闘種別はそのまま採用せず、専用確認とCombat Visibility Verificationを通ったCombat Encounter KindとCombat Encounter Basisだけを保存する。最初の非戦闘判定は独立再確認し、Scene Kind `combat`で二回とも戦闘を確認できなければExplanation Valueを`none`にする。それ以外の`recurring_gameplay` actionは戦闘有無の結果にかかわらずCombat Visibility Verificationへ進め、二回の敵本体観測がともに敵不在、または掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。掲載価値ありとした非戦闘の地図または`cinematic` sceneにはPublication Boundary Verificationを追加し、一時的な遷移effectと、台詞も動作もないevent導入の直接観測を適格性境界に優先する。最終score、soft coverage、最終採否は決めない。
+Combat Representative FallbackのRepresentative候補は戦闘を示し、Explanation Valueが`none`ではない観測だけに限定し、説明価値のある非戦闘frameで戦闘Momentを置換しない。
 主推論が戦闘としたものの戦闘可視性を通らないframeはExplanation Valueを`none`にし、主推論の未検証な特定種別を残さず`uncertain`と`ambiguous`へ正規化する。主推論が`not_combat`としたframeを専用確認で戦闘とした後に可視性を確認できなかった場合は、確認できない戦闘actionを保存せず`not_combat`と`none`へ戻す。主推論の戦闘誤判定から非戦闘へ訂正された地図または`cinematic` sceneにもPublication Boundary Verificationを適用する。
 _Avoid_: Candidate Scoring, Frame Refinement, Neutral Image Analysis, final selection
 
@@ -545,6 +546,7 @@ _Avoid_: all Candidate Moments, Selection Shortlist, selected output
 
 **Selection Shortlist**:
 有効なFrame Candidateを持つCandidate Momentのうち、Neutral Image Analysisによる品質と見た目の多様性から、Candidate Annotationへ進めるものをVideo Set全体でlocalに絞った集合。複数Momentが同じRepresentative Frameを共有する場合は決定済みshortlist順の最初のMomentだけを残し、後続の一意なFrameを持つMomentの探索を続けるため、集合内のFrame Candidate IDは一意になる。
+Primary Representative Frameを全Momentについて先に予約し、その後fallback候補をshortlist順で未予約IDだけに制限するため、早いMomentのfallbackが後続Primaryを奪わない。
 _Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
 
 **Selection Shortfall**:

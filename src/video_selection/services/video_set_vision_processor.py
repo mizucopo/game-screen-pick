@@ -762,12 +762,12 @@ def _single_frame_annotation_requests(
 def _select_representative_annotation(
     annotations: tuple[CandidateAnnotation, ...],
 ) -> CandidateAnnotation:
-    """fallback結果から説明価値と中立画質でRepresentativeを確定する。"""
+    """戦闘fallback結果から説明価値と中立画質でRepresentativeを確定する。"""
     primary = annotations[0]
     eligible = tuple(
         annotation
         for annotation in annotations
-        if annotation.explanation_value != "none"
+        if annotation.combat_action and annotation.explanation_value != "none"
     )
     if not eligible:
         return primary

@@ -14,12 +14,15 @@
 
 Scene Catalog Representative Setは要求画像枚数から独立します。Selection Shortlistは決定的selectorが不足時に追加batchを受けて拡張し、batch sizeと実model capacityの受け入れはIssue #189が所有します。各Candidate Momentの1〜3件のFrame Candidateは、Neutral Image AnalysisのQuality ScoreとFrame Candidate IDの順でPrimary Representative Frameを先頭に保持します。複数Momentが同じPrimary Representative Frameを共有する場合は、品質と見た目の多様性で決定したshortlist順の最初のMomentだけを注釈対象にし、後続の一意なPrimaryを持つMomentは保持します。Candidate Annotation requestには同じMomentの候補最大3件、versioned policyで選ばれた近傍Context Cue、Video Set Progress、Selection Intentを明示しますが、VisionRuntimeへは常に一枚ずつ渡します。
 
+request間のFrame Candidate IDは全Primaryを先に予約してからfallbackをshortlist順に割り当てるため一意です。早いMomentのfallbackが後続MomentのPrimaryを奪わず、同じfallbackが複数MomentのRepresentative Frameになることもありません。
+
 ## Ollama operation
 
 Ollamaの`/api/chat`を次の8種類だけに使います。
 
 1. `build-scene-catalog`: Video Set共有の3〜8 sceneを一回生成します。各sceneにScene Kind（`combat`、`exploration`、`interface`、`event`、`other`）を付けます。`other`を必ず1件含め、そのScene Kindは`other`、Scene Selection Roleは`ordinary`です。
 2. `annotate-candidate`: 最初にPrimary Representative Frame一枚だけを別request・別conversation contextで評価します。成功結果が戦闘を示し、かつExplanation Value `none`の場合だけ、同じCandidate Momentの残り最大2枚も一枚ずつ独立評価します。代替requestは`ollama.max_parallel_requests`を上限に並列実行できますが、responseやconversationを共有しません。全frameの成功結果を入力順へ戻してから、Explanation Value、画面内容、敵と主対象の視認性、一時的遮蔽、Neutral品質、Frame Candidate IDでRepresentative Frameをlocalに確定します。全frameが`none`ならPrimaryを維持し、代替を強制採用しません。
+   Representative候補は戦闘を示し、かつExplanation Valueが`none`ではない代替frameに限定します。説明価値が高くても非戦闘と確定した会話、menu、探索frameへ戦闘Momentを置換しません。
 3. 戦闘有無専用確認: 主推論が掲載価値ありの戦闘とした候補には必ず実行し、掲載価値ありの非戦闘としたScene Kind `combat`のgameplay、または`recurring_gameplay`のactionにも条件付きで実行します。敵・boss固有のstatus UIまたは対戦する本体から戦闘の有無を確認し、Combat Encounter KindとCombat Encounter Basisを整合する組で返します。主推論の戦闘種別はそのまま採用しません。敵名やHP・status barだけでは`ordinary`にも`major`にもせず、両方の積極的根拠がなければ`uncertain`にします。Scene Kind `combat`では戦闘を確認できなければ掲載価値を保持しません。それ以外の`recurring_gameplay`では戦闘可視性専用確認との交差確認へ進みます。
 4. 戦闘有無の独立再確認: 最初の戦闘有無専用確認が非戦闘を返した場合だけ、先の回答を参照しない別promptで同じ画素を観測し直します。二回とも非戦闘だったScene Kind `combat`のgameplayは掲載価値を下げます。それ以外の`recurring_gameplay` actionは、戦闘の見落としを検出するため戦闘可視性専用確認へ進みます。
 5. 戦闘可視性専用確認: 戦闘有無専用確認で戦闘と確認された場合、または同確認の対象になった`recurring_gameplay`のactionに実行します。同じRepresentative Frame一枚だけを入力し、音声、Context Cue、前後場面、主推論の説明文を渡しません。戦闘と確認済みの場合は不明瞭なら直ちに掲載価値を下げます。
