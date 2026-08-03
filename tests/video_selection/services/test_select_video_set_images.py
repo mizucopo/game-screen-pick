@@ -15,6 +15,7 @@ from src.video_selection.models.candidate_annotation import (
     CandidateAnnotation,
     ContextCueRelevance,
     ExplanationValue,
+    ScreenTextKind,
     SelectionCoverageFacet,
     SpoilerRisk,
 )
@@ -24,6 +25,10 @@ from src.video_selection.models.decoded_video_frame import DecodedVideoFrame
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.neutral_image_analysis import NeutralImageAnalysis
 from src.video_selection.models.neutral_image_metrics import NeutralImageMetrics
+from src.video_selection.models.representative_frame_evidence import (
+    CandidateFrameContentKind,
+    RepresentativeFrameEvidence,
+)
 from src.video_selection.models.scene_catalog_entry import SceneSelectionRole
 from src.video_selection.models.video_set_selection_result import (
     VideoSetSelectionResult,
@@ -108,6 +113,10 @@ def _candidate(
     scene_slug: str | None = None,
     video_order: int = 0,
     combat_encounter_kind: CombatEncounterKind = "not_combat",
+    video_fingerprint: str | None = None,
+    screen_text_kind: ScreenTextKind = "none",
+    content_kind: CandidateFrameContentKind | None = None,
+    summary: str | None = None,
 ) -> BlogCandidate:
     digest = (
         digest_character * 64
@@ -117,7 +126,7 @@ def _candidate(
     frame = FrameCandidate(
         identifier="frm_" + digest,
         image_bytes=digest_character.encode(),
-        video_fingerprint=digest,
+        video_fingerprint=video_fingerprint or digest,
         stream_index=0,
         source_pts=int(progress * 1000),
         origin_pts=0,
@@ -135,7 +144,7 @@ def _candidate(
     annotation = CandidateAnnotation(
         candidate=frame,
         candidate_moment_id="mom_" + digest,
-        summary=f"candidate {digest_character}",
+        summary=summary or f"candidate {digest_character}",
         scene_slug=scene_slug or "scene-" + digest_character,
         blog_image_type=blog_image_type,
         explanation_value=explanation_value,
@@ -149,6 +158,17 @@ def _candidate(
         ),
         combat_encounter_kind=combat_encounter_kind,
         combat_encounter_basis=_COMBAT_ENCOUNTER_BASIS_BY_KIND[combat_encounter_kind],
+        screen_text_kind=screen_text_kind,
+        representative_frame_evidence=(
+            RepresentativeFrameEvidence(
+                content_kind=content_kind,
+                primary_subject_visibility="clear",
+                opponent_body_visibility="absent",
+                transient_obstruction="none",
+            )
+            if content_kind is not None
+            else None
+        ),
     )
     return BlogCandidate(
         annotation=annotation,
@@ -159,6 +179,32 @@ def _candidate(
             ord(digest_character) if len(digest_character) == 1 else int(digest[:8], 16)
         ),
     )
+
+
+def _candidate_moment_timelines(
+    candidates: tuple[BlogCandidate, ...],
+) -> dict[tuple[int, str], tuple[str, ...]]:
+    """候補集合からsource別の完全なCandidate Moment時系列を返す。"""
+    grouped: dict[tuple[int, str], list[BlogCandidate]] = {}
+    for candidate in candidates:
+        fingerprint = candidate.annotation.candidate.video_fingerprint
+        assert fingerprint is not None
+        grouped.setdefault((candidate.video_order, fingerprint), []).append(candidate)
+    timelines: dict[tuple[int, str], tuple[str, ...]] = {}
+    for key, values in grouped.items():
+        moment_ids: list[str] = []
+        for item in sorted(
+            values,
+            key=lambda item: (
+                item.annotation.candidate.video_time,
+                item.annotation.candidate_moment_id,
+            ),
+        ):
+            moment_id = item.annotation.candidate_moment_id
+            assert moment_id is not None
+            moment_ids.append(moment_id)
+        timelines[key] = tuple(moment_ids)
+    return timelines
 
 
 def _hard_limit_variant_candidates(
@@ -780,7 +826,7 @@ def test_second_title_is_rejected_with_counterfactual_score() -> None:
         - Video Set selectorが終端passまで実行される
     Assert:
         - titleは1件だけ選択されSelection Shortfallになること
-        - 2件目へtitle limit、blocking ID、制約前の数値内訳が返されること
+        - 2件目へsemantic duplicate、blocking ID、制約前の数値内訳が返されること
     """
     # Arrange
     best = _candidate(
@@ -815,8 +861,9 @@ def test_second_title_is_rejected_with_counterfactual_score() -> None:
     assert result.shortfall is True
     assert len(result.rejected) == 1
     rejection = result.rejected[0]
-    assert rejection.reason_code == "title_limit"
+    assert rejection.reason_code == "semantic_duplicate"
     assert rejection.blocked_by_image_id == best.identifier
+    assert rejection.semantic_group_basis == "title_semantics"
     assert rejection.nearest_selected_image_id is None
     assert rejection.counterfactual_score.base_utility == pytest.approx(0.81)
     assert rejection.counterfactual_score.coverage_bonus == 0.05
@@ -1601,6 +1648,7 @@ def test_prerequisites_preserve_a_completable_coverage_path() -> None:
         {"title": 0},
         unmet_facets,
         variant_groups,
+        {},
         0.97,
         None,
         2,
@@ -1865,6 +1913,9 @@ def test_shortlist_expansion_recomputes_selection_from_full_expanded_pool() -> N
     # Act
     result = select_from_shortlist_batches(
         ((initial,), (gameplay, event)),
+        candidate_moment_timelines=_candidate_moment_timelines(
+            (initial, gameplay, event)
+        ),
         requested_count=2,
         spoiler_sensitivity="medium",
         similarity_threshold=0.72,
@@ -1937,6 +1988,9 @@ def test_shortlist_expands_for_an_undiscovered_conditional_facet() -> None:
     # Act
     result = select_from_shortlist_batches(
         ((ordinary_combat, *initial_gameplay), (event,)),
+        candidate_moment_timelines=_candidate_moment_timelines(
+            (ordinary_combat, *initial_gameplay, event)
+        ),
         requested_count=10,
         spoiler_sensitivity="medium",
         similarity_threshold=0.72,
@@ -1954,6 +2008,164 @@ def test_shortlist_expands_for_an_undiscovered_conditional_facet() -> None:
         "ordinary_combat": False,
         "event": False,
     }
+
+
+def test_shortlist_expands_until_combat_encounter_boundary_is_observed() -> None:
+    """未注釈Momentが主要戦闘Group内に残る間は選定が確定されないこと。
+
+    Arrange:
+        - 同じsource・Scene Slugの主要戦闘2件が初期batchに用意される
+        - 2件の間にある非戦闘Momentだけが後続batchに用意される
+        - 初期batchだけでも要求枚数は満たせる
+    Act:
+        - 完全なCandidate Moment時系列付きでlazy batch選定が実行される
+    Assert:
+        - 後続batchまで注釈され別遭遇の主要戦闘2件が選択されること
+    """
+    # Arrange
+    source_fingerprint = "a" * 64
+    first_encounter = _candidate(
+        "hidden-boundary-first",
+        quality=0.99,
+        feature=(1.0, 0.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-boss",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    boundary = _candidate(
+        "hidden-boundary-event",
+        quality=0.10,
+        feature=(0.0, 1.0, 0.0, 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="event",
+        explanation_value="none",
+        context_relevance="none",
+        scene_slug="story-event",
+        video_fingerprint=source_fingerprint,
+    )
+    second_encounter = _candidate(
+        "hidden-boundary-second",
+        quality=0.98,
+        feature=(0.0, 0.0, 1.0, 0.0),
+        progress=Fraction(30, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-boss",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    filler = _candidate(
+        "hidden-boundary-filler",
+        quality=0.10,
+        feature=(0.0, 0.0, 0.0, 1.0),
+        progress=Fraction(80, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="exploration",
+        video_fingerprint=source_fingerprint,
+    )
+    all_candidates = (first_encounter, boundary, second_encounter, filler)
+
+    # Act
+    result = select_from_shortlist_batches(
+        ((first_encounter, second_encounter, filler), (boundary,)),
+        candidate_moment_timelines=_candidate_moment_timelines(all_candidates),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        first_encounter.identifier,
+        second_encounter.identifier,
+    }
+    assert result.annotated_candidate_count == 4
+    assert result.shortlist_expansion_count == 1
+
+
+def test_title_semantics_do_not_complete_event_minimum_before_real_event() -> None:
+    """eventへ誤分類されたタイトルでevent最低枠が充足されないこと。
+
+    Arrange:
+        - 通常戦闘、eventへ誤分類されたタイトル、通常画像8件が初期batchにある
+        - 実際のevent候補が後続batchにある
+    Act:
+        - 10枚のlazy batch選定が実行される
+    Assert:
+        - 後続batchまで注釈され実際のeventが最低枠として選択されること
+        - タイトルがevent最低枠の実績へ数えられないこと
+    """
+    # Arrange
+    feature_count = 11
+
+    def unit_feature(index: int) -> tuple[float, ...]:
+        return tuple(float(position == index) for position in range(feature_count))
+
+    ordinary_combat = _candidate(
+        "title-facet-combat",
+        quality=0.95,
+        feature=unit_feature(0),
+        progress=Fraction(1, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="ordinary",
+    )
+    misclassified_title = _candidate(
+        "title-facet-misclassified",
+        quality=0.94,
+        feature=unit_feature(1),
+        progress=Fraction(2, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        screen_text_kind="title",
+        content_kind="title",
+    )
+    gameplay = tuple(
+        _candidate(
+            f"title-facet-gameplay-{index}",
+            quality=0.80 - index / 100,
+            feature=unit_feature(index + 2),
+            progress=Fraction(index + 2, 20),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+        )
+        for index in range(8)
+    )
+    event = _candidate(
+        "title-facet-real-event",
+        quality=0.90,
+        feature=unit_feature(10),
+        progress=Fraction(90, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+    )
+    all_candidates = (ordinary_combat, misclassified_title, *gameplay, event)
+
+    # Act
+    result = select_from_shortlist_batches(
+        ((ordinary_combat, misclassified_title, *gameplay), (event,)),
+        candidate_moment_timelines=_candidate_moment_timelines(all_candidates),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    selected_ids = {item.candidate.identifier for item in result.selected}
+    assert event.identifier in selected_ids
+    assert result.shortlist_expansion_count == 1
+    assert result.selection_coverage_actuals["event"] == 1
 
 
 def test_exact_utility_tie_uses_stable_video_order_and_records_tie_break() -> None:
@@ -2166,3 +2378,442 @@ def test_rejections_are_ordered_by_counterfactual_utility() -> None:
     assert [
         round(item.counterfactual_score.marginal_utility, 2) for item in result.rejected
     ] == [0.74, 0.25]
+
+
+def test_same_major_combat_encounter_selects_only_the_best_representative() -> None:
+    """分類揺れを含む同一主要戦闘から最良の1枚だけが選択されること。
+
+    Arrange:
+        - 同じ主要戦闘Aの候補3件に一時的なScene Slug誤分類が含まれる
+        - 別の主要戦闘Bと、その後に始まる同名の別遭遇Aが用意される
+        - 同じ候補集合が異なる入力順で用意される
+    Act:
+        - 5枚の選定が両方の候補集合へ要求される
+    Assert:
+        - 最初の戦闘Aから最高utilityの1枚だけが選択されること
+        - 戦闘Bと後発の別遭遇Aが維持されること
+        - 除外候補へstable reasonとblocking selected IDが記録されること
+    """
+    # Arrange
+    source_fingerprint = "1" * 64
+    encounter_a_best = _candidate(
+        "encounter-a-best",
+        quality=0.95,
+        feature=(1.0, 0.0, 0.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="boss-a",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    encounter_a_misclassified = _candidate(
+        "encounter-a-misclassified",
+        quality=0.90,
+        feature=(0.0, 1.0, 0.0, 0.0, 0.0),
+        progress=Fraction(12, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="mistaken-boss-name",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    encounter_a_other_variant = _candidate(
+        "encounter-a-other-variant",
+        quality=0.85,
+        feature=(0.0, 0.0, 1.0, 0.0, 0.0),
+        progress=Fraction(14, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="boss-a",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    encounter_b = _candidate(
+        "encounter-b",
+        quality=0.80,
+        feature=(0.0, 0.0, 0.0, 1.0, 0.0),
+        progress=Fraction(40, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="boss-b",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    later_encounter_a = _candidate(
+        "later-encounter-a",
+        quality=0.75,
+        feature=(0.0, 0.0, 0.0, 0.0, 1.0),
+        progress=Fraction(70, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="boss-a",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    candidates = (
+        encounter_a_best,
+        encounter_a_misclassified,
+        encounter_a_other_variant,
+        encounter_b,
+        later_encounter_a,
+    )
+
+    # Act
+    forward = select_video_set_images(
+        candidates,
+        requested_count=5,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+    reversed_result = select_video_set_images(
+        tuple(reversed(candidates)),
+        requested_count=5,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    expected_selected_ids = {
+        encounter_a_best.identifier,
+        encounter_b.identifier,
+        later_encounter_a.identifier,
+    }
+    assert {item.candidate.identifier for item in forward.selected} == (
+        expected_selected_ids
+    )
+    assert [item.candidate.identifier for item in forward.selected] == [
+        item.candidate.identifier for item in reversed_result.selected
+    ]
+    expected_rejected_ids = {
+        encounter_a_misclassified.identifier,
+        encounter_a_other_variant.identifier,
+    }
+    assert {item.candidate.identifier for item in forward.rejected} == (
+        expected_rejected_ids
+    )
+    for rejection in forward.rejected:
+        assert rejection.reason_code == "semantic_duplicate"
+        assert rejection.blocked_by_image_id == encounter_a_best.identifier
+        assert rejection.semantic_group_id == (
+            next(
+                item.semantic_group_id
+                for item in forward.selected
+                if item.candidate.identifier == encounter_a_best.identifier
+            )
+        )
+        assert rejection.semantic_group_basis == "combat_encounter_sequence"
+    encounter_representative = next(
+        item
+        for item in forward.selected
+        if item.candidate.identifier == encounter_a_best.identifier
+    )
+    assert "semantic_group_representative" in encounter_representative.reason_codes
+    assert encounter_representative.semantic_group_id is not None
+    assert encounter_representative.semantic_group_basis == "combat_encounter_sequence"
+
+
+def test_non_major_candidate_splits_repeated_major_combat_scene_slug() -> None:
+    """非主要場面を挟む同名Scene Slugが別の主要戦闘として維持されること。
+
+    Arrange:
+        - 同じVideo SourceとScene Slugを持つ主要戦闘候補2件がある
+        - 2件の間に非主要の探索候補がある
+    Act:
+        - 3枚の選定が要求される
+    Assert:
+        - 非主要候補が遭遇境界となり3件すべてが選択されること
+        - 主要戦闘2件が同じSemantic Duplicate Groupへ割り当てられないこと
+    """
+    # Arrange
+    source_fingerprint = "4" * 64
+    first_encounter = _candidate(
+        "first-repeated-major-encounter",
+        quality=0.90,
+        feature=(1.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-boss",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+    exploration = _candidate(
+        "between-major-encounters",
+        quality=0.80,
+        feature=(0.0, 1.0, 0.0),
+        progress=Fraction(30, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="exploration",
+        video_fingerprint=source_fingerprint,
+    )
+    second_encounter = _candidate(
+        "second-repeated-major-encounter",
+        quality=0.85,
+        feature=(0.0, 0.0, 1.0),
+        progress=Fraction(60, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-boss",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+    )
+
+    # Act
+    result = select_video_set_images(
+        (second_encounter, exploration, first_encounter),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        first_encounter.identifier,
+        exploration.identifier,
+        second_encounter.identifier,
+    }
+    encounter_groups = {
+        item.semantic_group_id
+        for item in result.selected
+        if item.candidate.annotation.combat_encounter_kind == "major"
+    }
+    assert encounter_groups == {None}
+
+
+def test_title_semantics_limit_applies_across_blog_image_type_misclassification() -> (
+    None
+):
+    """タイトル画面がeventへ誤分類されても最良の1枚だけが選択されること。
+
+    Arrange:
+        - 画像内根拠はタイトル画面だがBlog Image Typeがeventの高品質候補がある
+        - 正しくtitleへ分類された候補と通常プレイ候補がある
+    Act:
+        - 3枚の選定が要求される
+    Assert:
+        - 画像内根拠で識別された最良のタイトル画面と通常プレイだけが選択されること
+        - もう一つのタイトル画面へstable reasonとblocking selected IDが記録されること
+    """
+    # Arrange
+    misclassified_title = _candidate(
+        "misclassified-title",
+        quality=0.95,
+        feature=(1.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="opening-event",
+        screen_text_kind="title",
+        content_kind="title",
+    )
+    classified_title = _candidate(
+        "classified-title",
+        quality=0.90,
+        feature=(0.0, 1.0, 0.0),
+        progress=Fraction(12, 100),
+        blog_image_type="title",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="title-screen",
+        screen_text_kind="title",
+        content_kind="title",
+    )
+    gameplay = _candidate(
+        "title-test-gameplay",
+        quality=0.80,
+        feature=(0.0, 0.0, 1.0),
+        progress=Fraction(70, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (classified_title, gameplay, misclassified_title),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        misclassified_title.identifier,
+        gameplay.identifier,
+    }
+    rejection = result.rejected[0]
+    assert rejection.candidate.identifier == classified_title.identifier
+    assert rejection.reason_code == "semantic_duplicate"
+    assert rejection.blocked_by_image_id == misclassified_title.identifier
+    assert rejection.semantic_group_basis == "title_semantics"
+
+
+def test_semantic_movement_duplicate_does_not_displace_other_useful_roles() -> None:
+    """同じ移動画面の2枚目より通常戦闘と有用eventが優先されること。
+
+    Arrange:
+        - 異なるScene SlugとVariant Groupに分かれた近接する移動画面2件がある
+        - 視覚類似度だけでは許可される通常戦闘とeventがある
+    Act:
+        - global similarityを下げず4枚の選定が要求される
+    Assert:
+        - 最良の移動画面、通常戦闘、eventだけが選択されること
+        - 移動画面の2枚目がsemantic duplicateとして除外されること
+    """
+    # Arrange
+    source_fingerprint = "2" * 64
+    movement_best = _candidate(
+        "movement-best",
+        quality=0.95,
+        feature=(1.0, 0.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="field-movement",
+        video_fingerprint=source_fingerprint,
+        content_kind="gameplay_action",
+        summary="ダンジョン内を移動している場面",
+    )
+    movement_duplicate = _candidate(
+        "movement-duplicate",
+        quality=0.90,
+        feature=(0.94, math.sqrt(1 - 0.94**2), 0.0, 0.0),
+        progress=Fraction(12, 100),
+        blog_image_type="other",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="corridor-navigation",
+        video_fingerprint=source_fingerprint,
+        content_kind="gameplay_action",
+        summary="ダンジョン内を移動している場面",
+    )
+    ordinary_combat = _candidate(
+        "movement-test-ordinary-combat",
+        quality=0.80,
+        feature=(0.0, 0.0, 1.0, 0.0),
+        progress=Fraction(50, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="ordinary",
+        video_fingerprint=source_fingerprint,
+        content_kind="gameplay_action",
+    )
+    event = _candidate(
+        "movement-test-event",
+        quality=0.75,
+        feature=(0.0, 0.0, 0.0, 1.0),
+        progress=Fraction(80, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        video_fingerprint=source_fingerprint,
+        content_kind="event_dialogue",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (movement_duplicate, event, movement_best, ordinary_combat),
+        requested_count=4,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.95,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        movement_best.identifier,
+        ordinary_combat.identifier,
+        event.identifier,
+    }
+    rejection = result.rejected[0]
+    assert rejection.candidate.identifier == movement_duplicate.identifier
+    assert rejection.reason_code == "semantic_duplicate"
+    assert rejection.blocked_by_image_id == movement_best.identifier
+    assert rejection.semantic_group_basis == "visual_role_similarity"
+
+
+@pytest.mark.parametrize(
+    ("first_summary", "second_summary"),
+    (
+        ("炎の技で敵を攻撃している場面", "氷の技で敵を攻撃している場面"),
+        ("［…］", "［…］"),
+    ),
+)
+def test_useful_recurring_gameplay_variants_remain_selectable(
+    first_summary: str,
+    second_summary: str,
+) -> None:
+    """別説明または情報のないsummaryだけで有用variantが失われないこと。
+
+    Arrange:
+        - 同じScene Slug、画像内役割、近接時刻、高い視覚類似度を持つ2候補がある
+        - 各候補の独立した画像説明は異なる技または情報のないredactionを示す
+    Act:
+        - recurring gameplay候補2枚の選定が要求される
+    Assert:
+        - 追加説明価値を持つ両方のvariantが選択されること
+    """
+    # Arrange
+    source_fingerprint = "3" * 64
+    fire_action = _candidate(
+        "fire-action-variant",
+        quality=0.90,
+        feature=(1.0, 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="ordinary-battle",
+        video_fingerprint=source_fingerprint,
+        content_kind="gameplay_action",
+        summary=first_summary,
+    )
+    ice_action = _candidate(
+        "ice-action-variant",
+        quality=0.85,
+        feature=(0.94, math.sqrt(1 - 0.94**2)),
+        progress=Fraction(22, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="ordinary-battle",
+        video_fingerprint=source_fingerprint,
+        content_kind="gameplay_action",
+        summary=second_summary,
+    )
+
+    # Act
+    result = select_video_set_images(
+        (ice_action, fire_action),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.95,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        fire_action.identifier,
+        ice_action.identifier,
+    }
+    assert result.rejected == ()

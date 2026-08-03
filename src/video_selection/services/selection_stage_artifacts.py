@@ -9,9 +9,13 @@ from ..models.rejected_blog_candidate import RejectedBlogCandidate
 from ..models.selected_blog_image import SelectedBlogImage
 from ..models.selection_rejection_reason import SelectionRejectionReason
 from ..models.selection_score import SelectionScore
+from ..models.semantic_duplicate_basis import (
+    SEMANTIC_DUPLICATE_BASES,
+    SemanticDuplicateBasis,
+)
 from ..models.video_set_selection_result import VideoSetSelectionResult
 
-_SELECTION_SCHEMA = "game-screen-pick/video-set-selection@1.0.0"
+_SELECTION_SCHEMA = "game-screen-pick/video-set-selection@2.0.0"
 
 
 def serialize_video_set_selection_result(
@@ -28,6 +32,8 @@ def serialize_video_set_selection_result(
                 "reason_codes": list(item.reason_codes),
                 "variant_group_id": item.variant_group_id,
                 "tie_break_applied": item.tie_break_applied,
+                "semantic_group_id": item.semantic_group_id,
+                "semantic_group_basis": item.semantic_group_basis,
             }
             for item in selection.selected
         ],
@@ -40,6 +46,8 @@ def serialize_video_set_selection_result(
                 "nearest_selected_image_id": item.nearest_selected_image_id,
                 "similarity": item.similarity,
                 "variant_group_id": item.variant_group_id,
+                "semantic_group_id": item.semantic_group_id,
+                "semantic_group_basis": item.semantic_group_basis,
             }
             for item in selection.rejected
         ],
@@ -145,6 +153,7 @@ def _restore_selected(
     reason_codes = item.get("reason_codes")
     variant_group_id = item.get("variant_group_id")
     tie_break_applied = item.get("tie_break_applied")
+    semantic_group_id, semantic_group_basis = _semantic_group(item)
     if (
         selection_index != expected_index
         or not isinstance(reason_codes, list)
@@ -161,6 +170,8 @@ def _restore_selected(
         reason_codes=tuple(cast(list[str], reason_codes)),
         variant_group_id=variant_group_id,
         tie_break_applied=tie_break_applied,
+        semantic_group_id=semantic_group_id,
+        semantic_group_basis=semantic_group_basis,
     )
 
 
@@ -171,6 +182,7 @@ def _restore_rejected(
     item = _mapping(value, "rejected")
     reason_code_value = item.get("reason_code")
     variant_group_id = item.get("variant_group_id")
+    semantic_group_id, semantic_group_basis = _semantic_group(item)
     if not isinstance(reason_code_value, str):
         raise ValueError("Video Set Selection rejection reasonが不正です")
     try:
@@ -189,7 +201,28 @@ def _restore_rejected(
         ),
         similarity=_optional_number(item.get("similarity"), "similarity"),
         variant_group_id=variant_group_id,
+        semantic_group_id=semantic_group_id,
+        semantic_group_basis=semantic_group_basis,
     )
+
+
+def _semantic_group(
+    item: Mapping[str, object],
+) -> tuple[str | None, SemanticDuplicateBasis | None]:
+    """artifactのSemantic Duplicate Group fieldを検証して返す。"""
+    group_id = item.get("semantic_group_id")
+    basis = item.get("semantic_group_basis")
+    if group_id is None and basis is None:
+        return None, None
+    if (
+        not isinstance(group_id, str)
+        or not group_id.startswith("semantic_")
+        or len(group_id) != 73
+        or any(character not in "0123456789abcdef" for character in group_id[9:])
+        or basis not in SEMANTIC_DUPLICATE_BASES
+    ):
+        raise ValueError("Video Set Selection Semantic Duplicate Groupが不正です")
+    return group_id, basis
 
 
 def _serialize_score(score: SelectionScore) -> dict[str, float | None]:

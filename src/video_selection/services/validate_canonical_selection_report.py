@@ -18,6 +18,7 @@ from ..models.candidate_annotation import (
 )
 from ..models.canonical_publication_request import CanonicalPublicationRequest
 from ..models.report_value import string_looks_private
+from .build_canonical_selection_report import REPORT_SCHEMA_VERSION
 from .render_human_selection_report import render_human_selection_report
 from .report_time import display_report_time, exact_seconds_string
 from .serialize_canonical_selection_report import (
@@ -147,7 +148,7 @@ def _validate_reader_schema(
 
 @lru_cache(maxsize=1)
 def _schema_validator() -> Draft202012Validator:
-    schema = _load_schema("2.0.0")
+    schema = _load_schema(REPORT_SCHEMA_VERSION)
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema)
 
@@ -355,6 +356,7 @@ def _validate_intrinsic_report_relationships(
                 raise ValueError(
                     "Canonical Selection Reportのrejection参照が解決できません"
                 )
+    _validate_semantic_group_relationships(selected, near_misses)
     source_durations = {
         str(item["id"]): Fraction(str(_mapping(item["duration"])["exact_seconds"]))
         for item in _mapping_list(_mapping(report["video_set"])["sources"])
@@ -409,6 +411,49 @@ def _validate_warning_relationships(
         and _mapping(unavailable["details"])["roles"] != expected_roles
     ):
         raise ValueError("Canonical Selection Reportのmodel update warningが不正です")
+
+
+def _validate_semantic_group_relationships(
+    selected: list[dict[str, Any]],
+    near_misses: list[dict[str, Any]],
+) -> None:
+    """Semantic Duplicate Groupの代表とblocking参照を検証する。"""
+    selected_group_by_image: dict[str, tuple[str, str]] = {}
+    selected_group_ids: set[str] = set()
+    for item in selected:
+        selection = _mapping(item["selection"])
+        if "semantic_group" not in selection:
+            continue
+        selected_semantic_group = _mapping(selection["semantic_group"])
+        group_id = str(selected_semantic_group["id"])
+        if group_id in selected_group_ids:
+            message = (
+                "Canonical Selection Reportの"
+                "Semantic Duplicate Group代表が重複しています"
+            )
+            raise ValueError(message)
+        selected_group_ids.add(group_id)
+        selected_group_by_image[str(item["image_id"])] = (
+            group_id,
+            str(selected_semantic_group["basis"]),
+        )
+
+    for item in near_misses:
+        rejection = _mapping(item["rejection"])
+        if rejection["reason_code"] != "semantic_duplicate":
+            continue
+        blocker_id = rejection.get("blocked_by_image_id")
+        rejected_semantic_group = rejection.get("semantic_group")
+        if blocker_id is None or rejected_semantic_group is None:
+            raise ValueError(
+                "Canonical Selection ReportのSemantic Duplicate Group参照がありません"
+            )
+        group = _mapping(rejected_semantic_group)
+        expected_group = (str(group["id"]), str(group["basis"]))
+        if selected_group_by_image.get(str(blocker_id)) != expected_group:
+            raise ValueError(
+                "Canonical Selection ReportのSemantic Duplicate Group参照が一致しません"
+            )
 
 
 def _validate_context_cue_time(

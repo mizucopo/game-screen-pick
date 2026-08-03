@@ -207,9 +207,20 @@ class CandidateAnnotation:
         return self.combat_encounter_kind != "not_combat"
 
     @property
+    def has_title_semantics(self) -> bool:
+        """分類名または画像内根拠がタイトル画面を示すかを返す。"""
+        evidence = self.representative_frame_evidence
+        return (
+            self.blog_image_type == "title"
+            or self.screen_text_kind == "title"
+            or evidence is not None
+            and evidence.content_kind == "title"
+        )
+
+    @property
     def selection_coverage_facet(self) -> SelectionCoverageFacet | None:
         """条件付き最低coverageに使う画像内根拠のある役割を返す。"""
-        if self.blog_image_type == "event":
+        if self.blog_image_type == "event" and not self.has_title_semantics:
             return "event"
         if (
             self.blog_image_type == "normal_gameplay"

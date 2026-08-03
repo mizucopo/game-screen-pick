@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .blog_candidate import BlogCandidate
 from .selection_rejection_reason import SelectionRejectionReason
 from .selection_score import SelectionScore
+from .semantic_duplicate_basis import SemanticDuplicateBasis
 
 
 @dataclass(frozen=True)
@@ -18,3 +19,5 @@ class RejectedBlogCandidate:
     nearest_selected_image_id: str | None
     similarity: float | None
     variant_group_id: str
+    semantic_group_id: str | None = None
+    semantic_group_basis: SemanticDuplicateBasis | None = None

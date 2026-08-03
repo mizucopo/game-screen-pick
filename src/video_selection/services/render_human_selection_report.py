@@ -107,6 +107,9 @@ def render_human_selection_report(report: dict[str, object]) -> str:
             detail = str(rejection["reason_code"])
             if "similarity" in rejection:
                 detail += f" ({float(rejection['similarity']):.3f})"
+            if "semantic_group" in rejection:
+                semantic_group = _mapping(rejection["semantic_group"])
+                detail += f" ({semantic_group['basis']})"
             lines.append(
                 f"| `{_abbreviate(identifier, 8)}` "
                 f"{_escape_markdown_table_cell(str(annotation['summary']))} | "
@@ -273,6 +276,15 @@ def _append_selected(
             (
                 f"- **Reason codes**: `"
                 f"{', '.join(cast(list[str], selection['reason_codes']))}`"
+            ),
+            *(
+                (
+                    "- **Semantic duplicate group**: "
+                    f"`{_mapping(selection['semantic_group'])['id']}` · "
+                    f"`{_mapping(selection['semantic_group'])['basis']}`",
+                )
+                if "semantic_group" in selection
+                else ()
             ),
             (
                 f"- **Source**: Video {source_video['order']} "

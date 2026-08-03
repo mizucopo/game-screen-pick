@@ -7,6 +7,7 @@ class SelectionRejectionReason(StrEnum):
     """未採用Blog Candidateの排他的な主理由。"""
 
     TITLE_LIMIT = "title_limit"
+    SEMANTIC_DUPLICATE = "semantic_duplicate"
     VISUAL_NEAR_DUPLICATE = "visual_near_duplicate"
     SIMILARITY_CEILING = "similarity_ceiling"
     SPOILER_MONOTONICITY_GUARD = "spoiler_monotonicity_guard"

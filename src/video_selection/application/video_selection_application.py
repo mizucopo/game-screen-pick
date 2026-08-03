@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from ..configuration.configuration_error import ConfigurationError
 from ..models.blog_candidate import BlogCandidate
+from ..models.candidate_annotation_request import CandidateAnnotationRequest
 from ..models.canonical_publication_request import CanonicalPublicationRequest
 from ..models.completed_stage import CompletedStage
 from ..models.completed_stage_bundle import CompletedStageBundle
@@ -46,10 +47,11 @@ from ..services.sanitize_selection_annotations_for_publication import (
     sanitize_selection_annotations_for_publication,
 )
 from ..services.select_video_set_images import (
+    CandidateMomentTimelines,
     SpoilerSensitivity,
     select_from_shortlist_batches,
     select_video_set_images,
-    shortlist_selection_is_complete,
+    shortlist_selection_can_stop,
 )
 from ..services.selection_stage_artifacts import (
     restore_video_set_selection_result,
@@ -172,6 +174,10 @@ class VideoSelectionApplication:
         requests = build_candidate_annotation_requests(
             video_stage_results,
             selection_intent=_SELECTION_INTENT,
+        )
+        candidate_moment_timelines = _candidate_moment_timelines(
+            requests,
+            video_stage_results,
         )
         vision_stages: list[CompletedStage] = []
         vision_diagnostics: dict[str, VisionInferenceDiagnostics] = {}
@@ -313,6 +319,7 @@ class VideoSelectionApplication:
                 _validate_selection_decision(
                     restored_selection,
                     annotated_candidates,
+                    candidate_moment_timelines=candidate_moment_timelines,
                     request_count=len(requests),
                     requested_count=configuration.image_count,
                     spoiler_sensitivity=spoiler_sensitivity,
@@ -335,6 +342,7 @@ class VideoSelectionApplication:
             )
             selection = select_from_shortlist_batches(
                 batches,
+                candidate_moment_timelines=candidate_moment_timelines,
                 requested_count=configuration.image_count,
                 spoiler_sensitivity=spoiler_sensitivity,
                 similarity_threshold=configuration.similarity_threshold,
@@ -353,6 +361,7 @@ class VideoSelectionApplication:
         _validate_selection_decision(
             selection,
             selection_candidates,
+            candidate_moment_timelines=candidate_moment_timelines,
             request_count=len(requests),
             requested_count=configuration.image_count,
             spoiler_sensitivity=spoiler_sensitivity,
@@ -380,6 +389,7 @@ class VideoSelectionApplication:
                 selection,
                 completed_stages,
                 selection_request_fingerprint,
+                candidate_moment_timelines=candidate_moment_timelines,
                 request_count=len(requests),
                 spoiler_sensitivity=spoiler_sensitivity,
             )
@@ -413,6 +423,7 @@ class VideoSelectionApplication:
         completed_stages: tuple[CompletedStage, ...],
         selection_request_fingerprint: StageFingerprint,
         *,
+        candidate_moment_timelines: CandidateMomentTimelines,
         request_count: int,
         spoiler_sensitivity: SpoilerSensitivity,
     ) -> CompletedStage:
@@ -451,6 +462,7 @@ class VideoSelectionApplication:
             _validate_selection_decision(
                 restored,
                 candidates,
+                candidate_moment_timelines=candidate_moment_timelines,
                 request_count=request_count,
                 requested_count=configuration.image_count,
                 spoiler_sensitivity=spoiler_sensitivity,
@@ -576,6 +588,37 @@ def _annotation_batch_sizes(total: int, requested_count: int) -> tuple[int, ...]
     return tuple(sizes)
 
 
+def _candidate_moment_timelines(
+    requests: tuple[CandidateAnnotationRequest, ...],
+    video_stage_results: tuple[VideoStageResult, ...],
+) -> CandidateMomentTimelines:
+    """全Annotation requestをVideo Source別の時系列へ並べる。"""
+    source_orders = {
+        result.source.fingerprint: video_order
+        for video_order, result in enumerate(video_stage_results)
+    }
+    grouped: dict[tuple[int, str], list[CandidateAnnotationRequest]] = {}
+    for request in requests:
+        fingerprint = request.frame_candidates[0].video_fingerprint
+        if fingerprint is None or fingerprint not in source_orders:
+            raise ValueError("Annotation requestのVideo Sourceが見つかりません")
+        source_key = source_orders[fingerprint], fingerprint
+        grouped.setdefault(source_key, []).append(request)
+    return {
+        key: tuple(
+            request.moment.identifier
+            for request in sorted(
+                values,
+                key=lambda request: (
+                    request.moment.anchor_time,
+                    request.moment.identifier,
+                ),
+            )
+        )
+        for key, values in grouped.items()
+    }
+
+
 def _selection_request_fingerprint(
     configuration: EffectiveConfiguration,
     completed_stages: tuple[CompletedStage, ...],
@@ -585,7 +628,8 @@ def _selection_request_fingerprint(
 ) -> StageFingerprint:
     """selector実行前に全依存入力を識別するfingerprintを返す。"""
     semantic_input = {
-        "request_contract": "preselection-input-v2",
+        "request_contract": "preselection-input-v3",
+        "candidate_moment_timeline_contract": "source-ordered-complete-v1",
         "combat_representative_fallback_policy_version": (
             COMBAT_REPRESENTATIVE_FALLBACK_POLICY_VERSION
         ),
@@ -649,6 +693,7 @@ def _validate_selection_decision(
     selection: VideoSetSelectionResult,
     candidates: tuple[BlogCandidate, ...],
     *,
+    candidate_moment_timelines: CandidateMomentTimelines,
     request_count: int,
     requested_count: int,
     spoiler_sensitivity: SpoilerSensitivity,
@@ -675,7 +720,10 @@ def _validate_selection_decision(
                 break
         if expected_expansion_count < 0:
             raise ValueError("Video Set Selection cacheのbatch境界が不正です")
-    selection_is_complete = shortlist_selection_is_complete(expected)
+    selection_is_complete = shortlist_selection_can_stop(
+        expected,
+        candidate_moment_timelines,
+    )
     all_candidates_consumed = len(candidates) == request_count
     if not selection_is_complete and not all_candidates_consumed:
         raise ValueError("Video Set Selection cacheが途中で拡張を停止しています")

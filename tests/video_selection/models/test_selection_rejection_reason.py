@@ -18,6 +18,7 @@ def test_selection_rejection_reasons_have_stable_serialized_values() -> None:
     # Arrange
     expected = (
         "title_limit",
+        "semantic_duplicate",
         "visual_near_duplicate",
         "similarity_ceiling",
         "spoiler_monotonicity_guard",

@@ -15,16 +15,18 @@ output/
 ```
 
 - `images/`: 元frame解像度、lossy WebP quality 95、metadata除去済みの選択画像
-- `report.json`: `game-screen-pick/report@2.0.0`の唯一のmachine-readable正本
+- `report.json`: `game-screen-pick/report@2.1.0`の唯一のmachine-readable正本
 - `report.md`: 検証済みJSON objectだけから決定的に作るgallery-firstの人間向けreport
 
 画像名は全体選択順、Scene Slug、Frame Candidate IDの短縮digestから作ります。安定identityはfilenameではなく、完全なFrame Candidate IDです。
 
 Video Source IDは通常、whole-file SHA-256の先頭12文字を使います。同じVideo Set内でそのprefixが衝突した場合は、衝突したsourceだけを64文字の完全digestへ拡張し、一意性を保ちます。
 
-producerが検証する現行の厳密なschema実体は[`report-2.0.0.schema.json`](../src/video_selection/schemas/report-2.0.0.schema.json)です。履歴schemaの[`report-1.0.0.schema.json`](../src/video_selection/schemas/report-1.0.0.schema.json)も保持します。readerはschema identityを確認して対応major 1・2の基準schemaを選び、既知の必須構造を検証しながら将来minorの追加field／文字列enum値を保持します。既知の関係検証とMarkdown投影は既知facetだけを対象にし、将来minorが追加した未知facetはJSONに保持したまま旧readerでは解釈しません。report@1には存在しない条件付きcoverageのJSON関係とMarkdown sectionを要求しません。このreader検証はproducerの厳密な現行2.0検証とは分離し、report schema versionもpackage versionから独立します。
+producerが検証する現行の厳密なschema実体は[`report-2.1.0.schema.json`](../src/video_selection/schemas/report-2.1.0.schema.json)です。履歴schemaの[`report-1.0.0.schema.json`](../src/video_selection/schemas/report-1.0.0.schema.json)と[`report-2.0.0.schema.json`](../src/video_selection/schemas/report-2.0.0.schema.json)も保持します。readerはschema identityを確認して対応major 1・2の基準schemaを選び、既知の必須構造を検証しながら将来minorの追加field／文字列enum値を保持します。既知の関係検証とMarkdown投影は既知facetだけを対象にし、将来minorが追加した未知facetはJSONに保持したまま旧readerでは解釈しません。report@1には存在しない条件付きcoverageのJSON関係とMarkdown sectionを要求しません。このreader検証はproducerの厳密な現行2.1検証とは分離し、report schema versionもpackage versionから独立します。
 
 `selection_summary.conditional_coverage`は、要求枚数10枚以上で適用される`ordinary_combat`と`event`について、有効候補数、条件付き最低数、選択実績、未充足枠を他候補へ解放したかを記録します。最低枠のためにExplanation Valueが`none`の候補や重複画像を選ぶことはありません。
+
+Semantic Duplicate Groupの代表には`selected[].selection.semantic_group`として決定的なGroup IDとprivacy-safeなbasisを記録します。同じGroupで除外されたnear missには`semantic_duplicate`、blocking selected ID、同じGroup IDとbasisを記録します。basisは`combat_encounter_sequence`、`title_semantics`、`visual_role_similarity`のenumで、raw model response、固有名の正誤、比較用自由文は公開しません。JSONとMarkdownの検証では、各`semantic_duplicate`が同じGroupの選択代表を参照することも確認します。
 
 ## provenanceとmodel更新
 

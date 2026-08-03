@@ -113,6 +113,14 @@ Visual similarity is an eligibility rule rather than another numeric penalty:
 - A `recurring_gameplay` scene may use the same terminal ceiling after eligible Variant Groups have each had their first opportunity, allowing state variants without automatically admitting the observed 0.973 near-repetition boundary.
 - A pair with cosine similarity greater than 0.995 is a Visual Near-Duplicate and can never be selected together.
 
+Classification boundaries are not sufficient to prevent semantic repetition, so the selector also assigns Semantic Duplicate Groups before greedy selection:
+
+- `title_semantics` groups every candidate whose Blog Image Type, Screen Text Kind, or Representative Frame Evidence identifies a title screen. This preserves the one-title limit when Blog Image Type is wrong.
+- `combat_encounter_sequence` orders every candidate within one Video Source, splits encounters at non-`major` candidates, and then groups chronological `major`-combat Scene Slug runs. A one-candidate slug blip is bridged only when matching slug runs surround it and both adjacent gaps are at most 15 seconds. The same slug after a different major-combat run or a non-major scene starts a different encounter.
+- `visual_role_similarity` groups non-title, non-major candidates only when every pair is from the same source, no more than 30 seconds apart, has the same image-grounded content kind and Combat Encounter Kind, and has Neutral visual similarity of at least 0.93. Recurring-gameplay candidates additionally require equal normalized independent image summaries so distinct techniques, enemies, and outcomes remain available.
+
+Every Semantic Duplicate Group has a hard maximum of one selected image, even during Selection Shortfall. The first candidate selected by the normal Marginal Selection Utility ordering is its representative. This maximum outranks conditional coverage and Variant Expansion; an unrepresented encounter or role remains preferable to a second image from the same group. Neutral visual similarity never establishes a group by itself.
+
 The selector-level ceiling never exceeds the explicitly configured maximum of 0.98. The user-facing configuration and validation contract belongs to the CLI/config design.
 
 ## Greedy selection
@@ -140,7 +148,7 @@ Selection starts at the normal similarity ceiling and preserves selected images 
 
 ## Shortfall and failure
 
-If the current annotated Selection Shortlist cannot produce `N` images at the terminal similarity ceiling, the Video Set Stage extends it in deterministic local shortlist order, completes Candidate Annotation for the added Candidate Moments, and recomputes selection. For `N >= 10`, it also extends while a known conditional facet has not yet been discovered or its minimum remains unsatisfied. Expansion stops when the output and known minima are complete or all valid Candidate Moments are exhausted. Batch sizing and operational limits belong to the runtime-capacity design.
+If the current annotated Selection Shortlist cannot produce `N` images at the terminal similarity ceiling, the Video Set Stage extends it in deterministic local shortlist order, completes Candidate Annotation for the added Candidate Moments, and recomputes selection. For `N >= 10`, it also extends while a known conditional facet has not yet been discovered or its minimum remains unsatisfied; a candidate identified as a title by Screen Text Kind or Representative Frame Evidence cannot satisfy the event facet even when Blog Image Type says `event`. When two annotated major-combat candidates currently share a Combat Encounter Group, selection also waits while any unannotated Candidate Moment remains between them in the complete source timeline. This observes a later-batch non-major boundary without forcing annotation of every remaining candidate. Expansion stops when the output, known minima, and observed encounter boundaries are complete or all valid Candidate Moments are exhausted. Batch sizing and operational limits belong to the runtime-capacity design.
 
 After all valid Candidate Moments are exhausted, selecting fewer than `N` images is a Selection Shortfall. The run publishes the selected images, completes successfully with a warning, and reports requested count, selected count, the final similarity pass, and reason counts. It never fills a shortfall with:
 
@@ -148,6 +156,7 @@ After all valid Candidate Moments are exhausted, selecting fewer than `N` images
 - an incomplete Candidate Annotation;
 - a Candidate Annotation whose Explanation Value is `none`;
 - a second `title` image;
+- a second member of a Semantic Duplicate Group;
 - a Visual Near-Duplicate.
 
 Candidate Annotation failure is not a shortfall. The failure contract from Issue 165 remains fatal, and no output is published until the failed annotation succeeds on a later run.
@@ -171,6 +180,6 @@ If seven gameplay and one event image have already been selected for `N=10`, a g
 
 Changing requested count, Spoiler Sensitivity, penalty weights, or coverage targets can reuse Candidate Annotation because these inputs affect only deterministic final selection. The selection-policy version must still be part of the final selection stage fingerprint.
 
-The report must retain enough diagnostic data to reproduce each decision: utility components, type targets and actuals, conditional-facet eligible/minimum/actual counts and reallocation, spoiler setting and penalty, the monotonicity count limit, progress distance and temporal penalty, visual threshold/pass, nearest selected similarity, Variant Group behavior, tie-break use, and Selection Shortfall reasons. Unselected candidates retain their best observed counterfactual utility and one stable rejection code. The exact public report schema is decided with the CLI/config/report contract.
+The report must retain enough diagnostic data to reproduce each decision: utility components, type targets and actuals, conditional-facet eligible/minimum/actual counts and reallocation, spoiler setting and penalty, the monotonicity count limit, progress distance and temporal penalty, visual threshold/pass, nearest selected similarity, Variant Group behavior, Semantic Duplicate Group ID and privacy-safe basis, blocking selected ID, tie-break use, and Selection Shortfall reasons. Unselected candidates retain their best observed counterfactual utility and one stable rejection code, including `semantic_duplicate` when the selected representative blocks another group member. The exact public report schema is decided with the CLI/config/report contract.
 
 Greedy selection is intentionally preferred over a global optimizer: it is deterministic, incremental, and reportable, while still allowing coverage and temporal effects to react after each selected image.

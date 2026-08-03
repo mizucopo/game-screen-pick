@@ -103,7 +103,7 @@ def test_select_images_uses_real_video_set_selection_version() -> None:
     version = stage_version(stage)
 
     # Assert
-    assert version == "video-set-selection-v3"
+    assert version == "video-set-selection-v5"
 
 
 @pytest.mark.parametrize("stage", tuple(ProcessingStage))

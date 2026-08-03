@@ -437,7 +437,7 @@ def _provenance() -> ReportProvenance:
             "ctranslate2": "4.8.1",
         },
         contracts={
-            "video_set_selection_policy": "video-set-selection-v3",
+            "video_set_selection_policy": "video-set-selection-v5",
         },
         stages=(stage,),
     )
