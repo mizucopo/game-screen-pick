@@ -14,6 +14,7 @@ from ..models.candidate_frame_observation import (
     PRIMARY_SUBJECT_VISIBILITIES,
     TRANSIENT_OBSTRUCTIONS,
 )
+from ..models.combat_encounter_basis import COMBAT_ENCOUNTER_BASES
 from ..models.combat_encounter_kind import COMBAT_ENCOUNTER_KINDS
 from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
 from ..models.scene_kind import SCENE_KINDS
@@ -21,9 +22,9 @@ from ..models.scene_kind import SCENE_KINDS
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v5"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v2"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v7"
-CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v16"
-CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v11"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v30"
+CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v17"
+CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v12"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v31"
 CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION = (
     "candidate-annotation-relationship-repair-prompt-v1"
 )
@@ -35,14 +36,14 @@ CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_STAGE_CONTRACT_VERSION = (
 )
 CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_NUM_PREDICT = 1024
 CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_EVIDENCE_MAX_LENGTH = 160
-COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION = "combat-encounter-verification-prompt-v2"
-COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION = "combat-encounter-verification-schema-v2"
+COMBAT_ENCOUNTER_VERIFICATION_PROMPT_VERSION = "combat-encounter-verification-prompt-v3"
+COMBAT_ENCOUNTER_VERIFICATION_SCHEMA_VERSION = "combat-encounter-verification-schema-v3"
 COMBAT_ENCOUNTER_VERIFICATION_STAGE_CONTRACT_VERSION = (
-    "combat-encounter-verification-stage-v2"
+    "combat-encounter-verification-stage-v3"
 )
-COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION = "combat-encounter-confirmation-prompt-v2"
+COMBAT_ENCOUNTER_CONFIRMATION_PROMPT_VERSION = "combat-encounter-confirmation-prompt-v3"
 COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION = (
-    "combat-encounter-confirmation-stage-v2"
+    "combat-encounter-confirmation-stage-v3"
 )
 COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION = (
     "combat-visibility-verification-prompt-v2"
@@ -169,6 +170,14 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                         "type": "string",
                         "enum": list(COMBAT_ENCOUNTER_KINDS),
                     },
+                    "combat_encounter_basis": {
+                        "type": "string",
+                        "enum": list(COMBAT_ENCOUNTER_BASES),
+                        "description": (
+                            "Combat Encounter Kindを支持する積極的な画像内根拠。"
+                            "主要戦闘の根拠がないことだけではordinary_*にしない。"
+                        ),
+                    },
                     "player_body_visibility": {
                         "type": "string",
                         "enum": list(CHARACTER_BODY_VISIBILITIES),
@@ -219,6 +228,7 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                     "visible_action",
                     "visible_character_or_enemy",
                     "combat_encounter_kind",
+                    "combat_encounter_basis",
                     "player_body_visibility",
                     "opponent_body_visibility",
                     "effect_only_frame",
@@ -335,12 +345,20 @@ COMBAT_ENCOUNTER_VERIFICATION_SCHEMA: dict[str, object] = {
             "type": "string",
             "enum": list(COMBAT_ENCOUNTER_KINDS),
         },
+        "combat_encounter_basis": {
+            "type": "string",
+            "enum": list(COMBAT_ENCOUNTER_BASES),
+        },
         "combat_encounter_evidence": {
             "type": "string",
             "enum": ["none", "enemy_status_ui", "opposing_bodies", "both"],
         },
     },
-    "required": ["combat_encounter_kind", "combat_encounter_evidence"],
+    "required": [
+        "combat_encounter_kind",
+        "combat_encounter_basis",
+        "combat_encounter_evidence",
+    ],
 }
 
 PUBLICATION_BOUNDARY_VERIFICATION_SCHEMA: dict[str, object] = {

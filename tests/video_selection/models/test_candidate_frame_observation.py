@@ -12,8 +12,19 @@ from src.video_selection.models.candidate_frame_observation import (
     CandidateInterfaceKind,
     CharacterBodyVisibility,
 )
+from src.video_selection.models.combat_encounter_basis import CombatEncounterBasis
 from src.video_selection.models.combat_encounter_kind import CombatEncounterKind
 from src.video_selection.models.frame_candidate import FrameCandidate
+
+_COMBAT_ENCOUNTER_BASIS_BY_KIND: dict[
+    CombatEncounterKind,
+    CombatEncounterBasis,
+] = {
+    "not_combat": "none",
+    "ordinary": "ordinary_opponent_presentation",
+    "major": "major_opponent_presentation",
+    "uncertain": "ambiguous",
+}
 
 
 @pytest.mark.parametrize(
@@ -114,6 +125,7 @@ def test_atomic_observations_normalize_ambiguous_model_content(
         visible_action=visible_action,
         visible_character_or_enemy=visible_character_or_enemy,
         combat_encounter_kind="not_combat",
+        combat_encounter_basis="none",
         player_body_visibility=("clear" if visible_character_or_enemy else "absent"),
         opponent_body_visibility="absent",
         effect_only_frame=False,
@@ -159,6 +171,7 @@ def test_combat_without_visible_opponent_has_no_explanation_value() -> None:
         visible_action=True,
         visible_character_or_enemy=True,
         combat_encounter_kind="ordinary",
+        combat_encounter_basis="ordinary_opponent_presentation",
         player_body_visibility="clear",
         opponent_body_visibility="absent",
         effect_only_frame=False,
@@ -207,6 +220,7 @@ def test_unreadable_action_frame_has_no_explanation_value(
         visible_action=True,
         visible_character_or_enemy=True,
         combat_encounter_kind="ordinary",
+        combat_encounter_basis="ordinary_opponent_presentation",
         player_body_visibility="partial",
         opponent_body_visibility=opponent_body_visibility,
         effect_only_frame=effect_only_frame,
@@ -270,6 +284,7 @@ def test_static_document_and_silent_event_presentation_have_no_explanation_value
         visible_action=False,
         visible_character_or_enemy=True,
         combat_encounter_kind="not_combat",
+        combat_encounter_basis="none",
         player_body_visibility="clear",
         opponent_body_visibility="absent",
         effect_only_frame=False,
@@ -315,6 +330,7 @@ def test_visible_event_dialogue_overrides_generic_interface() -> None:
         visible_action=False,
         visible_character_or_enemy=True,
         combat_encounter_kind="not_combat",
+        combat_encounter_basis="none",
         player_body_visibility="clear",
         opponent_body_visibility="absent",
         effect_only_frame=False,
@@ -366,6 +382,7 @@ def test_dialogue_visibility_requires_a_visible_text_presentation() -> None:
             visible_action=False,
             visible_character_or_enemy=True,
             combat_encounter_kind="not_combat",
+            combat_encounter_basis="none",
             player_body_visibility="clear",
             opponent_body_visibility="absent",
             effect_only_frame=False,
@@ -416,6 +433,7 @@ def test_combat_action_is_derived_from_combat_encounter_kind(
         visible_action=True,
         visible_character_or_enemy=True,
         combat_encounter_kind=combat_encounter_kind,
+        combat_encounter_basis=_COMBAT_ENCOUNTER_BASIS_BY_KIND[combat_encounter_kind],
         player_body_visibility="clear",
         opponent_body_visibility=(
             "absent" if combat_encounter_kind == "not_combat" else "clear"
@@ -434,3 +452,44 @@ def test_combat_action_is_derived_from_combat_encounter_kind(
 
     # Assert
     assert combat_action is expected_combat_action
+
+
+def test_ordinary_frame_observation_requires_positive_basis() -> None:
+    """通常戦闘のframe観測に積極的な画像内根拠が要求されること。
+
+    Arrange:
+        - 戦闘は見えるが通常か主要かの根拠が曖昧なframe観測が用意される
+    Act:
+        - ordinaryとしてframe観測の構築が試行される
+    Assert:
+        - ordinaryとambiguousの矛盾した組が拒否されること
+    """
+    # Arrange
+    candidate = FrameCandidate("frm_" + "d" * 64, b"image")
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="domain field"):
+        CandidateFrameObservation(
+            candidate=candidate,
+            scene_slug="battle",
+            content_kind="gameplay_action",
+            interface_kind="none",
+            prominent_event_portrait=False,
+            cinematic_event_presentation=False,
+            visible_dialogue_text=False,
+            dialogue_text_presentation="none",
+            visible_action=True,
+            visible_character_or_enemy=True,
+            combat_encounter_kind="ordinary",
+            combat_encounter_basis="ambiguous",
+            player_body_visibility="clear",
+            opponent_body_visibility="clear",
+            effect_only_frame=False,
+            explanation_value="high",
+            screen_text_kind="hud",
+            primary_subject_visibility="clear",
+            transient_obstruction="none",
+            spoiler_risk="none",
+            spoiler_evidence="",
+        )

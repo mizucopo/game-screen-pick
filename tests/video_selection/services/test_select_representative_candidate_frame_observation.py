@@ -12,6 +12,7 @@ from src.video_selection.models.candidate_frame_observation import (
     CandidateInterfaceKind,
     CharacterBodyVisibility,
 )
+from src.video_selection.models.combat_encounter_basis import CombatEncounterBasis
 from src.video_selection.models.combat_encounter_kind import CombatEncounterKind
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.neutral_image_analysis import NeutralImageAnalysis
@@ -19,6 +20,16 @@ from src.video_selection.models.neutral_image_metrics import NeutralImageMetrics
 from src.video_selection.services import (
     select_representative_candidate_frame_observation as selection_service,
 )
+
+_COMBAT_ENCOUNTER_BASIS_BY_KIND: dict[
+    CombatEncounterKind,
+    CombatEncounterBasis,
+] = {
+    "not_combat": "none",
+    "ordinary": "ordinary_opponent_presentation",
+    "major": "major_opponent_presentation",
+    "uncertain": "ambiguous",
+}
 
 
 def test_meaningful_event_is_selected_over_equal_shop_and_idle_frames() -> None:
@@ -251,6 +262,7 @@ def _observation(
         ),
         visible_character_or_enemy=visible_character_or_enemy,
         combat_encounter_kind=combat_encounter_kind,
+        combat_encounter_basis=_COMBAT_ENCOUNTER_BASIS_BY_KIND[combat_encounter_kind],
         player_body_visibility=player_body_visibility,
         opponent_body_visibility=opponent_body_visibility,
         effect_only_frame=False,
