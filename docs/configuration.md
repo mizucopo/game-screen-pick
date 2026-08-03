@@ -70,7 +70,7 @@ Effective Configurationは設定項目ごとに次の順で解決します。
 
 組み込み既定値`1`は、modelやVRAM容量が不明な環境で安全側に保つ値です。supported Windows 11 / WSL2 / RTX 5090 target acceptanceでは、privateな通常設定へ`max_parallel_requests = 2`を明示します。設定を増やしてもOllama server側のcapacityを超えるrequestは速くならず、VRAM使用量が増える可能性があります。
 
-一部の独立requestだけが失敗した場合はCandidate Moment全体を確定しません。同じ並列batchで成功したframeのCompleted Stageは保存し、同じcommandの再実行時に失敗・未完了frameだけを評価してから全結果を比較します。後続batchは開始しません。worker数と完了順はStage Fingerprint、出力順、Representative Frameの比較順へ含めません。
+一部の独立requestだけが失敗した場合はCandidate Moment全体を確定しません。同じ並列batchで成功したframeのCompleted Stageは保存し、同じcommandの再実行時に失敗・未完了frameだけを評価してから全結果を比較します。入力順の途中にあるcache hitは並列batchの境界にせず、未完了Momentだけを元の位置情報付きで設定上限まで集めます。後続batchは開始しません。worker数と完了順はStage Fingerprint、出力順、Representative Frameの比較順へ含めません。
 
 ## Video Scanの動的並列制御
 

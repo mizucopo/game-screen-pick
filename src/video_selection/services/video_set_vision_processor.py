@@ -320,20 +320,13 @@ class VideoSetVisionProcessor:
         completed_stages: list[CompletedStage] = []
         plan_index = 0
         while plan_index < len(plans):
-            if _candidate_moment_plan_requires_inference(plans[plan_index]):
-                batch_end = plan_index
-                while (
-                    batch_end < len(plans)
-                    and batch_end - plan_index < max_parallel_requests
-                    and _candidate_moment_plan_requires_inference(plans[batch_end])
-                ):
-                    batch_end += 1
-                batch = plans[plan_index:batch_end]
-                monitor_external = True
-            else:
-                batch_end = plan_index + 1
-                batch = plans[plan_index:batch_end]
-                monitor_external = False
+            batch_end = plan_index
+            inference_count = 0
+            while batch_end < len(plans) and inference_count < max_parallel_requests:
+                if _candidate_moment_plan_requires_inference(plans[batch_end]):
+                    inference_count += 1
+                batch_end += 1
+            batch = plans[plan_index:batch_end]
             batch_annotations, batch_diagnostics, batch_completed = (
                 self._execute_candidate_moment_batch(
                     writer=writer,
@@ -345,7 +338,6 @@ class VideoSetVisionProcessor:
                     num_ctx=num_ctx,
                     max_parallel_requests=max_parallel_requests,
                     inference_limiter=inference_limiter,
-                    monitor_external=monitor_external,
                 )
             )
             annotations.extend(batch_annotations)
@@ -411,7 +403,6 @@ class VideoSetVisionProcessor:
         num_ctx: int,
         max_parallel_requests: int,
         inference_limiter: BoundedSemaphore,
-        monitor_external: bool,
     ) -> tuple[
         tuple[CandidateAnnotation, ...],
         tuple[VisionInferenceDiagnostics, ...],
@@ -422,48 +413,58 @@ class VideoSetVisionProcessor:
             ProcessingStage.ANNOTATE_CANDIDATE,
             "candidate",
         )
+        pending = tuple(
+            (index, plan)
+            for index, plan in enumerate(plans)
+            if _candidate_moment_plan_requires_inference(plan)
+        )
+        pending_indexes = {index for index, _plan in pending}
+
+        def execute_plan(plan: _CandidateMomentPlan) -> _CandidateMomentExecution:
+            return self._execute_candidate_moment(
+                writer=writer,
+                video_set=video_set,
+                plan=plan,
+                catalog=catalog,
+                catalog_fingerprint=catalog_fingerprint,
+                model=model,
+                num_ctx=num_ctx,
+                max_parallel_requests=max_parallel_requests,
+                inference_limiter=inference_limiter,
+            )
 
         def execute_plans() -> tuple[_CandidateMomentExecution, ...]:
-            with ThreadPoolExecutor(
-                max_workers=len(plans),
-                thread_name_prefix="candidate-moment",
-            ) as executor:
-                futures = tuple(
-                    executor.submit(
-                        self._execute_candidate_moment,
-                        writer=writer,
-                        video_set=video_set,
-                        plan=plan,
-                        catalog=catalog,
-                        catalog_fingerprint=catalog_fingerprint,
-                        model=model,
-                        num_ctx=num_ctx,
-                        max_parallel_requests=max_parallel_requests,
-                        inference_limiter=inference_limiter,
+            results: list[_CandidateMomentExecution | None] = [None] * len(plans)
+            if pending:
+                with ThreadPoolExecutor(
+                    max_workers=min(max_parallel_requests, len(pending)),
+                    thread_name_prefix="candidate-moment",
+                ) as executor:
+                    futures = tuple(
+                        (index, executor.submit(execute_plan, plan))
+                        for index, plan in pending
                     )
-                    for plan in plans
-                )
-                return tuple(future.result() for future in futures)
+                    for index, plan in enumerate(plans):
+                        if index not in pending_indexes:
+                            results[index] = execute_plan(plan)
+                    for index, future in futures:
+                        results[index] = future.result()
+            else:
+                results = [execute_plan(plan) for plan in plans]
+            completed: list[_CandidateMomentExecution] = []
+            for result in results:
+                if result is None:
+                    raise AssertionError("Candidate Momentの結果が確定していません")
+                completed.append(result)
+            return tuple(completed)
 
         executions = (
             self._run_external(
                 execute_plans,
                 reason_code="candidate_annotation_inference_started",
             )
-            if monitor_external
-            else (
-                self._execute_candidate_moment(
-                    writer=writer,
-                    video_set=video_set,
-                    plan=plans[0],
-                    catalog=catalog,
-                    catalog_fingerprint=catalog_fingerprint,
-                    model=model,
-                    num_ctx=num_ctx,
-                    max_parallel_requests=max_parallel_requests,
-                    inference_limiter=inference_limiter,
-                ),
-            )
+            if pending
+            else execute_plans()
         )
 
         completed_results: list[_CachedAnnotationStageResult] = []

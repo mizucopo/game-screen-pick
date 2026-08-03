@@ -403,17 +403,17 @@ def test_primary_and_fallback_annotations_share_the_parallel_limit(
     assert result.annotations == (first_annotations[2], second_annotations[2])
 
 
-def test_parallel_failure_reuses_successful_sibling_moment(
+def test_parallel_failure_reuses_successful_sibling_without_blocking_retry_batch(
     tmp_path: Path,
 ) -> None:
-    """並列batchの片方が失敗しても成功した兄弟Momentが再利用されること。
+    """成功済み兄弟Momentが再利用され未完了Momentは並列再開されること。
 
     Arrange:
         - 先頭だけが失敗し2件目が同時に成功する3件の主候補が用意される
     Act:
         - 失敗runの後に同じ入力が再実行される
     Assert:
-        - 再開時は成功済み2件目を飛ばし、先頭と未開始3件目だけが推論されること
+        - 成功済み2件目を飛ばし、先頭と未開始3件目が並列推論されること
     """
     # Arrange
     video_set, base_configuration = _video_set_and_configuration(tmp_path)
@@ -449,6 +449,23 @@ def test_parallel_failure_reuses_successful_sibling_moment(
         on_candidate_annotation_request=synchronize_first_pair,
     )
     models = FakeModelRuntime("vision-model").resolve_models(configuration)
+    retry_pair_started = threading.Event()
+    retry_state_lock = threading.Lock()
+    retry_call_count = 0
+
+    def synchronize_retry_misses(call: CandidateAnnotationRequest) -> None:
+        nonlocal retry_call_count
+        if call.moment.identifier not in {
+            requests[0].moment.identifier,
+            requests[2].moment.identifier,
+        }:
+            return
+        with retry_state_lock:
+            retry_call_count += 1
+            if retry_call_count == 2:
+                retry_pair_started.set()
+        if not retry_pair_started.wait(timeout=1.0):
+            raise RuntimeError("cache hitを越えた未完了Momentが並列化されませんでした")
 
     # Act
     with pytest.raises(RuntimeError, match="fake raw response"):
@@ -463,7 +480,11 @@ def test_parallel_failure_reuses_successful_sibling_moment(
             configuration=configuration,
             resolved_models=models,
         )
-    retry_runtime = FakeStructuredVisionRuntime(_catalog(), annotations)
+    retry_runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        annotations,
+        on_candidate_annotation_request=synchronize_retry_misses,
+    )
     result = VideoSetVisionProcessor(
         retry_runtime,
         RecordingRunObserver(),
@@ -489,6 +510,7 @@ def test_parallel_failure_reuses_successful_sibling_moment(
         requests[0].moment.identifier,
         requests[2].moment.identifier,
     )
+    assert retry_pair_started.is_set()
     assert result.annotations == annotations
     assert tuple(item.cache_hit for item in result.annotation_diagnostics) == (
         False,
