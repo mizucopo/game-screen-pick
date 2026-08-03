@@ -663,19 +663,13 @@ class VideoSetVisionProcessor:
         )
 
         def generate() -> tuple[CandidateAnnotation, VisionInferenceDiagnostics]:
-            def operation() -> tuple[
-                CandidateAnnotation,
-                VisionInferenceDiagnostics,
-            ]:
-                return self._runtime.annotate_candidate(
+            with inference_limiter:
+                generated = self._runtime.annotate_candidate(
                     request,
                     catalog,
                     model,
                     num_ctx=num_ctx,
                 )
-
-            with inference_limiter:
-                generated = operation()
             annotation, _diagnostics = generated
             _validate_runtime_annotation(annotation, request, catalog)
             return generated
