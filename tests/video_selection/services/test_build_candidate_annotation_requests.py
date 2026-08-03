@@ -43,16 +43,17 @@ from src.video_selection.services.build_candidate_annotation_requests import (
 def test_local_quality_representative_drives_shortlist_and_annotation_input(
     tmp_path: Path,
 ) -> None:
-    """最高品質のlocal代表だけが意味注釈へ渡されること。
+    """Primaryを先頭に同じMomentの代替frameも意味注釈候補へ保持されること。
 
     Arrange:
         - 最高品質frameを2枚持つMomentと、近似・多様な2 Momentが用意される
     Act:
         - Candidate Annotation requestとScene Catalog代表が構築される
     Assert:
-        - 各Momentの最高品質frameがlocal代表として使われること
+        - 各Momentの最高品質frameがPrimaryとして先頭に使われること
         - 近似Momentより多様なMomentが先に並べられること
-        - requestには画像間で意味を混ぜないようlocal代表だけが保持されること
+        - requestには同一Momentの独立fallback候補も品質順で保持されること
+        - Scene CatalogにはPrimaryだけが渡されること
     """
     # Arrange
     first_low = _frame("a", quality=0.70, feature=(1.0, 0.0), second=1)
@@ -89,8 +90,57 @@ def test_local_quality_representative_drives_shortlist_and_annotation_input(
         diverse.identifier,
         near.identifier,
     ]
-    assert requests[0].frame_candidates == (first_high,)
-    assert requests[0].moment.frame_candidate_ids == (first_high.identifier,)
+    assert requests[0].frame_candidates == (first_high, first_low)
+    assert requests[0].moment.frame_candidate_ids == (
+        first_high.identifier,
+        first_low.identifier,
+    )
+
+
+def test_annotation_request_keeps_only_three_best_same_moment_frames(
+    tmp_path: Path,
+) -> None:
+    """同じMomentの候補がPrimaryを含む品質上位3枚へ制限されること。
+
+    Arrange:
+        - 品質の異なる4枚の適格frameを持つ一つのMomentが用意される
+    Act:
+        - Candidate Annotation requestが構築される
+    Assert:
+        - 品質上位3枚だけが決定的な順序で保持されること
+    """
+    # Arrange
+    frames = (
+        _frame("a", quality=0.80, feature=(1.0, 0.0), second=1),
+        _frame("b", quality=0.95, feature=(1.0, 0.0), second=2),
+        _frame("c", quality=0.70, feature=(1.0, 0.0), second=3),
+        _frame("d", quality=0.90, feature=(1.0, 0.0), second=4),
+    )
+    result = _stage_result(
+        tmp_path,
+        "1",
+        duration=10,
+        moments=(
+            _moment(
+                "1",
+                Fraction(4),
+                tuple(frame.identifier for frame in frames),
+            ),
+        ),
+        candidates=frames,
+    )
+
+    # Act
+    requests = build_candidate_annotation_requests(
+        (result,),
+        selection_intent="ブログ本文を説明できる画像を選ぶ",
+    )
+
+    # Assert
+    assert requests[0].frame_candidates == (frames[1], frames[3], frames[0])
+    assert requests[0].moment.frame_candidate_ids == tuple(
+        frame.identifier for frame in requests[0].frame_candidates
+    )
 
 
 def test_ties_follow_video_order_time_moment_and_frame_id(tmp_path: Path) -> None:

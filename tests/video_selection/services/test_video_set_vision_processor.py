@@ -1,18 +1,27 @@
 import threading
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
-from src.video_selection.models.candidate_annotation import CandidateAnnotation
+from src.video_selection.models.candidate_annotation import (
+    CandidateAnnotation,
+    ExplanationValue,
+)
 from src.video_selection.models.candidate_annotation_request import (
     CandidateAnnotationRequest,
 )
 from src.video_selection.models.candidate_moment import CandidateMoment
+from src.video_selection.models.combat_encounter_basis import CombatEncounterBasis
+from src.video_selection.models.combat_encounter_kind import CombatEncounterKind
 from src.video_selection.models.context_cue import ContextCue
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.processing_stage import ProcessingStage
+from src.video_selection.models.representative_frame_evidence import (
+    RepresentativeFrameEvidence,
+)
 from src.video_selection.models.scene_catalog import SceneCatalog
 from src.video_selection.models.scene_catalog_entry import SceneCatalogEntry
 from src.video_selection.models.stage_fingerprint import StageFingerprint
@@ -27,6 +36,485 @@ from tests.video_selection.fakes.fake_structured_vision_runtime import (
     FakeStructuredVisionRuntime,
 )
 from tests.video_selection.fakes.recording_run_observer import RecordingRunObserver
+
+
+def test_combat_primary_without_explanation_uses_best_same_moment_fallback(
+    tmp_path: Path,
+) -> None:
+    """不適格な戦闘Primaryだけが独立評価された同一Momentの最良frameへ置換されること。
+
+    Arrange:
+        - 説明価値なしの戦闘Primaryと説明価値が異なる二つの代替frameが用意される
+    Act:
+        - 一つのCandidate MomentがVision processorで処理される
+    Assert:
+        - 三つのframeが一枚ずつ独立requestで評価されること
+        - 最も説明価値が高い代替frameがRepresentative Frameになること
+        - 各frameの診断とCompleted Stageが保持されること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=2,
+    )
+    primary = FrameCandidate("frame-primary", b"primary")
+    first_fallback = FrameCandidate("frame-fallback-low", b"fallback-low")
+    best_fallback = FrameCandidate("frame-fallback-high", b"fallback-high")
+    moment = CandidateMoment(
+        identifier="mom_" + "d" * 64,
+        source_pts=10,
+        anchor_time=Fraction(10),
+        timeline_segment_id="seg_" + "d" * 64,
+        evidence=("scene",),
+        proxy_quality_score=0.9,
+        frame_candidate_ids=(
+            primary.identifier,
+            first_fallback.identifier,
+            best_fallback.identifier,
+        ),
+    )
+    request = CandidateAnnotationRequest(
+        moment=moment,
+        frame_candidates=(primary, first_fallback, best_fallback),
+        context_cues=(),
+        video_set_progress=Fraction(1, 2),
+        selection_intent="ブログ本文を説明できる画像を選ぶ",
+        cue_selection_policy_version="nearby-context-v1",
+    )
+    annotations = (
+        CandidateAnnotation(
+            candidate=primary,
+            summary="攻撃effectで敵が見えない戦闘",
+            candidate_moment_id=moment.identifier,
+            scene_slug="exploration",
+            blog_image_type="normal_gameplay",
+            explanation_value="none",
+            combat_encounter_kind="ordinary",
+            combat_encounter_basis="ordinary_opponent_presentation",
+        ),
+        CandidateAnnotation(
+            candidate=first_fallback,
+            summary="敵が見える通常戦闘",
+            candidate_moment_id=moment.identifier,
+            scene_slug="exploration",
+            blog_image_type="normal_gameplay",
+            explanation_value="low",
+            combat_encounter_kind="ordinary",
+            combat_encounter_basis="ordinary_opponent_presentation",
+        ),
+        CandidateAnnotation(
+            candidate=best_fallback,
+            summary="敵と主人公が明瞭な通常戦闘",
+            candidate_moment_id=moment.identifier,
+            scene_slug="exploration",
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            combat_encounter_kind="ordinary",
+            combat_encounter_basis="ordinary_opponent_presentation",
+        ),
+    )
+    runtime = FakeStructuredVisionRuntime(_catalog(), annotations)
+
+    # Act
+    result = VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+        video_set=video_set,
+        representatives=(primary,),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=FakeModelRuntime("vision-model").resolve_models(configuration),
+    )
+
+    # Assert
+    evaluated_frame_ids = tuple(
+        call.frame_candidates[0].identifier
+        for call in runtime.candidate_annotation_calls
+    )
+    assert evaluated_frame_ids[0] == primary.identifier
+    assert set(evaluated_frame_ids[1:]) == {
+        first_fallback.identifier,
+        best_fallback.identifier,
+    }
+    assert all(
+        len(call.frame_candidates) == 1 for call in runtime.candidate_annotation_calls
+    )
+    assert result.annotations == (annotations[2],)
+    assert len(result.annotation_diagnostics) == 3
+    assert len(result.completed_stages) == 4
+
+
+def test_combat_fallback_frames_are_evaluated_concurrently(
+    tmp_path: Path,
+) -> None:
+    """同一Momentのfallback frameが独立性を保って設定上限内で並列評価されること。
+
+    Arrange:
+        - 説明価値なしの戦闘Primaryと、互いの開始を待つ二つの代替frameが用意される
+        - Ollama同時request上限2が設定される
+    Act:
+        - 一つのCandidate MomentがVision processorで処理される
+    Assert:
+        - 二つの代替frameが別requestとして同時実行されること
+        - 完了順に依存せず最良frameがRepresentative Frameになること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=2,
+    )
+    request, annotations = _combat_fallback_fixture()
+    primary_frame_id = request.frame_candidates[0].identifier
+    state_lock = threading.Lock()
+    both_fallbacks_started = threading.Event()
+    active_fallback_count = 0
+    maximum_active_fallback_count = 0
+
+    def synchronize_fallbacks(call: CandidateAnnotationRequest) -> None:
+        nonlocal active_fallback_count, maximum_active_fallback_count
+        if call.frame_candidates[0].identifier == primary_frame_id:
+            return
+        with state_lock:
+            active_fallback_count += 1
+            maximum_active_fallback_count = max(
+                maximum_active_fallback_count,
+                active_fallback_count,
+            )
+            if active_fallback_count == 2:
+                both_fallbacks_started.set()
+        if not both_fallbacks_started.wait(timeout=1.0):
+            raise RuntimeError("二つのfallback requestが並列に開始されませんでした")
+        with state_lock:
+            active_fallback_count -= 1
+
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        annotations,
+        on_candidate_annotation_request=synchronize_fallbacks,
+    )
+
+    # Act
+    result = VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+        video_set=video_set,
+        representatives=(request.frame_candidates[0],),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=FakeModelRuntime("vision-model").resolve_models(configuration),
+    )
+
+    # Assert
+    assert maximum_active_fallback_count == 2
+    assert all(
+        len(call.frame_candidates) == 1 for call in runtime.candidate_annotation_calls
+    )
+    assert result.annotations == (annotations[2],)
+
+
+def test_failed_combat_fallback_resumes_only_unfinished_frame(
+    tmp_path: Path,
+) -> None:
+    """一部失敗したfallbackが成功済みframeを保持して未完了分だけ再開されること。
+
+    Arrange:
+        - 二つの代替frameのうち後者だけ推論に失敗する初回runtimeが用意される
+    Act:
+        - 失敗runの後に同じ入力が正常なruntimeで再実行される
+    Assert:
+        - 初回runが部分成功を採用せず失敗すること
+        - 再開時は失敗したframeだけが推論されること
+        - 全frameがそろってから最良のRepresentative Frameが返されること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=2,
+    )
+    request, annotations = _combat_fallback_fixture()
+    failed_frame_id = request.frame_candidates[2].identifier
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+    failing_runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        annotations,
+        failure_frame_id=failed_frame_id,
+    )
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer, clock=lambda: 10.0)
+    progress.start_run()
+
+    # Act
+    with pytest.raises(RuntimeError, match="fake raw response"):
+        VideoSetVisionProcessor(
+            failing_runtime,
+            observer,
+            progress=progress,
+        ).process(
+            video_set=video_set,
+            representatives=(request.frame_candidates[0],),
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=(request,),
+            configuration=configuration,
+            resolved_models=models,
+        )
+    retry_runtime = FakeStructuredVisionRuntime(_catalog(), annotations)
+    result = VideoSetVisionProcessor(
+        retry_runtime,
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=(request.frame_candidates[0],),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=models,
+    )
+
+    # Assert
+    assert tuple(
+        call.frame_candidates[0].identifier
+        for call in retry_runtime.candidate_annotation_calls
+    ) == (failed_frame_id,)
+    assert result.annotations == (annotations[2],)
+    assert tuple(
+        diagnostics.cache_hit for diagnostics in result.annotation_diagnostics
+    ) == (True, True, False)
+    assert len(progress.completed_stage_events) == 3
+    assert len(observer.completed_stages) == 3
+
+
+@pytest.mark.parametrize(
+    ("explanation_value", "combat_encounter_kind", "combat_encounter_basis"),
+    (
+        ("medium", "ordinary", "ordinary_opponent_presentation"),
+        ("none", "not_combat", "none"),
+    ),
+)
+def test_fallback_is_skipped_without_failed_combat_primary(
+    tmp_path: Path,
+    explanation_value: ExplanationValue,
+    combat_encounter_kind: CombatEncounterKind,
+    combat_encounter_basis: CombatEncounterBasis,
+) -> None:
+    """説明価値のある戦闘または非戦闘Primaryではfallbackされないこと。
+
+    Arrange:
+        - 代替frameを持つがfallback開始条件を満たさないPrimaryが用意される
+    Act:
+        - 一つのCandidate MomentがVision processorで処理される
+    Assert:
+        - Primaryだけが評価され、そのままRepresentative Frameになること
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    request, annotations = _combat_fallback_fixture()
+    primary = replace(
+        annotations[0],
+        explanation_value=explanation_value,
+        combat_encounter_kind=combat_encounter_kind,
+        combat_encounter_basis=combat_encounter_basis,
+    )
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        (primary, *annotations[1:]),
+    )
+
+    # Act
+    result = VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+        video_set=video_set,
+        representatives=(request.frame_candidates[0],),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=FakeModelRuntime("vision-model").resolve_models(configuration),
+    )
+
+    # Assert
+    assert tuple(
+        call.frame_candidates[0].identifier
+        for call in runtime.candidate_annotation_calls
+    ) == (request.frame_candidates[0].identifier,)
+    assert result.annotations == (primary,)
+    assert len(result.annotation_diagnostics) == 1
+
+
+def test_expanded_combat_request_reuses_existing_primary_annotation_cache(
+    tmp_path: Path,
+) -> None:
+    """従来の一枚Primary cacheがfallback導入後も再利用されること。
+
+    Arrange:
+        - Primaryだけを評価したCompleted Stageと同一Momentの代替frameが用意される
+    Act:
+        - 同じPrimaryを先頭にした拡張requestが処理される
+    Assert:
+        - Primaryはcache hitになり、新しい代替frameだけが推論されること
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    request, annotations = _combat_fallback_fixture()
+    primary_frame = request.frame_candidates[0]
+    primary_request = replace(
+        request,
+        moment=replace(
+            request.moment,
+            frame_candidate_ids=(primary_frame.identifier,),
+        ),
+        frame_candidates=(primary_frame,),
+    )
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+    VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(_catalog(), (annotations[0],)),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=(primary_frame,),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(primary_request,),
+        configuration=configuration,
+        resolved_models=models,
+    )
+    expanded_runtime = FakeStructuredVisionRuntime(_catalog(), annotations)
+
+    # Act
+    result = VideoSetVisionProcessor(
+        expanded_runtime,
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=(primary_frame,),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=models,
+    )
+
+    # Assert
+    assert tuple(
+        call.frame_candidates[0].identifier
+        for call in expanded_runtime.candidate_annotation_calls
+    ) == tuple(frame.identifier for frame in request.frame_candidates[1:])
+    assert tuple(
+        diagnostics.cache_hit for diagnostics in result.annotation_diagnostics
+    ) == (True, False, False)
+    assert result.annotations == (annotations[2],)
+
+
+def test_combat_fallback_prefers_visible_unobstructed_subjects_before_frame_id(
+    tmp_path: Path,
+) -> None:
+    """同じ説明価値では敵と主対象が明瞭で遮蔽の少ないframeが優先されること。
+
+    Arrange:
+        - 同じExplanation Valueだが視認性と遮蔽が異なる二つの代替frameが用意される
+        - Frame ID順では視認性の低いframeが先になる
+    Act:
+        - 戦闘PrimaryからCombat Representative Fallbackが実行される
+    Assert:
+        - Frame IDではなく構造化された視認性と遮蔽でRepresentativeが選ばれること
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    request, original_annotations = _combat_fallback_fixture()
+    clear = replace(
+        original_annotations[1],
+        explanation_value="high",
+        representative_frame_evidence=RepresentativeFrameEvidence(
+            content_kind="gameplay_action",
+            primary_subject_visibility="clear",
+            opponent_body_visibility="clear",
+            transient_obstruction="none",
+        ),
+    )
+    obstructed = replace(
+        original_annotations[2],
+        explanation_value="high",
+        representative_frame_evidence=RepresentativeFrameEvidence(
+            content_kind="gameplay_action",
+            primary_subject_visibility="partial",
+            opponent_body_visibility="clear",
+            transient_obstruction="partial",
+        ),
+    )
+    annotations = (original_annotations[0], clear, obstructed)
+
+    # Act
+    result = VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(_catalog(), annotations),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=(request.frame_candidates[0],),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=FakeModelRuntime("vision-model").resolve_models(configuration),
+    )
+    warm_result = VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(
+            _catalog(),
+            annotations,
+            reject_all_calls=True,
+        ),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=(request.frame_candidates[0],),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=FakeModelRuntime("vision-model").resolve_models(configuration),
+    )
+
+    # Assert
+    assert result.annotations == (clear,)
+    assert warm_result.annotations[0].candidate == clear.candidate
+    assert (
+        warm_result.annotations[0].representative_frame_evidence
+        == clear.representative_frame_evidence
+    )
+
+
+def test_combat_fallback_keeps_primary_when_every_frame_has_no_explanation(
+    tmp_path: Path,
+) -> None:
+    """全frameが説明価値なしの場合に代替frameが強制採用されないこと。
+
+    Arrange:
+        - Primaryと二つの代替frameがすべてExplanation Valueなしで用意される
+    Act:
+        - Combat Representative Fallbackが実行される
+    Assert:
+        - Primary Representative Frameが維持されること
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    request, original_annotations = _combat_fallback_fixture()
+    annotations = (
+        original_annotations[0],
+        replace(original_annotations[1], explanation_value="none"),
+        replace(original_annotations[2], explanation_value="none"),
+    )
+
+    # Act
+    result = VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(_catalog(), annotations),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=(request.frame_candidates[0],),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=FakeModelRuntime("vision-model").resolve_models(configuration),
+    )
+
+    # Assert
+    assert result.annotations == (annotations[0],)
 
 
 def test_matching_fingerprints_reuse_catalog_and_each_annotation(
@@ -517,6 +1005,77 @@ def test_warm_vision_progress_reports_reuse_without_external_work(
     )
 
 
+def test_warm_combat_fallback_reports_each_frame_reuse_without_external_work(
+    tmp_path: Path,
+) -> None:
+    """warm fallbackの各frameが個別Stage reuseとして通知されること。
+
+    Arrange:
+        - Catalog、Primary、二つのfallback frameがCompleted Stageとして確定済みである
+    Act:
+        - 同じ入力がProgress Tracker付きで再実行される
+    Assert:
+        - 四つのCompleted Stageがhitとして通知されること
+        - 外部Ollama処理が開始されないこと
+    """
+    # Arrange
+    video_set, configuration = _video_set_and_configuration(tmp_path)
+    request, annotations = _combat_fallback_fixture()
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+    VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(_catalog(), annotations),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=(request.frame_candidates[0],),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=models,
+    )
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer, clock=lambda: 10.0)
+    progress.start_run()
+
+    # Act
+    result = VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(
+            _catalog(),
+            annotations,
+            reject_all_calls=True,
+        ),
+        observer,
+        progress=progress,
+    ).process(
+        video_set=video_set,
+        representatives=(request.frame_candidates[0],),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=(request,),
+        configuration=configuration,
+        resolved_models=models,
+    )
+
+    # Assert
+    assert len(progress.completed_stage_events) == 4
+    assert (
+        tuple(
+            (
+                event.cache_hit_count,
+                event.reuse_count,
+                event.cache_miss_count,
+                event.recompute_count,
+            )
+            for event in observer.progress_events
+            if event.kind == "cache"
+        )
+        == ((1, 1, 0, 0),) * 4
+    )
+    assert all(item.cache_hit for item in result.annotation_diagnostics)
+    assert not any(
+        event.kind == "external_work_started" for event in observer.progress_events
+    )
+
+
 def test_vision_processor_records_annotation_duration_for_eta(
     tmp_path: Path,
 ) -> None:
@@ -719,6 +1278,72 @@ def _requests() -> tuple[CandidateAnnotationRequest, ...]:
             video_set_progress=Fraction(3, 4),
             selection_intent="ブログ本文を説明できる画像を選ぶ",
             cue_selection_policy_version="nearby-context-v1",
+        ),
+    )
+
+
+def _combat_fallback_fixture() -> tuple[
+    CandidateAnnotationRequest,
+    tuple[CandidateAnnotation, ...],
+]:
+    """独立fallback評価用の一Momentとframe別Annotationを構築する。"""
+    primary = FrameCandidate("frame-primary", b"primary")
+    first_fallback = FrameCandidate("frame-fallback-low", b"fallback-low")
+    best_fallback = FrameCandidate("frame-fallback-high", b"fallback-high")
+    moment = CandidateMoment(
+        identifier="mom_" + "d" * 64,
+        source_pts=10,
+        anchor_time=Fraction(10),
+        timeline_segment_id="seg_" + "d" * 64,
+        evidence=("scene",),
+        proxy_quality_score=0.9,
+        frame_candidate_ids=(
+            primary.identifier,
+            first_fallback.identifier,
+            best_fallback.identifier,
+        ),
+    )
+    request = CandidateAnnotationRequest(
+        moment=moment,
+        frame_candidates=(primary, first_fallback, best_fallback),
+        context_cues=(),
+        video_set_progress=Fraction(1, 2),
+        selection_intent="ブログ本文を説明できる画像を選ぶ",
+        cue_selection_policy_version="nearby-context-v1",
+    )
+    return (
+        request,
+        (
+            CandidateAnnotation(
+                candidate=primary,
+                summary="攻撃effectで敵が見えない戦闘",
+                candidate_moment_id=moment.identifier,
+                scene_slug="exploration",
+                blog_image_type="normal_gameplay",
+                explanation_value="none",
+                combat_encounter_kind="ordinary",
+                combat_encounter_basis="ordinary_opponent_presentation",
+            ),
+            CandidateAnnotation(
+                candidate=first_fallback,
+                summary="敵が見える通常戦闘",
+                candidate_moment_id=moment.identifier,
+                scene_slug="exploration",
+                blog_image_type="normal_gameplay",
+                explanation_value="low",
+                combat_encounter_kind="ordinary",
+                combat_encounter_basis="ordinary_opponent_presentation",
+            ),
+            CandidateAnnotation(
+                candidate=best_fallback,
+                summary="敵と主人公が明瞭な通常戦闘",
+                candidate_moment_id=moment.identifier,
+                scene_slug="exploration",
+                blog_image_type="normal_gameplay",
+                explanation_value="high",
+                combat_encounter_kind="ordinary",
+                combat_encounter_basis="ordinary_opponent_presentation",
+            ),
         ),
     )
 

@@ -21,8 +21,8 @@ class VisionStageResult:
     def __post_init__(self) -> None:
         """Annotation、診断、Completed Stageの件数を検証する。"""
         if (
-            len(self.annotations) != len(self.annotation_diagnostics)
-            or len(self.completed_stages) != len(self.annotations) + 1
+            len(self.annotations) > len(self.annotation_diagnostics)
+            or len(self.completed_stages) != len(self.annotation_diagnostics) + 1
         ):
             msg = "Vision Stage resultの件数が一致しません"
             raise ValueError(msg)

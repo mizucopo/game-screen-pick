@@ -12,14 +12,14 @@
 - 決定的なlocal順を持つSelection ShortlistのCandidate Annotation request
 - Effective Configurationとrun中にfreeze済みのResolved Models
 
-Scene Catalog Representative Setは要求画像枚数から独立します。Selection Shortlistは決定的selectorが不足時に追加batchを受けて拡張し、batch sizeと実model capacityの受け入れはIssue #189が所有します。各Candidate Momentの1〜3件のFrame Candidateは、Neutral Image AnalysisのQuality ScoreとFrame Candidate IDで一つのRepresentative Frameへ先に確定します。複数Momentが同じRepresentative Frameを共有する場合は、品質と見た目の多様性で決定したshortlist順の最初のMomentだけを注釈対象にし、後続の一意なRepresentative Frameを持つMomentは保持します。Candidate Annotation requestにはその1件、versioned policyで選ばれた近傍Context Cue、Video Set Progress、Selection Intentを明示し、VisionRuntimeが暗黙に候補やCueを削りません。
+Scene Catalog Representative Setは要求画像枚数から独立します。Selection Shortlistは決定的selectorが不足時に追加batchを受けて拡張し、batch sizeと実model capacityの受け入れはIssue #189が所有します。各Candidate Momentの1〜3件のFrame Candidateは、Neutral Image AnalysisのQuality ScoreとFrame Candidate IDの順でPrimary Representative Frameを先頭に保持します。複数Momentが同じPrimary Representative Frameを共有する場合は、品質と見た目の多様性で決定したshortlist順の最初のMomentだけを注釈対象にし、後続の一意なPrimaryを持つMomentは保持します。Candidate Annotation requestには同じMomentの候補最大3件、versioned policyで選ばれた近傍Context Cue、Video Set Progress、Selection Intentを明示しますが、VisionRuntimeへは常に一枚ずつ渡します。
 
 ## Ollama operation
 
 Ollamaの`/api/chat`を次の8種類だけに使います。
 
 1. `build-scene-catalog`: Video Set共有の3〜8 sceneを一回生成します。各sceneにScene Kind（`combat`、`exploration`、`interface`、`event`、`other`）を付けます。`other`を必ず1件含め、そのScene Kindは`other`、Scene Selection Roleは`ordinary`です。
-2. `annotate-candidate`: Selection ShortlistのCandidate Momentごとに独立して実行し、先に確定した一つのRepresentative Frameの意味観測を主推論で返します。画像は対応するFrame Candidate IDとその画像だけに対する直接観測条件を持つmessageで送り、同じMoment内で切り替わった別画面の内容を混ぜません。総合分類の指示は画像messageの後に一度だけ送ります。
+2. `annotate-candidate`: 最初にPrimary Representative Frame一枚だけを別request・別conversation contextで評価します。成功結果が戦闘を示し、かつExplanation Value `none`の場合だけ、同じCandidate Momentの残り最大2枚も一枚ずつ独立評価します。代替requestは`ollama.max_parallel_requests`を上限に並列実行できますが、responseやconversationを共有しません。全frameの成功結果を入力順へ戻してから、Explanation Value、画面内容、敵と主対象の視認性、一時的遮蔽、Neutral品質、Frame Candidate IDでRepresentative Frameをlocalに確定します。全frameが`none`ならPrimaryを維持し、代替を強制採用しません。
 3. 戦闘有無専用確認: 主推論が掲載価値ありの戦闘とした候補には必ず実行し、掲載価値ありの非戦闘としたScene Kind `combat`のgameplay、または`recurring_gameplay`のactionにも条件付きで実行します。敵・boss固有のstatus UIまたは対戦する本体から戦闘の有無を確認し、Combat Encounter KindとCombat Encounter Basisを整合する組で返します。主推論の戦闘種別はそのまま採用しません。敵名やHP・status barだけでは`ordinary`にも`major`にもせず、両方の積極的根拠がなければ`uncertain`にします。Scene Kind `combat`では戦闘を確認できなければ掲載価値を保持しません。それ以外の`recurring_gameplay`では戦闘可視性専用確認との交差確認へ進みます。
 4. 戦闘有無の独立再確認: 最初の戦闘有無専用確認が非戦闘を返した場合だけ、先の回答を参照しない別promptで同じ画素を観測し直します。二回とも非戦闘だったScene Kind `combat`のgameplayは掲載価値を下げます。それ以外の`recurring_gameplay` actionは、戦闘の見落としを検出するため戦闘可視性専用確認へ進みます。
 5. 戦闘可視性専用確認: 戦闘有無専用確認で戦闘と確認された場合、または同確認の対象になった`recurring_gameplay`のactionに実行します。同じRepresentative Frame一枚だけを入力し、音声、Context Cue、前後場面、主推論の説明文を渡しません。戦闘と確認済みの場合は不明瞭なら直ちに掲載価値を下げます。
@@ -60,7 +60,7 @@ OllamaのCandidate Annotation responseはframeごとに次の意味情報だけ�
 - 一時的な遮蔽
 - Spoiler Riskと引用を含まないevidence summary
 
-response全体にはContext Cue Relevanceと参照Cue IDも含めます。Candidate Annotation artifactはlocalに決めたRepresentative Frame、Blog Image Type、annotation summary、Representative Frameの選択理由を従来どおり保持します。
+response全体にはContext Cue Relevanceと参照Cue IDも含めます。Candidate Annotation artifactはlocalに決めたRepresentative Frame、Blog Image Type、annotation summary、Representative Frameの選択理由に加え、fallback比較用の画面内容、敵と主対象の視認性、一時的遮蔽を保持します。この追加fieldがない既存の一枚Primary artifactも同じsemantic fingerprintで復元でき、Primaryが`none`なら新しい代替frameだけを評価します。
 
 Quality Score、model confidence、final score、soft coverage、eligible/selected flag、生成した逐語的画面テキスト、reasoning traceはschemaに含めません。最終採否は[Video Set最終選定Stage](selection-stage.md)の決定的selectorが所有し、Explanation Valueが`none`の候補を要求枚数の穴埋めに使いません。
 
@@ -84,15 +84,15 @@ Candidate Annotation主推論のresponse全体がschemaに適合し、Context Cu
 
 主推論が戦闘と誤判定した地図または`cinematic` sceneも、Combat Encounter VerificationとCombat Visibility Verificationが非戦闘として一致した後に掲載境界専用確認を実行し、主判定による監査の迂回を許しません。
 
-Cue逐語一致は再推論へ依存せずfield単位で決定的に安全化し、diagnosticsへ`candidate_annotation_verbatim_context_redacted`を記録します。公開前には同じ安全化をVideo Set全体のContext Cueに対して再適用し、Candidateに未提示のCueと偶然一致する生成文もreportへ公開しません。model出力が存在しないtransport retryでは元のpromptを変更しません。Representative Frame、Context Cue、Catalogを削る、別frameへ差し替える、`other`へfallbackする、失敗したCandidateを黙って除外する処理は行いません。model不在と408/429以外のHTTP 4xxは即時fatalです。
+Cue逐語一致は再推論へ依存せずfield単位で決定的に安全化し、diagnosticsへ`candidate_annotation_verbatim_context_redacted`を記録します。公開前には同じ安全化をVideo Set全体のContext Cueに対して再適用し、Candidateに未提示のCueと偶然一致する生成文もreportへ公開しません。model出力が存在しないtransport retryでは元のpromptを変更しません。Combat Representative Fallback以外でRepresentative Frameを差し替える、別Candidate Momentのframeや`other`へfallbackする、失敗したCandidateを黙って除外する処理は行いません。model不在と408/429以外のHTTP 4xxは即時fatalです。
 
 ## Completed Stage cache
 
-Scene CatalogはVideo Setごとに一つ、Candidate AnnotationはCandidate Momentごとに一つのatomic Completed Stageです。外部model request自体より細かい安全なcheckpointは作りません。同じStage Fingerprintの推論はfingerprint lock内で一度だけ実行し、並行workerも最初に確定したartifactを復元します。Vision batch境界とpublisher開始時にはInput Lock内のpath・size・`mtime_ns`を検査し、snapshot一致を通るまでoutputを公開しません。一つのAnnotationが最終失敗した場合、最終選定とoutput公開へ進みませんが、それ以前に完了したCatalogとAnnotationは次回runで再利用されます。Ollama runtimeまたはrole固有model identityの変更は該当するVision Stageとdownstreamだけを失効させ、Video Identity、Video Stage、STT checkpointを削除しません。
+Scene CatalogはVideo Setごとに一つ、Candidate Annotationは評価したFrame Candidate一枚ごとに一つのatomic Completed Stageです。Primaryの成功結果がfallback条件を満たした場合だけ、同じMomentの代替Stageを最大2件追加します。同じStage Fingerprintの推論はfingerprint lock内で一度だけ実行し、並行workerも最初に確定したartifactを復元します。並列評価の一部が失敗しても成功済み兄弟Stageを保持し、Candidate Moment全体と最終選定は確定しません。再開時は失敗・未完了frameだけを評価し、全結果がそろってから同じ安定順でRepresentative Frameを比較します。Vision batch境界とpublisher開始時にはInput Lock内のpath・size・`mtime_ns`を検査し、snapshot一致を通るまでoutputを公開しません。Ollama runtimeまたはrole固有model identityの変更は該当するVision Stageとdownstreamだけを失効させ、Video Identity、Video Stage、STT checkpointを削除しません。
 
 `combat_encounter_basis`を持たない旧Candidate Annotation artifactは現行schemaとして復元せず、該当Annotationとdownstreamだけを再計算します。Video Identity、Video Stage、Context Cue、無関係なmodel Stageは再利用し、動画のwhole-file SHA-256やframe抽出をやり直しません。
 
-fingerprintには、Representative Frame IDと画像SHA-256、Context Cue ID・正確な範囲・本文SHA-256、Cue選択policy、Scene Catalog fingerprint、Video Set Progress、Selection Intent、Resolved Model Identity、Ollama runtime identity、generation option、主推論・Candidate Annotation Relationship Repair・戦闘有無専用確認・戦闘有無独立再確認・戦闘可視性専用確認・戦闘可視性独立再確認・戦闘構図外周strip監査・掲載境界専用確認それぞれのprompt/schema/stage version、Relationship Repairの`num_predict`とSpoiler Evidence最大長、外周strip生成version、上下黒帯検知version、retry versionを含めます。現行より古いversioned Candidate Annotation Stage Contractをmanifestから認識したcache entryはcache準備時に削除し、現行versionの設定違いまたは認識できないentryは削除しません。target acceptanceでは旧artifactを正式evidenceへ流用せず、suite resetによって全cacheを削除してからcold実行します。
+一枚ごとのfingerprintには、そのFrame Candidate IDと画像SHA-256、Context Cue ID・正確な範囲・本文SHA-256、Cue選択policy、Scene Catalog fingerprint、Video Set Progress、Selection Intent、Resolved Model Identity、Ollama runtime identity、generation option、主推論・Candidate Annotation Relationship Repair・戦闘有無専用確認・戦闘有無独立再確認・戦闘可視性専用確認・戦闘可視性独立再確認・戦闘構図外周strip監査・掲載境界専用確認それぞれのprompt/schema/stage version、Relationship Repairの`num_predict`とSpoiler Evidence最大長、外周strip生成version、上下黒帯検知version、retry versionを含めます。Combat Representative Fallbackの集約policyと`ollama.max_parallel_requests`は一枚の意味結果を変えないため、このfingerprintへ含めません。policy versionはFinal Selectionの事前fingerprintへ含め、policy変更時も有効な一枚annotationを再利用します。現行より古いversioned Candidate Annotation Stage Contractをmanifestから認識したcache entryはcache準備時に削除し、現行versionの設定違いまたは認識できないentryは削除しません。target acceptanceでは旧artifactを正式evidenceへ流用せず、suite resetによって全cacheを削除してからcold実行します。
 
 次の値はmodel contentを変えないため含めません。
 
@@ -110,4 +110,4 @@ cache artifactには検証済みCatalog／Annotationと、canonical形式を検�
 uv run task test
 ```
 
-fake VisionRuntime goldenで推論前後のmodel/runtime identity変更、schema invalid、domain invalid、transport failure、打ち切り応答、retry成功・失敗、関係だけが不正なCandidate Annotationの従属field限定修復・凍結field保持・修復failure code、戦闘有無専用確認・戦闘有無独立再確認・戦闘可視性専用確認・戦闘可視性独立再確認・戦闘構図外周strip監査・掲載境界専用確認と集約attempt数、秒数／HTTP-dateのRetry-After、Context Cue有無、Cue逐語一致fieldの決定的な安全化、未安全化raw textのcache拒否、canonical diagnostic identity、major spoiler evidence、warm cache、同一fingerprintの並行処理、途中失敗後のMoment単位再開を検証します。
+fake VisionRuntime goldenで推論前後のmodel/runtime identity変更、schema invalid、domain invalid、transport failure、打ち切り応答、retry成功・失敗、関係だけが不正なCandidate Annotationの従属field限定修復・凍結field保持・修復failure code、戦闘有無専用確認・戦闘有無独立再確認・戦闘可視性専用確認・戦闘可視性独立再確認・戦闘構図外周strip監査・掲載境界専用確認と集約attempt数、秒数／HTTP-dateのRetry-After、Context Cue有無、Cue逐語一致fieldの決定的な安全化、未安全化raw textのcache拒否、canonical diagnostic identity、major spoiler evidence、warm cache、同一fingerprintの並行処理、Combat Representative Fallbackの条件・独立並列評価・決定的比較・全`none`境界・一部失敗後のframe単位再開・既存Primary cache再利用を検証します。

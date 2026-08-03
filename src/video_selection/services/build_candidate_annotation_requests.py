@@ -31,7 +31,7 @@ def build_candidate_annotation_requests(
     *,
     selection_intent: str,
 ) -> tuple[CandidateAnnotationRequest, ...]:
-    """各Momentを一つのlocal代表へ絞りvisual diversity順に並べる。"""
+    """各MomentのPrimaryと代替候補を保持してvisual diversity順に並べる。"""
     if not selection_intent.strip():
         msg = "Selection shortlistの意図が不正です"
         raise ValueError(msg)
@@ -62,10 +62,11 @@ def build_candidate_annotation_requests(
             if not 0 <= moment.anchor_time < duration:
                 msg = "Candidate MomentがVideo Durationの範囲外です"
                 raise ValueError(msg)
-            representative = _local_representative(frames)
+            ordered_frames = _ordered_local_frames(frames)
+            representative = ordered_frames[0]
             normalized_moment = replace(
                 moment,
-                frame_candidate_ids=(representative.identifier,),
+                frame_candidate_ids=tuple(frame.identifier for frame in ordered_frames),
             )
             progress = (elapsed + moment.anchor_time) / total_duration
             candidates.append(
@@ -73,7 +74,7 @@ def build_candidate_annotation_requests(
                     video_order,
                     result,
                     normalized_moment,
-                    (representative,),
+                    ordered_frames,
                     representative,
                     progress,
                 )
@@ -126,7 +127,14 @@ def _local_representative(
     frames: tuple[FrameCandidate, ...],
 ) -> FrameCandidate:
     """最高Quality Scoreを選び同点をFrame Candidate IDで固定する。"""
-    return min(frames, key=_representative_key)
+    return _ordered_local_frames(frames)[0]
+
+
+def _ordered_local_frames(
+    frames: tuple[FrameCandidate, ...],
+) -> tuple[FrameCandidate, ...]:
+    """Primaryを先頭に同一Momentのfallback候補を最大3件返す。"""
+    return tuple(sorted(frames, key=_representative_key)[:3])
 
 
 def _representative_key(frame: FrameCandidate) -> tuple[float, str]:

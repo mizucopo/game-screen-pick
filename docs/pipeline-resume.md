@@ -48,10 +48,17 @@ flowchart TD
     Q --> R
 
     M --> S[Video Setにつき一つのScene Catalog]
-    S --> T[Candidate MomentごとのAnnotation]
+    S --> T[Candidate MomentのPrimaryを一枚でAnnotation]
     R --> T
     M --> T
-    T --> U[決定的なFinal Selection]
+    T --> TA{戦闘かつExplanation Value noneで<br/>同じMomentに代替frameがある?}
+    TA -- Yes --> TB[残り最大2枚を別requestでbounded並列評価]
+    TA -- No --> TC[PrimaryをRepresentativeに確定]
+    TB --> TD{全frameの推論が成功?}
+    TD -- No --> TE[成功済みframeを保持してrun失敗]
+    TD -- Yes --> TF[安定順でRepresentativeを決定]
+    TC --> U[決定的なFinal Selection]
+    TF --> U
     U --> V[選択画像1枚ごとの元frame抽出・固定WebP]
     V --> W[全画像・JSON・Markdownをstagingで検証]
     W --> X{同じ意味結果の<br/>完成済みOutputがある?}
@@ -60,9 +67,10 @@ flowchart TD
 ```
 
 Embedded SubtitleとSTTを強制併用する設定では、両方のbranchを処理します。
-Scene CatalogはFrame Candidate代表画像に依存し、Candidate AnnotationはCatalog、
-Candidate、必要なContext Cueへ依存します。したがってSTT変更はCatalogを失効させず、
-Annotation以降だけへ伝播します。
+Scene CatalogはPrimary Representative Frameに依存し、Candidate AnnotationはCatalog、
+一枚のFrame Candidate、必要なContext Cueへ依存します。したがってSTT変更はCatalogを
+失効させず、Annotation以降だけへ伝播します。Combat Representative Fallbackの兄弟frameは
+それぞれ独立したCompleted Stageであり、並列完了順ではなく元のframe順で集約します。
 
 Video Scanはcold runと再開runの両方で同じ15分固定partitionを使います。streamに
 `duration_ts`がない場合だけ、ffprobeのcontainer durationを有理数としてstream tickへ
@@ -142,13 +150,14 @@ Stageもartifactとmanifestを同じ方法で検証します。親だけが欠�
 | PCM Extraction | 固定sample range 1件 | 抽出中だったrange |
 | Speech Recognition | overlapを含むPCM chunk 1件 | 推論中だったchunk |
 | Scene Catalog | Video Setにつき1 model request | 実行中だったrequest |
-| Candidate Annotation | Candidate Moment 1件 | 実行中だったMoment |
+| Candidate Annotation | 評価対象のFrame Candidate 1枚 | 推論中だった1枚。確定済み兄弟frameは保持 |
 | Final Selection | Video Setにつき1件 | 実行中だった選定 |
 | Selected Image | 選択画像1枚 | 抽出・encode中だった1枚 |
 | Canonical Publication | 検証済みOutput Folder全体 | rename前ならstaging再構築。rename後なら損失なし |
 | Target Acceptance計測 | Acceptance Run Attempt | 未確定resource sample。pipeline checkpointは保持 |
 
-Scene CatalogとFinal Selectionは一回のatomic operation自体が最小単位です。外部model
+Scene CatalogとFinal Selectionは一回のatomic operation自体が最小単位です。Candidate
+Annotationも一枚の外部model requestと条件付き専用確認をまとめたCompleted Stageです。
 requestの途中tokenやpartial responseは再利用しません。
 
 ## 依存変更時の局所的な再計算

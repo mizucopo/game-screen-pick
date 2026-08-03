@@ -64,6 +64,14 @@ Effective Configurationは設定項目ごとに次の順で解決します。
 
 `selection.image_count`の10枚下限は、通常戦闘とイベントの条件付き最低coverageを有効にしたうえで残りを動的配分できる公開境界です。CLIの`--image-count`だけでなく、明示TOMLを含めて優先順位を解決した値へ適用します。有効候補不足時の出力枚数を10枚へ水増しする規則ではなく、その場合はSelection Shortfallになります。
 
+## Ollamaの独立並列評価
+
+`ollama.max_parallel_requests`は、一つのOllama requestへ複数画像をまとめる設定ではありません。Candidate Annotationは常に画像一枚ごとの別request・別conversation contextです。戦闘を示すPrimary Representative FrameがExplanation Value `none`になった場合だけ、同じCandidate Moment内の残り最大2枚をこの値まで並列評価します。Scene Catalog、fallbackを必要としないCandidate Annotation、STTとの同時実行数を増やす設定ではありません。
+
+組み込み既定値`1`は、modelやVRAM容量が不明な環境で安全側に保つ値です。supported Windows 11 / WSL2 / RTX 5090 target acceptanceでは、privateな通常設定へ`max_parallel_requests = 2`を明示します。設定を増やしてもOllama server側のcapacityを超えるrequestは速くならず、VRAM使用量が増える可能性があります。
+
+一部の独立requestだけが失敗した場合はCandidate Moment全体を確定しません。成功したframeのCompleted Stageは保存し、同じcommandの再実行時に失敗・未完了frameだけを評価してから全結果を比較します。worker数と完了順はStage FingerprintやRepresentative Frameの比較順へ含めません。
+
 ## Video Scanの動的並列制御
 
 `video_scan.workers = "auto"`が既定です。CPU decodeではlogical CPU 8個につき1 workerを上限とする保守的な初期値を使います。NVDECではCPU・memory・NVIDIA Decoder・GPU・VRAM・diskの初期sampleにpressureがあれば1 workerから開始し、正常時は同じ保守値から開始します。rolling metricに余力がある場合だけlogical CPU 4個につき1 workerまで増やします。既定の`auto_max_workers = 6`と24 logical CPUの組み合わせでは最大6 workerです。

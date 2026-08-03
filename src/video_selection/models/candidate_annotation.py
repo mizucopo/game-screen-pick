@@ -2,7 +2,7 @@
 
 import hashlib
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, cast, get_args
 
 from .combat_encounter_basis import (
@@ -14,6 +14,7 @@ from .combat_encounter_basis import (
 from .combat_encounter_kind import COMBAT_ENCOUNTER_KINDS, CombatEncounterKind
 from .frame_candidate import FrameCandidate
 from .report_value import string_looks_private
+from .representative_frame_evidence import RepresentativeFrameEvidence
 
 BlogImageType = Literal["normal_gameplay", "event", "menu", "title", "other"]
 ExplanationValue = Literal["none", "low", "medium", "high"]
@@ -151,6 +152,11 @@ class CandidateAnnotation:
     spoiler_evidence: str = ""
     combat_encounter_kind: CombatEncounterKind = "not_combat"
     combat_encounter_basis: CombatEncounterBasis = "none"
+    representative_frame_evidence: RepresentativeFrameEvidence | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """domain enum、所属ID、evidenceの整合を検証する。"""
@@ -176,6 +182,11 @@ class CandidateAnnotation:
             or self.spoiler_risk not in SPOILER_RISKS
             or self.combat_encounter_kind not in COMBAT_ENCOUNTER_KINDS
             or self.combat_encounter_basis not in COMBAT_ENCOUNTER_BASES
+            or self.representative_frame_evidence is not None
+            and not isinstance(
+                self.representative_frame_evidence,
+                RepresentativeFrameEvidence,
+            )
             or not combat_encounter_classification_is_valid(
                 self.combat_encounter_kind,
                 self.combat_encounter_basis,

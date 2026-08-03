@@ -20,6 +20,13 @@ from ..models.combat_encounter_basis import (
     combat_encounter_classification_is_valid,
 )
 from ..models.combat_encounter_kind import COMBAT_ENCOUNTER_KINDS
+from ..models.representative_frame_evidence import (
+    CANDIDATE_FRAME_CONTENT_KINDS,
+    CHARACTER_BODY_VISIBILITIES,
+    PRIMARY_SUBJECT_VISIBILITIES,
+    TRANSIENT_OBSTRUCTIONS,
+    RepresentativeFrameEvidence,
+)
 from ..models.scene_catalog import SceneCatalog
 from ..models.scene_catalog_entry import (
     SCENE_SELECTION_ROLES,
@@ -64,24 +71,33 @@ def serialize_candidate_annotation(
     diagnostics: VisionInferenceDiagnostics,
 ) -> dict[str, object]:
     """model応答ではなく検証済みannotationとsafe diagnosticsを保存する。"""
+    annotation_value: dict[str, object] = {
+        "candidate_moment_id": annotation.candidate_moment_id,
+        "representative_frame_id": annotation.candidate.identifier,
+        "scene_slug": annotation.scene_slug,
+        "blog_image_type": annotation.blog_image_type,
+        "explanation_value": annotation.explanation_value,
+        "annotation_summary": annotation.summary,
+        "frame_choice_reason": annotation.frame_choice_reason,
+        "screen_text_kind": annotation.screen_text_kind,
+        "context_relevance": annotation.context_relevance,
+        "supporting_context_cue_ids": list(annotation.supporting_context_cue_ids),
+        "spoiler_risk": annotation.spoiler_risk,
+        "spoiler_evidence": annotation.spoiler_evidence,
+        "combat_encounter_kind": annotation.combat_encounter_kind,
+        "combat_encounter_basis": annotation.combat_encounter_basis,
+    }
+    if annotation.representative_frame_evidence is not None:
+        evidence = annotation.representative_frame_evidence
+        annotation_value["representative_frame_evidence"] = {
+            "content_kind": evidence.content_kind,
+            "primary_subject_visibility": evidence.primary_subject_visibility,
+            "opponent_body_visibility": evidence.opponent_body_visibility,
+            "transient_obstruction": evidence.transient_obstruction,
+        }
     return {
         "schema": _ANNOTATION_SCHEMA,
-        "annotation": {
-            "candidate_moment_id": annotation.candidate_moment_id,
-            "representative_frame_id": annotation.candidate.identifier,
-            "scene_slug": annotation.scene_slug,
-            "blog_image_type": annotation.blog_image_type,
-            "explanation_value": annotation.explanation_value,
-            "annotation_summary": annotation.summary,
-            "frame_choice_reason": annotation.frame_choice_reason,
-            "screen_text_kind": annotation.screen_text_kind,
-            "context_relevance": annotation.context_relevance,
-            "supporting_context_cue_ids": list(annotation.supporting_context_cue_ids),
-            "spoiler_risk": annotation.spoiler_risk,
-            "spoiler_evidence": annotation.spoiler_evidence,
-            "combat_encounter_kind": annotation.combat_encounter_kind,
-            "combat_encounter_basis": annotation.combat_encounter_basis,
-        },
+        "annotation": annotation_value,
         "diagnostics": _diagnostics_value(diagnostics),
     }
 
@@ -114,6 +130,9 @@ def restore_candidate_annotation(
     spoiler_evidence = annotation.get("spoiler_evidence")
     combat_encounter_kind = annotation.get("combat_encounter_kind")
     combat_encounter_basis = annotation.get("combat_encounter_basis")
+    representative_frame_evidence = _restore_representative_frame_evidence(
+        annotation.get("representative_frame_evidence")
+    )
     frames = {item.identifier: item for item in request.frame_candidates}
     available_cue_ids = tuple(item.identifier for item in request.context_cues)
     if (
@@ -178,9 +197,42 @@ def restore_candidate_annotation(
         spoiler_evidence=spoiler_evidence,
         combat_encounter_kind=typed_combat_encounter_kind,
         combat_encounter_basis=typed_combat_encounter_basis,
+        representative_frame_evidence=representative_frame_evidence,
     )
     diagnostics = _restore_diagnostics(artifact.get("diagnostics"))
     return restored, replace(diagnostics, cache_hit=True)
+
+
+def _restore_representative_frame_evidence(
+    value: object,
+) -> RepresentativeFrameEvidence | None:
+    """追加fieldがない旧artifactも受理して比較観測を復元する。"""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "content_kind",
+        "primary_subject_visibility",
+        "opponent_body_visibility",
+        "transient_obstruction",
+    }:
+        raise ValueError("Candidate Annotation artifact evidenceが不正です")
+    content_kind = value.get("content_kind")
+    primary_subject_visibility = value.get("primary_subject_visibility")
+    opponent_body_visibility = value.get("opponent_body_visibility")
+    transient_obstruction = value.get("transient_obstruction")
+    if (
+        content_kind not in CANDIDATE_FRAME_CONTENT_KINDS
+        or primary_subject_visibility not in PRIMARY_SUBJECT_VISIBILITIES
+        or opponent_body_visibility not in CHARACTER_BODY_VISIBILITIES
+        or transient_obstruction not in TRANSIENT_OBSTRUCTIONS
+    ):
+        raise ValueError("Candidate Annotation artifact evidenceが不正です")
+    return RepresentativeFrameEvidence(
+        content_kind=content_kind,
+        primary_subject_visibility=primary_subject_visibility,
+        opponent_body_visibility=opponent_body_visibility,
+        transient_obstruction=transient_obstruction,
+    )
 
 
 def _scene_value(scene: SceneCatalogEntry) -> dict[str, str]:

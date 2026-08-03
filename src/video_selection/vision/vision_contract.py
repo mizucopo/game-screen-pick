@@ -25,6 +25,7 @@ SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v7"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v17"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v12"
 CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v32"
+COMBAT_REPRESENTATIVE_FALLBACK_POLICY_VERSION = "combat-representative-fallback-v1"
 CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION = (
     "candidate-annotation-relationship-repair-prompt-v1"
 )

@@ -22,7 +22,9 @@ def build_real_application(
     progress: RunProgressTracker,
 ) -> VideoSelectionApplication:
     """FFmpeg、faster-whisper、Ollamaを共有GPU coordinatorへ接続する。"""
-    gpu_coordinator = GpuWorkCoordinator()
+    gpu_coordinator = GpuWorkCoordinator(
+        max_parallel_requests=configuration.ollama_max_parallel_requests
+    )
     media_runtime = FfmpegMediaRuntime()
     vision_runtime = OllamaVisionRuntime(
         configuration.ollama_host,

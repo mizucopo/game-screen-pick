@@ -1950,6 +1950,7 @@ def _parse_candidate_annotation(
                 spoiler_evidence=spoiler_evidence,
                 combat_encounter_kind=selected.combat_encounter_kind,
                 combat_encounter_basis=selected.combat_encounter_basis,
+                representative_frame_evidence=selected.representative_frame_evidence,
             ),
             free_text_redacted,
             requires_dialogue_verification,
