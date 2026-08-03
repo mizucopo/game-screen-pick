@@ -159,3 +159,36 @@ def test_per_moment_deduplication_and_zero_frame_moment_are_reported() -> None:
     assert extraction.deduplicated_frame_count == 1
     assert extraction.zero_frame_moment_count == 1
     assert extraction.reject_breakdown[ContentRejectReason.BLACKOUT.value] == 1
+
+
+def test_frame_candidates_cover_the_refinement_window_over_clustered_quality() -> None:
+    """高品質frameが一時点へ集中しても時間的に分散して選抜されること。
+
+    Arrange:
+        - 中央付近の3frameだけが品質と視覚差で優位になるnative frame列が用意される
+    Act:
+        - 2秒未満のRefinement Windowから最大3frameが選抜される
+    Assert:
+        - 最良品質frameを保持しながらwindow前後の有効frameも選抜されること
+    """
+    # Arrange
+    shifts = (0, 4, 8, 1, 5, 9, 2, 6, 10, 3)
+    frames = tuple(
+        _detailed_frame(source_pts, shift)
+        for source_pts, shift in enumerate(shifts, start=10)
+    )
+    moment = _moment("6", Fraction(3, 2))
+
+    # Act
+    extraction = refine_candidate_moments(
+        video_fingerprint="c" * 64,
+        timeline=_timeline(),
+        moments=(moment,),
+        frames=frames,
+        refinement_radius_seconds=0.5,
+        max_frame_candidates=3,
+    )
+
+    # Assert
+    selected_pts = tuple(candidate.source_pts for candidate in extraction.candidates)
+    assert selected_pts == (10, 15, 19)

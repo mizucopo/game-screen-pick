@@ -339,6 +339,13 @@ def _select_diverse_frames(
         chosen = max(
             remaining,
             key=lambda item: (
+                min(
+                    abs(
+                        _video_time(item[0], timeline)
+                        - _video_time(existing[0], timeline)
+                    )
+                    for existing in selected
+                ),
                 min(_visual_distance(item[1], existing[1]) for existing in selected),
                 item[1].quality_score,
                 -abs(_video_time(item[0], timeline) - moment.anchor_time),

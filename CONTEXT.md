@@ -281,7 +281,7 @@ Candidate Annotationとcache再利用のためにFrame Candidateごとに永続�
 _Avoid_: Heartbeat Proxy, original-resolution frame, selected output
 
 **Frame Refinement**:
-Candidate Momentのanchor前後にあるnative frameを対象に、Content Reject Reason判定、Source-Local Frame Deduplication、最大Frame Candidate数への選抜を行うVideo Stage処理。重なるrefinement windowは一つのRefinement Window Groupとして扱い、最初に最もQuality Scoreが高いframeを選び、残りは選択済みframeとの最小視覚距離、Quality Score、anchorへの近さ、早いVideo Timeの順で最大件数まで選ぶ。Candidate Momentから参照する最終順序はVideo Time順とする。
+Candidate Momentのanchor前後にあるnative frameを対象に、Content Reject Reason判定、Source-Local Frame Deduplication、最大Frame Candidate数への選抜を行うVideo Stage処理。重なるrefinement windowは一つのRefinement Window Groupとして扱い、最初に最もQuality Scoreが高いframeを選び、残りは選択済みframeとの最小時間距離、最小視覚距離、Quality Score、anchorへの近さ、早いVideo Timeの順で最大件数まで選ぶ。高Qualityの一時的なeffectが一時点へ集中してもfallback候補を同じ瞬間だけで埋めず、Refinement Window内の有効frameへ時間的に分散させる。Candidate Momentから参照する最終順序はVideo Time順とする。
 _Avoid_: fixed-fps conversion, Candidate Annotation, Representative Frame selection
 
 **Refinement Window Group**:

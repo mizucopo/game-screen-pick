@@ -21,7 +21,7 @@ Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行�
    - Moment前後のnative frameだけをrange scanで取り出します。独立rangeは入力順を保ったまま、logical CPU数に応じて最大4 workerで並列decodeします。
    - 同時に保持するdecode結果はworker数以下へ制限します。重なるMoment windowを一つのRefinement Window Groupとして順次処理し、選抜proxyを書いた時点でそのgroupのRGB frameを解放します。
    - 各Refinement Window Groupのproxyと解析結果をDurable Work Unitとしてatomicに確定し、PTS順に親Stageへ集約します。
-   - group内でmodel-free Neutral Image Analysis、無効frame除外、Moment内deduplication、多様性選抜を行います。
+   - group内でmodel-free Neutral Image Analysis、無効frame除外、Moment内deduplication、多様性選抜を行います。最初に最高Qualityのframeを保持し、残りは選択済みframeとの最小時間距離を最優先、最小視覚距離とQualityを後続条件として、Refinement Window全体へ決定的に分散させます。
    - Frame Candidate Proxyと抽出metricをatomicに確定します。
 3. `collect-context`
    - embedded text subtitleを優先し、選ばれなかった場合だけaudio STTを実行します。forced subtitleの場合はsubtitleとSTTの両方を保持します。

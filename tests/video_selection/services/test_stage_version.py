@@ -43,7 +43,7 @@ def test_extract_frame_candidates_has_isolated_cpu_metric_stage_version() -> Non
     version = stage_version(stage)
 
     # Assert
-    assert version == "frame-candidate-extraction-v3"
+    assert version == "frame-candidate-extraction-v4"
 
 
 def test_scan_video_has_partition_resume_stage_version() -> None:
