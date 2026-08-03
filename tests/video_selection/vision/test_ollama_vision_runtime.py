@@ -1882,6 +1882,10 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     assert "画像の端で大きく切れる" in second_prompt
     assert "opponent_body_framing" in second_prompt
     assert "音声、前後場面、説明文は使いません" in second_prompt
+    assert "見下ろし型・遠景・非人型" in second_prompt
+    assert "最も明瞭に判別でき、最も完全に収まる一体" in second_prompt
+    assert "別の敵が画面端にいるだけ" in second_prompt
+    assert "攻撃エフェクトがplayer付近にあるだけ" in second_prompt
     if expected_attempt_count == 5:
         confirmation_prompt = _last_message(payloads[3])["content"]
         assert isinstance(confirmation_prompt, str)
