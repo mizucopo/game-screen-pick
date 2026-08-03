@@ -24,7 +24,7 @@ SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v2"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v7"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v17"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v12"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v33"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v34"
 COMBAT_REPRESENTATIVE_FALLBACK_POLICY_VERSION = "combat-representative-fallback-v1"
 CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION = (
     "candidate-annotation-relationship-repair-prompt-v1"
@@ -61,10 +61,10 @@ COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION = (
 COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION = (
     "combat-visibility-confirmation-stage-v2"
 )
-COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION = "combat-visibility-edge-audit-prompt-v2"
+COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION = "combat-visibility-edge-audit-prompt-v3"
 COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA_VERSION = "combat-visibility-edge-audit-schema-v1"
 COMBAT_VISIBILITY_EDGE_AUDIT_STAGE_CONTRACT_VERSION = (
-    "combat-visibility-edge-audit-stage-v2"
+    "combat-visibility-edge-audit-stage-v3"
 )
 COMBAT_VISIBILITY_EDGE_STRIP_VERSION = "combat-visibility-edge-strips-v1"
 PUBLICATION_BOUNDARY_VERIFICATION_PROMPT_VERSION = (

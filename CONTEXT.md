@@ -360,7 +360,7 @@ Combat Encounter Verificationで戦闘と確認されたframe、またはScene K
 _Avoid_: second Candidate Annotation, contextual combat classification, final selection
 
 **Combat Visibility Edge Audit**:
-二回のCombat Visibility Verificationがともに掲載可能としたRepresentative Frame一枚だけに対し、上端・下端・左端・右端それぞれの外周30%をlocalで切り出し、4枚を一度に渡して実行する最終の条件付きOllama推論。各stripについて攻撃相手本体が判別可能か、その主要な輪郭が元画像の実際の外端へ到達するかだけを専用strict schemaで直接観測する。敵名、HP bar、光、攻撃effect、影、背景、診断用の内側crop境界を敵本体の外端到達に数えない。どれか一辺で敵本体の存在と実際の外端への到達がともに確認された場合はExplanation Valueを`none`に下げる。二回の可視性確認と外周strip監査のすべてを通った場合だけ掲載価値を保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
+二回のCombat Visibility Verificationがともに掲載可能としたRepresentative Frame一枚だけに対し、元画像と、上端・下端・左端・右端それぞれの外周30%をlocalで切り出した4枚を一度に渡して実行する最終の条件付きOllama推論。元画像で最も明瞭かつ完全に収まる攻撃相手一体を選び、その同じ本体だけを各stripで追跡して、主要な輪郭が元画像の実際の外端へ到達するかを専用strict schemaで直接観測する。別の攻撃相手、敵名、HP bar、光、攻撃effect、影、背景、診断用の内側crop境界を選んだ敵本体の外端到達に数えない。どれか一辺で選んだ敵本体の存在と実際の外端への到達がともに確認された場合はExplanation Valueを`none`に下げる。二回の可視性確認と外周strip監査のすべてを通った場合だけ掲載価値を保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
 _Avoid_: generic effect threshold, second Candidate Annotation, final selection
 
 **Publication Boundary Verification**:

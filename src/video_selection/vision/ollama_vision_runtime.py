@@ -393,13 +393,15 @@ _INDEPENDENT_CONFIRMATION_INSTRUCTION = (
     "画像の画素を最初から観測し直してください。"
 )
 _COMBAT_VISIBILITY_EDGE_AUDIT_INSTRUCTION = (
-    "添付した4画像は、同じ戦闘スクリーンショットから外周30%を切り出した診断画像で、"
-    "順番はtop、bottom、left、rightです。各診断画像では、そのedge名と同じ側だけが"
-    "元スクリーンショットの実際の外端で、反対側は診断用の内側crop境界です。"
-    "操作player、HUD、敵名、HP bar、光、hit effect、影、背景ではなく、playerが攻撃する"
-    "相手の生物・monster・boss本体だけを観測してください。opponent_body_presentは、"
-    "その本体の主要な輪郭を判別できる場合だけtrueです。"
-    "opponent_body_reaches_outer_edgeは、その本体の主要な輪郭が元スクリーンショットの"
+    "添付した5画像の最初の画像は元スクリーンショット全体です。残り4画像は同じ画像から"
+    "外周30%を切り出した診断画像で、順番はtop、bottom、left、rightです。"
+    "最初の画像でplayerが攻撃する相手のうち、本体を最も明瞭に判別でき、最も完全に"
+    "収まる一体を選び、残り4画像では選んだ同じ一体だけを追跡してください。"
+    "別の攻撃相手が外端へ到達しても数えません。各診断画像では、そのedge名と同じ側"
+    "だけが元スクリーンショットの実際の外端で、反対側は診断用の内側crop境界です。"
+    "操作player、HUD、敵名、HP bar、光、hit effect、影、背景を選択または追跡の対象に"
+    "しません。opponent_body_presentは、選んだ相手本体の主要な輪郭を判別できる場合だけ"
+    "trueです。opponent_body_reaches_outer_edgeは、選んだ相手本体の主要な輪郭が元画像の"
     "実際の外端に触れる、または外へ続く場合だけtrueです。診断用の内側crop境界に触れる"
     "ことは数えません。edgesをtop、bottom、left、rightの順で必ず4件返してください。"
     "推論過程や説明文は返しません。"
@@ -818,7 +820,7 @@ class OllamaVisionRuntime:
                     ),
                     parser=_parse_combat_visibility_edge_audit,
                     model=model,
-                    image_count=4,
+                    image_count=5,
                     context_cue_count=0,
                 )
                 diagnostics = _merge_candidate_diagnostics(
@@ -1564,7 +1566,11 @@ def _combat_visibility_edge_audit_payload(
     model: ResolvedModel,
     num_ctx: int,
 ) -> dict[str, object]:
-    """敵本体が外端へ続くfalse positiveを4辺stripで監査するrequestを返す。"""
+    """選んだ敵本体の外端到達を元画像と4辺stripで監査するrequestを返す。"""
+    diagnostic_images = (
+        candidate.image_bytes,
+        *_combat_visibility_edge_strips(candidate.image_bytes),
+    )
     return {
         "model": model.configured_name,
         "stream": False,
@@ -1577,9 +1583,7 @@ def _combat_visibility_edge_audit_payload(
                 "content": _COMBAT_VISIBILITY_EDGE_AUDIT_INSTRUCTION,
                 "images": [
                     base64.b64encode(image_bytes).decode()
-                    for image_bytes in _combat_visibility_edge_strips(
-                        candidate.image_bytes
-                    )
+                    for image_bytes in diagnostic_images
                 ],
             }
         ],

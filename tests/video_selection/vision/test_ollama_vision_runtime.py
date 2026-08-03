@@ -2038,7 +2038,10 @@ def test_combat_edge_audit_rejects_cropped_opponent_after_false_positives() -> N
     assert diagnostics.attempt_count == 5
     edge_audit_prompt = _last_message(payloads[4])["content"]
     assert isinstance(edge_audit_prompt, str)
-    assert "外周30%を切り出した診断画像" in edge_audit_prompt
+    assert "最初の画像は元スクリーンショット全体" in edge_audit_prompt
+    assert "最も明瞭に判別でき、最も完全に収まる一体" in edge_audit_prompt
+    assert "別の攻撃相手が外端へ到達しても数えません" in edge_audit_prompt
+    assert "残り4画像は同じ画像から外周30%を切り出した診断画像" in edge_audit_prompt
     assert "診断用の内側crop境界に触れることは数えません" in edge_audit_prompt
     edge_images = _last_message(payloads[4])["images"]
     assert isinstance(edge_images, list)
@@ -2048,7 +2051,7 @@ def test_combat_edge_audit_rejects_cropped_opponent_after_false_positives() -> N
         assert isinstance(encoded_image, str)
         with Image.open(io.BytesIO(base64.b64decode(encoded_image))) as image:
             image_sizes.append(image.size)
-    assert image_sizes == [(20, 3), (20, 3), (6, 10), (6, 10)]
+    assert image_sizes == [(20, 10), (20, 3), (20, 3), (6, 10), (6, 10)]
 
 
 def test_combat_edge_audit_schema_failure_is_retried() -> None:
