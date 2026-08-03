@@ -22,6 +22,12 @@ conversation context. Independent requests may run concurrently up to
 `ollama.max_parallel_requests`; the built-in default remains `1`, while the supported
 RTX 5090 target profile uses `2`.
 
+Different Candidate Moments may also be processed concurrently under the same
+limit. Each Moment still completes its Primary Representative Frame before deciding
+whether its own fallback frames are required. Scheduling never combines images or
+conversation state, and results are restored to deterministic shortlist and frame
+order rather than completion order.
+
 The shortlist reserves every Primary Representative Frame before assigning fallback
 frames in deterministic shortlist order. A Frame Candidate ID therefore belongs to
 only one annotation request, without allowing an earlier fallback to displace a
@@ -45,6 +51,8 @@ not unchanged per-frame annotations.
 
 - Combat fallback spends extra inference only after an unusable combat primary.
 - Parallel scheduling improves target utilization without combining image semantics.
+- The configured limit bounds all in-flight Candidate Annotation stages, including
+  primaries and fallback siblings from different Moments.
 - Interruption, request completion order, and transient partial failure do not change
   the selected Representative Frame.
 - Valid existing one-frame annotations can be reused when their semantic identity is
