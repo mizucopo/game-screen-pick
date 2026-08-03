@@ -24,7 +24,7 @@ SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v2"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v7"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v17"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v12"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v31"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v32"
 CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION = (
     "candidate-annotation-relationship-repair-prompt-v1"
 )
