@@ -706,7 +706,12 @@ class OllamaVisionRuntime:
                     confirmation_diagnostics,
                 )
             if verified_combat_encounter_kind == "not_combat" and combat_scene:
-                annotation = replace(annotation, explanation_value="none")
+                annotation = replace(
+                    annotation,
+                    explanation_value="none",
+                    combat_encounter_kind=verified_combat_encounter_kind,
+                    combat_encounter_basis=verified_combat_encounter_basis,
+                )
             requires_combat_verification = (
                 verified_combat_encounter_kind != "not_combat"
             )
@@ -814,6 +819,12 @@ class OllamaVisionRuntime:
                 if verified_combat_encounter_kind == "not_combat":
                     verified_combat_encounter_kind = "uncertain"
                     verified_combat_encounter_basis = "ambiguous"
+                annotation = replace(
+                    annotation,
+                    combat_encounter_kind=verified_combat_encounter_kind,
+                    combat_encounter_basis=verified_combat_encounter_basis,
+                )
+            elif requires_noncombat_visibility_verification:
                 annotation = replace(
                     annotation,
                     combat_encounter_kind=verified_combat_encounter_kind,
@@ -1855,9 +1866,9 @@ def _parse_candidate_annotation(
         scene = catalog.for_slug(selected.scene_slug)
         requires_combat_encounter_verification = (
             selected.effective_explanation_value != "none"
-            and not selected.combat_action
             and (
-                (
+                selected.combat_action
+                or (
                     scene.scene_kind == "combat"
                     and selected.effective_content_kind
                     in {"gameplay_action", "gameplay_idle"}
