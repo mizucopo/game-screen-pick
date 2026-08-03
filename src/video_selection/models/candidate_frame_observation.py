@@ -12,6 +12,11 @@ from .candidate_annotation import (
     ScreenTextKind,
     SpoilerRisk,
 )
+from .combat_encounter_basis import (
+    COMBAT_ENCOUNTER_BASES,
+    CombatEncounterBasis,
+    combat_encounter_classification_is_valid,
+)
 from .combat_encounter_kind import COMBAT_ENCOUNTER_KINDS, CombatEncounterKind
 from .frame_candidate import FrameCandidate
 from .scene_catalog_entry import is_valid_scene_slug
@@ -122,6 +127,7 @@ class CandidateFrameObservation:
     visible_action: bool
     visible_character_or_enemy: bool
     combat_encounter_kind: CombatEncounterKind
+    combat_encounter_basis: CombatEncounterBasis
     player_body_visibility: CharacterBodyVisibility
     opponent_body_visibility: CharacterBodyVisibility
     effect_only_frame: bool
@@ -148,6 +154,11 @@ class CandidateFrameObservation:
             or not isinstance(self.visible_action, bool)
             or not isinstance(self.visible_character_or_enemy, bool)
             or self.combat_encounter_kind not in COMBAT_ENCOUNTER_KINDS
+            or self.combat_encounter_basis not in COMBAT_ENCOUNTER_BASES
+            or not combat_encounter_classification_is_valid(
+                self.combat_encounter_kind,
+                self.combat_encounter_basis,
+            )
             or self.player_body_visibility not in CHARACTER_BODY_VISIBILITIES
             or self.opponent_body_visibility not in CHARACTER_BODY_VISIBILITIES
             or not isinstance(self.effect_only_frame, bool)

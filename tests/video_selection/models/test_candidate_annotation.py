@@ -61,6 +61,7 @@ def test_ordinary_combat_and_event_expose_distinct_selection_coverage_facets() -
         blog_image_type="normal_gameplay",
         explanation_value="high",
         combat_encounter_kind="ordinary",
+        combat_encounter_basis="ordinary_opponent_presentation",
         spoiler_risk="medium",
         spoiler_evidence="物語上の進行情報が表示される",
     )
@@ -70,6 +71,7 @@ def test_ordinary_combat_and_event_expose_distinct_selection_coverage_facets() -
         blog_image_type="normal_gameplay",
         explanation_value="high",
         combat_encounter_kind="major",
+        combat_encounter_basis="major_encounter_presentation",
     )
     uncertain_combat = CandidateAnnotation(
         candidate=candidate,
@@ -77,6 +79,7 @@ def test_ordinary_combat_and_event_expose_distinct_selection_coverage_facets() -
         blog_image_type="normal_gameplay",
         explanation_value="high",
         combat_encounter_kind="uncertain",
+        combat_encounter_basis="ambiguous",
     )
     event = CandidateAnnotation(
         candidate=candidate,
@@ -122,4 +125,30 @@ def test_combat_encounter_kind_requires_a_known_value() -> None:
             candidate=candidate,
             summary="通常戦闘",
             combat_encounter_kind="boss",  # type: ignore[arg-type]
+        )
+
+
+def test_ordinary_combat_requires_positive_basis_for_coverage() -> None:
+    """通常戦闘coverageに積極的な画像内根拠が要求されること。
+
+    Arrange:
+        - ordinaryだが曖昧な根拠しかないCandidate Annotation入力が用意される
+    Act:
+        - Candidate Annotationの構築が試行される
+    Assert:
+        - 主要戦闘の根拠がないだけのordinary判定が拒否されること
+    """
+    # Arrange
+    candidate = FrameCandidate(identifier="frame-1", image_bytes=b"image")
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="domain field"):
+        CandidateAnnotation(
+            candidate=candidate,
+            summary="種別を確定できない戦闘",
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            combat_encounter_kind="ordinary",
+            combat_encounter_basis="ambiguous",
         )

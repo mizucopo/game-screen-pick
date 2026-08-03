@@ -33,7 +33,7 @@ Explanation Valueが`none`の候補はCounterfactual Selection Scoreまで計算
 
 要求枚数に対する`normal_gameplay=70%`、`event=25%`、`menu=5%`の目標は最大剰余法で丸めます。同率はこのtype順です。目標未達候補へ`+0.10`、最初のtitleへ`+0.05`を加えますが、超過を減点せず、候補が偏っていてもhard quotaにしません。titleだけは最大1枚です。
 
-要求枚数が10枚以上なら、説明価値と既存の適格性を満たす候補がある場合に限り、`ordinary_combat`と`event`をそれぞれ最低1枚選びます。`ordinary_combat`は`normal_gameplay`のうち、Combat Encounter Kindが`ordinary`の候補です。`major`、`uncertain`、探索、移動、障害物破壊はこのfacetに含めません。Spoiler Riskは物語上のネタバレ評価に限定し、通常戦闘か主要戦闘かの判定には使いません。`event`はBlog Image Typeが`event`の候補です。
+要求枚数が10枚以上なら、説明価値と既存の適格性を満たす候補がある場合に限り、`ordinary_combat`と`event`をそれぞれ最低1枚選びます。`ordinary_combat`は`normal_gameplay`のうち、Combat Encounter Kindが`ordinary`で、一般敵の群れ・編成または通常遭遇を直接示す`ordinary_*`のCombat Encounter Basisがある候補です。主要戦闘の根拠がないことや、敵名・HP barだけでは通常戦闘の根拠になりません。`major`、`uncertain`、探索、移動、障害物破壊はこのfacetに含めません。Spoiler Riskは物語上のネタバレ評価に限定し、通常戦闘か主要戦闘かの判定には使いません。`event`はBlog Image Typeが`event`の候補です。
 
 未充足facetの適格候補を通常のutility候補より先に比較します。複数facetが未充足なら、終端similarity ceilingで各facetから1件ずつ両立する組合せを先に確認し、必要な未代表Variant Groupの代表を含む組合せ全体が残り出力枠へ収まる場合だけ候補として残します。現在のsimilarity passでは選べなくても後続passが残る間は枠を保持します。候補が同じrecurring gameplayの既選択Variant Groupに属し、別の未代表Groupが選択の前提になる場合は、最低枠を残せる範囲でその前提Groupを通常候補より先に選びます。終端passでも重複、spoiler guardなどの既存制約に反する場合、または有効候補が存在しない場合は枠を解放します。終端で最低枠を解放した場合だけでなく、緩和ceilingで最後の最低枠を満たした場合も、選択済み画像を保持して設定されたbase similarity ceilingから残りの通常選定を再開します。これにより、最低枠の可否確認にだけ使った緩和ceilingで類似画像が代替候補を押し出しません。残り枚数は固定内訳にせず、従来のMarginal Selection Utilityと候補供給に応じて動的に配分します。
 

@@ -18,6 +18,7 @@ from src.video_selection.models.candidate_annotation import (
     SelectionCoverageFacet,
     SpoilerRisk,
 )
+from src.video_selection.models.combat_encounter_basis import CombatEncounterBasis
 from src.video_selection.models.combat_encounter_kind import CombatEncounterKind
 from src.video_selection.models.decoded_video_frame import DecodedVideoFrame
 from src.video_selection.models.frame_candidate import FrameCandidate
@@ -46,6 +47,16 @@ type CandidateSpec = tuple[
     ExplanationValue,
     SpoilerRisk,
 ]
+
+_COMBAT_ENCOUNTER_BASIS_BY_KIND: dict[
+    CombatEncounterKind,
+    CombatEncounterBasis,
+] = {
+    "not_combat": "none",
+    "ordinary": "ordinary_opponent_presentation",
+    "major": "major_opponent_presentation",
+    "uncertain": "ambiguous",
+}
 
 
 def _metrics() -> NeutralImageMetrics:
@@ -137,6 +148,7 @@ def _candidate(
             "重大な物語情報が画像に示される" if spoiler_risk != "none" else ""
         ),
         combat_encounter_kind=combat_encounter_kind,
+        combat_encounter_basis=_COMBAT_ENCOUNTER_BASIS_BY_KIND[combat_encounter_kind],
     )
     return BlogCandidate(
         annotation=annotation,

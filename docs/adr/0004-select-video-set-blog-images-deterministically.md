@@ -88,7 +88,7 @@ An eligible `normal_gameplay`, `event`, or `menu` candidate receives a `+0.10` B
 
 The public Effective Configuration requires `N >= 10`. At that size, the selector applies a conditional minimum of one selected image to each of these facets when an eligible candidate exists:
 
-- `ordinary_combat`: `normal_gameplay` whose Combat Encounter Kind is `ordinary`. `major` and `uncertain` combat, exploration, movement, and obstacle interactions do not qualify. Spoiler Risk evaluates story disclosure independently and does not classify the encounter.
+- `ordinary_combat`: `normal_gameplay` whose Combat Encounter Kind is `ordinary` and whose Combat Encounter Basis positively identifies an ordinary opponent group or ordinary encounter presentation. The absence of major-encounter evidence is insufficient. A visible combat frame with only an enemy name or HP/status bar, with neither positive ordinary nor major evidence, is `uncertain` and does not qualify. `major` combat, exploration, movement, and obstacle interactions do not qualify. Spoiler Risk evaluates story disclosure independently and does not classify the encounter.
 - `event`: Blog Image Type `event`.
 
 Explanation Value, visual eligibility, the title maximum, existing duplicate boundaries, and the Spoiler Monotonicity Guard remain stronger than these minimums. A missing or still-ineligible facet releases its slot rather than filling it with a poor image. After satisfiable minimums are met, all remaining slots use the normal utility policy; the resulting proportions are therefore dynamic rather than a fixed quota.

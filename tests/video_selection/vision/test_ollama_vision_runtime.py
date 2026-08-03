@@ -1186,6 +1186,14 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
         "major",
         "uncertain",
     ]
+    assert observation_properties["combat_encounter_basis"]["enum"] == [
+        "none",
+        "ordinary_opponent_presentation",
+        "ordinary_encounter_presentation",
+        "major_opponent_presentation",
+        "major_encounter_presentation",
+        "ambiguous",
+    ]
     assert observation_properties["player_body_visibility"]["enum"] == [
         "clear",
         "partial",
@@ -1254,7 +1262,10 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     assert "visible_action" in prompt
     assert "visible_character_or_enemy" in prompt
     assert "combat_encounter_kind" in prompt
-    assert "敵名やHP・status barだけではmajorにしません" in prompt
+    assert "combat_encounter_basis" in prompt
+    assert "積極的な画像内根拠がある場合だけordinary" in prompt
+    assert "敵名やHP・status barだけではordinaryにもmajorにも" in prompt
+    assert "どちらの積極的根拠もない場合はuncertain" in prompt
     assert "spoiler_riskとは独立" in prompt
     assert "player_body_visibility" in prompt
     assert "opponent_body_visibility" in prompt
@@ -2107,6 +2118,7 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
             )
             observation = _first_frame_observation(response)
             observation["combat_encounter_kind"] = "not_combat"
+            observation["combat_encounter_basis"] = "none"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) == 2:
@@ -2155,6 +2167,7 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
     assert isinstance(routing_properties, Mapping)
     assert set(routing_properties) == {
         "combat_encounter_kind",
+        "combat_encounter_basis",
         "combat_encounter_evidence",
     }
     routing_prompt = _last_message(payloads[1])["content"]
@@ -2194,6 +2207,7 @@ def test_enemy_status_without_visible_player_does_not_mark_combat_action() -> No
             )
             observation = _first_frame_observation(response)
             observation["combat_encounter_kind"] = "not_combat"
+            observation["combat_encounter_basis"] = "none"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) == 2:
@@ -2301,7 +2315,86 @@ def test_noncombat_recurring_action_is_cross_checked_by_visibility() -> None:
     assert "opponent_body_framing" in visibility_prompt
     visibility_confirmation_prompt = _last_message(payloads[4])["content"]
     assert isinstance(visibility_confirmation_prompt, str)
-    assert "掲載可否を確定する独立した再確認" in (visibility_confirmation_prompt)
+    assert "掲載可否を確定する独立した再確認" in visibility_confirmation_prompt
+
+
+def test_status_only_combat_stays_uncertain_without_positive_basis() -> None:
+    """敵status UIだけの戦闘が通常戦闘coverageへ入らないこと。
+
+    Arrange:
+        - 主推論が非戦闘としたcombat sceneのframeが用意される
+        - 専用確認では敵status UIから戦闘を確認できるが種別根拠は曖昧とされる
+        - playerと敵本体の掲載可能な可視性が二回確認される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 戦闘はuncertainとして保持されordinary_combat facetを持たないこと
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            response = _frame_observation_payload(
+                (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+            )
+            observation = _first_frame_observation(response)
+            observation["combat_encounter_kind"] = "not_combat"
+            observation["combat_encounter_basis"] = "none"
+            observation["opponent_body_visibility"] = "absent"
+            return _response(response)
+        if len(payloads) == 2:
+            return _response(
+                _combat_encounter_payload(
+                    visible=True,
+                    evidence="enemy_status_ui",
+                    combat_encounter_kind="uncertain",
+                    combat_encounter_basis="ambiguous",
+                )
+            )
+        if len(payloads) == 5:
+            return _response(_combat_visibility_edge_audit_payload())
+        return _response(
+            {
+                "effect_screen_coverage": "under_quarter",
+                "largest_foreground_element": "opponent_body",
+                "player_body_visibility": "clear",
+                "opponent_body_visibility": "clear",
+                "opponent_body_framing": "complete",
+                "effect_overlaps_combatant_body": "partial",
+                "effect_only_frame": False,
+            }
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "high"
+    assert annotation.combat_encounter_kind == "uncertain"
+    assert annotation.combat_encounter_basis == "ambiguous"
+    assert annotation.selection_coverage_facet is None
+    assert diagnostics.attempt_count == 5
 
 
 def test_unconfirmed_combat_scene_has_no_explanation_value() -> None:
@@ -2332,6 +2425,7 @@ def test_unconfirmed_combat_scene_has_no_explanation_value() -> None:
             )
             observation = _first_frame_observation(response)
             observation["combat_encounter_kind"] = "not_combat"
+            observation["combat_encounter_basis"] = "none"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) <= 3:
@@ -2388,6 +2482,7 @@ def test_missed_combat_is_rejected_by_visibility_cross_check() -> None:
             )
             observation = _first_frame_observation(response)
             observation["combat_encounter_kind"] = "not_combat"
+            observation["combat_encounter_basis"] = "none"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) <= 3:
@@ -2453,6 +2548,7 @@ def test_negative_combat_encounter_is_confirmed_before_visibility_routing() -> N
             )
             observation = _first_frame_observation(response)
             observation["combat_encounter_kind"] = "not_combat"
+            observation["combat_encounter_basis"] = "none"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) == 2:
@@ -2492,6 +2588,22 @@ def test_negative_combat_encounter_is_confirmed_before_visibility_routing() -> N
     # Assert
     assert annotation.explanation_value == "none"
     assert diagnostics.attempt_count == 4
+    encounter_schema = payloads[1]["format"]
+    assert isinstance(encounter_schema, Mapping)
+    encounter_properties = encounter_schema["properties"]
+    assert isinstance(encounter_properties, Mapping)
+    assert encounter_properties["combat_encounter_basis"]["enum"] == [
+        "none",
+        "ordinary_opponent_presentation",
+        "ordinary_encounter_presentation",
+        "major_opponent_presentation",
+        "major_encounter_presentation",
+        "ambiguous",
+    ]
+    encounter_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(encounter_prompt, str)
+    assert "積極的な画像内根拠がある場合だけordinary" in encounter_prompt
+    assert "どちらの積極的根拠もない場合はuncertain" in encounter_prompt
     confirmation_prompt = _last_message(payloads[2])["content"]
     assert isinstance(confirmation_prompt, str)
     assert "先の回答を推測せず" in confirmation_prompt
@@ -2528,6 +2640,7 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
             )
             observation = _first_frame_observation(response)
             observation["combat_encounter_kind"] = "not_combat"
+            observation["combat_encounter_basis"] = "none"
             observation["opponent_body_visibility"] = "absent"
             return _response(response)
         if len(payloads) == 2:
@@ -2701,6 +2814,7 @@ def test_dialogue_and_combat_visibility_are_rechecked_separately() -> None:
         observation["cinematic_event_presentation"] = True
         observation["visible_action"] = True
         observation["combat_encounter_kind"] = "ordinary"
+        observation["combat_encounter_basis"] = "ordinary_opponent_presentation"
         observation["opponent_body_visibility"] = "clear"
         if len(payloads) == 2:
             observation["on_screen_dialogue_text_visible"] = False
@@ -4602,6 +4716,12 @@ def _frame_observation_payload(
                     and content_kind in {"gameplay_action", "event_action"}
                     else "not_combat"
                 ),
+                "combat_encounter_basis": (
+                    "ordinary_opponent_presentation"
+                    if scene_slug == "battle"
+                    and content_kind in {"gameplay_action", "event_action"}
+                    else "none"
+                ),
                 "player_body_visibility": (
                     "clear"
                     if content_kind not in {"map", "save", "tutorial_help", "title"}
@@ -4662,12 +4782,25 @@ def _combat_encounter_payload(
     visible: bool,
     evidence: str,
     combat_encounter_kind: str | None = None,
+    combat_encounter_basis: str | None = None,
 ) -> dict[str, object]:
+    resolved_kind = (
+        combat_encounter_kind
+        if combat_encounter_kind is not None
+        else ("ordinary" if visible else "not_combat")
+    )
+    default_basis = {
+        "not_combat": "none",
+        "ordinary": "ordinary_opponent_presentation",
+        "major": "major_opponent_presentation",
+        "uncertain": "ambiguous",
+    }[resolved_kind]
     return {
-        "combat_encounter_kind": (
-            combat_encounter_kind
-            if combat_encounter_kind is not None
-            else ("ordinary" if visible else "not_combat")
+        "combat_encounter_kind": resolved_kind,
+        "combat_encounter_basis": (
+            combat_encounter_basis
+            if combat_encounter_basis is not None
+            else default_basis
         ),
         "combat_encounter_evidence": evidence,
     }

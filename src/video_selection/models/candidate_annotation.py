@@ -5,6 +5,12 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Literal, cast, get_args
 
+from .combat_encounter_basis import (
+    COMBAT_ENCOUNTER_BASES,
+    ORDINARY_COMBAT_ENCOUNTER_BASES,
+    CombatEncounterBasis,
+    combat_encounter_classification_is_valid,
+)
 from .combat_encounter_kind import COMBAT_ENCOUNTER_KINDS, CombatEncounterKind
 from .frame_candidate import FrameCandidate
 from .report_value import string_looks_private
@@ -144,6 +150,7 @@ class CandidateAnnotation:
     spoiler_risk: SpoilerRisk = "none"
     spoiler_evidence: str = ""
     combat_encounter_kind: CombatEncounterKind = "not_combat"
+    combat_encounter_basis: CombatEncounterBasis = "none"
 
     def __post_init__(self) -> None:
         """domain enum、所属ID、evidenceの整合を検証する。"""
@@ -168,6 +175,11 @@ class CandidateAnnotation:
             or self.context_relevance not in CONTEXT_CUE_RELEVANCES
             or self.spoiler_risk not in SPOILER_RISKS
             or self.combat_encounter_kind not in COMBAT_ENCOUNTER_KINDS
+            or self.combat_encounter_basis not in COMBAT_ENCOUNTER_BASES
+            or not combat_encounter_classification_is_valid(
+                self.combat_encounter_kind,
+                self.combat_encounter_basis,
+            )
             or not candidate_annotation_relationships_are_valid(
                 self.context_relevance,
                 self.supporting_context_cue_ids,
@@ -191,6 +203,7 @@ class CandidateAnnotation:
         if (
             self.blog_image_type == "normal_gameplay"
             and self.combat_encounter_kind == "ordinary"
+            and self.combat_encounter_basis in ORDINARY_COMBAT_ENCOUNTER_BASES
         ):
             return "ordinary_combat"
         return None

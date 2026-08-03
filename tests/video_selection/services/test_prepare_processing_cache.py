@@ -92,7 +92,7 @@ def test_legacy_candidate_annotation_contract_cache_is_deleted(
         (
             legacy_folder,
             legacy_fingerprint,
-            "candidate-annotation-stage-v29",
+            "candidate-annotation-stage-v30",
         ),
         (
             current_folder,
