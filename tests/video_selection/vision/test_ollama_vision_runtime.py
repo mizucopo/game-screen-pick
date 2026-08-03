@@ -2,6 +2,7 @@ import base64
 import io
 import json
 from collections.abc import Mapping
+from concurrent.futures import CancelledError
 from datetime import datetime, timedelta, timezone
 from email.message import Message
 from email.utils import format_datetime
@@ -122,6 +123,71 @@ def test_inference_waits_for_shared_gpu_lease() -> None:
     assert request_count == 1
     assert holder.is_alive() is False
     assert worker.is_alive() is False
+
+
+def test_cancellation_stops_candidate_after_active_ollama_request() -> None:
+    """active Ollama requestへ届いた中止要求でCandidate処理が停止されること。
+
+    Arrange:
+        - 応答前で停止するOllama requestとCandidate Annotationが用意される
+    Act:
+        - request開始後にCandidate Annotationの中止が要求される
+    Assert:
+        - 応答の解析やretryへ進まずCancelledErrorが返されること
+    """
+    # Arrange
+    request_count = 0
+    request_started = Event()
+    release_request = Event()
+    failures: list[BaseException] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        _payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        nonlocal request_count
+        request_count += 1
+        request_started.set()
+        if not release_request.wait(timeout=1.0):
+            raise RuntimeError("Ollama requestを解放できませんでした")
+        return {}
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    def annotate() -> None:
+        try:
+            runtime.annotate_candidate(
+                _annotation_request(),
+                _catalog(),
+                _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+                num_ctx=32768,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    worker = Thread(target=annotate, name="cancelled-candidate-annotation")
+
+    # Act
+    worker.start()
+    assert request_started.wait(timeout=1.0)
+    runtime.cancel_candidate_annotations()
+    release_request.set()
+    worker.join(timeout=1.0)
+
+    # Assert
+    assert worker.is_alive() is False
+    assert len(failures) == 1
+    assert isinstance(failures[0], CancelledError)
+    assert "中止" in str(failures[0])
+    assert request_count == 1
 
 
 def test_scene_catalog_uses_strict_documented_ollama_request() -> None:

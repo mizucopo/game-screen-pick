@@ -3,6 +3,7 @@
 import hashlib
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -315,36 +316,17 @@ class VideoSetVisionProcessor:
             for request in requests
         )
         inference_limiter = BoundedSemaphore(max_parallel_requests)
-        annotations: list[CandidateAnnotation] = []
-        diagnostics: list[VisionInferenceDiagnostics] = []
-        completed_stages: list[CompletedStage] = []
-        plan_index = 0
-        while plan_index < len(plans):
-            batch_end = plan_index
-            inference_count = 0
-            while batch_end < len(plans) and inference_count < max_parallel_requests:
-                if _candidate_moment_plan_requires_inference(plans[batch_end]):
-                    inference_count += 1
-                batch_end += 1
-            batch = plans[plan_index:batch_end]
-            batch_annotations, batch_diagnostics, batch_completed = (
-                self._execute_candidate_moment_batch(
-                    writer=writer,
-                    video_set=video_set,
-                    plans=batch,
-                    catalog=catalog,
-                    catalog_fingerprint=catalog_fingerprint,
-                    model=model,
-                    num_ctx=num_ctx,
-                    max_parallel_requests=max_parallel_requests,
-                    inference_limiter=inference_limiter,
-                )
-            )
-            annotations.extend(batch_annotations)
-            diagnostics.extend(batch_diagnostics)
-            completed_stages.extend(batch_completed)
-            plan_index = batch_end
-        return tuple(annotations), tuple(diagnostics), tuple(completed_stages)
+        return self._execute_candidate_moments(
+            writer=writer,
+            video_set=video_set,
+            plans=plans,
+            catalog=catalog,
+            catalog_fingerprint=catalog_fingerprint,
+            model=model,
+            num_ctx=num_ctx,
+            max_parallel_requests=max_parallel_requests,
+            inference_limiter=inference_limiter,
+        )
 
     def _plan_candidate_moment(
         self,
@@ -391,7 +373,7 @@ class VideoSetVisionProcessor:
             )
         return frame_requests, restored
 
-    def _execute_candidate_moment_batch(
+    def _execute_candidate_moments(
         self,
         *,
         writer: CompletedStageWriter,
@@ -408,7 +390,7 @@ class VideoSetVisionProcessor:
         tuple[VisionInferenceDiagnostics, ...],
         tuple[CompletedStage, ...],
     ]:
-        """一batchを並列実行し結果とprogressを入力順で確定する。"""
+        """全Momentを連続並列実行し結果とprogressを入力順で確定する。"""
         self._start_progress_stage(
             ProcessingStage.ANNOTATE_CANDIDATE,
             "candidate",
@@ -436,19 +418,29 @@ class VideoSetVisionProcessor:
         def execute_plans() -> tuple[_CandidateMomentExecution, ...]:
             results: list[_CandidateMomentExecution | None] = [None] * len(plans)
             if pending:
-                with ThreadPoolExecutor(
+                executor = ThreadPoolExecutor(
                     max_workers=min(max_parallel_requests, len(pending)),
                     thread_name_prefix="candidate-moment",
-                ) as executor:
-                    futures = tuple(
-                        (index, executor.submit(execute_plan, plan))
-                        for index, plan in pending
-                    )
+                )
+                futures = tuple(
+                    (index, executor.submit(execute_plan, plan))
+                    for index, plan in pending
+                )
+                try:
                     for index, plan in enumerate(plans):
                         if index not in pending_indexes:
                             results[index] = execute_plan(plan)
                     for index, future in futures:
                         results[index] = future.result()
+                except BaseException:
+                    for _index, future in futures:
+                        future.cancel()
+                    with suppress(Exception):
+                        self._runtime.cancel_candidate_annotations()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise
+                else:
+                    executor.shutdown()
             else:
                 results = [execute_plan(plan) for plan in plans]
             completed: list[_CandidateMomentExecution] = []
@@ -486,7 +478,7 @@ class VideoSetVisionProcessor:
                     ProcessingStage.ANNOTATE_CANDIDATE,
                     "candidate",
                 )
-            duration_seconds = None if reused else diagnostics.duration_seconds
+            duration_seconds = 0.0 if reused else diagnostics.duration_seconds
             self._complete_progress_stage(
                 reused,
                 completed.fingerprint,

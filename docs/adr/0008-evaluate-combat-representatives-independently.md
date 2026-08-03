@@ -28,6 +28,11 @@ whether its own fallback frames are required. Scheduling never combines images o
 conversation state, and results are restored to deterministic shortlist and frame
 order rather than completion order.
 
+The scheduler does not reserve worker capacity for cache hits or wait for a fixed
+batch's slowest request. It continuously assigns the next unfinished Moment when a
+worker becomes free. On user interruption it cancels queued Moments and propagates a
+cooperative cancellation request to the active VisionRuntime operations.
+
 The shortlist reserves every Primary Representative Frame before assigning fallback
 frames in deterministic shortlist order. A Frame Candidate ID therefore belongs to
 only one annotation request, without allowing an earlier fallback to displace a
@@ -53,6 +58,7 @@ not unchanged per-frame annotations.
 - Parallel scheduling improves target utilization without combining image semantics.
 - The configured limit bounds all in-flight Candidate Annotation stages, including
   primaries and fallback siblings from different Moments.
+- A slow request does not leave capacity idle after another worker finishes.
 - Interruption, request completion order, and transient partial failure do not change
   the selected Representative Frame.
 - Valid existing one-frame annotations can be reused when their semantic identity is

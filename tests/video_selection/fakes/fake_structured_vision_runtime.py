@@ -24,6 +24,7 @@ class FakeStructuredVisionRuntime:
         *,
         fail_scene_catalog: bool = False,
         failure_moment_id: str | None = None,
+        failure_moment_ids: frozenset[str] | None = None,
         failure_frame_id: str | None = None,
         reject_all_calls: bool = False,
         scene_catalog_call_started: Event | None = None,
@@ -32,6 +33,7 @@ class FakeStructuredVisionRuntime:
         on_candidate_annotation_request: (
             Callable[[CandidateAnnotationRequest], None] | None
         ) = None,
+        on_cancel_candidate_annotations: Callable[[], None] | None = None,
     ) -> None:
         self._catalog = catalog
         self._annotations = {
@@ -42,15 +44,24 @@ class FakeStructuredVisionRuntime:
             for annotation in annotations
         }
         self._fail_scene_catalog = fail_scene_catalog
-        self._failure_moment_id = failure_moment_id
+        single_failure_moment = (
+            frozenset()
+            if failure_moment_id is None
+            else frozenset((failure_moment_id,))
+        )
+        self._failure_moment_ids = (
+            failure_moment_ids or frozenset()
+        ) | single_failure_moment
         self._failure_frame_id = failure_frame_id
         self._reject_all_calls = reject_all_calls
         self._scene_catalog_call_started = scene_catalog_call_started
         self._release_scene_catalog_call = release_scene_catalog_call
         self._on_candidate_annotation = on_candidate_annotation
         self._on_candidate_annotation_request = on_candidate_annotation_request
+        self._on_cancel_candidate_annotations = on_cancel_candidate_annotations
         self.scene_catalog_calls: list[SceneCatalogRequest] = []
         self.candidate_annotation_calls: list[CandidateAnnotationRequest] = []
+        self.cancel_candidate_annotations_call_count = 0
 
     def create_scene_catalog(
         self,
@@ -94,7 +105,7 @@ class FakeStructuredVisionRuntime:
         if self._on_candidate_annotation_request is not None:
             self._on_candidate_annotation_request(request)
         if (
-            request.moment.identifier == self._failure_moment_id
+            request.moment.identifier in self._failure_moment_ids
             or request.frame_candidates[0].identifier == self._failure_frame_id
         ):
             raise RuntimeError("fake raw response: chain of thought")
@@ -112,6 +123,12 @@ class FakeStructuredVisionRuntime:
             ),
             request_fingerprint=request.moment.identifier[4:],
         )
+
+    def cancel_candidate_annotations(self) -> None:
+        """Candidate Annotationの中止要求を記録する。"""
+        self.cancel_candidate_annotations_call_count += 1
+        if self._on_cancel_candidate_annotations is not None:
+            self._on_cancel_candidate_annotations()
 
 
 def _diagnostics(
