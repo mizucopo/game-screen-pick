@@ -89,7 +89,7 @@ _SCAN_PARTITION_SECONDS = 900.0
 _TIMELINE_ALGORITHM_VERSION = "exact-timeline-v1"
 _SCAN_PROXY_ANALYSIS_VERSION = "scan-proxy-analysis-v1"
 _HEARTBEAT_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
-_CANDIDATE_EXTRACTION_VERSION = "frame-candidate-extraction-v3"
+_CANDIDATE_EXTRACTION_VERSION = "frame-candidate-extraction-v4"
 _REFINEMENT_GROUP_CHECKPOINT_VERSION = checkpoint_version(
     CheckpointOperation.FRAME_REFINEMENT_GROUP
 )
