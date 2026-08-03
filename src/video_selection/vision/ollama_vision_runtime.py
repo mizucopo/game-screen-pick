@@ -643,6 +643,7 @@ class OllamaVisionRuntime:
             annotation.explanation_value != "none" and cinematic_letterbox_detected
         )
         combat_scene = scene_is_combat
+        primary_combat_action = annotation.combat_action
         verified_combat_encounter_kind = annotation.combat_encounter_kind
         verified_combat_encounter_basis = annotation.combat_encounter_basis
         if requires_combat_encounter_verification:
@@ -814,7 +815,22 @@ class OllamaVisionRuntime:
                 )
                 visibility_is_acceptable = not opponent_reaches_outer_edge
             if not visibility_is_acceptable:
-                annotation = replace(annotation, explanation_value="none")
+                annotation = replace(
+                    annotation,
+                    explanation_value="none",
+                    combat_encounter_kind=(
+                        "not_combat"
+                        if verified_combat_encounter_kind == "not_combat"
+                        or not primary_combat_action
+                        else "uncertain"
+                    ),
+                    combat_encounter_basis=(
+                        "none"
+                        if verified_combat_encounter_kind == "not_combat"
+                        or not primary_combat_action
+                        else "ambiguous"
+                    ),
+                )
             elif combat_is_consistently_publishable:
                 if verified_combat_encounter_kind == "not_combat":
                     verified_combat_encounter_kind = "uncertain"
@@ -830,7 +846,11 @@ class OllamaVisionRuntime:
                     combat_encounter_kind=verified_combat_encounter_kind,
                     combat_encounter_basis=verified_combat_encounter_basis,
                 )
-        if annotation.explanation_value != "none" and requires_publication_verification:
+        if (
+            annotation.explanation_value != "none"
+            and requires_publication_verification
+            and (not annotation.combat_action or cinematic_letterbox_detected)
+        ):
             verification_input = _publication_boundary_verification_semantic_input(
                 annotation.candidate,
                 model,
@@ -1882,8 +1902,6 @@ def _parse_candidate_annotation(
         )
         requires_publication_verification = (
             selected.effective_explanation_value != "none"
-            and not requires_combat_verification
-            and not requires_combat_encounter_verification
             and (
                 selected.effective_content_kind == "map"
                 or selected.interface_kind == "map"

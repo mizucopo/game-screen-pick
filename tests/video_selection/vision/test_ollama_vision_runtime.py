@@ -1853,7 +1853,12 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     # Assert
     assert annotation.explanation_value == expected_value
     assert annotation.combat_action is True
-    assert annotation.combat_encounter_kind == "ordinary"
+    assert annotation.combat_encounter_kind == (
+        "ordinary" if expected_value == "high" else "uncertain"
+    )
+    assert annotation.combat_encounter_basis == (
+        "ordinary_opponent_presentation" if expected_value == "high" else "ambiguous"
+    )
     assert annotation.spoiler_risk == "medium"
     assert diagnostics.attempt_count == expected_attempt_count
     assert diagnostics.validation_code is None
@@ -1889,15 +1894,15 @@ def test_publishable_combat_visibility_is_visually_rechecked(
 
 
 def test_clean_combat_visibility_is_confirmed_before_publication() -> None:
-    """一度だけ明瞭とされた戦闘が独立確認で掲載不可にされること。
+    """可視性を確認できない戦闘の主種別がartifactへ残されないこと。
 
     Arrange:
-        - 主推論と初回専用確認で掲載可能とされた戦闘応答が用意される
+        - 主推論がordinary、戦闘有無専用確認がmajorとした応答が用意される
         - 独立確認では敵本体が画面端で欠ける応答が用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 二回の直接観測が一致しない戦闘のExplanation Valueがnoneにされること
+        - 掲載不可となり未検証のordinaryも専用確認のmajorも保存されないこと
     """
     # Arrange
     payloads: list[Mapping[str, object]] = []
@@ -1917,7 +1922,14 @@ def test_clean_combat_visibility_is_confirmed_before_publication() -> None:
                 )
             )
         if len(payloads) == 2:
-            return _response(_combat_encounter_payload(visible=True, evidence="both"))
+            return _response(
+                _combat_encounter_payload(
+                    visible=True,
+                    evidence="both",
+                    combat_encounter_kind="major",
+                    combat_encounter_basis="major_opponent_presentation",
+                )
+            )
         verification = {
             "effect_screen_coverage": "under_quarter",
             "largest_foreground_element": "opponent_body",
@@ -1953,6 +1965,9 @@ def test_clean_combat_visibility_is_confirmed_before_publication() -> None:
     # Assert
     assert annotation.explanation_value == "none"
     assert annotation.combat_action is True
+    assert annotation.combat_encounter_kind == "uncertain"
+    assert annotation.combat_encounter_basis == "ambiguous"
+    assert annotation.selection_coverage_facet is None
     assert diagnostics.attempt_count == 4
     confirmation_prompt = _last_message(payloads[3])["content"]
     assert isinstance(confirmation_prompt, str)
@@ -3195,6 +3210,80 @@ def test_map_transition_is_visually_rechecked(
     assert "白いwipe、太い光帯" in second_prompt
     assert "地図の雲、通常のcursor" in second_prompt
     assert "音声、前後場面、説明文は使いません" in second_prompt
+
+
+def test_combat_misclassification_does_not_skip_map_transition_verification() -> None:
+    """戦闘から非戦闘へ訂正された地図でも掲載境界が確認されること。
+
+    Arrange:
+        - 遷移中の地図が掲載可能なordinary戦闘と誤判定される
+        - 戦闘有無と可視性の専用確認では非戦闘と確認される
+        - 掲載境界専用確認では白いwipeが確認される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 非戦闘への訂正後に掲載境界が確認され掲載不可にされること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            response = _frame_observation_payload(
+                (("frame-a", "exploration", "map", "high", "menu"),)
+            )
+            observation = _first_frame_observation(response)
+            observation["visible_character_or_enemy"] = True
+            observation["combat_encounter_kind"] = "ordinary"
+            observation["combat_encounter_basis"] = "ordinary_opponent_presentation"
+            observation["player_body_visibility"] = "clear"
+            observation["opponent_body_visibility"] = "clear"
+            return _response(response)
+        if len(payloads) in {2, 3}:
+            return _response(_combat_encounter_payload(visible=False, evidence="none"))
+        if len(payloads) in {4, 5}:
+            return _response(_combat_visibility_payload())
+        return _response(
+            _publication_boundary_payload(
+                transient_transition_effect=True,
+                transition_effect_kind="white_wipe",
+                transition_effect_coverage="over_half",
+                primary_content_readability="obscured",
+            )
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert annotation.combat_encounter_kind == "not_combat"
+    assert annotation.combat_encounter_basis == "none"
+    assert diagnostics.attempt_count == 6
+    assert len(payloads) == 6
+    publication_prompt = _last_message(payloads[5])["content"]
+    assert isinstance(publication_prompt, str)
+    assert "transient_transition_effect" in publication_prompt
 
 
 @pytest.mark.parametrize(
