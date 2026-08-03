@@ -9,7 +9,7 @@
 - 選択順付きのBlog Candidate
 - Base、coverage、spoiler、temporal、marginal utility
 - 選択時のsimilarity passと最も近い選択画像とのcosine similarity
-- Variant Group、stable reason code、tie-break使用有無
+- Variant Group、Semantic Duplicate Groupと判定根拠、stable reason code、tie-break使用有無
 - Blog Image Typeの目標と実績
 - 通常戦闘・イベントの有効候補数、条件付き最低数、実績、再配分
 - 未採用候補のstable rejection、blocking ID、Counterfactual Selection Score
@@ -29,7 +29,7 @@ Selection Base Utilityは次の固定式です。
 
 Explanation Valueは`none=0`、`low=1/3`、`medium=2/3`、`high=1`、Context Cue Relevanceは`unavailable/none=0`、`weak=0.5`、`strong=1`へ変換します。
 
-Explanation Valueが`none`の候補はCounterfactual Selection Scoreまで計算しますが、要求枚数を満たすための選択対象にはしません。これはCandidate Annotationに最終採否を委ねる処理ではなく、検証済みenumへ`video-set-selection-v3`が適用する決定的な適格性境界です。未採用理由は既存の`lower_marginal_utility`として公開され、shortfallでも穴埋めしません。
+Explanation Valueが`none`の候補はCounterfactual Selection Scoreまで計算しますが、要求枚数を満たすための選択対象にはしません。これはCandidate Annotationに最終採否を委ねる処理ではなく、検証済みenumへ`video-set-selection-v4`が適用する決定的な適格性境界です。未採用理由は既存の`lower_marginal_utility`として公開され、shortfallでも穴埋めしません。
 
 要求枚数に対する`normal_gameplay=70%`、`event=25%`、`menu=5%`の目標は最大剰余法で丸めます。同率はこのtype順です。目標未達候補へ`+0.10`、最初のtitleへ`+0.05`を加えますが、超過を減点せず、候補が偏っていてもhard quotaにしません。titleだけは最大1枚です。
 
@@ -53,6 +53,18 @@ ADR 0004の表に従うSpoiler Penaltyは候補単体へのsoft penaltyです。
 
 同じsceneでsimilarityが`0.95`以上の連結成分を安定したVariant Groupにします。`recurring_gameplay`で同じGroupの2枚目を選ぶ前に、そのpassで適格な未代表Groupへ一度ずつ機会を与えます。全Groupの代表後も、利用者がより緩い設定値を明示していなければ`0.97`までしかvariantを広げません。旧Cinematic Soft Capは適用しません。
 
+### 分類揺れをまたぐSemantic Duplicate Group
+
+`video-set-selection-v4`はVariant Groupとglobal similarity ceilingの外側にSemantic Duplicate Groupを設けます。同じGroupは要求枚数不足時にも最大1枚で、Marginal Selection Utilityと通常のstable tie-breakで最初に選ばれた候補が代表です。この上限はConditional Coverage Minimumと`recurring_gameplay`のVariant Expansionより強く、未代表の別遭遇、通常戦闘、eventを同一Groupの2枚目より先に残します。
+
+Group判定は次の互いに重ならない根拠を使います。
+
+- `title_semantics`: Blog Image Type、Screen Text Kind、Representative Frame Evidenceのいずれかがtitleを示す候補をVideo Set全体で一つにする。`event`などへの誤分類でも既存のtitle最大1枚を回避できない。
+- `combat_encounter_sequence`: 同じVideo Sourceの`major`候補をVideo Time順に並べ、Scene Slugの連続runを遭遇境界にする。同じSlugに挟まれた1件だけのSlug揺れは、前後がそれぞれ15秒以内の場合だけ同じrunへ吸収する。別の主要戦闘runを挟んで同じSlugが再登場した場合は別遭遇にする。
+- `visual_role_similarity`: titleでも`major`でもない候補について、同じVideo Source、30秒以内、同じRepresentative Frame content kind、同じCombat Encounter Kind、Neutral視覚類似度0.93以上をすべて満たす組だけを完全結合のGroupにする。`recurring_gameplay`ではさらに、独立評価された画像summaryのUnicode・大小文字・句読点を正規化した値が一致する場合だけ畳み、異なる技・敵・結果の説明を維持する。
+
+Semantic Group IDはbasisと全memberのFrame Candidate IDから決定的に作ります。選択代表には`semantic_group_representative`、除外候補には`semantic_duplicate`、blocking selected ID、同じGroup IDとbasisを記録します。Group判定は自由文の固有名を正解として扱わず、Neutral特徴だけで異なる敵をまとめることもしません。
+
 Temporal Diversity Penaltyは、要求枚数`N`と最も近い選択済みVideo Set Progress距離`d`から次の式で求めます。
 
 ```text
@@ -67,14 +79,15 @@ Video Orderや後半位置そのものへの加点・減点、動画ごとの最
 
 `select_from_shortlist_batches`は初期注釈batchでshortfallになった場合に加え、要求枚数が10枚以上で既知の条件付きfacetがまだ見つからない、または最低枠が未充足の場合も次の決定的batchを受け取ります。要求数と、発見済みの`ordinary_combat`・`event`最低枠を満たすか、全Candidate Momentを使い切るまで拡張し、拡張済みpoolを空の選択状態から再計算します。以前の緩和passで選んだ候補を固定しません。batchの生成、Candidate Annotation、batch sizeの性能上限は呼び出し側とIssue #189が所有します。
 
-全Candidate Momentを使い切っても不足する場合は、選べた画像だけを正常結果として返します。Explanation Valueが`none`の候補、2枚目のtitle、Visual Near-Duplicate、不適格frame、未完了Annotationでは穴埋めしません。未採用候補のSimilarity Ceilingは要求数を満たした時点、またはshortfallで最後まで到達した実際の最終passを基準にします。未採用候補はCounterfactual Selection Scoreの降順と同じstable tie-breakで返し、主因を次のenumで示します。
+全Candidate Momentを使い切っても不足する場合は、選べた画像だけを正常結果として返します。Explanation Valueが`none`の候補、Semantic Duplicate Groupの2枚目、2枚目のtitle、Visual Near-Duplicate、不適格frame、未完了Annotationでは穴埋めしません。未採用候補のSimilarity Ceilingは要求数を満たした時点、またはshortfallで最後まで到達した実際の最終passを基準にします。未採用候補はCounterfactual Selection Scoreの降順と同じstable tie-breakで返し、主因を次のenumで示します。
 
 - `title_limit`
+- `semantic_duplicate`
 - `visual_near_duplicate`
 - `similarity_ceiling`
 - `spoiler_monotonicity_guard`
 - `lower_marginal_utility`
 
-内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v3`としてCompleted Stageへ確定する。選定前cache keyには、Video Stage、全候補のCatalog fingerprint、Primaryと同一Momentの代替最大2枚を含む全一枚Annotation fingerprint、Combat Representative Fallback policy version、設定、batch境界を含める。fallbackの並列数と完了順は含めない。warm runはこのkeyをselector実行前に検索し、coldで実際に使用したbatch境界までCatalog／Annotationをcacheから復元した後、同じ条件でRepresentative Frameを再集約し、score、reason、coverageを含む選定結果をartifactから結び直す。selectorを実行したrunをcache reuseとして数えない。
+内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v4`、cache artifactを`game-screen-pick/video-set-selection@2.0.0`としてCompleted Stageへ確定する。選定前cache keyには、Video Stage、全候補のCatalog fingerprint、Primaryと同一Momentの代替最大2枚を含む全一枚Annotation fingerprint、Combat Representative Fallback policy version、設定、batch境界を含める。fallbackの並列数と完了順は含めない。warm runはこのkeyをselector実行前に検索し、coldで実際に使用したbatch境界までCatalog／Annotationをcacheから復元した後、同じ条件でRepresentative Frameを再集約し、score、reason、coverage、Semantic Duplicate Groupを含む選定結果をartifactから結び直す。selectorを実行したrunをcache reuseとして数えない。旧selection artifactはschema不一致として再利用せず、上流のVideo StageとCandidate Annotationはfingerprint一致時に再利用する。
 
 旧first-N fakeはwalking-skeleton専用applicationへ隔離され、public CLIはIssue #190までscreenshot入力のままである。

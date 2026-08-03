@@ -17,10 +17,12 @@ from ..models.rejected_blog_candidate import RejectedBlogCandidate
 from ..models.selected_blog_image import SelectedBlogImage
 from ..models.selection_rejection_reason import SelectionRejectionReason
 from ..models.selection_score import SelectionScore
+from ..models.semantic_duplicate_basis import SemanticDuplicateBasis
 from ..models.video_set_selection_result import (
     CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT,
     VideoSetSelectionResult,
 )
+from .assign_semantic_duplicate_groups import assign_semantic_duplicate_groups
 
 SpoilerSensitivity = Literal["low", "medium", "high"]
 
@@ -164,6 +166,7 @@ def _select_with_major_spoiler_limit(
     )
     conditional_actuals = dict.fromkeys(SELECTION_COVERAGE_FACETS, 0)
     variant_groups = _assign_variant_groups(candidates)
+    semantic_groups, semantic_group_bases = assign_semantic_duplicate_groups(candidates)
     selected: list[SelectedBlogImage] = []
     remaining = list(candidates)
     counterfactual_scores: dict[str, SelectionScore] = {}
@@ -211,6 +214,7 @@ def _select_with_major_spoiler_limit(
                     actuals,
                     similarity_pass,
                     variant_groups,
+                    semantic_groups,
                     major_spoiler_limit,
                 )
                 and not (
@@ -242,6 +246,7 @@ def _select_with_major_spoiler_limit(
                 actuals,
                 unmet_facets,
                 variant_groups,
+                semantic_groups,
                 similarity_passes[-1],
                 major_spoiler_limit,
                 requested_count - len(selected),
@@ -254,6 +259,7 @@ def _select_with_major_spoiler_limit(
                         selected,
                         actuals,
                         variant_groups,
+                        semantic_groups,
                         unmet_facets,
                         similarity_passes[-1],
                         major_spoiler_limit,
@@ -306,6 +312,7 @@ def _select_with_major_spoiler_limit(
                     reason_codes=_reason_codes(
                         candidate,
                         score,
+                        candidate.identifier in semantic_groups,
                         variant_groups[candidate.identifier]
                         in {
                             item.variant_group_id
@@ -318,6 +325,8 @@ def _select_with_major_spoiler_limit(
                     ),
                     variant_group_id=variant_groups[candidate.identifier],
                     tie_break_applied=tie_break_applied,
+                    semantic_group_id=semantic_groups.get(candidate.identifier),
+                    semantic_group_basis=semantic_group_bases.get(candidate.identifier),
                 )
             )
             actuals[candidate.annotation.blog_image_type] += 1
@@ -348,6 +357,8 @@ def _select_with_major_spoiler_limit(
             candidate,
             selected,
             variant_groups[candidate.identifier],
+            semantic_groups,
+            semantic_group_bases,
             counterfactual_scores[candidate.identifier],
             major_spoiler_limit,
             final_similarity_ceiling,
@@ -467,6 +478,7 @@ def _coverage_candidates_preserving_joint_feasibility(
     selected: list[SelectedBlogImage],
     actuals: Mapping[str, int],
     variant_groups: Mapping[str, str],
+    semantic_groups: Mapping[str, str],
     unmet_facets: set[SelectionCoverageFacet],
     terminal_similarity_ceiling: float,
     major_spoiler_limit: int | None,
@@ -484,6 +496,7 @@ def _coverage_candidates_preserving_joint_feasibility(
             (candidate,),
             actuals,
             variant_groups,
+            semantic_groups,
             unmet_facets - {candidate.annotation.selection_coverage_facet},
             terminal_similarity_ceiling,
             major_spoiler_limit,
@@ -498,6 +511,7 @@ def _has_joint_coverage_completion(
     chosen: tuple[BlogCandidate, ...],
     actuals: Mapping[str, int],
     variant_groups: Mapping[str, str],
+    semantic_groups: Mapping[str, str],
     unassigned_facets: set[SelectionCoverageFacet],
     terminal_similarity_ceiling: float,
     major_spoiler_limit: int | None,
@@ -511,6 +525,7 @@ def _has_joint_coverage_completion(
             chosen,
             actuals,
             variant_groups,
+            semantic_groups,
             terminal_similarity_ceiling,
             major_spoiler_limit,
             available_slots,
@@ -524,6 +539,7 @@ def _has_joint_coverage_completion(
                 candidate,
                 selected,
                 chosen,
+                semantic_groups,
                 terminal_similarity_ceiling,
                 major_spoiler_limit,
             )
@@ -535,6 +551,7 @@ def _has_joint_coverage_completion(
             (*chosen, candidate),
             actuals,
             variant_groups,
+            semantic_groups,
             unassigned_facets - {facet},
             terminal_similarity_ceiling,
             major_spoiler_limit,
@@ -550,6 +567,7 @@ def _coverage_combination_fits_variant_budget(
     chosen: tuple[BlogCandidate, ...],
     actuals: Mapping[str, int],
     variant_groups: Mapping[str, str],
+    semantic_groups: Mapping[str, str],
     terminal_similarity_ceiling: float,
     major_spoiler_limit: int | None,
     available_slots: int,
@@ -606,6 +624,7 @@ def _coverage_combination_fits_variant_budget(
                 candidate,
                 selected,
                 chosen,
+                semantic_groups,
                 terminal_similarity_ceiling,
                 major_spoiler_limit,
             )
@@ -727,11 +746,21 @@ def _coverage_combination_candidate_is_eligible(
     candidate: BlogCandidate,
     selected: list[SelectedBlogImage],
     chosen: tuple[BlogCandidate, ...],
+    semantic_groups: Mapping[str, str],
     terminal_similarity_ceiling: float,
     major_spoiler_limit: int | None,
 ) -> bool:
     """最低枠の組合せ候補が終端制約と両立するかを返す。"""
     if not _has_explanation_value(candidate):
+        return False
+    candidate_semantic_group = semantic_groups.get(candidate.identifier)
+    if candidate_semantic_group is not None and any(
+        semantic_groups.get(other.identifier) == candidate_semantic_group
+        for other in (
+            *(item.candidate for item in selected),
+            *chosen,
+        )
+    ):
         return False
     nearest = _nearest_selected_similarity(candidate, selected)
     if nearest is not None and nearest > terminal_similarity_ceiling:
@@ -756,6 +785,7 @@ def select_completable_coverage_prerequisites(
     actuals: Mapping[str, int],
     unmet_facets: set[SelectionCoverageFacet],
     variant_groups: Mapping[str, str],
+    semantic_groups: Mapping[str, str],
     terminal_similarity_ceiling: float,
     major_spoiler_limit: int | None,
     available_slots: int,
@@ -795,6 +825,7 @@ def select_completable_coverage_prerequisites(
                     coverage_candidate,
                     selected,
                     (candidate,),
+                    semantic_groups,
                     terminal_similarity_ceiling,
                     major_spoiler_limit,
                 )
@@ -804,6 +835,7 @@ def select_completable_coverage_prerequisites(
                     (candidate, coverage_candidate),
                     actuals,
                     variant_groups,
+                    semantic_groups,
                     unmet_facets - {coverage_facet},
                     terminal_similarity_ceiling,
                     major_spoiler_limit,
@@ -886,8 +918,11 @@ def _is_visually_eligible(
     actuals: Mapping[str, int],
     similarity_threshold: float,
     variant_groups: Mapping[str, str],
+    semantic_groups: Mapping[str, str],
     major_spoiler_limit: int | None,
 ) -> bool:
+    if _semantic_group_blocker(candidate, selected, semantic_groups) is not None:
+        return False
     nearest = _nearest_selected_similarity(candidate, selected)
     if nearest is not None and nearest > similarity_threshold:
         return False
@@ -907,6 +942,7 @@ def _is_visually_eligible(
             actuals,
             similarity_threshold,
             variant_groups,
+            semantic_groups,
             selected_groups,
             major_spoiler_limit,
         )
@@ -924,6 +960,7 @@ def _has_unrepresented_eligible_variant_group(
     actuals: Mapping[str, int],
     similarity_threshold: float,
     variant_groups: Mapping[str, str],
+    semantic_groups: Mapping[str, str],
     selected_groups: set[str],
     major_spoiler_limit: int | None,
 ) -> bool:
@@ -932,6 +969,12 @@ def _has_unrepresented_eligible_variant_group(
             not _has_explanation_value(alternative)
             or alternative.annotation.scene_slug != candidate.annotation.scene_slug
             or variant_groups[alternative.identifier] in selected_groups
+            or _semantic_group_blocker(
+                alternative,
+                selected,
+                semantic_groups,
+            )
+            is not None
             or (
                 alternative.annotation.blog_image_type == "title"
                 and actuals["title"] >= 1
@@ -993,6 +1036,7 @@ def _selection_key(
 def _reason_codes(
     candidate: BlogCandidate,
     score: SelectionScore,
+    is_semantic_group_representative: bool,
     is_variant_expansion: bool,
     tie_break_applied: bool,
     minimum_coverage_facet: SelectionCoverageFacet | None,
@@ -1013,6 +1057,8 @@ def _reason_codes(
         )
     if minimum_coverage_facet is not None:
         reasons.append(f"{minimum_coverage_facet}_minimum_coverage")
+    if is_semantic_group_representative:
+        reasons.append("semantic_group_representative")
     if is_variant_expansion and candidate.scene_selection_role == "recurring_gameplay":
         reasons.append("recurring_gameplay_variant")
     if score.spoiler_penalty > 0:
@@ -1026,6 +1072,8 @@ def _rejection(
     candidate: BlogCandidate,
     selected: list[SelectedBlogImage],
     variant_group_id: str,
+    semantic_groups: Mapping[str, str],
+    semantic_group_bases: Mapping[str, SemanticDuplicateBasis],
     counterfactual_score: SelectionScore,
     major_spoiler_limit: int | None,
     final_similarity_ceiling: float,
@@ -1040,8 +1088,15 @@ def _rejection(
         ),
         None,
     )
+    semantic_blocker = _semantic_group_blocker(
+        candidate,
+        selected,
+        semantic_groups,
+    )
     if candidate.annotation.blog_image_type == "title" and selected_title is not None:
         reason = SelectionRejectionReason.TITLE_LIMIT
+    elif semantic_blocker is not None:
+        reason = SelectionRejectionReason.SEMANTIC_DUPLICATE
     elif (
         nearest_similarity is not None
         and nearest_similarity > _VISUAL_NEAR_DUPLICATE_THRESHOLD
@@ -1059,16 +1114,19 @@ def _rejection(
         reason = SelectionRejectionReason.SPOILER_MONOTONICITY_GUARD
     else:
         reason = SelectionRejectionReason.LOWER_MARGINAL_UTILITY
+    blocked_by_image_id: str | None = None
+    if reason is SelectionRejectionReason.TITLE_LIMIT and selected_title is not None:
+        blocked_by_image_id = selected_title.candidate.identifier
+    elif (
+        reason is SelectionRejectionReason.SEMANTIC_DUPLICATE
+        and semantic_blocker is not None
+    ):
+        blocked_by_image_id = semantic_blocker.candidate.identifier
     return RejectedBlogCandidate(
         candidate=candidate,
         reason_code=reason,
         counterfactual_score=counterfactual_score,
-        blocked_by_image_id=(
-            selected_title.candidate.identifier
-            if reason is SelectionRejectionReason.TITLE_LIMIT
-            and selected_title is not None
-            else None
-        ),
+        blocked_by_image_id=blocked_by_image_id,
         nearest_selected_image_id=(
             nearest_selected.candidate.identifier
             if reason in _SIMILARITY_REJECTION_REASONS and nearest_selected is not None
@@ -1078,6 +1136,27 @@ def _rejection(
             nearest_similarity if reason in _SIMILARITY_REJECTION_REASONS else None
         ),
         variant_group_id=variant_group_id,
+        semantic_group_id=semantic_groups.get(candidate.identifier),
+        semantic_group_basis=semantic_group_bases.get(candidate.identifier),
+    )
+
+
+def _semantic_group_blocker(
+    candidate: BlogCandidate,
+    selected: list[SelectedBlogImage],
+    semantic_groups: Mapping[str, str],
+) -> SelectedBlogImage | None:
+    """同じSemantic Duplicate Groupで先に選ばれた代表を返す。"""
+    candidate_group = semantic_groups.get(candidate.identifier)
+    if candidate_group is None:
+        return None
+    return next(
+        (
+            item
+            for item in selected
+            if semantic_groups.get(item.candidate.identifier) == candidate_group
+        ),
+        None,
     )
 
 

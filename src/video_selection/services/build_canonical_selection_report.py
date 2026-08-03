@@ -10,6 +10,7 @@ from ..models.report_stage_provenance import ReportStageProvenance
 from ..models.selected_blog_image import SelectedBlogImage
 from ..models.selected_image_artifact import SelectedImageArtifact
 from ..models.selection_score import SelectionScore
+from ..models.semantic_duplicate_basis import SemanticDuplicateBasis
 from ..models.video_set_selection_result import (
     CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT,
 )
@@ -23,8 +24,8 @@ from .report_time import (
 )
 
 REPORT_SCHEMA_NAME = "game-screen-pick/report"
-REPORT_SCHEMA_VERSION = "2.0.0"
-SELECTION_POLICY_VERSION = "video-set-selection-v3"
+REPORT_SCHEMA_VERSION = "2.1.0"
+SELECTION_POLICY_VERSION = "video-set-selection-v4"
 SELECTION_EXPLANATION_RENDERER = "selection-explanation-ja-v1"
 
 _REASON_LABELS = {
@@ -37,6 +38,7 @@ _REASON_LABELS = {
     "title_first_image_bonus": "最初のtitle bonus",
     "ordinary_combat_minimum_coverage": "通常戦闘の条件付き最低coverage",
     "event_minimum_coverage": "eventの条件付き最低coverage",
+    "semantic_group_representative": "Semantic Duplicate Groupの代表",
     "recurring_gameplay_variant": "recurring gameplayの状態差",
     "low_spoiler_penalty_applied": "low spoiler penalty適用後のutility",
     "medium_spoiler_penalty_applied": "medium spoiler penalty適用後のutility",
@@ -49,7 +51,7 @@ def build_canonical_selection_report(
     request: CanonicalPublicationRequest,
     image_artifacts: tuple[SelectedImageArtifact, ...],
 ) -> dict[str, object]:
-    """画像artifactを含むreport@2.0.0 objectを返す。"""
+    """画像artifactを含むreport@2.1.0 objectを返す。"""
     selection = request.selection_result
     artifacts_by_id = {item.image_id: item for item in image_artifacts}
     selected_ids = {item.candidate.identifier for item in selection.selected}
@@ -382,6 +384,10 @@ def _selected_record(
             },
             "variant_group_id": selected.variant_group_id,
             "tie_break_applied": selected.tie_break_applied,
+            **_semantic_group_record(
+                selected.semantic_group_id,
+                selected.semantic_group_basis,
+            ),
         },
     }
 
@@ -399,6 +405,12 @@ def _near_miss_record(
         rejection["nearest_selected_image_id"] = rejected.nearest_selected_image_id
     if rejected.similarity is not None:
         rejection["similarity"] = rejected.similarity
+    rejection.update(
+        _semantic_group_record(
+            rejected.semantic_group_id,
+            rejected.semantic_group_basis,
+        )
+    )
     return {
         "image_id": rejected.candidate.identifier,
         "source": _candidate_source(rejected.candidate, stages, source_ids),
@@ -408,6 +420,18 @@ def _near_miss_record(
         "rejection": rejection,
         "variant_group_id": rejected.variant_group_id,
     }
+
+
+def _semantic_group_record(
+    group_id: str | None,
+    basis: SemanticDuplicateBasis | None,
+) -> dict[str, object]:
+    """存在するSemantic Duplicate Groupの公開可能な根拠を返す。"""
+    if group_id is None and basis is None:
+        return {}
+    if group_id is None or basis is None:
+        raise ValueError("Semantic Duplicate Groupの公開fieldが不正です")
+    return {"semantic_group": {"id": group_id, "basis": basis}}
 
 
 def _candidate_source(

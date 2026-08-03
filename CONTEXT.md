@@ -493,7 +493,7 @@ _Avoid_: hard quota, overflow penalty, guaranteed title image
 _Avoid_: Blog Image Type, Scene Kind, free-form scene name, final eligibility
 
 **Conditional Coverage Minimum**:
-要求枚数が10枚以上で、Explanation Valueと既存の適格性を満たすSelection Coverage Facet候補が存在する場合だけ、`ordinary_combat`と`event`を各最低1枚選ぶ決定的なVideo Set selectorの境界。複数facetが未充足なら、終端similarity ceilingで各facetから1件ずつ選べ、必要な未代表Variant Groupの代表を含めても残り出力枠へ収まる互換組合せを保持し、別facetの実現可能な最低枠を壊す高utility候補を先に選ばない。現在passで選べない候補は後続similarity passまで枠を保持する。候補が同じrecurring gameplayの既選択Variant Groupに属し、別の未代表Groupが選択の前提になる場合は、最低枠を残せる範囲でその前提Groupを先に選ぶ。終端でも重複、title上限、Spoiler Monotonicity Guardなどの制約に反する場合、または有効候補がなければ枠を他候補へ解放する。終端で解放した場合、または緩和ceilingで最後の最低枠を満たした場合は、選択済み画像を保持し、設定されたbase similarity ceilingから残りの通常選定を再開する。要求枚数10枚以上では、既知facetが未発見または未充足の間もSelection Shortlistを拡張し、全Candidate Momentを使い切るまで候補を探索する。残り枚数はBlog Image Type Soft CoverageとMarginal Selection Utilityで動的に配分し、Selection Shortfallを低品質候補で埋めない。
+要求枚数が10枚以上で、Explanation Valueと既存の適格性を満たすSelection Coverage Facet候補が存在する場合だけ、`ordinary_combat`と`event`を各最低1枚選ぶ決定的なVideo Set selectorの境界。複数facetが未充足なら、終端similarity ceilingで各facetから1件ずつ選べ、必要な未代表Variant Groupの代表を含めても残り出力枠へ収まる互換組合せを保持し、別facetの実現可能な最低枠を壊す高utility候補を先に選ばない。現在passで選べない候補は後続similarity passまで枠を保持する。候補が同じrecurring gameplayの既選択Variant Groupに属し、別の未代表Groupが選択の前提になる場合は、最低枠を残せる範囲でその前提Groupを先に選ぶ。終端でもSemantic Duplicate Group、Visual Near-Duplicate、title上限、Spoiler Monotonicity Guardなどの制約に反する場合、または有効候補がなければ枠を他候補へ解放する。終端で解放した場合、または緩和ceilingで最後の最低枠を満たした場合は、選択済み画像を保持し、設定されたbase similarity ceilingから残りの通常選定を再開する。要求枚数10枚以上では、既知facetが未発見または未充足の間もSelection Shortlistを拡張し、全Candidate Momentを使い切るまで候補を探索する。残り枚数はBlog Image Type Soft CoverageとMarginal Selection Utilityで動的に配分し、Selection Shortfallを低品質候補で埋めない。
 _Avoid_: fixed quota, output count guarantee, per-video minimum, invalid fallback
 
 **Explanation Value**:
@@ -554,7 +554,7 @@ _Avoid_: all Candidate Moments, annotated Blog Candidate, selected output
 _Avoid_: Candidate Annotation failure, silent omission, fabricated output, invalid-frame fallback
 
 **Selection Rejection Reason**:
-未採用Blog Candidateの主因を表すstable enum。`title_limit`、`visual_near_duplicate`、`similarity_ceiling`、`spoiler_monotonicity_guard`、`lower_marginal_utility`を持つ。Explanation Valueが`none`の候補はCounterfactual Selection Scoreを保持した`lower_marginal_utility`として説明し、model自由文や例外messageから理由を推測しない。
+未採用Blog Candidateの主因を表すstable enum。`title_limit`、`semantic_duplicate`、`visual_near_duplicate`、`similarity_ceiling`、`spoiler_monotonicity_guard`、`lower_marginal_utility`を持つ。`semantic_duplicate`は同じSemantic Duplicate Groupの代表が既に選択されたことを示し、そのblocking selected IDとGroup判定根拠を伴う。Explanation Valueが`none`の候補はCounterfactual Selection Scoreを保持した`lower_marginal_utility`として説明し、model自由文や例外messageから理由を推測しない。
 _Avoid_: free-text rejection, Content Reject Reason, Ollama Stage Failure
 
 **Counterfactual Selection Score**:
@@ -586,8 +586,20 @@ _Avoid_: Video Set selection rule, per-scene cinematic quota, hard reject, exact
 _Avoid_: duplicate image, cinematic scene, static menu
 
 **Variant Expansion**:
-recurring gameplay pattern で、同じ variant group から複数の画像を選ぶこと。要求選択枚数が多いほど強まり、同じ画面構造の中にある状態差や進行差を拾うために使う。
+recurring gameplay pattern で、同じ variant group から複数の画像を選ぶこと。要求選択枚数が多いほど強まり、同じ画面構造の中にある状態差や進行差を拾うために使う。Combat Encounter Groupまたは他のSemantic Duplicate Groupに属する2枚目は、Variant Expansionより強い上限によって選ばない。
 _Avoid_: duplicate flooding, one-representative-only selection, manual expansion mode
+
+**Semantic Duplicate Group**:
+Blog Image Type、Scene Slug、Variant Groupの分類境界をまたいでも、同じブログ上の役割を重ねて示す候補のまとまり。同じGroupからは要求枚数不足時も最大1枚だけを選び、最初に選ばれた最高Marginal Selection Utilityの候補を代表とする。判定は`combat_encounter_sequence`、`title_semantics`、`visual_role_similarity`のprivacy-safeなSemantic Duplicate Basisを持ち、Neutral Image Analysisだけを全体へ一律適用しない。
+_Avoid_: global similarity threshold, Variant Group, duplicate filename, model confidence
+
+**Combat Encounter Group**:
+Semantic Duplicate Groupのうち、同一Video Source内で時系列に連続する`major`戦闘候補を同じ遭遇として扱うまとまり。Scene Slugの連続runを境界にし、同じSlugに前後を挟まれた単発の誤分類は両側15秒以内のときだけ同じ遭遇へ吸収する。別の主要戦闘runを挟んだ同名Slugは別遭遇として保持する。同じGroupでは異なる構図や技でも代表1枚を上限とし、未代表の別遭遇や通常戦闘を優先する。
+_Avoid_: boss name truth, all major combat in one video, Combat Encounter Kind, Variant Group
+
+**Semantic Duplicate Basis**:
+Semantic Duplicate Groupを構成した決定的で公開可能な根拠enum。`combat_encounter_sequence`は主要戦闘の時系列run、`title_semantics`はBlog Image Type・Screen Text Kind・Representative Frame Evidenceのいずれかが示すtitle、`visual_role_similarity`は同一source内30秒以内、同じ画像内content kindとCombat Encounter Kind、0.93以上のNeutral視覚類似度を示す。`recurring_gameplay`で`visual_role_similarity`を使う場合は、独立評価された正規化済み画像summaryも一致させ、異なる技・敵・結果の追加説明価値を維持する。
+_Avoid_: free-form rejection explanation, raw model response, global threshold
 
 **Visual Near-Duplicate**:
 Video Set selectorで使う正規化済み視覚特徴のcosine similarityが0.995を超えるRepresentative Frameの組。要求枚数が不足しても同時には選択しない。
