@@ -8,7 +8,7 @@ Video Set内の全sourceをVideo Order順にprobeした後、独立した`scan-v
 
 Video Order上の対象scanが確定した時点で、後続Videoのscanを続けながら、そのVideoの`extract-frame-candidates`と`collect-context`を開始します。downstream、結果、progress通知はVideo Order順であり、後続scanの完了順には依存しません。worker数と変更履歴はStage Fingerprintやcache identityへ含めず、privacy-safeなrun provenanceへだけ記録します。各Stage境界ではpath・size・`mtime_ns` snapshotを検査し、内容のwhole-file SHA-256はVideo Identity cache miss時だけ計算します。device、inode、ctimeは再利用判定に使いません。Video IdentityのSHA-256はdisk/CPU処理であり、NVDECへ移せません。
 
-一つのVideo Sourceの`extract-frame-candidates`では、互いに離れたRefinement Window Groupをlogical CPU 4個につき1 worker、最大4 workerでbounded並列実行します。これはFFmpegのsoftware range decodeとOpenCV/NumPyによるmodel-free解析を行うCPU処理であり、OllamaのGPU推論ではありません。worker数はpublic設定やsemantic identityに加えず、同じ入力を1 workerまたは4 workerで処理しても結果をPTS range順へ戻します。処理全体のresource対応は[Pipeline処理フローと計算資源](processing-flow.md)を参照してください。
+一つのVideo Sourceの`extract-frame-candidates`では、互いに離れたRefinement Window Groupをbounded並列実行します。worker数はGroup数、最大4、実行中の後続Video Scanが予約しているlogical CPUを除いた残り容量（4 logical CPUにつき1 worker）、現在利用可能なmemoryから求めた上限の最小値です。CPU decodeのactive scanは1件あたり8 logical CPU、NVDEC scanは4 logical CPUを予約済みとして扱うため、scanのCPU予算を無視してRefinementを追加で最大4件走らせません。これはFFmpegのsoftware range decodeとOpenCV/NumPyによるmodel-free解析を行うCPU・disk処理であり、OllamaのGPU推論ではありません。worker数はpublic設定やsemantic identityに加えず、同じ入力を1 workerまたは4 workerで処理しても結果をPTS range順へ戻します。処理全体のresource対応は[Pipeline処理フローと計算資源](processing-flow.md)を参照してください。
 
 Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行中のscanへ終了を要求します。Refinement Window Groupの並列処理中はqueued Groupを取り消し、既に実行中のGroupだけを短いatomic境界まで完了または失敗させます。割り込み後に待機中のscanやGroupを新しく開始しません。Completed Stageが未確定でも、atomicに確定済みのscan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、STT chunkは次回runで再利用し、実行中または未開始だった最小Work Unitだけを再計算します。
 
@@ -21,7 +21,8 @@ Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行�
 2. `extract-frame-candidates`
    - timeline順の単調windowでscene近傍のheartbeat品質を参照し、density windowごとに最大1件のCandidate Momentを発見します。
    - Moment前後のnative frameだけをrange scanで取り出します。重なるMoment windowを一つのRefinement Window Groupとし、各Groupは一つの独立range decode、Neutral Image Analysis、proxy encodeを所有します。
-   - Group数、logical CPU数、最大4のsafe capからworker数を自動決定します。同時に保持するGroupのRGB decode結果をworker数以下へ制限し、選抜proxyを書いた時点でそのGroupのRGB frameを解放します。
+   - Group数、active Video Scanの予約分を除いたlogical CPU数、最大4のsafe cap、available memoryからworker数を自動決定します。memory上限は長辺960px、240 frame/秒、保持frameあたり4 byte/pixelで各PTS rangeを保守的に見積もり、その時点のavailable memoryの4分の1へ同時Groupが収まる値です。残る4分の3はOpenCV/NumPyの解析用一時領域、runtime、他processの余裕として予約します。available memoryまたはsource寸法を取得できない場合は1 workerへ抑制します。
+   - 同時に保持するGroupのRGB decode結果をworker数以下へ制限し、選抜proxyを書いた時点でそのGroupのRGB frameを解放します。resource値と決定worker数は実行時制御だけに使い、Completed Stage Fingerprint、Durable Work Unit key、成果物へ含めません。
    - 各Refinement Window Groupのproxyと解析結果を別々のDurable Work Unitとしてatomicに確定し、並列完了順にかかわらずPTS順に親Stageへ集約します。cache hit Groupはdecodeせず、破損・未完了Groupだけを再計算します。
    - group内でmodel-free Neutral Image Analysis、無効frame除外、Moment内deduplication、多様性選抜を行います。最初に最高Qualityのframeを保持し、残りは選択済みframeとの最小時間距離を最優先、最小視覚距離とQualityを後続条件として、Refinement Window全体へ決定的に分散させます。
    - Frame Candidate Proxyと抽出metricをatomicに確定します。

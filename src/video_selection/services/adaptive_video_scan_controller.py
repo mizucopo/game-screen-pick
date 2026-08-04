@@ -130,6 +130,15 @@ class AdaptiveVideoScanController:
         return self._mode == "auto"
 
     @property
+    def logical_cpus_per_worker(self) -> int:
+        """一つのactive scanへ予約するlogical CPU数を返す。"""
+        return (
+            _LOGICAL_CPUS_PER_NVDEC_WORKER
+            if self._decode_backend == "nvdec"
+            else _LOGICAL_CPUS_PER_CPU_WORKER
+        )
+
+    @property
     def diagnostics(self) -> dict[str, object]:
         """cache identityへ含めないprivacy-safeなrun診断を返す。"""
         return {

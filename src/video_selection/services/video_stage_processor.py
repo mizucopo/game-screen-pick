@@ -58,12 +58,15 @@ from .context_stage_processor import ContextStageProcessor
 from .discover_candidate_moments import discover_candidate_moments
 from .durable_work_unit_cache import DurableWorkUnitCache
 from .processing_stage_runner import ProcessingStageRunner
+from .read_available_memory_bytes import read_available_memory_bytes
 from .refine_candidate_moments import (
     combine_refined_candidate_groups,
     iter_refined_candidate_groups,
 )
 from .refinement_group_scheduler import RefinementGroupScheduler
-from .resolve_frame_range_worker_count import resolve_frame_range_worker_count
+from .resolve_refinement_group_worker_count import (
+    resolve_refinement_group_worker_count,
+)
 from .run_progress_tracker import RunProgressTracker
 from .sample_video_scan_resources_safely import sample_video_scan_resources_safely
 from .select_primary_video_stream import select_primary_video_stream
@@ -104,6 +107,7 @@ _SCAN_PROGRESS_HEARTBEAT_SECONDS = 30.0
 
 ScanPartitionDuration = tuple[str, int]
 VideoScanPartition = NativeVideoScan | EmptyVideoScanPartition
+AvailableMemoryReader = Callable[[], int | None]
 ProbedVideoSource = tuple[
     VideoSource,
     MediaProbe,
@@ -124,6 +128,7 @@ class VideoStageProcessor:
         *,
         progress: RunProgressTracker | None = None,
         resource_sampler: Callable[[], VideoScanResourceSample | None] | None = None,
+        available_memory_reader: AvailableMemoryReader | None = None,
     ) -> None:
         self._media_runtime = media_runtime
         self._context_processor = ContextStageProcessor(
@@ -139,6 +144,11 @@ class VideoStageProcessor:
             self._resource_sampler = system_sampler.sample
         else:
             self._resource_sampler = resource_sampler
+        self._available_memory_reader = (
+            read_available_memory_bytes
+            if available_memory_reader is None
+            else available_memory_reader
+        )
         self._parallelism_controller: AdaptiveVideoScanController | None = None
 
     @property
@@ -236,6 +246,14 @@ class VideoStageProcessor:
                             video_order,
                             len(probed_sources),
                         )
+                        completed_scan = self._await_prepared_scan(
+                            prepared_scan,
+                            emit_heartbeat=progress_started,
+                        )
+                        active_scan_logical_cpu_reservation = (
+                            scheduler.active_worker_count
+                            * controller.logical_cpus_per_worker
+                        )
                         results.append(
                             self._process_source(
                                 video_set,
@@ -244,13 +262,13 @@ class VideoStageProcessor:
                                 primary_stream,
                                 media_origin,
                                 scan_partition_duration,
-                                self._await_prepared_scan(
-                                    prepared_scan,
-                                    emit_heartbeat=progress_started,
-                                ),
+                                completed_scan,
                                 video_order,
                                 configuration,
                                 resolved_runtime_identity,
+                                active_scan_logical_cpu_reservation=(
+                                    active_scan_logical_cpu_reservation
+                                ),
                                 scan_progress_started=progress_started,
                             )
                         )
@@ -283,6 +301,7 @@ class VideoStageProcessor:
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
         *,
+        active_scan_logical_cpu_reservation: int,
         scan_progress_started: bool,
     ) -> VideoStageResult:
         """一つのVideo Sourceの3 Stageを確定または再利用する。"""
@@ -360,6 +379,9 @@ class VideoStageProcessor:
                     configuration,
                     extraction_input,
                     stage_root,
+                    active_scan_logical_cpu_reservation=(
+                        active_scan_logical_cpu_reservation
+                    ),
                 ),
                 validate_bundle=lambda value: _restore_extraction_for_source(
                     value.artifact,
@@ -782,6 +804,8 @@ class VideoStageProcessor:
         configuration: EffectiveConfiguration,
         extraction_input: dict[str, object],
         stage_root: Path,
+        *,
+        active_scan_logical_cpu_reservation: int,
     ) -> dict[str, object]:
         """Refinement Window Groupごとに確定して安定順に集約する。"""
         thread_cpu_before = time.thread_time()
@@ -890,9 +914,16 @@ class VideoStageProcessor:
         tasks = tuple(refinement_tasks)
         resolved_groups = (
             RefinementGroupScheduler(
-                max_workers=resolve_frame_range_worker_count(
-                    len(tasks),
+                max_workers=resolve_refinement_group_worker_count(
+                    pts_ranges,
+                    time_base=scan.timeline.time_base,
+                    source_width=scan.primary_stream.width,
+                    source_height=scan.primary_stream.height,
                     logical_cpu_count=os.cpu_count() or 1,
+                    active_scan_logical_cpu_reservation=(
+                        active_scan_logical_cpu_reservation
+                    ),
+                    available_memory_bytes=self._safe_available_memory_bytes(),
                 )
             ).resolve(tasks)
             if tasks
@@ -928,6 +959,16 @@ class VideoStageProcessor:
         artifact_metrics["wall_seconds"] = wall_seconds
         artifact_metrics["cpu_seconds"] = cpu_seconds
         return artifact
+
+    def _safe_available_memory_bytes(self) -> int | None:
+        """resource取得失敗と不正値を安全側のmemory欠落へ変換する。"""
+        try:
+            value = self._available_memory_reader()
+        except Exception:
+            return None
+        if type(value) is not int or value < 0:
+            return None
+        return value
 
     def _produce_refinement_group(
         self,

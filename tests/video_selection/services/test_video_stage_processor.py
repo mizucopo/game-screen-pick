@@ -1868,6 +1868,7 @@ def test_refinement_window_groups_run_concurrently_within_safe_limit(
         runtime,
         FakeSpeechRuntime(),
         RecordingRunObserver(),
+        available_memory_reader=lambda: 64 * 1024**3,
     ).process(
         discover_video_set(input_folder),
         _configuration(input_folder, tmp_path / "output"),
@@ -1876,6 +1877,192 @@ def test_refinement_window_groups_run_concurrently_within_safe_limit(
     # Assert
     assert len(result.extraction.moments) == 2
     assert peak_count == 2
+    assert len(runtime.range_pts_calls) == 2
+
+
+def test_refinement_reserves_cpu_for_background_video_scans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """background Video Scan分を除いたCPU容量でGroupが並列化されること。
+
+    Arrange:
+        - 20 logical CPUで3 scanが開始され、先頭scanだけが完了される
+        - 残る2 scanが16 CPUを予約する間に先頭Videoの2 Groupが処理される
+    Act:
+        - Video Stage processorがpipeliningされる
+    Assert:
+        - Refinement Groupが1件ずつ実行されること
+        - background scan解放後に全Video Stageが完了されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    for index, name in enumerate(
+        ("01-first.mp4", "02-background.mp4", "03-background.mp4"),
+        start=1,
+    ):
+        (input_folder / name).write_bytes(f"video-{index}".encode())
+    scans_started = threading.Barrier(3)
+    release_background_scans = threading.Event()
+    refinement_started = threading.Event()
+    release_refinement = threading.Event()
+    active_refinement_count = 0
+    peak_refinement_count = 0
+    refinement_lock = threading.Lock()
+
+    def coordinate_scans(path: Path) -> None:
+        scans_started.wait(timeout=2)
+        if path.name != "01-first.mp4":
+            assert release_background_scans.wait(timeout=2)
+
+    def coordinate_refinement(path: Path) -> None:
+        nonlocal active_refinement_count, peak_refinement_count
+        if path.name != "01-first.mp4":
+            return
+        with refinement_lock:
+            active_refinement_count += 1
+            peak_refinement_count = max(
+                peak_refinement_count,
+                active_refinement_count,
+            )
+            refinement_started.set()
+        try:
+            assert release_refinement.wait(timeout=2)
+        finally:
+            with refinement_lock:
+                active_refinement_count -= 1
+
+    def release_work() -> None:
+        assert refinement_started.wait(timeout=2)
+        time.sleep(0.05)
+        release_background_scans.set()
+        release_refinement.set()
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        lambda: 20,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        distant_moments=True,
+        on_scan_video=coordinate_scans,
+        on_scan_video_frame_ranges=coordinate_refinement,
+    )
+    releaser = threading.Thread(target=release_work)
+    releaser.start()
+
+    # Act
+    results = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+        available_memory_reader=lambda: 64 * 1024**3,
+    ).process(
+        discover_video_set(input_folder),
+        replace(
+            _configuration(input_folder, tmp_path / "output"),
+            video_scan_workers=3,
+        ),
+    )
+
+    # Assert
+    releaser.join(timeout=1)
+    assert not releaser.is_alive()
+    assert peak_refinement_count == 1
+    assert len(results) == 3
+
+
+def test_refinement_caps_parallel_groups_by_available_memory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """available memoryが少ない場合にGroupが1件ずつ処理されること。
+
+    Arrange:
+        - CPUには2 Groupを並列化できる余裕がある
+        - 高解像度sourceに対してavailable memoryが2 GiBと報告される
+    Act:
+        - 離れた2 GroupからFrame Candidateが抽出される
+    Assert:
+        - Refinement Groupが1件ずつ実行されること
+        - 両Groupの処理が完了されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=500,
+                width=1920,
+                height=1080,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+    )
+    refinement_started = threading.Event()
+    release_refinement = threading.Event()
+    active_count = 0
+    peak_count = 0
+    active_lock = threading.Lock()
+
+    def coordinate_refinement(_path: Path) -> None:
+        nonlocal active_count, peak_count
+        with active_lock:
+            active_count += 1
+            peak_count = max(peak_count, active_count)
+            refinement_started.set()
+        try:
+            assert release_refinement.wait(timeout=2)
+        finally:
+            with active_lock:
+                active_count -= 1
+
+    def release_work() -> None:
+        assert refinement_started.wait(timeout=2)
+        time.sleep(0.05)
+        release_refinement.set()
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        lambda: 16,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        distant_moments=True,
+        media_probe=media_probe,
+        on_scan_video_frame_ranges=coordinate_refinement,
+    )
+    releaser = threading.Thread(target=release_work)
+    releaser.start()
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+        available_memory_reader=lambda: 2 * 1024**3,
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    releaser.join(timeout=1)
+    assert not releaser.is_alive()
+    assert peak_count == 1
+    assert len(result.extraction.moments) == 2
     assert len(runtime.range_pts_calls) == 2
 
 
@@ -1961,6 +2148,7 @@ def test_refinement_worker_count_does_not_change_semantic_result(
             runtime,
             FakeSpeechRuntime(),
             RecordingRunObserver(),
+            available_memory_reader=lambda: 64 * 1024**3,
         ).process(video_set, configuration)[0]
         stage_root = (
             configuration.processing_cache_folder

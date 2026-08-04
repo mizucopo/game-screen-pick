@@ -35,6 +35,12 @@ class AdaptiveVideoScanScheduler:
         self._stopped = False
         self._filling = False
 
+    @property
+    def active_worker_count(self) -> int:
+        """現在実行中のVideo Scan task数を返す。"""
+        with self._lock:
+            return self._active_count
+
     def start(self, task_count: int) -> tuple[Future[PreparedVideoScan], ...]:
         """初期worker上限までtaskを投入し順序付きFuture列を返す。"""
         if task_count < 1:

@@ -84,7 +84,8 @@ checkpointへ確定し、同じ開始PTSからEOFまでを一度だけ確認し�
 並列workerの完了順ではなくVideo OrderとWork Unit keyの安定順で集約します。
 
 Video Order上の各Video Stageは従来どおり順番に確定します。その内側で、互いに離れた
-Refinement Window Groupだけをlogical CPU容量と最大4のsafe capに従って並列処理します。
+Refinement Window Groupだけを、active Video Scanの予約分を除いたlogical CPU容量、available
+memory、最大4のsafe capに従って並列処理します。memoryを取得できない場合は1 workerへ抑制します。
 各Groupは別々のDurable Work Unitなので、cache hitはdecodeせず、失敗・破損・中断した
 Groupだけを次回再計算します。worker数、開始順、完了順はfingerprintへ含めず、結果をPTS
 range順へ戻してから親Stageを作るため、再開やresource量によって意味outputは変わりません。
