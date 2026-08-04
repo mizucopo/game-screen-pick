@@ -4,6 +4,7 @@ import signal
 import stat
 import struct
 import sys
+import threading
 from collections.abc import Iterator
 from fractions import Fraction
 from pathlib import Path
@@ -17,6 +18,7 @@ from src.video_selection.models.effective_configuration import EffectiveConfigur
 from src.video_selection.models.empty_video_scan_partition import (
     EmptyVideoScanPartition,
 )
+from src.video_selection.models.media_probe import MediaProbe
 from src.video_selection.models.media_runtime_error import MediaRuntimeError
 from src.video_selection.models.media_runtime_failure_reason import (
     MediaRuntimeFailureReason,
@@ -1299,6 +1301,106 @@ def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
     # Assert
     assert [frame.pts for frame in frames] == [0, 750, 1000]
     assert sum(decoder_cpu_seconds) > 0
+
+
+def test_cancel_frame_refinements_terminates_active_range_decoder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Frame Refinement中止時にactive range decoderが終了されること。
+
+    Arrange:
+        - 中止要求まで終了しないrange decoderとprobe結果が用意される
+    Act:
+        - 別threadでrange scanが開始され、runtimeへ中止が要求される
+    Assert:
+        - active decoderへSIGTERMが一度送られること
+        - 終了済みdecoderがactive集合から解除されること
+    """
+    # Arrange
+    runtime = FfmpegMediaRuntime()
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="h264",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=1000,
+        width=1280,
+        height=720,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+    )
+    probe = MediaProbe(format_names=("matroska",), streams=(stream,))
+    decoder_started = threading.Event()
+    release_decoder = threading.Event()
+    killed: list[tuple[int, int]] = []
+
+    def iter_blocked_frames(
+        _command: list[str],
+        _stream_index: int,
+        *,
+        cpu_seconds_recorder: object = None,
+        on_process_started: object = None,
+        on_process_finished: object = None,
+    ) -> Iterator[object]:
+        del cpu_seconds_recorder
+        process = MagicMock()
+        process.pid = 123
+        assert callable(on_process_started)
+        assert callable(on_process_finished)
+        on_process_started(process)
+        decoder_started.set()
+        try:
+            assert release_decoder.wait(timeout=5)
+            yield from ()
+        finally:
+            on_process_finished(process)
+
+    def terminate_decoder(pid: int, sent_signal: int) -> None:
+        killed.append((pid, sent_signal))
+        release_decoder.set()
+
+    monkeypatch.setattr(runtime, "probe", lambda _path: probe)
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.iter_decoded_video_frames",
+        iter_blocked_frames,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.os.kill",
+        terminate_decoder,
+    )
+    failures: list[BaseException] = []
+
+    def scan_ranges() -> None:
+        try:
+            tuple(
+                runtime.scan_video_frame_ranges(
+                    tmp_path / "source.mkv",
+                    stream_index=0,
+                    pts_ranges=((0, 1000),),
+                    max_dimension=960,
+                )
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    scan_thread = threading.Thread(target=scan_ranges)
+    scan_thread.start()
+    assert decoder_started.wait(timeout=5)
+
+    # Act
+    runtime.cancel_frame_refinements()
+    scan_thread.join(timeout=5)
+    runtime.cancel_frame_refinements()
+
+    # Assert
+    assert not scan_thread.is_alive()
+    assert failures == []
+    assert killed == [(123, signal.SIGTERM)]
 
 
 def test_scan_video_frame_ranges_seek_preserves_nonzero_source_frames(

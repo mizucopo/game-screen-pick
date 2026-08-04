@@ -84,8 +84,9 @@ checkpointへ確定し、同じ開始PTSからEOFまでを一度だけ確認し�
 並列workerの完了順ではなくVideo OrderとWork Unit keyの安定順で集約します。
 
 Video Order上の各Video Stageは従来どおり順番に確定します。その内側で、互いに離れた
-Refinement Window Groupだけを、Video Scanと共有するlogical CPU容量、systemとapplicable cgroup
-ancestorの最小available memory、最大4のsafe capに従って並列処理します。RefinementのCPU予約中は
+Refinement Window Groupだけを、Video Scanと共有するprocess許可済みlogical CPU容量、systemとapplicable cgroup
+ancestorの最小available memory、最大4のsafe capに従って並列処理します。logical CPU容量はprocess
+affinityを起点に、applicable cgroup v2またはv1の各ancestor CPU quotaで制限します。RefinementのCPU予約中は
 後続scanの投入も残り容量へ制限し、余力がなければscan完了を待ちます。全frameから得るtiming・
 最大寸法hintまたはmemoryを取得できない場合は、旧cacheを失効させず1 workerへ抑制します。
 各Groupは別々のDurable Work Unitなので、cache hitはdecodeせず、失敗・破損・中断した
@@ -268,8 +269,8 @@ final folderが残っていれば上記検証で再利用し、残っていな�
 ## 停止と再開
 
 通常はCtrl+Cで停止し、terminal eventが表示されてからWSL2またはWindowsを停止します。
-Refinement Window Groupの処理中は未開始taskを取り消し、実行中taskだけをatomic境界まで
-完了または失敗させます。割り込み後に新しい兄弟taskを開始しません。強制終了でもatomic
+Refinement Window Groupの処理中は未開始taskを取り消し、実行中のFFmpeg range decoderへ
+終了要求を送って回収します。割り込み後に新しい兄弟taskを開始しません。強制終了でもatomic
 確定済みcheckpointは壊れません。次回は同じcommandを実行するだけです。
 
 Target Acceptanceではactive attemptのexecution context、cache件数、Work Unit resolutionを

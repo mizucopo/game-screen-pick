@@ -428,7 +428,7 @@ def test_three_video_scans_run_concurrently(
             active_count -= 1
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
 
@@ -473,7 +473,7 @@ def test_nvdec_auto_grows_to_six_workers_when_gpu_has_rolling_headroom(
         (input_folder / f"{index:02d}-video.mp4").write_bytes(f"video-{index}".encode())
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
     sample = VideoScanResourceSample(
@@ -584,7 +584,7 @@ def test_fixed_three_and_auto_produce_identical_completed_stage_artifacts(
         disk_read_mib_per_second=300.0,
     )
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
     fixed_configuration = replace(
@@ -684,7 +684,7 @@ def test_pressure_changes_admission_without_interrupting_active_scans(
             return healthy if sample_count <= 8 else pressure
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
     runtime = FakeVideoStageMediaRuntime(on_scan_video=block_scans)
@@ -779,7 +779,7 @@ def test_downstream_starts_while_later_video_scans_are_active(
             release_later_scans.set()
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
     runtime = FakeVideoStageMediaRuntime(
@@ -889,7 +889,7 @@ def test_interrupt_does_not_start_queued_video_scans(
         os.kill(os.getpid(), signal.SIGINT)
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
     runtime = FakeVideoStageMediaRuntime(
@@ -947,7 +947,7 @@ def test_scan_failure_cancels_queued_sibling_scans(
         raise OSError("injected scan failure")
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 8,
     )
     runtime = FakeVideoStageMediaRuntime(on_scan_video=fail_first_scan)
@@ -1933,7 +1933,7 @@ def test_refinement_window_groups_run_concurrently_within_safe_limit(
                 active_count -= 1
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 8,
     )
     runtime = FakeVideoStageMediaRuntime(
@@ -1955,6 +1955,74 @@ def test_refinement_window_groups_run_concurrently_within_safe_limit(
     # Assert
     assert len(result.extraction.moments) == 2
     assert peak_count == 2
+    assert len(runtime.range_pts_calls) == 2
+
+
+def test_interrupt_cancels_active_refinement_decoders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refinement並列実行中のinterruptでactive decoderが中止されること。
+
+    Arrange:
+        - 2 workerを占有し中止要求まで終了しないRefinement Groupが用意される
+        - 両Group開始後にmain threadへSIGINTが送られる
+    Act:
+        - Video Stage processorによるcandidate抽出が実行される
+    Assert:
+        - active Frame Refinementの中止が一度要求されること
+        - decoder解放後もKeyboardInterruptが維持されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    active_count = 0
+    active_lock = threading.Lock()
+    refinements_started = threading.Event()
+    release_refinements = threading.Event()
+
+    def block_refinement(_path: Path) -> None:
+        nonlocal active_count
+        with active_lock:
+            active_count += 1
+            if active_count == 2:
+                refinements_started.set()
+        assert release_refinements.wait(timeout=5)
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor."
+        "read_process_logical_cpu_count",
+        lambda: 8,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        distant_moments=True,
+        on_scan_video_frame_ranges=block_refinement,
+        on_cancel_frame_refinements=release_refinements.set,
+    )
+
+    def interrupt_main_thread() -> None:
+        assert refinements_started.wait(timeout=5)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    interrupter = threading.Thread(target=interrupt_main_thread)
+    interrupter.start()
+
+    # Act
+    # Assert
+    with pytest.raises(KeyboardInterrupt):
+        VideoStageProcessor(
+            runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+            available_memory_reader=lambda: 64 * 1024**3,
+        ).process(
+            discover_video_set(input_folder),
+            _configuration(input_folder, tmp_path / "output"),
+        )
+    interrupter.join(timeout=1)
+    assert not interrupter.is_alive()
+    assert runtime.cancel_frame_refinements_call_count == 1
     assert len(runtime.range_pts_calls) == 2
 
 
@@ -2025,7 +2093,7 @@ def test_refinement_reserves_cpu_for_background_video_scans(
         release_refinement.set()
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 16,
     )
     runtime = FakeVideoStageMediaRuntime(
@@ -2122,7 +2190,7 @@ def test_refinement_caps_parallel_groups_by_available_memory(
         release_refinement.set()
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 16,
     )
     runtime = FakeVideoStageMediaRuntime(
@@ -2221,7 +2289,7 @@ def test_refinement_worker_count_does_not_change_semantic_result(
                 completion_order.append(current_index)
 
         monkeypatch.setattr(
-            "src.video_selection.services.video_stage_processor.os.cpu_count",
+            "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
             lambda: cpu_count,
         )
         runtime = FakeVideoStageMediaRuntime(
@@ -2664,7 +2732,7 @@ def test_extraction_cpu_metric_excludes_background_scan_thread(
         assert background_scan_finished.wait(timeout=5)
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 16,
     )
     runtime = FakeVideoStageMediaRuntime(

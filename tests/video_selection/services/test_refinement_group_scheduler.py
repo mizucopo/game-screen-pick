@@ -155,6 +155,53 @@ def test_scheduler_cancels_queued_tasks_after_user_interrupt() -> None:
     assert sorted(started_indexes) == [0, 1]
 
 
+def test_scheduler_cancels_active_tasks_before_waiting_after_interrupt() -> None:
+    """user interrupt後にactive taskへ中止要求してから終了待機されること。
+
+    Arrange:
+        - 2 workerを占有し明示的な中止要求まで終了しないtaskが用意される
+        - 両task開始後にmain threadへSIGINTが送られる
+    Act:
+        - schedulerによるtask解決が試行される
+    Assert:
+        - active taskの中止callbackが一度呼ばれること
+        - callbackでtaskが解放されKeyboardInterruptが維持されること
+    """
+    # Arrange
+    active_tasks_started = threading.Barrier(2)
+    release_active_tasks = threading.Event()
+    cancellation_count = 0
+
+    def task() -> None:
+        active_tasks_started.wait(timeout=1)
+        assert release_active_tasks.wait(timeout=1)
+
+    def cancel_active_tasks() -> None:
+        nonlocal cancellation_count
+        cancellation_count += 1
+        release_active_tasks.set()
+
+    scheduler = RefinementGroupScheduler(
+        max_workers=2,
+        cancel_active_tasks=cancel_active_tasks,
+    )
+
+    def interrupt_main_thread() -> None:
+        active_tasks_started.wait(timeout=1)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    interrupter = threading.Thread(target=interrupt_main_thread)
+    interrupter.start()
+
+    # Act
+    # Assert
+    with pytest.raises(KeyboardInterrupt):
+        scheduler.resolve((task, task))
+    interrupter.join(timeout=1)
+    assert not interrupter.is_alive()
+    assert cancellation_count == 1
+
+
 def test_scheduler_does_not_start_waiting_tasks_after_worker_failure() -> None:
     """worker failure後に待機中taskが開始されないこと。
 

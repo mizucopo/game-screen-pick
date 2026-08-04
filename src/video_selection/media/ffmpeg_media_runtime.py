@@ -28,6 +28,9 @@ from ..models.media_stream import MediaStream
 from ..models.native_video_scan import NativeVideoScan
 from ..models.pcm_audio_chunk import PcmAudioChunk
 from ..models.scanned_video_frame import ScannedVideoFrame
+from ..services.read_process_logical_cpu_count import (
+    read_process_logical_cpu_count,
+)
 from ..services.resolve_frame_range_worker_count import (
     resolve_frame_range_worker_count,
 )
@@ -101,6 +104,9 @@ class FfmpegMediaRuntime:
         self._active_scan_lock = Lock()
         self._active_scan_processes: set[subprocess.Popen[str]] = set()
         self._video_scan_cancellation_requested = False
+        self._active_refinement_lock = Lock()
+        self._active_refinement_processes: set[subprocess.Popen[bytes]] = set()
+        self._frame_refinement_cancellation_requested = False
 
     def preflight(self) -> MediaRuntimeIdentity:
         """両toolのversionを解決してidentityを返す。"""
@@ -482,6 +488,15 @@ class FfmpegMediaRuntime:
             with suppress(OSError):
                 os.kill(process.pid, signal.SIGTERM)
 
+    def cancel_frame_refinements(self) -> None:
+        """実行中のFrame Refinement FFmpeg processへ終了要求を送る。"""
+        with self._active_refinement_lock:
+            self._frame_refinement_cancellation_requested = True
+            processes = tuple(self._active_refinement_processes)
+        for process in processes:
+            with suppress(OSError):
+                os.kill(process.pid, signal.SIGTERM)
+
     def scan_video_frame_ranges(
         self,
         media_path: Path,
@@ -499,6 +514,12 @@ class FfmpegMediaRuntime:
         ):
             msg = "PTS rangeとmax_dimensionが不正です"
             raise ValueError(msg)
+        with self._active_refinement_lock:
+            if self._frame_refinement_cancellation_requested:
+                raise MediaRuntimeError(
+                    MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
+                    "Frame Refinementは開始前にcancelされました",
+                )
         probe = self.probe(media_path)
         try:
             stream = next(
@@ -523,7 +544,7 @@ class FfmpegMediaRuntime:
             )
             worker_count = resolve_frame_range_worker_count(
                 len(commands),
-                logical_cpu_count=os.cpu_count() or 1,
+                logical_cpu_count=read_process_logical_cpu_count(),
             )
             with ThreadPoolExecutor(
                 max_workers=worker_count,
@@ -538,6 +559,8 @@ class FfmpegMediaRuntime:
                             next(command_iterator),
                             stream_index,
                             cpu_seconds_recorder,
+                            self._register_refinement_process,
+                            self._unregister_refinement_process,
                         )
                     )
                 while pending:
@@ -550,6 +573,8 @@ class FfmpegMediaRuntime:
                                 command,
                                 stream_index,
                                 cpu_seconds_recorder,
+                                self._register_refinement_process,
+                                self._unregister_refinement_process,
                             )
                         )
         except (*_DECODE_ERRORS, StopIteration) as error:
@@ -557,6 +582,26 @@ class FfmpegMediaRuntime:
                 MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
                 "指定されたPTS rangeのnative frameを抽出できませんでした",
             ) from error
+
+    def _register_refinement_process(
+        self,
+        process: subprocess.Popen[bytes],
+    ) -> None:
+        """active decoderを登録し先行cancel済みなら直ちに終了させる。"""
+        with self._active_refinement_lock:
+            self._active_refinement_processes.add(process)
+            cancellation_requested = self._frame_refinement_cancellation_requested
+        if cancellation_requested:
+            with suppress(OSError):
+                os.kill(process.pid, signal.SIGTERM)
+
+    def _unregister_refinement_process(
+        self,
+        process: subprocess.Popen[bytes],
+    ) -> None:
+        """終了済みdecoderをactive集合から解除する。"""
+        with self._active_refinement_lock:
+            self._active_refinement_processes.discard(process)
 
     def extract_video_frame(
         self,
@@ -1336,6 +1381,8 @@ def _decode_video_frame_range(
     command: list[str],
     stream_index: int,
     cpu_seconds_recorder: Callable[[float], None] | None,
+    on_process_started: Callable[[subprocess.Popen[bytes]], None],
+    on_process_finished: Callable[[subprocess.Popen[bytes]], None],
 ) -> tuple[DecodedVideoFrame, ...]:
     """一つのrangeをworker内で完結させ順序付きframeを返す。"""
     return tuple(
@@ -1343,6 +1390,8 @@ def _decode_video_frame_range(
             command,
             stream_index,
             cpu_seconds_recorder=cpu_seconds_recorder,
+            on_process_started=on_process_started,
+            on_process_finished=on_process_finished,
         )
     )
 

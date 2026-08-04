@@ -1,6 +1,5 @@
 """Video Sourceのscanをpipeliningし3つのVideo Stageを組み立てる。"""
 
-import os
 import shutil
 import time
 from _thread import LockType
@@ -59,6 +58,7 @@ from .discover_candidate_moments import discover_candidate_moments
 from .durable_work_unit_cache import DurableWorkUnitCache
 from .processing_stage_runner import ProcessingStageRunner
 from .read_available_memory_bytes import read_available_memory_bytes
+from .read_process_logical_cpu_count import read_process_logical_cpu_count
 from .refine_candidate_moments import (
     combine_refined_candidate_groups,
     iter_refined_candidate_groups,
@@ -190,7 +190,7 @@ class VideoStageProcessor:
                     ),
                 )
             )
-        logical_cpu_count = os.cpu_count() or 1
+        logical_cpu_count = read_process_logical_cpu_count()
         controller = AdaptiveVideoScanController(
             video_count=len(probed_sources),
             configured_workers=configuration.video_scan_workers,
@@ -932,7 +932,8 @@ class VideoStageProcessor:
             ) as worker_count:
                 refinement_uses_worker_threads = worker_count > 1
                 resolved_groups = RefinementGroupScheduler(
-                    max_workers=worker_count
+                    max_workers=worker_count,
+                    cancel_active_tasks=self._media_runtime.cancel_frame_refinements,
                 ).resolve(tasks)
         else:
             resolved_groups = ()

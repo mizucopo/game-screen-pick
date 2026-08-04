@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import suppress
 from typing import TypeVar
 
 GroupResult = TypeVar("GroupResult")
@@ -10,7 +11,12 @@ GroupResult = TypeVar("GroupResult")
 class RefinementGroupScheduler:
     """完了順に依存せずtask結果を入力順へ戻すscheduler。"""
 
-    def __init__(self, *, max_workers: int) -> None:
+    def __init__(
+        self,
+        *,
+        max_workers: int,
+        cancel_active_tasks: Callable[[], None] | None = None,
+    ) -> None:
         if (
             not isinstance(max_workers, int)
             or isinstance(max_workers, bool)
@@ -18,6 +24,7 @@ class RefinementGroupScheduler:
         ):
             raise ValueError("Refinement Group worker数は1以上である必要があります")
         self._max_workers = max_workers
+        self._cancel_active_tasks = cancel_active_tasks
 
     def resolve(
         self,
@@ -60,6 +67,9 @@ class RefinementGroupScheduler:
         except BaseException:
             for future in in_flight:
                 future.cancel()
+            if self._cancel_active_tasks is not None:
+                with suppress(Exception):
+                    self._cancel_active_tasks()
             raise
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
