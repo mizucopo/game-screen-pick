@@ -2589,6 +2589,36 @@ def test_stage_metrics_include_current_process_and_full_stage_time(
     assert result.extraction_metrics.cpu_seconds >= 1.01
 
 
+def test_serial_refinement_cpu_time_is_counted_once(tmp_path: Path) -> None:
+    """直列Refinementの所有thread CPU時間が一度だけ計上されること。
+
+    Arrange:
+        - 一つのRefinement Groupで0.2秒のCPUを消費するruntimeが用意される
+    Act:
+        - Video Stageが1 workerで初回計算される
+    Assert:
+        - candidate抽出のCPU時間が同じthreadの実測値と重複加算されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    runtime = FakeVideoStageMediaRuntime(cpu_burn_seconds=0.2)
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert 0.2 <= result.extraction_metrics.cpu_seconds < 0.35
+
+
 def test_extraction_cpu_metric_excludes_background_scan_thread(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

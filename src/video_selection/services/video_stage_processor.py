@@ -190,12 +190,13 @@ class VideoStageProcessor:
                     ),
                 )
             )
+        logical_cpu_count = os.cpu_count() or 1
         controller = AdaptiveVideoScanController(
             video_count=len(probed_sources),
             configured_workers=configuration.video_scan_workers,
             auto_max_workers=configuration.video_scan_auto_max_workers,
             decode_backend=configuration.decode_backend,
-            logical_cpu_count=os.cpu_count() or 1,
+            logical_cpu_count=logical_cpu_count,
             initial_resource_sample=(
                 self._safe_resource_sample() if automatic_workers else None
             ),
@@ -240,32 +241,36 @@ class VideoStageProcessor:
                             media_origin,
                             scan_partition_duration,
                         ) = probed
-                        progress_started = self._start_scan_wait_progress(
-                            prepared_scan,
-                            source,
-                            video_order,
-                            len(probed_sources),
-                        )
-                        completed_scan = self._await_prepared_scan(
-                            prepared_scan,
-                            emit_heartbeat=progress_started,
-                        )
-                        results.append(
-                            self._process_source(
-                                video_set,
+                        with scheduler.prioritize_refinement_capacity(
+                            logical_cpu_count=logical_cpu_count
+                        ):
+                            progress_started = self._start_scan_wait_progress(
+                                prepared_scan,
                                 source,
-                                probe,
-                                primary_stream,
-                                media_origin,
-                                scan_partition_duration,
-                                completed_scan,
                                 video_order,
-                                configuration,
-                                resolved_runtime_identity,
-                                scan_scheduler=scheduler,
-                                scan_progress_started=progress_started,
+                                len(probed_sources),
                             )
-                        )
+                            completed_scan = self._await_prepared_scan(
+                                prepared_scan,
+                                emit_heartbeat=progress_started,
+                            )
+                            results.append(
+                                self._process_source(
+                                    video_set,
+                                    source,
+                                    probe,
+                                    primary_stream,
+                                    media_origin,
+                                    scan_partition_duration,
+                                    completed_scan,
+                                    video_order,
+                                    configuration,
+                                    resolved_runtime_identity,
+                                    logical_cpu_count=logical_cpu_count,
+                                    scan_scheduler=scheduler,
+                                    scan_progress_started=progress_started,
+                                )
+                            )
                 except (Exception, KeyboardInterrupt) as error:
                     self._request_scan_cancellation(
                         scan_cancellation,
@@ -295,6 +300,7 @@ class VideoStageProcessor:
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
         *,
+        logical_cpu_count: int,
         scan_scheduler: AdaptiveVideoScanScheduler,
         scan_progress_started: bool,
     ) -> VideoStageResult:
@@ -373,6 +379,7 @@ class VideoStageProcessor:
                     configuration,
                     extraction_input,
                     stage_root,
+                    logical_cpu_count=logical_cpu_count,
                     scan_scheduler=scan_scheduler,
                 ),
                 validate_bundle=lambda value: _restore_extraction_for_source(
@@ -392,6 +399,7 @@ class VideoStageProcessor:
             discovery.moments,
             discovery.density_cap,
         )
+        scan_scheduler.release_pending_refinement_request()
         context = self._context_processor.process(
             video_set=video_set,
             source=source,
@@ -797,12 +805,14 @@ class VideoStageProcessor:
         extraction_input: dict[str, object],
         stage_root: Path,
         *,
+        logical_cpu_count: int,
         scan_scheduler: AdaptiveVideoScanScheduler,
     ) -> dict[str, object]:
         """Refinement Window Groupごとに確定して安定順に集約する。"""
         thread_cpu_before = time.thread_time()
         child_cpu_seconds = 0.0
         worker_cpu_seconds = 0.0
+        refinement_uses_worker_threads = False
         cpu_seconds_lock = Lock()
 
         def record_child_cpu_seconds(value: float) -> None:
@@ -882,7 +892,8 @@ class VideoStageProcessor:
                     end_pts,
                 )
             finally:
-                record_worker_cpu_seconds(time.thread_time() - worker_cpu_before)
+                if refinement_uses_worker_threads:
+                    record_worker_cpu_seconds(time.thread_time() - worker_cpu_before)
 
         refinement_tasks: list[Callable[[], FrameCandidateExtraction]] = []
         for start_pts, end_pts in pts_ranges:
@@ -905,7 +916,6 @@ class VideoStageProcessor:
             )
         tasks = tuple(refinement_tasks)
         if tasks:
-            logical_cpu_count = os.cpu_count() or 1
             desired_workers = resolve_refinement_group_worker_count(
                 pts_ranges,
                 time_base=scan.timeline.time_base,
@@ -920,6 +930,7 @@ class VideoStageProcessor:
                 desired_workers=desired_workers,
                 logical_cpu_count=logical_cpu_count,
             ) as worker_count:
+                refinement_uses_worker_threads = worker_count > 1
                 resolved_groups = RefinementGroupScheduler(
                     max_workers=worker_count
                 ).resolve(tasks)
