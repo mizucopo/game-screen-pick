@@ -31,7 +31,9 @@ order rather than completion order.
 The scheduler does not reserve worker capacity for cache hits or wait for a fixed
 batch's slowest request. It continuously assigns the next unfinished Moment when a
 worker becomes free. On user interruption it cancels queued Moments and propagates a
-cooperative cancellation request to the active VisionRuntime operations.
+cooperative cancellation request to the active VisionRuntime operations. The default
+Ollama transport aborts the active connection during response-header or body waits,
+and Candidate Annotation retry delays wait on the same cancellation event.
 
 The shortlist reserves every Primary Representative Frame before assigning fallback
 frames in deterministic shortlist order. A Frame Candidate ID therefore belongs to

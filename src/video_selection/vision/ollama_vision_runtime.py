@@ -1049,11 +1049,15 @@ class OllamaVisionRuntime:
 
     def _sleep_before_retry(self, seconds: float, stage_kind: StageKind) -> None:
         """retry待機の前後でCandidate Annotation中止要求を検査する。"""
-        if stage_kind != "scene_catalog":
-            self._require_candidate_annotation_active()
-        self._sleeper(seconds)
-        if stage_kind != "scene_catalog":
-            self._require_candidate_annotation_active()
+        if stage_kind == "scene_catalog":
+            self._sleeper(seconds)
+            return
+        self._require_candidate_annotation_active()
+        if self._sleeper is time.sleep:
+            self._candidate_annotation_cancellation.wait(seconds)
+        else:
+            self._sleeper(seconds)
+        self._require_candidate_annotation_active()
 
     def _require_candidate_annotation_active(self) -> None:
         """中止済みCandidate Annotationが追加処理へ進むことを拒否する。"""

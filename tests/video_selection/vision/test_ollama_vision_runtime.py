@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import time
 from collections.abc import Mapping
 from concurrent.futures import CancelledError
 from datetime import datetime, timedelta, timezone
@@ -187,6 +188,68 @@ def test_cancellation_stops_candidate_after_active_ollama_request() -> None:
     assert len(failures) == 1
     assert isinstance(failures[0], CancelledError)
     assert "中止" in str(failures[0])
+    assert request_count == 1
+
+
+def test_cancellation_interrupts_candidate_retry_delay() -> None:
+    """Candidate retry待機中の中止要求で待機が直ちに終了されること。
+
+    Arrange:
+        - 1秒のRetry-Afterを返すCandidate requestが用意される
+    Act:
+        - retry待機へ入った後にCandidate Annotationの中止が要求される
+    Assert:
+        - 待機時間を完了せずCancelledErrorで終了し再試行されないこと
+    """
+    # Arrange
+    request_count = 0
+    retry_response_returned = Event()
+    failures: list[BaseException] = []
+
+    def requester(
+        _method: str,
+        url: str,
+        _payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        nonlocal request_count
+        request_count += 1
+        headers = Message()
+        headers["Retry-After"] = "1"
+        retry_response_returned.set()
+        raise HTTPError(url, 429, "rate limited", headers, None)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    def annotate() -> None:
+        try:
+            runtime.annotate_candidate(
+                _annotation_request(),
+                _catalog(),
+                _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+                num_ctx=32768,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    worker = Thread(target=annotate, name="cancelled-candidate-retry")
+
+    # Act
+    worker.start()
+    assert retry_response_returned.wait(timeout=1.0)
+    time.sleep(0.1)
+    runtime.cancel_candidate_annotations()
+    worker.join(timeout=0.2)
+
+    # Assert
+    assert worker.is_alive() is False
+    assert len(failures) == 1
+    assert isinstance(failures[0], CancelledError)
     assert request_count == 1
 
 
