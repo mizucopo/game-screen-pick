@@ -13,11 +13,14 @@ _CgroupMount = tuple[PurePosixPath, Path, str]
 def read_available_memory_bytes() -> int | None:
     """system余力をapplicable cgroup残量で制限して返す。"""
     system_available = _read_system_available_memory_bytes()
+    if system_available is None:
+        return None
     cgroup_available = _read_cgroup_available_memory_bytes()
-    known_values = tuple(
-        value for value in (system_available, cgroup_available) if value is not None
+    return (
+        system_available
+        if cgroup_available is None
+        else min(system_available, cgroup_available)
     )
-    return min(known_values) if known_values else None
 
 
 def _read_system_available_memory_bytes() -> int | None:

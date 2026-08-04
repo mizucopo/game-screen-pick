@@ -181,3 +181,48 @@ def test_available_memory_is_capped_by_cgroup_v1_ancestor_allowance(
 
     # Assert
     assert actual == 2 * gib
+
+
+def test_cgroup_allowance_does_not_replace_unknown_system_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """system余力が不明な場合にcgroup残量だけが返されないこと。
+
+    Arrange:
+        - system providerが失敗し3 GiB残るcgroup v2だけが用意される
+    Act:
+        - available memoryが取得される
+    Assert:
+        - 並列化を抑制する不明値Noneが返されること
+    """
+    # Arrange
+    gib = 1024**3
+    contents = {
+        "/proc/self/cgroup": "0::/workload\n",
+        "/proc/self/mountinfo": (
+            "29 23 0:26 / /sys/fs/cgroup rw,nosuid,nodev - cgroup2 cgroup rw\n"
+        ),
+        "/sys/fs/cgroup/workload/memory.max": str(4 * gib),
+        "/sys/fs/cgroup/workload/memory.current": str(gib),
+        "/sys/fs/cgroup/memory.max": "max",
+        "/sys/fs/cgroup/memory.current": str(2 * gib),
+    }
+
+    def read_text(path: Path, *, encoding: str) -> str:
+        del encoding
+        try:
+            return contents[str(path)]
+        except KeyError as error:
+            raise OSError("resource unavailable") from error
+
+    def fail_sysconf(_name: str) -> int:
+        raise ValueError("sysconf unavailable")
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(os, "sysconf", fail_sysconf)
+
+    # Act
+    actual = read_available_memory_bytes()
+
+    # Assert
+    assert actual is None
