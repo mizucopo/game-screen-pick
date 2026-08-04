@@ -1,12 +1,16 @@
 """Video Scan taskを動的worker上限に従って遅延投入する。"""
 
-from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
-from threading import RLock
+from collections.abc import Callable, Iterator
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+from contextlib import contextmanager
+from threading import Condition, RLock
 
 from ..models.prepared_video_scan import PreparedVideoScan
 from ..models.video_scan_resource_sample import VideoScanResourceSample
 from .adaptive_video_scan_controller import AdaptiveVideoScanController
+from .resolve_frame_range_worker_count import (
+    LOGICAL_CPUS_PER_FRAME_RANGE_WORKER,
+)
 from .sample_video_scan_resources_safely import sample_video_scan_resources_safely
 
 ScanTask = Callable[[int], PreparedVideoScan]
@@ -28,12 +32,109 @@ class AdaptiveVideoScanScheduler:
         self._task = task
         self._resource_sampler = resource_sampler
         self._lock = RLock()
+        self._condition = Condition(self._lock)
         self._slots: tuple[Future[PreparedVideoScan], ...] = ()
         self._submitted: dict[int, Future[PreparedVideoScan]] = {}
         self._next_index = 0
         self._active_count = 0
         self._stopped = False
         self._filling = False
+        self._shared_logical_cpu_count: int | None = None
+        self._refinement_logical_cpu_reservation = 0
+        self._refinement_request_pending = False
+        self._failure: BaseException | None = None
+
+    @contextmanager
+    def prioritize_refinement_capacity(
+        self,
+        *,
+        logical_cpu_count: int,
+    ) -> Iterator[None]:
+        """次のRefinement用CPU容量をscan補充より先に確保する。"""
+        if type(logical_cpu_count) is not int or logical_cpu_count < 1:
+            raise ValueError("Refinement容量要求には正のlogical CPU数が必要です")
+        with self._condition:
+            self._raise_if_stopped()
+            if self._shared_logical_cpu_count is not None:
+                raise RuntimeError("Refinement容量要求は同時に一つだけです")
+            self._shared_logical_cpu_count = logical_cpu_count
+            self._refinement_logical_cpu_reservation = min(
+                logical_cpu_count,
+                LOGICAL_CPUS_PER_FRAME_RANGE_WORKER,
+            )
+            self._refinement_request_pending = True
+        try:
+            yield
+        except BaseException:
+            with self._condition:
+                if self._refinement_request_pending:
+                    self._abort_refinement_reservation()
+            raise
+        else:
+            self.release_pending_refinement_request()
+
+    def release_pending_refinement_request(self) -> None:
+        """Refinementが不要だった先行容量要求を解放する。"""
+        with self._condition:
+            if not self._refinement_request_pending:
+                return
+            self._release_refinement_reservation(refill=True)
+
+    @contextmanager
+    def reserve_refinement_workers(
+        self,
+        *,
+        desired_workers: int,
+        logical_cpu_count: int,
+    ) -> Iterator[int]:
+        """scan admissionと共有するCPU予算内でRefinement workerを予約する。"""
+        if (
+            type(desired_workers) is not int
+            or desired_workers < 1
+            or type(logical_cpu_count) is not int
+            or logical_cpu_count < 1
+        ):
+            raise ValueError("Refinement worker予約には正の容量が必要です")
+        with self._condition:
+            self._raise_if_stopped()
+            if self._refinement_request_pending:
+                if self._shared_logical_cpu_count != logical_cpu_count:
+                    msg = "Refinement容量要求のlogical CPU数が一致しません"
+                    raise RuntimeError(msg)
+                self._refinement_request_pending = False
+            elif self._shared_logical_cpu_count is not None:
+                raise RuntimeError("Refinement worker予約は同時に一つだけです")
+            remaining_logical_cpus = max(
+                0,
+                logical_cpu_count
+                - self._active_count * self._controller.logical_cpus_per_worker,
+            )
+            available_workers = (
+                remaining_logical_cpus // LOGICAL_CPUS_PER_FRAME_RANGE_WORKER
+            )
+            worker_count = min(desired_workers, max(1, available_workers))
+            self._shared_logical_cpu_count = logical_cpu_count
+            self._refinement_logical_cpu_reservation = min(
+                logical_cpu_count,
+                worker_count * LOGICAL_CPUS_PER_FRAME_RANGE_WORKER,
+            )
+            try:
+                self._condition.wait_for(
+                    lambda: self._stopped or self._refinement_has_cpu_capacity()
+                )
+                self._raise_if_stopped()
+            except BaseException:
+                self._abort_refinement_reservation()
+                raise
+        try:
+            yield worker_count
+        except BaseException:
+            with self._condition:
+                self._abort_refinement_reservation()
+            raise
+        else:
+            with self._condition:
+                self._release_refinement_reservation(refill=True)
 
     def start(self, task_count: int) -> tuple[Future[PreparedVideoScan], ...]:
         """初期worker上限までtaskを投入し順序付きFuture列を返す。"""
@@ -48,12 +149,13 @@ class AdaptiveVideoScanScheduler:
 
     def cancel_pending(self) -> None:
         """未開始taskを止めactive taskの完了を待てる状態にする。"""
-        with self._lock:
+        with self._condition:
             self._stopped = True
             for future in self._submitted.values():
                 future.cancel()
             for index in range(self._next_index, len(self._slots)):
                 self._slots[index].cancel()
+            self._condition.notify_all()
 
     def _fill_available_slots(self) -> None:
         if self._filling:
@@ -62,7 +164,7 @@ class AdaptiveVideoScanScheduler:
         try:
             while (
                 not self._stopped
-                and self._active_count < self._controller.current_workers
+                and self._active_count < self._scan_worker_limit()
                 and self._next_index < len(self._slots)
             ):
                 index = self._next_index
@@ -101,23 +203,27 @@ class AdaptiveVideoScanScheduler:
             )
             else self._safe_resource_sample()
         )
-        with self._lock:
+        with self._condition:
             self._active_count -= 1
             slot = self._slots[index]
             if error is not None:
                 if not slot.done():
                     slot.set_exception(error)
                 self._stopped = True
+                if self._failure is None:
+                    self._failure = error
                 for task_index, future in self._submitted.items():
                     if task_index != index:
                         future.cancel()
                 for task_index in range(self._next_index, len(self._slots)):
                     self._slots[task_index].cancel()
+                self._condition.notify_all()
                 return
             if result is None:
                 raise AssertionError("完了したVideo Scan resultがありません")
             if not slot.done():
                 slot.set_result(result)
+            self._condition.notify_all()
             if self._stopped:
                 return
             self._controller.observe_scan_completion(
@@ -126,6 +232,45 @@ class AdaptiveVideoScanScheduler:
                 resource_sample=resource_sample,
             )
             self._fill_available_slots()
+
+    def _scan_worker_limit(self) -> int:
+        if self._shared_logical_cpu_count is None:
+            return self._controller.current_workers
+        scan_logical_cpu_budget = max(
+            0,
+            self._shared_logical_cpu_count - self._refinement_logical_cpu_reservation,
+        )
+        return min(
+            self._controller.current_workers,
+            scan_logical_cpu_budget // self._controller.logical_cpus_per_worker,
+        )
+
+    def _refinement_has_cpu_capacity(self) -> bool:
+        if self._shared_logical_cpu_count is None:
+            raise AssertionError("Refinement worker予約がありません")
+        return (
+            self._active_count * self._controller.logical_cpus_per_worker
+            + self._refinement_logical_cpu_reservation
+            <= self._shared_logical_cpu_count
+        )
+
+    def _release_refinement_reservation(self, *, refill: bool) -> None:
+        self._shared_logical_cpu_count = None
+        self._refinement_logical_cpu_reservation = 0
+        self._refinement_request_pending = False
+        if refill:
+            self._fill_available_slots()
+
+    def _abort_refinement_reservation(self) -> None:
+        self._stopped = True
+        self._release_refinement_reservation(refill=False)
+
+    def _raise_if_stopped(self) -> None:
+        if not self._stopped:
+            return
+        if self._failure is not None:
+            raise self._failure
+        raise CancelledError
 
     def _safe_resource_sample(self) -> VideoScanResourceSample | None:
         return sample_video_scan_resources_safely(self._resource_sampler)

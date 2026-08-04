@@ -26,6 +26,7 @@ from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.video_scan_resource_sample import (
     VideoScanResourceSample,
 )
+from src.video_selection.models.video_stage_result import VideoStageResult
 from src.video_selection.services.checkpoint_version import checkpoint_version
 from src.video_selection.services.discover_video_set import discover_video_set
 from src.video_selection.services.run_progress_tracker import RunProgressTracker
@@ -319,6 +320,79 @@ def test_video_stage_pipeline_preserves_order_and_source_local_cache(
     ]
 
 
+def test_legacy_scan_without_resource_hints_reuses_all_stage_cache(
+    tmp_path: Path,
+) -> None:
+    """旧Scan artifactでも有効な全Stage cacheが再利用されること。
+
+    Arrange:
+        - 全Video Stageが確定され、親Scan artifactからresource hintが除かれる
+    Act:
+        - 同じVideo Sourceと設定で再実行される
+    Assert:
+        - Video ScanとRefinement Groupが再decodeされないこと
+        - 旧artifactのhint欠落だけが逐次fallbackとして復元されること
+        - Frame CandidateとStage Fingerprintが維持されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    configuration = _configuration(input_folder, tmp_path / "output")
+    initial = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+    scan_root = (
+        configuration.processing_cache_folder
+        / "videos"
+        / video_set.sources[0].fingerprint
+        / ProcessingStage.SCAN_VIDEO.value
+    )
+    scan_folder = next(
+        path
+        for path in scan_root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    )
+    artifact = json.loads((scan_folder / "artifact.json").read_text(encoding="utf-8"))
+    artifact.pop("minimum_frame_delta_ts")
+    artifact.pop("maximum_frame_count_per_pts")
+    artifact.pop("maximum_frame_width")
+    artifact.pop("maximum_frame_height")
+    _rewrite_hash_consistent_artifact(scan_folder, artifact)
+    retry_runtime = FakeVideoStageMediaRuntime(
+        minimum_frame_delta_ts=1,
+        maximum_frame_count_per_pts=2,
+    )
+
+    # Act
+    reused = VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+
+    # Assert
+    assert retry_runtime.scan_partition_calls == []
+    assert retry_runtime.range_calls == []
+    assert reused.scan.minimum_frame_delta_ts is None
+    assert reused.scan.maximum_frame_count_per_pts is None
+    assert reused.scan.maximum_frame_width is None
+    assert reused.scan.maximum_frame_height is None
+    assert tuple(stage.fingerprint for stage in reused.completed_stages) == tuple(
+        stage.fingerprint for stage in initial.completed_stages
+    )
+    assert tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in reused.extraction.candidates
+    ) == tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in initial.extraction.candidates
+    )
+
+
 def test_three_video_scans_run_concurrently(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -354,7 +428,7 @@ def test_three_video_scans_run_concurrently(
             active_count -= 1
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
 
@@ -399,7 +473,7 @@ def test_nvdec_auto_grows_to_six_workers_when_gpu_has_rolling_headroom(
         (input_folder / f"{index:02d}-video.mp4").write_bytes(f"video-{index}".encode())
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
     sample = VideoScanResourceSample(
@@ -510,7 +584,7 @@ def test_fixed_three_and_auto_produce_identical_completed_stage_artifacts(
         disk_read_mib_per_second=300.0,
     )
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
     fixed_configuration = replace(
@@ -610,7 +684,7 @@ def test_pressure_changes_admission_without_interrupting_active_scans(
             return healthy if sample_count <= 8 else pressure
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
     runtime = FakeVideoStageMediaRuntime(on_scan_video=block_scans)
@@ -705,7 +779,7 @@ def test_downstream_starts_while_later_video_scans_are_active(
             release_later_scans.set()
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
     runtime = FakeVideoStageMediaRuntime(
@@ -815,7 +889,7 @@ def test_interrupt_does_not_start_queued_video_scans(
         os.kill(os.getpid(), signal.SIGINT)
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 24,
     )
     runtime = FakeVideoStageMediaRuntime(
@@ -873,7 +947,7 @@ def test_scan_failure_cancels_queued_sibling_scans(
         raise OSError("injected scan failure")
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 8,
     )
     runtime = FakeVideoStageMediaRuntime(on_scan_video=fail_first_scan)
@@ -1292,6 +1366,7 @@ def test_container_duration_only_schedules_fixed_scan_partitions(
     Assert:
         - container durationがstream tickへ変換され2件のpartitionが処理されること
         - 最後のpartitionがEOFまで開かれること
+        - partition境界を含む最小PTS差がresource hintへ集約されること
     """
     # Arrange
     monkeypatch.setattr(
@@ -1341,6 +1416,10 @@ def test_container_duration_only_schedules_fixed_scan_partitions(
         (10, None),
     ]
     assert result.scan.metrics.decode_pass_count == 2
+    assert result.scan.minimum_frame_delta_ts == 1
+    assert result.scan.maximum_frame_count_per_pts == 1
+    assert result.scan.maximum_frame_width == 64
+    assert result.scan.maximum_frame_height == 48
 
 
 def test_duration_hint_tail_does_not_require_an_empty_scan_partition(
@@ -1775,27 +1854,25 @@ def test_metadata_change_is_checked_before_video_stage(
     assert runtime.call_order == []
 
 
-def test_refinement_is_streamed_between_distant_moment_groups(
+def test_refinement_keeps_distant_moment_groups_in_separate_work_units(
     tmp_path: Path,
 ) -> None:
-    """離れたMoment groupの全RGB frameが同時に保持されないこと。
+    """離れたMoment groupが独立したrangeとcheckpointへ分離されること。
 
     Arrange:
-        - 離れた2つのCandidate Momentとstreaming検査付きruntimeが用意される
+        - 離れた2つのCandidate Momentを持つruntimeが用意される
     Act:
-        - 一つのrange scanからFrame Candidateが抽出される
+        - Frame Candidateが抽出される
     Assert:
-        - 後側groupのdecode継続前に前側groupのproxyが書かれること
+        - 各groupが別の単一range requestとして処理されること
+        - 各groupのDurable Work Unitが個別に確定されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
     input_folder.mkdir()
     (input_folder / "video.mp4").write_bytes(b"video-content")
     configuration = _configuration(input_folder, tmp_path / "output")
-    runtime = FakeVideoStageMediaRuntime(
-        distant_moments=True,
-        require_streaming_refinement=True,
-    )
+    runtime = FakeVideoStageMediaRuntime(distant_moments=True)
 
     # Act
     result = VideoStageProcessor(
@@ -1810,6 +1887,469 @@ def test_refinement_is_streamed_between_distant_moment_groups(
     # Assert
     assert len(result.extraction.moments) == 2
     assert all(moment.frame_candidate_ids for moment in result.extraction.moments)
+    assert len(runtime.range_pts_calls) == 2
+    assert all(len(ranges) == 1 for ranges in runtime.range_pts_calls)
+    checkpoint_root = configuration.processing_cache_folder / "work-units"
+    assert (
+        len(tuple(checkpoint_root.glob("*/frame-refinement-group/*/manifest.json")))
+        == 2
+    )
+
+
+def test_refinement_window_groups_run_concurrently_within_safe_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """独立したRefinement Window GroupがCPU上限内で並列処理されること。
+
+    Arrange:
+        - 離れた2 groupと十分なlogical CPUを持つruntimeが用意される
+    Act:
+        - 一つのVideo SourceからFrame Candidateが抽出される
+    Assert:
+        - 先頭groupの完了を待たずに次のgroupが開始されること
+        - 同時実行数が2件を超えないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    active_count = 0
+    peak_count = 0
+    overlap_started = threading.Event()
+    active_lock = threading.Lock()
+
+    def wait_for_sibling_group(_path: Path) -> None:
+        nonlocal active_count, peak_count
+        with active_lock:
+            active_count += 1
+            peak_count = max(peak_count, active_count)
+            if active_count == 2:
+                overlap_started.set()
+        try:
+            assert overlap_started.wait(timeout=1)
+        finally:
+            with active_lock:
+                active_count -= 1
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
+        lambda: 8,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        distant_moments=True,
+        on_scan_video_frame_ranges=wait_for_sibling_group,
+    )
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+        available_memory_reader=lambda: 64 * 1024**3,
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert len(result.extraction.moments) == 2
+    assert peak_count == 2
+    assert len(runtime.range_pts_calls) == 2
+
+
+def test_interrupt_cancels_active_refinement_decoders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refinement並列実行中のinterruptでactive decoderが中止されること。
+
+    Arrange:
+        - 2 workerを占有し中止要求まで終了しないRefinement Groupが用意される
+        - 両Group開始後にmain threadへSIGINTが送られる
+    Act:
+        - Video Stage processorによるcandidate抽出が実行される
+    Assert:
+        - active Frame Refinementの中止が一度要求されること
+        - decoder解放後もKeyboardInterruptが維持されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    active_count = 0
+    active_lock = threading.Lock()
+    refinements_started = threading.Event()
+    release_refinements = threading.Event()
+
+    def block_refinement(_path: Path) -> None:
+        nonlocal active_count
+        with active_lock:
+            active_count += 1
+            if active_count == 2:
+                refinements_started.set()
+        assert release_refinements.wait(timeout=5)
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor."
+        "read_process_logical_cpu_count",
+        lambda: 8,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        distant_moments=True,
+        on_scan_video_frame_ranges=block_refinement,
+        on_cancel_frame_refinements=release_refinements.set,
+    )
+
+    def interrupt_main_thread() -> None:
+        assert refinements_started.wait(timeout=5)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    interrupter = threading.Thread(target=interrupt_main_thread)
+    interrupter.start()
+
+    # Act
+    # Assert
+    with pytest.raises(KeyboardInterrupt):
+        VideoStageProcessor(
+            runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+            available_memory_reader=lambda: 64 * 1024**3,
+        ).process(
+            discover_video_set(input_folder),
+            _configuration(input_folder, tmp_path / "output"),
+        )
+    interrupter.join(timeout=1)
+    assert not interrupter.is_alive()
+    assert runtime.cancel_frame_refinements_call_count == 1
+    assert len(runtime.range_pts_calls) == 2
+
+
+def test_refinement_reserves_cpu_for_background_video_scans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """background Video Scan分を除いたCPU容量でGroupが並列化されること。
+
+    Arrange:
+        - 16 logical CPUで3 scanが開始され、先頭scanだけが完了される
+        - 残る2 scanが全CPUを予約した後、一方だけが解放される
+    Act:
+        - Video Stage processorがpipeliningされる
+    Assert:
+        - Refinement Groupが1件ずつ実行されること
+        - background scan解放後に全Video Stageが完了されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    for index, name in enumerate(
+        ("01-first.mp4", "02-background.mp4", "03-background.mp4"),
+        start=1,
+    ):
+        (input_folder / name).write_bytes(f"video-{index}".encode())
+    scans_started = threading.Barrier(3)
+    first_scan_completed = threading.Event()
+    release_background_scans = {
+        name: threading.Event() for name in ("02-background.mp4", "03-background.mp4")
+    }
+    refinement_started = threading.Event()
+    release_refinement = threading.Event()
+    active_refinement_count = 0
+    peak_refinement_count = 0
+    refinement_lock = threading.Lock()
+
+    def coordinate_scans(path: Path) -> None:
+        scans_started.wait(timeout=2)
+        if path.name == "01-first.mp4":
+            first_scan_completed.set()
+            return
+        assert release_background_scans[path.name].wait(timeout=2)
+
+    def coordinate_refinement(path: Path) -> None:
+        nonlocal active_refinement_count, peak_refinement_count
+        if path.name != "01-first.mp4":
+            return
+        with refinement_lock:
+            active_refinement_count += 1
+            peak_refinement_count = max(
+                peak_refinement_count,
+                active_refinement_count,
+            )
+            refinement_started.set()
+        try:
+            assert release_refinement.wait(timeout=2)
+        finally:
+            with refinement_lock:
+                active_refinement_count -= 1
+
+    def release_work() -> None:
+        assert first_scan_completed.wait(timeout=2)
+        time.sleep(0.05)
+        release_background_scans["02-background.mp4"].set()
+        assert refinement_started.wait(timeout=2)
+        release_background_scans["03-background.mp4"].set()
+        release_refinement.set()
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
+        lambda: 16,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        distant_moments=True,
+        on_scan_video=coordinate_scans,
+        on_scan_video_frame_ranges=coordinate_refinement,
+    )
+    releaser = threading.Thread(target=release_work)
+    releaser.start()
+
+    # Act
+    results = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+        available_memory_reader=lambda: 64 * 1024**3,
+    ).process(
+        discover_video_set(input_folder),
+        replace(
+            _configuration(input_folder, tmp_path / "output"),
+            video_scan_workers=3,
+        ),
+    )
+
+    # Assert
+    releaser.join(timeout=1)
+    assert not releaser.is_alive()
+    assert peak_refinement_count == 1
+    assert len(results) == 3
+
+
+def test_refinement_caps_parallel_groups_by_available_memory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """scan中の最大解像度でGroup memoryが制限されること。
+
+    Arrange:
+        - CPUには2 Groupを並列化できる余裕がある
+        - probe後に1920x1080へ変化するsourceと5 GiBのmemoryが用意される
+        - 一Groupはparallel予算へ収まるが二Groupは収まらない
+    Act:
+        - 離れた2 GroupからFrame Candidateが抽出される
+    Assert:
+        - Refinement Groupが1件ずつ実行されること
+        - 両Groupの処理が完了されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=500,
+                width=320,
+                height=180,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+    )
+    refinement_started = threading.Event()
+    release_refinement = threading.Event()
+    active_count = 0
+    peak_count = 0
+    active_lock = threading.Lock()
+
+    def coordinate_refinement(_path: Path) -> None:
+        nonlocal active_count, peak_count
+        with active_lock:
+            active_count += 1
+            peak_count = max(peak_count, active_count)
+            refinement_started.set()
+        try:
+            assert release_refinement.wait(timeout=2)
+        finally:
+            with active_lock:
+                active_count -= 1
+
+    def release_work() -> None:
+        assert refinement_started.wait(timeout=2)
+        time.sleep(0.05)
+        release_refinement.set()
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
+        lambda: 16,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        distant_moments=True,
+        media_probe=media_probe,
+        maximum_frame_width=1920,
+        maximum_frame_height=1080,
+        on_scan_video_frame_ranges=coordinate_refinement,
+    )
+    releaser = threading.Thread(target=release_work)
+    releaser.start()
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+        available_memory_reader=lambda: 5 * 1024**3,
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    releaser.join(timeout=1)
+    assert not releaser.is_alive()
+    assert peak_count == 1
+    assert len(result.extraction.moments) == 2
+    assert len(runtime.range_pts_calls) == 2
+
+
+def test_refinement_worker_count_does_not_change_semantic_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resource条件がFrame Candidateの意味結果を変えないこと。
+
+    Arrange:
+        - 離れた4 groupを持つ同内容のVideo Sourceが2組用意される
+    Act:
+        - 異なるframe timing hintの1 workerと完了順を反転した4 workerで抽出される
+    Assert:
+        - 4 worker側のGroup完了順が入力順と異なること
+        - Moment、Candidate、親Stage artifact、Fingerprintが一致すること
+    """
+    # Arrange
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=310,
+                width=64,
+                height=48,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+    )
+
+    def run_with_cpu_count(
+        name: str,
+        cpu_count: int,
+        *,
+        minimum_frame_delta_ts: int,
+        maximum_frame_count_per_pts: int,
+        reverse_completion: bool = False,
+    ) -> tuple[VideoStageResult, dict[Path, bytes], tuple[int, ...]]:
+        input_folder = tmp_path / name
+        input_folder.mkdir()
+        (input_folder / "video.mp4").write_bytes(b"video-content")
+        completion_order: list[int] = []
+        call_index = 0
+        call_lock = threading.Lock()
+        later_group_started = threading.Event()
+
+        def complete_later(_path: Path) -> None:
+            nonlocal call_index
+            with call_lock:
+                current_index = call_index
+                call_index += 1
+            if current_index == 0:
+                assert later_group_started.wait(timeout=1)
+                time.sleep(0.05)
+            elif current_index == 1:
+                later_group_started.set()
+            with call_lock:
+                completion_order.append(current_index)
+
+        monkeypatch.setattr(
+            "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
+            lambda: cpu_count,
+        )
+        runtime = FakeVideoStageMediaRuntime(
+            media_probe=media_probe,
+            scan_frame_pts=(0, 100, 200, 300),
+            on_scan_video_frame_ranges=(complete_later if reverse_completion else None),
+            minimum_frame_delta_ts=minimum_frame_delta_ts,
+            maximum_frame_count_per_pts=maximum_frame_count_per_pts,
+        )
+        configuration = replace(
+            _configuration(input_folder, tmp_path / f"{name}-output"),
+            candidate_density_per_minute=60.0,
+        )
+        video_set = discover_video_set(input_folder)
+        result = VideoStageProcessor(
+            runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+            available_memory_reader=lambda: 64 * 1024**3,
+        ).process(video_set, configuration)[0]
+        stage_root = (
+            configuration.processing_cache_folder
+            / "videos"
+            / video_set.sources[0].fingerprint
+            / ProcessingStage.EXTRACT_FRAME_CANDIDATES.value
+            / result.completed_stages[1].fingerprint.value
+        )
+        return result, _semantic_stage_artifacts(stage_root), tuple(completion_order)
+
+    # Act
+    serial, serial_artifacts, _serial_completion_order = run_with_cpu_count(
+        "serial-videos",
+        4,
+        minimum_frame_delta_ts=5,
+        maximum_frame_count_per_pts=1,
+    )
+    parallel, parallel_artifacts, parallel_completion_order = run_with_cpu_count(
+        "parallel-videos",
+        16,
+        minimum_frame_delta_ts=1,
+        maximum_frame_count_per_pts=2,
+        reverse_completion=True,
+    )
+
+    # Assert
+    assert len(serial.extraction.moments) == 4
+    assert parallel_completion_order[0] != 0
+    assert (
+        serial.completed_stages[1].fingerprint
+        == parallel.completed_stages[1].fingerprint
+    )
+    assert serial.extraction.moments == parallel.extraction.moments
+    assert tuple(
+        replace(candidate, proxy_path=None)
+        for candidate in serial.extraction.candidates
+    ) == tuple(
+        replace(candidate, proxy_path=None)
+        for candidate in parallel.extraction.candidates
+    )
+    assert serial_artifacts == parallel_artifacts
 
 
 def test_completed_refinement_group_survives_later_group_failure(
@@ -2125,6 +2665,36 @@ def test_stage_metrics_include_current_process_and_full_stage_time(
     assert result.extraction_metrics.cpu_seconds >= 1.01
 
 
+def test_serial_refinement_cpu_time_is_counted_once(tmp_path: Path) -> None:
+    """直列Refinementの所有thread CPU時間が一度だけ計上されること。
+
+    Arrange:
+        - 一つのRefinement Groupで0.2秒のCPUを消費するruntimeが用意される
+    Act:
+        - Video Stageが1 workerで初回計算される
+    Assert:
+        - candidate抽出のCPU時間が同じthreadの実測値と重複加算されないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    runtime = FakeVideoStageMediaRuntime(cpu_burn_seconds=0.2)
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert 0.2 <= result.extraction_metrics.cpu_seconds < 0.35
+
+
 def test_extraction_cpu_metric_excludes_background_scan_thread(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2162,7 +2732,7 @@ def test_extraction_cpu_metric_excludes_background_scan_thread(
         assert background_scan_finished.wait(timeout=5)
 
     monkeypatch.setattr(
-        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        "src.video_selection.services.video_stage_processor.read_process_logical_cpu_count",
         lambda: 16,
     )
     runtime = FakeVideoStageMediaRuntime(

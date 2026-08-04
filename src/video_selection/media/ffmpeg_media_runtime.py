@@ -28,6 +28,12 @@ from ..models.media_stream import MediaStream
 from ..models.native_video_scan import NativeVideoScan
 from ..models.pcm_audio_chunk import PcmAudioChunk
 from ..models.scanned_video_frame import ScannedVideoFrame
+from ..services.read_process_logical_cpu_count import (
+    read_process_logical_cpu_count,
+)
+from ..services.resolve_frame_range_worker_count import (
+    resolve_frame_range_worker_count,
+)
 from ..services.select_scene_signal_frames import select_scene_signal_frames
 from .ffmpeg_pcm_reader import iter_pcm_audio_chunks
 from .ffmpeg_subtitle_reader import read_embedded_subtitle_events
@@ -83,8 +89,6 @@ _SHOWINFO_DURATION_PATTERN = re.compile(r"\bduration:\s*(-?\d+)")
 _SHOWINFO_SIZE_PATTERN = re.compile(r"\bs:(\d+)x(\d+)")
 _FRAME_RANGE_SEEK_PADDING = Fraction(1)
 _FRAME_RANGE_END_PADDING = Fraction(1, 10)
-_MAX_FRAME_RANGE_WORKERS = 4
-_LOGICAL_CPUS_PER_FRAME_RANGE_WORKER = 4
 
 
 class FfmpegMediaRuntime:
@@ -100,6 +104,9 @@ class FfmpegMediaRuntime:
         self._active_scan_lock = Lock()
         self._active_scan_processes: set[subprocess.Popen[str]] = set()
         self._video_scan_cancellation_requested = False
+        self._active_refinement_lock = Lock()
+        self._active_refinement_processes: set[subprocess.Popen[bytes]] = set()
+        self._frame_refinement_cancellation_requested = False
 
     def preflight(self) -> MediaRuntimeIdentity:
         """両toolのversionを解決してidentityを返す。"""
@@ -314,6 +321,13 @@ class FfmpegMediaRuntime:
         started_at = time.monotonic()
         timeline_first: tuple[int, int | None, int, int] | None = None
         timeline_last: tuple[int, int | None, int, int] | None = None
+        previous_timeline_pts: int | None = None
+        minimum_frame_delta_ts: int | None = None
+        current_frame_count_per_pts = 0
+        maximum_frame_count_per_pts = 0
+        maximum_frame_width = 0
+        maximum_frame_height = 0
+        frame_timing_reliable = True
         heartbeat_metadata: list[tuple[int, int | None, int, int]] = []
         scene_metadata: list[tuple[int, int | None, int, int]] = []
         stderr_tail: deque[str] = deque(maxlen=80)
@@ -342,6 +356,28 @@ class FfmpegMediaRuntime:
                     continue
                 branch, metadata = parsed
                 if branch == "timeline":
+                    frame_pts, _duration, frame_width, frame_height = metadata
+                    maximum_frame_width = max(maximum_frame_width, frame_width)
+                    maximum_frame_height = max(maximum_frame_height, frame_height)
+                    if previous_timeline_pts is None:
+                        current_frame_count_per_pts = 1
+                    elif frame_pts == previous_timeline_pts:
+                        current_frame_count_per_pts += 1
+                    elif frame_pts > previous_timeline_pts:
+                        frame_delta_ts = frame_pts - previous_timeline_pts
+                        minimum_frame_delta_ts = (
+                            frame_delta_ts
+                            if minimum_frame_delta_ts is None
+                            else min(minimum_frame_delta_ts, frame_delta_ts)
+                        )
+                        maximum_frame_count_per_pts = max(
+                            maximum_frame_count_per_pts,
+                            current_frame_count_per_pts,
+                        )
+                        current_frame_count_per_pts = 1
+                    else:
+                        frame_timing_reliable = False
+                    previous_timeline_pts = frame_pts
                     if timeline_first is None:
                         timeline_first = metadata
                     timeline_last = metadata
@@ -417,6 +453,15 @@ class FfmpegMediaRuntime:
         )
         origin_pts, _origin_duration, _origin_width, _origin_height = timeline_first
         last_pts, last_duration, _last_width, _last_height = timeline_last
+        maximum_frame_count_per_pts = max(
+            maximum_frame_count_per_pts,
+            current_frame_count_per_pts,
+        )
+        if not frame_timing_reliable or minimum_frame_delta_ts is None:
+            minimum_frame_delta_ts = None
+            resolved_maximum_frame_count_per_pts = None
+        else:
+            resolved_maximum_frame_count_per_pts = maximum_frame_count_per_pts
         return NativeVideoScan(
             stream_index=stream.index,
             origin_pts=origin_pts,
@@ -428,6 +473,10 @@ class FfmpegMediaRuntime:
             wall_seconds=wall_seconds,
             cpu_seconds=cpu_seconds,
             decode_pass_count=1,
+            minimum_frame_delta_ts=minimum_frame_delta_ts,
+            maximum_frame_count_per_pts=resolved_maximum_frame_count_per_pts,
+            maximum_frame_width=maximum_frame_width,
+            maximum_frame_height=maximum_frame_height,
         )
 
     def cancel_video_scans(self) -> None:
@@ -435,6 +484,15 @@ class FfmpegMediaRuntime:
         with self._active_scan_lock:
             self._video_scan_cancellation_requested = True
             processes = tuple(self._active_scan_processes)
+        for process in processes:
+            with suppress(OSError):
+                os.kill(process.pid, signal.SIGTERM)
+
+    def cancel_frame_refinements(self) -> None:
+        """実行中のFrame Refinement FFmpeg processへ終了要求を送る。"""
+        with self._active_refinement_lock:
+            self._frame_refinement_cancellation_requested = True
+            processes = tuple(self._active_refinement_processes)
         for process in processes:
             with suppress(OSError):
                 os.kill(process.pid, signal.SIGTERM)
@@ -456,6 +514,12 @@ class FfmpegMediaRuntime:
         ):
             msg = "PTS rangeとmax_dimensionが不正です"
             raise ValueError(msg)
+        with self._active_refinement_lock:
+            if self._frame_refinement_cancellation_requested:
+                raise MediaRuntimeError(
+                    MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
+                    "Frame Refinementは開始前にcancelされました",
+                )
         probe = self.probe(media_path)
         try:
             stream = next(
@@ -478,7 +542,10 @@ class FfmpegMediaRuntime:
                 )
                 for start, end in pts_ranges
             )
-            worker_count = _frame_range_worker_count(len(commands))
+            worker_count = resolve_frame_range_worker_count(
+                len(commands),
+                logical_cpu_count=read_process_logical_cpu_count(),
+            )
             with ThreadPoolExecutor(
                 max_workers=worker_count,
                 thread_name_prefix="frame-range-decode",
@@ -492,6 +559,8 @@ class FfmpegMediaRuntime:
                             next(command_iterator),
                             stream_index,
                             cpu_seconds_recorder,
+                            self._register_refinement_process,
+                            self._unregister_refinement_process,
                         )
                     )
                 while pending:
@@ -504,6 +573,8 @@ class FfmpegMediaRuntime:
                                 command,
                                 stream_index,
                                 cpu_seconds_recorder,
+                                self._register_refinement_process,
+                                self._unregister_refinement_process,
                             )
                         )
         except (*_DECODE_ERRORS, StopIteration) as error:
@@ -511,6 +582,26 @@ class FfmpegMediaRuntime:
                 MediaRuntimeFailureReason.FRAME_EXTRACTION_FAILED,
                 "指定されたPTS rangeのnative frameを抽出できませんでした",
             ) from error
+
+    def _register_refinement_process(
+        self,
+        process: subprocess.Popen[bytes],
+    ) -> None:
+        """active decoderを登録し先行cancel済みなら直ちに終了させる。"""
+        with self._active_refinement_lock:
+            self._active_refinement_processes.add(process)
+            cancellation_requested = self._frame_refinement_cancellation_requested
+        if cancellation_requested:
+            with suppress(OSError):
+                os.kill(process.pid, signal.SIGTERM)
+
+    def _unregister_refinement_process(
+        self,
+        process: subprocess.Popen[bytes],
+    ) -> None:
+        """終了済みdecoderをactive集合から解除する。"""
+        with self._active_refinement_lock:
+            self._active_refinement_processes.discard(process)
 
     def extract_video_frame(
         self,
@@ -1286,17 +1377,12 @@ def _media_origin(probe: MediaProbe) -> Fraction:
     return min(origins)
 
 
-def _frame_range_worker_count(range_count: int) -> int:
-    """CPU decodeを過剰subscribeしないbounded worker数を返す。"""
-    logical_cpus = os.cpu_count() or 1
-    cpu_workers = max(1, logical_cpus // _LOGICAL_CPUS_PER_FRAME_RANGE_WORKER)
-    return min(range_count, _MAX_FRAME_RANGE_WORKERS, cpu_workers)
-
-
 def _decode_video_frame_range(
     command: list[str],
     stream_index: int,
     cpu_seconds_recorder: Callable[[float], None] | None,
+    on_process_started: Callable[[subprocess.Popen[bytes]], None],
+    on_process_finished: Callable[[subprocess.Popen[bytes]], None],
 ) -> tuple[DecodedVideoFrame, ...]:
     """一つのrangeをworker内で完結させ順序付きframeを返す。"""
     return tuple(
@@ -1304,6 +1390,8 @@ def _decode_video_frame_range(
             command,
             stream_index,
             cpu_seconds_recorder=cpu_seconds_recorder,
+            on_process_started=on_process_started,
+            on_process_finished=on_process_finished,
         )
     )
 

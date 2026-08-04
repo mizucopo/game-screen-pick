@@ -1,0 +1,228 @@
+"""available memory取得serviceのtest。"""
+
+import os
+from pathlib import Path
+
+import pytest
+
+from src.video_selection.services.read_available_memory_bytes import (
+    read_available_memory_bytes,
+)
+
+
+def test_available_memory_is_read_from_procfs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LinuxのMemAvailableがbyte数へ変換されること。
+
+    Arrange:
+        - MemAvailableを含むprocfs内容が用意される
+    Act:
+        - available memoryが取得される
+    Assert:
+        - kB値がbyte数へ変換されて返されること
+    """
+
+    # Arrange
+    def read_meminfo(_path: Path, *, encoding: str) -> str:
+        del encoding
+        return "MemTotal: 8192 kB\nMemAvailable: 4096 kB\n"
+
+    monkeypatch.setattr(Path, "read_text", read_meminfo)
+
+    # Act
+    actual = read_available_memory_bytes()
+
+    # Assert
+    assert actual == 4096 * 1024
+
+
+def test_available_memory_falls_back_to_sysconf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """procfsを読めない環境でsysconf値が利用されること。
+
+    Arrange:
+        - procfs読込が失敗し、page sizeとavailable page数が用意される
+    Act:
+        - available memoryが取得される
+    Assert:
+        - sysconf値からbyte数が返されること
+    """
+
+    # Arrange
+    def fail_read(_path: Path, *, encoding: str) -> str:
+        del encoding
+        raise OSError("procfs unavailable")
+
+    values = {"SC_PAGE_SIZE": 4096, "SC_AVPHYS_PAGES": 2048}
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    monkeypatch.setattr(os, "sysconf", values.__getitem__)
+
+    # Act
+    actual = read_available_memory_bytes()
+
+    # Assert
+    assert actual == 4096 * 2048
+
+
+def test_available_memory_is_unknown_when_providers_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """すべてのresource providerが失敗した場合にNoneが返されること。
+
+    Arrange:
+        - procfs読込とsysconf取得の両方が失敗する
+    Act:
+        - available memoryが取得される
+    Assert:
+        - 安全側の不明値Noneが返されること
+    """
+
+    # Arrange
+    def fail_read(_path: Path, *, encoding: str) -> str:
+        del encoding
+        raise OSError("procfs unavailable")
+
+    def fail_sysconf(_name: str) -> int:
+        raise ValueError("sysconf unavailable")
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    monkeypatch.setattr(os, "sysconf", fail_sysconf)
+
+    # Act
+    actual = read_available_memory_bytes()
+
+    # Assert
+    assert actual is None
+
+
+def test_available_memory_is_capped_by_cgroup_v2_allowance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """host余力より小さいcgroup v2残量でavailable memoryが制限されること。
+
+    Arrange:
+        - 8 GiBのhost余力と3 GiBだけ残るcgroup v2が用意される
+    Act:
+        - available memoryが取得される
+    Assert:
+        - memory.maxからmemory.currentを引いた3 GiBが返されること
+    """
+    # Arrange
+    gib = 1024**3
+    contents = {
+        "/proc/meminfo": f"MemAvailable: {8 * gib // 1024} kB\n",
+        "/proc/self/cgroup": "0::/workload\n",
+        "/proc/self/mountinfo": (
+            "29 23 0:26 / /sys/fs/cgroup rw,nosuid,nodev - cgroup2 cgroup rw\n"
+        ),
+        "/sys/fs/cgroup/workload/memory.max": str(4 * gib),
+        "/sys/fs/cgroup/workload/memory.current": str(gib),
+        "/sys/fs/cgroup/memory.max": "max",
+        "/sys/fs/cgroup/memory.current": str(2 * gib),
+    }
+
+    def read_text(path: Path, *, encoding: str) -> str:
+        del encoding
+        try:
+            return contents[str(path)]
+        except KeyError as error:
+            raise OSError("resource unavailable") from error
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    # Act
+    actual = read_available_memory_bytes()
+
+    # Assert
+    assert actual == 3 * gib
+
+
+def test_available_memory_is_capped_by_cgroup_v1_ancestor_allowance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cgroup v1階層で最小の残量がavailable memoryへ適用されること。
+
+    Arrange:
+        - 8 GiBのhost余力を持つmemory controller階層が用意される
+        - current groupは3 GiB、親groupは2 GiBだけ利用可能である
+    Act:
+        - available memoryが取得される
+    Assert:
+        - applicable ancestorの最小残量2 GiBが返されること
+    """
+    # Arrange
+    gib = 1024**3
+    contents = {
+        "/proc/meminfo": f"MemAvailable: {8 * gib // 1024} kB\n",
+        "/proc/self/cgroup": "5:memory:/docker/workload\n",
+        "/proc/self/mountinfo": (
+            "30 23 0:27 /docker /sys/fs/cgroup/memory rw,nosuid,nodev "
+            "- cgroup cgroup rw,memory\n"
+        ),
+        "/sys/fs/cgroup/memory/workload/memory.limit_in_bytes": str(4 * gib),
+        "/sys/fs/cgroup/memory/workload/memory.usage_in_bytes": str(gib),
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes": str(3 * gib),
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes": str(gib),
+    }
+
+    def read_text(path: Path, *, encoding: str) -> str:
+        del encoding
+        try:
+            return contents[str(path)]
+        except KeyError as error:
+            raise OSError("resource unavailable") from error
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    # Act
+    actual = read_available_memory_bytes()
+
+    # Assert
+    assert actual == 2 * gib
+
+
+def test_cgroup_allowance_does_not_replace_unknown_system_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """system余力が不明な場合にcgroup残量だけが返されないこと。
+
+    Arrange:
+        - system providerが失敗し3 GiB残るcgroup v2だけが用意される
+    Act:
+        - available memoryが取得される
+    Assert:
+        - 並列化を抑制する不明値Noneが返されること
+    """
+    # Arrange
+    gib = 1024**3
+    contents = {
+        "/proc/self/cgroup": "0::/workload\n",
+        "/proc/self/mountinfo": (
+            "29 23 0:26 / /sys/fs/cgroup rw,nosuid,nodev - cgroup2 cgroup rw\n"
+        ),
+        "/sys/fs/cgroup/workload/memory.max": str(4 * gib),
+        "/sys/fs/cgroup/workload/memory.current": str(gib),
+        "/sys/fs/cgroup/memory.max": "max",
+        "/sys/fs/cgroup/memory.current": str(2 * gib),
+    }
+
+    def read_text(path: Path, *, encoding: str) -> str:
+        del encoding
+        try:
+            return contents[str(path)]
+        except KeyError as error:
+            raise OSError("resource unavailable") from error
+
+    def fail_sysconf(_name: str) -> int:
+        raise ValueError("sysconf unavailable")
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(os, "sysconf", fail_sysconf)
+
+    # Act
+    actual = read_available_memory_bytes()
+
+    # Assert
+    assert actual is None

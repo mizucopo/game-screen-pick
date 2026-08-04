@@ -28,6 +28,8 @@ def iter_decoded_video_frames(
     stream_index: int,
     *,
     cpu_seconds_recorder: Callable[[float], None] | None = None,
+    on_process_started: Callable[[subprocess.Popen[bytes]], None] | None = None,
+    on_process_finished: Callable[[subprocess.Popen[bytes]], None] | None = None,
 ) -> Iterator[DecodedVideoFrame]:
     """一つのFFmpeg processからPTSとRGB24 frameを順次返す。"""
     process = subprocess.Popen(
@@ -38,6 +40,8 @@ def iter_decoded_video_frames(
     if process.stdout is None or process.stderr is None:
         msg = "FFmpeg pipeを開始できません"
         raise RuntimeError(msg)
+    if on_process_started is not None:
+        on_process_started(process)
     metadata_queue: queue.Queue[_MetadataItem] = queue.Queue()
     stderr_thread = threading.Thread(
         target=_collect_showinfo,
@@ -60,16 +64,20 @@ def iter_decoded_video_frames(
         if return_code != 0:
             raise subprocess.CalledProcessError(return_code, command)
     finally:
-        if not process_waited:
-            with suppress(ProcessLookupError):
-                os.kill(process.pid, signal.SIGTERM)
-            with suppress(ChildProcessError):
-                _return_code, cpu_seconds = wait_for_process(process)
-                if cpu_seconds_recorder is not None:
-                    cpu_seconds_recorder(cpu_seconds)
-        stderr_thread.join()
-        process.stdout.close()
-        process.stderr.close()
+        try:
+            if not process_waited:
+                with suppress(ProcessLookupError):
+                    os.kill(process.pid, signal.SIGTERM)
+                with suppress(ChildProcessError):
+                    _return_code, cpu_seconds = wait_for_process(process)
+                    if cpu_seconds_recorder is not None:
+                        cpu_seconds_recorder(cpu_seconds)
+            stderr_thread.join()
+            process.stdout.close()
+            process.stderr.close()
+        finally:
+            if on_process_finished is not None:
+                on_process_finished(process)
 
 
 def _collect_showinfo(

@@ -4,6 +4,7 @@ import signal
 import stat
 import struct
 import sys
+import threading
 from collections.abc import Iterator
 from fractions import Fraction
 from pathlib import Path
@@ -17,6 +18,7 @@ from src.video_selection.models.effective_configuration import EffectiveConfigur
 from src.video_selection.models.empty_video_scan_partition import (
     EmptyVideoScanPartition,
 )
+from src.video_selection.models.media_probe import MediaProbe
 from src.video_selection.models.media_runtime_error import MediaRuntimeError
 from src.video_selection.models.media_runtime_failure_reason import (
     MediaRuntimeFailureReason,
@@ -577,6 +579,120 @@ def test_scan_video_frames_preserves_vfr_source_timing(tmp_path: Path) -> None:
     ]
 
 
+def test_scan_video_records_observed_vfr_timing_hint(tmp_path: Path) -> None:
+    """VFRの実測最小PTS差がresource hintへ記録されること。
+
+    Arrange:
+        - 0、0.25、0.75、1.0秒にframeを持つVFR fixtureが用意される
+    Act:
+        - composite Video Scanが実行される
+    Assert:
+        - 最小0.25秒のPTS差と同一PTS最大1frameが記録されること
+    """
+    # Arrange
+    video_path = generate_vfr_video(tmp_path / "vfr-hint.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+
+    # Act
+    scan = runtime.scan_video(
+        video_path,
+        stream,
+        tmp_path / "vfr-hint-artifacts",
+        heartbeat_interval_seconds=0.25,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.25,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert scan.minimum_frame_delta_ts is not None
+    assert Fraction(scan.minimum_frame_delta_ts) * scan.time_base == Fraction(1, 4)
+    assert scan.maximum_frame_count_per_pts == 1
+    assert (scan.maximum_frame_width, scan.maximum_frame_height) == (64, 48)
+
+
+def test_scan_video_records_maximum_dimensions_across_timeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """途中で変化するframe寸法の最大値がresource hintへ記録されること。
+
+    Arrange:
+        - probe寸法320x180から1920x1080へ変化するtimeline出力が用意される
+    Act:
+        - composite Video Scanが実行される
+    Assert:
+        - 全timeline frameで観測された最大幅と最大高さが記録されること
+    """
+    # Arrange
+    artifact_folder = tmp_path / "resolution-change-artifacts"
+    process = MagicMock()
+    process.pid = 123
+    process.returncode = None
+    process.stderr.__iter__.return_value = iter(
+        (
+            "[showinfo@timeline] n: 0 pts: 0 duration: 1 s:320x180\n",
+            "[showinfo@heartbeat] n: 0 pts: 0 duration: 1 s:320x180\n",
+            "[showinfo@timeline] n: 1 pts: 1 duration: 1 s:1920x1080\n",
+            "[showinfo@timeline] n: 2 pts: 2 duration: 1 s:1280x720\n",
+        )
+    )
+
+    def start_process(*_args: object, **_kwargs: object) -> MagicMock:
+        heartbeat_folder = artifact_folder / "heartbeats"
+        scene_folder = artifact_folder / ".scene-proxies"
+        (heartbeat_folder / "000000000000.jpg").write_bytes(b"sentinel")
+        (heartbeat_folder / "000000000001.jpg").write_bytes(b"heartbeat")
+        (scene_folder / "000000000000.jpg").write_bytes(b"sentinel")
+        return process
+
+    def reap(_process: object) -> tuple[int, float]:
+        process.returncode = 0
+        return (0, 0.01)
+
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.subprocess.Popen",
+        start_process,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.wait_for_process",
+        reap,
+    )
+    runtime = FfmpegMediaRuntime()
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="h264",
+        time_base=Fraction(1, 10),
+        start_pts=0,
+        duration_ts=3,
+        width=320,
+        height=180,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+        is_attached_picture=False,
+    )
+
+    # Act
+    scan = runtime.scan_video(
+        tmp_path / "source.mkv",
+        stream,
+        artifact_folder,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=1.0,
+        scene_min_interval_seconds=1.0,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert scan.maximum_frame_width == 1920
+    assert scan.maximum_frame_height == 1080
+
+
 def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
     tmp_path: Path,
 ) -> None:
@@ -590,6 +706,7 @@ def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
         - exactなorigin、最終frame終端、1秒heartbeatが返されること
         - scene signalが320px以下の一時画像とともに返されること
         - Heartbeat Proxyが960px以下のmetadataなしMJPEGとして保存されること
+        - native frameの最小PTS差と同一PTS最大frame数が記録されること
         - decode passが1回として記録されること
     """
     # Arrange
@@ -612,6 +729,9 @@ def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
     # Assert
     assert scan.decode_pass_count == 1
     assert scan.cpu_seconds > 0
+    assert scan.minimum_frame_delta_ts is not None
+    assert scan.minimum_frame_delta_ts > 0
+    assert scan.maximum_frame_count_per_pts == 1
     assert scan.origin_pts == 0
     assert scan.last_frame_duration_ts is not None
     assert stream.time_base is not None
@@ -1181,6 +1301,106 @@ def test_scan_video_frame_ranges_preserves_vfr_frames_inside_half_open_ranges(
     # Assert
     assert [frame.pts for frame in frames] == [0, 750, 1000]
     assert sum(decoder_cpu_seconds) > 0
+
+
+def test_cancel_frame_refinements_terminates_active_range_decoder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Frame Refinement中止時にactive range decoderが終了されること。
+
+    Arrange:
+        - 中止要求まで終了しないrange decoderとprobe結果が用意される
+    Act:
+        - 別threadでrange scanが開始され、runtimeへ中止が要求される
+    Assert:
+        - active decoderへSIGTERMが一度送られること
+        - 終了済みdecoderがactive集合から解除されること
+    """
+    # Arrange
+    runtime = FfmpegMediaRuntime()
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="h264",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=1000,
+        width=1280,
+        height=720,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+    )
+    probe = MediaProbe(format_names=("matroska",), streams=(stream,))
+    decoder_started = threading.Event()
+    release_decoder = threading.Event()
+    killed: list[tuple[int, int]] = []
+
+    def iter_blocked_frames(
+        _command: list[str],
+        _stream_index: int,
+        *,
+        cpu_seconds_recorder: object = None,
+        on_process_started: object = None,
+        on_process_finished: object = None,
+    ) -> Iterator[object]:
+        del cpu_seconds_recorder
+        process = MagicMock()
+        process.pid = 123
+        assert callable(on_process_started)
+        assert callable(on_process_finished)
+        on_process_started(process)
+        decoder_started.set()
+        try:
+            assert release_decoder.wait(timeout=5)
+            yield from ()
+        finally:
+            on_process_finished(process)
+
+    def terminate_decoder(pid: int, sent_signal: int) -> None:
+        killed.append((pid, sent_signal))
+        release_decoder.set()
+
+    monkeypatch.setattr(runtime, "probe", lambda _path: probe)
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.iter_decoded_video_frames",
+        iter_blocked_frames,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.os.kill",
+        terminate_decoder,
+    )
+    failures: list[BaseException] = []
+
+    def scan_ranges() -> None:
+        try:
+            tuple(
+                runtime.scan_video_frame_ranges(
+                    tmp_path / "source.mkv",
+                    stream_index=0,
+                    pts_ranges=((0, 1000),),
+                    max_dimension=960,
+                )
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    scan_thread = threading.Thread(target=scan_ranges)
+    scan_thread.start()
+    assert decoder_started.wait(timeout=5)
+
+    # Act
+    runtime.cancel_frame_refinements()
+    scan_thread.join(timeout=5)
+    runtime.cancel_frame_refinements()
+
+    # Assert
+    assert not scan_thread.is_alive()
+    assert failures == []
+    assert killed == [(123, signal.SIGTERM)]
 
 
 def test_scan_video_frame_ranges_seek_preserves_nonzero_source_frames(

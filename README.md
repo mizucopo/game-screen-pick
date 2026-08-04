@@ -20,6 +20,7 @@ game-screen-pick \
 最低runtimeはPython 3.13、FFmpeg/ffprobe 6.1.1、Ollama server 0.31.2、faster-whisper 1.2.1、CTranslate2 4.8.1です。Windows 11 + WSL2のtarget acceptanceでは、Windowsの非loopback addressを指定した明示URLでWindows native Ollamaへ接続し、Windows/WSLのserverを自動切替しません。
 
 - [動画入力とCLI](docs/video-input.md)
+- [Pipeline処理フローと計算資源](docs/processing-flow.md)
 - [Pipelineの処理順・checkpoint・安全な再開](docs/pipeline-resume.md)
 - [動画単位のscan、timeline、Frame Candidate、Context Cue cache](docs/video-stage.md)
 - [共有Scene CatalogとCandidate Annotation Stage](docs/vision-stage.md)

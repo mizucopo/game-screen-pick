@@ -1,6 +1,5 @@
 """Video Sourceのscanをpipeliningし3つのVideo Stageを組み立てる。"""
 
-import os
 import shutil
 import time
 from _thread import LockType
@@ -14,6 +13,7 @@ from concurrent.futures import (
 from contextlib import suppress
 from dataclasses import replace
 from fractions import Fraction
+from functools import partial
 from pathlib import Path
 from threading import Event, Lock
 from typing import cast
@@ -57,9 +57,15 @@ from .context_stage_processor import ContextStageProcessor
 from .discover_candidate_moments import discover_candidate_moments
 from .durable_work_unit_cache import DurableWorkUnitCache
 from .processing_stage_runner import ProcessingStageRunner
+from .read_available_memory_bytes import read_available_memory_bytes
+from .read_process_logical_cpu_count import read_process_logical_cpu_count
 from .refine_candidate_moments import (
     combine_refined_candidate_groups,
     iter_refined_candidate_groups,
+)
+from .refinement_group_scheduler import RefinementGroupScheduler
+from .resolve_refinement_group_worker_count import (
+    resolve_refinement_group_worker_count,
 )
 from .run_progress_tracker import RunProgressTracker
 from .sample_video_scan_resources_safely import sample_video_scan_resources_safely
@@ -101,6 +107,7 @@ _SCAN_PROGRESS_HEARTBEAT_SECONDS = 30.0
 
 ScanPartitionDuration = tuple[str, int]
 VideoScanPartition = NativeVideoScan | EmptyVideoScanPartition
+AvailableMemoryReader = Callable[[], int | None]
 ProbedVideoSource = tuple[
     VideoSource,
     MediaProbe,
@@ -121,6 +128,7 @@ class VideoStageProcessor:
         *,
         progress: RunProgressTracker | None = None,
         resource_sampler: Callable[[], VideoScanResourceSample | None] | None = None,
+        available_memory_reader: AvailableMemoryReader | None = None,
     ) -> None:
         self._media_runtime = media_runtime
         self._context_processor = ContextStageProcessor(
@@ -136,6 +144,11 @@ class VideoStageProcessor:
             self._resource_sampler = system_sampler.sample
         else:
             self._resource_sampler = resource_sampler
+        self._available_memory_reader = (
+            read_available_memory_bytes
+            if available_memory_reader is None
+            else available_memory_reader
+        )
         self._parallelism_controller: AdaptiveVideoScanController | None = None
 
     @property
@@ -177,12 +190,13 @@ class VideoStageProcessor:
                     ),
                 )
             )
+        logical_cpu_count = read_process_logical_cpu_count()
         controller = AdaptiveVideoScanController(
             video_count=len(probed_sources),
             configured_workers=configuration.video_scan_workers,
             auto_max_workers=configuration.video_scan_auto_max_workers,
             decode_backend=configuration.decode_backend,
-            logical_cpu_count=os.cpu_count() or 1,
+            logical_cpu_count=logical_cpu_count,
             initial_resource_sample=(
                 self._safe_resource_sample() if automatic_workers else None
             ),
@@ -227,30 +241,36 @@ class VideoStageProcessor:
                             media_origin,
                             scan_partition_duration,
                         ) = probed
-                        progress_started = self._start_scan_wait_progress(
-                            prepared_scan,
-                            source,
-                            video_order,
-                            len(probed_sources),
-                        )
-                        results.append(
-                            self._process_source(
-                                video_set,
+                        with scheduler.prioritize_refinement_capacity(
+                            logical_cpu_count=logical_cpu_count
+                        ):
+                            progress_started = self._start_scan_wait_progress(
+                                prepared_scan,
                                 source,
-                                probe,
-                                primary_stream,
-                                media_origin,
-                                scan_partition_duration,
-                                self._await_prepared_scan(
-                                    prepared_scan,
-                                    emit_heartbeat=progress_started,
-                                ),
                                 video_order,
-                                configuration,
-                                resolved_runtime_identity,
-                                scan_progress_started=progress_started,
+                                len(probed_sources),
                             )
-                        )
+                            completed_scan = self._await_prepared_scan(
+                                prepared_scan,
+                                emit_heartbeat=progress_started,
+                            )
+                            results.append(
+                                self._process_source(
+                                    video_set,
+                                    source,
+                                    probe,
+                                    primary_stream,
+                                    media_origin,
+                                    scan_partition_duration,
+                                    completed_scan,
+                                    video_order,
+                                    configuration,
+                                    resolved_runtime_identity,
+                                    logical_cpu_count=logical_cpu_count,
+                                    scan_scheduler=scheduler,
+                                    scan_progress_started=progress_started,
+                                )
+                            )
                 except (Exception, KeyboardInterrupt) as error:
                     self._request_scan_cancellation(
                         scan_cancellation,
@@ -280,6 +300,8 @@ class VideoStageProcessor:
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
         *,
+        logical_cpu_count: int,
+        scan_scheduler: AdaptiveVideoScanScheduler,
         scan_progress_started: bool,
     ) -> VideoStageResult:
         """一つのVideo Sourceの3 Stageを確定または再利用する。"""
@@ -357,6 +379,8 @@ class VideoStageProcessor:
                     configuration,
                     extraction_input,
                     stage_root,
+                    logical_cpu_count=logical_cpu_count,
+                    scan_scheduler=scan_scheduler,
                 ),
                 validate_bundle=lambda value: _restore_extraction_for_source(
                     value.artifact,
@@ -375,6 +399,7 @@ class VideoStageProcessor:
             discovery.moments,
             discovery.density_cap,
         )
+        scan_scheduler.release_pending_refinement_request()
         context = self._context_processor.process(
             video_set=video_set,
             source=source,
@@ -779,16 +804,26 @@ class VideoStageProcessor:
         configuration: EffectiveConfiguration,
         extraction_input: dict[str, object],
         stage_root: Path,
+        *,
+        logical_cpu_count: int,
+        scan_scheduler: AdaptiveVideoScanScheduler,
     ) -> dict[str, object]:
         """Refinement Window Groupごとに確定して安定順に集約する。"""
         thread_cpu_before = time.thread_time()
         child_cpu_seconds = 0.0
-        child_cpu_lock = Lock()
+        worker_cpu_seconds = 0.0
+        refinement_uses_worker_threads = False
+        cpu_seconds_lock = Lock()
 
         def record_child_cpu_seconds(value: float) -> None:
             nonlocal child_cpu_seconds
-            with child_cpu_lock:
+            with cpu_seconds_lock:
                 child_cpu_seconds += value
+
+        def record_worker_cpu_seconds(value: float) -> None:
+            nonlocal worker_cpu_seconds
+            with cpu_seconds_lock:
+                worker_cpu_seconds += value
 
         started_at = time.monotonic()
         pts_ranges = build_refinement_pts_ranges(
@@ -802,69 +837,110 @@ class VideoStageProcessor:
             operation=CheckpointOperation.FRAME_REFINEMENT_GROUP,
             observer=self._observer,
         )
-        encoded_groups: list[FrameCandidateExtraction] = []
+
+        def resolve_refinement_group(
+            start_pts: int,
+            end_pts: int,
+            group_moments: tuple[CandidateMoment, ...],
+            unit_input: dict[str, object],
+        ) -> FrameCandidateExtraction:
+            worker_cpu_before = time.thread_time()
+            try:
+
+                def produce_refinement_group(
+                    checkpoint_root: Path,
+                ) -> dict[str, object]:
+                    return self._produce_refinement_group(
+                        video_set,
+                        source,
+                        scan,
+                        group_moments,
+                        start_pts,
+                        end_pts,
+                        configuration,
+                        checkpoint_root,
+                        record_child_cpu_seconds,
+                    )
+
+                def validate_refinement_group(
+                    value: DurableWorkUnitBundle,
+                ) -> None:
+                    _restore_refinement_group(
+                        value.artifact,
+                        value.root,
+                        source,
+                        scan,
+                        group_moments,
+                        start_pts,
+                        end_pts,
+                    )
+
+                bundle, _reused = checkpoint_cache.resolve(
+                    f"pts-{start_pts}-{end_pts}",
+                    unit_input,
+                    produce_refinement_group,
+                    validate_bundle=validate_refinement_group,
+                )
+                validate_video_source_snapshot(video_set, source)
+                return _restore_refinement_group(
+                    bundle.artifact,
+                    bundle.root,
+                    source,
+                    scan,
+                    group_moments,
+                    start_pts,
+                    end_pts,
+                )
+            finally:
+                if refinement_uses_worker_threads:
+                    record_worker_cpu_seconds(time.thread_time() - worker_cpu_before)
+
+        refinement_tasks: list[Callable[[], FrameCandidateExtraction]] = []
         for start_pts, end_pts in pts_ranges:
             group_moments = tuple(
                 moment for moment in moments if start_pts <= moment.source_pts < end_pts
             )
-            unit_input = {
+            unit_input: dict[str, object] = {
                 "parent_stage_semantic_input": extraction_input,
                 "pts_range": [start_pts, end_pts],
                 "moment_ids": [moment.identifier for moment in group_moments],
             }
-
-            def produce_refinement_group(
-                checkpoint_root: Path,
-                start_pts: int = start_pts,
-                end_pts: int = end_pts,
-                group_moments: tuple[CandidateMoment, ...] = group_moments,
-            ) -> dict[str, object]:
-                return self._produce_refinement_group(
-                    video_set,
-                    source,
-                    scan,
-                    group_moments,
+            refinement_tasks.append(
+                partial(
+                    resolve_refinement_group,
                     start_pts,
                     end_pts,
-                    configuration,
-                    checkpoint_root,
-                    record_child_cpu_seconds,
-                )
-
-            def validate_refinement_group(
-                value: DurableWorkUnitBundle,
-                group_moments: tuple[CandidateMoment, ...] = group_moments,
-                start_pts: int = start_pts,
-                end_pts: int = end_pts,
-            ) -> None:
-                _restore_refinement_group(
-                    value.artifact,
-                    value.root,
-                    source,
-                    scan,
                     group_moments,
-                    start_pts,
-                    end_pts,
+                    unit_input,
                 )
-
-            bundle, _reused = checkpoint_cache.resolve(
-                f"pts-{start_pts}-{end_pts}",
-                unit_input,
-                produce_refinement_group,
-                validate_bundle=validate_refinement_group,
             )
-            validate_video_source_snapshot(video_set, source)
-            restored = _restore_refinement_group(
-                bundle.artifact,
-                bundle.root,
-                source,
-                scan,
-                group_moments,
-                start_pts,
-                end_pts,
+        tasks = tuple(refinement_tasks)
+        if tasks:
+            desired_workers = resolve_refinement_group_worker_count(
+                pts_ranges,
+                time_base=scan.timeline.time_base,
+                source_width=scan.maximum_frame_width,
+                source_height=scan.maximum_frame_height,
+                minimum_frame_delta_ts=scan.minimum_frame_delta_ts,
+                maximum_frame_count_per_pts=scan.maximum_frame_count_per_pts,
+                logical_cpu_count=logical_cpu_count,
+                available_memory_bytes=self._safe_available_memory_bytes(),
             )
-            encoded_groups.append(_materialize_candidate_group(restored, stage_root))
-        extraction = combine_refined_candidate_groups(moments, tuple(encoded_groups))
+            with scan_scheduler.reserve_refinement_workers(
+                desired_workers=desired_workers,
+                logical_cpu_count=logical_cpu_count,
+            ) as worker_count:
+                refinement_uses_worker_threads = worker_count > 1
+                resolved_groups = RefinementGroupScheduler(
+                    max_workers=worker_count,
+                    cancel_active_tasks=self._media_runtime.cancel_frame_refinements,
+                ).resolve(tasks)
+        else:
+            resolved_groups = ()
+        encoded_groups = tuple(
+            _materialize_candidate_group(group, stage_root) for group in resolved_groups
+        )
+        extraction = combine_refined_candidate_groups(moments, encoded_groups)
         metrics = FrameCandidateExtractionMetrics(
             wall_seconds=0.0,
             cpu_seconds=0.0,
@@ -881,11 +957,26 @@ class VideoStageProcessor:
         )
         artifact = serialize_frame_candidate_extraction(extraction, metrics, stage_root)
         wall_seconds = time.monotonic() - started_at
-        cpu_seconds = time.thread_time() - thread_cpu_before + child_cpu_seconds
+        cpu_seconds = (
+            time.thread_time()
+            - thread_cpu_before
+            + worker_cpu_seconds
+            + child_cpu_seconds
+        )
         artifact_metrics = _artifact_metrics(artifact)
         artifact_metrics["wall_seconds"] = wall_seconds
         artifact_metrics["cpu_seconds"] = cpu_seconds
         return artifact
+
+    def _safe_available_memory_bytes(self) -> int | None:
+        """resource取得失敗と不正値を安全側のmemory欠落へ変換する。"""
+        try:
+            value = self._available_memory_reader()
+        except Exception:
+            return None
+        if type(value) is not int or value < 0:
+            return None
+        return value
 
     def _produce_refinement_group(
         self,
@@ -1043,6 +1134,12 @@ def _materialize_video_scan_partitions(
         ),
         stage_root / ".scene-proxies",
     )
+    minimum_frame_delta_ts, maximum_frame_count_per_pts = _merge_frame_timing_hints(
+        framed_partitions
+    )
+    maximum_frame_width, maximum_frame_height = _merge_frame_dimension_hints(
+        framed_partitions
+    )
     last = framed_partitions[-1]
     return NativeVideoScan(
         stream_index=first.stream_index,
@@ -1055,6 +1152,50 @@ def _materialize_video_scan_partitions(
         wall_seconds=sum(partition.wall_seconds for partition in partitions),
         cpu_seconds=sum(partition.cpu_seconds for partition in partitions),
         decode_pass_count=sum(partition.decode_pass_count for partition in partitions),
+        minimum_frame_delta_ts=minimum_frame_delta_ts,
+        maximum_frame_count_per_pts=maximum_frame_count_per_pts,
+        maximum_frame_width=maximum_frame_width,
+        maximum_frame_height=maximum_frame_height,
+    )
+
+
+def _merge_frame_timing_hints(
+    partitions: tuple[NativeVideoScan, ...],
+) -> tuple[int | None, int | None]:
+    """完全なpartition hintをsource全体の保守値へ集約する。"""
+    if any(
+        partition.minimum_frame_delta_ts is None
+        or partition.maximum_frame_count_per_pts is None
+        for partition in partitions
+    ):
+        return (None, None)
+    frame_deltas = [
+        cast(int, partition.minimum_frame_delta_ts) for partition in partitions
+    ]
+    frame_deltas.extend(
+        right.origin_pts - left.last_frame_pts
+        for left, right in zip(partitions, partitions[1:], strict=False)
+    )
+    return (
+        min(frame_deltas),
+        max(
+            cast(int, partition.maximum_frame_count_per_pts) for partition in partitions
+        ),
+    )
+
+
+def _merge_frame_dimension_hints(
+    partitions: tuple[NativeVideoScan, ...],
+) -> tuple[int | None, int | None]:
+    """完全なpartition hintをsource全体の最大寸法へ集約する。"""
+    if any(
+        partition.maximum_frame_width is None or partition.maximum_frame_height is None
+        for partition in partitions
+    ):
+        return (None, None)
+    return (
+        max(cast(int, partition.maximum_frame_width) for partition in partitions),
+        max(cast(int, partition.maximum_frame_height) for partition in partitions),
     )
 
 

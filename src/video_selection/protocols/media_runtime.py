@@ -76,6 +76,9 @@ class MediaRuntime(Protocol):
     def cancel_video_scans(self) -> None:
         """実行中のVideo Scan subprocessを終了させる。"""
 
+    def cancel_frame_refinements(self) -> None:
+        """実行中のFrame Refinement subprocessを終了させる。"""
+
     def extract_video_frame(
         self,
         media_path: Path,

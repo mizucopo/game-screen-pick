@@ -96,6 +96,10 @@ def build_video_scan_result(
         heartbeats=heartbeats,
         scene_signals=scene_signals,
         metrics=metrics,
+        minimum_frame_delta_ts=native_scan.minimum_frame_delta_ts,
+        maximum_frame_count_per_pts=native_scan.maximum_frame_count_per_pts,
+        maximum_frame_width=native_scan.maximum_frame_width,
+        maximum_frame_height=native_scan.maximum_frame_height,
     )
 
 

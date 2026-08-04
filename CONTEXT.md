@@ -177,7 +177,7 @@ _Avoid_: partial cache, in-progress stage, progress checkpoint
 _Avoid_: progress sample, arbitrary loop iteration, partial Stage, mutable scratch file
 
 **Resume Output Invariance**:
-同じsemantic inputから中断後に再開したrunが、中断なしのrunと同じ選択Candidate ID、選択順、公開WebP bytes、canonical reportの意味内容を返す契約。attempt時刻、経過時間、resource sample、cache hit/recompute件数などの運用診断は含めない。初回runとresume runで同じ固定partitionと安定集約順を使い、worker数や完了順をsemantic identityへ混ぜない。atomic rename済みの完成Canonical Outputは自己検証とsemantic digest一致後にbyte変更なしで再利用する。
+同じsemantic inputから中断後に再開したrunが、中断なしのrunと同じ選択Candidate ID、選択順、公開WebP bytes、canonical reportの意味内容を返す契約。attempt時刻、経過時間、resource sample、cache hit/recompute件数などの運用診断は含めない。初回runとresume runで同じ固定partitionと安定集約順を使い、Video ScanとRefinement Window Groupのworker数・開始順・完了順をsemantic identityへ混ぜない。atomic rename済みの完成Canonical Outputは自己検証とsemantic digest一致後にbyte変更なしで再利用する。
 _Avoid_: bit-identical operational telemetry, cache performance equality, unvalidated output reuse
 
 **Recognized Partial Stage**:
@@ -185,7 +185,7 @@ Completed StageまたはDurable Work Unitとして確定する前に中断・失
 _Avoid_: Completed Stage, Durable Work Unit, Legacy Cache, unknown directory
 
 **Video Stage**:
-一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysis、Context Cue収集を所有し、scan partition、Refinement Window Group、Speech Recognition chunkをDurable Work Unitとして確定する。複数Videoでは独立したscanをbounded workerで並列実行し、Video Order上の対象scanが確定した時点で後続Videoのscanを続けながら、そのVideoのcandidate extractionとcontext collectionを順序どおり進める。中断時は未開始scanを取り消してから実行中scanへ終了を要求し、中断後に新しいscanを開始しない。resultとprogressはVideo Order順に確定し、Video Orderとworker数はfingerprintへ含めない。
+一つのVideo Identityだけを対象とし、Video Setの構成やVideo Orderから独立して再利用できる Processing Stage。同一動画内で完結する時間構造、候補密度、frame refinement、Neutral Image Analysis、Context Cue収集を所有し、scan partition、Refinement Window Group、Speech Recognition chunkをDurable Work Unitとして確定する。複数Videoでは独立したscanをbounded workerで並列実行し、Video Order上の対象scanが確定した時点で後続Videoのscanを続けながら、そのVideoのcandidate extractionとcontext collectionを順序どおり進める。一つのVideo Source内では互いに独立したRefinement Window Groupだけをlogical CPU容量とsafe capでbounded並列実行し、結果をPTS range順へ戻す。中断時は未開始scanとRefinement Window Groupを取り消し、実行中の最小atomic unitを完了または失敗させた後に新しい兄弟unitを開始しない。resultとprogressはVideo Order順に確定し、Video Order、worker数、taskの開始順・完了順はfingerprintへ含めない。
 _Avoid_: Video Set Stage, cross-video selection, whole-run stage
 
 **Video Scan Stage**:
@@ -201,7 +201,7 @@ Video Scan Stageがnative heartbeatごとに永続化する、長辺960px、FFmp
 _Avoid_: scene signal image, Frame Candidate, selected output
 
 **Frame Candidate Extraction Stage**:
-Video Scan Stageを上流にして、Candidate Moment Density、Frame Refinement、Neutral Image AnalysisをCompleted Stageとして確定するVideo Stage。merge済みRefinement Window Groupごとにrange decode、解析、proxyをDurable Work Unitとして確定し、PTS順に集約する。FingerprintにはVideo Fingerprint、上流Stage Fingerprint、density、refinement半径、最大Frame Candidate数、Neutral Analysis/reject/dedupe/ID/proxyのalgorithm versionだけを含める。metricにはwall/CPU時間、density上限/実Moment数、refinement frame数、reason別reject、dedupe、0-frame Moment、Frame Candidate件数/bytesを残すがfingerprintへ含めない。heartbeat/scene設定やdecode結果を独自に作り直さない。
+Video Scan Stageを上流にして、Candidate Moment Density、Frame Refinement、Neutral Image AnalysisをCompleted Stageとして確定するVideo Stage。merge済みRefinement Window Groupごとにrange decode、解析、proxyをDurable Work Unitとしてatomicに確定する。独立GroupはVideo Scanと共有するlogical CPU、available memory、最大4のresource policyでbounded並列実行する。Refinement実行中は選択worker分のCPUを予約し、後続scanのadmissionも残り容量へ制限する。memory見積もりには最低240fpsと、Video Scanで全native frameから実測した最小PTS差・同一PTS最大frame数による上限の大きい方を使う。旧cacheなどで実測hintを取得不能な場合はcacheを失効させず逐次実行する。完了順にかかわらずPTS順に親Stageへ集約する。FingerprintにはVideo Fingerprint、上流Stage Fingerprint、density、refinement半径、最大Frame Candidate数、Neutral Analysis/reject/dedupe/ID/proxyのalgorithm versionだけを含める。metricにはwall/CPU時間、density上限/実Moment数、refinement frame数、reason別reject、dedupe、0-frame Moment、Frame Candidate件数/bytesを残すがfingerprintへ含めない。worker数・resource値・frame timing hint・完了順、heartbeat/scene設定やdecode結果を独自に作り直さない。
 _Avoid_: full video scan, Context Cue extraction, final selection
 
 **Context Collection Stage**:
@@ -285,7 +285,7 @@ Candidate Momentのanchor前後にあるnative frameを対象に、Content Rejec
 _Avoid_: fixed-fps conversion, Candidate Annotation, Representative Frame selection
 
 **Refinement Window Group**:
-一つのVideo Source内で互いに重なるCandidate Momentのrefinement windowから作る最大の連続時間範囲。Neutral Image Analysisの相対分布と前後関係はこの範囲内だけで共有し、離れた範囲のsampleを隣接frameとして扱わない。
+一つのVideo Source内で互いに重なるCandidate Momentのrefinement windowから作る最大の連続時間範囲。Neutral Image Analysisの相対分布と前後関係はこの範囲内だけで共有し、離れた範囲のsampleを隣接frameとして扱わない。離れたGroupとはsemantic stateを共有せず、一つのDurable Work Unitとして独立して並列実行できる。
 _Avoid_: whole-video refinement, Timeline Segment, density window, arbitrary frame batch
 
 **Source-Local Frame Deduplication**:

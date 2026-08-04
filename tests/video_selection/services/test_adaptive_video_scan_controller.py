@@ -206,6 +206,43 @@ def test_cpu_auto_keeps_the_conservative_worker_limit() -> None:
     assert controller.executor_capacity == 3
 
 
+@pytest.mark.parametrize(
+    ("decode_backend", "expected_logical_cpus"),
+    [
+        pytest.param("cpu", 8, id="cpu"),
+        pytest.param("nvdec", 4, id="nvdec"),
+    ],
+)
+def test_scan_worker_exposes_its_logical_cpu_reservation(
+    decode_backend: str,
+    expected_logical_cpus: int,
+) -> None:
+    """decode backendごとの1 scan分CPU予約が返されること。
+
+    Arrange:
+        - CPUまたはNVDECを使うVideo Scan Controllerが用意される
+    Act:
+        - 1 worker分のlogical CPU予約が取得される
+    Assert:
+        - backendの保守的worker予算と同じlogical CPU数が返されること
+    """
+    # Arrange
+    controller = AdaptiveVideoScanController(
+        video_count=2,
+        configured_workers=2,
+        auto_max_workers=6,
+        decode_backend=decode_backend,
+        logical_cpu_count=24,
+        initial_resource_sample=None,
+    )
+
+    # Act
+    actual = controller.logical_cpus_per_worker
+
+    # Assert
+    assert actual == expected_logical_cpus
+
+
 def test_fixed_worker_count_ignores_dynamic_resource_changes() -> None:
     """固定worker指定ではresource sampleによる増減が行われないこと。
 
