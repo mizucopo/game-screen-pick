@@ -29,6 +29,8 @@ def test_worker_count_respects_total_cpu_capacity() -> None:
         time_base=Fraction(1, 10),
         source_width=320,
         source_height=180,
+        minimum_frame_delta_ts=1,
+        maximum_frame_count_per_pts=1,
         logical_cpu_count=8,
         available_memory_bytes=64 * _GIB,
     )
@@ -57,6 +59,8 @@ def test_worker_count_caps_groups_when_one_but_not_two_fit_memory() -> None:
         time_base=Fraction(1),
         source_width=1920,
         source_height=1080,
+        minimum_frame_delta_ts=1,
+        maximum_frame_count_per_pts=1,
         logical_cpu_count=64,
         available_memory_bytes=6 * _GIB,
     )
@@ -85,6 +89,8 @@ def test_worker_count_falls_back_to_one_for_oversized_group() -> None:
         time_base=Fraction(1),
         source_width=1920,
         source_height=1080,
+        minimum_frame_delta_ts=1,
+        maximum_frame_count_per_pts=1,
         logical_cpu_count=64,
         available_memory_bytes=16 * _GIB,
     )
@@ -113,8 +119,70 @@ def test_worker_count_fails_safe_when_memory_is_unknown() -> None:
         time_base=Fraction(1, 10),
         source_width=320,
         source_height=180,
+        minimum_frame_delta_ts=1,
+        maximum_frame_count_per_pts=1,
         logical_cpu_count=64,
         available_memory_bytes=None,
+    )
+
+    # Assert
+    assert actual == 1
+
+
+def test_worker_count_accounts_for_observed_vfr_bursts() -> None:
+    """240fpsを超える実測frame密度でmemoryが過小評価されないこと。
+
+    Arrange:
+        - 1ms間隔かつ同一PTS最大2frameの1秒Groupが4件用意される
+        - 240fpsなら複数Groupが収まるが実測密度では一Groupも予算を超える
+    Act:
+        - Refinement Group worker数が解決される
+    Assert:
+        - 実測timingに基づく1 workerが返されること
+    """
+    # Arrange
+    ranges = ((0, 1000), (2000, 3000), (4000, 5000), (6000, 7000))
+
+    # Act
+    actual = resolve_refinement_group_worker_count(
+        ranges,
+        time_base=Fraction(1, 1000),
+        source_width=1920,
+        source_height=1080,
+        minimum_frame_delta_ts=1,
+        maximum_frame_count_per_pts=2,
+        logical_cpu_count=64,
+        available_memory_bytes=6 * _GIB,
+    )
+
+    # Assert
+    assert actual == 1
+
+
+def test_worker_count_fails_safe_when_frame_timing_is_unknown() -> None:
+    """frame timing hintを取得できない場合に1 workerへ抑制されること。
+
+    Arrange:
+        - CPUとmemoryには4 Groupを処理できる余裕がある
+        - 実測frame timingを取得できないsourceが用意される
+    Act:
+        - Refinement Group worker数が解決される
+    Assert:
+        - 安全側の1 workerが返されること
+    """
+    # Arrange
+    ranges = ((0, 10), (20, 30), (40, 50), (60, 70))
+
+    # Act
+    actual = resolve_refinement_group_worker_count(
+        ranges,
+        time_base=Fraction(1, 10),
+        source_width=320,
+        source_height=180,
+        minimum_frame_delta_ts=None,
+        maximum_frame_count_per_pts=None,
+        logical_cpu_count=64,
+        available_memory_bytes=64 * _GIB,
     )
 
     # Assert

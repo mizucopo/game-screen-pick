@@ -315,6 +315,11 @@ class FfmpegMediaRuntime:
         started_at = time.monotonic()
         timeline_first: tuple[int, int | None, int, int] | None = None
         timeline_last: tuple[int, int | None, int, int] | None = None
+        previous_timeline_pts: int | None = None
+        minimum_frame_delta_ts: int | None = None
+        current_frame_count_per_pts = 0
+        maximum_frame_count_per_pts = 0
+        frame_timing_reliable = True
         heartbeat_metadata: list[tuple[int, int | None, int, int]] = []
         scene_metadata: list[tuple[int, int | None, int, int]] = []
         stderr_tail: deque[str] = deque(maxlen=80)
@@ -343,6 +348,26 @@ class FfmpegMediaRuntime:
                     continue
                 branch, metadata = parsed
                 if branch == "timeline":
+                    frame_pts = metadata[0]
+                    if previous_timeline_pts is None:
+                        current_frame_count_per_pts = 1
+                    elif frame_pts == previous_timeline_pts:
+                        current_frame_count_per_pts += 1
+                    elif frame_pts > previous_timeline_pts:
+                        frame_delta_ts = frame_pts - previous_timeline_pts
+                        minimum_frame_delta_ts = (
+                            frame_delta_ts
+                            if minimum_frame_delta_ts is None
+                            else min(minimum_frame_delta_ts, frame_delta_ts)
+                        )
+                        maximum_frame_count_per_pts = max(
+                            maximum_frame_count_per_pts,
+                            current_frame_count_per_pts,
+                        )
+                        current_frame_count_per_pts = 1
+                    else:
+                        frame_timing_reliable = False
+                    previous_timeline_pts = frame_pts
                     if timeline_first is None:
                         timeline_first = metadata
                     timeline_last = metadata
@@ -418,6 +443,15 @@ class FfmpegMediaRuntime:
         )
         origin_pts, _origin_duration, _origin_width, _origin_height = timeline_first
         last_pts, last_duration, _last_width, _last_height = timeline_last
+        maximum_frame_count_per_pts = max(
+            maximum_frame_count_per_pts,
+            current_frame_count_per_pts,
+        )
+        if not frame_timing_reliable or minimum_frame_delta_ts is None:
+            minimum_frame_delta_ts = None
+            resolved_maximum_frame_count_per_pts = None
+        else:
+            resolved_maximum_frame_count_per_pts = maximum_frame_count_per_pts
         return NativeVideoScan(
             stream_index=stream.index,
             origin_pts=origin_pts,
@@ -429,6 +463,8 @@ class FfmpegMediaRuntime:
             wall_seconds=wall_seconds,
             cpu_seconds=cpu_seconds,
             decode_pass_count=1,
+            minimum_frame_delta_ts=minimum_frame_delta_ts,
+            maximum_frame_count_per_pts=resolved_maximum_frame_count_per_pts,
         )
 
     def cancel_video_scans(self) -> None:

@@ -1,6 +1,6 @@
 """Completed Video Scan Stageのdomain result。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .heartbeat_proxy import HeartbeatProxy
 from .media_stream import MediaStream
@@ -18,3 +18,29 @@ class VideoScanResult:
     heartbeats: tuple[HeartbeatProxy, ...]
     scene_signals: tuple[SceneSignal, ...]
     metrics: VideoScanMetrics
+    minimum_frame_delta_ts: int | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    maximum_frame_count_per_pts: int | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        """resource hintが完全な正値pairであることを検証する。"""
+        if (
+            (self.minimum_frame_delta_ts is None)
+            != (self.maximum_frame_count_per_pts is None)
+            or (
+                self.minimum_frame_delta_ts is not None
+                and self.minimum_frame_delta_ts < 1
+            )
+            or (
+                self.maximum_frame_count_per_pts is not None
+                and self.maximum_frame_count_per_pts < 1
+            )
+        ):
+            raise ValueError("Video Scanのframe timing resource hintが不正です")

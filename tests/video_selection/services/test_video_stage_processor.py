@@ -320,6 +320,75 @@ def test_video_stage_pipeline_preserves_order_and_source_local_cache(
     ]
 
 
+def test_legacy_scan_without_frame_timing_hint_reuses_all_stage_cache(
+    tmp_path: Path,
+) -> None:
+    """旧Scan artifactでも有効な全Stage cacheが再利用されること。
+
+    Arrange:
+        - 全Video Stageが確定され、親Scan artifactからresource hintが除かれる
+    Act:
+        - 同じVideo Sourceと設定で再実行される
+    Assert:
+        - Video ScanとRefinement Groupが再decodeされないこと
+        - 旧artifactのhint欠落だけが逐次fallbackとして復元されること
+        - Frame CandidateとStage Fingerprintが維持されること
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    video_set = discover_video_set(input_folder)
+    configuration = _configuration(input_folder, tmp_path / "output")
+    initial = VideoStageProcessor(
+        FakeVideoStageMediaRuntime(),
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+    scan_root = (
+        configuration.processing_cache_folder
+        / "videos"
+        / video_set.sources[0].fingerprint
+        / ProcessingStage.SCAN_VIDEO.value
+    )
+    scan_folder = next(
+        path
+        for path in scan_root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    )
+    artifact = json.loads((scan_folder / "artifact.json").read_text(encoding="utf-8"))
+    artifact.pop("minimum_frame_delta_ts")
+    artifact.pop("maximum_frame_count_per_pts")
+    _rewrite_hash_consistent_artifact(scan_folder, artifact)
+    retry_runtime = FakeVideoStageMediaRuntime(
+        minimum_frame_delta_ts=1,
+        maximum_frame_count_per_pts=2,
+    )
+
+    # Act
+    reused = VideoStageProcessor(
+        retry_runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(video_set, configuration)[0]
+
+    # Assert
+    assert retry_runtime.scan_partition_calls == []
+    assert retry_runtime.range_calls == []
+    assert reused.scan.minimum_frame_delta_ts is None
+    assert reused.scan.maximum_frame_count_per_pts is None
+    assert tuple(stage.fingerprint for stage in reused.completed_stages) == tuple(
+        stage.fingerprint for stage in initial.completed_stages
+    )
+    assert tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in reused.extraction.candidates
+    ) == tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in initial.extraction.candidates
+    )
+
+
 def test_three_video_scans_run_concurrently(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1293,6 +1362,7 @@ def test_container_duration_only_schedules_fixed_scan_partitions(
     Assert:
         - container durationがstream tickへ変換され2件のpartitionが処理されること
         - 最後のpartitionがEOFまで開かれること
+        - partition境界を含む最小PTS差がresource hintへ集約されること
     """
     # Arrange
     monkeypatch.setattr(
@@ -1342,6 +1412,8 @@ def test_container_duration_only_schedules_fixed_scan_partitions(
         (10, None),
     ]
     assert result.scan.metrics.decode_pass_count == 2
+    assert result.scan.minimum_frame_delta_ts == 1
+    assert result.scan.maximum_frame_count_per_pts == 1
 
 
 def test_duration_hint_tail_does_not_require_an_empty_scan_partition(
@@ -2078,12 +2150,12 @@ def test_refinement_worker_count_does_not_change_semantic_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """worker数とGroup完了順がFrame Candidateの意味結果を変えないこと。
+    """resource条件がFrame Candidateの意味結果を変えないこと。
 
     Arrange:
         - 離れた4 groupを持つ同内容のVideo Sourceが2組用意される
     Act:
-        - 1 workerと完了順を反転した4 workerでFrame Candidateが抽出される
+        - 異なるframe timing hintの1 workerと完了順を反転した4 workerで抽出される
     Assert:
         - 4 worker側のGroup完了順が入力順と異なること
         - Moment、Candidate、親Stage artifact、Fingerprintが一致すること
@@ -2115,6 +2187,8 @@ def test_refinement_worker_count_does_not_change_semantic_result(
         name: str,
         cpu_count: int,
         *,
+        minimum_frame_delta_ts: int,
+        maximum_frame_count_per_pts: int,
         reverse_completion: bool = False,
     ) -> tuple[VideoStageResult, dict[Path, bytes], tuple[int, ...]]:
         input_folder = tmp_path / name
@@ -2146,6 +2220,8 @@ def test_refinement_worker_count_does_not_change_semantic_result(
             media_probe=media_probe,
             scan_frame_pts=(0, 100, 200, 300),
             on_scan_video_frame_ranges=(complete_later if reverse_completion else None),
+            minimum_frame_delta_ts=minimum_frame_delta_ts,
+            maximum_frame_count_per_pts=maximum_frame_count_per_pts,
         )
         configuration = replace(
             _configuration(input_folder, tmp_path / f"{name}-output"),
@@ -2171,10 +2247,14 @@ def test_refinement_worker_count_does_not_change_semantic_result(
     serial, serial_artifacts, _serial_completion_order = run_with_cpu_count(
         "serial-videos",
         4,
+        minimum_frame_delta_ts=5,
+        maximum_frame_count_per_pts=1,
     )
     parallel, parallel_artifacts, parallel_completion_order = run_with_cpu_count(
         "parallel-videos",
         16,
+        minimum_frame_delta_ts=1,
+        maximum_frame_count_per_pts=2,
         reverse_completion=True,
     )
 

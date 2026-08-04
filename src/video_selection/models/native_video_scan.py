@@ -1,7 +1,7 @@
 """MediaRuntimeの一回のnative Video Scan結果。"""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 
 from .scanned_video_frame import ScannedVideoFrame
@@ -21,6 +21,16 @@ class NativeVideoScan:
     wall_seconds: float
     cpu_seconds: float
     decode_pass_count: int
+    minimum_frame_delta_ts: int | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    maximum_frame_count_per_pts: int | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """scanが1回以上のdecodeと有効なtimingを持つことを検証する。"""
@@ -33,6 +43,16 @@ class NativeVideoScan:
                 and self.last_frame_duration_ts <= 0
             )
             or self.decode_pass_count < 1
+            or (self.minimum_frame_delta_ts is None)
+            != (self.maximum_frame_count_per_pts is None)
+            or (
+                self.minimum_frame_delta_ts is not None
+                and self.minimum_frame_delta_ts < 1
+            )
+            or (
+                self.maximum_frame_count_per_pts is not None
+                and self.maximum_frame_count_per_pts < 1
+            )
             or not math.isfinite(self.wall_seconds)
             or not math.isfinite(self.cpu_seconds)
             or self.wall_seconds < 0

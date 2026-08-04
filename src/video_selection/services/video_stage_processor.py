@@ -911,6 +911,8 @@ class VideoStageProcessor:
                 time_base=scan.timeline.time_base,
                 source_width=scan.primary_stream.width,
                 source_height=scan.primary_stream.height,
+                minimum_frame_delta_ts=scan.minimum_frame_delta_ts,
+                maximum_frame_count_per_pts=scan.maximum_frame_count_per_pts,
                 logical_cpu_count=logical_cpu_count,
                 available_memory_bytes=self._safe_available_memory_bytes(),
             )
@@ -1120,6 +1122,9 @@ def _materialize_video_scan_partitions(
         ),
         stage_root / ".scene-proxies",
     )
+    minimum_frame_delta_ts, maximum_frame_count_per_pts = _merge_frame_timing_hints(
+        framed_partitions
+    )
     last = framed_partitions[-1]
     return NativeVideoScan(
         stream_index=first.stream_index,
@@ -1132,6 +1137,33 @@ def _materialize_video_scan_partitions(
         wall_seconds=sum(partition.wall_seconds for partition in partitions),
         cpu_seconds=sum(partition.cpu_seconds for partition in partitions),
         decode_pass_count=sum(partition.decode_pass_count for partition in partitions),
+        minimum_frame_delta_ts=minimum_frame_delta_ts,
+        maximum_frame_count_per_pts=maximum_frame_count_per_pts,
+    )
+
+
+def _merge_frame_timing_hints(
+    partitions: tuple[NativeVideoScan, ...],
+) -> tuple[int | None, int | None]:
+    """完全なpartition hintをsource全体の保守値へ集約する。"""
+    if any(
+        partition.minimum_frame_delta_ts is None
+        or partition.maximum_frame_count_per_pts is None
+        for partition in partitions
+    ):
+        return (None, None)
+    frame_deltas = [
+        cast(int, partition.minimum_frame_delta_ts) for partition in partitions
+    ]
+    frame_deltas.extend(
+        right.origin_pts - left.last_frame_pts
+        for left, right in zip(partitions, partitions[1:], strict=False)
+    )
+    return (
+        min(frame_deltas),
+        max(
+            cast(int, partition.maximum_frame_count_per_pts) for partition in partitions
+        ),
     )
 
 

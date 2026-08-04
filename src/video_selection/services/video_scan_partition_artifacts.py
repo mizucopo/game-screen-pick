@@ -42,6 +42,8 @@ def serialize_video_scan_partition(
         "origin_pts": scan.origin_pts,
         "last_frame_pts": scan.last_frame_pts,
         "last_frame_duration_ts": scan.last_frame_duration_ts,
+        "minimum_frame_delta_ts": scan.minimum_frame_delta_ts,
+        "maximum_frame_count_per_pts": scan.maximum_frame_count_per_pts,
         "time_base": _fraction_value(scan.time_base),
         "heartbeats": [
             _frame_value(frame, checkpoint_root) for frame in scan.heartbeats
@@ -82,6 +84,12 @@ def restore_video_scan_partition(
         last_frame_pts=_integer(artifact.get("last_frame_pts")),
         last_frame_duration_ts=_optional_integer(
             artifact.get("last_frame_duration_ts")
+        ),
+        minimum_frame_delta_ts=_optional_integer(
+            artifact.get("minimum_frame_delta_ts")
+        ),
+        maximum_frame_count_per_pts=_optional_integer(
+            artifact.get("maximum_frame_count_per_pts")
         ),
         time_base=_fraction(artifact.get("time_base")),
         heartbeats=tuple(

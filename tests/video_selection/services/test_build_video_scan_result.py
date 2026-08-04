@@ -55,6 +55,8 @@ def test_heartbeat_proxies_are_analyzed_without_retaining_all_decoded_rgb(
         wall_seconds=1.0,
         cpu_seconds=0.5,
         decode_pass_count=1,
+        minimum_frame_delta_ts=1,
+        maximum_frame_count_per_pts=1,
     )
     primary_stream = MediaStream(
         index=0,
@@ -111,3 +113,5 @@ def test_heartbeat_proxies_are_analyzed_without_retaining_all_decoded_rgb(
     # Assert
     assert len(result.heartbeats) == len(scanned_frames)
     assert max_retained_before_decode <= 1
+    assert result.minimum_frame_delta_ts == 1
+    assert result.maximum_frame_count_per_pts == 1

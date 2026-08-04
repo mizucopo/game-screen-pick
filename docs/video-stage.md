@@ -21,7 +21,7 @@ Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行�
 2. `extract-frame-candidates`
    - timeline順の単調windowでscene近傍のheartbeat品質を参照し、density windowごとに最大1件のCandidate Momentを発見します。
    - Moment前後のnative frameだけをrange scanで取り出します。重なるMoment windowを一つのRefinement Window Groupとし、各Groupは一つの独立range decode、Neutral Image Analysis、proxy encodeを所有します。
-   - Group数、Video Scanと共有するlogical CPU、最大4のsafe cap、available memoryからworker数を自動決定します。memory上限は長辺960px、240 frame/秒、保持frameあたり4 byte/pixelで各PTS rangeを保守的に見積もり、その時点のavailable memoryの4分の1へ同時Groupが収まる値です。残る4分の3はOpenCV/NumPyの解析用一時領域、runtime、他processの余裕として予約します。一Groupもこのparallel予算へ収まらない場合は、従来と同じ逐次1 workerへ戻して並列化によるmemory増幅を防ぎます。available memoryまたはsource寸法を取得できない場合も1 workerへ抑制します。
+   - Group数、Video Scanと共有するlogical CPU、最大4のsafe cap、available memoryからworker数を自動決定します。memory上限は長辺960px、保持frameあたり4 byte/pixel、最低240fpsの保守値とVideo Scanで実測した最小PTS差・同一PTS最大frame数による上限の大きい方で各PTS rangeを見積もり、その時点のavailable memoryの4分の1へ同時Groupが収まる値です。残る4分の3はOpenCV/NumPyの解析用一時領域、runtime、他processの余裕として予約します。一Groupもこのparallel予算へ収まらない場合は、従来と同じ逐次1 workerへ戻して並列化によるmemory増幅を防ぎます。旧cacheなどで完全なframe timing hintを取得できない場合、available memory、source寸法のいずれかを取得できない場合も、cacheを失効させず1 workerへ抑制します。
    - 同時に保持するGroupのRGB decode結果をworker数以下へ制限し、選抜proxyを書いた時点でそのGroupのRGB frameを解放します。resource値と決定worker数は実行時制御だけに使い、Completed Stage Fingerprint、Durable Work Unit key、成果物へ含めません。
    - 各Refinement Window Groupのproxyと解析結果を別々のDurable Work Unitとしてatomicに確定し、並列完了順にかかわらずPTS順に親Stageへ集約します。cache hit Groupはdecodeせず、破損・未完了Groupだけを再計算します。
    - group内でmodel-free Neutral Image Analysis、無効frame除外、Moment内deduplication、多様性選抜を行います。最初に最高Qualityのframeを保持し、残りは選択済みframeとの最小時間距離を最優先、最小視覚距離とQualityを後続条件として、Refinement Window全体へ決定的に分散させます。

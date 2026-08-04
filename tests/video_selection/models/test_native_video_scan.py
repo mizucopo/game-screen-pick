@@ -70,3 +70,37 @@ def test_partition_with_reversed_timeline_is_rejected() -> None:
 
     # Assert
     assert "timingまたはmetric" in str(error.value)
+
+
+def test_incomplete_frame_timing_hint_is_rejected() -> None:
+    """片方だけのframe timing resource hintが拒否されること。
+
+    Arrange:
+        - 最小PTS差だけを持つpartition値が用意される
+    Act:
+        - Native Video Scanの構築が試行される
+    Assert:
+        - 不正なtimingとして拒否されること
+    """
+    # Arrange
+    minimum_frame_delta_ts = 1
+
+    # Act
+    with pytest.raises(ValueError) as error:
+        NativeVideoScan(
+            stream_index=0,
+            origin_pts=0,
+            last_frame_pts=10,
+            last_frame_duration_ts=1,
+            time_base=Fraction(1, 10),
+            heartbeats=(),
+            scene_frames=(),
+            wall_seconds=1.0,
+            cpu_seconds=0.5,
+            decode_pass_count=1,
+            minimum_frame_delta_ts=minimum_frame_delta_ts,
+            maximum_frame_count_per_pts=None,
+        )
+
+    # Assert
+    assert "timingまたはmetric" in str(error.value)

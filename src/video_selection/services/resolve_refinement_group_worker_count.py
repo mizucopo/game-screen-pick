@@ -5,7 +5,7 @@ from fractions import Fraction
 from .resolve_frame_range_worker_count import resolve_frame_range_worker_count
 
 _MAX_REFINEMENT_DIMENSION = 960
-_ESTIMATED_MAX_FRAMES_PER_SECOND = 240
+_MINIMUM_ESTIMATED_FRAMES_PER_SECOND = 240
 _RETAINED_FRAME_BYTES_PER_PIXEL = 4
 _AVAILABLE_MEMORY_BUDGET_DIVISOR = 4
 
@@ -16,6 +16,8 @@ def resolve_refinement_group_worker_count(
     time_base: Fraction,
     source_width: int | None,
     source_height: int | None,
+    minimum_frame_delta_ts: int | None,
+    maximum_frame_count_per_pts: int | None,
     logical_cpu_count: int,
     available_memory_bytes: int | None,
 ) -> int:
@@ -25,6 +27,8 @@ def resolve_refinement_group_worker_count(
         time_base,
         source_width,
         source_height,
+        minimum_frame_delta_ts,
+        maximum_frame_count_per_pts,
         logical_cpu_count,
         available_memory_bytes,
     )
@@ -32,7 +36,13 @@ def resolve_refinement_group_worker_count(
         len(pts_ranges),
         logical_cpu_count=logical_cpu_count,
     )
-    if available_memory_bytes is None or source_width is None or source_height is None:
+    if (
+        available_memory_bytes is None
+        or source_width is None
+        or source_height is None
+        or minimum_frame_delta_ts is None
+        or maximum_frame_count_per_pts is None
+    ):
         return 1
     memory_budget = available_memory_bytes // _AVAILABLE_MEMORY_BUDGET_DIVISOR
     group_bytes = sorted(
@@ -43,6 +53,8 @@ def resolve_refinement_group_worker_count(
                 time_base,
                 source_width,
                 source_height,
+                minimum_frame_delta_ts,
+                maximum_frame_count_per_pts,
             )
             for start_pts, end_pts in pts_ranges
         ),
@@ -64,13 +76,21 @@ def _estimated_group_bytes(
     time_base: Fraction,
     source_width: int,
     source_height: int,
+    minimum_frame_delta_ts: int,
+    maximum_frame_count_per_pts: int,
 ) -> int:
     """一Groupが保持し得るscaled frameの基礎memoryを保守的に返す。"""
     width, height = _scaled_dimensions(source_width, source_height)
     duration = (end_pts - start_pts) * time_base
+    conservative_frame_count = _ceiling(duration * _MINIMUM_ESTIMATED_FRAMES_PER_SECOND)
+    observed_timing_frame_count = (
+        _ceiling(Fraction(end_pts - start_pts, minimum_frame_delta_ts))
+        * maximum_frame_count_per_pts
+    )
     estimated_frame_count = max(
         1,
-        _ceiling(duration * _ESTIMATED_MAX_FRAMES_PER_SECOND),
+        conservative_frame_count,
+        observed_timing_frame_count,
     )
     return width * height * _RETAINED_FRAME_BYTES_PER_PIXEL * estimated_frame_count
 
@@ -100,6 +120,8 @@ def _validate_inputs(
     time_base: Fraction,
     source_width: int | None,
     source_height: int | None,
+    minimum_frame_delta_ts: int | None,
+    maximum_frame_count_per_pts: int | None,
     logical_cpu_count: int,
     available_memory_bytes: int | None,
 ) -> None:
@@ -113,5 +135,11 @@ def _validate_inputs(
         and (source_width < 1 or source_height < 1)
     ):
         raise ValueError("Refinement Groupのsource寸法が不正です")
+    if (minimum_frame_delta_ts is None) != (maximum_frame_count_per_pts is None) or (
+        minimum_frame_delta_ts is not None
+        and maximum_frame_count_per_pts is not None
+        and (minimum_frame_delta_ts < 1 or maximum_frame_count_per_pts < 1)
+    ):
+        raise ValueError("Refinement Groupのframe timing hintが不正です")
     if available_memory_bytes is not None and available_memory_bytes < 0:
         raise ValueError("available memoryは非負である必要があります")

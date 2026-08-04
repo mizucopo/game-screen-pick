@@ -577,6 +577,38 @@ def test_scan_video_frames_preserves_vfr_source_timing(tmp_path: Path) -> None:
     ]
 
 
+def test_scan_video_records_observed_vfr_timing_hint(tmp_path: Path) -> None:
+    """VFRの実測最小PTS差がresource hintへ記録されること。
+
+    Arrange:
+        - 0、0.25、0.75、1.0秒にframeを持つVFR fixtureが用意される
+    Act:
+        - composite Video Scanが実行される
+    Assert:
+        - 最小0.25秒のPTS差と同一PTS最大1frameが記録されること
+    """
+    # Arrange
+    video_path = generate_vfr_video(tmp_path / "vfr-hint.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+
+    # Act
+    scan = runtime.scan_video(
+        video_path,
+        stream,
+        tmp_path / "vfr-hint-artifacts",
+        heartbeat_interval_seconds=0.25,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.25,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert scan.minimum_frame_delta_ts is not None
+    assert Fraction(scan.minimum_frame_delta_ts) * scan.time_base == Fraction(1, 4)
+    assert scan.maximum_frame_count_per_pts == 1
+
+
 def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
     tmp_path: Path,
 ) -> None:
@@ -590,6 +622,7 @@ def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
         - exactなorigin、最終frame終端、1秒heartbeatが返されること
         - scene signalが320px以下の一時画像とともに返されること
         - Heartbeat Proxyが960px以下のmetadataなしMJPEGとして保存されること
+        - native frameの最小PTS差と同一PTS最大frame数が記録されること
         - decode passが1回として記録されること
     """
     # Arrange
@@ -612,6 +645,9 @@ def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(
     # Assert
     assert scan.decode_pass_count == 1
     assert scan.cpu_seconds > 0
+    assert scan.minimum_frame_delta_ts is not None
+    assert scan.minimum_frame_delta_ts > 0
+    assert scan.maximum_frame_count_per_pts == 1
     assert scan.origin_pts == 0
     assert scan.last_frame_duration_ts is not None
     assert stream.time_base is not None

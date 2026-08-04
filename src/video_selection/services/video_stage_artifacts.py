@@ -37,6 +37,8 @@ def serialize_video_scan(scan: VideoScanResult, stage_root: Path) -> dict[str, o
     return {
         "schema": _SCAN_SCHEMA,
         "primary_stream": _serialize_stream(scan.primary_stream),
+        "minimum_frame_delta_ts": scan.minimum_frame_delta_ts,
+        "maximum_frame_count_per_pts": scan.maximum_frame_count_per_pts,
         "timeline": {
             "origin_pts": scan.timeline.origin_pts,
             "time_base": _serialize_fraction(scan.timeline.time_base),
@@ -147,6 +149,12 @@ def restore_video_scan(
             timeline_segment_count=_integer(
                 metrics_value.get("timeline_segment_count")
             ),
+        ),
+        minimum_frame_delta_ts=_optional_integer(
+            artifact.get("minimum_frame_delta_ts")
+        ),
+        maximum_frame_count_per_pts=_optional_integer(
+            artifact.get("maximum_frame_count_per_pts")
         ),
     )
     _validate_video_scan_result(result)
