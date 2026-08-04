@@ -2,7 +2,7 @@
 
 import hashlib
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import replace
 from fractions import Fraction
@@ -418,15 +418,15 @@ class VideoSetVisionProcessor:
         def execute_plans() -> tuple[_CandidateMomentExecution, ...]:
             results: list[_CandidateMomentExecution | None] = [None] * len(plans)
             if pending:
-                executor = ThreadPoolExecutor(
-                    max_workers=min(max_parallel_requests, len(pending)),
-                    thread_name_prefix="candidate-moment",
-                )
-                futures = tuple(
-                    (index, executor.submit(execute_plan, plan))
-                    for index, plan in pending
-                )
+                executor: ThreadPoolExecutor | None = None
+                futures: list[tuple[int, Future[_CandidateMomentExecution]]] = []
                 try:
+                    executor = ThreadPoolExecutor(
+                        max_workers=min(max_parallel_requests, len(pending)),
+                        thread_name_prefix="candidate-moment",
+                    )
+                    for index, plan in pending:
+                        futures.append((index, executor.submit(execute_plan, plan)))
                     for index, plan in enumerate(plans):
                         if index not in pending_indexes:
                             results[index] = execute_plan(plan)
@@ -437,9 +437,12 @@ class VideoSetVisionProcessor:
                         future.cancel()
                     with suppress(Exception):
                         self._runtime.cancel_candidate_annotations()
-                    executor.shutdown(wait=False, cancel_futures=True)
+                    if executor is not None:
+                        executor.shutdown(wait=False, cancel_futures=True)
                     raise
                 else:
+                    if executor is None:
+                        raise AssertionError("Candidate executorが確定していません")
                     executor.shutdown()
             else:
                 results = [execute_plan(plan) for plan in plans]

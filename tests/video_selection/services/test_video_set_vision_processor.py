@@ -1,4 +1,6 @@
 import threading
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -539,6 +541,95 @@ def test_interrupt_cancels_active_candidate_annotations(tmp_path: Path) -> None:
                 configuration
             ),
         )
+    assert runtime.cancel_candidate_annotations_call_count == 1
+    assert cancellation_requested.is_set()
+
+
+def test_interrupt_during_future_submission_cancels_started_candidate_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Future登録中の割り込みでも開始済みCandidate推論が中止されること。
+
+    Arrange:
+        - 先頭推論の開始後、2件目のFuture登録で割り込むexecutorが用意される
+    Act:
+        - Candidate Annotationが並列実行される
+    Assert:
+        - KeyboardInterruptが維持され、開始済みruntimeへ中止が要求されること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=2,
+    )
+    requests = _requests()
+    first_started = threading.Event()
+    cancellation_requested = threading.Event()
+    submission_count = 0
+
+    def await_cancellation(_call: CandidateAnnotationRequest) -> None:
+        first_started.set()
+        if not cancellation_requested.wait(timeout=1.0):
+            raise RuntimeError("開始済みCandidate推論が中止されませんでした")
+
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        _annotations(requests),
+        on_candidate_annotation_request=await_cancellation,
+        on_cancel_candidate_annotations=cancellation_requested.set,
+    )
+
+    def create_interrupting_executor(
+        *,
+        max_workers: int,
+        thread_name_prefix: str,
+    ) -> ThreadPoolExecutor:
+        executor = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix=thread_name_prefix,
+        )
+        submit_to_executor = executor.submit
+
+        def submit(
+            function: Callable[..., object],
+            /,
+            *args: object,
+            **kwargs: object,
+        ) -> Future[object]:
+            nonlocal submission_count
+            submission_count += 1
+            if submission_count == 2:
+                raise KeyboardInterrupt
+            future = submit_to_executor(function, *args, **kwargs)
+            if not first_started.wait(timeout=1.0):
+                raise RuntimeError("先頭Candidate推論が開始されませんでした")
+            return future
+
+        monkeypatch.setattr(executor, "submit", submit)
+        return executor
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_set_vision_processor.ThreadPoolExecutor",
+        create_interrupting_executor,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(KeyboardInterrupt):
+        VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+            video_set=video_set,
+            representatives=tuple(request.frame_candidates[0] for request in requests),
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=requests,
+            configuration=configuration,
+            resolved_models=FakeModelRuntime("vision-model").resolve_models(
+                configuration
+            ),
+        )
+    assert submission_count == 2
     assert runtime.cancel_candidate_annotations_call_count == 1
     assert cancellation_requested.is_set()
 
