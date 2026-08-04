@@ -1,4 +1,6 @@
 import threading
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -26,10 +28,12 @@ from src.video_selection.models.scene_catalog import SceneCatalog
 from src.video_selection.models.scene_catalog_entry import SceneCatalogEntry
 from src.video_selection.models.stage_fingerprint import StageFingerprint
 from src.video_selection.models.video_set import VideoSet
+from src.video_selection.models.vision_stage_result import VisionStageResult
 from src.video_selection.services.discover_video_set import discover_video_set
 from src.video_selection.services.run_progress_tracker import RunProgressTracker
 from src.video_selection.services.video_set_vision_processor import (
     VideoSetVisionProcessor,
+    plan_vision_stage_fingerprints,
 )
 from tests.video_selection.fakes.fake_model_runtime import FakeModelRuntime
 from tests.video_selection.fakes.fake_structured_vision_runtime import (
@@ -212,6 +216,632 @@ def test_combat_fallback_frames_are_evaluated_concurrently(
         len(call.frame_candidates) == 1 for call in runtime.candidate_annotation_calls
     )
     assert result.annotations == (annotations[2],)
+
+
+def test_primary_candidate_moments_are_evaluated_concurrently_in_input_order(
+    tmp_path: Path,
+) -> None:
+    """主候補が設定上限まで並列評価され結果は入力順に固定されること。
+
+    Arrange:
+        - 完了順が逆転する3件の主候補とOllama同時request上限2が用意される
+    Act:
+        - Video Set Vision processingが実行される
+    Assert:
+        - 最大2件だけが同時実行され、結果は入力順で返されること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=2,
+    )
+    requests = _three_requests()
+    annotations = _three_annotations(requests)
+    first_moment_id = requests[0].moment.identifier
+    second_moment_id = requests[1].moment.identifier
+    state_lock = threading.Lock()
+    first_started = threading.Event()
+    second_completed_first = threading.Event()
+    active_count = 0
+    maximum_active_count = 0
+
+    def reverse_first_two_completion(call: CandidateAnnotationRequest) -> None:
+        nonlocal active_count, maximum_active_count
+        with state_lock:
+            active_count += 1
+            maximum_active_count = max(maximum_active_count, active_count)
+        try:
+            if call.moment.identifier == first_moment_id:
+                first_started.set()
+                if not second_completed_first.wait(timeout=1.0):
+                    raise RuntimeError("二つ目の主候補が並列に完了しませんでした")
+            elif call.moment.identifier == second_moment_id:
+                if not first_started.wait(timeout=1.0):
+                    raise RuntimeError("一つ目の主候補が開始されませんでした")
+                second_completed_first.set()
+        finally:
+            with state_lock:
+                active_count -= 1
+
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        annotations,
+        on_candidate_annotation_request=reverse_first_two_completion,
+    )
+
+    # Act
+    result = VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+        video_set=video_set,
+        representatives=tuple(request.frame_candidates[0] for request in requests),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=requests,
+        configuration=configuration,
+        resolved_models=FakeModelRuntime("vision-model").resolve_models(configuration),
+    )
+
+    # Assert
+    assert maximum_active_count == 2
+    assert result.annotations == annotations
+    assert all(
+        len(call.frame_candidates) == 1 for call in runtime.candidate_annotation_calls
+    )
+
+
+def test_candidate_worker_slot_is_refilled_before_slow_sibling_finishes(
+    tmp_path: Path,
+) -> None:
+    """完了したworkerへ次のCandidate Momentが直ちに補充されること。
+
+    Arrange:
+        - 上限2、長時間停止する先頭Moment、すぐ完了する2番目が用意される
+    Act:
+        - 3件のCandidate Annotationが実行される
+    Assert:
+        - 先頭Momentの解放前に3番目のMomentが開始されること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=2,
+    )
+    requests = _three_requests()
+    annotations = _three_annotations(requests)
+    first_started = threading.Event()
+    third_started = threading.Event()
+    release_first = threading.Event()
+
+    def block_first_moment(call: CandidateAnnotationRequest) -> None:
+        if call.moment.identifier == requests[0].moment.identifier:
+            first_started.set()
+            if not release_first.wait(timeout=5.0):
+                raise RuntimeError("先頭Momentを解放できませんでした")
+        elif call.moment.identifier == requests[2].moment.identifier:
+            third_started.set()
+
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        annotations,
+        on_candidate_annotation_request=block_first_moment,
+    )
+    errors: list[BaseException] = []
+    results: list[VisionStageResult] = []
+
+    def process() -> None:
+        try:
+            results.append(
+                VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+                    video_set=video_set,
+                    representatives=tuple(
+                        request.frame_candidates[0] for request in requests
+                    ),
+                    representative_source_fingerprints=(StageFingerprint("c" * 64),),
+                    annotation_requests=requests,
+                    configuration=configuration,
+                    resolved_models=FakeModelRuntime("vision-model").resolve_models(
+                        configuration
+                    ),
+                )
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=process, name="candidate-worker-refill")
+
+    # Act
+    thread.start()
+    try:
+        assert first_started.wait(timeout=5.0)
+        third_started_before_release = third_started.wait(timeout=1.0)
+    finally:
+        release_first.set()
+        thread.join(timeout=5.0)
+
+    # Assert
+    assert third_started_before_release is True
+    assert errors == []
+    assert not thread.is_alive()
+    assert len(results) == 1
+    assert results[0].annotations == annotations
+
+
+def test_primary_and_fallback_annotations_share_the_parallel_limit(
+    tmp_path: Path,
+) -> None:
+    """複数Momentの主候補とfallbackで同じ同時実行上限が共有されること。
+
+    Arrange:
+        - fallbackが必要な2件のMomentとOllama同時request上限2が用意される
+    Act:
+        - 両Momentが並列にCandidate Annotationされる
+    Assert:
+        - 主候補とfallbackのどちらも3件目が同時実行されないこと
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=2,
+    )
+    first_request, first_annotations = _combat_fallback_fixture()
+    second_request, second_annotations = _combat_fallback_fixture(
+        seed="e",
+        anchor_time=Fraction(20),
+    )
+    requests = (first_request, second_request)
+    annotations = (*first_annotations, *second_annotations)
+    primary_ids = {
+        first_request.frame_candidates[0].identifier,
+        second_request.frame_candidates[0].identifier,
+    }
+    state_lock = threading.Lock()
+    two_primaries_started = threading.Event()
+    release_primaries = threading.Event()
+    two_fallbacks_started = threading.Event()
+    third_fallback_started = threading.Event()
+    release_fallbacks = threading.Event()
+    active_primary_count = 0
+    active_fallback_count = 0
+
+    def observe_parallel_limit(call: CandidateAnnotationRequest) -> None:
+        nonlocal active_primary_count, active_fallback_count
+        frame_id = call.frame_candidates[0].identifier
+        is_primary = frame_id in primary_ids
+        with state_lock:
+            if is_primary:
+                active_primary_count += 1
+                if active_primary_count == 2:
+                    two_primaries_started.set()
+            else:
+                active_fallback_count += 1
+                if active_fallback_count == 2:
+                    two_fallbacks_started.set()
+                elif active_fallback_count >= 3:
+                    third_fallback_started.set()
+        try:
+            release = release_primaries if is_primary else release_fallbacks
+            if not release.wait(timeout=5.0):
+                raise RuntimeError("Candidate Annotationを解放できませんでした")
+        finally:
+            with state_lock:
+                if is_primary:
+                    active_primary_count -= 1
+                else:
+                    active_fallback_count -= 1
+
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        annotations,
+        on_candidate_annotation_request=observe_parallel_limit,
+    )
+    errors: list[BaseException] = []
+    results: list[object] = []
+
+    def process() -> None:
+        try:
+            results.append(
+                VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+                    video_set=video_set,
+                    representatives=tuple(
+                        request.frame_candidates[0] for request in requests
+                    ),
+                    representative_source_fingerprints=(StageFingerprint("c" * 64),),
+                    annotation_requests=requests,
+                    configuration=configuration,
+                    resolved_models=FakeModelRuntime("vision-model").resolve_models(
+                        configuration
+                    ),
+                )
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=process, name="parallel-candidate-moments")
+
+    # Act
+    thread.start()
+    try:
+        assert two_primaries_started.wait(timeout=5.0)
+        release_primaries.set()
+        assert two_fallbacks_started.wait(timeout=5.0)
+        third_started_before_release = third_fallback_started.wait(timeout=0.2)
+    finally:
+        release_primaries.set()
+        release_fallbacks.set()
+        thread.join(timeout=5.0)
+
+    # Assert
+    assert third_started_before_release is False
+    assert errors == []
+    assert not thread.is_alive()
+    assert len(results) == 1
+    result = results[0]
+    assert isinstance(result, VisionStageResult)
+    assert result.annotations == (first_annotations[2], second_annotations[2])
+
+
+def test_interrupt_cancels_active_candidate_annotations(tmp_path: Path) -> None:
+    """Candidate Annotation待機中の割り込みでactive推論が中止されること。
+
+    Arrange:
+        - 一方がKeyboardInterruptとなり他方が中止要求を待つ2件のMomentが用意される
+    Act:
+        - Candidate Annotationが並列実行される
+    Assert:
+        - KeyboardInterruptが維持され、runtimeへ中止が一度要求されること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=2,
+    )
+    requests = _requests()
+    annotations = _annotations(requests)
+    both_started = threading.Event()
+    cancellation_requested = threading.Event()
+    state_lock = threading.Lock()
+    started_count = 0
+
+    def interrupt_first_moment(call: CandidateAnnotationRequest) -> None:
+        nonlocal started_count
+        with state_lock:
+            started_count += 1
+            if started_count == 2:
+                both_started.set()
+        if not both_started.wait(timeout=1.0):
+            raise RuntimeError("二つのCandidate Momentが開始されませんでした")
+        if call.moment.identifier == requests[0].moment.identifier:
+            raise KeyboardInterrupt
+        if not cancellation_requested.wait(timeout=1.0):
+            raise RuntimeError("active Candidate Annotationが中止されませんでした")
+
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        annotations,
+        on_candidate_annotation_request=interrupt_first_moment,
+        on_cancel_candidate_annotations=cancellation_requested.set,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(KeyboardInterrupt):
+        VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+            video_set=video_set,
+            representatives=tuple(request.frame_candidates[0] for request in requests),
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=requests,
+            configuration=configuration,
+            resolved_models=FakeModelRuntime("vision-model").resolve_models(
+                configuration
+            ),
+        )
+    assert runtime.cancel_candidate_annotations_call_count == 1
+    assert cancellation_requested.is_set()
+
+
+def test_interrupt_during_future_submission_cancels_started_candidate_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Future登録中の割り込みでも開始済みCandidate推論が中止されること。
+
+    Arrange:
+        - 先頭推論の開始後、2件目のFuture登録で割り込むexecutorが用意される
+    Act:
+        - Candidate Annotationが並列実行される
+    Assert:
+        - KeyboardInterruptが維持され、開始済みruntimeへ中止が要求されること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=2,
+    )
+    requests = _requests()
+    first_started = threading.Event()
+    cancellation_requested = threading.Event()
+    submission_count = 0
+
+    def await_cancellation(_call: CandidateAnnotationRequest) -> None:
+        first_started.set()
+        if not cancellation_requested.wait(timeout=1.0):
+            raise RuntimeError("開始済みCandidate推論が中止されませんでした")
+
+    runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        _annotations(requests),
+        on_candidate_annotation_request=await_cancellation,
+        on_cancel_candidate_annotations=cancellation_requested.set,
+    )
+
+    def create_interrupting_executor(
+        *,
+        max_workers: int,
+        thread_name_prefix: str,
+    ) -> ThreadPoolExecutor:
+        executor = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix=thread_name_prefix,
+        )
+        submit_to_executor = executor.submit
+
+        def submit(
+            function: Callable[..., object],
+            /,
+            *args: object,
+            **kwargs: object,
+        ) -> Future[object]:
+            nonlocal submission_count
+            submission_count += 1
+            if submission_count == 2:
+                raise KeyboardInterrupt
+            future = submit_to_executor(function, *args, **kwargs)
+            if not first_started.wait(timeout=1.0):
+                raise RuntimeError("先頭Candidate推論が開始されませんでした")
+            return future
+
+        monkeypatch.setattr(executor, "submit", submit)
+        return executor
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_set_vision_processor.ThreadPoolExecutor",
+        create_interrupting_executor,
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(KeyboardInterrupt):
+        VideoSetVisionProcessor(runtime, RecordingRunObserver()).process(
+            video_set=video_set,
+            representatives=tuple(request.frame_candidates[0] for request in requests),
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=requests,
+            configuration=configuration,
+            resolved_models=FakeModelRuntime("vision-model").resolve_models(
+                configuration
+            ),
+        )
+    assert submission_count == 2
+    assert runtime.cancel_candidate_annotations_call_count == 1
+    assert cancellation_requested.is_set()
+
+
+def test_parallel_failure_reuses_successful_sibling_without_blocking_retry_batch(
+    tmp_path: Path,
+) -> None:
+    """成功済み兄弟Momentが再利用され未完了Momentは並列再開されること。
+
+    Arrange:
+        - 先頭と3件目が失敗し2件目だけが成功する3件の主候補が用意される
+    Act:
+        - 失敗runの後に同じ入力が再実行される
+    Assert:
+        - 成功済み2件目を飛ばし、先頭と未開始3件目が並列推論されること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=2,
+    )
+    requests = _three_requests()
+    annotations = _three_annotations(requests)
+    first_two_started = threading.Event()
+    state_lock = threading.Lock()
+    first_two_call_count = 0
+
+    def synchronize_first_pair(call: CandidateAnnotationRequest) -> None:
+        nonlocal first_two_call_count
+        if call.moment.identifier not in {
+            requests[0].moment.identifier,
+            requests[1].moment.identifier,
+        }:
+            return
+        with state_lock:
+            first_two_call_count += 1
+            if first_two_call_count == 2:
+                first_two_started.set()
+        if not first_two_started.wait(timeout=1.0):
+            raise RuntimeError("先頭2件が並列に開始されませんでした")
+
+    failing_runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        annotations,
+        failure_moment_ids=frozenset(
+            (
+                requests[0].moment.identifier,
+                requests[2].moment.identifier,
+            )
+        ),
+        on_candidate_annotation_request=synchronize_first_pair,
+    )
+    models = FakeModelRuntime("vision-model").resolve_models(configuration)
+    retry_pair_started = threading.Event()
+    retry_state_lock = threading.Lock()
+    retry_call_count = 0
+
+    def synchronize_retry_misses(call: CandidateAnnotationRequest) -> None:
+        nonlocal retry_call_count
+        if call.moment.identifier not in {
+            requests[0].moment.identifier,
+            requests[2].moment.identifier,
+        }:
+            return
+        with retry_state_lock:
+            retry_call_count += 1
+            if retry_call_count == 2:
+                retry_pair_started.set()
+        if not retry_pair_started.wait(timeout=1.0):
+            raise RuntimeError("cache hitを越えた未完了Momentが並列化されませんでした")
+
+    # Act
+    with pytest.raises(RuntimeError, match="fake raw response"):
+        VideoSetVisionProcessor(
+            failing_runtime,
+            RecordingRunObserver(),
+        ).process(
+            video_set=video_set,
+            representatives=tuple(request.frame_candidates[0] for request in requests),
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=requests,
+            configuration=configuration,
+            resolved_models=models,
+        )
+    retry_runtime = FakeStructuredVisionRuntime(
+        _catalog(),
+        annotations,
+        on_candidate_annotation_request=synchronize_retry_misses,
+    )
+    result = VideoSetVisionProcessor(
+        retry_runtime,
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=tuple(request.frame_candidates[0] for request in requests),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=requests,
+        configuration=configuration,
+        resolved_models=models,
+    )
+
+    # Assert
+    assert {
+        call.moment.identifier for call in failing_runtime.candidate_annotation_calls
+    } == {
+        requests[0].moment.identifier,
+        requests[1].moment.identifier,
+        requests[2].moment.identifier,
+    }
+    assert {
+        call.moment.identifier for call in retry_runtime.candidate_annotation_calls
+    } == {
+        requests[0].moment.identifier,
+        requests[2].moment.identifier,
+    }
+    assert retry_pair_started.is_set()
+    assert result.annotations == annotations
+    assert tuple(item.cache_hit for item in result.annotation_diagnostics) == (
+        False,
+        True,
+        False,
+    )
+
+
+def test_parallel_limit_does_not_change_vision_identity_or_result(
+    tmp_path: Path,
+) -> None:
+    """worker数1と2でVision Stage identityと意味結果が同一になること。
+
+    Arrange:
+        - 同じVideo Setと候補に独立した直列cacheと並列cacheが用意される
+    Act:
+        - worker数1と2でcold Vision processingが実行される
+    Assert:
+        - 計画fingerprint、Annotation順、Completed Stageが一致すること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    parallel_input = tmp_path / "parallel-input"
+    parallel_input.mkdir()
+    sequential_configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=tmp_path / "sequential-output",
+        ollama_max_parallel_requests=1,
+    )
+    parallel_configuration = EffectiveConfiguration(
+        video_input_folder=parallel_input,
+        output_folder=tmp_path / "parallel-output",
+        ollama_max_parallel_requests=2,
+    )
+    requests = _three_requests()
+    annotations = _three_annotations(requests)
+    representatives = tuple(request.frame_candidates[0] for request in requests)
+    source_fingerprints = (StageFingerprint("c" * 64),)
+    sequential_models = FakeModelRuntime("vision-model").resolve_models(
+        sequential_configuration
+    )
+    parallel_models = FakeModelRuntime("vision-model").resolve_models(
+        parallel_configuration
+    )
+
+    # Act
+    sequential_fingerprints = plan_vision_stage_fingerprints(
+        video_set=video_set,
+        representatives=representatives,
+        representative_source_fingerprints=source_fingerprints,
+        annotation_requests=requests,
+        configuration=sequential_configuration,
+        resolved_models=sequential_models,
+    )
+    parallel_fingerprints = plan_vision_stage_fingerprints(
+        video_set=video_set,
+        representatives=representatives,
+        representative_source_fingerprints=source_fingerprints,
+        annotation_requests=requests,
+        configuration=parallel_configuration,
+        resolved_models=parallel_models,
+    )
+    sequential_result = VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(_catalog(), annotations),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=representatives,
+        representative_source_fingerprints=source_fingerprints,
+        annotation_requests=requests,
+        configuration=sequential_configuration,
+        resolved_models=sequential_models,
+    )
+    parallel_result = VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(_catalog(), annotations),
+        RecordingRunObserver(),
+    ).process(
+        video_set=video_set,
+        representatives=representatives,
+        representative_source_fingerprints=source_fingerprints,
+        annotation_requests=requests,
+        configuration=parallel_configuration,
+        resolved_models=parallel_models,
+    )
+
+    # Assert
+    assert sequential_fingerprints == parallel_fingerprints
+    assert sequential_result.annotations == parallel_result.annotations == annotations
+    assert sequential_result.completed_stages == parallel_result.completed_stages
+    assert tuple(
+        item.request_fingerprint for item in sequential_result.annotation_diagnostics
+    ) == tuple(
+        item.request_fingerprint for item in parallel_result.annotation_diagnostics
+    )
 
 
 def test_failed_combat_fallback_resumes_only_unfinished_frame(
@@ -794,14 +1424,14 @@ def test_completed_annotations_survive_first_middle_last_failure(
     tmp_path: Path,
     failure_position: int,
 ) -> None:
-    """先頭・途中・末尾Annotation失敗後も先行Momentが再利用されること。
+    """先頭・途中・末尾Annotation失敗後も成功済みMomentが再利用されること。
 
     Arrange:
         - 3件のうち指定位置だけ失敗するfake VisionRuntimeが用意される
     Act:
         - 失敗runの後に同じ入力が再実行される
     Assert:
-        - Scene Catalogと先行Annotationは再実行されず未完了分だけ生成されること
+        - Scene Catalogと成功済みAnnotationは再実行されず失敗位置だけ生成されること
     """
     # Arrange
     video_set, configuration = _video_set_and_configuration(tmp_path)
@@ -848,12 +1478,13 @@ def test_completed_annotations_survive_first_middle_last_failure(
     assert retry_runtime.scene_catalog_calls == []
     assert [
         item.moment.identifier for item in retry_runtime.candidate_annotation_calls
-    ] == [request.moment.identifier for request in requests[failure_position:]]
+    ] == [requests[failure_position].moment.identifier]
     assert result.annotations == annotations
-    assert [item.cache_hit for item in result.annotation_diagnostics] == [
-        *([True] * failure_position),
-        *([False] * (len(requests) - failure_position)),
-    ]
+    expected_cache_hits = [True] * len(requests)
+    expected_cache_hits[failure_position] = False
+    assert [
+        item.cache_hit for item in result.annotation_diagnostics
+    ] == expected_cache_hits
 
 
 def test_failed_scene_catalog_is_recomputed_on_rerun(tmp_path: Path) -> None:
@@ -925,6 +1556,7 @@ def test_vision_stage_progress_reports_catalog_and_each_annotation(
         - cold Video Set Vision processingが実行される
     Assert:
         - Catalogと各Annotationが単調なStage番号とrecompute結果で通知されること
+        - Candidate schedulerの外部処理開始が一度だけ通知されること
     """
     # Arrange
     video_set, configuration = _video_set_and_configuration(tmp_path)
@@ -974,7 +1606,6 @@ def test_vision_stage_progress_reports_catalog_and_each_annotation(
         if event.kind == "external_work_started"
     ) == (
         "scene_catalog_inference_started",
-        "candidate_annotation_inference_started",
         "candidate_annotation_inference_started",
     )
 
@@ -1126,14 +1757,14 @@ def test_warm_combat_fallback_reports_each_frame_reuse_without_external_work(
 def test_vision_processor_records_annotation_duration_for_eta(
     tmp_path: Path,
 ) -> None:
-    """Vision processorのAnnotation完了時間がETA sampleへ記録されること。
+    """Annotationごとの推論診断時間がETA sampleへ記録されること。
 
     Arrange:
-        - 同じAnnotation系列を異なるVideo Setで5回再計算するprocessorが用意される
+        - 0.25秒の推論診断を返すAnnotationが5回再計算される
     Act:
         - 6件目のAnnotation Stageで残り1件のETAが通知される
     Assert:
-        - atomic completionまでの実時間によるETAが通知されること
+        - 並列待ち時間でなく画像単位の診断時間によるETAが通知されること
     """
     # Arrange
     observer = RecordingRunObserver()
@@ -1144,9 +1775,6 @@ def test_vision_processor_records_annotation_duration_for_eta(
     request = requests[0]
     annotation = _annotations(requests)[0]
 
-    def advance_annotation_clock() -> None:
-        current_time[0] += 10.0
-
     for run_index in range(5):
         run_folder = tmp_path / f"run-{run_index}"
         run_folder.mkdir()
@@ -1155,7 +1783,6 @@ def test_vision_processor_records_annotation_duration_for_eta(
             FakeStructuredVisionRuntime(
                 _catalog(),
                 (annotation,),
-                on_candidate_annotation=advance_annotation_clock,
             ),
             observer,
             progress=progress,
@@ -1183,7 +1810,85 @@ def test_vision_processor_records_annotation_duration_for_eta(
 
     # Assert
     event = observer.progress_events[-1]
-    assert (event.estimation_state, event.eta_seconds) == ("available", 10.0)
+    assert (event.estimation_state, event.eta_seconds) == ("available", 0.25)
+
+
+def test_cache_reuse_duration_excludes_parallel_inference_wait(
+    tmp_path: Path,
+) -> None:
+    """cache reuseの所要時間へ並列推論の待ち時間が記録されないこと。
+
+    Arrange:
+        - 先頭だけがcache hitで後続推論中にclockが100秒進む再開runが用意される
+    Act:
+        - 上限2でCandidate Annotationが再開される
+    Assert:
+        - cache hitの完了時間が0秒として記録されること
+    """
+    # Arrange
+    video_set, base_configuration = _video_set_and_configuration(tmp_path)
+    sequential_configuration = EffectiveConfiguration(
+        video_input_folder=base_configuration.video_input_folder,
+        output_folder=base_configuration.output_folder,
+        ollama_max_parallel_requests=1,
+    )
+    parallel_configuration = replace(
+        sequential_configuration,
+        ollama_max_parallel_requests=2,
+    )
+    requests = _three_requests()
+    annotations = _three_annotations(requests)
+    models = FakeModelRuntime("vision-model").resolve_models(sequential_configuration)
+    with pytest.raises(RuntimeError, match="fake raw response"):
+        VideoSetVisionProcessor(
+            FakeStructuredVisionRuntime(
+                _catalog(),
+                annotations,
+                failure_moment_id=requests[1].moment.identifier,
+            ),
+            RecordingRunObserver(),
+        ).process(
+            video_set=video_set,
+            representatives=tuple(request.frame_candidates[0] for request in requests),
+            representative_source_fingerprints=(StageFingerprint("c" * 64),),
+            annotation_requests=requests,
+            configuration=sequential_configuration,
+            resolved_models=models,
+        )
+    current_time = [0.0]
+    observer = RecordingRunObserver()
+    progress = RunProgressTracker(observer, clock=lambda: current_time[0])
+    progress.start_run()
+
+    def advance_clock(_call: CandidateAnnotationRequest) -> None:
+        current_time[0] = 100.0
+
+    # Act
+    VideoSetVisionProcessor(
+        FakeStructuredVisionRuntime(
+            _catalog(),
+            annotations,
+            on_candidate_annotation_request=advance_clock,
+        ),
+        observer,
+        progress=progress,
+    ).process(
+        video_set=video_set,
+        representatives=tuple(request.frame_candidates[0] for request in requests),
+        representative_source_fingerprints=(StageFingerprint("c" * 64),),
+        annotation_requests=requests,
+        configuration=parallel_configuration,
+        resolved_models=models,
+    )
+
+    # Assert
+    reused_annotation_events = tuple(
+        event
+        for event in progress.completed_stage_events
+        if event.stage == ProcessingStage.ANNOTATE_CANDIDATE and event.reuse_count == 1
+    )
+    assert reused_annotation_events
+    assert reused_annotation_events[0].elapsed_seconds == 0.0
 
 
 def test_verbatim_context_cue_is_rejected_before_annotation_cache(
@@ -1329,19 +2034,30 @@ def _requests() -> tuple[CandidateAnnotationRequest, ...]:
     )
 
 
-def _combat_fallback_fixture() -> tuple[
+def _combat_fallback_fixture(
+    *,
+    seed: str = "d",
+    anchor_time: Fraction = Fraction(10),
+) -> tuple[
     CandidateAnnotationRequest,
     tuple[CandidateAnnotation, ...],
 ]:
     """独立fallback評価用の一Momentとframe別Annotationを構築する。"""
-    primary = FrameCandidate("frame-primary", b"primary")
-    first_fallback = FrameCandidate("frame-fallback-low", b"fallback-low")
-    best_fallback = FrameCandidate("frame-fallback-high", b"fallback-high")
+    frame_prefix = "frame" if seed == "d" else f"frame-{seed}"
+    primary = FrameCandidate(f"{frame_prefix}-primary", f"{seed}-primary".encode())
+    first_fallback = FrameCandidate(
+        f"{frame_prefix}-fallback-low",
+        f"{seed}-fallback-low".encode(),
+    )
+    best_fallback = FrameCandidate(
+        f"{frame_prefix}-fallback-high",
+        f"{seed}-fallback-high".encode(),
+    )
     moment = CandidateMoment(
-        identifier="mom_" + "d" * 64,
-        source_pts=10,
-        anchor_time=Fraction(10),
-        timeline_segment_id="seg_" + "d" * 64,
+        identifier="mom_" + seed * 64,
+        source_pts=int(anchor_time),
+        anchor_time=anchor_time,
+        timeline_segment_id="seg_" + seed * 64,
         evidence=("scene",),
         proxy_quality_score=0.9,
         frame_candidate_ids=(

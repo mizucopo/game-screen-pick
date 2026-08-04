@@ -100,6 +100,9 @@ class EchoStructuredVisionRuntime:
             ),
         )
 
+    def cancel_candidate_annotations(self) -> None:
+        """同期fakeには実行中の外部処理がないため何もしない。"""
+
 
 def _diagnostics(
     model: ResolvedModel,

@@ -31,3 +31,6 @@ class VisionRuntime(Protocol):
         num_ctx: int,
     ) -> tuple[CandidateAnnotation, VisionInferenceDiagnostics]:
         """一つのCandidate Momentのannotationと診断を返す。"""
+
+    def cancel_candidate_annotations(self) -> None:
+        """実行中と待機中のCandidate Annotationへ中止を要求する。"""

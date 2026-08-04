@@ -8,12 +8,13 @@ import json
 import re
 import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import CancelledError
 from dataclasses import replace
 from fractions import Fraction
 from functools import partial
+from threading import Event
 from typing import Literal, TypeAlias, TypeVar, cast
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 
 from PIL import Image
 
@@ -82,6 +83,7 @@ from ..services.select_representative_candidate_frame_observation import (
     select_representative_candidate_frame_observation,
 )
 from ..utils.http_retry_delay import http_retry_delay
+from .cancellable_json_requester import CancellableJsonRequester
 from .detect_cinematic_letterbox import (
     CINEMATIC_LETTERBOX_DETECTION_VERSION,
     has_cinematic_letterbox,
@@ -529,7 +531,13 @@ class OllamaVisionRuntime:
             raise ValueError("Ollama VisionRuntimeの接続設定が不正です")
         self._host = host.rstrip("/")
         self._timeout_seconds = timeout_seconds
-        self._requester = requester or _request_json
+        self._cancellable_requester: CancellableJsonRequester | None
+        if requester is None:
+            self._cancellable_requester = CancellableJsonRequester()
+            self._requester: JsonRequester = self._cancellable_requester
+        else:
+            self._cancellable_requester = None
+            self._requester = requester
         self._sleeper = sleeper
         self._model_store = OllamaModelStore(
             self._host,
@@ -540,6 +548,7 @@ class OllamaVisionRuntime:
             model_state_resolver or self._resolve_current_model_state
         )
         self._gpu_coordinator = gpu_coordinator
+        self._candidate_annotation_cancellation = Event()
 
     def create_scene_catalog(
         self,
@@ -580,6 +589,7 @@ class OllamaVisionRuntime:
         num_ctx: int,
     ) -> tuple[CandidateAnnotation, VisionInferenceDiagnostics]:
         """一つのCandidate Momentをstrict schemaと所属検証で評価する。"""
+        self._require_candidate_annotation_active()
         _require_model_role(model, ModelRole.CANDIDATE_ANNOTATION, num_ctx)
         semantic_input = _candidate_semantic_input(request, catalog, model, num_ctx)
         candidate_response_count = 0
@@ -911,6 +921,12 @@ class OllamaVisionRuntime:
             )
         return annotation, diagnostics
 
+    def cancel_candidate_annotations(self) -> None:
+        """実行中のCandidate Annotationへ協調的な中止を要求する。"""
+        self._candidate_annotation_cancellation.set()
+        if self._cancellable_requester is not None:
+            self._cancellable_requester.cancel()
+
     def _infer(
         self,
         *,
@@ -933,6 +949,8 @@ class OllamaVisionRuntime:
         repair_code: str | None = None
         candidate_relationship_draft: Mapping[str, object] | None = None
         for attempt in (1, 2, 3):
+            if stage_kind != "scene_catalog":
+                self._require_candidate_annotation_active()
             relationship_repair = candidate_relationship_draft is not None
             decoded: Mapping[str, object] | None = None
             try:
@@ -947,6 +965,8 @@ class OllamaVisionRuntime:
                 )
                 self._require_frozen_model_state(model)
                 response = self._request(attempt_payload)
+                if stage_kind != "scene_catalog":
+                    self._require_candidate_annotation_active()
                 self._require_frozen_model_state(model)
                 decoded = _decode_content(
                     response,
@@ -981,7 +1001,7 @@ class OllamaVisionRuntime:
                     previous_validation_code = error.validation_code
                     candidate_relationship_draft = None
                     repair_code = _repair_validation_code(error)
-                    self._sleeper(error.retry_after_seconds)
+                    self._sleep_before_retry(error.retry_after_seconds, stage_kind)
                     continue
                 if relationship_repair:
                     error = _relationship_repair_error(error)
@@ -1011,7 +1031,7 @@ class OllamaVisionRuntime:
                     repair_code = None
                 else:
                     repair_code = _repair_validation_code(error)
-                self._sleeper(error.retry_after_seconds)
+                self._sleep_before_retry(error.retry_after_seconds, stage_kind)
                 continue
             diagnostics = _diagnostics(
                 response=response,
@@ -1026,6 +1046,23 @@ class OllamaVisionRuntime:
             )
             return value, diagnostics
         raise AssertionError("VisionRuntime retry loop did not terminate")
+
+    def _sleep_before_retry(self, seconds: float, stage_kind: StageKind) -> None:
+        """retry待機の前後でCandidate Annotation中止要求を検査する。"""
+        if stage_kind == "scene_catalog":
+            self._sleeper(seconds)
+            return
+        self._require_candidate_annotation_active()
+        if self._sleeper is time.sleep:
+            self._candidate_annotation_cancellation.wait(seconds)
+        else:
+            self._sleeper(seconds)
+        self._require_candidate_annotation_active()
+
+    def _require_candidate_annotation_active(self) -> None:
+        """中止済みCandidate Annotationが追加処理へ進むことを拒否する。"""
+        if self._candidate_annotation_cancellation.is_set():
+            raise CancelledError("Candidate Annotationは中止されました")
 
     def _require_frozen_model_state(self, model: ResolvedModel) -> None:
         """推論前後のmodel artifactがfreeze済みstateと一致することを要求する。"""
@@ -1098,6 +1135,8 @@ class OllamaVisionRuntime:
                 error.code,
                 http_retry_delay(error.code, retry_after),
             ) from None
+        except CancelledError:
+            raise
         except Exception:
             raise VisionRuntimeError(
                 VisionRuntimeFailureReason.TRANSPORT_FAILURE,
@@ -1111,23 +1150,6 @@ class OllamaVisionRuntime:
                 validation_code="ollama_response_invalid",
             )
         return cast(dict[str, object], response)
-
-
-def _request_json(
-    method: str,
-    url: str,
-    payload: Mapping[str, object] | None,
-    timeout: float,
-) -> object:
-    body = None if payload is None else json.dumps(payload).encode()
-    request = Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method=method,
-    )
-    with urlopen(request, timeout=timeout) as response:
-        return json.load(response)
 
 
 def _scene_catalog_payload(

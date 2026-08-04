@@ -66,11 +66,11 @@ Effective Configurationは設定項目ごとに次の順で解決します。
 
 ## Ollamaの独立並列評価
 
-`ollama.max_parallel_requests`は、一つのOllama requestへ複数画像をまとめる設定ではありません。Candidate Annotationは常に画像一枚ごとの別request・別conversation contextです。戦闘を示すPrimary Representative FrameがExplanation Value `none`になった場合だけ、同じCandidate Moment内の残り最大2枚をこの値まで並列評価します。Scene Catalog、fallbackを必要としないCandidate Annotation、STTとの同時実行数を増やす設定ではありません。
+`ollama.max_parallel_requests`は、一つのOllama requestへ複数画像をまとめる設定ではありません。Candidate Annotationは常に画像一枚ごとの別request・別conversation contextです。異なるCandidate MomentのPrimary Representative Frameをこの値まで並列評価し、戦闘を示すPrimaryがExplanation Value `none`になった場合は、同じMoment内の残り最大2枚も同じ共通上限の内側で並列評価します。各Momentでは必ずPrimaryの成功後にだけfallbackを開始します。Scene CatalogやSTTとの同時実行数を増やす設定ではありません。
 
 組み込み既定値`1`は、modelやVRAM容量が不明な環境で安全側に保つ値です。supported Windows 11 / WSL2 / RTX 5090 target acceptanceでは、privateな通常設定へ`max_parallel_requests = 2`を明示します。設定を増やしてもOllama server側のcapacityを超えるrequestは速くならず、VRAM使用量が増える可能性があります。
 
-一部の独立requestだけが失敗した場合はCandidate Moment全体を確定しません。成功したframeのCompleted Stageは保存し、同じcommandの再実行時に失敗・未完了frameだけを評価してから全結果を比較します。worker数と完了順はStage FingerprintやRepresentative Frameの比較順へ含めません。
+一部の独立requestだけが失敗した場合はCandidate Moment全体を確定しません。成功したframeのCompleted Stageは保存し、同じcommandの再実行時に失敗・未完了frameだけを評価してから全結果を比較します。cache hitはworker枠を消費せず、未完了Momentを元の位置情報付きで待機列へ入れ、空いたworkerへ設定上限まで連続して補充します。worker数、開始順、完了順はStage Fingerprint、出力順、Representative Frameの比較順へ含めません。
 
 ## Video Scanの動的並列制御
 
