@@ -320,7 +320,7 @@ def test_video_stage_pipeline_preserves_order_and_source_local_cache(
     ]
 
 
-def test_legacy_scan_without_frame_timing_hint_reuses_all_stage_cache(
+def test_legacy_scan_without_resource_hints_reuses_all_stage_cache(
     tmp_path: Path,
 ) -> None:
     """旧Scan artifactでも有効な全Stage cacheが再利用されること。
@@ -359,6 +359,8 @@ def test_legacy_scan_without_frame_timing_hint_reuses_all_stage_cache(
     artifact = json.loads((scan_folder / "artifact.json").read_text(encoding="utf-8"))
     artifact.pop("minimum_frame_delta_ts")
     artifact.pop("maximum_frame_count_per_pts")
+    artifact.pop("maximum_frame_width")
+    artifact.pop("maximum_frame_height")
     _rewrite_hash_consistent_artifact(scan_folder, artifact)
     retry_runtime = FakeVideoStageMediaRuntime(
         minimum_frame_delta_ts=1,
@@ -377,6 +379,8 @@ def test_legacy_scan_without_frame_timing_hint_reuses_all_stage_cache(
     assert retry_runtime.range_calls == []
     assert reused.scan.minimum_frame_delta_ts is None
     assert reused.scan.maximum_frame_count_per_pts is None
+    assert reused.scan.maximum_frame_width is None
+    assert reused.scan.maximum_frame_height is None
     assert tuple(stage.fingerprint for stage in reused.completed_stages) == tuple(
         stage.fingerprint for stage in initial.completed_stages
     )
@@ -1414,6 +1418,8 @@ def test_container_duration_only_schedules_fixed_scan_partitions(
     assert result.scan.metrics.decode_pass_count == 2
     assert result.scan.minimum_frame_delta_ts == 1
     assert result.scan.maximum_frame_count_per_pts == 1
+    assert result.scan.maximum_frame_width == 64
+    assert result.scan.maximum_frame_height == 48
 
 
 def test_duration_hint_tail_does_not_require_an_empty_scan_partition(
@@ -2055,11 +2061,11 @@ def test_refinement_caps_parallel_groups_by_available_memory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """available memoryが少ない場合にGroupが1件ずつ処理されること。
+    """scan中の最大解像度でGroup memoryが制限されること。
 
     Arrange:
         - CPUには2 Groupを並列化できる余裕がある
-        - 高解像度sourceに対してavailable memoryが5 GiBと報告される
+        - probe後に1920x1080へ変化するsourceと5 GiBのmemoryが用意される
         - 一Groupはparallel予算へ収まるが二Groupは収まらない
     Act:
         - 離れた2 GroupからFrame Candidateが抽出される
@@ -2081,8 +2087,8 @@ def test_refinement_caps_parallel_groups_by_available_memory(
                 time_base=Fraction(1, 10),
                 start_pts=0,
                 duration_ts=500,
-                width=1920,
-                height=1080,
+                width=320,
+                height=180,
                 sample_rate=None,
                 channels=None,
                 language=None,
@@ -2122,6 +2128,8 @@ def test_refinement_caps_parallel_groups_by_available_memory(
     runtime = FakeVideoStageMediaRuntime(
         distant_moments=True,
         media_probe=media_probe,
+        maximum_frame_width=1920,
+        maximum_frame_height=1080,
         on_scan_video_frame_ranges=coordinate_refinement,
     )
     releaser = threading.Thread(target=release_work)

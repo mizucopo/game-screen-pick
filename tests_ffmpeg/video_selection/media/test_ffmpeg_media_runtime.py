@@ -607,6 +607,88 @@ def test_scan_video_records_observed_vfr_timing_hint(tmp_path: Path) -> None:
     assert scan.minimum_frame_delta_ts is not None
     assert Fraction(scan.minimum_frame_delta_ts) * scan.time_base == Fraction(1, 4)
     assert scan.maximum_frame_count_per_pts == 1
+    assert (scan.maximum_frame_width, scan.maximum_frame_height) == (64, 48)
+
+
+def test_scan_video_records_maximum_dimensions_across_timeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """途中で変化するframe寸法の最大値がresource hintへ記録されること。
+
+    Arrange:
+        - probe寸法320x180から1920x1080へ変化するtimeline出力が用意される
+    Act:
+        - composite Video Scanが実行される
+    Assert:
+        - 全timeline frameで観測された最大幅と最大高さが記録されること
+    """
+    # Arrange
+    artifact_folder = tmp_path / "resolution-change-artifacts"
+    process = MagicMock()
+    process.pid = 123
+    process.returncode = None
+    process.stderr.__iter__.return_value = iter(
+        (
+            "[showinfo@timeline] n: 0 pts: 0 duration: 1 s:320x180\n",
+            "[showinfo@heartbeat] n: 0 pts: 0 duration: 1 s:320x180\n",
+            "[showinfo@timeline] n: 1 pts: 1 duration: 1 s:1920x1080\n",
+            "[showinfo@timeline] n: 2 pts: 2 duration: 1 s:1280x720\n",
+        )
+    )
+
+    def start_process(*_args: object, **_kwargs: object) -> MagicMock:
+        heartbeat_folder = artifact_folder / "heartbeats"
+        scene_folder = artifact_folder / ".scene-proxies"
+        (heartbeat_folder / "000000000000.jpg").write_bytes(b"sentinel")
+        (heartbeat_folder / "000000000001.jpg").write_bytes(b"heartbeat")
+        (scene_folder / "000000000000.jpg").write_bytes(b"sentinel")
+        return process
+
+    def reap(_process: object) -> tuple[int, float]:
+        process.returncode = 0
+        return (0, 0.01)
+
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.subprocess.Popen",
+        start_process,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime.wait_for_process",
+        reap,
+    )
+    runtime = FfmpegMediaRuntime()
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="h264",
+        time_base=Fraction(1, 10),
+        start_pts=0,
+        duration_ts=3,
+        width=320,
+        height=180,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+        is_attached_picture=False,
+    )
+
+    # Act
+    scan = runtime.scan_video(
+        tmp_path / "source.mkv",
+        stream,
+        artifact_folder,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=1.0,
+        scene_min_interval_seconds=1.0,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert scan.maximum_frame_width == 1920
+    assert scan.maximum_frame_height == 1080
 
 
 def test_scan_video_emits_heartbeat_and_scene_signals_from_one_decode(

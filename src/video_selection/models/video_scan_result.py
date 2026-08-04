@@ -28,6 +28,16 @@ class VideoScanResult:
         compare=False,
         repr=False,
     )
+    maximum_frame_width: int | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    maximum_frame_height: int | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """resource hintが完全な正値pairであることを検証する。"""
@@ -42,5 +52,8 @@ class VideoScanResult:
                 self.maximum_frame_count_per_pts is not None
                 and self.maximum_frame_count_per_pts < 1
             )
+            or (self.maximum_frame_width is None) != (self.maximum_frame_height is None)
+            or (self.maximum_frame_width is not None and self.maximum_frame_width < 1)
+            or (self.maximum_frame_height is not None and self.maximum_frame_height < 1)
         ):
-            raise ValueError("Video Scanのframe timing resource hintが不正です")
+            raise ValueError("Video Scanのresource hintが不正です")

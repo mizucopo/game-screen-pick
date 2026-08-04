@@ -31,6 +31,16 @@ class NativeVideoScan:
         compare=False,
         repr=False,
     )
+    maximum_frame_width: int | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    maximum_frame_height: int | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """scanが1回以上のdecodeと有効なtimingを持つことを検証する。"""
@@ -53,6 +63,9 @@ class NativeVideoScan:
                 self.maximum_frame_count_per_pts is not None
                 and self.maximum_frame_count_per_pts < 1
             )
+            or (self.maximum_frame_width is None) != (self.maximum_frame_height is None)
+            or (self.maximum_frame_width is not None and self.maximum_frame_width < 1)
+            or (self.maximum_frame_height is not None and self.maximum_frame_height < 1)
             or not math.isfinite(self.wall_seconds)
             or not math.isfinite(self.cpu_seconds)
             or self.wall_seconds < 0

@@ -20,10 +20,9 @@ flowchart TD
         G2 --> H
         GN --> H
         H --> I[PTS range順でFrame Candidateを集約]
-        E --> J[SubtitleまたはPCM・STTからContextを収集]
+        I --> J[SubtitleまたはPCM・STTからContextを収集]
     end
 
-    I --> K{未処理のVideo Sourceがある?}
     J --> K
     K -- Yes --> E
     K -- No --> L[Scene Catalog]
@@ -33,7 +32,7 @@ flowchart TD
     O --> P[JSON・Markdown・画像をatomic公開]
 ```
 
-Refinement Window Groupは互いに意味状態を共有しない範囲だけを並列化します。worker数はGroup数、最大4、available memory、Video Scanと共有するlogical CPU予算の最小値です。次にVideo Orderで処理するsourceのRefinement容量は、そのscan完了を待つ前に要求します。このためscan完了境界では後続scanの補充より最低1 Refinement worker分を優先し、後からVideo Scan Controllerが増員しても、両方の予約合計がlogical CPU数を超える新規scanを投入しません。active scanだけで余力がない場合はscan完了を待ち、1 worker分を確保してからRefinementを開始します。待機中にbackground scanが失敗した場合は、新しいRefinementを開始せず同じ失敗を返します。RGB frame数は最低240fpsの保守値と、Video Scanで全native frameから実測した最小PTS差・同一PTS最大frame数による上限の大きい方で見積もります。旧cacheなどで完全なframe timing hintを取得できない場合、available memoryを取得できない場合、または一Groupもparallel memory予算へ収まらない場合は従来の1 workerへ戻します。Groupの開始順や完了順ではなくPTS range順に戻してから親Stageへ集約するため、CPU数、memory量、再開の有無はCandidate ID、画像bytes、下流選定を変えません。
+Refinement Window Groupは互いに意味状態を共有しない範囲だけを並列化します。worker数はGroup数、最大4、available memory、Video Scanと共有するlogical CPU予算の最小値です。available memoryはsystem余力と、processに適用されるcgroup v2またはv1の各ancestor残量の最小値です。次にVideo Orderで処理するsourceのRefinement容量は、そのscan完了を待つ前に要求します。このためscan完了境界では後続scanの補充より最低1 Refinement worker分を優先し、後からVideo Scan Controllerが増員しても、両方の予約合計がlogical CPU数を超える新規scanを投入しません。active scanだけで余力がない場合はscan完了を待ち、1 worker分を確保してからRefinementを開始します。待機中にbackground scanが失敗した場合は、新しいRefinementを開始せず同じ失敗を返します。RGB frame数は最低240fpsの保守値と、Video Scanで全native frameから実測した最小PTS差・同一PTS最大frame数による上限の大きい方、RGB寸法は同じ全frame scanで観測した最大幅・最大高さで見積もります。旧cacheなどで完全なresource hintを取得できない場合、available memoryを取得できない場合、または一Groupもparallel memory予算へ収まらない場合は従来の1 workerへ戻します。Groupの開始順や完了順ではなくPTS range順に戻してから親Stageへ集約するため、CPU数、memory量、再開の有無はCandidate ID、画像bytes、下流選定を変えません。
 
 ## 主に使う計算資源
 

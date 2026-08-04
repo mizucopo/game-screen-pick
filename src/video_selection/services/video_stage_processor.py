@@ -919,8 +919,8 @@ class VideoStageProcessor:
             desired_workers = resolve_refinement_group_worker_count(
                 pts_ranges,
                 time_base=scan.timeline.time_base,
-                source_width=scan.primary_stream.width,
-                source_height=scan.primary_stream.height,
+                source_width=scan.maximum_frame_width,
+                source_height=scan.maximum_frame_height,
                 minimum_frame_delta_ts=scan.minimum_frame_delta_ts,
                 maximum_frame_count_per_pts=scan.maximum_frame_count_per_pts,
                 logical_cpu_count=logical_cpu_count,
@@ -1136,6 +1136,9 @@ def _materialize_video_scan_partitions(
     minimum_frame_delta_ts, maximum_frame_count_per_pts = _merge_frame_timing_hints(
         framed_partitions
     )
+    maximum_frame_width, maximum_frame_height = _merge_frame_dimension_hints(
+        framed_partitions
+    )
     last = framed_partitions[-1]
     return NativeVideoScan(
         stream_index=first.stream_index,
@@ -1150,6 +1153,8 @@ def _materialize_video_scan_partitions(
         decode_pass_count=sum(partition.decode_pass_count for partition in partitions),
         minimum_frame_delta_ts=minimum_frame_delta_ts,
         maximum_frame_count_per_pts=maximum_frame_count_per_pts,
+        maximum_frame_width=maximum_frame_width,
+        maximum_frame_height=maximum_frame_height,
     )
 
 
@@ -1175,6 +1180,21 @@ def _merge_frame_timing_hints(
         max(
             cast(int, partition.maximum_frame_count_per_pts) for partition in partitions
         ),
+    )
+
+
+def _merge_frame_dimension_hints(
+    partitions: tuple[NativeVideoScan, ...],
+) -> tuple[int | None, int | None]:
+    """完全なpartition hintをsource全体の最大寸法へ集約する。"""
+    if any(
+        partition.maximum_frame_width is None or partition.maximum_frame_height is None
+        for partition in partitions
+    ):
+        return (None, None)
+    return (
+        max(cast(int, partition.maximum_frame_width) for partition in partitions),
+        max(cast(int, partition.maximum_frame_height) for partition in partitions),
     )
 
 

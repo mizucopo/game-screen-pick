@@ -40,6 +40,8 @@ class FakeVideoStageMediaRuntime:
         reported_refinement_child_cpu_seconds: float = 0.0,
         minimum_frame_delta_ts: int | None = 5,
         maximum_frame_count_per_pts: int | None = 1,
+        maximum_frame_width: int | None = 64,
+        maximum_frame_height: int | None = 48,
         media_probe: MediaProbe | None = None,
         embedded_subtitles: tuple[EmbeddedSubtitle, ...] = (),
         pcm_audio_chunks: tuple[PcmAudioChunk, ...] = (),
@@ -74,6 +76,8 @@ class FakeVideoStageMediaRuntime:
         )
         self._minimum_frame_delta_ts = minimum_frame_delta_ts
         self._maximum_frame_count_per_pts = maximum_frame_count_per_pts
+        self._maximum_frame_width = maximum_frame_width
+        self._maximum_frame_height = maximum_frame_height
         self._media_probe = media_probe
         self._embedded_subtitles = embedded_subtitles
         self._pcm_audio_chunks = pcm_audio_chunks
@@ -334,6 +338,8 @@ class FakeVideoStageMediaRuntime:
             decode_pass_count=1,
             minimum_frame_delta_ts=self._minimum_frame_delta_ts,
             maximum_frame_count_per_pts=self._maximum_frame_count_per_pts,
+            maximum_frame_width=self._maximum_frame_width,
+            maximum_frame_height=self._maximum_frame_height,
         )
 
     def cancel_video_scans(self) -> None:

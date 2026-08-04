@@ -319,6 +319,8 @@ class FfmpegMediaRuntime:
         minimum_frame_delta_ts: int | None = None
         current_frame_count_per_pts = 0
         maximum_frame_count_per_pts = 0
+        maximum_frame_width = 0
+        maximum_frame_height = 0
         frame_timing_reliable = True
         heartbeat_metadata: list[tuple[int, int | None, int, int]] = []
         scene_metadata: list[tuple[int, int | None, int, int]] = []
@@ -348,7 +350,9 @@ class FfmpegMediaRuntime:
                     continue
                 branch, metadata = parsed
                 if branch == "timeline":
-                    frame_pts = metadata[0]
+                    frame_pts, _duration, frame_width, frame_height = metadata
+                    maximum_frame_width = max(maximum_frame_width, frame_width)
+                    maximum_frame_height = max(maximum_frame_height, frame_height)
                     if previous_timeline_pts is None:
                         current_frame_count_per_pts = 1
                     elif frame_pts == previous_timeline_pts:
@@ -465,6 +469,8 @@ class FfmpegMediaRuntime:
             decode_pass_count=1,
             minimum_frame_delta_ts=minimum_frame_delta_ts,
             maximum_frame_count_per_pts=resolved_maximum_frame_count_per_pts,
+            maximum_frame_width=maximum_frame_width,
+            maximum_frame_height=maximum_frame_height,
         )
 
     def cancel_video_scans(self) -> None:
