@@ -1887,8 +1887,8 @@ def test_refinement_reserves_cpu_for_background_video_scans(
     """background Video Scan分を除いたCPU容量でGroupが並列化されること。
 
     Arrange:
-        - 20 logical CPUで3 scanが開始され、先頭scanだけが完了される
-        - 残る2 scanが16 CPUを予約する間に先頭Videoの2 Groupが処理される
+        - 16 logical CPUで3 scanが開始され、先頭scanだけが完了される
+        - 残る2 scanが全CPUを予約した後、一方だけが解放される
     Act:
         - Video Stage processorがpipeliningされる
     Assert:
@@ -1904,7 +1904,10 @@ def test_refinement_reserves_cpu_for_background_video_scans(
     ):
         (input_folder / name).write_bytes(f"video-{index}".encode())
     scans_started = threading.Barrier(3)
-    release_background_scans = threading.Event()
+    first_scan_completed = threading.Event()
+    release_background_scans = {
+        name: threading.Event() for name in ("02-background.mp4", "03-background.mp4")
+    }
     refinement_started = threading.Event()
     release_refinement = threading.Event()
     active_refinement_count = 0
@@ -1913,8 +1916,10 @@ def test_refinement_reserves_cpu_for_background_video_scans(
 
     def coordinate_scans(path: Path) -> None:
         scans_started.wait(timeout=2)
-        if path.name != "01-first.mp4":
-            assert release_background_scans.wait(timeout=2)
+        if path.name == "01-first.mp4":
+            first_scan_completed.set()
+            return
+        assert release_background_scans[path.name].wait(timeout=2)
 
     def coordinate_refinement(path: Path) -> None:
         nonlocal active_refinement_count, peak_refinement_count
@@ -1934,14 +1939,16 @@ def test_refinement_reserves_cpu_for_background_video_scans(
                 active_refinement_count -= 1
 
     def release_work() -> None:
-        assert refinement_started.wait(timeout=2)
+        assert first_scan_completed.wait(timeout=2)
         time.sleep(0.05)
-        release_background_scans.set()
+        release_background_scans["02-background.mp4"].set()
+        assert refinement_started.wait(timeout=2)
+        release_background_scans["03-background.mp4"].set()
         release_refinement.set()
 
     monkeypatch.setattr(
         "src.video_selection.services.video_stage_processor.os.cpu_count",
-        lambda: 20,
+        lambda: 16,
     )
     runtime = FakeVideoStageMediaRuntime(
         distant_moments=True,
@@ -1980,7 +1987,8 @@ def test_refinement_caps_parallel_groups_by_available_memory(
 
     Arrange:
         - CPUには2 Groupを並列化できる余裕がある
-        - 高解像度sourceに対してavailable memoryが2 GiBと報告される
+        - 高解像度sourceに対してavailable memoryが5 GiBと報告される
+        - 一Groupはparallel予算へ収まるが二Groupは収まらない
     Act:
         - 離れた2 GroupからFrame Candidateが抽出される
     Assert:
@@ -2052,7 +2060,7 @@ def test_refinement_caps_parallel_groups_by_available_memory(
         runtime,
         FakeSpeechRuntime(),
         RecordingRunObserver(),
-        available_memory_reader=lambda: 2 * 1024**3,
+        available_memory_reader=lambda: 5 * 1024**3,
     ).process(
         discover_video_set(input_folder),
         _configuration(input_folder, tmp_path / "output"),

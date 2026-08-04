@@ -201,7 +201,7 @@ Video Scan Stageがnative heartbeatごとに永続化する、長辺960px、FFmp
 _Avoid_: scene signal image, Frame Candidate, selected output
 
 **Frame Candidate Extraction Stage**:
-Video Scan Stageを上流にして、Candidate Moment Density、Frame Refinement、Neutral Image AnalysisをCompleted Stageとして確定するVideo Stage。merge済みRefinement Window Groupごとにrange decode、解析、proxyをDurable Work Unitとしてatomicに確定する。独立Groupはactive Video Scanの予約分を除いたlogical CPU、available memory、最大4の共有resource policyでbounded並列実行し、完了順にかかわらずPTS順に親Stageへ集約する。FingerprintにはVideo Fingerprint、上流Stage Fingerprint、density、refinement半径、最大Frame Candidate数、Neutral Analysis/reject/dedupe/ID/proxyのalgorithm versionだけを含める。metricにはwall/CPU時間、density上限/実Moment数、refinement frame数、reason別reject、dedupe、0-frame Moment、Frame Candidate件数/bytesを残すがfingerprintへ含めない。worker数・resource値・完了順、heartbeat/scene設定やdecode結果を独自に作り直さない。
+Video Scan Stageを上流にして、Candidate Moment Density、Frame Refinement、Neutral Image AnalysisをCompleted Stageとして確定するVideo Stage。merge済みRefinement Window Groupごとにrange decode、解析、proxyをDurable Work Unitとしてatomicに確定する。独立GroupはVideo Scanと共有するlogical CPU、available memory、最大4のresource policyでbounded並列実行する。Refinement実行中は選択worker分のCPUを予約し、後続scanのadmissionも残り容量へ制限する。完了順にかかわらずPTS順に親Stageへ集約する。FingerprintにはVideo Fingerprint、上流Stage Fingerprint、density、refinement半径、最大Frame Candidate数、Neutral Analysis/reject/dedupe/ID/proxyのalgorithm versionだけを含める。metricにはwall/CPU時間、density上限/実Moment数、refinement frame数、reason別reject、dedupe、0-frame Moment、Frame Candidate件数/bytesを残すがfingerprintへ含めない。worker数・resource値・完了順、heartbeat/scene設定やdecode結果を独自に作り直さない。
 _Avoid_: full video scan, Context Cue extraction, final selection
 
 **Context Collection Stage**:

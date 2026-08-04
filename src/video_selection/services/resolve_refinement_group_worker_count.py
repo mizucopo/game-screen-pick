@@ -17,26 +17,20 @@ def resolve_refinement_group_worker_count(
     source_width: int | None,
     source_height: int | None,
     logical_cpu_count: int,
-    active_scan_logical_cpu_reservation: int,
     available_memory_bytes: int | None,
 ) -> int:
-    """active scanとRGB保持memoryを除いたbounded worker数を返す。"""
+    """Group、CPU、RGB保持memoryからbounded worker上限を返す。"""
     _validate_inputs(
         pts_ranges,
         time_base,
         source_width,
         source_height,
         logical_cpu_count,
-        active_scan_logical_cpu_reservation,
         available_memory_bytes,
-    )
-    remaining_logical_cpus = max(
-        1,
-        logical_cpu_count - active_scan_logical_cpu_reservation,
     )
     cpu_limit = resolve_frame_range_worker_count(
         len(pts_ranges),
-        logical_cpu_count=remaining_logical_cpus,
+        logical_cpu_count=logical_cpu_count,
     )
     if available_memory_bytes is None or source_width is None or source_height is None:
         return 1
@@ -107,15 +101,12 @@ def _validate_inputs(
     source_width: int | None,
     source_height: int | None,
     logical_cpu_count: int,
-    active_scan_logical_cpu_reservation: int,
     available_memory_bytes: int | None,
 ) -> None:
     if not pts_ranges or any(start >= end for start, end in pts_ranges):
         raise ValueError("Refinement Group PTS rangeが不正です")
     if time_base <= 0 or logical_cpu_count < 1:
         raise ValueError("Refinement Groupのtime baseとCPU数が不正です")
-    if active_scan_logical_cpu_reservation < 0:
-        raise ValueError("Video Scan CPU予約は非負である必要があります")
     if (source_width is None) != (source_height is None) or (
         source_width is not None
         and source_height is not None

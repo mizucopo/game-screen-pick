@@ -33,7 +33,7 @@ flowchart TD
     O --> P[JSON・Markdown・画像をatomic公開]
 ```
 
-Refinement Window Groupは互いに意味状態を共有しない範囲だけを並列化します。worker数はGroup数、最大4、実行中の後続Video Scanが予約しているCPUを除いた残りlogical CPU 4個につき1 worker、available memoryに同時保持できるGroup数の最小値です。available memoryを取得できない場合は1 workerへ抑制します。Groupの開始順や完了順ではなくPTS range順に戻してから親Stageへ集約するため、CPU数、memory量、再開の有無はCandidate ID、画像bytes、下流選定を変えません。
+Refinement Window Groupは互いに意味状態を共有しない範囲だけを並列化します。worker数はGroup数、最大4、available memory、Video Scanと共有するlogical CPU予算の最小値です。Refinement workerのCPU予約中は、後からVideo Scan Controllerが増員しても、両方の予約合計がlogical CPU数を超える新規scanを投入しません。active scanだけで余力がない場合はscan完了を待ち、1 worker分を確保してからRefinementを開始します。available memoryを取得できない場合、または一Groupもparallel memory予算へ収まらない場合は従来の1 workerへ戻します。Groupの開始順や完了順ではなくPTS range順に戻してから親Stageへ集約するため、CPU数、memory量、再開の有無はCandidate ID、画像bytes、下流選定を変えません。
 
 ## 主に使う計算資源
 
@@ -41,7 +41,7 @@ Refinement Window Groupは互いに意味状態を共有しない範囲だけを
 |---|---|---|---|
 | Video IdentityのSHA-256 | HDD/SSD、CPU | GPUへ移せない | 動画1本ごと |
 | Video Scan | disk、FFmpeg decode、CPU。設定時はNVDEC | `nvdec`選択時だけNVIDIA Decoderを使う | source間の動的worker、15分PTS partition |
-| Refinement Window Group | disk、FFmpeg software range decode、CPU、RGB frame memory、OpenCV/NumPy | OllamaやGPU推論を使わない | active scan後のCPU・available memoryに応じて最大4 Group、Groupごと |
+| Refinement Window Group | disk、FFmpeg software range decode、CPU、RGB frame memory、OpenCV/NumPy | OllamaやGPU推論を使わない | Video Scanとの共有CPU・available memoryに応じて最大4 Group、Groupごと |
 | Subtitle・PCM抽出 | disk、FFmpeg、CPU | 通常はGPUを使わない | subtitle stream、PCM sample rangeごと |
 | STT | disk、CPU、設定されたSpeech Runtime | CUDA設定時はGPUを使える | PCM chunkごと |
 | Scene Catalog・Candidate Annotation | Ollama、GPU/VRAM | 主なGPU推論 | model requestまたは評価画像1枚ごと |

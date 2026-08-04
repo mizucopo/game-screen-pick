@@ -9,16 +9,16 @@ from src.video_selection.services.resolve_refinement_group_worker_count import (
 _GIB = 1024**3
 
 
-def test_worker_count_reserves_cpu_for_active_video_scans() -> None:
-    """active Video ScanのCPU予約を除いたworker数が返されること。
+def test_worker_count_respects_total_cpu_capacity() -> None:
+    """logical CPU容量に収まるworker数が返されること。
 
     Arrange:
-        - 24 logical CPUのうち2 scan分の16 CPUが予約される
+        - 8 logical CPUと4 Groupが用意される
         - memoryには4 Groupを処理できる余裕がある
     Act:
         - Refinement Group worker数が解決される
     Assert:
-        - 残る8 CPUに対応する2 workerが返されること
+        - 4 logical CPUにつき1件の2 workerが返されること
     """
     # Arrange
     ranges = ((0, 10), (20, 30), (40, 50), (60, 70))
@@ -29,8 +29,7 @@ def test_worker_count_reserves_cpu_for_active_video_scans() -> None:
         time_base=Fraction(1, 10),
         source_width=320,
         source_height=180,
-        logical_cpu_count=24,
-        active_scan_logical_cpu_reservation=16,
+        logical_cpu_count=8,
         available_memory_bytes=64 * _GIB,
     )
 
@@ -38,44 +37,44 @@ def test_worker_count_reserves_cpu_for_active_video_scans() -> None:
     assert actual == 2
 
 
-def test_worker_count_uses_one_worker_when_scans_hold_cpu_capacity() -> None:
-    """Video ScanがCPU容量を使い切る場合も1 Groupずつ進行されること。
+def test_worker_count_caps_groups_when_one_but_not_two_fit_memory() -> None:
+    """一Groupだけがparallel memory予算へ収まる場合に1 workerになること。
 
     Arrange:
-        - 16 logical CPUの全容量がactive Video Scanへ予約される
+        - 2秒、960x540相当のGroupが4件用意される
+        - 一Groupは収まるが二Groupは収まらない6 GiBのmemoryが用意される
     Act:
         - Refinement Group worker数が解決される
     Assert:
-        - pipelineを停止させない最小1 workerが返されること
+        - memory由来の1 workerが返されること
     """
     # Arrange
-    ranges = ((0, 10), (20, 30), (40, 50), (60, 70))
+    ranges = ((0, 2), (10, 12), (20, 22), (30, 32))
 
     # Act
     actual = resolve_refinement_group_worker_count(
         ranges,
-        time_base=Fraction(1, 10),
-        source_width=320,
-        source_height=180,
-        logical_cpu_count=16,
-        active_scan_logical_cpu_reservation=16,
-        available_memory_bytes=64 * _GIB,
+        time_base=Fraction(1),
+        source_width=1920,
+        source_height=1080,
+        logical_cpu_count=64,
+        available_memory_bytes=6 * _GIB,
     )
 
     # Assert
     assert actual == 1
 
 
-def test_worker_count_caps_large_groups_by_available_memory() -> None:
-    """長い高解像度Groupの並列数がavailable memoryで制限されること。
+def test_worker_count_falls_back_to_one_for_oversized_group() -> None:
+    """一Groupもparallel memory予算を超える場合に逐次処理へ戻ること。
 
     Arrange:
         - 20秒、960x540相当のGroupが4件用意される
-        - CPUには4 worker分の余裕があるがavailable memoryは16 GiBである
+        - CPUには4 worker分の余裕があるがparallel予算は一Group未満である
     Act:
         - Refinement Group worker数が解決される
     Assert:
-        - RGB frame保持を同時に増幅しない1 workerが返されること
+        - 従来の逐次処理を維持する1 workerが返されること
     """
     # Arrange
     ranges = ((0, 20), (30, 50), (60, 80), (90, 110))
@@ -87,7 +86,6 @@ def test_worker_count_caps_large_groups_by_available_memory() -> None:
         source_width=1920,
         source_height=1080,
         logical_cpu_count=64,
-        active_scan_logical_cpu_reservation=0,
         available_memory_bytes=16 * _GIB,
     )
 
@@ -116,7 +114,6 @@ def test_worker_count_fails_safe_when_memory_is_unknown() -> None:
         source_width=320,
         source_height=180,
         logical_cpu_count=64,
-        active_scan_logical_cpu_reservation=0,
         available_memory_bytes=None,
     )
 

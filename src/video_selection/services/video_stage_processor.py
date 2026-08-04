@@ -250,10 +250,6 @@ class VideoStageProcessor:
                             prepared_scan,
                             emit_heartbeat=progress_started,
                         )
-                        active_scan_logical_cpu_reservation = (
-                            scheduler.active_worker_count
-                            * controller.logical_cpus_per_worker
-                        )
                         results.append(
                             self._process_source(
                                 video_set,
@@ -266,9 +262,7 @@ class VideoStageProcessor:
                                 video_order,
                                 configuration,
                                 resolved_runtime_identity,
-                                active_scan_logical_cpu_reservation=(
-                                    active_scan_logical_cpu_reservation
-                                ),
+                                scan_scheduler=scheduler,
                                 scan_progress_started=progress_started,
                             )
                         )
@@ -301,7 +295,7 @@ class VideoStageProcessor:
         configuration: EffectiveConfiguration,
         runtime_identity: MediaRuntimeIdentity,
         *,
-        active_scan_logical_cpu_reservation: int,
+        scan_scheduler: AdaptiveVideoScanScheduler,
         scan_progress_started: bool,
     ) -> VideoStageResult:
         """一つのVideo Sourceの3 Stageを確定または再利用する。"""
@@ -379,9 +373,7 @@ class VideoStageProcessor:
                     configuration,
                     extraction_input,
                     stage_root,
-                    active_scan_logical_cpu_reservation=(
-                        active_scan_logical_cpu_reservation
-                    ),
+                    scan_scheduler=scan_scheduler,
                 ),
                 validate_bundle=lambda value: _restore_extraction_for_source(
                     value.artifact,
@@ -805,7 +797,7 @@ class VideoStageProcessor:
         extraction_input: dict[str, object],
         stage_root: Path,
         *,
-        active_scan_logical_cpu_reservation: int,
+        scan_scheduler: AdaptiveVideoScanScheduler,
     ) -> dict[str, object]:
         """Refinement Window Groupごとに確定して安定順に集約する。"""
         thread_cpu_before = time.thread_time()
@@ -912,23 +904,25 @@ class VideoStageProcessor:
                 )
             )
         tasks = tuple(refinement_tasks)
-        resolved_groups = (
-            RefinementGroupScheduler(
-                max_workers=resolve_refinement_group_worker_count(
-                    pts_ranges,
-                    time_base=scan.timeline.time_base,
-                    source_width=scan.primary_stream.width,
-                    source_height=scan.primary_stream.height,
-                    logical_cpu_count=os.cpu_count() or 1,
-                    active_scan_logical_cpu_reservation=(
-                        active_scan_logical_cpu_reservation
-                    ),
-                    available_memory_bytes=self._safe_available_memory_bytes(),
-                )
-            ).resolve(tasks)
-            if tasks
-            else ()
-        )
+        if tasks:
+            logical_cpu_count = os.cpu_count() or 1
+            desired_workers = resolve_refinement_group_worker_count(
+                pts_ranges,
+                time_base=scan.timeline.time_base,
+                source_width=scan.primary_stream.width,
+                source_height=scan.primary_stream.height,
+                logical_cpu_count=logical_cpu_count,
+                available_memory_bytes=self._safe_available_memory_bytes(),
+            )
+            with scan_scheduler.reserve_refinement_workers(
+                desired_workers=desired_workers,
+                logical_cpu_count=logical_cpu_count,
+            ) as worker_count:
+                resolved_groups = RefinementGroupScheduler(
+                    max_workers=worker_count
+                ).resolve(tasks)
+        else:
+            resolved_groups = ()
         encoded_groups = tuple(
             _materialize_candidate_group(group, stage_root) for group in resolved_groups
         )

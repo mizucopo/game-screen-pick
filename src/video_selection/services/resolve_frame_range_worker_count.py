@@ -1,7 +1,7 @@
 """Frame Range decodeのbounded worker数を解決する。"""
 
 _MAX_FRAME_RANGE_WORKERS = 4
-_LOGICAL_CPUS_PER_FRAME_RANGE_WORKER = 4
+LOGICAL_CPUS_PER_FRAME_RANGE_WORKER = 4
 
 
 def resolve_frame_range_worker_count(
@@ -16,6 +16,6 @@ def resolve_frame_range_worker_count(
         raise ValueError("logical CPU数は正の整数である必要があります")
     cpu_workers = max(
         1,
-        logical_cpu_count // _LOGICAL_CPUS_PER_FRAME_RANGE_WORKER,
+        logical_cpu_count // LOGICAL_CPUS_PER_FRAME_RANGE_WORKER,
     )
     return min(range_count, _MAX_FRAME_RANGE_WORKERS, cpu_workers)
