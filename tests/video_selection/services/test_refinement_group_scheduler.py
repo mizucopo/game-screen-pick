@@ -155,6 +155,43 @@ def test_scheduler_cancels_queued_tasks_after_user_interrupt() -> None:
     assert sorted(started_indexes) == [0, 1]
 
 
+def test_scheduler_does_not_start_waiting_tasks_after_worker_failure() -> None:
+    """worker failure後に待機中taskが開始されないこと。
+
+    Arrange:
+        - 2 workerを同時開始するtaskと後続の待機taskが用意される
+        - 先頭taskが失敗し、もう一方のtaskは短時間実行を続ける
+    Act:
+        - schedulerによるtask解決が試行される
+    Assert:
+        - 先頭の失敗が維持されること
+        - failure検知前に実行中だった2件だけが開始されること
+    """
+    # Arrange
+    started_indexes: list[int] = []
+    started_lock = threading.Lock()
+    first_pair_started = threading.Barrier(2)
+
+    def task(index: int) -> int:
+        with started_lock:
+            started_indexes.append(index)
+        if index < 2:
+            first_pair_started.wait(timeout=1)
+        if index == 0:
+            raise RuntimeError("injected refinement group failure")
+        if index == 1:
+            time.sleep(0.05)
+        return index
+
+    # Act
+    # Assert
+    with pytest.raises(RuntimeError, match="injected refinement group failure"):
+        RefinementGroupScheduler(max_workers=2).resolve(
+            tuple(partial(task, index) for index in range(20))
+        )
+    assert sorted(started_indexes) == [0, 1]
+
+
 @pytest.mark.parametrize("max_workers", [0, -1, True])
 def test_scheduler_rejects_invalid_worker_limits(max_workers: int) -> None:
     """不正なworker上限が拒否されること。

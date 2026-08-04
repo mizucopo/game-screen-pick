@@ -1,7 +1,7 @@
 """Refinement Window Group taskを上限付きで並列実行する。"""
 
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import TypeVar
 
 GroupResult = TypeVar("GroupResult")
@@ -26,21 +26,39 @@ class RefinementGroupScheduler:
         """taskをbounded実行し入力順の結果だけを返す。"""
         if len(tasks) < 2 or self._max_workers == 1:
             return tuple(task() for task in tasks)
+        worker_count = min(self._max_workers, len(tasks))
         executor = ThreadPoolExecutor(
-            max_workers=min(self._max_workers, len(tasks)),
+            max_workers=worker_count,
             thread_name_prefix="refinement-group",
         )
-        futures: list[Future[GroupResult]] = []
+        in_flight: dict[Future[GroupResult], int] = {}
+        next_task_index = 0
+
+        def fill_available_workers() -> None:
+            nonlocal next_task_index
+            while next_task_index < len(tasks) and len(in_flight) < worker_count:
+                in_flight[executor.submit(tasks[next_task_index])] = next_task_index
+                next_task_index += 1
+
         try:
-            for task in tasks:
-                futures.append(executor.submit(task))
-            future_indexes = {future: index for index, future in enumerate(futures)}
+            fill_available_workers()
             results: dict[int, GroupResult] = {}
-            for future in as_completed(futures):
-                results[future_indexes[future]] = future.result()
-            return tuple(results[index] for index in range(len(futures)))
+            while in_flight:
+                completed, _pending = wait(
+                    tuple(in_flight),
+                    return_when=FIRST_COMPLETED,
+                )
+                completed_in_input_order = sorted(
+                    completed,
+                    key=in_flight.__getitem__,
+                )
+                for future in completed_in_input_order:
+                    result = future.result()
+                    results[in_flight.pop(future)] = result
+                fill_available_workers()
+            return tuple(results[index] for index in range(len(tasks)))
         except BaseException:
-            for future in futures:
+            for future in in_flight:
                 future.cancel()
             raise
         finally:

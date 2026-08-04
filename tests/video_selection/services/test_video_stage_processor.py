@@ -1883,14 +1883,15 @@ def test_refinement_worker_count_does_not_change_semantic_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """worker数1と4でFrame Candidateの意味結果が一致すること。
+    """worker数とGroup完了順がFrame Candidateの意味結果を変えないこと。
 
     Arrange:
         - 離れた4 groupを持つ同内容のVideo Sourceが2組用意される
     Act:
-        - 1 workerと4 workerでFrame Candidateが抽出される
+        - 1 workerと完了順を反転した4 workerでFrame Candidateが抽出される
     Assert:
-        - Stage Fingerprint、Candidate ID、proxy bytesが一致すること
+        - 4 worker側のGroup完了順が入力順と異なること
+        - Moment、Candidate、親Stage artifact、Fingerprintが一致すること
     """
     # Arrange
     media_probe = MediaProbe(
@@ -1915,10 +1916,33 @@ def test_refinement_worker_count_does_not_change_semantic_result(
         ),
     )
 
-    def run_with_cpu_count(name: str, cpu_count: int) -> VideoStageResult:
+    def run_with_cpu_count(
+        name: str,
+        cpu_count: int,
+        *,
+        reverse_completion: bool = False,
+    ) -> tuple[VideoStageResult, dict[Path, bytes], tuple[int, ...]]:
         input_folder = tmp_path / name
         input_folder.mkdir()
         (input_folder / "video.mp4").write_bytes(b"video-content")
+        completion_order: list[int] = []
+        call_index = 0
+        call_lock = threading.Lock()
+        later_group_started = threading.Event()
+
+        def complete_later(_path: Path) -> None:
+            nonlocal call_index
+            with call_lock:
+                current_index = call_index
+                call_index += 1
+            if current_index == 0:
+                assert later_group_started.wait(timeout=1)
+                time.sleep(0.05)
+            elif current_index == 1:
+                later_group_started.set()
+            with call_lock:
+                completion_order.append(current_index)
+
         monkeypatch.setattr(
             "src.video_selection.services.video_stage_processor.os.cpu_count",
             lambda: cpu_count,
@@ -1926,34 +1950,54 @@ def test_refinement_worker_count_does_not_change_semantic_result(
         runtime = FakeVideoStageMediaRuntime(
             media_probe=media_probe,
             scan_frame_pts=(0, 100, 200, 300),
+            on_scan_video_frame_ranges=(complete_later if reverse_completion else None),
         )
         configuration = replace(
             _configuration(input_folder, tmp_path / f"{name}-output"),
             candidate_density_per_minute=60.0,
         )
-        return VideoStageProcessor(
+        video_set = discover_video_set(input_folder)
+        result = VideoStageProcessor(
             runtime,
             FakeSpeechRuntime(),
             RecordingRunObserver(),
-        ).process(discover_video_set(input_folder), configuration)[0]
+        ).process(video_set, configuration)[0]
+        stage_root = (
+            configuration.processing_cache_folder
+            / "videos"
+            / video_set.sources[0].fingerprint
+            / ProcessingStage.EXTRACT_FRAME_CANDIDATES.value
+            / result.completed_stages[1].fingerprint.value
+        )
+        return result, _semantic_stage_artifacts(stage_root), tuple(completion_order)
 
     # Act
-    serial = run_with_cpu_count("serial-videos", 4)
-    parallel = run_with_cpu_count("parallel-videos", 16)
+    serial, serial_artifacts, _serial_completion_order = run_with_cpu_count(
+        "serial-videos",
+        4,
+    )
+    parallel, parallel_artifacts, parallel_completion_order = run_with_cpu_count(
+        "parallel-videos",
+        16,
+        reverse_completion=True,
+    )
 
     # Assert
     assert len(serial.extraction.moments) == 4
+    assert parallel_completion_order[0] != 0
     assert (
         serial.completed_stages[1].fingerprint
         == parallel.completed_stages[1].fingerprint
     )
+    assert serial.extraction.moments == parallel.extraction.moments
     assert tuple(
-        (candidate.identifier, candidate.image_bytes)
+        replace(candidate, proxy_path=None)
         for candidate in serial.extraction.candidates
     ) == tuple(
-        (candidate.identifier, candidate.image_bytes)
+        replace(candidate, proxy_path=None)
         for candidate in parallel.extraction.candidates
     )
+    assert serial_artifacts == parallel_artifacts
 
 
 def test_completed_refinement_group_survives_later_group_failure(
