@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from typing import TypeVar, cast
+from typing import TypeVar
 
 GroupResult = TypeVar("GroupResult")
 
@@ -35,10 +35,10 @@ class RefinementGroupScheduler:
             for task in tasks:
                 futures.append(executor.submit(task))
             future_indexes = {future: index for index, future in enumerate(futures)}
-            results: list[GroupResult | None] = [None] * len(futures)
+            results: dict[int, GroupResult] = {}
             for future in as_completed(futures):
                 results[future_indexes[future]] = future.result()
-            return tuple(cast(GroupResult, result) for result in results)
+            return tuple(results[index] for index in range(len(futures)))
         except BaseException:
             for future in futures:
                 future.cancel()
