@@ -28,6 +28,9 @@ from ..models.media_stream import MediaStream
 from ..models.native_video_scan import NativeVideoScan
 from ..models.pcm_audio_chunk import PcmAudioChunk
 from ..models.scanned_video_frame import ScannedVideoFrame
+from ..services.resolve_frame_range_worker_count import (
+    resolve_frame_range_worker_count,
+)
 from ..services.select_scene_signal_frames import select_scene_signal_frames
 from .ffmpeg_pcm_reader import iter_pcm_audio_chunks
 from .ffmpeg_subtitle_reader import read_embedded_subtitle_events
@@ -83,8 +86,6 @@ _SHOWINFO_DURATION_PATTERN = re.compile(r"\bduration:\s*(-?\d+)")
 _SHOWINFO_SIZE_PATTERN = re.compile(r"\bs:(\d+)x(\d+)")
 _FRAME_RANGE_SEEK_PADDING = Fraction(1)
 _FRAME_RANGE_END_PADDING = Fraction(1, 10)
-_MAX_FRAME_RANGE_WORKERS = 4
-_LOGICAL_CPUS_PER_FRAME_RANGE_WORKER = 4
 
 
 class FfmpegMediaRuntime:
@@ -478,7 +479,10 @@ class FfmpegMediaRuntime:
                 )
                 for start, end in pts_ranges
             )
-            worker_count = _frame_range_worker_count(len(commands))
+            worker_count = resolve_frame_range_worker_count(
+                len(commands),
+                logical_cpu_count=os.cpu_count() or 1,
+            )
             with ThreadPoolExecutor(
                 max_workers=worker_count,
                 thread_name_prefix="frame-range-decode",
@@ -1284,13 +1288,6 @@ def _media_origin(probe: MediaProbe) -> Fraction:
         msg = "media streamに開始PTSがありません"
         raise ValueError(msg)
     return min(origins)
-
-
-def _frame_range_worker_count(range_count: int) -> int:
-    """CPU decodeを過剰subscribeしないbounded worker数を返す。"""
-    logical_cpus = os.cpu_count() or 1
-    cpu_workers = max(1, logical_cpus // _LOGICAL_CPUS_PER_FRAME_RANGE_WORKER)
-    return min(range_count, _MAX_FRAME_RANGE_WORKERS, cpu_workers)
 
 
 def _decode_video_frame_range(

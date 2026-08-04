@@ -37,8 +37,9 @@ flowchart TD
     I --> J[15分固定PTS partitionごとのVideo Scan]
     J --> K[Scan Completed Stageを安定順で集約]
 
-    K --> L[Refinement Window Groupごとのframe抽出・解析]
-    L --> M[Frame Candidate Completed Stageを集約]
+    K --> L[独立Refinement Window Groupを<br/>CPU上限付きで並列抽出・解析]
+    L --> LA[Groupごとにatomic checkpoint]
+    LA --> M[PTS range順でFrame Candidate<br/>Completed Stageを集約]
 
     K --> N{Context source}
     N --> O[Embedded Subtitle stream checkpoint]
@@ -81,6 +82,13 @@ EOFまで開くことで、probeの丸めによる末尾frameの欠落と空part
 checkpointへ確定し、同じ開始PTSからEOFまでを一度だけ確認します。EOF確認も空なら後続境界を
 処理せず、後半frameがあればtimestamp gapとしてそのtailを最終partitionへ保持します。
 並列workerの完了順ではなくVideo OrderとWork Unit keyの安定順で集約します。
+
+Video Order上の各Video Stageは従来どおり順番に確定します。その内側で、互いに離れた
+Refinement Window Groupだけをlogical CPU容量と最大4のsafe capに従って並列処理します。
+各Groupは別々のDurable Work Unitなので、cache hitはdecodeせず、失敗・破損・中断した
+Groupだけを次回再計算します。worker数、開始順、完了順はfingerprintへ含めず、結果をPTS
+range順へ戻してから親Stageを作るため、再開やresource量によって意味outputは変わりません。
+処理ごとの主な計算資源は[Pipeline処理フローと計算資源](processing-flow.md)にまとめています。
 
 ## Target Acceptanceのmaterialization
 
@@ -145,7 +153,7 @@ Stageもartifactとmanifestを同じ方法で検証します。親だけが欠�
 | Full materialization | source 1本のsymlinkとduration | probe中だったsource 1本 |
 | Video Identity | 動画1本 | hash中だった1本のSHA-256 |
 | Video Scan | 15分のPTS partition | decode中だった1 partition |
-| Frame Candidate Extraction | merge済みRefinement Window Group | 処理中だった1 group |
+| Frame Candidate Extraction | merge済みRefinement Window Group | 実行中だった各group。未開始groupは処理量の損失なし、確定済み兄弟groupは保持 |
 | Embedded Subtitle | 選択subtitle stream 1本 | 抽出中だったstream |
 | PCM Extraction | 固定sample range 1件 | 抽出中だったrange |
 | Speech Recognition | overlapを含むPCM chunk 1件 | 推論中だったchunk |
@@ -257,7 +265,9 @@ final folderが残っていれば上記検証で再利用し、残っていな�
 ## 停止と再開
 
 通常はCtrl+Cで停止し、terminal eventが表示されてからWSL2またはWindowsを停止します。
-強制終了でもatomic確定済みcheckpointは壊れません。次回は同じcommandを実行するだけです。
+Refinement Window Groupの処理中は未開始taskを取り消し、実行中taskだけをatomic境界まで
+完了または失敗させます。割り込み後に新しい兄弟taskを開始しません。強制終了でもatomic
+確定済みcheckpointは壊れません。次回は同じcommandを実行するだけです。
 
 Target Acceptanceではactive attemptのexecution context、cache件数、Work Unit resolutionを
 `active-attempt.json`へ継続的にatomic保存します。processが強制終了した場合、次回起動時に

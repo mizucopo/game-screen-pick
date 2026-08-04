@@ -26,6 +26,7 @@ from src.video_selection.models.processing_stage import ProcessingStage
 from src.video_selection.models.video_scan_resource_sample import (
     VideoScanResourceSample,
 )
+from src.video_selection.models.video_stage_result import VideoStageResult
 from src.video_selection.services.checkpoint_version import checkpoint_version
 from src.video_selection.services.discover_video_set import discover_video_set
 from src.video_selection.services.run_progress_tracker import RunProgressTracker
@@ -1775,27 +1776,25 @@ def test_metadata_change_is_checked_before_video_stage(
     assert runtime.call_order == []
 
 
-def test_refinement_is_streamed_between_distant_moment_groups(
+def test_refinement_keeps_distant_moment_groups_in_separate_work_units(
     tmp_path: Path,
 ) -> None:
-    """離れたMoment groupの全RGB frameが同時に保持されないこと。
+    """離れたMoment groupが独立したrangeとcheckpointへ分離されること。
 
     Arrange:
-        - 離れた2つのCandidate Momentとstreaming検査付きruntimeが用意される
+        - 離れた2つのCandidate Momentを持つruntimeが用意される
     Act:
-        - 一つのrange scanからFrame Candidateが抽出される
+        - Frame Candidateが抽出される
     Assert:
-        - 後側groupのdecode継続前に前側groupのproxyが書かれること
+        - 各groupが別の単一range requestとして処理されること
+        - 各groupのDurable Work Unitが個別に確定されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
     input_folder.mkdir()
     (input_folder / "video.mp4").write_bytes(b"video-content")
     configuration = _configuration(input_folder, tmp_path / "output")
-    runtime = FakeVideoStageMediaRuntime(
-        distant_moments=True,
-        require_streaming_refinement=True,
-    )
+    runtime = FakeVideoStageMediaRuntime(distant_moments=True)
 
     # Act
     result = VideoStageProcessor(
@@ -1810,6 +1809,151 @@ def test_refinement_is_streamed_between_distant_moment_groups(
     # Assert
     assert len(result.extraction.moments) == 2
     assert all(moment.frame_candidate_ids for moment in result.extraction.moments)
+    assert len(runtime.range_pts_calls) == 2
+    assert all(len(ranges) == 1 for ranges in runtime.range_pts_calls)
+    checkpoint_root = configuration.processing_cache_folder / "work-units"
+    assert (
+        len(tuple(checkpoint_root.glob("*/frame-refinement-group/*/manifest.json")))
+        == 2
+    )
+
+
+def test_refinement_window_groups_run_concurrently_within_safe_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """独立したRefinement Window GroupがCPU上限内で並列処理されること。
+
+    Arrange:
+        - 離れた2 groupと十分なlogical CPUを持つruntimeが用意される
+    Act:
+        - 一つのVideo SourceからFrame Candidateが抽出される
+    Assert:
+        - 先頭groupの完了を待たずに次のgroupが開始されること
+        - 同時実行数が2件を超えないこと
+    """
+    # Arrange
+    input_folder = tmp_path / "videos"
+    input_folder.mkdir()
+    (input_folder / "video.mp4").write_bytes(b"video-content")
+    active_count = 0
+    peak_count = 0
+    overlap_started = threading.Event()
+    active_lock = threading.Lock()
+
+    def wait_for_sibling_group(_path: Path) -> None:
+        nonlocal active_count, peak_count
+        with active_lock:
+            active_count += 1
+            peak_count = max(peak_count, active_count)
+            if active_count == 2:
+                overlap_started.set()
+        try:
+            assert overlap_started.wait(timeout=1)
+        finally:
+            with active_lock:
+                active_count -= 1
+
+    monkeypatch.setattr(
+        "src.video_selection.services.video_stage_processor.os.cpu_count",
+        lambda: 8,
+    )
+    runtime = FakeVideoStageMediaRuntime(
+        distant_moments=True,
+        on_scan_video_frame_ranges=wait_for_sibling_group,
+    )
+
+    # Act
+    result = VideoStageProcessor(
+        runtime,
+        FakeSpeechRuntime(),
+        RecordingRunObserver(),
+    ).process(
+        discover_video_set(input_folder),
+        _configuration(input_folder, tmp_path / "output"),
+    )[0]
+
+    # Assert
+    assert len(result.extraction.moments) == 2
+    assert peak_count == 2
+    assert len(runtime.range_pts_calls) == 2
+
+
+def test_refinement_worker_count_does_not_change_semantic_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """worker数1と4でFrame Candidateの意味結果が一致すること。
+
+    Arrange:
+        - 離れた4 groupを持つ同内容のVideo Sourceが2組用意される
+    Act:
+        - 1 workerと4 workerでFrame Candidateが抽出される
+    Assert:
+        - Stage Fingerprint、Candidate ID、proxy bytesが一致すること
+    """
+    # Arrange
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=310,
+                width=64,
+                height=48,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+    )
+
+    def run_with_cpu_count(name: str, cpu_count: int) -> VideoStageResult:
+        input_folder = tmp_path / name
+        input_folder.mkdir()
+        (input_folder / "video.mp4").write_bytes(b"video-content")
+        monkeypatch.setattr(
+            "src.video_selection.services.video_stage_processor.os.cpu_count",
+            lambda: cpu_count,
+        )
+        runtime = FakeVideoStageMediaRuntime(
+            media_probe=media_probe,
+            scan_frame_pts=(0, 100, 200, 300),
+        )
+        configuration = replace(
+            _configuration(input_folder, tmp_path / f"{name}-output"),
+            candidate_density_per_minute=60.0,
+        )
+        return VideoStageProcessor(
+            runtime,
+            FakeSpeechRuntime(),
+            RecordingRunObserver(),
+        ).process(discover_video_set(input_folder), configuration)[0]
+
+    # Act
+    serial = run_with_cpu_count("serial-videos", 4)
+    parallel = run_with_cpu_count("parallel-videos", 16)
+
+    # Assert
+    assert len(serial.extraction.moments) == 4
+    assert (
+        serial.completed_stages[1].fingerprint
+        == parallel.completed_stages[1].fingerprint
+    )
+    assert tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in serial.extraction.candidates
+    ) == tuple(
+        (candidate.identifier, candidate.image_bytes)
+        for candidate in parallel.extraction.candidates
+    )
 
 
 def test_completed_refinement_group_survives_later_group_failure(

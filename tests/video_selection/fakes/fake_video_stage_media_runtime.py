@@ -34,7 +34,6 @@ class FakeVideoStageMediaRuntime:
         on_scan_video_frame_ranges: Callable[[Path], None] | None = None,
         distant_moments: bool = False,
         scan_frame_pts: tuple[int, ...] | None = None,
-        require_streaming_refinement: bool = False,
         cpu_burn_seconds: float = 0.0,
         reported_scan_wall_seconds: float = 0.1,
         reported_scan_cpu_seconds: float = 0.05,
@@ -65,7 +64,6 @@ class FakeVideoStageMediaRuntime:
         ):
             raise ValueError("scan_frame_ptsは昇順で重複しない必要があります")
         self._scan_frame_pts = scan_frame_pts
-        self._require_streaming_refinement = require_streaming_refinement
         self._cpu_burn_seconds = cpu_burn_seconds
         self._reported_scan_wall_seconds = reported_scan_wall_seconds
         self._reported_scan_cpu_seconds = reported_scan_cpu_seconds
@@ -360,13 +358,6 @@ class FakeVideoStageMediaRuntime:
         frame_pts = (0, 5, 395, 400, 405) if self._distant_moments else (0, 5, 10, 15)
         for pts in frame_pts:
             if any(start <= pts < end for start, end in pts_ranges):
-                if (
-                    self._require_streaming_refinement
-                    and pts == 400
-                    and self._candidate_proxy_write_count == 0
-                ):
-                    msg = "次のrefinement groupより前にproxyが書かれていません"
-                    raise AssertionError(msg)
                 yield self._decoded_frame(stream_index, pts)
 
     def extract_video_frame(

@@ -14,6 +14,7 @@ from concurrent.futures import (
 from contextlib import suppress
 from dataclasses import replace
 from fractions import Fraction
+from functools import partial
 from pathlib import Path
 from threading import Event, Lock
 from typing import cast
@@ -61,6 +62,8 @@ from .refine_candidate_moments import (
     combine_refined_candidate_groups,
     iter_refined_candidate_groups,
 )
+from .refinement_group_scheduler import RefinementGroupScheduler
+from .resolve_frame_range_worker_count import resolve_frame_range_worker_count
 from .run_progress_tracker import RunProgressTracker
 from .sample_video_scan_resources_safely import sample_video_scan_resources_safely
 from .select_primary_video_stream import select_primary_video_stream
@@ -783,12 +786,18 @@ class VideoStageProcessor:
         """Refinement Window Groupごとに確定して安定順に集約する。"""
         thread_cpu_before = time.thread_time()
         child_cpu_seconds = 0.0
-        child_cpu_lock = Lock()
+        worker_cpu_seconds = 0.0
+        cpu_seconds_lock = Lock()
 
         def record_child_cpu_seconds(value: float) -> None:
             nonlocal child_cpu_seconds
-            with child_cpu_lock:
+            with cpu_seconds_lock:
                 child_cpu_seconds += value
+
+        def record_worker_cpu_seconds(value: float) -> None:
+            nonlocal worker_cpu_seconds
+            with cpu_seconds_lock:
+                worker_cpu_seconds += value
 
         started_at = time.monotonic()
         pts_ranges = build_refinement_pts_ranges(
@@ -802,69 +811,97 @@ class VideoStageProcessor:
             operation=CheckpointOperation.FRAME_REFINEMENT_GROUP,
             observer=self._observer,
         )
-        encoded_groups: list[FrameCandidateExtraction] = []
+
+        def resolve_refinement_group(
+            start_pts: int,
+            end_pts: int,
+            group_moments: tuple[CandidateMoment, ...],
+            unit_input: dict[str, object],
+        ) -> FrameCandidateExtraction:
+            worker_cpu_before = time.thread_time()
+            try:
+
+                def produce_refinement_group(
+                    checkpoint_root: Path,
+                ) -> dict[str, object]:
+                    return self._produce_refinement_group(
+                        video_set,
+                        source,
+                        scan,
+                        group_moments,
+                        start_pts,
+                        end_pts,
+                        configuration,
+                        checkpoint_root,
+                        record_child_cpu_seconds,
+                    )
+
+                def validate_refinement_group(
+                    value: DurableWorkUnitBundle,
+                ) -> None:
+                    _restore_refinement_group(
+                        value.artifact,
+                        value.root,
+                        source,
+                        scan,
+                        group_moments,
+                        start_pts,
+                        end_pts,
+                    )
+
+                bundle, _reused = checkpoint_cache.resolve(
+                    f"pts-{start_pts}-{end_pts}",
+                    unit_input,
+                    produce_refinement_group,
+                    validate_bundle=validate_refinement_group,
+                )
+                validate_video_source_snapshot(video_set, source)
+                return _restore_refinement_group(
+                    bundle.artifact,
+                    bundle.root,
+                    source,
+                    scan,
+                    group_moments,
+                    start_pts,
+                    end_pts,
+                )
+            finally:
+                record_worker_cpu_seconds(time.thread_time() - worker_cpu_before)
+
+        refinement_tasks: list[Callable[[], FrameCandidateExtraction]] = []
         for start_pts, end_pts in pts_ranges:
             group_moments = tuple(
                 moment for moment in moments if start_pts <= moment.source_pts < end_pts
             )
-            unit_input = {
+            unit_input: dict[str, object] = {
                 "parent_stage_semantic_input": extraction_input,
                 "pts_range": [start_pts, end_pts],
                 "moment_ids": [moment.identifier for moment in group_moments],
             }
-
-            def produce_refinement_group(
-                checkpoint_root: Path,
-                start_pts: int = start_pts,
-                end_pts: int = end_pts,
-                group_moments: tuple[CandidateMoment, ...] = group_moments,
-            ) -> dict[str, object]:
-                return self._produce_refinement_group(
-                    video_set,
-                    source,
-                    scan,
-                    group_moments,
+            refinement_tasks.append(
+                partial(
+                    resolve_refinement_group,
                     start_pts,
                     end_pts,
-                    configuration,
-                    checkpoint_root,
-                    record_child_cpu_seconds,
-                )
-
-            def validate_refinement_group(
-                value: DurableWorkUnitBundle,
-                group_moments: tuple[CandidateMoment, ...] = group_moments,
-                start_pts: int = start_pts,
-                end_pts: int = end_pts,
-            ) -> None:
-                _restore_refinement_group(
-                    value.artifact,
-                    value.root,
-                    source,
-                    scan,
                     group_moments,
-                    start_pts,
-                    end_pts,
+                    unit_input,
                 )
-
-            bundle, _reused = checkpoint_cache.resolve(
-                f"pts-{start_pts}-{end_pts}",
-                unit_input,
-                produce_refinement_group,
-                validate_bundle=validate_refinement_group,
             )
-            validate_video_source_snapshot(video_set, source)
-            restored = _restore_refinement_group(
-                bundle.artifact,
-                bundle.root,
-                source,
-                scan,
-                group_moments,
-                start_pts,
-                end_pts,
-            )
-            encoded_groups.append(_materialize_candidate_group(restored, stage_root))
-        extraction = combine_refined_candidate_groups(moments, tuple(encoded_groups))
+        tasks = tuple(refinement_tasks)
+        resolved_groups = (
+            RefinementGroupScheduler(
+                max_workers=resolve_frame_range_worker_count(
+                    len(tasks),
+                    logical_cpu_count=os.cpu_count() or 1,
+                )
+            ).resolve(tasks)
+            if tasks
+            else ()
+        )
+        encoded_groups = tuple(
+            _materialize_candidate_group(group, stage_root) for group in resolved_groups
+        )
+        extraction = combine_refined_candidate_groups(moments, encoded_groups)
         metrics = FrameCandidateExtractionMetrics(
             wall_seconds=0.0,
             cpu_seconds=0.0,
@@ -881,7 +918,12 @@ class VideoStageProcessor:
         )
         artifact = serialize_frame_candidate_extraction(extraction, metrics, stage_root)
         wall_seconds = time.monotonic() - started_at
-        cpu_seconds = time.thread_time() - thread_cpu_before + child_cpu_seconds
+        cpu_seconds = (
+            time.thread_time()
+            - thread_cpu_before
+            + worker_cpu_seconds
+            + child_cpu_seconds
+        )
         artifact_metrics = _artifact_metrics(artifact)
         artifact_metrics["wall_seconds"] = wall_seconds
         artifact_metrics["cpu_seconds"] = cpu_seconds

@@ -8,7 +8,9 @@ Video Set内の全sourceをVideo Order順にprobeした後、独立した`scan-v
 
 Video Order上の対象scanが確定した時点で、後続Videoのscanを続けながら、そのVideoの`extract-frame-candidates`と`collect-context`を開始します。downstream、結果、progress通知はVideo Order順であり、後続scanの完了順には依存しません。worker数と変更履歴はStage Fingerprintやcache identityへ含めず、privacy-safeなrun provenanceへだけ記録します。各Stage境界ではpath・size・`mtime_ns` snapshotを検査し、内容のwhole-file SHA-256はVideo Identity cache miss時だけ計算します。device、inode、ctimeは再利用判定に使いません。Video IdentityのSHA-256はdisk/CPU処理であり、NVDECへ移せません。
 
-Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行中のscanへ終了を要求します。割り込み後に待機中のscanを新しく開始しません。Completed Stageが未確定でも、atomicに確定済みのscan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、STT chunkは次回runで再利用し、実行中だった最小Work Unitだけを再計算します。
+一つのVideo Sourceの`extract-frame-candidates`では、互いに離れたRefinement Window Groupをlogical CPU 4個につき1 worker、最大4 workerでbounded並列実行します。これはFFmpegのsoftware range decodeとOpenCV/NumPyによるmodel-free解析を行うCPU処理であり、OllamaのGPU推論ではありません。worker数はpublic設定やsemantic identityに加えず、同じ入力を1 workerまたは4 workerで処理しても結果をPTS range順へ戻します。処理全体のresource対応は[Pipeline処理フローと計算資源](processing-flow.md)を参照してください。
+
+Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行中のscanへ終了を要求します。Refinement Window Groupの並列処理中はqueued Groupを取り消し、既に実行中のGroupだけを短いatomic境界まで完了または失敗させます。割り込み後に待機中のscanやGroupを新しく開始しません。Completed Stageが未確定でも、atomicに確定済みのscan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、STT chunkは次回runで再利用し、実行中または未開始だった最小Work Unitだけを再計算します。
 
 1. `scan-video`
    - `attached_pic`を除外し、default disposition、stream indexの順でPrimary Video Streamを決めます。
@@ -18,9 +20,9 @@ Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行�
    - partitionをPTS順に集約し、Heartbeat Proxy、scene signalの時刻、exact timeline、scan metricをCompleted Stageとしてatomicに確定します。
 2. `extract-frame-candidates`
    - timeline順の単調windowでscene近傍のheartbeat品質を参照し、density windowごとに最大1件のCandidate Momentを発見します。
-   - Moment前後のnative frameだけをrange scanで取り出します。独立rangeは入力順を保ったまま、logical CPU数に応じて最大4 workerで並列decodeします。
-   - 同時に保持するdecode結果はworker数以下へ制限します。重なるMoment windowを一つのRefinement Window Groupとして順次処理し、選抜proxyを書いた時点でそのgroupのRGB frameを解放します。
-   - 各Refinement Window Groupのproxyと解析結果をDurable Work Unitとしてatomicに確定し、PTS順に親Stageへ集約します。
+   - Moment前後のnative frameだけをrange scanで取り出します。重なるMoment windowを一つのRefinement Window Groupとし、各Groupは一つの独立range decode、Neutral Image Analysis、proxy encodeを所有します。
+   - Group数、logical CPU数、最大4のsafe capからworker数を自動決定します。同時に保持するGroupのRGB decode結果をworker数以下へ制限し、選抜proxyを書いた時点でそのGroupのRGB frameを解放します。
+   - 各Refinement Window Groupのproxyと解析結果を別々のDurable Work Unitとしてatomicに確定し、並列完了順にかかわらずPTS順に親Stageへ集約します。cache hit Groupはdecodeせず、破損・未完了Groupだけを再計算します。
    - group内でmodel-free Neutral Image Analysis、無効frame除外、Moment内deduplication、多様性選抜を行います。最初に最高Qualityのframeを保持し、残りは選択済みframeとの最小時間距離を最優先、最小視覚距離とQualityを後続条件として、Refinement Window全体へ決定的に分散させます。
    - Frame Candidate Proxyと抽出metricをatomicに確定します。
 3. `collect-context`
