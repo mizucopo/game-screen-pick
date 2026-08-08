@@ -355,11 +355,15 @@ def test_visible_event_dialogue_overrides_generic_interface() -> None:
     assert explanation_value == "high"
 
 
-def test_dialogue_without_visual_subject_has_no_explanation_value() -> None:
+@pytest.mark.parametrize("content_kind", ("event_dialogue", "other"))
+def test_dialogue_without_visual_subject_has_no_explanation_value(
+    content_kind: CandidateFrameContentKind,
+) -> None:
     """画面内文字だけで主体のない会話風frameが掲載不可にされること。
 
     Arrange:
         - 台詞文字は見えるが人物、event構図、動作がない高評価frameが用意される
+        - 内容分類はevent dialogueまたはotherとされる
     Act:
         - 観測の決定的なExplanation Valueが参照される
     Assert:
@@ -369,7 +373,7 @@ def test_dialogue_without_visual_subject_has_no_explanation_value() -> None:
     observation = CandidateFrameObservation(
         candidate=FrameCandidate("frm_" + "c" * 64, b"image"),
         scene_slug="event",
-        content_kind="event_dialogue",
+        content_kind=content_kind,
         interface_kind="none",
         prominent_event_portrait=False,
         cinematic_event_presentation=False,
@@ -391,11 +395,11 @@ def test_dialogue_without_visual_subject_has_no_explanation_value() -> None:
     )
 
     # Act
-    content_kind = observation.effective_content_kind
+    effective_content_kind = observation.effective_content_kind
     explanation_value = observation.effective_explanation_value
 
     # Assert
-    assert content_kind == "event_dialogue"
+    assert effective_content_kind == observation.content_kind
     assert explanation_value == "none"
 
 
