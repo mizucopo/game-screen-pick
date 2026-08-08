@@ -53,9 +53,11 @@ published basis priority is `combat_subject_appearance`,
 basis participates only when its public contract is satisfied. In particular,
 `combat_subject_appearance` requires complete identifiable evidence from every
 member and at least one finite evidence token common to all of them. When no
-originating group spans the component, non-overlapping originating groups are kept in
-priority order with their own member boundaries instead of extending one basis
-transitively through another. The pre-merge Combat Encounter Group edges remain
+originating group spans the component, originating groups are processed in priority
+order. Members claimed by an earlier group are removed, and a residual subset with
+at least two members is kept under the same basis. This avoids extending one basis
+transitively through another without discarding lower-priority duplicate constraints
+among unclaimed members. The pre-merge Combat Encounter Group edges remain
 available to Shortlist boundary observation even when they are not published or the
 published basis becomes `combat_subject_appearance`. Selection cannot stop while an
 unannotated Candidate Moment remains between members of one of those encounter edges.

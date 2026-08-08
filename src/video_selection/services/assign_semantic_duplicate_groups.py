@@ -205,12 +205,14 @@ def _published_component_groups(
         originating_groups,
         key=_originating_group_sort_key,
     ):
-        member_ids = {member.identifier for member in members}
-        if claimed_member_ids.isdisjoint(member_ids) and _basis_is_publishable(
-            basis, members
+        residual_members = tuple(
+            member for member in members if member.identifier not in claimed_member_ids
+        )
+        if len(residual_members) >= 2 and _basis_is_publishable(
+            basis, residual_members
         ):
-            published.append((basis, members))
-            claimed_member_ids.update(member_ids)
+            published.append((basis, residual_members))
+            claimed_member_ids.update(member.identifier for member in residual_members)
     return tuple(published)
 
 

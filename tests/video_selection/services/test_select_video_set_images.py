@@ -3104,6 +3104,108 @@ def test_overlapping_groups_keep_their_supported_member_boundaries() -> None:
     assert result.rejected[0].semantic_group_basis == "combat_subject_appearance"
 
 
+def test_overlapping_groups_preserve_unclaimed_residual_members() -> None:
+    """低優先Groupの未使用memberが残余Groupとして維持されること。
+
+    Arrange:
+        - 動画横断Subject Group A/Bとtitle semantics Group B/C/Dが用意される
+    Act:
+        - 全候補数と同じ4枚の選定が要求される
+    Assert:
+        - A/BがSubject Groupとして維持されること
+        - 未使用のC/Dがtitle semantics Groupとして代表1枚へ制限されること
+    """
+    # Arrange
+    shared_subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    subject_only = _candidate(
+        "residual-subject-only",
+        quality=0.95,
+        feature=(1.0, 0.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="major",
+        video_order=0,
+        video_fingerprint="b" * 64,
+        combat_subject_evidence=shared_subject,
+    )
+    overlapping_title = _candidate(
+        "residual-overlapping-title",
+        quality=0.90,
+        feature=(0.90, math.sqrt(1 - 0.90**2), 0.0, 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint="c" * 64,
+        screen_text_kind="title",
+        combat_subject_evidence=shared_subject,
+    )
+    residual_title_best = _candidate(
+        "residual-title-best",
+        quality=0.85,
+        feature=(0.0, 0.0, 1.0, 0.0),
+        progress=Fraction(30, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="major",
+        video_order=2,
+        video_fingerprint="d" * 64,
+        screen_text_kind="title",
+    )
+    residual_title_weaker = _candidate(
+        "residual-title-weaker",
+        quality=0.80,
+        feature=(0.0, 0.0, 0.0, 1.0),
+        progress=Fraction(40, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="major",
+        video_order=3,
+        video_fingerprint="e" * 64,
+        screen_text_kind="title",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (
+            residual_title_weaker,
+            overlapping_title,
+            subject_only,
+            residual_title_best,
+        ),
+        requested_count=4,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        subject_only.identifier,
+        residual_title_best.identifier,
+    ]
+    assert {item.semantic_group_basis for item in result.selected} == {
+        "combat_subject_appearance",
+        "title_semantics",
+    }
+    assert {item.semantic_group_basis for item in result.rejected} == {
+        "combat_subject_appearance",
+        "title_semantics",
+    }
+
+
 def test_distinct_combat_subjects_in_one_encounter_are_not_merged() -> None:
     """同じ遭遇内でも外見が明確に異なる戦闘対象が別々に選択されること。
 
