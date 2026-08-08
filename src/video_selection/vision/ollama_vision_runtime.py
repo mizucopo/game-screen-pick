@@ -163,10 +163,14 @@ StageKind = Literal[
 ]
 ResponseStageKind = StageKind | Literal["candidate_annotation_relationship_repair"]
 OpponentBodyFraming = Literal["complete", "edge_cropped", "occluded", "absent"]
+OpponentPresentation = Literal["prominent", "recognizable", "weak", "absent"]
+CombatInteractionVisibility = Literal["direct", "indirect", "none"]
 CombatVisibilityObservation: TypeAlias = tuple[
     CharacterBodyVisibility,
     CharacterBodyVisibility,
     OpponentBodyFraming,
+    OpponentPresentation,
+    CombatInteractionVisibility,
     bool,
 ]
 CombatEncounterClassification: TypeAlias = tuple[
@@ -237,6 +241,8 @@ _COMBAT_VISIBILITY_VERIFICATION_KEYS = {
     "player_body_visibility",
     "opponent_body_visibility",
     "opponent_body_framing",
+    "opponent_presentation",
+    "combat_interaction_visibility",
     "effect_overlaps_combatant_body",
     "effect_only_frame",
 }
@@ -288,6 +294,17 @@ _OPPONENT_BODY_FRAMINGS: tuple[OpponentBodyFraming, ...] = (
     "edge_cropped",
     "occluded",
     "absent",
+)
+_OPPONENT_PRESENTATIONS: tuple[OpponentPresentation, ...] = (
+    "prominent",
+    "recognizable",
+    "weak",
+    "absent",
+)
+_COMBAT_INTERACTION_VISIBILITIES: tuple[CombatInteractionVisibility, ...] = (
+    "direct",
+    "indirect",
+    "none",
 )
 _TRANSITION_EFFECT_KINDS = {
     "none",
@@ -396,6 +413,14 @@ _COMBAT_VISIBILITY_VERIFICATION_INSTRUCTION = (
     "本体を判別できなければabsentです。effect_overlaps_combatant_bodyは"
     "visual_effectがplayerまたはopponentの本体へ重なる程度をnone、partial、"
     "severeから選びます。"
+    "opponent_presentationは、攻撃相手本体がブログ画像の主要な被写体として一目で"
+    "識別できるならprominent、小さくても輪郭・色・姿勢から単体で識別できるなら"
+    "recognizable、遠すぎる・小さすぎる・隠れすぎるためHUDや名前を手掛かりに"
+    "探さなければ識別しにくいならweak、本体を判別できなければabsentです。"
+    "combat_interaction_visibilityは、攻撃姿勢、弾道、接触、命中effectなどがplayerと"
+    "基準にした相手を視覚的に結び付けるならdirect、戦闘UI等から戦闘中とは分かるが"
+    "両者の直接的なやり取りが見えないならindirect、戦闘関係自体が見えなければ"
+    "noneです。単なるHUDや敵名だけをdirectにしません。"
     "見下ろし型・遠景・非人型のゲームでは、敵spriteが小さくても輪郭、色、姿勢から"
     "攻撃相手の本体だと判別でき、そのsprite全体が画像内に収まるなら"
     "opponent_body_visibility=clearかつopponent_body_framing=completeです。"
@@ -521,10 +546,10 @@ _CANDIDATE_ANNOTATION_SEMANTICS = (
 )
 _CONTENT_KIND_LABELS: Mapping[CandidateFrameContentKind, str] = {
     "gameplay_action": "具体的なプレイ",
-    "gameplay_idle": "通常プレイの待機場面",
-    "event_dialogue": "台詞のあるイベント",
+    "gameplay_idle": "通常プレイ画面",
+    "event_dialogue": "画面内テキストのあるイベント",
     "event_action": "動きのあるイベント",
-    "event_setup": "イベント開始前の場面",
+    "event_setup": "イベント場面",
     "document": "文書画面",
     "shop": "ショップ画面",
     "map": "マップ画面",
@@ -936,6 +961,13 @@ class OllamaVisionRuntime:
                 diagnostics,
                 verification_diagnostics,
             )
+        publication_summary, publication_summary_redacted = privacy_safe_candidate_text(
+            _truth_preserving_annotation_summary(annotation),
+            "画像内容を示す場面",
+            tuple(item.text for item in request.context_cues),
+        )
+        annotation = replace(annotation, summary=publication_summary)
+        free_text_redacted = free_text_redacted or publication_summary_redacted
         if free_text_redacted:
             diagnostics = replace(
                 diagnostics,
@@ -1972,12 +2004,7 @@ def _parse_candidate_annotation(
         annotation_scene_slug = (
             selected.scene_slug if selected.scene_catalog_match else "other"
         )
-        annotation_scene = catalog.for_slug(annotation_scene_slug)
-        annotation_summary = (
-            f"{annotation_scene.display_name}の{content_label}"
-            if selected.scene_catalog_match
-            else content_label
-        )
+        annotation_summary = content_label
         frame_choice_reason = f"{content_label}が候補内で最も明瞭なフレーム"
         (
             annotation_summary,
@@ -1988,11 +2015,8 @@ def _parse_candidate_annotation(
             annotation_summary=annotation_summary,
             frame_choice_reason=frame_choice_reason,
             spoiler_evidence=selected.spoiler_evidence,
-            scene_slug=annotation_scene_slug,
-            blog_image_type=selected.blog_image_type,
             spoiler_risk=selected.spoiler_risk,
             raw_context_texts=tuple(item.text for item in request.context_cues),
-            catalog=catalog,
         )
         return (
             CandidateAnnotation(
@@ -2060,6 +2084,8 @@ def _parse_combat_visibility_verification(
     player_body_visibility = value.get("player_body_visibility")
     opponent_body_visibility = value.get("opponent_body_visibility")
     opponent_body_framing = value.get("opponent_body_framing")
+    opponent_presentation = value.get("opponent_presentation")
+    combat_interaction_visibility = value.get("combat_interaction_visibility")
     effect_overlap = value.get("effect_overlaps_combatant_body")
     effect_only_frame = value.get("effect_only_frame")
     if (
@@ -2068,6 +2094,8 @@ def _parse_combat_visibility_verification(
         or player_body_visibility not in CHARACTER_BODY_VISIBILITIES
         or opponent_body_visibility not in CHARACTER_BODY_VISIBILITIES
         or opponent_body_framing not in _OPPONENT_BODY_FRAMINGS
+        or opponent_presentation not in _OPPONENT_PRESENTATIONS
+        or combat_interaction_visibility not in _COMBAT_INTERACTION_VISIBILITIES
         or effect_overlap not in _EFFECT_COMBATANT_OVERLAPS
         or not isinstance(effect_only_frame, bool)
     ):
@@ -2076,6 +2104,8 @@ def _parse_combat_visibility_verification(
         player_body_visibility,
         opponent_body_visibility,
         opponent_body_framing,
+        opponent_presentation,
+        combat_interaction_visibility,
         effect_only_frame,
     )
 
@@ -2343,22 +2373,18 @@ def _privacy_safe_candidate_texts(
     annotation_summary: str,
     frame_choice_reason: str,
     spoiler_evidence: str,
-    scene_slug: str,
-    blog_image_type: str,
     spoiler_risk: str,
     raw_context_texts: tuple[str, ...],
-    catalog: SceneCatalog,
 ) -> tuple[str, str, str, bool]:
     """Cue逐語一致fieldだけを視覚・enum由来の安全な説明へ置換する。"""
-    scene = next(item for item in catalog.scenes if item.slug == scene_slug)
     summary, summary_redacted = privacy_safe_candidate_text(
         annotation_summary,
-        f"{scene.display_name}に分類される{blog_image_type}の場面",
+        "画像内容を示す場面",
         raw_context_texts,
     )
     reason, reason_redacted = privacy_safe_candidate_text(
         frame_choice_reason,
-        f"{scene.description}を視覚的に表すフレーム",
+        "画像内容が候補内で最も明瞭なフレーム",
         raw_context_texts,
     )
     evidence, evidence_redacted = privacy_safe_candidate_text(
@@ -2798,19 +2824,37 @@ def _merge_candidate_diagnostics(
 def _is_publishable_combat_visibility(
     observation: CombatVisibilityObservation,
 ) -> bool:
-    """playerと敵本体が見え、敵が構図内に収まる場合だけ許可する。"""
+    """敵を識別でき、戦闘内容が画像単体で伝わる場合だけ許可する。"""
     (
         player_body_visibility,
         opponent_body_visibility,
         opponent_body_framing,
+        opponent_presentation,
+        combat_interaction_visibility,
         effect_only_frame,
     ) = observation
     return (
         player_body_visibility != "absent"
         and opponent_body_visibility == "clear"
         and opponent_body_framing == "complete"
+        and (
+            opponent_presentation == "prominent"
+            or opponent_presentation == "recognizable"
+            and combat_interaction_visibility == "direct"
+        )
         and not effect_only_frame
     )
+
+
+def _truth_preserving_annotation_summary(annotation: CandidateAnnotation) -> str:
+    """検証済みの有限分類だけから公開用の画像説明を返す。"""
+    if annotation.combat_encounter_kind == "ordinary":
+        return "通常戦闘の具体的なプレイ"
+    if annotation.combat_encounter_kind == "major":
+        return "主要戦闘の具体的なプレイ"
+    if annotation.combat_encounter_kind == "uncertain":
+        return "戦闘の具体的なプレイ"
+    return annotation.summary
 
 
 def _is_consistent_noncombat_or_publishable_combat_visibility(
@@ -2825,6 +2869,8 @@ def _is_consistent_noncombat_or_publishable_combat_visibility(
             _player_body_visibility,
             opponent_body_visibility,
             opponent_body_framing,
+            _opponent_presentation,
+            _combat_interaction_visibility,
             _effect_only_frame,
         ) in observations
     )
@@ -2836,6 +2882,8 @@ def _is_consistent_noncombat_or_publishable_combat_visibility(
             _player_body_visibility,
             _opponent_body_visibility,
             _opponent_body_framing,
+            _opponent_presentation,
+            _combat_interaction_visibility,
             effect_only_frame,
         ) in observations
     )

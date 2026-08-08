@@ -236,6 +236,13 @@ class CandidateFrameObservation:
                 self.effective_content_kind == "shop"
                 and not self.visible_character_or_enemy
             )
+            or (
+                self.effective_content_kind == "event_dialogue"
+                and not self.visible_character_or_enemy
+                and not self.prominent_event_portrait
+                and not self.cinematic_event_presentation
+                and not self.visible_action
+            )
             or (self.combat_action and self.opponent_body_visibility != "clear")
             or self.effect_only_frame
             or self.primary_subject_visibility == "absent"

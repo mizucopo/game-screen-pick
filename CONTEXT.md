@@ -334,6 +334,7 @@ _Avoid_: Selection Shortlist, selected output, per-video representatives
 
 **Candidate Annotation**:
 Selection Shortlist内の一つのCandidate Momentについて、Primary Representative Frame、共有Scene Catalog、近傍Context Cue、Selection Intent、Video Set内の進行位置を入力にし、主Ollama推論でID付きCandidate Frame Observationを評価するVideo Set Stage。Primary Representative Frameが戦闘を示す一方でExplanation Valueが`none`になった場合だけ、同じCandidate Moment内の残り最大2件を一枚ずつ独立評価し、すべての成功した観測から決定的にRepresentative Frameを確定する。推論の失敗は画像の不適格性とみなさずCandidate Momentを未確定のままにし、全frameが`none`の場合は代替frameを強制採用しない。各観測はScene Slug、Scene Catalog Match、画面内容、Interface Kind、会話eventの大きな人物立ち絵・胸像の有無、Cinematic Event Presentationの有無、画面内に実在する台詞文字の有無とDialogue Text Presentation、動作・人物または敵の有無、Combat Encounter KindとCombat Encounter Basis、Combat Subject Evidence、player・攻撃相手それぞれの本体可視性、一時的な光・爆発・煙だけが主内容か、Explanation Value、Screen Text Kind、主対象の視認性、一時的な遮蔽、Spoiler Riskを持つ。音声やContext Cueの会話文は画面内台詞文字とScene Catalog Matchの根拠に使わない。Blog Image Type、公開用要約と理由は観測からlocalに決定し、Scene Catalog MatchがfalseならScene Slugを`other`へ正規化し、具体的なScene Display Nameを要約に使わない。具体的なInterface Kindは曖昧な画面内容分類より優先する一方、動作が見えるframeの`other_interface`は戦闘HUDなどの誤認として上書きに使わない。大きなevent人物立ち絵またはCinematic Event Presentationと画面内台詞文字を持つ会話eventも、汎用的な`other_interface`より優先する。台詞のない`event_dialogue`、動作のないaction分類、台詞も動作もない会話eventの大きな人物立ち絵またはCinematic Event Presentationを静止場面へ補正し、`document`、`tutorial_help`、台詞も動作もない`event_setup`、`save`、人物も敵も判別できない`shop`、攻撃相手本体が`clear`でない戦闘、一時的な光・爆発・煙だけが主内容のframe、主対象不在、深刻な一時遮蔽はExplanation Valueを`none`に正規化する。主推論が掲載可能とした戦闘と、非戦闘とした掲載可能なScene Kind `combat`のgameplayまたは`recurring_gameplay` actionにはCombat Encounter Verificationを追加する。主推論の戦闘種別はそのまま採用せず、専用確認とCombat Visibility Verificationを通ったCombat Encounter KindとCombat Encounter Basisだけを保存する。最初の非戦闘判定は独立再確認し、Scene Kind `combat`で二回とも戦闘を確認できなければExplanation Valueを`none`にする。それ以外の`recurring_gameplay` actionは戦闘有無の結果にかかわらずCombat Visibility Verificationへ進め、二回の敵本体観測がともに敵不在、または掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。掲載価値ありとした非戦闘の地図または`cinematic` sceneにはPublication Boundary Verificationを追加し、一時的な遷移effectと、台詞も動作もないevent導入の直接観測を適格性境界に優先する。最終score、soft coverage、最終採否は決めない。
+Scene Catalog Matchがtrueでも公開用要約へScene Display Nameを連結せず、最終的なCombat Encounter Kindと直接観測した画面内容から有限表現をlocal生成する。画面内文字だけで人物・event構図・動作のいずれもない会話風frameと、敵が`weak`または`recognizable`でも直接的な戦闘関係が見えないframeはExplanation Valueを`none`にする。
 異なるCandidate Momentは各画像のrequestとconversation contextを共有せず設定上限まで並列評価できるが、各Moment内ではPrimary Representative Frameの成功後だけ条件付きfallbackへ進み、完了順やworker数をAnnotation順、Representative Frame、Stage Fingerprintへ混ぜない。
 Combat Representative FallbackのRepresentative候補は戦闘を示し、Explanation Valueが`none`ではない観測だけに限定し、説明価値のある非戦闘frameで戦闘Momentを置換しない。
 主推論が戦闘としたものの戦闘可視性を通らないframeはExplanation Valueを`none`にし、主推論の未検証な特定種別を残さず`uncertain`と`ambiguous`へ正規化する。主推論が`not_combat`としたframeを専用確認で戦闘とした後に可視性を確認できなかった場合は、確認できない戦闘actionを保存せず`not_combat`と`none`へ戻す。主推論の戦闘誤判定から非戦闘へ訂正された地図または`cinematic` sceneにもPublication Boundary Verificationを適用する。
@@ -356,9 +357,17 @@ Candidate Annotationの主推論が掲載可能とした戦闘、または掲載
 _Avoid_: combat visibility, contextual combat classification, final selection
 
 **Combat Visibility Verification**:
-Combat Encounter Verificationで戦闘と確認されたframe、またはScene Kind `combat`以外で同確認の対象になった`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、エフェクトの本体への重なり、エフェクトだけのframeかをstrict enumで観測する。見下ろし型・遠景・非人型の小型敵はgameplay spriteの輪郭全体で可視性と構図を判定し、複数敵では最も明瞭かつ完全に収まる一体を基準にする。別の敵の端欠け、player付近のeffect、damage number、色づいた地面は基準にした敵本体の遮蔽として扱わない。戦闘と確認済みの場合、player本体が`absent`、攻撃相手本体が`partial`・`absent`、構図が`edge_cropped`・`occluded`・`absent`、またはエフェクトだけならExplanation Valueを`none`に下げる。最初の確認が掲載可能なら、先の回答を推測しない別promptで同じ画素を独立再確認し、二回ともplayer本体が`clear`または`partial`、攻撃相手本体が`clear`、構図が`complete`、かつエフェクトだけではない場合だけCombat Visibility Edge Auditへ進む。Scene Kind `combat`以外で戦闘有無が二回とも否定された場合は可視性を必ず二回確認し、両方で敵本体が不在かつエフェクトだけではない場合、または両方で掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。Combat Encounter Verificationの戦闘種別と根拠は、player本体と攻撃相手本体の可視性が一致しCombat Visibility Edge Auditも通るまで確定しない。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
+Combat Encounter Verificationで戦闘と確認されたframe、またはScene Kind `combat`以外で同確認の対象になった`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。エフェクトの画面占有率、最大の前景要素、player本体と攻撃相手本体の可視性、攻撃相手本体が画面内へ収まる構図、Opponent Presentation、Combat Interaction Visibility、エフェクトの本体への重なり、エフェクトだけのframeかをstrict enumで観測する。見下ろし型・遠景・非人型の小型敵はgameplay spriteの輪郭全体で可視性と構図を判定し、複数敵では最も明瞭かつ完全に収まる一体を基準にする。別の敵の端欠け、player付近のeffect、damage number、色づいた地面は基準にした敵本体の遮蔽として扱わない。戦闘と確認済みの場合、player本体が`absent`、攻撃相手本体が`partial`・`absent`、構図が`edge_cropped`・`occluded`・`absent`、Opponent Presentationが`weak`・`absent`、または`recognizable`でもCombat Interaction Visibilityが`direct`でない場合はExplanation Valueを`none`に下げる。最初の確認が掲載可能なら、先の回答を推測しない別promptで同じ画素を独立再確認し、二回とも同じ掲載境界を満たす場合だけCombat Visibility Edge Auditへ進む。Scene Kind `combat`以外で戦闘有無が二回とも否定された場合は可視性を必ず二回確認し、両方で敵本体が不在かつエフェクトだけではない場合、または両方で掲載可能な戦闘として一致してCombat Visibility Edge Auditも通る場合だけ元のExplanation Valueを保持する。Combat Encounter Verificationの戦闘種別と根拠は、player本体と攻撃相手本体の可視性および掲載可読性が一致しCombat Visibility Edge Auditも通るまで確定しない。Scene Slug、画面内容、Spoiler Riskは変更しない。公開用要約は検証済みのCombat Encounter Kindから有限表現へ正規化する。
 主推論が戦闘としたframeで戦闘としての可視性または外周strip監査を通らない場合は、主推論の`ordinary`または`major`を残さず`uncertain`と`ambiguous`へ正規化する。主推論が`not_combat`としたframeで専用確認後の可視性を確認できない場合は、`not_combat`と`none`へ戻す。
 _Avoid_: second Candidate Annotation, contextual combat classification, final selection
+
+**Opponent Presentation**:
+Combat Visibility Verificationが攻撃相手本体のブログ画像内での見せ方を表す`prominent`、`recognizable`、`weak`、`absent`の直接観測。主要な被写体として一目で識別できる相手を`prominent`、小さくても輪郭・色・姿勢から単体で識別できる相手を`recognizable`、HUDや名前を手掛かりに探さなければ識別しにくい相手を`weak`とする。敵の物語上の重要度やCombat Encounter Kindは含めない。
+_Avoid_: boss importance, screen coverage threshold, enemy name, model confidence
+
+**Combat Interaction Visibility**:
+Combat Visibility Verificationがplayerと基準にした攻撃相手の直接的な戦闘関係を表す`direct`、`indirect`、`none`の直接観測。攻撃姿勢、弾道、接触、命中effectなどが両者を視覚的に結び付ける場合だけ`direct`とし、敵名、HP bar、戦闘HUDだけでは`direct`にしない。
+_Avoid_: combat existence, Encounter Basis, audio cue, inferred action
 
 **Combat Visibility Edge Audit**:
 二回のCombat Visibility Verificationがともに掲載可能としたRepresentative Frame一枚だけに対し、元画像と、上端・下端・左端・右端それぞれの外周30%をlocalで切り出した4枚を一度に渡して実行する最終の条件付きOllama推論。元画像で最も明瞭かつ完全に収まる攻撃相手一体を選び、その同じ本体だけを各stripで追跡して、主要な輪郭が元画像の実際の外端へ到達するかを専用strict schemaで直接観測する。別の攻撃相手、敵名、HP bar、光、攻撃effect、影、背景、診断用の内側crop境界を選んだ敵本体の外端到達に数えない。どれか一辺で選んだ敵本体の存在と実際の外端への到達がともに確認された場合はExplanation Valueを`none`に下げる。二回の可視性確認と外周strip監査のすべてを通った場合だけ掲載価値を保持する。Scene Slug、画面内容、Spoiler Risk、説明文は変更しない。
@@ -458,7 +467,7 @@ Scene Catalog Representative Setから作る、一つのVideo Setを横断して
 _Avoid_: fixed scene list, free-form per-image labels, per-video catalog
 
 **Scene Catalog Match**:
-Candidate Frameの画素だけから、選択したScene Catalog entryのScene Display NameとScene Descriptionに含まれる具体的な場所・人物・出来事まで裏付けられること。Scene Kindや会話・戦闘という大分類だけが合う場合、音声・Context Cue・Video Set Progressで補わなければ合わない場合は不一致とする。不一致のCandidate AnnotationはScene Slugを`other`へ正規化し、具体的なScene Display Nameを使わず画面内容だけの要約を公開する。
+Candidate Frameの画素だけから、選択したScene Catalog entryのScene Display NameとScene Descriptionに含まれる具体的な場所・人物・出来事まで裏付けられること。Scene Kindや会話・戦闘という大分類だけが合う場合、音声・Context Cue・Video Set Progressで補わなければ合わない場合は不一致とする。不一致のCandidate AnnotationはScene Slugを`other`へ正規化する。公開用要約はMatchの真偽にかかわらずScene Display Nameを使わず、検証済みの有限分類だけから生成する。
 _Avoid_: Scene Kind match, Context Cue relevance, image quality, selection eligibility
 
 **Scene Description**:
@@ -499,6 +508,7 @@ _Avoid_: fixed quota, output count guarantee, per-video minimum, invalid fallbac
 
 **Explanation Value**:
 Representative FrameとそのCandidate Momentがブログ本文でplayや出来事を説明できる度合い。値は`none`、`low`、`medium`、`high`で、Candidate Annotationが意味評価として付与する。`none`はCandidate Annotation自体の失敗やmodelによる最終採否ではないが、決定的selectorが要求枚数の穴埋めに使わない適格性境界になる。
+画面内文字だけで人物・event構図・動作のない会話風frame、攻撃相手をブログ画像の被写体として識別できない戦闘、または小さな相手を識別できてもplayerとの直接的な戦闘関係が見えないframeは`none`へ正規化する。
 _Avoid_: Quality Score, model confidence, final selection score
 
 **Screen Text Kind**:

@@ -355,6 +355,50 @@ def test_visible_event_dialogue_overrides_generic_interface() -> None:
     assert explanation_value == "high"
 
 
+def test_dialogue_without_visual_subject_has_no_explanation_value() -> None:
+    """画面内文字だけで主体のない会話風frameが掲載不可にされること。
+
+    Arrange:
+        - 台詞文字は見えるが人物、event構図、動作がない高評価frameが用意される
+    Act:
+        - 観測の決定的なExplanation Valueが参照される
+    Assert:
+        - modelの主対象判定より直接観測が優先され、説明価値なしにされること
+    """
+    # Arrange
+    observation = CandidateFrameObservation(
+        candidate=FrameCandidate("frm_" + "c" * 64, b"image"),
+        scene_slug="event",
+        content_kind="event_dialogue",
+        interface_kind="none",
+        prominent_event_portrait=False,
+        cinematic_event_presentation=False,
+        visible_dialogue_text=True,
+        dialogue_text_presentation="dialogue_box",
+        visible_action=False,
+        visible_character_or_enemy=False,
+        combat_encounter_kind="not_combat",
+        combat_encounter_basis="none",
+        player_body_visibility="absent",
+        opponent_body_visibility="absent",
+        effect_only_frame=False,
+        explanation_value="high",
+        screen_text_kind="dialogue",
+        primary_subject_visibility="clear",
+        transient_obstruction="none",
+        spoiler_risk="none",
+        spoiler_evidence="",
+    )
+
+    # Act
+    content_kind = observation.effective_content_kind
+    explanation_value = observation.effective_explanation_value
+
+    # Assert
+    assert content_kind == "event_dialogue"
+    assert explanation_value == "none"
+
+
 def test_dialogue_visibility_requires_a_visible_text_presentation() -> None:
     """画面内台詞の真偽値と視覚的な表示形式が一致させられること。
 

@@ -53,15 +53,15 @@ def _sanitize_candidate(
     raw_context_texts: tuple[str, ...],
 ) -> BlogCandidate:
     annotation = candidate.annotation
-    scene = scene_catalog.for_slug(annotation.scene_slug)
+    scene_catalog.for_slug(annotation.scene_slug)
     summary, _ = privacy_safe_candidate_text(
         annotation.summary,
-        f"{scene.display_name}に分類される{annotation.blog_image_type}の場面",
+        "画像内容を示す場面",
         raw_context_texts,
     )
     frame_choice_reason, _ = privacy_safe_candidate_text(
         annotation.frame_choice_reason or annotation.summary,
-        f"{scene.description}を視覚的に表すフレーム",
+        "画像内容が候補内で最も明瞭なフレーム",
         raw_context_texts,
     )
     spoiler_evidence, _ = privacy_safe_candidate_text(

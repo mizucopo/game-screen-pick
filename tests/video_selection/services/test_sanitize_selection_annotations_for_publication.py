@@ -61,7 +61,7 @@ def test_annotation_matching_an_unseen_video_set_cue_is_sanitized(
         ),
         (cue_text,),
     )
-    assert sanitized_annotation.summary != cue_text
+    assert sanitized_annotation.summary == "画像内容を示す場面"
     assert sanitized.requested_count == unsafe_selection.requested_count
     assert sanitized.annotated_candidate_count == (
         unsafe_selection.annotated_candidate_count
