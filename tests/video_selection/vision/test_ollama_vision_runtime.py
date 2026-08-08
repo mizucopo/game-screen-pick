@@ -4878,7 +4878,7 @@ def test_candidate_uses_symbol_omission_when_safe_fallback_matches_context() -> 
         - Cue文字を持たない省略記号がsummaryへ返されること
     """
     # Arrange
-    cue_text = "画面内テキストのあるイベント。画像内容を示す場面"
+    cue_text = "画面内テキストのあるイベント。scene:battle"
     request = _annotation_request_with_context_text(cue_text)
     response = _annotation_payload()
     runtime = OllamaVisionRuntime(
@@ -4899,6 +4899,50 @@ def test_candidate_uses_symbol_omission_when_safe_fallback_matches_context() -> 
 
     # Assert
     assert annotation.summary == "［…］"
+    assert candidate_annotation_free_text_is_safe(
+        (annotation.summary,),
+        (cue_text,),
+    )
+    assert diagnostics.validation_code == (
+        "candidate_annotation_verbatim_context_redacted"
+    )
+
+
+def test_candidate_redaction_preserves_recurring_scene_discriminator() -> None:
+    """Cue伏字後もrecurring sceneの内部識別子が保持されること。
+
+    Arrange:
+        - content labelを含むContext Cueとrecurring gameplay応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - Cue逐語spanを含まず、検証済みscene slugを持つsummaryが返されること
+    """
+    # Arrange
+    cue_text = "通常プレイ画面を紹介する"
+    request = _annotation_request_with_context_text(cue_text)
+    response = _frame_observation_payload(
+        (("frame-a", "exploration", "gameplay_idle", "high", "hud"),)
+    )
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        request,
+        _catalog_with_recurring_exploration(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.scene_slug == "exploration"
+    assert annotation.summary == "scene:exploration"
     assert candidate_annotation_free_text_is_safe(
         (annotation.summary,),
         (cue_text,),

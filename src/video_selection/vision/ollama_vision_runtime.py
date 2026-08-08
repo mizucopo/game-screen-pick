@@ -2011,6 +2011,11 @@ def _parse_candidate_annotation(
             free_text_redacted,
         ) = _privacy_safe_candidate_texts(
             annotation_summary=annotation_summary,
+            annotation_summary_fallback=(
+                f"scene:{annotation_scene_slug}"
+                if selected.scene_catalog_match
+                else "画像内容を示す場面"
+            ),
             frame_choice_reason=frame_choice_reason,
             spoiler_evidence=selected.spoiler_evidence,
             spoiler_risk=selected.spoiler_risk,
@@ -2380,6 +2385,7 @@ def _parse_combat_subject_evidence(value: object) -> CombatSubjectEvidence:
 def _privacy_safe_candidate_texts(
     *,
     annotation_summary: str,
+    annotation_summary_fallback: str,
     frame_choice_reason: str,
     spoiler_evidence: str,
     spoiler_risk: str,
@@ -2388,7 +2394,7 @@ def _privacy_safe_candidate_texts(
     """Cue逐語一致fieldだけを視覚・enum由来の安全な説明へ置換する。"""
     summary, summary_redacted = privacy_safe_candidate_text(
         annotation_summary,
-        "画像内容を示す場面",
+        annotation_summary_fallback,
         raw_context_texts,
     )
     reason, reason_redacted = privacy_safe_candidate_text(

@@ -110,13 +110,19 @@ def _sanitize_candidate(
 
 def _publication_annotation_summary(annotation: CandidateAnnotation) -> str:
     """内部の意味識別子を使わず検証済み観測だけから公開説明を返す。"""
-    if annotation.combat_encounter_kind == "ordinary":
-        return "通常戦闘の具体的なプレイ"
-    if annotation.combat_encounter_kind == "major":
-        return "主要戦闘の具体的なプレイ"
-    if annotation.combat_encounter_kind == "uncertain":
-        return "戦闘の具体的なプレイ"
     evidence = annotation.representative_frame_evidence
+    has_gameplay_semantics = (
+        annotation.blog_image_type == "normal_gameplay"
+        if evidence is None
+        else evidence.content_kind in {"gameplay_action", "gameplay_idle"}
+    )
+    if has_gameplay_semantics:
+        if annotation.combat_encounter_kind == "ordinary":
+            return "通常戦闘の具体的なプレイ"
+        if annotation.combat_encounter_kind == "major":
+            return "主要戦闘の具体的なプレイ"
+        if annotation.combat_encounter_kind == "uncertain":
+            return "戦闘の具体的なプレイ"
     if evidence is not None:
         return _PUBLICATION_CONTENT_SUMMARIES[evidence.content_kind]
     if annotation.has_title_semantics:

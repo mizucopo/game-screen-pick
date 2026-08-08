@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from src.video_selection.models.candidate_annotation import (
+    ScreenTextKind,
     candidate_annotation_free_text_is_safe,
+)
+from src.video_selection.models.representative_frame_evidence import (
+    CandidateFrameContentKind,
+    RepresentativeFrameEvidence,
 )
 from src.video_selection.services import (
     sanitize_selection_annotations_for_publication as sanitize_module,
@@ -146,3 +151,68 @@ def test_publication_uses_verified_combat_kind_in_summary(tmp_path: Path) -> Non
     assert sanitized.selected[0].candidate.annotation.summary == (
         "通常戦闘の具体的なプレイ"
     )
+
+
+@pytest.mark.parametrize(
+    ("content_kind", "screen_text_kind", "expected_summary"),
+    (
+        pytest.param(
+            "event_action",
+            "none",
+            "動きのあるイベント",
+            id="event-action",
+        ),
+        pytest.param(
+            "event_dialogue",
+            "dialogue",
+            "画面内テキストのあるイベント",
+            id="event-dialogue",
+        ),
+    ),
+)
+def test_publication_preserves_event_semantics_for_combat_classification(
+    tmp_path: Path,
+    content_kind: CandidateFrameContentKind,
+    screen_text_kind: ScreenTextKind,
+    expected_summary: str,
+) -> None:
+    """戦闘種別を持つevent画像が具体的なプレイと説明されないこと。
+
+    Arrange:
+        - event内容と検証済みordinary戦闘種別を持つ選定結果が用意される
+    Act:
+        - 公開前Annotation安全化が実行される
+    Assert:
+        - 戦闘種別より画像のevent意味が優先された公開説明になること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    selected = request.selection_result.selected[0]
+    internal_annotation = replace(
+        selected.candidate.annotation,
+        blog_image_type="event",
+        screen_text_kind=screen_text_kind,
+        combat_encounter_kind="ordinary",
+        combat_encounter_basis="ordinary_opponent_presentation",
+        representative_frame_evidence=RepresentativeFrameEvidence(
+            content_kind=content_kind,
+            primary_subject_visibility="clear",
+            opponent_body_visibility="clear",
+            transient_obstruction="none",
+        ),
+    )
+    internal_candidate = replace(selected.candidate, annotation=internal_annotation)
+    internal_selection = replace(
+        request.selection_result,
+        selected=(replace(selected, candidate=internal_candidate),),
+    )
+
+    # Act
+    sanitized = sanitize_module.sanitize_selection_annotations_for_publication(
+        internal_selection,
+        request.scene_catalog,
+        (),
+    )
+
+    # Assert
+    assert sanitized.selected[0].candidate.annotation.summary == expected_summary
