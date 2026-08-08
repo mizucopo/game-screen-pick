@@ -2833,15 +2833,15 @@ def _is_publishable_combat_visibility(
         combat_interaction_visibility,
         effect_only_frame,
     ) = observation
+    opponent_is_blog_readable = opponent_presentation == "prominent" or (
+        opponent_presentation == "recognizable"
+        and combat_interaction_visibility == "direct"
+    )
     return (
         player_body_visibility != "absent"
         and opponent_body_visibility == "clear"
         and opponent_body_framing == "complete"
-        and (
-            opponent_presentation == "prominent"
-            or opponent_presentation == "recognizable"
-            and combat_interaction_visibility == "direct"
-        )
+        and opponent_is_blog_readable
         and not effect_only_frame
     )
 
