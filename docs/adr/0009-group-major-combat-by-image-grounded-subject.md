@@ -38,22 +38,27 @@ Combat Encounter Group remains auxiliary. Within one encounter, identifiable
 evidence is compatible without the 0.80 Neutral threshold when body plan, scale, and
 surface match and the color sets and trait sets each intersect. When all identifiable
 evidence is compatible, the existing chronological group remains useful, including
-unclear members. When multiple clearly different subjects are present, only mutually
-compatible repeated subjects use the encounter basis; unclear members are not
-attached across that distinction.
+unclear members. Concrete `generic` evidence is also considered when mutually
+observed body-plan, scale, surface, color, or trait fields conflict, so a visibly
+different generic subject splits the encounter. Generic evidence cannot establish
+cross-video identity or a repeated-subject subgroup after such a conflict. When
+multiple clearly different subjects are present, only mutually compatible repeated
+`distinctive` subjects use the encounter basis; unclear members are not attached
+across that distinction.
 
-Overlapping semantic groups are merged deterministically, with published basis
-priority `combat_subject_appearance`, `combat_encounter_sequence`, `title_semantics`,
-then `visual_role_similarity`. A basis participates in that priority only when its
-public contract can describe the merged component. In particular,
+Overlapping semantic groups are merged deterministically only when an originating
+group contains every member of the connected component. Among those spanning groups,
+published basis priority is `combat_subject_appearance`,
+`combat_encounter_sequence`, `title_semantics`, then `visual_role_similarity`, and a
+basis participates only when its public contract is satisfied. In particular,
 `combat_subject_appearance` requires complete identifiable evidence from every
-member and at least one finite evidence token common to all of them. When any member
-lacks identifiable evidence or no common token remains, publication falls back to
-the next applicable basis while the originating subject groups remain internal
-evidence. The pre-merge Combat Encounter Group edges remain available to Shortlist
-boundary observation even when the published basis becomes
-`combat_subject_appearance`. Selection cannot stop while an unannotated Candidate
-Moment remains between members of one of those encounter edges.
+member and at least one finite evidence token common to all of them. When no
+originating group spans the component, non-overlapping originating groups are kept in
+priority order with their own member boundaries instead of extending one basis
+transitively through another. The pre-merge Combat Encounter Group edges remain
+available to Shortlist boundary observation even when they are not published or the
+published basis becomes `combat_subject_appearance`. Selection cannot stop while an
+unannotated Candidate Moment remains between members of one of those encounter edges.
 
 Every Combat Subject Group has the existing Semantic Duplicate Group hard maximum of
 one selected image, including during Selection Shortfall. Marginal Selection Utility

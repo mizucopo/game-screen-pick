@@ -3022,6 +3022,88 @@ def test_subject_basis_requires_identifiable_evidence_from_every_member() -> Non
     }
 
 
+def test_overlapping_groups_keep_their_supported_member_boundaries() -> None:
+    """統合component全体を説明できないbasisがmember外へ拡張されないこと。
+
+    Arrange:
+        - 動画横断の同一Subject 2件と片方に重なる同一遭遇のunclear 1件が用意される
+    Act:
+        - 全候補数と同じ3枚の選定が要求される
+    Assert:
+        - Subject Groupだけが元の2件へ公開されること
+        - 別動画の候補を含むEncounter Groupへ3件が拡張されないこと
+    """
+    # Arrange
+    shared_subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    cross_video = _candidate(
+        "supported-boundary-cross-video",
+        quality=0.95,
+        feature=(1.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="shared-subject",
+        combat_encounter_kind="major",
+        video_order=0,
+        video_fingerprint="8" * 64,
+        combat_subject_evidence=shared_subject,
+    )
+    encounter_subject = _candidate(
+        "supported-boundary-encounter-subject",
+        quality=0.90,
+        feature=(0.90, math.sqrt(1 - 0.90**2), 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="local-encounter",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint="9" * 64,
+        combat_subject_evidence=shared_subject,
+    )
+    encounter_unclear = _candidate(
+        "supported-boundary-encounter-unclear",
+        quality=0.85,
+        feature=(0.0, 0.0, 1.0),
+        progress=Fraction(22, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="local-encounter",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint="9" * 64,
+    )
+
+    # Act
+    result = select_video_set_images(
+        (encounter_unclear, encounter_subject, cross_video),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        cross_video.identifier,
+        encounter_unclear.identifier,
+    ]
+    assert result.selected[0].semantic_group_basis == "combat_subject_appearance"
+    assert result.selected[1].semantic_group_id is None
+    assert len(result.rejected) == 1
+    assert result.rejected[0].candidate.identifier == encounter_subject.identifier
+    assert result.rejected[0].semantic_group_basis == "combat_subject_appearance"
+
+
 def test_distinct_combat_subjects_in_one_encounter_are_not_merged() -> None:
     """同じ遭遇内でも外見が明確に異なる戦闘対象が別々に選択されること。
 
@@ -3090,6 +3172,78 @@ def test_distinct_combat_subjects_in_one_encounter_are_not_merged() -> None:
     assert {item.candidate.identifier for item in result.selected} == {
         frog.identifier,
         armored.identifier,
+    }
+    assert result.rejected == ()
+
+
+def test_concrete_generic_evidence_splits_distinct_encounter_subjects() -> None:
+    """具体的なgeneric根拠で同一遭遇の別対象が分離されること。
+
+    Arrange:
+        - 同じ主要戦闘runに外見が異なるdistinctive対象とgeneric対象が用意される
+    Act:
+        - 2枚の選定が要求される
+    Assert:
+        - genericが動画横断同一性ではなく遭遇内の不一致判定に使われること
+        - 明らかに異なる両対象が選択されること
+    """
+    # Arrange
+    source_fingerprint = "a" * 64
+    distinctive = _candidate(
+        "distinctive-encounter-subject",
+        quality=0.90,
+        feature=(1.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="mixed-subject-encounter",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("green",),
+            traits=("large_mouth",),
+            distinctiveness="distinctive",
+        ),
+    )
+    generic = _candidate(
+        "generic-encounter-subject",
+        quality=0.85,
+        feature=(0.0, 1.0),
+        progress=Fraction(12, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="mixed-subject-encounter",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="humanoid",
+            scale="large",
+            surface="armored",
+            colors=("black",),
+            traits=("armor",),
+            distinctiveness="generic",
+        ),
+    )
+
+    # Act
+    result = select_video_set_images(
+        (generic, distinctive),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        distinctive.identifier,
+        generic.identifier,
     }
     assert result.rejected == ()
 

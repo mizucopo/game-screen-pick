@@ -121,7 +121,7 @@ def _group_evidence(
 def _merge_overlapping_groups(
     groups: list[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]],
 ) -> tuple[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]], ...]:
-    """複数の根拠を持つ候補を一つの決定的なSemantic Groupへ統合する。"""
+    """公開根拠のmember境界を保って重なるSemantic Groupを整理する。"""
     parents: dict[str, str] = {}
     candidates_by_id: dict[str, BlogCandidate] = {}
 
@@ -142,7 +142,12 @@ def _merge_overlapping_groups(
         parents[higher] = lower
 
     applicable_groups = tuple(
-        (basis, members) for basis, members in groups if len(members) >= 2
+        (
+            basis,
+            tuple(sorted(members, key=lambda item: item.identifier)),
+        )
+        for basis, members in groups
+        if len(members) >= 2
     )
     for _, members in applicable_groups:
         member_ids = tuple(member.identifier for member in members)
@@ -155,17 +160,21 @@ def _merge_overlapping_groups(
     members_by_root: dict[str, list[BlogCandidate]] = defaultdict(list)
     for identifier, candidate in candidates_by_id.items():
         members_by_root[find(identifier)].append(candidate)
-    bases_by_root: dict[str, set[SemanticDuplicateBasis]] = defaultdict(set)
+    groups_by_root: dict[
+        str,
+        list[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]],
+    ] = defaultdict(list)
     for basis, members in applicable_groups:
-        bases_by_root[find(members[0].identifier)].add(basis)
+        groups_by_root[find(members[0].identifier)].append((basis, members))
 
-    merged = []
+    merged: list[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]] = []
     for root, component_members in members_by_root.items():
         ordered_members = tuple(
             sorted(component_members, key=lambda item: item.identifier)
         )
-        basis = _published_basis(bases_by_root[root], ordered_members)
-        merged.append((basis, ordered_members))
+        merged.extend(
+            _published_component_groups(groups_by_root[root], ordered_members)
+        )
     return tuple(
         sorted(
             merged,
@@ -174,18 +183,55 @@ def _merge_overlapping_groups(
     )
 
 
-def _published_basis(
-    bases: set[SemanticDuplicateBasis],
-    members: tuple[BlogCandidate, ...],
-) -> SemanticDuplicateBasis:
-    """統合Group全体を公開contractで表せる最上位basisを返す。"""
-    for basis in sorted(
-        bases,
-        key=lambda item: (_SEMANTIC_BASIS_PRIORITY[item], item),
+def _published_component_groups(
+    originating_groups: list[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]],
+    component_members: tuple[BlogCandidate, ...],
+) -> tuple[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]], ...]:
+    """根拠が実際に説明するmemberだけを公開Groupとして返す。"""
+    component_ids = tuple(member.identifier for member in component_members)
+    spanning_groups = tuple(
+        (basis, members)
+        for basis, members in originating_groups
+        if tuple(member.identifier for member in members) == component_ids
+        and _basis_is_publishable(basis, members)
+    )
+    if spanning_groups:
+        basis, _ = min(spanning_groups, key=_originating_group_sort_key)
+        return ((basis, component_members),)
+
+    published = []
+    claimed_member_ids: set[str] = set()
+    for basis, members in sorted(
+        originating_groups,
+        key=_originating_group_sort_key,
     ):
-        if basis != _COMBAT_SUBJECT_BASIS or _group_evidence(basis, members):
-            return basis
-    raise ValueError("Semantic Duplicate Groupの公開可能な根拠がありません")
+        member_ids = {member.identifier for member in members}
+        if claimed_member_ids.isdisjoint(member_ids) and _basis_is_publishable(
+            basis, members
+        ):
+            published.append((basis, members))
+            claimed_member_ids.update(member_ids)
+    return tuple(published)
+
+
+def _originating_group_sort_key(
+    group: tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]],
+) -> tuple[int, str, tuple[str, ...]]:
+    """元Groupを公開優先度と安定member順へ正規化する。"""
+    basis, members = group
+    return (
+        _SEMANTIC_BASIS_PRIORITY[basis],
+        basis,
+        tuple(member.identifier for member in members),
+    )
+
+
+def _basis_is_publishable(
+    basis: SemanticDuplicateBasis,
+    members: tuple[BlogCandidate, ...],
+) -> bool:
+    """元Groupのmember全体がbasisの公開contractを満たすかを返す。"""
+    return basis != _COMBAT_SUBJECT_BASIS or bool(_group_evidence(basis, members))
 
 
 def _combat_subject_groups(
@@ -306,16 +352,22 @@ def _subject_aware_encounter_groups(
     candidates: list[BlogCandidate],
 ) -> Iterable[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]]:
     """同じ遭遇内で明確に異なる戦闘対象を別Groupとして維持する。"""
-    identifiable_candidates = [
+    evidenced_candidates = [
         candidate
         for candidate in candidates
         if (evidence := candidate.annotation.combat_subject_evidence) is not None
-        and evidence.can_identify_subject
+        and evidence.distinctiveness != "unclear"
     ]
-    if all(
-        _have_compatible_combat_subject_evidence(left, right)
-        for index, left in enumerate(identifiable_candidates)
-        for right in identifiable_candidates[index + 1 :]
+    identifiable_candidates = [
+        candidate
+        for candidate in evidenced_candidates
+        if candidate.annotation.combat_subject_evidence is not None
+        and candidate.annotation.combat_subject_evidence.can_identify_subject
+    ]
+    if not any(
+        _have_incompatible_combat_subject_evidence(left, right)
+        for index, left in enumerate(evidenced_candidates)
+        for right in evidenced_candidates[index + 1 :]
     ):
         yield _COMBAT_ENCOUNTER_BASIS, tuple(candidates)
         return
@@ -332,6 +384,35 @@ def _subject_aware_encounter_groups(
                 unassigned.remove(other)
         if len(component) > 1:
             yield _COMBAT_ENCOUNTER_BASIS, tuple(component)
+
+
+def _have_incompatible_combat_subject_evidence(
+    left: BlogCandidate,
+    right: BlogCandidate,
+) -> bool:
+    """同一遭遇内で具体的な外見根拠が明確に競合するかを返す。"""
+    left_evidence = left.annotation.combat_subject_evidence
+    right_evidence = right.annotation.combat_subject_evidence
+    if left_evidence is None or right_evidence is None:
+        return False
+    for field_name in ("body_plan", "scale", "surface"):
+        left_value = getattr(left_evidence, field_name)
+        right_value = getattr(right_evidence, field_name)
+        if (
+            left_value != "unknown"
+            and right_value != "unknown"
+            and left_value != right_value
+        ):
+            return True
+    return (
+        bool(left_evidence.colors)
+        and bool(right_evidence.colors)
+        and set(left_evidence.colors).isdisjoint(right_evidence.colors)
+    ) or (
+        bool(left_evidence.traits)
+        and bool(right_evidence.traits)
+        and set(left_evidence.traits).isdisjoint(right_evidence.traits)
+    )
 
 
 def _have_compatible_combat_subject_evidence(
