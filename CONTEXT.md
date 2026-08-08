@@ -607,7 +607,7 @@ Semantic Duplicate Groupのうち、同一Video Source内で時系列に連続�
 _Avoid_: boss name truth, all major combat in one video, Combat Encounter Kind, Variant Group
 
 **Semantic Duplicate Basis**:
-Semantic Duplicate Groupを構成した決定的で公開可能な根拠enum。`combat_subject_appearance`は完全な画像内Combat Subject Evidenceと0.80以上のNeutral視覚類似度、`combat_encounter_sequence`は主要戦闘の時系列run、`title_semantics`はBlog Image Type・Screen Text Kind・Representative Frame Evidenceのいずれかが示すtitle、`visual_role_similarity`は同一source内30秒以内、同じ画像内content kindとCombat Encounter Kind、0.93以上のNeutral視覚類似度を示す。`combat_subject_appearance`だけはmemberに共通する有限enum tokenもprivacy-safe evidenceとして持つ。`recurring_gameplay`で`visual_role_similarity`を使う場合は、独立評価された正規化済み画像summaryも一致させ、異なる技・敵・結果の追加説明価値を維持する。
+Semantic Duplicate Groupを構成した決定的で公開可能な根拠enum。`combat_subject_appearance`は完全な画像内Combat Subject Evidenceと0.80以上のNeutral視覚類似度、`combat_encounter_sequence`は主要戦闘の時系列run、`title_semantics`はBlog Image Type・Screen Text Kind・Representative Frame Evidenceのいずれかが示すtitle、`visual_role_similarity`は同一source内30秒以内、同じ画像内content kindとCombat Encounter Kind、0.93以上のNeutral視覚類似度を示す。複数の根拠が重なるGroupでは、Group全体を公開contractで表せる最上位のbasisを使う。`combat_subject_appearance`はmember全体に共通する有限enum tokenをprivacy-safe evidenceとして持てる場合だけ公開し、共通tokenがなければ次順位のbasisへフォールバックする。`recurring_gameplay`で`visual_role_similarity`を使う場合は、独立評価された正規化済み画像summaryも一致させ、異なる技・敵・結果の追加説明価値を維持する。
 _Avoid_: free-form rejection explanation, raw model response, global threshold
 
 **Visual Near-Duplicate**:

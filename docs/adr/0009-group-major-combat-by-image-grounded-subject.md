@@ -44,10 +44,15 @@ attached across that distinction.
 
 Overlapping semantic groups are merged deterministically, with published basis
 priority `combat_subject_appearance`, `combat_encounter_sequence`, `title_semantics`,
-then `visual_role_similarity`. The pre-merge Combat Encounter Group edges remain
-available to Shortlist boundary observation even when the published basis becomes
-`combat_subject_appearance`. Selection cannot stop while an unannotated Candidate
-Moment remains between members of one of those encounter edges.
+then `visual_role_similarity`. A basis participates in that priority only when its
+public contract can describe the merged component. In particular,
+`combat_subject_appearance` requires at least one finite evidence token common to
+every member; without one, publication falls back to the next applicable basis while
+the originating subject groups remain internal evidence. The pre-merge Combat
+Encounter Group edges remain available to Shortlist boundary observation even when
+the published basis becomes `combat_subject_appearance`. Selection cannot stop while
+an unannotated Candidate Moment remains between members of one of those encounter
+edges.
 
 Every Combat Subject Group has the existing Semantic Duplicate Group hard maximum of
 one selected image, including during Selection Shortfall. Marginal Selection Utility

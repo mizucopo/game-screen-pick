@@ -161,13 +161,10 @@ def _merge_overlapping_groups(
 
     merged = []
     for root, component_members in members_by_root.items():
-        basis = min(
-            bases_by_root[root],
-            key=lambda item: (_SEMANTIC_BASIS_PRIORITY[item], item),
-        )
         ordered_members = tuple(
             sorted(component_members, key=lambda item: item.identifier)
         )
+        basis = _published_basis(bases_by_root[root], ordered_members)
         merged.append((basis, ordered_members))
     return tuple(
         sorted(
@@ -175,6 +172,20 @@ def _merge_overlapping_groups(
             key=lambda item: tuple(member.identifier for member in item[1]),
         )
     )
+
+
+def _published_basis(
+    bases: set[SemanticDuplicateBasis],
+    members: tuple[BlogCandidate, ...],
+) -> SemanticDuplicateBasis:
+    """統合Group全体を公開contractで表せる最上位basisを返す。"""
+    for basis in sorted(
+        bases,
+        key=lambda item: (_SEMANTIC_BASIS_PRIORITY[item], item),
+    ):
+        if basis != _COMBAT_SUBJECT_BASIS or _group_evidence(basis, members):
+            return basis
+    raise ValueError("Semantic Duplicate Groupの公開可能な根拠がありません")
 
 
 def _combat_subject_groups(
