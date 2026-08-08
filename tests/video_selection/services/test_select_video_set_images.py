@@ -2962,6 +2962,99 @@ def test_encounter_consensus_merges_same_subject_across_videos() -> None:
     ]
 
 
+def test_published_subject_evidence_preserves_encounter_boundaries() -> None:
+    """公開根拠が元のCombat Encounter境界ごとに集約されること。
+
+    Arrange:
+        - 同じ動画とScene Slugに同一対象の主要戦闘が2回用意される
+        - 2回の遭遇は非主要frameで区切られ、片方だけにblueとtailが現れる
+    Act:
+        - Semantic Duplicate Groupと公開根拠が割り当てられる
+    Assert:
+        - 同一対象の主要戦闘候補が一つのSubject Groupになること
+        - 一方の遭遇だけのblueとtailが公開根拠へ含まれないこと
+    """
+    # Arrange
+    source_fingerprint = "8" * 64
+    first_encounter_evidence = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("blue", "red"),
+        traits=("horns", "tail"),
+        distinctiveness="distinctive",
+    )
+    second_encounter_evidence = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("red",),
+        traits=("horns",),
+        distinctiveness="distinctive",
+    )
+    first_encounter = tuple(
+        _candidate(
+            f"bounded-profile-first-{index}",
+            quality=0.95 - index * 0.05,
+            feature=(1.0, 0.0),
+            progress=Fraction(10 + index * 10, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+            scene_slug="repeated-major-battle",
+            combat_encounter_kind="major",
+            video_fingerprint=source_fingerprint,
+            combat_subject_evidence=first_encounter_evidence,
+        )
+        for index in range(2)
+    )
+    separator = _candidate(
+        "bounded-profile-separator",
+        quality=0.70,
+        feature=(0.0, 1.0),
+        progress=Fraction(30, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="between-major-battles",
+        video_fingerprint=source_fingerprint,
+    )
+    second_encounter = _candidate(
+        "bounded-profile-second",
+        quality=0.85,
+        feature=(1.0, 0.0),
+        progress=Fraction(40, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-major-battle",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=second_encounter_evidence,
+    )
+    candidates = (*first_encounter, separator, second_encounter)
+
+    # Act
+    group_ids, bases, evidence_by_member = assign_semantic_duplicate_groups(candidates)
+
+    # Assert
+    subject_ids = {
+        candidate.identifier for candidate in (*first_encounter, second_encounter)
+    }
+    assert set(group_ids) == subject_ids
+    assert len(set(group_ids.values())) == 1
+    assert set(bases.values()) == {"combat_subject_appearance"}
+    assert set(evidence_by_member.values()) == {
+        (
+            "body_plan:quadruped",
+            "scale:large",
+            "surface:organic",
+            "color:red",
+            "trait:horns",
+        )
+    }
+
+
 def test_repeated_secondary_profile_features_match_across_encounters() -> None:
     """反復済みの第2色・第2特徴でも遭遇Profileが照合されること。
 
@@ -3082,6 +3175,79 @@ def test_repeated_secondary_profile_features_match_across_encounters() -> None:
         "color:brown",
         "trait:bulbous_body",
     )
+
+
+def test_complete_link_group_allows_no_global_secondary_token() -> None:
+    """完全結合のSubject Groupが全Profile共通の色・特徴なしでも維持されること。
+
+    Arrange:
+        - 中核特徴が一致する3遭遇Profileが用意される
+        - 各Profile対は色と特徴を共有するが3件すべてに共通する値はない
+    Act:
+        - Semantic Duplicate Groupと公開根拠が割り当てられる
+    Assert:
+        - 3件が一つのCombat Subject Groupになること
+        - 全Profileで一致する中核特徴だけが公開されること
+    """
+    # Arrange
+    profiles = (
+        CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("blue", "red"),
+            traits=("horns", "wings"),
+            distinctiveness="distinctive",
+        ),
+        CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("blue", "green"),
+            traits=("tail", "wings"),
+            distinctiveness="distinctive",
+        ),
+        CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("green", "red"),
+            traits=("horns", "tail"),
+            distinctiveness="distinctive",
+        ),
+    )
+    candidates = tuple(
+        _candidate(
+            f"pairwise-subject-profile-{index}",
+            quality=0.95 - index * 0.05,
+            feature=(1.0, 0.0),
+            progress=Fraction(10 + index * 30, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+            scene_slug=f"pairwise-battle-{index}",
+            combat_encounter_kind="major",
+            video_order=index,
+            video_fingerprint=f"{index + 1}" * 64,
+            combat_subject_evidence=profile,
+        )
+        for index, profile in enumerate(profiles)
+    )
+
+    # Act
+    group_ids, bases, evidence_by_member = assign_semantic_duplicate_groups(candidates)
+
+    # Assert
+    assert set(group_ids) == {candidate.identifier for candidate in candidates}
+    assert len(set(group_ids.values())) == 1
+    assert set(bases.values()) == {"combat_subject_appearance"}
+    assert set(evidence_by_member.values()) == {
+        (
+            "body_plan:quadruped",
+            "scale:large",
+            "surface:organic",
+        )
+    }
 
 
 def test_single_profile_encounter_uses_encounter_basis() -> None:
@@ -3600,6 +3766,77 @@ def test_isolated_subject_conflict_keeps_one_combat_encounter_group() -> None:
                 distinctiveness="distinctive",
             ),
         ),
+    )
+
+    # Act
+    group_ids, bases, _ = assign_semantic_duplicate_groups(candidates)
+
+    # Assert
+    assert set(group_ids) == {candidate.identifier for candidate in candidates}
+    assert len(set(group_ids.values())) == 1
+    assert set(bases.values()) == {"combat_encounter_sequence"}
+
+
+def test_compatible_encounter_profiles_do_not_split_one_subject() -> None:
+    """集約後に互換なProfileでは連続遭遇が分割されないこと。
+
+    Arrange:
+        - red観測を含むclusterとblue観測だけのclusterが各2 Moment以上ある
+        - 前者の集約Profileには反復済みのblueも含まれる
+    Act:
+        - Semantic Duplicate Groupが割り当てられる
+    Assert:
+        - 集約Profileが互換な全候補が一つのEncounter Groupになること
+    """
+    # Arrange
+    source_fingerprint = "4" * 64
+    red_only = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("red",),
+        traits=("horns",),
+        distinctiveness="distinctive",
+    )
+    red_and_blue = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("blue", "red"),
+        traits=("horns",),
+        distinctiveness="distinctive",
+    )
+    blue_only = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("blue",),
+        traits=("horns",),
+        distinctiveness="distinctive",
+    )
+    evidence = (
+        red_only,
+        red_and_blue,
+        red_and_blue,
+        blue_only,
+        blue_only,
+    )
+    identifiers = ("1", "2", "3", "4", "5")
+    candidates = tuple(
+        _candidate(
+            identifiers[index],
+            quality=0.95 - index * 0.02,
+            feature=(1.0, 0.0) if index < 3 else (0.0, 1.0),
+            progress=Fraction(10 + index * 10, 100),
+            blog_image_type="normal_gameplay",
+            explanation_value="high",
+            context_relevance="none",
+            scene_slug="compatible-profile-battle",
+            combat_encounter_kind="major",
+            video_fingerprint=source_fingerprint,
+            combat_subject_evidence=item,
+        )
+        for index, item in enumerate(evidence)
     )
 
     # Act

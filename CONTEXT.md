@@ -603,15 +603,15 @@ _Avoid_: boss name, encounter identity, free-form description, multi-image compa
 _Avoid_: multi-image model response, boss name identity, averaged embedding, corrected Candidate Annotation
 
 **Combat Subject Group**:
-Semantic Duplicate Groupのうち、Video Source、時刻、Scene Slug、名称の正誤をまたいで同じ主要戦闘対象を示す候補のまとまり。Combat Encounter Subject Profile間の裏付け済み共通特徴とNeutral視覚根拠で同一性を判定し、孤立した単一画像の矛盾では分断しない。同じGroupは要求枚数不足時も代表1枚を上限とする。
+Semantic Duplicate Groupのうち、Video Source、時刻、Scene Slug、名称の正誤をまたいで同じ主要戦闘対象を示す候補のまとまり。元のCombat Encounter境界を保持したCombat Encounter Subject Profile間の裏付け済み共通特徴とNeutral視覚根拠で同一性を完全結合判定し、孤立した単一画像の矛盾では分断しない。各Profile対が互換なら、3件以上の全Profileに共通する単一の色・特徴がなくても同じGroupになる。同じGroupは要求枚数不足時も代表1枚を上限とする。
 _Avoid_: Combat Encounter Group, enemy name identity, single-frame complete linkage, generic boss category, global visual cluster
 
 **Combat Encounter Group**:
-Semantic Duplicate Groupのうち、同一Video Source内で時系列に連続する`major`戦闘候補を同じ遭遇として扱う補助的なまとまり。非`major`場面と決定的なScene runを境界とし、原則として遭遇全体を代表1枚へまとめる。別対象へ分割するには、それぞれの対象を明瞭に示す異なるCandidate Momentの画像が2枚以上必要であり、単一画像の外見矛盾だけでは分割しない。
+Semantic Duplicate Groupのうち、同一Video Source内で時系列に連続する`major`戦闘候補を同じ遭遇として扱う補助的なまとまり。非`major`場面と決定的なScene runを境界とし、原則として遭遇全体を代表1枚へまとめる。別対象へ分割するには、それぞれの対象を明瞭に示す異なるCandidate Momentの画像が2枚以上必要で、集約後の各Profileも互いに非互換でなければならない。単一画像の外見矛盾や、互換な集約Profileでは分割しない。
 _Avoid_: boss name truth, all major combat in one video, Combat Encounter Kind, Variant Group
 
 **Semantic Duplicate Basis**:
-Semantic Duplicate Groupを構成した決定的で公開可能な根拠enum。`combat_subject_appearance`は互換なCombat Encounter Subject Profileと、それぞれを支持する候補間の0.80以上のNeutral視覚類似度、`combat_encounter_sequence`は主要戦闘の時系列run、`title_semantics`はBlog Image Type・Screen Text Kind・Representative Frame Evidenceのいずれかが示すtitle、`visual_role_similarity`は同一source内30秒以内、同じ画像内content kindとCombat Encounter Kind、0.93以上のNeutral視覚類似度を示す。複数の根拠が重なるcomponentでは、元Groupがcomponent全memberを実際に含む場合だけ、その公開contractで表せる最上位basisへ統合する。全memberを説明する元Groupがない場合は、優先度順に元Groupを処理し、先に使われたmemberを除いた残余が2件以上なら同じbasisの残余Groupとして保持する。これによりbasisを無関係なmemberへ推移的に拡張せず、未使用member間の低優先重複制約も失わない。`combat_subject_appearance`はProfile間で裏付けられた有限enum tokenをprivacy-safe evidenceとして持てる場合だけ公開し、Group memberに孤立した異なる単一画像Evidenceや`unclear`が含まれてもProfileを分断しない。`recurring_gameplay`で`visual_role_similarity`を使う場合は、独立評価された正規化済み画像summaryも一致させ、異なる技・敵・結果の追加説明価値を維持する。
+Semantic Duplicate Groupを構成した決定的で公開可能な根拠enum。`combat_subject_appearance`は互換なCombat Encounter Subject Profileと、それぞれを支持する候補間の0.80以上のNeutral視覚類似度、`combat_encounter_sequence`は主要戦闘の時系列run、`title_semantics`はBlog Image Type・Screen Text Kind・Representative Frame Evidenceのいずれかが示すtitle、`visual_role_similarity`は同一source内30秒以内、同じ画像内content kindとCombat Encounter Kind、0.93以上のNeutral視覚類似度を示す。複数の根拠が重なるcomponentでは、元Groupがcomponent全memberを実際に含む場合だけ、その公開contractで表せる最上位basisへ統合する。全memberを説明する元Groupがない場合は、優先度順に元Groupを処理し、先に使われたmemberを除いた残余が2件以上なら同じbasisの残余Groupとして保持する。これによりbasisを無関係なmemberへ推移的に拡張せず、未使用member間の低優先重複制約も失わない。`combat_subject_appearance`は元の遭遇境界を保持した全Profileで一致するbody plan・scale・surfaceと、全Profileに共通するcolor・traitだけをprivacy-safe evidenceとして公開する。完全結合が成立していれば共通color・traitが空でも中核tokenだけでGroupを公開し、Group memberに孤立した異なる単一画像Evidenceや`unclear`が含まれてもProfileを分断しない。`recurring_gameplay`で`visual_role_similarity`を使う場合は、独立評価された正規化済み画像summaryも一致させ、異なる技・敵・結果の追加説明価値を維持する。
 _Avoid_: free-form rejection explanation, raw model response, global threshold
 
 **Visual Near-Duplicate**:

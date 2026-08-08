@@ -16,6 +16,10 @@ SemanticDuplicateGroupAssignments = tuple[
     dict[str, SemanticDuplicateBasis],
     dict[str, tuple[str, ...]],
 ]
+type CombatEncounterSubjectProfile = tuple[
+    tuple[BlogCandidate, ...],
+    CombatSubjectEvidence,
+]
 
 _COMBAT_ENCOUNTER_BASIS: SemanticDuplicateBasis = "combat_encounter_sequence"
 _COMBAT_SUBJECT_BASIS: SemanticDuplicateBasis = "combat_subject_appearance"
@@ -43,6 +47,7 @@ def assign_semantic_duplicate_groups(
         if candidate.annotation.explanation_value != "none"
     )
     groups: list[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]] = []
+    encounter_profiles = tuple(_combat_encounter_subject_profiles(candidates))
     title_candidates = tuple(
         candidate
         for candidate in eligible_candidates
@@ -50,7 +55,7 @@ def assign_semantic_duplicate_groups(
     )
     if title_candidates:
         groups.append((_TITLE_SEMANTICS_BASIS, title_candidates))
-    groups.extend(_combat_subject_groups(candidates))
+    groups.extend(_combat_subject_groups(encounter_profiles))
     groups.extend(
         (_COMBAT_ENCOUNTER_BASIS, members)
         for members in assign_combat_encounter_groups(candidates)
@@ -60,13 +65,20 @@ def assign_semantic_duplicate_groups(
     group_ids: dict[str, str] = {}
     bases: dict[str, SemanticDuplicateBasis] = {}
     evidence_by_member: dict[str, tuple[str, ...]] = {}
-    for basis, members in _merge_overlapping_groups(groups):
+    for basis, members in _merge_overlapping_groups(
+        groups,
+        encounter_profiles=encounter_profiles,
+    ):
         if len(members) < 2:
             continue
         member_ids = tuple(sorted(member.identifier for member in members))
         payload = "\0".join((basis, *member_ids))
         group_id = "semantic_" + hashlib.sha256(payload.encode()).hexdigest()
-        group_evidence = _group_evidence(basis, members)
+        group_evidence = _group_evidence(
+            basis,
+            members,
+            encounter_profiles=encounter_profiles,
+        )
         for member_id in member_ids:
             if member_id in group_ids:
                 raise ValueError("Semantic Duplicate Groupが重複しています")
@@ -91,57 +103,63 @@ def assign_combat_encounter_groups(
 def _group_evidence(
     basis: SemanticDuplicateBasis,
     members: tuple[BlogCandidate, ...],
+    *,
+    encounter_profiles: tuple[CombatEncounterSubjectProfile, ...],
 ) -> tuple[str, ...]:
     """Combat Subject Groupへ共通するprivacy-safeな有限enum根拠を返す。"""
     if basis != _COMBAT_SUBJECT_BASIS:
         return ()
-    profile = _published_combat_subject_profile(members)
-    if profile is None:
-        return ()
-    return (
-        f"body_plan:{profile.body_plan}",
-        f"scale:{profile.scale}",
-        f"surface:{profile.surface}",
-        *(f"color:{color}" for color in profile.colors),
-        *(f"trait:{trait}" for trait in profile.traits),
+    return _published_combat_subject_evidence(
+        members,
+        encounter_profiles=encounter_profiles,
     )
 
 
-def _published_combat_subject_profile(
+def _published_combat_subject_evidence(
     members: tuple[BlogCandidate, ...],
-) -> CombatSubjectEvidence | None:
-    """Group化された遭遇Profileすべてに共通する公開外見根拠を返す。"""
-    profiles = tuple(
-        profile for _, profile in _combat_encounter_subject_profiles(members)
+    *,
+    encounter_profiles: tuple[CombatEncounterSubjectProfile, ...],
+) -> tuple[str, ...]:
+    """Group化された遭遇Profileすべてに共通する有限enum根拠を返す。"""
+    member_ids = {member.identifier for member in members}
+    applicable_profiles = tuple(
+        (profile_members, profile)
+        for profile_members, profile in encounter_profiles
+        if {member.identifier for member in profile_members}.issubset(member_ids)
     )
-    if len(profiles) < 2:
-        return _aggregate_combat_subject_evidence(members)
+    covered_ids = {
+        member.identifier
+        for profile_members, _ in applicable_profiles
+        for member in profile_members
+    }
+    if covered_ids != member_ids or not applicable_profiles:
+        return ()
+    profiles = tuple(profile for _, profile in applicable_profiles)
     if any(
         getattr(profile, field_name) != getattr(profiles[0], field_name)
         for profile in profiles[1:]
         for field_name in ("body_plan", "scale", "surface")
     ):
-        return None
+        return ()
     common_colors = set(profiles[0].colors).intersection(
         *(set(profile.colors) for profile in profiles[1:])
     )
     common_traits = set(profiles[0].traits).intersection(
         *(set(profile.traits) for profile in profiles[1:])
     )
-    if not common_colors or not common_traits:
-        return None
-    return CombatSubjectEvidence(
-        body_plan=profiles[0].body_plan,
-        scale=profiles[0].scale,
-        surface=profiles[0].surface,
-        colors=tuple(sorted(common_colors)),
-        traits=tuple(sorted(common_traits)),
-        distinctiveness="distinctive",
+    return (
+        f"body_plan:{profiles[0].body_plan}",
+        f"scale:{profiles[0].scale}",
+        f"surface:{profiles[0].surface}",
+        *(f"color:{color}" for color in sorted(common_colors)),
+        *(f"trait:{trait}" for trait in sorted(common_traits)),
     )
 
 
 def _merge_overlapping_groups(
     groups: list[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]],
+    *,
+    encounter_profiles: tuple[CombatEncounterSubjectProfile, ...],
 ) -> tuple[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]], ...]:
     """公開根拠のmember境界を保って重なるSemantic Groupを整理する。"""
     parents: dict[str, str] = {}
@@ -195,7 +213,11 @@ def _merge_overlapping_groups(
             sorted(component_members, key=lambda item: item.identifier)
         )
         merged.extend(
-            _published_component_groups(groups_by_root[root], ordered_members)
+            _published_component_groups(
+                groups_by_root[root],
+                ordered_members,
+                encounter_profiles=encounter_profiles,
+            )
         )
     return tuple(
         sorted(
@@ -208,6 +230,8 @@ def _merge_overlapping_groups(
 def _published_component_groups(
     originating_groups: list[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]],
     component_members: tuple[BlogCandidate, ...],
+    *,
+    encounter_profiles: tuple[CombatEncounterSubjectProfile, ...],
 ) -> tuple[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]], ...]:
     """根拠が実際に説明するmemberだけを公開Groupとして返す。"""
     component_ids = tuple(member.identifier for member in component_members)
@@ -215,7 +239,11 @@ def _published_component_groups(
         (basis, members)
         for basis, members in originating_groups
         if tuple(member.identifier for member in members) == component_ids
-        and _basis_is_publishable(basis, members)
+        and _basis_is_publishable(
+            basis,
+            members,
+            encounter_profiles=encounter_profiles,
+        )
     )
     if spanning_groups:
         basis, _ = min(spanning_groups, key=_originating_group_sort_key)
@@ -231,7 +259,9 @@ def _published_component_groups(
             member for member in members if member.identifier not in claimed_member_ids
         )
         if len(residual_members) >= 2 and _basis_is_publishable(
-            basis, residual_members
+            basis,
+            residual_members,
+            encounter_profiles=encounter_profiles,
         ):
             published.append((basis, residual_members))
             claimed_member_ids.update(member.identifier for member in residual_members)
@@ -253,17 +283,25 @@ def _originating_group_sort_key(
 def _basis_is_publishable(
     basis: SemanticDuplicateBasis,
     members: tuple[BlogCandidate, ...],
+    *,
+    encounter_profiles: tuple[CombatEncounterSubjectProfile, ...],
 ) -> bool:
     """元Groupのmember全体がbasisの公開contractを満たすかを返す。"""
-    return basis != _COMBAT_SUBJECT_BASIS or bool(_group_evidence(basis, members))
+    return basis != _COMBAT_SUBJECT_BASIS or bool(
+        _group_evidence(
+            basis,
+            members,
+            encounter_profiles=encounter_profiles,
+        )
+    )
 
 
 def _combat_subject_groups(
-    candidates: tuple[BlogCandidate, ...],
+    encounter_profiles: tuple[CombatEncounterSubjectProfile, ...],
 ) -> Iterable[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]]:
     """遭遇Profileが一致する主要戦闘対象を動画横断でまとめる。"""
     unassigned = sorted(
-        _combat_encounter_subject_profiles(candidates),
+        encounter_profiles,
         key=lambda item: tuple(member.identifier for member in item[0]),
     )
     while unassigned:
@@ -291,7 +329,7 @@ def _combat_subject_groups(
 
 def _combat_encounter_subject_profiles(
     candidates: tuple[BlogCandidate, ...],
-) -> Iterable[tuple[tuple[BlogCandidate, ...], CombatSubjectEvidence]]:
+) -> Iterable[CombatEncounterSubjectProfile]:
     """時系列遭遇ごとの識別可能な集約外見Profileを返す。"""
     for _, members in _combat_encounter_groups(candidates):
         profile = _aggregate_combat_subject_evidence(members)
@@ -338,8 +376,10 @@ def _profile_supporting_candidates(
 
 def _aggregate_combat_subject_evidence(
     members: tuple[BlogCandidate, ...],
+    *,
+    include_generic: bool = False,
 ) -> CombatSubjectEvidence | None:
-    """Candidate Momentごとのdistinctive観測から孤立値を除いたProfileを返す。"""
+    """Candidate Momentごとの明瞭な観測から孤立値を除いたProfileを返す。"""
     candidates_by_moment: dict[str, list[BlogCandidate]] = defaultdict(list)
     for member in members:
         evidence = member.annotation.combat_subject_evidence
@@ -347,7 +387,10 @@ def _aggregate_combat_subject_evidence(
         if (
             moment_id is not None
             and evidence is not None
-            and evidence.can_identify_subject
+            and (
+                evidence.can_identify_subject
+                or (include_generic and _combat_subject_evidence_is_clear(evidence))
+            )
         ):
             candidates_by_moment[moment_id].append(member)
     observations: list[CombatSubjectEvidence] = []
@@ -546,6 +589,23 @@ def _subject_aware_encounter_groups(
         >= 2
     )
     if len(corroborated_components) < 2:
+        yield _COMBAT_ENCOUNTER_BASIS, tuple(candidates)
+        return
+    corroborated_profiles: list[CombatSubjectEvidence] = []
+    for corroborated_component in corroborated_components:
+        profile = _aggregate_combat_subject_evidence(
+            corroborated_component,
+            include_generic=True,
+        )
+        if profile is None:
+            yield _COMBAT_ENCOUNTER_BASIS, tuple(candidates)
+            return
+        corroborated_profiles.append(profile)
+    if any(
+        _combat_subject_evidence_matches(left, right)
+        for index, left in enumerate(corroborated_profiles)
+        for right in corroborated_profiles[index + 1 :]
+    ):
         yield _COMBAT_ENCOUNTER_BASIS, tuple(candidates)
         return
     grouped_candidates = [list(component) for component in corroborated_components]

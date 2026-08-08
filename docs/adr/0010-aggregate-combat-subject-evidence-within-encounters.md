@@ -28,7 +28,9 @@ image by default. One conflicting or generic frame is treated as observation noi
 The encounter is split only when every resulting subject is corroborated by at least
 two clear observations from different Candidate Moments and the corroborated
 profiles are mutually incompatible. Two sibling frames from one Candidate Moment do
-not independently corroborate a split.
+not independently corroborate a split. Profile compatibility is checked after each
+raw observation cluster is aggregated; if any resulting Profile pair is compatible
+or cannot be formed, the encounter retains its default one-subject maximum.
 
 Combat Subject Group matching across encounters compares the encounter profiles,
 not every pair of raw frame observations. A profile match needs image-grounded common
@@ -36,6 +38,14 @@ features and supporting Neutral Image Analysis; a name, Scene Slug, screen text,
 generic boss category cannot establish identity. An isolated incompatible
 observation does not defeat a profile match, while incompatible values corroborated
 in at least two Candidate Moments keep distinct subjects separate.
+
+The original Combat Encounter boundaries and their Profiles are retained while a
+Combat Subject Group is formed and published. Publication never recomputes those
+boundaries from the flattened subject-group members because doing so would erase a
+non-major separator between repeated encounters with the same Scene Slug. A
+complete-link group may be pairwise compatible without one color or trait shared by
+every Profile. Such a group remains valid and publishes the common body plan, scale,
+and surface plus only those color and trait tokens, if any, shared by every Profile.
 
 The resulting group, representative, rejection reason, blocking selected ID, and
 privacy-safe evidence are deterministic over the ordered semantic inputs. Worker
