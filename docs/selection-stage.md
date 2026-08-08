@@ -29,7 +29,7 @@ Selection Base Utilityは次の固定式です。
 
 Explanation Valueは`none=0`、`low=1/3`、`medium=2/3`、`high=1`、Context Cue Relevanceは`unavailable/none=0`、`weak=0.5`、`strong=1`へ変換します。
 
-Explanation Valueが`none`の候補はCounterfactual Selection Scoreまで計算しますが、要求枚数を満たすための選択対象にはしません。これはCandidate Annotationに最終採否を委ねる処理ではなく、検証済みenumへ`video-set-selection-v6`が適用する決定的な適格性境界です。未採用理由は既存の`lower_marginal_utility`として公開され、shortfallでも穴埋めしません。
+Explanation Valueが`none`の候補はCounterfactual Selection Scoreまで計算しますが、要求枚数を満たすための選択対象にはしません。これはCandidate Annotationに最終採否を委ねる処理ではなく、検証済みenumへ`video-set-selection-v7`が適用する決定的な適格性境界です。未採用理由は既存の`lower_marginal_utility`として公開され、shortfallでも穴埋めしません。
 
 要求枚数に対する`normal_gameplay=70%`、`event=25%`、`menu=5%`の目標は最大剰余法で丸めます。同率はこのtype順です。目標未達候補へ`+0.10`、最初のtitleへ`+0.05`を加えますが、超過を減点せず、候補が偏っていてもhard quotaにしません。titleだけは最大1枚です。
 
@@ -55,16 +55,16 @@ ADR 0004の表に従うSpoiler Penaltyは候補単体へのsoft penaltyです。
 
 ### 分類揺れをまたぐSemantic Duplicate Group
 
-`video-set-selection-v6`はVariant Groupとglobal similarity ceilingの外側にSemantic Duplicate Groupを設けます。同じGroupは要求枚数不足時にも最大1枚で、Marginal Selection Utilityと通常のstable tie-breakで最初に選ばれた候補が代表です。この上限はConditional Coverage Minimumと`recurring_gameplay`のVariant Expansionより強く、未代表の別戦闘対象、別遭遇、通常戦闘、eventを同一Groupの2枚目より先に残します。
+`video-set-selection-v7`はVariant Groupとglobal similarity ceilingの外側にSemantic Duplicate Groupを設けます。同じGroupは要求枚数不足時にも最大1枚で、Marginal Selection Utilityと通常のstable tie-breakで最初に選ばれた候補が代表です。この上限はConditional Coverage Minimumと`recurring_gameplay`のVariant Expansionより強く、未代表の別戦闘対象、別遭遇、通常戦闘、eventを同一Groupの2枚目より先に残します。
 
-Group判定は次の根拠を使います。候補が複数の根拠に属する場合でも、元Groupが統合component全memberを実際に含むときだけ、`combat_subject_appearance`、`combat_encounter_sequence`、`title_semantics`、`visual_role_similarity`の順で公開basisを一つに統合します。全memberを説明する元Groupがない場合は、同じ優先順で元Groupを処理し、先に使われたmemberを除いた残余が2件以上なら同じbasisの残余Groupとして保持します。basisを無関係なmemberへ推移的に拡張せず、未使用member間の低優先重複制約も失いません。全memberが完全な識別可能Evidenceを持たない場合、またはmember全体に共通する有限enum evidenceがない場合は`combat_subject_appearance`を公開せず、component全体を含む次順位の元Groupがある場合だけフォールバックします。公開basisとは別に統合前のCombat Encounter Groupを保持し、Encounter edge間の未注釈MomentがなくなるまでShortlistを拡張します。
+Group判定は次の根拠を使います。候補が複数の根拠に属する場合でも、元Groupが統合component全memberを実際に含むときだけ、`combat_subject_appearance`、`combat_encounter_sequence`、`title_semantics`、`visual_role_similarity`の順で公開basisを一つに統合します。全memberを説明する元Groupがない場合は、同じ優先順で元Groupを処理し、先に使われたmemberを除いた残余が2件以上なら同じbasisの残余Groupとして保持します。basisを無関係なmemberへ推移的に拡張せず、未使用member間の低優先重複制約も失いません。`combat_subject_appearance`は単一frameの完全一致ではなく、遭遇内の独立観測から集約された有限enum evidenceを公開します。公開basisとは別に統合前のCombat Encounter Groupを保持し、Encounter edge間の未注釈MomentがなくなるまでShortlistを拡張します。
 
 - `title_semantics`: Blog Image Type、Screen Text Kind、Representative Frame Evidenceのいずれかがtitleを示す候補をVideo Set全体で一つにする。`event`などへの誤分類でも既存のtitle最大1枚を回避できない。
-- `combat_subject_appearance`: `major`候補のCombat Subject Evidenceが`distinctive`で完全な場合だけ動画横断で比較する。body plan・scale・surfaceが一致し、colorとtraitがそれぞれ一つ以上共通し、Neutral視覚類似度が0.80以上の完全結合だけを同じ戦闘対象にする。Scene Slug、敵名、動画、遭遇時刻、公開用summaryの一致は要求しない。`generic`、`unclear`、不完全な根拠、外見が異なる相手は「boss戦」という大分類だけでまとめない。
-- `combat_encounter_sequence`: 同じVideo Sourceの全候補をVideo Time順に並べ、非`major`候補で遭遇を区切ってから、`major`候補をScene Slugの連続runへ分ける。同じSlugに挟まれた1件だけのSlug揺れは、前後がそれぞれ15秒以内の場合だけ同じrunへ吸収する。別の主要戦闘runまたは非主要場面を挟んで同じSlugが再登場した場合は別遭遇にする。同一遭遇ではbody plan・scale・surfaceが一致しcolorとtraitがそれぞれ一つ以上共通する識別可能なEvidenceを、Neutral 0.80を要求せず互換とする。`generic`でも双方に存在するbody plan・scale・surface・color・traitが競合すれば、同一遭遇内の別対象を検出する根拠にする。ただし`generic`は動画横断の同一性や競合検出後の反復Groupを成立させない。明確な競合がなければ不明な候補を含む遭遇全体を維持し、競合がある場合は互換な`distinctive`の反復だけをGroupにして不明な対象を結合しない。
+- `combat_subject_appearance`: 各Combat Encounter Groupについて、Candidate Momentごとに最高品質の完全な`distinctive` Evidenceを一つだけ数え、body plan・scale・surfaceの一意な最頻値と、複数Momentで2回以上反復したcolor・traitからCombat Encounter Subject Profileを作る。孤立したeffect、部分表示、色変化はProfileを上書きしない。異なるEncounter Profile間でbody plan・scale・surfaceが一致し、colorとtraitがそれぞれ一つ以上共通し、各Profileを支持する候補の少なくとも一組がNeutral視覚類似度0.80以上となる完全結合だけを同じ戦闘対象にする。Scene Slug、敵名、動画、遭遇時刻、公開用summaryの一致は要求しない。`generic`、`unclear`、不完全な根拠、title画像は動画横断同一性を成立させない。
+- `combat_encounter_sequence`: 同じVideo Sourceの全候補をVideo Time順に並べ、非`major`候補で遭遇を区切ってから、`major`候補をScene Slugの連続runへ分ける。同じSlugに挟まれた1件だけのSlug揺れは、前後がそれぞれ15秒以内の場合だけ同じrunへ吸収する。各runは原則一つのGroupであり、単発の`distinctive`矛盾、`generic`、`unclear`では分割しない。完全な具体的Evidenceが互換なclusterを作り、互いに異なるclusterが少なくとも二つあり、その各clusterが異なるCandidate Momentで2回以上裏付けられた場合だけ対象別に分割する。同じMomentの兄弟frameは1回と数える。分割後の単発・不明観測はVideo Timeが最も近い確認済み対象へ安定tie-break付きで属させ、第三の未確認対象として選択しない。`generic`はこの遭遇内の反復根拠には使えるが、動画横断同一性には使わない。
 - `visual_role_similarity`: titleでも`major`でもない候補について、同じVideo Source、30秒以内、同じRepresentative Frame content kind、同じCombat Encounter Kind、Neutral視覚類似度0.93以上をすべて満たす組だけを完全結合のGroupにする。`recurring_gameplay`ではさらに、独立評価された画像summaryのUnicode・大小文字・句読点を正規化した値が一致する場合だけ畳み、異なる技・敵・結果の説明を維持する。
 
-Semantic Group IDはbasisと全memberのFrame Candidate IDから決定的に作ります。選択代表には`semantic_group_representative`、除外候補には`semantic_duplicate`、blocking selected ID、同じGroup IDとbasisを記録します。Combat Subject Groupではmemberに共通するbody plan・scale・surface・color・traitだけを有限enum tokenとして記録し、自由文、固有名、model responseを診断へ出しません。Group判定は自由文の固有名を正解として扱わず、Neutral特徴だけで異なる敵をまとめることもしません。
+Semantic Group IDはbasisと全memberのFrame Candidate IDから決定的に作ります。選択代表には`semantic_group_representative`、除外候補には`semantic_duplicate`、blocking selected ID、同じGroup IDとbasisを記録します。Combat Subject Groupでは遭遇Profile間で裏付けられたbody plan・scale・surface・color・traitだけを有限enum tokenとして記録し、単発矛盾、自由文、固有名、model responseを診断へ出しません。Group判定は自由文の固有名を正解として扱わず、Neutral特徴だけで異なる敵をまとめることもしません。
 
 Temporal Diversity Penaltyは、要求枚数`N`と最も近い選択済みVideo Set Progress距離`d`から次の式で求めます。
 
@@ -89,6 +89,6 @@ Video Orderや後半位置そのものへの加点・減点、動画ごとの最
 - `spoiler_monotonicity_guard`
 - `lower_marginal_utility`
 
-内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v6`、cache artifactを`game-screen-pick/video-set-selection@3.0.0`としてCompleted Stageへ確定する。選定前cache keyには、Video Stage、全候補のCatalog fingerprint、Primaryと同一Momentの代替最大2枚を含む全一枚Annotation fingerprint、Combat Representative Fallback policy version、完全時系列contract、設定、batch境界を含める。fallbackの並列数と完了順は含めない。warm runはこのkeyをselector実行前に検索し、coldで実際に使用したbatch境界までCatalog／Annotationをcacheから復元した後、同じ完全時系列条件でRepresentative Frameを再集約し、score、reason、coverage、Semantic Duplicate Groupを含む選定結果をartifactから結び直す。selectorを実行したrunをcache reuseとして数えない。`video-set-selection-v5`のSelection Stageは新policyへ再利用せず、Combat Subject Evidenceを持たない`game-screen-pick/candidate-annotation@4.0.0`も該当Annotationとdownstreamだけを再計算する。Video Identity、Video Stage、Context Cueなど不変の上流Stageはfingerprint一致時に再利用する。
+内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v7`、cache artifactを`game-screen-pick/video-set-selection@3.0.0`としてCompleted Stageへ確定する。選定前cache keyには、Video Stage、全候補のCatalog fingerprint、Primaryと同一Momentの代替最大2枚を含む全一枚Annotation fingerprint、Combat Representative Fallback policy version、完全時系列contract、設定、batch境界を含める。fallbackの並列数と完了順は含めない。warm runはこのkeyをselector実行前に検索し、coldで実際に使用したbatch境界までCatalog／Annotationをcacheから復元した後、同じ完全時系列条件でRepresentative Frameを再集約し、score、reason、coverage、Semantic Duplicate Groupを含む選定結果をartifactから結び直す。selectorを実行したrunをcache reuseとして数えない。`video-set-selection-v6`以前のSelection Stageは新policyへ再利用しない。Candidate Annotation contractは変えないため、現行`game-screen-pick/candidate-annotation@5.0.0`とVideo Identity、Video Stage、Context Cueなど不変の上流Stageはfingerprint一致時に再利用する。
 
 旧first-N fakeはwalking-skeleton専用applicationへ隔離され、public CLIはIssue #190までscreenshot入力のままである。

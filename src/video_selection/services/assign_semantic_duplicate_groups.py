@@ -3,8 +3,9 @@
 import hashlib
 import math
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable
+from fractions import Fraction
 
 from ..models.blog_candidate import BlogCandidate
 from ..models.combat_subject_evidence import CombatSubjectEvidence
@@ -49,7 +50,7 @@ def assign_semantic_duplicate_groups(
     )
     if title_candidates:
         groups.append((_TITLE_SEMANTICS_BASIS, title_candidates))
-    groups.extend(_combat_subject_groups(eligible_candidates))
+    groups.extend(_combat_subject_groups(candidates))
     groups.extend(
         (_COMBAT_ENCOUNTER_BASIS, members)
         for members in assign_combat_encounter_groups(candidates)
@@ -94,28 +95,49 @@ def _group_evidence(
     """Combat Subject Groupへ共通するprivacy-safeな有限enum根拠を返す。"""
     if basis != _COMBAT_SUBJECT_BASIS:
         return ()
-    evidence = tuple(
-        item.annotation.combat_subject_evidence
-        for item in members
-        if item.annotation.combat_subject_evidence is not None
-        and item.annotation.combat_subject_evidence.can_identify_subject
-    )
-    if len(evidence) != len(members):
+    profile = _published_combat_subject_profile(members)
+    if profile is None:
         return ()
-    tokens: list[str] = []
-    for field_name in ("body_plan", "scale", "surface"):
-        values = {getattr(item, field_name) for item in evidence}
-        if len(values) == 1:
-            tokens.append(f"{field_name}:{next(iter(values))}")
-    common_colors = set(evidence[0].colors).intersection(
-        *(set(item.colors) for item in evidence[1:])
+    return (
+        f"body_plan:{profile.body_plan}",
+        f"scale:{profile.scale}",
+        f"surface:{profile.surface}",
+        *(f"color:{color}" for color in profile.colors),
+        *(f"trait:{trait}" for trait in profile.traits),
     )
-    common_traits = set(evidence[0].traits).intersection(
-        *(set(item.traits) for item in evidence[1:])
+
+
+def _published_combat_subject_profile(
+    members: tuple[BlogCandidate, ...],
+) -> CombatSubjectEvidence | None:
+    """Group化された遭遇Profileすべてに共通する公開外見根拠を返す。"""
+    profiles = tuple(
+        profile for _, profile in _combat_encounter_subject_profiles(members)
     )
-    tokens.extend(f"color:{color}" for color in sorted(common_colors))
-    tokens.extend(f"trait:{trait}" for trait in sorted(common_traits))
-    return tuple(tokens)
+    if len(profiles) < 2:
+        return _aggregate_combat_subject_evidence(members)
+    if any(
+        getattr(profile, field_name) != getattr(profiles[0], field_name)
+        for profile in profiles[1:]
+        for field_name in ("body_plan", "scale", "surface")
+    ):
+        return None
+    common_colors = set(profiles[0].colors).intersection(
+        *(set(profile.colors) for profile in profiles[1:])
+    )
+    common_traits = set(profiles[0].traits).intersection(
+        *(set(profile.traits) for profile in profiles[1:])
+    )
+    if not common_colors or not common_traits:
+        return None
+    return CombatSubjectEvidence(
+        body_plan=profiles[0].body_plan,
+        scale=profiles[0].scale,
+        surface=profiles[0].surface,
+        colors=tuple(sorted(common_colors)),
+        traits=tuple(sorted(common_traits)),
+        distinctiveness="distinctive",
+    )
 
 
 def _merge_overlapping_groups(
@@ -239,34 +261,178 @@ def _basis_is_publishable(
 def _combat_subject_groups(
     candidates: tuple[BlogCandidate, ...],
 ) -> Iterable[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]]:
-    """十分な外見根拠が一致する主要戦闘対象を動画横断でまとめる。"""
-    unassigned = sorted(candidates, key=lambda item: item.identifier)
+    """遭遇Profileが一致する主要戦闘対象を動画横断でまとめる。"""
+    unassigned = sorted(
+        _combat_encounter_subject_profiles(candidates),
+        key=lambda item: tuple(member.identifier for member in item[0]),
+    )
     while unassigned:
         root = unassigned.pop(0)
         component = [root]
         for other in tuple(unassigned):
-            if all(_has_same_combat_subject(other, member) for member in component):
+            if all(
+                _has_same_combat_subject_profile(other, member) for member in component
+            ):
                 component.append(other)
                 unassigned.remove(other)
         if len(component) > 1:
-            yield _COMBAT_SUBJECT_BASIS, tuple(component)
+            members = tuple(
+                sorted(
+                    (
+                        candidate
+                        for profile_members, _ in component
+                        for candidate in profile_members
+                    ),
+                    key=lambda item: item.identifier,
+                )
+            )
+            yield _COMBAT_SUBJECT_BASIS, members
 
 
-def _has_same_combat_subject(left: BlogCandidate, right: BlogCandidate) -> bool:
-    """外見根拠とNeutral特徴が同じ主要戦闘対象を支持するかを返す。"""
-    left_evidence = left.annotation.combat_subject_evidence
-    right_evidence = right.annotation.combat_subject_evidence
+def _combat_encounter_subject_profiles(
+    candidates: tuple[BlogCandidate, ...],
+) -> Iterable[tuple[tuple[BlogCandidate, ...], CombatSubjectEvidence]]:
+    """時系列遭遇ごとの識別可能な集約外見Profileを返す。"""
+    for _, members in _combat_encounter_groups(candidates):
+        profile = _aggregate_combat_subject_evidence(members)
+        if profile is not None:
+            yield members, profile
+
+
+def _has_same_combat_subject_profile(
+    left: tuple[tuple[BlogCandidate, ...], CombatSubjectEvidence],
+    right: tuple[tuple[BlogCandidate, ...], CombatSubjectEvidence],
+) -> bool:
+    """集約外見とNeutral特徴が同じ主要戦闘対象を支持するかを返す。"""
+    left_members, left_evidence = left
+    right_members, right_evidence = right
+    left_support = _profile_supporting_candidates(left_members, left_evidence)
+    right_support = _profile_supporting_candidates(right_members, right_evidence)
     return (
-        left.annotation.combat_encounter_kind == "major"
-        and right.annotation.combat_encounter_kind == "major"
-        and left_evidence is not None
-        and right_evidence is not None
-        and left_evidence.can_identify_subject
-        and right_evidence.can_identify_subject
-        and _combat_subject_evidence_matches(left_evidence, right_evidence)
-        and _cosine_similarity(left, right)
+        _combat_subject_evidence_matches(left_evidence, right_evidence)
+        and max(
+            (
+                _cosine_similarity(left_candidate, right_candidate)
+                for left_candidate in left_support
+                for right_candidate in right_support
+            ),
+            default=-1.0,
+        )
         >= _COMBAT_SUBJECT_VISUAL_SIMILARITY_THRESHOLD
     )
+
+
+def _profile_supporting_candidates(
+    members: tuple[BlogCandidate, ...],
+    profile: CombatSubjectEvidence,
+) -> tuple[BlogCandidate, ...]:
+    """集約Profileの外見根拠と互換性がある独立観測候補を返す。"""
+    return tuple(
+        member
+        for member in members
+        if (evidence := member.annotation.combat_subject_evidence) is not None
+        and evidence.can_identify_subject
+        and _combat_subject_evidence_matches(evidence, profile)
+    )
+
+
+def _aggregate_combat_subject_evidence(
+    members: tuple[BlogCandidate, ...],
+) -> CombatSubjectEvidence | None:
+    """Candidate Momentごとのdistinctive観測から孤立値を除いたProfileを返す。"""
+    candidates_by_moment: dict[str, list[BlogCandidate]] = defaultdict(list)
+    for member in members:
+        evidence = member.annotation.combat_subject_evidence
+        moment_id = member.annotation.candidate_moment_id
+        if (
+            moment_id is not None
+            and evidence is not None
+            and evidence.can_identify_subject
+        ):
+            candidates_by_moment[moment_id].append(member)
+    observations: list[CombatSubjectEvidence] = []
+    for moment_id in sorted(candidates_by_moment):
+        representative = min(
+            candidates_by_moment[moment_id],
+            key=lambda item: (-item.quality_score, item.identifier),
+        )
+        evidence = representative.annotation.combat_subject_evidence
+        if evidence is None:  # pragma: no cover - 上のfilterで保証される
+            raise AssertionError
+        observations.append(evidence)
+    if not observations:
+        return None
+    observation_count = len(observations)
+    body_plan = _dominant_profile_value(
+        tuple(item.body_plan for item in observations),
+        unknown="unknown",
+    )
+    scale = _dominant_profile_value(
+        tuple(item.scale for item in observations),
+        unknown="unknown",
+    )
+    surface = _dominant_profile_value(
+        tuple(item.surface for item in observations),
+        unknown="unknown",
+    )
+    colors = _corroborated_profile_tokens(
+        tuple(item.colors for item in observations),
+        observation_count=observation_count,
+        limit=2,
+    )
+    traits = _corroborated_profile_tokens(
+        tuple(item.traits for item in observations),
+        observation_count=observation_count,
+        limit=4,
+    )
+    if (
+        body_plan == "unknown"
+        or scale == "unknown"
+        or surface == "unknown"
+        or not colors
+        or not traits
+    ):
+        return None
+    return CombatSubjectEvidence(
+        body_plan=body_plan,
+        scale=scale,
+        surface=surface,
+        colors=colors,
+        traits=traits,
+        distinctiveness="distinctive",
+    )
+
+
+def _dominant_profile_value[ValueT: str](
+    values: tuple[ValueT, ...],
+    *,
+    unknown: ValueT,
+) -> ValueT:
+    """一意に最頻の有限enum値を返し、同数競合はunknownにする。"""
+    counts = Counter(values)
+    highest_count = max(counts.values())
+    dominant = tuple(
+        sorted(value for value, count in counts.items() if count == highest_count)
+    )
+    return dominant[0] if len(dominant) == 1 else unknown
+
+
+def _corroborated_profile_tokens[ValueT: str](
+    values: tuple[tuple[ValueT, ...], ...],
+    *,
+    observation_count: int,
+    limit: int,
+) -> tuple[ValueT, ...]:
+    """複数Momentでは2回以上観測されたtokenを支持数順で返す。"""
+    counts = Counter(token for observation in values for token in observation)
+    if not counts:
+        return ()
+    minimum_count = 1 if observation_count == 1 else 2
+    ranked_tokens = sorted(
+        ((token, count) for token, count in counts.items() if count >= minimum_count),
+        key=lambda item: (-item[1], item[0]),
+    )
+    return tuple(token for token, _ in ranked_tokens[:limit])
 
 
 def _combat_subject_evidence_matches(
@@ -353,27 +519,15 @@ def _groups_within_major_block(
 def _subject_aware_encounter_groups(
     candidates: list[BlogCandidate],
 ) -> Iterable[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]]:
-    """同じ遭遇内で明確に異なる戦闘対象を別Groupとして維持する。"""
-    evidenced_candidates = [
+    """同じ遭遇で各対象が独立して裏付けられた場合だけGroupを分ける。"""
+    clear_candidates = [
         candidate
         for candidate in candidates
         if (evidence := candidate.annotation.combat_subject_evidence) is not None
-        and evidence.distinctiveness != "unclear"
+        and _combat_subject_evidence_is_clear(evidence)
     ]
-    identifiable_candidates = [
-        candidate
-        for candidate in evidenced_candidates
-        if candidate.annotation.combat_subject_evidence is not None
-        and candidate.annotation.combat_subject_evidence.can_identify_subject
-    ]
-    if not any(
-        _have_incompatible_combat_subject_evidence(left, right)
-        for index, left in enumerate(evidenced_candidates)
-        for right in evidenced_candidates[index + 1 :]
-    ):
-        yield _COMBAT_ENCOUNTER_BASIS, tuple(candidates)
-        return
-    unassigned = sorted(identifiable_candidates, key=lambda item: item.identifier)
+    unassigned = sorted(clear_candidates, key=lambda item: item.identifier)
+    components: list[tuple[BlogCandidate, ...]] = []
     while unassigned:
         root = unassigned.pop(0)
         component = [root]
@@ -384,36 +538,62 @@ def _subject_aware_encounter_groups(
             ):
                 component.append(other)
                 unassigned.remove(other)
-        if len(component) > 1:
-            yield _COMBAT_ENCOUNTER_BASIS, tuple(component)
+        components.append(tuple(component))
+    corroborated_components = tuple(
+        component
+        for component in components
+        if len({candidate.annotation.candidate_moment_id for candidate in component})
+        >= 2
+    )
+    if len(corroborated_components) < 2:
+        yield _COMBAT_ENCOUNTER_BASIS, tuple(candidates)
+        return
+    grouped_candidates = [list(component) for component in corroborated_components]
+    corroborated_ids = {
+        candidate.identifier
+        for component in corroborated_components
+        for candidate in component
+    }
+    for candidate in candidates:
+        if candidate.identifier in corroborated_ids:
+            continue
+        target_index = min(
+            range(len(grouped_candidates)),
+            key=lambda index: _encounter_component_distance(
+                candidate,
+                grouped_candidates[index],
+            ),
+        )
+        grouped_candidates[target_index].append(candidate)
+    for component in grouped_candidates:
+        yield _COMBAT_ENCOUNTER_BASIS, tuple(component)
 
 
-def _have_incompatible_combat_subject_evidence(
-    left: BlogCandidate,
-    right: BlogCandidate,
-) -> bool:
-    """同一遭遇内で具体的な外見根拠が明確に競合するかを返す。"""
-    left_evidence = left.annotation.combat_subject_evidence
-    right_evidence = right.annotation.combat_subject_evidence
-    if left_evidence is None or right_evidence is None:
-        return False
-    for field_name in ("body_plan", "scale", "surface"):
-        left_value = getattr(left_evidence, field_name)
-        right_value = getattr(right_evidence, field_name)
-        if (
-            left_value != "unknown"
-            and right_value != "unknown"
-            and left_value != right_value
-        ):
-            return True
+def _encounter_component_distance(
+    candidate: BlogCandidate,
+    component: list[BlogCandidate],
+) -> tuple[Fraction, tuple[str, ...]]:
+    """未裏付け観測を最も近い確認済み対象へ安定して割り当てる距離を返す。"""
+    candidate_time = candidate.annotation.candidate.video_time
+    if candidate_time is None:  # pragma: no cover - BlogCandidateで保証される
+        raise AssertionError
+    temporal_distance = min(
+        abs(candidate_time - member.annotation.candidate.video_time)
+        for member in component
+        if member.annotation.candidate.video_time is not None
+    )
+    return temporal_distance, tuple(sorted(member.identifier for member in component))
+
+
+def _combat_subject_evidence_is_clear(evidence: CombatSubjectEvidence) -> bool:
+    """遭遇内の別対象を裏付けられる具体的な一枚観測かを返す。"""
     return (
-        bool(left_evidence.colors)
-        and bool(right_evidence.colors)
-        and set(left_evidence.colors).isdisjoint(right_evidence.colors)
-    ) or (
-        bool(left_evidence.traits)
-        and bool(right_evidence.traits)
-        and set(left_evidence.traits).isdisjoint(right_evidence.traits)
+        evidence.distinctiveness != "unclear"
+        and evidence.body_plan != "unknown"
+        and evidence.scale != "unknown"
+        and evidence.surface != "unknown"
+        and bool(evidence.colors)
+        and bool(evidence.traits)
     )
 
 
@@ -427,8 +607,8 @@ def _have_compatible_combat_subject_evidence(
     return (
         left_evidence is not None
         and right_evidence is not None
-        and left_evidence.can_identify_subject
-        and right_evidence.can_identify_subject
+        and _combat_subject_evidence_is_clear(left_evidence)
+        and _combat_subject_evidence_is_clear(right_evidence)
         and _combat_subject_evidence_matches(left_evidence, right_evidence)
     )
 

@@ -133,7 +133,7 @@ Each selected record keeps these sources separate:
 - `annotation.representative_frame_reason`: model-derived reason this frame represents the Candidate Moment;
 - `selection.reason_codes`: deterministic selector facts;
 - `selection.decision_explanation`: Japanese text rendered locally from reason codes and numeric selection components;
-- optional `selection.semantic_group`: the deterministic privacy-safe group ID and basis when this image represents a Semantic Duplicate Group; `combat_subject_appearance` additionally contains the finite appearance evidence common to all members.
+- optional `selection.semantic_group`: the deterministic privacy-safe group ID and basis when this image represents a Semantic Duplicate Group; `combat_subject_appearance` additionally contains the finite appearance evidence corroborated by the grouped Combat Encounter Subject Profiles.
 
 The selector explanation records its renderer version. It is not free-form model output. The report does not publish model confidence, chain of thought, reasoning traces, or raw responses.
 

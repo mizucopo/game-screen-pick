@@ -11,7 +11,7 @@ _STAGE_VERSIONS = {
     ProcessingStage.BUILD_SCENE_CATALOG: "scene-catalog-v1",
     ProcessingStage.ANNOTATE_CANDIDATE: "candidate-annotation-v1",
     ProcessingStage.ANNOTATE_CANDIDATES: "candidate-annotations-v1",
-    ProcessingStage.SELECT_IMAGES: "video-set-selection-v6",
+    ProcessingStage.SELECT_IMAGES: "video-set-selection-v7",
 }
 
 if set(_STAGE_VERSIONS) != set(ProcessingStage):

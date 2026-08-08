@@ -153,7 +153,7 @@
   "provenance": {
     "contracts": {
       "report_schema": "2.2.0",
-      "video_set_selection_policy": "video-set-selection-v6"
+      "video_set_selection_policy": "video-set-selection-v7"
     },
     "models": {
       "candidate_annotation": {
@@ -197,7 +197,7 @@
         "menu": 0.05,
         "normal_gameplay": 0.7
       },
-      "policy_version": "video-set-selection-v6",
+      "policy_version": "video-set-selection-v7",
       "similarity_base": 0.72,
       "similarity_final": 0.98,
       "spoiler_sensitivity": "medium"
