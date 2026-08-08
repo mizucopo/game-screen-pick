@@ -17,6 +17,7 @@ from src.video_selection.models.candidate_annotation_request import (
 from src.video_selection.models.candidate_moment import CandidateMoment
 from src.video_selection.models.combat_encounter_basis import CombatEncounterBasis
 from src.video_selection.models.combat_encounter_kind import CombatEncounterKind
+from src.video_selection.models.combat_subject_evidence import CombatSubjectEvidence
 from src.video_selection.models.context_cue import ContextCue
 from src.video_selection.models.effective_configuration import EffectiveConfiguration
 from src.video_selection.models.frame_candidate import FrameCandidate
@@ -1053,6 +1054,14 @@ def test_combat_fallback_prefers_visible_unobstructed_subjects_before_frame_id(
     clear = replace(
         original_annotations[1],
         explanation_value="high",
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("green",),
+            traits=("large_mouth",),
+            distinctiveness="distinctive",
+        ),
         representative_frame_evidence=RepresentativeFrameEvidence(
             content_kind="gameplay_action",
             primary_subject_visibility="clear",
@@ -1106,6 +1115,10 @@ def test_combat_fallback_prefers_visible_unobstructed_subjects_before_frame_id(
     assert (
         warm_result.annotations[0].representative_frame_evidence
         == clear.representative_frame_evidence
+    )
+    assert (
+        warm_result.annotations[0].combat_subject_evidence
+        == clear.combat_subject_evidence
     )
 
 

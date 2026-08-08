@@ -105,7 +105,7 @@ Context Cue records retain their source timestamp basis. When container cue timi
 
 ## Canonical JSON structure
 
-The contract started at `game-screen-pick/report@1.0.0`. Version `2.0.0` added required conditional-coverage diagnostics and incremented the major version. The current producer is `game-screen-pick/report@2.1.0`; it adds optional Semantic Duplicate Group evidence and the `semantic_duplicate` rejection enum. Immutable `report-1.0.0.schema.json` and `report-2.0.0.schema.json` remain available beside the current schema:
+The contract started at `game-screen-pick/report@1.0.0`. Version `2.0.0` added required conditional-coverage diagnostics and incremented the major version. Version `2.1.0` added Semantic Duplicate Group references and the `semantic_duplicate` rejection enum. The current producer is `game-screen-pick/report@2.2.0`; it adds the `combat_subject_appearance` basis and requires finite privacy-safe evidence tokens for that basis. Immutable `report-1.0.0.schema.json`, `report-2.0.0.schema.json`, and `report-2.1.0.schema.json` remain available beside the current schema:
 
 | Field | Purpose |
 |---|---|
@@ -133,7 +133,7 @@ Each selected record keeps these sources separate:
 - `annotation.representative_frame_reason`: model-derived reason this frame represents the Candidate Moment;
 - `selection.reason_codes`: deterministic selector facts;
 - `selection.decision_explanation`: Japanese text rendered locally from reason codes and numeric selection components;
-- optional `selection.semantic_group`: the deterministic privacy-safe group ID and basis when this image represents a Semantic Duplicate Group.
+- optional `selection.semantic_group`: the deterministic privacy-safe group ID and basis when this image represents a Semantic Duplicate Group; `combat_subject_appearance` additionally contains the finite appearance evidence common to all members.
 
 The selector explanation records its renderer version. It is not free-form model output. The report does not publish model confidence, chain of thought, reasoning traces, or raw responses.
 
@@ -166,7 +166,7 @@ min(total rejected, 100, max(20, requested image count * 2))
 
 The set first includes at least one candidate for every rejection reason, then fills remaining slots by descending counterfactual Marginal Selection Utility with the normal deterministic tie-break. `report.md` shows at most the first 10. Full rejected-candidate detail remains in processing cache.
 
-Near misses retain full Frame Candidate ID, exact source/time, classification, counterfactual utility components, reason code, and reason-specific references such as the blocking selected ID or nearest selected similarity. A `semantic_duplicate` near miss also retains the same Semantic Duplicate Group ID and privacy-safe basis as its blocking selected representative. The validator requires that reference to resolve to exactly one selected representative; raw names, model responses, and comparison prose are not published.
+Near misses retain full Frame Candidate ID, exact source/time, classification, counterfactual utility components, reason code, and reason-specific references such as the blocking selected ID or nearest selected similarity. A `semantic_duplicate` near miss also retains the same Semantic Duplicate Group ID, privacy-safe basis, and any required Combat Subject evidence as its blocking selected representative. The validator requires that reference to resolve to exactly one selected representative; raw names, model responses, and comparison prose are not published.
 
 ## Stage provenance
 

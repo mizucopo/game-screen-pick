@@ -16,15 +16,23 @@ from ..models.candidate_frame_observation import (
 )
 from ..models.combat_encounter_basis import COMBAT_ENCOUNTER_BASES
 from ..models.combat_encounter_kind import COMBAT_ENCOUNTER_KINDS
+from ..models.combat_subject_evidence import (
+    COMBAT_SUBJECT_BODY_PLANS,
+    COMBAT_SUBJECT_COLORS,
+    COMBAT_SUBJECT_DISTINCTIVENESSES,
+    COMBAT_SUBJECT_SCALES,
+    COMBAT_SUBJECT_SURFACES,
+    COMBAT_SUBJECT_TRAITS,
+)
 from ..models.scene_catalog_entry import SCENE_SELECTION_ROLES
 from ..models.scene_kind import SCENE_KINDS
 
 SCENE_CATALOG_PROMPT_VERSION = "scene-catalog-prompt-v5"
 SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v2"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v7"
-CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v17"
-CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v12"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v34"
+CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v18"
+CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v13"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v35"
 COMBAT_REPRESENTATIVE_FALLBACK_POLICY_VERSION = "combat-representative-fallback-v1"
 CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION = (
     "candidate-annotation-relationship-repair-prompt-v1"
@@ -179,6 +187,54 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                             "主要戦闘の根拠がないことだけではordinary_*にしない。"
                         ),
                     },
+                    "combat_subject_evidence": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "body_plan": {
+                                "type": "string",
+                                "enum": list(COMBAT_SUBJECT_BODY_PLANS),
+                            },
+                            "scale": {
+                                "type": "string",
+                                "enum": list(COMBAT_SUBJECT_SCALES),
+                            },
+                            "surface": {
+                                "type": "string",
+                                "enum": list(COMBAT_SUBJECT_SURFACES),
+                            },
+                            "colors": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "enum": list(COMBAT_SUBJECT_COLORS),
+                                },
+                                "maxItems": 2,
+                                "uniqueItems": True,
+                            },
+                            "traits": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "enum": list(COMBAT_SUBJECT_TRAITS),
+                                },
+                                "maxItems": 4,
+                                "uniqueItems": True,
+                            },
+                            "distinctiveness": {
+                                "type": "string",
+                                "enum": list(COMBAT_SUBJECT_DISTINCTIVENESSES),
+                            },
+                        },
+                        "required": [
+                            "body_plan",
+                            "scale",
+                            "surface",
+                            "colors",
+                            "traits",
+                            "distinctiveness",
+                        ],
+                    },
                     "player_body_visibility": {
                         "type": "string",
                         "enum": list(CHARACTER_BODY_VISIBILITIES),
@@ -230,6 +286,7 @@ CANDIDATE_ANNOTATION_SCHEMA: dict[str, object] = {
                     "visible_character_or_enemy",
                     "combat_encounter_kind",
                     "combat_encounter_basis",
+                    "combat_subject_evidence",
                     "player_body_visibility",
                     "opponent_body_visibility",
                     "effect_only_frame",

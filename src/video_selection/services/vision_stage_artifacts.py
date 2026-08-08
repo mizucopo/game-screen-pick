@@ -20,6 +20,21 @@ from ..models.combat_encounter_basis import (
     combat_encounter_classification_is_valid,
 )
 from ..models.combat_encounter_kind import COMBAT_ENCOUNTER_KINDS
+from ..models.combat_subject_evidence import (
+    COMBAT_SUBJECT_BODY_PLANS,
+    COMBAT_SUBJECT_COLORS,
+    COMBAT_SUBJECT_DISTINCTIVENESSES,
+    COMBAT_SUBJECT_SCALES,
+    COMBAT_SUBJECT_SURFACES,
+    COMBAT_SUBJECT_TRAITS,
+    CombatSubjectBodyPlan,
+    CombatSubjectColor,
+    CombatSubjectDistinctiveness,
+    CombatSubjectEvidence,
+    CombatSubjectScale,
+    CombatSubjectSurface,
+    CombatSubjectTrait,
+)
 from ..models.representative_frame_evidence import (
     CANDIDATE_FRAME_CONTENT_KINDS,
     CHARACTER_BODY_VISIBILITIES,
@@ -37,7 +52,7 @@ from ..models.scene_kind import SCENE_KINDS, SceneKind
 from ..models.vision_inference_diagnostics import VisionInferenceDiagnostics
 
 _CATALOG_SCHEMA = "game-screen-pick/scene-catalog@2.0.0"
-_ANNOTATION_SCHEMA = "game-screen-pick/candidate-annotation@4.0.0"
+_ANNOTATION_SCHEMA = "game-screen-pick/candidate-annotation@5.0.0"
 
 
 def serialize_scene_catalog(
@@ -88,12 +103,26 @@ def serialize_candidate_annotation(
         "combat_encounter_basis": annotation.combat_encounter_basis,
     }
     if annotation.representative_frame_evidence is not None:
-        evidence = annotation.representative_frame_evidence
+        representative_evidence = annotation.representative_frame_evidence
         annotation_value["representative_frame_evidence"] = {
-            "content_kind": evidence.content_kind,
-            "primary_subject_visibility": evidence.primary_subject_visibility,
-            "opponent_body_visibility": evidence.opponent_body_visibility,
-            "transient_obstruction": evidence.transient_obstruction,
+            "content_kind": representative_evidence.content_kind,
+            "primary_subject_visibility": (
+                representative_evidence.primary_subject_visibility
+            ),
+            "opponent_body_visibility": (
+                representative_evidence.opponent_body_visibility
+            ),
+            "transient_obstruction": representative_evidence.transient_obstruction,
+        }
+    if annotation.combat_subject_evidence is not None:
+        combat_evidence = annotation.combat_subject_evidence
+        annotation_value["combat_subject_evidence"] = {
+            "body_plan": combat_evidence.body_plan,
+            "scale": combat_evidence.scale,
+            "surface": combat_evidence.surface,
+            "colors": list(combat_evidence.colors),
+            "traits": list(combat_evidence.traits),
+            "distinctiveness": combat_evidence.distinctiveness,
         }
     return {
         "schema": _ANNOTATION_SCHEMA,
@@ -132,6 +161,9 @@ def restore_candidate_annotation(
     combat_encounter_basis = annotation.get("combat_encounter_basis")
     representative_frame_evidence = _restore_representative_frame_evidence(
         annotation.get("representative_frame_evidence")
+    )
+    combat_subject_evidence = _restore_combat_subject_evidence(
+        annotation.get("combat_subject_evidence")
     )
     frames = {item.identifier: item for item in request.frame_candidates}
     available_cue_ids = tuple(item.identifier for item in request.context_cues)
@@ -197,6 +229,7 @@ def restore_candidate_annotation(
         spoiler_evidence=spoiler_evidence,
         combat_encounter_kind=typed_combat_encounter_kind,
         combat_encounter_basis=typed_combat_encounter_basis,
+        combat_subject_evidence=combat_subject_evidence,
         representative_frame_evidence=representative_frame_evidence,
     )
     diagnostics = _restore_diagnostics(artifact.get("diagnostics"))
@@ -232,6 +265,51 @@ def _restore_representative_frame_evidence(
         primary_subject_visibility=primary_subject_visibility,
         opponent_body_visibility=opponent_body_visibility,
         transient_obstruction=transient_obstruction,
+    )
+
+
+def _restore_combat_subject_evidence(value: object) -> CombatSubjectEvidence | None:
+    """有限enumだけから戦闘対象の画像内根拠を復元する。"""
+    expected_keys = {
+        "body_plan",
+        "scale",
+        "surface",
+        "colors",
+        "traits",
+        "distinctiveness",
+    }
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise ValueError("Candidate Annotation artifact combat subjectが不正です")
+    body_plan = value.get("body_plan")
+    scale = value.get("scale")
+    surface = value.get("surface")
+    colors = value.get("colors")
+    traits = value.get("traits")
+    distinctiveness = value.get("distinctiveness")
+    if (
+        body_plan not in COMBAT_SUBJECT_BODY_PLANS
+        or scale not in COMBAT_SUBJECT_SCALES
+        or surface not in COMBAT_SUBJECT_SURFACES
+        or distinctiveness not in COMBAT_SUBJECT_DISTINCTIVENESSES
+        or not isinstance(colors, list)
+        or not all(color in COMBAT_SUBJECT_COLORS for color in colors)
+        or len(colors) != len(set(colors))
+        or len(colors) > 2
+        or not isinstance(traits, list)
+        or not all(trait in COMBAT_SUBJECT_TRAITS for trait in traits)
+        or len(traits) != len(set(traits))
+        or len(traits) > 4
+    ):
+        raise ValueError("Candidate Annotation artifact combat subjectが不正です")
+    return CombatSubjectEvidence(
+        body_plan=cast(CombatSubjectBodyPlan, body_plan),
+        scale=cast(CombatSubjectScale, scale),
+        surface=cast(CombatSubjectSurface, surface),
+        colors=tuple(cast(list[CombatSubjectColor], colors)),
+        traits=tuple(cast(list[CombatSubjectTrait], traits)),
+        distinctiveness=cast(CombatSubjectDistinctiveness, distinctiveness),
     )
 
 

@@ -21,6 +21,7 @@ from src.video_selection.models.candidate_annotation import (
 )
 from src.video_selection.models.combat_encounter_basis import CombatEncounterBasis
 from src.video_selection.models.combat_encounter_kind import CombatEncounterKind
+from src.video_selection.models.combat_subject_evidence import CombatSubjectEvidence
 from src.video_selection.models.decoded_video_frame import DecodedVideoFrame
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.neutral_image_analysis import NeutralImageAnalysis
@@ -117,6 +118,7 @@ def _candidate(
     screen_text_kind: ScreenTextKind = "none",
     content_kind: CandidateFrameContentKind | None = None,
     summary: str | None = None,
+    combat_subject_evidence: CombatSubjectEvidence | None = None,
 ) -> BlogCandidate:
     digest = (
         digest_character * 64
@@ -158,6 +160,7 @@ def _candidate(
         ),
         combat_encounter_kind=combat_encounter_kind,
         combat_encounter_basis=_COMBAT_ENCOUNTER_BASIS_BY_KIND[combat_encounter_kind],
+        combat_subject_evidence=combat_subject_evidence,
         screen_text_kind=screen_text_kind,
         representative_frame_evidence=(
             RepresentativeFrameEvidence(
@@ -2090,6 +2093,121 @@ def test_shortlist_expands_until_combat_encounter_boundary_is_observed() -> None
     assert result.shortlist_expansion_count == 1
 
 
+def test_shortlist_preserves_encounter_boundary_after_subject_group_merge() -> None:
+    """Subject Groupへ統合後も未注釈のEncounter境界が探索されること。
+
+    Arrange:
+        - 別動画のA/Bが同じ主要戦闘対象として対応付けられる
+        - 同一遭遇のB/CがEncounter GroupになりCの対象外見は不明である
+        - B/C間の未注釈非戦闘Momentが後続batchに用意される
+    Act:
+        - 完全なCandidate Moment時系列付きでlazy batch選定が実行される
+    Assert:
+        - 公開basisがSubjectでも後続batchまで拡張されること
+        - 境界後のCが別遭遇として選択されること
+    """
+    # Arrange
+    shared_subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    first_source = "1" * 64
+    encounter_source = "2" * 64
+    cross_video_subject = _candidate(
+        "merged-boundary-cross-video",
+        quality=0.99,
+        feature=(1.0, 0.0, 0.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="other-subject-label",
+        combat_encounter_kind="major",
+        video_order=0,
+        video_fingerprint=first_source,
+        combat_subject_evidence=shared_subject,
+    )
+    encounter_subject = _candidate(
+        "merged-boundary-subject",
+        quality=0.90,
+        feature=(0.90, math.sqrt(1 - 0.90**2), 0.0, 0.0, 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-major-battle",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint=encounter_source,
+        combat_subject_evidence=shared_subject,
+    )
+    hidden_boundary = _candidate(
+        "merged-boundary-event",
+        quality=0.10,
+        feature=(0.0, 0.0, 0.0, 1.0, 0.0),
+        progress=Fraction(30, 100),
+        blog_image_type="event",
+        explanation_value="none",
+        context_relevance="none",
+        scene_slug="story-event",
+        video_order=1,
+        video_fingerprint=encounter_source,
+    )
+    unclear_later_encounter = _candidate(
+        "merged-boundary-unclear",
+        quality=0.98,
+        feature=(0.0, 0.0, 1.0, 0.0, 0.0),
+        progress=Fraction(40, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-major-battle",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint=encounter_source,
+    )
+    filler = _candidate(
+        "merged-boundary-filler",
+        quality=0.10,
+        feature=(0.0, 0.0, 0.0, 0.0, 1.0),
+        progress=Fraction(80, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="exploration",
+        video_order=1,
+        video_fingerprint=encounter_source,
+    )
+    initial = (
+        cross_video_subject,
+        encounter_subject,
+        unclear_later_encounter,
+        filler,
+    )
+    all_candidates = (*initial, hidden_boundary)
+
+    # Act
+    result = select_from_shortlist_batches(
+        (initial, (hidden_boundary,)),
+        candidate_moment_timelines=_candidate_moment_timelines(all_candidates),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        cross_video_subject.identifier,
+        unclear_later_encounter.identifier,
+    }
+    assert result.shortlist_expansion_count == 1
+    assert result.annotated_candidate_count == 5
+
+
 def test_title_semantics_do_not_complete_event_minimum_before_real_event() -> None:
     """eventへ誤分類されたタイトルでevent最低枠が充足されないこと。
 
@@ -2521,6 +2639,916 @@ def test_same_major_combat_encounter_selects_only_the_best_representative() -> N
     assert "semantic_group_representative" in encounter_representative.reason_codes
     assert encounter_representative.semantic_group_id is not None
     assert encounter_representative.semantic_group_basis == "combat_encounter_sequence"
+
+
+def test_same_subject_across_videos_selects_best_representative() -> None:
+    """名前と動画が異なる同じ戦闘対象から最良の1枚だけが選択されること。
+
+    Arrange:
+        - 同じ外見の主要戦闘対象が異なるVideo Sourceと誤った名前で注釈される
+        - 外見の異なる主要戦闘対象が用意される
+    Act:
+        - 全候補数と同じ3枚の選定が要求される
+    Assert:
+        - 同じ戦闘対象から最高utilityの1枚だけが選択されること
+        - 外見の異なる戦闘対象が維持されること
+        - 除外候補へCombat Subject Groupの根拠と代表IDが記録されること
+    """
+    # Arrange
+    same_subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("brown", "green"),
+        traits=("bulbous_body", "large_mouth"),
+        distinctiveness="distinctive",
+    )
+    different_subject = CombatSubjectEvidence(
+        body_plan="humanoid",
+        scale="large",
+        surface="armored",
+        colors=("black", "red"),
+        traits=("armor", "weapon"),
+        distinctiveness="distinctive",
+    )
+    best = _candidate(
+        "same-subject-best",
+        quality=0.95,
+        feature=(1.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="progyo-no-oyabun",
+        combat_encounter_kind="major",
+        video_order=0,
+        video_fingerprint="a" * 64,
+        summary="プロギョの大親分との戦闘",
+        combat_subject_evidence=same_subject,
+    )
+    weaker = _candidate(
+        "same-subject-weaker",
+        quality=0.80,
+        feature=(0.90, math.sqrt(1 - 0.90**2), 0.0),
+        progress=Fraction(55, 100),
+        blog_image_type="other",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="ordinary",
+        scene_slug="frogi-no-oyabun",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint="b" * 64,
+        summary="フロギーの大親分との戦闘",
+        combat_subject_evidence=same_subject,
+    )
+    other_boss = _candidate(
+        "different-subject",
+        quality=0.85,
+        feature=(0.0, 0.0, 1.0),
+        progress=Fraction(80, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="armored-boss",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint="b" * 64,
+        summary="鎧を着た戦闘対象との戦闘",
+        combat_subject_evidence=different_subject,
+    )
+
+    # Act
+    result = select_video_set_images(
+        (weaker, other_boss, best),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+    reversed_result = select_video_set_images(
+        (best, other_boss, weaker),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        best.identifier,
+        other_boss.identifier,
+    ]
+    assert result.shortfall is True
+    assert len(result.rejected) == 1
+    rejection = result.rejected[0]
+    assert rejection.candidate.identifier == weaker.identifier
+    assert rejection.reason_code == "semantic_duplicate"
+    assert rejection.blocked_by_image_id == best.identifier
+    assert rejection.semantic_group_basis == "combat_subject_appearance"
+    expected_group_evidence = (
+        "body_plan:quadruped",
+        "scale:large",
+        "surface:organic",
+        "color:brown",
+        "color:green",
+        "trait:bulbous_body",
+        "trait:large_mouth",
+    )
+    assert rejection.semantic_group_evidence == expected_group_evidence
+    representative = next(
+        item for item in result.selected if item.candidate.identifier == best.identifier
+    )
+    assert representative.semantic_group_evidence == expected_group_evidence
+    assert [item.candidate.identifier for item in reversed_result.selected] == [
+        item.candidate.identifier for item in result.selected
+    ]
+    assert (
+        reversed_result.rejected[0].reason_code,
+        reversed_result.rejected[0].blocked_by_image_id,
+        reversed_result.rejected[0].semantic_group_id,
+        reversed_result.rejected[0].semantic_group_evidence,
+    ) == (
+        rejection.reason_code,
+        rejection.blocked_by_image_id,
+        rejection.semantic_group_id,
+        rejection.semantic_group_evidence,
+    )
+
+
+def test_combat_subject_group_absorbs_matching_encounter_group() -> None:
+    """同じ対象と同じ遭遇の根拠が一つのSemantic Groupへ統合されること。
+
+    Arrange:
+        - 同じVideo Source、遭遇、外見を持つ主要戦闘候補2件が用意される
+    Act:
+        - 2枚の選定が要求される
+    Assert:
+        - Group根拠の重複で失敗せず最高utilityの1枚だけが選択されること
+        - 統合後の根拠がCombat Subject Groupになること
+    """
+    # Arrange
+    subject = CombatSubjectEvidence(
+        body_plan="serpentine",
+        scale="enormous",
+        surface="scaled",
+        colors=("blue", "purple"),
+        traits=("elongated_body", "horns"),
+        distinctiveness="distinctive",
+    )
+    source_fingerprint = "c" * 64
+    best = _candidate(
+        "matching-subject-encounter-best",
+        quality=0.95,
+        feature=(1.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="serpent-battle",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=subject,
+    )
+    weaker = _candidate(
+        "matching-subject-encounter-weaker",
+        quality=0.80,
+        feature=(0.90, math.sqrt(1 - 0.90**2)),
+        progress=Fraction(12, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="serpent-battle",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=subject,
+    )
+
+    # Act
+    result = select_video_set_images(
+        (weaker, best),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [best.identifier]
+    assert result.rejected[0].candidate.identifier == weaker.identifier
+    assert result.rejected[0].semantic_group_basis == "combat_subject_appearance"
+
+
+def test_overlapping_subject_groups_fall_back_to_publishable_title_basis() -> None:
+    """共通Subject evidenceがない統合Groupで公開可能なbasisが選ばれること。
+
+    Arrange:
+        - 外見が異なる二つのCombat Subject Groupが用意される
+        - 全候補がtitle semanticsでも一つのGroupへ接続される
+    Act:
+        - 全候補数と同じ4枚の選定が要求される
+    Assert:
+        - Group全体に共通しないCombat Subject basisが公開されないこと
+        - 次順位のtitle semanticsが根拠なしで公開されること
+    """
+    # Arrange
+    first_subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    second_subject = CombatSubjectEvidence(
+        body_plan="humanoid",
+        scale="enormous",
+        surface="armored",
+        colors=("black",),
+        traits=("weapon",),
+        distinctiveness="distinctive",
+    )
+    candidates = (
+        _candidate(
+            "fallback-title-first-best",
+            quality=0.95,
+            feature=(1.0, 0.0, 0.0, 0.0),
+            progress=Fraction(10, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            combat_encounter_kind="major",
+            video_fingerprint="1" * 64,
+            screen_text_kind="title",
+            combat_subject_evidence=first_subject,
+        ),
+        _candidate(
+            "fallback-title-first-weaker",
+            quality=0.85,
+            feature=(0.90, math.sqrt(1 - 0.90**2), 0.0, 0.0),
+            progress=Fraction(20, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            combat_encounter_kind="major",
+            video_fingerprint="2" * 64,
+            screen_text_kind="title",
+            combat_subject_evidence=first_subject,
+        ),
+        _candidate(
+            "fallback-title-second-best",
+            quality=0.90,
+            feature=(0.0, 0.0, 1.0, 0.0),
+            progress=Fraction(30, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            combat_encounter_kind="major",
+            video_fingerprint="3" * 64,
+            screen_text_kind="title",
+            combat_subject_evidence=second_subject,
+        ),
+        _candidate(
+            "fallback-title-second-weaker",
+            quality=0.80,
+            feature=(0.0, 0.0, 0.90, math.sqrt(1 - 0.90**2)),
+            progress=Fraction(40, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            combat_encounter_kind="major",
+            video_fingerprint="4" * 64,
+            screen_text_kind="title",
+            combat_subject_evidence=second_subject,
+        ),
+    )
+
+    # Act
+    result = select_video_set_images(
+        candidates,
+        requested_count=4,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert len(result.selected) == 1
+    representative = result.selected[0]
+    assert representative.semantic_group_basis == "title_semantics"
+    assert representative.semantic_group_evidence is None
+    assert {item.semantic_group_basis for item in result.rejected} == {
+        "title_semantics"
+    }
+    assert {item.semantic_group_evidence for item in result.rejected} == {None}
+
+
+def test_subject_basis_requires_identifiable_evidence_from_every_member() -> None:
+    """全memberにSubject evidenceがない統合Groupでbasisがfallbackされること。
+
+    Arrange:
+        - 同じCombat Subjectを示す2件とEvidenceがunclearな1件が用意される
+        - 3件がtitle semanticsでも一つのGroupへ接続される
+    Act:
+        - 全候補数と同じ3枚の選定が要求される
+    Assert:
+        - 識別可能なsubsetだけを根拠にCombat Subject basisが公開されないこと
+        - Group全体を説明できるtitle semanticsへfallbackされること
+    """
+    # Arrange
+    shared_subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    candidates = (
+        _candidate(
+            "all-member-evidence-best",
+            quality=0.95,
+            feature=(1.0, 0.0, 0.0),
+            progress=Fraction(10, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            combat_encounter_kind="major",
+            video_fingerprint="5" * 64,
+            screen_text_kind="title",
+            combat_subject_evidence=shared_subject,
+        ),
+        _candidate(
+            "all-member-evidence-weaker",
+            quality=0.85,
+            feature=(0.90, math.sqrt(1 - 0.90**2), 0.0),
+            progress=Fraction(20, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            combat_encounter_kind="major",
+            video_fingerprint="6" * 64,
+            screen_text_kind="title",
+            combat_subject_evidence=shared_subject,
+        ),
+        _candidate(
+            "all-member-evidence-unclear",
+            quality=0.80,
+            feature=(0.0, 0.0, 1.0),
+            progress=Fraction(30, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            combat_encounter_kind="major",
+            video_fingerprint="7" * 64,
+            screen_text_kind="title",
+        ),
+    )
+
+    # Act
+    result = select_video_set_images(
+        candidates,
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert len(result.selected) == 1
+    assert result.selected[0].semantic_group_basis == "title_semantics"
+    assert result.selected[0].semantic_group_evidence is None
+    assert {item.semantic_group_basis for item in result.rejected} == {
+        "title_semantics"
+    }
+
+
+def test_overlapping_groups_keep_their_supported_member_boundaries() -> None:
+    """統合component全体を説明できないbasisがmember外へ拡張されないこと。
+
+    Arrange:
+        - 動画横断の同一Subject 2件と片方に重なる同一遭遇のunclear 1件が用意される
+    Act:
+        - 全候補数と同じ3枚の選定が要求される
+    Assert:
+        - Subject Groupだけが元の2件へ公開されること
+        - 別動画の候補を含むEncounter Groupへ3件が拡張されないこと
+    """
+    # Arrange
+    shared_subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    cross_video = _candidate(
+        "supported-boundary-cross-video",
+        quality=0.95,
+        feature=(1.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="shared-subject",
+        combat_encounter_kind="major",
+        video_order=0,
+        video_fingerprint="8" * 64,
+        combat_subject_evidence=shared_subject,
+    )
+    encounter_subject = _candidate(
+        "supported-boundary-encounter-subject",
+        quality=0.90,
+        feature=(0.90, math.sqrt(1 - 0.90**2), 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="local-encounter",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint="9" * 64,
+        combat_subject_evidence=shared_subject,
+    )
+    encounter_unclear = _candidate(
+        "supported-boundary-encounter-unclear",
+        quality=0.85,
+        feature=(0.0, 0.0, 1.0),
+        progress=Fraction(22, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="local-encounter",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint="9" * 64,
+    )
+
+    # Act
+    result = select_video_set_images(
+        (encounter_unclear, encounter_subject, cross_video),
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        cross_video.identifier,
+        encounter_unclear.identifier,
+    ]
+    assert result.selected[0].semantic_group_basis == "combat_subject_appearance"
+    assert result.selected[1].semantic_group_id is None
+    assert len(result.rejected) == 1
+    assert result.rejected[0].candidate.identifier == encounter_subject.identifier
+    assert result.rejected[0].semantic_group_basis == "combat_subject_appearance"
+
+
+def test_overlapping_groups_preserve_unclaimed_residual_members() -> None:
+    """低優先Groupの未使用memberが残余Groupとして維持されること。
+
+    Arrange:
+        - 動画横断Subject Group A/Bとtitle semantics Group B/C/Dが用意される
+    Act:
+        - 全候補数と同じ4枚の選定が要求される
+    Assert:
+        - A/BがSubject Groupとして維持されること
+        - 未使用のC/Dがtitle semantics Groupとして代表1枚へ制限されること
+    """
+    # Arrange
+    shared_subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    subject_only = _candidate(
+        "residual-subject-only",
+        quality=0.95,
+        feature=(1.0, 0.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="major",
+        video_order=0,
+        video_fingerprint="b" * 64,
+        combat_subject_evidence=shared_subject,
+    )
+    overlapping_title = _candidate(
+        "residual-overlapping-title",
+        quality=0.90,
+        feature=(0.90, math.sqrt(1 - 0.90**2), 0.0, 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint="c" * 64,
+        screen_text_kind="title",
+        combat_subject_evidence=shared_subject,
+    )
+    residual_title_best = _candidate(
+        "residual-title-best",
+        quality=0.85,
+        feature=(0.0, 0.0, 1.0, 0.0),
+        progress=Fraction(30, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="major",
+        video_order=2,
+        video_fingerprint="d" * 64,
+        screen_text_kind="title",
+    )
+    residual_title_weaker = _candidate(
+        "residual-title-weaker",
+        quality=0.80,
+        feature=(0.0, 0.0, 0.0, 1.0),
+        progress=Fraction(40, 100),
+        blog_image_type="event",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="major",
+        video_order=3,
+        video_fingerprint="e" * 64,
+        screen_text_kind="title",
+    )
+
+    # Act
+    result = select_video_set_images(
+        (
+            residual_title_weaker,
+            overlapping_title,
+            subject_only,
+            residual_title_best,
+        ),
+        requested_count=4,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [
+        subject_only.identifier,
+        residual_title_best.identifier,
+    ]
+    assert {item.semantic_group_basis for item in result.selected} == {
+        "combat_subject_appearance",
+        "title_semantics",
+    }
+    assert {item.semantic_group_basis for item in result.rejected} == {
+        "combat_subject_appearance",
+        "title_semantics",
+    }
+
+
+def test_distinct_combat_subjects_in_one_encounter_are_not_merged() -> None:
+    """同じ遭遇内でも外見が明確に異なる戦闘対象が別々に選択されること。
+
+    Arrange:
+        - 同じVideo SourceとScene Slugに外見が異なる主要戦闘対象2件がある
+    Act:
+        - 2枚の選定が要求される
+    Assert:
+        - Encounter Groupだけを理由に同じGroupへ統合されないこと
+        - 両方の戦闘対象が選択されること
+    """
+    # Arrange
+    source_fingerprint = "d" * 64
+    frog = _candidate(
+        "distinct-subject-frog",
+        quality=0.90,
+        feature=(1.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="major-battle",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("green",),
+            traits=("large_mouth",),
+            distinctiveness="distinctive",
+        ),
+    )
+    armored = _candidate(
+        "distinct-subject-armored",
+        quality=0.85,
+        feature=(0.0, 1.0),
+        progress=Fraction(12, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="major-battle",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="humanoid",
+            scale="large",
+            surface="armored",
+            colors=("black", "red"),
+            traits=("armor", "weapon"),
+            distinctiveness="distinctive",
+        ),
+    )
+
+    # Act
+    result = select_video_set_images(
+        (armored, frog),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        frog.identifier,
+        armored.identifier,
+    }
+    assert result.rejected == ()
+
+
+def test_concrete_generic_evidence_splits_distinct_encounter_subjects() -> None:
+    """具体的なgeneric根拠で同一遭遇の別対象が分離されること。
+
+    Arrange:
+        - 同じ主要戦闘runに外見が異なるdistinctive対象とgeneric対象が用意される
+    Act:
+        - 2枚の選定が要求される
+    Assert:
+        - genericが動画横断同一性ではなく遭遇内の不一致判定に使われること
+        - 明らかに異なる両対象が選択されること
+    """
+    # Arrange
+    source_fingerprint = "a" * 64
+    distinctive = _candidate(
+        "distinctive-encounter-subject",
+        quality=0.90,
+        feature=(1.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="mixed-subject-encounter",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("green",),
+            traits=("large_mouth",),
+            distinctiveness="distinctive",
+        ),
+    )
+    generic = _candidate(
+        "generic-encounter-subject",
+        quality=0.85,
+        feature=(0.0, 1.0),
+        progress=Fraction(12, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_selection_role="recurring_gameplay",
+        scene_slug="mixed-subject-encounter",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="humanoid",
+            scale="large",
+            surface="armored",
+            colors=("black",),
+            traits=("armor",),
+            distinctiveness="generic",
+        ),
+    )
+
+    # Act
+    result = select_video_set_images(
+        (generic, distinctive),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        distinctive.identifier,
+        generic.identifier,
+    }
+    assert result.rejected == ()
+
+
+def test_combat_subject_matching_tolerates_independent_evidence_variation() -> None:
+    """独立画像評価の一部列挙差を越えて同じ戦闘対象がまとめられること。
+
+    Arrange:
+        - 身体構造などの中核特徴が一致し色と特徴の一部だけが異なる2件がある
+        - 2件のNeutral視覚特徴が同じ対象を支持する
+    Act:
+        - 異なるVideo Sourceから2枚の選定が要求される
+    Assert:
+        - 固有名や完全一致に依存せず最高utilityの1枚だけが選択されること
+    """
+    # Arrange
+    first = _candidate(
+        "varied-subject-first",
+        quality=0.90,
+        feature=(1.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="incorrect-name",
+        combat_encounter_kind="major",
+        video_order=0,
+        video_fingerprint="e" * 64,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("brown", "green"),
+            traits=("bulbous_body", "large_mouth"),
+            distinctiveness="distinctive",
+        ),
+    )
+    second = _candidate(
+        "varied-subject-second",
+        quality=0.80,
+        feature=(0.90, math.sqrt(1 - 0.90**2)),
+        progress=Fraction(70, 100),
+        blog_image_type="other",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="generic-boss",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint="f" * 64,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("green",),
+            traits=("large_mouth",),
+            distinctiveness="distinctive",
+        ),
+    )
+
+    # Act
+    result = select_video_set_images(
+        (second, first),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [first.identifier]
+    assert result.rejected[0].candidate.identifier == second.identifier
+    assert result.rejected[0].semantic_group_basis == "combat_subject_appearance"
+
+
+def test_same_encounter_accepts_compatible_subject_evidence_variation() -> None:
+    """同一遭遇では外見根拠の列挙差があっても代表1枚に制限されること。
+
+    Arrange:
+        - 同じ主要戦闘runに中核外見と一部の色・特徴が共通する2件がある
+        - Neutral類似度は動画横断Subject Groupの閾値0.80を下回る
+    Act:
+        - 2枚の選定が要求される
+    Assert:
+        - 時間的なEncounter Groupにより最高utilityの1枚だけが選択されること
+    """
+    # Arrange
+    source_fingerprint = "7" * 64
+    best = _candidate(
+        "compatible-encounter-best",
+        quality=0.95,
+        feature=(1.0, 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="same-major-run",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("brown", "green"),
+            traits=("bulbous_body", "large_mouth"),
+            distinctiveness="distinctive",
+        ),
+    )
+    varied = _candidate(
+        "compatible-encounter-varied",
+        quality=0.80,
+        feature=(0.50, math.sqrt(1 - 0.50**2)),
+        progress=Fraction(22, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="same-major-run",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("green",),
+            traits=("large_mouth",),
+            distinctiveness="distinctive",
+        ),
+    )
+
+    # Act
+    result = select_video_set_images(
+        (varied, best),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [best.identifier]
+    assert result.shortfall is True
+    assert result.rejected[0].candidate.identifier == varied.identifier
+    assert result.rejected[0].semantic_group_basis == "combat_encounter_sequence"
+
+
+def test_generic_combat_subject_evidence_does_not_merge_across_videos() -> None:
+    """genericな大分類だけでは異なる動画の主要戦闘が統合されないこと。
+
+    Arrange:
+        - 同じ一般的な外見観測と似た画面を持つ異なるVideo Sourceが用意される
+        - 外見観測は対象同一性を裏付けられないgenericとされる
+    Act:
+        - 2枚の選定が要求される
+    Assert:
+        - 「ボス戦」という大分類だけで同じSubject Groupにされないこと
+    """
+    # Arrange
+    generic = CombatSubjectEvidence(
+        body_plan="humanoid",
+        scale="large",
+        surface="armored",
+        colors=("black",),
+        traits=("armor",),
+        distinctiveness="generic",
+    )
+    first = _candidate(
+        "generic-subject-first",
+        quality=0.90,
+        feature=(1.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="major",
+        video_order=0,
+        video_fingerprint="1" * 64,
+        combat_subject_evidence=generic,
+    )
+    second = _candidate(
+        "generic-subject-second",
+        quality=0.85,
+        feature=(0.90, math.sqrt(1 - 0.90**2)),
+        progress=Fraction(70, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint="2" * 64,
+        combat_subject_evidence=generic,
+    )
+
+    # Act
+    result = select_video_set_images(
+        (second, first),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.95,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        first.identifier,
+        second.identifier,
+    }
+    assert result.rejected == ()
 
 
 def test_non_major_candidate_splits_repeated_major_combat_scene_slug() -> None:

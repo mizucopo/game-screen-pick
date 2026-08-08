@@ -22,6 +22,7 @@ from src.video_selection.models.candidate_annotation_request import (
     CandidateAnnotationRequest,
 )
 from src.video_selection.models.candidate_moment import CandidateMoment
+from src.video_selection.models.combat_subject_evidence import CombatSubjectEvidence
 from src.video_selection.models.context_cue import ContextCue
 from src.video_selection.models.frame_candidate import FrameCandidate
 from src.video_selection.models.model_artifact import ModelArtifact
@@ -1323,6 +1324,25 @@ def test_candidate_schema_limits_references_to_request_members() -> None:
         "major_encounter_presentation",
         "ambiguous",
     ]
+    subject_evidence = observation_properties["combat_subject_evidence"]
+    assert subject_evidence["additionalProperties"] is False
+    assert subject_evidence["properties"]["body_plan"]["enum"] == [
+        "unknown",
+        "humanoid",
+        "quadruped",
+        "serpentine",
+        "fish_like",
+        "insectoid",
+        "avian",
+        "amorphous",
+        "plant_like",
+        "mechanical",
+        "structure",
+        "multi_part",
+        "other",
+    ]
+    assert subject_evidence["properties"]["colors"]["maxItems"] == 2
+    assert subject_evidence["properties"]["traits"]["maxItems"] == 4
     assert observation_properties["player_body_visibility"]["enum"] == [
         "clear",
         "partial",
@@ -1410,6 +1430,151 @@ def test_candidate_prompt_defines_blog_usefulness_boundaries() -> None:
     assert "explanation_valueのnone=" in prompt
     assert "context_relevanceのstrong=" in prompt
     assert "spoiler_riskのhigh=" in prompt
+    messages = payloads[0]["messages"]
+    assert isinstance(messages, list)
+    frame_prompt = messages[0]["content"]
+    assert "combat_subject_evidence" in frame_prompt
+    assert "固有名" in frame_prompt
+    assert "Context Cue、前後frameを根拠に" in frame_prompt
+    assert "distinctiveness=distinctive" in frame_prompt
+
+
+def test_candidate_annotation_keeps_single_image_combat_subject_evidence() -> None:
+    """一枚の画像から得た戦闘対象の外見根拠がAnnotationへ保持されること。
+
+    Arrange:
+        - 説明価値なしの主要戦闘frameと構造化された外見観測が用意される
+    Act:
+        - 公開Vision RuntimeでCandidate Annotationが実行される
+    Assert:
+        - 名前を含まない外見根拠がCandidate Annotationへ保持されること
+        - requestには一枚の画像だけが渡されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+    response = _frame_observation_payload(
+        (("frame-a", "battle", "gameplay_action", "none", "hud"),)
+    )
+    observation = _first_frame_observation(response)
+    observation["combat_encounter_kind"] = "major"
+    observation["combat_encounter_basis"] = "major_opponent_presentation"
+    observation["combat_subject_evidence"] = {
+        "body_plan": "quadruped",
+        "scale": "large",
+        "surface": "organic",
+        "colors": ["green", "brown"],
+        "traits": ["large_mouth", "bulbous_body"],
+        "distinctiveness": "distinctive",
+    }
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.combat_subject_evidence == CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("brown", "green"),
+        traits=("bulbous_body", "large_mouth"),
+        distinctiveness="distinctive",
+    )
+    messages = payloads[0]["messages"]
+    assert isinstance(messages, list)
+    assert sum("images" in message for message in messages) == 1
+
+
+def test_incomplete_distinctive_combat_subject_evidence_is_retried() -> None:
+    """不完全なdistinctive Combat Subject Evidenceがdomain retryされること。
+
+    Arrange:
+        - 初回は有限enumだが色と特徴が空のdistinctive応答が用意される
+        - 2回目は完全なdistinctive応答が用意される
+    Act:
+        - 公開Vision RuntimeでCandidate Annotationが実行される
+    Assert:
+        - 初回のdomain違反で処理全体が中断されず再試行されること
+        - 2回目の完全なEvidenceとstable validation codeが返されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (("frame-a", "exploration", "gameplay_idle", "high", "hud"),)
+        )
+        observation = _first_frame_observation(response)
+        observation["combat_subject_evidence"] = {
+            "body_plan": "quadruped",
+            "scale": "large",
+            "surface": "organic",
+            "colors": [] if len(payloads) == 1 else ["green"],
+            "traits": [] if len(payloads) == 1 else ["large_mouth"],
+            "distinctiveness": "distinctive",
+        }
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.combat_subject_evidence == CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "candidate_annotation_domain_invalid"
+    assert len(payloads) == 2
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "candidate_annotation_domain_invalid" in second_prompt
 
 
 def test_candidate_uses_generic_scene_when_catalog_details_do_not_match_frame() -> None:
@@ -5043,6 +5208,14 @@ def _frame_observation_payload(
                     and content_kind in {"gameplay_action", "event_action"}
                     else "none"
                 ),
+                "combat_subject_evidence": {
+                    "body_plan": "unknown",
+                    "scale": "unknown",
+                    "surface": "unknown",
+                    "colors": [],
+                    "traits": [],
+                    "distinctiveness": "unclear",
+                },
                 "player_body_visibility": (
                     "clear"
                     if content_kind not in {"map", "save", "tutorial_help", "title"}

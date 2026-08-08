@@ -21,3 +21,4 @@ class RejectedBlogCandidate:
     variant_group_id: str
     semantic_group_id: str | None = None
     semantic_group_basis: SemanticDuplicateBasis | None = None
+    semantic_group_evidence: tuple[str, ...] | None = None

@@ -22,7 +22,10 @@ from ..models.video_set_selection_result import (
     CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT,
     VideoSetSelectionResult,
 )
-from .assign_semantic_duplicate_groups import assign_semantic_duplicate_groups
+from .assign_semantic_duplicate_groups import (
+    assign_combat_encounter_groups,
+    assign_semantic_duplicate_groups,
+)
 
 SpoilerSensitivity = Literal["low", "medium", "high"]
 type CandidateMomentTimelines = Mapping[tuple[int, str], tuple[str, ...]]
@@ -143,21 +146,7 @@ def _combat_encounter_boundaries_are_observed(
             raise ValueError("注釈済みCandidateが完全時系列にありません")
         annotated_by_source[source_key].add(moment_id)
 
-    groups: dict[str, list[BlogCandidate]] = defaultdict(list)
-    for item in result.selected:
-        if (
-            item.semantic_group_id is not None
-            and item.semantic_group_basis == "combat_encounter_sequence"
-        ):
-            groups[item.semantic_group_id].append(item.candidate)
-    for rejected_item in result.rejected:
-        if (
-            rejected_item.semantic_group_id is not None
-            and rejected_item.semantic_group_basis == "combat_encounter_sequence"
-        ):
-            groups[rejected_item.semantic_group_id].append(rejected_item.candidate)
-
-    for members in groups.values():
+    for members in assign_combat_encounter_groups(candidates):
         source_keys = {_candidate_timeline_key(member) for member in members}
         if len(source_keys) != 1:
             raise ValueError("主要戦闘Groupが複数sourceにまたがっています")
@@ -259,7 +248,11 @@ def _select_with_major_spoiler_limit(
     )
     conditional_actuals = dict.fromkeys(SELECTION_COVERAGE_FACETS, 0)
     variant_groups = _assign_variant_groups(candidates)
-    semantic_groups, semantic_group_bases = assign_semantic_duplicate_groups(candidates)
+    (
+        semantic_groups,
+        semantic_group_bases,
+        semantic_group_evidence,
+    ) = assign_semantic_duplicate_groups(candidates)
     selected: list[SelectedBlogImage] = []
     remaining = list(candidates)
     counterfactual_scores: dict[str, SelectionScore] = {}
@@ -420,6 +413,9 @@ def _select_with_major_spoiler_limit(
                     tie_break_applied=tie_break_applied,
                     semantic_group_id=semantic_groups.get(candidate.identifier),
                     semantic_group_basis=semantic_group_bases.get(candidate.identifier),
+                    semantic_group_evidence=semantic_group_evidence.get(
+                        candidate.identifier
+                    ),
                 )
             )
             actuals[candidate.annotation.blog_image_type] += 1
@@ -452,6 +448,7 @@ def _select_with_major_spoiler_limit(
             variant_groups[candidate.identifier],
             semantic_groups,
             semantic_group_bases,
+            semantic_group_evidence,
             counterfactual_scores[candidate.identifier],
             major_spoiler_limit,
             final_similarity_ceiling,
@@ -1167,6 +1164,7 @@ def _rejection(
     variant_group_id: str,
     semantic_groups: Mapping[str, str],
     semantic_group_bases: Mapping[str, SemanticDuplicateBasis],
+    semantic_group_evidence: Mapping[str, tuple[str, ...]],
     counterfactual_score: SelectionScore,
     major_spoiler_limit: int | None,
     final_similarity_ceiling: float,
@@ -1231,6 +1229,7 @@ def _rejection(
         variant_group_id=variant_group_id,
         semantic_group_id=semantic_groups.get(candidate.identifier),
         semantic_group_basis=semantic_group_bases.get(candidate.identifier),
+        semantic_group_evidence=semantic_group_evidence.get(candidate.identifier),
     )
 
 

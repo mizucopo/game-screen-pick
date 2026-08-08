@@ -5,6 +5,7 @@ from fractions import Fraction
 
 import pytest
 
+from src.video_selection.models.combat_subject_evidence import CombatSubjectEvidence
 from src.video_selection.services.select_video_set_images import (
     select_video_set_images,
 )
@@ -82,13 +83,21 @@ def test_semantic_group_decision_round_trips_with_privacy_safe_basis() -> None:
     """Semantic Duplicate GroupのIDと根拠がcache artifactで復元されること。
 
     Arrange:
-        - 同じ動画とScene Slugに属する主要戦闘候補2件が用意される
+        - 同じ外見の主要戦闘対象を持つ候補2件が用意される
     Act:
         - semantic duplicateを含む選定結果がartifact化され復元される
     Assert:
-        - schemaが更新されGroup ID、根拠、blocking IDを含む結果が一致すること
+        - schemaが更新されGroup ID、外見根拠、blocking IDを含む結果が一致すること
     """
     # Arrange
+    subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
     first = build_blog_candidate("a")
     first = replace(
         first,
@@ -96,6 +105,7 @@ def test_semantic_group_decision_round_trips_with_privacy_safe_basis() -> None:
             first.annotation,
             combat_encounter_kind="major",
             combat_encounter_basis="major_opponent_presentation",
+            combat_subject_evidence=subject,
         ),
     )
     second = build_blog_candidate("b")
@@ -112,6 +122,7 @@ def test_semantic_group_decision_round_trips_with_privacy_safe_basis() -> None:
             candidate=second_frame,
             combat_encounter_kind="major",
             combat_encounter_basis="major_opponent_presentation",
+            combat_subject_evidence=subject,
         ),
         video_set_progress=Fraction(2, 10),
         shortlist_rank=2,
@@ -128,12 +139,22 @@ def test_semantic_group_decision_round_trips_with_privacy_safe_basis() -> None:
     restored = restore_video_set_selection_result(artifact, (first, second))
 
     # Assert
-    assert artifact["schema"] == "game-screen-pick/video-set-selection@2.0.0"
+    assert artifact["schema"] == "game-screen-pick/video-set-selection@3.0.0"
     selected = artifact["selected"]
     rejected = artifact["rejected"]
     assert isinstance(selected, list)
     assert isinstance(rejected, list)
-    assert selected[0]["semantic_group_basis"] == "combat_encounter_sequence"
-    assert rejected[0]["semantic_group_basis"] == "combat_encounter_sequence"
+    assert selected[0]["semantic_group_basis"] == "combat_subject_appearance"
+    assert rejected[0]["semantic_group_basis"] == "combat_subject_appearance"
+    assert selected[0]["semantic_group_evidence"] == [
+        "body_plan:quadruped",
+        "scale:large",
+        "surface:organic",
+        "color:green",
+        "trait:large_mouth",
+    ]
+    assert (
+        rejected[0]["semantic_group_evidence"] == selected[0]["semantic_group_evidence"]
+    )
     assert rejected[0]["blocked_by_image_id"] == first.identifier
     assert restored == selection

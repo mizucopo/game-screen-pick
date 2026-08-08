@@ -22,6 +22,12 @@ conversation context. Independent requests may run concurrently up to
 `ollama.max_parallel_requests`; the built-in default remains `1`, while the supported
 RTX 5090 target profile uses `2`.
 
+Each main Candidate Annotation request also returns finite Combat Subject Evidence
+for the opponent visible in that image. It must not use another frame, Context Cue,
+Scene Slug, opponent name, screen text, status UI, background, or player appearance.
+This preserves the independent-evaluation boundary when downstream selection groups
+the same major combat subject across videos.
+
 Different Candidate Moments may also be processed concurrently under the same
 limit. Each Moment still completes its Primary Representative Frame before deciding
 whether its own fallback frames are required. Scheduling never combines images or
@@ -53,6 +59,10 @@ The per-frame cache identity includes the image, context, model, prompt, schema,
 runtime contract, but not the fallback aggregation policy or scheduling order. A
 fallback-policy change therefore invalidates aggregation and downstream selection,
 not unchanged per-frame annotations.
+
+Changing the Candidate Annotation schema to add Combat Subject Evidence does
+invalidate that per-frame annotation and downstream selection. It does not invalidate
+Video Identity, Video Stage, Context Cue, or other unchanged upstream artifacts.
 
 ## Consequences
 

@@ -110,6 +110,9 @@ def render_human_selection_report(report: dict[str, object]) -> str:
             if "semantic_group" in rejection:
                 semantic_group = _mapping(rejection["semantic_group"])
                 detail += f" ({semantic_group['basis']})"
+                group_evidence = _semantic_group_evidence_text(semantic_group)
+                if group_evidence:
+                    detail += f" {group_evidence}"
             lines.append(
                 f"| `{_abbreviate(identifier, 8)}` "
                 f"{_escape_markdown_table_cell(str(annotation['summary']))} | "
@@ -256,6 +259,16 @@ def _append_selected(
     source_video = sources[source["video_id"]]
     video_time = _mapping(source["video_time"])
     relative_path = str(output["relative_path"])
+    semantic_group_lines: tuple[str, ...] = ()
+    if "semantic_group" in selection:
+        semantic_group = _mapping(selection["semantic_group"])
+        group_evidence = _semantic_group_evidence_text(semantic_group)
+        evidence_suffix = f" · `{group_evidence}`" if group_evidence else ""
+        semantic_group_lines = (
+            "- **Semantic duplicate group**: "
+            f"`{semantic_group['id']}` · `{semantic_group['basis']}`"
+            f"{evidence_suffix}",
+        )
     lines.extend(
         (
             f"### {index:02d} — {annotation['summary']}",
@@ -277,15 +290,7 @@ def _append_selected(
                 f"- **Reason codes**: `"
                 f"{', '.join(cast(list[str], selection['reason_codes']))}`"
             ),
-            *(
-                (
-                    "- **Semantic duplicate group**: "
-                    f"`{_mapping(selection['semantic_group'])['id']}` · "
-                    f"`{_mapping(selection['semantic_group'])['basis']}`",
-                )
-                if "semantic_group" in selection
-                else ()
-            ),
+            *semantic_group_lines,
             (
                 f"- **Source**: Video {source_video['order']} "
                 f"`{source_video['relative_path']}` (`{source['video_id']}`) · "
@@ -316,6 +321,13 @@ def _append_selected(
                 "",
             )
         )
+
+
+def _semantic_group_evidence_text(group: dict[str, Any]) -> str:
+    """Semantic Duplicate Groupの有限enum evidenceを表示用に連結する。"""
+    if "evidence" not in group:
+        return ""
+    return ", ".join(str(value) for value in group["evidence"])
 
 
 def _context_line(annotation: dict[str, Any]) -> str:

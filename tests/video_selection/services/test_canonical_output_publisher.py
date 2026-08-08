@@ -76,7 +76,7 @@ def test_selected_webp_and_reports_are_published_from_one_canonical_object(
     assert report_from_disk == report
     assert report["schema"] == {
         "name": "game-screen-pick/report",
-        "version": "2.1.0",
+        "version": "2.2.0",
     }
     assert report["run"]["status"] == "completed_with_warnings"
     assert report["run"]["warnings"] == [
@@ -146,6 +146,13 @@ def test_semantic_duplicate_group_evidence_is_published(tmp_path: Path) -> None:
     selected = selection.selected[0]
     rejected = selection.rejected[0]
     semantic_group_id = "semantic_" + "3" * 64
+    semantic_group_evidence = (
+        "body_plan:quadruped",
+        "scale:large",
+        "surface:organic",
+        "color:green",
+        "trait:large_mouth",
+    )
     request = replace(
         request,
         selection_result=replace(
@@ -158,7 +165,8 @@ def test_semantic_duplicate_group_evidence_is_published(tmp_path: Path) -> None:
                         "semantic_group_representative",
                     ),
                     semantic_group_id=semantic_group_id,
-                    semantic_group_basis="combat_encounter_sequence",
+                    semantic_group_basis="combat_subject_appearance",
+                    semantic_group_evidence=semantic_group_evidence,
                 ),
             ),
             rejected=(
@@ -169,7 +177,8 @@ def test_semantic_duplicate_group_evidence_is_published(tmp_path: Path) -> None:
                     nearest_selected_image_id=None,
                     similarity=None,
                     semantic_group_id=semantic_group_id,
-                    semantic_group_basis="combat_encounter_sequence",
+                    semantic_group_basis="combat_subject_appearance",
+                    semantic_group_evidence=semantic_group_evidence,
                 ),
             ),
         ),
@@ -182,26 +191,115 @@ def test_semantic_duplicate_group_evidence_is_published(tmp_path: Path) -> None:
     )
 
     # Assert
-    assert report["schema"]["version"] == "2.1.0"
+    assert report["schema"]["version"] == "2.2.0"
     selected_record = report["selected"][0]
     near_miss = report["near_misses"][0]
     assert selected_record["selection"]["semantic_group"] == {
         "id": semantic_group_id,
-        "basis": "combat_encounter_sequence",
+        "basis": "combat_subject_appearance",
+        "evidence": list(semantic_group_evidence),
     }
     assert near_miss["rejection"] == {
         "reason_code": "semantic_duplicate",
         "blocked_by_image_id": selected.candidate.identifier,
         "semantic_group": {
             "id": semantic_group_id,
-            "basis": "combat_encounter_sequence",
+            "basis": "combat_subject_appearance",
+            "evidence": list(semantic_group_evidence),
         },
     }
     markdown = (request.configuration.output_folder / "report.md").read_text(
         encoding="utf-8"
     )
-    assert "combat_encounter_sequence" in markdown
+    assert "combat_subject_appearance" in markdown
+    assert "body_plan:quadruped" in markdown
     assert "semantic_duplicate" in markdown
+
+
+def test_reader_rejects_invalid_combat_subject_evidence_token(tmp_path: Path) -> None:
+    """カテゴリと値が一致しないCombat Subject evidenceが拒否されること。
+
+    Arrange:
+        - 完成reportの選択代表へpatternだけが正しい不正な有限enum tokenが混入される
+        - JSONとMarkdownは同じ不正objectから再生成される
+    Act:
+        - 公開済みCanonical Outputのreader検証が実行される
+    Assert:
+        - privacy-safeな有限enum contract違反として拒否されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    report = cast(
+        dict[str, Any],
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request),
+    )
+    output_folder = request.configuration.output_folder
+    selected = cast(list[dict[str, Any]], report["selected"])[0]
+    selection = cast(dict[str, Any], selected["selection"])
+    selection["semantic_group"] = {
+        "id": "semantic_" + "4" * 64,
+        "basis": "combat_subject_appearance",
+        "evidence": ["body_plan:red"],
+    }
+    cast(list[str], selection["reason_codes"]).append("semantic_group_representative")
+    report_value = cast(dict[str, object], report)
+    (output_folder / "report.json").write_text(
+        serialize_canonical_selection_report(report_value),
+        encoding="utf-8",
+    )
+    (output_folder / "report.md").write_text(
+        render_human_selection_report(report_value),
+        encoding="utf-8",
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Combat Subject evidence"):
+        load_validated_canonical_selection_report(output_folder)
+
+
+def test_reader_validates_semantic_group_on_non_duplicate_near_miss(
+    tmp_path: Path,
+) -> None:
+    """非duplicate理由のnear missでもSemantic Group evidenceが検証されること。
+
+    Arrange:
+        - similarity ceilingで除外されたnear missへ不正なEvidenceが記録される
+        - JSONとMarkdownは同じ不正objectから再生成される
+    Act:
+        - 公開済みCanonical Outputのreader検証が実行される
+    Assert:
+        - rejection reasonに関係なく有限enum contract違反が拒否されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    report = cast(
+        dict[str, Any],
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request),
+    )
+    output_folder = request.configuration.output_folder
+    near_miss = cast(list[dict[str, Any]], report["near_misses"])[0]
+    rejection = cast(dict[str, Any], near_miss["rejection"])
+    assert rejection["reason_code"] == "similarity_ceiling"
+    rejection["semantic_group"] = {
+        "id": "semantic_" + "5" * 64,
+        "basis": "combat_subject_appearance",
+        "evidence": ["body_plan:red"],
+    }
+    report_value = cast(dict[str, object], report)
+    (output_folder / "report.json").write_text(
+        serialize_canonical_selection_report(report_value),
+        encoding="utf-8",
+    )
+    (output_folder / "report.md").write_text(
+        render_human_selection_report(report_value),
+        encoding="utf-8",
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Combat Subject evidence"):
+        load_validated_canonical_selection_report(output_folder)
 
 
 def test_colliding_digest_prefixes_expand_only_affected_output_names(
@@ -608,7 +706,7 @@ def test_reader_revalidates_historical_report_with_its_major_schema(
     )
     markdown_path.write_text(
         (summary + "\n## Selected images" + selected_and_later).replace(
-            "game-screen-pick/report@2.1.0",
+            "game-screen-pick/report@2.2.0",
             "game-screen-pick/report@1.0.0",
         ),
         encoding="utf-8",
@@ -808,7 +906,7 @@ def test_schema_or_renderer_mismatch_leaves_no_output_folder(
 def test_unknown_nested_field_is_rejected_by_exact_producer_schema(
     tmp_path: Path,
 ) -> None:
-    """report@2.1.0の既知objectへ追加された未知fieldが拒否されること。
+    """report@2.2.0の既知objectへ追加された未知fieldが拒否されること。
 
     Arrange:
         - validation直前にVideo Time契約へ未知fieldを追加するfaultが用意される
@@ -828,7 +926,7 @@ def test_unknown_nested_field_is_rejected_by_exact_producer_schema(
         report = cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
         video_set = cast(dict[str, Any], report["video_set"])
         time_contract = cast(dict[str, Any], video_set["time_contract"])
-        time_contract["future_field"] = "not-in-report-2.1.0"
+        time_contract["future_field"] = "not-in-report-2.2.0"
         path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
