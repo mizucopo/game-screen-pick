@@ -57,7 +57,7 @@ ADR 0004の表に従うSpoiler Penaltyは候補単体へのsoft penaltyです。
 
 `video-set-selection-v6`はVariant Groupとglobal similarity ceilingの外側にSemantic Duplicate Groupを設けます。同じGroupは要求枚数不足時にも最大1枚で、Marginal Selection Utilityと通常のstable tie-breakで最初に選ばれた候補が代表です。この上限はConditional Coverage Minimumと`recurring_gameplay`のVariant Expansionより強く、未代表の別戦闘対象、別遭遇、通常戦闘、eventを同一Groupの2枚目より先に残します。
 
-Group判定は次の根拠を使います。候補が複数の根拠に属する場合はGroupを決定的に統合し、統合component全体を公開contractで表せるものだけを対象に、`combat_subject_appearance`、`combat_encounter_sequence`、`title_semantics`、`visual_role_similarity`の順で公開basisを選びます。member全体に共通する有限enum evidenceがない`combat_subject_appearance`は公開せず、次順位のbasisへフォールバックします。公開basisとは別に統合前のCombat Encounter Groupを保持し、Encounter edge間の未注釈MomentがなくなるまでShortlistを拡張します。
+Group判定は次の根拠を使います。候補が複数の根拠に属する場合はGroupを決定的に統合し、統合component全体を公開contractで表せるものだけを対象に、`combat_subject_appearance`、`combat_encounter_sequence`、`title_semantics`、`visual_role_similarity`の順で公開basisを選びます。全memberが完全な識別可能Evidenceを持たない場合、またはmember全体に共通する有限enum evidenceがない場合は`combat_subject_appearance`を公開せず、次順位のbasisへフォールバックします。公開basisとは別に統合前のCombat Encounter Groupを保持し、Encounter edge間の未注釈MomentがなくなるまでShortlistを拡張します。
 
 - `title_semantics`: Blog Image Type、Screen Text Kind、Representative Frame Evidenceのいずれかがtitleを示す候補をVideo Set全体で一つにする。`event`などへの誤分類でも既存のtitle最大1枚を回避できない。
 - `combat_subject_appearance`: `major`候補のCombat Subject Evidenceが`distinctive`で完全な場合だけ動画横断で比較する。body plan・scale・surfaceが一致し、colorとtraitがそれぞれ一つ以上共通し、Neutral視覚類似度が0.80以上の完全結合だけを同じ戦闘対象にする。Scene Slug、敵名、動画、遭遇時刻、公開用summaryの一致は要求しない。`generic`、`unclear`、不完全な根拠、外見が異なる相手は「boss戦」という大分類だけでまとめない。

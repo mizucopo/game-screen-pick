@@ -443,19 +443,23 @@ def _validate_semantic_group_relationships(
 
     for item in near_misses:
         rejection = _mapping(item["rejection"])
+        rejected_semantic_group = rejection.get("semantic_group")
+        group: dict[str, Any] | None = None
+        group_evidence: tuple[str, ...] = ()
+        if rejected_semantic_group is not None:
+            group = _mapping(rejected_semantic_group)
+            group_evidence = _validated_semantic_group_evidence(group)
         if rejection["reason_code"] != "semantic_duplicate":
             continue
         blocker_id = rejection.get("blocked_by_image_id")
-        rejected_semantic_group = rejection.get("semantic_group")
-        if blocker_id is None or rejected_semantic_group is None:
+        if blocker_id is None or group is None:
             raise ValueError(
                 "Canonical Selection ReportのSemantic Duplicate Group参照がありません"
             )
-        group = _mapping(rejected_semantic_group)
         expected_group = (
             str(group["id"]),
             str(group["basis"]),
-            _validated_semantic_group_evidence(group),
+            group_evidence,
         )
         if selected_group_by_image.get(str(blocker_id)) != expected_group:
             raise ValueError(

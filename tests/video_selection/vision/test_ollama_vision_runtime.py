@@ -1507,6 +1507,76 @@ def test_candidate_annotation_keeps_single_image_combat_subject_evidence() -> No
     assert sum("images" in message for message in messages) == 1
 
 
+def test_incomplete_distinctive_combat_subject_evidence_is_retried() -> None:
+    """不完全なdistinctive Combat Subject Evidenceがdomain retryされること。
+
+    Arrange:
+        - 初回は有限enumだが色と特徴が空のdistinctive応答が用意される
+        - 2回目は完全なdistinctive応答が用意される
+    Act:
+        - 公開Vision RuntimeでCandidate Annotationが実行される
+    Assert:
+        - 初回のdomain違反で処理全体が中断されず再試行されること
+        - 2回目の完全なEvidenceとstable validation codeが返されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (("frame-a", "exploration", "gameplay_idle", "high", "hud"),)
+        )
+        observation = _first_frame_observation(response)
+        observation["combat_subject_evidence"] = {
+            "body_plan": "quadruped",
+            "scale": "large",
+            "surface": "organic",
+            "colors": [] if len(payloads) == 1 else ["green"],
+            "traits": [] if len(payloads) == 1 else ["large_mouth"],
+            "distinctiveness": "distinctive",
+        }
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.combat_subject_evidence == CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "candidate_annotation_domain_invalid"
+    assert len(payloads) == 2
+    second_prompt = _last_message(payloads[1])["content"]
+    assert isinstance(second_prompt, str)
+    assert "candidate_annotation_domain_invalid" in second_prompt
+
+
 def test_candidate_uses_generic_scene_when_catalog_details_do_not_match_frame() -> None:
     """Catalogの具体的な場所が画像で確認できなければ要約から除かれること。
 

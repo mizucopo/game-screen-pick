@@ -64,7 +64,7 @@ OllamaのCandidate Annotation responseはframeごとに次の意味情報だけ�
 - 一時的な遮蔽
 - Spoiler Riskと引用を含まないevidence summary
 
-Combat Subject Evidenceはbody plan、scale、surface、最大2色、最大4特徴、`distinctive`・`generic`・`unclear`のdistinctivenessだけを有限enumで返します。対象画像一枚の攻撃相手本体だけを観測し、敵名、Scene Slug、画面内文字、HP・status UI、背景、player、Context Cue、前後frame、別requestの結果を根拠にしません。body plan・scale・surface・色・特徴がすべてそろう場合だけ`distinctive`を許可し、判別不能または汎用的な外見を動画横断の同一対象判定に使いません。
+Combat Subject Evidenceはbody plan、scale、surface、最大2色、最大4特徴、`distinctive`・`generic`・`unclear`のdistinctivenessだけを有限enumで返します。対象画像一枚の攻撃相手本体だけを観測し、敵名、Scene Slug、画面内文字、HP・status UI、背景、player、Context Cue、前後frame、別requestの結果を根拠にしません。body plan・scale・surface・色・特徴がすべてそろう場合だけ`distinctive`を許可し、判別不能または汎用的な外見を動画横断の同一対象判定に使いません。enum自体が正しくても、unknown fieldまたは空の色・特徴を持つ`distinctive`はdomain-invalid応答として受理しません。
 
 response全体にはContext Cue Relevanceと参照Cue IDも含めます。Candidate Annotation artifactはlocalに決めたRepresentative Frame、Blog Image Type、annotation summary、Representative Frameの選択理由に加え、fallback比較用の画面内容、敵と主対象の視認性、一時的遮蔽、Combat Subject Evidenceを保持します。
 
@@ -72,7 +72,7 @@ Quality Score、model confidence、final score、soft coverage、eligible/select
 
 ## Retryとfailure
 
-各Ollama operationは同じsemantic入力で初回と一回のretryだけを行います。Candidate Annotation Stageは主推論に加えて、関係修復、戦闘有無と戦闘可視性の二段階、それぞれの許可方向に対する独立再確認、戦闘構図の外周strip監査、または掲載境界専用確認を条件付きで含むため、Stage全体のdiagnosticsは合計1〜15 attemptになります。timeout、connection failure、HTTP 408/429/5xx、空・打ち切り応答、schema/domain validation failureがretry対象です。このHTTP分類は推論前の`/api/tags`確認にも適用します。429の`Retry-After`は秒数とHTTP-dateの両形式を解釈して最大30秒まで尊重し、その他は1秒待ちます。
+各Ollama operationは同じsemantic入力で初回と一回のretryだけを行います。Candidate Annotation Stageは主推論に加えて、関係修復、戦闘有無と戦闘可視性の二段階、それぞれの許可方向に対する独立再確認、戦闘構図の外周strip監査、または掲載境界専用確認を条件付きで含むため、Stage全体のdiagnosticsは合計1〜15 attemptになります。timeout、connection failure、HTTP 408/429/5xx、空・打ち切り応答、schema/domain validation failureがretry対象です。不完全な`distinctive` Combat Subject Evidenceもdomain validation failureとして同じ上限付きretryへ渡します。このHTTP分類は推論前の`/api/tags`確認にも適用します。429の`Retry-After`は秒数とHTTP-dateの両形式を解釈して最大30秒まで尊重し、その他は1秒待ちます。
 
 response/schema/domain validation retryではstable validation codeを追加し、raw responseを次promptへ戻しません。Scene Kind `other`のsceneは自由なslugが返っても、分類の逃げ先として正確な`other`、汎用表示名と汎用説明へ決定的に正規化します。Scene Catalogのdomain違反ではScene Kindの重複を許しつつScene Slugを一意にし、`other`のkind・role関係を満たす修正指示を再提示します。再試行でも非`other`のScene Slugだけが重複した場合は、入力順に`-2`、`-3`のsuffixを付けて決定的に一意化します。Scene Kind `other`が複数ある場合やその他のdomain違反は補正せず失敗します。Context Cueを持つCinematic Event Presentationまたは大きなevent portraitで画面内台詞文字ありと返された場合は、同じ画像とsemantic入力を使う主推論の一回のretryで、音声やContext Cueを根拠にせずDialogue Text Presentationを再確認します。再確認でも台詞文字ありなら有効な会話画面として保持し、文字表示なしなら静止eventへ正規化します。
 

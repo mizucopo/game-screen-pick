@@ -2325,14 +2325,17 @@ def _parse_combat_subject_evidence(value: object) -> CombatSubjectEvidence:
         or len(traits) > 4
     ):
         raise _schema_error("candidate_annotation_schema_invalid")
-    return CombatSubjectEvidence(
-        body_plan=cast(CombatSubjectBodyPlan, body_plan),
-        scale=cast(CombatSubjectScale, scale),
-        surface=cast(CombatSubjectSurface, surface),
-        colors=tuple(cast(list[CombatSubjectColor], colors)),
-        traits=tuple(cast(list[CombatSubjectTrait], traits)),
-        distinctiveness=cast(CombatSubjectDistinctiveness, distinctiveness),
-    )
+    try:
+        return CombatSubjectEvidence(
+            body_plan=cast(CombatSubjectBodyPlan, body_plan),
+            scale=cast(CombatSubjectScale, scale),
+            surface=cast(CombatSubjectSurface, surface),
+            colors=tuple(cast(list[CombatSubjectColor], colors)),
+            traits=tuple(cast(list[CombatSubjectTrait], traits)),
+            distinctiveness=cast(CombatSubjectDistinctiveness, distinctiveness),
+        )
+    except ValueError:
+        raise _domain_error("candidate_annotation_domain_invalid") from None
 
 
 def _privacy_safe_candidate_texts(

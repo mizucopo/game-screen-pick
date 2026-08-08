@@ -2943,6 +2943,85 @@ def test_overlapping_subject_groups_fall_back_to_publishable_title_basis() -> No
     assert {item.semantic_group_evidence for item in result.rejected} == {None}
 
 
+def test_subject_basis_requires_identifiable_evidence_from_every_member() -> None:
+    """全memberにSubject evidenceがない統合Groupでbasisがfallbackされること。
+
+    Arrange:
+        - 同じCombat Subjectを示す2件とEvidenceがunclearな1件が用意される
+        - 3件がtitle semanticsでも一つのGroupへ接続される
+    Act:
+        - 全候補数と同じ3枚の選定が要求される
+    Assert:
+        - 識別可能なsubsetだけを根拠にCombat Subject basisが公開されないこと
+        - Group全体を説明できるtitle semanticsへfallbackされること
+    """
+    # Arrange
+    shared_subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    candidates = (
+        _candidate(
+            "all-member-evidence-best",
+            quality=0.95,
+            feature=(1.0, 0.0, 0.0),
+            progress=Fraction(10, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            combat_encounter_kind="major",
+            video_fingerprint="5" * 64,
+            screen_text_kind="title",
+            combat_subject_evidence=shared_subject,
+        ),
+        _candidate(
+            "all-member-evidence-weaker",
+            quality=0.85,
+            feature=(0.90, math.sqrt(1 - 0.90**2), 0.0),
+            progress=Fraction(20, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            combat_encounter_kind="major",
+            video_fingerprint="6" * 64,
+            screen_text_kind="title",
+            combat_subject_evidence=shared_subject,
+        ),
+        _candidate(
+            "all-member-evidence-unclear",
+            quality=0.80,
+            feature=(0.0, 0.0, 1.0),
+            progress=Fraction(30, 100),
+            blog_image_type="event",
+            explanation_value="high",
+            context_relevance="none",
+            combat_encounter_kind="major",
+            video_fingerprint="7" * 64,
+            screen_text_kind="title",
+        ),
+    )
+
+    # Act
+    result = select_video_set_images(
+        candidates,
+        requested_count=3,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert len(result.selected) == 1
+    assert result.selected[0].semantic_group_basis == "title_semantics"
+    assert result.selected[0].semantic_group_evidence is None
+    assert {item.semantic_group_basis for item in result.rejected} == {
+        "title_semantics"
+    }
+
+
 def test_distinct_combat_subjects_in_one_encounter_are_not_merged() -> None:
     """同じ遭遇内でも外見が明確に異なる戦闘対象が別々に選択されること。
 

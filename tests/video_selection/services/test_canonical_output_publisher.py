@@ -258,6 +258,50 @@ def test_reader_rejects_invalid_combat_subject_evidence_token(tmp_path: Path) ->
         load_validated_canonical_selection_report(output_folder)
 
 
+def test_reader_validates_semantic_group_on_non_duplicate_near_miss(
+    tmp_path: Path,
+) -> None:
+    """非duplicate理由のnear missでもSemantic Group evidenceが検証されること。
+
+    Arrange:
+        - similarity ceilingで除外されたnear missへ不正なEvidenceが記録される
+        - JSONとMarkdownは同じ不正objectから再生成される
+    Act:
+        - 公開済みCanonical Outputのreader検証が実行される
+    Assert:
+        - rejection reasonに関係なく有限enum contract違反が拒否されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    report = cast(
+        dict[str, Any],
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request),
+    )
+    output_folder = request.configuration.output_folder
+    near_miss = cast(list[dict[str, Any]], report["near_misses"])[0]
+    rejection = cast(dict[str, Any], near_miss["rejection"])
+    assert rejection["reason_code"] == "similarity_ceiling"
+    rejection["semantic_group"] = {
+        "id": "semantic_" + "5" * 64,
+        "basis": "combat_subject_appearance",
+        "evidence": ["body_plan:red"],
+    }
+    report_value = cast(dict[str, object], report)
+    (output_folder / "report.json").write_text(
+        serialize_canonical_selection_report(report_value),
+        encoding="utf-8",
+    )
+    (output_folder / "report.md").write_text(
+        render_human_selection_report(report_value),
+        encoding="utf-8",
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Combat Subject evidence"):
+        load_validated_canonical_selection_report(output_folder)
+
+
 def test_colliding_digest_prefixes_expand_only_affected_output_names(
     tmp_path: Path,
 ) -> None:

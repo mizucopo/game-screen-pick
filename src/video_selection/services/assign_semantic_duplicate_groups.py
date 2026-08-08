@@ -100,7 +100,7 @@ def _group_evidence(
         if item.annotation.combat_subject_evidence is not None
         and item.annotation.combat_subject_evidence.can_identify_subject
     )
-    if not evidence:
+    if len(evidence) != len(members):
         return ()
     tokens: list[str] = []
     for field_name in ("body_plan", "scale", "surface"):
