@@ -12,6 +12,7 @@ from .combat_encounter_basis import (
     combat_encounter_classification_is_valid,
 )
 from .combat_encounter_kind import COMBAT_ENCOUNTER_KINDS, CombatEncounterKind
+from .combat_subject_evidence import CombatSubjectEvidence
 from .frame_candidate import FrameCandidate
 from .report_value import string_looks_private
 from .representative_frame_evidence import RepresentativeFrameEvidence
@@ -152,6 +153,7 @@ class CandidateAnnotation:
     spoiler_evidence: str = ""
     combat_encounter_kind: CombatEncounterKind = "not_combat"
     combat_encounter_basis: CombatEncounterBasis = "none"
+    combat_subject_evidence: CombatSubjectEvidence | None = None
     representative_frame_evidence: RepresentativeFrameEvidence | None = field(
         default=None,
         compare=False,
@@ -182,6 +184,8 @@ class CandidateAnnotation:
             or self.spoiler_risk not in SPOILER_RISKS
             or self.combat_encounter_kind not in COMBAT_ENCOUNTER_KINDS
             or self.combat_encounter_basis not in COMBAT_ENCOUNTER_BASES
+            or self.combat_subject_evidence is not None
+            and not isinstance(self.combat_subject_evidence, CombatSubjectEvidence)
             or self.representative_frame_evidence is not None
             and not isinstance(
                 self.representative_frame_evidence,

@@ -58,6 +58,21 @@ from ..models.combat_encounter_kind import (
     COMBAT_ENCOUNTER_KINDS,
     CombatEncounterKind,
 )
+from ..models.combat_subject_evidence import (
+    COMBAT_SUBJECT_BODY_PLANS,
+    COMBAT_SUBJECT_COLORS,
+    COMBAT_SUBJECT_DISTINCTIVENESSES,
+    COMBAT_SUBJECT_SCALES,
+    COMBAT_SUBJECT_SURFACES,
+    COMBAT_SUBJECT_TRAITS,
+    CombatSubjectBodyPlan,
+    CombatSubjectColor,
+    CombatSubjectDistinctiveness,
+    CombatSubjectEvidence,
+    CombatSubjectScale,
+    CombatSubjectSurface,
+    CombatSubjectTrait,
+)
 from ..models.frame_candidate import FrameCandidate
 from ..models.model_artifact import ModelArtifact
 from ..models.model_artifact_invalid_error import ModelArtifactInvalidError
@@ -205,6 +220,7 @@ _FRAME_OBSERVATION_KEYS = {
     "visible_character_or_enemy",
     "combat_encounter_kind",
     "combat_encounter_basis",
+    "combat_subject_evidence",
     "player_body_visibility",
     "opponent_body_visibility",
     "effect_only_frame",
@@ -335,6 +351,12 @@ _CANDIDATE_FRAME_DIRECT_OBSERVATION_INSTRUCTION = (
     "visible_character_or_enemy=falseです。portrait、HUD、文字、影、発光、"
     "移動軌跡だけは本体ではありません。戦闘ではplayer本体と攻撃相手本体を別々に"
     "判定し、portrait、HUD、文字、光、hit effect、影を本体に数えません。"
+    "combat_subject_evidenceは攻撃相手本体の外見だけを構造化します。固有名、"
+    "画面内文字、HP・status bar、背景、player、Context Cue、前後frameを根拠に"
+    "しません。body_plan、scale、surface、最大2色のcolors、最大4件のtraitsを"
+    "実際に見える本体から選びます。安定した中核特徴をすべて判別できる場合だけ"
+    "distinctiveness=distinctive、本体は見えるが一般的な特徴しかなければgeneric、"
+    "本体を判別できない場合はunclearとし、unknownと空配列を使います。"
 )
 _COMBAT_ENCOUNTER_VERIFICATION_INSTRUCTION = (
     "この画像1枚に実際に見える画素だけを観測してください。音声、前後場面、"
@@ -1988,6 +2010,7 @@ def _parse_candidate_annotation(
                 spoiler_evidence=spoiler_evidence,
                 combat_encounter_kind=selected.combat_encounter_kind,
                 combat_encounter_basis=selected.combat_encounter_basis,
+                combat_subject_evidence=selected.combat_subject_evidence,
                 representative_frame_evidence=selected.representative_frame_evidence,
             ),
             free_text_redacted,
@@ -2166,6 +2189,9 @@ def _parse_candidate_frame_observations(
         visible_character_or_enemy = raw_observation.get("visible_character_or_enemy")
         combat_encounter_kind = raw_observation.get("combat_encounter_kind")
         combat_encounter_basis = raw_observation.get("combat_encounter_basis")
+        combat_subject_evidence = _parse_combat_subject_evidence(
+            raw_observation.get("combat_subject_evidence")
+        )
         player_body_visibility = raw_observation.get("player_body_visibility")
         opponent_body_visibility = raw_observation.get("opponent_body_visibility")
         effect_only_frame = raw_observation.get("effect_only_frame")
@@ -2237,6 +2263,7 @@ def _parse_candidate_frame_observations(
                         CombatEncounterBasis,
                         combat_encounter_basis,
                     ),
+                    combat_subject_evidence=combat_subject_evidence,
                     player_body_visibility=cast(
                         CharacterBodyVisibility,
                         player_body_visibility,
@@ -2263,6 +2290,49 @@ def _parse_candidate_frame_observations(
         except ValueError:
             raise _domain_error("candidate_annotation_domain_invalid") from None
     return tuple(observations)
+
+
+def _parse_combat_subject_evidence(value: object) -> CombatSubjectEvidence:
+    """名前を含まない有限enumの戦闘対象外見根拠を復元する。"""
+    expected_keys = {
+        "body_plan",
+        "scale",
+        "surface",
+        "colors",
+        "traits",
+        "distinctiveness",
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise _schema_error("candidate_annotation_schema_invalid")
+    body_plan = value.get("body_plan")
+    scale = value.get("scale")
+    surface = value.get("surface")
+    colors = value.get("colors")
+    traits = value.get("traits")
+    distinctiveness = value.get("distinctiveness")
+    if (
+        body_plan not in COMBAT_SUBJECT_BODY_PLANS
+        or scale not in COMBAT_SUBJECT_SCALES
+        or surface not in COMBAT_SUBJECT_SURFACES
+        or distinctiveness not in COMBAT_SUBJECT_DISTINCTIVENESSES
+        or not isinstance(colors, list)
+        or not all(color in COMBAT_SUBJECT_COLORS for color in colors)
+        or len(colors) != len(set(colors))
+        or len(colors) > 2
+        or not isinstance(traits, list)
+        or not all(trait in COMBAT_SUBJECT_TRAITS for trait in traits)
+        or len(traits) != len(set(traits))
+        or len(traits) > 4
+    ):
+        raise _schema_error("candidate_annotation_schema_invalid")
+    return CombatSubjectEvidence(
+        body_plan=cast(CombatSubjectBodyPlan, body_plan),
+        scale=cast(CombatSubjectScale, scale),
+        surface=cast(CombatSubjectSurface, surface),
+        colors=tuple(cast(list[CombatSubjectColor], colors)),
+        traits=tuple(cast(list[CombatSubjectTrait], traits)),
+        distinctiveness=cast(CombatSubjectDistinctiveness, distinctiveness),
+    )
 
 
 def _privacy_safe_candidate_texts(

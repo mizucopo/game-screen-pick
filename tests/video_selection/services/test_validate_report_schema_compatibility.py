@@ -67,7 +67,7 @@ def test_report_schema_version_is_independent_from_package_version() -> None:
     Act:
         - 両方のversionが読み取られる
     Assert:
-        - report schemaが2.1.0でpackage versionとは異なること
+        - report schemaが2.2.0でpackage versionとは異なること
     """
     # Arrange
     project_root = Path(__file__).parents[3]
@@ -79,7 +79,7 @@ def test_report_schema_version_is_independent_from_package_version() -> None:
     package_version = project["project"]["version"]
 
     # Assert
-    assert REPORT_SCHEMA_VERSION == "2.1.0"
+    assert REPORT_SCHEMA_VERSION == "2.2.0"
     assert package_version != REPORT_SCHEMA_VERSION
 
 
@@ -87,7 +87,7 @@ def test_historical_report_schema_remains_available_after_major_upgrade() -> Non
     """major更新後も旧report schemaがversion別pathで保持されること。
 
     Arrange:
-        - schema配置先と履歴1.0.0・2.0.0・現行2.1.0のpathが用意される
+        - schema配置先と履歴1.0.0・2.0.0・2.1.0・現行2.2.0のpathが用意される
     Act:
         - 両schema documentが読み込まれる
     Assert:
@@ -97,11 +97,13 @@ def test_historical_report_schema_remains_available_after_major_upgrade() -> Non
     schema_folder = Path(__file__).parents[3] / "src/video_selection/schemas"
     historical_path = schema_folder / "report-1.0.0.schema.json"
     previous_minor_path = schema_folder / "report-2.0.0.schema.json"
-    current_path = schema_folder / "report-2.1.0.schema.json"
+    semantic_group_path = schema_folder / "report-2.1.0.schema.json"
+    current_path = schema_folder / "report-2.2.0.schema.json"
 
     # Act
     historical = json.loads(historical_path.read_text(encoding="utf-8"))
     previous_minor = json.loads(previous_minor_path.read_text(encoding="utf-8"))
+    semantic_group = json.loads(semantic_group_path.read_text(encoding="utf-8"))
     current = json.loads(current_path.read_text(encoding="utf-8"))
 
     # Assert
@@ -112,6 +114,10 @@ def test_historical_report_schema_remains_available_after_major_upgrade() -> Non
         previous_minor["properties"]["schema"]["properties"]["version"]["const"]
         == "2.0.0"
     )
+    assert (
+        semantic_group["properties"]["schema"]["properties"]["version"]["const"]
+        == "2.1.0"
+    )
     assert current["properties"]["schema"]["properties"]["version"]["const"] == (
-        "2.1.0"
+        "2.2.0"
     )

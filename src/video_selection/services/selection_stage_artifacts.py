@@ -5,6 +5,13 @@ from collections.abc import Mapping
 from typing import cast
 
 from ..models.blog_candidate import BlogCandidate
+from ..models.combat_subject_evidence import (
+    COMBAT_SUBJECT_BODY_PLANS,
+    COMBAT_SUBJECT_COLORS,
+    COMBAT_SUBJECT_SCALES,
+    COMBAT_SUBJECT_SURFACES,
+    COMBAT_SUBJECT_TRAITS,
+)
 from ..models.rejected_blog_candidate import RejectedBlogCandidate
 from ..models.selected_blog_image import SelectedBlogImage
 from ..models.selection_rejection_reason import SelectionRejectionReason
@@ -15,7 +22,7 @@ from ..models.semantic_duplicate_basis import (
 )
 from ..models.video_set_selection_result import VideoSetSelectionResult
 
-_SELECTION_SCHEMA = "game-screen-pick/video-set-selection@2.0.0"
+_SELECTION_SCHEMA = "game-screen-pick/video-set-selection@3.0.0"
 
 
 def serialize_video_set_selection_result(
@@ -34,6 +41,11 @@ def serialize_video_set_selection_result(
                 "tie_break_applied": item.tie_break_applied,
                 "semantic_group_id": item.semantic_group_id,
                 "semantic_group_basis": item.semantic_group_basis,
+                "semantic_group_evidence": (
+                    list(item.semantic_group_evidence)
+                    if item.semantic_group_evidence is not None
+                    else None
+                ),
             }
             for item in selection.selected
         ],
@@ -48,6 +60,11 @@ def serialize_video_set_selection_result(
                 "variant_group_id": item.variant_group_id,
                 "semantic_group_id": item.semantic_group_id,
                 "semantic_group_basis": item.semantic_group_basis,
+                "semantic_group_evidence": (
+                    list(item.semantic_group_evidence)
+                    if item.semantic_group_evidence is not None
+                    else None
+                ),
             }
             for item in selection.rejected
         ],
@@ -153,7 +170,11 @@ def _restore_selected(
     reason_codes = item.get("reason_codes")
     variant_group_id = item.get("variant_group_id")
     tie_break_applied = item.get("tie_break_applied")
-    semantic_group_id, semantic_group_basis = _semantic_group(item)
+    (
+        semantic_group_id,
+        semantic_group_basis,
+        semantic_group_evidence,
+    ) = _semantic_group(item)
     if (
         selection_index != expected_index
         or not isinstance(reason_codes, list)
@@ -172,6 +193,7 @@ def _restore_selected(
         tie_break_applied=tie_break_applied,
         semantic_group_id=semantic_group_id,
         semantic_group_basis=semantic_group_basis,
+        semantic_group_evidence=semantic_group_evidence,
     )
 
 
@@ -182,7 +204,11 @@ def _restore_rejected(
     item = _mapping(value, "rejected")
     reason_code_value = item.get("reason_code")
     variant_group_id = item.get("variant_group_id")
-    semantic_group_id, semantic_group_basis = _semantic_group(item)
+    (
+        semantic_group_id,
+        semantic_group_basis,
+        semantic_group_evidence,
+    ) = _semantic_group(item)
     if not isinstance(reason_code_value, str):
         raise ValueError("Video Set Selection rejection reasonが不正です")
     try:
@@ -203,17 +229,23 @@ def _restore_rejected(
         variant_group_id=variant_group_id,
         semantic_group_id=semantic_group_id,
         semantic_group_basis=semantic_group_basis,
+        semantic_group_evidence=semantic_group_evidence,
     )
 
 
 def _semantic_group(
     item: Mapping[str, object],
-) -> tuple[str | None, SemanticDuplicateBasis | None]:
+) -> tuple[
+    str | None,
+    SemanticDuplicateBasis | None,
+    tuple[str, ...] | None,
+]:
     """artifactのSemantic Duplicate Group fieldを検証して返す。"""
     group_id = item.get("semantic_group_id")
     basis = item.get("semantic_group_basis")
-    if group_id is None and basis is None:
-        return None, None
+    raw_evidence = item.get("semantic_group_evidence")
+    if group_id is None and basis is None and raw_evidence is None:
+        return None, None, None
     if (
         not isinstance(group_id, str)
         or not group_id.startswith("semantic_")
@@ -222,7 +254,36 @@ def _semantic_group(
         or basis not in SEMANTIC_DUPLICATE_BASES
     ):
         raise ValueError("Video Set Selection Semantic Duplicate Groupが不正です")
-    return group_id, basis
+    evidence = _semantic_group_evidence(raw_evidence, basis)
+    return group_id, basis, evidence
+
+
+def _semantic_group_evidence(
+    value: object,
+    basis: SemanticDuplicateBasis,
+) -> tuple[str, ...] | None:
+    """Combat Subject Groupの公開可能な有限enum tokenだけを受理する。"""
+    if basis != "combat_subject_appearance":
+        if value is not None:
+            raise ValueError(
+                "Video Set Selection Semantic Duplicate evidenceが不正です"
+            )
+        return None
+    allowed = {
+        *(f"body_plan:{item}" for item in COMBAT_SUBJECT_BODY_PLANS),
+        *(f"scale:{item}" for item in COMBAT_SUBJECT_SCALES),
+        *(f"surface:{item}" for item in COMBAT_SUBJECT_SURFACES),
+        *(f"color:{item}" for item in COMBAT_SUBJECT_COLORS),
+        *(f"trait:{item}" for item in COMBAT_SUBJECT_TRAITS),
+    }
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) and item in allowed for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise ValueError("Video Set Selection Semantic Duplicate evidenceが不正です")
+    return tuple(cast(list[str], value))
 
 
 def _serialize_score(score: SelectionScore) -> dict[str, float | None]:

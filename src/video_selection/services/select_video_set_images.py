@@ -259,7 +259,11 @@ def _select_with_major_spoiler_limit(
     )
     conditional_actuals = dict.fromkeys(SELECTION_COVERAGE_FACETS, 0)
     variant_groups = _assign_variant_groups(candidates)
-    semantic_groups, semantic_group_bases = assign_semantic_duplicate_groups(candidates)
+    (
+        semantic_groups,
+        semantic_group_bases,
+        semantic_group_evidence,
+    ) = assign_semantic_duplicate_groups(candidates)
     selected: list[SelectedBlogImage] = []
     remaining = list(candidates)
     counterfactual_scores: dict[str, SelectionScore] = {}
@@ -420,6 +424,9 @@ def _select_with_major_spoiler_limit(
                     tie_break_applied=tie_break_applied,
                     semantic_group_id=semantic_groups.get(candidate.identifier),
                     semantic_group_basis=semantic_group_bases.get(candidate.identifier),
+                    semantic_group_evidence=semantic_group_evidence.get(
+                        candidate.identifier
+                    ),
                 )
             )
             actuals[candidate.annotation.blog_image_type] += 1
@@ -452,6 +459,7 @@ def _select_with_major_spoiler_limit(
             variant_groups[candidate.identifier],
             semantic_groups,
             semantic_group_bases,
+            semantic_group_evidence,
             counterfactual_scores[candidate.identifier],
             major_spoiler_limit,
             final_similarity_ceiling,
@@ -1167,6 +1175,7 @@ def _rejection(
     variant_group_id: str,
     semantic_groups: Mapping[str, str],
     semantic_group_bases: Mapping[str, SemanticDuplicateBasis],
+    semantic_group_evidence: Mapping[str, tuple[str, ...]],
     counterfactual_score: SelectionScore,
     major_spoiler_limit: int | None,
     final_similarity_ceiling: float,
@@ -1231,6 +1240,7 @@ def _rejection(
         variant_group_id=variant_group_id,
         semantic_group_id=semantic_groups.get(candidate.identifier),
         semantic_group_basis=semantic_group_bases.get(candidate.identifier),
+        semantic_group_evidence=semantic_group_evidence.get(candidate.identifier),
     )
 
 

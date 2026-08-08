@@ -19,3 +19,4 @@ class SelectedBlogImage:
     tie_break_applied: bool
     semantic_group_id: str | None = None
     semantic_group_basis: SemanticDuplicateBasis | None = None
+    semantic_group_evidence: tuple[str, ...] | None = None

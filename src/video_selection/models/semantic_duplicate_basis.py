@@ -3,6 +3,7 @@
 from typing import Literal, cast, get_args
 
 SemanticDuplicateBasis = Literal[
+    "combat_subject_appearance",
     "combat_encounter_sequence",
     "title_semantics",
     "visual_role_similarity",

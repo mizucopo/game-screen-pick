@@ -24,8 +24,8 @@ from .report_time import (
 )
 
 REPORT_SCHEMA_NAME = "game-screen-pick/report"
-REPORT_SCHEMA_VERSION = "2.1.0"
-SELECTION_POLICY_VERSION = "video-set-selection-v5"
+REPORT_SCHEMA_VERSION = "2.2.0"
+SELECTION_POLICY_VERSION = "video-set-selection-v6"
 SELECTION_EXPLANATION_RENDERER = "selection-explanation-ja-v1"
 
 _REASON_LABELS = {
@@ -51,7 +51,7 @@ def build_canonical_selection_report(
     request: CanonicalPublicationRequest,
     image_artifacts: tuple[SelectedImageArtifact, ...],
 ) -> dict[str, object]:
-    """画像artifactを含むreport@2.1.0 objectを返す。"""
+    """画像artifactを含むreport@2.2.0 objectを返す。"""
     selection = request.selection_result
     artifacts_by_id = {item.image_id: item for item in image_artifacts}
     selected_ids = {item.candidate.identifier for item in selection.selected}
@@ -387,6 +387,7 @@ def _selected_record(
             **_semantic_group_record(
                 selected.semantic_group_id,
                 selected.semantic_group_basis,
+                selected.semantic_group_evidence,
             ),
         },
     }
@@ -409,6 +410,7 @@ def _near_miss_record(
         _semantic_group_record(
             rejected.semantic_group_id,
             rejected.semantic_group_basis,
+            rejected.semantic_group_evidence,
         )
     )
     return {
@@ -425,13 +427,21 @@ def _near_miss_record(
 def _semantic_group_record(
     group_id: str | None,
     basis: SemanticDuplicateBasis | None,
+    evidence: tuple[str, ...] | None,
 ) -> dict[str, object]:
     """存在するSemantic Duplicate Groupの公開可能な根拠を返す。"""
-    if group_id is None and basis is None:
+    if group_id is None and basis is None and evidence is None:
         return {}
-    if group_id is None or basis is None:
+    if (
+        group_id is None
+        or basis is None
+        or (basis == "combat_subject_appearance") != (evidence is not None)
+    ):
         raise ValueError("Semantic Duplicate Groupの公開fieldが不正です")
-    return {"semantic_group": {"id": group_id, "basis": basis}}
+    group: dict[str, object] = {"id": group_id, "basis": basis}
+    if evidence is not None:
+        group["evidence"] = list(evidence)
+    return {"semantic_group": group}
 
 
 def _candidate_source(

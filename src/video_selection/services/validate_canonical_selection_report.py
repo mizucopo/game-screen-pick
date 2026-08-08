@@ -418,7 +418,7 @@ def _validate_semantic_group_relationships(
     near_misses: list[dict[str, Any]],
 ) -> None:
     """Semantic Duplicate Groupの代表とblocking参照を検証する。"""
-    selected_group_by_image: dict[str, tuple[str, str]] = {}
+    selected_group_by_image: dict[str, tuple[str, str, tuple[str, ...]]] = {}
     selected_group_ids: set[str] = set()
     for item in selected:
         selection = _mapping(item["selection"])
@@ -436,6 +436,7 @@ def _validate_semantic_group_relationships(
         selected_group_by_image[str(item["image_id"])] = (
             group_id,
             str(selected_semantic_group["basis"]),
+            tuple(str(value) for value in selected_semantic_group.get("evidence", [])),
         )
 
     for item in near_misses:
@@ -449,7 +450,11 @@ def _validate_semantic_group_relationships(
                 "Canonical Selection ReportのSemantic Duplicate Group参照がありません"
             )
         group = _mapping(rejected_semantic_group)
-        expected_group = (str(group["id"]), str(group["basis"]))
+        expected_group = (
+            str(group["id"]),
+            str(group["basis"]),
+            tuple(str(value) for value in group.get("evidence", [])),
+        )
         if selected_group_by_image.get(str(blocker_id)) != expected_group:
             raise ValueError(
                 "Canonical Selection ReportのSemantic Duplicate Group参照が一致しません"

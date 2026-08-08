@@ -18,6 +18,10 @@ from .combat_encounter_basis import (
     combat_encounter_classification_is_valid,
 )
 from .combat_encounter_kind import COMBAT_ENCOUNTER_KINDS, CombatEncounterKind
+from .combat_subject_evidence import (
+    UNCLEAR_COMBAT_SUBJECT_EVIDENCE,
+    CombatSubjectEvidence,
+)
 from .frame_candidate import FrameCandidate
 from .representative_frame_evidence import (
     CANDIDATE_FRAME_CONTENT_KINDS as CANDIDATE_FRAME_CONTENT_KINDS,
@@ -130,6 +134,7 @@ class CandidateFrameObservation:
     transient_obstruction: TransientObstruction
     spoiler_risk: SpoilerRisk
     spoiler_evidence: str
+    combat_subject_evidence: CombatSubjectEvidence = UNCLEAR_COMBAT_SUBJECT_EVIDENCE
     scene_catalog_match: bool = True
 
     def __post_init__(self) -> None:
@@ -152,6 +157,7 @@ class CandidateFrameObservation:
                 self.combat_encounter_kind,
                 self.combat_encounter_basis,
             )
+            or not isinstance(self.combat_subject_evidence, CombatSubjectEvidence)
             or self.player_body_visibility not in CHARACTER_BODY_VISIBILITIES
             or self.opponent_body_visibility not in CHARACTER_BODY_VISIBILITIES
             or not isinstance(self.effect_only_frame, bool)

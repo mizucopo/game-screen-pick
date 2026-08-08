@@ -110,6 +110,10 @@ def render_human_selection_report(report: dict[str, object]) -> str:
             if "semantic_group" in rejection:
                 semantic_group = _mapping(rejection["semantic_group"])
                 detail += f" ({semantic_group['basis']})"
+                if "evidence" in semantic_group:
+                    detail += " " + ", ".join(
+                        str(value) for value in semantic_group["evidence"]
+                    )
             lines.append(
                 f"| `{_abbreviate(identifier, 8)}` "
                 f"{_escape_markdown_table_cell(str(annotation['summary']))} | "
@@ -281,7 +285,19 @@ def _append_selected(
                 (
                     "- **Semantic duplicate group**: "
                     f"`{_mapping(selection['semantic_group'])['id']}` · "
-                    f"`{_mapping(selection['semantic_group'])['basis']}`",
+                    f"`{_mapping(selection['semantic_group'])['basis']}`"
+                    + (
+                        " · `"
+                        + ", ".join(
+                            str(value)
+                            for value in _mapping(selection["semantic_group"])[
+                                "evidence"
+                            ]
+                        )
+                        + "`"
+                        if "evidence" in _mapping(selection["semantic_group"])
+                        else ""
+                    ),
                 )
                 if "semantic_group" in selection
                 else ()
