@@ -83,7 +83,7 @@ def test_semantic_group_decision_round_trips_with_privacy_safe_basis() -> None:
     """Semantic Duplicate GroupのIDと根拠がcache artifactで復元されること。
 
     Arrange:
-        - 同じ外見の主要戦闘対象を持つ候補2件が用意される
+        - 異なるVideo Sourceに同じ外見の主要戦闘対象を持つ候補2件が用意される
     Act:
         - semantic duplicateを含む選定結果がartifact化され復元される
     Assert:
@@ -111,7 +111,6 @@ def test_semantic_group_decision_round_trips_with_privacy_safe_basis() -> None:
     second = build_blog_candidate("b")
     second_frame = replace(
         second.annotation.candidate,
-        video_fingerprint=first.annotation.candidate.video_fingerprint,
         source_pts=200,
         video_time=Fraction(2, 10),
     )

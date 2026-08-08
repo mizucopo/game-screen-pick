@@ -7,6 +7,10 @@
 - [ADR 0006: Expose Video Selection Through CLI and Versioned Config](0006-expose-video-selection-through-cli-and-versioned-config.md)
 - [ADR 0007: Migrate to the Video Set Selector Through a Gated Cutover](0007-migrate-to-video-set-selector-through-gated-cutover.md)
 - [ADR 0008: Evaluate Combat Representative Frames Independently](0008-evaluate-combat-representatives-independently.md)
+- [ADR 0010: Aggregate Combat Subject Evidence Within Encounters](0010-aggregate-combat-subject-evidence-within-encounters.md)
+
+## Superseded v2.0 decisions
+
 - [ADR 0009: Group Major Combat by Image-Grounded Subject](0009-group-major-combat-by-image-grounded-subject.md)
 
 ## Superseded screenshot-selector decisions
