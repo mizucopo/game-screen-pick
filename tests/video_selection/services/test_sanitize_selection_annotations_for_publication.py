@@ -216,3 +216,48 @@ def test_publication_preserves_event_semantics_for_combat_classification(
 
     # Assert
     assert sanitized.selected[0].candidate.annotation.summary == expected_summary
+
+
+def test_publication_prefers_title_semantics_over_frame_content(
+    tmp_path: Path,
+) -> None:
+    """画面内title文字が汎用的なframe内容分類より優先されること。
+
+    Arrange:
+        - title文字とother内容分類を持つ選定結果が用意される
+    Act:
+        - 公開前Annotation安全化が実行される
+    Assert:
+        - 公開説明がその他の場面ではなくタイトル画面になること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    selected = request.selection_result.selected[0]
+    internal_annotation = replace(
+        selected.candidate.annotation,
+        blog_image_type="other",
+        screen_text_kind="title",
+        combat_encounter_kind="not_combat",
+        combat_encounter_basis="none",
+        representative_frame_evidence=RepresentativeFrameEvidence(
+            content_kind="other",
+            primary_subject_visibility="clear",
+            opponent_body_visibility="absent",
+            transient_obstruction="none",
+        ),
+    )
+    internal_candidate = replace(selected.candidate, annotation=internal_annotation)
+    internal_selection = replace(
+        request.selection_result,
+        selected=(replace(selected, candidate=internal_candidate),),
+    )
+
+    # Act
+    sanitized = sanitize_module.sanitize_selection_annotations_for_publication(
+        internal_selection,
+        request.scene_catalog,
+        (),
+    )
+
+    # Assert
+    assert sanitized.selected[0].candidate.annotation.summary == "タイトル画面"

@@ -110,6 +110,8 @@ def _sanitize_candidate(
 
 def _publication_annotation_summary(annotation: CandidateAnnotation) -> str:
     """内部の意味識別子を使わず検証済み観測だけから公開説明を返す。"""
+    if annotation.has_title_semantics:
+        return "タイトル画面"
     evidence = annotation.representative_frame_evidence
     has_gameplay_semantics = (
         annotation.blog_image_type == "normal_gameplay"
@@ -125,8 +127,6 @@ def _publication_annotation_summary(annotation: CandidateAnnotation) -> str:
             return "戦闘の具体的なプレイ"
     if evidence is not None:
         return _PUBLICATION_CONTENT_SUMMARIES[evidence.content_kind]
-    if annotation.has_title_semantics:
-        return "タイトル画面"
     if (
         annotation.blog_image_type == "event"
         and annotation.screen_text_kind == "dialogue"

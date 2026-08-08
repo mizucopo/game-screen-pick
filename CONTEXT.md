@@ -345,7 +345,7 @@ Candidate Annotation artifactが選定前に保持する非公開の意味識別
 _Avoid_: Publication Annotation Summary, final selection reason, raw model text
 
 **Publication Annotation Summary**:
-最終選定後の公開前安全化で、検証済みCombat Encounter KindとRepresentative Frame Evidenceだけから生成する有限の画像説明。Semantic Annotation Summary、Scene Display Name、推定固有名を入力にせず、「通常戦闘の具体的なプレイ」「通常プレイ画面」「画面内テキストのあるイベント」など、画像と矛盾しない汎用表現へ選定結果のcopyだけを置換する。戦闘種別を具体的なplay説明へ反映するのはRepresentative Frame Evidenceもgameplayの場合だけとし、event画像の意味を上書きしない。最終selectorの入力には戻さない。
+最終選定後の公開前安全化で、検証済みCombat Encounter KindとRepresentative Frame Evidenceだけから生成する有限の画像説明。Semantic Annotation Summary、Scene Display Name、推定固有名を入力にせず、「通常戦闘の具体的なプレイ」「通常プレイ画面」「画面内テキストのあるイベント」など、画像と矛盾しない汎用表現へ選定結果のcopyだけを置換する。Title Semanticsは汎用的なRepresentative Frame Evidenceより優先する。戦闘種別を具体的なplay説明へ反映するのはRepresentative Frame Evidenceもgameplayの場合だけとし、event画像の意味を上書きしない。最終selectorの入力には戻さない。
 _Avoid_: semantic deduplication discriminator, scene identity, inferred proper name
 
 **Combat Encounter Kind**:
