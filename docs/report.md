@@ -20,7 +20,7 @@ output/
 
 画像名は全体選択順、Scene Slug、Frame Candidate IDの短縮digestから作ります。安定identityはfilenameではなく、完全なFrame Candidate IDです。
 
-`annotation.summary`はScene Display Nameや推定した固有名を連結せず、検証済みのCombat Encounter Kindと画像から直接観測した画面内容だけから有限表現を生成します。通常playの移動・待機を断定せず「通常プレイ画面」、人物の有無や会話相手を断定せず「画面内テキストのあるイベント」のように表します。
+公開成果物の`annotation.summary`は、選定用のSemantic Annotation Summaryを公開前のcopyで置換したPublication Annotation Summaryです。Scene Display Nameや推定した固有名を連結せず、検証済みのCombat Encounter Kindと画像から直接観測した画面内容だけから有限表現を生成します。通常playの移動・待機を断定せず「通常プレイ画面」、人物の有無や会話相手を断定せず「画面内テキストのあるイベント」のように表します。この置換結果を最終selectorの意味重複判定へ戻しません。
 
 Video Source IDは通常、whole-file SHA-256の先頭12文字を使います。同じVideo Set内でそのprefixが衝突した場合は、衝突したsourceだけを64文字の完全digestへ拡張し、一意性を保ちます。
 

@@ -2164,11 +2164,7 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     assert annotation.combat_encounter_basis == (
         "ordinary_opponent_presentation" if expected_value == "high" else "ambiguous"
     )
-    assert annotation.summary == (
-        "通常戦闘の具体的なプレイ"
-        if expected_value == "high"
-        else "戦闘の具体的なプレイ"
-    )
+    assert annotation.summary == "戦闘の具体的なプレイ"
     assert annotation.spoiler_risk == "medium"
     assert diagnostics.attempt_count == expected_attempt_count
     assert diagnostics.validation_code is None
@@ -2575,7 +2571,7 @@ def test_enemy_status_without_visible_player_does_not_mark_combat_action() -> No
                 "opponent_body_visibility": "clear",
                 "opponent_body_framing": "complete",
                 "opponent_presentation": "prominent",
-                "combat_interaction_visibility": "direct",
+                "combat_interaction_visibility": "indirect",
                 "effect_overlaps_combatant_body": "none",
                 "effect_only_frame": False,
             }
@@ -3130,11 +3126,17 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
     assert "掲載可否を確定する独立した再確認" in confirmation_prompt
 
 
-def test_combat_visibility_schema_failure_is_retried() -> None:
+@pytest.mark.parametrize(
+    "invalid_response_kind",
+    ("missing_required_field", "contradictory_opponent_signals"),
+)
+def test_combat_visibility_schema_failure_is_retried(
+    invalid_response_kind: str,
+) -> None:
     """戦闘可視性専用確認のschema違反が一回だけ再試行されること。
 
     Arrange:
-        - 掲載可能な戦闘応答と、必須fieldを欠く専用応答が用意される
+        - 掲載可能な戦闘応答と、field欠落または相関矛盾を持つ専用応答が用意される
         - 再試行では敵本体が明瞭な有効応答が用意される
     Act:
         - Candidate Annotation推論が実行される
@@ -3172,7 +3174,11 @@ def test_combat_visibility_schema_failure_is_retried() -> None:
             "effect_only_frame": False,
         }
         if len(payloads) == 3:
-            del verification["effect_only_frame"]
+            if invalid_response_kind == "missing_required_field":
+                del verification["effect_only_frame"]
+            else:
+                verification["opponent_body_visibility"] = "absent"
+                verification["opponent_body_framing"] = "absent"
         if len(payloads) == 6:
             return _response(_combat_visibility_edge_audit_payload())
         return _response(verification)
@@ -4946,15 +4952,15 @@ def test_candidate_allows_ambiguous_one_or_two_character_cue_occurrence(
     assert annotation.spoiler_evidence == spoiler_evidence
 
 
-def test_event_summary_does_not_repeat_unverified_catalog_name() -> None:
-    """公開するevent説明へ未検証の固有Scene名が出力されないこと。
+def test_internal_event_summary_keeps_scene_discriminator() -> None:
+    """選定前のevent説明にScene間の意味識別子が保持されること。
 
     Arrange:
-        - 人物会話という誤った固有Scene名と、画面内文字のあるevent観測が用意される
+        - 異なるSceneを識別する名前と、画面内文字のあるevent観測が用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 画像から直接確定できる汎用説明だけが返されること
+        - 公開前の内部説明にはScene識別子が保持されること
     """
     # Arrange
     response = _annotation_payload()
@@ -4976,19 +4982,18 @@ def test_event_summary_does_not_repeat_unverified_catalog_name() -> None:
     )
 
     # Assert
-    assert annotation.summary == "画面内テキストのあるイベント"
-    assert "キャラクター" not in annotation.summary
+    assert annotation.summary == "キャラクターとの会話の画面内テキストのあるイベント"
 
 
 def test_idle_gameplay_summary_does_not_claim_the_player_is_waiting() -> None:
-    """通常play画面の公開説明へ未観測の待機状態が断定されないこと。
+    """通常play画面の内部説明へ未観測の待機状態が断定されないこと。
 
     Arrange:
         - gameplay idleと分類された高評価frameが用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
-        - 移動中とも待機中とも矛盾しない汎用説明が返されること
+        - Scene識別子を保ちつつ待機中と断定しない説明が返されること
     """
     # Arrange
     response = _frame_observation_payload(
@@ -5011,7 +5016,7 @@ def test_idle_gameplay_summary_does_not_claim_the_player_is_waiting() -> None:
     )
 
     # Assert
-    assert annotation.summary == "通常プレイ画面"
+    assert annotation.summary == "探索の通常プレイ画面"
     assert "待機" not in annotation.summary
 
 

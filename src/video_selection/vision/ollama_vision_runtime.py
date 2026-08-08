@@ -961,13 +961,6 @@ class OllamaVisionRuntime:
                 diagnostics,
                 verification_diagnostics,
             )
-        publication_summary, publication_summary_redacted = privacy_safe_candidate_text(
-            _truth_preserving_annotation_summary(annotation),
-            "画像内容を示す場面",
-            tuple(item.text for item in request.context_cues),
-        )
-        annotation = replace(annotation, summary=publication_summary)
-        free_text_redacted = free_text_redacted or publication_summary_redacted
         if free_text_redacted:
             diagnostics = replace(
                 diagnostics,
@@ -2004,7 +1997,12 @@ def _parse_candidate_annotation(
         annotation_scene_slug = (
             selected.scene_slug if selected.scene_catalog_match else "other"
         )
-        annotation_summary = content_label
+        annotation_scene = catalog.for_slug(annotation_scene_slug)
+        annotation_summary = (
+            f"{annotation_scene.display_name}の{content_label}"
+            if selected.scene_catalog_match
+            else content_label
+        )
         frame_choice_reason = f"{content_label}が候補内で最も明瞭なフレーム"
         (
             annotation_summary,
@@ -2088,6 +2086,16 @@ def _parse_combat_visibility_verification(
     combat_interaction_visibility = value.get("combat_interaction_visibility")
     effect_overlap = value.get("effect_overlaps_combatant_body")
     effect_only_frame = value.get("effect_only_frame")
+    opponent_body_is_absent = opponent_body_visibility == "absent"
+    opponent_signals_are_consistent = (
+        opponent_body_is_absent == (opponent_body_framing == "absent")
+        and opponent_body_is_absent == (opponent_presentation == "absent")
+        and (not opponent_body_is_absent or combat_interaction_visibility == "none")
+        and (
+            player_body_visibility != "absent"
+            or combat_interaction_visibility != "direct"
+        )
+    )
     if (
         effect_screen_coverage not in _EFFECT_SCREEN_COVERAGES
         or largest_foreground_element not in _LARGEST_FOREGROUND_ELEMENTS
@@ -2098,6 +2106,7 @@ def _parse_combat_visibility_verification(
         or combat_interaction_visibility not in _COMBAT_INTERACTION_VISIBILITIES
         or effect_overlap not in _EFFECT_COMBATANT_OVERLAPS
         or not isinstance(effect_only_frame, bool)
+        or not opponent_signals_are_consistent
     ):
         raise _schema_error("combat_visibility_verification_schema_invalid")
     return (
@@ -2844,17 +2853,6 @@ def _is_publishable_combat_visibility(
         and opponent_is_blog_readable
         and not effect_only_frame
     )
-
-
-def _truth_preserving_annotation_summary(annotation: CandidateAnnotation) -> str:
-    """検証済みの有限分類だけから公開用の画像説明を返す。"""
-    if annotation.combat_encounter_kind == "ordinary":
-        return "通常戦闘の具体的なプレイ"
-    if annotation.combat_encounter_kind == "major":
-        return "主要戦闘の具体的なプレイ"
-    if annotation.combat_encounter_kind == "uncertain":
-        return "戦闘の具体的なプレイ"
-    return annotation.summary
 
 
 def _is_consistent_noncombat_or_publishable_combat_visibility(
