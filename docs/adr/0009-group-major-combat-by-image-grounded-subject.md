@@ -34,13 +34,20 @@ The group can cross videos, encounter times, Scene Slugs, public descriptions, a
 wrong names. Generic, unclear, incomplete, or visibly different subjects remain
 separate.
 
-Combat Encounter Group remains auxiliary. When one encounter contains no more than
-one identifiable subject, its existing chronological grouping remains useful. When
-it contains multiple clearly different subject evidence values, only repeated exact
-subjects may use the encounter basis; distinct and uncertain subjects are not
-merged. Overlapping semantic groups are merged deterministically, with published
-basis priority `combat_subject_appearance`, `combat_encounter_sequence`,
-`title_semantics`, then `visual_role_similarity`.
+Combat Encounter Group remains auxiliary. Within one encounter, identifiable
+evidence is compatible without the 0.80 Neutral threshold when body plan, scale, and
+surface match and the color sets and trait sets each intersect. When all identifiable
+evidence is compatible, the existing chronological group remains useful, including
+unclear members. When multiple clearly different subjects are present, only mutually
+compatible repeated subjects use the encounter basis; unclear members are not
+attached across that distinction.
+
+Overlapping semantic groups are merged deterministically, with published basis
+priority `combat_subject_appearance`, `combat_encounter_sequence`, `title_semantics`,
+then `visual_role_similarity`. The pre-merge Combat Encounter Group edges remain
+available to Shortlist boundary observation even when the published basis becomes
+`combat_subject_appearance`. Selection cannot stop while an unannotated Candidate
+Moment remains between members of one of those encounter edges.
 
 Every Combat Subject Group has the existing Semantic Duplicate Group hard maximum of
 one selected image, including during Selection Shortfall. Marginal Selection Utility
@@ -48,9 +55,10 @@ and the stable selector tie-break choose the representative. Input order, parall
 completion order, public description, and naming errors do not affect the result.
 
 The selected representative and rejected duplicates keep the same deterministic
-group ID, basis, and finite evidence tokens common to every member. Diagnostics may
-contain only body-plan, scale, surface, color, and trait tokens. They do not contain
-free text, names, raw model output, or inferred identity.
+group ID, basis, and finite evidence tokens common to every member. Each token is
+validated as a complete field-and-value enum rather than a prefix pattern, so a value
+from one category cannot be relabeled as another. Diagnostics do not contain free
+text, names, raw model output, or inferred identity.
 
 ## Contract and cache versions
 

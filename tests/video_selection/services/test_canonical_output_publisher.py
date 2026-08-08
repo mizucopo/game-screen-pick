@@ -216,6 +216,48 @@ def test_semantic_duplicate_group_evidence_is_published(tmp_path: Path) -> None:
     assert "semantic_duplicate" in markdown
 
 
+def test_reader_rejects_invalid_combat_subject_evidence_token(tmp_path: Path) -> None:
+    """カテゴリと値が一致しないCombat Subject evidenceが拒否されること。
+
+    Arrange:
+        - 完成reportの選択代表へpatternだけが正しい不正な有限enum tokenが混入される
+        - JSONとMarkdownは同じ不正objectから再生成される
+    Act:
+        - 公開済みCanonical Outputのreader検証が実行される
+    Assert:
+        - privacy-safeな有限enum contract違反として拒否されること
+    """
+    # Arrange
+    request = build_canonical_publication_request(tmp_path)
+    report = cast(
+        dict[str, Any],
+        CanonicalOutputPublisher(FakeVideoStageMediaRuntime()).publish(request),
+    )
+    output_folder = request.configuration.output_folder
+    selected = cast(list[dict[str, Any]], report["selected"])[0]
+    selection = cast(dict[str, Any], selected["selection"])
+    selection["semantic_group"] = {
+        "id": "semantic_" + "4" * 64,
+        "basis": "combat_subject_appearance",
+        "evidence": ["body_plan:red"],
+    }
+    cast(list[str], selection["reason_codes"]).append("semantic_group_representative")
+    report_value = cast(dict[str, object], report)
+    (output_folder / "report.json").write_text(
+        serialize_canonical_selection_report(report_value),
+        encoding="utf-8",
+    )
+    (output_folder / "report.md").write_text(
+        render_human_selection_report(report_value),
+        encoding="utf-8",
+    )
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="Combat Subject evidence"):
+        load_validated_canonical_selection_report(output_folder)
+
+
 def test_colliding_digest_prefixes_expand_only_affected_output_names(
     tmp_path: Path,
 ) -> None:

@@ -603,7 +603,7 @@ Semantic Duplicate Groupのうち、Video Source、時刻、Scene Slug、名称�
 _Avoid_: Combat Encounter Group, enemy name identity, generic boss category, global visual cluster
 
 **Combat Encounter Group**:
-Semantic Duplicate Groupのうち、同一Video Source内で時系列に連続する`major`戦闘候補を同じ遭遇として扱う補助的なまとまり。全Candidate Momentのsource別時系列を境界検知に使い、同じGroupへ入った注釈済み候補間に未注釈Momentがあれば、そのMomentを含む決定的な後続batchまでShortlistを拡張する。全Blog CandidateのVideo Time順を基準にし、非`major`候補を遭遇境界としてからScene Slugの連続runへ分ける。同じSlugに前後を挟まれた単発の誤分類は両側15秒以内のときだけ同じ遭遇へ吸収する。別の主要戦闘runまたは非主要場面を挟んだ同名Slugは別遭遇として保持する。遭遇内に複数の明確に異なるCombat Subject Evidenceがある場合は同じGroupにせず、同じ対象だと識別できる反復だけへ補助根拠を適用する。同じGroupでは異なる構図や技でも代表1枚を上限とし、未代表の別対象・別遭遇・通常戦闘を優先する。
+Semantic Duplicate Groupのうち、同一Video Source内で時系列に連続する`major`戦闘候補を同じ遭遇として扱う補助的なまとまり。全Candidate Momentのsource別時系列を境界検知に使い、同じGroupへ入った注釈済み候補間に未注釈Momentがあれば、そのMomentを含む決定的な後続batchまでShortlistを拡張する。全Blog CandidateのVideo Time順を基準にし、非`major`候補を遭遇境界としてからScene Slugの連続runへ分ける。同じSlugに前後を挟まれた単発の誤分類は両側15秒以内のときだけ同じ遭遇へ吸収する。別の主要戦闘runまたは非主要場面を挟んだ同名Slugは別遭遇として保持する。同一遭遇ではbody plan・scale・surfaceが一致し、色と特徴がそれぞれ一つ以上共通するCombat Subject EvidenceをNeutral類似度に依存せず同じ対象の互換根拠とする。複数の明確に異なる対象がある場合は同じGroupにせず、互換な反復だけへ補助根拠を適用する。Combat Subject Groupと重なって公開basisが変わっても、Encounter Groupの境界根拠は失わず未観測境界の探索に使う。同じGroupでは異なる構図や技でも代表1枚を上限とし、未代表の別対象・別遭遇・通常戦闘を優先する。
 _Avoid_: boss name truth, all major combat in one video, Combat Encounter Kind, Variant Group
 
 **Semantic Duplicate Basis**:

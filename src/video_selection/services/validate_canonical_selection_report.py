@@ -17,7 +17,9 @@ from ..models.candidate_annotation import (
     candidate_annotation_free_text_is_safe,
 )
 from ..models.canonical_publication_request import CanonicalPublicationRequest
+from ..models.combat_subject_evidence import COMBAT_SUBJECT_EVIDENCE_TOKENS
 from ..models.report_value import string_looks_private
+from ..models.semantic_duplicate_basis import SEMANTIC_DUPLICATE_BASES
 from .build_canonical_selection_report import REPORT_SCHEMA_VERSION
 from .render_human_selection_report import render_human_selection_report
 from .report_time import display_report_time, exact_seconds_string
@@ -436,7 +438,7 @@ def _validate_semantic_group_relationships(
         selected_group_by_image[str(item["image_id"])] = (
             group_id,
             str(selected_semantic_group["basis"]),
-            tuple(str(value) for value in selected_semantic_group.get("evidence", [])),
+            _validated_semantic_group_evidence(selected_semantic_group),
         )
 
     for item in near_misses:
@@ -453,12 +455,45 @@ def _validate_semantic_group_relationships(
         expected_group = (
             str(group["id"]),
             str(group["basis"]),
-            tuple(str(value) for value in group.get("evidence", [])),
+            _validated_semantic_group_evidence(group),
         )
         if selected_group_by_image.get(str(blocker_id)) != expected_group:
             raise ValueError(
                 "Canonical Selection ReportのSemantic Duplicate Group参照が一致しません"
             )
+
+
+def _validated_semantic_group_evidence(
+    group: dict[str, Any],
+) -> tuple[str, ...]:
+    """既知basisの公開evidence contractを検証して返す。"""
+    basis = str(group["basis"])
+    evidence = group.get("evidence")
+    if basis == "combat_subject_appearance":
+        if (
+            not isinstance(evidence, list)
+            or not evidence
+            or not all(
+                isinstance(value, str) and value in COMBAT_SUBJECT_EVIDENCE_TOKENS
+                for value in evidence
+            )
+            or len(evidence) != len(set(evidence))
+        ):
+            raise ValueError(
+                "Canonical Selection ReportのCombat Subject evidenceが不正です"
+            )
+        return tuple(evidence)
+    if basis in SEMANTIC_DUPLICATE_BASES:
+        if evidence is not None:
+            raise ValueError(
+                "Canonical Selection ReportのSemantic Duplicate evidenceが不正です"
+            )
+        return ()
+    if evidence is None:
+        return ()
+    if not isinstance(evidence, list):
+        return (str(evidence),)
+    return tuple(str(value) for value in evidence)
 
 
 def _validate_context_cue_time(

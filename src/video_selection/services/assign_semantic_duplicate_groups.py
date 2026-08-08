@@ -50,7 +50,10 @@ def assign_semantic_duplicate_groups(
     if title_candidates:
         groups.append((_TITLE_SEMANTICS_BASIS, title_candidates))
     groups.extend(_combat_subject_groups(eligible_candidates))
-    groups.extend(_combat_encounter_groups(candidates))
+    groups.extend(
+        (_COMBAT_ENCOUNTER_BASIS, members)
+        for members in assign_combat_encounter_groups(candidates)
+    )
     groups.extend(_visual_role_similarity_groups(eligible_candidates))
 
     group_ids: dict[str, str] = {}
@@ -71,6 +74,17 @@ def assign_semantic_duplicate_groups(
             if group_evidence:
                 evidence_by_member[member_id] = group_evidence
     return group_ids, bases, evidence_by_member
+
+
+def assign_combat_encounter_groups(
+    candidates: tuple[BlogCandidate, ...],
+) -> tuple[tuple[BlogCandidate, ...], ...]:
+    """Semantic Group統合前のCombat Encounter Groupを返す。"""
+    return tuple(
+        members
+        for _, members in _combat_encounter_groups(candidates)
+        if len(members) >= 2
+    )
 
 
 def _group_evidence(
@@ -281,23 +295,48 @@ def _subject_aware_encounter_groups(
     candidates: list[BlogCandidate],
 ) -> Iterable[tuple[SemanticDuplicateBasis, tuple[BlogCandidate, ...]]]:
     """同じ遭遇内で明確に異なる戦闘対象を別Groupとして維持する。"""
-    identifiable_evidence = {
-        evidence
+    identifiable_candidates = [
+        candidate
         for candidate in candidates
         if (evidence := candidate.annotation.combat_subject_evidence) is not None
         and evidence.can_identify_subject
-    }
-    if len(identifiable_evidence) <= 1:
+    ]
+    if all(
+        _have_compatible_combat_subject_evidence(left, right)
+        for index, left in enumerate(identifiable_candidates)
+        for right in identifiable_candidates[index + 1 :]
+    ):
         yield _COMBAT_ENCOUNTER_BASIS, tuple(candidates)
         return
-    for evidence in sorted(identifiable_evidence, key=repr):
-        members = tuple(
-            candidate
-            for candidate in candidates
-            if candidate.annotation.combat_subject_evidence == evidence
-        )
-        if len(members) > 1:
-            yield _COMBAT_ENCOUNTER_BASIS, members
+    unassigned = sorted(identifiable_candidates, key=lambda item: item.identifier)
+    while unassigned:
+        root = unassigned.pop(0)
+        component = [root]
+        for other in tuple(unassigned):
+            if all(
+                _have_compatible_combat_subject_evidence(other, member)
+                for member in component
+            ):
+                component.append(other)
+                unassigned.remove(other)
+        if len(component) > 1:
+            yield _COMBAT_ENCOUNTER_BASIS, tuple(component)
+
+
+def _have_compatible_combat_subject_evidence(
+    left: BlogCandidate,
+    right: BlogCandidate,
+) -> bool:
+    """同一遭遇の時間的根拠を補強できる外見互換性を返す。"""
+    left_evidence = left.annotation.combat_subject_evidence
+    right_evidence = right.annotation.combat_subject_evidence
+    return (
+        left_evidence is not None
+        and right_evidence is not None
+        and left_evidence.can_identify_subject
+        and right_evidence.can_identify_subject
+        and _combat_subject_evidence_matches(left_evidence, right_evidence)
+    )
 
 
 def _visual_role_similarity_groups(

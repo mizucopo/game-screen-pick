@@ -22,7 +22,10 @@ from ..models.video_set_selection_result import (
     CONDITIONAL_COVERAGE_MINIMUM_REQUEST_COUNT,
     VideoSetSelectionResult,
 )
-from .assign_semantic_duplicate_groups import assign_semantic_duplicate_groups
+from .assign_semantic_duplicate_groups import (
+    assign_combat_encounter_groups,
+    assign_semantic_duplicate_groups,
+)
 
 SpoilerSensitivity = Literal["low", "medium", "high"]
 type CandidateMomentTimelines = Mapping[tuple[int, str], tuple[str, ...]]
@@ -143,21 +146,7 @@ def _combat_encounter_boundaries_are_observed(
             raise ValueError("注釈済みCandidateが完全時系列にありません")
         annotated_by_source[source_key].add(moment_id)
 
-    groups: dict[str, list[BlogCandidate]] = defaultdict(list)
-    for item in result.selected:
-        if (
-            item.semantic_group_id is not None
-            and item.semantic_group_basis == "combat_encounter_sequence"
-        ):
-            groups[item.semantic_group_id].append(item.candidate)
-    for rejected_item in result.rejected:
-        if (
-            rejected_item.semantic_group_id is not None
-            and rejected_item.semantic_group_basis == "combat_encounter_sequence"
-        ):
-            groups[rejected_item.semantic_group_id].append(rejected_item.candidate)
-
-    for members in groups.values():
+    for members in assign_combat_encounter_groups(candidates):
         source_keys = {_candidate_timeline_key(member) for member in members}
         if len(source_keys) != 1:
             raise ValueError("主要戦闘Groupが複数sourceにまたがっています")

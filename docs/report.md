@@ -26,7 +26,7 @@ producerが検証する現行の厳密なschema実体は[`report-2.2.0.schema.js
 
 `selection_summary.conditional_coverage`は、要求枚数10枚以上で適用される`ordinary_combat`と`event`について、有効候補数、条件付き最低数、選択実績、未充足枠を他候補へ解放したかを記録します。最低枠のためにExplanation Valueが`none`の候補や重複画像を選ぶことはありません。
 
-Semantic Duplicate Groupの代表には`selected[].selection.semantic_group`として決定的なGroup IDとprivacy-safeなbasisを記録します。同じGroupで除外されたnear missには`semantic_duplicate`、blocking selected ID、同じGroup IDとbasisを記録します。basisは`combat_subject_appearance`、`combat_encounter_sequence`、`title_semantics`、`visual_role_similarity`のenumです。`combat_subject_appearance`だけはGroup memberに共通するbody plan・scale・surface・color・traitの有限enum tokenを`evidence`へ必須で記録し、他basisでは`evidence`を出しません。raw model response、固有名の正誤、比較用自由文は公開しません。JSONとMarkdownの検証では、各`semantic_duplicate`が同じGroup ID・basis・evidenceの選択代表を参照することも確認します。
+Semantic Duplicate Groupの代表には`selected[].selection.semantic_group`として決定的なGroup IDとprivacy-safeなbasisを記録します。同じGroupで除外されたnear missには`semantic_duplicate`、blocking selected ID、同じGroup IDとbasisを記録します。basisは`combat_subject_appearance`、`combat_encounter_sequence`、`title_semantics`、`visual_role_similarity`のenumです。`combat_subject_appearance`だけはGroup memberに共通するbody plan・scale・surface・color・traitの有限enum tokenを`evidence`へ必須で記録し、他basisでは`evidence`を出しません。tokenはprefixだけでなくfieldごとの許可値を含む完全enumで検証し、`body_plan:red`のようなカテゴリ不一致も拒否します。対応majorのreaderも既知のCombat Subject evidence関係を同じ有限enumで検証します。raw model response、固有名の正誤、比較用自由文は公開しません。JSONとMarkdownの検証では、各`semantic_duplicate`が同じGroup ID・basis・evidenceの選択代表を参照することも確認します。
 
 ## provenanceとmodel更新
 

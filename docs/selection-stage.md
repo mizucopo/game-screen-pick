@@ -57,11 +57,11 @@ ADR 0004の表に従うSpoiler Penaltyは候補単体へのsoft penaltyです。
 
 `video-set-selection-v6`はVariant Groupとglobal similarity ceilingの外側にSemantic Duplicate Groupを設けます。同じGroupは要求枚数不足時にも最大1枚で、Marginal Selection Utilityと通常のstable tie-breakで最初に選ばれた候補が代表です。この上限はConditional Coverage Minimumと`recurring_gameplay`のVariant Expansionより強く、未代表の別戦闘対象、別遭遇、通常戦闘、eventを同一Groupの2枚目より先に残します。
 
-Group判定は次の根拠を使います。候補が複数の根拠に属する場合はGroupを決定的に統合し、`combat_subject_appearance`、`combat_encounter_sequence`、`title_semantics`、`visual_role_similarity`の順で公開basisを選びます。
+Group判定は次の根拠を使います。候補が複数の根拠に属する場合はGroupを決定的に統合し、`combat_subject_appearance`、`combat_encounter_sequence`、`title_semantics`、`visual_role_similarity`の順で公開basisを選びます。公開basisとは別に統合前のCombat Encounter Groupを保持し、Encounter edge間の未注釈MomentがなくなるまでShortlistを拡張します。
 
 - `title_semantics`: Blog Image Type、Screen Text Kind、Representative Frame Evidenceのいずれかがtitleを示す候補をVideo Set全体で一つにする。`event`などへの誤分類でも既存のtitle最大1枚を回避できない。
 - `combat_subject_appearance`: `major`候補のCombat Subject Evidenceが`distinctive`で完全な場合だけ動画横断で比較する。body plan・scale・surfaceが一致し、colorとtraitがそれぞれ一つ以上共通し、Neutral視覚類似度が0.80以上の完全結合だけを同じ戦闘対象にする。Scene Slug、敵名、動画、遭遇時刻、公開用summaryの一致は要求しない。`generic`、`unclear`、不完全な根拠、外見が異なる相手は「boss戦」という大分類だけでまとめない。
-- `combat_encounter_sequence`: 同じVideo Sourceの全候補をVideo Time順に並べ、非`major`候補で遭遇を区切ってから、`major`候補をScene Slugの連続runへ分ける。同じSlugに挟まれた1件だけのSlug揺れは、前後がそれぞれ15秒以内の場合だけ同じrunへ吸収する。別の主要戦闘runまたは非主要場面を挟んで同じSlugが再登場した場合は別遭遇にする。遭遇内に複数の明確に異なるCombat Subject Evidenceがある場合は補助根拠としてだけ使い、異なる対象や不明な対象を一つへ結合しない。
+- `combat_encounter_sequence`: 同じVideo Sourceの全候補をVideo Time順に並べ、非`major`候補で遭遇を区切ってから、`major`候補をScene Slugの連続runへ分ける。同じSlugに挟まれた1件だけのSlug揺れは、前後がそれぞれ15秒以内の場合だけ同じrunへ吸収する。別の主要戦闘runまたは非主要場面を挟んで同じSlugが再登場した場合は別遭遇にする。同一遭遇ではbody plan・scale・surfaceが一致しcolorとtraitがそれぞれ一つ以上共通する識別可能なEvidenceを、Neutral 0.80を要求せず互換とする。識別可能なEvidenceがすべて互換なら不明な候補を含む遭遇全体を維持し、明確に異なる対象が混在する場合は互換な反復だけをGroupにして不明な対象を結合しない。
 - `visual_role_similarity`: titleでも`major`でもない候補について、同じVideo Source、30秒以内、同じRepresentative Frame content kind、同じCombat Encounter Kind、Neutral視覚類似度0.93以上をすべて満たす組だけを完全結合のGroupにする。`recurring_gameplay`ではさらに、独立評価された画像summaryのUnicode・大小文字・句読点を正規化した値が一致する場合だけ畳み、異なる技・敵・結果の説明を維持する。
 
 Semantic Group IDはbasisと全memberのFrame Candidate IDから決定的に作ります。選択代表には`semantic_group_representative`、除外候補には`semantic_duplicate`、blocking selected ID、同じGroup IDとbasisを記録します。Combat Subject Groupではmemberに共通するbody plan・scale・surface・color・traitだけを有限enum tokenとして記録し、自由文、固有名、model responseを診断へ出しません。Group判定は自由文の固有名を正解として扱わず、Neutral特徴だけで異なる敵をまとめることもしません。

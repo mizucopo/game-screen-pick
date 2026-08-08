@@ -96,6 +96,13 @@ COMBAT_SUBJECT_DISTINCTIVENESSES = cast(
     tuple[CombatSubjectDistinctiveness, ...],
     get_args(CombatSubjectDistinctiveness),
 )
+COMBAT_SUBJECT_EVIDENCE_TOKENS = (
+    *(f"body_plan:{item}" for item in COMBAT_SUBJECT_BODY_PLANS),
+    *(f"scale:{item}" for item in COMBAT_SUBJECT_SCALES),
+    *(f"surface:{item}" for item in COMBAT_SUBJECT_SURFACES),
+    *(f"color:{item}" for item in COMBAT_SUBJECT_COLORS),
+    *(f"trait:{item}" for item in COMBAT_SUBJECT_TRAITS),
+)
 
 
 @dataclass(frozen=True)

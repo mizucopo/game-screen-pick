@@ -5,13 +5,7 @@ from collections.abc import Mapping
 from typing import cast
 
 from ..models.blog_candidate import BlogCandidate
-from ..models.combat_subject_evidence import (
-    COMBAT_SUBJECT_BODY_PLANS,
-    COMBAT_SUBJECT_COLORS,
-    COMBAT_SUBJECT_SCALES,
-    COMBAT_SUBJECT_SURFACES,
-    COMBAT_SUBJECT_TRAITS,
-)
+from ..models.combat_subject_evidence import COMBAT_SUBJECT_EVIDENCE_TOKENS
 from ..models.rejected_blog_candidate import RejectedBlogCandidate
 from ..models.selected_blog_image import SelectedBlogImage
 from ..models.selection_rejection_reason import SelectionRejectionReason
@@ -269,17 +263,13 @@ def _semantic_group_evidence(
                 "Video Set Selection Semantic Duplicate evidenceが不正です"
             )
         return None
-    allowed = {
-        *(f"body_plan:{item}" for item in COMBAT_SUBJECT_BODY_PLANS),
-        *(f"scale:{item}" for item in COMBAT_SUBJECT_SCALES),
-        *(f"surface:{item}" for item in COMBAT_SUBJECT_SURFACES),
-        *(f"color:{item}" for item in COMBAT_SUBJECT_COLORS),
-        *(f"trait:{item}" for item in COMBAT_SUBJECT_TRAITS),
-    }
     if (
         not isinstance(value, list)
         or not value
-        or not all(isinstance(item, str) and item in allowed for item in value)
+        or not all(
+            isinstance(item, str) and item in COMBAT_SUBJECT_EVIDENCE_TOKENS
+            for item in value
+        )
         or len(value) != len(set(value))
     ):
         raise ValueError("Video Set Selection Semantic Duplicate evidenceが不正です")

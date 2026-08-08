@@ -2093,6 +2093,121 @@ def test_shortlist_expands_until_combat_encounter_boundary_is_observed() -> None
     assert result.shortlist_expansion_count == 1
 
 
+def test_shortlist_preserves_encounter_boundary_after_subject_group_merge() -> None:
+    """Subject Groupへ統合後も未注釈のEncounter境界が探索されること。
+
+    Arrange:
+        - 別動画のA/Bが同じ主要戦闘対象として対応付けられる
+        - 同一遭遇のB/CがEncounter GroupになりCの対象外見は不明である
+        - B/C間の未注釈非戦闘Momentが後続batchに用意される
+    Act:
+        - 完全なCandidate Moment時系列付きでlazy batch選定が実行される
+    Assert:
+        - 公開basisがSubjectでも後続batchまで拡張されること
+        - 境界後のCが別遭遇として選択されること
+    """
+    # Arrange
+    shared_subject = CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("green",),
+        traits=("large_mouth",),
+        distinctiveness="distinctive",
+    )
+    first_source = "1" * 64
+    encounter_source = "2" * 64
+    cross_video_subject = _candidate(
+        "merged-boundary-cross-video",
+        quality=0.99,
+        feature=(1.0, 0.0, 0.0, 0.0, 0.0),
+        progress=Fraction(10, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="other-subject-label",
+        combat_encounter_kind="major",
+        video_order=0,
+        video_fingerprint=first_source,
+        combat_subject_evidence=shared_subject,
+    )
+    encounter_subject = _candidate(
+        "merged-boundary-subject",
+        quality=0.90,
+        feature=(0.90, math.sqrt(1 - 0.90**2), 0.0, 0.0, 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-major-battle",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint=encounter_source,
+        combat_subject_evidence=shared_subject,
+    )
+    hidden_boundary = _candidate(
+        "merged-boundary-event",
+        quality=0.10,
+        feature=(0.0, 0.0, 0.0, 1.0, 0.0),
+        progress=Fraction(30, 100),
+        blog_image_type="event",
+        explanation_value="none",
+        context_relevance="none",
+        scene_slug="story-event",
+        video_order=1,
+        video_fingerprint=encounter_source,
+    )
+    unclear_later_encounter = _candidate(
+        "merged-boundary-unclear",
+        quality=0.98,
+        feature=(0.0, 0.0, 1.0, 0.0, 0.0),
+        progress=Fraction(40, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="repeated-major-battle",
+        combat_encounter_kind="major",
+        video_order=1,
+        video_fingerprint=encounter_source,
+    )
+    filler = _candidate(
+        "merged-boundary-filler",
+        quality=0.10,
+        feature=(0.0, 0.0, 0.0, 0.0, 1.0),
+        progress=Fraction(80, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="exploration",
+        video_order=1,
+        video_fingerprint=encounter_source,
+    )
+    initial = (
+        cross_video_subject,
+        encounter_subject,
+        unclear_later_encounter,
+        filler,
+    )
+    all_candidates = (*initial, hidden_boundary)
+
+    # Act
+    result = select_from_shortlist_batches(
+        (initial, (hidden_boundary,)),
+        candidate_moment_timelines=_candidate_moment_timelines(all_candidates),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert {item.candidate.identifier for item in result.selected} == {
+        cross_video_subject.identifier,
+        unclear_later_encounter.identifier,
+    }
+    assert result.shortlist_expansion_count == 1
+    assert result.annotated_candidate_count == 5
+
+
 def test_title_semantics_do_not_complete_event_minimum_before_real_event() -> None:
     """eventへ誤分類されたタイトルでevent最低枠が充足されないこと。
 
@@ -2864,6 +2979,75 @@ def test_combat_subject_matching_tolerates_independent_evidence_variation() -> N
     assert [item.candidate.identifier for item in result.selected] == [first.identifier]
     assert result.rejected[0].candidate.identifier == second.identifier
     assert result.rejected[0].semantic_group_basis == "combat_subject_appearance"
+
+
+def test_same_encounter_accepts_compatible_subject_evidence_variation() -> None:
+    """同一遭遇では外見根拠の列挙差があっても代表1枚に制限されること。
+
+    Arrange:
+        - 同じ主要戦闘runに中核外見と一部の色・特徴が共通する2件がある
+        - Neutral類似度は動画横断Subject Groupの閾値0.80を下回る
+    Act:
+        - 2枚の選定が要求される
+    Assert:
+        - 時間的なEncounter Groupにより最高utilityの1枚だけが選択されること
+    """
+    # Arrange
+    source_fingerprint = "7" * 64
+    best = _candidate(
+        "compatible-encounter-best",
+        quality=0.95,
+        feature=(1.0, 0.0),
+        progress=Fraction(20, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="same-major-run",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("brown", "green"),
+            traits=("bulbous_body", "large_mouth"),
+            distinctiveness="distinctive",
+        ),
+    )
+    varied = _candidate(
+        "compatible-encounter-varied",
+        quality=0.80,
+        feature=(0.50, math.sqrt(1 - 0.50**2)),
+        progress=Fraction(22, 100),
+        blog_image_type="normal_gameplay",
+        explanation_value="high",
+        context_relevance="none",
+        scene_slug="same-major-run",
+        combat_encounter_kind="major",
+        video_fingerprint=source_fingerprint,
+        combat_subject_evidence=CombatSubjectEvidence(
+            body_plan="quadruped",
+            scale="large",
+            surface="organic",
+            colors=("green",),
+            traits=("large_mouth",),
+            distinctiveness="distinctive",
+        ),
+    )
+
+    # Act
+    result = select_video_set_images(
+        (varied, best),
+        requested_count=2,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+    # Assert
+    assert [item.candidate.identifier for item in result.selected] == [best.identifier]
+    assert result.shortfall is True
+    assert result.rejected[0].candidate.identifier == varied.identifier
+    assert result.rejected[0].semantic_group_basis == "combat_encounter_sequence"
 
 
 def test_generic_combat_subject_evidence_does_not_merge_across_videos() -> None:
