@@ -32,7 +32,7 @@ SCENE_CATALOG_SCHEMA_VERSION = "scene-catalog-schema-v2"
 SCENE_CATALOG_STAGE_CONTRACT_VERSION = "scene-catalog-stage-v7"
 CANDIDATE_ANNOTATION_PROMPT_VERSION = "candidate-annotation-prompt-v18"
 CANDIDATE_ANNOTATION_SCHEMA_VERSION = "candidate-annotation-schema-v13"
-CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v35"
+CANDIDATE_ANNOTATION_STAGE_CONTRACT_VERSION = "candidate-annotation-stage-v38"
 COMBAT_REPRESENTATIVE_FALLBACK_POLICY_VERSION = "combat-representative-fallback-v1"
 CANDIDATE_ANNOTATION_RELATIONSHIP_REPAIR_PROMPT_VERSION = (
     "candidate-annotation-relationship-repair-prompt-v1"
@@ -55,19 +55,19 @@ COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION = (
     "combat-encounter-confirmation-stage-v3"
 )
 COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION = (
-    "combat-visibility-verification-prompt-v3"
+    "combat-visibility-verification-prompt-v4"
 )
 COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION = (
-    "combat-visibility-verification-schema-v2"
+    "combat-visibility-verification-schema-v3"
 )
 COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION = (
-    "combat-visibility-verification-stage-v3"
+    "combat-visibility-verification-stage-v4"
 )
 COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION = (
-    "combat-visibility-confirmation-prompt-v2"
+    "combat-visibility-confirmation-prompt-v3"
 )
 COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION = (
-    "combat-visibility-confirmation-stage-v2"
+    "combat-visibility-confirmation-stage-v3"
 )
 COMBAT_VISIBILITY_EDGE_AUDIT_PROMPT_VERSION = "combat-visibility-edge-audit-prompt-v3"
 COMBAT_VISIBILITY_EDGE_AUDIT_SCHEMA_VERSION = "combat-visibility-edge-audit-schema-v1"
@@ -348,6 +348,14 @@ COMBAT_VISIBILITY_VERIFICATION_SCHEMA: dict[str, object] = {
             "type": "string",
             "enum": ["complete", "edge_cropped", "occluded", "absent"],
         },
+        "opponent_presentation": {
+            "type": "string",
+            "enum": ["prominent", "recognizable", "weak", "absent"],
+        },
+        "combat_interaction_visibility": {
+            "type": "string",
+            "enum": ["direct", "indirect", "none"],
+        },
         "effect_overlaps_combatant_body": {
             "type": "string",
             "enum": ["none", "partial", "severe"],
@@ -360,6 +368,8 @@ COMBAT_VISIBILITY_VERIFICATION_SCHEMA: dict[str, object] = {
         "player_body_visibility",
         "opponent_body_visibility",
         "opponent_body_framing",
+        "opponent_presentation",
+        "combat_interaction_visibility",
         "effect_overlaps_combatant_body",
         "effect_only_frame",
     ],

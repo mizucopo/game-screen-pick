@@ -229,6 +229,13 @@ class CandidateFrameObservation:
             and analysis.metrics.information_score < 0.15
             and analysis.metrics.visibility_score < 0.85
         )
+        has_subjectless_dialogue = (
+            self.visible_dialogue_text
+            and not self.visible_character_or_enemy
+            and not self.prominent_event_portrait
+            and not self.cinematic_event_presentation
+            and not self.visible_action
+        )
         if (
             self.effective_content_kind in _NO_EXPLANATION_CONTENT
             or self.effective_content_kind == "save"
@@ -236,6 +243,7 @@ class CandidateFrameObservation:
                 self.effective_content_kind == "shop"
                 and not self.visible_character_or_enemy
             )
+            or has_subjectless_dialogue
             or (self.combat_action and self.opponent_body_visibility != "clear")
             or self.effect_only_frame
             or self.primary_subject_visibility == "absent"

@@ -1631,7 +1631,7 @@ def test_candidate_uses_generic_scene_when_catalog_details_do_not_match_frame() 
 
     # Assert
     assert annotation.scene_slug == "other"
-    assert annotation.summary == "台詞のあるイベント"
+    assert annotation.summary == "画面内テキストのあるイベント"
 
 
 def test_candidate_frames_are_labeled_and_selected_from_per_frame_observations() -> (
@@ -2065,20 +2065,27 @@ def test_invalid_candidate_response_does_not_count_as_dialogue_verification() ->
     (
         "confirmed_opponent_visibility",
         "confirmed_opponent_framing",
+        "confirmed_opponent_presentation",
+        "confirmed_combat_interaction_visibility",
         "confirmed_effect_only",
         "expected_value",
         "expected_attempt_count",
     ),
     (
-        ("clear", "complete", False, "high", 5),
-        ("clear", "edge_cropped", False, "none", 3),
-        ("absent", "absent", False, "none", 3),
-        ("clear", "complete", True, "none", 3),
+        ("clear", "complete", "prominent", "none", False, "high", 5),
+        ("clear", "complete", "recognizable", "direct", False, "high", 5),
+        ("clear", "complete", "recognizable", "indirect", False, "none", 3),
+        ("clear", "complete", "weak", "direct", False, "none", 3),
+        ("clear", "edge_cropped", "prominent", "direct", False, "none", 3),
+        ("absent", "absent", "absent", "none", False, "none", 3),
+        ("clear", "complete", "prominent", "direct", True, "none", 3),
     ),
 )
 def test_publishable_combat_visibility_is_visually_rechecked(
     confirmed_opponent_visibility: str,
     confirmed_opponent_framing: str,
+    confirmed_opponent_presentation: str,
+    confirmed_combat_interaction_visibility: str,
     confirmed_effect_only: bool,
     expected_value: str,
     expected_attempt_count: int,
@@ -2123,6 +2130,10 @@ def test_publishable_combat_visibility_is_visually_rechecked(
                 "player_body_visibility": "partial",
                 "opponent_body_visibility": confirmed_opponent_visibility,
                 "opponent_body_framing": confirmed_opponent_framing,
+                "opponent_presentation": confirmed_opponent_presentation,
+                "combat_interaction_visibility": (
+                    confirmed_combat_interaction_visibility
+                ),
                 "effect_overlaps_combatant_body": "severe",
                 "effect_only_frame": confirmed_effect_only,
             }
@@ -2153,6 +2164,7 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     assert annotation.combat_encounter_basis == (
         "ordinary_opponent_presentation" if expected_value == "high" else "ambiguous"
     )
+    assert annotation.summary == "戦闘の具体的なプレイ"
     assert annotation.spoiler_risk == "medium"
     assert diagnostics.attempt_count == expected_attempt_count
     assert diagnostics.validation_code is None
@@ -2166,6 +2178,8 @@ def test_publishable_combat_visibility_is_visually_rechecked(
         "player_body_visibility",
         "opponent_body_visibility",
         "opponent_body_framing",
+        "opponent_presentation",
+        "combat_interaction_visibility",
         "effect_overlaps_combatant_body",
         "effect_only_frame",
     }
@@ -2180,6 +2194,8 @@ def test_publishable_combat_visibility_is_visually_rechecked(
     assert "最も明瞭に判別でき、最も完全に収まる一体" in second_prompt
     assert "別の敵が画面端にいるだけ" in second_prompt
     assert "攻撃エフェクトがplayer付近にあるだけ" in second_prompt
+    assert "opponent_presentation" in second_prompt
+    assert "combat_interaction_visibility" in second_prompt
     if expected_attempt_count == 5:
         confirmation_prompt = _last_message(payloads[3])["content"]
         assert isinstance(confirmation_prompt, str)
@@ -2234,6 +2250,8 @@ def test_clean_combat_visibility_is_confirmed_before_publication() -> None:
             "player_body_visibility": "clear",
             "opponent_body_visibility": "clear",
             "opponent_body_framing": "complete",
+            "opponent_presentation": "prominent",
+            "combat_interaction_visibility": "direct",
             "effect_overlaps_combatant_body": "partial",
             "effect_only_frame": False,
         }
@@ -2459,6 +2477,8 @@ def test_possible_combat_is_routed_before_visibility_verification() -> None:
                 "player_body_visibility": "partial",
                 "opponent_body_visibility": "absent",
                 "opponent_body_framing": "absent",
+                "opponent_presentation": "absent",
+                "combat_interaction_visibility": "none",
                 "effect_overlaps_combatant_body": "severe",
                 "effect_only_frame": False,
             }
@@ -2550,6 +2570,8 @@ def test_enemy_status_without_visible_player_does_not_mark_combat_action() -> No
                 "player_body_visibility": "absent",
                 "opponent_body_visibility": "clear",
                 "opponent_body_framing": "complete",
+                "opponent_presentation": "prominent",
+                "combat_interaction_visibility": "indirect",
                 "effect_overlaps_combatant_body": "none",
                 "effect_only_frame": False,
             }
@@ -2692,6 +2714,8 @@ def test_status_only_combat_stays_uncertain_without_positive_basis() -> None:
                 "player_body_visibility": "clear",
                 "opponent_body_visibility": "clear",
                 "opponent_body_framing": "complete",
+                "opponent_presentation": "prominent",
+                "combat_interaction_visibility": "direct",
                 "effect_overlaps_combatant_body": "partial",
                 "effect_only_frame": False,
             }
@@ -2962,6 +2986,8 @@ def test_negative_combat_encounter_is_confirmed_before_visibility_routing() -> N
                 "player_body_visibility": "partial",
                 "opponent_body_visibility": "absent",
                 "opponent_body_framing": "absent",
+                "opponent_presentation": "absent",
+                "combat_interaction_visibility": "none",
                 "effect_overlaps_combatant_body": "severe",
                 "effect_only_frame": False,
             }
@@ -3059,6 +3085,8 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
                 "player_body_visibility": "clear",
                 "opponent_body_visibility": "clear",
                 "opponent_body_framing": "complete",
+                "opponent_presentation": "prominent",
+                "combat_interaction_visibility": "direct",
                 "effect_overlaps_combatant_body": "partial",
                 "effect_only_frame": False,
             }
@@ -3098,11 +3126,17 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
     assert "掲載可否を確定する独立した再確認" in confirmation_prompt
 
 
-def test_combat_visibility_schema_failure_is_retried() -> None:
+@pytest.mark.parametrize(
+    "invalid_response_kind",
+    ("missing_required_field", "contradictory_opponent_signals"),
+)
+def test_combat_visibility_schema_failure_is_retried(
+    invalid_response_kind: str,
+) -> None:
     """戦闘可視性専用確認のschema違反が一回だけ再試行されること。
 
     Arrange:
-        - 掲載可能な戦闘応答と、必須fieldを欠く専用応答が用意される
+        - 掲載可能な戦闘応答と、field欠落または相関矛盾を持つ専用応答が用意される
         - 再試行では敵本体が明瞭な有効応答が用意される
     Act:
         - Candidate Annotation推論が実行される
@@ -3134,11 +3168,17 @@ def test_combat_visibility_schema_failure_is_retried() -> None:
             "player_body_visibility": "clear",
             "opponent_body_visibility": "clear",
             "opponent_body_framing": "complete",
+            "opponent_presentation": "prominent",
+            "combat_interaction_visibility": "direct",
             "effect_overlaps_combatant_body": "partial",
             "effect_only_frame": False,
         }
         if len(payloads) == 3:
-            del verification["effect_only_frame"]
+            if invalid_response_kind == "missing_required_field":
+                del verification["effect_only_frame"]
+            else:
+                verification["opponent_body_visibility"] = "absent"
+                verification["opponent_body_framing"] = "absent"
         if len(payloads) == 6:
             return _response(_combat_visibility_edge_audit_payload())
         return _response(verification)
@@ -3205,6 +3245,8 @@ def test_dialogue_and_combat_visibility_are_rechecked_separately() -> None:
                     "player_body_visibility": "clear",
                     "opponent_body_visibility": "absent",
                     "opponent_body_framing": "absent",
+                    "opponent_presentation": "absent",
+                    "combat_interaction_visibility": "none",
                     "effect_overlaps_combatant_body": "partial",
                     "effect_only_frame": False,
                 }
@@ -3299,6 +3341,8 @@ def test_relationship_repair_is_followed_by_combat_visibility_check() -> None:
                     "player_body_visibility": "partial",
                     "opponent_body_visibility": "absent",
                     "opponent_body_framing": "absent",
+                    "opponent_presentation": "absent",
+                    "combat_interaction_visibility": "none",
                     "effect_overlaps_combatant_body": "severe",
                     "effect_only_frame": True,
                 }
@@ -4834,7 +4878,7 @@ def test_candidate_uses_symbol_omission_when_safe_fallback_matches_context() -> 
         - Cue文字を持たない省略記号がsummaryへ返されること
     """
     # Arrange
-    cue_text = "戦闘の台詞のあるイベント。戦闘に分類されるeventの場面"
+    cue_text = "画面内テキストのあるイベント。scene:battle"
     request = _annotation_request_with_context_text(cue_text)
     response = _annotation_payload()
     runtime = OllamaVisionRuntime(
@@ -4864,8 +4908,52 @@ def test_candidate_uses_symbol_omission_when_safe_fallback_matches_context() -> 
     )
 
 
+def test_candidate_redaction_preserves_recurring_scene_discriminator() -> None:
+    """Cue伏字後もrecurring sceneの内部識別子が保持されること。
+
+    Arrange:
+        - content labelを含むContext Cueとrecurring gameplay応答が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - Cue逐語spanを含まず、検証済みscene slugを持つsummaryが返されること
+    """
+    # Arrange
+    cue_text = "通常プレイ画面を紹介する"
+    request = _annotation_request_with_context_text(cue_text)
+    response = _frame_observation_payload(
+        (("frame-a", "exploration", "gameplay_idle", "high", "hud"),)
+    )
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        request,
+        _catalog_with_recurring_exploration(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.scene_slug == "exploration"
+    assert annotation.summary == "scene:exploration"
+    assert candidate_annotation_free_text_is_safe(
+        (annotation.summary,),
+        (cue_text,),
+    )
+    assert diagnostics.validation_code == (
+        "candidate_annotation_verbatim_context_redacted"
+    )
+
+
 @pytest.mark.parametrize(
-    ("cue_text", "annotation_summary"),
+    ("cue_text", "spoiler_evidence"),
     (
         ("はい", "人物がはいと返事する場面"),
         ("OK", "画面にOK表示が示される場面"),
@@ -4873,12 +4961,12 @@ def test_candidate_uses_symbol_omission_when_safe_fallback_matches_context() -> 
 )
 def test_candidate_allows_ambiguous_one_or_two_character_cue_occurrence(
     cue_text: str,
-    annotation_summary: str,
+    spoiler_evidence: str,
 ) -> None:
     """一般的な1〜2文字Cueの出現が逐語引用と判定されないこと。
 
     Arrange:
-        - 一般的な1〜2文字Cueと、その文字列を含む要約が用意される
+        - 一般的な1〜2文字Cueと、その文字列を含む画像由来evidenceが用意される
     Act:
         - Candidate Annotation推論が実行される
     Assert:
@@ -4887,7 +4975,7 @@ def test_candidate_allows_ambiguous_one_or_two_character_cue_occurrence(
     # Arrange
     request = _annotation_request_with_context_text(cue_text)
     response = _annotation_payload()
-    catalog = _catalog_with_battle_display(annotation_summary)
+    _first_frame_observation(response)["spoiler_evidence"] = spoiler_evidence
     runtime = OllamaVisionRuntime(
         "http://localhost:11434",
         timeout_seconds=60.0,
@@ -4899,13 +4987,81 @@ def test_candidate_allows_ambiguous_one_or_two_character_cue_occurrence(
     # Act
     annotation, _ = runtime.annotate_candidate(
         request,
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.spoiler_evidence == spoiler_evidence
+
+
+def test_internal_event_summary_keeps_scene_discriminator() -> None:
+    """選定前のevent説明にScene間の意味識別子が保持されること。
+
+    Arrange:
+        - 異なるSceneを識別する名前と、画面内文字のあるevent観測が用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 公開前の内部説明にはScene識別子が保持されること
+    """
+    # Arrange
+    response = _annotation_payload()
+    catalog = _catalog_with_battle_display("キャラクターとの会話")
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _ = runtime.annotate_candidate(
+        _annotation_request(),
         catalog,
         _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
         num_ctx=32768,
     )
 
     # Assert
-    assert annotation.summary.startswith(annotation_summary)
+    assert annotation.summary == "キャラクターとの会話の画面内テキストのあるイベント"
+
+
+def test_idle_gameplay_summary_does_not_claim_the_player_is_waiting() -> None:
+    """通常play画面の内部説明へ未観測の待機状態が断定されないこと。
+
+    Arrange:
+        - gameplay idleと分類された高評価frameが用意される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - Scene識別子を保ちつつ待機中と断定しない説明が返されること
+    """
+    # Arrange
+    response = _frame_observation_payload(
+        (("frame-a", "exploration", "gameplay_idle", "high", "hud"),)
+    )
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=lambda _method, _url, _payload, _timeout: _response(response),
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, _ = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.summary == "探索の通常プレイ画面"
+    assert "待機" not in annotation.summary
 
 
 def test_retryable_transport_failure_is_retried_with_same_semantic_input() -> None:
@@ -5304,13 +5460,27 @@ def _combat_visibility_payload(
     *,
     opponent_body_visibility: str = "absent",
     opponent_body_framing: str = "absent",
+    opponent_presentation: str | None = None,
+    combat_interaction_visibility: str | None = None,
 ) -> dict[str, object]:
+    resolved_presentation = opponent_presentation or (
+        "prominent"
+        if opponent_body_visibility == "clear" and opponent_body_framing == "complete"
+        else "absent"
+        if opponent_body_visibility == "absent"
+        else "weak"
+    )
+    resolved_interaction = combat_interaction_visibility or (
+        "direct" if resolved_presentation == "prominent" else "none"
+    )
     return {
         "effect_screen_coverage": "none",
         "largest_foreground_element": "environment",
         "player_body_visibility": "clear",
         "opponent_body_visibility": opponent_body_visibility,
         "opponent_body_framing": opponent_body_framing,
+        "opponent_presentation": resolved_presentation,
+        "combat_interaction_visibility": resolved_interaction,
         "effect_overlaps_combatant_body": "none",
         "effect_only_frame": False,
     }

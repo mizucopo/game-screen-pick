@@ -20,6 +20,8 @@ output/
 
 画像名は全体選択順、Scene Slug、Frame Candidate IDの短縮digestから作ります。安定identityはfilenameではなく、完全なFrame Candidate IDです。
 
+公開成果物の`annotation.summary`は、選定用のSemantic Annotation Summaryを公開前のcopyで置換したPublication Annotation Summaryです。Scene Display Nameや推定した固有名を連結せず、検証済みのCombat Encounter Kindと画像から直接観測した画面内容だけから有限表現を生成します。画面内title文字を含むTitle Semanticsは汎用的な画面内容分類より優先します。戦闘種別を「具体的なプレイ」へ反映するのは画像もgameplayの場合に限り、event画像はeventとして説明します。通常playの移動・待機を断定せず「通常プレイ画面」、人物の有無や会話相手を断定せず「画面内テキストのあるイベント」のように表します。この置換結果を最終selectorの意味重複判定へ戻しません。
+
 Video Source IDは通常、whole-file SHA-256の先頭12文字を使います。同じVideo Set内でそのprefixが衝突した場合は、衝突したsourceだけを64文字の完全digestへ拡張し、一意性を保ちます。
 
 producerが検証する現行の厳密なschema実体は[`report-2.2.0.schema.json`](../src/video_selection/schemas/report-2.2.0.schema.json)です。履歴schemaの[`report-1.0.0.schema.json`](../src/video_selection/schemas/report-1.0.0.schema.json)、[`report-2.0.0.schema.json`](../src/video_selection/schemas/report-2.0.0.schema.json)、[`report-2.1.0.schema.json`](../src/video_selection/schemas/report-2.1.0.schema.json)も保持します。readerはschema identityを確認して対応major 1・2の基準schemaを選び、既知の必須構造を検証しながら将来minorの追加field／文字列enum値を保持します。既知の関係検証とMarkdown投影は既知facetだけを対象にし、将来minorが追加した未知facetはJSONに保持したまま旧readerでは解釈しません。report@1には存在しない条件付きcoverageのJSON関係とMarkdown sectionを要求しません。このreader検証はproducerの厳密な現行2.2検証とは分離し、report schema versionもpackage versionから独立します。
