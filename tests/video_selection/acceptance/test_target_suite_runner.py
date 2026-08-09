@@ -579,6 +579,59 @@ def test_unknown_active_marker_is_rejected_without_mutation(
     assert journal_path.read_bytes() == journal_before
 
 
+def test_completed_release_rejects_out_of_plan_active_comparison_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """完了済みreleaseでも対象外comparison markerが変更されず拒否されること。
+
+    Arrange:
+        - coldとwarmが完了したrelease stateへfixed3 markerとjournalが永続化される
+    Act:
+        - `--reset-suite`なしで同じrelease suiteが再実行される
+    Assert:
+        - stateとjournalを変更せずexecution plan不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state_path = suite_root / "acceptance-state.json"
+    journal_path = suite_root / "work" / "active-attempt.json"
+    state = read_json_object(state_path)
+    assert state is not None
+    state["active_comparison_run"] = "fixed3"
+    write_atomic_json(state_path, state)
+    AcceptanceAttemptJournal(journal_path).start(
+        attempt_id="abandoned-fixed3",
+        step_kind="comparison",
+        step_name="fixed3",
+        started_at_epoch_seconds=0.0,
+        execution_context={},
+    )
+    state_before = state_path.read_bytes()
+    journal_before = journal_path.read_bytes()
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="execution planと一致しません"):
+        runner.run(profile_path=profile_path, suite="release")
+    assert calls == ["cold", "warm"]
+    assert state_path.read_bytes() == state_before
+    assert journal_path.read_bytes() == journal_before
+
+
 def test_reset_suite_discards_completed_state_and_runs_cold_again(
     tmp_path: Path,
 ) -> None:

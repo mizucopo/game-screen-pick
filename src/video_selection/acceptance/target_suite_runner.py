@@ -180,9 +180,7 @@ class TargetSuiteRunner:
                 cold_configuration,
                 warm_configuration,
             )
-            if any(
-                state.get(step.active_state_key) is not None for step in execution_steps
-            ):
+            if _resolve_active_step(state, execution_steps) is not None:
                 raise ValueError("完了済みAcceptance stateにactive runがあります")
             attempt_journal.clear()
             for step in execution_steps:
@@ -1375,22 +1373,9 @@ def _recover_abandoned_attempt(
     attempt_journal: AcceptanceAttemptJournal,
 ) -> None:
     """process終了で残ったactive markerを保守的なattemptへ閉じる。"""
-    active_markers = {
-        key: state[key] for key in _ACTIVE_RUN_STATE_KEYS if state.get(key) is not None
-    }
-    if not active_markers:
+    step = _resolve_active_step(state, steps)
+    if step is None:
         return
-    if len(active_markers) != 1:
-        raise ValueError("複数のAcceptance Runが同時にactiveです")
-    active_key, active_name = next(iter(active_markers.items()))
-    active_steps = tuple(
-        step
-        for step in steps
-        if step.active_state_key == active_key and step.name == active_name
-    )
-    if len(active_steps) != 1:
-        raise ValueError("Acceptance active runが現在のexecution planと一致しません")
-    step = active_steps[0]
     started_at = state.get(_active_attempt_started_key(step))
     duration_seconds = (
         max(0.0, time.time() - float(started_at))
@@ -1461,6 +1446,29 @@ def _recover_abandoned_attempt(
     }
     write_atomic_json(state_path, state)
     attempt_journal.clear()
+
+
+def _resolve_active_step(
+    state: Mapping[str, object],
+    steps: tuple[AcceptanceExecutionStep, ...],
+) -> AcceptanceExecutionStep | None:
+    """active markerを副作用なしで一つの実行stepへ解決する。"""
+    active_markers = {
+        key: state[key] for key in _ACTIVE_RUN_STATE_KEYS if state.get(key) is not None
+    }
+    if not active_markers:
+        return None
+    if len(active_markers) != 1:
+        raise ValueError("複数のAcceptance Runが同時にactiveです")
+    active_key, active_name = next(iter(active_markers.items()))
+    active_steps = tuple(
+        step
+        for step in steps
+        if step.active_state_key == active_key and step.name == active_name
+    )
+    if len(active_steps) != 1:
+        raise ValueError("Acceptance active runが現在のexecution planと一致しません")
+    return active_steps[0]
 
 
 def _active_attempt_started_key(step: AcceptanceExecutionStep) -> str:
