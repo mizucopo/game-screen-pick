@@ -3127,11 +3127,21 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
 
 
 @pytest.mark.parametrize(
-    "invalid_response_kind",
-    ("missing_required_field", "contradictory_opponent_signals"),
+    ("invalid_response_kind", "expected_validation_code"),
+    (
+        (
+            "missing_required_field",
+            "combat_visibility_verification_schema_invalid",
+        ),
+        (
+            "contradictory_opponent_signals",
+            "combat_visibility_verification_opponent_presentation_mismatch",
+        ),
+    ),
 )
 def test_combat_visibility_schema_failure_is_retried(
     invalid_response_kind: str,
+    expected_validation_code: str,
 ) -> None:
     """戦闘可視性専用確認のschema違反が一回だけ再試行されること。
 
@@ -3202,15 +3212,98 @@ def test_combat_visibility_schema_failure_is_retried(
     # Assert
     assert annotation.explanation_value == "high"
     assert diagnostics.attempt_count == 6
-    assert (
-        diagnostics.validation_code == "combat_visibility_verification_schema_invalid"
-    )
+    assert diagnostics.validation_code == expected_validation_code
     third_prompt = _last_message(payloads[3])["content"]
     assert isinstance(third_prompt, str)
-    assert "combat_visibility_verification_schema_invalid" in third_prompt
+    assert expected_validation_code in third_prompt
     confirmation_prompt = _last_message(payloads[4])["content"]
     assert isinstance(confirmation_prompt, str)
     assert "掲載可否を確定する独立した再確認" in confirmation_prompt
+
+
+def test_combat_visibility_retry_repairs_player_absent_direct_interaction() -> None:
+    """player不在と直接戦闘の矛盾が明示的な再試行で修復されること。
+
+    Arrange:
+        - player本体が不在なのに直接戦闘とする実障害相当の応答が用意される
+        - 相関規則が再試行promptに明示された場合だけ有効な応答が返される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 二回目の戦闘可視性応答が採用され、Candidate Annotationが完了すること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+    repair_instruction = (
+        "player_body_visibility=absentなら"
+        "combat_interaction_visibility=directを返しません"
+    )
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+                )
+            )
+        if len(payloads) == 2:
+            return _response(_combat_encounter_payload(visible=True, evidence="both"))
+        if len(payloads) in {3, 4}:
+            prompt = _last_message(payloads[-1])["content"]
+            assert isinstance(prompt, str)
+            return _response(
+                {
+                    **_combat_visibility_payload(
+                        opponent_body_visibility="clear",
+                        opponent_body_framing="complete",
+                    ),
+                    "player_body_visibility": (
+                        "clear" if repair_instruction in prompt else "absent"
+                    ),
+                    "combat_interaction_visibility": "direct",
+                }
+            )
+        if len(payloads) == 6:
+            return _response(_combat_visibility_edge_audit_payload())
+        return _response(
+            _combat_visibility_payload(
+                opponent_body_visibility="clear",
+                opponent_body_framing="complete",
+            )
+        )
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "high"
+    assert diagnostics.attempt_count == 6
+    assert diagnostics.validation_code == (
+        "combat_visibility_verification_player_absent_direct_interaction"
+    )
+    retry_prompt = _last_message(payloads[3])["content"]
+    assert isinstance(retry_prompt, str)
+    assert repair_instruction in retry_prompt
 
 
 def test_dialogue_and_combat_visibility_are_rechecked_separately() -> None:

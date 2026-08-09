@@ -1296,6 +1296,14 @@ def test_matching_fingerprints_reuse_catalog_and_each_annotation(
     assert '"combat_encounter_basis": "ordinary_opponent_presentation"' in cache_text
     assert '"combat_action"' not in cache_text
     assert '"seed": 0' in cache_text
+    assert (
+        '"combat_visibility_verification_prompt_version": '
+        '"combat-visibility-verification-prompt-v5"' in cache_text
+    )
+    assert (
+        '"combat_visibility_confirmation_prompt_version": '
+        '"combat-visibility-confirmation-prompt-v4"' in cache_text
+    )
     assert '"combat_visibility_edge_audit_prompt_version"' in cache_text
     assert '"combat_visibility_edge_strip_version"' in cache_text
     assert '"cinematic_letterbox_detection_version"' in cache_text

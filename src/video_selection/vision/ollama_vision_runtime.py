@@ -246,6 +246,13 @@ _COMBAT_VISIBILITY_VERIFICATION_KEYS = {
     "effect_overlaps_combatant_body",
     "effect_only_frame",
 }
+_COMBAT_VISIBILITY_RETRY_VALIDATION_CODES = {
+    "combat_visibility_verification_schema_invalid",
+    "combat_visibility_verification_opponent_framing_mismatch",
+    "combat_visibility_verification_opponent_presentation_mismatch",
+    "combat_visibility_verification_opponent_absent_interaction_mismatch",
+    "combat_visibility_verification_player_absent_direct_interaction",
+}
 _COMBAT_VISIBILITY_EDGE_NAMES = ("top", "bottom", "left", "right")
 _COMBAT_VISIBILITY_EDGE_OBSERVATION_KEYS = {
     "edge",
@@ -1771,6 +1778,15 @@ def _with_repair_code(
             "context_relevanceがnoneまたはunavailableならsupporting_context_cue_idsは"
             "空配列、weakまたはstrongなら入力内IDを1件以上入れます。"
         )
+    if validation_code in _COMBAT_VISIBILITY_RETRY_VALIDATION_CODES:
+        repair += (
+            "\n戦闘可視性fieldの相関を再確認します。opponent_body_visibility=absent"
+            "ならopponent_body_framingとopponent_presentationもabsent、"
+            "combat_interaction_visibilityはnoneです。opponent_body_visibilityが"
+            "absentでなければopponent_body_framingとopponent_presentationもabsent"
+            "にしません。player_body_visibility=absentなら"
+            "combat_interaction_visibility=directを返しません。"
+        )
     messages[-1]["content"] = f"{content}\n{repair}"
     return copied
 
@@ -2091,16 +2107,6 @@ def _parse_combat_visibility_verification(
     combat_interaction_visibility = value.get("combat_interaction_visibility")
     effect_overlap = value.get("effect_overlaps_combatant_body")
     effect_only_frame = value.get("effect_only_frame")
-    opponent_body_is_absent = opponent_body_visibility == "absent"
-    opponent_signals_are_consistent = (
-        opponent_body_is_absent == (opponent_body_framing == "absent")
-        and opponent_body_is_absent == (opponent_presentation == "absent")
-        and (not opponent_body_is_absent or combat_interaction_visibility == "none")
-        and (
-            player_body_visibility != "absent"
-            or combat_interaction_visibility != "direct"
-        )
-    )
     if (
         effect_screen_coverage not in _EFFECT_SCREEN_COVERAGES
         or largest_foreground_element not in _LARGEST_FOREGROUND_ELEMENTS
@@ -2111,9 +2117,23 @@ def _parse_combat_visibility_verification(
         or combat_interaction_visibility not in _COMBAT_INTERACTION_VISIBILITIES
         or effect_overlap not in _EFFECT_COMBATANT_OVERLAPS
         or not isinstance(effect_only_frame, bool)
-        or not opponent_signals_are_consistent
     ):
         raise _schema_error("combat_visibility_verification_schema_invalid")
+    opponent_body_is_absent = opponent_body_visibility == "absent"
+    if opponent_body_is_absent != (opponent_body_framing == "absent"):
+        raise _schema_error("combat_visibility_verification_opponent_framing_mismatch")
+    if opponent_body_is_absent != (opponent_presentation == "absent"):
+        raise _schema_error(
+            "combat_visibility_verification_opponent_presentation_mismatch"
+        )
+    if opponent_body_is_absent and combat_interaction_visibility != "none":
+        raise _schema_error(
+            "combat_visibility_verification_opponent_absent_interaction_mismatch"
+        )
+    if player_body_visibility == "absent" and combat_interaction_visibility == "direct":
+        raise _schema_error(
+            "combat_visibility_verification_player_absent_direct_interaction"
+        )
     return (
         player_body_visibility,
         opponent_body_visibility,
