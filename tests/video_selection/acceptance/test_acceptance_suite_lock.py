@@ -23,10 +23,12 @@ def test_lock_rejects_overlap_and_reopens_after_release(tmp_path: Path) -> None:
     lock_path = tmp_path / ".locks" / "release.lock"
 
     # Act
-    with AcceptanceSuiteLock(lock_path):
-        with pytest.raises(ValueError, match="Acceptance suiteは実行中"):
-            with AcceptanceSuiteLock(lock_path):
-                pass
+    with (
+        AcceptanceSuiteLock(lock_path),
+        pytest.raises(ValueError, match="Acceptance suiteは実行中"),
+        AcceptanceSuiteLock(lock_path),
+    ):
+        pass
     with AcceptanceSuiteLock(lock_path):
         pass
 
