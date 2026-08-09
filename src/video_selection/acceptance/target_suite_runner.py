@@ -2,9 +2,6 @@
 
 import hashlib
 import json
-import os
-import shutil
-import stat
 import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
@@ -56,6 +53,7 @@ from .human_review import (
 from .load_acceptance_profile import load_acceptance_profile
 from .release_suite_materializer import ReleaseSuiteMaterializer
 from .source_snapshot_fingerprint import acceptance_source_snapshot_fingerprint
+from .suite_owned_deletion_boundary import SuiteOwnedDeletionBoundary
 from .target_environment import (
     probe_source_revision,
     probe_target_environment,
@@ -146,7 +144,7 @@ class TargetSuiteRunner:
             owned_root=profile.artifact_root,
         )
         lock_path = suite_root.parent / ".locks" / f"{suite}.lock"
-        with AcceptanceSuiteLock(lock_path):
+        with AcceptanceSuiteLock(lock_path, owned_root=profile.artifact_root):
             return self._run_locked(
                 profile=profile,
                 suite=suite,
@@ -950,12 +948,7 @@ def _validate_directory_deletion(
     owned_root: Path,
 ) -> None:
     """suite所有rootから対象までが通常directoryだけであることを検証する。"""
-    _validate_deletion_chain(
-        path,
-        label,
-        owned_root=owned_root,
-        target_kind="directory",
-    )
+    SuiteOwnedDeletionBoundary(owned_root).validate_directory(path, label)
 
 
 def _validate_file_deletion(
@@ -965,45 +958,7 @@ def _validate_file_deletion(
     owned_root: Path,
 ) -> None:
     """suite所有rootから対象fileまでに外部参照がないことを検証する。"""
-    _validate_deletion_chain(
-        path,
-        label,
-        owned_root=owned_root,
-        target_kind="file",
-    )
-
-
-def _validate_deletion_chain(
-    path: Path,
-    label: str,
-    *,
-    owned_root: Path,
-    target_kind: str,
-) -> None:
-    root = Path(os.path.abspath(owned_root))
-    target = Path(os.path.abspath(path))
-    try:
-        relative = target.relative_to(root)
-    except ValueError:
-        raise ValueError(f"{label}はsuite所有directory外にあります") from None
-    current = root
-    chain = [root]
-    for part in relative.parts:
-        current /= part
-        chain.append(current)
-    for candidate in chain:
-        try:
-            mode = candidate.lstat().st_mode
-        except FileNotFoundError:
-            return
-        if stat.S_ISLNK(mode):
-            raise ValueError(f"{label}の途中階層がsymbolic linkです")
-        is_target = candidate == target
-        if not is_target or target_kind == "directory":
-            if not stat.S_ISDIR(mode):
-                raise ValueError(f"{label}の途中階層が通常directoryではありません")
-        elif not stat.S_ISREG(mode):
-            raise ValueError(f"{label}が通常fileではありません")
+    SuiteOwnedDeletionBoundary(owned_root).validate_file(path, label)
 
 
 def _remove_directory_strict(
@@ -1013,15 +968,7 @@ def _remove_directory_strict(
     owned_root: Path,
 ) -> None:
     """reset対象directoryが完全に削除された場合だけ後続処理を許可する。"""
-    _validate_directory_deletion(path, label, owned_root=owned_root)
-    if not path.exists():
-        return
-    try:
-        shutil.rmtree(path)
-    except OSError:
-        raise ValueError(f"{label}を完全に削除できません") from None
-    if path.exists() or path.is_symlink():
-        raise ValueError(f"{label}を完全に削除できません")
+    SuiteOwnedDeletionBoundary(owned_root).remove_directory(path, label)
 
 
 def _remove_file_strict(
@@ -1031,15 +978,7 @@ def _remove_file_strict(
     owned_root: Path,
 ) -> None:
     """suite-owned regular fileだけを削除し外部参照を辿らない。"""
-    _validate_file_deletion(path, label, owned_root=owned_root)
-    if not path.exists():
-        return
-    try:
-        path.unlink()
-    except OSError:
-        raise ValueError(f"{label}を削除できません") from None
-    if path.exists() or path.is_symlink():
-        raise ValueError(f"{label}を完全に削除できません")
+    SuiteOwnedDeletionBoundary(owned_root).remove_file(path, label)
 
 
 def _remove_invalid_attempt_output(output_folder: Path, suite_root: Path) -> None:

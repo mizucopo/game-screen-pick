@@ -23,6 +23,7 @@ def iter_pcm_audio_chunks(
     sample_rate: int,
     *,
     initial_sample_start: int = 0,
+    observed_timing: list[_AudioMetadata] | None = None,
 ) -> Iterator[PcmAudioChunk]:
     """一つのFFmpeg processから連続PCM chunkを順次返す。"""
     process = subprocess.Popen(
@@ -36,7 +37,7 @@ def iter_pcm_audio_chunks(
     metadata_queue: queue.Queue[_MetadataItem] = queue.Queue()
     stderr_thread = threading.Thread(
         target=_collect_ashowinfo,
-        args=(process.stderr, metadata_queue),
+        args=(process.stderr, metadata_queue, observed_timing),
         daemon=True,
     )
     stderr_thread.start()
@@ -64,20 +65,29 @@ def iter_pcm_audio_chunks(
 def _collect_ashowinfo(
     stderr: IO[bytes],
     metadata_queue: queue.Queue[_MetadataItem],
+    observed_timing: list[_AudioMetadata] | None,
 ) -> None:
     try:
         for raw_line in stderr:
             line = raw_line.decode("utf-8", errors="replace")
-            if "Parsed_ashowinfo" not in line or " n:" not in line:
+            is_observed_timing = "[ashowinfo@observed " in line
+            is_chunk_timing = "[ashowinfo@chunk " in line
+            is_default_timing = "Parsed_ashowinfo" in line
+            if (
+                not is_observed_timing and not is_chunk_timing and not is_default_timing
+            ) or " n:" not in line:
                 continue
             pts_match = _PTS_PATTERN.search(line)
             sample_count_match = _SAMPLE_COUNT_PATTERN.search(line)
             if pts_match is None or sample_count_match is None:
                 msg = "ashowinfo metadataが不正です"
                 raise ValueError(msg)
-            metadata_queue.put(
-                (int(pts_match.group(1)), int(sample_count_match.group(1)))
-            )
+            metadata = (int(pts_match.group(1)), int(sample_count_match.group(1)))
+            if is_observed_timing:
+                if observed_timing is not None:
+                    observed_timing.append(metadata)
+            else:
+                metadata_queue.put(metadata)
     except BaseException as error:
         metadata_queue.put(error)
     finally:

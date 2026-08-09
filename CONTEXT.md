@@ -81,12 +81,12 @@ supported target上の実videoからrelease suiteとfull-scale suiteの対象を
 _Avoid_: public TOML, Effective Configuration, committed fixture, production default
 
 **Acceptance Suite Lock**:
-一つのartifact rootとsuiteに対するtarget acceptance commandの同時実行を即時拒否し、安全なsuite root解決後からstate、active marker、attempt journal、cache、worksheetの読込・回復・変更までを保護する非待機排他境界。後発commandは先発の実行中に証拠を変更せず、異なるsuiteの実行は互いに妨げない。
+一つのartifact rootとsuiteに対するtarget acceptance commandの同時実行を即時拒否し、安全なsuite root解決後からstate、active marker、attempt journal、cache、worksheetの読込・回復・変更までを保護する非待機排他境界。lock pathはartifact rootからsymlinkを辿らずdirectory handle相対で作成・openし、後発commandは先発の実行中に証拠を変更せず、異なるsuiteの実行は互いに妨げない。
 _Avoid_: Input Lock, waiting queue, active attempt marker, global lock
 
 **Suite-Owned Deletion Boundary**:
-target acceptanceのrecursive deleteを、明示されたsuite所有root内の対象と、そのrootから対象までにあるsymlinkでも通常directory以外でもない既存chainだけへ限定する安全境界。検証に失敗した場合は外部内容と既存acceptance証拠を変更せずresetを拒否する。
-_Avoid_: path文字列prefix検査, targetだけのsymlink検査, best-effort cleanup, external directory
+target acceptanceのrecursive deleteを、明示されたsuite所有root内の対象と、そのrootから対象までにあるsymlinkでも通常directory以外でもない既存chainだけへ限定する安全境界。削除時は検証済みchainをdirectory handle相対で開き、path検証後にancestorがrenameまたはsymlinkへ差し替えられても外部treeを辿らない。検証に失敗した場合は外部内容と既存acceptance証拠を変更せずresetを拒否する。
+_Avoid_: path文字列prefix検査, targetだけのsymlink検査, path検証とpath-based deleteの分離, best-effort cleanup, external directory
 
 **Acceptance Record**:
 一回のtarget acceptanceで得たcommit、runtime/model identity、pathなしのVideo Set fingerprint、Stage時間、resource、cache、quality判定をversioned JSONとして保存する証拠。media、absolute path、raw text、prompt、model responseを含めない。
@@ -169,7 +169,7 @@ Speech Runtimeが返す、word本文、chunk内の開始・終了PCM sample位�
 _Avoid_: Context Cue, backend object, calibrated confidence, global Video Time
 
 **PCM Range Continuity Validation**:
-checkpoint対象のPCM sample rangeについてMedia Runtimeから観測した先頭sampleのPTSを要求rangeのsample gridと照合し、不連続ならDurable Work Unitの確定前に拒否する検査。観測PTSを期待値へ置換して重複や欠落を隠さず、連続rangeでは中断なしと再開後に同じ音声sampleとContext Cueを確定する。
+checkpoint対象のPCM sample rangeについて、canonical chunkへまとめる前の各PCM frameでMedia Runtimeが観測したPTSを要求rangeのsample gridと照合し、不連続ならDurable Work Unitの確定前に拒否する検査。既存対応範囲である3 output sample以内のpacket timestamp量子化だけは検証後にcanonical gridへ正規化する。大きな観測PTSを期待値へ置換して重複や欠落を隠さず、連続rangeでは中断なしと再開後に同じ音声sampleとContext Cueを確定する。
 _Avoid_: expected PTSへの上書き, timestamp補間, best-effort audio concatenation, completed chunkの黙示修復
 
 **Rejected Speech Diagnostic**:

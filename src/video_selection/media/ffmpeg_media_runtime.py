@@ -89,6 +89,7 @@ _SHOWINFO_DURATION_PATTERN = re.compile(r"\bduration:\s*(-?\d+)")
 _SHOWINFO_SIZE_PATTERN = re.compile(r"\bs:(\d+)x(\d+)")
 _FRAME_RANGE_SEEK_PADDING = Fraction(1)
 _FRAME_RANGE_END_PADDING = Fraction(1, 10)
+_PCM_PTS_QUANTIZATION_TOLERANCE_SAMPLES = 3
 
 
 class FfmpegMediaRuntime:
@@ -869,9 +870,10 @@ class FfmpegMediaRuntime:
             f"aresample={sample_rate}:async=0,"
             "aformat=sample_fmts=s16:channel_layouts=mono,"
             f"atrim=end_sample={maximum_sample_count},"
-            f"asetnsamples=n={maximum_sample_count}:p=0,"
             f"asettb=expr=1/{sample_rate},"
-            "ashowinfo"
+            "ashowinfo@observed,"
+            f"asetnsamples=n={maximum_sample_count}:p=0,"
+            "ashowinfo@chunk"
         )
         command = self._decode_command_prefix(
             media_path,
@@ -893,12 +895,14 @@ class FfmpegMediaRuntime:
             ]
         )
         try:
+            observed_timing: list[tuple[int, int]] = []
             chunks = tuple(
                 iter_pcm_audio_chunks(
                     command,
                     stream.index,
                     sample_rate,
                     initial_sample_start=sample_start,
+                    observed_timing=observed_timing,
                 )
             )
         except _DECODE_ERRORS as error:
@@ -914,12 +918,16 @@ class FfmpegMediaRuntime:
                 "audio sample rangeがcanonical chunkへ収まりません",
             )
         chunk = chunks[0]
-        if chunk.pts != absolute_start_pts:
+        if not _pcm_range_timing_is_continuous(
+            observed_timing,
+            absolute_start_pts,
+            chunk.sample_count,
+        ):
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED,
                 "audio sample rangeのtimestampが連続していません",
             )
-        return chunk
+        return replace(chunk, pts=absolute_start_pts)
 
     def read_embedded_subtitles(
         self,
@@ -1423,6 +1431,24 @@ def _remove_scan_proxy_sentinel(folder: Path) -> tuple[Path, ...]:
         )
     files[0].unlink()
     return files[1:]
+
+
+def _pcm_range_timing_is_continuous(
+    observed_timing: list[tuple[int, int]],
+    expected_start_pts: int,
+    expected_sample_count: int,
+) -> bool:
+    """小さなpacket量子化だけを許しrange内のsample gridを検証する。"""
+    observed_sample_count = 0
+    for pts, sample_count in observed_timing:
+        expected_pts = expected_start_pts + observed_sample_count
+        if (
+            sample_count < 1
+            or abs(pts - expected_pts) > _PCM_PTS_QUANTIZATION_TOLERANCE_SAMPLES
+        ):
+            return False
+        observed_sample_count += sample_count
+    return observed_sample_count == expected_sample_count
 
 
 def _ffmpeg_number(value: float) -> str:

@@ -44,7 +44,7 @@ flowchart TD
     K --> N{Context source}
     N --> O[Embedded Subtitle stream checkpoint]
     N --> P[PCM sample rangeを抽出]
-    P --> PA{観測したrange先頭PTSが<br/>要求sample gridと連続?}
+    P --> PA{coalesce前の各frame PTSが<br/>要求sample gridと連続?}
     PA -- Yes --> PB[PCM sample range checkpoint]
     PA -- No --> PC[補間・PTS上書きをせずrun失敗]
     PB --> Q[PCM chunkごとのSpeech Recognition checkpoint]
@@ -175,10 +175,12 @@ Scene CatalogとFinal Selectionは一回のatomic operation自体が最小単位
 Annotationも一枚の外部model requestと条件付き専用確認をまとめたCompleted Stageです。
 requestの途中tokenやpartial responseは再利用しません。
 
-PCM rangeはFFmpegから観測した先頭PTSを期待sample位置へ置換しません。独立rangeの観測PTSが
-要求sample gridと一致しない場合は、音声の重複・欠落を連続音声として確定せず、そのrangeの
-checkpointを作る前に失敗します。連続音声では同じsample rangeとPCM bytesを確定するため、
-中断なしとcheckpoint再開で同じSpeech Recognition入力とContext Cueになります。
+PCM rangeはcanonical chunkへまとめる前の各frameについてFFmpegから観測したPTSを要求sample
+gridへ照合します。既存対応範囲である3 output sample以内のpacket timestamp量子化だけは
+検証後にcanonical gridへ正規化します。それを超える先頭またはrange途中の不連続は、音声の
+重複・欠落を連続音声として確定せず、そのrangeのcheckpointを作る前に失敗します。連続音声では
+同じsample rangeとPCM bytesを確定するため、中断なしとcheckpoint再開で同じSpeech Recognition
+入力とContext Cueになります。
 
 ## 依存変更時の局所的な再計算
 
@@ -290,7 +292,9 @@ journalと確定manifestを照合してkill直前までの作業量を回復し�
 同じ意味結果ならそのまま使い、不完全なsuite-owned outputだけを除去します。
 同じartifact rootとsuiteの後発commandはstateを読む前に非待機で拒否されるため、実行中の
 先発attemptをabandonedとして回収しません。先発の通常終了、例外、Ctrl+C、process終了で
-OS lockが解放された後は、残ったlock fileを削除せず同じcommandを再実行できます。
+OS lockが解放された後は、残ったlock fileを削除せず同じcommandを再実行できます。`.locks`と
+lock fileはartifact rootからdirectory handle相対かつsymlink非追従で作成・openするため、
+外部pathへ向けられたlockで排他や外部fileを変更しません。
 
 Fresh Processing、Cache Reuseとreview worksheetが確定しても、review pendingまたは
 自動gate不合格のrelease suiteは実行単位resetに備えてprivate workを保持します。human reviewを

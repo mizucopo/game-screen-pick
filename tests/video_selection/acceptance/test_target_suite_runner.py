@@ -1328,8 +1328,8 @@ def test_reset_suite_fails_when_suite_root_survives_deletion(
     runner = _runner(execute)
     assert runner.run(profile_path=profile_path, suite="release") == 3
     monkeypatch.setattr(
-        "src.video_selection.acceptance.target_suite_runner.shutil.rmtree",
-        lambda _path: None,
+        "src.video_selection.acceptance.suite_owned_deletion_boundary.shutil.rmtree",
+        lambda _path, *_args, **_kwargs: None,
     )
 
     # Act
@@ -1450,7 +1450,7 @@ def test_release_finalization_fails_when_private_work_survives_cleanup(
     worksheet_path = suite_root / "review-worksheet.json"
     _complete_review_worksheet(worksheet_path)
     monkeypatch.setattr(
-        "src.video_selection.acceptance.target_suite_runner.shutil.rmtree",
+        "src.video_selection.acceptance.suite_owned_deletion_boundary.shutil.rmtree",
         lambda _path, *_args, **_kwargs: None,
     )
 
@@ -1508,7 +1508,7 @@ def test_privacy_failure_also_reports_release_cleanup_failure(
         reject_privacy,
     )
     monkeypatch.setattr(
-        "src.video_selection.acceptance.target_suite_runner.shutil.rmtree",
+        "src.video_selection.acceptance.suite_owned_deletion_boundary.shutil.rmtree",
         lambda _path, *_args, **_kwargs: None,
     )
 

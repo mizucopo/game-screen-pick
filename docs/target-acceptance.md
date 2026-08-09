@@ -75,7 +75,9 @@ uv run task acceptance-target \
 profileと安全なsuite rootを解決した後、state、active attempt、journal、cache、resetを
 読み書きする前に取得する。後発commandは先発の証拠を変更せず明示的に拒否される。
 releaseとfullは別々に排他される。lock fileはprocess終了後も残り得るが、fileの存在や保存PIDを
-実行中判定には使わず、OS lockが解放されていれば同じcommandで直ちに再開できる。
+実行中判定には使わず、OS lockが解放されていれば同じcommandで直ちに再開できる。lock pathは
+artifact rootからdirectory handle相対かつsymlink非追従で作成・openし、`.locks`またはlock
+fileが外部pathへのsymbolic linkなら、外部を変更せず起動を拒否する。
 
 modelの更新確認、download、capability検証とResolved Model Identityのfreezeは最初のrun
 timerより前に行う。利用者向けのrun名と役割は次のとおり。
@@ -292,6 +294,9 @@ recursive deleteより前にすべて`lstat`し、symbolic link、通常director
 一つでも検出したら全削除対象を変更せず拒否する。このpreflightはmaterializeより前にも行うため、
 外部symlink先へ再生成fileを書き込まない。`--reset-run fresh-processing`、
 `--reset-suite`、Parallelism BaselineからFresh Processingへ移るcache解放に同じ境界を使う。
+実削除は検証済み親directoryをsymlink非追従でopenし、そのdirectory handleを基準に行う。
+preflight後に別processがancestorをrenameまたは外部へのsymlinkへ差し替えても、pathを再解決して
+外部treeをrecursive deleteしない。
 symlink構成を安全な通常directoryへ戻すまで、reset種別を変えて処理を続けない。
 削除失敗時もstateを変更せず追加runを開始しない。`--reset-suite`との同時指定は拒否する。
 
