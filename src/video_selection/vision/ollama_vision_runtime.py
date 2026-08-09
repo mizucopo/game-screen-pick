@@ -2121,9 +2121,7 @@ def _parse_combat_visibility_verification(
         raise _schema_error("combat_visibility_verification_schema_invalid")
     opponent_body_is_absent = opponent_body_visibility == "absent"
     if opponent_body_is_absent != (opponent_body_framing == "absent"):
-        raise _schema_error(
-            "combat_visibility_verification_opponent_framing_mismatch"
-        )
+        raise _schema_error("combat_visibility_verification_opponent_framing_mismatch")
     if opponent_body_is_absent != (opponent_presentation == "absent"):
         raise _schema_error(
             "combat_visibility_verification_opponent_presentation_mismatch"
@@ -2132,10 +2130,7 @@ def _parse_combat_visibility_verification(
         raise _schema_error(
             "combat_visibility_verification_opponent_absent_interaction_mismatch"
         )
-    if (
-        player_body_visibility == "absent"
-        and combat_interaction_visibility == "direct"
-    ):
+    if player_body_visibility == "absent" and combat_interaction_visibility == "direct":
         raise _schema_error(
             "combat_visibility_verification_player_absent_direct_interaction"
         )
