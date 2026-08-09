@@ -80,6 +80,14 @@ _Avoid_: internal adapter, preview mode, compatibility period, Processing Stage
 supported target上の実videoからrelease suiteとfull-scale suiteの対象を指定するtarget-onlyのuntracked設定。repositoryにはschema templateだけを置き、実pathやvideo名を記録しない。
 _Avoid_: public TOML, Effective Configuration, committed fixture, production default
 
+**Acceptance Suite Lock**:
+一つのartifact rootとsuiteに対するtarget acceptance commandの同時実行を即時拒否し、安全なsuite root解決後からstate、active marker、attempt journal、cache、worksheetの読込・回復・変更までを保護する非待機排他境界。lock pathはartifact rootからsymlinkを辿らずdirectory handle相対で作成・openし、後発commandは先発の実行中に証拠を変更せず、異なるsuiteの実行は互いに妨げない。
+_Avoid_: Input Lock, waiting queue, active attempt marker, global lock
+
+**Suite-Owned Deletion Boundary**:
+target acceptanceのrecursive deleteを、明示されたsuite所有root内の対象と、そのrootから対象までにあるsymlinkでも通常directory以外でもない既存chainだけへ限定する安全境界。削除時は検証済みchainをdirectory handle相対で開き、path検証後にancestorがrenameまたはsymlinkへ差し替えられても外部treeを辿らない。検証に失敗した場合は外部内容と既存acceptance証拠を変更せずresetを拒否する。
+_Avoid_: path文字列prefix検査, targetだけのsymlink検査, path検証とpath-based deleteの分離, best-effort cleanup, external directory
+
 **Acceptance Record**:
 一回のtarget acceptanceで得たcommit、runtime/model identity、pathなしのVideo Set fingerprint、Stage時間、resource、cache、quality判定をversioned JSONとして保存する証拠。media、absolute path、raw text、prompt、model responseを含めない。
 _Avoid_: Canonical Selection Report, runtime log, baseline snapshot, raw benchmark output
@@ -111,6 +119,10 @@ _Avoid_: Acceptance Run, Acceptance Phase, Acceptance Comparison Run, retry insi
 **Acceptance Attempt Journal**:
 activeなAcceptance Run Attemptのexecution context、cache・reuse・recompute件数、Stage aggregate、Work Unitごとのresolutionを、Progress Event境界でatomicに更新するprivacy-safeな回復記録。process強制終了後はCompleted Stage、Durable Work Unit、Video Identityの確定manifestと照合してkill直前の作業量を回復する。resource samplerの未確定sampleを捏造せず、attempt完了後に削除する。
 _Avoid_: Acceptance Record, pipeline checkpoint, raw progress log, resource sample database
+
+**Acceptance Worksheet Recovery**:
+Fresh ProcessingとCache Reuseの完了record、retained artifact、candidate binding、materialized Video Set identityを再検証し、未確定のprivate review worksheetだけを復旧する終端再開。確定済みworkloadを再実行せず、現在のsource revision、target runtime、Model Runtimeの利用可能性や更新状態には依存しない。retained evidenceが欠落または改変されている場合は明示的に拒否する。
+_Avoid_: target preflight, model resolution, workload rerun, unchecked report rendering
 
 **Legacy Cache**:
 旧screenshot selectorが作成した認識可能なprocessing cache entry、旧processing cache内の`video-identities/`、またはmanifestから現行より古いversioned Candidate Annotation Stage Contractだと識別できるCompleted Stage。cache lock取得後に自動削除し、変換・保持・互換利用は行わない。現行の独立Video Identity cache、現行contractの設定違いによるStage Fingerprint不一致、認識できない`videos/`・`video-sets/`・`work-units/` entryは含まない。
@@ -155,6 +167,10 @@ _Avoid_: Resolved Model Identity, configured device profile, host identity, mode
 **Speech Recognition Result**:
 Speech Runtimeが返す、word本文、chunk内の開始・終了PCM sample位置、source segmentとの対応、未校正のbackend diagnosticsからなるinfra-level結果。faster-whisper固有型とbinary float秒を境界の外へ漏らさず、Context Collection Stageがword grouping、global Video Time変換、chunk overlap所有権、reliability、Context Cue IDを決める。
 _Avoid_: Context Cue, backend object, calibrated confidence, global Video Time
+
+**PCM Range Continuity Validation**:
+checkpoint対象のPCM sample rangeについて、canonical chunkへまとめる前の各PCM frameでMedia Runtimeが観測したPTSを要求rangeのsample gridと照合し、不連続ならDurable Work Unitの確定前に拒否する検査。既存対応範囲である3 output sample以内のpacket timestamp量子化だけは検証後にcanonical gridへ正規化する。大きな観測PTSを期待値へ置換して重複や欠落を隠さず、連続rangeでは中断なしと再開後に同じ音声sampleとContext Cueを確定する。
+_Avoid_: expected PTSへの上書き, timestamp補間, best-effort audio concatenation, completed chunkの黙示修復
 
 **Rejected Speech Diagnostic**:
 word grouping後に低reliabilityとしてContext Cueへ採用しなかったSTT文字列、正確な時刻範囲、未校正backend値を保持する非公開のContext Collection Stage artifact。processing cache内だけに保存し、画像評価、progress、error、Human Selection Report、machine-readable reportへ渡さず、`--reset-cache`で削除する。

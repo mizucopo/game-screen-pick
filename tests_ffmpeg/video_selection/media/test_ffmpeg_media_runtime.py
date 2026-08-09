@@ -37,6 +37,7 @@ from tests_ffmpeg.support.ffmpeg_fixture_factory import (
     generate_cfr_video,
     generate_corrupt_video,
     generate_delayed_video_with_audio,
+    generate_discontinuous_audio,
     generate_nonzero_start_video,
     generate_odd_dimension_video,
     generate_quantized_audio,
@@ -1704,6 +1705,117 @@ def test_extract_pcm_audio_chunks_returns_canonical_seek_ranges(
         if stream.start_pts is not None and stream.time_base is not None
     )
     assert all(any(chunk.pcm_bytes) for chunk in chunks)
+
+
+def test_extract_pcm_audio_chunk_rejects_observed_timestamp_discontinuity(
+    tmp_path: Path,
+) -> None:
+    """range先頭の観測PTSがsample gridと不連続なら確定されないこと。
+
+    Arrange:
+        - 1秒以降のpacket PTSが連続sample gridからずれるaudioが用意される
+        - 不連続より後から始まるcheckpoint rangeが指定される
+    Act:
+        - rangeが独立したFFmpeg processで抽出される
+    Assert:
+        - 観測PTSが期待値へ置換されずaudio抽出失敗として拒否されること
+    """
+    # Arrange
+    audio_path = generate_discontinuous_audio(tmp_path / "discontinuous-audio.mkv")
+    runtime = FfmpegMediaRuntime()
+    probe = runtime.probe(audio_path)
+    stream = probe.streams[0]
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    media_origin = stream.start_pts * stream.time_base
+
+    # Act
+    with pytest.raises(MediaRuntimeError, match="timestamp") as captured:
+        runtime.extract_pcm_audio_chunk(
+            audio_path,
+            stream,
+            media_origin,
+            16_000,
+            17_000,
+            15_000,
+        )
+
+    # Assert
+    assert captured.value.reason is MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED
+
+
+def test_extract_pcm_audio_chunk_rejects_mid_range_timestamp_discontinuity(
+    tmp_path: Path,
+) -> None:
+    """range途中の観測PTS不連続がcoalesce前に拒否されること。
+
+    Arrange:
+        - 1秒以降のpacket PTSに250msのgapを持つaudioが用意される
+        - gapの前から後までを含むcheckpoint rangeが指定される
+    Act:
+        - rangeが一つのcanonical chunkとして抽出される
+    Assert:
+        - 中間frameの不連続が隠されずaudio抽出失敗として拒否されること
+    """
+    # Arrange
+    audio_path = generate_discontinuous_audio(tmp_path / "mid-range-gap.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(audio_path).streams[0]
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    media_origin = stream.start_pts * stream.time_base
+
+    # Act
+    with pytest.raises(MediaRuntimeError, match="timestamp") as captured:
+        runtime.extract_pcm_audio_chunk(
+            audio_path,
+            stream,
+            media_origin,
+            16_000,
+            0,
+            32_000,
+        )
+
+    # Assert
+    assert captured.value.reason is MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED
+
+
+def test_extract_pcm_audio_chunk_preserves_supported_timestamp_quantization(
+    tmp_path: Path,
+) -> None:
+    """既存仕様内のpacket PTS量子化がcanonical rangeへ正規化されること。
+
+    Arrange:
+        - 後半packet PTSが3 output sampleずれるaudio fixtureが用意される
+        - 量子化後から始まるcheckpoint rangeが指定される
+    Act:
+        - rangeが独立したFFmpeg processで抽出される
+    Assert:
+        - rangeが拒否されずcanonical sample gridのPTSで返されること
+    """
+    # Arrange
+    audio_path = generate_quantized_audio(tmp_path / "quantized-range.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(audio_path).streams[0]
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    media_origin = stream.start_pts * stream.time_base
+
+    # Act
+    chunk = runtime.extract_pcm_audio_chunk(
+        audio_path,
+        stream,
+        media_origin,
+        16_000,
+        17_000,
+        15_000,
+    )
+
+    # Assert
+    assert chunk is not None
+    assert chunk.sample_start == 17_000
+    assert chunk.sample_count == 15_000
+    assert chunk.pts * chunk.time_base == Fraction(17_000, 16_000)
 
 
 def test_scan_pcm_audio_normalizes_quantized_packet_pts_to_sample_grid(

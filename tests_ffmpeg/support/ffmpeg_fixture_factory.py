@@ -325,6 +325,31 @@ def generate_quantized_audio(output_path: Path) -> Path:
     return output_path
 
 
+def generate_discontinuous_audio(output_path: Path) -> Path:
+    """後半のpacket PTSに250msのgapを持つaudio fixtureを生成する。"""
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=2",
+            "-af",
+            r"asetpts=PTS+gte(T\,1)*12000",
+            "-c:a",
+            "pcm_s16le",
+            str(output_path),
+        ],
+        check=True,
+    )
+    return output_path
+
+
 def generate_corrupt_video(output_path: Path) -> Path:
     """headerを保ち途中のMPEG-TS packetを破損させたfixtureを生成する。"""
     valid_path = output_path.with_name(f".{output_path.stem}.valid.ts")
