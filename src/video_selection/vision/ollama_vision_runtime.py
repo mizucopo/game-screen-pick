@@ -1071,13 +1071,11 @@ class OllamaVisionRuntime:
                         candidate_draft_validator(decoded)
                     except VisionRuntimeError as draft_error:
                         error = draft_error
-                conservative_repair = (
-                    _repair_repeated_combat_visibility_correlation(
-                        stage_kind=stage_kind,
-                        attempt=attempt,
-                        decoded=decoded,
-                        validation_code=error.validation_code,
-                    )
+                conservative_repair = _repair_repeated_combat_visibility_correlation(
+                    stage_kind=stage_kind,
+                    attempt=attempt,
+                    decoded=decoded,
+                    validation_code=error.validation_code,
                 )
                 if conservative_repair is not None:
                     value = parser(conservative_repair)
