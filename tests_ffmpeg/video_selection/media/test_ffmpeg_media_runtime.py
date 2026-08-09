@@ -63,6 +63,35 @@ def _write_failing_tool(path: Path) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def _write_strict_proxy_pts_tool(path: Path) -> None:
+    script = f"""#!{sys.executable}
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+graph = arguments[arguments.index("-filter_complex") + 1]
+required = (
+    "concat=n=2:v=1:a=0,setpts=N/(1*TB)[heartbeat_output]",
+    "concat=n=2:v=1:a=0,setpts=N/(1*TB)[scene_output]",
+)
+if not all(item in graph for item in required):
+    print("[mjpeg] Invalid pts (0) <= last (0)", file=sys.stderr)
+    raise SystemExit(7)
+
+for pattern in (item for item in arguments if "%012d.jpg" in item):
+    first = Path(pattern.replace("%012d", "000000000001"))
+    second = Path(pattern.replace("%012d", "000000000002"))
+    first.write_bytes(b"sentinel")
+    second.write_bytes(b"proxy")
+
+print("[showinfo@timeline] n: 0 pts: 1000 duration: 1 s:64x48", file=sys.stderr)
+print("[showinfo@heartbeat] n: 0 pts: 1000 duration: 1 s:64x48", file=sys.stderr)
+print("[showinfo@scene] n: 0 pts: 1000 duration: 1 s:64x48", file=sys.stderr)
+"""
+    path.write_text(script, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
 def _write_capable_tool(
     path: Path,
     tool: str,
@@ -835,6 +864,104 @@ def test_scan_video_partitions_match_uninterrupted_scan(
         (frame.source_pts, frame.image_path.read_bytes())
         for frame in uninterrupted.scene_frames
     ]
+
+
+def test_scan_partition_accepts_scene_change_at_owned_start(
+    tmp_path: Path,
+) -> None:
+    """partition先頭のscene changeがproxy PTS重複なく返されること。
+
+    Arrange:
+        - 1秒境界に明確なscene changeを持つ3秒動画が用意される
+    Act:
+        - scene changeを先頭に含む1秒partitionが実FFmpegでscanされる
+    Assert:
+        - heartbeatとsceneがexactなpartition先頭PTSで返されること
+    """
+    # Arrange
+    video_path = generate_scene_change_video(tmp_path / "boundary-scene.mkv")
+    runtime = FfmpegMediaRuntime()
+    stream = runtime.probe(video_path).streams[0]
+    assert stream.start_pts is not None
+    assert stream.time_base is not None
+    start_offset = Fraction(1) / stream.time_base
+    end_offset = Fraction(2) / stream.time_base
+    assert start_offset.denominator == 1
+    assert end_offset.denominator == 1
+    start_pts = stream.start_pts + start_offset.numerator
+    end_pts = stream.start_pts + end_offset.numerator
+
+    # Act
+    scan = runtime.scan_video_partition(
+        video_path,
+        stream,
+        tmp_path / "boundary-scene-partition",
+        media_origin=stream.start_pts * stream.time_base,
+        start_pts=start_pts,
+        end_pts=end_pts,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert isinstance(scan, NativeVideoScan)
+    assert [frame.source_pts for frame in scan.heartbeats] == [start_pts]
+    assert [frame.source_pts for frame in scan.scene_frames] == [start_pts]
+
+
+def test_scan_partition_supplies_monotonic_pts_to_proxy_encoder(
+    tmp_path: Path,
+) -> None:
+    """proxy encoderへ単調増加するPTSが渡されること。
+
+    Arrange:
+        - 重複PTSを拒否する外部FFmpegと有限partitionが用意される
+    Act:
+        - 公開MediaRuntimeからpartition scanが実行される
+    Assert:
+        - encoder failureにならずheartbeatとsceneが返されること
+    """
+    # Arrange
+    strict_ffmpeg = tmp_path / "strict-ffmpeg"
+    _write_strict_proxy_pts_tool(strict_ffmpeg)
+    runtime = FfmpegMediaRuntime(ffmpeg_executable=str(strict_ffmpeg))
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="h264",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=2000,
+        width=64,
+        height=48,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+        is_attached_picture=False,
+    )
+
+    # Act
+    scan = runtime.scan_video_partition(
+        tmp_path / "source.mkv",
+        stream,
+        tmp_path / "strict-proxy-pts",
+        media_origin=Fraction(0),
+        start_pts=1000,
+        end_pts=2000,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="cpu",
+    )
+
+    # Assert
+    assert isinstance(scan, NativeVideoScan)
+    assert [frame.source_pts for frame in scan.heartbeats] == [1000]
+    assert [frame.source_pts for frame in scan.scene_frames] == [1000]
 
 
 def test_scan_partition_allows_no_owned_heartbeat_or_scene(

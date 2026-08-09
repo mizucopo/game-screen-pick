@@ -203,6 +203,12 @@ algorithm versionを意味入力とprovenanceへ記録します。
 | Pillow・libwebp・WebP contract | Selected Imageとpublication | Final SelectionまでのStage |
 | worker数・resource sample・進捗表示 | semantic outputは再計算しない | 全semantic checkpoint |
 
+heartbeatとscene signalのproxy encoderへ渡すPTSは、sentinelを含めて単調増加する
+連番へ正規化します。exact source timingは正規化より前の`showinfo`から記録するため、
+このencoder用PTSはsemantic outputではありません。source timing、proxy件数、JPEG bytesが
+同じまま非単調PTSだけを修復する実装変更ではScan engine versionを上げず、確定済みの
+Video Scan partitionを再利用します。
+
 model tagの更新確認結果だけが変わり、実際に解決されたidentityが同じ場合は既存Stageを
 再利用します。Ollama server versionまたはmodel identityが変わっても、その依存を持たない
 Video Identity、Video Scan、Frame Candidate、PCM、STTを捨てません。各Stageまたは

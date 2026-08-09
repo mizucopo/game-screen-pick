@@ -213,7 +213,7 @@ Video SourceからVideo Scan Stageが選ぶ一つの表示映像stream。`attach
 _Avoid_: audio stream, cover art, user-selected stream index
 
 **Heartbeat Proxy**:
-Video Scan Stageがnative heartbeatごとに永続化する、長辺960px、FFmpeg MJPEG `q:v=3`、metadataなしのcache画像。Scan Proxy Analysisでは1件ずつRGB decode・測定して解放し、全proxyのdecoded RGBを同時保持しない。scene signal用の一時320px画像、Frame Candidate Proxy、公開画像とは区別し、pathをidentityにしない。
+Video Scan Stageがnative heartbeatごとに永続化する、長辺960px、FFmpeg MJPEG `q:v=3`、metadataなしのcache画像。空signalを許容するsentinelを含め、image encoder用PTSはsource timingと分離した単調増加の連番へ正規化する。exact source timingは正規化前に記録し、encoder用PTSをsemantic identityへ含めない。Scan Proxy Analysisでは1件ずつRGB decode・測定して解放し、全proxyのdecoded RGBを同時保持しない。scene signal用の一時320px画像、Frame Candidate Proxy、公開画像とは区別し、pathをidentityにしない。
 _Avoid_: scene signal image, Frame Candidate, selected output
 
 **Frame Candidate Extraction Stage**:
