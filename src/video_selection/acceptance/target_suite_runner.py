@@ -79,6 +79,7 @@ SuiteMaterializer = Callable[
 StoragePreflight = Callable[[AcceptanceProfile, Path], dict[str, object]]
 
 _STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.3.0"
+_ACTIVE_RUN_STATE_KEYS = ("active_phase", "active_comparison_run")
 
 
 class TargetSuiteRunner:
@@ -1374,17 +1375,24 @@ def _recover_abandoned_attempt(
     attempt_journal: AcceptanceAttemptJournal,
 ) -> None:
     """process終了で残ったactive markerを保守的なattemptへ閉じる。"""
-    active_steps = tuple(
-        step for step in steps if state.get(step.active_state_key) is not None
-    )
-    if not active_steps:
+    active_markers = {
+        key: state[key]
+        for key in _ACTIVE_RUN_STATE_KEYS
+        if state.get(key) is not None
+    }
+    if not active_markers:
         return
-    if len(active_steps) != 1:
+    if len(active_markers) != 1:
         raise ValueError("複数のAcceptance Runが同時にactiveです")
-    step = active_steps[0]
-    active_name = state.get(step.active_state_key)
-    if active_name != step.name:
+    active_key, active_name = next(iter(active_markers.items()))
+    active_steps = tuple(
+        step
+        for step in steps
+        if step.active_state_key == active_key and step.name == active_name
+    )
+    if len(active_steps) != 1:
         raise ValueError("Acceptance active runが現在のexecution planと一致しません")
+    step = active_steps[0]
     started_at = state.get(_active_attempt_started_key(step))
     duration_seconds = (
         max(0.0, time.time() - float(started_at))
