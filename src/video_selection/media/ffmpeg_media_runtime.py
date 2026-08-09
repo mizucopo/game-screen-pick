@@ -1137,7 +1137,7 @@ class FfmpegMediaRuntime:
                 ),
                 (
                     "[heartbeat_sentinel][heartbeat_actual]"
-                    "concat=n=2:v=1:a=0[heartbeat_output]"
+                    "concat=n=2:v=1:a=0,setpts=N/(1*TB)[heartbeat_output]"
                 ),
                 (
                     "[scene_source]"
@@ -1154,7 +1154,10 @@ class FfmpegMediaRuntime:
                     f"{_bounded_scale_filter(320)},"
                     "format=yuvj420p,setpts=PTS-STARTPTS[scene_sentinel]"
                 ),
-                ("[scene_sentinel][scene_actual]concat=n=2:v=1:a=0[scene_output]"),
+                (
+                    "[scene_sentinel][scene_actual]"
+                    "concat=n=2:v=1:a=0,setpts=N/(1*TB)[scene_output]"
+                ),
             )
         )
         command.extend(
