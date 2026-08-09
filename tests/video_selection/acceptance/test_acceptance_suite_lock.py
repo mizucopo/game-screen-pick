@@ -28,8 +28,7 @@ def test_lock_rejects_overlap_and_reopens_after_release(tmp_path: Path) -> None:
             with AcceptanceSuiteLock(lock_path):
                 pass
     with AcceptanceSuiteLock(lock_path):
-        reacquired = True
+        pass
 
     # Assert
-    assert reacquired is True
     assert lock_path.is_file()

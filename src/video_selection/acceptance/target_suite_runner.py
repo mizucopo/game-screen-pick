@@ -83,6 +83,11 @@ StoragePreflight = Callable[[AcceptanceProfile, Path], dict[str, object]]
 
 _STATE_SCHEMA = "game-screen-pick/target-acceptance-state@1.3.0"
 _ACTIVE_RUN_STATE_KEYS = ("active_phase", "active_comparison_run")
+_RESET_RUN_NAMES: dict[AcceptanceRunReset, tuple[str, ...]] = {
+    "parallelism-baseline": ("fixed3", "cold", "warm"),
+    "fresh-processing": ("cold", "warm"),
+    "cache-reuse": ("warm",),
+}
 
 
 class TargetSuiteRunner:
@@ -789,11 +794,7 @@ def _reset_acceptance_run_suffix(
     state_path: Path,
 ) -> None:
     """指定runと依存する後続runだけをstateとartifactから破棄する。"""
-    reset_names = {
-        "parallelism-baseline": {"fixed3", "cold", "warm"},
-        "fresh-processing": {"cold", "warm"},
-        "cache-reuse": {"warm"},
-    }[reset_run]
+    reset_names = frozenset(_RESET_RUN_NAMES[reset_run])
     reset_steps = tuple(step for step in execution_steps if step.name in reset_names)
     directory_deletions = [
         (
@@ -856,11 +857,7 @@ def _validate_reset_run_deletion_boundaries(
     suite_root: Path,
 ) -> None:
     """materialize前にreset対象の全path chainを非破壊検証する。"""
-    reset_names = {
-        "parallelism-baseline": ("fixed3", "cold", "warm"),
-        "fresh-processing": ("cold", "warm"),
-        "cache-reuse": ("warm",),
-    }[reset_run]
+    reset_names = _RESET_RUN_NAMES[reset_run]
     directory_deletions = [
         (
             suite_root / "outputs" / run_name,
