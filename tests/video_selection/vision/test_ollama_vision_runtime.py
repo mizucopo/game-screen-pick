@@ -3306,6 +3306,81 @@ def test_combat_visibility_retry_repairs_player_absent_direct_interaction() -> N
     assert repair_instruction in retry_prompt
 
 
+def test_repeated_player_absent_direct_interaction_is_repaired_conservatively() -> None:
+    """再観測後も残るplayer不在と直接戦闘の矛盾が安全側へ修復されること。
+
+    Arrange:
+        - 最初の可視性確認では再試行によってplayer本体が部分表示へ修復される
+        - 独立再確認ではplayer本体不在と直接戦闘の矛盾が二回返される
+    Act:
+        - Candidate Annotation推論が実行される
+    Assert:
+        - 候補がdropされず掲載不可として完了し、修復理由が記録されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+    invalid_visibility = {
+        "effect_screen_coverage": "over_half",
+        "largest_foreground_element": "visual_effect",
+        "player_body_visibility": "absent",
+        "opponent_body_visibility": "clear",
+        "opponent_body_framing": "complete",
+        "opponent_presentation": "prominent",
+        "combat_interaction_visibility": "direct",
+        "effect_overlaps_combatant_body": "severe",
+        "effect_only_frame": False,
+    }
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _response(
+                _frame_observation_payload(
+                    (("frame-a", "battle", "gameplay_action", "high", "hud"),)
+                )
+            )
+        if len(payloads) == 2:
+            return _response(_combat_encounter_payload(visible=True, evidence="both"))
+        if len(payloads) == 4:
+            return _response(
+                {
+                    **invalid_visibility,
+                    "player_body_visibility": "partial",
+                }
+            )
+        return _response(invalid_visibility)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert annotation.combat_encounter_kind == "uncertain"
+    assert diagnostics.attempt_count == 6
+    assert diagnostics.validation_code == (
+        "combat_visibility_verification_player_absent_direct_interaction"
+    )
+
+
 def test_dialogue_and_combat_visibility_are_rechecked_separately() -> None:
     """台詞の修復後に戦闘可視性が専用推論で再確認されること。
 

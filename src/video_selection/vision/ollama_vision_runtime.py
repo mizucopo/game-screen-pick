@@ -246,12 +246,15 @@ _COMBAT_VISIBILITY_VERIFICATION_KEYS = {
     "effect_overlaps_combatant_body",
     "effect_only_frame",
 }
+_PLAYER_ABSENT_DIRECT_INTERACTION_VALIDATION_CODE = (
+    "combat_visibility_verification_player_absent_direct_interaction"
+)
 _COMBAT_VISIBILITY_RETRY_VALIDATION_CODES = {
     "combat_visibility_verification_schema_invalid",
     "combat_visibility_verification_opponent_framing_mismatch",
     "combat_visibility_verification_opponent_presentation_mismatch",
     "combat_visibility_verification_opponent_absent_interaction_mismatch",
-    "combat_visibility_verification_player_absent_direct_interaction",
+    _PLAYER_ABSENT_DIRECT_INTERACTION_VALIDATION_CODE,
 }
 _COMBAT_VISIBILITY_EDGE_NAMES = ("top", "bottom", "left", "right")
 _COMBAT_VISIBILITY_EDGE_OBSERVATION_KEYS = {
@@ -1068,25 +1071,35 @@ class OllamaVisionRuntime:
                         candidate_draft_validator(decoded)
                     except VisionRuntimeError as draft_error:
                         error = draft_error
-                if attempt >= 2 or error.reason not in _RETRYABLE_REASONS:
+                conservative_repair = _repair_repeated_combat_visibility_correlation(
+                    stage_kind=stage_kind,
+                    attempt=attempt,
+                    decoded=decoded,
+                    validation_code=error.validation_code,
+                )
+                if conservative_repair is not None:
+                    value = parser(conservative_repair)
+                    previous_validation_code = error.validation_code
+                elif attempt >= 2 or error.reason not in _RETRYABLE_REASONS:
                     raise VisionRuntimeError(
                         error.reason,
                         validation_code=error.validation_code,
                         attempt_count=attempt,
                     ) from None
-                previous_validation_code = error.validation_code
-                if (
-                    stage_kind == "candidate_annotation"
-                    and error.validation_code
-                    == "candidate_annotation_relationship_invalid"
-                    and decoded is not None
-                ):
-                    candidate_relationship_draft = decoded
-                    repair_code = None
                 else:
-                    repair_code = _repair_validation_code(error)
-                self._sleep_before_retry(error.retry_after_seconds, stage_kind)
-                continue
+                    previous_validation_code = error.validation_code
+                    if (
+                        stage_kind == "candidate_annotation"
+                        and error.validation_code
+                        == "candidate_annotation_relationship_invalid"
+                        and decoded is not None
+                    ):
+                        candidate_relationship_draft = decoded
+                        repair_code = None
+                    else:
+                        repair_code = _repair_validation_code(error)
+                    self._sleep_before_retry(error.retry_after_seconds, stage_kind)
+                    continue
             diagnostics = _diagnostics(
                 response=response,
                 stage_kind=stage_kind,
@@ -1789,6 +1802,30 @@ def _with_repair_code(
         )
     messages[-1]["content"] = f"{content}\n{repair}"
     return copied
+
+
+def _repair_repeated_combat_visibility_correlation(
+    *,
+    stage_kind: StageKind,
+    attempt: int,
+    decoded: Mapping[str, object] | None,
+    validation_code: str | None,
+) -> Mapping[str, object] | None:
+    """再観測後も残るplayer不在と直接戦闘の矛盾だけを安全側へ修復する。"""
+    if (
+        attempt < 2
+        or stage_kind
+        not in {
+            "combat_visibility_verification",
+            "combat_visibility_confirmation",
+        }
+        or decoded is None
+        or validation_code != _PLAYER_ABSENT_DIRECT_INTERACTION_VALIDATION_CODE
+    ):
+        return None
+    repaired = dict(decoded)
+    repaired["combat_interaction_visibility"] = "none"
+    return repaired
 
 
 def _decode_content(

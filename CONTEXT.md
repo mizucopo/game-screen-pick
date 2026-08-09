@@ -370,6 +370,10 @@ Combat Encounter Verificationで戦闘と確認されたframe、またはScene K
 攻撃相手本体の可視性、構図、Opponent Presentationは不在状態を一致させ、相手不在でCombat Interaction Visibilityが`none`以外、またはplayer不在で`direct`とする応答をschema相関違反として再試行する。これにより非戦闘交差確認の「二回とも敵不在」経路へ矛盾した戦闘signalを流さない。
 _Avoid_: second Candidate Annotation, contextual combat classification, final selection
 
+**Combat Visibility Correlation Repair**:
+Combat Visibility Verificationの再観測後もplayer本体不在と直接戦闘が同時に返された場合に、独立観測を保持して従属するCombat Interaction Visibilityだけを安全側へ整合させ、Candidate Annotation全体を再検証する境界。掲載価値を上げず、候補をdropしない。
+_Avoid_: schema relaxation, publication promotion, silent candidate drop
+
 **Opponent Presentation**:
 Combat Visibility Verificationが攻撃相手本体のブログ画像内での見せ方を表す`prominent`、`recognizable`、`weak`、`absent`の直接観測。主要な被写体として一目で識別できる相手を`prominent`、小さくても輪郭・色・姿勢から単体で識別できる相手を`recognizable`、HUDや名前を手掛かりに探さなければ識別しにくい相手を`weak`とする。敵の物語上の重要度やCombat Encounter Kindは含めない。
 _Avoid_: boss importance, screen coverage threshold, enemy name, model confidence
