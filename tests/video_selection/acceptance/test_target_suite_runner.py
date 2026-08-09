@@ -314,16 +314,17 @@ def test_abandoned_active_phase_is_recovered_without_reset(
     """process異常終了でactive phaseが残ってもsuiteが再開されること。
 
     Arrange:
-        - cold executorが計測record確定前に一度だけ異常終了するsuiteが用意される
+        - cold中にprocess終了した単一active markerとjournalが永続化される
     Act:
         - `--reset-suite`なしで同じsuiteが再実行される
     Assert:
-        - active markerが回復されcoldとwarmがCompleted workから続行されること
+        - marker名と一致するcoldだけがabandoned attemptとして回復されること
+        - coldとwarmがCompleted workから続行されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
     calls: list[str] = []
-    failed = False
+    interrupted = False
 
     def execute(
         run_name: str,
@@ -331,28 +332,22 @@ def test_abandoned_active_phase_is_recovered_without_reset(
         _models: ResolvedModels,
         _suite_root: Path,
     ) -> AcceptanceRunAttemptExecutionResult:
-        nonlocal failed
+        nonlocal interrupted
         calls.append(run_name)
-        if not failed:
-            failed = True
-            AcceptanceAttemptJournal(
-                _suite_root / "work" / "active-attempt.json"
-            ).record_snapshot(
-                {
-                    "cache_hit_count": 2,
-                    "cache_miss_count": 1,
-                    "reuse_count": 2,
-                    "unexpected_recompute_count": 1,
-                    "stage_durations_seconds": {"scan-video": 3.0},
-                    "completed_stage_counts": {"scan-video": 1},
-                },
-                {"1" * 64: "recomputed"},
-            )
-            raise RuntimeError("simulated process loss")
+        if not interrupted:
+            interrupted = True
+            return 130, _interrupted_run_attempt(run_name), None, None
         return _successful_run_attempt(configuration, run_name)
 
     runner = _runner(execute)
-    assert runner.run(profile_path=profile_path, suite="release") == 1
+    assert runner.run(profile_path=profile_path, suite="release") == 130
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state_path = suite_root / "acceptance-state.json"
+    _persist_active_attempt(
+        suite_root,
+        step_kind="phase",
+        step_name="cold",
+    )
 
     # Act
     resumed = runner.run(profile_path=profile_path, suite="release")
@@ -360,13 +355,7 @@ def test_abandoned_active_phase_is_recovered_without_reset(
     # Assert
     assert resumed == 1
     assert calls == ["cold", "cold", "warm"]
-    state = read_json_object(
-        tmp_path
-        / "artifacts"
-        / "target-acceptance"
-        / "release"
-        / "acceptance-state.json"
-    )
+    state = read_json_object(state_path)
     assert state is not None
     assert state.get("active_phase") is None
     phases = state["phases"]
@@ -375,13 +364,273 @@ def test_abandoned_active_phase_is_recovered_without_reset(
     assert isinstance(cold, dict)
     attempts = cold["attempts"]
     assert isinstance(attempts, list)
-    first_attempt = attempts[0]
-    assert isinstance(first_attempt, dict)
-    assert first_attempt["cache_hit_count"] == 2
-    assert first_attempt["cache_miss_count"] == 1
-    assert first_attempt["reuse_count"] == 2
-    assert first_attempt["unexpected_recompute_count"] == 1
-    assert first_attempt["stage_durations_seconds"] == {"scan-video": 3.0}
+    abandoned = next(
+        attempt
+        for attempt in attempts
+        if isinstance(attempt, dict)
+        and attempt.get("failure_reason") == "process_abandoned"
+    )
+    assert abandoned["cache_hit_count"] == 2
+    assert abandoned["cache_miss_count"] == 1
+    assert abandoned["reuse_count"] == 2
+    assert abandoned["unexpected_recompute_count"] == 1
+    assert abandoned["stage_durations_seconds"] == {"scan-video": 3.0}
+
+
+@pytest.mark.parametrize(
+    (
+        "suite",
+        "step_kind",
+        "step_name",
+        "active_key",
+        "attempts_key",
+        "expected_calls",
+    ),
+    (
+        pytest.param(
+            "release",
+            "phase",
+            "warm",
+            "active_phase",
+            "phase_attempts",
+            ("cold", "warm", "warm"),
+            id="warm-phase",
+        ),
+        pytest.param(
+            "full",
+            "comparison",
+            "fixed3",
+            "active_comparison_run",
+            "comparison_run_attempts",
+            ("fixed3", "fixed3"),
+            id="fixed3-comparison",
+        ),
+    ),
+)
+def test_abandoned_marker_recovers_only_matching_run(
+    tmp_path: Path,
+    suite: str,
+    step_kind: str,
+    step_name: str,
+    active_key: str,
+    attempts_key: str,
+    expected_calls: tuple[str, ...],
+) -> None:
+    """process異常終了したrunだけがmarker名どおり再開されること。
+
+    Arrange:
+        - warmまたはfixed3の単一active markerとjournalが永続化される
+    Act:
+        - `--reset-suite`なしで同じsuiteが再実行される
+    Assert:
+        - 他のrunへ戻らず一致するrunだけがabandoned attemptから再開されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        if step_name == "warm" and run_name == "cold":
+            return _successful_run_attempt(configuration, run_name)
+        return 130, _interrupted_run_attempt(run_name), None, None
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite=suite) == 130
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / suite
+    _persist_active_attempt(
+        suite_root,
+        step_kind=step_kind,
+        step_name=step_name,
+    )
+
+    # Act
+    resumed = runner.run(profile_path=profile_path, suite=suite)
+
+    # Assert
+    assert resumed == 130
+    assert calls == list(expected_calls)
+    state = read_json_object(suite_root / "acceptance-state.json")
+    assert state is not None
+    assert state.get(active_key) is None
+    attempts_by_name = state[attempts_key]
+    assert isinstance(attempts_by_name, dict)
+    attempts = attempts_by_name[step_name]
+    assert isinstance(attempts, list)
+    assert any(
+        isinstance(attempt, dict)
+        and attempt.get("failure_reason") == "process_abandoned"
+        for attempt in attempts
+    )
+
+
+def test_simultaneous_active_markers_are_rejected_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """phaseとcomparisonの同時active stateが変更されず拒否されること。
+
+    Arrange:
+        - fixed3とcoldが同時にactiveな矛盾stateとjournalが永続化される
+    Act:
+        - `--reset-suite`なしで同じfull suiteが再実行される
+    Assert:
+        - 複数runの誤回復としてstateとjournalを変更せず拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        _configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return 130, _interrupted_run_attempt(run_name), None, None
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="full") == 130
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "full"
+    state_path = suite_root / "acceptance-state.json"
+    journal_path = suite_root / "work" / "active-attempt.json"
+    _persist_active_attempt(
+        suite_root,
+        step_kind="comparison",
+        step_name="fixed3",
+    )
+    state = read_json_object(state_path)
+    assert state is not None
+    execution_context = state["active_comparison_run_execution_context"]
+    state.update(
+        {
+            "active_phase": "cold",
+            "active_phase_started_at_epoch_seconds": 0.0,
+            "active_phase_attempt_id": "abandoned-cold",
+            "active_phase_execution_context": execution_context,
+        }
+    )
+    write_atomic_json(state_path, state)
+    state_before = state_path.read_bytes()
+    journal_before = journal_path.read_bytes()
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="複数のAcceptance Run"):
+        runner.run(profile_path=profile_path, suite="full")
+    assert calls == ["fixed3"]
+    assert state_path.read_bytes() == state_before
+    assert journal_path.read_bytes() == journal_before
+
+
+def test_unknown_active_marker_is_rejected_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """旧stateの未知active markerがmigrationされず拒否されること。
+
+    Arrange:
+        - source fingerprintがない旧stateへ未知phase markerとjournalが永続化される
+    Act:
+        - `--reset-suite`なしで同じrelease suiteが再実行される
+    Assert:
+        - stateとjournalを変更せずexecution plan不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        _configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return 130, _interrupted_run_attempt(run_name), None, None
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="release") == 130
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state_path = suite_root / "acceptance-state.json"
+    journal_path = suite_root / "work" / "active-attempt.json"
+    _persist_active_attempt(
+        suite_root,
+        step_kind="phase",
+        step_name="cold",
+    )
+    state = read_json_object(state_path)
+    assert state is not None
+    state["active_phase"] = "unknown"
+    state.pop("materialization_source_snapshot_fingerprint")
+    write_atomic_json(state_path, state)
+    state_before = state_path.read_bytes()
+    journal_before = journal_path.read_bytes()
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="execution planと一致しません"):
+        runner.run(profile_path=profile_path, suite="release")
+    assert calls == ["cold"]
+    assert state_path.read_bytes() == state_before
+    assert journal_path.read_bytes() == journal_before
+
+
+def test_completed_release_rejects_out_of_plan_active_comparison_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """完了済みreleaseでも対象外comparison markerが変更されず拒否されること。
+
+    Arrange:
+        - coldとwarmが完了したrelease stateへfixed3 markerとjournalが永続化される
+    Act:
+        - `--reset-suite`なしで同じrelease suiteが再実行される
+    Assert:
+        - stateとjournalを変更せずexecution plan不一致として拒否されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state_path = suite_root / "acceptance-state.json"
+    journal_path = suite_root / "work" / "active-attempt.json"
+    state = read_json_object(state_path)
+    assert state is not None
+    state["active_comparison_run"] = "fixed3"
+    write_atomic_json(state_path, state)
+    AcceptanceAttemptJournal(journal_path).start(
+        attempt_id="abandoned-fixed3",
+        step_kind="comparison",
+        step_name="fixed3",
+        started_at_epoch_seconds=0.0,
+        execution_context={},
+    )
+    state_before = state_path.read_bytes()
+    journal_before = journal_path.read_bytes()
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="execution planと一致しません"):
+        runner.run(profile_path=profile_path, suite="release")
+    assert calls == ["cold", "warm"]
+    assert state_path.read_bytes() == state_before
+    assert journal_path.read_bytes() == journal_before
 
 
 def test_reset_suite_discards_completed_state_and_runs_cold_again(
@@ -3077,6 +3326,59 @@ def _runner(
                 "peak_additional_budget_bytes": 96 * 1024**3,
             }
         ),
+    )
+
+
+def _persist_active_attempt(
+    suite_root: Path,
+    *,
+    step_kind: str,
+    step_name: str,
+) -> None:
+    """計測済みattemptに続くprocess異常終了状態を永続化する。"""
+    state_path = suite_root / "acceptance-state.json"
+    state = read_json_object(state_path)
+    assert state is not None
+    attempts_key = (
+        "phase_attempts" if step_kind == "phase" else "comparison_run_attempts"
+    )
+    attempts_by_name = state[attempts_key]
+    assert isinstance(attempts_by_name, dict)
+    attempts = attempts_by_name[step_name]
+    assert isinstance(attempts, list)
+    prior_attempt = attempts[-1]
+    assert isinstance(prior_attempt, dict)
+    execution_context = prior_attempt["execution_context"]
+    assert isinstance(execution_context, dict)
+    active_key = "active_phase" if step_kind == "phase" else "active_comparison_run"
+    attempt_id = f"abandoned-{step_name}"
+    state.update(
+        {
+            active_key: step_name,
+            f"{active_key}_started_at_epoch_seconds": 0.0,
+            f"{active_key}_attempt_id": attempt_id,
+            f"{active_key}_execution_context": execution_context,
+        }
+    )
+    write_atomic_json(state_path, state)
+    journal = AcceptanceAttemptJournal(suite_root / "work" / "active-attempt.json")
+    journal.start(
+        attempt_id=attempt_id,
+        step_kind=step_kind,
+        step_name=step_name,
+        started_at_epoch_seconds=0.0,
+        execution_context=execution_context,
+    )
+    journal.record_snapshot(
+        {
+            "cache_hit_count": 2,
+            "cache_miss_count": 1,
+            "reuse_count": 2,
+            "unexpected_recompute_count": 1,
+            "stage_durations_seconds": {"scan-video": 3.0},
+            "completed_stage_counts": {"scan-video": 1},
+        },
+        {"1" * 64: "recomputed"},
     )
 
 

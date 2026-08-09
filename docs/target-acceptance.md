@@ -237,6 +237,9 @@ attemptとして確定する。active attempt journalのexecution context、cach
 kill後も残ったVideo Identity、Durable Work Unit、Completed Stage manifestを照合して
 確定直前の作業量も回復し、markerを消して新しいattemptから自動再開する。`--reset-suite`や
 最初からの再処理は要求しない。
+回復対象はactive markerの種別keyと保存run名の両方でexecution planから一意に解決する。
+phaseとcomparisonが同時にactiveな場合、または保存run名がplanに存在しない場合は、
+attempt、state、journalを推測で変更せずfail-fastする。
 
 identityを変えた場合や意図的に特定runからやり直す場合だけ、対象runまたはsuiteを
 明示的にresetする。
