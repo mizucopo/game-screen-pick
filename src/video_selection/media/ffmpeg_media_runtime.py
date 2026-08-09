@@ -853,10 +853,16 @@ class FfmpegMediaRuntime:
         if relative_start < 0:
             msg = "PCM Audio rangeがmedia originより前です"
             raise ValueError(msg)
+        range_duration = _ffmpeg_number(maximum_sample_count / sample_rate)
         input_options = (
-            ()
+            ("-t", range_duration)
             if relative_start == 0
-            else ("-ss", _ffmpeg_number(float(relative_start)))
+            else (
+                "-ss",
+                _ffmpeg_number(float(relative_start)),
+                "-t",
+                range_duration,
+            )
         )
         absolute_start_pts = round(stream_origin * sample_rate) + sample_start
         audio_filter = (
@@ -865,7 +871,7 @@ class FfmpegMediaRuntime:
             f"atrim=end_sample={maximum_sample_count},"
             f"asetnsamples=n={maximum_sample_count}:p=0,"
             f"asettb=expr=1/{sample_rate},"
-            "asetpts=N,ashowinfo"
+            "ashowinfo"
         )
         command = self._decode_command_prefix(
             media_path,
@@ -879,8 +885,6 @@ class FfmpegMediaRuntime:
                 "-dn",
                 "-af",
                 audio_filter,
-                "-t",
-                _ffmpeg_number(maximum_sample_count / sample_rate),
                 "-f",
                 "s16le",
                 "-acodec",
@@ -909,7 +913,13 @@ class FfmpegMediaRuntime:
                 MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED,
                 "audio sample rangeがcanonical chunkへ収まりません",
             )
-        return replace(chunks[0], pts=absolute_start_pts)
+        chunk = chunks[0]
+        if chunk.pts != absolute_start_pts:
+            raise MediaRuntimeError(
+                MediaRuntimeFailureReason.AUDIO_EXTRACTION_FAILED,
+                "audio sample rangeのtimestampが連続していません",
+            )
+        return chunk
 
     def read_embedded_subtitles(
         self,

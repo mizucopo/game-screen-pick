@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import os
 import shutil
+import stat
 import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
@@ -43,6 +45,7 @@ from .acceptance_run_attempt_metrics import (
 )
 from .acceptance_run_reset import ACCEPTANCE_RUN_RESETS, AcceptanceRunReset
 from .acceptance_storage_preflight import preflight_acceptance_storage
+from .acceptance_suite_lock import AcceptanceSuiteLock
 from .atomic_json import read_json_object, write_atomic_json
 from .full_suite_materializer import FullSuiteMaterializer
 from .human_review import (
@@ -132,8 +135,39 @@ class TargetSuiteRunner:
         _validate_profile_files(profile)
         suite_root = profile.artifact_root / "target-acceptance" / suite
         _validate_suite_source_paths(profile_path, profile, suite_root)
+        _validate_directory_deletion(
+            suite_root,
+            "Acceptance suite",
+            owned_root=profile.artifact_root,
+        )
+        lock_path = suite_root.parent / ".locks" / f"{suite}.lock"
+        with AcceptanceSuiteLock(lock_path):
+            return self._run_locked(
+                profile=profile,
+                suite=suite,
+                suite_root=suite_root,
+                reset_suite=reset_suite,
+                reset_run=reset_run,
+                human_review_path=human_review_path,
+            )
+
+    def _run_locked(
+        self,
+        *,
+        profile: AcceptanceProfile,
+        suite: str,
+        suite_root: Path,
+        reset_suite: bool,
+        reset_run: AcceptanceRunReset | None,
+        human_review_path: Path | None,
+    ) -> int:
+        """suite lock保持中にstate回復からfinalizationまでを実行する。"""
         if reset_suite:
-            _remove_directory_strict(suite_root, "Acceptance suite")
+            _remove_directory_strict(
+                suite_root,
+                "Acceptance suite",
+                owned_root=suite_root.parent,
+            )
         state_path = suite_root / "acceptance-state.json"
         attempt_journal = AcceptanceAttemptJournal(
             suite_root / "work" / "active-attempt.json"
@@ -141,10 +175,13 @@ class TargetSuiteRunner:
         state = read_json_object(state_path)
         if state is None:
             attempt_journal.clear()
+        if reset_run is not None:
+            _validate_reset_run_deletion_boundaries(reset_run, suite_root)
         if reset_run == "cache-reuse":
             _validate_cache_reuse_reset_prerequisites(
                 state,
                 suite_root / "work" / "input" / ".game-screen-pick" / "cache",
+                suite_root,
             )
         configuration_digest = _content_digest(profile.configuration_path)
         identity_cache_folder = suite_root.parent / "video-identities"
@@ -152,7 +189,6 @@ class TargetSuiteRunner:
             state is not None
             and reset_run is None
             and _runs_completed(state)
-            and state.get("worksheet_ready") is True
             and _is_sha256(state.get("materialization_source_snapshot_fingerprint"))
         ):
             _validate_completed_state_identity(
@@ -183,18 +219,12 @@ class TargetSuiteRunner:
             if _resolve_active_step(state, execution_steps) is not None:
                 raise ValueError("完了済みAcceptance stateにactive runがあります")
             attempt_journal.clear()
-            for step in execution_steps:
-                completed_runs = _mapping(
-                    state.get(step.records_state_key),
-                    step.records_state_key,
-                )
-                load_completed_run_report(
-                    configuration=step.configuration,
-                    run_record=_mapping(
-                        completed_runs.get(step.name),
-                        f"{step.name} run",
-                    ),
-                )
+            self._restore_completed_worksheet(
+                suite=suite,
+                suite_root=suite_root,
+                state=state,
+                execution_steps=execution_steps,
+            )
             return self._finalize(
                 profile,
                 suite_root,
@@ -413,7 +443,10 @@ class TargetSuiteRunner:
                     run_record=cast(dict[str, object], existing),
                 )
                 continue
-            _remove_invalid_attempt_output(step.configuration.output_folder)
+            _remove_invalid_attempt_output(
+                step.configuration.output_folder,
+                suite_root,
+            )
             attempt_id = uuid4().hex
             attempt_started_at_epoch = time.time()
             state[step.active_state_key] = step.name
@@ -575,6 +608,58 @@ class TargetSuiteRunner:
             return self._release_materializer(profile, suite_root)
         return self._full_materializer(profile, suite_root)
 
+    def _restore_completed_worksheet(
+        self,
+        *,
+        suite: str,
+        suite_root: Path,
+        state: dict[str, object],
+        execution_steps: tuple[AcceptanceExecutionStep, ...],
+    ) -> None:
+        """完了runのretained evidenceだけから未確定worksheetを復旧する。"""
+        worksheet_ready = state.get("worksheet_ready") is True
+        cold_report: dict[str, object] | None = None
+        cold_selection: dict[str, object] | None = None
+        for step in execution_steps:
+            completed_runs = _mapping(
+                state.get(step.records_state_key),
+                step.records_state_key,
+            )
+            run_record = _mapping(
+                completed_runs.get(step.name),
+                f"{step.name} run",
+            )
+            if step.is_cold_phase and not worksheet_ready:
+                cold_report, cold_selection = load_completed_run_evidence(
+                    configuration=step.configuration,
+                    run_record=run_record,
+                )
+            else:
+                load_completed_run_report(
+                    configuration=step.configuration,
+                    run_record=run_record,
+                )
+        if worksheet_ready:
+            return
+        if cold_report is None or cold_selection is None:
+            raise ValueError("Fresh Processingのretained evidenceがありません")
+        phases = _mapping(state.get("phases"), "phases")
+        cold_phase = _mapping(phases.get("cold"), "cold phase")
+        state["video_set"] = _mapping(
+            cold_phase.get("video_set"),
+            "video_set",
+        )
+        worksheet = ensure_review_worksheet(
+            suite_root / "review-worksheet.json",
+            suite=suite,
+            suite_fingerprint=_string(state.get("suite_fingerprint")),
+            canonical_report=cold_report,
+            selection_artifact=cold_selection,
+        )
+        state["review_candidate_digest"] = review_candidate_digest(worksheet)
+        state["worksheet_ready"] = True
+        write_atomic_json(suite_root / "acceptance-state.json", state)
+
     def _finalize(
         self,
         profile: AcceptanceProfile,
@@ -669,6 +754,7 @@ class TargetSuiteRunner:
             _remove_directory_strict(
                 suite_root / "baseline",
                 "Acceptance baseline",
+                owned_root=suite_root,
             )
             if record["status"] == "passed":
                 write_normalized_baseline(record, suite_root / "baseline")
@@ -709,28 +795,38 @@ def _reset_acceptance_run_suffix(
         "cache-reuse": {"warm"},
     }[reset_run]
     reset_steps = tuple(step for step in execution_steps if step.name in reset_names)
-    for step in reset_steps:
-        _remove_directory_strict(
+    directory_deletions = [
+        (
             step.configuration.output_folder,
             f"{reset_run} Acceptance output",
         )
+        for step in reset_steps
+    ]
     if "cold" in reset_names:
-        _remove_directory_strict(
-            processing_cache_folder,
-            f"{reset_run} processing cache",
+        directory_deletions.append(
+            (
+                processing_cache_folder,
+                f"{reset_run} processing cache",
+            )
         )
-        _remove_file_strict(
-            suite_root / "review-worksheet.json",
-            "Acceptance review worksheet",
+    directory_deletions.append((suite_root / "baseline", "Acceptance baseline"))
+    file_deletions = [(suite_root / "acceptance.json", "Acceptance record")]
+    if "cold" in reset_names:
+        file_deletions.insert(
+            0,
+            (
+                suite_root / "review-worksheet.json",
+                "Acceptance review worksheet",
+            ),
         )
-    _remove_file_strict(
-        suite_root / "acceptance.json",
-        "Acceptance record",
-    )
-    _remove_directory_strict(
-        suite_root / "baseline",
-        "Acceptance baseline",
-    )
+    for path, label in directory_deletions:
+        _validate_directory_deletion(path, label, owned_root=suite_root)
+    for path, label in file_deletions:
+        _validate_file_deletion(path, label, owned_root=suite_root)
+    for path, label in directory_deletions:
+        _remove_directory_strict(path, label, owned_root=suite_root)
+    for path, label in file_deletions:
+        _remove_file_strict(path, label, owned_root=suite_root)
 
     for step in reset_steps:
         records = state.get(step.records_state_key)
@@ -755,11 +851,56 @@ def _reset_acceptance_run_suffix(
     write_atomic_json(state_path, state)
 
 
+def _validate_reset_run_deletion_boundaries(
+    reset_run: AcceptanceRunReset,
+    suite_root: Path,
+) -> None:
+    """materialize前にreset対象の全path chainを非破壊検証する。"""
+    reset_names = {
+        "parallelism-baseline": ("fixed3", "cold", "warm"),
+        "fresh-processing": ("cold", "warm"),
+        "cache-reuse": ("warm",),
+    }[reset_run]
+    directory_deletions = [
+        (
+            suite_root / "outputs" / run_name,
+            f"{reset_run} Acceptance output",
+        )
+        for run_name in reset_names
+    ]
+    if "cold" in reset_names:
+        directory_deletions.append(
+            (
+                suite_root / "work" / "input" / ".game-screen-pick" / "cache",
+                f"{reset_run} processing cache",
+            )
+        )
+    directory_deletions.append((suite_root / "baseline", "Acceptance baseline"))
+    file_deletions = [(suite_root / "acceptance.json", "Acceptance record")]
+    if "cold" in reset_names:
+        file_deletions.append(
+            (
+                suite_root / "review-worksheet.json",
+                "Acceptance review worksheet",
+            )
+        )
+    for path, label in directory_deletions:
+        _validate_directory_deletion(path, label, owned_root=suite_root)
+    for path, label in file_deletions:
+        _validate_file_deletion(path, label, owned_root=suite_root)
+
+
 def _validate_cache_reuse_reset_prerequisites(
     state: dict[str, object] | None,
     processing_cache_folder: Path,
+    suite_root: Path,
 ) -> None:
     """本処理の完了recordと実cacheがある場合だけ再利用resetを許可する。"""
+    _validate_directory_deletion(
+        processing_cache_folder,
+        "cache-reuse processing cache",
+        owned_root=suite_root,
+    )
     phases = state.get("phases") if state is not None else None
     fresh_processing = phases.get("cold") if isinstance(phases, dict) else None
     if (
@@ -785,7 +926,11 @@ def _cleanup_release_work(
     if suite != "release":
         return True
     try:
-        _remove_directory_strict(suite_root / "work", "Release acceptance work")
+        _remove_directory_strict(
+            suite_root / "work",
+            "Release acceptance work",
+            owned_root=suite_root,
+        )
     except ValueError:
         failure: dict[str, object] = {
             "phase": "acceptance_cleanup",
@@ -801,12 +946,79 @@ def _cleanup_release_work(
     return True
 
 
-def _remove_directory_strict(path: Path, label: str) -> None:
+def _validate_directory_deletion(
+    path: Path,
+    label: str,
+    *,
+    owned_root: Path,
+) -> None:
+    """suite所有rootから対象までが通常directoryだけであることを検証する。"""
+    _validate_deletion_chain(
+        path,
+        label,
+        owned_root=owned_root,
+        target_kind="directory",
+    )
+
+
+def _validate_file_deletion(
+    path: Path,
+    label: str,
+    *,
+    owned_root: Path,
+) -> None:
+    """suite所有rootから対象fileまでに外部参照がないことを検証する。"""
+    _validate_deletion_chain(
+        path,
+        label,
+        owned_root=owned_root,
+        target_kind="file",
+    )
+
+
+def _validate_deletion_chain(
+    path: Path,
+    label: str,
+    *,
+    owned_root: Path,
+    target_kind: str,
+) -> None:
+    root = Path(os.path.abspath(owned_root))
+    target = Path(os.path.abspath(path))
+    try:
+        relative = target.relative_to(root)
+    except ValueError:
+        raise ValueError(f"{label}はsuite所有directory外にあります") from None
+    current = root
+    chain = [root]
+    for part in relative.parts:
+        current /= part
+        chain.append(current)
+    for candidate in chain:
+        try:
+            mode = candidate.lstat().st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(mode):
+            raise ValueError(f"{label}の途中階層がsymbolic linkです")
+        is_target = candidate == target
+        if not is_target or target_kind == "directory":
+            if not stat.S_ISDIR(mode):
+                raise ValueError(f"{label}の途中階層が通常directoryではありません")
+        elif not stat.S_ISREG(mode):
+            raise ValueError(f"{label}が通常fileではありません")
+
+
+def _remove_directory_strict(
+    path: Path,
+    label: str,
+    *,
+    owned_root: Path,
+) -> None:
     """reset対象directoryが完全に削除された場合だけ後続処理を許可する。"""
-    if not path.exists() and not path.is_symlink():
+    _validate_directory_deletion(path, label, owned_root=owned_root)
+    if not path.exists():
         return
-    if path.is_symlink():
-        raise ValueError(f"{label}はsymbolic linkのため削除できません")
     try:
         shutil.rmtree(path)
     except OSError:
@@ -815,12 +1027,16 @@ def _remove_directory_strict(path: Path, label: str) -> None:
         raise ValueError(f"{label}を完全に削除できません")
 
 
-def _remove_file_strict(path: Path, label: str) -> None:
+def _remove_file_strict(
+    path: Path,
+    label: str,
+    *,
+    owned_root: Path,
+) -> None:
     """suite-owned regular fileだけを削除し外部参照を辿らない。"""
-    if not path.exists() and not path.is_symlink():
+    _validate_file_deletion(path, label, owned_root=owned_root)
+    if not path.exists():
         return
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{label}が通常fileではありません")
     try:
         path.unlink()
     except OSError:
@@ -829,8 +1045,13 @@ def _remove_file_strict(path: Path, label: str) -> None:
         raise ValueError(f"{label}を完全に削除できません")
 
 
-def _remove_invalid_attempt_output(output_folder: Path) -> None:
+def _remove_invalid_attempt_output(output_folder: Path, suite_root: Path) -> None:
     """完成済みCanonical outputを保持し、不完全なsuite-owned outputだけ除く。"""
+    _validate_directory_deletion(
+        output_folder,
+        "Acceptance Output Folder",
+        owned_root=suite_root,
+    )
     if not output_folder.exists() and not output_folder.is_symlink():
         return
     if output_folder.is_symlink() or not output_folder.is_dir():
@@ -838,7 +1059,11 @@ def _remove_invalid_attempt_output(output_folder: Path) -> None:
     try:
         load_validated_canonical_selection_report(output_folder)
     except ValueError:
-        _remove_directory_strict(output_folder, "不完全なAcceptance Output Folder")
+        _remove_directory_strict(
+            output_folder,
+            "不完全なAcceptance Output Folder",
+            owned_root=suite_root,
+        )
 
 
 def _execute_run_attempt(
@@ -939,7 +1164,11 @@ def _release_fixed_three_cache(
     )
     if fixed_three.get("operation_status") != "completed":
         raise ValueError("Fixed3 comparison完了前にauto cacheを開始できません")
-    _remove_directory_strict(cache_folder, "Fixed3 comparison cache")
+    _remove_directory_strict(
+        cache_folder,
+        "Fixed3 comparison cache",
+        owned_root=state_path.parent,
+    )
     state["fixed3_cache_released"] = True
     write_atomic_json(state_path, state)
 
@@ -1047,14 +1276,17 @@ def _reconcile_full_comparison_context(
         return
     if fixed_three_matches:
         return
-    _remove_directory_strict(
-        suite_root / "outputs" / "fixed3",
-        "旧contextのFixed3 comparison output",
+    deletion_targets = (
+        (
+            suite_root / "outputs" / "fixed3",
+            "旧contextのFixed3 comparison output",
+        ),
+        (cache_folder, "旧contextのFixed3 comparison cache"),
     )
-    _remove_directory_strict(
-        cache_folder,
-        "旧contextのFixed3 comparison cache",
-    )
+    for path, label in deletion_targets:
+        _validate_directory_deletion(path, label, owned_root=suite_root)
+    for path, label in deletion_targets:
+        _remove_directory_strict(path, label, owned_root=suite_root)
     comparison_runs.pop("fixed3", None)
     state["comparison_runs"] = comparison_runs
     comparison_attempts = state.get("comparison_run_attempts")

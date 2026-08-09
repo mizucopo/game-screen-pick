@@ -43,8 +43,11 @@ flowchart TD
 
     K --> N{Context source}
     N --> O[Embedded Subtitle stream checkpoint]
-    N --> P[PCM sample range checkpoint]
-    P --> Q[PCM chunkごとのSpeech Recognition checkpoint]
+    N --> P[PCM sample rangeを抽出]
+    P --> PA{観測したrange先頭PTSが<br/>要求sample gridと連続?}
+    PA -- Yes --> PB[PCM sample range checkpoint]
+    PA -- No --> PC[補間・PTS上書きをせずrun失敗]
+    PB --> Q[PCM chunkごとのSpeech Recognition checkpoint]
     O --> R[Context Completed Stageを集約]
     Q --> R
 
@@ -172,6 +175,11 @@ Scene CatalogとFinal Selectionは一回のatomic operation自体が最小単位
 Annotationも一枚の外部model requestと条件付き専用確認をまとめたCompleted Stageです。
 requestの途中tokenやpartial responseは再利用しません。
 
+PCM rangeはFFmpegから観測した先頭PTSを期待sample位置へ置換しません。独立rangeの観測PTSが
+要求sample gridと一致しない場合は、音声の重複・欠落を連続音声として確定せず、そのrangeの
+checkpointを作る前に失敗します。連続音声では同じsample rangeとPCM bytesを確定するため、
+中断なしとcheckpoint再開で同じSpeech Recognition入力とContext Cueになります。
+
 ## 依存変更時の局所的な再計算
 
 TOMLへ期待hashを手入力しません。実行時に解決・検証したruntime identity、model identity、
@@ -219,18 +227,20 @@ Work Unitのengine versionを上げた場合も、そのoperationだけを起点
 Target Acceptance:
 
 ```text
-<SUITE_ROOT>/
-├── acceptance-state.json
-├── outputs/{fixed3,cold,warm}/      # schema互換用の内部key
-└── work/
-    ├── active-attempt.json
-    ├── input/
-    ├── interval-checkpoints/        # release
-    ├── source-checkpoints/          # full
-    ├── release-materialization-context.json
-    ├── release-materialization.json
-    ├── full-materialization-context.json
-    └── full-materialization.json
+<ARTIFACT_ROOT>/target-acceptance/
+├── .locks/{release,full}.lock        # fileの存在ではなくOS lockが正本
+└── <SUITE>/
+    ├── acceptance-state.json
+    ├── outputs/{fixed3,cold,warm}/   # schema互換用の内部key
+    └── work/
+        ├── active-attempt.json
+        ├── input/
+        ├── interval-checkpoints/     # release
+        ├── source-checkpoints/       # full
+        ├── release-materialization-context.json
+        ├── release-materialization.json
+        ├── full-materialization-context.json
+        └── full-materialization.json
 ```
 
 Video Identity cacheはprocessing cacheと寿命を分離します。Parallelism Baselineから
@@ -278,6 +288,9 @@ Target Acceptanceではactive attemptのexecution context、cache件数、Work U
 journalと確定manifestを照合してkill直前までの作業量を回復し、旧attemptを
 `process_abandoned`として閉じて新attemptを開始します。完成済みCanonical Outputは削除せず
 同じ意味結果ならそのまま使い、不完全なsuite-owned outputだけを除去します。
+同じartifact rootとsuiteの後発commandはstateを読む前に非待機で拒否されるため、実行中の
+先発attemptをabandonedとして回収しません。先発の通常終了、例外、Ctrl+C、process終了で
+OS lockが解放された後は、残ったlock fileを削除せず同じcommandを再実行できます。
 
 Fresh Processing、Cache Reuseとreview worksheetが確定しても、review pendingまたは
 自動gate不合格のrelease suiteは実行単位resetに備えてprivate workを保持します。human reviewを

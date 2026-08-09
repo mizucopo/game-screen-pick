@@ -5,6 +5,8 @@ import shutil
 from collections.abc import Callable
 from dataclasses import fields, replace
 from pathlib import Path
+from threading import Event, Lock, Thread
+from typing import Never
 
 import pytest
 
@@ -28,6 +30,7 @@ from src.video_selection.acceptance.target_suite_runner import (
     EnvironmentProbe,
     ModelResolver,
     OllamaDeploymentProbe,
+    RevisionProbe,
     TargetSuiteRunner,
 )
 from src.video_selection.configuration.resolve_effective_configuration import (
@@ -51,6 +54,81 @@ from tests.video_selection.fakes.fake_model_runtime import FakeModelRuntime
 from tests.video_selection.fakes.fake_video_stage_media_runtime import (
     FakeVideoStageMediaRuntime,
 )
+
+
+def test_concurrent_runner_preserves_live_suite_evidence(tmp_path: Path) -> None:
+    """同じsuiteの後発runnerがliveな証拠を変更せず拒否されること。
+
+    Arrange:
+        - cold attemptの途中で待機する先発runnerが起動される
+        - 先発が確定したstate、journal、cacheのsnapshotが取得される
+    Act:
+        - 同じprofileとsuiteで後発runnerが起動される
+    Assert:
+        - 後発が明示的に拒否されsuite内の全fileが変更されないこと
+        - 先発は待機解除後に通常どおり完了し同じsuiteを再開できること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    first_attempt_started = Event()
+    release_first_attempt = Event()
+    call_guard = Lock()
+    first_call = True
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        nonlocal first_call
+        with call_guard:
+            should_wait = first_call
+            first_call = False
+        if should_wait:
+            first_attempt_started.set()
+            assert release_first_attempt.wait(timeout=5)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute)
+    first_results: list[int] = []
+    first_errors: list[BaseException] = []
+
+    def run_first() -> None:
+        try:
+            first_results.append(runner.run(profile_path=profile_path, suite="release"))
+        except BaseException as error:
+            first_errors.append(error)
+
+    first_thread = Thread(target=run_first)
+    first_thread.start()
+    assert first_attempt_started.wait(timeout=5)
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    evidence_before = {
+        path.relative_to(suite_root).as_posix(): path.read_bytes()
+        for path in sorted(suite_root.rglob("*"))
+        if path.is_file()
+    }
+
+    # Act
+    try:
+        with pytest.raises(ValueError, match="Acceptance suiteは実行中"):
+            runner.run(profile_path=profile_path, suite="release")
+        evidence_after = {
+            path.relative_to(suite_root).as_posix(): path.read_bytes()
+            for path in sorted(suite_root.rglob("*"))
+            if path.is_file()
+        }
+    finally:
+        release_first_attempt.set()
+        first_thread.join(timeout=5)
+
+    # Assert
+    assert not first_thread.is_alive()
+    assert first_errors == []
+    assert first_results == [3]
+    assert evidence_after == evidence_before
+    assert runner.run(profile_path=profile_path, suite="release") == 3
 
 
 def test_interrupt_after_cold_resumes_only_warm_then_waits_for_human_review(
@@ -961,6 +1039,222 @@ def test_reset_run_stops_before_state_change_when_suffix_deletion_fails(
     assert read_json_object(state_path) == state_before
     assert external_marker.read_text(encoding="utf-8") == "external"
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "symlink_component",
+    ("work", "input", "processing-root", "cache"),
+)
+def test_fresh_processing_reset_rejects_symlinked_cache_ancestor(
+    tmp_path: Path,
+    symlink_component: str,
+) -> None:
+    """cache途中階層がsymlinkのresetで全証拠と外部内容が保持されること。
+
+    Arrange:
+        - coldとwarmが完了したrelease suiteが用意される
+        - processing cacheの各階層が外部directoryへのsymlinkへ置換される
+    Act:
+        - fresh-processingからのresetが試行される
+    Assert:
+        - resetが削除前に拒否され外部marker、state、既存outputが保持されること
+        - phaseが追加実行されないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    state_path = suite_root / "acceptance-state.json"
+    evidence_before = {
+        path.relative_to(suite_root).as_posix(): path.read_bytes()
+        for path in sorted((suite_root / "outputs").rglob("*"))
+        if path.is_file()
+    }
+    component_path = {
+        "work": suite_root / "work",
+        "input": suite_root / "work" / "input",
+        "processing-root": (suite_root / "work" / "input" / ".game-screen-pick"),
+        "cache": (suite_root / "work" / "input" / ".game-screen-pick" / "cache"),
+    }[symlink_component]
+    external_root = tmp_path / f"external-{symlink_component}"
+    component_path.rename(external_root)
+    component_path.symlink_to(external_root, target_is_directory=True)
+    materialized_video = next(external_root.rglob("scenario-001.mkv"), None)
+    if materialized_video is not None:
+        materialized_video.write_bytes(b"external-scenario")
+    external_marker = external_root / "keep"
+    external_marker.write_text("external", encoding="utf-8")
+    external_before = {
+        path.relative_to(external_root).as_posix(): path.read_bytes()
+        for path in sorted(external_root.rglob("*"))
+        if path.is_file()
+    }
+    state_before = state_path.read_bytes()
+    calls.clear()
+
+    # Act
+    with pytest.raises(ValueError, match="symbolic link"):
+        runner.run(
+            profile_path=profile_path,
+            suite="release",
+            reset_run="fresh-processing",
+        )
+
+    # Assert
+    evidence_after = {
+        path.relative_to(suite_root).as_posix(): path.read_bytes()
+        for path in sorted((suite_root / "outputs").rglob("*"))
+        if path.is_file()
+    }
+    external_after = {
+        path.relative_to(external_root).as_posix(): path.read_bytes()
+        for path in sorted(external_root.rglob("*"))
+        if path.is_file()
+    }
+    assert external_marker.read_text(encoding="utf-8") == "external"
+    assert external_after == external_before
+    assert state_path.read_bytes() == state_before
+    assert evidence_after == evidence_before
+    assert calls == []
+
+
+def test_reset_suite_rejects_symlinked_suite_root_without_external_change(
+    tmp_path: Path,
+) -> None:
+    """suite rootが外部symlinkなら全resetが非破壊で拒否されること。
+
+    Arrange:
+        - cold/warm完了済みrelease suiteが外部directoryへ移される
+        - 元suite rootがその外部directoryへのsymlinkへ置換される
+    Act:
+        - suite全体のresetが試行される
+    Assert:
+        - 外部treeを変更せずresetが拒否されphaseも再実行されないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    runner = _runner(execute)
+    assert runner.run(profile_path=profile_path, suite="release") == 3
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
+    external_suite = tmp_path / "external-release-suite"
+    suite_root.rename(external_suite)
+    suite_root.symlink_to(external_suite, target_is_directory=True)
+    external_marker = external_suite / "keep"
+    external_marker.write_text("external", encoding="utf-8")
+    external_before = {
+        path.relative_to(external_suite).as_posix(): path.read_bytes()
+        for path in sorted(external_suite.rglob("*"))
+        if path.is_file()
+    }
+    calls.clear()
+
+    # Act
+    with pytest.raises(ValueError, match="symbolic link"):
+        runner.run(
+            profile_path=profile_path,
+            suite="release",
+            reset_suite=True,
+        )
+
+    # Assert
+    external_after = {
+        path.relative_to(external_suite).as_posix(): path.read_bytes()
+        for path in sorted(external_suite.rglob("*"))
+        if path.is_file()
+    }
+    assert external_after == external_before
+    assert external_marker.read_text(encoding="utf-8") == "external"
+    assert calls == []
+
+
+def test_fixed_three_cache_release_rejects_symlinked_cache_ancestor(
+    tmp_path: Path,
+) -> None:
+    """fixed3 cacheの親がsymlinkならauto cold前に非破壊で拒否されること。
+
+    Arrange:
+        - fixed3完了時にprocessing cacheの親が外部symlinkへ置換される
+    Act:
+        - full suiteがauto coldへ移行する
+    Assert:
+        - 外部cacheを変更せずcache解放が拒否されauto coldが始まらないこと
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    calls: list[str] = []
+    external_root = tmp_path / "external-fixed3-cache"
+    external_before: dict[str, bytes] = {}
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        calls.append(run_name)
+        result = _successful_run_attempt(configuration, run_name)
+        record = result[1]
+        record["video_scan_parallelism"] = {
+            "mode": "fixed",
+            "configured_workers": 3,
+            "initial_workers": 3,
+            "peak_workers": 3,
+            "scan_wall_seconds": 120.0,
+        }
+        record["stage_artifact_content_digest"] = "9" * 64
+        if configuration.video_scan_workers == 3:
+            processing_root = configuration.processing_cache_folder.parent
+            processing_root.rename(external_root)
+            processing_root.symlink_to(external_root, target_is_directory=True)
+            marker = external_root / "keep"
+            marker.write_text("external", encoding="utf-8")
+            external_before.update(
+                {
+                    path.relative_to(external_root).as_posix(): path.read_bytes()
+                    for path in sorted(external_root.rglob("*"))
+                    if path.is_file()
+                }
+            )
+        return result
+
+    runner = _runner(execute)
+
+    # Act
+    with pytest.raises(ValueError, match="symbolic link"):
+        runner.run(profile_path=profile_path, suite="full")
+
+    # Assert
+    external_after = {
+        path.relative_to(external_root).as_posix(): path.read_bytes()
+        for path in sorted(external_root.rglob("*"))
+        if path.is_file()
+    }
+    assert external_after == external_before
+    assert (external_root / "keep").read_text(encoding="utf-8") == "external"
+    assert calls == ["fixed3"]
 
 
 def test_release_rejects_parallelism_baseline_reset(tmp_path: Path) -> None:
@@ -2133,6 +2427,76 @@ def test_completed_phases_resume_worksheet_finalization_without_rerun(
     assert (suite_root / "review-worksheet.json").is_file()
 
 
+def test_completed_phases_restore_worksheet_without_target_preflight(
+    tmp_path: Path,
+) -> None:
+    """完了証拠からのworksheet復旧が現在のtargetへ依存しないこと。
+
+    Arrange:
+        - cold/warm完了後かつworksheet未生成のresume stateが用意される
+        - Git、target、Ollama、modelの各preflightが利用不能にされる
+    Act:
+        - 同じrelease suiteがworksheet生成から再開される
+    Assert:
+        - preflightとphaseを呼ばずretained evidenceだけでworksheetが生成されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    initial_calls: list[str] = []
+
+    def execute_initial(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        initial_calls.append(run_name)
+        return _successful_run_attempt(configuration, run_name)
+
+    initial_runner = _runner(execute_initial)
+    suite_root, _cold_configuration = _prepare_resume_without_worksheet(
+        tmp_path,
+        initial_runner,
+        profile_path,
+    )
+    preflight_calls: list[str] = []
+    resume_run_calls: list[str] = []
+    materialization_calls: list[str] = []
+
+    def unavailable(name: str) -> Never:
+        preflight_calls.append(name)
+        raise AssertionError(f"{name}はworksheet復旧で呼び出されません")
+
+    def execute_resume(
+        run_name: str,
+        _configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        resume_run_calls.append(run_name)
+        raise AssertionError("完了phaseは再実行されません")
+
+    resume_runner = _runner(
+        execute_resume,
+        revision_probe=lambda _path: unavailable("git"),
+        environment_probe=lambda: unavailable("target"),
+        ollama_deployment_probe=lambda _host: unavailable("ollama"),
+        model_resolver=lambda _configuration: unavailable("model"),
+        materialization_calls=materialization_calls,
+    )
+
+    # Act
+    result = resume_runner.run(profile_path=profile_path, suite="release")
+
+    # Assert
+    assert result == 3
+    assert initial_calls == ["cold", "warm"]
+    assert preflight_calls == []
+    assert resume_run_calls == []
+    assert materialization_calls == []
+    assert (suite_root / "review-worksheet.json").is_file()
+
+
 def test_resume_rejects_changed_completed_cold_report(tmp_path: Path) -> None:
     """完了phase後に変更されたcold reportからworksheetが生成されないこと。
 
@@ -3254,6 +3618,7 @@ def _runner(
     model_identity_seed: str = "acceptance-runner",
     model_resolver: ModelResolver | None = None,
     environment_probe: EnvironmentProbe | None = None,
+    revision_probe: RevisionProbe | None = None,
     ollama_deployment_probe: OllamaDeploymentProbe | None = None,
     materialization_calls: list[str] | None = None,
     storage_preflight: Callable[
@@ -3296,7 +3661,7 @@ def _runner(
                 "visible_ram_bytes": 32 * 1024**3,
             }
         ),
-        revision_probe=lambda _path: ("a" * 40, False),
+        revision_probe=revision_probe or (lambda _path: ("a" * 40, False)),
         ollama_deployment_probe=ollama_deployment_probe
         or (
             lambda _host: {

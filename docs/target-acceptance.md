@@ -71,6 +71,12 @@ uv run task acceptance-target \
   --suite full
 ```
 
+同じ`artifact_root`とsuiteを指定したcommandは一つだけ実行できる。suite単位の非待機lockは
+profileと安全なsuite rootを解決した後、state、active attempt、journal、cache、resetを
+読み書きする前に取得する。後発commandは先発の証拠を変更せず明示的に拒否される。
+releaseとfullは別々に排他される。lock fileはprocess終了後も残り得るが、fileの存在や保存PIDを
+実行中判定には使わず、OS lockが解放されていれば同じcommandで直ちに再開できる。
+
 modelの更新確認、download、capability検証とResolved Model Identityのfreezeは最初のrun
 timerより前に行う。利用者向けのrun名と役割は次のとおり。
 
@@ -209,6 +215,10 @@ Ollama deployment、server version、Resolved Model Identityをprobeまたは再
 worksheet未生成から再開するときはFresh Processing reportをphase digestと照合し、
 selection artifactを
 Completed Stage manifest、artifact hash、semantic fingerprintで再検証する。
+この検証に合格すれば`worksheet_ready`が未確定でもmaterialize、Git dirty検査、target
+preflight、Ollama接続、model更新・解決、phase workloadを実行せずworksheetだけを復旧する。
+retained report、selected画像、selection artifact、candidate bindingのいずれかが欠落または
+改変されていれば、別の結果を作らず明示的に停止する。
 worksheet生成済みのhuman review待ちから再開するときも、Fresh Processing／Cache Reuse双方の
 canonical reportを
 phase確定時のfile hashと照合し、`report.md`の決定的projection、selected画像のpath、byte数、
@@ -277,9 +287,13 @@ uv run task acceptance-target \
 `parallelism-baseline`はfull suiteだけで利用できる。`cache-reuse`に必要なFresh Processingの
 cacheが既にない場合は、空cacheを再利用測定として扱わず`fresh-processing`を要求する。
 いずれもmaterialized inputとsuite間で共有するVideo Identity cacheは保持する。
-suite root、work、materialized inputのいずれかがsymbolic linkの場合は外部pathを辿らず、
-`--reset-suite`を要求する。削除対象にsymbolic link、不正なfile種別、削除失敗がある場合も
-stateを変更せず追加runを開始しない。`--reset-suite`との同時指定は拒否する。
+suite rootから各output、work、materialized input、processing cacheまでの既存階層を
+recursive deleteより前にすべて`lstat`し、symbolic link、通常directory以外、suite外参照を
+一つでも検出したら全削除対象を変更せず拒否する。このpreflightはmaterializeより前にも行うため、
+外部symlink先へ再生成fileを書き込まない。`--reset-run fresh-processing`、
+`--reset-suite`、Parallelism BaselineからFresh Processingへ移るcache解放に同じ境界を使う。
+symlink構成を安全な通常directoryへ戻すまで、reset種別を変えて処理を続けない。
+削除失敗時もstateを変更せず追加runを開始しない。`--reset-suite`との同時指定は拒否する。
 
 `--reset-suite`は選んだsuiteのstate、run output、worksheet、
 processing cacheを破棄する。release/full suiteの親にある共有Video Identity cacheは保持し、
