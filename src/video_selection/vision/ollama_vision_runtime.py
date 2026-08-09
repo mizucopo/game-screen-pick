@@ -5,9 +5,7 @@ import copy
 import hashlib
 import io
 import json
-import os
 import re
-import sys
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import CancelledError
@@ -18,7 +16,6 @@ from threading import Event
 from typing import Literal, TypeAlias, TypeVar, cast
 from urllib.error import HTTPError
 
-from jsonschema import Draft202012Validator
 from PIL import Image
 
 from ..model_runtime.ollama_model_store import OllamaModelStore
@@ -248,6 +245,12 @@ _COMBAT_VISIBILITY_VERIFICATION_KEYS = {
     "combat_interaction_visibility",
     "effect_overlaps_combatant_body",
     "effect_only_frame",
+}
+_COMBAT_VISIBILITY_RELATIONSHIP_VALIDATION_CODES = {
+    "combat_visibility_verification_opponent_framing_mismatch",
+    "combat_visibility_verification_opponent_presentation_mismatch",
+    "combat_visibility_verification_opponent_absent_interaction_mismatch",
+    "combat_visibility_verification_player_absent_direct_interaction",
 }
 _COMBAT_VISIBILITY_EDGE_NAMES = ("top", "bottom", "left", "right")
 _COMBAT_VISIBILITY_EDGE_OBSERVATION_KEYS = {
@@ -1042,13 +1045,6 @@ class OllamaVisionRuntime:
                     else decoded
                 )
             except VisionRuntimeError as error:
-                _emit_schema_debug_diagnostic(
-                    stage_kind=stage_kind,
-                    attempt=attempt,
-                    decoded=decoded,
-                    schema=attempt_payload.get("format"),
-                    error=error,
-                )
                 if (
                     stage_kind == "candidate_annotation"
                     and error.validation_code
@@ -1781,7 +1777,9 @@ def _with_repair_code(
             "context_relevanceがnoneまたはunavailableならsupporting_context_cue_idsは"
             "空配列、weakまたはstrongなら入力内IDを1件以上入れます。"
         )
-    if validation_code == "combat_visibility_verification_schema_invalid":
+    if validation_code == "combat_visibility_verification_schema_invalid" or (
+        validation_code in _COMBAT_VISIBILITY_RELATIONSHIP_VALIDATION_CODES
+    ):
         repair += (
             "\n戦闘可視性fieldの相関を再確認します。opponent_body_visibility=absent"
             "ならopponent_body_framingとopponent_presentationもabsent、"
@@ -1792,94 +1790,6 @@ def _with_repair_code(
         )
     messages[-1]["content"] = f"{content}\n{repair}"
     return copied
-
-
-def _emit_schema_debug_diagnostic(
-    *,
-    stage_kind: StageKind,
-    attempt: int,
-    decoded: Mapping[str, object] | None,
-    schema: object,
-    error: VisionRuntimeError,
-) -> None:
-    """明示的なdebug時だけraw値を含まないschema差分を標準errorへ出す。"""
-    if (
-        os.environ.get("GAME_SCREEN_PICK_SCHEMA_DEBUG") != "1"
-        or error.reason is not VisionRuntimeFailureReason.SCHEMA_INVALID
-    ):
-        return
-    if decoded is None:
-        print(
-            "[schema-debug] "
-            f"stage={stage_kind} attempt={attempt} "
-            f"validation_code={error.validation_code} result=decode_failed",
-            file=sys.stderr,
-            flush=True,
-        )
-        return
-    if not isinstance(schema, Mapping):
-        print(
-            "[schema-debug] "
-            f"stage={stage_kind} attempt={attempt} "
-            f"validation_code={error.validation_code} result=schema_unavailable",
-            file=sys.stderr,
-            flush=True,
-        )
-        return
-    try:
-        violations = sorted(
-            Draft202012Validator(schema).iter_errors(decoded),
-            key=lambda item: (
-                tuple(str(part) for part in item.absolute_path),
-                tuple(str(part) for part in item.absolute_schema_path),
-            ),
-        )
-    except Exception:  # noqa: BLE001
-        violations = []
-    if not violations:
-        result = (
-            "parser_only relation="
-            f"{_schema_debug_parser_relation(stage_kind, decoded)}"
-        )
-    else:
-        violation = violations[0]
-        instance_path = "/".join(str(part) for part in violation.absolute_path)
-        schema_path = "/".join(
-            str(part) for part in violation.absolute_schema_path
-        )
-        result = (
-            f"json_schema_invalid validator={violation.validator} "
-            f"instance_path=/{instance_path} schema_path=/{schema_path}"
-        )
-    print(
-        "[schema-debug] "
-        f"stage={stage_kind} attempt={attempt} "
-        f"validation_code={error.validation_code} result={result}",
-        file=sys.stderr,
-        flush=True,
-    )
-
-
-def _schema_debug_parser_relation(
-    stage_kind: StageKind,
-    decoded: Mapping[str, object],
-) -> str:
-    """raw値を出さず既知のparser相関違反だけを分類する。"""
-    if stage_kind != "combat_visibility_verification":
-        return "unclassified"
-    opponent_absent = decoded.get("opponent_body_visibility") == "absent"
-    if opponent_absent != (decoded.get("opponent_body_framing") == "absent"):
-        return "opponent_visibility_framing_mismatch"
-    if opponent_absent != (decoded.get("opponent_presentation") == "absent"):
-        return "opponent_visibility_presentation_mismatch"
-    if opponent_absent and decoded.get("combat_interaction_visibility") != "none":
-        return "opponent_absent_interaction_mismatch"
-    if (
-        decoded.get("player_body_visibility") == "absent"
-        and decoded.get("combat_interaction_visibility") == "direct"
-    ):
-        return "player_absent_direct_interaction"
-    return "unclassified"
 
 
 def _decode_content(
@@ -2198,16 +2108,6 @@ def _parse_combat_visibility_verification(
     combat_interaction_visibility = value.get("combat_interaction_visibility")
     effect_overlap = value.get("effect_overlaps_combatant_body")
     effect_only_frame = value.get("effect_only_frame")
-    opponent_body_is_absent = opponent_body_visibility == "absent"
-    opponent_signals_are_consistent = (
-        opponent_body_is_absent == (opponent_body_framing == "absent")
-        and opponent_body_is_absent == (opponent_presentation == "absent")
-        and (not opponent_body_is_absent or combat_interaction_visibility == "none")
-        and (
-            player_body_visibility != "absent"
-            or combat_interaction_visibility != "direct"
-        )
-    )
     if (
         effect_screen_coverage not in _EFFECT_SCREEN_COVERAGES
         or largest_foreground_element not in _LARGEST_FOREGROUND_ELEMENTS
@@ -2218,9 +2118,28 @@ def _parse_combat_visibility_verification(
         or combat_interaction_visibility not in _COMBAT_INTERACTION_VISIBILITIES
         or effect_overlap not in _EFFECT_COMBATANT_OVERLAPS
         or not isinstance(effect_only_frame, bool)
-        or not opponent_signals_are_consistent
     ):
         raise _schema_error("combat_visibility_verification_schema_invalid")
+    opponent_body_is_absent = opponent_body_visibility == "absent"
+    if opponent_body_is_absent != (opponent_body_framing == "absent"):
+        raise _schema_error(
+            "combat_visibility_verification_opponent_framing_mismatch"
+        )
+    if opponent_body_is_absent != (opponent_presentation == "absent"):
+        raise _schema_error(
+            "combat_visibility_verification_opponent_presentation_mismatch"
+        )
+    if opponent_body_is_absent and combat_interaction_visibility != "none":
+        raise _schema_error(
+            "combat_visibility_verification_opponent_absent_interaction_mismatch"
+        )
+    if (
+        player_body_visibility == "absent"
+        and combat_interaction_visibility == "direct"
+    ):
+        raise _schema_error(
+            "combat_visibility_verification_player_absent_direct_interaction"
+        )
     return (
         player_body_visibility,
         opponent_body_visibility,

@@ -3127,11 +3127,21 @@ def test_combat_encounter_schema_failure_is_retried() -> None:
 
 
 @pytest.mark.parametrize(
-    "invalid_response_kind",
-    ("missing_required_field", "contradictory_opponent_signals"),
+    ("invalid_response_kind", "expected_validation_code"),
+    (
+        (
+            "missing_required_field",
+            "combat_visibility_verification_schema_invalid",
+        ),
+        (
+            "contradictory_opponent_signals",
+            "combat_visibility_verification_opponent_presentation_mismatch",
+        ),
+    ),
 )
 def test_combat_visibility_schema_failure_is_retried(
     invalid_response_kind: str,
+    expected_validation_code: str,
 ) -> None:
     """戦闘可視性専用確認のschema違反が一回だけ再試行されること。
 
@@ -3202,12 +3212,10 @@ def test_combat_visibility_schema_failure_is_retried(
     # Assert
     assert annotation.explanation_value == "high"
     assert diagnostics.attempt_count == 6
-    assert (
-        diagnostics.validation_code == "combat_visibility_verification_schema_invalid"
-    )
+    assert diagnostics.validation_code == expected_validation_code
     third_prompt = _last_message(payloads[3])["content"]
     assert isinstance(third_prompt, str)
-    assert "combat_visibility_verification_schema_invalid" in third_prompt
+    assert expected_validation_code in third_prompt
     confirmation_prompt = _last_message(payloads[4])["content"]
     assert isinstance(confirmation_prompt, str)
     assert "掲載可否を確定する独立した再確認" in confirmation_prompt
@@ -3291,7 +3299,7 @@ def test_combat_visibility_retry_repairs_player_absent_direct_interaction() -> N
     assert annotation.explanation_value == "high"
     assert diagnostics.attempt_count == 6
     assert diagnostics.validation_code == (
-        "combat_visibility_verification_schema_invalid"
+        "combat_visibility_verification_player_absent_direct_interaction"
     )
     retry_prompt = _last_message(payloads[3])["content"]
     assert isinstance(retry_prompt, str)
