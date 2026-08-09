@@ -377,17 +377,53 @@ def test_abandoned_active_phase_is_recovered_without_reset(
     assert abandoned["stage_durations_seconds"] == {"scan-video": 3.0}
 
 
-def test_abandoned_warm_marker_recovers_only_warm_phase(
+@pytest.mark.parametrize(
+    (
+        "suite",
+        "step_kind",
+        "step_name",
+        "active_key",
+        "attempts_key",
+        "expected_calls",
+    ),
+    (
+        pytest.param(
+            "release",
+            "phase",
+            "warm",
+            "active_phase",
+            "phase_attempts",
+            ("cold", "warm", "warm"),
+            id="warm-phase",
+        ),
+        pytest.param(
+            "full",
+            "comparison",
+            "fixed3",
+            "active_comparison_run",
+            "comparison_run_attempts",
+            ("fixed3", "fixed3"),
+            id="fixed3-comparison",
+        ),
+    ),
+)
+def test_abandoned_marker_recovers_only_matching_run(
     tmp_path: Path,
+    suite: str,
+    step_kind: str,
+    step_name: str,
+    active_key: str,
+    attempts_key: str,
+    expected_calls: tuple[str, ...],
 ) -> None:
-    """process異常終了したwarmだけが再開されること。
+    """process異常終了したrunだけがmarker名どおり再開されること。
 
     Arrange:
-        - cold完了後にwarmの単一active markerとjournalが永続化される
+        - warmまたはfixed3の単一active markerとjournalが永続化される
     Act:
         - `--reset-suite`なしで同じsuiteが再実行される
     Assert:
-        - coldが再実行されずwarmだけがabandoned attemptから再開されること
+        - 他のrunへ戻らず一致するrunだけがabandoned attemptから再開されること
     """
     # Arrange
     profile_path = _profile(tmp_path)
@@ -400,90 +436,36 @@ def test_abandoned_warm_marker_recovers_only_warm_phase(
         _suite_root: Path,
     ) -> AcceptanceRunAttemptExecutionResult:
         calls.append(run_name)
-        if run_name == "warm":
-            return 130, _interrupted_run_attempt(run_name), None, None
-        return _successful_run_attempt(configuration, run_name)
-
-    runner = _runner(execute)
-    assert runner.run(profile_path=profile_path, suite="release") == 130
-    suite_root = tmp_path / "artifacts" / "target-acceptance" / "release"
-    _persist_active_attempt(
-        suite_root,
-        step_kind="phase",
-        step_name="warm",
-    )
-
-    # Act
-    resumed = runner.run(profile_path=profile_path, suite="release")
-
-    # Assert
-    assert resumed == 130
-    assert calls == ["cold", "warm", "warm"]
-    state = read_json_object(suite_root / "acceptance-state.json")
-    assert state is not None
-    assert state.get("active_phase") is None
-    phase_attempts = state["phase_attempts"]
-    assert isinstance(phase_attempts, dict)
-    warm_attempts = phase_attempts["warm"]
-    assert isinstance(warm_attempts, list)
-    assert any(
-        isinstance(attempt, dict)
-        and attempt.get("failure_reason") == "process_abandoned"
-        for attempt in warm_attempts
-    )
-
-
-def test_abandoned_comparison_marker_recovers_only_comparison_run(
-    tmp_path: Path,
-) -> None:
-    """process異常終了したcomparison runだけが再開されること。
-
-    Arrange:
-        - fixed3の単一active markerとjournalがfull suiteへ永続化される
-    Act:
-        - `--reset-suite`なしで同じsuiteが再実行される
-    Assert:
-        - phaseへ進まずfixed3だけがabandoned attemptから再開されること
-    """
-    # Arrange
-    profile_path = _profile(tmp_path)
-    calls: list[str] = []
-
-    def execute(
-        run_name: str,
-        _configuration: EffectiveConfiguration,
-        _models: ResolvedModels,
-        _suite_root: Path,
-    ) -> AcceptanceRunAttemptExecutionResult:
-        calls.append(run_name)
+        if step_name == "warm" and run_name == "cold":
+            return _successful_run_attempt(configuration, run_name)
         return 130, _interrupted_run_attempt(run_name), None, None
 
     runner = _runner(execute)
-    assert runner.run(profile_path=profile_path, suite="full") == 130
-    suite_root = tmp_path / "artifacts" / "target-acceptance" / "full"
+    assert runner.run(profile_path=profile_path, suite=suite) == 130
+    suite_root = tmp_path / "artifacts" / "target-acceptance" / suite
     _persist_active_attempt(
         suite_root,
-        step_kind="comparison",
-        step_name="fixed3",
+        step_kind=step_kind,
+        step_name=step_name,
     )
 
     # Act
-    resumed = runner.run(profile_path=profile_path, suite="full")
+    resumed = runner.run(profile_path=profile_path, suite=suite)
 
     # Assert
     assert resumed == 130
-    assert calls == ["fixed3", "fixed3"]
+    assert calls == list(expected_calls)
     state = read_json_object(suite_root / "acceptance-state.json")
     assert state is not None
-    assert state.get("active_comparison_run") is None
-    comparison_attempts = state["comparison_run_attempts"]
-    assert isinstance(comparison_attempts, dict)
-    fixed_three_attempts = comparison_attempts["fixed3"]
-    assert isinstance(fixed_three_attempts, list)
+    assert state.get(active_key) is None
+    attempts_by_name = state[attempts_key]
+    assert isinstance(attempts_by_name, dict)
+    attempts = attempts_by_name[step_name]
+    assert isinstance(attempts, list)
     assert any(
         isinstance(attempt, dict)
         and attempt.get("failure_reason") == "process_abandoned"
-        for attempt in fixed_three_attempts
+        for attempt in attempts
     )
 
 
