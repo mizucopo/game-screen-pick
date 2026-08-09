@@ -243,6 +243,7 @@ class TargetSuiteRunner:
         if not _is_sha256(materialization_source_snapshot):
             raise ValueError("Suite source snapshot fingerprintがありません")
         if state is not None:
+            _resolve_active_step(state, execution_steps)
             if "materialization_source_snapshot_fingerprint" not in state:
                 state["materialization_source_snapshot_fingerprint"] = (
                     materialization_source_snapshot

@@ -531,10 +531,10 @@ def test_simultaneous_active_markers_are_rejected_without_mutation(
 def test_unknown_active_marker_is_rejected_without_mutation(
     tmp_path: Path,
 ) -> None:
-    """実行planに存在しないactive markerが変更されず拒否されること。
+    """旧stateの未知active markerがmigrationされず拒否されること。
 
     Arrange:
-        - 未知のphase名を持つactive stateとjournalが永続化される
+        - source fingerprintがない旧stateへ未知phase markerとjournalが永続化される
     Act:
         - `--reset-suite`なしで同じrelease suiteが再実行される
     Assert:
@@ -566,6 +566,7 @@ def test_unknown_active_marker_is_rejected_without_mutation(
     state = read_json_object(state_path)
     assert state is not None
     state["active_phase"] = "unknown"
+    state.pop("materialization_source_snapshot_fingerprint")
     write_atomic_json(state_path, state)
     state_before = state_path.read_bytes()
     journal_before = journal_path.read_bytes()
