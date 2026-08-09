@@ -246,7 +246,8 @@ _COMBAT_VISIBILITY_VERIFICATION_KEYS = {
     "effect_overlaps_combatant_body",
     "effect_only_frame",
 }
-_COMBAT_VISIBILITY_RELATIONSHIP_VALIDATION_CODES = {
+_COMBAT_VISIBILITY_RETRY_VALIDATION_CODES = {
+    "combat_visibility_verification_schema_invalid",
     "combat_visibility_verification_opponent_framing_mismatch",
     "combat_visibility_verification_opponent_presentation_mismatch",
     "combat_visibility_verification_opponent_absent_interaction_mismatch",
@@ -1777,9 +1778,7 @@ def _with_repair_code(
             "context_relevanceがnoneまたはunavailableならsupporting_context_cue_idsは"
             "空配列、weakまたはstrongなら入力内IDを1件以上入れます。"
         )
-    if validation_code == "combat_visibility_verification_schema_invalid" or (
-        validation_code in _COMBAT_VISIBILITY_RELATIONSHIP_VALIDATION_CODES
-    ):
+    if validation_code in _COMBAT_VISIBILITY_RETRY_VALIDATION_CODES:
         repair += (
             "\n戦闘可視性fieldの相関を再確認します。opponent_body_visibility=absent"
             "ならopponent_body_framingとopponent_presentationもabsent、"
