@@ -1073,17 +1073,11 @@ class OllamaVisionRuntime:
                         error = draft_error
                 conservative_repair = (
                     _repair_repeated_combat_visibility_correlation(
-                        decoded,
-                        error.validation_code,
+                        stage_kind=stage_kind,
+                        attempt=attempt,
+                        decoded=decoded,
+                        validation_code=error.validation_code,
                     )
-                    if attempt >= 2
-                    and stage_kind
-                    in {
-                        "combat_visibility_verification",
-                        "combat_visibility_confirmation",
-                    }
-                    and decoded is not None
-                    else None
                 )
                 if conservative_repair is not None:
                     value = parser(conservative_repair)
@@ -1813,11 +1807,23 @@ def _with_repair_code(
 
 
 def _repair_repeated_combat_visibility_correlation(
-    decoded: Mapping[str, object],
+    *,
+    stage_kind: StageKind,
+    attempt: int,
+    decoded: Mapping[str, object] | None,
     validation_code: str | None,
 ) -> Mapping[str, object] | None:
     """再観測後も残るplayer不在と直接戦闘の矛盾だけを安全側へ修復する。"""
-    if validation_code != _PLAYER_ABSENT_DIRECT_INTERACTION_VALIDATION_CODE:
+    if (
+        attempt < 2
+        or stage_kind
+        not in {
+            "combat_visibility_verification",
+            "combat_visibility_confirmation",
+        }
+        or decoded is None
+        or validation_code != _PLAYER_ABSENT_DIRECT_INTERACTION_VALIDATION_CODE
+    ):
         return None
     repaired = dict(decoded)
     repaired["combat_interaction_visibility"] = "none"
