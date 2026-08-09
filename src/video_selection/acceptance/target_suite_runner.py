@@ -1376,9 +1376,7 @@ def _recover_abandoned_attempt(
 ) -> None:
     """process終了で残ったactive markerを保守的なattemptへ閉じる。"""
     active_markers = {
-        key: state[key]
-        for key in _ACTIVE_RUN_STATE_KEYS
-        if state.get(key) is not None
+        key: state[key] for key in _ACTIVE_RUN_STATE_KEYS if state.get(key) is not None
     }
     if not active_markers:
         return

@@ -3285,7 +3285,9 @@ def _persist_active_attempt(
     state_path = suite_root / "acceptance-state.json"
     state = read_json_object(state_path)
     assert state is not None
-    attempts_key = "phase_attempts" if step_kind == "phase" else "comparison_run_attempts"
+    attempts_key = (
+        "phase_attempts" if step_kind == "phase" else "comparison_run_attempts"
+    )
     attempts_by_name = state[attempts_key]
     assert isinstance(attempts_by_name, dict)
     attempts = attempts_by_name[step_name]
