@@ -55,7 +55,7 @@ COMBAT_ENCOUNTER_CONFIRMATION_STAGE_CONTRACT_VERSION = (
     "combat-encounter-confirmation-stage-v3"
 )
 COMBAT_VISIBILITY_VERIFICATION_PROMPT_VERSION = (
-    "combat-visibility-verification-prompt-v4"
+    "combat-visibility-verification-prompt-v5"
 )
 COMBAT_VISIBILITY_VERIFICATION_SCHEMA_VERSION = (
     "combat-visibility-verification-schema-v3"
@@ -64,7 +64,7 @@ COMBAT_VISIBILITY_VERIFICATION_STAGE_CONTRACT_VERSION = (
     "combat-visibility-verification-stage-v4"
 )
 COMBAT_VISIBILITY_CONFIRMATION_PROMPT_VERSION = (
-    "combat-visibility-confirmation-prompt-v3"
+    "combat-visibility-confirmation-prompt-v4"
 )
 COMBAT_VISIBILITY_CONFIRMATION_STAGE_CONTRACT_VERSION = (
     "combat-visibility-confirmation-stage-v3"
