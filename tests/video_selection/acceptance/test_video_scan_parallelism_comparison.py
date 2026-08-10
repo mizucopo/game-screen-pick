@@ -83,6 +83,91 @@ def test_different_execution_contexts_fail_the_comparison() -> None:
     assert comparison["passed"] is False
 
 
+def test_commit_change_preserves_the_comparison_context() -> None:
+    """commitだけが異なる再開attemptが同じ比較条件として扱われること。
+
+    Arrange:
+        - 設定、model、targetが同じでsource commitだけが異なるrunが用意される
+    Act:
+        - Video Scan parallelism比較が構築される
+    Assert:
+        - execution context gateと比較全体が合格されること
+    """
+    # Arrange
+    fixed = _run_record(
+        workers=3,
+        mode="fixed",
+        wall_seconds=120.0,
+        artifact_digest="a" * 64,
+    )
+    automatic = _run_record(
+        workers=6,
+        mode="auto",
+        wall_seconds=80.0,
+        artifact_digest="a" * 64,
+    )
+    automatic["execution_context"] = _execution_context(commit="e" * 40)
+
+    # Act
+    comparison = build_video_scan_parallelism_comparison(fixed, automatic)
+
+    # Assert
+    gates = comparison["gates"]
+    assert isinstance(gates, dict)
+    assert gates["execution_context_equal"] is True
+    assert comparison["passed"] is True
+
+
+@pytest.mark.parametrize(
+    "identity_key",
+    (
+        "configuration_digest",
+        "effective_configuration_digest",
+        "ollama_endpoint_identity",
+        "model_identity_digest",
+    ),
+)
+def test_comparison_identity_change_breaks_the_comparison(
+    identity_key: str,
+) -> None:
+    """比較対象identityが異なるrunが比較不能にされること。
+
+    Arrange:
+        - targetとcommitが同じで比較対象identityだけが異なるrunが用意される
+    Act:
+        - Video Scan parallelism比較が構築される
+    Assert:
+        - execution context gateと比較全体が不合格にされること
+    """
+    # Arrange
+    fixed = _run_record(
+        workers=3,
+        mode="fixed",
+        wall_seconds=120.0,
+        artifact_digest="a" * 64,
+    )
+    automatic = _run_record(
+        workers=6,
+        mode="auto",
+        wall_seconds=80.0,
+        artifact_digest="a" * 64,
+    )
+    changed_context = _execution_context()
+    changed_identity = changed_context["identity"]
+    assert isinstance(changed_identity, dict)
+    changed_identity[identity_key] = "e" * 64
+    automatic["execution_context"] = changed_context
+
+    # Act
+    comparison = build_video_scan_parallelism_comparison(fixed, automatic)
+
+    # Assert
+    gates = comparison["gates"]
+    assert isinstance(gates, dict)
+    assert gates["execution_context_equal"] is False
+    assert comparison["passed"] is False
+
+
 @pytest.mark.parametrize(
     ("automatic_change", "failed_gate"),
     [
@@ -235,16 +320,21 @@ def _run_record(
     }
 
 
-def _execution_context(*, cpu: str = "stable") -> dict[str, object]:
+def _execution_context(
+    *,
+    cpu: str = "stable",
+    commit: str = "d" * 40,
+) -> dict[str, object]:
     """比較test用のprivacy-safe execution contextを返す。"""
     return {
         "identity": {
+            "configuration_digest": "f" * 64,
             "effective_configuration_digest": "a" * 64,
             "ollama_endpoint_identity": "b" * 64,
             "model_identity_digest": "c" * 64,
-            "commit": "d" * 40,
+            "commit": commit,
         },
-        "source_revision": {"commit": "d" * 40, "dirty": False},
+        "source_revision": {"commit": commit, "dirty": False},
         "target": {
             "cpu": cpu,
             "logical_cpu_count": 24,

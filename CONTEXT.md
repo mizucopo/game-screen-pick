@@ -93,7 +93,7 @@ _Avoid_: path文字列prefix検査, targetだけのsymlink検査, path検証とp
 _Avoid_: Canonical Selection Report, runtime log, baseline snapshot, raw benchmark output
 
 **Acceptance Run**:
-Acceptance PhaseまたはAcceptance Comparison Runを総称する論理的な完了・集約単位。一つ以上のAcceptance Run Attemptを持ち、再開をまたぐ全試行を集約して完了recordと予算判定を確定する。
+Acceptance PhaseまたはAcceptance Comparison Runを総称する論理的な完了・集約単位。一つ以上のAcceptance Run Attemptを持ち、commitだけが変わる再開を含む全試行を集約して完了recordと予算判定を確定する。
 _Avoid_: Acceptance Run Attempt, one process lifetime, Processing Stage, production run
 
 **Acceptance Phase**:
@@ -109,11 +109,11 @@ target acceptanceの論理runと、その結果に依存する後続runだけを
 _Avoid_: suite全体reset, Processing Stage reset, cache migration, automatic Stage invalidation
 
 **Video Scan Comparison Context**:
-Parallelism BaselineとFresh Processingのwall timeを同一条件の証拠として比較するために共有する、source revision・実効設定/model identity・target runtimeを正規化したprivacy-safe identity。bootごとのvisible RAM差は含めず、両runの全attemptで一致するものだけを同一比較として扱う。
+Parallelism BaselineとFresh Processingのwall timeを同一条件の証拠として比較するために共有する、実効設定/model/endpoint identity・target runtimeを正規化したprivacy-safe identity。bootごとのvisible RAM差とsource commitは含めず、両runの全attemptで一致するものだけを同一比較として扱う。source commitは各attemptのprovenanceへ完全な値で残し、commitだけが変わる再開ではそれ以前のattemptも同じ論理runへ累積する。
 _Avoid_: Acceptance Run execution context, raw host snapshot, Stage artifact digest
 
 **Acceptance Run Attempt**:
-一つのAcceptance PhaseまたはAcceptance Comparison Runについて、開始から正常終了、中断、またはoperation failureまで連続して計測された実行区間。Completed Stageを再利用してrunを再開しても、それ以前のattemptを性能証拠から除外しない。process強制終了時もactive markerとAcceptance Attempt Journalから`process_abandoned`として閉じる。
+一つのAcceptance PhaseまたはAcceptance Comparison Runについて、開始から正常終了、中断、またはoperation failureまで連続して計測された実行区間。Completed Stageを再利用してrunを再開しても、source commitの変更を含むそれ以前のattemptを性能証拠から除外しない。process強制終了時もactive markerとAcceptance Attempt Journalから`process_abandoned`として閉じる。
 _Avoid_: Acceptance Run, Acceptance Phase, Acceptance Comparison Run, retry inside model inference, Processing Stage
 
 **Acceptance Attempt Journal**:
