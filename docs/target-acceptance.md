@@ -187,9 +187,12 @@ Video Scan Comparison Contextが変わった場合だけ、旧Parallelism Baseli
 processing cacheを
 破棄してParallelism Baselineを現在contextで再測定する。共有Video Identity cacheは保持する。
 
-Video Scan Comparison Contextはsource revision、実効configuration/model/endpoint identity、
-target runtimeから作り、boot単位で微小に変わるvisible RAMは除外する。Parallelism Baselineと
-Fresh Processingの全attemptが同じcontextの場合だけwall time改善gateを評価する。
+Video Scan Comparison Contextは実効configuration/model/endpoint identityとtarget runtimeから
+作り、boot単位で微小に変わるvisible RAMとsource commitは除外する。source commitは各attemptと
+最終Acceptance Recordのprovenanceへ完全な値で残すが、commitだけが変わる再開では
+Parallelism Baselineを再測定せず、それ以前を含む全attemptの時間、作業量、resource peakを
+同じ論理runへ累積する。Parallelism BaselineとFresh Processingの全attemptが同じcontextの場合だけ
+wall time改善gateを評価し、両runのStage artifact content digest一致も引き続き要求する。
 Fresh Processingが一度でも開始された
 後にcontextが変わった場合は、新旧環境の性能証拠を混在させず、追加runを始める前に
 `--reset-run parallelism-baseline`を要求する。
@@ -253,8 +256,9 @@ kill後も残ったVideo Identity、Durable Work Unit、Completed Stage manifest
 phaseとcomparisonが同時にactiveな場合、または保存run名がplanに存在しない場合は、
 attempt、state、journalを推測で変更せずfail-fastする。
 
-identityを変えた場合や意図的に特定runからやり直す場合だけ、対象runまたはsuiteを
-明示的にresetする。
+比較対象となる実効configuration/model/endpoint identityまたはtarget runtimeを変えた場合や、
+意図的に特定runからやり直す場合だけ、対象runまたはsuiteを明示的にresetする。source commitだけの
+変更ではresetせず、StageとDurable Work Unitそれぞれのfingerprintで再利用可否を判定する。
 
 ```bash
 uv run task acceptance-target \

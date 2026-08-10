@@ -1957,6 +1957,119 @@ def test_interrupted_auto_cold_preserves_cache_after_fixed_three_release(
     assert state["fixed3_cache_released"] is True
 
 
+def test_full_suite_resumes_failed_fixed_three_after_commit_change(
+    tmp_path: Path,
+) -> None:
+    """commit変更後も未完了fixed3がcheckpointから再開されること。
+
+    Arrange:
+        - 旧commitでfixed3が失敗しprocessing cacheへpartitionが確定される
+        - 同じsuite、設定、model、targetのままsource commitだけが変更される
+    Act:
+        - full suiteが新commitから再開される
+    Assert:
+        - 確定済みpartitionが保持されfixed3、cold、warmが完了されること
+        - fixed3の全attempt時間が性能証拠へ累積されること
+    """
+    # Arrange
+    profile_path = _profile(tmp_path)
+    revision = {"commit": "a" * 40}
+    calls: list[tuple[str, str | int]] = []
+    fixed_three_failed = False
+    partition_reused = False
+
+    def execute(
+        run_name: str,
+        configuration: EffectiveConfiguration,
+        _models: ResolvedModels,
+        _suite_root: Path,
+    ) -> AcceptanceRunAttemptExecutionResult:
+        nonlocal fixed_three_failed, partition_reused
+        calls.append((run_name, configuration.video_scan_workers))
+        fixed_three = configuration.video_scan_workers == 3
+        partition_marker = configuration.processing_cache_folder / "preserved-partition"
+        if fixed_three and not fixed_three_failed:
+            fixed_three_failed = True
+            partition_marker.parent.mkdir(parents=True, exist_ok=True)
+            partition_marker.write_text("completed", encoding="utf-8")
+            failed = _interrupted_run_attempt(run_name)
+            failed.update(
+                {
+                    "failure_reason": "decoder_failure",
+                    "failure_exit_code": 1,
+                    "video_scan_parallelism": {
+                        "mode": "fixed",
+                        "configured_workers": 3,
+                        "decode_backend": "nvdec",
+                        "auto_max_workers": 6,
+                        "initial_workers": 3,
+                        "final_workers": 3,
+                        "peak_workers": 3,
+                        "completed_scans": 0,
+                        "scan_wall_seconds": 20.0,
+                        "changes": [],
+                    },
+                }
+            )
+            return 1, failed, None, None
+        if fixed_three:
+            partition_reused = (
+                partition_marker.read_text(encoding="utf-8") == "completed"
+            )
+        result = _successful_run_attempt(configuration, run_name)
+        record = result[1]
+        workers = 3 if fixed_three else 6
+        record["video_scan_parallelism"] = {
+            "mode": "fixed" if fixed_three else "auto",
+            "configured_workers": 3 if fixed_three else "auto",
+            "decode_backend": "nvdec",
+            "auto_max_workers": 6,
+            "initial_workers": 3,
+            "final_workers": workers,
+            "peak_workers": workers,
+            "completed_scans": 1,
+            "scan_wall_seconds": 120.0 if fixed_three else 80.0,
+            "changes": [],
+        }
+        record["stage_artifact_content_digest"] = "8" * 64
+        return result
+
+    runner = _runner(
+        execute,
+        revision_probe=lambda _path: (revision["commit"], False),
+    )
+    failed = runner.run(profile_path=profile_path, suite="full")
+    revision["commit"] = "b" * 40
+
+    # Act
+    resumed = runner.run(profile_path=profile_path, suite="full")
+
+    # Assert
+    state = read_json_object(
+        tmp_path / "artifacts" / "target-acceptance" / "full" / "acceptance-state.json"
+    )
+    assert failed == 1
+    assert resumed == 3
+    assert partition_reused is True
+    assert calls == [
+        ("fixed3", 3),
+        ("fixed3", 3),
+        ("cold", "auto"),
+        ("warm", "auto"),
+    ]
+    assert state is not None
+    comparison_runs = state["comparison_runs"]
+    assert isinstance(comparison_runs, dict)
+    fixed_three = comparison_runs["fixed3"]
+    assert isinstance(fixed_three, dict)
+    assert fixed_three["attempt_count"] == 2
+    assert fixed_three["duration_seconds"] == 14.0
+    assert fixed_three["cache_hit_count"] == 1
+    assert fixed_three["cache_miss_count"] == 2
+    assert fixed_three["completed_stage_counts"] == {"scan-video": 2}
+    assert state["fixed3_cache_released"] is True
+
+
 def test_full_suite_remeasures_fixed_three_after_context_change_before_auto_cold(
     tmp_path: Path,
 ) -> None:

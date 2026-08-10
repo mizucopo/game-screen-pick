@@ -11,7 +11,6 @@ _COMPARISON_IDENTITY_KEYS = (
     "effective_configuration_digest",
     "ollama_endpoint_identity",
     "model_identity_digest",
-    "commit",
 )
 
 
@@ -156,17 +155,12 @@ def _video_scan_comparison_context(
         execution_context.get("identity"),
         "execution context identity",
     )
-    source_revision = _mapping(
-        execution_context.get("source_revision"),
-        "execution context source_revision",
-    )
     target = _mapping(
         execution_context.get("target"),
         "execution context target",
     )
     return {
         "identity": {key: identity.get(key) for key in _COMPARISON_IDENTITY_KEYS},
-        "source_revision": source_revision,
         "target": {
             key: value for key, value in target.items() if key != "visible_ram_bytes"
         },
