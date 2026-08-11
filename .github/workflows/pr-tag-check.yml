@@ -19,8 +19,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Detect Dependabot update
+        id: dependabot
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$PR_AUTHOR" = "dependabot[bot]" ]; then
+            echo "is_dependabot=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_dependabot=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Read version
         id: version
+        if: steps.dependabot.outputs.is_dependabot != 'true'
         continue-on-error: true
         run: |
           VERSION="$(awk -F'\"' '/^version *=/ {print $2}' pyproject.toml)"
@@ -31,7 +44,7 @@ jobs:
 
       - name: Check if tag exists
         id: tag
-        if: steps.version.outcome == 'success'
+        if: steps.dependabot.outputs.is_dependabot != 'true' && steps.version.outcome == 'success'
         continue-on-error: true
         run: |
           git fetch --tags
@@ -47,7 +60,14 @@ jobs:
         run: |
           TAG_CHECK_COMPLETED="false"
           VERSION_SOURCE_VALIDATION_FAILED="false"
-          if [ "${{ steps.version.outcome }}" != "success" ]; then
+          if [ "${{ steps.dependabot.outputs.is_dependabot }}" = "true" ]; then
+            TAG_CHECK_COMPLETED="true"
+            cat > tag_report.md <<'EOF'
+          ## Version Tag Check ⏭️
+
+          Dependabot dependency updates do not change the project version, so the version tag check was skipped.
+          EOF
+          elif [ "${{ steps.version.outcome }}" != "success" ]; then
             VERSION_ERROR="The version could not be read, so tag availability was not checked."
             if [ -f version_check_error.txt ]; then
               VERSION_ERROR="$(< version_check_error.txt)"
@@ -102,16 +122,21 @@ jobs:
           TAG_EXISTS: ${{ steps.tag.outputs.exists }}
           TAG_CHECK_COMPLETED: ${{ steps.tag-report.outputs.tag_check_completed }}
           VERSION_SOURCE_VALIDATION_FAILED: ${{ steps.tag-report.outputs.version_source_validation_failed }}
+          IS_DEPENDABOT: ${{ steps.dependabot.outputs.is_dependabot }}
         with:
           script: |
             const tagExists = process.env.TAG_EXISTS === "true";
             const tagCheckCompleted = process.env.TAG_CHECK_COMPLETED === "true";
             const versionSourceValidationFailed =
               process.env.VERSION_SOURCE_VALIDATION_FAILED === "true";
+            const isDependabot = process.env.IS_DEPENDABOT === "true";
 
             let checkConclusion = "neutral";
             let checkTitle = "Version tag is available";
-            if (versionSourceValidationFailed) {
+            if (isDependabot) {
+              checkConclusion = "success";
+              checkTitle = "Version tag check skipped for Dependabot";
+            } else if (versionSourceValidationFailed) {
               checkConclusion = "failure";
               checkTitle = "Chrome extension version source validation failed";
             } else if (tagCheckCompleted && !tagExists) {
@@ -137,5 +162,5 @@ jobs:
             });
 
       - name: Fail if tag exists
-        if: steps.tag.outputs.exists == 'true'
+        if: steps.tag.outputs.exists == 'true' && steps.dependabot.outputs.is_dependabot != 'true'
         run: exit 1
