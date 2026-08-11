@@ -1005,6 +1005,28 @@ class OllamaVisionRuntime:
         previous_validation_code: str | None = None
         repair_code: str | None = None
         candidate_relationship_draft: Mapping[str, object] | None = None
+
+        def retry_candidate_dialogue_validation(
+            error: VisionRuntimeError,
+            attempt: int,
+        ) -> bool:
+            """画面内台詞の専用validationを追加の視覚確認へ渡す。"""
+            nonlocal previous_validation_code
+            nonlocal repair_code
+            nonlocal candidate_relationship_draft
+            if (
+                stage_kind != "candidate_annotation"
+                or error.validation_code
+                != "candidate_annotation_dialogue_visibility_unverified"
+                or attempt >= 3
+            ):
+                return False
+            previous_validation_code = error.validation_code
+            candidate_relationship_draft = None
+            repair_code = _repair_validation_code(error)
+            self._sleep_before_retry(error.retry_after_seconds, stage_kind)
+            return True
+
         for attempt in (1, 2, 3):
             if stage_kind != "scene_catalog":
                 self._require_candidate_annotation_active()
@@ -1049,16 +1071,7 @@ class OllamaVisionRuntime:
                     else decoded
                 )
             except VisionRuntimeError as error:
-                if (
-                    stage_kind == "candidate_annotation"
-                    and error.validation_code
-                    == "candidate_annotation_dialogue_visibility_unverified"
-                    and attempt < 3
-                ):
-                    previous_validation_code = error.validation_code
-                    candidate_relationship_draft = None
-                    repair_code = _repair_validation_code(error)
-                    self._sleep_before_retry(error.retry_after_seconds, stage_kind)
+                if retry_candidate_dialogue_validation(error, attempt):
                     continue
                 if relationship_repair:
                     error = _relationship_repair_error(error)
@@ -1091,6 +1104,11 @@ class OllamaVisionRuntime:
                     try:
                         value = parser(conservative_repair)
                     except VisionRuntimeError as repaired_error:
+                        if retry_candidate_dialogue_validation(
+                            repaired_error,
+                            attempt,
+                        ):
+                            continue
                         error = repaired_error
                         conservative_repair = None
                     else:
