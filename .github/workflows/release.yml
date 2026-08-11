@@ -9,54 +9,177 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Read version
         id: version
         run: |
-          echo "version=$(awk -F'\"' '/^version *=/ {print $2}' pyproject.toml)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
 
-      - name: Read git author
-        id: author
-        run: |
-          echo "name=$(git log -1 --format=%an)" >> "$GITHUB_OUTPUT"
-          echo "email=$(git log -1 --format=%ae)" >> "$GITHUB_OUTPUT"
+          fail_version() {
+            printf '%s\n' "$1" > version_check_error.txt
+            echo "::error::$1"
+            exit 1
+          }
 
-      - name: Configure Git
-        run: |
-          git config user.name "${{ steps.author.outputs.name }}"
-          git config user.email "${{ steps.author.outputs.email }}"
 
-      - name: Check if tag exists
-        id: tag
-        run: |
-          git fetch --tags
-          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Version ${{ steps.version.outputs.version }} already exists; release creation is skipped." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+          VERSION_RAW="$(awk -F'\"' '/^version *=/ {print $2}' pyproject.toml)"
+
+
+          case "$VERSION_RAW" in
+            *$'\n'*)
+              fail_version "version must contain exactly one line."
+              ;;
+          esac
+
+          VERSION="$(
+            printf '%s' "$VERSION_RAW" \
+              | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+          )"
+
+          if [ -z "$VERSION" ]; then
+            fail_version "version must not be empty."
           fi
 
-      - name: Create and push git tag
-        if: steps.tag.outputs.exists != 'true'
+
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+            fail_version "version contains characters that are not valid for this release tag."
+          fi
+
+
+          if ! git check-ref-format "refs/tags/$VERSION"; then
+            fail_version "version is not a valid git tag."
+          fi
+
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+
+
+
+      - name: Inspect release state
+        id: release-state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.version }}
         run: |
-          git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
-          git push origin "${{ steps.version.outputs.version }}"
+          set -euo pipefail
+
+          git fetch --force --tags
+
+          HEAD_SHA="$(git rev-parse HEAD)"
+          tag_exists=false
+          release_exists=false
+          release_asset_exists=false
+
+          if git show-ref --tags --verify --quiet "refs/tags/$TAG"; then
+            TAG_SHA="$(git rev-list -n 1 "refs/tags/$TAG")"
+            if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+              echo "::error::Tag $TAG already points to $TAG_SHA, not $HEAD_SHA."
+              exit 1
+            fi
+            tag_exists=true
+          fi
+
+          RELEASE_RESPONSE="$(mktemp)"
+          trap 'rm -f "$RELEASE_RESPONSE"' EXIT
+
+          set +e
+          RELEASE_HTTP_STATUS="$(
+            curl --silent --show-error --location \
+              --output "$RELEASE_RESPONSE" \
+              --write-out '%{http_code}' \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$TAG"
+          )"
+          CURL_STATUS=$?
+          set -e
+
+          if [ "$CURL_STATUS" -ne 0 ]; then
+            echo "::error::Could not inspect GitHub Release $TAG."
+            exit "$CURL_STATUS"
+          fi
+
+          case "$RELEASE_HTTP_STATUS" in
+            200)
+              release_exists=true
+              ;;
+            404)
+              ;;
+            *)
+              echo "::error::Could not inspect GitHub Release $TAG: HTTP $RELEASE_HTTP_STATUS."
+              exit 1
+              ;;
+          esac
+
+          if [ "$release_exists" = "true" ] && [ "$tag_exists" != "true" ]; then
+            echo "::error::GitHub Release $TAG exists, but the matching git tag was not found."
+            exit 1
+          fi
+
+          if [ "$release_exists" = "true" ] && [ -n "${RELEASE_ASSET_NAME:-}" ]; then
+            if ! release_asset_exists="$(
+              jq -r --arg name "$RELEASE_ASSET_NAME" \
+                'any(.assets[]?; .name == $name)' \
+                "$RELEASE_RESPONSE"
+            )"; then
+              echo "::error::Could not inspect assets for GitHub Release $TAG."
+              exit 1
+            fi
+            case "$release_asset_exists" in
+              true|false) ;;
+              *)
+                echo "::error::GitHub Release $TAG returned an invalid asset state."
+                exit 1
+                ;;
+            esac
+          fi
+
+          {
+            echo "tag_exists=$tag_exists"
+            echo "release_exists=$release_exists"
+            echo "release_asset_exists=$release_asset_exists"
+          } >> "$GITHUB_OUTPUT"
+
+
+
+      - name: Configure Git
+        if: steps.release-state.outputs.tag_exists != 'true'
+        env:
+          GIT_USER_NAME: "\u307f\u305a"
+          GIT_USER_EMAIL: "mizu.copo@gmail.com"
+        run: |
+          git config user.name "$GIT_USER_NAME"
+          git config user.email "$GIT_USER_EMAIL"
+
+      - name: Create version tag
+        if: steps.release-state.outputs.tag_exists != 'true'
+        env:
+          TAG: ${{ steps.version.outputs.version }}
+        run: |
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "refs/tags/$TAG"
 
       - name: Create GitHub Release
-        if: steps.tag.outputs.exists != 'true'
+        if: steps.release-state.outputs.release_exists != 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "${{ steps.version.outputs.version }}" \
-            --title "Release ${{ steps.version.outputs.version }}" \
+          gh release create "$TAG" \
+            --title "Release $TAG" \
             --notes "## Links:
 
-          - [Source Code](${{ github.server_url }}/${{ github.repository }}/tree/${{ steps.version.outputs.version }})
+          - [Source Code](${{ github.server_url }}/${{ github.repository }}/tree/$TAG)
           "
