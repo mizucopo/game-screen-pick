@@ -1702,6 +1702,80 @@ def test_candidate_combat_duplicate_repair_preserves_dialogue_recheck() -> None:
     assert len(payloads) == 3
 
 
+def test_dialogue_recheck_combat_trait_duplicates_are_deduplicated() -> None:
+    """画面内台詞の再確認応答に残る重複特徴が決定的に一意化されること。
+
+    Arrange:
+        - 初回は画面内台詞の独立再確認が必要な応答が用意される
+        - 2回目は台詞なしだが有限enum特徴だけが重複した応答が用意される
+    Act:
+        - 公開Vision RuntimeでCandidate Annotationが実行される
+    Assert:
+        - 再確認結果を保ったまま特徴だけが入力順で一意化されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (("frame-a", "exploration", "event_dialogue", "high", "dialogue"),)
+        )
+        observation = _first_frame_observation(response)
+        visible = len(payloads) == 1
+        observation.update(
+            {
+                "cinematic_event_presentation": True,
+                "on_screen_dialogue_text_visible": visible,
+                "dialogue_text_presentation": ("dialogue_box" if visible else "none"),
+                "combat_subject_evidence": {
+                    "body_plan": "unknown",
+                    "scale": "unknown",
+                    "surface": "unknown",
+                    "colors": [],
+                    "traits": (["tail"] if visible else ["tail", "tail"]),
+                    "distinctiveness": "unclear",
+                },
+            }
+        )
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.combat_subject_evidence == CombatSubjectEvidence(
+        body_plan="unknown",
+        scale="unknown",
+        surface="unknown",
+        colors=(),
+        traits=("tail",),
+        distinctiveness="unclear",
+    )
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "candidate_annotation_schema_invalid"
+    assert len(payloads) == 2
+
+
 def test_incomplete_distinctive_combat_subject_evidence_is_retried() -> None:
     """不完全なdistinctive Combat Subject Evidenceがdomain retryされること。
 
