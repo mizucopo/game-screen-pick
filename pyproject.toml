@@ -34,7 +34,7 @@ dev = [
     "python-decouple-stubs>=0.1",
     "ruff>=0.14.10",
     "taskipy>=1.14.1",
-    "types-requests>=2.32.4.20250913",
+    "types-requests>=2.33.0.20260712",
     "vulture>=2.14",
 ]
 
