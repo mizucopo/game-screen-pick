@@ -19,8 +19,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Detect version change
+        id: version-change
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ] || [ -z "$BASE_SHA" ]; then
+            echo "version_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BASE_VERSION="$(git show "$BASE_SHA:pyproject.toml" 2>/dev/null | awk -F'\"' '/^version *=/ {print $2}')"
+          CURRENT_VERSION="$(awk -F'\"' '/^version *=/ {print $2}' pyproject.toml)"
+          if [ -n "$BASE_VERSION" ] && [ "$BASE_VERSION" = "$CURRENT_VERSION" ]; then
+            echo "version_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "version_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Read version
         id: version
+        if: steps.version-change.outputs.version_changed == 'true'
         continue-on-error: true
         run: |
           VERSION="$(awk -F'\"' '/^version *=/ {print $2}' pyproject.toml)"
@@ -31,7 +51,7 @@ jobs:
 
       - name: Check if tag exists
         id: tag
-        if: steps.version.outcome == 'success'
+        if: steps.version-change.outputs.version_changed == 'true' && steps.version.outcome == 'success'
         continue-on-error: true
         run: |
           git fetch --tags
@@ -47,7 +67,14 @@ jobs:
         run: |
           TAG_CHECK_COMPLETED="false"
           VERSION_SOURCE_VALIDATION_FAILED="false"
-          if [ "${{ steps.version.outcome }}" != "success" ]; then
+          if [ "${{ steps.version-change.outputs.version_changed }}" = "false" ]; then
+            TAG_CHECK_COMPLETED="true"
+            cat > tag_report.md <<'EOF'
+          ## Version Tag Check ⏭️
+
+          The project version was not changed, so the version tag check was skipped.
+          EOF
+          elif [ "${{ steps.version.outcome }}" != "success" ]; then
             VERSION_ERROR="The version could not be read, so tag availability was not checked."
             if [ -f version_check_error.txt ]; then
               VERSION_ERROR="$(< version_check_error.txt)"
@@ -102,16 +129,21 @@ jobs:
           TAG_EXISTS: ${{ steps.tag.outputs.exists }}
           TAG_CHECK_COMPLETED: ${{ steps.tag-report.outputs.tag_check_completed }}
           VERSION_SOURCE_VALIDATION_FAILED: ${{ steps.tag-report.outputs.version_source_validation_failed }}
+          VERSION_CHANGED: ${{ steps.version-change.outputs.version_changed }}
         with:
           script: |
             const tagExists = process.env.TAG_EXISTS === "true";
             const tagCheckCompleted = process.env.TAG_CHECK_COMPLETED === "true";
             const versionSourceValidationFailed =
               process.env.VERSION_SOURCE_VALIDATION_FAILED === "true";
+            const versionChanged = process.env.VERSION_CHANGED === "true";
 
             let checkConclusion = "neutral";
             let checkTitle = "Version tag is available";
-            if (versionSourceValidationFailed) {
+            if (!versionChanged) {
+              checkConclusion = "success";
+              checkTitle = "Version tag check skipped because the project version is unchanged";
+            } else if (versionSourceValidationFailed) {
               checkConclusion = "failure";
               checkTitle = "Chrome extension version source validation failed";
             } else if (tagCheckCompleted && !tagExists) {
@@ -137,5 +169,5 @@ jobs:
             });
 
       - name: Fail if tag exists
-        if: steps.tag.outputs.exists == 'true'
+        if: steps.tag.outputs.exists == 'true' && steps.version-change.outputs.version_changed == 'true'
         run: exit 1
