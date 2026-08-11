@@ -33,15 +33,15 @@ def test_existing_version_tag_publishes_failure_check() -> None:
     assert 'checkTitle = "Version tag already exists";' in branch_body
 
 
-def test_existing_version_tag_fails_workflow_job() -> None:
-    """既存のtagと同じversionが検出されるとworkflow jobが失敗されること.
+def test_changed_version_existing_tag_fails_workflow_job() -> None:
+    """変更されたversionと同じtagが検出されるとworkflow jobが失敗されること.
 
     Arrange:
         - PR tag check workflowが読み込まれる
     Act:
-        - 既存tagを失敗扱いにするstepが検索される
+        - version変更後の既存tagを失敗扱いにするstepが検索される
     Assert:
-        - 既存tagの場合にexit 1が実行されること
+        - version変更後に既存tagがある場合にexit 1が実行されること
     """
     # Arrange
     workflow = _WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -50,7 +50,7 @@ def test_existing_version_tag_fails_workflow_job() -> None:
     fail_step = re.search(
         r"- name: Fail if tag exists\n"
         r"\s+if: steps\.tag\.outputs\.exists == 'true' && "
-        r"steps\.dependabot\.outputs\.is_dependabot != 'true'\n"
+        r"steps\.version-change\.outputs\.version_changed == 'true'\n"
         r"\s+run: exit 1",
         workflow,
     )
@@ -59,30 +59,34 @@ def test_existing_version_tag_fails_workflow_job() -> None:
     assert fail_step is not None
 
 
-def test_dependabot_update_skips_version_tag_check() -> None:
-    """Dependabotの依存更新ではversion tag checkが成功扱いでスキップされること。
+def test_unchanged_project_version_skips_version_tag_check() -> None:
+    """プロジェクトversionが変更されないPRではversion tag checkが
+    成功扱いでスキップされること。
 
     Arrange:
         - PR tag check workflowが読み込まれる
     Act:
-        - Dependabot判定とタグチェックの分岐が検索される
+        - ベースとの差分判定とタグチェックの分岐が検索される
     Assert:
-        - Dependabotではタグチェックがスキップされ、成功checkが公開されること
+        - versionが不変のPRではタグチェックがスキップされ、成功checkが公開されること
     """
     # Arrange
     workflow = _WORKFLOW_PATH.read_text(encoding="utf-8")
 
     # Act
-    dependabot_skip = re.search(
-        r"- name: Detect Dependabot update.*?"
+    unchanged_version_skip = re.search(
+        r"- name: Detect version change.*?"
         r"- name: Read version.*?"
-        r"if: steps\.dependabot\.outputs\.is_dependabot != 'true'",
+        r"if: steps\.version-change\.outputs\.version_changed == 'true'",
         workflow,
         re.DOTALL,
     )
 
     # Assert
-    assert dependabot_skip is not None
-    assert "Dependabot dependency updates do not change the project version" in workflow
-    assert "const isDependabot = process.env.IS_DEPENDABOT === \"true\";" in workflow
-    assert 'checkTitle = "Version tag check skipped for Dependabot";' in workflow
+    assert unchanged_version_skip is not None
+    assert 'echo "version_changed=false" >> "$GITHUB_OUTPUT"' in workflow
+    assert 'const versionChanged = process.env.VERSION_CHANGED === "true";' in workflow
+    assert (
+        'checkTitle = "Version tag check skipped because the project version '
+        'is unchanged";' in workflow
+    )
