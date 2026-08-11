@@ -68,7 +68,7 @@ class CLIPModelManager:
             # デバイスにモデルを転送
             logger.info(f"モデルをデバイスに転送しています ({self.device})...")
             self._model.to(torch.device(self.device))  # type: ignore[arg-type]
-            self._model.eval()
+            self._model.eval()  # type: ignore[no-untyped-call]
 
             # GPU最適化: TF32を許可
             # 理由: Ampere GPU以上ではTF32演算を使用することで、
