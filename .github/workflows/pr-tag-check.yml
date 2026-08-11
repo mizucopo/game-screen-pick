@@ -10,104 +10,211 @@ permissions:
   contents: read
   checks: write
 
+
 jobs:
   check-tag-conflict:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Detect version change
-        id: version-change
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if [ "$EVENT_NAME" != "pull_request" ] || [ -z "$BASE_SHA" ]; then
-            echo "version_changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          BASE_VERSION="$(git show "$BASE_SHA:pyproject.toml" 2>/dev/null | awk -F'\"' '/^version *=/ {print $2}')"
-          CURRENT_VERSION="$(awk -F'\"' '/^version *=/ {print $2}' pyproject.toml)"
-          if [ -n "$BASE_VERSION" ] && [ "$BASE_VERSION" = "$CURRENT_VERSION" ]; then
-            echo "version_changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "version_changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Read version
         id: version
-        if: steps.version-change.outputs.version_changed == 'true'
         continue-on-error: true
         run: |
-          VERSION="$(awk -F'\"' '/^version *=/ {print $2}' pyproject.toml)"
-          if [ -z "$VERSION" ]; then
+          set -euo pipefail
+
+          fail_version() {
+            printf '%s\n' "$1" > version_check_error.txt
+            echo "::error::$1"
             exit 1
+          }
+
+
+          VERSION_RAW="$(awk -F'\"' '/^version *=/ {print $2}' pyproject.toml)"
+
+
+          case "$VERSION_RAW" in
+            *$'\n'*)
+              fail_version "version must contain exactly one line."
+              ;;
+          esac
+
+          VERSION="$(
+            printf '%s' "$VERSION_RAW" \
+              | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+          )"
+
+          if [ -z "$VERSION" ]; then
+            fail_version "version must not be empty."
           fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+            fail_version "version contains characters that are not valid for this release tag."
+          fi
+
+
+          if ! git check-ref-format "refs/tags/$VERSION"; then
+            fail_version "version is not a valid git tag."
+          fi
+
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+
+
 
       - name: Check if tag exists
         id: tag
-        if: steps.version-change.outputs.version_changed == 'true' && steps.version.outcome == 'success'
+        if: steps.version.outcome == 'success'
         continue-on-error: true
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          set -euo pipefail
+
           git fetch --tags
-          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          if git show-ref --tags --verify --quiet "refs/tags/$VERSION"; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build version tag check summary
+      - name: Check if GitHub Release exists
+        id: release
+        if: steps.version.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          RELEASE_HTTP_STATUS="$(
+            curl --silent --show-error --location \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$VERSION"
+          )"
+          CURL_STATUS=$?
+          set -e
+
+          if [ "$CURL_STATUS" -ne 0 ]; then
+            echo "::error::Could not inspect GitHub Release $VERSION."
+            exit "$CURL_STATUS"
+          fi
+
+          case "$RELEASE_HTTP_STATUS" in
+            200)
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              ;;
+            404)
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Could not inspect GitHub Release $VERSION: HTTP $RELEASE_HTTP_STATUS."
+              exit 1
+              ;;
+          esac
+
+
+      - name: Build release version availability summary
         id: tag-report
         if: always()
-        run: |
-          TAG_CHECK_COMPLETED="false"
-          VERSION_SOURCE_VALIDATION_FAILED="false"
-          if [ "${{ steps.version-change.outputs.version_changed }}" = "false" ]; then
-            TAG_CHECK_COMPLETED="true"
-            cat > tag_report.md <<'EOF'
-          ## Version Tag Check ⏭️
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_OUTCOME: ${{ steps.version.outcome }}
+          TAG_OUTCOME: ${{ steps.tag.outcome }}
+          TAG_EXISTS: ${{ steps.tag.outputs.exists }}
+          RELEASE_OUTCOME: ${{ steps.release.outcome }}
+          RELEASE_EXISTS: ${{ steps.release.outputs.exists }}
 
-          The project version was not changed, so the version tag check was skipped.
-          EOF
-          elif [ "${{ steps.version.outcome }}" != "success" ]; then
-            VERSION_ERROR="The version could not be read, so tag availability was not checked."
-            if [ -f version_check_error.txt ]; then
+        run: |
+          set -euo pipefail
+
+          AVAILABILITY_CHECK_COMPLETED="true"
+          AVAILABILITY_CONFLICT="false"
+          VERSION_SOURCE_VALIDATION_FAILED="false"
+          DETAILS="$(mktemp)"
+          trap 'rm -f "$DETAILS"' EXIT
+
+
+          if [ "$VERSION_OUTCOME" != "success" ]; then
+            AVAILABILITY_CHECK_COMPLETED="false"
+            VERSION_SOURCE_VALIDATION_FAILED="true"
+            VERSION_ERROR="The version could not be read, so release version availability was not checked."
+            if [ -s version_check_error.txt ]; then
               VERSION_ERROR="$(< version_check_error.txt)"
             fi
-            cat > tag_report.md <<EOF
-          ## Version Tag Check ⚠️
-
-          ${VERSION_ERROR}
-          EOF
-          elif [ "${{ steps.tag.outcome }}" != "success" ] || [ -z "${{ steps.tag.outputs.exists }}" ]; then
-            cat > tag_report.md <<'EOF'
-          ## Version Tag Check ⚠️
-
-          The version `${{ steps.version.outputs.version }}` could not be checked against git tags.
-          EOF
-          elif [ "${{ steps.tag.outputs.exists }}" = "true" ]; then
-            TAG_CHECK_COMPLETED="true"
-            cat > tag_report.md <<'EOF'
-          ## Version Tag Check ❌
-
-          The version `${{ steps.version.outputs.version }}` already exists as a git tag.
-
-          Please update the version with a new version number before merging.
-          EOF
+            printf '%s\n' "$VERSION_ERROR" >> "$DETAILS"
           else
-            TAG_CHECK_COMPLETED="true"
-            cat > tag_report.md <<'EOF'
-          ## Version Tag Check ✅
+            case "$TAG_OUTCOME:$TAG_EXISTS" in
+              success:true)
+                AVAILABILITY_CONFLICT="true"
+                printf '%s\n' "- The version \`$VERSION\` already exists as a git tag." >> "$DETAILS"
+                ;;
+              success:false)
+                printf '%s\n' "- Git tag \`$VERSION\` is available." >> "$DETAILS"
+                ;;
+              *)
+                AVAILABILITY_CHECK_COMPLETED="false"
+                printf '%s\n' "- The version \`$VERSION\` could not be checked against git tags." >> "$DETAILS"
+                ;;
+            esac
 
-          The version `${{ steps.version.outputs.version }}` does not exist as a git tag.
+            case "$RELEASE_OUTCOME:$RELEASE_EXISTS" in
+              success:true)
+                AVAILABILITY_CONFLICT="true"
+                printf '%s\n' "- The version \`$VERSION\` already exists as a GitHub Release." >> "$DETAILS"
+                ;;
+              success:false)
+                printf '%s\n' "- GitHub Release \`$VERSION\` is available." >> "$DETAILS"
+                ;;
+              *)
+                AVAILABILITY_CHECK_COMPLETED="false"
+                printf '%s\n' "- The version \`$VERSION\` could not be checked against GitHub Releases." >> "$DETAILS"
+                ;;
+            esac
+
+          fi
+
+          if [ "$AVAILABILITY_CHECK_COMPLETED" = "true" ] \
+            && [ "$AVAILABILITY_CONFLICT" = "false" ]; then
+            {
+              cat <<'EOF'
+          ## Release Version Availability ✅
+
+          EOF
+              cat "$DETAILS"
+              cat <<'EOF'
 
           This version is available for use.
           EOF
+            } > tag_report.md
+          else
+            {
+              cat <<'EOF'
+          ## Release Version Availability ❌
+
+          EOF
+              cat "$DETAILS"
+              if [ "$AVAILABILITY_CONFLICT" = "true" ]; then
+                cat <<'EOF'
+
+          Please update the version with a new version number before merging.
+          EOF
+              elif [ "$AVAILABILITY_CHECK_COMPLETED" != "true" ]; then
+                cat <<'EOF'
+
+          Release version availability could not be confirmed.
+          EOF
+              fi
+            } > tag_report.md
           fi
 
           cat tag_report.md >> "$GITHUB_STEP_SUMMARY"
@@ -116,43 +223,38 @@ jobs:
             echo "summary<<EOF"
             cat tag_report.md
             echo "EOF"
-            echo "tag_check_completed=$TAG_CHECK_COMPLETED"
+            echo "availability_check_completed=$AVAILABILITY_CHECK_COMPLETED"
+            echo "availability_conflict=$AVAILABILITY_CONFLICT"
             echo "version_source_validation_failed=$VERSION_SOURCE_VALIDATION_FAILED"
           } >> "$GITHUB_OUTPUT"
 
       - name: Publish version tag check
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         continue-on-error: true
         env:
           SUMMARY: ${{ steps.tag-report.outputs.summary }}
-          TAG_EXISTS: ${{ steps.tag.outputs.exists }}
-          TAG_CHECK_COMPLETED: ${{ steps.tag-report.outputs.tag_check_completed }}
+          AVAILABILITY_CHECK_COMPLETED: ${{ steps.tag-report.outputs.availability_check_completed }}
+          AVAILABILITY_CONFLICT: ${{ steps.tag-report.outputs.availability_conflict }}
           VERSION_SOURCE_VALIDATION_FAILED: ${{ steps.tag-report.outputs.version_source_validation_failed }}
-          VERSION_CHANGED: ${{ steps.version-change.outputs.version_changed }}
         with:
           script: |
-            const tagExists = process.env.TAG_EXISTS === "true";
-            const tagCheckCompleted = process.env.TAG_CHECK_COMPLETED === "true";
+            const availabilityCheckCompleted =
+              process.env.AVAILABILITY_CHECK_COMPLETED === "true";
+            const availabilityConflict =
+              process.env.AVAILABILITY_CONFLICT === "true";
             const versionSourceValidationFailed =
               process.env.VERSION_SOURCE_VALIDATION_FAILED === "true";
-            const versionChanged = process.env.VERSION_CHANGED === "true";
 
-            let checkConclusion = "neutral";
-            let checkTitle = "Version tag is available";
-            if (!versionChanged) {
+            let checkConclusion = "failure";
+            let checkTitle = "Release version availability check could not complete";
+            if (versionSourceValidationFailed) {
+              checkTitle = "Release version source validation failed";
+            } else if (availabilityCheckCompleted && !availabilityConflict) {
               checkConclusion = "success";
-              checkTitle = "Version tag check skipped because the project version is unchanged";
-            } else if (versionSourceValidationFailed) {
-              checkConclusion = "failure";
-              checkTitle = "Chrome extension version source validation failed";
-            } else if (tagCheckCompleted && !tagExists) {
-              checkConclusion = "success";
-            } else if (!tagCheckCompleted) {
-              checkTitle = "Version tag check could not complete";
-            } else if (tagExists) {
-              checkConclusion = "failure";
-              checkTitle = "Version tag already exists";
+              checkTitle = "Release version is available";
+            } else if (availabilityCheckCompleted && availabilityConflict) {
+              checkTitle = "Release version is already in use";
             }
 
             await github.rest.checks.create({
@@ -168,6 +270,9 @@ jobs:
               },
             });
 
-      - name: Fail if tag exists
-        if: steps.tag.outputs.exists == 'true' && steps.version-change.outputs.version_changed == 'true'
+      - name: Enforce version tag availability
+        if: >-
+          always() &&
+          (steps.tag-report.outputs.availability_check_completed != 'true' ||
+          steps.tag-report.outputs.availability_conflict != 'false')
         run: exit 1

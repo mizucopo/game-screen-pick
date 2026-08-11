@@ -147,6 +147,12 @@ Ollama host の優先順位は `--ollama-host`、`OLLAMA_HOST`、`[ollama].host`
 - scene catalog作成に使う代表画像は最大24枚のまま、高品質画像、見た目の多様な画像、頻出する通常プレイpatternが混ざるように選ばれます
 - Ollamaの `/api/chat` には常に `think=false` を送信します。scene分類では最終JSONだけを使うため、thinking対応モデルでは推論trace生成を抑えて速度を優先します
 
+## バージョンとリリース
+
+- `main` を対象にするすべてのPull Requestは、ドキュメントやテストだけの変更を含め、`pyproject.toml` を未公開の新しいバージョンへ更新します。
+- `main` へのマージごとに、そのバージョンのGit tagとGitHub Releaseを作成します。
+- Pull Requestのタグ検査が既存バージョンとの衝突を報告した場合は、次の未公開バージョンへ更新してから再実行します。
+
 ## 関連ドキュメント
 
 - [ADR 0002: Classify Selection Shortlist With Ollama](docs/adr/0002-classify-selection-shortlist-with-ollama.md)
