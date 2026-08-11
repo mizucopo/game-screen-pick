@@ -1005,6 +1005,28 @@ class OllamaVisionRuntime:
         previous_validation_code: str | None = None
         repair_code: str | None = None
         candidate_relationship_draft: Mapping[str, object] | None = None
+
+        def retry_candidate_dialogue_validation(
+            error: VisionRuntimeError,
+            attempt: int,
+        ) -> bool:
+            """画面内台詞の専用validationを追加の視覚確認へ渡す。"""
+            nonlocal previous_validation_code
+            nonlocal repair_code
+            nonlocal candidate_relationship_draft
+            if (
+                stage_kind != "candidate_annotation"
+                or error.validation_code
+                != "candidate_annotation_dialogue_visibility_unverified"
+                or attempt >= 3
+            ):
+                return False
+            previous_validation_code = error.validation_code
+            candidate_relationship_draft = None
+            repair_code = _repair_validation_code(error)
+            self._sleep_before_retry(error.retry_after_seconds, stage_kind)
+            return True
+
         for attempt in (1, 2, 3):
             if stage_kind != "scene_catalog":
                 self._require_candidate_annotation_active()
@@ -1049,16 +1071,7 @@ class OllamaVisionRuntime:
                     else decoded
                 )
             except VisionRuntimeError as error:
-                if (
-                    stage_kind == "candidate_annotation"
-                    and error.validation_code
-                    == "candidate_annotation_dialogue_visibility_unverified"
-                    and attempt < 3
-                ):
-                    previous_validation_code = error.validation_code
-                    candidate_relationship_draft = None
-                    repair_code = _repair_validation_code(error)
-                    self._sleep_before_retry(error.retry_after_seconds, stage_kind)
+                if retry_candidate_dialogue_validation(error, attempt):
                     continue
                 if relationship_repair:
                     error = _relationship_repair_error(error)
@@ -1077,16 +1090,38 @@ class OllamaVisionRuntime:
                     decoded=decoded,
                     validation_code=error.validation_code,
                 )
+                if conservative_repair is None:
+                    conservative_repair = (
+                        _repair_repeated_candidate_combat_subject_duplicates(
+                            stage_kind=stage_kind,
+                            attempt=attempt,
+                            decoded=decoded,
+                            previous_validation_code=previous_validation_code,
+                            validation_code=error.validation_code,
+                        )
+                    )
                 if conservative_repair is not None:
-                    value = parser(conservative_repair)
-                    previous_validation_code = error.validation_code
-                elif attempt >= 2 or error.reason not in _RETRYABLE_REASONS:
+                    try:
+                        value = parser(conservative_repair)
+                    except VisionRuntimeError as repaired_error:
+                        if retry_candidate_dialogue_validation(
+                            repaired_error,
+                            attempt,
+                        ):
+                            continue
+                        error = repaired_error
+                        conservative_repair = None
+                    else:
+                        previous_validation_code = error.validation_code
+                if conservative_repair is None and (
+                    attempt >= 2 or error.reason not in _RETRYABLE_REASONS
+                ):
                     raise VisionRuntimeError(
                         error.reason,
                         validation_code=error.validation_code,
                         attempt_count=attempt,
                     ) from None
-                else:
+                if conservative_repair is None:
                     previous_validation_code = error.validation_code
                     if (
                         stage_kind == "candidate_annotation"
@@ -1826,6 +1861,48 @@ def _repair_repeated_combat_visibility_correlation(
     repaired = dict(decoded)
     repaired["combat_interaction_visibility"] = "none"
     return repaired
+
+
+def _repair_repeated_candidate_combat_subject_duplicates(
+    *,
+    stage_kind: StageKind,
+    attempt: int,
+    decoded: Mapping[str, object] | None,
+    previous_validation_code: str | None,
+    validation_code: str | None,
+) -> Mapping[str, object] | None:
+    """再試行後も残る戦闘対象の有限set重複だけを決定的に一意化する。"""
+    schema_code = "candidate_annotation_schema_invalid"
+    if (
+        attempt < 2
+        or stage_kind != "candidate_annotation"
+        or decoded is None
+        or previous_validation_code != schema_code
+        or validation_code != schema_code
+    ):
+        return None
+    repaired = cast(dict[str, object], copy.deepcopy(decoded))
+    raw_observations = repaired.get("frame_observations")
+    if not isinstance(raw_observations, list):
+        return None
+    changed = False
+    for raw_observation in raw_observations:
+        if not isinstance(raw_observation, dict):
+            return None
+        evidence = raw_observation.get("combat_subject_evidence")
+        if not isinstance(evidence, dict):
+            return None
+        for field in ("colors", "traits"):
+            values = evidence.get(field)
+            if not isinstance(values, list) or not all(
+                isinstance(value, str) for value in values
+            ):
+                return None
+            unique_values = list(dict.fromkeys(values))
+            if unique_values != values:
+                evidence[field] = unique_values
+                changed = True
+    return repaired if changed else None
 
 
 def _decode_content(

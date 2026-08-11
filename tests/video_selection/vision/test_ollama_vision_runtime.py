@@ -1507,6 +1507,201 @@ def test_candidate_annotation_keeps_single_image_combat_subject_evidence() -> No
     assert sum("images" in message for message in messages) == 1
 
 
+def test_repeated_candidate_combat_trait_duplicates_are_deduplicated() -> None:
+    """再試行後も重複する戦闘対象特徴が決定的に一意化されること。
+
+    Arrange:
+        - 同じ有限enum特徴を重複して返すCandidate Annotation応答が用意される
+    Act:
+        - 公開Vision RuntimeでCandidate Annotationが実行される
+    Assert:
+        - 初回はSchema違反として再試行されること
+        - 再試行後は特徴だけが入力順を保って一意化されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (("frame-a", "battle", "gameplay_action", "none", "hud"),)
+        )
+        observation = _first_frame_observation(response)
+        observation["combat_subject_evidence"] = {
+            "body_plan": "quadruped",
+            "scale": "large",
+            "surface": "organic",
+            "colors": ["green", "green", "brown"],
+            "traits": ["large_mouth", "large_mouth", "bulbous_body"],
+            "distinctiveness": "distinctive",
+        }
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.combat_subject_evidence == CombatSubjectEvidence(
+        body_plan="quadruped",
+        scale="large",
+        surface="organic",
+        colors=("brown", "green"),
+        traits=("bulbous_body", "large_mouth"),
+        distinctiveness="distinctive",
+    )
+    assert diagnostics.attempt_count == 2
+    assert diagnostics.validation_code == "candidate_annotation_schema_invalid"
+    assert len(payloads) == 2
+
+
+def test_candidate_combat_duplicate_repair_keeps_other_schema_errors_fatal() -> None:
+    """戦闘対象特徴の重複修復で別のSchema違反が隠されないこと。
+
+    Arrange:
+        - 重複特徴に加えて未知fieldを持つ応答が繰り返し用意される
+    Act:
+        - 公開Vision RuntimeでCandidate Annotationが実行される
+    Assert:
+        - 2回目にも全体のSchema違反がfatalとして返されること
+    """
+    # Arrange
+    request_count = 0
+
+    def requester(
+        _method: str,
+        _url: str,
+        _payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        nonlocal request_count
+        request_count += 1
+        response = _frame_observation_payload(
+            (("frame-a", "battle", "gameplay_action", "none", "hud"),)
+        )
+        observation = _first_frame_observation(response)
+        observation["combat_subject_evidence"] = {
+            "body_plan": "quadruped",
+            "scale": "large",
+            "surface": "organic",
+            "colors": ["green"],
+            "traits": ["large_mouth", "large_mouth"],
+            "distinctiveness": "distinctive",
+        }
+        observation["unexpected"] = True
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    with pytest.raises(VisionRuntimeError) as failure:
+        runtime.annotate_candidate(
+            _annotation_request(),
+            _catalog(),
+            _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+            num_ctx=32768,
+        )
+
+    # Assert
+    assert failure.value.reason is VisionRuntimeFailureReason.SCHEMA_INVALID
+    assert failure.value.validation_code == "candidate_annotation_schema_invalid"
+    assert failure.value.attempt_count == 2
+    assert request_count == 2
+
+
+def test_candidate_combat_duplicate_repair_preserves_dialogue_recheck() -> None:
+    """戦闘対象特徴の重複修復後にも画面内台詞が独立再確認されること。
+
+    Arrange:
+        - 最初の2応答で重複特徴と文脈依存の画面内台詞判定が用意される
+        - 3回目では重複がなく画面内台詞もない応答が用意される
+    Act:
+        - 公開Vision RuntimeでCandidate Annotationが実行される
+    Assert:
+        - 重複修復後の専用validationが3回目の視覚再確認へ渡されること
+    """
+    # Arrange
+    payloads: list[Mapping[str, object]] = []
+
+    def requester(
+        _method: str,
+        _url: str,
+        payload: Mapping[str, object] | None,
+        _timeout: float,
+    ) -> object:
+        assert payload is not None
+        payloads.append(payload)
+        response = _frame_observation_payload(
+            (("frame-a", "exploration", "event_dialogue", "high", "dialogue"),)
+        )
+        observation = _first_frame_observation(response)
+        visible = len(payloads) < 3
+        observation.update(
+            {
+                "cinematic_event_presentation": True,
+                "on_screen_dialogue_text_visible": visible,
+                "dialogue_text_presentation": ("dialogue_box" if visible else "none"),
+                "combat_subject_evidence": {
+                    "body_plan": "unknown",
+                    "scale": "unknown",
+                    "surface": "unknown",
+                    "colors": [],
+                    "traits": (["tail", "tail"] if len(payloads) < 3 else ["tail"]),
+                    "distinctiveness": "unclear",
+                },
+            }
+        )
+        return _response(response)
+
+    runtime = OllamaVisionRuntime(
+        "http://localhost:11434",
+        timeout_seconds=60.0,
+        requester=requester,
+        sleeper=lambda _seconds: None,
+        model_state_resolver=_resolved_artifact,
+    )
+
+    # Act
+    annotation, diagnostics = runtime.annotate_candidate(
+        _annotation_request(),
+        _catalog(),
+        _resolved_model(ModelRole.CANDIDATE_ANNOTATION),
+        num_ctx=32768,
+    )
+
+    # Assert
+    assert annotation.explanation_value == "none"
+    assert diagnostics.attempt_count == 3
+    assert diagnostics.validation_code == (
+        "candidate_annotation_dialogue_visibility_unverified"
+    )
+    assert len(payloads) == 3
+
+
 def test_incomplete_distinctive_combat_subject_evidence_is_retried() -> None:
     """不完全なdistinctive Combat Subject Evidenceがdomain retryされること。
 

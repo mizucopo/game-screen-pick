@@ -376,6 +376,10 @@ _Avoid_: confidence score, enemy name inference, absence of major evidence, Spoi
 Candidate Annotationの主推論がschemaには適合するがContext Cue参照またはSpoiler Evidenceの関係だけに違反したとき、分類と他の観測を凍結し、違反した従属fieldだけを一度修復してAnnotation全体を再検証する境界。
 _Avoid_: second Candidate Annotation, classification retry, deterministic fallback, silent candidate drop
 
+**Combat Subject Evidence Set Repair**:
+Candidate Annotationの主推論を同じsemantic入力で一度再試行しても、Combat Subject Evidenceの有限集合である`colors`または`traits`に同じenum値だけが重複した場合、最初の出現順を保って重複を除去し、Candidate Annotation全体をstrict validatorへ通し直す境界。欠落field、未知field、型違反、未知enum、件数上限、domain関係違反は修復せずfatalにする。
+_Avoid_: schema relaxation, inferred evidence, silent candidate drop, Stage cache invalidation
+
 **Combat Encounter Verification**:
 Candidate Annotationの主推論が掲載可能とした戦闘、または掲載可能な非戦闘としたScene Kind `combat`のgameplayまたは`recurring_gameplay` actionのRepresentative Frame一枚だけに対し、音声、Context Cue、前後場面、主推論の説明文を与えず実行する条件付きOllama推論。敵・boss固有の名前とHP・status bar、または戦うplayer・相手本体から戦闘の有無を確認し、Combat Encounter KindとCombat Encounter Basisを必ず整合する組として返す。主推論の戦闘種別はそのまま採用しない。敵名やHP・status barだけでは通常戦闘にも主要戦闘にもせず、両方の積極的根拠がなければ`uncertain`とする。敵本体が画面外・画面端・エフェクト内でも敵status UIがあれば戦闘とし、Combat Visibility Verificationへ進める。player自身の通常HUD、portrait、操作button、minimapだけでは戦闘にしない。最初の確認が非戦闘なら、先の回答を推測しない別promptで同じ画素を独立再確認する。Scene Kind `combat`で二回とも非戦闘なら、戦闘sceneとして説明できないframeとしてExplanation Valueを`none`にする。それ以外の`recurring_gameplay` actionではCombat Visibility Verificationへ進め、敵本体の直接観測との不一致を検出する。
 _Avoid_: combat visibility, contextual combat classification, final selection
