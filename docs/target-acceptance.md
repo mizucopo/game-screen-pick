@@ -110,11 +110,13 @@ GPU計測は、`nvidia-smi`によるSystem GPU Channelと、Ollama `/api/ps`に�
 Observation Channelを独立して記録する。System GPU Channelはsystem GPU memoryを継続測定し、
 process GPU memoryをrun開始時のbaselineとして一度だけ取得する。各channelは一時的な失敗を
 同じsample内で一度だけ即時再試行し、成功数とerror数を別々に記録する。System GPU Channelの
-再試行失敗、または停止timeout内に終了しないbackground samplerが一つでもあればresource
-samplingを不完全として扱う。Ollama Observation Channelだけの再試行失敗は成功済みsystem
-sampleを破棄せずresource samplingも不完全にしないが、modelを一度も観測できないrunはmodel
-gateを不合格にする。STT中にOllama観測が欠けたsampleでは推測値を差し引かず、system GPU
-memory全量をSTT peakへ保守的に計上する。各`nvidia-smi` queryには2秒のtimeoutを設ける。
+再試行失敗、または停止timeout内に終了しないSystem GPU samplerがあればresource samplingを
+不完全として扱う。両channelは独立threadで同じsampling intervalを進めるため、Ollama
+Observation Channelの遅延中もSystem GPU Channelは短いpeakを継続して取得する。Ollama側の
+再試行失敗または停止timeoutは別errorへ記録し、成功済みsystem sampleを破棄せずresource
+samplingも不完全にしないが、modelを一度も観測できないrunはmodel gateを不合格にする。
+STT中にOllama観測が欠けたsampleでは推測値を差し引かず、system GPU memory全量をSTT peakへ
+保守的に計上する。各`nvidia-smi` queryには2秒のtimeoutを設ける。
 
 Fresh ProcessingのVideo Identity cache missではwhole-file SHA-256を動画1本ずつatomicに
 確定する。Cache Reuse、Parallelism BaselineからFresh Processingへのprocessing cache切替、

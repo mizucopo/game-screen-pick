@@ -201,6 +201,74 @@ def test_sampling_is_incomplete_when_background_probe_outlives_stop() -> None:
     assert result["resource_sampling_complete"] is False
 
 
+def test_slow_ollama_probe_does_not_pause_system_gpu_sampling() -> None:
+    """遅いOllama観測中もsystem GPU sampleが独立して継続されること。
+
+    Arrange:
+        - 二回目から停止待ちになるOllama probeと成功するsystem probeが用意される
+    Act:
+        - Ollama probeの停止待ち中にmonitorが停止される
+    Assert:
+        - system sampleが継続され完全なresource証拠として保持されること
+        - 未完了のOllama sampleだけが別errorとして記録されること
+    """
+    # Arrange
+    ollama_blocked = Event()
+    release_ollama = Event()
+    system_continued = Event()
+    system_call_count = 0
+    ollama_call_count = 0
+
+    def system_probe() -> dict[str, int]:
+        nonlocal system_call_count
+        system_call_count += 1
+        if system_call_count >= 3:
+            system_continued.set()
+        return {
+            "system_used_mib": 12000 if system_call_count == 3 else 100,
+            "process_used_mib": 10,
+        }
+
+    def ollama_probe() -> dict[str, int]:
+        nonlocal ollama_call_count
+        ollama_call_count += 1
+        if ollama_call_count > 1:
+            ollama_blocked.set()
+            release_ollama.wait(timeout=1)
+        return {
+            "ollama_size_bytes": 8_000_000_000,
+            "ollama_size_vram_bytes": 8_000_000_000,
+        }
+
+    monitor = GpuResourceMonitor(
+        ollama_host="http://unused",
+        stage_provider=lambda: ProcessingStage.BUILD_SCENE_CATALOG,
+        system_probe=system_probe,
+        ollama_probe=ollama_probe,
+        interval_seconds=0.001,
+        join_timeout_seconds=0.01,
+    )
+    monitor.start()
+    assert ollama_blocked.wait(timeout=1)
+    system_continued.wait(timeout=0.1)
+
+    # Act
+    result = monitor.stop()
+    release_ollama.set()
+
+    # Assert
+    system_sample_count = result["gpu_sample_count"]
+    ollama_sample_errors = result["ollama_sample_error_count"]
+    assert isinstance(system_sample_count, int)
+    assert isinstance(ollama_sample_errors, int)
+    assert system_continued.is_set()
+    assert system_sample_count >= 3
+    assert result["gpu_sample_error_count"] == 0
+    assert result["system_global_gpu_peak_mib"] == 12000
+    assert result["resource_sampling_complete"] is True
+    assert ollama_sample_errors >= 1
+
+
 def test_transient_probe_failure_is_retried_without_invalidating_sampling() -> None:
     """一時的なGPU probe失敗が同じsample内で回復されること。
 
@@ -283,7 +351,7 @@ def test_unrecovered_probe_failure_invalidates_sampling() -> None:
     assert call_count == 4
     assert result["gpu_sample_error_count"] == 2
     assert result["resource_sampling_complete"] is False
-    assert result["ollama_sample_count"] == 2
+    assert result["ollama_sample_count"] == 1
     assert result["ollama_sample_error_count"] == 0
 
 
@@ -323,7 +391,7 @@ def test_ollama_outage_preserves_successful_system_gpu_samples() -> None:
     assert result["gpu_sample_error_count"] == 0
     assert result["resource_sampling_complete"] is True
     assert result["ollama_sample_count"] == 0
-    assert result["ollama_sample_error_count"] == 2
+    assert result["ollama_sample_error_count"] == 1
     assert result["ollama_model_observed"] is False
 
 
@@ -363,6 +431,7 @@ def test_ollama_outage_does_not_erase_observed_partial_offload() -> None:
 
     # Act
     monitor.start()
+    monitor.sample_now()
     result = monitor.stop()
 
     # Assert
