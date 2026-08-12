@@ -1096,7 +1096,6 @@ class OllamaVisionRuntime:
                             stage_kind=stage_kind,
                             attempt=attempt,
                             decoded=decoded,
-                            previous_validation_code=previous_validation_code,
                             validation_code=error.validation_code,
                         )
                     )
@@ -1868,7 +1867,6 @@ def _repair_repeated_candidate_combat_subject_duplicates(
     stage_kind: StageKind,
     attempt: int,
     decoded: Mapping[str, object] | None,
-    previous_validation_code: str | None,
     validation_code: str | None,
 ) -> Mapping[str, object] | None:
     """再試行後も残る戦闘対象の有限set重複だけを決定的に一意化する。"""
@@ -1877,7 +1875,6 @@ def _repair_repeated_candidate_combat_subject_duplicates(
         attempt < 2
         or stage_kind != "candidate_annotation"
         or decoded is None
-        or previous_validation_code != schema_code
         or validation_code != schema_code
     ):
         return None
