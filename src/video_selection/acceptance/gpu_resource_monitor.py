@@ -46,8 +46,8 @@ class GpuResourceMonitor:
         self._stop = Event()
         self._lock = Lock()
         self._thread: Thread | None = None
-        self._sample_count = 0
-        self._sample_errors = 0
+        self._system_sample_count = 0
+        self._system_sample_errors = 0
         self._ollama_sample_count = 0
         self._ollama_sample_errors = 0
         self._process_baseline_mib = 0
@@ -82,11 +82,11 @@ class GpuResourceMonitor:
             return {
                 "resource_sampling_complete": (
                     sampler_stopped
-                    and self._sample_count > 0
-                    and self._sample_errors == 0
+                    and self._system_sample_count > 0
+                    and self._system_sample_errors == 0
                 ),
-                "gpu_sample_count": self._sample_count,
-                "gpu_sample_error_count": self._sample_errors,
+                "gpu_sample_count": self._system_sample_count,
+                "gpu_sample_error_count": self._system_sample_errors,
                 "ollama_sample_count": self._ollama_sample_count,
                 "ollama_sample_error_count": self._ollama_sample_errors,
                 "process_gpu_baseline_mib": self._process_baseline_mib,
@@ -116,10 +116,10 @@ class GpuResourceMonitor:
         stage = self._stage_provider()
         with self._lock:
             if system_sample is None:
-                self._sample_errors += 1
+                self._system_sample_errors += 1
             else:
                 system, process = system_sample
-                self._sample_count += 1
+                self._system_sample_count += 1
                 if is_baseline:
                     self._process_baseline_mib = process
                     self._system_baseline_mib = system
