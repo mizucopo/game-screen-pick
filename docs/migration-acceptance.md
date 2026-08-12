@@ -252,14 +252,20 @@ workerを満たす未完了scan数から算出した到達可能な最大worker�
 
 旧fingerprint artifactの併存はclean profile予算から除くが、runはcache root全体の容量と警告を
 記録する。容量予算はacceptance gateであり、runtimeの強制quotaではない。OllamaとSTTの
-GPU-heavy Stageは重ねない。GPU recordはprocess baseline、model `size_vram`、system全体の
-peakを分ける。Ollama `/api/ps`のmodel `size`と`size_vram`も比較し、Fresh Processingで
-modelが観測され、
-全量がGPU residentである場合だけ自動gateを合格させる。停止timeout内にbackground GPU
-probeまたはdisk samplerが終了しない場合もsampling incompleteとして不合格にする。
-process GPU baselineはrun開始時に一度だけ取得し、継続sampleではsystem GPU memoryだけを
-`nvidia-smi`から取得する。各queryは2秒でtimeoutし、GPU sampleは一時的な失敗を同じsample
-内で一度だけ即時再試行する。再試行も失敗したsampleはsampling incompleteとして不合格にする。
+GPU-heavy Stageは重ねない。GPU recordは`nvidia-smi`のSystem GPU ChannelとOllama
+`/api/ps`のOllama Observation Channelを分離し、各channelの成功数とerror数、process
+baseline、model `size_vram`、system全体のpeakを記録する。Ollama Observation Channelの
+一時的な欠測は成功済みsystem sampleを捨てずresource samplingを不完全にしない。
+ただしFresh ProcessingとParallelism Baselineでmodelが一度も観測されない場合、または
+`size`と`size_vram`が一致せず全量GPU residentでない場合はmodel gateを不合格にする。
+STT中にOllama観測が欠けたsampleではsystem GPU memory全量をSTT peakへ保守的に計上する。
+両channelは独立threadで同じintervalを進め、Ollama側の遅延中もsystem GPU peakを取得する。
+停止timeout内にSystem GPU samplerまたはdisk samplerが終了しない場合はsampling incomplete
+として不合格にする。Ollama samplerの停止timeoutはOllama errorへ記録し、system resource
+evidenceを不完全にしない。process GPU baselineはrun開始時に一度だけ取得し、継続sampleでは
+system GPU memoryだけを`nvidia-smi`から取得する。各channelは一時的な失敗を同じsample内で
+一度だけ即時再試行し、System GPU Channelの再試行も失敗したsampleだけをsampling incomplete
+として不合格にする。
 model capability probeは`keep_alive = 0`でtimed phase前にOllama modelを解放する。
 
 既存prototypeの参考値は、#163の全scan約14時間見込み、heartbeat proxy約17 GB、#165の

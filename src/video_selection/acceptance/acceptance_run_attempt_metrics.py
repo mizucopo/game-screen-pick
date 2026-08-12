@@ -13,6 +13,14 @@ _SUMMED_INTEGER_METRICS = (
     "disk_sample_error_count",
     "gpu_sample_count",
     "gpu_sample_error_count",
+    "ollama_sample_count",
+    "ollama_sample_error_count",
+)
+_LEGACY_OPTIONAL_INTEGER_METRICS = frozenset(
+    {
+        "ollama_sample_count",
+        "ollama_sample_error_count",
+    }
 )
 _MAXIMUM_INTEGER_METRICS = (
     "persistent_cache_bytes",
@@ -63,7 +71,11 @@ def build_incomplete_interrupt_attempt(
     return record
 
 
-def validate_run_measurements(record: Mapping[str, object]) -> None:
+def validate_run_measurements(
+    record: Mapping[str, object],
+    *,
+    allow_legacy_ollama_counts: bool = False,
+) -> None:
     """一試行を安全に累積できる完全な計測recordとして検証する。"""
     _measurement_number(record, "duration_seconds")
     for key in (
@@ -71,7 +83,10 @@ def validate_run_measurements(record: Mapping[str, object]) -> None:
         *_MAXIMUM_INTEGER_METRICS,
         *_BASELINE_INTEGER_METRICS,
     ):
-        _measurement_integer(record, key)
+        if allow_legacy_ollama_counts:
+            _measurement_integer_compatible_with_legacy(record, key)
+        else:
+            _measurement_integer(record, key)
     _measurement_numeric_mapping(record, "stage_durations_seconds")
     _measurement_integer_mapping(record, "completed_stage_counts")
     for key in (
@@ -90,7 +105,7 @@ def aggregate_run_attempts(
     if not records:
         raise ValueError("Acceptance run attemptがありません")
     for record in records:
-        validate_run_measurements(record)
+        validate_run_measurements(record, allow_legacy_ollama_counts=True)
     aggregate = dict(records[-1])
     aggregate["attempt_count"] = len(records)
     aggregate["attempts"] = [dict(record) for record in records]
@@ -98,7 +113,10 @@ def aggregate_run_attempts(
         _measurement_number(record, "duration_seconds") for record in records
     )
     for key in _SUMMED_INTEGER_METRICS:
-        aggregate[key] = sum(_measurement_integer(record, key) for record in records)
+        aggregate[key] = sum(
+            _measurement_integer_compatible_with_legacy(record, key)
+            for record in records
+        )
     for key in _MAXIMUM_INTEGER_METRICS:
         aggregate[key] = max(_measurement_integer(record, key) for record in records)
     for key in _BASELINE_INTEGER_METRICS:
@@ -268,6 +286,16 @@ def _measurement_integer(record: Mapping[str, object], key: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ValueError(f"Acceptance run metric {key}が不正です")
     return value
+
+
+def _measurement_integer_compatible_with_legacy(
+    record: Mapping[str, object],
+    key: str,
+) -> int:
+    """旧attemptに存在しない追加metricだけを0として扱う。"""
+    if key in _LEGACY_OPTIONAL_INTEGER_METRICS and key not in record:
+        return 0
+    return _measurement_integer(record, key)
 
 
 def _measurement_numeric_mapping(

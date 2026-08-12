@@ -12,6 +12,8 @@ def acceptance_run_resource_budget_passed(record: Mapping[str, object]) -> bool:
     """一つのacceptance runが計測完全性と共有resource予算を満たすか返す。"""
     return (
         _boolean(record, "resource_sampling_complete")
+        and _boolean(record, "ollama_model_observed")
+        and _boolean(record, "ollama_model_fully_resident")
         and _integer(record, "persistent_cache_bytes") <= PERSISTENT_CACHE_BYTES
         and _integer(record, "peak_additional_bytes") <= PEAK_ADDITIONAL_BYTES
         and _integer(record, "ollama_global_gpu_peak_mib") <= OLLAMA_GPU_MIB

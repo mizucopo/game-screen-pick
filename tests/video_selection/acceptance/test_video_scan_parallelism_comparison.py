@@ -195,6 +195,16 @@ def test_comparison_identity_change_breaks_the_comparison(
             id="incomplete-resource-sampling",
         ),
         pytest.param(
+            {"ollama_model_observed": False},
+            "resource_budget",
+            id="ollama-model-not-observed",
+        ),
+        pytest.param(
+            {"ollama_model_fully_resident": False},
+            "resource_budget",
+            id="ollama-model-partially-offloaded",
+        ),
+        pytest.param(
             {
                 "video_scan_parallelism": {
                     "mode": "auto",
@@ -306,6 +316,8 @@ def _run_record(
         "execution_context": _execution_context(),
         "stage_artifact_content_digest": artifact_digest,
         "resource_sampling_complete": True,
+        "ollama_model_observed": True,
+        "ollama_model_fully_resident": True,
         "persistent_cache_bytes": 1024,
         "peak_additional_bytes": 2048,
         "ollama_global_gpu_peak_mib": 1000,

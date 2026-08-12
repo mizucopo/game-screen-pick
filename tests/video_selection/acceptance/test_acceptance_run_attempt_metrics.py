@@ -4,6 +4,7 @@ import pytest
 
 from src.video_selection.acceptance.acceptance_run_attempt_metrics import (
     aggregate_run_attempts,
+    validate_run_measurements,
 )
 
 
@@ -36,6 +37,92 @@ def test_parallelism_change_preserves_attempts_as_incomplete_measurement() -> No
         {"name": "before-restart"},
         {"name": "after-restart"},
     ]
+
+
+def test_independent_gpu_channel_counts_are_summed_across_attempts() -> None:
+    """system GPUとOllamaの観測件数が独立して合算されること。
+
+    Arrange:
+        - system GPUとOllamaで異なる観測件数を持つ二つのattemptが用意される
+    Act:
+        - 両attemptが一つのrun recordへ集約される
+    Assert:
+        - 各観測channelの成功数と失敗数が混同されず合算されること
+    """
+    # Arrange
+    first = _attempt(auto_max_workers=6, context_name="first")
+    first.update(
+        {
+            "gpu_sample_count": 10,
+            "gpu_sample_error_count": 1,
+            "ollama_sample_count": 8,
+            "ollama_sample_error_count": 3,
+        }
+    )
+    second = _attempt(auto_max_workers=6, context_name="second")
+    second.update(
+        {
+            "gpu_sample_count": 20,
+            "gpu_sample_error_count": 2,
+            "ollama_sample_count": 17,
+            "ollama_sample_error_count": 5,
+        }
+    )
+
+    # Act
+    aggregate = aggregate_run_attempts((first, second))
+
+    # Assert
+    assert aggregate["gpu_sample_count"] == 30
+    assert aggregate["gpu_sample_error_count"] == 3
+    assert aggregate["ollama_sample_count"] == 25
+    assert aggregate["ollama_sample_error_count"] == 8
+
+
+def test_legacy_incomplete_attempt_is_not_promoted_by_new_channel_counts() -> None:
+    """旧attemptの不完全なresource証拠が新field追加で格上げされないこと。
+
+    Arrange:
+        - Ollama観測件数を持たずresource計測が不完全な旧attemptが用意される
+    Act:
+        - 旧attemptと新attemptが一つのrun recordへ集約される
+    Assert:
+        - 旧件数は0として読まれrun全体はresource計測不完全のままになること
+    """
+    # Arrange
+    legacy = _attempt(auto_max_workers=6, context_name="legacy")
+    legacy.pop("ollama_sample_count")
+    legacy.pop("ollama_sample_error_count")
+    legacy["resource_sampling_complete"] = False
+    current = _attempt(auto_max_workers=6, context_name="current")
+
+    # Act
+    aggregate = aggregate_run_attempts((legacy, current))
+
+    # Assert
+    assert aggregate["ollama_sample_count"] == 1
+    assert aggregate["ollama_sample_error_count"] == 0
+    assert aggregate["resource_sampling_complete"] is False
+
+
+def test_current_attempt_requires_independent_ollama_channel_counts() -> None:
+    """新しいattempt計測ではOllama channel件数が必須になること。
+
+    Arrange:
+        - Ollama観測件数だけを欠く新規attemptが用意される
+    Act:
+        - 一試行の計測recordが検証される
+    Assert:
+        - 新規計測の欠落として拒否されること
+    """
+    # Arrange
+    attempt = _attempt(auto_max_workers=6, context_name="current")
+    attempt.pop("ollama_sample_count")
+
+    # Act
+    # Assert
+    with pytest.raises(ValueError, match="ollama_sample_count"):
+        validate_run_measurements(attempt)
 
 
 @pytest.mark.parametrize("duration_seconds", (float("nan"), float("inf")))
@@ -76,6 +163,8 @@ def _attempt(
         "disk_sample_error_count": 0,
         "gpu_sample_count": 1,
         "gpu_sample_error_count": 0,
+        "ollama_sample_count": 1,
+        "ollama_sample_error_count": 0,
         "persistent_cache_bytes": 1,
         "peak_additional_bytes": 1,
         "system_global_gpu_peak_mib": 1,
