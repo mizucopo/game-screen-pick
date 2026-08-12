@@ -1,5 +1,6 @@
 """versioned acceptance recordとprivacy gateのtest。"""
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -38,6 +39,7 @@ def test_phase_budgets_and_human_quality_determine_pending_pass_failure() -> Non
     passed = _build_record(human_quality=passed_quality)
 
     # Assert
+    assert pending["schema"] == "game-screen-pick/target-acceptance@1.3.0"
     assert pending["status"] == "pending_human_review"
     automatic_gates = pending["automatic_gates"]
     assert isinstance(automatic_gates, dict)
@@ -172,6 +174,8 @@ def test_passed_record_generates_normalized_json_and_markdown(tmp_path: Path) ->
     # Assert
     assert json_path.is_file()
     assert markdown_path.is_file()
+    baseline = json.loads(json_path.read_text(encoding="utf-8"))
+    assert baseline["schema"] == ("game-screen-pick/target-acceptance-baseline@1.3.0")
     assert "source_revision" not in json_path.read_text(encoding="utf-8")
     assert "Normalized digest" in markdown_path.read_text(encoding="utf-8")
 

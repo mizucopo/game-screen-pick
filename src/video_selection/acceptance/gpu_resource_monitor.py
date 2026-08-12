@@ -11,7 +11,8 @@ from urllib.request import Request, urlopen
 
 from ..models.processing_stage import ProcessingStage
 
-GpuProbe = Callable[[], Mapping[str, int]]
+SystemGpuProbe = Callable[[], Mapping[str, int]]
+OllamaGpuProbe = Callable[[], Mapping[str, int]]
 StageProvider = Callable[[], ProcessingStage | None]
 
 _VISION_STAGES = {
@@ -30,13 +31,15 @@ class GpuResourceMonitor:
         *,
         ollama_host: str,
         stage_provider: StageProvider,
-        probe: GpuProbe | None = None,
+        system_probe: SystemGpuProbe | None = None,
+        ollama_probe: OllamaGpuProbe | None = None,
         interval_seconds: float = 0.5,
         join_timeout_seconds: float = 2.0,
     ) -> None:
         if interval_seconds <= 0 or join_timeout_seconds <= 0:
             raise ValueError("GPU sampler interval/停止timeoutは正の値が必要です")
-        self._probe = probe or _default_probe(ollama_host)
+        self._system_probe = system_probe or _default_system_probe()
+        self._ollama_probe = ollama_probe or _default_ollama_probe(ollama_host)
         self._stage_provider = stage_provider
         self._interval_seconds = interval_seconds
         self._join_timeout_seconds = join_timeout_seconds
@@ -45,6 +48,8 @@ class GpuResourceMonitor:
         self._thread: Thread | None = None
         self._sample_count = 0
         self._sample_errors = 0
+        self._ollama_sample_count = 0
+        self._ollama_sample_errors = 0
         self._process_baseline_mib = 0
         self._system_baseline_mib = 0
         self._system_peak_mib = 0
@@ -82,6 +87,8 @@ class GpuResourceMonitor:
                 ),
                 "gpu_sample_count": self._sample_count,
                 "gpu_sample_error_count": self._sample_errors,
+                "ollama_sample_count": self._ollama_sample_count,
+                "ollama_sample_error_count": self._ollama_sample_errors,
                 "process_gpu_baseline_mib": self._process_baseline_mib,
                 "system_gpu_baseline_mib": self._system_baseline_mib,
                 "system_global_gpu_peak_mib": self._system_peak_mib,
@@ -104,58 +111,79 @@ class GpuResourceMonitor:
             self._sample(is_baseline=False)
 
     def _sample(self, *, is_baseline: bool) -> None:
+        system_sample = self._sample_system()
+        ollama_sample = self._sample_ollama()
+        stage = self._stage_provider()
+        with self._lock:
+            if system_sample is None:
+                self._sample_errors += 1
+            else:
+                system, process = system_sample
+                self._sample_count += 1
+                if is_baseline:
+                    self._process_baseline_mib = process
+                    self._system_baseline_mib = system
+                self._system_peak_mib = max(self._system_peak_mib, system)
+                if stage in _VISION_STAGES:
+                    self._ollama_peak_mib = max(self._ollama_peak_mib, system)
+                elif stage is ProcessingStage.COLLECT_CONTEXT:
+                    model_vram = 0 if ollama_sample is None else ollama_sample[1]
+                    non_ollama_system = max(
+                        system - model_vram // _MIB_BYTES,
+                        0,
+                    )
+                    self._stt_peak_mib = max(
+                        self._stt_peak_mib,
+                        non_ollama_system,
+                    )
+            if ollama_sample is None:
+                self._ollama_sample_errors += 1
+            else:
+                model_size, model_vram = ollama_sample
+                self._ollama_sample_count += 1
+                self._ollama_size_bytes = max(
+                    self._ollama_size_bytes,
+                    model_size,
+                )
+                self._ollama_size_vram_bytes = max(
+                    self._ollama_size_vram_bytes,
+                    model_vram,
+                )
+                if model_size > 0:
+                    self._ollama_model_observed = True
+                    self._ollama_model_fully_resident = (
+                        self._ollama_model_fully_resident and model_vram == model_size
+                    )
+
+    def _sample_system(self) -> tuple[int, int] | None:
         for attempt in range(2):
             try:
-                sample = self._probe()
+                sample = self._system_probe()
                 system = _non_negative_integer(sample, "system_used_mib")
                 process = _non_negative_integer(sample, "process_used_mib")
+                return system, process
+            except Exception:
+                if attempt == 0:
+                    continue
+        return None
+
+    def _sample_ollama(self) -> tuple[int, int] | None:
+        for attempt in range(2):
+            try:
+                sample = self._ollama_probe()
                 model_size = _non_negative_integer(sample, "ollama_size_bytes")
                 model_vram = _non_negative_integer(
                     sample,
                     "ollama_size_vram_bytes",
                 )
-                break
+                return model_size, model_vram
             except Exception:
                 if attempt == 0:
                     continue
-        else:
-            with self._lock:
-                self._sample_errors += 1
-            return
-        stage = self._stage_provider()
-        with self._lock:
-            self._sample_count += 1
-            if is_baseline:
-                self._process_baseline_mib = process
-                self._system_baseline_mib = system
-            self._system_peak_mib = max(self._system_peak_mib, system)
-            self._ollama_size_bytes = max(
-                self._ollama_size_bytes,
-                model_size,
-            )
-            self._ollama_size_vram_bytes = max(
-                self._ollama_size_vram_bytes,
-                model_vram,
-            )
-            if model_size > 0:
-                self._ollama_model_observed = True
-                self._ollama_model_fully_resident = (
-                    self._ollama_model_fully_resident and model_vram == model_size
-                )
-            if stage in _VISION_STAGES:
-                self._ollama_peak_mib = max(self._ollama_peak_mib, system)
-            elif stage is ProcessingStage.COLLECT_CONTEXT:
-                non_ollama_system = max(
-                    system - model_vram // _MIB_BYTES,
-                    0,
-                )
-                self._stt_peak_mib = max(
-                    self._stt_peak_mib,
-                    non_ollama_system,
-                )
+        return None
 
 
-def _default_probe(ollama_host: str) -> GpuProbe:
+def _default_system_probe() -> SystemGpuProbe:
     command = find_nvidia_smi()
     process_baseline: int | None = None
 
@@ -166,10 +194,18 @@ def _default_probe(ollama_host: str) -> GpuProbe:
         )
         if process_baseline is None:
             process_baseline = _query_current_process_memory(command)
-        model_size, model_vram = _query_ollama_sizes(ollama_host)
         return {
             "system_used_mib": system,
             "process_used_mib": process_baseline,
+        }
+
+    return probe
+
+
+def _default_ollama_probe(ollama_host: str) -> OllamaGpuProbe:
+    def probe() -> Mapping[str, int]:
+        model_size, model_vram = _query_ollama_sizes(ollama_host)
+        return {
             "ollama_size_bytes": model_size,
             "ollama_size_vram_bytes": model_vram,
         }

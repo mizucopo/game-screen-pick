@@ -18,8 +18,8 @@ from .acceptance_resource_budget import (
 )
 from .atomic_json import write_atomic_json
 
-_RECORD_SCHEMA = "game-screen-pick/target-acceptance@1.2.0"
-_BASELINE_SCHEMA = "game-screen-pick/target-acceptance-baseline@1.2.0"
+_RECORD_SCHEMA = "game-screen-pick/target-acceptance@1.3.0"
+_BASELINE_SCHEMA = "game-screen-pick/target-acceptance-baseline@1.3.0"
 _DENIED_KEY_PARTS = (
     "absolute_path",
     "credential",

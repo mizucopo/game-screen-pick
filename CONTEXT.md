@@ -116,6 +116,10 @@ _Avoid_: Acceptance Run execution context, raw host snapshot, Stage artifact dig
 一つのAcceptance PhaseまたはAcceptance Comparison Runについて、開始から正常終了、中断、またはoperation failureまで連続して計測された実行区間。Completed Stageを再利用してrunを再開しても、source commitの変更を含むそれ以前のattemptを性能証拠から除外しない。process強制終了時もactive markerとAcceptance Attempt Journalから`process_abandoned`として閉じる。
 _Avoid_: Acceptance Run, Acceptance Phase, Acceptance Comparison Run, retry inside model inference, Processing Stage
 
+**GPU Resource Sample Channels**:
+Acceptance Run Attempt中に独立して観測するSystem GPU ChannelとOllama Observation Channel。System GPU Channelは`nvidia-smi`によるsystem全体とprocess baselineを持ち、その欠測だけがresource samplingを不完全にする。Ollama Observation Channelは`/api/ps`によるmodel sizeとGPU resident sizeを持ち、欠測を別件数で記録して成功済みsystem sampleを破棄しない。model未観測またはpartial offloadは独立したmodel gateを不合格にする。
+_Avoid_: 一つのcombined GPU probe, Ollama outageをsystem sample failureとして数えること, 欠測Ollama使用量の推測
+
 **Acceptance Attempt Journal**:
 activeなAcceptance Run Attemptのexecution context、cache・reuse・recompute件数、Stage aggregate、Work Unitごとのresolutionを、Progress Event境界でatomicに更新するprivacy-safeな回復記録。process強制終了後はCompleted Stage、Durable Work Unit、Video Identityの確定manifestと照合してkill直前の作業量を回復する。resource samplerの未確定sampleを捏造せず、attempt完了後に削除する。
 _Avoid_: Acceptance Record, pipeline checkpoint, raw progress log, resource sample database

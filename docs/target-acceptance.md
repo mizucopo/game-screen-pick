@@ -106,11 +106,15 @@ cacheは独立した64 GiB budgetだけへ計上し、temporary workとoutput st
 二重計上しない。確定済みoutputはpeakから除く。
 background disk sampleが一度でも失敗した場合はerror件数を記録し、後続sampleと停止に成功しても
 resource samplingを不完全として扱う。
-GPU sampleはsystem GPU memoryを継続測定する一方、process GPU memoryはrun開始時の
-baselineとして一度だけ取得する。各`nvidia-smi` queryには2秒のtimeoutを設け、同じGPU
-sample内で一時的な失敗を一度だけ即時再試行する。再試行も失敗したsample、または停止timeout
-内に終了しないbackground probeが一つでもあれば、error件数を記録してresource samplingを
-不完全として扱う。
+GPU計測は、`nvidia-smi`によるSystem GPU Channelと、Ollama `/api/ps`によるOllama
+Observation Channelを独立して記録する。System GPU Channelはsystem GPU memoryを継続測定し、
+process GPU memoryをrun開始時のbaselineとして一度だけ取得する。各channelは一時的な失敗を
+同じsample内で一度だけ即時再試行し、成功数とerror数を別々に記録する。System GPU Channelの
+再試行失敗、または停止timeout内に終了しないbackground samplerが一つでもあればresource
+samplingを不完全として扱う。Ollama Observation Channelだけの再試行失敗は成功済みsystem
+sampleを破棄せずresource samplingも不完全にしないが、modelを一度も観測できないrunはmodel
+gateを不合格にする。STT中にOllama観測が欠けたsampleでは推測値を差し引かず、system GPU
+memory全量をSTT peakへ保守的に計上する。各`nvidia-smi` queryには2秒のtimeoutを設ける。
 
 Fresh ProcessingのVideo Identity cache missではwhole-file SHA-256を動画1本ずつatomicに
 確定する。Cache Reuse、Parallelism BaselineからFresh Processingへのprocessing cache切替、
@@ -293,6 +297,9 @@ uv run task acceptance-target \
 `parallelism-baseline`はfull suiteだけで利用できる。`cache-reuse`に必要なFresh Processingの
 cacheが既にない場合は、空cacheを再利用測定として扱わず`fresh-processing`を要求する。
 いずれもmaterialized inputとsuite間で共有するVideo Identity cacheは保持する。
+GPU Resource Sample Channels導入前に記録された不完全なfull suite証拠は、修正版の初回実行で
+`--reset-run parallelism-baseline`を明示して再測定する。これにより3 runの性能・resource証拠を
+同じ計測契約へそろえつつ、共有Video Identity cacheは保持して動画SHA-256を再計算しない。
 suite rootから各output、work、materialized input、processing cacheまでの既存階層を
 recursive deleteより前にすべて`lstat`し、symbolic link、通常directory以外、suite外参照を
 一つでも検出したら全削除対象を変更せず拒否する。このpreflightはmaterializeより前にも行うため、
@@ -365,7 +372,10 @@ gate aggregateだけを含める。canonical reportの各Stageも
 STTを呼び出さなかったphaseでは`runtime.speech_to_text`を`null`として明示し、
 Fresh Processing／Cache Reuseの
 両方が未使用ならSpeech Runtime consistency gateを合格とする。Acceptance Recordとbaselineの
-schemaはこのnullable契約を追加した`1.2.0`とする。
+schemaは、GPU Resource Sample Channelsごとの成功・error件数を追加した`1.3.0`とする。
+durable state schemaは変更せず、旧attemptにchannel件数がない場合だけ0件として読み取る。
+旧attemptの不完全なresource証拠は不完全なまま累積し、明示的に`--reset-run`して再測定しない
+限り合格へ格上げしない。
 performance比較用configurationには設定file digest、URLを含まないendpoint identity、
 privacy-safeな全実効performance設定を保存する。
 Fresh Processing／Cache Reuseの結果一致digestには、選定・棄却・near miss・Context Cue・
