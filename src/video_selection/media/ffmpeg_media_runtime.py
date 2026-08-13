@@ -95,6 +95,7 @@ _FRAME_RANGE_END_PADDING = Fraction(1, 10)
 _PCM_PTS_QUANTIZATION_TOLERANCE_SAMPLES = 3
 _VIDEO_SCAN_PROGRESS_TIMEOUT_SECONDS = 30 * 60.0
 _VIDEO_SCAN_TERMINATION_GRACE_SECONDS = 5.0
+_VIDEO_SCAN_STALL_MESSAGE = "Video ScanのFFmpeg decode進捗が停止しました"
 
 
 class FfmpegMediaRuntime:
@@ -369,14 +370,14 @@ class FfmpegMediaRuntime:
                 if remaining_seconds <= 0:
                     raise MediaRuntimeError(
                         MediaRuntimeFailureReason.DECODER_STALLED,
-                        "Video ScanのFFmpeg decode進捗が停止しました",
+                        _VIDEO_SCAN_STALL_MESSAGE,
                     )
                 try:
                     item = stderr_queue.get(timeout=remaining_seconds)
                 except queue.Empty as error:
                     raise MediaRuntimeError(
                         MediaRuntimeFailureReason.DECODER_STALLED,
-                        "Video ScanのFFmpeg decode進捗が停止しました",
+                        _VIDEO_SCAN_STALL_MESSAGE,
                     ) from error
                 if item is None:
                     break
@@ -427,7 +428,7 @@ class FfmpegMediaRuntime:
             if remaining_seconds <= 0:
                 raise MediaRuntimeError(
                     MediaRuntimeFailureReason.DECODER_STALLED,
-                    "Video ScanのFFmpeg decode進捗が停止しました",
+                    _VIDEO_SCAN_STALL_MESSAGE,
                 )
             return_code, cpu_seconds = _wait_for_scan_process_with_timeout(
                 process,
@@ -1486,7 +1487,7 @@ def _wait_for_scan_process_with_timeout(
     except subprocess.TimeoutExpired as error:
         raise MediaRuntimeError(
             MediaRuntimeFailureReason.DECODER_STALLED,
-            "Video ScanのFFmpeg decode進捗が停止しました",
+            _VIDEO_SCAN_STALL_MESSAGE,
         ) from error
 
 
