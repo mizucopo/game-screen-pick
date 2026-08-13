@@ -13,6 +13,7 @@ class MediaRuntimeFailureReason(str, Enum):
     MISSING_REQUIRED_DEMUXER_OR_DECODER = "missing_required_demuxer_or_decoder"
     MEDIA_PROBE_FAILED = "media_probe_failed"
     DECODER_FAILURE = "decoder_failure"
+    DECODER_STALLED = "decoder_stalled"
     FRAME_EXTRACTION_FAILED = "frame_extraction_failed"
     AUDIO_EXTRACTION_FAILED = "audio_extraction_failed"
     SUBTITLE_EXTRACTION_FAILED = "subtitle_extraction_failed"

@@ -1,11 +1,14 @@
 """system FFmpeg MediaRuntimeのintegration test。"""
 
+import os
 import signal
 import stat
 import struct
 import sys
 import threading
+import time
 from collections.abc import Iterator
+from contextlib import suppress
 from fractions import Fraction
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -61,6 +64,119 @@ def _write_failing_tool(path: Path) -> None:
         encoding="utf-8",
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _write_stalling_scan_tool(path: Path, pid_path: Path) -> None:
+    script = f"""#!{sys.executable}
+import os
+import signal
+import sys
+from pathlib import Path
+
+Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding="utf-8")
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+print("private-media=/secret/input.mp4", file=sys.stderr, flush=True)
+print(
+    "[showinfo@scan_progress] n: 0 pts: 0 duration: 1 s:64x48",
+    file=sys.stderr,
+    flush=True,
+)
+while True:
+    pass
+"""
+    path.write_text(script, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _write_stalling_scan_after_stderr_eof_tool(path: Path, pid_path: Path) -> None:
+    script = f"""#!{sys.executable}
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding="utf-8")
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+print(
+    "[showinfo@scan_progress] n: 0 pts: 0 duration: 1 s:64x48",
+    file=sys.stderr,
+    flush=True,
+)
+time.sleep(0.6)
+sys.stderr.close()
+while True:
+    pass
+"""
+    path.write_text(script, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _write_progressing_scan_tool(path: Path) -> None:
+    script = f"""#!{sys.executable}
+import sys
+import time
+from pathlib import Path
+
+arguments = sys.argv[1:]
+graph = arguments[arguments.index("-filter_complex") + 1]
+progress = "showinfo@scan_progress"
+ownership = "select='gte(pts\\,3000000)'"
+if progress not in graph or (
+    ownership in graph and graph.index(progress) > graph.index(ownership)
+):
+    print("scan progress marker is not before ownership", file=sys.stderr)
+    raise SystemExit(8)
+for index in range(6):
+    print(
+        f"[showinfo@scan_progress] n: {{index}} pts: {{index}} "
+        "duration: 1 s:64x48",
+        file=sys.stderr,
+        flush=True,
+    )
+    time.sleep(0.15)
+print(
+    "[showinfo@timeline] n: 0 pts: 1000 duration: 1 s:64x48",
+    file=sys.stderr,
+    flush=True,
+)
+print(
+    "[showinfo@timeline] n: 1 pts: 1005 duration: 1 s:64x48",
+    file=sys.stderr,
+    flush=True,
+)
+for pattern in (item for item in arguments if "%012d.jpg" in item):
+    sentinel = Path(pattern.replace("%012d", "000000000001"))
+    proxy = Path(pattern.replace("%012d", "000000000002"))
+    sentinel.write_bytes(b"sentinel")
+    proxy.write_bytes(b"proxy")
+print(
+    "[showinfo@heartbeat] n: 0 pts: 1000 duration: 1 s:64x48",
+    file=sys.stderr,
+    flush=True,
+)
+print(
+    "[showinfo@scene] n: 0 pts: 1000 duration: 1 s:64x48",
+    file=sys.stderr,
+    flush=True,
+)
+"""
+    path.write_text(script, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _wait_for_decoder_pid(pid_path: Path, timeout_seconds: float) -> int | None:
+    """decoder PIDが完全に書き込まれるまで待つ。"""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            value = pid_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            value = ""
+        if value:
+            return int(value)
+        time.sleep(0.01)
+    return None
 
 
 def _write_strict_proxy_pts_tool(path: Path) -> None:
@@ -677,17 +793,13 @@ def test_scan_video_records_maximum_dimensions_across_timeline(
         (scene_folder / "000000000000.jpg").write_bytes(b"sentinel")
         return process
 
-    def reap(_process: object) -> tuple[int, float]:
-        process.returncode = 0
-        return (0, 0.01)
-
     monkeypatch.setattr(
         "src.video_selection.media.ffmpeg_media_runtime.subprocess.Popen",
         start_process,
     )
     monkeypatch.setattr(
         "src.video_selection.media.ffmpeg_media_runtime.wait_for_process",
-        reap,
+        lambda _process, **_kwargs: (0, 0.01),
     )
     runtime = FfmpegMediaRuntime()
     stream = MediaStream(
@@ -964,6 +1076,314 @@ def test_scan_partition_supplies_monotonic_pts_to_proxy_encoder(
     assert [frame.source_pts for frame in scan.scene_frames] == [1000]
 
 
+def test_scan_partition_reports_safe_stall_and_reaps_decoder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """decode進捗停止が安全なreasonで失敗しprocessが回収されること。
+
+    Arrange:
+        - 1frameの進捗後に停止しSIGTERMを無視するdecoderが用意される
+        - source pathを模したprivate文字列がstderrへ出力される
+    Act:
+        - 短い進捗期限でpartition scanが実行される
+    Assert:
+        - privacy-safeなdecoder stall reasonが期限内に返されること
+        - decoderが強制終了され子processとして回収されること
+    """
+    # Arrange
+    pid_path = tmp_path / "decoder.pid"
+    stalling_ffmpeg = tmp_path / "stalling-ffmpeg"
+    _write_stalling_scan_tool(stalling_ffmpeg, pid_path)
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime."
+        "_VIDEO_SCAN_PROGRESS_TIMEOUT_SECONDS",
+        0.5,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime."
+        "_VIDEO_SCAN_TERMINATION_GRACE_SECONDS",
+        0.1,
+    )
+    runtime = FfmpegMediaRuntime(ffmpeg_executable=str(stalling_ffmpeg))
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="av1",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=2000,
+        width=64,
+        height=48,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+        is_attached_picture=False,
+    )
+    failures: list[BaseException] = []
+
+    def scan_partition() -> None:
+        try:
+            runtime.scan_video_partition(
+                tmp_path / "source.mp4",
+                stream,
+                tmp_path / "stall-artifacts",
+                media_origin=Fraction(0),
+                start_pts=1000,
+                end_pts=None,
+                heartbeat_interval_seconds=1.0,
+                scene_change_threshold=0.25,
+                scene_min_interval_seconds=0.5,
+                decode_backend="nvdec",
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    scan_thread = threading.Thread(target=scan_partition)
+
+    # Act
+    scan_thread.start()
+    decoder_pid: int | None = None
+    completed_before_cleanup = False
+    try:
+        decoder_pid = _wait_for_decoder_pid(pid_path, 2.0)
+        scan_thread.join(timeout=2)
+        completed_before_cleanup = not scan_thread.is_alive()
+    finally:
+        if scan_thread.is_alive():
+            runtime.cancel_video_scans()
+            if decoder_pid is not None:
+                with suppress(ProcessLookupError):
+                    os.kill(decoder_pid, signal.SIGKILL)
+            scan_thread.join(timeout=2)
+
+    # Assert
+    assert decoder_pid is not None
+    assert completed_before_cleanup
+    assert not scan_thread.is_alive()
+    assert len(failures) == 1
+    failure = failures[0]
+    assert isinstance(failure, MediaRuntimeError)
+    assert failure.reason is MediaRuntimeFailureReason.DECODER_STALLED
+    assert str(failure) == "Video ScanのFFmpeg decode進捗が停止しました"
+    assert "/secret/input.mp4" not in str(failure)
+    with pytest.raises(ChildProcessError):
+        os.waitpid(decoder_pid, os.WNOHANG)
+
+
+def test_scan_partition_allows_long_decode_while_progress_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """絶対期限を越えてもdecode進捗が続くpartitionが完了されること。
+
+    Arrange:
+        - ownership前の進捗frameを定期的に返す長いpreroll decoderが用意される
+    Act:
+        - 短い進捗期限でpartition scanが実行される
+    Assert:
+        - wall時間では打ち切られずexact timelineとproxyが返されること
+    """
+    # Arrange
+    progressing_ffmpeg = tmp_path / "progressing-ffmpeg"
+    _write_progressing_scan_tool(progressing_ffmpeg)
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime."
+        "_VIDEO_SCAN_PROGRESS_TIMEOUT_SECONDS",
+        0.5,
+    )
+    runtime = FfmpegMediaRuntime(ffmpeg_executable=str(progressing_ffmpeg))
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="av1",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=2000,
+        width=64,
+        height=48,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+        is_attached_picture=False,
+    )
+
+    # Act
+    scan = runtime.scan_video_partition(
+        tmp_path / "source.mp4",
+        stream,
+        tmp_path / "progressing-artifacts",
+        media_origin=Fraction(0),
+        start_pts=1000,
+        end_pts=None,
+        heartbeat_interval_seconds=1.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="nvdec",
+    )
+
+    # Assert
+    assert isinstance(scan, NativeVideoScan)
+    assert scan.origin_pts == 1000
+    assert scan.last_frame_pts == 1005
+    assert [frame.source_pts for frame in scan.heartbeats] == [1000]
+    assert [frame.source_pts for frame in scan.scene_frames] == [1000]
+
+
+def test_scan_partition_reports_stall_after_stderr_eof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """stderr EOF後も終了しないdecoderがstallとして回収されること。
+
+    Arrange:
+        - stderrを閉じた後にCPU loopを続けSIGTERMを無視するdecoderが用意される
+    Act:
+        - 短い進捗期限でpartition scanが実行される
+    Assert:
+        - waitが無期限化せずprivacy-safeなstall reasonで失敗されること
+        - decoderが強制終了され子processとして回収されること
+    """
+    # Arrange
+    pid_path = tmp_path / "stderr-eof-decoder.pid"
+    stalling_ffmpeg = tmp_path / "stderr-eof-stalling-ffmpeg"
+    _write_stalling_scan_after_stderr_eof_tool(stalling_ffmpeg, pid_path)
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime."
+        "_VIDEO_SCAN_PROGRESS_TIMEOUT_SECONDS",
+        0.8,
+    )
+    monkeypatch.setattr(
+        "src.video_selection.media.ffmpeg_media_runtime."
+        "_VIDEO_SCAN_TERMINATION_GRACE_SECONDS",
+        0.05,
+    )
+    runtime = FfmpegMediaRuntime(ffmpeg_executable=str(stalling_ffmpeg))
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="av1",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=2000,
+        width=64,
+        height=48,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+        is_attached_picture=False,
+    )
+
+    failures: list[BaseException] = []
+
+    def scan_partition() -> None:
+        try:
+            runtime.scan_video_partition(
+                tmp_path / "source.mp4",
+                stream,
+                tmp_path / "stderr-eof-stall-artifacts",
+                media_origin=Fraction(0),
+                start_pts=1000,
+                end_pts=None,
+                heartbeat_interval_seconds=1.0,
+                scene_change_threshold=0.25,
+                scene_min_interval_seconds=0.5,
+                decode_backend="nvdec",
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    scan_thread = threading.Thread(target=scan_partition)
+
+    # Act
+    started_at = time.monotonic()
+    scan_thread.start()
+    decoder_pid: int | None = None
+    completed_before_cleanup = False
+    try:
+        decoder_pid = _wait_for_decoder_pid(pid_path, 2.0)
+        scan_thread.join(timeout=2)
+        completed_before_cleanup = not scan_thread.is_alive()
+    finally:
+        if scan_thread.is_alive():
+            runtime.cancel_video_scans()
+            if decoder_pid is not None:
+                with suppress(ProcessLookupError):
+                    os.kill(decoder_pid, signal.SIGKILL)
+            scan_thread.join(timeout=2)
+    elapsed_seconds = time.monotonic() - started_at
+
+    # Assert
+    assert decoder_pid is not None
+    assert completed_before_cleanup
+    assert not scan_thread.is_alive()
+    assert len(failures) == 1
+    failure = failures[0]
+    assert isinstance(failure, MediaRuntimeError)
+    assert failure.reason is MediaRuntimeFailureReason.DECODER_STALLED
+    assert str(failure) == "Video ScanのFFmpeg decode進捗が停止しました"
+    assert elapsed_seconds < 1.2
+    with pytest.raises(ChildProcessError):
+        os.waitpid(decoder_pid, os.WNOHANG)
+
+
+def test_scan_partition_places_progress_marker_before_partition_ownership(
+    tmp_path: Path,
+) -> None:
+    """長いprerollも監視される位置へprogress markerが配置されること。
+
+    Arrange:
+        - 30分を超えるheartbeat設定とpartition開始PTSが用意される
+    Act:
+        - 公開MediaRuntimeからpartition scan commandが実行される
+    Assert:
+        - ownership filterより前にscan progress markerが配置されること
+    """
+    # Arrange
+    strict_ffmpeg = tmp_path / "strict-progress-ffmpeg"
+    _write_progressing_scan_tool(strict_ffmpeg)
+    runtime = FfmpegMediaRuntime(ffmpeg_executable=str(strict_ffmpeg))
+    stream = MediaStream(
+        index=0,
+        kind="video",
+        codec_name="av1",
+        time_base=Fraction(1, 1000),
+        start_pts=0,
+        duration_ts=4_000_000,
+        width=64,
+        height=48,
+        sample_rate=None,
+        channels=None,
+        language=None,
+        is_default=True,
+        is_forced=False,
+        is_attached_picture=False,
+    )
+
+    # Act
+    scan = runtime.scan_video_partition(
+        tmp_path / "source.mp4",
+        stream,
+        tmp_path / "progress-marker-artifacts",
+        media_origin=Fraction(0),
+        start_pts=3_000_000,
+        end_pts=None,
+        heartbeat_interval_seconds=2_000.0,
+        scene_change_threshold=0.25,
+        scene_min_interval_seconds=0.5,
+        decode_backend="nvdec",
+    )
+
+    # Assert
+    assert isinstance(scan, NativeVideoScan)
+
+
 def test_scan_partition_allows_no_owned_heartbeat_or_scene(
     tmp_path: Path,
 ) -> None:
@@ -1133,17 +1553,13 @@ def test_scan_partition_does_not_treat_unparsed_proxy_output_as_empty(
         (heartbeat_folder / "000000000001.jpg").write_bytes(b"proxy")
         return process
 
-    def reap(_process: object) -> tuple[int, float]:
-        process.returncode = 0
-        return 0, 0.01
-
     monkeypatch.setattr(
         "src.video_selection.media.ffmpeg_media_runtime.subprocess.Popen",
         start_process,
     )
     monkeypatch.setattr(
         "src.video_selection.media.ffmpeg_media_runtime.wait_for_process",
-        reap,
+        lambda _process, **_kwargs: (0, 0.01),
     )
     runtime = FfmpegMediaRuntime()
     stream = MediaStream(
@@ -1206,13 +1622,7 @@ def test_scan_video_reaps_decoder_when_stderr_processing_fails(
 
     process.stderr = failing_stderr()
     killed: list[tuple[int, int]] = []
-    reaped: list[int] = []
-
-    def reap(active_process: object) -> tuple[int, float]:
-        assert active_process is process
-        reaped.append(process.pid)
-        process.returncode = -15
-        return -15, 0.0
+    process.wait.return_value = -15
 
     monkeypatch.setattr(
         "src.video_selection.media.ffmpeg_media_runtime.subprocess.Popen",
@@ -1221,10 +1631,6 @@ def test_scan_video_reaps_decoder_when_stderr_processing_fails(
     monkeypatch.setattr(
         "src.video_selection.media.ffmpeg_media_runtime.os.kill",
         lambda pid, sent_signal: killed.append((pid, sent_signal)),
-    )
-    monkeypatch.setattr(
-        "src.video_selection.media.ffmpeg_media_runtime.wait_for_process",
-        reap,
     )
     runtime = FfmpegMediaRuntime()
     stream = MediaStream(
@@ -1258,7 +1664,7 @@ def test_scan_video_reaps_decoder_when_stderr_processing_fails(
 
     # Assert
     assert killed == [(123, signal.SIGTERM)]
-    assert reaped == [123]
+    process.wait.assert_called_once_with(timeout=5.0)
 
 
 def test_cancel_requested_before_scan_prevents_decoder_start(tmp_path: Path) -> None:
