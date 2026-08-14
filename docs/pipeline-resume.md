@@ -76,15 +76,24 @@ Scene CatalogはPrimary Representative Frameに依存し、Candidate Annotation�
 失効させず、Annotation以降だけへ伝播します。Combat Representative Fallbackの兄弟frameは
 それぞれ独立したCompleted Stageであり、並列完了順ではなく元のframe順で集約します。
 
-Video Scanはcold runと再開runの両方で同じ15分固定partitionを使います。streamに
-`duration_ts`がない場合だけ、ffprobeのcontainer durationを有理数としてstream tickへ
-切り上げ、完全な15分区間の境界を決めます。このhintをVideo Durationやframe時刻には
-使いません。15分未満の端数は独立partitionにせず、最後のpartitionを直前の境界から
-EOFまで開くことで、probeの丸めによる末尾frameの欠落と空partitionの必須化を防ぎます。
+Video Scanはcold runと再開runの両方で同じ15分固定partitionを使います。正のstream
+`duration_ts`がある場合は末尾の端数も独立させ、最後だけを端数の開始PTSからEOFまで
+開くため、一回の連続decodeは最大15分です。streamに`duration_ts`がない場合だけ、
+ffprobeのcontainer durationを有理数としてstream tickへ切り上げ、完全な15分区間の境界を
+決めます。このhintをVideo Durationやframe時刻には使いません。近似hintの15分未満の端数は
+独立partitionにせず、最後のpartitionを直前の境界からEOFまで開くことで、probeの丸めによる
+末尾frameの欠落と空partitionの必須化を防ぎます。
 別streamの長いtailにより完全な15分境界まで過大評価された場合は、最初の空partitionも
 checkpointへ確定し、同じ開始PTSからEOFまでを一度だけ確認します。EOF確認も空なら後続境界を
 処理せず、後半frameがあればtimestamp gapとしてそのtailを最終partitionへ保持します。
 並列workerの完了順ではなくVideo OrderとWork Unit keyの安定順で集約します。
+
+partition ownership前のdecode進捗frame通知が30分停止したFFmpegは`decoder_stalled`として扱い、SIGTERMの5秒後も
+終了しなければSIGKILLして回収します。errorにはraw stderrやsource pathを含めません。
+失敗中のtemporary partitionだけを捨て、atomicに確定済みの兄弟partitionは次回runで再利用します。
+exact durationの末尾を独立させる変更はsource timing、proxy、選定結果を変えない運用境界なので、
+Scan engine versionを上げません。既存のCompleted Stageはそのまま再利用し、親Stageが未確定の
+場合も同じ開始・終了PTSを持つ確定済みpartitionを保持して、新しい末尾境界だけを計算します。
 
 Video Order上の各Video Stageは従来どおり順番に確定します。その内側で、互いに離れた
 Refinement Window Groupだけを、Video Scanと共有するprocess許可済みlogical CPU容量、systemとapplicable cgroup
@@ -159,7 +168,7 @@ Stageもartifactとmanifestを同じ方法で検証します。親だけが欠�
 | Release materialization | 指定interval 1件 | 作成中だったclip 1件。同runtimeの確定clipは保持 |
 | Full materialization | source 1本のsymlinkとduration | probe中だったsource 1本 |
 | Video Identity | 動画1本 | hash中だった1本のSHA-256 |
-| Video Scan | 15分のPTS partition | decode中だった1 partition |
+| Video Scan | 15分以下のPTS partition（exact stream duration時） | decode中だった1 partition |
 | Frame Candidate Extraction | merge済みRefinement Window Group | 実行中だった各group。未開始groupは処理量の損失なし、確定済み兄弟groupは保持 |
 | Embedded Subtitle | 選択subtitle stream 1本 | 抽出中だったstream |
 | PCM Extraction | 固定sample range 1件 | 抽出中だったrange |

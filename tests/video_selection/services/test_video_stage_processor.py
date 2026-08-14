@@ -1128,10 +1128,11 @@ def test_completed_scan_partition_survives_later_partition_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """後続scan partition失敗後も完了済みpartitionが再利用されること。
+    """端数scan partition失敗後も完了済みpartitionが再利用されること。
 
     Arrange:
-        - 2秒動画を1秒partitionへ分割し、2件目だけ初回に失敗させる
+        - exact durationが2.1秒の動画を最大1秒partitionへ分割する
+        - 3件目の端数partitionだけ初回に失敗させる
     Act:
         - 初回失敗後に同じVideo SourceのVideo Stageが再実行される
     Assert:
@@ -1148,25 +1149,49 @@ def test_completed_scan_partition_survives_later_partition_failure(
     (input_folder / "video.mp4").write_bytes(b"video-content")
     video_set = discover_video_set(input_folder)
     configuration = _configuration(input_folder, tmp_path / "output")
+    media_probe = MediaProbe(
+        format_names=("matroska",),
+        streams=(
+            MediaStream(
+                index=0,
+                kind="video",
+                codec_name="ffv1",
+                time_base=Fraction(1, 10),
+                start_pts=0,
+                duration_ts=21,
+                width=64,
+                height=48,
+                sample_rate=None,
+                channels=None,
+                language=None,
+                is_default=True,
+                is_forced=False,
+                is_attached_picture=False,
+            ),
+        ),
+    )
     scan_call_count = 0
 
-    def fail_second_partition(_path: Path) -> None:
+    def fail_remainder_partition(_path: Path) -> None:
         nonlocal scan_call_count
         scan_call_count += 1
-        if scan_call_count == 2:
-            raise OSError("injected second scan partition failure")
+        if scan_call_count == 3:
+            raise OSError("injected remainder scan partition failure")
 
-    failing_runtime = FakeVideoStageMediaRuntime(on_scan_video=fail_second_partition)
+    failing_runtime = FakeVideoStageMediaRuntime(
+        media_probe=media_probe,
+        on_scan_video=fail_remainder_partition,
+    )
     with pytest.raises(
         OSError,
-        match="injected second scan partition failure",
+        match="injected remainder scan partition failure",
     ):
         VideoStageProcessor(
             failing_runtime,
             FakeSpeechRuntime(),
             RecordingRunObserver(),
         ).process(video_set, configuration)
-    retry_runtime = FakeVideoStageMediaRuntime()
+    retry_runtime = FakeVideoStageMediaRuntime(media_probe=media_probe)
 
     # Act
     resumed = VideoStageProcessor(
@@ -1178,7 +1203,7 @@ def test_completed_scan_partition_survives_later_partition_failure(
     uninterrupted_input.mkdir()
     (uninterrupted_input / "video.mp4").write_bytes(b"video-content")
     uninterrupted = VideoStageProcessor(
-        FakeVideoStageMediaRuntime(),
+        FakeVideoStageMediaRuntime(media_probe=media_probe),
         FakeSpeechRuntime(),
         RecordingRunObserver(),
     ).process(
@@ -1189,10 +1214,10 @@ def test_completed_scan_partition_survives_later_partition_failure(
     # Assert
     assert [
         (start, end) for _path, start, end in failing_runtime.scan_partition_calls
-    ] == [(0, 10), (10, None)]
+    ] == [(0, 10), (10, 20), (20, None)]
     assert [
         (start, end) for _path, start, end in retry_runtime.scan_partition_calls
-    ] == [(10, None)]
+    ] == [(20, None)]
     assert resumed.scan.timeline == uninterrupted.scan.timeline
     assert tuple(
         (heartbeat.source_pts, heartbeat.proxy_path.read_bytes())
@@ -1209,7 +1234,7 @@ def test_completed_scan_partition_survives_later_partition_failure(
         (candidate.identifier, candidate.image_bytes)
         for candidate in uninterrupted.extraction.candidates
     )
-    assert resumed.scan.metrics.decode_pass_count == 2
+    assert resumed.scan.metrics.decode_pass_count == 3
 
 
 def test_hash_consistent_wrong_scan_partition_recomputes_only_that_partition(

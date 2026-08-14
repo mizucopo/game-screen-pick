@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import queue
 import re
 import signal
 import subprocess
@@ -14,8 +15,8 @@ from contextlib import suppress
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
-from threading import Lock
-from typing import NoReturn
+from threading import Lock, Thread
+from typing import IO, NoReturn
 
 from ..models.decoded_video_frame import DecodedVideoFrame
 from ..models.embedded_subtitle import EmbeddedSubtitle
@@ -83,13 +84,18 @@ _DECODE_ERRORS = (
     EOFError,
     ValueError,
 )
-_SHOWINFO_BRANCH_PATTERN = re.compile(r"showinfo@(?P<branch>timeline|heartbeat|scene)")
+_SHOWINFO_BRANCH_PATTERN = re.compile(
+    r"showinfo@(?P<branch>scan_progress|timeline|heartbeat|scene)"
+)
 _SHOWINFO_PTS_PATTERN = re.compile(r"\bpts:\s*(-?\d+)")
 _SHOWINFO_DURATION_PATTERN = re.compile(r"\bduration:\s*(-?\d+)")
 _SHOWINFO_SIZE_PATTERN = re.compile(r"\bs:(\d+)x(\d+)")
 _FRAME_RANGE_SEEK_PADDING = Fraction(1)
 _FRAME_RANGE_END_PADDING = Fraction(1, 10)
 _PCM_PTS_QUANTIZATION_TOLERANCE_SAMPLES = 3
+_VIDEO_SCAN_PROGRESS_TIMEOUT_SECONDS = 30 * 60.0
+_VIDEO_SCAN_TERMINATION_GRACE_SECONDS = 5.0
+_VIDEO_SCAN_STALL_MESSAGE = "Video ScanのFFmpeg decode進捗が停止しました"
 
 
 class FfmpegMediaRuntime:
@@ -333,6 +339,7 @@ class FfmpegMediaRuntime:
         scene_metadata: list[tuple[int, int | None, int, int]] = []
         stderr_tail: deque[str] = deque(maxlen=80)
         process: subprocess.Popen[str] | None = None
+        stderr_thread: Thread | None = None
         try:
             with self._active_scan_lock:
                 if self._video_scan_cancellation_requested:
@@ -350,12 +357,43 @@ class FfmpegMediaRuntime:
             if process.stderr is None:
                 msg = "FFmpeg scan stderrを開始できません"
                 raise RuntimeError(msg)
-            for line in process.stderr:
+            stderr_queue: queue.Queue[str | BaseException | None] = queue.Queue()
+            stderr_thread = Thread(
+                target=_collect_scan_stderr,
+                args=(process.stderr, stderr_queue),
+                daemon=True,
+            )
+            stderr_thread.start()
+            progress_deadline = time.monotonic() + _VIDEO_SCAN_PROGRESS_TIMEOUT_SECONDS
+            while True:
+                remaining_seconds = progress_deadline - time.monotonic()
+                if remaining_seconds <= 0:
+                    raise MediaRuntimeError(
+                        MediaRuntimeFailureReason.DECODER_STALLED,
+                        _VIDEO_SCAN_STALL_MESSAGE,
+                    )
+                try:
+                    item = stderr_queue.get(timeout=remaining_seconds)
+                except queue.Empty as error:
+                    raise MediaRuntimeError(
+                        MediaRuntimeFailureReason.DECODER_STALLED,
+                        _VIDEO_SCAN_STALL_MESSAGE,
+                    ) from error
+                if item is None:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                line = item
                 stderr_tail.append(line.rstrip())
                 parsed = _parse_named_showinfo(line)
                 if parsed is None:
                     continue
                 branch, metadata = parsed
+                if branch == "scan_progress":
+                    progress_deadline = (
+                        time.monotonic() + _VIDEO_SCAN_PROGRESS_TIMEOUT_SECONDS
+                    )
+                    continue
                 if branch == "timeline":
                     frame_pts, _duration, frame_width, frame_height = metadata
                     maximum_frame_width = max(maximum_frame_width, frame_width)
@@ -386,7 +424,16 @@ class FfmpegMediaRuntime:
                     heartbeat_metadata.append(metadata)
                 else:
                     scene_metadata.append(metadata)
-            return_code, cpu_seconds = wait_for_process(process)
+            remaining_seconds = progress_deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise MediaRuntimeError(
+                    MediaRuntimeFailureReason.DECODER_STALLED,
+                    _VIDEO_SCAN_STALL_MESSAGE,
+                )
+            return_code, cpu_seconds = _wait_for_scan_process_with_timeout(
+                process,
+                remaining_seconds,
+            )
         except OSError as error:
             raise MediaRuntimeError(
                 MediaRuntimeFailureReason.DECODER_FAILURE,
@@ -395,13 +442,12 @@ class FfmpegMediaRuntime:
         finally:
             if process is not None:
                 if process.returncode is None:
-                    with suppress(ProcessLookupError):
-                        os.kill(process.pid, signal.SIGTERM)
-                    with suppress(ChildProcessError):
-                        wait_for_process(process)
+                    _terminate_and_reap_scan_process(process)
                 if process.stderr is not None:
                     with suppress(OSError):
                         process.stderr.close()
+                if stderr_thread is not None:
+                    stderr_thread.join()
                 with self._active_scan_lock:
                     self._active_scan_processes.discard(process)
         wall_seconds = time.monotonic() - started_at
@@ -1108,7 +1154,7 @@ class FfmpegMediaRuntime:
         partition_filter = _scan_partition_filter(start_pts, end_pts)
         ownership_filter = "" if partition_filter is None else f"{partition_filter},"
         source_graph = (
-            f"[0:{stream.index}]split=5[timeline_source]"
+            f"[0:{stream.index}]showinfo@scan_progress,split=5[timeline_source]"
             "[heartbeat_source][heartbeat_sentinel_source]"
             "[scene_source][scene_sentinel_source]"
         )
@@ -1415,6 +1461,46 @@ def _decode_video_frame_range(
             on_process_finished=on_process_finished,
         )
     )
+
+
+def _collect_scan_stderr(
+    stderr: IO[str],
+    stderr_queue: queue.Queue[str | BaseException | None],
+) -> None:
+    """blocking stderrを別threadで読みmain threadの進捗期限を有効にする。"""
+    try:
+        for line in stderr:
+            stderr_queue.put(line)
+    except BaseException as error:
+        stderr_queue.put(error)
+    finally:
+        stderr_queue.put(None)
+
+
+def _wait_for_scan_process_with_timeout(
+    process: subprocess.Popen[str],
+    timeout_seconds: float,
+) -> tuple[int, float]:
+    """一つのreaperでCPU metricとstall期限付き終了を回収する。"""
+    try:
+        return wait_for_process(process, timeout_seconds=timeout_seconds)
+    except subprocess.TimeoutExpired as error:
+        raise MediaRuntimeError(
+            MediaRuntimeFailureReason.DECODER_STALLED,
+            _VIDEO_SCAN_STALL_MESSAGE,
+        ) from error
+
+
+def _terminate_and_reap_scan_process(process: subprocess.Popen[str]) -> None:
+    """Video Scan processを猶予付きで終了し必ず子processとして回収する。"""
+    with suppress(ProcessLookupError):
+        os.kill(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=_VIDEO_SCAN_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        with suppress(ProcessLookupError):
+            os.kill(process.pid, signal.SIGKILL)
+        process.wait()
 
 
 def _bounded_scale_filter(max_dimension: int) -> str:

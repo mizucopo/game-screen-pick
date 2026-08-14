@@ -14,8 +14,9 @@ Ctrl+Cでは未開始の`scan-video`を先に取り消し、その後で実行�
 
 1. `scan-video`
    - `attached_pic`を除外し、default disposition、stream indexの順でPrimary Video Streamを決めます。
-   - exact stream timingを15分の固定PTS partitionへ分け、各partitionの一回のnative decodeを、1秒heartbeat、320px scene signal、全frame timing・最大frame寸法へ分岐します。streamの`duration_ts`がないcontainerでは、ffprobeのcontainer durationを有理数のままstream tickへ切り上げ、完全な15分区間の境界だけを決めます。15分未満の端数は独立partitionにせず、最後のpartitionを直前の境界からEOFまで開きます。過大なcontainer tailで空partitionへ到達した場合は、その空結果を確定して同じ開始PTSからEOFまでを確認します。後半frameがなければ後続境界を止め、timestamp gap後にframeがあれば最終partitionとして保持します。
+   - exact stream timingを15分の固定PTS partitionへ分け、各partitionの一回のnative decodeを、1秒heartbeat、320px scene signal、全frame timing・最大frame寸法へ分岐します。正のstream `duration_ts`がある場合は15分未満の末尾も独立させ、最後のpartitionだけをその端数の開始PTSからEOFまで開くため、一回の連続decodeは最大15分です。streamの`duration_ts`がないcontainerでは、ffprobeのcontainer durationを有理数のままstream tickへ切り上げ、完全な15分区間の境界だけを決めます。この近似hintの端数は独立partitionにせず、最後のpartitionを直前の境界からEOFまで開きます。過大なcontainer tailで空partitionへ到達した場合は、その空結果を確定して同じ開始PTSからEOFまでを確認します。後半frameがなければ後続境界を止め、timestamp gap後にframeがあれば最終partitionとして保持します。
    - 各partitionをDurable Work Unitとしてatomicに確定します。cold runと再開runが同じpartition境界を使うため、再開の有無でtimeline、scene signal、Candidate IDを変えません。
+   - FFmpegからownership前のdecode進捗frameが30分間一件も通知されない場合は`decoder_stalled`で失敗させます。SIGTERM後5秒以内に終了しないdecoderはSIGKILLして子processとして回収し、raw stderrやsource pathをerrorへ含めません。未確定temporary artifactだけを破棄し、確定済みpartitionは次回runで再利用します。
    - heartbeat/scene proxyは1件ずつRGB decode・測定して解放し、全proxyのRGBを同時保持しません。
    - partitionをPTS順に集約し、Heartbeat Proxy、scene signalの時刻、exact timeline、scan metricをCompleted Stageとしてatomicに確定します。
 2. `extract-frame-candidates`

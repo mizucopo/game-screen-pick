@@ -33,6 +33,7 @@ from ..models.media_stream import MediaStream
 from ..models.native_video_scan import NativeVideoScan
 from ..models.prepared_video_scan import PreparedVideoScan
 from ..models.processing_stage import VIDEO_STAGE_ORDER, ProcessingStage
+from ..models.scan_partition_duration import ScanPartitionDuration
 from ..models.scanned_video_frame import ScannedVideoFrame
 from ..models.video_scan_resource_sample import VideoScanResourceSample
 from ..models.video_scan_result import VideoScanResult
@@ -105,7 +106,6 @@ _ENTITY_ID_VERSION = "video-entity-id-v1"
 _CANDIDATE_PROXY_CONTRACT = "ffmpeg-mjpeg-960-q3-no-metadata-v1"
 _SCAN_PROGRESS_HEARTBEAT_SECONDS = 30.0
 
-ScanPartitionDuration = tuple[str, int]
 VideoScanPartition = NativeVideoScan | EmptyVideoScanPartition
 AvailableMemoryReader = Callable[[], int | None]
 ProbedVideoSource = tuple[
@@ -492,7 +492,7 @@ class VideoStageProcessor:
                         source,
                         primary_stream,
                         media_origin,
-                        scan_partition_duration[1],
+                        scan_partition_duration,
                         configuration,
                         semantic_input,
                         stage_root,
@@ -542,7 +542,7 @@ class VideoStageProcessor:
         source: VideoSource,
         primary_stream: MediaStream,
         media_origin: Fraction,
-        scan_partition_duration_ts: int,
+        scan_partition_duration: ScanPartitionDuration,
         configuration: EffectiveConfiguration,
         scan_input: dict[str, object],
         stage_root: Path,
@@ -562,7 +562,7 @@ class VideoStageProcessor:
         for partition_index, (start_pts, end_pts) in enumerate(
             _build_scan_partitions(
                 primary_stream,
-                scan_partition_duration_ts,
+                scan_partition_duration,
             ),
             start=1,
         ):
@@ -1057,22 +1057,21 @@ class VideoStageProcessor:
 
 def _build_scan_partitions(
     stream: MediaStream,
-    duration_ts: int,
+    duration: ScanPartitionDuration,
 ) -> tuple[tuple[int, int | None], ...]:
-    """probe durationを固定区間へ分け、最後だけEOFまで開く。"""
-    if (
-        stream.kind != "video"
-        or stream.time_base is None
-        or stream.start_pts is None
-        or duration_ts <= 0
-    ):
+    """exact stream durationを上限付き固定区間へ分け、最後だけEOFまで開く。"""
+    if stream.kind != "video" or stream.time_base is None or stream.start_pts is None:
         msg = "再開可能なVideo Scanにはstart PTSと正のdurationが必要です"
         raise ValueError(msg)
     step_value = Fraction(str(_SCAN_PARTITION_SECONDS)) / stream.time_base
     step_pts = max(1, step_value.numerator // step_value.denominator)
-    hinted_end = stream.start_pts + duration_ts
+    hinted_end = stream.start_pts + duration.duration_ts
     starts = tuple(range(stream.start_pts, hinted_end, step_pts))
-    if len(starts) > 1 and duration_ts % step_pts != 0:
+    if (
+        not duration.is_exact
+        and len(starts) > 1
+        and duration.duration_ts % step_pts != 0
+    ):
         starts = starts[:-1]
     if not starts:
         msg = "Video Scan partitionを構築できませんでした"
@@ -1407,8 +1406,8 @@ def _scan_semantic_input(
             "seconds": _SCAN_PARTITION_SECONDS,
             "last_partition": "open-ended-eof",
             "duration_hint": {
-                "source": scan_partition_duration[0],
-                "duration_ts": scan_partition_duration[1],
+                "source": scan_partition_duration.source,
+                "duration_ts": scan_partition_duration.duration_ts,
             },
         },
         "timeline_algorithm": _TIMELINE_ALGORITHM_VERSION,
@@ -1425,7 +1424,10 @@ def _resolve_scan_partition_duration(
         msg = "再開可能なVideo Scanにはvideo streamのstart PTSとtime baseが必要です"
         raise ValueError(msg)
     if stream.duration_ts is not None and stream.duration_ts > 0:
-        return ("stream", stream.duration_ts)
+        return ScanPartitionDuration(
+            duration_ts=stream.duration_ts,
+            is_exact=True,
+        )
     if container_duration is None or container_duration <= 0:
         msg = "再開可能なVideo Scanにはstreamまたはcontainerの正のdurationが必要です"
         raise ValueError(msg)
@@ -1436,7 +1438,10 @@ def _resolve_scan_partition_duration(
     if duration_ts <= 0:
         msg = "Video Scanのcontainer durationをstream tickへ変換できませんでした"
         raise ValueError(msg)
-    return ("container", duration_ts)
+    return ScanPartitionDuration(
+        duration_ts=duration_ts,
+        is_exact=False,
+    )
 
 
 def _media_origin(probe: MediaProbe) -> Fraction:
