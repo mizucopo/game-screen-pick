@@ -42,6 +42,7 @@ from ..services.completed_stage_writer import CompletedStageWriter
 from ..services.discover_video_set import discover_video_set
 from ..services.input_folder_lock import InputFolderLock
 from ..services.prepare_processing_cache import prepare_processing_cache
+from ..services.resumable_shortlist_selector import ResumableShortlistSelector
 from ..services.run_progress_tracker import RunProgressTracker
 from ..services.sanitize_selection_annotations_for_publication import (
     sanitize_selection_annotations_for_publication,
@@ -49,7 +50,6 @@ from ..services.sanitize_selection_annotations_for_publication import (
 from ..services.select_video_set_images import (
     CandidateMomentTimelines,
     SpoilerSensitivity,
-    select_from_shortlist_batches,
     select_video_set_images,
     shortlist_selection_can_stop,
 )
@@ -340,8 +340,12 @@ class VideoSelectionApplication:
                 if pending_batches is None
                 else chain(replayed_batches, pending_batches)
             )
-            selection = select_from_shortlist_batches(
+            selection = ResumableShortlistSelector(
+                configuration.processing_cache_folder,
+                video_set_fingerprint=video_set.fingerprint,
+            ).select(
                 batches,
+                selection_request_fingerprint=selection_request_fingerprint,
                 candidate_moment_timelines=candidate_moment_timelines,
                 requested_count=configuration.image_count,
                 spoiler_sensitivity=spoiler_sensitivity,

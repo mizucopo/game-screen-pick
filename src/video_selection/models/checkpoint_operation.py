@@ -13,3 +13,4 @@ class CheckpointOperation(Enum):
     SPEECH_RECOGNITION_CHUNK = "speech-recognition-chunk"
     EMBEDDED_SUBTITLE_STREAM = "embedded-subtitle-stream"
     SELECTED_IMAGE_WEBP = "selected-image-webp"
+    SHORTLIST_SELECTION_FRONTIER = "shortlist-selection-frontier"

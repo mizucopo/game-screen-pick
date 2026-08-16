@@ -83,7 +83,7 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     selection_indexes[0].unlink()
     monkeypatch.setattr(
         "src.video_selection.application.video_selection_application."
-        "select_from_shortlist_batches",
+        "ResumableShortlistSelector.select",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("warm runでselectorが再実行されました")
         ),
@@ -879,6 +879,7 @@ def test_shortfall_expands_annotation_without_fixed_maximum(tmp_path: Path) -> N
         - initial 24件の後に2件が追加され全26件が注釈されること
         - Scene Catalog代表が要求枚数に依存せず24枚に制限されること
         - 全Moment消費後のshortfallが記録されること
+        - 不足が確認された二つのbatch境界が耐久保存されること
     """
     # Arrange
     input_folder = tmp_path / "videos"
@@ -912,6 +913,12 @@ def test_shortfall_expands_annotation_without_fixed_maximum(tmp_path: Path) -> N
         report["selection_summary"]["shortfall"]["all_candidate_moments_exhausted"]
         is True
     )
+    frontier_manifests = tuple(
+        (configuration.processing_cache_folder / "work-units").glob(
+            "*/shortlist-selection-frontier/*/manifest.json"
+        )
+    )
+    assert len(frontier_manifests) == 2
 
 
 def _application(

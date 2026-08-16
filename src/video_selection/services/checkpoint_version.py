@@ -10,6 +10,9 @@ _CHECKPOINT_VERSIONS = {
     CheckpointOperation.SPEECH_RECOGNITION_CHUNK: "speech-recognition-chunk-v1",
     CheckpointOperation.EMBEDDED_SUBTITLE_STREAM: "embedded-subtitle-stream-v1",
     CheckpointOperation.SELECTED_IMAGE_WEBP: "selected-image-webp-v1",
+    CheckpointOperation.SHORTLIST_SELECTION_FRONTIER: (
+        "shortlist-selection-frontier-v1"
+    ),
 }
 
 if set(_CHECKPOINT_VERSIONS) != set(CheckpointOperation):

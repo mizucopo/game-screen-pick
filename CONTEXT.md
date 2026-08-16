@@ -193,8 +193,12 @@ _Avoid_: model fallback, cache reset, model identity, notification-only update c
 _Avoid_: partial cache, in-progress stage, progress checkpoint
 
 **Durable Work Unit**:
-長時間のProcessing Stageを構成する最小の再計算可能単位。engine version、stable key、semantic inputからfingerprintを作り、artifactとmanifestの全fileをfsyncした後にatomic renameで確定する。Video Identity 1本、Video Scan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、Speech Recognition chunk、Selected Image WebPが該当し、親Completed Stageが未確定または破損しても健全な兄弟unitを再利用する。integrityだけでなくdomain schema・件数・参照も復元時に検証し、不正なfingerprintだけを修復する。
+長時間のProcessing Stageを構成する最小の再計算可能単位。engine version、stable key、semantic inputからfingerprintを作り、artifactとmanifestの全fileをfsyncした後にatomic renameで確定する。Video Identity 1本、Video Scan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、Speech Recognition chunk、Shortlist Selection Frontier、Selected Image WebPが該当し、親Completed Stageが未確定または破損しても健全な兄弟unitを再利用する。integrityだけでなくdomain schema・件数・参照も復元時に検証し、不正なfingerprintだけを修復する。
 _Avoid_: progress sample, arbitrary loop iteration, partial Stage, mutable scratch file
+
+**Shortlist Selection Frontier**:
+累積したCandidate Annotationのbatch境界まで最終選定を実行し、要求数・条件付き最低枠・主要戦闘の遭遇境界がまだ確定できないと確認したDurable Work Unit。再開時は同じ選定意味入力に属する確認済み境界を再選定せず、最初の未確認境界または全Candidate末尾から決定的な選定を続ける。
+_Avoid_: Final Selection, Candidate Annotation cache, mutable resume cursor, selected candidates
 
 **Resume Output Invariance**:
 同じsemantic inputから中断後に再開したrunが、中断なしのrunと同じ選択Candidate ID、選択順、公開WebP bytes、canonical reportの意味内容を返す契約。attempt時刻、経過時間、resource sample、cache hit/recompute件数などの運用診断は含めない。初回runとresume runで同じ固定partitionと安定集約順を使い、Video ScanとRefinement Window Groupのworker数・開始順・完了順をsemantic identityへ混ぜない。atomic rename済みの完成Canonical Outputは自己検証とsemantic digest一致後にbyte変更なしで再利用する。

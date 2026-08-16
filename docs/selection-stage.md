@@ -80,6 +80,8 @@ Video Orderや後半位置そのものへの加点・減点、動画ごとの最
 
 `select_from_shortlist_batches`は初期注釈batchでshortfallになった場合に加え、要求枚数が10枚以上で既知の条件付きfacetがまだ見つからない、または最低枠が未充足の場合も次の決定的batchを受け取ります。さらに、`combat_encounter_sequence`の同一Groupへ入った候補間に、完全なsource別Candidate Moment時系列上で未注釈Momentが残る場合は選定を確定せず、そのMomentを含むbatchが消費されるまで拡張します。これにより、後続batchの非主要場面を見ないまま同名Scene Slugの別遭遇を畳みません。全候補を一律に注釈するのではなく、要求数、最低枠、観測済み遭遇境界が揃うか、全Candidate Momentを使い切るまで拡張し、拡張済みpoolを空の選択状態から再計算します。以前の緩和passで選んだ候補を固定しません。batchの生成、Candidate Annotation、batch sizeの性能上限は呼び出し側とIssue #189が所有します。
 
+各batchの選定後も確定条件を満たさなかった場合は、その累積Candidate件数をShortlist Selection Frontierとしてatomicに保存します。Frontierは選択候補やscoreを固定する成果物ではなく、「この境界では継続が必要だった」という確認結果だけを保持します。中断後はmanifest、artifact hash・size、engine version、全選定意味入力のfingerprint、累積件数を検証し、連続する確認済み境界を一つへまとめて最初の未確認境界だけを拡張済みpoolから再選定します。全境界が確認済みなら全Candidate末尾を一度だけ再選定します。破損または意味入力が異なるFrontierはその境界だけを再計算し、中断なしと同じCandidate ID・順序・shortfallを返します。
+
 全Candidate Momentを使い切っても不足する場合は、選べた画像だけを正常結果として返します。Explanation Valueが`none`の候補、Semantic Duplicate Groupの2枚目、2枚目のtitle、Visual Near-Duplicate、不適格frame、未完了Annotationでは穴埋めしません。未採用候補のSimilarity Ceilingは要求数を満たした時点、またはshortfallで最後まで到達した実際の最終passを基準にします。未採用候補はCounterfactual Selection Scoreの降順と同じstable tie-breakで返し、主因を次のenumで示します。
 
 - `title_limit`
@@ -89,6 +91,6 @@ Video Orderや後半位置そのものへの加点・減点、動画ごとの最
 - `spoiler_monotonicity_guard`
 - `lower_marginal_utility`
 
-内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v7`、cache artifactを`game-screen-pick/video-set-selection@3.0.0`としてCompleted Stageへ確定する。選定前cache keyには、Video Stage、全候補のCatalog fingerprint、Primaryと同一Momentの代替最大2枚を含む全一枚Annotation fingerprint、Combat Representative Fallback policy version、完全時系列contract、設定、batch境界を含める。fallbackの並列数と完了順は含めない。warm runはこのkeyをselector実行前に検索し、coldで実際に使用したbatch境界までCatalog／Annotationをcacheから復元した後、同じ完全時系列条件でRepresentative Frameを再集約し、score、reason、coverage、Semantic Duplicate Groupを含む選定結果をartifactから結び直す。selectorを実行したrunをcache reuseとして数えない。`video-set-selection-v6`以前のSelection Stageは新policyへ再利用しない。Candidate Annotation contractは変えないため、現行`game-screen-pick/candidate-annotation@5.0.0`とVideo Identity、Video Stage、Context Cueなど不変の上流Stageはfingerprint一致時に再利用する。
+内部Video Selection Applicationはこのshortlist拡張と決定的selectorを実行し、`select-images`を`video-set-selection-v7`、cache artifactを`game-screen-pick/video-set-selection@3.0.0`としてCompleted Stageへ確定する。選定前cache keyには、Video Stage、全候補のCatalog fingerprint、Primaryと同一Momentの代替最大2枚を含む全一枚Annotation fingerprint、Combat Representative Fallback policy version、完全時系列contract、設定、batch境界を含める。Shortlist Selection Frontierは同じ選定前cache keyと累積件数を意味入力に持ち、`shortlist-selection-frontier-v1`のengine versionで独立して失効する。fallbackの並列数と完了順は含めない。warm runはこのkeyをselector実行前に検索し、coldで実際に使用したbatch境界までCatalog／Annotationをcacheから復元した後、同じ完全時系列条件でRepresentative Frameを再集約し、score、reason、coverage、Semantic Duplicate Groupを含む選定結果をartifactから結び直す。selectorを実行したrunをcache reuseとして数えない。`video-set-selection-v6`以前のSelection Stageは新policyへ再利用しない。Candidate Annotation contractは変えないため、現行`game-screen-pick/candidate-annotation@5.0.0`とVideo Identity、Video Stage、Context Cueなど不変の上流Stageはfingerprint一致時に再利用する。
 
 旧first-N fakeはwalking-skeleton専用applicationへ隔離され、public CLIはIssue #190までscreenshot入力のままである。

@@ -22,6 +22,7 @@ def test_checkpoint_operations_are_explicit_and_unique() -> None:
         "speech-recognition-chunk",
         "embedded-subtitle-stream",
         "selected-image-webp",
+        "shortlist-selection-frontier",
     }
 
     # Act

@@ -117,7 +117,7 @@ rename失敗、disk full、permission denied、不正manifest、artifact欠落�
 
 検証する不変条件は次の通り。
 
-- 完了manifestと成果物がatomicに確定したCompleted Stageに加え、動画1本のidentity、15分のVideo Scan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、Speech Recognition chunk、選択WebP 1枚のDurable Work Unitを再利用する。
+- 完了manifestと成果物がatomicに確定したCompleted Stageに加え、動画1本のidentity、15分のVideo Scan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、Speech Recognition chunk、Shortlist Selection Frontier、選択WebP 1枚のDurable Work Unitを再利用する。
 - manifest hashだけでなくdomain schema・件数・参照を検証する。recognized partial/in-progressまたはdomain不正entryはInput Lock取得後に対象の最小Work Unitだけを削除して再計算し、健全な兄弟Work Unit、Completed Stage、未知のdirectoryは削除しない。fatal runはpartial Output Folderを公開しない。
 - 同じsemantic inputからのresumeと中断なしrunで、選択Candidate ID、選択順、公開WebP bytes、canonical reportの意味内容が一致する。
 - Ctrl+Cはexit 130、operation errorはexit 1であり、どちらも完了済み上流Stageを保持する。

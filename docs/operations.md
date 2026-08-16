@@ -87,7 +87,7 @@ Video Identity entryはengine version、privacy-safeなlogical source key、size
 通常実行は常に再開可能です。`--resume`はありません。
 
 - 完了manifestと成果物がatomicに確定したCompleted Stageだけを再利用します。
-- Stage内では、動画1本のidentity、15分のVideo Scan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、STT chunk、選択WebP 1枚をDurable Work Unitとして個別に再利用します。Candidate AnnotationはFrame Candidate一枚ごとのCompleted Stageとして再利用し、異なるMomentの主評価またはCombat Representative Fallbackの一部だけが失敗しても、成功したframeを保持します。
+- Stage内では、動画1本のidentity、15分のVideo Scan partition、Refinement Window Group、Embedded Subtitle stream、PCM sample range、STT chunk、選定不能を確認したShortlist Selection Frontier、選択WebP 1枚をDurable Work Unitとして個別に再利用します。Candidate AnnotationはFrame Candidate一枚ごとのCompleted Stageとして再利用し、異なるMomentの主評価またはCombat Representative Fallbackの一部だけが失敗しても、成功したframeを保持します。Frontierは選択候補を固定せず、再開時に確認済みの不足境界を飛ばして最初の未確認境界または全Candidate末尾だけを再選定します。
 - 中断・失敗した最小Work Unitの未確定成果物は再利用しません。認識可能なtemporary entryだけを削除し、そのWork Unitから再実行します。健全な兄弟Work Unit、Completed Stage、未知のdirectoryは削除しません。
 - 同じVideoのVideo StageはpathやVideo Orderが変わっても再利用できます。
 - Videoの追加・削除・並べ替えでは再利用可能なVideo Stageを残し、Video Set Stageだけを新しいVideo Set Fingerprintで再実行します。

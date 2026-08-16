@@ -175,6 +175,7 @@ Stageもartifactとmanifestを同じ方法で検証します。親だけが欠�
 | Speech Recognition | overlapを含むPCM chunk 1件 | 推論中だったchunk |
 | Scene Catalog | Video Setにつき1 model request | 実行中だったrequest |
 | Candidate Annotation | 評価対象のFrame Candidate 1枚 | 推論中だった1枚。確定済み兄弟frameは保持 |
+| Shortlist Expansion | 選定不能が確定したannotation batch境界 | 判定中だった1境界。確定済みFrontierとCandidate Annotationは保持 |
 | Final Selection | Video Setにつき1件 | 実行中だった選定 |
 | Selected Image | 選択画像1枚 | 抽出・encode中だった1枚 |
 | Canonical Publication | 検証済みOutput Folder全体 | rename前ならstaging再構築。rename後なら損失なし |
