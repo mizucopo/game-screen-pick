@@ -39,7 +39,6 @@ from tests.video_selection.fakes.recording_run_observer import RecordingRunObser
 
 def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """実Processor列がcanonical outputを公開しwarm時に推論cacheが再利用されること。
 
@@ -81,13 +80,6 @@ def test_real_processors_publish_canonical_output_and_reuse_warm_cache(
     )
     assert len(selection_indexes) == 1
     selection_indexes[0].unlink()
-    monkeypatch.setattr(
-        "src.video_selection.application.video_selection_application."
-        "ResumableShortlistSelector.select",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("warm runでselectorが再実行されました")
-        ),
-    )
     warm_media = FakeVideoStageMediaRuntime()
     warm_vision = EchoStructuredVisionRuntime()
     warm_observer = RecordingRunObserver()

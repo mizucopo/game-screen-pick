@@ -2,16 +2,22 @@
 
 import hashlib
 import json
-from collections.abc import Iterator
+import multiprocessing
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 
 import pytest
 
 from src.video_selection.models.blog_candidate import BlogCandidate
+from src.video_selection.models.checkpoint_operation import CheckpointOperation
+from src.video_selection.models.shortlist_selection_frontier import (
+    ShortlistSelectionFrontier,
+)
 from src.video_selection.models.stage_fingerprint import StageFingerprint
+from src.video_selection.services.durable_work_unit_cache import DurableWorkUnitCache
 from src.video_selection.services.resumable_shortlist_selector import (
     ResumableShortlistSelector,
 )
@@ -195,6 +201,133 @@ def test_hash_consistent_corrupt_frontier_is_recomputed_locally(
     assert repaired_artifact["annotated_candidate_count"] == 24
 
 
+def test_process_kill_resumes_from_committed_frontier(tmp_path: Path) -> None:
+    """process kill後も確定済みFrontierから同じ選定結果へ再開されること。
+
+    Arrange:
+        - 最初の不足Frontier確定後に待機する別processが用意される
+    Act:
+        - processが強制終了され同じcacheから選定が再開される
+    Assert:
+        - 中断なしと同じ選定結果が返されること
+        - 確定済みFrontierが再開後も保持されること
+    """
+    # Arrange
+    ready_path = tmp_path / "frontier-ready"
+    context = multiprocessing.get_context("spawn")
+    process = context.Process(
+        target=_run_until_frontier_then_wait,
+        args=(tmp_path, ready_path),
+    )
+    process.start()
+    try:
+        deadline = perf_counter() + 10
+        while not ready_path.is_file() and perf_counter() < deadline:
+            sleep(0.01)
+        assert ready_path.is_file()
+        assert process.is_alive()
+
+        # Act
+        process.kill()
+        process.join(timeout=10)
+        candidates = _candidates(40)
+        batches = _batches(candidates, requested_count=10)
+        actual = ResumableShortlistSelector(
+            tmp_path,
+            video_set_fingerprint="e" * 64,
+        ).select(
+            batches,
+            selection_request_fingerprint=StageFingerprint("f" * 64),
+            candidate_moment_timelines=_candidate_moment_timelines(candidates),
+            requested_count=10,
+            spoiler_sensitivity="medium",
+            similarity_threshold=0.72,
+        )
+    finally:
+        if process.is_alive():
+            process.kill()
+        process.join(timeout=10)
+
+    # Assert
+    expected = replace(
+        select_video_set_images(
+            candidates,
+            requested_count=10,
+            spoiler_sensitivity="medium",
+            similarity_threshold=0.72,
+        ),
+        shortlist_expansion_count=len(batches) - 1,
+        all_candidate_moments_exhausted=True,
+    )
+    frontier_root = (
+        tmp_path / "work-units" / ("e" * 64) / "shortlist-selection-frontier"
+    )
+    assert process.exitcode is not None and process.exitcode != 0
+    assert actual == expected
+    assert len(tuple(frontier_root.glob("*/manifest.json"))) == len(batches)
+
+
+def test_7000_cached_candidates_are_selected_once_within_unit_budget(
+    tmp_path: Path,
+) -> None:
+    """7,000件の確認済みFrontierが全件再選定なしで復元されること。
+
+    Arrange:
+        - 7,000件の候補と全batch分の検証可能なFrontierが用意される
+    Act:
+        - cache-onlyのShortlist選定が再開される
+    Assert:
+        - 全候補を一度選定した結果と一致すること
+        - selector部分が30秒以内でFrontierを再計算せず完了すること
+    """
+    # Arrange
+    candidates = _candidates(7_000)
+    batches = _batches(candidates, requested_count=10)
+    request_fingerprint = StageFingerprint("2" * 64)
+    video_set_fingerprint = "1" * 64
+    frontier_root = _seed_frontiers(
+        tmp_path,
+        video_set_fingerprint=video_set_fingerprint,
+        request_fingerprint=request_fingerprint,
+        batches=batches,
+    )
+    manifest_mtimes = {
+        path: path.stat().st_mtime_ns for path in frontier_root.glob("*/manifest.json")
+    }
+    expected = replace(
+        select_video_set_images(
+            candidates,
+            requested_count=10,
+            spoiler_sensitivity="medium",
+            similarity_threshold=0.72,
+        ),
+        shortlist_expansion_count=len(batches) - 1,
+        all_candidate_moments_exhausted=True,
+    )
+
+    # Act
+    started = perf_counter()
+    actual = ResumableShortlistSelector(
+        tmp_path,
+        video_set_fingerprint=video_set_fingerprint,
+    ).select(
+        batches,
+        selection_request_fingerprint=request_fingerprint,
+        candidate_moment_timelines=_candidate_moment_timelines(candidates),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+    elapsed = perf_counter() - started
+
+    # Assert
+    assert actual == expected
+    assert elapsed < 30
+    assert {
+        path: path.stat().st_mtime_ns for path in manifest_mtimes
+    } == manifest_mtimes
+
+
 def _candidates(count: int) -> tuple[BlogCandidate, ...]:
     """不足が最後まで解消されない相互に識別可能な候補を返す。"""
     return tuple(
@@ -229,3 +362,72 @@ def _batches(
             for offset in range(24, len(candidates), requested_count)
         ),
     )
+
+
+def _run_until_frontier_then_wait(cache_folder: Path, ready_path: Path) -> None:
+    """最初のFrontier確定後に親processからkillされるまで待機する。"""
+    candidates = _candidates(40)
+    batches = _batches(candidates, requested_count=10)
+
+    def blocking_batches() -> Iterator[tuple[BlogCandidate, ...]]:
+        yield batches[0]
+        yield batches[1]
+        ready_path.write_text("ready\n", encoding="utf-8")
+        while True:
+            sleep(1)
+
+    ResumableShortlistSelector(
+        cache_folder,
+        video_set_fingerprint="e" * 64,
+    ).select(
+        blocking_batches(),
+        selection_request_fingerprint=StageFingerprint("f" * 64),
+        candidate_moment_timelines=_candidate_moment_timelines(candidates),
+        requested_count=10,
+        spoiler_sensitivity="medium",
+        similarity_threshold=0.72,
+    )
+
+
+def _seed_frontiers(
+    cache_folder: Path,
+    *,
+    video_set_fingerprint: str,
+    request_fingerprint: StageFingerprint,
+    batches: tuple[tuple[BlogCandidate, ...], ...],
+) -> Path:
+    """全batch境界へ不足Frontierを実cache writerで確定する。"""
+    cache = DurableWorkUnitCache(
+        cache_folder,
+        subject_fingerprint=video_set_fingerprint,
+        operation=CheckpointOperation.SHORTLIST_SELECTION_FRONTIER,
+    )
+    candidate_count = 0
+    for batch in batches:
+        candidate_count += len(batch)
+        frontier = ShortlistSelectionFrontier(
+            selection_request_fingerprint=request_fingerprint,
+            annotated_candidate_count=candidate_count,
+        )
+        cache.resolve(
+            frontier.work_unit_key,
+            frontier.semantic_input,
+            _frontier_artifact_producer(frontier),
+        )
+    return (
+        cache_folder
+        / "work-units"
+        / video_set_fingerprint
+        / "shortlist-selection-frontier"
+    )
+
+
+def _frontier_artifact_producer(
+    frontier: ShortlistSelectionFrontier,
+) -> Callable[[Path], dict[str, object]]:
+    """指定Frontierのartifact producerを返す。"""
+
+    def produce(_folder: Path) -> dict[str, object]:
+        return frontier.artifact
+
+    return produce

@@ -1,12 +1,13 @@
 """不足確認済みのShortlist境界を飛ばして決定的選定を再開する。"""
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator
 from dataclasses import replace
 from pathlib import Path
 
 from ..models.blog_candidate import BlogCandidate
 from ..models.checkpoint_operation import CheckpointOperation
 from ..models.durable_work_unit_bundle import DurableWorkUnitBundle
+from ..models.shortlist_selection_frontier import ShortlistSelectionFrontier
 from ..models.stage_fingerprint import StageFingerprint
 from ..models.video_set_selection_result import VideoSetSelectionResult
 from .durable_work_unit_cache import DurableWorkUnitCache
@@ -15,8 +16,6 @@ from .select_video_set_images import (
     SpoilerSensitivity,
     select_from_shortlist_batches,
 )
-
-_ARTIFACT_SCHEMA = "game-screen-pick/shortlist-selection-frontier@1.0.0"
 
 
 class ResumableShortlistSelector:
@@ -96,10 +95,11 @@ class ResumableShortlistSelector:
             cumulative_count += len(batch)
             last_boundary_index = boundary_index
             pending.extend(batch)
-            if self._is_proven_incomplete(
-                selection_request_fingerprint,
-                cumulative_count,
-            ):
+            frontier = ShortlistSelectionFrontier(
+                selection_request_fingerprint=selection_request_fingerprint,
+                annotated_candidate_count=cumulative_count,
+            )
+            if self._is_proven_incomplete(frontier):
                 continue
             selected_boundary_indexes.append(boundary_index)
             yield tuple(pending)
@@ -116,23 +116,22 @@ class ResumableShortlistSelector:
 
     def _is_proven_incomplete(
         self,
-        request_fingerprint: StageFingerprint,
-        candidate_count: int,
+        frontier: ShortlistSelectionFrontier,
     ) -> bool:
         """完全検証済みの不足checkpointが存在するかを返す。"""
-        semantic_input = _semantic_input(request_fingerprint, candidate_count)
-        work_unit_key = _work_unit_key(candidate_count)
-        bundle = self._checkpoints.read(work_unit_key, semantic_input)
+        bundle = self._checkpoints.read(
+            frontier.work_unit_key,
+            frontier.semantic_input,
+        )
         if bundle is None:
             return False
         try:
-            _validate_bundle(
-                bundle,
-                request_fingerprint=request_fingerprint,
-                candidate_count=candidate_count,
-            )
+            _validate_bundle(bundle, frontier)
         except (TypeError, ValueError):
-            self._checkpoints.discard(work_unit_key, semantic_input)
+            self._checkpoints.discard(
+                frontier.work_unit_key,
+                frontier.semantic_input,
+            )
             return False
         return True
 
@@ -142,57 +141,25 @@ class ResumableShortlistSelector:
         candidate_count: int,
     ) -> None:
         """選定を継続した境界だけをatomicに確定する。"""
-        semantic_input = _semantic_input(request_fingerprint, candidate_count)
-        artifact = _artifact(request_fingerprint, candidate_count)
+        frontier = ShortlistSelectionFrontier(
+            selection_request_fingerprint=request_fingerprint,
+            annotated_candidate_count=candidate_count,
+        )
 
         def validate(bundle: DurableWorkUnitBundle) -> None:
-            _validate_bundle(
-                bundle,
-                request_fingerprint=request_fingerprint,
-                candidate_count=candidate_count,
-            )
+            _validate_bundle(bundle, frontier)
 
         self._checkpoints.resolve(
-            _work_unit_key(candidate_count),
-            semantic_input,
-            lambda _folder: artifact,
+            frontier.work_unit_key,
+            frontier.semantic_input,
+            lambda _folder: frontier.artifact,
             validate_bundle=validate,
         )
 
 
-def _semantic_input(
-    request_fingerprint: StageFingerprint,
-    candidate_count: int,
-) -> Mapping[str, object]:
-    if candidate_count < 1:
-        raise ValueError("Shortlist FrontierのCandidate件数は1以上が必要です")
-    return {
-        "selection_request_fingerprint": request_fingerprint.value,
-        "annotated_candidate_count": candidate_count,
-    }
-
-
-def _artifact(
-    request_fingerprint: StageFingerprint,
-    candidate_count: int,
-) -> dict[str, object]:
-    return {
-        "schema": _ARTIFACT_SCHEMA,
-        "selection_request_fingerprint": request_fingerprint.value,
-        "annotated_candidate_count": candidate_count,
-        "selection_can_stop": False,
-    }
-
-
 def _validate_bundle(
     bundle: DurableWorkUnitBundle,
-    *,
-    request_fingerprint: StageFingerprint,
-    candidate_count: int,
+    frontier: ShortlistSelectionFrontier,
 ) -> None:
-    if bundle.artifact != _artifact(request_fingerprint, candidate_count):
+    if bundle.artifact != frontier.artifact:
         raise ValueError("Shortlist Frontier artifactが不正です")
-
-
-def _work_unit_key(candidate_count: int) -> str:
-    return f"annotated-candidate-count-{candidate_count}"
