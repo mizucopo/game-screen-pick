@@ -885,9 +885,11 @@ def test_shortfall_expands_annotation_without_fixed_maximum(tmp_path: Path) -> N
         candidate_density_per_minute=3.0,
     )
     vision = EchoStructuredVisionRuntime()
+    observer = RecordingRunObserver()
     application = _application(
         FakeVideoStageMediaRuntime(distant_moments=True),
         vision,
+        observer=observer,
     )
 
     # Act
@@ -911,6 +913,13 @@ def test_shortfall_expands_annotation_without_fixed_maximum(tmp_path: Path) -> N
         )
     )
     assert len(frontier_manifests) == 2
+    frontier_events = tuple(
+        event
+        for event in observer.progress_events
+        if event.work_unit_kind == "shortlist-selection-frontier"
+    )
+    assert sum(event.cache_miss_count for event in frontier_events) == 2
+    assert sum(event.recompute_count for event in frontier_events) == 2
 
 
 def _application(

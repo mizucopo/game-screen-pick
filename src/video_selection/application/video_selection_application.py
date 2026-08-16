@@ -343,6 +343,7 @@ class VideoSelectionApplication:
             selection = ResumableShortlistSelector(
                 configuration.processing_cache_folder,
                 video_set_fingerprint=video_set.fingerprint,
+                observer=self._observer,
             ).select(
                 batches,
                 selection_request_fingerprint=selection_request_fingerprint,

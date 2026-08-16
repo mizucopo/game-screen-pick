@@ -24,6 +24,7 @@ from src.video_selection.services.resumable_shortlist_selector import (
 from src.video_selection.services.select_video_set_images import (
     select_video_set_images,
 )
+from tests.video_selection.fakes.recording_run_observer import RecordingRunObserver
 from tests.video_selection.services.test_select_video_set_images import (
     _candidate,
     _candidate_moment_timelines,
@@ -181,11 +182,13 @@ def test_hash_consistent_corrupt_frontier_is_recomputed_locally(
         shortlist_expansion_count=len(batches) - 1,
         all_candidate_moments_exhausted=True,
     )
+    observer = RecordingRunObserver()
 
     # Act
     actual = ResumableShortlistSelector(
         tmp_path,
         video_set_fingerprint="c" * 64,
+        observer=observer,
     ).select(
         batches,
         selection_request_fingerprint=request_fingerprint,
@@ -197,8 +200,15 @@ def test_hash_consistent_corrupt_frontier_is_recomputed_locally(
 
     # Assert
     repaired_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    frontier_events = tuple(
+        event
+        for event in observer.progress_events
+        if event.work_unit_kind == "shortlist-selection-frontier"
+    )
     assert actual == expected
     assert repaired_artifact["annotated_candidate_count"] == 24
+    assert sum(event.cache_hit_count for event in frontier_events) == 2
+    assert sum(event.recompute_count for event in frontier_events) == 1
 
 
 def test_process_kill_resumes_from_committed_frontier(tmp_path: Path) -> None:
@@ -226,6 +236,10 @@ def test_process_kill_resumes_from_committed_frontier(tmp_path: Path) -> None:
             sleep(0.01)
         assert ready_path.is_file()
         assert process.is_alive()
+        frontier_root = (
+            tmp_path / "work-units" / ("e" * 64) / "shortlist-selection-frontier"
+        )
+        assert len(tuple(frontier_root.glob("*/manifest.json"))) == 2
 
         # Act
         process.kill()
@@ -259,9 +273,6 @@ def test_process_kill_resumes_from_committed_frontier(tmp_path: Path) -> None:
         shortlist_expansion_count=len(batches) - 1,
         all_candidate_moments_exhausted=True,
     )
-    frontier_root = (
-        tmp_path / "work-units" / ("e" * 64) / "shortlist-selection-frontier"
-    )
     assert process.exitcode is not None and process.exitcode != 0
     assert actual == expected
     assert len(tuple(frontier_root.glob("*/manifest.json"))) == len(batches)
@@ -285,6 +296,7 @@ def test_7000_cached_candidates_are_selected_once_within_unit_budget(
     batches = _batches(candidates, requested_count=10)
     request_fingerprint = StageFingerprint("2" * 64)
     video_set_fingerprint = "1" * 64
+    observer = RecordingRunObserver()
     frontier_root = _seed_frontiers(
         tmp_path,
         video_set_fingerprint=video_set_fingerprint,
@@ -310,6 +322,7 @@ def test_7000_cached_candidates_are_selected_once_within_unit_budget(
     actual = ResumableShortlistSelector(
         tmp_path,
         video_set_fingerprint=video_set_fingerprint,
+        observer=observer,
     ).select(
         batches,
         selection_request_fingerprint=request_fingerprint,
@@ -326,6 +339,13 @@ def test_7000_cached_candidates_are_selected_once_within_unit_budget(
     assert {
         path: path.stat().st_mtime_ns for path in manifest_mtimes
     } == manifest_mtimes
+    frontier_events = tuple(
+        event
+        for event in observer.progress_events
+        if event.work_unit_kind == "shortlist-selection-frontier"
+    )
+    assert sum(event.cache_hit_count for event in frontier_events) == len(batches)
+    assert sum(event.recompute_count for event in frontier_events) == 0
 
 
 def _candidates(count: int) -> tuple[BlogCandidate, ...]:

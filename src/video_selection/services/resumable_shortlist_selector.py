@@ -10,6 +10,7 @@ from ..models.durable_work_unit_bundle import DurableWorkUnitBundle
 from ..models.shortlist_selection_frontier import ShortlistSelectionFrontier
 from ..models.stage_fingerprint import StageFingerprint
 from ..models.video_set_selection_result import VideoSetSelectionResult
+from ..protocols.run_observer import RunObserver
 from .durable_work_unit_cache import DurableWorkUnitCache
 from .select_video_set_images import (
     CandidateMomentTimelines,
@@ -26,11 +27,13 @@ class ResumableShortlistSelector:
         cache_folder: Path,
         *,
         video_set_fingerprint: str,
+        observer: RunObserver | None = None,
     ) -> None:
         self._checkpoints = DurableWorkUnitCache(
             cache_folder,
             subject_fingerprint=video_set_fingerprint,
             operation=CheckpointOperation.SHORTLIST_SELECTION_FRONTIER,
+            observer=observer,
         )
 
     def select(
@@ -81,19 +84,27 @@ class ResumableShortlistSelector:
         pending_checkpoint_count: int | None = None
         cumulative_count = 0
         last_boundary_index = -1
-        for boundary_index, batch in enumerate(batches):
+        batch_iterator = iter(batches)
+        boundary_index = 0
+        while True:
             if pending_checkpoint_count is not None:
                 self._record_incomplete_boundary(
                     selection_request_fingerprint,
                     pending_checkpoint_count,
                 )
                 pending_checkpoint_count = None
+            try:
+                batch = next(batch_iterator)
+            except StopIteration:
+                break
+            current_boundary_index = boundary_index
+            boundary_index += 1
             if not batch:
-                selected_boundary_indexes.append(boundary_index)
+                selected_boundary_indexes.append(current_boundary_index)
                 yield batch
                 return
             cumulative_count += len(batch)
-            last_boundary_index = boundary_index
+            last_boundary_index = current_boundary_index
             pending.extend(batch)
             frontier = ShortlistSelectionFrontier(
                 selection_request_fingerprint=selection_request_fingerprint,
@@ -101,15 +112,10 @@ class ResumableShortlistSelector:
             )
             if self._is_proven_incomplete(frontier):
                 continue
-            selected_boundary_indexes.append(boundary_index)
+            selected_boundary_indexes.append(current_boundary_index)
             yield tuple(pending)
             pending.clear()
             pending_checkpoint_count = cumulative_count
-        if pending_checkpoint_count is not None:
-            self._record_incomplete_boundary(
-                selection_request_fingerprint,
-                pending_checkpoint_count,
-            )
         if pending:
             selected_boundary_indexes.append(last_boundary_index)
             yield tuple(pending)
@@ -119,21 +125,20 @@ class ResumableShortlistSelector:
         frontier: ShortlistSelectionFrontier,
     ) -> bool:
         """完全検証済みの不足checkpointが存在するかを返す。"""
-        bundle = self._checkpoints.read(
-            frontier.work_unit_key,
-            frontier.semantic_input,
-        )
-        if bundle is None:
-            return False
         try:
-            _validate_bundle(bundle, frontier)
+            bundle = self._checkpoints.read(
+                frontier.work_unit_key,
+                frontier.semantic_input,
+                validate_bundle=lambda value: _validate_bundle(value, frontier),
+                observe_reuse=True,
+            )
         except (TypeError, ValueError):
             self._checkpoints.discard(
                 frontier.work_unit_key,
                 frontier.semantic_input,
             )
             return False
-        return True
+        return bundle is not None
 
     def _record_incomplete_boundary(
         self,

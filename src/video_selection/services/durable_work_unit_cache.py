@@ -158,16 +158,26 @@ class DurableWorkUnitCache:
         self,
         work_unit_key: str,
         semantic_input: Mapping[str, object],
+        *,
+        validate_bundle: WorkUnitBundleValidator | None = None,
+        observe_reuse: bool = False,
     ) -> DurableWorkUnitBundle | None:
-        """副作用なしで検証済みcheckpointを読む。"""
+        """検証済みcheckpointを読み、要求時だけ再利用を通知する。"""
         normalized_input = _normalize_json_mapping(semantic_input)
         fingerprint = self._fingerprint(work_unit_key, normalized_input)
         self._validate_root()
-        return self._read(
+        bundle = self._read(
             fingerprint,
             work_unit_key,
             normalized_input,
         )
+        if bundle is None:
+            return None
+        if validate_bundle is not None:
+            validate_bundle(bundle)
+        if observe_reuse:
+            self._observe_resolution(fingerprint, reused=True)
+        return bundle
 
     def _write_locked(
         self,
