@@ -1,93 +1,25 @@
-## Issue-First Branch Workflow
+# Repository guidance
 
-### WHAT
+## Work boundaries
 
-- Never make changes directly on `main`.
-- Before starting work, create a GitHub Issue that describes the work.
-- Perform the work on a non-`main` branch associated with that Issue.
+- Do not make implementation changes directly on `main`.
+- Track implementation changes in GitHub Issues and use a corresponding non-`main` branch.
+- Do not weaken quality checks or test configuration to make a failing change pass.
 
-## Documentation
+## Project context
 
-### HOW
+- For issue creation and management, follow `docs/agents/issue-tracker.md`.
+- For issue triage, use the label mapping in `docs/agents/triage-labels.md`.
+- Before changing domain terminology or architecture, follow `docs/agents/domain.md` and its referenced context and ADRs.
 
-- Update related documentation when code changes affect users
-- Document usage for new features in README
-- Update relevant docs when interfaces change
-- Split large docs into separate files in `docs/` folder
-- Add links to split docs in README
+## Template updates
 
-## File Operations
+- Generated configuration and source files remain Copier-managed.
+- Update from `repo-template/main` with `copier update --trust --defaults --vcs-ref HEAD` on a clean non-`main` branch.
+- Review the complete diff and resolve every Copier conflict before running the repository quality gate.
+- Do not use `copier recopy` for routine updates.
 
-### HOW
-
-```bash
-# File operations
-git mv <old-path> <new-path>  # Move files
-git rm <path>                  # Delete files
-```
-
-## Agent skills
-
-### Issue tracker
-
-Issues are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-The default five-role vocabulary is used. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-This repository uses a single-context layout. See `docs/agents/domain.md`.
-
-## Code Organization Rules
-
-### WHY
-
-Maintain consistent structure to ensure readability, maintainability, and testability.
-Follow single responsibility principle to minimize scope of changes.
-
-### WHAT
-
-- One class per file
-- One test file per class
-- Keep `__init__.py` files empty
-- Never modify pyproject.toml when fixing linting errors
-
-### HOW
-
-- Create a new file when adding a new class
-- Name test files as `test_<filename>.py`
-- Fix lint errors in code, never relax configuration
-- Place imports at the top of the file, never in the middle
-
-## Testing Guidelines
-
-### WHAT
-
-- **Framework**: Use function-based tests (pytest), not class-based
-- **Language**: Write test comments (especially AAA steps) and docstrings in Japanese to clarify intent
-- **Strategy**: Test "What" (observable behavior/results), not "How" (implementation details)
-- **Mocking**: Minimize mocks. Use real instances for domain logic; mock only external boundaries (DB, API, SMTP)
-- **Architecture**: Separate domain logic from IO. Use Humble Object/Hexagonal patterns for testability
-- **Scope**: Never test private methods directly. Cover them indirectly via public interfaces
-
-### HOW
-
-- Structure with **AAA Pattern** (Arrange, Act, Assert) with explicit sections in both docstrings and code comments, written in Japanese
-  - **Docstring**: Include `Arrange:`, `Act:`, `Assert:` lines describing each step
-  - **Code comments**: Insert `# Arrange`, `# Act`, `# Assert` as section dividers in the test function body
-- **Naming**: Use English for test function names, describing business requirements
-- **File placement**: Mirror source module structure in `tests/` directory
-- **Docstring**: Describe a summary of what is being tested (in Japanese)
-- **Docstring style**: Use passive voice ("〜こと" form) consistently
-  - Title: "〜を検証" → "〜されること", "〜が〜されること"
-  - When: "〜を選択", "〜を実行" → "〜が選択され", "〜が実行される"
-  - Then: "〜を返す", "〜が生成" → "〜が返されること", "〜が生成されること"
-
-## Quality Check
-
-### HOW
+## Python quality check
 
 ```bash
 uv run task check
