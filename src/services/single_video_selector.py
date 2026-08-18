@@ -176,6 +176,8 @@ class SingleVideoSelector:
                 f"抽出可能な候補{len(self.timestamps)}件が"
                 f"選択枚数{self.request.output_count}件を下回ります"
             )
+        if self._prepare_completed_manifest():
+            return
 
         host = self.request.ollama_host or os.environ.get(
             "OLLAMA_HOST", "127.0.0.1:11434"
@@ -192,6 +194,53 @@ class SingleVideoSelector:
         self.manifest_digest = json_digest(manifest)
         manifest["manifest_digest"] = self.manifest_digest
         self._prepare_output_dir(manifest)
+
+    def _prepare_completed_manifest(self) -> bool:
+        """保存済みmanifestから完了runをOllamaなしで検証可能にする."""
+        manifest_path = self.work_dir / "run-manifest.json"
+        completion_path = self.work_dir / "completion.json"
+        if not completion_path.is_file():
+            return False
+        if not manifest_path.is_file():
+            raise RuntimeError("完了記録に対応する再開manifestがありません")
+
+        existing = read_json(manifest_path)
+        if not isinstance(existing, dict):
+            raise RuntimeError("再開manifestが不正です")
+        raw_models = existing.get("models")
+        if not isinstance(raw_models, dict):
+            raise RuntimeError("再開manifestのmodelsが不正です")
+
+        model_metadata: dict[str, dict[str, Any]] = {}
+        requested_by_stage = {
+            "primary": self.request.primary_model,
+            "secondary": self.request.secondary_model,
+        }
+        for stage, requested_model in requested_by_stage.items():
+            raw_model = raw_models.get(stage)
+            if (
+                not isinstance(raw_model, dict)
+                or raw_model.get("name") != requested_model
+            ):
+                raise RuntimeError(
+                    "既存の実行条件が今回と異なります。"
+                    "新しい出力フォルダを指定してください"
+                )
+            metadata = {key: value for key, value in raw_model.items() if key != "name"}
+            previous = model_metadata.get(requested_model)
+            if previous is not None and previous != metadata:
+                raise RuntimeError("再開manifestのmodel metadataが不正です")
+            model_metadata[requested_model] = metadata
+
+        self.model_metadata = model_metadata
+        manifest = self._build_manifest()
+        self.manifest_digest = json_digest(manifest)
+        manifest["manifest_digest"] = self.manifest_digest
+        if existing != manifest:
+            raise RuntimeError(
+                "既存の実行条件が今回と異なります。新しい出力フォルダを指定してください"
+            )
+        return True
 
     def _build_manifest(self) -> dict[str, Any]:
         """結果に影響する入力だけを含む再開manifestを作る."""
@@ -441,7 +490,8 @@ class SingleVideoSelector:
                     jobs.append((candidate, position, timestamp))
         if jobs:
             logger.info("遷移判定用フレームを抽出します: %d件", len(jobs))
-        with ThreadPoolExecutor(max_workers=self.request.ffmpeg_workers) as executor:
+        executor = ThreadPoolExecutor(max_workers=self.request.ffmpeg_workers)
+        try:
             futures = [
                 executor.submit(
                     self.frame_extractor.extract_frame,
@@ -454,6 +504,11 @@ class SingleVideoSelector:
             ]
             for future in as_completed(futures):
                 future.result()
+        except BaseException:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown()
 
     def _assess_candidates(
         self,
@@ -758,11 +813,6 @@ def make_timestamps(
     requested_interval_seconds: float | None,
 ) -> tuple[float, ...]:
     """動画のほぼ先頭から末尾までを等間隔で覆う時刻列を返す."""
-    if duration_seconds <= 1.0:
-        return (round(duration_seconds / 2.0, 6),)
-    start = min(0.5, duration_seconds / 4.0)
-    end = duration_seconds - start
-    span = end - start
     if requested_interval_seconds is not None:
         if (
             not math.isfinite(requested_interval_seconds)
@@ -774,11 +824,19 @@ def make_timestamps(
                 f"sample intervalは{MINIMUM_SAMPLE_INTERVAL_SECONDS}秒以上で"
                 "指定してください"
             )
+    if duration_seconds <= 1.0:
+        return (round(duration_seconds / 2.0, 6),)
+    start = min(0.5, duration_seconds / 4.0)
+    end = duration_seconds - start
+    span = end - start
+    if requested_interval_seconds is not None:
         interval = requested_interval_seconds
         sample_count = max(
             math.ceil(span / interval) + 1,
             output_count,
         )
+        if sample_count > MAXIMUM_RAW_CANDIDATES:
+            raise ValueError("指定したsample intervalでは候補数が上限4,000件を超えます")
     else:
         base_count = (
             math.ceil(duration_seconds / DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS) + 1

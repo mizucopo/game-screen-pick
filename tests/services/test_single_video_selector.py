@@ -60,6 +60,12 @@ def test_make_timestamps_rejects_an_interval_below_supported_floor() -> None:
         make_timestamps(60.0, 30, 0.1)
 
 
+def test_make_timestamps_rejects_interval_requiring_too_many_candidates() -> None:
+    """候補上限によって明示した最大間隔を広げないこと."""
+    with pytest.raises(ValueError, match="4,000件"):
+        make_timestamps(3600.0, 30, 0.25)
+
+
 def test_measure_candidate_rejects_black_and_scores_visible_frame(
     tmp_path: Path,
 ) -> None:

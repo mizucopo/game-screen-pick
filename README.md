@@ -48,7 +48,7 @@ OLLAMA_HOST=192.168.1.31:11434 \
 - `--ollama-host`: Ollama host。CLI、`OLLAMA_HOST`、localhostの順で解決
 - `--ollama-timeout`: Ollama APIのbatch単位timeout秒数（既定: 900）
 - `--ffmpeg-workers`: フレーム抽出の並列数（1から4、既定: 2）
-- `--sample-interval-seconds`: 候補抽出の最大間隔（0.25秒以上）。通常は自動設定を推奨
+- `--sample-interval-seconds`: 候補抽出の最大間隔（0.25秒以上）。通常は自動設定を推奨。候補が4,000件を超える指定は拒否
 - `--allow-cpu`: GPU利用を確認できなくても続行する
 - `--debug`: debug logを有効化する
 
@@ -80,7 +80,7 @@ recording-selected/
 同じ動画・選択条件・modelで同じコマンドを再実行してください。抽出済みframeと
 完了済みOllama batchを再利用します。条件が異なる既存フォルダは上書きせず、
 新しい出力フォルダを要求します。完了済み実行では全成果物のsizeとSHA-256を
-検証します。
+検証し、Ollamaへ接続せずに結果を返します。
 
 ## 選定の流れ
 

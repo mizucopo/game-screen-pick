@@ -170,6 +170,18 @@ class AliasFakeAssessor(FakeAssessor):
         )
 
 
+class UnavailableAssessor(FakeAssessor):
+    """Ollamaへ接続できない状態を表すfake."""
+
+    def fetch_model_metadata(
+        self,
+        requested_models: set[str],
+    ) -> dict[str, dict[str, Any]]:
+        """metadata取得が呼ばれた場合は接続失敗にする."""
+        del requested_models
+        raise ConnectionError("Ollama is unavailable")
+
+
 def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> None:
     """成果物を揃え、同条件再実行ではmodel評価を繰り返さないこと."""
     video = tmp_path / "Sample Game Part3.mp4"
@@ -217,14 +229,16 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     calls_after_first_run = assessor.assess_calls
     extraction_after_first_run = extractor.extract_calls
 
+    unavailable_assessor = UnavailableAssessor()
     resumed_sheet = SingleVideoSelector(
         request,
         frame_extractor=extractor,
-        assessor=assessor,
+        assessor=unavailable_assessor,
     ).run()
 
     assert resumed_sheet == contact_sheet
     assert assessor.assess_calls == calls_after_first_run
+    assert unavailable_assessor.assess_calls == 0
     assert extractor.extract_calls == extraction_after_first_run
     assert [file_sha256(path) for path in selected_paths] == first_hashes
 
@@ -377,5 +391,60 @@ def test_candidate_extraction_cancels_queued_jobs_on_interrupt(
 
     with pytest.raises(KeyboardInterrupt):
         selector._extract_candidates()
+
+    assert (False, True) in shutdown_calls
+
+
+def test_context_extraction_cancels_queued_jobs_on_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """遷移判定frameの抽出中も未開始jobを取消すこと."""
+    shutdown_calls: list[tuple[bool, bool]] = []
+
+    class RecordingExecutor(ThreadPoolExecutor):
+        """shutdown引数を記録するexecutor."""
+
+        def shutdown(
+            self,
+            wait: bool = True,
+            *,
+            cancel_futures: bool = False,
+        ) -> None:
+            shutdown_calls.append((wait, cancel_futures))
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(
+        "src.services.single_video_selector.ThreadPoolExecutor",
+        RecordingExecutor,
+    )
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=1,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=InterruptingFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+
+    with pytest.raises(KeyboardInterrupt):
+        selector._extract_context_frames(
+            [FrameCandidate("f00001", 2.0, str(tmp_path / "candidate.jpg"))]
+        )
 
     assert (False, True) in shutdown_calls
