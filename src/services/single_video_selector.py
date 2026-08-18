@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 ALGORITHM_VERSION = "single-video-selection-v1"
 PROMPT_VERSION = "blog-image-selection-v3"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
+MINIMUM_ENDPOINT_MARGIN_SECONDS = 0.05
 MAXIMUM_RAW_CANDIDATES = 4_000
 PRIMARY_CANDIDATE_MULTIPLIER = 12
 SECONDARY_CANDIDATE_MULTIPLIER = 3
@@ -160,6 +161,7 @@ class SingleVideoSelector:
             raise FileNotFoundError(f"入力動画が見つかりません: {self.video}")
         self.output_dir = Path(self.request.output_dir).expanduser().resolve()
         self.work_dir = self.output_dir / ".game-screen-pick"
+        self._preflight_output_dir()
         self.game_title = (
             self.request.game_title.strip()
             if self.request.game_title and self.request.game_title.strip()
@@ -194,6 +196,18 @@ class SingleVideoSelector:
         self.manifest_digest = json_digest(manifest)
         manifest["manifest_digest"] = self.manifest_digest
         self._prepare_output_dir(manifest)
+
+    def _preflight_output_dir(self) -> None:
+        """再開不能なoutputを外部処理より前に拒否する."""
+        if not self.output_dir.exists():
+            return
+        if not self.output_dir.is_dir():
+            raise RuntimeError(f"出力先がフォルダではありません: {self.output_dir}")
+        manifest_path = self.work_dir / "run-manifest.json"
+        if any(self.output_dir.iterdir()) and not manifest_path.is_file():
+            raise RuntimeError(
+                f"出力フォルダが空ではなく、再開manifestもありません: {self.output_dir}"
+            )
 
     def _prepare_completed_manifest(self) -> bool:
         """保存済みmanifestから完了runをOllamaなしで検証可能にする."""
@@ -824,9 +838,15 @@ def make_timestamps(
                 f"sample intervalは{MINIMUM_SAMPLE_INTERVAL_SECONDS}秒以上で"
                 "指定してください"
             )
-    if duration_seconds <= 1.0:
+    if duration_seconds <= MINIMUM_ENDPOINT_MARGIN_SECONDS * 2:
         return (round(duration_seconds / 2.0, 6),)
-    start = min(0.5, duration_seconds / 4.0)
+    default_margin = min(0.5, duration_seconds / 4.0)
+    required_output_span = max(0, output_count - 1) * MINIMUM_SAMPLE_INTERVAL_SECONDS
+    maximum_output_margin = (duration_seconds - required_output_span) / 2.0
+    start = max(
+        MINIMUM_ENDPOINT_MARGIN_SECONDS,
+        min(default_margin, maximum_output_margin),
+    )
     end = duration_seconds - start
     span = end - start
     if requested_interval_seconds is not None:
@@ -852,7 +872,9 @@ def make_timestamps(
         MAXIMUM_RAW_CANDIDATES,
         maximum_by_interval,
     )
-    sample_count = max(2, sample_count)
+    sample_count = max(1, sample_count)
+    if sample_count == 1:
+        return (round(duration_seconds / 2.0, 6),)
     timestamps = np.linspace(start, end, sample_count, dtype=np.float64)
     return tuple(round(float(timestamp), 6) for timestamp in timestamps)
 

@@ -34,7 +34,8 @@ class VideoFrameExtractor:
                 "-show_entries",
                 (
                     "format=duration:"
-                    "stream=index,codec_type,codec_name,width,height,avg_frame_rate"
+                    "stream=index,codec_type,codec_name,width,height,"
+                    "avg_frame_rate,duration"
                 ),
                 "-of",
                 "json",
@@ -46,13 +47,6 @@ class VideoFrameExtractor:
         if not isinstance(format_payload, dict) or not isinstance(streams, list):
             raise ValueError("ffprobeから動画メタデータを取得できませんでした")
 
-        try:
-            duration = float(format_payload["duration"])
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("動画時間を取得できませんでした") from error
-        if not math.isfinite(duration) or duration <= 0:
-            raise ValueError(f"動画時間が不正です: {duration}")
-
         video_stream = next(
             (
                 stream
@@ -63,6 +57,11 @@ class VideoFrameExtractor:
         )
         if video_stream is None:
             raise ValueError("映像streamが見つかりません")
+        duration = self._positive_duration(video_stream.get("duration"))
+        if duration is None:
+            duration = self._positive_duration(format_payload.get("duration"))
+        if duration is None:
+            raise ValueError("動画時間を取得できませんでした")
         return VideoMetadata(
             duration_seconds=duration,
             width=self._positive_int(video_stream.get("width"), "width"),
@@ -120,6 +119,19 @@ class VideoFrameExtractor:
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"動画の{field_name}が不正です: {value!r}")
         return value
+
+    @staticmethod
+    def _positive_duration(value: object) -> float | None:
+        """ffprobeの有限な正のdurationを返す."""
+        if isinstance(value, bool) or not isinstance(value, str | int | float):
+            return None
+        try:
+            duration = float(value)
+        except ValueError:
+            return None
+        if not math.isfinite(duration) or duration <= 0:
+            return None
+        return duration
 
     @staticmethod
     def _run_json(command: list[str]) -> dict[str, Any]:

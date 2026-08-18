@@ -66,6 +66,22 @@ def test_make_timestamps_rejects_interval_requiring_too_many_candidates() -> Non
         make_timestamps(3600.0, 30, 0.25)
 
 
+def test_make_timestamps_adapts_endpoint_margin_for_short_video() -> None:
+    """短い動画でも可能な選択枚数を固定余白で失わないこと."""
+    timestamps = make_timestamps(8.0, 30, None)
+
+    assert len(timestamps) == 30
+    assert timestamps[0] < 0.5
+    assert timestamps[-1] > 7.5
+    assert (
+        min(
+            right - left
+            for left, right in zip(timestamps[:-1], timestamps[1:], strict=True)
+        )
+        >= 0.25 - 1e-6
+    )
+
+
 def test_measure_candidate_rejects_black_and_scores_visible_frame(
     tmp_path: Path,
 ) -> None:

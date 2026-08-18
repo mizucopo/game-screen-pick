@@ -342,6 +342,39 @@ def test_pipeline_rejects_output_count_above_contact_sheet_limit(
         ).run()
 
 
+def test_pipeline_rejects_nonempty_output_before_contacting_ollama(
+    tmp_path: Path,
+) -> None:
+    """再開manifestのない非空folderはOllama接続前に拒否すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    output_dir.mkdir()
+    (output_dir / "existing.txt").write_text("keep", encoding="utf-8")
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    with pytest.raises(RuntimeError, match="再開manifestもありません"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=UnavailableAssessor(),
+        ).run()
+
+
 def test_candidate_extraction_cancels_queued_jobs_on_interrupt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
