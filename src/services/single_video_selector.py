@@ -53,6 +53,7 @@ ALGORITHM_VERSION = "single-video-selection-v1"
 PROMPT_VERSION = "blog-image-selection-v3"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
 MINIMUM_ENDPOINT_MARGIN_SECONDS = 0.05
+INTERVAL_COUNT_TOLERANCE = 1e-9
 MAXIMUM_RAW_CANDIDATES = 4_000
 PRIMARY_CANDIDATE_MULTIPLIER = 12
 SECONDARY_CANDIDATE_MULTIPLIER = 3
@@ -913,7 +914,7 @@ def make_timestamps(
     if requested_interval_seconds is not None:
         interval = requested_interval_seconds
         sample_count = max(
-            math.ceil(span / interval) + 1,
+            math.ceil(span / interval - INTERVAL_COUNT_TOLERANCE) + 1,
             output_count,
         )
         if sample_count > MAXIMUM_RAW_CANDIDATES:
@@ -928,7 +929,8 @@ def make_timestamps(
         )
         sample_count = max(base_count, desired_count)
     maximum_by_interval = (
-        math.floor((span + 1e-9) / MINIMUM_SAMPLE_INTERVAL_SECONDS) + 1
+        math.floor(span / MINIMUM_SAMPLE_INTERVAL_SECONDS + INTERVAL_COUNT_TOLERANCE)
+        + 1
     )
     sample_count = min(
         sample_count,

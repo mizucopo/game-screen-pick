@@ -66,6 +66,13 @@ def test_make_timestamps_rejects_interval_requiring_too_many_candidates() -> Non
         make_timestamps(3600.0, 30, 0.25)
 
 
+def test_make_timestamps_accepts_exact_explicit_interval_candidate_limit() -> None:
+    """浮動小数点誤差で4,000件ちょうどの候補を拒否しないこと."""
+    timestamps = make_timestamps(1200.7, 30, 0.3)
+
+    assert len(timestamps) == 4_000
+
+
 def test_make_timestamps_adapts_endpoint_margin_for_short_video() -> None:
     """短い動画でも可能な選択枚数を固定余白で失わないこと."""
     timestamps = make_timestamps(8.0, 30, None)
