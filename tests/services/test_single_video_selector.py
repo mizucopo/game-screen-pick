@@ -82,6 +82,18 @@ def test_make_timestamps_adapts_endpoint_margin_for_short_video() -> None:
     )
 
 
+def test_make_timestamps_stays_before_low_frame_rate_stream_end() -> None:
+    """末尾sampleを最後のframe時刻より後へ置かないこと."""
+    timestamps = make_timestamps(
+        8.0,
+        8,
+        None,
+        minimum_end_margin_seconds=1.0,
+    )
+
+    assert timestamps[-1] <= 7.0
+
+
 def test_measure_candidate_rejects_black_and_scores_visible_frame(
     tmp_path: Path,
 ) -> None:

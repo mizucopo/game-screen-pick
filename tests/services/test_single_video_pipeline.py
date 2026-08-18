@@ -15,7 +15,10 @@ from src.models.video_selection import (
     VideoMetadata,
 )
 from src.models.video_selection_request import VideoSelectionRequest
-from src.services.ollama_frame_assessor import OllamaFrameAssessor
+from src.services.ollama_frame_assessor import (
+    OllamaFrameAssessor,
+    OllamaModelValidationError,
+)
 from src.services.single_video_selector import SingleVideoSelector
 from src.services.video_frame_extractor import VideoFrameExtractor
 from src.utils.video_selection_files import file_sha256
@@ -40,10 +43,12 @@ class FakeFrameExtractor(VideoFrameExtractor):
         output_path: Path,
         *,
         max_width: int | None,
+        video_stream_index: int = 0,
     ) -> None:
         """時刻に応じた見た目のJPEGを生成する."""
         assert video.is_file()
         assert max_width is None or max_width == 960
+        assert video_stream_index == 0
         self.extract_calls += 1
         marker = round(timestamp_seconds * 100)
         image = Image.new(
@@ -121,9 +126,10 @@ class InterruptingFrameExtractor(FakeFrameExtractor):
         output_path: Path,
         *,
         max_width: int | None,
+        video_stream_index: int = 0,
     ) -> None:
         """queued job取消を検証するためKeyboardInterruptを送出する."""
-        del video, timestamp_seconds, output_path, max_width
+        del video, timestamp_seconds, output_path, max_width, video_stream_index
         raise KeyboardInterrupt
 
 
@@ -180,6 +186,24 @@ class UnavailableAssessor(FakeAssessor):
         """metadata取得が呼ばれた場合は接続失敗にする."""
         del requested_models
         raise ConnectionError("Ollama is unavailable")
+
+
+class GpuValidationFailingAssessor(FakeAssessor):
+    """決定的なGPU検証失敗を返すfake."""
+
+    def assess(
+        self,
+        *,
+        model: str,
+        model_digest: str,
+        prompt: str,
+        candidates: Sequence[FrameCandidate],
+        contact_sheet: Path,
+    ) -> list[FrameAssessment]:
+        """呼出回数を記録してmodel検証errorを送出する."""
+        del model, model_digest, prompt, candidates, contact_sheet
+        self.assess_calls += 1
+        raise OllamaModelValidationError("GPU利用を確認できません")
 
 
 def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> None:
@@ -481,3 +505,98 @@ def test_context_extraction_cancels_queued_jobs_on_interrupt(
         )
 
     assert (False, True) in shutdown_calls
+
+
+def test_mechanical_preselection_cancels_queued_jobs_on_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """機械評価中も未開始jobを取消して中断を伝播すること."""
+    shutdown_calls: list[tuple[bool, bool]] = []
+
+    class RecordingExecutor(ThreadPoolExecutor):
+        """shutdown引数を記録するexecutor."""
+
+        def shutdown(
+            self,
+            wait: bool = True,
+            *,
+            cancel_futures: bool = False,
+        ) -> None:
+            shutdown_calls.append((wait, cancel_futures))
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    def interrupt(_candidate: FrameCandidate) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        "src.services.single_video_selector.ThreadPoolExecutor",
+        RecordingExecutor,
+    )
+    monkeypatch.setattr(
+        "src.services.single_video_selector.measure_candidate",
+        interrupt,
+    )
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=1,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+
+    with pytest.raises(KeyboardInterrupt):
+        selector._preselect_candidates([FrameCandidate("f00001", 1.0, "unused")])
+
+    assert (False, True) in shutdown_calls
+
+
+def test_pipeline_does_not_retry_model_validation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """GPUやdigestの決定的な検証失敗をinference再試行しないこと."""
+    monkeypatch.setattr("src.services.single_video_selector.time.sleep", lambda _: None)
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=False,
+        ffmpeg_workers=1,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    assessor = GpuValidationFailingAssessor()
+
+    with pytest.raises(OllamaModelValidationError):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=assessor,
+        ).run()
+
+    assert assessor.assess_calls == 1

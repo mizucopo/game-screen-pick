@@ -12,6 +12,7 @@ class VideoMetadata:
     height: int
     codec_name: str
     average_frame_rate: str
+    video_stream_index: int = 0
 
 
 @dataclass(frozen=True)

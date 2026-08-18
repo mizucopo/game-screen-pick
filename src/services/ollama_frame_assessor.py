@@ -16,6 +16,10 @@ MODEL_OPTIONS = {"temperature": 0, "seed": 271}
 MINIMUM_GPU_MEMORY_RATIO = 0.5
 
 
+class OllamaModelValidationError(RuntimeError):
+    """model identityまたはGPU実行条件が満たされないerror."""
+
+
 class OllamaFrameAssessor:
     """Ollama APIのモデル検証・画像評価・GPU確認を担当する."""
 
@@ -30,7 +34,6 @@ class OllamaFrameAssessor:
         self.host = self.normalize_host(host)
         self.timeout_seconds = timeout_seconds
         self.require_gpu = require_gpu
-        self._verified_gpu_models: set[str] = set()
         self.gpu_evidence: dict[str, dict[str, Any]] = {}
 
     @staticmethod
@@ -155,42 +158,60 @@ class OllamaFrameAssessor:
         return assessments
 
     def _verify_gpu_use(self, model: str, model_digest: str) -> None:
-        """実際にロードされたmodelの半分以上がVRAM上にあることを確認する."""
-        if not self.require_gpu or model in self._verified_gpu_models:
-            return
+        """各batchでloaded modelのdigestとGPU配置を確認する."""
         payload = self._request_json(f"{self.host}/api/ps", timeout_seconds=30)
         raw_models = payload.get("models")
         if not isinstance(raw_models, list):
-            raise RuntimeError("Ollama /api/psからGPU利用状況を取得できません")
+            raise OllamaModelValidationError(
+                "Ollama /api/psからmodel利用状況を取得できません"
+            )
 
-        for raw_model in raw_models:
-            if not isinstance(raw_model, dict):
-                continue
-            name = raw_model.get("name") or raw_model.get("model")
-            size = raw_model.get("size")
-            size_vram = raw_model.get("size_vram")
-            digest = raw_model.get("digest")
-            if (
-                name == model
-                and digest == model_digest
-                and isinstance(size, int | float)
-                and not isinstance(size, bool)
-                and size > 0
-                and isinstance(size_vram, int | float)
-                and not isinstance(size_vram, bool)
-                and size_vram / size >= MINIMUM_GPU_MEMORY_RATIO
-            ):
-                evidence = {
-                    "name": name,
-                    "digest": digest,
-                    "size": size,
-                    "size_vram": size_vram,
-                    "gpu_memory_ratio": round(size_vram / size, 4),
-                }
-                self.gpu_evidence[model] = evidence
-                self._verified_gpu_models.add(model)
-                return
-        raise RuntimeError(f"Ollama modelのGPU利用を確認できません: {model}")
+        matching_name = [
+            raw_model
+            for raw_model in raw_models
+            if isinstance(raw_model, dict)
+            and (raw_model.get("name") or raw_model.get("model")) == model
+        ]
+        loaded_model = next(
+            (
+                raw_model
+                for raw_model in matching_name
+                if raw_model.get("digest") == model_digest
+            ),
+            None,
+        )
+        if loaded_model is None:
+            actual_digests = sorted(
+                str(raw_model.get("digest")) for raw_model in matching_name
+            )
+            raise OllamaModelValidationError(
+                f"Ollama model digestが一致しません: {model}; "
+                f"expected={model_digest}, actual={actual_digests}"
+            )
+        if not self.require_gpu:
+            return
+
+        size = loaded_model.get("size")
+        size_vram = loaded_model.get("size_vram")
+        if (
+            not isinstance(size, int | float)
+            or isinstance(size, bool)
+            or size <= 0
+            or not isinstance(size_vram, int | float)
+            or isinstance(size_vram, bool)
+            or size_vram / size < MINIMUM_GPU_MEMORY_RATIO
+        ):
+            raise OllamaModelValidationError(
+                f"Ollama modelのGPU利用を確認できません: {model}"
+            )
+        evidence = {
+            "name": model,
+            "digest": model_digest,
+            "size": size,
+            "size_vram": size_vram,
+            "gpu_memory_ratio": round(size_vram / size, 4),
+        }
+        self.gpu_evidence[model] = evidence
 
     def _request_json(
         self,

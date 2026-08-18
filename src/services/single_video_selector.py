@@ -40,7 +40,11 @@ from ..utils.video_selection_files import (
     sampled_file_sha256,
     write_json_atomic,
 )
-from .ollama_frame_assessor import MODEL_OPTIONS, OllamaFrameAssessor
+from .ollama_frame_assessor import (
+    MODEL_OPTIONS,
+    OllamaFrameAssessor,
+    OllamaModelValidationError,
+)
 from .video_frame_extractor import VideoFrameExtractor
 
 logger = logging.getLogger(__name__)
@@ -79,6 +83,7 @@ class SingleVideoSelector:
         self.work_dir = Path()
         self.game_title = ""
         self.metadata = VideoMetadata(0, 0, 0, "", "")
+        self.end_margin_seconds = MINIMUM_ENDPOINT_MARGIN_SECONDS
         self.timestamps: tuple[float, ...] = ()
         self.model_metadata: dict[str, dict[str, Any]] = {}
         self.manifest_digest = ""
@@ -168,10 +173,15 @@ class SingleVideoSelector:
             else infer_game_title(self.video)
         )
         self.metadata = self.frame_extractor.probe(self.video)
+        self.end_margin_seconds = max(
+            MINIMUM_ENDPOINT_MARGIN_SECONDS,
+            frame_interval_seconds(self.metadata.average_frame_rate),
+        )
         self.timestamps = make_timestamps(
             self.metadata.duration_seconds,
             self.request.output_count,
             self.request.sample_interval_seconds,
+            minimum_end_margin_seconds=self.end_margin_seconds,
         )
         if len(self.timestamps) < self.request.output_count:
             raise ValueError(
@@ -272,6 +282,7 @@ class SingleVideoSelector:
                 "height": self.metadata.height,
                 "codec_name": self.metadata.codec_name,
                 "average_frame_rate": self.metadata.average_frame_rate,
+                "video_stream_index": self.metadata.video_stream_index,
             },
             "game_title": self.game_title,
             "game_context": self.request.game_context.strip(),
@@ -296,6 +307,7 @@ class SingleVideoSelector:
                 "secondary": SECONDARY_BATCH_SIZE,
             },
             "context_offset_seconds": CONTEXT_OFFSET_SECONDS,
+            "end_margin_seconds": self.end_margin_seconds,
             "model_options": MODEL_OPTIONS,
             "require_gpu": not self.request.allow_cpu,
         }
@@ -393,6 +405,7 @@ class SingleVideoSelector:
             candidate.timestamp_seconds,
             Path(candidate.path),
             max_width=960,
+            video_stream_index=self.metadata.video_stream_index,
         )
 
     def _preselect_candidates(
@@ -401,10 +414,16 @@ class SingleVideoSelector:
     ) -> list[FrameCandidate]:
         """機械的品質と時間分散で一次Ollama評価候補を絞る."""
         logger.info("候補フレームを機械評価します: %d件", len(candidates))
-        with ThreadPoolExecutor(
+        executor = ThreadPoolExecutor(
             max_workers=min(8, self.request.ffmpeg_workers * 2)
-        ) as executor:
+        )
+        try:
             measured = list(executor.map(measure_candidate, candidates))
+        except BaseException:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown()
         usable = [candidate for candidate in measured if candidate is not None]
         if len(usable) < self.request.output_count:
             raise RuntimeError(
@@ -494,7 +513,7 @@ class SingleVideoSelector:
         for candidate in candidates:
             before = max(0.05, candidate.timestamp_seconds - CONTEXT_OFFSET_SECONDS)
             after = min(
-                self.metadata.duration_seconds - 0.05,
+                self.metadata.duration_seconds - self.end_margin_seconds,
                 candidate.timestamp_seconds + CONTEXT_OFFSET_SECONDS,
             )
             for position, timestamp in (("before", before), ("after", after)):
@@ -513,6 +532,7 @@ class SingleVideoSelector:
                     timestamp,
                     context_frame_path(context_dir, candidate, position),
                     max_width=960,
+                    video_stream_index=self.metadata.video_stream_index,
                 )
                 for candidate, position, timestamp in jobs
             ]
@@ -582,6 +602,8 @@ class SingleVideoSelector:
                     )
                     last_error = None
                     break
+                except OllamaModelValidationError:
+                    raise
                 except Exception as error:
                     last_error = error
                     logger.warning(
@@ -714,6 +736,7 @@ contact sheet内の対象ID: {ids}
                 selected_frame.candidate.timestamp_seconds,
                 output_path,
                 max_width=None,
+                video_stream_index=self.metadata.video_stream_index,
             )
             with Image.open(output_path) as image:
                 output_hash = image_difference_hash(image)
@@ -825,6 +848,8 @@ def make_timestamps(
     duration_seconds: float,
     output_count: int,
     requested_interval_seconds: float | None,
+    *,
+    minimum_end_margin_seconds: float = MINIMUM_ENDPOINT_MARGIN_SECONDS,
 ) -> tuple[float, ...]:
     """動画のほぼ先頭から末尾までを等間隔で覆う時刻列を返す."""
     if requested_interval_seconds is not None:
@@ -838,16 +863,36 @@ def make_timestamps(
                 f"sample intervalは{MINIMUM_SAMPLE_INTERVAL_SECONDS}秒以上で"
                 "指定してください"
             )
-    if duration_seconds <= MINIMUM_ENDPOINT_MARGIN_SECONDS * 2:
-        return (round(duration_seconds / 2.0, 6),)
-    default_margin = min(0.5, duration_seconds / 4.0)
-    required_output_span = max(0, output_count - 1) * MINIMUM_SAMPLE_INTERVAL_SECONDS
-    maximum_output_margin = (duration_seconds - required_output_span) / 2.0
-    start = max(
+    if not math.isfinite(minimum_end_margin_seconds) or minimum_end_margin_seconds < 0:
+        raise ValueError("end marginは0以上の有限値で指定してください")
+    minimum_start_margin = MINIMUM_ENDPOINT_MARGIN_SECONDS
+    minimum_end_margin = max(
         MINIMUM_ENDPOINT_MARGIN_SECONDS,
-        min(default_margin, maximum_output_margin),
+        minimum_end_margin_seconds,
     )
-    end = duration_seconds - start
+    default_start_margin = min(0.5, duration_seconds / 4.0)
+    default_end_margin = max(default_start_margin, minimum_end_margin)
+    required_output_span = max(0, output_count - 1) * MINIMUM_SAMPLE_INTERVAL_SECONDS
+    available_margin = max(0.0, duration_seconds - required_output_span)
+    minimum_total_margin = minimum_start_margin + minimum_end_margin
+    default_total_margin = default_start_margin + default_end_margin
+    target_total_margin = max(
+        minimum_total_margin,
+        min(default_total_margin, available_margin),
+    )
+    if minimum_total_margin >= duration_seconds:
+        start = 0.0
+        end_margin = min(duration_seconds, minimum_end_margin)
+    else:
+        start = min(default_start_margin, target_total_margin / 2.0)
+        end_margin = target_total_margin - start
+        if start < minimum_start_margin:
+            start = minimum_start_margin
+            end_margin = target_total_margin - start
+        if end_margin < minimum_end_margin:
+            end_margin = minimum_end_margin
+            start = target_total_margin - end_margin
+    end = max(start, duration_seconds - end_margin)
     span = end - start
     if requested_interval_seconds is not None:
         interval = requested_interval_seconds
@@ -874,9 +919,24 @@ def make_timestamps(
     )
     sample_count = max(1, sample_count)
     if sample_count == 1:
-        return (round(duration_seconds / 2.0, 6),)
+        return (round((start + end) / 2.0, 6),)
     timestamps = np.linspace(start, end, sample_count, dtype=np.float64)
     return tuple(round(float(timestamp), 6) for timestamp in timestamps)
+
+
+def frame_interval_seconds(average_frame_rate: str) -> float:
+    """ffprobeの平均frame rateから1frame分の秒数を返す."""
+    try:
+        if "/" in average_frame_rate:
+            numerator_text, denominator_text = average_frame_rate.split("/", maxsplit=1)
+            frames_per_second = float(numerator_text) / float(denominator_text)
+        else:
+            frames_per_second = float(average_frame_rate)
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+    if not math.isfinite(frames_per_second) or frames_per_second <= 0:
+        return 0.0
+    return 1.0 / frames_per_second
 
 
 def measure_candidate(candidate: FrameCandidate) -> FrameCandidate | None:

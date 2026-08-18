@@ -35,7 +35,7 @@ class VideoFrameExtractor:
                 (
                     "format=duration:"
                     "stream=index,codec_type,codec_name,width,height,"
-                    "avg_frame_rate,duration"
+                    "avg_frame_rate,duration:stream_disposition=attached_pic"
                 ),
                 "-of",
                 "json",
@@ -51,7 +51,11 @@ class VideoFrameExtractor:
             (
                 stream
                 for stream in streams
-                if isinstance(stream, dict) and stream.get("codec_type") == "video"
+                if (
+                    isinstance(stream, dict)
+                    and stream.get("codec_type") == "video"
+                    and not self._is_attached_picture(stream)
+                )
             ),
             None,
         )
@@ -68,6 +72,9 @@ class VideoFrameExtractor:
             height=self._positive_int(video_stream.get("height"), "height"),
             codec_name=str(video_stream.get("codec_name", "unknown")),
             average_frame_rate=str(video_stream.get("avg_frame_rate", "unknown")),
+            video_stream_index=self._nonnegative_int(
+                video_stream.get("index"), "stream index"
+            ),
         )
 
     def extract_frame(
@@ -77,6 +84,7 @@ class VideoFrameExtractor:
         output_path: Path,
         *,
         max_width: int | None,
+        video_stream_index: int = 0,
     ) -> None:
         """指定時刻の映像フレームをJPEGとしてatomicに出力する."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,7 +101,7 @@ class VideoFrameExtractor:
             "-i",
             str(video),
             "-map",
-            "0:v:0",
+            f"0:{video_stream_index}",
             "-frames:v",
             "1",
             "-an",
@@ -119,6 +127,19 @@ class VideoFrameExtractor:
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"動画の{field_name}が不正です: {value!r}")
         return value
+
+    @staticmethod
+    def _nonnegative_int(value: object, field_name: str) -> int:
+        """ffprobeの非負整数フィールドを検証する."""
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"動画の{field_name}が不正です: {value!r}")
+        return value
+
+    @staticmethod
+    def _is_attached_picture(stream: dict[str, Any]) -> bool:
+        """cover art用video streamかを返す."""
+        disposition = stream.get("disposition")
+        return isinstance(disposition, dict) and disposition.get("attached_pic") == 1
 
     @staticmethod
     def _positive_duration(value: object) -> float | None:
