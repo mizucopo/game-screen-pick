@@ -179,12 +179,18 @@ class AliasFakeAssessor(FakeAssessor):
 class UnavailableAssessor(FakeAssessor):
     """Ollamaへ接続できない状態を表すfake."""
 
+    def __init__(self) -> None:
+        """metadata取得回数を記録する."""
+        super().__init__()
+        self.metadata_calls = 0
+
     def fetch_model_metadata(
         self,
         requested_models: set[str],
     ) -> dict[str, dict[str, Any]]:
         """metadata取得が呼ばれた場合は接続失敗にする."""
         del requested_models
+        self.metadata_calls += 1
         raise ConnectionError("Ollama is unavailable")
 
 
@@ -263,8 +269,52 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     assert resumed_sheet == contact_sheet
     assert assessor.assess_calls == calls_after_first_run
     assert unavailable_assessor.assess_calls == 0
+    assert unavailable_assessor.metadata_calls == 0
     assert extractor.extract_calls == extraction_after_first_run
     assert [file_sha256(path) for path in selected_paths] == first_hashes
+
+
+def test_pipeline_finishes_fully_assessed_run_without_ollama(tmp_path: Path) -> None:
+    """評価後の成果物生成を中断してもOllamaなしで完了できること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    extractor = FakeFrameExtractor()
+    SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=FakeAssessor(),
+    ).run()
+    (output_dir / ".game-screen-pick" / "completion.json").unlink()
+    (output_dir / "selected-01.jpg").unlink()
+    unavailable_assessor = UnavailableAssessor()
+
+    contact_sheet = SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=unavailable_assessor,
+    ).run()
+
+    assert contact_sheet.is_file()
+    assert (output_dir / "selected-01.jpg").is_file()
+    assert (output_dir / ".game-screen-pick" / "completion.json").is_file()
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
 
 
 def test_pipeline_does_not_reuse_cpu_allowed_cache_for_gpu_required_run(

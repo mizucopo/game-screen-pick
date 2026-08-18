@@ -94,6 +94,13 @@ def test_make_timestamps_stays_before_low_frame_rate_stream_end() -> None:
     assert timestamps[-1] <= 7.0
 
 
+def test_make_timestamps_keeps_exact_minimum_interval_after_rounding() -> None:
+    """浮動小数点誤差で配置可能な最小間隔のsampleを失わないこと."""
+    timestamps = make_timestamps(0.45, 2, None)
+
+    assert timestamps == (0.1, 0.35)
+
+
 def test_measure_candidate_rejects_black_and_scores_visible_frame(
     tmp_path: Path,
 ) -> None:

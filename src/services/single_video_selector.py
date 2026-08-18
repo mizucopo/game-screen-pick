@@ -86,6 +86,7 @@ class SingleVideoSelector:
         self.end_margin_seconds = MINIMUM_ENDPOINT_MARGIN_SECONDS
         self.timestamps: tuple[float, ...] = ()
         self.model_metadata: dict[str, dict[str, Any]] = {}
+        self._live_validated_models: set[str] = set()
         self.manifest_digest = ""
 
     def run(self) -> Path:
@@ -188,7 +189,8 @@ class SingleVideoSelector:
                 f"抽出可能な候補{len(self.timestamps)}件が"
                 f"選択枚数{self.request.output_count}件を下回ります"
             )
-        if self._prepare_completed_manifest():
+        has_existing_manifest = self._restore_existing_manifest()
+        if has_existing_manifest and (self.work_dir / "completion.json").is_file():
             return
 
         host = self.request.ollama_host or os.environ.get(
@@ -199,9 +201,12 @@ class SingleVideoSelector:
             timeout_seconds=self.request.ollama_timeout,
             require_gpu=not self.request.allow_cpu,
         )
+        if has_existing_manifest:
+            return
         self.model_metadata = self.assessor.fetch_model_metadata(
             {self.request.primary_model, self.request.secondary_model}
         )
+        self._live_validated_models.update(self.model_metadata)
         manifest = self._build_manifest()
         self.manifest_digest = json_digest(manifest)
         manifest["manifest_digest"] = self.manifest_digest
@@ -219,14 +224,11 @@ class SingleVideoSelector:
                 f"出力フォルダが空ではなく、再開manifestもありません: {self.output_dir}"
             )
 
-    def _prepare_completed_manifest(self) -> bool:
-        """保存済みmanifestから完了runをOllamaなしで検証可能にする."""
+    def _restore_existing_manifest(self) -> bool:
+        """保存済みmanifestを外部接続なしで検証しmodel情報を復元する."""
         manifest_path = self.work_dir / "run-manifest.json"
-        completion_path = self.work_dir / "completion.json"
-        if not completion_path.is_file():
-            return False
         if not manifest_path.is_file():
-            raise RuntimeError("完了記録に対応する再開manifestがありません")
+            return False
 
         existing = read_json(manifest_path)
         if not isinstance(existing, dict):
@@ -265,6 +267,19 @@ class SingleVideoSelector:
                 "既存の実行条件が今回と異なります。新しい出力フォルダを指定してください"
             )
         return True
+
+    def _validate_live_model_metadata(self, model: str) -> None:
+        """未評価batchの実行前に保存済みmodelとの同一性を確認する."""
+        if model in self._live_validated_models:
+            return
+        if self.assessor is None:
+            raise RuntimeError("Ollama assessorが初期化されていません")
+        live_metadata = self.assessor.fetch_model_metadata({model})
+        if live_metadata.get(model) != self.model_metadata.get(model):
+            raise OllamaModelValidationError(
+                f"Ollama model metadataが再開manifestと一致しません: {model}"
+            )
+        self._live_validated_models.add(model)
 
     def _build_manifest(self) -> dict[str, Any]:
         """結果に影響する入力だけを含む再開manifestを作る."""
@@ -567,6 +582,7 @@ class SingleVideoSelector:
             batch_ids = {candidate.frame_id for candidate in batch}
             if batch_ids.issubset(state):
                 continue
+            self._validate_live_model_metadata(model)
             sheet_path = (
                 self.work_dir
                 / "contact-sheets"
@@ -911,7 +927,9 @@ def make_timestamps(
             120,
         )
         sample_count = max(base_count, desired_count)
-    maximum_by_interval = math.floor(span / MINIMUM_SAMPLE_INTERVAL_SECONDS) + 1
+    maximum_by_interval = (
+        math.floor((span + 1e-9) / MINIMUM_SAMPLE_INTERVAL_SECONDS) + 1
+    )
     sample_count = min(
         sample_count,
         MAXIMUM_RAW_CANDIDATES,
