@@ -23,7 +23,11 @@ from ..models.video_selection import (
     SelectedFrame,
     VideoMetadata,
 )
-from ..models.video_selection_request import VideoSelectionRequest
+from ..models.video_selection_request import (
+    MAXIMUM_OUTPUT_COUNT,
+    MINIMUM_SAMPLE_INTERVAL_SECONDS,
+    VideoSelectionRequest,
+)
 from ..utils.contact_sheet import (
     build_contact_sheet,
     context_frame_path,
@@ -44,7 +48,6 @@ logger = logging.getLogger(__name__)
 ALGORITHM_VERSION = "single-video-selection-v1"
 PROMPT_VERSION = "blog-image-selection-v3"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
-MINIMUM_SAMPLE_INTERVAL_SECONDS = 0.25
 MAXIMUM_RAW_CANDIDATES = 4_000
 PRIMARY_CANDIDATE_MULTIPLIER = 12
 SECONDARY_CANDIDATE_MULTIPLIER = 3
@@ -139,13 +142,18 @@ class SingleVideoSelector:
         """入力・モデル・manifestを検証して実行状態を確定する."""
         if self.request.output_count <= 0:
             raise ValueError("選択枚数は正の整数で指定してください")
+        if self.request.output_count > MAXIMUM_OUTPUT_COUNT:
+            raise ValueError(f"選択枚数は{MAXIMUM_OUTPUT_COUNT}以下で指定してください")
         if not 1 <= self.request.ffmpeg_workers <= 4:
             raise ValueError("ffmpeg workersは1から4で指定してください")
         if (
             self.request.sample_interval_seconds is not None
-            and self.request.sample_interval_seconds <= 0
+            and self.request.sample_interval_seconds < MINIMUM_SAMPLE_INTERVAL_SECONDS
         ):
-            raise ValueError("sample intervalは正の数で指定してください")
+            raise ValueError(
+                f"sample intervalは{MINIMUM_SAMPLE_INTERVAL_SECONDS}秒以上で"
+                "指定してください"
+            )
 
         self.video = Path(self.request.input_video).expanduser().resolve()
         if not self.video.is_file():
@@ -298,7 +306,8 @@ class SingleVideoSelector:
             logger.info(
                 "候補フレームを抽出します: %d/%d件", len(pending), len(candidates)
             )
-        with ThreadPoolExecutor(max_workers=self.request.ffmpeg_workers) as executor:
+        executor = ThreadPoolExecutor(max_workers=self.request.ffmpeg_workers)
+        try:
             futures = [
                 executor.submit(self._extract_candidate, candidate)
                 for candidate in pending
@@ -307,6 +316,11 @@ class SingleVideoSelector:
                 future.result()
                 if completed % 50 == 0 or completed == len(futures):
                     logger.info("候補フレーム抽出: %d/%d件", completed, len(futures))
+        except BaseException:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown()
         return candidates
 
     def _extract_candidate(self, candidate: FrameCandidate) -> None:
@@ -479,7 +493,7 @@ class SingleVideoSelector:
                 started = time.monotonic()
                 try:
                     assessments = self.assessor.assess(
-                        model=model,
+                        model=str(self.model_metadata[model]["resolved_name"]),
                         model_digest=str(self.model_metadata[model]["digest"]),
                         prompt=self._model_prompt(stage, batch),
                         candidates=batch,
@@ -679,12 +693,18 @@ contact sheet内の対象ID: {ids}
                 "models": {
                     "primary": {
                         "name": self.request.primary_model,
+                        "resolved_name": self.model_metadata[
+                            self.request.primary_model
+                        ]["resolved_name"],
                         "digest": self.model_metadata[self.request.primary_model][
                             "digest"
                         ],
                     },
                     "secondary": {
                         "name": self.request.secondary_model,
+                        "resolved_name": self.model_metadata[
+                            self.request.secondary_model
+                        ]["resolved_name"],
                         "digest": self.model_metadata[self.request.secondary_model][
                             "digest"
                         ],
@@ -749,10 +769,12 @@ def make_timestamps(
             or requested_interval_seconds <= 0
         ):
             raise ValueError("sample intervalは正の数で指定してください")
-        interval = max(
-            MINIMUM_SAMPLE_INTERVAL_SECONDS,
-            requested_interval_seconds,
-        )
+        if requested_interval_seconds < MINIMUM_SAMPLE_INTERVAL_SECONDS:
+            raise ValueError(
+                f"sample intervalは{MINIMUM_SAMPLE_INTERVAL_SECONDS}秒以上で"
+                "指定してください"
+            )
+        interval = requested_interval_seconds
         sample_count = max(
             math.ceil(span / interval) + 1,
             output_count,

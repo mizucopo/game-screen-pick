@@ -1,6 +1,7 @@
 """単一動画production pipelineの小さな結合テスト."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
@@ -77,6 +78,7 @@ class FakeAssessor(OllamaFrameAssessor):
         return {
             model: {
                 "digest": f"digest-{model}",
+                "resolved_name": model,
                 "capabilities": ["vision"],
                 "details": {},
             }
@@ -107,6 +109,65 @@ class FakeAssessor(OllamaFrameAssessor):
             )
             for candidate in candidates
         ]
+
+
+class InterruptingFrameExtractor(FakeFrameExtractor):
+    """最初のframe抽出でCtrl+C相当を発生させるfake."""
+
+    def extract_frame(
+        self,
+        video: Path,
+        timestamp_seconds: float,
+        output_path: Path,
+        *,
+        max_width: int | None,
+    ) -> None:
+        """queued job取消を検証するためKeyboardInterruptを送出する."""
+        del video, timestamp_seconds, output_path, max_width
+        raise KeyboardInterrupt
+
+
+class AliasFakeAssessor(FakeAssessor):
+    """untagged modelを`:latest`へ解決するfake."""
+
+    def __init__(self) -> None:
+        """実際に評価へ渡されたmodel名を記録する."""
+        super().__init__()
+        self.assessed_models: list[str] = []
+
+    def fetch_model_metadata(
+        self,
+        requested_models: set[str],
+    ) -> dict[str, dict[str, Any]]:
+        """requested keyごとにcanonical nameを返す."""
+        assert requested_models == {"llava"}
+        return {
+            "llava": {
+                "digest": "digest-llava:latest",
+                "resolved_name": "llava:latest",
+                "capabilities": ["vision"],
+                "details": {},
+            }
+        }
+
+    def assess(
+        self,
+        *,
+        model: str,
+        model_digest: str,
+        prompt: str,
+        candidates: Sequence[FrameCandidate],
+        contact_sheet: Path,
+    ) -> list[FrameAssessment]:
+        """canonical model名を記録して固定評価を返す."""
+        self.assessed_models.append(model)
+        return super().assess(
+            model=model,
+            model_digest=model_digest,
+            prompt=prompt,
+            candidates=candidates,
+            contact_sheet=contact_sheet,
+        )
 
 
 def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> None:
@@ -204,3 +265,117 @@ def test_pipeline_does_not_reuse_cpu_allowed_cache_for_gpu_required_run(
             frame_extractor=extractor,
             assessor=assessor,
         ).run()
+
+
+def test_pipeline_uses_resolved_ollama_model_name(tmp_path: Path) -> None:
+    """untagged modelはresolved nameでchatとGPU確認へ渡すこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="llava",
+        secondary_model="llava",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    assessor = AliasFakeAssessor()
+
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=assessor,
+    ).run()
+
+    assert assessor.assessed_models
+    assert set(assessor.assessed_models) == {"llava:latest"}
+
+
+def test_pipeline_rejects_output_count_above_contact_sheet_limit(
+    tmp_path: Path,
+) -> None:
+    """JPEG一覧を生成できない枚数を高価な処理前に拒否すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=601,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    with pytest.raises(ValueError, match="600以下"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=FakeAssessor(),
+        ).run()
+
+
+def test_candidate_extraction_cancels_queued_jobs_on_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Ctrl+C時にexecutorが未開始jobを取消して待ち続けないこと."""
+    shutdown_calls: list[tuple[bool, bool]] = []
+
+    class RecordingExecutor(ThreadPoolExecutor):
+        """shutdown引数を記録するexecutor."""
+
+        def shutdown(
+            self,
+            wait: bool = True,
+            *,
+            cancel_futures: bool = False,
+        ) -> None:
+            shutdown_calls.append((wait, cancel_futures))
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(
+        "src.services.single_video_selector.ThreadPoolExecutor",
+        RecordingExecutor,
+    )
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=1,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=InterruptingFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+
+    with pytest.raises(KeyboardInterrupt):
+        selector._extract_candidates()
+
+    assert (False, True) in shutdown_calls

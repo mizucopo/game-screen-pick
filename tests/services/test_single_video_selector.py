@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from src.models.video_selection import FrameAssessment, FrameCandidate
@@ -51,6 +52,12 @@ def test_make_timestamps_treats_requested_interval_as_a_maximum() -> None:
         )
         <= 600.0
     )
+
+
+def test_make_timestamps_rejects_an_interval_below_supported_floor() -> None:
+    """0.25秒未満を黙って広げず、処理前に拒否すること."""
+    with pytest.raises(ValueError, match="0.25秒以上"):
+        make_timestamps(60.0, 30, 0.1)
 
 
 def test_measure_candidate_rejects_black_and_scores_visible_frame(

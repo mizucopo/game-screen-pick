@@ -6,7 +6,11 @@ import sys
 import click
 
 from .application.run_video import run_video_application
-from .models.video_selection_request import VideoSelectionRequest
+from .models.video_selection_request import (
+    MAXIMUM_OUTPUT_COUNT,
+    MINIMUM_SAMPLE_INTERVAL_SECONDS,
+    VideoSelectionRequest,
+)
 from .utils.elapsed_log_formatter import ElapsedLogFormatter
 
 DEFAULT_PRIMARY_MODEL = "qwen3.8:27b"
@@ -45,6 +49,27 @@ def validate_positive_float(value: float | str | None) -> float | None:
     return float_value
 
 
+def validate_output_count(value: int | str | None) -> int | None:
+    """選択枚数をcontact sheetがJPEGに収まる範囲へ制限する."""
+    output_count = validate_positive_int(value)
+    if output_count is not None and output_count > MAXIMUM_OUTPUT_COUNT:
+        raise click.BadParameter(
+            f"{MAXIMUM_OUTPUT_COUNT}以下で指定してください（実際の値: {output_count}）"
+        )
+    return output_count
+
+
+def validate_sample_interval(value: float | str | None) -> float | None:
+    """候補抽出間隔を実装が保証する下限以上へ制限する."""
+    interval = validate_positive_float(value)
+    if interval is not None and interval < MINIMUM_SAMPLE_INTERVAL_SECONDS:
+        raise click.BadParameter(
+            f"{MINIMUM_SAMPLE_INTERVAL_SECONDS}以上で指定してください"
+            f"（実際の値: {interval}）"
+        )
+    return interval
+
+
 def validate_ffmpeg_workers(value: int | str | None) -> int | None:
     """ffmpeg並列数をCPU負荷を抑える1から4へ制限する."""
     workers = validate_positive_int(value)
@@ -61,8 +86,8 @@ def validate_ffmpeg_workers(value: int | str | None) -> int | None:
     default=30,
     show_default=True,
     type=int,
-    callback=lambda _ctx, _param, value: validate_positive_int(value),
-    help="選択枚数",
+    callback=lambda _ctx, _param, value: validate_output_count(value),
+    help=f"選択枚数（1から{MAXIMUM_OUTPUT_COUNT}）",
 )
 @click.option(
     "--game-title",
@@ -116,8 +141,11 @@ def validate_ffmpeg_workers(value: int | str | None) -> int | None:
     "--sample-interval-seconds",
     default=None,
     type=float,
-    callback=lambda _ctx, _param, value: validate_positive_float(value),
-    help="候補抽出の最大間隔。未指定時は動画時間と選択枚数から自動決定",
+    callback=lambda _ctx, _param, value: validate_sample_interval(value),
+    help=(
+        f"候補抽出の最大間隔（{MINIMUM_SAMPLE_INTERVAL_SECONDS}秒以上）。"
+        "未指定時は動画時間と選択枚数から自動決定"
+    ),
 )
 @click.option("--debug", is_flag=True, help="デバッグログを有効化")
 @click.argument(

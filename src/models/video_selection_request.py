@@ -2,6 +2,9 @@
 
 from dataclasses import dataclass
 
+MAXIMUM_OUTPUT_COUNT = 600
+MINIMUM_SAMPLE_INTERVAL_SECONDS = 0.25
+
 
 @dataclass(frozen=True)
 class VideoSelectionRequest:

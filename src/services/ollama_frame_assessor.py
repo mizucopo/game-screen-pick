@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 from typing import Any, Sequence
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from ..models.video_selection import FrameAssessment, FrameCandidate
@@ -40,10 +41,10 @@ class OllamaFrameAssessor:
             raise ValueError("Ollama hostが空です")
         if "://" not in normalized:
             normalized = f"http://{normalized}"
-        authority = normalized.split("://", maxsplit=1)[1]
-        if ":" not in authority and not authority.startswith("["):
-            normalized = f"{normalized}:11434"
-        return normalized
+        parsed = urlsplit(normalized)
+        if parsed.port is None:
+            parsed = parsed._replace(netloc=f"{parsed.netloc}:11434")
+        return urlunsplit(parsed)
 
     def fetch_model_metadata(
         self,
@@ -63,7 +64,17 @@ class OllamaFrameAssessor:
             digest = raw_model.get("digest")
             if isinstance(name, str) and isinstance(digest, str):
                 available[name] = digest
-        missing = sorted(requested_models - available.keys())
+        resolved_names: dict[str, str] = {}
+        for requested_model in requested_models:
+            if requested_model in available:
+                resolved_names[requested_model] = requested_model
+                continue
+            latest_name = f"{requested_model}:latest"
+            untagged = ":" not in requested_model.rsplit("/", maxsplit=1)[-1]
+            if untagged and latest_name in available:
+                resolved_names[requested_model] = latest_name
+
+        missing = sorted(requested_models - resolved_names.keys())
         if missing:
             raise ValueError(
                 f"Ollama modelが見つかりません: {missing}; "
@@ -72,16 +83,18 @@ class OllamaFrameAssessor:
 
         metadata: dict[str, dict[str, Any]] = {}
         for model in sorted(requested_models):
+            resolved_name = resolved_names[model]
             details = self._request_json(
                 f"{self.host}/api/show",
-                payload={"model": model},
+                payload={"model": resolved_name},
                 timeout_seconds=min(self.timeout_seconds, 60),
             )
             capabilities = details.get("capabilities")
             if not isinstance(capabilities, list) or "vision" not in capabilities:
-                raise ValueError(f"vision非対応のOllama modelです: {model}")
+                raise ValueError(f"vision非対応のOllama modelです: {resolved_name}")
             metadata[model] = {
-                "digest": available[model],
+                "digest": available[resolved_name],
+                "resolved_name": resolved_name,
                 "capabilities": capabilities,
                 "details": details.get("details"),
             }

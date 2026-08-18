@@ -76,8 +76,10 @@ def test_cli_translates_options_to_video_selection_request(
         (["-n", "-1"], "正の整数"),
         (["--ollama-timeout", "0"], "正の数"),
         (["--sample-interval-seconds", "-1"], "正の数"),
+        (["--sample-interval-seconds", "0.1"], "0.25以上"),
         (["--ffmpeg-workers", "0"], "正の整数"),
         (["--ffmpeg-workers", "5"], "1から4"),
+        (["-n", "601"], "600以下"),
     ],
 )
 def test_cli_rejects_invalid_numeric_options(

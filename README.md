@@ -40,7 +40,7 @@ OLLAMA_HOST=192.168.1.31:11434 \
 
 ### オプション
 
-- `-n`, `--num`: 選択枚数（既定: 30）
+- `-n`, `--num`: 選択枚数（1から600、既定: 30）
 - `--game-title`: ゲームタイトル。未指定時はファイル名から推測
 - `--game-context`: ゲーム内容やブログ掲載意図の任意補足
 - `--primary-model`: 一次評価用Ollama vision model
@@ -48,7 +48,7 @@ OLLAMA_HOST=192.168.1.31:11434 \
 - `--ollama-host`: Ollama host。CLI、`OLLAMA_HOST`、localhostの順で解決
 - `--ollama-timeout`: Ollama APIのbatch単位timeout秒数（既定: 900）
 - `--ffmpeg-workers`: フレーム抽出の並列数（1から4、既定: 2）
-- `--sample-interval-seconds`: 候補抽出の最大間隔。通常は自動設定を推奨
+- `--sample-interval-seconds`: 候補抽出の最大間隔（0.25秒以上）。通常は自動設定を推奨
 - `--allow-cpu`: GPU利用を確認できなくても続行する
 - `--debug`: debug logを有効化する
 
