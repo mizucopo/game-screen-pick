@@ -39,6 +39,20 @@ def test_make_timestamps_covers_the_whole_video() -> None:
     assert any(2650 < timestamp < 2750 for timestamp in timestamps)
 
 
+def test_make_timestamps_treats_requested_interval_as_a_maximum() -> None:
+    """大きい最大間隔でも選択枚数以上のsample位置を確保すること."""
+    timestamps = make_timestamps(3600.0, 30, 600.0)
+
+    assert len(timestamps) == 30
+    assert (
+        max(
+            right - left
+            for left, right in zip(timestamps[:-1], timestamps[1:], strict=True)
+        )
+        <= 600.0
+    )
+
+
 def test_measure_candidate_rejects_black_and_scores_visible_frame(
     tmp_path: Path,
 ) -> None:

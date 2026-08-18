@@ -1,9 +1,11 @@
 """単一動画production pipelineの小さな結合テスト."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
+import pytest
 from PIL import Image, ImageDraw
 
 from src.models.video_selection import (
@@ -164,3 +166,41 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     assert assessor.assess_calls == calls_after_first_run
     assert extractor.extract_calls == extraction_after_first_run
     assert [file_sha256(path) for path in selected_paths] == first_hashes
+
+
+def test_pipeline_does_not_reuse_cpu_allowed_cache_for_gpu_required_run(
+    tmp_path: Path,
+) -> None:
+    """GPU保証が異なる既存outputを同じrunとして再開しないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    cpu_allowed_request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    extractor = FakeFrameExtractor()
+    assessor = FakeAssessor()
+    SingleVideoSelector(
+        cpu_allowed_request,
+        frame_extractor=extractor,
+        assessor=assessor,
+    ).run()
+
+    with pytest.raises(RuntimeError, match="実行条件が今回と異なります"):
+        SingleVideoSelector(
+            replace(cpu_allowed_request, allow_cpu=False),
+            frame_extractor=extractor,
+            assessor=assessor,
+        ).run()

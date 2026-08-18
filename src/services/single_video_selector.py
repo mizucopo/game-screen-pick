@@ -226,6 +226,7 @@ class SingleVideoSelector:
             },
             "context_offset_seconds": CONTEXT_OFFSET_SECONDS,
             "model_options": MODEL_OPTIONS,
+            "require_gpu": not self.request.allow_cpu,
         }
 
     def _prepare_output_dir(self, manifest: dict[str, Any]) -> None:
@@ -752,7 +753,10 @@ def make_timestamps(
             MINIMUM_SAMPLE_INTERVAL_SECONDS,
             requested_interval_seconds,
         )
-        sample_count = math.ceil(span / interval) + 1
+        sample_count = max(
+            math.ceil(span / interval) + 1,
+            output_count,
+        )
     else:
         base_count = (
             math.ceil(duration_seconds / DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS) + 1
