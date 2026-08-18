@@ -80,6 +80,37 @@ def test_probe_falls_back_to_container_duration(
     assert metadata.duration_seconds == 12.0
 
 
+def test_probe_offsets_delayed_video_and_limits_fallback_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """遅れて始まるvideo streamの位置と残り時間を返すこと."""
+    extractor, commands = _probe_with_payload(
+        monkeypatch,
+        {
+            "format": {"start_time": "0.0", "duration": "8.0"},
+            "streams": [
+                {"index": 0, "codec_type": "audio", "duration": "8.0"},
+                {
+                    "index": 1,
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1920,
+                    "height": 1080,
+                    "avg_frame_rate": "1/1",
+                    "start_time": "5.0",
+                    "duration": "N/A",
+                },
+            ],
+        },
+    )
+
+    metadata = extractor.probe(Path("sample.mp4"))
+
+    assert metadata.start_time_seconds == 5.0
+    assert metadata.duration_seconds == 3.0
+    assert "start_time" in commands[0][commands[0].index("-show_entries") + 1]
+
+
 def test_probe_skips_attached_picture_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

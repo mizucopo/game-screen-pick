@@ -33,9 +33,10 @@ class VideoFrameExtractor:
                 "error",
                 "-show_entries",
                 (
-                    "format=duration:"
+                    "format=duration,start_time:"
                     "stream=index,codec_type,codec_name,width,height,"
-                    "avg_frame_rate,duration:stream_disposition=attached_pic"
+                    "avg_frame_rate,duration,start_time:"
+                    "stream_disposition=attached_pic"
                 ),
                 "-of",
                 "json",
@@ -61,9 +62,20 @@ class VideoFrameExtractor:
         )
         if video_stream is None:
             raise ValueError("映像streamが見つかりません")
+        format_start = self._finite_timestamp(format_payload.get("start_time")) or 0.0
+        stream_start = self._finite_timestamp(video_stream.get("start_time"))
+        start_time = max(
+            0.0,
+            (stream_start if stream_start is not None else format_start) - format_start,
+        )
         duration = self._positive_duration(video_stream.get("duration"))
         if duration is None:
-            duration = self._positive_duration(format_payload.get("duration"))
+            container_duration = self._positive_duration(format_payload.get("duration"))
+            duration = (
+                self._positive_duration(container_duration - start_time)
+                if container_duration is not None
+                else None
+            )
         if duration is None:
             raise ValueError("動画時間を取得できませんでした")
         return VideoMetadata(
@@ -75,6 +87,7 @@ class VideoFrameExtractor:
             video_stream_index=self._nonnegative_int(
                 video_stream.get("index"), "stream index"
             ),
+            start_time_seconds=start_time,
         )
 
     def extract_frame(
@@ -153,6 +166,17 @@ class VideoFrameExtractor:
         if not math.isfinite(duration) or duration <= 0:
             return None
         return duration
+
+    @staticmethod
+    def _finite_timestamp(value: object) -> float | None:
+        """ffprobeの有限なtimestampを返す."""
+        if isinstance(value, bool) or not isinstance(value, str | int | float):
+            return None
+        try:
+            timestamp = float(value)
+        except ValueError:
+            return None
+        return timestamp if math.isfinite(timestamp) else None
 
     @staticmethod
     def _run_json(command: list[str]) -> dict[str, Any]:

@@ -101,6 +101,21 @@ def test_make_timestamps_stays_before_low_frame_rate_stream_end() -> None:
     assert timestamps[-1] <= 7.0
 
 
+def test_make_timestamps_offsets_a_delayed_video_stream() -> None:
+    """video streamが遅れて始まる場合も先頭から末尾までを覆うこと."""
+    timestamps = make_timestamps(
+        3.0,
+        3,
+        None,
+        minimum_end_margin_seconds=1.0,
+        start_time_seconds=5.0,
+    )
+
+    assert timestamps[0] == 5.5
+    assert timestamps[-1] == 7.0
+    assert len(timestamps) == 7
+
+
 def test_make_timestamps_keeps_exact_minimum_interval_after_rounding() -> None:
     """浮動小数点誤差で配置可能な最小間隔のsampleを失わないこと."""
     timestamps = make_timestamps(0.45, 2, None)

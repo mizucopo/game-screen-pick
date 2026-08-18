@@ -184,6 +184,7 @@ class SingleVideoSelector:
             self.request.output_count,
             self.request.sample_interval_seconds,
             minimum_end_margin_seconds=self.end_margin_seconds,
+            start_time_seconds=self.metadata.start_time_seconds,
         )
         if len(self.timestamps) < self.request.output_count:
             raise ValueError(
@@ -299,6 +300,7 @@ class SingleVideoSelector:
                 "codec_name": self.metadata.codec_name,
                 "average_frame_rate": self.metadata.average_frame_rate,
                 "video_stream_index": self.metadata.video_stream_index,
+                "start_time_seconds": self.metadata.start_time_seconds,
             },
             "game_title": self.game_title,
             "game_context": self.request.game_context.strip(),
@@ -455,9 +457,13 @@ class SingleVideoSelector:
         bins: list[list[FrameCandidate]] = [[] for _ in range(bin_count)]
         span = max(self.metadata.duration_seconds, 0.001)
         for candidate in usable:
+            relative_timestamp = max(
+                0.0,
+                candidate.timestamp_seconds - self.metadata.start_time_seconds,
+            )
             bin_index = min(
                 bin_count - 1,
-                int(candidate.timestamp_seconds / span * bin_count),
+                int(relative_timestamp / span * bin_count),
             )
             bins[bin_index].append(candidate)
         for bucket in bins:
@@ -526,10 +532,15 @@ class SingleVideoSelector:
         """二次評価候補の直前・直後フレームを抽出する."""
         context_dir = self.work_dir / "context-frames"
         jobs: list[tuple[FrameCandidate, str, float]] = []
+        stream_start = self.metadata.start_time_seconds
+        stream_end = stream_start + self.metadata.duration_seconds
         for candidate in candidates:
-            before = max(0.05, candidate.timestamp_seconds - CONTEXT_OFFSET_SECONDS)
+            before = max(
+                stream_start + MINIMUM_ENDPOINT_MARGIN_SECONDS,
+                candidate.timestamp_seconds - CONTEXT_OFFSET_SECONDS,
+            )
             after = min(
-                self.metadata.duration_seconds - self.end_margin_seconds,
+                stream_end - self.end_margin_seconds,
                 candidate.timestamp_seconds + CONTEXT_OFFSET_SECONDS,
             )
             for position, timestamp in (("before", before), ("after", after)):
@@ -867,6 +878,7 @@ def make_timestamps(
     requested_interval_seconds: float | None,
     *,
     minimum_end_margin_seconds: float = MINIMUM_ENDPOINT_MARGIN_SECONDS,
+    start_time_seconds: float = 0.0,
 ) -> tuple[float, ...]:
     """動画のほぼ先頭から末尾までを等間隔で覆う時刻列を返す."""
     if requested_interval_seconds is not None:
@@ -882,6 +894,8 @@ def make_timestamps(
             )
     if not math.isfinite(minimum_end_margin_seconds) or minimum_end_margin_seconds < 0:
         raise ValueError("end marginは0以上の有限値で指定してください")
+    if not math.isfinite(start_time_seconds) or start_time_seconds < 0:
+        raise ValueError("start timeは0以上の有限値で指定してください")
     minimum_start_margin = MINIMUM_ENDPOINT_MARGIN_SECONDS
     minimum_end_margin = max(
         MINIMUM_ENDPOINT_MARGIN_SECONDS,
@@ -938,9 +952,16 @@ def make_timestamps(
         maximum_by_interval,
     )
     sample_count = max(1, sample_count)
+    absolute_start = start_time_seconds + start
+    absolute_end = start_time_seconds + end
     if sample_count == 1:
-        return (round((start + end) / 2.0, 6),)
-    timestamps = np.linspace(start, end, sample_count, dtype=np.float64)
+        return (round((absolute_start + absolute_end) / 2.0, 6),)
+    timestamps = np.linspace(
+        absolute_start,
+        absolute_end,
+        sample_count,
+        dtype=np.float64,
+    )
     return tuple(round(float(timestamp), 6) for timestamp in timestamps)
 
 

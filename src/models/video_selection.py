@@ -13,6 +13,7 @@ class VideoMetadata:
     codec_name: str
     average_frame_rate: str
     video_stream_index: int = 0
+    start_time_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
