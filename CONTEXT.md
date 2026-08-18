@@ -1,97 +1,77 @@
 # Game Screen Pick
 
-ゲームスクリーンショットから、ブログで使いやすい画像を選び出すための文脈。
+単一のゲーム動画全体から、ブログへ掲載しやすい画像を選び出すための文脈。
 
 ## Language
 
+**Input Video**:
+一回の画像選定で扱う1本のゲーム録画。動画のほぼ先頭から末尾までを選定対象にする。
+_Avoid_: screenshot folder, selected clip, representative segment
+
+**Game Title**:
+Ollamaが画像の意味を判断するときに使うゲーム名。明示されなければ動画名から推測する。
+_Avoid_: title-specific selection rule, paid metadata lookup
+
+**Game Context**:
+ゲーム内容やブログ掲載意図を補足する任意の文章。評価の参考情報であり、固定カテゴリやquotaではない。
+_Avoid_: hard-coded title tuning, required external API lookup
+
+**Sample Position**:
+Input Video全体へ等間隔に置かれた候補抽出時刻。処理量に上限を持ちつつ、動画の四半期など一部だけへ偏らない。
+_Avoid_: beginning-only sampling, random timestamp
+
+**Frame Candidate**:
+Sample Positionから抽出し、ブログ画像になる可能性があるframe。暗転、白飛び、ほぼ単色のframeは含まない。
+_Avoid_: selected output, every decoded frame
+
+**Primary Candidate**:
+Frame Candidateを機械的品質と時間分散で絞った、一次Ollama評価の対象。
+_Avoid_: final output, title-specific category
+
+**Secondary Candidate**:
+一次評価後にscene、見た目、動画時刻を分散させた、二次Ollama評価の対象。
+_Avoid_: selected output, all primary candidates
+
+**Transition Context**:
+Secondary Candidateの直前・対象・直後の三frame。対象frameが暗転、fade、loading、画面遷移途中か判断するために使う。
+_Avoid_: three independently selectable images, gameplay category
+
 **Scene**:
-ブログ用の画像選択で使う、画像内容を表すカテゴリ。ゲームジャンルや入力画像群に応じて決まる。
-_Avoid_: play/event density bucket, fixed category
+Ollamaが同種の画面をまとめるために返す短い場面名。最終選定の多様性に使うが、実行前の固定catalogは持たない。
+_Avoid_: fixed scene catalog, title-specific quota
 
-**Scene Slug**:
-scene を表す小文字英数字の安定名。出力ファイル名、レポート、カテゴリ集計に使われる。
-_Avoid_: localized category name
+**Normal Progress Screen**:
+そのゲームで繰り返し現れる移動、探索、戦闘、会話、推理、puzzleなどの通常進行画面。特別画面より少し多く残すが、通常画面だけには限定しない。
+_Avoid_: combat-only preference, universal required scene
 
-**Scene-numbered Output Name**:
-選択された画像に付ける標準の出力ファイル名。scene slug と scene 内の連番で構成される。
-_Avoid_: original filename output, optional rename mode
+**Special Screen**:
+title、map、menu、resultなど、ブログ上は有用でも多すぎると入力全体の代表性を損なう画面。
+_Avoid_: hard reject, cinematic scene as a whole
+
+**Selected Image**:
+二段階評価を通過し、Transition Frameと近い重複を除きながら、品質・scene・見た目・動画時刻の分散を考慮して選ばれたfull resolution画像。
+_Avoid_: resized evaluation frame, unreviewed candidate
+
+**Selected Contact Sheet**:
+全Selected Imageを順位と動画時刻付きで一枚にまとめた、人間確認用の`selected-contact-sheet.jpg`。
+_Avoid_: Ollama batch input, machine-only report
 
 **Output Folder**:
-選択された画像とレポートを書き出す実行ごとの保存先。処理開始前に空である必要がある。
-_Avoid_: append destination, overwrite target, resumable output
+Selected Image、Selected Contact Sheet、reportと再開用作業状態を置く実行先。新規時は空で、再開時は同じrun manifestを持つ必要がある。
+_Avoid_: unconditional overwrite target, append-only destination
 
-**Scene Display Name**:
-scene を人が読みやすいように表す日本語名。ブログ用の画像選択やレポート表示で使われる。
-_Avoid_: filename prefix, report key
+**Run Manifest**:
+Input Videoの指紋、選定条件、sample位置、model digest、algorithm versionを固定する再開条件。同じmanifestの実行だけがOutput Folderを再利用できる。
+_Avoid_: progress counter, human approval record
 
-**Scene Catalog**:
-入力画像群から見つけた、その実行で使う scene と scene selection role の一覧。3から8個の scene で構成され、分類の逃げ先として other を含む。各画像は scene catalog のいずれかの scene に分類される。
-_Avoid_: fixed scene list, free-form per-image labels
+**Assessment Cache**:
+Ollama評価をbatch完了ごとにatomic保存した再開状態。中断やnetwork切断後は完了batchを再利用する。
+_Avoid_: final completion, cross-manifest cache reuse
 
-**Scene Description**:
-画像がその scene に分類された理由を、ブログ用の画像選択に役立つように短く説明する文章。
-_Avoid_: internal reasoning, model trace
+**Completed Run**:
+指定枚数のSelected Image、report、Selected Contact Sheetが揃い、sizeとSHA-256を記録した状態。
+_Avoid_: extracted candidates only, cached assessment only, human approval
 
-**Scene Selection Role**:
-scene ごとに、最終選択での扱いを表す役割。値は `ordinary`、`cinematic`、`recurring_gameplay` の3種類で、other scene、その他や不明なroleは通常配分で扱う。
-_Avoid_: scene label, manual quota, content reject reason, failure mode
-
-**Scene Hint**:
-scene catalog を作るときに、ユーザーがゲームジャンルやブログ画像選択の意図を補足する短い説明。
-_Avoid_: fixed scene list, selection rule
-
-**Selection Intent**:
-ブログ画像として何を重視して選ぶかを表す実行ごとの意図。scene hint は selection intent を補足する入力であり、変わると scene catalog や画像分類も変わり得る。
-_Avoid_: image analysis setting, cache option
-
-**Quality Score**:
-blog candidate がブログ画像としてどれだけ使いやすいかを表す評価値。scene の種類やゲームジャンルの指示ではなく、画像そのものの見やすさを表す。
-_Avoid_: scene hint, user-facing mode, selection profile
-
-**Blog Candidate**:
-ブログ画像として選択する余地があるスクリーンショット。明らかな暗転、白飛び、単色画面、遷移フレームは含まない。
-_Avoid_: all input images
-
-**Selection Shortlist**:
-blog candidate のうち、ブログに採用される可能性が高く、最終選別のためにscene分類へ進める画像群。
-_Avoid_: all blog candidates, selected output
-
-**Neutral Image Analysis**:
-scene や selection intent に依存せず、画像そのものから得られる特徴と品質評価。画像の内容分類ではなく、blog candidate 判定や類似度判定の土台になる。
-_Avoid_: scene classification, selection intent
-
-**Transition Frame**:
-シーン移動や画面切り替えの途中に現れる、ブログ画像として説明価値が低い一時的な画面。
-_Avoid_: event scene, cutscene
-
-**Cinematic Scene**:
-ゲームの進行操作より演出、会話、イベントの見せ場を主に写した scene。ブログ画像として少量は有用だが、入力全体の代表性を崩さないよう通常 gameplay より控えめに扱う。
-_Avoid_: transition frame, hard reject, movie frame
-
-**Cinematic Soft Cap**:
-すべての cinematic scene の合計選択枚数を通常は少量に抑えつつ、他の有用候補が足りない場合だけ超過を許す上限。重要な見せ場を残しながら、入力全体が cinematic に偏ることを防ぐ。
-_Avoid_: per-scene cinematic quota, hard reject, fixed exclusion, exact quota
-
-**Recurring Gameplay Pattern**:
-戦闘UI、探索画面、パズル盤面など、ゲーム中に頻繁に表示される通常playの画面構造。同じ構図でも状態や進行の違いがブログ上の説明価値になるため、複数のvariantを選ぶ余地がある。
-_Avoid_: duplicate image, cinematic scene, static menu
-
-**Variant Expansion**:
-recurring gameplay pattern で、同じ variant group から複数の画像を選ぶこと。要求選択枚数が多いほど強まり、同じ画面構造の中にある状態差や進行差を拾うために使う。
-_Avoid_: duplicate flooding, one-representative-only selection, manual expansion mode
-
-**Variant Group**:
-同じ scene の中で、見た目や構図が近くブログ上の役割が重複する画像のまとまり。最終選択では原則として各 variant group から代表画像を1枚だけ選ぶが、recurring gameplay pattern では variant expansion の対象になる。
-_Avoid_: scene, duplicate file
-
-**Ollama Classification Failure**:
-blog candidate を scene catalog の scene に分類できなかった状態。other に分類された画像とは区別され、最終選択の対象にはならない。
-_Avoid_: other scene, rejected by content filter
-
-**Ollama Catalog Fallback**:
-scene catalog を作成できないときに、処理継続のため全 blog candidate を fallback scene に割り当てる代替状態。Ollama Classification Failure とは区別される。
-_Avoid_: per-image classification failure, other scene
-
-**Resumable Run**:
-中断された画像選択を、同じ入力画像群と同じ選択意図で後から続ける実行。すでに得られた画像解析やscene分類の結果を再利用し、未処理の画像だけを進める。
-_Avoid_: fresh run, output overwrite
+**Human Review**:
+Selected Contact Sheetと必要に応じたSelected Imageを人が確認する品質gate。production implementation前の検証では正式な合格条件として扱う。
+_Avoid_: model score threshold alone, cache-preserved progress
