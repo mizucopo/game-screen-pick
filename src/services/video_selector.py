@@ -516,14 +516,9 @@ class VideoSelector:
 
     def _source_for(self, candidate: FrameCandidate) -> VideoSource:
         """候補が属する入力動画を返す."""
-        if candidate.video_index < 0:
+        if not 0 <= candidate.video_index < len(self.sources):
             raise RuntimeError(f"候補の入力動画IDが不正です: {candidate.frame_id}")
-        try:
-            return self.sources[candidate.video_index]
-        except IndexError as error:
-            raise RuntimeError(
-                f"候補の入力動画IDが不正です: {candidate.frame_id}"
-            ) from error
+        return self.sources[candidate.video_index]
 
     def _preselect_candidates(
         self,
@@ -1249,15 +1244,12 @@ def select_diverse_candidates(
     )
     time_scale = max(60.0, timeline_span / max(1, count))
     while len(selected) < count:
-        unrepresented_sources = source_indexes - set(source_counts)
-        source_pool = (
-            [
-                candidate
-                for candidate in remaining
-                if candidate.video_index in unrepresented_sources
-            ]
-            if len(selected) < min(count, len(source_indexes))
-            else remaining
+        source_pool = _source_balanced_pool(
+            remaining,
+            selected_count=len(selected),
+            requested_count=count,
+            source_indexes=source_indexes,
+            source_counts=source_counts,
         )
 
         def utility(candidate: FrameCandidate) -> tuple[float, float, float]:
@@ -1331,15 +1323,12 @@ def select_final_frames(
     time_scale = max(60.0, timeline_span / max(1, count))
 
     while len(selected) < count:
-        unrepresented_sources = source_indexes - set(source_counts)
-        source_pool = (
-            [
-                candidate
-                for candidate in remaining
-                if candidate.video_index in unrepresented_sources
-            ]
-            if len(selected) < min(count, len(source_indexes))
-            else remaining
+        source_pool = _source_balanced_pool(
+            remaining,
+            selected_count=len(selected),
+            requested_count=count,
+            source_indexes=source_indexes,
+            source_counts=source_counts,
         )
         preferred = [
             candidate
@@ -1413,6 +1402,25 @@ def select_final_frames(
             item.candidate.timestamp_seconds,
         ),
     )
+
+
+def _source_balanced_pool(
+    remaining: list[FrameCandidate],
+    *,
+    selected_count: int,
+    requested_count: int,
+    source_indexes: set[int],
+    source_counts: Counter[int],
+) -> list[FrameCandidate]:
+    """出力枠が許す間は、まだ選ばれていない入力動画の候補を優先する."""
+    if selected_count >= min(requested_count, len(source_indexes)):
+        return remaining
+    unrepresented_sources = source_indexes - set(source_counts)
+    return [
+        candidate
+        for candidate in remaining
+        if candidate.video_index in unrepresented_sources
+    ]
 
 
 def _nearest_distances(
