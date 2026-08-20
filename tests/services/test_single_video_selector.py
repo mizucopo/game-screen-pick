@@ -101,6 +101,19 @@ def test_make_timestamps_stays_before_low_frame_rate_stream_end() -> None:
     assert timestamps[-1] <= 7.0
 
 
+def test_make_timestamps_stays_before_actual_last_vfr_frame() -> None:
+    """平均frame rateでは推定できないVFRの最終frame位置を上限にすること."""
+    timestamps = make_timestamps(
+        8.0,
+        8,
+        None,
+        minimum_end_margin_seconds=1 / 30,
+        last_frame_timestamp_seconds=6.5,
+    )
+
+    assert timestamps[-1] <= 6.5
+
+
 def test_make_timestamps_offsets_a_delayed_video_stream() -> None:
     """video streamが遅れて始まる場合も先頭から末尾までを覆うこと."""
     timestamps = make_timestamps(

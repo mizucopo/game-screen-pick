@@ -1,9 +1,11 @@
 """単一動画production pipelineの小さな結合テスト."""
 
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from typing import Any, Sequence
 
 import pytest
@@ -274,6 +276,54 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     assert [file_sha256(path) for path in selected_paths] == first_hashes
 
 
+def test_pipeline_rejects_resume_when_unsampled_video_bytes_change(
+    tmp_path: Path,
+) -> None:
+    """sizeとmtimeが同じでも入力動画全体の変更を見逃さないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    with video.open("wb") as file:
+        file.truncate(8 * 1024 * 1024)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    original_stat = video.stat()
+    with video.open("r+b") as file:
+        file.seek(2 * 1024 * 1024)
+        file.write(b"changed")
+    os.utime(
+        video,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    unavailable_assessor = UnavailableAssessor()
+
+    with pytest.raises(RuntimeError, match="実行条件が今回と異なります"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=unavailable_assessor,
+        ).run()
+
+    assert unavailable_assessor.metadata_calls == 0
+
+
 def test_pipeline_finishes_fully_assessed_run_without_ollama(tmp_path: Path) -> None:
     """評価後の成果物生成を中断してもOllamaなしで完了できること."""
     video = tmp_path / "Sample Game.mp4"
@@ -447,6 +497,63 @@ def test_pipeline_rejects_nonempty_output_before_contacting_ollama(
             frame_extractor=FakeFrameExtractor(),
             assessor=UnavailableAssessor(),
         ).run()
+
+
+def test_pipeline_rejects_concurrent_run_for_same_output(tmp_path: Path) -> None:
+    """同じoutputを処理中の別pipelineへ書き込ませないこと."""
+    metadata_started = Event()
+    release_metadata = Event()
+
+    class BlockingAssessor(FakeAssessor):
+        """最初のrunをmanifest作成前で待機させるfake."""
+
+        def fetch_model_metadata(
+            self,
+            requested_models: set[str],
+        ) -> dict[str, dict[str, Any]]:
+            metadata_started.set()
+            if not release_metadata.wait(timeout=5):
+                raise TimeoutError("concurrency test timed out")
+            return super().fetch_model_metadata(requested_models)
+
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_run = executor.submit(
+            SingleVideoSelector(
+                request,
+                frame_extractor=FakeFrameExtractor(),
+                assessor=BlockingAssessor(),
+            ).run
+        )
+        assert metadata_started.wait(timeout=2)
+        try:
+            with pytest.raises(RuntimeError, match="同じ出力フォルダ.*実行中"):
+                SingleVideoSelector(
+                    request,
+                    frame_extractor=FakeFrameExtractor(),
+                    assessor=FakeAssessor(),
+                ).run()
+        finally:
+            release_metadata.set()
+
+        assert first_run.result(timeout=10).is_file()
 
 
 def test_candidate_extraction_cancels_queued_jobs_on_interrupt(

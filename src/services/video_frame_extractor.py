@@ -12,6 +12,8 @@ from typing import Any
 from ..models.video_selection import VideoMetadata
 from ..utils.video_selection_files import is_valid_image
 
+LAST_PACKET_PROBE_WINDOW_SECONDS = 60.0
+
 
 class VideoFrameExtractor:
     """ffprobeとffmpegを安全な引数配列で呼び出す."""
@@ -78,17 +80,101 @@ class VideoFrameExtractor:
             )
         if duration is None:
             raise ValueError("動画時間を取得できませんでした")
+        video_stream_index = self._nonnegative_int(
+            video_stream.get("index"), "stream index"
+        )
+        last_frame_timestamp = self._probe_last_frame_timestamp(
+            video,
+            video_stream_index=video_stream_index,
+            format_start_seconds=format_start,
+            stream_start_seconds=start_time,
+            duration_seconds=duration,
+        )
         return VideoMetadata(
             duration_seconds=duration,
             width=self._positive_int(video_stream.get("width"), "width"),
             height=self._positive_int(video_stream.get("height"), "height"),
             codec_name=str(video_stream.get("codec_name", "unknown")),
             average_frame_rate=str(video_stream.get("avg_frame_rate", "unknown")),
-            video_stream_index=self._nonnegative_int(
-                video_stream.get("index"), "stream index"
-            ),
+            video_stream_index=video_stream_index,
             start_time_seconds=start_time,
+            last_frame_timestamp_seconds=last_frame_timestamp,
         )
+
+    def _probe_last_frame_timestamp(
+        self,
+        video: Path,
+        *,
+        video_stream_index: int,
+        format_start_seconds: float,
+        stream_start_seconds: float,
+        duration_seconds: float,
+    ) -> float | None:
+        """選択したvideo streamの最後のpacket PTSを返す."""
+        absolute_stream_start = format_start_seconds + stream_start_seconds
+        probe_start = absolute_stream_start + max(
+            0.0,
+            duration_seconds - LAST_PACKET_PROBE_WINDOW_SECONDS,
+        )
+        use_tail_interval = probe_start > absolute_stream_start
+        payload = self._probe_packets(
+            video,
+            video_stream_index=video_stream_index,
+            start_seconds=probe_start if use_tail_interval else None,
+        )
+        timestamps = self._packet_timestamps(payload)
+        if not timestamps and use_tail_interval:
+            payload = self._probe_packets(
+                video,
+                video_stream_index=video_stream_index,
+                start_seconds=None,
+            )
+            timestamps = self._packet_timestamps(payload)
+        if not timestamps:
+            return None
+        timestamp = max(timestamps) - format_start_seconds
+        return timestamp if timestamp >= stream_start_seconds else None
+
+    def _probe_packets(
+        self,
+        video: Path,
+        *,
+        video_stream_index: int,
+        start_seconds: float | None,
+    ) -> dict[str, Any]:
+        """指定streamのpacket時刻を必要なら末尾区間に絞って取得する."""
+        command = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            str(video_stream_index),
+            "-show_packets",
+            "-show_entries",
+            "packet=pts_time,dts_time",
+            "-of",
+            "json",
+        ]
+        if start_seconds is not None:
+            command.extend(["-read_intervals", f"{start_seconds:.6f}%"])
+        command.append(str(video))
+        return self._run_json(command)
+
+    def _packet_timestamps(self, payload: dict[str, Any]) -> list[float]:
+        """packet payloadからpresentation時刻を優先して有限値だけ返す."""
+        packets = payload.get("packets")
+        if not isinstance(packets, list):
+            return []
+        timestamps: list[float] = []
+        for packet in packets:
+            if not isinstance(packet, dict):
+                continue
+            timestamp = self._finite_timestamp(packet.get("pts_time"))
+            if timestamp is None:
+                timestamp = self._finite_timestamp(packet.get("dts_time"))
+            if timestamp is not None:
+                timestamps.append(timestamp)
+        return timestamps
 
     def extract_frame(
         self,

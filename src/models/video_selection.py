@@ -14,6 +14,7 @@ class VideoMetadata:
     average_frame_rate: str
     video_stream_index: int = 0
     start_time_seconds: float = 0.0
+    last_frame_timestamp_seconds: float | None = None
 
 
 @dataclass(frozen=True)

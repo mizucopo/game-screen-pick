@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import hashlib
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
+
+RUN_LOCK_FILENAME = "run.lock"
 
 
 def file_sha256(path: Path) -> str:
@@ -20,25 +26,28 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def sampled_file_sha256(path: Path) -> str:
-    """巨大動画の先頭・中央・末尾を用いた安定指紋を返す."""
-    size = path.stat().st_size
-    block_size = 1024 * 1024
-    offsets = {
-        0,
-        max(0, size // 2 - block_size // 2),
-        max(0, size - block_size),
-    }
-    digest = hashlib.sha256()
-    digest.update(str(size).encode("ascii"))
-    with path.open("rb") as file:
-        for offset in sorted(offsets):
-            file.seek(offset)
-            block = file.read(block_size)
-            digest.update(offset.to_bytes(8, "big"))
-            digest.update(len(block).to_bytes(8, "big"))
-            digest.update(block)
-    return digest.hexdigest()
+@contextmanager
+def output_directory_lock(work_dir: Path) -> Iterator[None]:
+    """同一outputのpipelineをadvisory lockで一つに制限する."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = work_dir / RUN_LOCK_FILENAME
+    lock_file = lock_path.open("a+b")
+    locked = False
+    try:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
+            raise RuntimeError(
+                f"同じ出力フォルダを使う処理がすでに実行中です: {work_dir.parent}"
+            ) from error
+        locked = True
+        yield
+    finally:
+        if locked:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
 
 
 def json_digest(payload: Any) -> str:

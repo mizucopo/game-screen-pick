@@ -11,6 +11,8 @@ from src.services.video_frame_extractor import VideoFrameExtractor
 def _probe_with_payload(
     monkeypatch: pytest.MonkeyPatch,
     payload: dict[str, Any],
+    *,
+    packet_payload: dict[str, Any] | None = None,
 ) -> tuple[VideoFrameExtractor, list[list[str]]]:
     """外部commandを使わず指定payloadを返すextractorを作る."""
     commands: list[list[str]] = []
@@ -18,6 +20,8 @@ def _probe_with_payload(
 
     def run_json(command: list[str]) -> dict[str, Any]:
         commands.append(command)
+        if "-show_packets" in command:
+            return packet_payload if packet_payload is not None else {"packets": []}
         return payload
 
     monkeypatch.setattr(extractor, "_run_json", run_json)
@@ -149,6 +153,42 @@ def test_probe_skips_attached_picture_stream(
     assert metadata.codec_name == "h264"
     assert metadata.duration_seconds == 8.0
     assert metadata.video_stream_index == 2
+
+
+def test_probe_reads_actual_last_video_packet_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """可変frame間隔でも最後にdecode可能な位置をmetadataへ含めること."""
+    extractor, commands = _probe_with_payload(
+        monkeypatch,
+        {
+            "format": {"start_time": "0.0", "duration": "8.0"},
+            "streams": [
+                {
+                    "index": 2,
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1920,
+                    "height": 1080,
+                    "avg_frame_rate": "30/1",
+                    "duration": "8.0",
+                }
+            ],
+        },
+        packet_payload={
+            "packets": [
+                {"pts_time": "0.0", "dts_time": "-0.033"},
+                {"pts_time": "5.0", "dts_time": "4.967"},
+                {"pts_time": "6.5", "dts_time": "6.467"},
+            ]
+        },
+    )
+
+    metadata = extractor.probe(Path("sample.mp4"))
+
+    assert metadata.last_frame_timestamp_seconds == 6.5
+    packet_command = next(command for command in commands if "-show_packets" in command)
+    assert packet_command[packet_command.index("-select_streams") + 1] == "2"
 
 
 def test_extract_frame_maps_the_selected_video_stream(

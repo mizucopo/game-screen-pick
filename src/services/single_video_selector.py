@@ -33,11 +33,12 @@ from ..utils.contact_sheet import (
     context_frame_path,
 )
 from ..utils.video_selection_files import (
+    RUN_LOCK_FILENAME,
     file_sha256,
     is_valid_image,
     json_digest,
+    output_directory_lock,
     read_json,
-    sampled_file_sha256,
     write_json_atomic,
 )
 from .ollama_frame_assessor import (
@@ -92,6 +93,12 @@ class SingleVideoSelector:
 
     def run(self) -> Path:
         """選定を実行し、人間確認用コンタクトシートのパスを返す."""
+        self._prepare_paths()
+        with output_directory_lock(self.work_dir):
+            return self._run_locked()
+
+    def _run_locked(self) -> Path:
+        """outputの排他lockを保持した状態でpipelineを実行する."""
         self._prepare_run()
         if self._verify_completion():
             contact_sheet = self.output_dir / "selected-contact-sheet.jpg"
@@ -146,8 +153,8 @@ class SingleVideoSelector:
         logger.info("画像選定が完了しました: %s", contact_sheet)
         return contact_sheet
 
-    def _prepare_run(self) -> None:
-        """入力・モデル・manifestを検証して実行状態を確定する."""
+    def _prepare_paths(self) -> None:
+        """安価なrequest検証と入出力pathの確定を行う."""
         if self.request.output_count <= 0:
             raise ValueError("選択枚数は正の整数で指定してください")
         if self.request.output_count > MAXIMUM_OUTPUT_COUNT:
@@ -169,6 +176,10 @@ class SingleVideoSelector:
         self.output_dir = Path(self.request.output_dir).expanduser().resolve()
         self.work_dir = self.output_dir / ".game-screen-pick"
         self._preflight_output_dir()
+
+    def _prepare_run(self) -> None:
+        """入力・モデル・manifestを検証して実行状態を確定する."""
+        self._prepare_paths()
         self.game_title = (
             self.request.game_title.strip()
             if self.request.game_title and self.request.game_title.strip()
@@ -185,6 +196,7 @@ class SingleVideoSelector:
             self.request.sample_interval_seconds,
             minimum_end_margin_seconds=self.end_margin_seconds,
             start_time_seconds=self.metadata.start_time_seconds,
+            last_frame_timestamp_seconds=(self.metadata.last_frame_timestamp_seconds),
         )
         if len(self.timestamps) < self.request.output_count:
             raise ValueError(
@@ -221,7 +233,20 @@ class SingleVideoSelector:
         if not self.output_dir.is_dir():
             raise RuntimeError(f"出力先がフォルダではありません: {self.output_dir}")
         manifest_path = self.work_dir / "run-manifest.json"
-        if any(self.output_dir.iterdir()) and not manifest_path.is_file():
+        non_manifest_entries = [
+            entry for entry in self.output_dir.iterdir() if entry != self.work_dir
+        ]
+        if self.work_dir.exists():
+            if not self.work_dir.is_dir():
+                raise RuntimeError(
+                    f"実行状態の保存先がフォルダではありません: {self.work_dir}"
+                )
+            non_manifest_entries.extend(
+                entry
+                for entry in self.work_dir.iterdir()
+                if entry.name != RUN_LOCK_FILENAME
+            )
+        if non_manifest_entries and not manifest_path.is_file():
             raise RuntimeError(
                 f"出力フォルダが空ではなく、再開manifestもありません: {self.output_dir}"
             )
@@ -293,7 +318,7 @@ class SingleVideoSelector:
                 "path": str(self.video),
                 "size": stat.st_size,
                 "mtime_ns": stat.st_mtime_ns,
-                "sampled_sha256": sampled_file_sha256(self.video),
+                "sha256": file_sha256(self.video),
                 "duration_seconds": self.metadata.duration_seconds,
                 "width": self.metadata.width,
                 "height": self.metadata.height,
@@ -301,6 +326,9 @@ class SingleVideoSelector:
                 "average_frame_rate": self.metadata.average_frame_rate,
                 "video_stream_index": self.metadata.video_stream_index,
                 "start_time_seconds": self.metadata.start_time_seconds,
+                "last_frame_timestamp_seconds": (
+                    self.metadata.last_frame_timestamp_seconds
+                ),
             },
             "game_title": self.game_title,
             "game_context": self.request.game_context.strip(),
@@ -333,12 +361,7 @@ class SingleVideoSelector:
     def _prepare_output_dir(self, manifest: dict[str, Any]) -> None:
         """新規outputまたは同一manifestの再開先だけを受け入れる."""
         manifest_path = self.work_dir / "run-manifest.json"
-        if self.output_dir.exists() and any(self.output_dir.iterdir()):
-            if not manifest_path.is_file():
-                raise RuntimeError(
-                    "出力フォルダが空ではなく、再開manifestもありません: "
-                    f"{self.output_dir}"
-                )
+        if manifest_path.is_file():
             existing = read_json(manifest_path)
             if existing != manifest:
                 raise RuntimeError(
@@ -534,13 +557,19 @@ class SingleVideoSelector:
         jobs: list[tuple[FrameCandidate, str, float]] = []
         stream_start = self.metadata.start_time_seconds
         stream_end = stream_start + self.metadata.duration_seconds
+        context_end = stream_end - self.end_margin_seconds
+        if self.metadata.last_frame_timestamp_seconds is not None:
+            context_end = min(
+                context_end,
+                self.metadata.last_frame_timestamp_seconds,
+            )
         for candidate in candidates:
             before = max(
                 stream_start + MINIMUM_ENDPOINT_MARGIN_SECONDS,
                 candidate.timestamp_seconds - CONTEXT_OFFSET_SECONDS,
             )
             after = min(
-                stream_end - self.end_margin_seconds,
+                context_end,
                 candidate.timestamp_seconds + CONTEXT_OFFSET_SECONDS,
             )
             for position, timestamp in (("before", before), ("after", after)):
@@ -879,6 +908,7 @@ def make_timestamps(
     *,
     minimum_end_margin_seconds: float = MINIMUM_ENDPOINT_MARGIN_SECONDS,
     start_time_seconds: float = 0.0,
+    last_frame_timestamp_seconds: float | None = None,
 ) -> tuple[float, ...]:
     """動画のほぼ先頭から末尾までを等間隔で覆う時刻列を返す."""
     if requested_interval_seconds is not None:
@@ -896,6 +926,13 @@ def make_timestamps(
         raise ValueError("end marginは0以上の有限値で指定してください")
     if not math.isfinite(start_time_seconds) or start_time_seconds < 0:
         raise ValueError("start timeは0以上の有限値で指定してください")
+    if last_frame_timestamp_seconds is not None and (
+        not math.isfinite(last_frame_timestamp_seconds)
+        or last_frame_timestamp_seconds < start_time_seconds
+    ):
+        raise ValueError(
+            "last frame timestampはstart time以降の有限値で指定してください"
+        )
     minimum_start_margin = MINIMUM_ENDPOINT_MARGIN_SECONDS
     minimum_end_margin = max(
         MINIMUM_ENDPOINT_MARGIN_SECONDS,
@@ -924,6 +961,10 @@ def make_timestamps(
             end_margin = minimum_end_margin
             start = target_total_margin - end_margin
     end = max(start, duration_seconds - end_margin)
+    if last_frame_timestamp_seconds is not None:
+        last_frame_offset = last_frame_timestamp_seconds - start_time_seconds
+        end = min(end, last_frame_offset)
+        start = min(start, end)
     span = end - start
     if requested_interval_seconds is not None:
         interval = requested_interval_seconds
