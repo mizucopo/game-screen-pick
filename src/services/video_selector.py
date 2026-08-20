@@ -51,7 +51,7 @@ from .video_frame_extractor import VideoFrameExtractor
 
 logger = logging.getLogger(__name__)
 
-ALGORITHM_VERSION = "multi-video-selection-v1"
+ALGORITHM_VERSION = "multi-video-selection-v2"
 PROMPT_VERSION = "blog-image-selection-v3"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
 MINIMUM_ENDPOINT_MARGIN_SECONDS = 0.05
@@ -105,6 +105,7 @@ class VideoSelector:
         self.total_duration_seconds = 0.0
         self.model_metadata: dict[str, dict[str, Any]] = {}
         self._live_validated_models: set[str] = set()
+        self._usable_candidates: tuple[FrameCandidate, ...] = ()
         self.manifest_digest = ""
 
     def run(self) -> Path:
@@ -123,10 +124,8 @@ class VideoSelector:
 
         candidates = self._extract_candidates()
         primary_candidates = self._preselect_candidates(candidates)
-        primary_assessments = self._assess_candidates(
-            model=self.request.primary_model,
-            stage="primary",
-            candidates=primary_candidates,
+        primary_candidates, primary_assessments = (
+            self._assess_primary_candidates_with_backfill(primary_candidates)
         )
         primary_eligible = [
             candidate
@@ -558,6 +557,7 @@ class VideoSelector:
         else:
             executor.shutdown()
         usable = [candidate for candidate in measured if candidate is not None]
+        self._usable_candidates = tuple(usable)
         if len(usable) < self.request.output_count:
             raise RuntimeError(
                 f"有効候補{len(usable)}件が選択枚数"
@@ -575,6 +575,64 @@ class VideoSelector:
         )
         logger.info("一次評価候補を絞りました: %d/%d件", len(result), len(usable))
         return result
+
+    def _assess_primary_candidates_with_backfill(
+        self,
+        initial_candidates: Sequence[FrameCandidate],
+    ) -> tuple[list[FrameCandidate], dict[str, FrameAssessment]]:
+        """一次候補を評価し、未代表の入力元から候補を追加評価する."""
+        candidates = list(initial_candidates)
+        assessments = self._assess_candidates(
+            model=self.request.primary_model,
+            stage="primary",
+            candidates=candidates,
+        )
+        backfill_round = 0
+        while len(self.sources) <= self.request.output_count:
+            uncovered_sources = _uncovered_primary_sources(
+                candidates,
+                assessments,
+                len(self.sources),
+            )
+            if not uncovered_sources:
+                break
+            backfill = select_primary_backfill_candidates(
+                self._usable_candidates,
+                candidates,
+                assessments,
+                source_count=len(self.sources),
+                output_count=self.request.output_count,
+            )
+            if not backfill:
+                labels = ", ".join(
+                    self.sources[index].label for index in uncovered_sources
+                )
+                raise RuntimeError(f"入力動画に非遷移候補がありません: {labels}")
+            backfill_round += 1
+            backfill_assessments = self._assess_candidates(
+                model=self.request.primary_model,
+                stage=f"primary-backfill-{backfill_round:04d}",
+                candidates=backfill,
+            )
+            candidates.extend(backfill)
+            candidates.sort(
+                key=lambda item: (
+                    item.video_index,
+                    item.timestamp_seconds,
+                    item.frame_id,
+                )
+            )
+            assessments.update(backfill_assessments)
+            write_json_atomic(
+                self.work_dir / "primary-candidates.json",
+                [candidate_to_json(candidate) for candidate in candidates],
+            )
+            logger.info(
+                "一次評価候補を入力元から補充しました: round=%d, %d件",
+                backfill_round,
+                len(backfill),
+            )
+        return candidates, assessments
 
     def _extract_context_frames(
         self,
@@ -644,12 +702,13 @@ class VideoSelector:
         cache_key = self._assessment_cache_key(model, stage, candidates)
         state_path = self.work_dir / f"assessments-{stage}.json"
         state = load_assessment_state(state_path, cache_key)
-        batch_size = PRIMARY_BATCH_SIZE if stage == "primary" else SECONDARY_BATCH_SIZE
+        primary_stage = _is_primary_stage(stage)
+        batch_size = PRIMARY_BATCH_SIZE if primary_stage else SECONDARY_BATCH_SIZE
         batches = [
             candidates[index : index + batch_size]
             for index in range(0, len(candidates), batch_size)
         ]
-        context_dir = self.work_dir / "context-frames" if stage == "secondary" else None
+        context_dir = None if primary_stage else self.work_dir / "context-frames"
         for batch_index, batch in enumerate(batches, start=1):
             batch_ids = {candidate.frame_id for candidate in batch}
             if batch_ids.issubset(state):
@@ -740,17 +799,19 @@ class VideoSelector:
                                     context_frame_path(context_dir, candidate, "after")
                                 ),
                             }
-                            if stage == "secondary"
+                            if not _is_primary_stage(stage)
                             else {}
                         ),
                     }
                     for candidate in candidates
                 ],
                 "batch_size": (
-                    PRIMARY_BATCH_SIZE if stage == "primary" else SECONDARY_BATCH_SIZE
+                    PRIMARY_BATCH_SIZE
+                    if _is_primary_stage(stage)
+                    else SECONDARY_BATCH_SIZE
                 ),
                 "context_offset_seconds": (
-                    0 if stage == "primary" else CONTEXT_OFFSET_SECONDS
+                    0 if _is_primary_stage(stage) else CONTEXT_OFFSET_SECONDS
                 ),
                 "model_options": MODEL_OPTIONS,
             }
@@ -767,7 +828,7 @@ class VideoSelector:
             f"{candidate.frame_id}={self._source_for(candidate).label}"
             for candidate in candidates
         )
-        if stage == "primary":
+        if _is_primary_stage(stage):
             stage_note = "動画全体を時間分散と機械的品質で絞った一次候補です。"
             context_note = ""
         else:
@@ -1303,6 +1364,11 @@ def candidate_to_json(candidate: FrameCandidate) -> dict[str, Any]:
     return payload
 
 
+def _is_primary_stage(stage: str) -> bool:
+    """一次評価と、その追補評価のstage名を判定する."""
+    return stage == "primary" or stage.startswith("primary-backfill-")
+
+
 def select_primary_candidates(
     candidates: Sequence[FrameCandidate],
     metadata_items: Sequence[VideoMetadata],
@@ -1431,6 +1497,88 @@ def select_primary_candidates(
     return sorted(
         selected[:target],
         key=lambda item: (item.video_index, item.timestamp_seconds, item.frame_id),
+    )
+
+
+def select_primary_backfill_candidates(
+    all_candidates: Sequence[FrameCandidate],
+    assessed_candidates: Sequence[FrameCandidate],
+    assessments: dict[str, FrameAssessment],
+    *,
+    source_count: int,
+    output_count: int,
+) -> list[FrameCandidate]:
+    """非遷移候補がない入力元から未評価候補を少数ずつ補充する."""
+    if source_count <= 0 or output_count <= 0:
+        raise ValueError("入力動画数と選択枚数は正の整数で指定してください")
+    if source_count > output_count:
+        return []
+
+    uncovered_sources = _uncovered_primary_sources(
+        assessed_candidates,
+        assessments,
+        source_count,
+    )
+    assessed_ids = {candidate.frame_id for candidate in assessed_candidates}
+    assessed_by_source: dict[int, list[FrameCandidate]] = {
+        video_index: [] for video_index in uncovered_sources
+    }
+    available_by_source: dict[int, list[FrameCandidate]] = {
+        video_index: [] for video_index in uncovered_sources
+    }
+    for candidate in assessed_candidates:
+        if candidate.video_index in assessed_by_source:
+            assessed_by_source[candidate.video_index].append(candidate)
+    for candidate in all_candidates:
+        if (
+            candidate.video_index in available_by_source
+            and candidate.frame_id not in assessed_ids
+        ):
+            available_by_source[candidate.video_index].append(candidate)
+    for candidates in available_by_source.values():
+        candidates.sort(key=_primary_candidate_order)
+
+    selected_by_source: dict[int, list[FrameCandidate]] = {
+        video_index: [] for video_index in uncovered_sources
+    }
+    for _ in range(SECONDARY_CANDIDATE_MULTIPLIER):
+        for video_index in uncovered_sources:
+            source_candidates = available_by_source[video_index]
+            chosen = _next_source_representative(
+                source_candidates,
+                (
+                    *assessed_by_source[video_index],
+                    *selected_by_source[video_index],
+                ),
+            )
+            if chosen is not None:
+                selected_by_source[video_index].append(chosen)
+    selected = [
+        candidate
+        for video_index in uncovered_sources
+        for candidate in selected_by_source[video_index]
+    ]
+    return sorted(
+        selected,
+        key=lambda item: (item.video_index, item.timestamp_seconds, item.frame_id),
+    )
+
+
+def _uncovered_primary_sources(
+    candidates: Sequence[FrameCandidate],
+    assessments: dict[str, FrameAssessment],
+    source_count: int,
+) -> tuple[int, ...]:
+    """一次評価で非遷移候補をまだ得ていない入力元を返す."""
+    covered_sources = {
+        candidate.video_index
+        for candidate in candidates
+        if not assessments[candidate.frame_id].is_transition
+    }
+    return tuple(
+        video_index
+        for video_index in range(source_count)
+        if video_index not in covered_sources
     )
 
 

@@ -13,6 +13,7 @@ from src.services.video_selector import (
     make_timestamps,
     measure_candidate,
     select_final_frames,
+    select_primary_backfill_candidates,
     select_primary_candidates,
 )
 
@@ -211,6 +212,50 @@ def test_primary_shortlist_keeps_fallbacks_for_each_representable_source() -> No
 
     assert len([item for item in selected if item.video_index == 0]) >= 2
     assert len([item for item in selected if item.video_index == 1]) >= 2
+
+
+def test_primary_backfill_uses_next_candidate_after_reservations_fail() -> None:
+    """予約候補が全滅した入力元から未評価の次候補を補充すること."""
+    source_candidates = [
+        FrameCandidate(
+            frame_id=f"v1-f{index}",
+            timestamp_seconds=float(index),
+            path="",
+            quality_score=100.0 - index,
+            difference_hash=1 << (index * 8),
+            video_index=0,
+        )
+        for index in range(1, 5)
+    ]
+    other_candidate = FrameCandidate(
+        frame_id="v2-f1",
+        timestamp_seconds=1.0,
+        path="",
+        quality_score=90.0,
+        difference_hash=2,
+        video_index=1,
+    )
+    assessed = [*source_candidates[:3], other_candidate]
+    assessments = {
+        candidate.frame_id: FrameAssessment(
+            candidate.frame_id,
+            80.0,
+            candidate.video_index == 0,
+            "探索",
+            "test",
+        )
+        for candidate in assessed
+    }
+
+    backfill = select_primary_backfill_candidates(
+        [*source_candidates, other_candidate],
+        assessed,
+        assessments,
+        source_count=2,
+        output_count=2,
+    )
+
+    assert [candidate.frame_id for candidate in backfill] == ["v1-f4"]
 
 
 def test_measure_candidate_rejects_black_and_scores_visible_frame(

@@ -339,6 +339,109 @@ def test_pipeline_selects_from_multiple_videos_and_reports_each_source(
     assert unavailable_assessor.assess_calls == 0
 
 
+def test_pipeline_backfills_source_when_reserved_primary_candidates_fail(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """入力元の予約候補が全遷移なら未評価候補を追加評価すること."""
+    failed_primary_ids: set[str] = set()
+
+    def select_initial_candidates(
+        candidates: Sequence[FrameCandidate],
+        _metadata: Sequence[VideoMetadata],
+        _output_count: int,
+    ) -> list[FrameCandidate]:
+        by_source = {
+            video_index: [
+                candidate
+                for candidate in candidates
+                if candidate.video_index == video_index
+            ]
+            for video_index in range(2)
+        }
+        failed_primary_ids.update(candidate.frame_id for candidate in by_source[0][:3])
+        return [*by_source[0][:3], *by_source[1][:6]]
+
+    class ReservedCandidateFailingAssessor(FakeAssessor):
+        """最初の入力元で予約された一次候補だけを遷移と判定するfake."""
+
+        def assess(
+            self,
+            *,
+            model: str,
+            model_digest: str,
+            prompt: str,
+            candidates: Sequence[FrameCandidate],
+            contact_sheet: Path,
+        ) -> list[FrameAssessment]:
+            assessments = super().assess(
+                model=model,
+                model_digest=model_digest,
+                prompt=prompt,
+                candidates=candidates,
+                contact_sheet=contact_sheet,
+            )
+            return [
+                replace(
+                    assessment,
+                    is_transition=assessment.frame_id in failed_primary_ids,
+                )
+                for assessment in assessments
+            ]
+
+    monkeypatch.setattr(
+        "src.services.video_selector.select_primary_candidates",
+        select_initial_candidates,
+    )
+    videos = (
+        tmp_path / "Sample Game Part1.mp4",
+        tmp_path / "Sample Game Part2.mp4",
+    )
+    for video in videos:
+        video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_videos=tuple(str(video) for video in videos),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    extractor = FakeFrameExtractor()
+    SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=ReservedCandidateFailingAssessor(),
+    ).run()
+
+    work_dir = output_dir / ".game-screen-pick"
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert (work_dir / "assessments-primary-backfill-0001.json").is_file()
+    assert {item["video_index"] for item in report["selected"]} == {1, 2}
+    assert not failed_primary_ids & {item["frame_id"] for item in report["selected"]}
+
+    (work_dir / "completion.json").unlink()
+    (output_dir / "selected-01.jpg").unlink()
+    unavailable_assessor = UnavailableAssessor()
+    SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=unavailable_assessor,
+    ).run()
+
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
 def test_pipeline_rejects_resume_when_any_input_video_changes(tmp_path: Path) -> None:
     """2本目だけの内容変更も全体SHA-256で検出すること."""
     videos = (
