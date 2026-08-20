@@ -5,13 +5,15 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from src.models.video_selection import FrameAssessment, FrameCandidate
+from src.models.video_selection import FrameAssessment, FrameCandidate, VideoMetadata
 from src.services.video_selector import (
+    allocate_automatic_sample_counts,
     difference_hash_distance,
     infer_game_title,
     make_timestamps,
     measure_candidate,
     select_final_frames,
+    select_primary_candidates,
 )
 
 
@@ -134,6 +136,81 @@ def test_make_timestamps_keeps_exact_minimum_interval_after_rounding() -> None:
     timestamps = make_timestamps(0.45, 2, None)
 
     assert timestamps == (0.1, 0.35)
+
+
+def test_automatic_sample_budget_is_allocated_across_all_videos() -> None:
+    """自動sample数を各動画で増幅せず全入力の時間へ配分すること."""
+    metadata = [VideoMetadata(3600.0, 320, 180, "fake", "30/1")] * 4
+
+    counts = allocate_automatic_sample_counts(metadata, output_count=30)
+
+    assert counts == (361, 361, 361, 361)
+    assert sum(counts) <= 4_000
+    assert all(
+        len(
+            make_timestamps(
+                item.duration_seconds,
+                1,
+                None,
+                automatic_sample_count=count,
+            )
+        )
+        == count
+        for item, count in zip(metadata, counts, strict=True)
+    )
+
+
+def test_automatic_sample_budget_caps_long_combined_inputs() -> None:
+    """既定間隔の合計が上限を超えても自動modeは4,000件へ配分すること."""
+    metadata = [VideoMetadata(3600.0, 320, 180, "fake", "30/1")] * 12
+
+    counts = allocate_automatic_sample_counts(metadata, output_count=30)
+
+    assert sum(counts) == 4_000
+    assert all(count > 0 for count in counts)
+
+
+def test_primary_shortlist_stays_bounded_with_more_sources_than_slots() -> None:
+    """入力本数が多くても一次候補を出力枚数の12倍以内へ保つこと."""
+    metadata = [VideoMetadata(4.0, 320, 180, "fake", "30/1")] * 100
+    candidates = [
+        FrameCandidate(
+            frame_id=f"f{index:05d}",
+            timestamp_seconds=1.0,
+            path="",
+            quality_score=200.0 - index,
+            difference_hash=index,
+            video_index=index,
+        )
+        for index in range(100)
+    ]
+
+    selected = select_primary_candidates(candidates, metadata, output_count=1)
+
+    assert len(selected) == 12
+    assert len({candidate.video_index for candidate in selected}) == 12
+
+
+def test_primary_shortlist_keeps_fallbacks_for_each_representable_source() -> None:
+    """全入力を出力可能なら各入力から一次評価候補を複数残すこと."""
+    metadata = [VideoMetadata(8.0, 320, 180, "fake", "30/1")] * 2
+    candidates = [
+        FrameCandidate(
+            frame_id=f"v{video_index}-f{candidate_index}",
+            timestamp_seconds=float(candidate_index),
+            path="",
+            quality_score=100.0 - candidate_index,
+            difference_hash=(video_index + 1) << (candidate_index * 8),
+            video_index=video_index,
+        )
+        for video_index in range(2)
+        for candidate_index in range(1, 4)
+    ]
+
+    selected = select_primary_candidates(candidates, metadata, output_count=2)
+
+    assert len([item for item in selected if item.video_index == 0]) >= 2
+    assert len([item for item in selected if item.video_index == 1]) >= 2
 
 
 def test_measure_candidate_rejects_black_and_scores_visible_frame(

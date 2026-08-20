@@ -10,6 +10,7 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
+from heapq import heapify, heappop, heappush
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -204,20 +205,40 @@ class VideoSelector:
         """入力・モデル・manifestを検証して実行状態を確定する."""
         self._prepare_paths()
         self.game_title = self._resolve_game_title()
-        sources: list[VideoSource] = []
-        for index, video in enumerate(self.videos):
+        probed_sources: list[tuple[Path, VideoMetadata, float]] = []
+        for video in self.videos:
             metadata = self.frame_extractor.probe(video)
             end_margin_seconds = max(
                 MINIMUM_ENDPOINT_MARGIN_SECONDS,
                 frame_interval_seconds(metadata.average_frame_rate),
             )
+            probed_sources.append((video, metadata, end_margin_seconds))
+
+        metadata_items = [item[1] for item in probed_sources]
+        automatic_counts: tuple[int | None, ...]
+        if self.request.sample_interval_seconds is None:
+            minimum_counts = (1,) * len(metadata_items)
+            automatic_counts = allocate_automatic_sample_counts(
+                metadata_items,
+                self.request.output_count,
+            )
+        else:
+            minimum_counts = _allocate_minimum_sample_counts(
+                metadata_items,
+                self.request.output_count,
+            )
+            automatic_counts = (None,) * len(metadata_items)
+
+        sources: list[VideoSource] = []
+        for index, (video, metadata, end_margin_seconds) in enumerate(probed_sources):
             timestamps = make_timestamps(
                 metadata.duration_seconds,
-                self.request.output_count,
+                minimum_counts[index],
                 self.request.sample_interval_seconds,
                 minimum_end_margin_seconds=end_margin_seconds,
                 start_time_seconds=metadata.start_time_seconds,
                 last_frame_timestamp_seconds=metadata.last_frame_timestamp_seconds,
+                automatic_sample_count=automatic_counts[index],
             )
             sources.append(
                 VideoSource(
@@ -543,100 +564,10 @@ class VideoSelector:
                 f"{self.request.output_count}件を下回りました"
             )
 
-        target = min(
-            max(
-                self.request.output_count * PRIMARY_CANDIDATE_MULTIPLIER,
-                len({candidate.video_index for candidate in usable}),
-            ),
-            len(usable),
-        )
-        bin_count = min(60, target)
-        bins: list[list[FrameCandidate]] = [[] for _ in range(bin_count)]
-        offsets: dict[int, float] = {}
-        elapsed = 0.0
-        for source in self.sources:
-            offsets[source.index] = elapsed
-            elapsed += source.metadata.duration_seconds
-        span = max(elapsed, 0.001)
-
-        def bin_index_for(candidate: FrameCandidate) -> int:
-            source = self._source_for(candidate)
-            relative_timestamp = max(
-                0.0,
-                candidate.timestamp_seconds - source.metadata.start_time_seconds,
-            )
-            global_timestamp = offsets[candidate.video_index] + relative_timestamp
-            return min(bin_count - 1, int(global_timestamp / span * bin_count))
-
-        for candidate in usable:
-            bins[bin_index_for(candidate)].append(candidate)
-        for bucket in bins:
-            bucket.sort(key=lambda item: (-item.quality_score, item.timestamp_seconds))
-
-        selected: list[FrameCandidate] = []
-        selected_ids: set[str] = set()
-        selected_by_bin: list[list[FrameCandidate]] = [[] for _ in range(bin_count)]
-        for video_index in sorted({candidate.video_index for candidate in usable}):
-            source_candidates = [
-                candidate
-                for candidate in usable
-                if candidate.video_index == video_index
-            ]
-            chosen = max(
-                source_candidates,
-                key=lambda item: (item.quality_score, -item.timestamp_seconds),
-            )
-            selected.append(chosen)
-            selected_ids.add(chosen.frame_id)
-            selected_by_bin[bin_index_for(chosen)].append(chosen)
-        while len(selected) < target:
-            progressed = False
-            for bin_index, bucket in enumerate(bins):
-                remaining = [
-                    candidate
-                    for candidate in bucket
-                    if candidate.frame_id not in selected_ids
-                ]
-                if not remaining:
-                    continue
-                diverse = next(
-                    (
-                        candidate
-                        for candidate in remaining
-                        if all(
-                            difference_hash_distance(
-                                candidate.difference_hash,
-                                chosen.difference_hash,
-                            )
-                            >= MINIMUM_DISTINCT_DHASH_DISTANCE
-                            for chosen in selected_by_bin[bin_index]
-                        )
-                    ),
-                    None,
-                )
-                chosen = diverse or remaining[0]
-                selected.append(chosen)
-                selected_ids.add(chosen.frame_id)
-                selected_by_bin[bin_index].append(chosen)
-                progressed = True
-                if len(selected) == target:
-                    break
-            if not progressed:
-                break
-
-        if len(selected) < target:
-            remaining = sorted(
-                (
-                    candidate
-                    for candidate in usable
-                    if candidate.frame_id not in selected_ids
-                ),
-                key=lambda item: (-item.quality_score, item.timestamp_seconds),
-            )
-            selected.extend(remaining[: target - len(selected)])
-        result = sorted(
-            selected[:target],
-            key=lambda item: (item.video_index, item.timestamp_seconds),
+        result = select_primary_candidates(
+            usable,
+            [source.metadata for source in self.sources],
+            self.request.output_count,
         )
         write_json_atomic(
             self.work_dir / "primary-candidates.json",
@@ -1026,6 +957,150 @@ def infer_game_title(video: Path) -> str:
     return title
 
 
+def allocate_automatic_sample_counts(
+    metadata_items: Sequence[VideoMetadata],
+    output_count: int,
+) -> tuple[int, ...]:
+    """全入力へ共有する自動sample budgetを動画時間に応じて配分する."""
+    if not metadata_items:
+        raise ValueError("入力動画を1本以上指定してください")
+    if output_count <= 0:
+        raise ValueError("選択枚数は正の整数で指定してください")
+    if len(metadata_items) == 1:
+        metadata = metadata_items[0]
+        return (
+            len(
+                make_timestamps(
+                    metadata.duration_seconds,
+                    output_count,
+                    None,
+                    minimum_end_margin_seconds=max(
+                        MINIMUM_ENDPOINT_MARGIN_SECONDS,
+                        frame_interval_seconds(metadata.average_frame_rate),
+                    ),
+                    start_time_seconds=metadata.start_time_seconds,
+                    last_frame_timestamp_seconds=(
+                        metadata.last_frame_timestamp_seconds
+                    ),
+                )
+            ),
+        )
+    capacities = tuple(_sample_capacity(metadata) for metadata in metadata_items)
+    base_counts = tuple(
+        min(
+            capacity,
+            math.ceil(metadata.duration_seconds / DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS)
+            + 1,
+        )
+        for metadata, capacity in zip(metadata_items, capacities, strict=True)
+    )
+    desired_count = max(
+        output_count * PRIMARY_CANDIDATE_MULTIPLIER * 3,
+        120,
+        sum(base_counts),
+        len(metadata_items),
+    )
+    target_count = min(
+        desired_count,
+        sum(capacities),
+        MAXIMUM_RAW_CANDIDATES,
+    )
+    if target_count < len(metadata_items):
+        raise ValueError("入力動画数が候補数の上限4,000件を超えます")
+    minimum_counts = (
+        base_counts if sum(base_counts) <= target_count else (1,) * len(metadata_items)
+    )
+    return _allocate_sample_counts(
+        capacities,
+        [metadata.duration_seconds for metadata in metadata_items],
+        target_count,
+        minimum_counts,
+    )
+
+
+def _allocate_minimum_sample_counts(
+    metadata_items: Sequence[VideoMetadata],
+    output_count: int,
+) -> tuple[int, ...]:
+    """明示interval用の最小sample数を全入力へ配分する."""
+    capacities = tuple(_sample_capacity(metadata) for metadata in metadata_items)
+    target_count = min(
+        sum(capacities),
+        max(output_count, len(metadata_items)),
+    )
+    return _allocate_sample_counts(
+        capacities,
+        [metadata.duration_seconds for metadata in metadata_items],
+        target_count,
+        (1,) * len(metadata_items),
+    )
+
+
+def _allocate_sample_counts(
+    capacities: Sequence[int],
+    weights: Sequence[float],
+    target_count: int,
+    minimum_counts: Sequence[int],
+) -> tuple[int, ...]:
+    """上限と最小値を守り、重み付きで整数sample数を配分する."""
+    if not (len(capacities) == len(weights) == len(minimum_counts) and capacities):
+        raise ValueError("sample配分条件が不正です")
+    counts = list(minimum_counts)
+    if any(
+        minimum < 0 or minimum > capacity
+        for minimum, capacity in zip(counts, capacities, strict=True)
+    ):
+        raise ValueError("sample配分の最小値が上限を超えています")
+    remaining = target_count - sum(counts)
+    if remaining < 0 or target_count > sum(capacities):
+        raise ValueError("sample配分数が不正です")
+
+    heap = [
+        (-max(weight, 0.001) / (counts[index] + 1), index)
+        for index, (weight, capacity) in enumerate(
+            zip(weights, capacities, strict=True)
+        )
+        if counts[index] < capacity
+    ]
+    heapify(heap)
+    while remaining:
+        if not heap:
+            raise ValueError("sample配分数が入力動画の上限を超えています")
+        _, index = heappop(heap)
+        counts[index] += 1
+        remaining -= 1
+        if counts[index] < capacities[index]:
+            priority = -max(weights[index], 0.001) / (counts[index] + 1)
+            heappush(heap, (priority, index))
+    return tuple(counts)
+
+
+def _sample_capacity(metadata: VideoMetadata) -> int:
+    """入力動画へ0.25秒間隔で配置できる最大sample数を返す."""
+    end_margin = max(
+        MINIMUM_ENDPOINT_MARGIN_SECONDS,
+        frame_interval_seconds(metadata.average_frame_rate),
+    )
+    minimum_total_margin = MINIMUM_ENDPOINT_MARGIN_SECONDS + end_margin
+    if minimum_total_margin >= metadata.duration_seconds:
+        relative_start = 0.0
+        relative_end = max(0.0, metadata.duration_seconds - end_margin)
+    else:
+        relative_start = MINIMUM_ENDPOINT_MARGIN_SECONDS
+        relative_end = metadata.duration_seconds - end_margin
+    if metadata.last_frame_timestamp_seconds is not None:
+        relative_end = min(
+            relative_end,
+            metadata.last_frame_timestamp_seconds - metadata.start_time_seconds,
+        )
+    span = max(0.0, relative_end - relative_start)
+    return min(
+        MAXIMUM_RAW_CANDIDATES,
+        math.floor(span / MINIMUM_SAMPLE_INTERVAL_SECONDS + INTERVAL_COUNT_TOLERANCE)
+        + 1,
+    )
+
+
 def make_timestamps(
     duration_seconds: float,
     output_count: int,
@@ -1034,8 +1109,14 @@ def make_timestamps(
     minimum_end_margin_seconds: float = MINIMUM_ENDPOINT_MARGIN_SECONDS,
     start_time_seconds: float = 0.0,
     last_frame_timestamp_seconds: float | None = None,
+    automatic_sample_count: int | None = None,
 ) -> tuple[float, ...]:
     """動画のほぼ先頭から末尾までを等間隔で覆う時刻列を返す."""
+    if automatic_sample_count is not None:
+        if automatic_sample_count <= 0:
+            raise ValueError("自動sample数は正の整数で指定してください")
+        if requested_interval_seconds is not None:
+            raise ValueError("明示intervalと自動sample数は同時に指定できません")
     if requested_interval_seconds is not None:
         if (
             not math.isfinite(requested_interval_seconds)
@@ -1065,7 +1146,8 @@ def make_timestamps(
     )
     default_start_margin = min(0.5, duration_seconds / 4.0)
     default_end_margin = max(default_start_margin, minimum_end_margin)
-    required_output_span = max(0, output_count - 1) * MINIMUM_SAMPLE_INTERVAL_SECONDS
+    required_count = automatic_sample_count or output_count
+    required_output_span = max(0, required_count - 1) * MINIMUM_SAMPLE_INTERVAL_SECONDS
     available_margin = max(0.0, duration_seconds - required_output_span)
     minimum_total_margin = minimum_start_margin + minimum_end_margin
     default_total_margin = default_start_margin + default_end_margin
@@ -1099,7 +1181,7 @@ def make_timestamps(
         )
         if sample_count > MAXIMUM_RAW_CANDIDATES:
             raise ValueError("指定したsample intervalでは候補数が上限4,000件を超えます")
-    else:
+    elif automatic_sample_count is None:
         base_count = (
             math.ceil(duration_seconds / DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS) + 1
         )
@@ -1108,6 +1190,8 @@ def make_timestamps(
             120,
         )
         sample_count = max(base_count, desired_count)
+    else:
+        sample_count = automatic_sample_count
     maximum_by_interval = (
         math.floor(span / MINIMUM_SAMPLE_INTERVAL_SECONDS + INTERVAL_COUNT_TOLERANCE)
         + 1
@@ -1217,6 +1301,171 @@ def candidate_to_json(candidate: FrameCandidate) -> dict[str, Any]:
     payload = asdict(candidate)
     payload["difference_hash"] = f"{candidate.difference_hash:016x}"
     return payload
+
+
+def select_primary_candidates(
+    candidates: Sequence[FrameCandidate],
+    metadata_items: Sequence[VideoMetadata],
+    output_count: int,
+) -> list[FrameCandidate]:
+    """品質、入力元、全体時刻を分散した一次評価候補を選ぶ."""
+    if output_count <= 0:
+        raise ValueError("選択枚数は正の整数で指定してください")
+    if not candidates:
+        return []
+    if any(
+        not 0 <= candidate.video_index < len(metadata_items) for candidate in candidates
+    ):
+        raise ValueError("候補の入力動画IDが不正です")
+
+    target = min(
+        output_count * PRIMARY_CANDIDATE_MULTIPLIER,
+        len(candidates),
+    )
+    bin_count = min(60, target)
+    offsets: list[float] = []
+    elapsed = 0.0
+    for metadata in metadata_items:
+        offsets.append(elapsed)
+        elapsed += metadata.duration_seconds
+    span = max(elapsed, 0.001)
+
+    def bin_index_for(candidate: FrameCandidate) -> int:
+        metadata = metadata_items[candidate.video_index]
+        relative_timestamp = max(
+            0.0,
+            candidate.timestamp_seconds - metadata.start_time_seconds,
+        )
+        global_timestamp = offsets[candidate.video_index] + relative_timestamp
+        return min(bin_count - 1, int(global_timestamp / span * bin_count))
+
+    bins: list[list[FrameCandidate]] = [[] for _ in range(bin_count)]
+    candidates_by_source: dict[int, list[FrameCandidate]] = {}
+    for candidate in candidates:
+        bins[bin_index_for(candidate)].append(candidate)
+        candidates_by_source.setdefault(candidate.video_index, []).append(candidate)
+    for bucket in bins:
+        bucket.sort(key=_primary_candidate_order)
+    for source_candidates in candidates_by_source.values():
+        source_candidates.sort(key=_primary_candidate_order)
+
+    ranked_sources = sorted(
+        candidates_by_source,
+        key=lambda video_index: (
+            -candidates_by_source[video_index][0].quality_score,
+            video_index,
+        ),
+    )
+    represented_sources = ranked_sources[:target]
+    representatives_per_source = (
+        SECONDARY_CANDIDATE_MULTIPLIER
+        if len(candidates_by_source) <= output_count
+        else 1
+    )
+    selected: list[FrameCandidate] = []
+    selected_ids: set[str] = set()
+    selected_by_bin: list[list[FrameCandidate]] = [[] for _ in range(bin_count)]
+    selected_by_source: dict[int, list[FrameCandidate]] = {
+        video_index: [] for video_index in represented_sources
+    }
+    for _ in range(representatives_per_source):
+        for video_index in represented_sources:
+            if len(selected) == target:
+                break
+            chosen = _next_source_representative(
+                candidates_by_source[video_index],
+                selected_by_source[video_index],
+            )
+            if chosen is None:
+                continue
+            selected.append(chosen)
+            selected_ids.add(chosen.frame_id)
+            selected_by_source[video_index].append(chosen)
+            selected_by_bin[bin_index_for(chosen)].append(chosen)
+
+    while len(selected) < target:
+        progressed = False
+        for bin_index, bucket in enumerate(bins):
+            remaining = [
+                candidate
+                for candidate in bucket
+                if candidate.frame_id not in selected_ids
+            ]
+            if not remaining:
+                continue
+            diverse = next(
+                (
+                    candidate
+                    for candidate in remaining
+                    if all(
+                        difference_hash_distance(
+                            candidate.difference_hash,
+                            chosen.difference_hash,
+                        )
+                        >= MINIMUM_DISTINCT_DHASH_DISTANCE
+                        for chosen in selected_by_bin[bin_index]
+                    )
+                ),
+                None,
+            )
+            chosen = diverse or remaining[0]
+            selected.append(chosen)
+            selected_ids.add(chosen.frame_id)
+            selected_by_bin[bin_index].append(chosen)
+            progressed = True
+            if len(selected) == target:
+                break
+        if not progressed:
+            break
+
+    if len(selected) < target:
+        remaining = sorted(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.frame_id not in selected_ids
+            ),
+            key=_primary_candidate_order,
+        )
+        selected.extend(remaining[: target - len(selected)])
+    return sorted(
+        selected[:target],
+        key=lambda item: (item.video_index, item.timestamp_seconds, item.frame_id),
+    )
+
+
+def _primary_candidate_order(candidate: FrameCandidate) -> tuple[float, float, str]:
+    """一次候補の品質順を安定して比較するkeyを返す."""
+    return (-candidate.quality_score, candidate.timestamp_seconds, candidate.frame_id)
+
+
+def _next_source_representative(
+    candidates: Sequence[FrameCandidate],
+    selected: Sequence[FrameCandidate],
+) -> FrameCandidate | None:
+    """同じ入力元から、既選択候補と見た目が異なる次候補を返す."""
+    selected_ids = {candidate.frame_id for candidate in selected}
+    remaining = [
+        candidate for candidate in candidates if candidate.frame_id not in selected_ids
+    ]
+    if not remaining:
+        return None
+    diverse = next(
+        (
+            candidate
+            for candidate in remaining
+            if all(
+                difference_hash_distance(
+                    candidate.difference_hash,
+                    chosen.difference_hash,
+                )
+                >= MINIMUM_DISTINCT_DHASH_DISTANCE
+                for chosen in selected
+            )
+        ),
+        None,
+    )
+    return diverse or remaining[0]
 
 
 def select_diverse_candidates(
