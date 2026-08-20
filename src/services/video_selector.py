@@ -1,4 +1,4 @@
-"""単一動画全体からブログ掲載用画像を選ぶproduction pipeline."""
+"""1本以上の動画全体からブログ掲載用画像を選ぶproduction pipeline."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import re
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -50,7 +50,7 @@ from .video_frame_extractor import VideoFrameExtractor
 
 logger = logging.getLogger(__name__)
 
-ALGORITHM_VERSION = "single-video-selection-v1"
+ALGORITHM_VERSION = "multi-video-selection-v1"
 PROMPT_VERSION = "blog-image-selection-v3"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
 MINIMUM_ENDPOINT_MARGIN_SECONDS = 0.05
@@ -65,7 +65,23 @@ MAXIMUM_OUTPUT_DHASH_DISTANCE = 10
 MINIMUM_DISTINCT_DHASH_DISTANCE = 5
 
 
-class SingleVideoSelector:
+@dataclass(frozen=True)
+class VideoSource:
+    """一つの入力動画と、その動画に固有の抽出条件."""
+
+    index: int
+    path: Path
+    metadata: VideoMetadata
+    end_margin_seconds: float
+    timestamps: tuple[float, ...]
+
+    @property
+    def label(self) -> str:
+        """コンタクトシートで入力元を識別する短い表示名を返す."""
+        return f"v{self.index + 1:02d} {self.path.name}"
+
+
+class VideoSelector:
     """フレーム抽出、Ollama評価、選定、成果物生成を順に実行する."""
 
     def __init__(
@@ -80,13 +96,12 @@ class SingleVideoSelector:
         self.frame_extractor = frame_extractor or VideoFrameExtractor()
         self._provided_assessor = assessor
         self.assessor: OllamaFrameAssessor | None = None
-        self.video = Path()
+        self.videos: tuple[Path, ...] = ()
+        self.sources: tuple[VideoSource, ...] = ()
         self.output_dir = Path()
         self.work_dir = Path()
         self.game_title = ""
-        self.metadata = VideoMetadata(0, 0, 0, "", "")
-        self.end_margin_seconds = MINIMUM_ENDPOINT_MARGIN_SECONDS
-        self.timestamps: tuple[float, ...] = ()
+        self.total_duration_seconds = 0.0
         self.model_metadata: dict[str, dict[str, Any]] = {}
         self._live_validated_models: set[str] = set()
         self.manifest_digest = ""
@@ -170,9 +185,17 @@ class SingleVideoSelector:
                 "指定してください"
             )
 
-        self.video = Path(self.request.input_video).expanduser().resolve()
-        if not self.video.is_file():
-            raise FileNotFoundError(f"入力動画が見つかりません: {self.video}")
+        self.videos = tuple(
+            Path(input_video).expanduser().resolve()
+            for input_video in self.request.input_videos
+        )
+        if not self.videos:
+            raise ValueError("入力動画を1本以上指定してください")
+        if len(set(self.videos)) != len(self.videos):
+            raise ValueError("同じ入力動画を重複して指定できません")
+        for video in self.videos:
+            if not video.is_file():
+                raise FileNotFoundError(f"入力動画が見つかりません: {video}")
         self.output_dir = Path(self.request.output_dir).expanduser().resolve()
         self.work_dir = self.output_dir / ".game-screen-pick"
         self._preflight_output_dir()
@@ -180,29 +203,46 @@ class SingleVideoSelector:
     def _prepare_run(self) -> None:
         """入力・モデル・manifestを検証して実行状態を確定する."""
         self._prepare_paths()
-        self.game_title = (
-            self.request.game_title.strip()
-            if self.request.game_title and self.request.game_title.strip()
-            else infer_game_title(self.video)
-        )
-        self.metadata = self.frame_extractor.probe(self.video)
-        self.end_margin_seconds = max(
-            MINIMUM_ENDPOINT_MARGIN_SECONDS,
-            frame_interval_seconds(self.metadata.average_frame_rate),
-        )
-        self.timestamps = make_timestamps(
-            self.metadata.duration_seconds,
-            self.request.output_count,
-            self.request.sample_interval_seconds,
-            minimum_end_margin_seconds=self.end_margin_seconds,
-            start_time_seconds=self.metadata.start_time_seconds,
-            last_frame_timestamp_seconds=(self.metadata.last_frame_timestamp_seconds),
-        )
-        if len(self.timestamps) < self.request.output_count:
+        self.game_title = self._resolve_game_title()
+        sources: list[VideoSource] = []
+        for index, video in enumerate(self.videos):
+            metadata = self.frame_extractor.probe(video)
+            end_margin_seconds = max(
+                MINIMUM_ENDPOINT_MARGIN_SECONDS,
+                frame_interval_seconds(metadata.average_frame_rate),
+            )
+            timestamps = make_timestamps(
+                metadata.duration_seconds,
+                self.request.output_count,
+                self.request.sample_interval_seconds,
+                minimum_end_margin_seconds=end_margin_seconds,
+                start_time_seconds=metadata.start_time_seconds,
+                last_frame_timestamp_seconds=metadata.last_frame_timestamp_seconds,
+            )
+            sources.append(
+                VideoSource(
+                    index=index,
+                    path=video,
+                    metadata=metadata,
+                    end_margin_seconds=end_margin_seconds,
+                    timestamps=timestamps,
+                )
+            )
+        self.sources = tuple(sources)
+        sample_count = sum(len(source.timestamps) for source in self.sources)
+        if sample_count > MAXIMUM_RAW_CANDIDATES:
             raise ValueError(
-                f"抽出可能な候補{len(self.timestamps)}件が"
+                "全入力動画の候補数が上限4,000件を超えます。"
+                "sample intervalを広げてください"
+            )
+        if sample_count < self.request.output_count:
+            raise ValueError(
+                f"抽出可能な候補{sample_count}件が"
                 f"選択枚数{self.request.output_count}件を下回ります"
             )
+        self.total_duration_seconds = sum(
+            source.metadata.duration_seconds for source in self.sources
+        )
         has_existing_manifest = self._restore_existing_manifest()
         if has_existing_manifest and (self.work_dir / "completion.json").is_file():
             return
@@ -225,6 +265,18 @@ class SingleVideoSelector:
         self.manifest_digest = json_digest(manifest)
         manifest["manifest_digest"] = self.manifest_digest
         self._prepare_output_dir(manifest)
+
+    def _resolve_game_title(self) -> str:
+        """明示タイトル、または全入力から一致して推測したタイトルを返す."""
+        if self.request.game_title and self.request.game_title.strip():
+            return self.request.game_title.strip()
+        inferred = [infer_game_title(video) for video in self.videos]
+        if len(set(inferred)) != 1:
+            raise ValueError(
+                "複数の動画ファイル名から同じゲームタイトルを推測できません。"
+                "--game-titleを指定してください"
+            )
+        return inferred[0]
 
     def _preflight_output_dir(self) -> None:
         """再開不能なoutputを外部処理より前に拒否する."""
@@ -310,30 +362,13 @@ class SingleVideoSelector:
 
     def _build_manifest(self) -> dict[str, Any]:
         """結果に影響する入力だけを含む再開manifestを作る."""
-        stat = self.video.stat()
         return {
             "algorithm_version": ALGORITHM_VERSION,
             "prompt_version": PROMPT_VERSION,
-            "input": {
-                "path": str(self.video),
-                "size": stat.st_size,
-                "mtime_ns": stat.st_mtime_ns,
-                "sha256": file_sha256(self.video),
-                "duration_seconds": self.metadata.duration_seconds,
-                "width": self.metadata.width,
-                "height": self.metadata.height,
-                "codec_name": self.metadata.codec_name,
-                "average_frame_rate": self.metadata.average_frame_rate,
-                "video_stream_index": self.metadata.video_stream_index,
-                "start_time_seconds": self.metadata.start_time_seconds,
-                "last_frame_timestamp_seconds": (
-                    self.metadata.last_frame_timestamp_seconds
-                ),
-            },
+            "inputs": [self._input_manifest(source) for source in self.sources],
             "game_title": self.game_title,
             "game_context": self.request.game_context.strip(),
             "output_count": self.request.output_count,
-            "timestamps": list(self.timestamps),
             "models": {
                 "primary": {
                     "name": self.request.primary_model,
@@ -353,9 +388,30 @@ class SingleVideoSelector:
                 "secondary": SECONDARY_BATCH_SIZE,
             },
             "context_offset_seconds": CONTEXT_OFFSET_SECONDS,
-            "end_margin_seconds": self.end_margin_seconds,
             "model_options": MODEL_OPTIONS,
             "require_gpu": not self.request.allow_cpu,
+        }
+
+    def _input_manifest(self, source: VideoSource) -> dict[str, Any]:
+        """入力動画一つ分の再開条件を返す."""
+        stat = source.path.stat()
+        metadata = source.metadata
+        return {
+            "video_index": source.index + 1,
+            "path": str(source.path),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "sha256": file_sha256(source.path),
+            "duration_seconds": metadata.duration_seconds,
+            "width": metadata.width,
+            "height": metadata.height,
+            "codec_name": metadata.codec_name,
+            "average_frame_rate": metadata.average_frame_rate,
+            "video_stream_index": metadata.video_stream_index,
+            "start_time_seconds": metadata.start_time_seconds,
+            "last_frame_timestamp_seconds": metadata.last_frame_timestamp_seconds,
+            "end_margin_seconds": source.end_margin_seconds,
+            "timestamps": list(source.timestamps),
         }
 
     def _prepare_output_dir(self, manifest: dict[str, Any]) -> None:
@@ -403,16 +459,24 @@ class SingleVideoSelector:
         return True
 
     def _extract_candidates(self) -> list[FrameCandidate]:
-        """動画全体の等間隔位置から縮小候補フレームを抽出する."""
+        """全入力動画の等間隔位置から縮小候補フレームを抽出する."""
         candidate_dir = self.work_dir / "candidate-frames"
-        candidates = [
-            FrameCandidate(
-                frame_id=f"f{index:05d}",
-                timestamp_seconds=timestamp,
-                path=str(candidate_dir / f"f{index:05d}.jpg"),
-            )
-            for index, timestamp in enumerate(self.timestamps, start=1)
-        ]
+        candidates: list[FrameCandidate] = []
+        frame_number = 1
+        for source in self.sources:
+            source_dir = candidate_dir / f"v{source.index + 1:02d}"
+            for timestamp in source.timestamps:
+                frame_id = f"f{frame_number:05d}"
+                candidates.append(
+                    FrameCandidate(
+                        frame_id=frame_id,
+                        timestamp_seconds=timestamp,
+                        path=str(source_dir / f"{frame_id}.jpg"),
+                        video_index=source.index,
+                        source_label=source.label,
+                    )
+                )
+                frame_number += 1
         pending = [
             candidate
             for candidate in candidates
@@ -441,13 +505,25 @@ class SingleVideoSelector:
 
     def _extract_candidate(self, candidate: FrameCandidate) -> None:
         """候補フレームを一枚抽出する."""
+        source = self._source_for(candidate)
         self.frame_extractor.extract_frame(
-            self.video,
+            source.path,
             candidate.timestamp_seconds,
             Path(candidate.path),
             max_width=960,
-            video_stream_index=self.metadata.video_stream_index,
+            video_stream_index=source.metadata.video_stream_index,
         )
+
+    def _source_for(self, candidate: FrameCandidate) -> VideoSource:
+        """候補が属する入力動画を返す."""
+        if candidate.video_index < 0:
+            raise RuntimeError(f"候補の入力動画IDが不正です: {candidate.frame_id}")
+        try:
+            return self.sources[candidate.video_index]
+        except IndexError as error:
+            raise RuntimeError(
+                f"候補の入力動画IDが不正です: {candidate.frame_id}"
+            ) from error
 
     def _preselect_candidates(
         self,
@@ -473,28 +549,51 @@ class SingleVideoSelector:
             )
 
         target = min(
-            self.request.output_count * PRIMARY_CANDIDATE_MULTIPLIER,
+            max(
+                self.request.output_count * PRIMARY_CANDIDATE_MULTIPLIER,
+                len({candidate.video_index for candidate in usable}),
+            ),
             len(usable),
         )
         bin_count = min(60, target)
         bins: list[list[FrameCandidate]] = [[] for _ in range(bin_count)]
-        span = max(self.metadata.duration_seconds, 0.001)
-        for candidate in usable:
+        offsets: dict[int, float] = {}
+        elapsed = 0.0
+        for source in self.sources:
+            offsets[source.index] = elapsed
+            elapsed += source.metadata.duration_seconds
+        span = max(elapsed, 0.001)
+
+        def bin_index_for(candidate: FrameCandidate) -> int:
+            source = self._source_for(candidate)
             relative_timestamp = max(
                 0.0,
-                candidate.timestamp_seconds - self.metadata.start_time_seconds,
+                candidate.timestamp_seconds - source.metadata.start_time_seconds,
             )
-            bin_index = min(
-                bin_count - 1,
-                int(relative_timestamp / span * bin_count),
-            )
-            bins[bin_index].append(candidate)
+            global_timestamp = offsets[candidate.video_index] + relative_timestamp
+            return min(bin_count - 1, int(global_timestamp / span * bin_count))
+
+        for candidate in usable:
+            bins[bin_index_for(candidate)].append(candidate)
         for bucket in bins:
             bucket.sort(key=lambda item: (-item.quality_score, item.timestamp_seconds))
 
         selected: list[FrameCandidate] = []
         selected_ids: set[str] = set()
         selected_by_bin: list[list[FrameCandidate]] = [[] for _ in range(bin_count)]
+        for video_index in sorted({candidate.video_index for candidate in usable}):
+            source_candidates = [
+                candidate
+                for candidate in usable
+                if candidate.video_index == video_index
+            ]
+            chosen = max(
+                source_candidates,
+                key=lambda item: (item.quality_score, -item.timestamp_seconds),
+            )
+            selected.append(chosen)
+            selected_ids.add(chosen.frame_id)
+            selected_by_bin[bin_index_for(chosen)].append(chosen)
         while len(selected) < target:
             progressed = False
             for bin_index, bucket in enumerate(bins):
@@ -540,7 +639,10 @@ class SingleVideoSelector:
                 key=lambda item: (-item.quality_score, item.timestamp_seconds),
             )
             selected.extend(remaining[: target - len(selected)])
-        result = sorted(selected[:target], key=lambda item: item.timestamp_seconds)
+        result = sorted(
+            selected[:target],
+            key=lambda item: (item.video_index, item.timestamp_seconds),
+        )
         write_json_atomic(
             self.work_dir / "primary-candidates.json",
             [candidate_to_json(candidate) for candidate in result],
@@ -555,15 +657,16 @@ class SingleVideoSelector:
         """二次評価候補の直前・直後フレームを抽出する."""
         context_dir = self.work_dir / "context-frames"
         jobs: list[tuple[FrameCandidate, str, float]] = []
-        stream_start = self.metadata.start_time_seconds
-        stream_end = stream_start + self.metadata.duration_seconds
-        context_end = stream_end - self.end_margin_seconds
-        if self.metadata.last_frame_timestamp_seconds is not None:
-            context_end = min(
-                context_end,
-                self.metadata.last_frame_timestamp_seconds,
-            )
         for candidate in candidates:
+            source = self._source_for(candidate)
+            stream_start = source.metadata.start_time_seconds
+            stream_end = stream_start + source.metadata.duration_seconds
+            context_end = stream_end - source.end_margin_seconds
+            if source.metadata.last_frame_timestamp_seconds is not None:
+                context_end = min(
+                    context_end,
+                    source.metadata.last_frame_timestamp_seconds,
+                )
             before = max(
                 stream_start + MINIMUM_ENDPOINT_MARGIN_SECONDS,
                 candidate.timestamp_seconds - CONTEXT_OFFSET_SECONDS,
@@ -584,11 +687,13 @@ class SingleVideoSelector:
             futures = [
                 executor.submit(
                     self.frame_extractor.extract_frame,
-                    self.video,
+                    self._source_for(candidate).path,
                     timestamp,
                     context_frame_path(context_dir, candidate, position),
                     max_width=960,
-                    video_stream_index=self.metadata.video_stream_index,
+                    video_stream_index=(
+                        self._source_for(candidate).metadata.video_stream_index
+                    ),
                 )
                 for candidate, position, timestamp in jobs
             ]
@@ -696,6 +801,7 @@ class SingleVideoSelector:
                 "candidates": [
                     {
                         "id": candidate.frame_id,
+                        "video_index": candidate.video_index + 1,
                         "timestamp_seconds": candidate.timestamp_seconds,
                         "difference_hash": f"{candidate.difference_hash:016x}",
                         "image_sha256": file_sha256(Path(candidate.path)),
@@ -731,6 +837,10 @@ class SingleVideoSelector:
     ) -> str:
         """検証済みの汎用選定方針をOllama向けpromptにする."""
         ids = ", ".join(candidate.frame_id for candidate in candidates)
+        source_ids = ", ".join(
+            f"{candidate.frame_id}={self._source_for(candidate).label}"
+            for candidate in candidates
+        )
         if stage == "primary":
             stage_note = "動画全体を時間分散と機械的品質で絞った一次候補です。"
             context_note = ""
@@ -745,11 +855,17 @@ class SingleVideoSelector:
             if self.request.game_context.strip()
             else ""
         )
-        duration_label = format_duration(self.metadata.duration_seconds)
-        return f"""ゲーム『{self.game_title}』の{duration_label}の全編録画から、
+        duration_label = format_duration(self.total_duration_seconds)
+        recording_label = (
+            f"{duration_label}の全編録画"
+            if len(self.sources) == 1
+            else f"{len(self.sources)}本、合計{duration_label}の全編録画"
+        )
+        return f"""ゲーム『{self.game_title}』の{recording_label}から、
 ブログへ実際に掲載する画像を{self.request.output_count}枚選びます。{stage_note}
 {context_note}{game_context}
 contact sheet内の対象ID: {ids}
+対象IDと入力動画: {source_ids}
 
 各画像について次を判定してください。
 - blog_score: ブログ掲載価値を0から100で厳しく評価
@@ -787,13 +903,14 @@ contact sheet内の対象ID: {ids}
         contact_candidates: list[FrameCandidate] = []
         selected_paths: list[Path] = []
         for rank, selected_frame in enumerate(selected, start=1):
+            source = self._source_for(selected_frame.candidate)
             output_path = self.output_dir / f"selected-{rank:0{width}d}.jpg"
             self.frame_extractor.extract_frame(
-                self.video,
+                source.path,
                 selected_frame.candidate.timestamp_seconds,
                 output_path,
                 max_width=None,
-                video_stream_index=self.metadata.video_stream_index,
+                video_stream_index=source.metadata.video_stream_index,
             )
             with Image.open(output_path) as image:
                 output_hash = image_difference_hash(image)
@@ -812,6 +929,9 @@ contact sheet内の対象ID: {ids}
                     "rank": rank,
                     "output_path": output_path.name,
                     "frame_id": selected_frame.candidate.frame_id,
+                    "video_index": source.index + 1,
+                    "video": str(source.path),
+                    "video_name": source.path.name,
                     "timestamp_seconds": round(
                         selected_frame.candidate.timestamp_seconds, 6
                     ),
@@ -826,6 +946,8 @@ contact sheet内の対象ID: {ids}
                     frame_id=f"{rank:0{width}d}",
                     timestamp_seconds=selected_frame.candidate.timestamp_seconds,
                     path=str(output_path),
+                    video_index=source.index,
+                    source_label=source.label,
                 )
             )
 
@@ -834,11 +956,19 @@ contact sheet内の対象ID: {ids}
             report_path,
             {
                 "manifest_digest": self.manifest_digest,
-                "video": str(self.video),
+                "videos": [
+                    {
+                        "video_index": source.index + 1,
+                        "path": str(source.path),
+                        "duration_seconds": source.metadata.duration_seconds,
+                        "sample_count": len(source.timestamps),
+                    }
+                    for source in self.sources
+                ],
                 "game_title": self.game_title,
                 "game_context": self.request.game_context.strip(),
                 "output_count": self.request.output_count,
-                "sample_count": len(self.timestamps),
+                "sample_count": sum(len(source.timestamps) for source in self.sources),
                 "models": {
                     "primary": {
                         "name": self.request.primary_model,
@@ -1056,6 +1186,8 @@ def measure_candidate(candidate: FrameCandidate) -> FrameCandidate | None:
         path=candidate.path,
         quality_score=quality_score,
         difference_hash=difference_hash,
+        video_index=candidate.video_index,
+        source_label=candidate.source_label,
     )
 
 
@@ -1108,6 +1240,8 @@ def select_diverse_candidates(
     selected: list[FrameCandidate] = []
     remaining = list(eligible)
     scene_counts: Counter[str] = Counter()
+    source_counts: Counter[int] = Counter()
+    source_indexes = {candidate.video_index for candidate in eligible}
     timeline_span = max(
         1.0,
         max(item.timestamp_seconds for item in eligible)
@@ -1115,6 +1249,16 @@ def select_diverse_candidates(
     )
     time_scale = max(60.0, timeline_span / max(1, count))
     while len(selected) < count:
+        unrepresented_sources = source_indexes - set(source_counts)
+        source_pool = (
+            [
+                candidate
+                for candidate in remaining
+                if candidate.video_index in unrepresented_sources
+            ]
+            if len(selected) < min(count, len(source_indexes))
+            else remaining
+        )
 
         def utility(candidate: FrameCandidate) -> tuple[float, float, float]:
             assessment = assessments[candidate.frame_id]
@@ -1131,15 +1275,17 @@ def select_diverse_candidates(
             total = (
                 assessment.blog_score
                 + 14.0 / (scene_counts[scene_key] + 1)
+                + 12.0 / (source_counts[candidate.video_index] + 1)
                 + min(32, visual_distance) * 0.60
                 + min(time_scale, time_distance) / time_scale * 8.0
                 - near_duplicate_penalty
             )
             return total, assessment.blog_score, -candidate.timestamp_seconds
 
-        chosen = max(remaining, key=utility)
+        chosen = max(source_pool, key=utility)
         selected.append(chosen)
         scene_counts[normalize_scene(assessments[chosen.frame_id])] += 1
+        source_counts[chosen.video_index] += 1
         remaining.remove(chosen)
     return selected
 
@@ -1175,6 +1321,8 @@ def select_final_frames(
     remaining = list(eligible)
     scene_counts: Counter[str] = Counter()
     family_counts: Counter[str] = Counter()
+    source_counts: Counter[int] = Counter()
+    source_indexes = {candidate.video_index for candidate in eligible}
     timeline_span = max(
         1.0,
         max(item.timestamp_seconds for item in eligible)
@@ -1183,14 +1331,24 @@ def select_final_frames(
     time_scale = max(60.0, timeline_span / max(1, count))
 
     while len(selected) < count:
+        unrepresented_sources = source_indexes - set(source_counts)
+        source_pool = (
+            [
+                candidate
+                for candidate in remaining
+                if candidate.video_index in unrepresented_sources
+            ]
+            if len(selected) < min(count, len(source_indexes))
+            else remaining
+        )
         preferred = [
             candidate
-            for candidate in remaining
+            for candidate in source_pool
             if screen_family(secondary[candidate.frame_id]) not in soft_caps
             or family_counts[screen_family(secondary[candidate.frame_id])]
             < soft_caps[screen_family(secondary[candidate.frame_id])]
         ]
-        pool = preferred or remaining
+        pool = preferred or source_pool
         visually_distinct = [
             candidate
             for candidate in pool
@@ -1222,6 +1380,7 @@ def select_final_frames(
             total = (
                 aggregate_score(candidate)
                 + 14.0 / (scene_counts[scene_key] + 1)
+                + 12.0 / (source_counts[candidate.video_index] + 1)
                 + min(32, visual_distance) * 0.65
                 + min(time_scale, time_distance) / time_scale * 9.0
                 - family_penalty
@@ -1234,6 +1393,7 @@ def select_final_frames(
         assessment = secondary[chosen.frame_id]
         scene_counts[normalize_scene(assessment)] += 1
         family_counts[screen_family(assessment)] += 1
+        source_counts[chosen.video_index] += 1
         remaining.remove(chosen)
 
     result = [
@@ -1247,7 +1407,11 @@ def select_final_frames(
     ]
     return sorted(
         result,
-        key=lambda item: (-item.aggregate_score, item.candidate.timestamp_seconds),
+        key=lambda item: (
+            -item.aggregate_score,
+            item.candidate.video_index,
+            item.candidate.timestamp_seconds,
+        ),
     )
 
 
@@ -1259,6 +1423,9 @@ def _nearest_distances(
     """既選択候補への最小visual/time距離を返す."""
     if not selected:
         return 64, default_time_distance
+    same_video = [
+        chosen for chosen in selected if chosen.video_index == candidate.video_index
+    ]
     return (
         min(
             difference_hash_distance(
@@ -1267,9 +1434,13 @@ def _nearest_distances(
             )
             for chosen in selected
         ),
-        min(
-            abs(candidate.timestamp_seconds - chosen.timestamp_seconds)
-            for chosen in selected
+        (
+            min(
+                abs(candidate.timestamp_seconds - chosen.timestamp_seconds)
+                for chosen in same_video
+            )
+            if same_video
+            else default_time_distance
         ),
     )
 

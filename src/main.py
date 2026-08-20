@@ -2,6 +2,7 @@
 
 import logging
 import sys
+from pathlib import Path
 
 import click
 
@@ -149,12 +150,11 @@ def validate_ffmpeg_workers(value: int | str | None) -> int | None:
 )
 @click.option("--debug", is_flag=True, help="デバッグログを有効化")
 @click.argument(
-    "input_video",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=str),
-)
-@click.argument(
-    "output_dir",
-    type=click.Path(file_okay=False, dir_okay=True, path_type=str),
+    "paths",
+    nargs=-1,
+    required=True,
+    type=click.Path(path_type=str),
+    metavar="INPUT_VIDEO... OUTPUT_DIR",
 )
 def execute(
     output_count: int,
@@ -168,13 +168,22 @@ def execute(
     ffmpeg_workers: int,
     sample_interval_seconds: float | None,
     debug: bool,
-    input_video: str,
-    output_dir: str,
+    paths: tuple[str, ...],
 ) -> None:
-    """単一のゲーム動画全体からブログ掲載用画像を選定する."""
+    """1本以上のゲーム動画全体からブログ掲載用画像を選定する."""
+    if len(paths) < 2:
+        raise click.UsageError("入力動画を1本以上と出力フォルダを指定してください")
+    input_videos = paths[:-1]
+    output_dir = paths[-1]
+    for input_video in input_videos:
+        if not Path(input_video).is_file():
+            raise click.BadParameter(
+                f"入力動画が見つかりません: {input_video}",
+                param_hint="INPUT_VIDEOS",
+            )
     run_video_application(
         VideoSelectionRequest(
-            input_video=input_video,
+            input_videos=input_videos,
             output_dir=output_dir,
             output_count=output_count,
             game_title=game_title,

@@ -8,14 +8,16 @@ from src.main import run
 from src.models.video_selection_request import VideoSelectionRequest
 
 
-def test_cli_translates_options_to_video_selection_request(
+def test_cli_translates_multiple_inputs_to_video_selection_request(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """CLIオプションが単一動画requestへ変換されること."""
-    input_video = tmp_path / "game.mp4"
+    input_video = tmp_path / "game-part-1.mp4"
+    second_input_video = tmp_path / "game-part-2.mp4"
     output_dir = tmp_path / "selected"
     input_video.write_bytes(b"video")
+    second_input_video.write_bytes(b"video")
     captured_requests: list[VideoSelectionRequest] = []
 
     def capture_request(request: VideoSelectionRequest) -> None:
@@ -46,13 +48,14 @@ def test_cli_translates_options_to_video_selection_request(
             "2.5",
             "--debug",
             str(input_video),
+            str(second_input_video),
             str(output_dir),
         ]
     )
 
     assert captured_requests == [
         VideoSelectionRequest(
-            input_video=str(input_video),
+            input_videos=(str(input_video), str(second_input_video)),
             output_dir=str(output_dir),
             output_count=12,
             game_title="ゲーム名",

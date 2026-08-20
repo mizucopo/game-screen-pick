@@ -6,7 +6,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from src.models.video_selection import FrameAssessment, FrameCandidate
-from src.services.single_video_selector import (
+from src.services.video_selector import (
     difference_hash_distance,
     infer_game_title,
     make_timestamps,

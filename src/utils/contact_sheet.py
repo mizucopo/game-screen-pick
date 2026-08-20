@@ -57,11 +57,12 @@ def build_contact_sheet(
         x = index % columns * cell_width
         y = index // columns * (image_height + label_height)
         suffix = "  [before | selected | after]" if contextual else ""
+        source = f"  {candidate.source_label}" if candidate.source_label else ""
         draw.text(
             (x + 10, y + 8),
             (
                 f"{candidate.frame_id}  "
-                f"{_format_timestamp(candidate.timestamp_seconds)}{suffix}"
+                f"{_format_timestamp(candidate.timestamp_seconds)}{source}{suffix}"
             ),
             fill="white",
         )
