@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from src.models.video_selection import FrameCandidate
+from src.models.video_selection import FrameAssessment, FrameCandidate
 from src.services.ollama_frame_assessor import OllamaFrameAssessor
 
 
@@ -92,6 +92,82 @@ class ChangingDigestAssessor(OllamaFrameAssessor):
         }
 
 
+class FrameResponseAssessor(OllamaFrameAssessor):
+    """指定したframe評価を返すfake."""
+
+    def __init__(self, frames: list[dict[str, object]]) -> None:
+        """Ollama応答のframe配列を保持する."""
+        super().__init__("localhost", timeout_seconds=1.0, require_gpu=False)
+        self.frames = frames
+
+    def _request_json(
+        self,
+        url: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        """chat応答とloaded model一覧を固定する."""
+        del payload
+        assert timeout_seconds > 0
+        if url.endswith("/api/chat"):
+            return {
+                "message": {
+                    "content": json.dumps({"frames": self.frames}),
+                }
+            }
+        assert url.endswith("/api/ps")
+        return {
+            "models": [
+                {
+                    "name": "llava:latest",
+                    "digest": "stable-digest",
+                    "size": 100,
+                    "size_vram": 0,
+                }
+            ]
+        }
+
+
+def frame_response(
+    frame_id: str,
+    *,
+    blog_score: int = 80,
+    scene: str = "探索",
+    reason: str = "test",
+) -> dict[str, object]:
+    """有効なframe評価fixtureを返す."""
+    return {
+        "id": frame_id,
+        "blog_score": blog_score,
+        "transition": False,
+        "scene": scene,
+        "reason": reason,
+    }
+
+
+def assess_frames(
+    tmp_path: Path,
+    frames: list[dict[str, object]],
+    candidate_ids: list[str],
+) -> list[FrameAssessment]:
+    """指定した応答とcandidate IDで評価を実行する."""
+    contact_sheet = tmp_path / "sheet.jpg"
+    contact_sheet.write_bytes(b"image")
+    assessor = FrameResponseAssessor(frames)
+    candidates = [
+        FrameCandidate(frame_id, float(index), "unused")
+        for index, frame_id in enumerate(candidate_ids)
+    ]
+    return assessor.assess(
+        model="llava:latest",
+        model_digest="stable-digest",
+        prompt="test",
+        candidates=candidates,
+        contact_sheet=contact_sheet,
+    )
+
+
 def test_normalize_host_adds_default_port_to_bracketed_ipv6() -> None:
     """portなしIPv6へOllama既定portを補うこと."""
     assert OllamaFrameAssessor.normalize_host("[::1]") == "http://[::1]:11434"
@@ -137,3 +213,56 @@ def test_assess_revalidates_loaded_model_digest_for_every_batch(
         )
 
     assert assessor.ps_calls == 2
+
+
+def test_assess_accepts_identical_duplicates_in_candidate_order(
+    tmp_path: Path,
+) -> None:
+    """完全一致する重複を除き、入力candidate順で返すこと."""
+    first = frame_response("f00001", blog_score=81)
+    second = frame_response("f00002", blog_score=72)
+
+    assessments = assess_frames(
+        tmp_path,
+        [second, first, second.copy(), first.copy()],
+        ["f00001", "f00002"],
+    )
+
+    assert [assessment.frame_id for assessment in assessments] == [
+        "f00001",
+        "f00002",
+    ]
+    assert [assessment.blog_score for assessment in assessments] == [81.0, 72.0]
+
+
+def test_assess_rejects_conflicting_duplicate(tmp_path: Path) -> None:
+    """同じframe IDで内容が異なる重複を拒否すること."""
+    with pytest.raises(ValueError, match="f00001"):
+        assess_frames(
+            tmp_path,
+            [
+                frame_response("f00001", blog_score=80),
+                frame_response("f00001", blog_score=81),
+            ],
+            ["f00001"],
+        )
+
+
+def test_assess_rejects_missing_frame_id(tmp_path: Path) -> None:
+    """要求したframe IDが欠落する応答を拒否すること."""
+    with pytest.raises(ValueError, match="frame IDが一致しません"):
+        assess_frames(
+            tmp_path,
+            [frame_response("f00001")],
+            ["f00001", "f00002"],
+        )
+
+
+def test_assess_rejects_unknown_frame_id(tmp_path: Path) -> None:
+    """要求していないframe IDを含む応答を拒否すること."""
+    with pytest.raises(ValueError, match="frame IDが一致しません"):
+        assess_frames(
+            tmp_path,
+            [frame_response("f00001"), frame_response("f99999")],
+            ["f00001"],
+        )

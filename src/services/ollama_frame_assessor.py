@@ -147,15 +147,24 @@ class OllamaFrameAssessor:
         if not isinstance(frames, list):
             raise ValueError("Ollama応答JSONにframesがありません")
 
-        assessments = [self._assessment_from_item(item) for item in frames]
+        assessments_by_id: dict[str, FrameAssessment] = {}
+        for item in frames:
+            assessment = self._assessment_from_item(item)
+            previous = assessments_by_id.get(assessment.frame_id)
+            if previous is not None and previous != assessment:
+                raise ValueError(
+                    f"Ollama応答の重複frame評価が一致しません: {assessment.frame_id}"
+                )
+            assessments_by_id[assessment.frame_id] = assessment
+
         expected_ids = {candidate.frame_id for candidate in candidates}
-        actual_ids = [assessment.frame_id for assessment in assessments]
-        if set(actual_ids) != expected_ids or len(actual_ids) != len(expected_ids):
+        actual_ids = set(assessments_by_id)
+        if actual_ids != expected_ids:
             raise ValueError(
                 "Ollama応答のframe IDが一致しません: "
-                f"expected={sorted(expected_ids)}, actual={actual_ids}"
+                f"expected={sorted(expected_ids)}, actual={sorted(actual_ids)}"
             )
-        return assessments
+        return [assessments_by_id[candidate.frame_id] for candidate in candidates]
 
     def _verify_gpu_use(self, model: str, model_digest: str) -> None:
         """各batchでloaded modelのdigestとGPU配置を確認する."""
