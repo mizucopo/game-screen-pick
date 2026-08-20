@@ -1,159 +1,102 @@
 # game-screen-pick
-ゲームスクリーンショットから、ブログで使いやすい画像をOllamaの画像分類で選択するAIツールです。
 
-## インストール
+1本のゲーム動画全体から、ブログへ掲載しやすい画像を指定枚数選定します。
+Ollamaのvision modelを二段階で利用し、画面遷移中のフレームや近い重複を
+避けながら、通常進行画面を少し多めに含む多様な画像を出力します。
+
+## 必要なもの
+
+- Python 3.13以上
+- `ffmpeg` と `ffprobe`
+- vision対応modelを用意したOllama
+
+依存packageは次のコマンドで導入します。
 
 ```bash
 uv sync
 ```
 
-## 使用方法
-
-### 実行方法
+## 実行方法
 
 ```bash
-uv run game-screen-pick [オプション] <入力フォルダ> <出力フォルダ>
+uv run game-screen-pick [オプション] <入力動画> <出力フォルダ>
 ```
+
+標準では30枚を選び、一次評価に`qwen3.8:27b`、二次評価に
+`muse-glimmer:30b`を使います。
+
+```bash
+OLLAMA_HOST=192.168.1.31:11434 \
+  uv run game-screen-pick \
+  --game-title "冒険家エリオットの千年物語" \
+  -n 30 \
+  ./recording.mp4 \
+  ./recording-selected
+```
+
+`--game-title`を省略すると、動画ファイル名から末尾の`Part 7`や`#02`を
+除いた文字列をゲームタイトルとして使います。日付だけのファイル名など、
+推測できない名前では明示してください。
 
 ### オプション
 
-- `-n <数値>`, `--num <数値>`: 選択枚数
-- `-s <数値>`, `--similarity <数値>`: 類似度しきい値（0.0〜1.0、デフォルト: 0.72）
-- `-r`, `--recursive`: サブフォルダも検索
-- `--config <パス>`: TOML設定ファイル
-- `--ollama-model <文字列>`: Ollamaの画像分類モデル名。未指定の場合はエラー
-- `--ollama-host <URLまたはhost>`: Ollamaホスト。`OLLAMA_HOST` より優先。`192.168.1.31` のようにschemeとportを省略した場合は `http://192.168.1.31:11434` として扱う
-- `--ollama-timeout <秒>`: Ollama APIタイムアウト秒数（デフォルト: 60）
-- `--ollama-max-workers <数値>`: Ollama分類の並列ワーカー数（デフォルト: 1）
-- `--ollama-scene-hint <文字列>`: Ollama scene catalog 作成時に渡す補助情報
-- `--reset-cache`: 既存キャッシュを削除してから実行
-- `--max-dim <数値>`: 画像リサイズ時の長辺の最大ピクセル数
-- `--max-memory-gb <数値>`: チャンク処理時のメモリ予算GB
-- `--batch-size <数値>`: CLIP推論のバッチサイズ
-- `--result-max-workers <数値>`: 結果構築の並列ワーカー数
+- `-n`, `--num`: 選択枚数（1から600、既定: 30）
+- `--game-title`: ゲームタイトル。未指定時はファイル名から推測
+- `--game-context`: ゲーム内容やブログ掲載意図の任意補足
+- `--primary-model`: 一次評価用Ollama vision model
+- `--secondary-model`: 遷移確認を含む二次評価用Ollama vision model
+- `--ollama-host`: Ollama host。CLI、`OLLAMA_HOST`、localhostの順で解決
+- `--ollama-timeout`: Ollama APIのbatch単位timeout秒数（既定: 900）
+- `--ffmpeg-workers`: フレーム抽出の並列数（1から4、既定: 2）
+- `--sample-interval-seconds`: 候補抽出の最大間隔（0.25秒以上）。通常は自動設定を推奨。候補が4,000件を超える指定は拒否
+- `--allow-cpu`: GPU利用を確認できなくても続行する
+- `--debug`: debug logを有効化する
 
-### 使用例
+model名は切り替えられます。どちらもOllamaの`/api/show`でvision対応が
+確認できる必要があります。標準では各modelのロード後に`/api/ps`を確認し、
+model memoryの50%以上がVRAMにある場合だけ処理を継続します。
 
-```bash
-# スクリーンショットから15枚選択して出力フォルダにコピー
-uv run game-screen-pick --ollama-model gemma4 -n 15 ./screenshots ./output
+## 出力
 
-# 設定ファイルを使用
-uv run game-screen-pick --config ./picker.toml ./screenshots ./output
+出力フォルダには次の成果物を作ります。
 
-# アドベンチャーゲーム向けの補助ヒント
-uv run game-screen-pick --ollama-model gemma4 \
-  --ollama-scene-hint "アドベンチャーゲーム。会話差分が多く、表情や背景の違いを重視したい" \
-  ./screenshots ./output
-
-# パズルゲーム向けの補助ヒント
-uv run game-screen-pick --ollama-model gemma4 \
-  --ollama-scene-hint "パズルゲーム。盤面の状態が似やすいので、進行や結果が分かる画像を優先したい" \
-  ./screenshots ./output
-
-# RPG向けの補助ヒント
-uv run game-screen-pick --ollama-model gemma4 \
-  --ollama-scene-hint "RPG。戦闘、探索、会話、メニューが混在している" \
-  ./screenshots ./output
-
-# 既存キャッシュを削除して最初から実行
-uv run game-screen-pick --ollama-model gemma4 --reset-cache ./screenshots ./output
+```text
+recording-selected/
+├── selected-01.jpg
+├── selected-02.jpg
+├── ...
+├── selected-30.jpg
+├── selected-contact-sheet.jpg
+├── report.json
+└── .game-screen-pick/
+    └── 再開用のmanifest、候補画像、評価cache
 ```
 
-## 処理の流れ
+- `selected-XX.jpg`: ブログ掲載候補のfull resolution画像
+- `selected-contact-sheet.jpg`: 選定画像を順位・動画時刻付きで一覧できる画像
+- `report.json`: 選定時刻、score、scene、model評価を含むmachine-readable report
 
-現在の実装は次の流れです。
+新規実行時の出力フォルダは空である必要があります。途中で中断した場合は、
+同じ動画・選択条件・modelで同じコマンドを再実行してください。抽出済みframeと
+完了済みOllama batchを再利用します。条件が異なる既存フォルダは上書きせず、
+新しい出力フォルダを要求します。完了済み実行では全成果物のsizeとSHA-256を
+検証し、Ollamaへ接続せずに結果を返します。
 
-1. 入力画像をすべて解析し、CLIP特徴・結合特徴・画質メトリクスを作る
-2. 解析結果をもとに `content filter` を実施し、暗転・白飛び・単色・遷移フレームを厳格に明示的な reject reason 付きで除外する
-3. 残った blog candidate から画質と見た目の多様性で Selection Shortlist を作る
-4. Selection Shortlist から高品質・多様性・頻出patternを含む代表画像を最大24枚選び、Ollamaでその実行用の scene catalog を作る
-5. scene catalog は3〜8個の scene で構成され、必ず `other` と scene selection role を含む
-6. Selection Shortlist の各画像を scene catalog のいずれかへ分類し、分類失敗した画像は最終選択対象から外す
-7. 同じ scene 内で見た目や構図が近い画像を variant group にまとめ、recurring gameplayでは要求枚数に応じてvariantを広げる
-8. scene selection role、scene ごとの自動配分、画質、分類信頼度、類似度除外を組み合わせて最終出力を決める
-9. 選定結果を copy / console / JSON report 共通の出力recordへ変換する
-10. `OutputPlanner` が scene slug別連番とreport用 `output_path` をcopyなしで計画する
-11. 計画済みの出力先へ画像をコピーし、同じrecordから表示と `<出力フォルダ>/report.json` のJSONレポートを生成する
+## 選定の流れ
 
-出力フォルダが存在する場合は、処理開始前に空である必要があります。既存ファイル、既存フォルダ、`report.json` などが1件でもある場合は失敗します。
-JSONレポートは常に `<出力フォルダ>/report.json` へ出力されます。
-選択画像は常に `battle0001.ext` や `conversation0001.ext` のように、scene slug と scene 内連番で出力されます。
+1. 動画のほぼ先頭から末尾までを等間隔でsampleする
+2. 暗転、白飛び、単色frameを機械的に除外する
+3. 品質と時間分散から選択枚数の最大12倍を一次候補にする
+4. 一次modelがブログ掲載価値、遷移、sceneを評価する
+5. 場面・見た目・動画時刻を分散させ、最大3倍を二次候補にする
+6. 二次modelが各候補の直前・対象・直後を見て再評価する
+7. 遷移frameを除外し、近い重複とtitle/map/menuへの偏りを抑えて選定する
+8. 個別画像、JSON report、一覧contact sheetを出力する
 
-### コンソールログ
-
-通常実行では、入力画像の検索件数、中立解析キャッシュ確認中の処理件数、キャッシュのhit/miss件数、未cache画像の解析開始、解析チャンク数、画像読み込み、CLIP特徴抽出の開始・完了がコンソールに出力されます。
-CLIPモデルの初回ロード前にも、画像読み込みやチャンク準備の進捗が出るため、処理が進んでいるかを確認できます。
-各ログ行の先頭には日時と直前ログ行からの経過秒が出力されます。形式は `2026-06-06 13:45:12.345 (+1.234s): 入力画像: 120件` です。
-
-### scene の意味
-
-- `scene_slug`: `battle`、`conversation`、`menu` など、ファイル名やJSONキーに使う英語slug
-- `scene_display_name`: `戦闘`、`会話`、`メニュー` など、人が読む日本語名
-- `scene_description`: ブログ画像選択に役立つ短い説明文
-- `scene_selection_role`: `ordinary`、`cinematic`、`recurring_gameplay` のいずれか。`cinematic` は合計で控えめに、`recurring_gameplay` は通常プレイの状態差を拾いやすく扱います
-- `variant_group`: 同じscene内でブログ上の役割が重複する差分画像のまとまり
-
-### 類似度フィルタリング
-
-- 類似度判定は Ollama の scene 分類後に実行します
-- 既に選ばれた画像と似すぎる候補は、scene をまたいでも除外します
-- `--similarity` はこの除外判定の基準値で、高いほど緩く、低いほど厳しくなります
-- `cinematic` roleのsceneは、通常は選択要求枚数の10%（最低1枚）までに抑えます。他の有用候補が足りない場合は補充として超過できます
-- `recurring_gameplay` roleのsceneでは、戦闘UI、探索画面、パズル盤面など頻繁に表示される通常プレイ画面の状態差を拾うため、要求枚数が多いほど同じvariant groupからも複数枚選びやすくなります
-- ただし、recurring gameplayでも類似度判定は残るため、ほぼ同一の連番フレームだけで埋まることは避けます
-
-### Ollama分類キャッシュ
-
-- 分類結果は入力画像のあるフォルダ配下の `.game-screen-pick/cache/ollama-scenes.json` に保存されます
-- キャッシュキーには画像パス、更新時刻、サイズ、モデル名、scene selection roleを含むscene catalog が含まれます
-- コンソールには scene catalog 作成開始・完了、画像分類の対象件数、分類済み件数、成功・失敗件数が出力されます
-- JSONレポートには Selection Shortlist 外になった件数として `rejected_by_selection_shortlist` が出力され、各候補には `scene_selection_role` が含まれます
-- scene catalog 応答が不正な場合は、代表画像数を減らして再試行します
-- scene catalog 作成が最終的に失敗した場合は、`fallback` sceneで選定を継続し、console / JSON report に `ollama_catalog_fallback_used` と `ollama_catalog_fallback_reason` を出力します
-- `ollama_classification_failed` は、scene catalog 作成後に個別画像を catalog 内の scene へ分類できなかった件数です。catalog 作成失敗による `fallback` とは別に集計されます
-
-### 処理再開
-
-- 中立解析結果は入力フォルダ配下の `.game-screen-pick/cache/neutral-analysis/` に保存されます
-- Ctrl+Cで中断した場合は、同じコマンドを再実行すると処理済みの中立解析結果とOllama分類キャッシュを再利用します
-- 中立解析キャッシュは画像パス、更新時刻、サイズ、解析設定をもとに再利用可否を判定します
-- `--ollama-scene-hint` を変更して再実行した場合、中立解析結果は再利用されますが、scene catalog 作成とOllama分類は新しいヒントに基づいて実行されます
-- 古いOllama分類キャッシュは削除されず、scene catalog ごとに別のキャッシュとして保持されます
-- 最初から実行したい場合は `--reset-cache` を指定します。入力フォルダとそのサブフォルダ配下の `.game-screen-pick/cache/` を削除してから実行し、その実行中に新しいキャッシュを保存します
-
-## 設定ファイル
-
-```toml
-[ollama]
-model = "gemma4"
-host = "http://localhost:11434"
-timeout = 60
-max_workers = 1
-
-[thresholds]
-similarity = 0.72
-```
-
-Ollama host の優先順位は `--ollama-host`、`OLLAMA_HOST`、`[ollama].host`、`http://localhost:11434` です。`192.168.1.31` のようにschemeとportを省略したhostは `http://192.168.1.31:11434` として扱われます。
-
-## 性能チューニング
-
-- `--max-dim`: 小さいほど高速ですが、精度が下がる可能性があります
-- `--max-memory-gb`: 大きいほどチャンクサイズが増え、GPU利用率が上がりやすくなります
-- `--batch-size`: 大きいほど高速ですが、VRAM消費量が増えます
-- `--result-max-workers`: CPU並列度を調整します
-- Ollama分類は全blog candidateではなく、画質と見た目の多様性で絞った Selection Shortlist にだけ実行されます。Selection Shortlist は選択枚数の10倍または500件の大きい方を基本に、通常は最大2000件まで自動調整されます。ただし、選択枚数が2000件を超える場合は、Ollama分類失敗に備えて要求枚数より少し多めに確保されます
-- scene catalog作成に使う代表画像は最大24枚のまま、高品質画像、見た目の多様な画像、頻出する通常プレイpatternが混ざるように選ばれます
-- Ollamaの `/api/chat` には常に `think=false` を送信します。scene分類では最終JSONだけを使うため、thinking対応モデルでは推論trace生成を抑えて速度を優先します
+特定タイトル専用の選定ruleは持ちません。`--game-context`はmodel判断の補足で、
+固定カテゴリや手動quotaとしては扱いません。
 
 ## バージョンとリリース
 
-- `main` を対象にするすべてのPull Requestは、ドキュメントやテストだけの変更を含め、`pyproject.toml` を未公開の新しいバージョンへ更新します。
-- `main` へのマージごとに、そのバージョンのGit tagとGitHub Releaseを作成します。
-- Pull Requestのタグ検査が既存バージョンとの衝突を報告した場合は、次の未公開バージョンへ更新してから再実行します。
-
-## 関連ドキュメント
-
-- [ADR 0002: Classify Selection Shortlist With Ollama](docs/adr/0002-classify-selection-shortlist-with-ollama.md)
-- [ADR 0003: Derive Selection Roles From Scene Catalog](docs/adr/0003-derive-selection-roles-from-scene-catalog.md)
+`main`を対象にするすべてのPull Requestは、ドキュメントやテストだけの変更も
+含めて、`pyproject.toml`を未公開の新しいversionへ更新します。

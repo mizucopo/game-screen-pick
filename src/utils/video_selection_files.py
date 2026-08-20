@@ -1,0 +1,95 @@
+"""単一動画選定の再開可能なファイル操作."""
+
+from __future__ import annotations
+
+import errno
+import fcntl
+import hashlib
+import json
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
+
+from PIL import Image
+
+RUN_LOCK_FILENAME = "run.lock"
+
+
+def file_sha256(path: Path) -> str:
+    """ファイル全体のSHA-256を返す."""
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for block in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@contextmanager
+def output_directory_lock(work_dir: Path) -> Iterator[None]:
+    """同一outputのpipelineをadvisory lockで一つに制限する."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = work_dir / RUN_LOCK_FILENAME
+    lock_file = lock_path.open("a+b")
+    locked = False
+    try:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
+            raise RuntimeError(
+                f"同じ出力フォルダを使う処理がすでに実行中です: {work_dir.parent}"
+            ) from error
+        locked = True
+        yield
+    finally:
+        if locked:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+
+
+def json_digest(payload: Any) -> str:
+    """JSON互換値の決定的なSHA-256を返す."""
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def read_json(path: Path) -> Any:
+    """UTF-8のJSONファイルを読む."""
+    with path.open(encoding="utf-8") as file:
+        return json.load(file)
+
+
+def write_json_atomic(path: Path, payload: Any) -> None:
+    """JSONを同一ディレクトリ内でatomicに置換する."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.partial")
+    try:
+        with temporary.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def is_valid_image(path: Path) -> bool:
+    """画像ファイルが存在し、Pillowで検証できるか返す."""
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        with Image.open(path) as image:
+            image.verify()
+        with Image.open(path) as image:
+            return image.width > 0 and image.height > 0
+    except (OSError, ValueError):
+        return False

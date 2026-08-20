@@ -5,27 +5,24 @@ import sys
 
 import click
 
-from .application.run import run_application
-from .models.application_run_request import ApplicationRunRequest
+from .application.run_video import run_video_application
+from .models.video_selection_request import (
+    MAXIMUM_OUTPUT_COUNT,
+    MINIMUM_SAMPLE_INTERVAL_SECONDS,
+    VideoSelectionRequest,
+)
 from .utils.elapsed_log_formatter import ElapsedLogFormatter
+
+DEFAULT_PRIMARY_MODEL = "qwen3.8:27b"
+DEFAULT_SECONDARY_MODEL = "muse-glimmer:30b"
 
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(ElapsedLogFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[console_handler], force=True)
 
 
-def validate_positive_int(value: str | None) -> int | None:
-    """正の整数をバリデーションする.
-
-    Args:
-        value: CLIから渡された文字列値。
-
-    Returns:
-        検証済みの整数値。 `None` が渡された場合は `None` を返す。
-
-    Raises:
-        click.BadParameter: 整数でない、または1未満の値が渡された場合。
-    """
+def validate_positive_int(value: int | str | None) -> int | None:
+    """正の整数を検証する."""
     if value is None:
         return None
     try:
@@ -39,266 +36,166 @@ def validate_positive_int(value: str | None) -> int | None:
     return integer_value
 
 
-def validate_positive_int_or_zero(value: str | None) -> int | None:
-    """0または正の整数をバリデーションする.
-
-    CLI上では「0でシングルスレッド」を許可するが、
-    `ThreadPoolExecutor(max_workers=0)` は実行時エラーになるため、
-    内部では0を1へ正規化して返す。
-
-    Args:
-        value: CLIから渡された文字列値。
-
-    Returns:
-        検証済みの整数値。 `0` は `1` に変換される。
-
-    Raises:
-        click.BadParameter: 整数でない、または負の値が渡された場合。
-    """
-    if value is None:
-        return None
-    try:
-        integer_value = int(value)
-    except ValueError as error:
-        raise click.BadParameter(f"'{value}' は整数ではありません") from error
-    if integer_value < 0:
-        raise click.BadParameter(
-            f"0以上の整数を指定してください（実際の値: {integer_value}）"
-        )
-    return integer_value if integer_value > 0 else 1
-
-
-def validate_similarity_range(value: float | str | None) -> float | None:
-    """類似度しきい値をバリデーションする.
-
-    Args:
-        value: CLIから渡された文字列値。
-
-    Returns:
-        0.0以上1.0以下で検証済みの浮動小数点値。
-        `None` が渡された場合は `None` を返す。
-
-    Raises:
-        click.BadParameter: 数値でない、または許容範囲外の値の場合。
-    """
-    if value is None:
-        return None
-    try:
-        float_value = float(value)
-    except ValueError as error:
-        raise click.BadParameter(f"'{value}' は数値ではありません") from error
-    if not 0.0 <= float_value <= 1.0:
-        raise click.BadParameter(
-            f"0.0~1.0の範囲で指定してください（実際の値: {float_value}）"
-        )
-    return float_value
-
-
 def validate_positive_float(value: float | str | None) -> float | None:
-    """正の浮動小数点数をバリデーションする."""
+    """正の有限浮動小数点数を検証する."""
     if value is None:
         return None
     try:
         float_value = float(value)
     except ValueError as error:
         raise click.BadParameter(f"'{value}' は数値ではありません") from error
-    if float_value <= 0:
+    if not 0 < float_value < float("inf"):
         raise click.BadParameter(f"正の数を指定してください（実際の値: {float_value}）")
     return float_value
+
+
+def validate_output_count(value: int | str | None) -> int | None:
+    """選択枚数をcontact sheetがJPEGに収まる範囲へ制限する."""
+    output_count = validate_positive_int(value)
+    if output_count is not None and output_count > MAXIMUM_OUTPUT_COUNT:
+        raise click.BadParameter(
+            f"{MAXIMUM_OUTPUT_COUNT}以下で指定してください（実際の値: {output_count}）"
+        )
+    return output_count
+
+
+def validate_sample_interval(value: float | str | None) -> float | None:
+    """候補抽出間隔を実装が保証する下限以上へ制限する."""
+    interval = validate_positive_float(value)
+    if interval is not None and interval < MINIMUM_SAMPLE_INTERVAL_SECONDS:
+        raise click.BadParameter(
+            f"{MINIMUM_SAMPLE_INTERVAL_SECONDS}以上で指定してください"
+            f"（実際の値: {interval}）"
+        )
+    return interval
+
+
+def validate_ffmpeg_workers(value: int | str | None) -> int | None:
+    """ffmpeg並列数をCPU負荷を抑える1から4へ制限する."""
+    workers = validate_positive_int(value)
+    if workers is not None and workers > 4:
+        raise click.BadParameter(f"1から4で指定してください（実際の値: {workers}）")
+    return workers
 
 
 @click.command()
 @click.option(
     "-n",
     "--num",
-    default=100,
+    "output_count",
+    default=30,
+    show_default=True,
     type=int,
-    callback=lambda _ctx, _param, x: validate_positive_int(x),
-    help="選択枚数",
+    callback=lambda _ctx, _param, value: validate_output_count(value),
+    help=f"選択枚数（1から{MAXIMUM_OUTPUT_COUNT}）",
 )
 @click.option(
-    "-s",
-    "--similarity",
+    "--game-title",
     default=None,
-    type=float,
-    callback=lambda _ctx, _param, x: validate_similarity_range(x),
-    help="類似度しきい値(0.7~0.85推奨)",
-)
-@click.option("-r", "--recursive", is_flag=True, help="サブフォルダも検索")
-@click.option(
-    "--config",
-    "config_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=str),
-    default=None,
-    help="TOML設定ファイル",
+    help="ゲームタイトル。未指定時は動画ファイル名から推測",
 )
 @click.option(
-    "--ollama-model",
-    default=None,
-    type=str,
-    help="Ollamaの画像分類モデル名",
+    "--game-context",
+    default="",
+    help="ゲーム内容や掲載意図の任意補足",
+)
+@click.option(
+    "--primary-model",
+    default=DEFAULT_PRIMARY_MODEL,
+    show_default=True,
+    help="一次評価に使うOllama vision model",
+)
+@click.option(
+    "--secondary-model",
+    default=DEFAULT_SECONDARY_MODEL,
+    show_default=True,
+    help="遷移確認を含む二次評価に使うOllama vision model",
 )
 @click.option(
     "--ollama-host",
     default=None,
-    type=str,
-    help="OllamaホストURL（OLLAMA_HOSTより優先）",
+    help="Ollama host。未指定時はOLLAMA_HOST、その後localhostを使用",
 )
 @click.option(
     "--ollama-timeout",
+    default=900.0,
+    show_default=True,
     type=float,
-    callback=lambda _ctx, _param, x: validate_positive_float(x),
-    default=None,
-    help="Ollama APIタイムアウト秒数",
+    callback=lambda _ctx, _param, value: validate_positive_float(value),
+    help="Ollama APIのbatch単位timeout秒数",
 )
 @click.option(
-    "--ollama-max-workers",
-    type=int,
-    callback=lambda _ctx, _param, x: validate_positive_int(x),
-    default=None,
-    help="Ollama分類の並列ワーカー数",
-)
-@click.option(
-    "--reset-cache",
+    "--allow-cpu",
     is_flag=True,
-    help="既存キャッシュを削除してから実行する",
+    help="Ollama modelのGPU利用を確認できなくても続行",
 )
 @click.option(
-    "--ollama-scene-hint",
-    "scene_hint",
+    "--ffmpeg-workers",
+    default=2,
+    show_default=True,
+    type=int,
+    callback=lambda _ctx, _param, value: validate_ffmpeg_workers(value),
+    help="候補フレーム抽出の並列数（1から4）",
+)
+@click.option(
+    "--sample-interval-seconds",
     default=None,
-    type=str,
-    help="Ollama scene catalog作成に渡す任意ヒント",
-)
-@click.option(
-    "--batch-size",
-    type=int,
-    callback=lambda _ctx, _param, x: validate_positive_int(x),
-    default=None,
-    help="CLIP推論のバッチサイズ",
-)
-@click.option(
-    "--result-max-workers",
-    type=int,
-    callback=lambda _ctx, _param, x: validate_positive_int_or_zero(x),
-    default=None,
-    help="結果構築の並列ワーカー数（0でシングルスレッド）",
-)
-@click.option(
-    "--max-dim",
-    type=int,
-    callback=lambda _ctx, _param, x: validate_positive_int(x),
-    default=720,
-    help="画像リサイズ時の長辺の最大ピクセル数",
-)
-@click.option(
-    "--max-memory-gb",
-    type=int,
-    callback=lambda _ctx, _param, x: validate_positive_int(x),
-    default=1,
-    help="チャンク処理時のメモリ予算（GB）",
+    type=float,
+    callback=lambda _ctx, _param, value: validate_sample_interval(value),
+    help=(
+        f"候補抽出の最大間隔（{MINIMUM_SAMPLE_INTERVAL_SECONDS}秒以上）。"
+        "未指定時は動画時間と選択枚数から自動決定"
+    ),
 )
 @click.option("--debug", is_flag=True, help="デバッグログを有効化")
 @click.argument(
-    "input_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    "input_video",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=str),
 )
 @click.argument(
     "output_dir",
-    type=click.Path(file_okay=False, dir_okay=True),
+    type=click.Path(file_okay=False, dir_okay=True, path_type=str),
 )
 def execute(
-    num: int,
-    similarity: float | None,
-    recursive: bool,
-    config_path: str | None,
-    ollama_model: str | None,
+    output_count: int,
+    game_title: str | None,
+    game_context: str,
+    primary_model: str,
+    secondary_model: str,
     ollama_host: str | None,
-    ollama_timeout: float | None,
-    ollama_max_workers: int | None,
-    reset_cache: bool,
-    scene_hint: str | None,
-    batch_size: int | None,
-    result_max_workers: int | None,
-    max_dim: int,
-    max_memory_gb: int,
+    ollama_timeout: float,
+    allow_cpu: bool,
+    ffmpeg_workers: int,
+    sample_interval_seconds: float | None,
     debug: bool,
-    input_dir: str,
+    input_video: str,
     output_dir: str,
 ) -> None:
-    """ゲーム画面からscene mixを保って画像を選択する.
-
-    CLIはオプション変換と入力検証に集中し、application実行層へ
-    リクエストを渡す。
-
-    \b
-    使用例:
-      game-screen-pick -n 15 ./screenshots ./output
-      game-screen-pick --ollama-model gemma4 --ollama-scene-hint "RPG" ./in ./out
-
-    Args:
-        num: 選択枚数。
-        similarity: 類似度しきい値。未指定時は設定ファイルまたは既定値を使う。
-        recursive: サブフォルダを再帰的に探索するかどうか。
-        config_path: TOML設定ファイルのパス。
-        ollama_model: Ollamaの画像分類モデル名。
-        ollama_host: OllamaホストURL。
-        ollama_timeout: Ollama APIタイムアウト秒数。
-        ollama_max_workers: Ollama分類の並列ワーカー数。
-        reset_cache: 既存キャッシュを削除してから実行するかどうか。
-        scene_hint: Ollama scene catalog作成に渡す任意ヒント。
-        batch_size: CLIP推論のバッチサイズ上書き。
-        result_max_workers: 結果構築に使う並列ワーカー数。
-        max_dim: 入力画像の長辺最大サイズ。
-        max_memory_gb: チャンク処理のメモリ予算。
-        debug: デバッグログを有効化するかどうか。
-        input_dir: 入力画像フォルダ。
-        output_dir: 選択画像のコピー先フォルダ。
-
-    Returns:
-        なし。
-
-    Raises:
-        click.BadParameter: 入力値または入力パスが不正な場合。
-        SystemExit: 想定外の実行時エラーをCLI終了コードへ変換する場合。
-    """
-    run_application(
-        ApplicationRunRequest(
-            num=num,
-            similarity=similarity,
-            recursive=recursive,
-            config_path=config_path,
-            ollama_model=ollama_model,
+    """単一のゲーム動画全体からブログ掲載用画像を選定する."""
+    run_video_application(
+        VideoSelectionRequest(
+            input_video=input_video,
+            output_dir=output_dir,
+            output_count=output_count,
+            game_title=game_title,
+            game_context=game_context,
+            primary_model=primary_model,
+            secondary_model=secondary_model,
             ollama_host=ollama_host,
             ollama_timeout=ollama_timeout,
-            ollama_max_workers=ollama_max_workers,
-            reset_cache=reset_cache,
-            scene_hint=scene_hint,
-            batch_size=batch_size,
-            result_max_workers=result_max_workers,
-            max_dim=max_dim,
-            max_memory_gb=max_memory_gb,
+            allow_cpu=allow_cpu,
+            ffmpeg_workers=ffmpeg_workers,
+            sample_interval_seconds=sample_interval_seconds,
             debug=debug,
-            input_dir=input_dir,
-            output_dir=output_dir,
         )
     )
 
 
 def run(args: list[str]) -> None:
-    """CLIを実行する.
-
-    `args` を `sys.argv` へ一時反映し、Clickフローで `execute` を呼び出す。
-
-    Returns:
-        なし。
-
-    Raises:
-        SystemExit: 実行時エラーを終了コードへ変換した場合。
-    """
+    """引数配列を使ってCLIを実行する."""
     original_argv = sys.argv
     try:
-        sys.argv = ["game-screen-pick"] + args
+        sys.argv = ["game-screen-pick", *args]
         execute(standalone_mode=False)
     except click.ClickException as error:
         error.show()
@@ -308,11 +205,7 @@ def run(args: list[str]) -> None:
 
 
 def cli_main() -> None:
-    """CLIエントリポイント関数.
-
-    `pyproject.toml` の script entrypoint から呼ばれる薄いラッパーで、
-    `run` を生成して実行するだけに責務を限定する。
-    """
+    """project script用の薄いentrypoint."""
     run(sys.argv[1:])
 
 
