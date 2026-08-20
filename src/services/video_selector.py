@@ -51,7 +51,7 @@ from .video_frame_extractor import VideoFrameExtractor
 
 logger = logging.getLogger(__name__)
 
-ALGORITHM_VERSION = "multi-video-selection-v3"
+ALGORITHM_VERSION = "multi-video-selection-v4"
 PROMPT_VERSION = "blog-image-selection-v3"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
 MINIMUM_ENDPOINT_MARGIN_SECONDS = 0.05
@@ -598,13 +598,21 @@ class VideoSelector:
             candidates=candidates,
         )
         backfill_round = 0
-        while len(self.sources) <= self.request.output_count:
-            uncovered_sources = _uncovered_assessment_sources(
-                candidates,
-                assessments,
-                len(self.sources),
+        while True:
+            survivor_count = sum(
+                not assessments[candidate.frame_id].is_transition
+                for candidate in candidates
             )
-            if not uncovered_sources:
+            uncovered_sources = (
+                _uncovered_assessment_sources(
+                    candidates,
+                    assessments,
+                    len(self.sources),
+                )
+                if len(self.sources) <= self.request.output_count
+                else ()
+            )
+            if not uncovered_sources and survivor_count >= self.request.output_count:
                 break
             backfill = select_source_backfill_candidates(
                 candidate_pool,
@@ -617,8 +625,13 @@ class VideoSelector:
                 labels = ", ".join(
                     self.sources[index].label for index in uncovered_sources
                 )
+                if labels:
+                    raise RuntimeError(
+                        f"{stage_label}評価で入力動画に非遷移候補がありません: {labels}"
+                    )
                 raise RuntimeError(
-                    f"{stage_label}評価で入力動画に非遷移候補がありません: {labels}"
+                    f"{stage_label}評価の非遷移候補{survivor_count}件が"
+                    f"選択枚数{self.request.output_count}件を下回りました"
                 )
             backfill_round += 1
             if not primary_stage:
@@ -1523,54 +1536,79 @@ def select_source_backfill_candidates(
     source_count: int,
     output_count: int,
 ) -> list[FrameCandidate]:
-    """非遷移候補がない入力元から未評価候補を少数ずつ補充する."""
+    """入力元の欠落または生存候補の不足を未評価候補で追補する."""
     if source_count <= 0 or output_count <= 0:
         raise ValueError("入力動画数と選択枚数は正の整数で指定してください")
-    if source_count > output_count:
+    survivor_counts = Counter(
+        candidate.video_index
+        for candidate in assessed_candidates
+        if not assessments[candidate.frame_id].is_transition
+    )
+    survivor_count = sum(survivor_counts.values())
+    uncovered_sources = (
+        _uncovered_assessment_sources(
+            assessed_candidates,
+            assessments,
+            source_count,
+        )
+        if source_count <= output_count
+        else ()
+    )
+    shortfall = max(0, output_count - survivor_count)
+    if not uncovered_sources and not shortfall:
         return []
 
-    uncovered_sources = _uncovered_assessment_sources(
-        assessed_candidates,
-        assessments,
-        source_count,
-    )
     assessed_ids = {candidate.frame_id for candidate in assessed_candidates}
-    assessed_by_source: dict[int, list[FrameCandidate]] = {
-        video_index: [] for video_index in uncovered_sources
-    }
-    available_by_source: dict[int, list[FrameCandidate]] = {
-        video_index: [] for video_index in uncovered_sources
-    }
+    assessed_by_source: dict[int, list[FrameCandidate]] = {}
+    available_by_source: dict[int, list[FrameCandidate]] = {}
     for candidate in assessed_candidates:
-        if candidate.video_index in assessed_by_source:
-            assessed_by_source[candidate.video_index].append(candidate)
+        assessed_by_source.setdefault(candidate.video_index, []).append(candidate)
     for candidate in all_candidates:
-        if (
-            candidate.video_index in available_by_source
-            and candidate.frame_id not in assessed_ids
-        ):
-            available_by_source[candidate.video_index].append(candidate)
+        if candidate.frame_id not in assessed_ids:
+            available_by_source.setdefault(candidate.video_index, []).append(candidate)
     for candidates in available_by_source.values():
         candidates.sort(key=_primary_candidate_order)
 
+    if uncovered_sources:
+        source_order = uncovered_sources
+        target_count = len(uncovered_sources) * SECONDARY_CANDIDATE_MULTIPLIER
+    else:
+        source_order = tuple(
+            sorted(
+                available_by_source,
+                key=lambda video_index: (
+                    survivor_counts[video_index],
+                    video_index,
+                ),
+            )
+        )
+        target_count = shortfall * SECONDARY_CANDIDATE_MULTIPLIER
     selected_by_source: dict[int, list[FrameCandidate]] = {
-        video_index: [] for video_index in uncovered_sources
+        video_index: [] for video_index in source_order
     }
-    for _ in range(SECONDARY_CANDIDATE_MULTIPLIER):
-        for video_index in uncovered_sources:
-            source_candidates = available_by_source[video_index]
+    selected_count = 0
+    while selected_count < target_count:
+        progressed = False
+        for video_index in source_order:
+            source_candidates = available_by_source.get(video_index, [])
             chosen = _next_source_representative(
                 source_candidates,
                 (
-                    *assessed_by_source[video_index],
+                    *assessed_by_source.get(video_index, []),
                     *selected_by_source[video_index],
                 ),
             )
             if chosen is not None:
                 selected_by_source[video_index].append(chosen)
+                selected_count += 1
+                progressed = True
+                if selected_count == target_count:
+                    break
+        if not progressed:
+            break
     selected = [
         candidate
-        for video_index in uncovered_sources
+        for video_index in source_order
         for candidate in selected_by_source[video_index]
     ]
     return sorted(
@@ -1584,7 +1622,7 @@ def _uncovered_assessment_sources(
     assessments: dict[str, FrameAssessment],
     source_count: int,
 ) -> tuple[int, ...]:
-    """一次評価で非遷移候補をまだ得ていない入力元を返す."""
+    """評価で非遷移候補をまだ得ていない入力元を返す."""
     covered_sources = {
         candidate.video_index
         for candidate in candidates
@@ -1631,6 +1669,30 @@ def _next_source_representative(
     return diverse or remaining[0]
 
 
+def source_time_scales(
+    candidates: Sequence[FrameCandidate],
+    count: int,
+) -> dict[int, float]:
+    """各入力元の相対spanと期待選定枚数から時間分散尺度を返す."""
+    if count <= 0:
+        raise ValueError("選択枚数は正の整数で指定してください")
+    timestamps_by_source: dict[int, list[float]] = {}
+    for candidate in candidates:
+        timestamps_by_source.setdefault(candidate.video_index, []).append(
+            candidate.timestamp_seconds
+        )
+    if not timestamps_by_source:
+        return {}
+    expected_count = max(1.0, count / len(timestamps_by_source))
+    return {
+        video_index: max(
+            60.0,
+            (max(timestamps) - min(timestamps)) / expected_count,
+        )
+        for video_index, timestamps in timestamps_by_source.items()
+    }
+
+
 def select_diverse_candidates(
     candidates: Sequence[FrameCandidate],
     assessments: dict[str, FrameAssessment],
@@ -1649,12 +1711,7 @@ def select_diverse_candidates(
     scene_counts: Counter[str] = Counter()
     source_counts: Counter[int] = Counter()
     source_indexes = {candidate.video_index for candidate in eligible}
-    timeline_span = max(
-        1.0,
-        max(item.timestamp_seconds for item in eligible)
-        - min(item.timestamp_seconds for item in eligible),
-    )
-    time_scale = max(60.0, timeline_span / max(1, count))
+    time_scales = source_time_scales(eligible, count)
     while len(selected) < count:
         source_pool = _source_balanced_pool(
             remaining,
@@ -1666,8 +1723,11 @@ def select_diverse_candidates(
 
         def utility(candidate: FrameCandidate) -> tuple[float, float, float]:
             assessment = assessments[candidate.frame_id]
+            time_scale = time_scales[candidate.video_index]
             visual_distance, time_distance = _nearest_distances(
-                candidate, selected, time_scale
+                candidate,
+                selected,
+                time_scale,
             )
             scene_key = normalize_scene(assessment)
             near_duplicate_penalty = (
@@ -1727,12 +1787,7 @@ def select_final_frames(
     family_counts: Counter[str] = Counter()
     source_counts: Counter[int] = Counter()
     source_indexes = {candidate.video_index for candidate in eligible}
-    timeline_span = max(
-        1.0,
-        max(item.timestamp_seconds for item in eligible)
-        - min(item.timestamp_seconds for item in eligible),
-    )
-    time_scale = max(60.0, timeline_span / max(1, count))
+    time_scales = source_time_scales(eligible, count)
 
     while len(selected) < count:
         source_pool = _source_balanced_pool(
@@ -1766,8 +1821,11 @@ def select_final_frames(
 
         def utility(candidate: FrameCandidate) -> tuple[float, float, float]:
             assessment = secondary[candidate.frame_id]
+            time_scale = time_scales[candidate.video_index]
             visual_distance, time_distance = _nearest_distances(
-                candidate, selected, time_scale
+                candidate,
+                selected,
+                time_scale,
             )
             scene_key = normalize_scene(assessment)
             family = screen_family(assessment)

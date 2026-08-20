@@ -15,6 +15,7 @@ from src.services.video_selector import (
     select_final_frames,
     select_primary_candidates,
     select_source_backfill_candidates,
+    source_time_scales,
 )
 
 
@@ -256,6 +257,65 @@ def test_primary_backfill_uses_next_candidate_after_reservations_fail() -> None:
     )
 
     assert [candidate.frame_id for candidate in backfill] == ["v1-f4"]
+
+
+def test_source_backfill_continues_when_survivor_count_is_short() -> None:
+    """全入力に生存候補があっても出力枚数不足なら未評価候補を補充すること."""
+    assessed = [
+        FrameCandidate("v1-live", 1.0, "", video_index=0),
+        FrameCandidate("v2-live", 1.0, "", video_index=1),
+    ]
+    remaining = [
+        FrameCandidate(
+            f"v{video_index + 1}-next-{index}",
+            float(index + 2),
+            "",
+            quality_score=90.0 - index,
+            difference_hash=1 << (video_index * 24 + index * 8),
+            video_index=video_index,
+        )
+        for video_index in range(2)
+        for index in range(3)
+    ]
+    assessments = {
+        candidate.frame_id: FrameAssessment(
+            candidate.frame_id,
+            80.0,
+            False,
+            "探索",
+            "test",
+        )
+        for candidate in assessed
+    }
+
+    backfill = select_source_backfill_candidates(
+        [*assessed, *remaining],
+        assessed,
+        assessments,
+        source_count=2,
+        output_count=3,
+    )
+
+    assert len(backfill) == 3
+    assert {candidate.video_index for candidate in backfill} == {0, 1}
+
+
+def test_source_time_scales_use_each_video_span_and_expected_share() -> None:
+    """動画ごとの相対spanをその入力へ期待する選定枚数で割ること."""
+    candidates = [
+        FrameCandidate(
+            frame_id=f"v{video_index}-{position}",
+            timestamp_seconds=video_index * 10_000.0 + position * 3600.0,
+            path="",
+            video_index=video_index,
+        )
+        for video_index in range(10)
+        for position in range(2)
+    ]
+
+    scales = source_time_scales(candidates, count=30)
+
+    assert scales == dict.fromkeys(range(10), 1200.0)
 
 
 def test_measure_candidate_rejects_black_and_scores_visible_frame(
