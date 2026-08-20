@@ -13,8 +13,8 @@ from src.services.video_selector import (
     make_timestamps,
     measure_candidate,
     select_final_frames,
-    select_primary_backfill_candidates,
     select_primary_candidates,
+    select_source_backfill_candidates,
 )
 
 
@@ -247,7 +247,7 @@ def test_primary_backfill_uses_next_candidate_after_reservations_fail() -> None:
         for candidate in assessed
     }
 
-    backfill = select_primary_backfill_candidates(
+    backfill = select_source_backfill_candidates(
         [*source_candidates, other_candidate],
         assessed,
         assessments,

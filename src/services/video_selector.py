@@ -51,7 +51,7 @@ from .video_frame_extractor import VideoFrameExtractor
 
 logger = logging.getLogger(__name__)
 
-ALGORITHM_VERSION = "multi-video-selection-v2"
+ALGORITHM_VERSION = "multi-video-selection-v3"
 PROMPT_VERSION = "blog-image-selection-v3"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
 MINIMUM_ENDPOINT_MARGIN_SECONDS = 0.05
@@ -124,8 +124,11 @@ class VideoSelector:
 
         candidates = self._extract_candidates()
         primary_candidates = self._preselect_candidates(candidates)
-        primary_candidates, primary_assessments = (
-            self._assess_primary_candidates_with_backfill(primary_candidates)
+        primary_candidates, primary_assessments = self._assess_with_source_backfill(
+            self._usable_candidates,
+            primary_candidates,
+            model=self.request.primary_model,
+            stage="primary",
         )
         primary_eligible = [
             candidate
@@ -146,15 +149,11 @@ class VideoSelector:
             primary_assessments,
             secondary_count,
         )
-        write_json_atomic(
-            self.work_dir / "secondary-candidates.json",
-            [candidate_to_json(candidate) for candidate in secondary_candidates],
-        )
-        self._extract_context_frames(secondary_candidates)
-        secondary_assessments = self._assess_candidates(
+        secondary_candidates, secondary_assessments = self._assess_with_source_backfill(
+            primary_eligible,
+            secondary_candidates,
             model=self.request.secondary_model,
             stage="secondary",
-            candidates=secondary_candidates,
         )
         selected = select_final_frames(
             secondary_candidates,
@@ -569,35 +568,46 @@ class VideoSelector:
             [source.metadata for source in self.sources],
             self.request.output_count,
         )
-        write_json_atomic(
-            self.work_dir / "primary-candidates.json",
-            [candidate_to_json(candidate) for candidate in result],
-        )
         logger.info("一次評価候補を絞りました: %d/%d件", len(result), len(usable))
         return result
 
-    def _assess_primary_candidates_with_backfill(
+    def _assess_with_source_backfill(
         self,
+        candidate_pool: Sequence[FrameCandidate],
         initial_candidates: Sequence[FrameCandidate],
+        *,
+        model: str,
+        stage: str,
     ) -> tuple[list[FrameCandidate], dict[str, FrameAssessment]]:
-        """一次候補を評価し、未代表の入力元から候補を追加評価する."""
+        """候補を評価し、未代表の入力元から同じstageの候補を追補する."""
+        if stage not in {"primary", "secondary"}:
+            raise ValueError(f"候補追補に未対応の評価stageです: {stage}")
+        primary_stage = _is_primary_stage(stage)
+        stage_label = "一次" if primary_stage else "二次"
+        candidates_path = self.work_dir / f"{stage}-candidates.json"
         candidates = list(initial_candidates)
+        write_json_atomic(
+            candidates_path,
+            [candidate_to_json(candidate) for candidate in candidates],
+        )
+        if not primary_stage:
+            self._extract_context_frames(candidates)
         assessments = self._assess_candidates(
-            model=self.request.primary_model,
-            stage="primary",
+            model=model,
+            stage=stage,
             candidates=candidates,
         )
         backfill_round = 0
         while len(self.sources) <= self.request.output_count:
-            uncovered_sources = _uncovered_primary_sources(
+            uncovered_sources = _uncovered_assessment_sources(
                 candidates,
                 assessments,
                 len(self.sources),
             )
             if not uncovered_sources:
                 break
-            backfill = select_primary_backfill_candidates(
-                self._usable_candidates,
+            backfill = select_source_backfill_candidates(
+                candidate_pool,
                 candidates,
                 assessments,
                 source_count=len(self.sources),
@@ -607,11 +617,15 @@ class VideoSelector:
                 labels = ", ".join(
                     self.sources[index].label for index in uncovered_sources
                 )
-                raise RuntimeError(f"入力動画に非遷移候補がありません: {labels}")
+                raise RuntimeError(
+                    f"{stage_label}評価で入力動画に非遷移候補がありません: {labels}"
+                )
             backfill_round += 1
+            if not primary_stage:
+                self._extract_context_frames(backfill)
             backfill_assessments = self._assess_candidates(
-                model=self.request.primary_model,
-                stage=f"primary-backfill-{backfill_round:04d}",
+                model=model,
+                stage=f"{stage}-backfill-{backfill_round:04d}",
                 candidates=backfill,
             )
             candidates.extend(backfill)
@@ -624,11 +638,12 @@ class VideoSelector:
             )
             assessments.update(backfill_assessments)
             write_json_atomic(
-                self.work_dir / "primary-candidates.json",
+                candidates_path,
                 [candidate_to_json(candidate) for candidate in candidates],
             )
             logger.info(
-                "一次評価候補を入力元から補充しました: round=%d, %d件",
+                "%s評価候補を入力元から補充しました: round=%d, %d件",
+                stage_label,
                 backfill_round,
                 len(backfill),
             )
@@ -1500,7 +1515,7 @@ def select_primary_candidates(
     )
 
 
-def select_primary_backfill_candidates(
+def select_source_backfill_candidates(
     all_candidates: Sequence[FrameCandidate],
     assessed_candidates: Sequence[FrameCandidate],
     assessments: dict[str, FrameAssessment],
@@ -1514,7 +1529,7 @@ def select_primary_backfill_candidates(
     if source_count > output_count:
         return []
 
-    uncovered_sources = _uncovered_primary_sources(
+    uncovered_sources = _uncovered_assessment_sources(
         assessed_candidates,
         assessments,
         source_count,
@@ -1564,7 +1579,7 @@ def select_primary_backfill_candidates(
     )
 
 
-def _uncovered_primary_sources(
+def _uncovered_assessment_sources(
     candidates: Sequence[FrameCandidate],
     assessments: dict[str, FrameAssessment],
     source_count: int,

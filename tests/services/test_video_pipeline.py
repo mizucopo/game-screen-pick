@@ -442,6 +442,116 @@ def test_pipeline_backfills_source_when_reserved_primary_candidates_fail(
     assert unavailable_assessor.assess_calls == 0
 
 
+def test_pipeline_backfills_source_when_secondary_representative_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """二次評価の唯一の代表が遷移なら同じ入力元から追補すること."""
+    failed_secondary_ids: set[str] = set()
+
+    def select_single_source_representative(
+        candidates: Sequence[FrameCandidate],
+        _assessments: dict[str, FrameAssessment],
+        count: int,
+    ) -> list[FrameCandidate]:
+        by_source = {
+            video_index: [
+                candidate
+                for candidate in candidates
+                if candidate.video_index == video_index
+            ]
+            for video_index in range(2)
+        }
+        return [by_source[0][0], *by_source[1][: count - 1]]
+
+    class SecondaryRepresentativeFailingAssessor(FakeAssessor):
+        """最初の入力元で最初の二次候補だけを遷移と判定するfake."""
+
+        def assess(
+            self,
+            *,
+            model: str,
+            model_digest: str,
+            prompt: str,
+            candidates: Sequence[FrameCandidate],
+            contact_sheet: Path,
+        ) -> list[FrameAssessment]:
+            assessments = super().assess(
+                model=model,
+                model_digest=model_digest,
+                prompt=prompt,
+                candidates=candidates,
+                contact_sheet=contact_sheet,
+            )
+            if "厳しい再評価" in prompt and not failed_secondary_ids:
+                failed_secondary_ids.add(
+                    next(
+                        candidate.frame_id
+                        for candidate in candidates
+                        if candidate.video_index == 0
+                    )
+                )
+            return [
+                replace(
+                    assessment,
+                    is_transition=assessment.frame_id in failed_secondary_ids,
+                )
+                for assessment in assessments
+            ]
+
+    monkeypatch.setattr(
+        "src.services.video_selector.select_diverse_candidates",
+        select_single_source_representative,
+    )
+    videos = (
+        tmp_path / "Sample Game Part1.mp4",
+        tmp_path / "Sample Game Part2.mp4",
+    )
+    for video in videos:
+        video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_videos=tuple(str(video) for video in videos),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    extractor = FakeFrameExtractor()
+
+    SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=SecondaryRepresentativeFailingAssessor(),
+    ).run()
+
+    work_dir = output_dir / ".game-screen-pick"
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert (work_dir / "assessments-secondary-backfill-0001.json").is_file()
+    assert {item["video_index"] for item in report["selected"]} == {1, 2}
+    assert not failed_secondary_ids & {item["frame_id"] for item in report["selected"]}
+
+    (work_dir / "completion.json").unlink()
+    (output_dir / "selected-01.jpg").unlink()
+    unavailable_assessor = UnavailableAssessor()
+    SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=unavailable_assessor,
+    ).run()
+
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
 def test_pipeline_rejects_resume_when_any_input_video_changes(tmp_path: Path) -> None:
     """2本目だけの内容変更も全体SHA-256で検出すること."""
     videos = (
