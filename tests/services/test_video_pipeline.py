@@ -387,9 +387,7 @@ def test_pipeline_logs_assessment_completion_and_failure_without_batch_start(
     assert all("評価を開始します" not in message for message in messages)
     assert any(message.startswith("primary評価: ") for message in messages)
     assert any(message.startswith("secondary評価: ") for message in messages)
-    assert (
-        "primary評価batch 1の試行1が失敗しました: temporary failure" in messages
-    )
+    assert "primary評価batch 1の試行1が失敗しました: temporary failure" in messages
 
 
 def test_pipeline_selects_from_multiple_videos_and_reports_each_source(
