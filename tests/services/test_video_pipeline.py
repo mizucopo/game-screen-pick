@@ -277,11 +277,11 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     assert [file_sha256(path) for path in selected_paths] == first_hashes
 
 
-def test_pipeline_logs_resolved_automatic_options(
+def test_pipeline_logs_concrete_processing_without_generic_status(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """metadata確定後に自動決定したtitleとsampling条件を出力すること."""
+    """具体的な処理だけを出力し汎用状態と自動決定詳細を出さないこと."""
     video = tmp_path / "Sample Game Part3.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
@@ -308,20 +308,17 @@ def test_pipeline_logs_resolved_automatic_options(
     ).run()
 
     messages = [record.getMessage() for record in caplog.records]
-    resolved_message = next(
-        message for message in messages if message.startswith("自動決定オプション: ")
+    assert (
+        "入力動画の情報を確認しています: 1/1件 Sample Game Part3.mp4" in messages
     )
-    resolved = json.loads(resolved_message.removeprefix("自動決定オプション: "))
-    assert resolved == {
-        "--game-title": "Sample Game",
-        "--sample-interval-seconds": [
-            {
-                "candidate_count": 13,
-                "effective_interval_seconds": 0.25,
-                "source": "v01 Sample Game Part3.mp4",
-            }
-        ],
-    }
+    assert (
+        "入力動画の同一性を確認しています: 1/1件 Sample Game Part3.mp4"
+        in messages
+    )
+    assert "Ollamaモデル情報を確認しています: primary, secondary" in messages
+    assert "候補フレームを抽出します: 13/13件" in messages
+    assert all("画像選定処理は動作中です" not in message for message in messages)
+    assert all(not message.startswith("自動決定オプション:") for message in messages)
 
 
 def test_pipeline_selects_from_multiple_videos_and_reports_each_source(

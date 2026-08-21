@@ -99,10 +99,9 @@ def _log_cli_start(
         "INPUT_VIDEO_DIR": input_video_dir,
         "OUTPUT_DIR": output_dir,
     }
-    logger.info(
-        "起動オプション: %s",
-        json.dumps(options, ensure_ascii=False, sort_keys=True),
-    )
+    logger.info("起動オプション:")
+    for option, value in options.items():
+        logger.info("  %s: %s", option, json.dumps(value, ensure_ascii=False))
 
 
 def validate_positive_int(value: int | str | None) -> int | None:

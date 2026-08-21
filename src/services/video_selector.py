@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
@@ -34,7 +33,6 @@ from ..utils.contact_sheet import (
     build_contact_sheet,
     context_frame_path,
 )
-from ..utils.periodic_status_logger import periodic_status_log
 from ..utils.video_selection_files import (
     RUN_LOCK_FILENAME,
     file_sha256,
@@ -66,7 +64,6 @@ SECONDARY_BATCH_SIZE = 6
 CONTEXT_OFFSET_SECONDS = 0.35
 MAXIMUM_OUTPUT_DHASH_DISTANCE = 10
 MINIMUM_DISTINCT_DHASH_DISTANCE = 5
-STATUS_LOG_INTERVAL_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -113,14 +110,10 @@ class VideoSelector:
 
     def run(self) -> Path:
         """選定を実行し、人間確認用コンタクトシートのパスを返す."""
-        with periodic_status_log(
-            logger,
-            "画像選定処理は動作中です",
-            interval_seconds=STATUS_LOG_INTERVAL_SECONDS,
-        ):
-            self._prepare_paths()
-            with output_directory_lock(self.work_dir):
-                return self._run_locked()
+        self._prepare_paths()
+        logger.info("出力フォルダの実行状態を確認しています: %s", self.output_dir)
+        with output_directory_lock(self.work_dir):
+            return self._run_locked()
 
     def _run_locked(self) -> Path:
         """outputの排他lockを保持した状態でpipelineを実行する."""
@@ -213,7 +206,13 @@ class VideoSelector:
         self._prepare_paths()
         self.game_title = self._resolve_game_title()
         probed_sources: list[tuple[Path, VideoMetadata, float]] = []
-        for video in self.videos:
+        for index, video in enumerate(self.videos, start=1):
+            logger.info(
+                "入力動画の情報を確認しています: %d/%d件 %s",
+                index,
+                len(self.videos),
+                video.name,
+            )
             metadata = self.frame_extractor.probe(video)
             end_margin_seconds = max(
                 MINIMUM_ENDPOINT_MARGIN_SECONDS,
@@ -271,7 +270,6 @@ class VideoSelector:
         self.total_duration_seconds = sum(
             source.metadata.duration_seconds for source in self.sources
         )
-        self._log_resolved_automatic_options()
         has_existing_manifest = self._restore_existing_manifest()
         if has_existing_manifest and (self.work_dir / "completion.json").is_file():
             return
@@ -286,46 +284,20 @@ class VideoSelector:
         )
         if has_existing_manifest:
             return
-        self.model_metadata = self.assessor.fetch_model_metadata(
-            {self.request.primary_model, self.request.secondary_model}
+        requested_models = {
+            self.request.primary_model,
+            self.request.secondary_model,
+        }
+        logger.info(
+            "Ollamaモデル情報を確認しています: %s",
+            ", ".join(sorted(requested_models)),
         )
+        self.model_metadata = self.assessor.fetch_model_metadata(requested_models)
         self._live_validated_models.update(self.model_metadata)
         manifest = self._build_manifest()
         self.manifest_digest = json_digest(manifest)
         manifest["manifest_digest"] = self.manifest_digest
         self._prepare_output_dir(manifest)
-
-    def _log_resolved_automatic_options(self) -> None:
-        """metadataから確定した自動決定optionの実効値を出力する."""
-        resolved: dict[str, object] = {}
-        if not self.request.game_title or not self.request.game_title.strip():
-            resolved["--game-title"] = self.game_title
-        if self.request.sample_interval_seconds is None:
-            sampling: list[dict[str, object]] = []
-            for source in self.sources:
-                intervals = [
-                    right - left
-                    for left, right in zip(
-                        source.timestamps[:-1],
-                        source.timestamps[1:],
-                        strict=True,
-                    )
-                ]
-                sampling.append(
-                    {
-                        "source": source.label,
-                        "candidate_count": len(source.timestamps),
-                        "effective_interval_seconds": (
-                            round(max(intervals), 6) if intervals else None
-                        ),
-                    }
-                )
-            resolved["--sample-interval-seconds"] = sampling
-        if resolved:
-            logger.info(
-                "自動決定オプション: %s",
-                json.dumps(resolved, ensure_ascii=False, sort_keys=True),
-            )
 
     def _resolve_game_title(self) -> str:
         """明示タイトル、または全入力から一致して推測したタイトルを返す."""
@@ -414,6 +386,7 @@ class VideoSelector:
             return
         if self.assessor is None:
             raise RuntimeError("Ollama assessorが初期化されていません")
+        logger.info("Ollamaモデル情報を再確認しています: %s", model)
         live_metadata = self.assessor.fetch_model_metadata({model})
         if live_metadata.get(model) != self.model_metadata.get(model):
             raise OllamaModelValidationError(
@@ -455,6 +428,12 @@ class VideoSelector:
 
     def _input_manifest(self, source: VideoSource) -> dict[str, Any]:
         """入力動画一つ分の再開条件を返す."""
+        logger.info(
+            "入力動画の同一性を確認しています: %d/%d件 %s",
+            source.index + 1,
+            len(self.sources),
+            source.path.name,
+        )
         stat = source.path.stat()
         metadata = source.metadata
         return {
@@ -501,6 +480,7 @@ class VideoSelector:
         artifacts = payload.get("artifacts")
         if not isinstance(artifacts, list):
             raise RuntimeError("完了記録のartifactsが不正です")
+        logger.info("完了済み成果物を検証しています: %d件", len(artifacts))
         output_root = self.output_dir.resolve()
         for item in artifacts:
             if not isinstance(item, dict) or not isinstance(item.get("path"), str):
@@ -888,6 +868,12 @@ class VideoSelector:
             for attempt in range(1, 4):
                 started = time.monotonic()
                 try:
+                    logger.info(
+                        "%s評価を開始します: %d/%d batch",
+                        stage,
+                        batch_index,
+                        len(batches),
+                    )
                     assessments = self.assessor.assess(
                         model=str(self.model_metadata[model]["resolved_name"]),
                         model_digest=str(self.model_metadata[model]["digest"]),
@@ -1045,6 +1031,7 @@ contact sheet内の対象ID: {ids}
         selected: Sequence[SelectedFrame],
     ) -> list[Path]:
         """full resolution画像、report、一覧sheetを出力する."""
+        logger.info("最終画像とレポートを出力します: %d件", len(selected))
         width = max(2, len(str(self.request.output_count)))
         report_items: list[dict[str, Any]] = []
         contact_candidates: list[FrameCandidate] = []
