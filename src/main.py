@@ -15,6 +15,7 @@ from .models.video_selection_request import (
     MINIMUM_SAMPLE_INTERVAL_SECONDS,
     VideoSelectionRequest,
 )
+from .services.game_context_generator import SUPPORTED_GAME_CONTEXT_PROVIDERS
 from .utils.elapsed_log_formatter import ElapsedLogFormatter
 
 DEFAULT_PRIMARY_MODEL = "qwen3.8:27b"
@@ -63,6 +64,8 @@ def _log_cli_start(
     output_count: int,
     game_title: str | None,
     game_context: str,
+    game_context_provider: str,
+    game_context_model: str | None,
     primary_model: str,
     secondary_model: str,
     ollama_host: str | None,
@@ -79,11 +82,11 @@ def _log_cli_start(
     options: dict[str, object] = {
         "--num": output_count,
         "--game-title": (
-            game_title.strip()
-            if game_title and game_title.strip()
-            else "<自動決定: 動画ファイル名>"
+            game_title.strip() if game_title and game_title.strip() else ""
         ),
         "--game-context": game_context.strip(),
+        "--game-context-provider": game_context_provider,
+        "--game-context-model": game_context_model or "<provider既定>",
         "--primary-model": primary_model,
         "--secondary-model": secondary_model,
         "--ollama-host": _display_ollama_host(ollama_host),
@@ -186,6 +189,27 @@ def discover_input_videos(input_video_dir: str) -> tuple[str, ...]:
     return videos
 
 
+def validate_game_context_input(
+    game_title: str | None,
+    game_context: str,
+    output_dir: str,
+) -> None:
+    """新規実行のGame TitleとGame ContextをXORへ制限する."""
+    has_title = bool(game_title and game_title.strip())
+    has_context = bool(game_context.strip())
+    resume_manifest = (
+        Path(output_dir).expanduser() / ".game-screen-pick" / "run-manifest.json"
+    )
+    if has_title and has_context:
+        raise click.UsageError(
+            "--game-titleと--game-contextのどちらか一方だけを指定してください"
+        )
+    if not has_title and not has_context and not resume_manifest.is_file():
+        raise click.UsageError(
+            "--game-titleと--game-contextのどちらか一方を指定してください"
+        )
+
+
 @click.command()
 @click.option(
     "-n",
@@ -200,12 +224,24 @@ def discover_input_videos(input_video_dir: str) -> tuple[str, ...]:
 @click.option(
     "--game-title",
     default=None,
-    help="ゲームタイトル。未指定時は動画ファイル名から推測",
+    help="Web検索からGame Contextを生成するためのゲーム表記",
 )
 @click.option(
     "--game-context",
     default="",
-    help="ゲーム内容や掲載意図の任意補足",
+    help="画像選定に直接使うGame Context",
+)
+@click.option(
+    "--game-context-provider",
+    default="ollama",
+    show_default=True,
+    type=click.Choice(SUPPORTED_GAME_CONTEXT_PROVIDERS, case_sensitive=True),
+    help="--game-title指定時のWeb検索provider",
+)
+@click.option(
+    "--game-context-model",
+    default=None,
+    help="Game Context生成model。未指定時はprovider既定",
 )
 @click.option(
     "--primary-model",
@@ -262,6 +298,8 @@ def execute(
     output_count: int,
     game_title: str | None,
     game_context: str,
+    game_context_provider: str,
+    game_context_model: str | None,
     primary_model: str,
     secondary_model: str,
     ollama_host: str | None,
@@ -274,10 +312,14 @@ def execute(
     output_dir: str,
 ) -> None:
     """入力ディレクトリのゲーム動画全体からブログ掲載用画像を選定する."""
+    input_videos = discover_input_videos(input_video_dir)
+    validate_game_context_input(game_title, game_context, output_dir)
     _log_cli_start(
         output_count=output_count,
         game_title=game_title,
         game_context=game_context,
+        game_context_provider=game_context_provider,
+        game_context_model=game_context_model,
         primary_model=primary_model,
         secondary_model=secondary_model,
         ollama_host=ollama_host,
@@ -289,7 +331,6 @@ def execute(
         input_video_dir=input_video_dir,
         output_dir=output_dir,
     )
-    input_videos = discover_input_videos(input_video_dir)
     run_video_application(
         VideoSelectionRequest(
             input_videos=input_videos,
@@ -297,6 +338,8 @@ def execute(
             output_count=output_count,
             game_title=game_title,
             game_context=game_context,
+            game_context_provider=game_context_provider,
+            game_context_model=game_context_model,
             primary_model=primary_model,
             secondary_model=secondary_model,
             ollama_host=ollama_host,

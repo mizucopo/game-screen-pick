@@ -9,7 +9,6 @@ from src.models.video_selection import FrameAssessment, FrameCandidate, VideoMet
 from src.services.video_selector import (
     allocate_automatic_sample_counts,
     difference_hash_distance,
-    infer_game_title,
     make_timestamps,
     measure_candidate,
     select_final_frames,
@@ -17,19 +16,6 @@ from src.services.video_selector import (
     select_source_backfill_candidates,
     source_time_scales,
 )
-
-
-def test_infer_game_title_removes_common_episode_suffixes() -> None:
-    """Part番号や#番号より前をゲーム名として使うこと."""
-    assert (
-        infer_game_title(Path("Clair Obscur： Expedition 33 Part12.mp4"))
-        == "Clair Obscur： Expedition 33"
-    )
-    assert (
-        infer_game_title(Path("かまいたちの夜×3 #04 エンディング有.mp4"))
-        == "かまいたちの夜×3"
-    )
-    assert infer_game_title(Path("ゲーム本編.mp4")) == "ゲーム本編"
 
 
 def test_make_timestamps_covers_the_whole_video() -> None:
