@@ -107,7 +107,9 @@ def discover_input_videos(input_video_dir: str) -> tuple[str, ...]:
     videos = tuple(
         str(path)
         for path in sorted(input_path.iterdir(), key=lambda path: path.name)
-        if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+        if not path.is_symlink()
+        and path.is_file()
+        and path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
     )
     if not videos:
         extensions = ", ".join(sorted(SUPPORTED_VIDEO_EXTENSIONS))

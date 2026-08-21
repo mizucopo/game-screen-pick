@@ -50,6 +50,9 @@ def test_cli_translates_sorted_directory_videos_to_video_selection_request(
     nested_dir = input_dir / "nested"
     nested_dir.mkdir()
     (nested_dir / "game-part-3.mp4").write_bytes(b"video")
+    external_video = tmp_path / "external.mp4"
+    external_video.write_bytes(b"video")
+    (input_dir / "linked.mp4").symlink_to(external_video)
     captured_requests: list[VideoSelectionRequest] = []
 
     def capture_request(request: VideoSelectionRequest) -> None:
