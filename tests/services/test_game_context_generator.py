@@ -224,3 +224,38 @@ def test_generation_reports_missing_provider_key_without_fallback(
         )
 
     assert requester.calls == []
+
+
+def test_generation_reports_invalid_context_with_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """共通項目が欠けたmodel応答もprovider別errorに変換すること."""
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    response = {
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": json.dumps(
+                            {
+                                "status": "ok",
+                                "identified_title": "Game",
+                                "game_context": "ジャンル: RPG",
+                            }
+                        ),
+                    }
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(GameContextGenerationError, match="openai.*共通項目"):
+        GameContextGenerator(requester=RecordingRequester([response])).generate(
+            game_title="Game",
+            provider="openai",
+            model="gpt-test",
+            ollama_host="127.0.0.1:11434",
+            timeout_seconds=30.0,
+        )

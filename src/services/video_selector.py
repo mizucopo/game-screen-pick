@@ -44,7 +44,6 @@ from ..utils.video_selection_files import (
 )
 from .game_context_generator import (
     GameContextGenerator,
-    GeneratedGameContext,
     resolve_game_context_model,
 )
 from .ollama_frame_assessor import (
@@ -397,21 +396,17 @@ class VideoSelector:
             ollama_host=host,
             timeout_seconds=self.request.ollama_timeout,
         )
-        self._set_generated_context(generated)
+        self.game_context = generated.game_context
+        self.game_context_generation = {
+            "provider": generated.provider,
+            "model": generated.model,
+        }
         logger.info(
             "Game Contextを生成しました: provider=%s, model=%s, context=%s",
             _log_value(generated.provider),
             _log_value(generated.model),
             _log_value(generated.game_context),
         )
-
-    def _set_generated_context(self, generated: GeneratedGameContext) -> None:
-        """生成結果をmanifestへ保存できる内部状態へ変換する."""
-        self.game_context = generated.game_context
-        self.game_context_generation = {
-            "provider": generated.provider,
-            "model": generated.model,
-        }
 
     @staticmethod
     def _manifest_generation_metadata(

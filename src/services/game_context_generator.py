@@ -128,6 +128,7 @@ class GameContextGenerator:
                     model=model,
                     timeout_seconds=timeout_seconds,
                 )
+            context = _parse_generated_context(response_text, provider=provider)
         except GameContextGenerationError:
             raise
         except HTTPError as error:
@@ -145,7 +146,6 @@ class GameContextGenerator:
                 f"{provider}: Web検索またはcontext生成の応答error: {error}"
             ) from error
 
-        context = _parse_generated_context(response_text, provider=provider)
         return GeneratedGameContext(context, provider, used_model)
 
     def _generate_with_integrated_search(
@@ -326,9 +326,9 @@ def _extract_integrated_response_text(response: dict[str, Any]) -> str:
 def _response_model(response: dict[str, Any], requested_model: str) -> str:
     """APIが返したmodel名を優先して記録する."""
     model = response.get("model")
-    return (
-        model.strip() if isinstance(model, str) and model.strip() else requested_model
-    )
+    if isinstance(model, str) and model.strip():
+        return model.strip()
+    return requested_model
 
 
 def _parse_generated_context(content: str, *, provider: str) -> str:
