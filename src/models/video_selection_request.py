@@ -62,7 +62,7 @@ class VideoSelectionRequest:
         if missing:
             raise TypeError(f"必須引数が不足しています: {', '.join(missing)}")
         if input_video is not None:
-            if input_videos:
+            if len(input_videos) > 1:
                 raise ValueError("input_videoとinput_videosは同時に指定できません")
             input_videos = (input_video,)
         if not input_videos:
