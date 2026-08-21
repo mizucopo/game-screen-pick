@@ -71,9 +71,14 @@ class RecordingRequester:
                 "outputs": [
                     {
                         "type": "google_search_call",
+                        "id": "search-call",
                         "arguments": {"queries": ["ドラクエ11"]},
                     },
-                    {"type": "google_search_result", "call_id": "search-call"},
+                    {
+                        "type": "google_search_result",
+                        "call_id": "search-call",
+                        "result": {"url": "https://example.test"},
+                    },
                     {"type": "text", "text": json.dumps(VALID_RESULT)},
                 ],
             },
@@ -144,9 +149,14 @@ def test_gemini_accepts_current_steps_response(
         "steps": [
             {
                 "type": "google_search_call",
+                "id": "search-call",
                 "arguments": {"queries": ["ドラクエ11"]},
             },
-            {"type": "google_search_result", "call_id": "search-call"},
+            {
+                "type": "google_search_result",
+                "call_id": "search-call",
+                "result": [{"url": "https://example.test"}],
+            },
             {
                 "type": "model_output",
                 "content": [{"type": "text", "text": json.dumps(VALID_RESULT)}],
@@ -217,6 +227,63 @@ def test_integrated_provider_rejects_context_without_search_call(
             game_title="ドラクエ11",
             provider=provider,
             model=f"{provider}-requested",
+            ollama_host="127.0.0.1:11434",
+            timeout_seconds=42.0,
+        )
+
+
+@pytest.mark.parametrize("provider", ["openai", "xai"])
+def test_responses_provider_rejects_unsuccessful_search_call(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    """Responses APIの未完了検索callを成功証拠として扱わないこと."""
+    monkeypatch.setenv(
+        "OPENAI_API_KEY" if provider == "openai" else "XAI_API_KEY",
+        "secret",
+    )
+    response = {
+        "output": [
+            {"type": "web_search_call", "status": "incomplete"},
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": json.dumps(VALID_RESULT)}],
+            },
+        ]
+    }
+
+    with pytest.raises(GameContextGenerationError, match=f"{provider}.*検索tool"):
+        GameContextGenerator(requester=RecordingRequester([response])).generate(
+            game_title="ドラクエ11",
+            provider=provider,
+            model=f"{provider}-requested",
+            ollama_host="127.0.0.1:11434",
+            timeout_seconds=42.0,
+        )
+
+
+def test_gemini_rejects_search_call_without_matching_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemini検索callに対応するresultがない応答を拒否すること."""
+    monkeypatch.setenv("GEMINI_API_KEY", "secret")
+    response = {
+        "outputs": [
+            {"type": "google_search_call", "id": "search-call"},
+            {
+                "type": "google_search_result",
+                "call_id": "different-call",
+                "result": {"url": "https://example.test"},
+            },
+            {"type": "text", "text": json.dumps(VALID_RESULT)},
+        ]
+    }
+
+    with pytest.raises(GameContextGenerationError, match="gemini.*検索tool"):
+        GameContextGenerator(requester=RecordingRequester([response])).generate(
+            game_title="ドラクエ11",
+            provider="gemini",
+            model="gemini-requested",
             ollama_host="127.0.0.1:11434",
             timeout_seconds=42.0,
         )

@@ -336,18 +336,39 @@ def _require_integrated_search_call(
     *,
     provider: str,
 ) -> None:
-    """providerの検索toolが実行された証拠を応答内に要求する."""
-    expected_type = "google_search_call" if provider == "gemini" else "web_search_call"
-    for collection_name in ("output", "outputs", "steps"):
+    """providerの検索toolが完了した証拠を応答内に要求する."""
+    if provider != "gemini":
+        output = response.get("output")
+        if isinstance(output, list) and any(
+            isinstance(item, dict)
+            and item.get("type") == "web_search_call"
+            and item.get("status") == "completed"
+            for item in output
+        ):
+            return
+        raise ValueError("web_search_call検索toolの完了記録が応答にありません")
+
+    for collection_name in ("outputs", "steps"):
         collection = response.get(collection_name)
         if not isinstance(collection, list):
             continue
+        call_ids = {
+            call_id
+            for item in collection
+            if isinstance(item, dict)
+            and item.get("type") == "google_search_call"
+            and isinstance((call_id := item.get("id")), str)
+            and call_id
+        }
         if any(
-            isinstance(item, dict) and item.get("type") == expected_type
+            isinstance(item, dict)
+            and item.get("type") == "google_search_result"
+            and item.get("call_id") in call_ids
+            and bool(item.get("result"))
             for item in collection
         ):
             return
-    raise ValueError(f"{expected_type}検索toolの実行記録が応答にありません")
+    raise ValueError("google_search検索toolの対応resultが応答にありません")
 
 
 def _response_model(response: dict[str, Any], requested_model: str) -> str:

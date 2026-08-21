@@ -349,7 +349,7 @@ class VideoSelector:
 
         if existing_manifest is not None:
             saved_context = existing_manifest.get("game_context")
-            if not isinstance(saved_context, str):
+            if not isinstance(saved_context, str) or not saved_context.strip():
                 raise RuntimeError("再開manifestのgame_contextが不正です")
             if requested_context and requested_context != saved_context:
                 raise RuntimeError(

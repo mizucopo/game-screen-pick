@@ -575,6 +575,58 @@ def test_pipeline_reuses_game_context_from_legacy_manifest(tmp_path: Path) -> No
     assert all("Legacy Game" not in prompt for prompt in assessor.prompts)
 
 
+def test_pipeline_rejects_legacy_manifest_with_empty_game_context(
+    tmp_path: Path,
+) -> None:
+    """旧manifestの空contextを新promptで暗黙利用しないこと."""
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="legacy context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+        context_generator=ExplodingContextGenerator(),
+    ).run()
+
+    manifest_path = output_dir / ".game-screen-pick" / "run-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["game_title"] = "Legacy Game"
+    manifest["game_context"] = ""
+    manifest["prompt_version"] = "blog-image-selection-v3"
+    manifest_body = {
+        key: value for key, value in manifest.items() if key != "manifest_digest"
+    }
+    manifest["manifest_digest"] = json_digest(manifest_body)
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="再開manifestのgame_context"):
+        SingleVideoSelector(
+            replace(request, game_context=""),
+            frame_extractor=FakeFrameExtractor(),
+            assessor=FakeAssessor(),
+            context_generator=ExplodingContextGenerator(),
+        ).run()
+
+
 def test_pipeline_logs_concrete_processing_without_generic_status(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
