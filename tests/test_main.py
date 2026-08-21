@@ -128,25 +128,22 @@ def test_cli_logs_project_version_and_all_effective_options(
 
     messages = [record.getMessage() for record in caplog.records]
     assert "game-screen-pick 1.8.0-test の画像選定処理を開始します。" in messages
-    options_message = next(
-        message for message in messages if message.startswith("起動オプション: ")
-    )
-    options = json.loads(options_message.removeprefix("起動オプション: "))
-    assert options == {
-        "--allow-cpu": False,
-        "--debug": False,
-        "--ffmpeg-workers": 2,
-        "--game-context": "",
-        "--game-title": "<自動決定: 動画ファイル名>",
-        "--num": 30,
-        "--ollama-host": ("http://ollama.example:11434（自動決定: OLLAMA_HOST）"),
-        "--ollama-timeout": 900.0,
-        "--primary-model": "qwen3.8:27b",
-        "--sample-interval-seconds": "<自動決定: 動画時間と選択枚数>",
-        "--secondary-model": "muse-glimmer:30b",
-        "INPUT_VIDEO_DIR": str(input_dir),
-        "OUTPUT_DIR": str(output_dir),
-    }
+    assert "起動オプション:" in messages
+    assert [message for message in messages if message.startswith("  ")] == [
+        "  --num: 30",
+        '  --game-title: "<自動決定: 動画ファイル名>"',
+        '  --game-context: ""',
+        '  --primary-model: "qwen3.8:27b"',
+        '  --secondary-model: "muse-glimmer:30b"',
+        '  --ollama-host: "http://ollama.example:11434（自動決定: OLLAMA_HOST）"',
+        "  --ollama-timeout: 900.0",
+        "  --allow-cpu: false",
+        "  --ffmpeg-workers: 2",
+        '  --sample-interval-seconds: "<自動決定: 動画時間と選択枚数>"',
+        "  --debug: false",
+        f"  INPUT_VIDEO_DIR: {json.dumps(str(input_dir), ensure_ascii=False)}",
+        f"  OUTPUT_DIR: {json.dumps(str(output_dir), ensure_ascii=False)}",
+    ]
 
 
 @pytest.mark.parametrize(
