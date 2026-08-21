@@ -877,12 +877,6 @@ class VideoSelector:
             for attempt in range(1, 4):
                 started = time.monotonic()
                 try:
-                    logger.info(
-                        "%s評価を開始します: %d/%d batch",
-                        stage,
-                        batch_index,
-                        len(batches),
-                    )
                     assessments = self.assessor.assess(
                         model=str(self.model_metadata[model]["resolved_name"]),
                         model_digest=str(self.model_metadata[model]["digest"]),

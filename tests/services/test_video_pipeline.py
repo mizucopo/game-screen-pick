@@ -326,6 +326,72 @@ def test_pipeline_logs_concrete_processing_without_generic_status(
     assert all(not message.startswith("自動決定オプション:") for message in messages)
 
 
+def test_pipeline_logs_assessment_completion_and_failure_without_batch_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """評価開始は省略し、完了と一時失敗は引き続き出力すること."""
+
+    class RetryOnceAssessor(FakeAssessor):
+        """最初の評価だけ一時失敗するfake."""
+
+        def assess(
+            self,
+            *,
+            model: str,
+            model_digest: str,
+            prompt: str,
+            candidates: Sequence[FrameCandidate],
+            contact_sheet: Path,
+        ) -> list[FrameAssessment]:
+            """一度だけ失敗し、その後は固定評価を返す."""
+            if self.assess_calls == 0:
+                self.assess_calls += 1
+                raise ConnectionError("temporary failure")
+            return super().assess(
+                model=model,
+                model_digest=model_digest,
+                prompt=prompt,
+                candidates=candidates,
+                contact_sheet=contact_sheet,
+            )
+
+    monkeypatch.setattr("src.services.video_selector.time.sleep", lambda _: None)
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title="Sample Game",
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    caplog.set_level(logging.INFO)
+
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=RetryOnceAssessor(),
+    ).run()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert all("評価を開始します" not in message for message in messages)
+    assert any(message.startswith("primary評価: ") for message in messages)
+    assert any(message.startswith("secondary評価: ") for message in messages)
+    assert (
+        "primary評価batch 1の試行1が失敗しました: temporary failure" in messages
+    )
+
+
 def test_pipeline_selects_from_multiple_videos_and_reports_each_source(
     tmp_path: Path,
 ) -> None:
