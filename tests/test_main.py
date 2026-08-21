@@ -139,9 +139,7 @@ def test_cli_logs_project_version_and_all_effective_options(
         "--game-context": "",
         "--game-title": "<自動決定: 動画ファイル名>",
         "--num": 30,
-        "--ollama-host": (
-            "http://ollama.example:11434（自動決定: OLLAMA_HOST）"
-        ),
+        "--ollama-host": ("http://ollama.example:11434（自動決定: OLLAMA_HOST）"),
         "--ollama-timeout": 900.0,
         "--primary-model": "qwen3.8:27b",
         "--sample-interval-seconds": "<自動決定: 動画時間と選択枚数>",

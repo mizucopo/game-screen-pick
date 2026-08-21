@@ -75,9 +75,7 @@ def _log_cli_start(
     output_dir: str,
 ) -> None:
     """project情報と実際に適用するCLI optionを起動直後に出力する."""
-    logger.info(
-        "%s %s の画像選定処理を開始します。", PROJECT_NAME, _project_version()
-    )
+    logger.info("%s %s の画像選定処理を開始します。", PROJECT_NAME, _project_version())
     options: dict[str, object] = {
         "--num": output_count,
         "--game-title": (
