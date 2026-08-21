@@ -1,6 +1,6 @@
 # game-screen-pick
 
-1本のゲーム動画全体から、ブログへ掲載しやすい画像を指定枚数選定します。
+1本以上のゲーム動画全体から、ブログへ掲載しやすい画像を指定枚数選定します。
 Ollamaのvision modelを二段階で利用し、画面遷移中のフレームや近い重複を
 避けながら、通常進行画面を少し多めに含む多様な画像を出力します。
 
@@ -19,7 +19,7 @@ uv sync
 ## 実行方法
 
 ```bash
-uv run game-screen-pick [オプション] <入力動画> <出力フォルダ>
+uv run game-screen-pick [オプション] <入力動画>... <出力フォルダ>
 ```
 
 標準では30枚を選び、一次評価に`qwen3.8:27b`、二次評価に
@@ -30,13 +30,14 @@ OLLAMA_HOST=192.168.1.31:11434 \
   uv run game-screen-pick \
   --game-title "冒険家エリオットの千年物語" \
   -n 30 \
-  ./recording.mp4 \
-  ./recording-selected
+  ./recording-part-1.mp4 \
+  ./recording-part-2.mp4 \
+  ./recordings-selected
 ```
 
-`--game-title`を省略すると、動画ファイル名から末尾の`Part 7`や`#02`を
-除いた文字列をゲームタイトルとして使います。日付だけのファイル名など、
-推測できない名前では明示してください。
+`--game-title`を省略すると、全動画のファイル名から末尾の`Part 7`や`#02`を
+除いた文字列をゲームタイトルとして使います。推測結果が動画間で一致しない
+場合や、日付だけのファイル名など推測できない名前では明示してください。
 
 ### オプション
 
@@ -73,22 +74,26 @@ recording-selected/
 ```
 
 - `selected-XX.jpg`: ブログ掲載候補のfull resolution画像
-- `selected-contact-sheet.jpg`: 選定画像を順位・動画時刻付きで一覧できる画像
-- `report.json`: 選定時刻、score、scene、model評価を含むmachine-readable report
+- `selected-contact-sheet.jpg`: 選定画像を順位・入力動画・動画時刻付きで一覧できる画像
+- `report.json`: 入力元、選定時刻、score、scene、model評価を含むmachine-readable report
 
 新規実行時の出力フォルダは空である必要があります。途中で中断した場合は、
-同じ動画・選択条件・modelで同じコマンドを再実行してください。抽出済みframeと
+同じ動画一覧・順序・選択条件・modelで同じコマンドを再実行してください。抽出済みframeと
 完了済みOllama batchを再利用します。条件が異なる既存フォルダは上書きせず、
 新しい出力フォルダを要求します。完了済み実行では全成果物のsizeとSHA-256を
 検証し、Ollamaへ接続せずに結果を返します。
 
+候補数は全入力動画の合計で4,000件までです。指定した抽出間隔で上限を超える
+場合は、`--sample-interval-seconds`を広げてください。同じ入力動画を重複して
+指定することはできません。
+
 ## 選定の流れ
 
-1. 動画のほぼ先頭から末尾までを等間隔でsampleする
+1. 各動画のほぼ先頭から末尾までを等間隔でsampleする
 2. 暗転、白飛び、単色frameを機械的に除外する
 3. 品質と時間分散から選択枚数の最大12倍を一次候補にする
 4. 一次modelがブログ掲載価値、遷移、sceneを評価する
-5. 場面・見た目・動画時刻を分散させ、最大3倍を二次候補にする
+5. 入力動画・場面・見た目・動画時刻を分散させ、最大3倍を二次候補にする
 6. 二次modelが各候補の直前・対象・直後を見て再評価する
 7. 遷移frameを除外し、近い重複とtitle/map/menuへの偏りを抑えて選定する
 8. 個別画像、JSON report、一覧contact sheetを出力する

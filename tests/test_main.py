@@ -8,14 +8,41 @@ from src.main import run
 from src.models.video_selection_request import VideoSelectionRequest
 
 
-def test_cli_translates_options_to_video_selection_request(
+def test_video_selection_request_preserves_legacy_positional_constructor() -> None:
+    """旧単一動画requestの13引数位置指定を同じ順序で受け付けること."""
+    request = VideoSelectionRequest(
+        "input.mp4",
+        "output",
+        12,
+        "ゲーム名",
+        "探索を含む",
+        "primary",
+        "secondary",
+        "127.0.0.1:11434",
+        120.0,
+        True,
+        4,
+        2.5,
+        True,
+    )
+
+    assert request.input_videos == ("input.mp4",)
+    assert request.input_video == "input.mp4"
+    assert request.output_dir == "output"
+    assert request.output_count == 12
+    assert request.debug is True
+
+
+def test_cli_translates_multiple_inputs_to_video_selection_request(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """CLIオプションが単一動画requestへ変換されること."""
-    input_video = tmp_path / "game.mp4"
+    input_video = tmp_path / "game-part-1.mp4"
+    second_input_video = tmp_path / "game-part-2.mp4"
     output_dir = tmp_path / "selected"
     input_video.write_bytes(b"video")
+    second_input_video.write_bytes(b"video")
     captured_requests: list[VideoSelectionRequest] = []
 
     def capture_request(request: VideoSelectionRequest) -> None:
@@ -46,13 +73,14 @@ def test_cli_translates_options_to_video_selection_request(
             "2.5",
             "--debug",
             str(input_video),
+            str(second_input_video),
             str(output_dir),
         ]
     )
 
     assert captured_requests == [
         VideoSelectionRequest(
-            input_video=str(input_video),
+            input_videos=(str(input_video), str(second_input_video)),
             output_dir=str(output_dir),
             output_count=12,
             game_title="ゲーム名",
@@ -67,6 +95,7 @@ def test_cli_translates_options_to_video_selection_request(
             debug=True,
         )
     ]
+    assert captured_requests[0].input_video is None
 
 
 @pytest.mark.parametrize(

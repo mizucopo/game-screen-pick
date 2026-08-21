@@ -1,4 +1,4 @@
-"""単一動画の画像選定で共有する値オブジェクト."""
+"""動画の画像選定で共有する値オブジェクト."""
 
 from dataclasses import dataclass
 
@@ -26,6 +26,8 @@ class FrameCandidate:
     path: str
     quality_score: float = 0.0
     difference_hash: int = 0
+    video_index: int = 0
+    source_label: str = ""
 
 
 @dataclass(frozen=True)

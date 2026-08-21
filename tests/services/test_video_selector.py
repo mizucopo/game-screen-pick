@@ -5,13 +5,17 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from src.models.video_selection import FrameAssessment, FrameCandidate
-from src.services.single_video_selector import (
+from src.models.video_selection import FrameAssessment, FrameCandidate, VideoMetadata
+from src.services.video_selector import (
+    allocate_automatic_sample_counts,
     difference_hash_distance,
     infer_game_title,
     make_timestamps,
     measure_candidate,
     select_final_frames,
+    select_primary_candidates,
+    select_source_backfill_candidates,
+    source_time_scales,
 )
 
 
@@ -111,6 +115,7 @@ def test_make_timestamps_stays_before_actual_last_vfr_frame() -> None:
         last_frame_timestamp_seconds=6.5,
     )
 
+    assert timestamps[0] == 0.5
     assert timestamps[-1] <= 6.5
 
 
@@ -134,6 +139,224 @@ def test_make_timestamps_keeps_exact_minimum_interval_after_rounding() -> None:
     timestamps = make_timestamps(0.45, 2, None)
 
     assert timestamps == (0.1, 0.35)
+
+
+def test_automatic_sample_budget_is_allocated_across_all_videos() -> None:
+    """自動sample数を各動画で増幅せず全入力の時間へ配分すること."""
+    metadata = [VideoMetadata(3600.0, 320, 180, "fake", "30/1")] * 4
+
+    counts = allocate_automatic_sample_counts(metadata, output_count=30)
+
+    assert counts == (361, 361, 361, 361)
+    assert sum(counts) <= 4_000
+    assert all(
+        len(
+            make_timestamps(
+                item.duration_seconds,
+                1,
+                None,
+                automatic_sample_count=count,
+            )
+        )
+        == count
+        for item, count in zip(metadata, counts, strict=True)
+    )
+
+
+def test_automatic_sample_budget_caps_long_combined_inputs() -> None:
+    """既定間隔の合計が上限を超えても自動modeは4,000件へ配分すること."""
+    metadata = [VideoMetadata(3600.0, 320, 180, "fake", "30/1")] * 12
+
+    counts = allocate_automatic_sample_counts(metadata, output_count=30)
+
+    assert sum(counts) == 4_000
+    assert all(count > 0 for count in counts)
+
+
+def test_automatic_sample_budget_matches_early_last_frame_capacity() -> None:
+    """最終frameが早い場合も配分数と生成timestamp数が一致すること."""
+    metadata = [
+        VideoMetadata(
+            100.0,
+            320,
+            180,
+            "fake",
+            "30/1",
+            last_frame_timestamp_seconds=1.0,
+        )
+    ] * 2
+
+    counts = allocate_automatic_sample_counts(metadata, output_count=8)
+
+    assert counts == (4, 4)
+    assert all(
+        len(
+            make_timestamps(
+                item.duration_seconds,
+                8,
+                None,
+                minimum_end_margin_seconds=1 / 30,
+                last_frame_timestamp_seconds=item.last_frame_timestamp_seconds,
+                automatic_sample_count=count,
+            )
+        )
+        == count
+        for item, count in zip(metadata, counts, strict=True)
+    )
+
+
+def test_legacy_single_video_selector_import_path_is_available() -> None:
+    """旧moduleから従来のclass名をimportできること."""
+    from src.services.single_video_selector import SingleVideoSelector
+    from src.services.video_selector import VideoSelector
+
+    assert SingleVideoSelector is VideoSelector
+
+
+def test_primary_shortlist_stays_bounded_with_more_sources_than_slots() -> None:
+    """入力本数が多くても一次候補を出力枚数の12倍以内へ保つこと."""
+    metadata = [VideoMetadata(4.0, 320, 180, "fake", "30/1")] * 100
+    candidates = [
+        FrameCandidate(
+            frame_id=f"f{index:05d}",
+            timestamp_seconds=1.0,
+            path="",
+            quality_score=200.0 - index,
+            difference_hash=index,
+            video_index=index,
+        )
+        for index in range(100)
+    ]
+
+    selected = select_primary_candidates(candidates, metadata, output_count=1)
+
+    assert len(selected) == 12
+    assert len({candidate.video_index for candidate in selected}) == 12
+
+
+def test_primary_shortlist_keeps_fallbacks_for_each_representable_source() -> None:
+    """全入力を出力可能なら各入力から一次評価候補を複数残すこと."""
+    metadata = [VideoMetadata(8.0, 320, 180, "fake", "30/1")] * 2
+    candidates = [
+        FrameCandidate(
+            frame_id=f"v{video_index}-f{candidate_index}",
+            timestamp_seconds=float(candidate_index),
+            path="",
+            quality_score=100.0 - candidate_index,
+            difference_hash=(video_index + 1) << (candidate_index * 8),
+            video_index=video_index,
+        )
+        for video_index in range(2)
+        for candidate_index in range(1, 4)
+    ]
+
+    selected = select_primary_candidates(candidates, metadata, output_count=2)
+
+    assert len([item for item in selected if item.video_index == 0]) >= 2
+    assert len([item for item in selected if item.video_index == 1]) >= 2
+
+
+def test_primary_backfill_uses_next_candidate_after_reservations_fail() -> None:
+    """予約候補が全滅した入力元から未評価の次候補を補充すること."""
+    source_candidates = [
+        FrameCandidate(
+            frame_id=f"v1-f{index}",
+            timestamp_seconds=float(index),
+            path="",
+            quality_score=100.0 - index,
+            difference_hash=1 << (index * 8),
+            video_index=0,
+        )
+        for index in range(1, 5)
+    ]
+    other_candidate = FrameCandidate(
+        frame_id="v2-f1",
+        timestamp_seconds=1.0,
+        path="",
+        quality_score=90.0,
+        difference_hash=2,
+        video_index=1,
+    )
+    assessed = [*source_candidates[:3], other_candidate]
+    assessments = {
+        candidate.frame_id: FrameAssessment(
+            candidate.frame_id,
+            80.0,
+            candidate.video_index == 0,
+            "探索",
+            "test",
+        )
+        for candidate in assessed
+    }
+
+    backfill = select_source_backfill_candidates(
+        [*source_candidates, other_candidate],
+        assessed,
+        assessments,
+        source_count=2,
+        output_count=2,
+    )
+
+    assert [candidate.frame_id for candidate in backfill] == ["v1-f4"]
+
+
+def test_source_backfill_continues_when_survivor_count_is_short() -> None:
+    """全入力に生存候補があっても出力枚数不足なら未評価候補を補充すること."""
+    assessed = [
+        FrameCandidate("v1-live", 1.0, "", video_index=0),
+        FrameCandidate("v2-live", 1.0, "", video_index=1),
+    ]
+    remaining = [
+        FrameCandidate(
+            f"v{video_index + 1}-next-{index}",
+            float(index + 2),
+            "",
+            quality_score=90.0 - index,
+            difference_hash=1 << (video_index * 24 + index * 8),
+            video_index=video_index,
+        )
+        for video_index in range(2)
+        for index in range(3)
+    ]
+    assessments = {
+        candidate.frame_id: FrameAssessment(
+            candidate.frame_id,
+            80.0,
+            False,
+            "探索",
+            "test",
+        )
+        for candidate in assessed
+    }
+
+    backfill = select_source_backfill_candidates(
+        [*assessed, *remaining],
+        assessed,
+        assessments,
+        source_count=2,
+        output_count=3,
+    )
+
+    assert len(backfill) == 3
+    assert {candidate.video_index for candidate in backfill} == {0, 1}
+
+
+def test_source_time_scales_use_each_video_span_and_expected_share() -> None:
+    """動画ごとの相対spanをその入力へ期待する選定枚数で割ること."""
+    candidates = [
+        FrameCandidate(
+            frame_id=f"v{video_index}-{position}",
+            timestamp_seconds=video_index * 10_000.0 + position * 3600.0,
+            path="",
+            video_index=video_index,
+        )
+        for video_index in range(10)
+        for position in range(2)
+    ]
+
+    scales = source_time_scales(candidates, count=30)
+
+    assert scales == dict.fromkeys(range(10), 1200.0)
 
 
 def test_measure_candidate_rejects_black_and_scores_visible_frame(

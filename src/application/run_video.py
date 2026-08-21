@@ -1,19 +1,19 @@
-"""単一動画選定applicationの実行境界."""
+"""動画選定applicationの実行境界."""
 
 import logging
 
 from ..models.video_selection_request import VideoSelectionRequest
-from ..services.single_video_selector import SingleVideoSelector
+from ..services.video_selector import VideoSelector
 
 logger = logging.getLogger(__name__)
 
 
 def run_video_application(request: VideoSelectionRequest) -> None:
-    """単一動画からブログ掲載用画像を選定する."""
+    """1本以上の動画からブログ掲載用画像を選定する."""
     if request.debug:
         logging.getLogger().setLevel(logging.DEBUG)
     try:
-        SingleVideoSelector(request).run()
+        VideoSelector(request).run()
     except KeyboardInterrupt as error:
         logger.info("中断されました。同じコマンドで保存済み進捗から再開できます。")
         raise SystemExit(130) from error
