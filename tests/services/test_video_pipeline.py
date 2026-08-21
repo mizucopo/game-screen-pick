@@ -628,6 +628,108 @@ def test_pipeline_backfills_when_secondary_survivors_cannot_fill_output(
     assert {item["video_index"] for item in report["selected"]} == {1, 2}
 
 
+def test_pipeline_assesses_new_primary_candidate_for_secondary_backfill(
+    tmp_path: Path,
+) -> None:
+    """二次追補poolが尽きた入力元は未評価候補を一次評価から補充すること."""
+    kept_primary_source = False
+    failed_primary_ids: set[str] = set()
+    failed_secondary_ids: set[str] = set()
+
+    class ExhaustedSecondaryPoolAssessor(FakeAssessor):
+        """片方の一次生存候補を1件にし、その二次評価を遷移にするfake."""
+
+        def assess(
+            self,
+            *,
+            model: str,
+            model_digest: str,
+            prompt: str,
+            candidates: Sequence[FrameCandidate],
+            contact_sheet: Path,
+        ) -> list[FrameAssessment]:
+            nonlocal kept_primary_source
+            assessments = super().assess(
+                model=model,
+                model_digest=model_digest,
+                prompt=prompt,
+                candidates=candidates,
+                contact_sheet=contact_sheet,
+            )
+            if contact_sheet.parent.name == "primary":
+                for candidate in candidates:
+                    if candidate.video_index != 0:
+                        continue
+                    if kept_primary_source:
+                        failed_primary_ids.add(candidate.frame_id)
+                    else:
+                        kept_primary_source = True
+            if contact_sheet.parent.name == "secondary":
+                failed_secondary_ids.update(
+                    candidate.frame_id
+                    for candidate in candidates
+                    if candidate.video_index == 0
+                )
+            return [
+                replace(
+                    assessment,
+                    is_transition=(
+                        assessment.frame_id in failed_primary_ids
+                        or assessment.frame_id in failed_secondary_ids
+                    ),
+                )
+                for assessment in assessments
+            ]
+
+    videos = (
+        tmp_path / "Sample Game Part1.mp4",
+        tmp_path / "Sample Game Part2.mp4",
+    )
+    for video in videos:
+        video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_videos=tuple(str(video) for video in videos),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    extractor = FakeFrameExtractor()
+    SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=ExhaustedSecondaryPoolAssessor(),
+    ).run()
+
+    work_dir = output_dir / ".game-screen-pick"
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert (work_dir / "assessments-primary-secondary-backfill-0001.json").is_file()
+    assert (work_dir / "assessments-secondary-backfill-0001.json").is_file()
+    assert {item["video_index"] for item in report["selected"]} == {1, 2}
+
+    (work_dir / "completion.json").unlink()
+    (output_dir / "selected-01.jpg").unlink()
+    unavailable_assessor = UnavailableAssessor()
+    SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=unavailable_assessor,
+    ).run()
+
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
 def test_pipeline_rejects_resume_when_any_input_video_changes(tmp_path: Path) -> None:
     """2本目だけの内容変更も全体SHA-256で検出すること."""
     videos = (

@@ -8,6 +8,30 @@ from src.main import run
 from src.models.video_selection_request import VideoSelectionRequest
 
 
+def test_video_selection_request_preserves_legacy_positional_constructor() -> None:
+    """旧単一動画requestの13引数位置指定を同じ順序で受け付けること."""
+    request = VideoSelectionRequest(
+        "input.mp4",
+        "output",
+        12,
+        "ゲーム名",
+        "探索を含む",
+        "primary",
+        "secondary",
+        "127.0.0.1:11434",
+        120.0,
+        True,
+        4,
+        2.5,
+        True,
+    )
+
+    assert request.input_videos == ("input.mp4",)
+    assert request.output_dir == "output"
+    assert request.output_count == 12
+    assert request.debug is True
+
+
 def test_cli_translates_multiple_inputs_to_video_selection_request(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

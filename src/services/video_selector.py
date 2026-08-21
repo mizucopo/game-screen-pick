@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from heapq import heapify, heappop, heappush
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import cv2
 import numpy as np
@@ -51,7 +51,7 @@ from .video_frame_extractor import VideoFrameExtractor
 
 logger = logging.getLogger(__name__)
 
-ALGORITHM_VERSION = "multi-video-selection-v4"
+ALGORITHM_VERSION = "multi-video-selection-v5"
 PROMPT_VERSION = "blog-image-selection-v3"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
 MINIMUM_ENDPOINT_MARGIN_SECONDS = 0.05
@@ -149,11 +149,12 @@ class VideoSelector:
             primary_assessments,
             secondary_count,
         )
-        secondary_candidates, secondary_assessments = self._assess_with_source_backfill(
-            primary_eligible,
-            secondary_candidates,
-            model=self.request.secondary_model,
-            stage="secondary",
+        secondary_candidates, secondary_assessments = (
+            self._assess_secondary_with_primary_backfill(
+                primary_candidates,
+                primary_assessments,
+                secondary_candidates,
+            )
         )
         selected = select_final_frames(
             secondary_candidates,
@@ -578,6 +579,11 @@ class VideoSelector:
         *,
         model: str,
         stage: str,
+        expand_candidate_pool: Callable[
+            [Sequence[FrameCandidate], dict[str, FrameAssessment]],
+            Sequence[FrameCandidate],
+        ]
+        | None = None,
     ) -> tuple[list[FrameCandidate], dict[str, FrameAssessment]]:
         """候補を評価し、未代表の入力元から同じstageの候補を追補する."""
         if stage not in {"primary", "secondary"}:
@@ -585,6 +591,7 @@ class VideoSelector:
         primary_stage = _is_primary_stage(stage)
         stage_label = "一次" if primary_stage else "二次"
         candidates_path = self.work_dir / f"{stage}-candidates.json"
+        pool = list(candidate_pool)
         candidates = list(initial_candidates)
         write_json_atomic(
             candidates_path,
@@ -615,12 +622,27 @@ class VideoSelector:
             if not uncovered_sources and survivor_count >= self.request.output_count:
                 break
             backfill = select_source_backfill_candidates(
-                candidate_pool,
+                pool,
                 candidates,
                 assessments,
                 source_count=len(self.sources),
                 output_count=self.request.output_count,
             )
+            if not backfill and expand_candidate_pool is not None:
+                additions = expand_candidate_pool(candidates, assessments)
+                pool_ids = {candidate.frame_id for candidate in pool}
+                pool.extend(
+                    candidate
+                    for candidate in additions
+                    if candidate.frame_id not in pool_ids
+                )
+                backfill = select_source_backfill_candidates(
+                    pool,
+                    candidates,
+                    assessments,
+                    source_count=len(self.sources),
+                    output_count=self.request.output_count,
+                )
             if not backfill:
                 labels = ", ".join(
                     self.sources[index].label for index in uncovered_sources
@@ -661,6 +683,75 @@ class VideoSelector:
                 len(backfill),
             )
         return candidates, assessments
+
+    def _assess_secondary_with_primary_backfill(
+        self,
+        primary_candidates: list[FrameCandidate],
+        primary_assessments: dict[str, FrameAssessment],
+        initial_candidates: Sequence[FrameCandidate],
+    ) -> tuple[list[FrameCandidate], dict[str, FrameAssessment]]:
+        """二次候補が尽きた場合は未評価候補を一次評価から補充する."""
+        primary_backfill_round = 0
+
+        def expand_primary_pool(
+            secondary_candidates: Sequence[FrameCandidate],
+            secondary_assessments: dict[str, FrameAssessment],
+        ) -> Sequence[FrameCandidate]:
+            nonlocal primary_backfill_round
+            source_order, target_count = _source_backfill_requirements(
+                secondary_candidates,
+                secondary_assessments,
+                source_count=len(self.sources),
+                output_count=self.request.output_count,
+            )
+            while True:
+                new_candidates = _select_unassessed_source_candidates(
+                    self._usable_candidates,
+                    primary_candidates,
+                    source_order,
+                    target_count,
+                )
+                if not new_candidates:
+                    return ()
+                primary_backfill_round += 1
+                new_assessments = self._assess_candidates(
+                    model=self.request.primary_model,
+                    stage=f"primary-secondary-backfill-{primary_backfill_round:04d}",
+                    candidates=new_candidates,
+                )
+                primary_candidates.extend(new_candidates)
+                primary_candidates.sort(
+                    key=lambda item: (
+                        item.video_index,
+                        item.timestamp_seconds,
+                        item.frame_id,
+                    )
+                )
+                primary_assessments.update(new_assessments)
+                write_json_atomic(
+                    self.work_dir / "primary-candidates.json",
+                    [candidate_to_json(candidate) for candidate in primary_candidates],
+                )
+                eligible = [
+                    candidate
+                    for candidate in new_candidates
+                    if not new_assessments[candidate.frame_id].is_transition
+                ]
+                if eligible:
+                    return eligible
+
+        primary_eligible = [
+            candidate
+            for candidate in primary_candidates
+            if not primary_assessments[candidate.frame_id].is_transition
+        ]
+        return self._assess_with_source_backfill(
+            primary_eligible,
+            initial_candidates,
+            model=self.request.secondary_model,
+            stage="secondary",
+            expand_candidate_pool=expand_primary_pool,
+        )
 
     def _extract_context_frames(
         self,
@@ -1394,7 +1485,7 @@ def candidate_to_json(candidate: FrameCandidate) -> dict[str, Any]:
 
 def _is_primary_stage(stage: str) -> bool:
     """一次評価と、その追補評価のstage名を判定する."""
-    return stage == "primary" or stage.startswith("primary-backfill-")
+    return stage == "primary" or stage.startswith("primary-")
 
 
 def select_primary_candidates(
@@ -1537,6 +1628,28 @@ def select_source_backfill_candidates(
     output_count: int,
 ) -> list[FrameCandidate]:
     """入力元の欠落または生存候補の不足を未評価候補で追補する."""
+    source_order, target_count = _source_backfill_requirements(
+        assessed_candidates,
+        assessments,
+        source_count=source_count,
+        output_count=output_count,
+    )
+    return _select_unassessed_source_candidates(
+        all_candidates,
+        assessed_candidates,
+        source_order,
+        target_count,
+    )
+
+
+def _source_backfill_requirements(
+    assessed_candidates: Sequence[FrameCandidate],
+    assessments: dict[str, FrameAssessment],
+    *,
+    source_count: int,
+    output_count: int,
+) -> tuple[tuple[int, ...], int]:
+    """追補対象の入力元順と、一度に評価する候補数を返す."""
     if source_count <= 0 or output_count <= 0:
         raise ValueError("入力動画数と選択枚数は正の整数で指定してください")
     survivor_counts = Counter(
@@ -1556,8 +1669,31 @@ def select_source_backfill_candidates(
     )
     shortfall = max(0, output_count - survivor_count)
     if not uncovered_sources and not shortfall:
-        return []
+        return (), 0
+    if uncovered_sources:
+        return (
+            uncovered_sources,
+            len(uncovered_sources) * SECONDARY_CANDIDATE_MULTIPLIER,
+        )
+    source_order = tuple(
+        sorted(
+            range(source_count),
+            key=lambda video_index: (
+                survivor_counts[video_index],
+                video_index,
+            ),
+        )
+    )
+    return source_order, shortfall * SECONDARY_CANDIDATE_MULTIPLIER
 
+
+def _select_unassessed_source_candidates(
+    all_candidates: Sequence[FrameCandidate],
+    assessed_candidates: Sequence[FrameCandidate],
+    source_order: Sequence[int],
+    target_count: int,
+) -> list[FrameCandidate]:
+    """指定した入力元順で未評価候補を見た目も分散して選ぶ."""
     assessed_ids = {candidate.frame_id for candidate in assessed_candidates}
     assessed_by_source: dict[int, list[FrameCandidate]] = {}
     available_by_source: dict[int, list[FrameCandidate]] = {}
@@ -1569,20 +1705,6 @@ def select_source_backfill_candidates(
     for candidates in available_by_source.values():
         candidates.sort(key=_primary_candidate_order)
 
-    if uncovered_sources:
-        source_order = uncovered_sources
-        target_count = len(uncovered_sources) * SECONDARY_CANDIDATE_MULTIPLIER
-    else:
-        source_order = tuple(
-            sorted(
-                available_by_source,
-                key=lambda video_index: (
-                    survivor_counts[video_index],
-                    video_index,
-                ),
-            )
-        )
-        target_count = shortfall * SECONDARY_CANDIDATE_MULTIPLIER
     selected_by_source: dict[int, list[FrameCandidate]] = {
         video_index: [] for video_index in source_order
     }
