@@ -570,9 +570,92 @@ def test_pipeline_reuses_game_context_from_legacy_manifest(tmp_path: Path) -> No
     ).run()
 
     report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    migrated_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    migrated_body = {
+        key: value
+        for key, value in migrated_manifest.items()
+        if key != "manifest_digest"
+    }
+    completion = json.loads((work_dir / "completion.json").read_text(encoding="utf-8"))
     assert report["game_context"] == "legacy context"
     assert "game_title" not in report
+    assert migrated_manifest["prompt_version"] == "blog-image-selection-v4"
+    assert "game_title" not in migrated_manifest
+    assert migrated_manifest["manifest_digest"] == json_digest(migrated_body)
+    assert report["manifest_digest"] == migrated_manifest["manifest_digest"]
+    assert completion["manifest_digest"] == migrated_manifest["manifest_digest"]
+    migration = json.loads(
+        (work_dir / "prompt-migration-blog-image-selection-v4.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert migration["from_manifest_digest"] == manifest["manifest_digest"]
+    assert migration["manifest_digest"] == migrated_manifest["manifest_digest"]
+    assert (work_dir / "assessments-primary-blog-image-selection-v4.json").is_file()
     assert all("Legacy Game" not in prompt for prompt in assessor.prompts)
+
+
+def test_pipeline_keeps_completed_legacy_manifest_without_new_assessment(
+    tmp_path: Path,
+) -> None:
+    """完了済み旧runはmanifestを移行せず成果物だけ検証すること."""
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="legacy context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    contact_sheet = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    work_dir = output_dir / ".game-screen-pick"
+    manifest_path = work_dir / "run-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["game_title"] = "Legacy Game"
+    manifest["prompt_version"] = "blog-image-selection-v3"
+    manifest_body = {
+        key: value for key, value in manifest.items() if key != "manifest_digest"
+    }
+    manifest["manifest_digest"] = json_digest(manifest_body)
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    completion_path = work_dir / "completion.json"
+    completion = json.loads(completion_path.read_text(encoding="utf-8"))
+    completion["manifest_digest"] = manifest["manifest_digest"]
+    completion_path.write_text(
+        json.dumps(completion, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    unavailable_assessor = UnavailableAssessor()
+
+    resumed_sheet = SingleVideoSelector(
+        replace(request, game_context=""),
+        frame_extractor=FakeFrameExtractor(),
+        assessor=unavailable_assessor,
+        context_generator=ExplodingContextGenerator(),
+    ).run()
+
+    preserved_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert resumed_sheet == contact_sheet
+    assert preserved_manifest["prompt_version"] == "blog-image-selection-v3"
+    assert preserved_manifest["manifest_digest"] == manifest["manifest_digest"]
+    assert unavailable_assessor.metadata_calls == 0
 
 
 def test_pipeline_rejects_legacy_manifest_with_empty_game_context(

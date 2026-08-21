@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 ALGORITHM_VERSION = "multi-video-selection-v5"
 PROMPT_VERSION = "blog-image-selection-v4"
 LEGACY_PROMPT_VERSION = "blog-image-selection-v3"
+PROMPT_MIGRATION_FILENAME = f"prompt-migration-{PROMPT_VERSION}.json"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
 MINIMUM_ENDPOINT_MARGIN_SECONDS = 0.05
 INTERVAL_COUNT_TOLERANCE = 1e-9
@@ -616,8 +617,56 @@ class VideoSelector:
         existing_body = {
             key: value for key, value in existing.items() if key != "manifest_digest"
         }
-        self._legacy_manifest = existing_body != expected
+        is_legacy_manifest = existing_body != expected
+        if is_legacy_manifest and not (self.work_dir / "completion.json").is_file():
+            self._migrate_legacy_manifest(
+                expected,
+                previous_digest=stored_digest,
+            )
+            self._legacy_manifest = True
+            return True
+        self._legacy_manifest = is_legacy_manifest or self._has_prompt_migration(
+            stored_digest
+        )
         self.manifest_digest = stored_digest
+        return True
+
+    def _migrate_legacy_manifest(
+        self,
+        manifest_body: dict[str, Any],
+        *,
+        previous_digest: str,
+    ) -> None:
+        """未完了legacy runのmanifestを現行promptへatomicに移行する."""
+        migrated_digest = json_digest(manifest_body)
+        write_json_atomic(
+            self.work_dir / PROMPT_MIGRATION_FILENAME,
+            {
+                "from_prompt_version": LEGACY_PROMPT_VERSION,
+                "from_manifest_digest": previous_digest,
+                "to_prompt_version": PROMPT_VERSION,
+                "manifest_digest": migrated_digest,
+            },
+        )
+        write_json_atomic(
+            self.work_dir / "run-manifest.json",
+            {**manifest_body, "manifest_digest": migrated_digest},
+        )
+        self.manifest_digest = migrated_digest
+
+    def _has_prompt_migration(self, manifest_digest: str) -> bool:
+        """移行済みrunでlegacy評価cacheを上書きしないための印を検証する."""
+        migration_path = self.work_dir / PROMPT_MIGRATION_FILENAME
+        if not migration_path.is_file():
+            return False
+        migration = read_json(migration_path)
+        if (
+            not isinstance(migration, dict)
+            or migration.get("from_prompt_version") != LEGACY_PROMPT_VERSION
+            or migration.get("to_prompt_version") != PROMPT_VERSION
+            or migration.get("manifest_digest") != manifest_digest
+        ):
+            raise RuntimeError("prompt migration記録が再開manifestと一致しません")
         return True
 
     @staticmethod
