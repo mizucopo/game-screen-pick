@@ -1352,6 +1352,14 @@ def make_timestamps(
         last_frame_offset = last_frame_timestamp_seconds - start_time_seconds
         end = min(end, last_frame_offset)
         start = min(start, end)
+        if end - start < required_output_span:
+            required_start = end - required_output_span
+            earliest_start = (
+                0.0
+                if minimum_total_margin >= duration_seconds
+                else min(minimum_start_margin, end)
+            )
+            start = min(end, max(earliest_start, required_start))
     span = end - start
     if requested_interval_seconds is not None:
         interval = requested_interval_seconds

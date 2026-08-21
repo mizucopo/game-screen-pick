@@ -115,6 +115,7 @@ def test_make_timestamps_stays_before_actual_last_vfr_frame() -> None:
         last_frame_timestamp_seconds=6.5,
     )
 
+    assert timestamps[0] == 0.5
     assert timestamps[-1] <= 6.5
 
 
@@ -170,6 +171,46 @@ def test_automatic_sample_budget_caps_long_combined_inputs() -> None:
 
     assert sum(counts) == 4_000
     assert all(count > 0 for count in counts)
+
+
+def test_automatic_sample_budget_matches_early_last_frame_capacity() -> None:
+    """最終frameが早い場合も配分数と生成timestamp数が一致すること."""
+    metadata = [
+        VideoMetadata(
+            100.0,
+            320,
+            180,
+            "fake",
+            "30/1",
+            last_frame_timestamp_seconds=1.0,
+        )
+    ] * 2
+
+    counts = allocate_automatic_sample_counts(metadata, output_count=8)
+
+    assert counts == (4, 4)
+    assert all(
+        len(
+            make_timestamps(
+                item.duration_seconds,
+                8,
+                None,
+                minimum_end_margin_seconds=1 / 30,
+                last_frame_timestamp_seconds=item.last_frame_timestamp_seconds,
+                automatic_sample_count=count,
+            )
+        )
+        == count
+        for item, count in zip(metadata, counts, strict=True)
+    )
+
+
+def test_legacy_single_video_selector_import_path_is_available() -> None:
+    """旧moduleから従来のclass名をimportできること."""
+    from src.services.single_video_selector import SingleVideoSelector
+    from src.services.video_selector import VideoSelector
+
+    assert SingleVideoSelector is VideoSelector
 
 
 def test_primary_shortlist_stays_bounded_with_more_sources_than_slots() -> None:
