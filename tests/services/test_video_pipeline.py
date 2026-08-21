@@ -308,13 +308,8 @@ def test_pipeline_logs_concrete_processing_without_generic_status(
     ).run()
 
     messages = [record.getMessage() for record in caplog.records]
-    assert (
-        "入力動画の情報を確認しています: 1/1件 Sample Game Part3.mp4" in messages
-    )
-    assert (
-        "入力動画の同一性を確認しています: 1/1件 Sample Game Part3.mp4"
-        in messages
-    )
+    assert "入力動画の情報を確認しています: 1/1件 Sample Game Part3.mp4" in messages
+    assert "入力動画の同一性を確認しています: 1/1件 Sample Game Part3.mp4" in messages
     assert "Ollamaモデル情報を確認しています: primary, secondary" in messages
     assert "候補フレームを抽出します: 13/13件" in messages
     assert all("画像選定処理は動作中です" not in message for message in messages)
