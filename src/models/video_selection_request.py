@@ -24,6 +24,8 @@ class VideoSelectionRequest:
     sample_interval_seconds: float | None
     debug: bool
     input_videos: tuple[str, ...]
+    game_context_provider: str
+    game_context_model: str | None
 
     def __init__(
         self,
@@ -42,6 +44,8 @@ class VideoSelectionRequest:
         debug: bool | object = _MISSING,
         *,
         input_videos: tuple[str, ...] = (),
+        game_context_provider: str = "ollama",
+        game_context_model: str | None = None,
     ) -> None:
         """旧位置指定と新しい複数入力keywordを同じrequestへ正規化する."""
         values = {
@@ -70,6 +74,8 @@ class VideoSelectionRequest:
         for name, value in values.items():
             object.__setattr__(self, name, value)
         object.__setattr__(self, "input_videos", tuple(input_videos))
+        object.__setattr__(self, "game_context_provider", game_context_provider)
+        object.__setattr__(self, "game_context_model", game_context_model)
 
     @property
     def input_video(self) -> str | None:

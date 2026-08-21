@@ -12,7 +12,7 @@ def test_replace_can_update_legacy_input_video() -> None:
         output_dir="output",
         output_count=30,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host=None,

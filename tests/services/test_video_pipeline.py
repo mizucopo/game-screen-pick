@@ -18,13 +18,18 @@ from src.models.video_selection import (
     VideoMetadata,
 )
 from src.models.video_selection_request import VideoSelectionRequest
+from src.services.game_context_generator import (
+    GameContextGenerationError,
+    GameContextGenerator,
+    GeneratedGameContext,
+)
 from src.services.ollama_frame_assessor import (
     OllamaFrameAssessor,
     OllamaModelValidationError,
 )
 from src.services.video_frame_extractor import VideoFrameExtractor
 from src.services.video_selector import VideoSelector as SingleVideoSelector
-from src.utils.video_selection_files import file_sha256
+from src.utils.video_selection_files import file_sha256, json_digest
 
 
 class FakeFrameExtractor(VideoFrameExtractor):
@@ -33,10 +38,12 @@ class FakeFrameExtractor(VideoFrameExtractor):
     def __init__(self) -> None:
         """外部command確認を省略する."""
         self.extract_calls = 0
+        self.probe_calls = 0
 
     def probe(self, video: Path) -> VideoMetadata:
         """短いtest動画のmetadataを返す."""
         assert video.is_file()
+        self.probe_calls += 1
         return VideoMetadata(4.0, 320, 180, "fake", "30/1")
 
     def extract_frame(
@@ -77,6 +84,7 @@ class FakeAssessor(OllamaFrameAssessor):
         self.require_gpu = False
         self.gpu_evidence: dict[str, dict[str, Any]] = {}
         self.assess_calls = 0
+        self.prompts: list[str] = []
 
     def fetch_model_metadata(
         self,
@@ -107,6 +115,7 @@ class FakeAssessor(OllamaFrameAssessor):
         assert "全編録画" in prompt
         assert contact_sheet.is_file()
         self.assess_calls += 1
+        self.prompts.append(prompt)
         return [
             FrameAssessment(
                 frame_id=candidate.frame_id,
@@ -215,6 +224,53 @@ class GpuValidationFailingAssessor(FakeAssessor):
         raise OllamaModelValidationError("GPU利用を確認できません")
 
 
+class FakeContextGenerator(GameContextGenerator):
+    """Web検索なしで固定Game Contextを返すfake."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def generate(
+        self,
+        *,
+        game_title: str,
+        provider: str,
+        model: str,
+        ollama_host: str,
+        timeout_seconds: float,
+    ) -> GeneratedGameContext:
+        self.calls.append(
+            {
+                "game_title": game_title,
+                "provider": provider,
+                "model": model,
+                "ollama_host": ollama_host,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return GeneratedGameContext(
+            game_context="生成済みのGame Context",
+            provider=provider,
+            model=f"{model}:resolved",
+        )
+
+
+class ExplodingContextGenerator(GameContextGenerator):
+    """呼び出されてはならないcontext generator."""
+
+    def generate(
+        self,
+        *,
+        game_title: str,
+        provider: str,
+        model: str,
+        ollama_host: str,
+        timeout_seconds: float,
+    ) -> GeneratedGameContext:
+        del game_title, provider, model, ollama_host, timeout_seconds
+        raise AssertionError("context generatorは呼ばれないこと")
+
+
 def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> None:
     """成果物を揃え、同条件再実行ではmodel評価を繰り返さないこと."""
     video = tmp_path / "Sample Game Part3.mp4"
@@ -225,7 +281,7 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
         output_dir=str(output_dir),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -242,6 +298,7 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
         request,
         frame_extractor=extractor,
         assessor=assessor,
+        context_generator=ExplodingContextGenerator(),
     ).run()
 
     selected_paths = [output_dir / "selected-01.jpg", output_dir / "selected-02.jpg"]
@@ -249,7 +306,9 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     assert contact_sheet.is_file()
     assert all(path.is_file() for path in selected_paths)
     report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
-    assert report["game_title"] == "Sample Game"
+    assert "game_title" not in report
+    assert report["game_context"] == "テスト用のGame Context"
+    assert "game_context_generation" not in report
     assert report["output_count"] == 2
     assert len(report["selected"]) == 2
     completion = json.loads(
@@ -267,6 +326,7 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
         request,
         frame_extractor=extractor,
         assessor=unavailable_assessor,
+        context_generator=ExplodingContextGenerator(),
     ).run()
 
     assert resumed_sheet == contact_sheet
@@ -275,6 +335,180 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     assert unavailable_assessor.metadata_calls == 0
     assert extractor.extract_calls == extraction_after_first_run
     assert [file_sha256(path) for path in selected_paths] == first_hashes
+    manifest = json.loads(
+        (output_dir / ".game-screen-pick" / "run-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "game_title" not in manifest
+    assert manifest["game_context"] == "テスト用のGame Context"
+    assert "game_context_generation" not in manifest
+    assert all("ゲーム『" not in prompt for prompt in assessor.prompts)
+    assert all("テスト用のGame Context" in prompt for prompt in assessor.prompts)
+
+
+def test_pipeline_generates_context_before_video_processing_and_reuses_it(
+    tmp_path: Path,
+) -> None:
+    """title指定時だけ事前生成し、再開時は保存済みcontextを再利用すること."""
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title="ドラクエ11",
+        game_context="",
+        game_context_provider="openai",
+        game_context_model="gpt-context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    generator = FakeContextGenerator()
+    assessor = FakeAssessor()
+
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=assessor,
+        context_generator=generator,
+    ).run()
+
+    assert generator.calls == [
+        {
+            "game_title": "ドラクエ11",
+            "provider": "openai",
+            "model": "gpt-context",
+            "ollama_host": "fake",
+            "timeout_seconds": 1.0,
+        }
+    ]
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["game_context"] == "生成済みのGame Context"
+    assert report["game_context_generation"] == {
+        "provider": "openai",
+        "model": "gpt-context:resolved",
+    }
+    assert "game_title" not in report
+    assert all("ドラクエ11" not in prompt for prompt in assessor.prompts)
+    assert all("生成済みのGame Context" in prompt for prompt in assessor.prompts)
+
+    unavailable_assessor = UnavailableAssessor()
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=unavailable_assessor,
+        context_generator=ExplodingContextGenerator(),
+    ).run()
+
+    assert unavailable_assessor.metadata_calls == 0
+
+
+def test_context_generation_failure_stops_before_video_probe(tmp_path: Path) -> None:
+    """検索・生成失敗では長い動画処理へ進まないこと."""
+
+    class FailingContextGenerator(GameContextGenerator):
+        def generate(
+            self,
+            *,
+            game_title: str,
+            provider: str,
+            model: str,
+            ollama_host: str,
+            timeout_seconds: float,
+        ) -> GeneratedGameContext:
+            del game_title, model, ollama_host, timeout_seconds
+            raise GameContextGenerationError(f"{provider}: 認証error")
+
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(b"video")
+    extractor = FakeFrameExtractor()
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title="Game",
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    with pytest.raises(GameContextGenerationError, match="ollama.*認証"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=extractor,
+            assessor=FakeAssessor(),
+            context_generator=FailingContextGenerator(),
+        ).run()
+
+    assert extractor.probe_calls == 0
+
+
+def test_pipeline_reuses_game_context_from_legacy_manifest(tmp_path: Path) -> None:
+    """旧manifestのtitleを選定へ戻さず、保存済みcontextだけを再利用すること."""
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="legacy context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    work_dir = output_dir / ".game-screen-pick"
+    manifest_path = work_dir / "run-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["game_title"] = "Legacy Game"
+    manifest["prompt_version"] = "blog-image-selection-v3"
+    manifest_body = {
+        key: value for key, value in manifest.items() if key != "manifest_digest"
+    }
+    manifest["manifest_digest"] = json_digest(manifest_body)
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (work_dir / "completion.json").unlink()
+    assessor = FakeAssessor()
+
+    SingleVideoSelector(
+        replace(request, game_context=""),
+        frame_extractor=FakeFrameExtractor(),
+        assessor=assessor,
+        context_generator=ExplodingContextGenerator(),
+    ).run()
+
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["game_context"] == "legacy context"
+    assert "game_title" not in report
+    assert all("Legacy Game" not in prompt for prompt in assessor.prompts)
 
 
 def test_pipeline_logs_concrete_processing_without_generic_status(
@@ -288,8 +522,8 @@ def test_pipeline_logs_concrete_processing_without_generic_status(
         input_video=str(video),
         output_dir=str(tmp_path / "selected"),
         output_count=2,
-        game_title="Sample Game",
-        game_context="",
+        game_title=None,
+        game_context="テスト用のGame Context",
         primary_model="primary\nmodel",
         secondary_model="secondary\x1bmodel",
         ollama_host="fake",
@@ -364,8 +598,8 @@ def test_pipeline_logs_assessment_completion_and_failure_without_batch_start(
         input_video=str(video),
         output_dir=str(tmp_path / "selected"),
         output_count=2,
-        game_title="Sample Game",
-        game_context="",
+        game_title=None,
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -406,7 +640,7 @@ def test_pipeline_selects_from_multiple_videos_and_reports_each_source(
         output_dir=str(output_dir),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -519,7 +753,7 @@ def test_pipeline_backfills_source_when_reserved_primary_candidates_fail(
         output_dir=str(output_dir),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -629,7 +863,7 @@ def test_pipeline_backfills_source_when_secondary_representative_fails(
         output_dir=str(output_dir),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -718,7 +952,7 @@ def test_pipeline_backfills_when_secondary_survivors_cannot_fill_output(
         output_dir=str(output_dir),
         output_count=3,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -807,7 +1041,7 @@ def test_pipeline_assesses_new_primary_candidate_for_secondary_backfill(
         output_dir=str(output_dir),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -857,7 +1091,7 @@ def test_pipeline_rejects_resume_when_any_input_video_changes(tmp_path: Path) ->
         output_dir=str(tmp_path / "selected"),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -902,7 +1136,7 @@ def test_pipeline_rejects_duplicate_input_video_before_ollama(tmp_path: Path) ->
         output_dir=str(tmp_path / "selected"),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -924,10 +1158,10 @@ def test_pipeline_rejects_duplicate_input_video_before_ollama(tmp_path: Path) ->
     assert unavailable_assessor.metadata_calls == 0
 
 
-def test_pipeline_requires_title_when_input_names_infer_different_games(
+def test_pipeline_requires_exactly_one_title_or_context(
     tmp_path: Path,
 ) -> None:
-    """入力名から同じgame titleを得られない場合は明示指定を求めること."""
+    """programmatic requestでもtitleとcontextの両方未指定を拒否すること."""
     videos = (tmp_path / "Game A Part1.mp4", tmp_path / "Game B Part1.mp4")
     for video in videos:
         video.write_bytes(b"video")
@@ -948,7 +1182,7 @@ def test_pipeline_requires_title_when_input_names_infer_different_games(
     )
     unavailable_assessor = UnavailableAssessor()
 
-    with pytest.raises(ValueError, match="--game-title"):
+    with pytest.raises(ValueError, match="どちらか一方"):
         SingleVideoSelector(
             request,
             frame_extractor=FakeFrameExtractor(),
@@ -971,7 +1205,7 @@ def test_pipeline_rejects_resume_when_unsampled_video_bytes_change(
         output_dir=str(output_dir),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -1016,7 +1250,7 @@ def test_pipeline_finishes_fully_assessed_run_without_ollama(tmp_path: Path) -> 
         output_dir=str(output_dir),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -1061,7 +1295,7 @@ def test_pipeline_does_not_reuse_cpu_allowed_cache_for_gpu_required_run(
         output_dir=str(output_dir),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -1096,7 +1330,7 @@ def test_pipeline_uses_resolved_ollama_model_name(tmp_path: Path) -> None:
         output_dir=str(tmp_path / "selected"),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="llava",
         secondary_model="llava",
         ollama_host="fake",
@@ -1129,7 +1363,7 @@ def test_pipeline_rejects_output_count_above_contact_sheet_limit(
         output_dir=str(tmp_path / "selected"),
         output_count=601,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -1162,7 +1396,7 @@ def test_pipeline_rejects_nonempty_output_before_contacting_ollama(
         output_dir=str(output_dir),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -1205,7 +1439,7 @@ def test_pipeline_rejects_concurrent_run_for_same_output(tmp_path: Path) -> None
         output_dir=str(tmp_path / "selected"),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -1268,7 +1502,7 @@ def test_candidate_extraction_cancels_queued_jobs_on_interrupt(
         output_dir=str(tmp_path / "selected"),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -1321,7 +1555,7 @@ def test_context_extraction_cancels_queued_jobs_on_interrupt(
         output_dir=str(tmp_path / "selected"),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -1383,7 +1617,7 @@ def test_mechanical_preselection_cancels_queued_jobs_on_interrupt(
         output_dir=str(tmp_path / "selected"),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -1419,7 +1653,7 @@ def test_pipeline_does_not_retry_model_validation_failure(
         output_dir=str(tmp_path / "selected"),
         output_count=2,
         game_title=None,
-        game_context="",
+        game_context="テスト用のGame Context",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
