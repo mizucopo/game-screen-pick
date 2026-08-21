@@ -1,7 +1,10 @@
 """game-screen-pick のCLIエントリポイント."""
 
+import json
 import logging
+import os
 import sys
+from importlib import metadata
 from pathlib import Path
 
 import click
@@ -16,6 +19,7 @@ from .utils.elapsed_log_formatter import ElapsedLogFormatter
 
 DEFAULT_PRIMARY_MODEL = "qwen3.8:27b"
 DEFAULT_SECONDARY_MODEL = "muse-glimmer:30b"
+PROJECT_NAME = "game-screen-pick"
 SUPPORTED_VIDEO_EXTENSIONS = frozenset(
     {
         ".avi",
@@ -37,6 +41,70 @@ SUPPORTED_VIDEO_EXTENSIONS = frozenset(
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(ElapsedLogFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[console_handler], force=True)
+logger = logging.getLogger(__name__)
+
+
+def _project_version() -> str:
+    """install済みpackage metadataから実行versionを返す."""
+    return metadata.version(PROJECT_NAME)
+
+
+def _display_ollama_host(ollama_host: str | None) -> str:
+    """Ollama hostの実効入力値と自動決定元を表示用に返す."""
+    if ollama_host:
+        return ollama_host
+    if "OLLAMA_HOST" in os.environ:
+        return f"{os.environ['OLLAMA_HOST']}（自動決定: OLLAMA_HOST）"
+    return "127.0.0.1:11434（自動決定: 既定値）"
+
+
+def _log_cli_start(
+    *,
+    output_count: int,
+    game_title: str | None,
+    game_context: str,
+    primary_model: str,
+    secondary_model: str,
+    ollama_host: str | None,
+    ollama_timeout: float,
+    allow_cpu: bool,
+    ffmpeg_workers: int,
+    sample_interval_seconds: float | None,
+    debug: bool,
+    input_video_dir: str,
+    output_dir: str,
+) -> None:
+    """project情報と実際に適用するCLI optionを起動直後に出力する."""
+    logger.info(
+        "%s %s の画像選定処理を開始します。", PROJECT_NAME, _project_version()
+    )
+    options: dict[str, object] = {
+        "--num": output_count,
+        "--game-title": (
+            game_title.strip()
+            if game_title and game_title.strip()
+            else "<自動決定: 動画ファイル名>"
+        ),
+        "--game-context": game_context.strip(),
+        "--primary-model": primary_model,
+        "--secondary-model": secondary_model,
+        "--ollama-host": _display_ollama_host(ollama_host),
+        "--ollama-timeout": ollama_timeout,
+        "--allow-cpu": allow_cpu,
+        "--ffmpeg-workers": ffmpeg_workers,
+        "--sample-interval-seconds": (
+            sample_interval_seconds
+            if sample_interval_seconds is not None
+            else "<自動決定: 動画時間と選択枚数>"
+        ),
+        "--debug": debug,
+        "INPUT_VIDEO_DIR": input_video_dir,
+        "OUTPUT_DIR": output_dir,
+    }
+    logger.info(
+        "起動オプション: %s",
+        json.dumps(options, ensure_ascii=False, sort_keys=True),
+    )
 
 
 def validate_positive_int(value: int | str | None) -> int | None:
@@ -209,6 +277,21 @@ def execute(
     output_dir: str,
 ) -> None:
     """入力ディレクトリのゲーム動画全体からブログ掲載用画像を選定する."""
+    _log_cli_start(
+        output_count=output_count,
+        game_title=game_title,
+        game_context=game_context,
+        primary_model=primary_model,
+        secondary_model=secondary_model,
+        ollama_host=ollama_host,
+        ollama_timeout=ollama_timeout,
+        allow_cpu=allow_cpu,
+        ffmpeg_workers=ffmpeg_workers,
+        sample_interval_seconds=sample_interval_seconds,
+        debug=debug,
+        input_video_dir=input_video_dir,
+        output_dir=output_dir,
+    )
     input_videos = discover_input_videos(input_video_dir)
     run_video_application(
         VideoSelectionRequest(

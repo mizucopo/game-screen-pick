@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -33,6 +34,7 @@ from ..utils.contact_sheet import (
     build_contact_sheet,
     context_frame_path,
 )
+from ..utils.periodic_status_logger import periodic_status_log
 from ..utils.video_selection_files import (
     RUN_LOCK_FILENAME,
     file_sha256,
@@ -64,6 +66,7 @@ SECONDARY_BATCH_SIZE = 6
 CONTEXT_OFFSET_SECONDS = 0.35
 MAXIMUM_OUTPUT_DHASH_DISTANCE = 10
 MINIMUM_DISTINCT_DHASH_DISTANCE = 5
+STATUS_LOG_INTERVAL_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -110,9 +113,14 @@ class VideoSelector:
 
     def run(self) -> Path:
         """選定を実行し、人間確認用コンタクトシートのパスを返す."""
-        self._prepare_paths()
-        with output_directory_lock(self.work_dir):
-            return self._run_locked()
+        with periodic_status_log(
+            logger,
+            "画像選定処理は動作中です",
+            interval_seconds=STATUS_LOG_INTERVAL_SECONDS,
+        ):
+            self._prepare_paths()
+            with output_directory_lock(self.work_dir):
+                return self._run_locked()
 
     def _run_locked(self) -> Path:
         """outputの排他lockを保持した状態でpipelineを実行する."""
@@ -263,6 +271,7 @@ class VideoSelector:
         self.total_duration_seconds = sum(
             source.metadata.duration_seconds for source in self.sources
         )
+        self._log_resolved_automatic_options()
         has_existing_manifest = self._restore_existing_manifest()
         if has_existing_manifest and (self.work_dir / "completion.json").is_file():
             return
@@ -285,6 +294,38 @@ class VideoSelector:
         self.manifest_digest = json_digest(manifest)
         manifest["manifest_digest"] = self.manifest_digest
         self._prepare_output_dir(manifest)
+
+    def _log_resolved_automatic_options(self) -> None:
+        """metadataから確定した自動決定optionの実効値を出力する."""
+        resolved: dict[str, object] = {}
+        if not self.request.game_title or not self.request.game_title.strip():
+            resolved["--game-title"] = self.game_title
+        if self.request.sample_interval_seconds is None:
+            sampling: list[dict[str, object]] = []
+            for source in self.sources:
+                intervals = [
+                    right - left
+                    for left, right in zip(
+                        source.timestamps[:-1],
+                        source.timestamps[1:],
+                        strict=True,
+                    )
+                ]
+                sampling.append(
+                    {
+                        "source": source.label,
+                        "candidate_count": len(source.timestamps),
+                        "effective_interval_seconds": (
+                            round(max(intervals), 6) if intervals else None
+                        ),
+                    }
+                )
+            resolved["--sample-interval-seconds"] = sampling
+        if resolved:
+            logger.info(
+                "自動決定オプション: %s",
+                json.dumps(resolved, ensure_ascii=False, sort_keys=True),
+            )
 
     def _resolve_game_title(self) -> str:
         """明示タイトル、または全入力から一致して推測したタイトルを返す."""

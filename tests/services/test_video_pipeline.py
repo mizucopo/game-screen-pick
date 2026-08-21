@@ -1,6 +1,7 @@
 """1本以上の動画を扱うproduction pipelineの小さな結合テスト."""
 
 import json
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -274,6 +275,53 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     assert unavailable_assessor.metadata_calls == 0
     assert extractor.extract_calls == extraction_after_first_run
     assert [file_sha256(path) for path in selected_paths] == first_hashes
+
+
+def test_pipeline_logs_resolved_automatic_options(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """metadata確定後に自動決定したtitleとsampling条件を出力すること."""
+    video = tmp_path / "Sample Game Part3.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    caplog.set_level(logging.INFO)
+
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+
+    messages = [record.getMessage() for record in caplog.records]
+    resolved_message = next(
+        message for message in messages if message.startswith("自動決定オプション: ")
+    )
+    resolved = json.loads(resolved_message.removeprefix("自動決定オプション: "))
+    assert resolved == {
+        "--game-title": "Sample Game",
+        "--sample-interval-seconds": [
+            {
+                "candidate_count": 13,
+                "effective_interval_seconds": 0.25,
+                "source": "v01 Sample Game Part3.mp4",
+            }
+        ],
+    }
 
 
 def test_pipeline_selects_from_multiple_videos_and_reports_each_source(

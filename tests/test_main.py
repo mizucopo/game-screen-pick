@@ -1,5 +1,7 @@
 """動画ディレクトリCLI adapterの単体テスト."""
 
+import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -105,6 +107,48 @@ def test_cli_translates_sorted_directory_videos_to_video_selection_request(
         )
     ]
     assert captured_requests[0].input_video is None
+
+
+def test_cli_logs_project_version_and_all_effective_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """起動直後にproject情報とdefaultを含む全optionを確認できること."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    (input_dir / "Sample Game Part1.mp4").write_bytes(b"video")
+    output_dir = tmp_path / "selected"
+    monkeypatch.setenv("OLLAMA_HOST", "http://ollama.example:11434")
+    monkeypatch.setattr("src.main._project_version", lambda: "1.8.0-test")
+    monkeypatch.setattr("src.main.run_video_application", lambda _request: None)
+    caplog.set_level(logging.INFO)
+
+    run([str(input_dir), str(output_dir)])
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "game-screen-pick 1.8.0-test の画像選定処理を開始します。" in messages
+    options_message = next(
+        message for message in messages if message.startswith("起動オプション: ")
+    )
+    options = json.loads(options_message.removeprefix("起動オプション: "))
+    assert options == {
+        "--allow-cpu": False,
+        "--debug": False,
+        "--ffmpeg-workers": 2,
+        "--game-context": "",
+        "--game-title": "<自動決定: 動画ファイル名>",
+        "--num": 30,
+        "--ollama-host": (
+            "http://ollama.example:11434（自動決定: OLLAMA_HOST）"
+        ),
+        "--ollama-timeout": 900.0,
+        "--primary-model": "qwen3.8:27b",
+        "--sample-interval-seconds": "<自動決定: 動画時間と選択枚数>",
+        "--secondary-model": "muse-glimmer:30b",
+        "INPUT_VIDEO_DIR": str(input_dir),
+        "OUTPUT_DIR": str(output_dir),
+    }
 
 
 @pytest.mark.parametrize(
