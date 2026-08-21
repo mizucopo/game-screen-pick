@@ -1,10 +1,11 @@
-"""単一動画CLI adapterの単体テスト."""
+"""動画ディレクトリCLI adapterの単体テスト."""
 
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
-from src.main import run
+from src.main import execute, run
 from src.models.video_selection_request import VideoSelectionRequest
 
 
@@ -33,16 +34,25 @@ def test_video_selection_request_preserves_legacy_positional_constructor() -> No
     assert request.debug is True
 
 
-def test_cli_translates_multiple_inputs_to_video_selection_request(
+def test_cli_translates_sorted_directory_videos_to_video_selection_request(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """CLIオプションが単一動画requestへ変換されること."""
-    input_video = tmp_path / "game-part-1.mp4"
-    second_input_video = tmp_path / "game-part-2.mp4"
+    """CLIオプションと名前順の対象動画がrequestへ変換されること."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    input_video = input_dir / "game-part-1.mp4"
+    second_input_video = input_dir / "game-part-2.MKV"
     output_dir = tmp_path / "selected"
-    input_video.write_bytes(b"video")
     second_input_video.write_bytes(b"video")
+    input_video.write_bytes(b"video")
+    (input_dir / "notes.txt").write_text("not a video", encoding="utf-8")
+    nested_dir = input_dir / "nested"
+    nested_dir.mkdir()
+    (nested_dir / "game-part-3.mp4").write_bytes(b"video")
+    external_video = tmp_path / "external.mp4"
+    external_video.write_bytes(b"video")
+    (input_dir / "linked.mp4").symlink_to(external_video)
     captured_requests: list[VideoSelectionRequest] = []
 
     def capture_request(request: VideoSelectionRequest) -> None:
@@ -72,8 +82,7 @@ def test_cli_translates_multiple_inputs_to_video_selection_request(
             "--sample-interval-seconds",
             "2.5",
             "--debug",
-            str(input_video),
-            str(second_input_video),
+            str(input_dir),
             str(output_dir),
         ]
     )
@@ -119,6 +128,26 @@ def test_cli_rejects_invalid_numeric_options(
     error_pattern: str,
 ) -> None:
     """不正な数値をapplicationへ渡さないこと."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    monkeypatch.setattr(
+        "src.main.run_video_application",
+        lambda _request: pytest.fail("applicationは呼ばれないこと"),
+    )
+
+    with pytest.raises(SystemExit):
+        run([*args, str(input_dir), str(tmp_path / "selected")])
+
+    assert error_pattern in capsys.readouterr().err
+
+
+def test_cli_rejects_a_file_as_input(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """単一動画ファイルを公開CLIの入力として受け入れないこと."""
     input_video = tmp_path / "game.mp4"
     input_video.write_bytes(b"video")
     monkeypatch.setattr(
@@ -127,15 +156,38 @@ def test_cli_rejects_invalid_numeric_options(
     )
 
     with pytest.raises(SystemExit):
-        run([*args, str(input_video), str(tmp_path / "selected")])
+        run([str(input_video), str(tmp_path / "selected")])
 
-    assert error_pattern in capsys.readouterr().err
+    assert "入力動画ディレクトリが見つかりません" in capsys.readouterr().err
 
 
-def test_cli_requires_a_file_as_input(tmp_path: Path) -> None:
-    """入力folderを動画として受け入れないこと."""
-    input_dir = tmp_path / "input"
+def test_cli_rejects_directory_without_supported_videos(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """対象動画がない入力ディレクトリを明確に拒否すること."""
+    input_dir = tmp_path / "recordings"
     input_dir.mkdir()
+    (input_dir / "notes.txt").write_text("not a video", encoding="utf-8")
+    nested_dir = input_dir / "nested"
+    nested_dir.mkdir()
+    (nested_dir / "nested.mp4").write_bytes(b"video")
+    monkeypatch.setattr(
+        "src.main.run_video_application",
+        lambda _request: pytest.fail("applicationは呼ばれないこと"),
+    )
 
     with pytest.raises(SystemExit):
         run([str(input_dir), str(tmp_path / "selected")])
+
+    assert "処理対象の動画が見つかりません" in capsys.readouterr().err
+
+
+def test_cli_help_describes_directory_input() -> None:
+    """helpが入力動画ディレクトリと出力フォルダを案内すること."""
+    result = CliRunner().invoke(execute, ["--help"])
+
+    assert result.exit_code == 0
+    assert "INPUT_VIDEO_DIR OUTPUT_DIR" in result.output
+    assert "INPUT_VIDEO..." not in result.output

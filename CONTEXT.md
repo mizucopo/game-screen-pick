@@ -8,8 +8,12 @@
 一回の画像選定へ渡すゲーム録画の1本。各動画のほぼ先頭から末尾までを選定対象にする。
 _Avoid_: screenshot folder, selected clip, representative segment
 
+**Input Video Directory**:
+一回の画像選定の入力集合を指定するディレクトリ。直下の対応拡張子を持つ通常ファイルだけをファイル名順でInput Videosへ変換し、サブディレクトリは探索しない。
+_Avoid_: recursive folder tree, single video path, caller-ordered file list
+
 **Input Videos**:
-一回の画像選定で扱う、順序を持った1本以上のInput Video。重複したpathは含めず、各動画の入力元をSelected Imageまで追跡する。
+一回の画像選定で扱う、Input Video Directoryから安定した順序で列挙した1本以上のInput Video。重複したpathは含めず、各動画の入力元をSelected Imageまで追跡する。
 _Avoid_: unordered folder scan, concatenated temporary video, duplicate input
 
 **Game Title**:

@@ -16,6 +16,23 @@ from .utils.elapsed_log_formatter import ElapsedLogFormatter
 
 DEFAULT_PRIMARY_MODEL = "qwen3.8:27b"
 DEFAULT_SECONDARY_MODEL = "muse-glimmer:30b"
+SUPPORTED_VIDEO_EXTENSIONS = frozenset(
+    {
+        ".avi",
+        ".flv",
+        ".m2ts",
+        ".m4v",
+        ".mkv",
+        ".mov",
+        ".mp4",
+        ".mpeg",
+        ".mpg",
+        ".mts",
+        ".ts",
+        ".webm",
+        ".wmv",
+    }
+)
 
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(ElapsedLogFormatter())
@@ -77,6 +94,31 @@ def validate_ffmpeg_workers(value: int | str | None) -> int | None:
     if workers is not None and workers > 4:
         raise click.BadParameter(f"1から4で指定してください（実際の値: {workers}）")
     return workers
+
+
+def discover_input_videos(input_video_dir: str) -> tuple[str, ...]:
+    """入力ディレクトリ直下の対象動画を安定した順序で列挙する."""
+    input_path = Path(input_video_dir)
+    if not input_path.is_dir():
+        raise click.BadParameter(
+            f"入力動画ディレクトリが見つかりません: {input_video_dir}",
+            param_hint="INPUT_VIDEO_DIR",
+        )
+    videos = tuple(
+        str(path)
+        for path in sorted(input_path.iterdir(), key=lambda path: path.name)
+        if not path.is_symlink()
+        and path.is_file()
+        and path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+    )
+    if not videos:
+        extensions = ", ".join(sorted(SUPPORTED_VIDEO_EXTENSIONS))
+        raise click.BadParameter(
+            f"処理対象の動画が見つかりません: {input_video_dir}"
+            f"（対応拡張子: {extensions}）",
+            param_hint="INPUT_VIDEO_DIR",
+        )
+    return videos
 
 
 @click.command()
@@ -149,13 +191,8 @@ def validate_ffmpeg_workers(value: int | str | None) -> int | None:
     ),
 )
 @click.option("--debug", is_flag=True, help="デバッグログを有効化")
-@click.argument(
-    "paths",
-    nargs=-1,
-    required=True,
-    type=click.Path(path_type=str),
-    metavar="INPUT_VIDEO... OUTPUT_DIR",
-)
+@click.argument("input_video_dir", type=click.Path(path_type=str))
+@click.argument("output_dir", type=click.Path(path_type=str))
 def execute(
     output_count: int,
     game_title: str | None,
@@ -168,19 +205,11 @@ def execute(
     ffmpeg_workers: int,
     sample_interval_seconds: float | None,
     debug: bool,
-    paths: tuple[str, ...],
+    input_video_dir: str,
+    output_dir: str,
 ) -> None:
-    """1本以上のゲーム動画全体からブログ掲載用画像を選定する."""
-    if len(paths) < 2:
-        raise click.UsageError("入力動画を1本以上と出力フォルダを指定してください")
-    input_videos = paths[:-1]
-    output_dir = paths[-1]
-    for input_video in input_videos:
-        if not Path(input_video).is_file():
-            raise click.BadParameter(
-                f"入力動画が見つかりません: {input_video}",
-                param_hint="INPUT_VIDEOS",
-            )
+    """入力ディレクトリのゲーム動画全体からブログ掲載用画像を選定する."""
+    input_videos = discover_input_videos(input_video_dir)
     run_video_application(
         VideoSelectionRequest(
             input_videos=input_videos,
