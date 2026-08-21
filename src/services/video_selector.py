@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -66,6 +67,11 @@ MAXIMUM_OUTPUT_DHASH_DISTANCE = 10
 MINIMUM_DISTINCT_DHASH_DISTANCE = 5
 
 
+def _log_value(value: object) -> str:
+    """動的な値を1物理行へ安全に収まる表示へ変換する."""
+    return json.dumps(str(value), ensure_ascii=False)
+
+
 @dataclass(frozen=True)
 class VideoSource:
     """一つの入力動画と、その動画に固有の抽出条件."""
@@ -111,7 +117,10 @@ class VideoSelector:
     def run(self) -> Path:
         """選定を実行し、人間確認用コンタクトシートのパスを返す."""
         self._prepare_paths()
-        logger.info("出力フォルダの実行状態を確認しています: %s", self.output_dir)
+        logger.info(
+            "出力フォルダの実行状態を確認しています: %s",
+            _log_value(self.output_dir),
+        )
         with output_directory_lock(self.work_dir):
             return self._run_locked()
 
@@ -120,7 +129,7 @@ class VideoSelector:
         self._prepare_run()
         if self._verify_completion():
             contact_sheet = self.output_dir / "selected-contact-sheet.jpg"
-            logger.info("完了済み成果物を検証しました: %s", contact_sheet)
+            logger.info("完了済み成果物を検証しました: %s", _log_value(contact_sheet))
             return contact_sheet
 
         candidates = self._extract_candidates()
@@ -166,7 +175,7 @@ class VideoSelector:
         artifacts = self._write_selected_artifacts(selected)
         self._write_completion(artifacts)
         contact_sheet = self.output_dir / "selected-contact-sheet.jpg"
-        logger.info("画像選定が完了しました: %s", contact_sheet)
+        logger.info("画像選定が完了しました: %s", _log_value(contact_sheet))
         return contact_sheet
 
     def _prepare_paths(self) -> None:
@@ -211,7 +220,7 @@ class VideoSelector:
                 "入力動画の情報を確認しています: %d/%d件 %s",
                 index,
                 len(self.videos),
-                video.name,
+                _log_value(video.name),
             )
             metadata = self.frame_extractor.probe(video)
             end_margin_seconds = max(
@@ -290,7 +299,7 @@ class VideoSelector:
         }
         logger.info(
             "Ollamaモデル情報を確認しています: %s",
-            ", ".join(sorted(requested_models)),
+            _log_value(", ".join(sorted(requested_models))),
         )
         self.model_metadata = self.assessor.fetch_model_metadata(requested_models)
         self._live_validated_models.update(self.model_metadata)
@@ -386,7 +395,7 @@ class VideoSelector:
             return
         if self.assessor is None:
             raise RuntimeError("Ollama assessorが初期化されていません")
-        logger.info("Ollamaモデル情報を再確認しています: %s", model)
+        logger.info("Ollamaモデル情報を再確認しています: %s", _log_value(model))
         live_metadata = self.assessor.fetch_model_metadata({model})
         if live_metadata.get(model) != self.model_metadata.get(model):
             raise OllamaModelValidationError(
@@ -432,7 +441,7 @@ class VideoSelector:
             "入力動画の同一性を確認しています: %d/%d件 %s",
             source.index + 1,
             len(self.sources),
-            source.path.name,
+            _log_value(source.path.name),
         )
         stat = source.path.stat()
         metadata = source.metadata

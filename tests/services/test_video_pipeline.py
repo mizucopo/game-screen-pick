@@ -282,16 +282,16 @@ def test_pipeline_logs_concrete_processing_without_generic_status(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """具体的な処理だけを出力し汎用状態と自動決定詳細を出さないこと."""
-    video = tmp_path / "Sample Game Part3.mp4"
+    video = tmp_path / "Sample Game\nPart3.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
         input_video=str(video),
         output_dir=str(tmp_path / "selected"),
         output_count=2,
-        game_title=None,
+        game_title="Sample Game",
         game_context="",
-        primary_model="primary",
-        secondary_model="secondary",
+        primary_model="primary\nmodel",
+        secondary_model="secondary\x1bmodel",
         ollama_host="fake",
         ollama_timeout=1.0,
         allow_cpu=True,
@@ -308,10 +308,20 @@ def test_pipeline_logs_concrete_processing_without_generic_status(
     ).run()
 
     messages = [record.getMessage() for record in caplog.records]
-    assert "入力動画の情報を確認しています: 1/1件 Sample Game Part3.mp4" in messages
-    assert "入力動画の同一性を確認しています: 1/1件 Sample Game Part3.mp4" in messages
-    assert "Ollamaモデル情報を確認しています: primary, secondary" in messages
+    assert '入力動画の情報を確認しています: 1/1件 "Sample Game\\nPart3.mp4"' in messages
+    assert (
+        '入力動画の同一性を確認しています: 1/1件 "Sample Game\\nPart3.mp4"' in messages
+    )
+    assert (
+        'Ollamaモデル情報を確認しています: "primary\\nmodel, '
+        'secondary\\u001bmodel"' in messages
+    )
     assert "候補フレームを抽出します: 13/13件" in messages
+    assert all(
+        control not in message
+        for message in messages
+        for control in ("\n", "\r", "\x1b")
+    )
     assert all("画像選定処理は動作中です" not in message for message in messages)
     assert all(not message.startswith("自動決定オプション:") for message in messages)
 
