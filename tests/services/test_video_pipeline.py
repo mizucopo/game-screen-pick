@@ -626,6 +626,7 @@ def test_pipeline_keeps_completed_legacy_manifest_without_new_assessment(
     manifest_path = work_dir / "run-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["game_title"] = "Legacy Game"
+    manifest["game_context"] = ""
     manifest["prompt_version"] = "blog-image-selection-v3"
     manifest_body = {
         key: value for key, value in manifest.items() if key != "manifest_digest"
@@ -700,6 +701,7 @@ def test_pipeline_rejects_legacy_manifest_with_empty_game_context(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    (output_dir / ".game-screen-pick" / "completion.json").unlink()
 
     with pytest.raises(RuntimeError, match="再開manifestのgame_context"):
         SingleVideoSelector(

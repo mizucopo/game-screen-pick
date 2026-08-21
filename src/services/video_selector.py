@@ -350,7 +350,13 @@ class VideoSelector:
 
         if existing_manifest is not None:
             saved_context = existing_manifest.get("game_context")
-            if not isinstance(saved_context, str) or not saved_context.strip():
+            completed_legacy_run = (
+                existing_manifest.get("prompt_version") == LEGACY_PROMPT_VERSION
+                and (self.work_dir / "completion.json").is_file()
+            )
+            if not isinstance(saved_context, str) or (
+                not saved_context.strip() and not completed_legacy_run
+            ):
                 raise RuntimeError("再開manifestのgame_contextが不正です")
             if requested_context and requested_context != saved_context:
                 raise RuntimeError(
