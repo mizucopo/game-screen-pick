@@ -182,6 +182,7 @@ class GameContextGenerator:
             api_key if auth_header == "x-goog-api-key" else f"Bearer {api_key}"
         )
         prompt = f"{SYSTEM_PROMPT}\n\n検索して特定するゲーム表記: {game_title}"
+        tool_choice = "any" if provider == "gemini" else "required"
         response = self._requester(
             endpoint,
             {
@@ -192,9 +193,11 @@ class GameContextGenerator:
                 "model": model,
                 "input": prompt,
                 "tools": [{"type": tool_type}],
+                "tool_choice": tool_choice,
             },
             timeout_seconds,
         )
+        _require_integrated_search_call(response, provider=provider)
         return _extract_integrated_response_text(response), _response_model(
             response, model
         )
@@ -298,6 +301,7 @@ def _extract_integrated_response_text(response: dict[str, Any]) -> str:
 
     for collection_name, accepted_types in (
         ("output", {"message"}),
+        ("outputs", {"text"}),
         ("steps", {"model_output"}),
     ):
         collection = response.get(collection_name)
@@ -306,6 +310,10 @@ def _extract_integrated_response_text(response: dict[str, Any]) -> str:
         texts: list[str] = []
         for item in collection:
             if not isinstance(item, dict) or item.get("type") not in accepted_types:
+                continue
+            direct_text = item.get("text")
+            if isinstance(direct_text, str) and direct_text.strip():
+                texts.append(direct_text)
                 continue
             content = item.get("content")
             if not isinstance(content, list):
@@ -321,6 +329,25 @@ def _extract_integrated_response_text(response: dict[str, Any]) -> str:
         if texts:
             return "\n".join(texts)
     raise ValueError("model出力本文が応答にありません")
+
+
+def _require_integrated_search_call(
+    response: dict[str, Any],
+    *,
+    provider: str,
+) -> None:
+    """providerの検索toolが実行された証拠を応答内に要求する."""
+    expected_type = "google_search_call" if provider == "gemini" else "web_search_call"
+    for collection_name in ("output", "outputs", "steps"):
+        collection = response.get(collection_name)
+        if not isinstance(collection, list):
+            continue
+        if any(
+            isinstance(item, dict) and item.get("type") == expected_type
+            for item in collection
+        ):
+            return
+    raise ValueError(f"{expected_type}検索toolの実行記録が応答にありません")
 
 
 def _response_model(response: dict[str, Any], requested_model: str) -> str:

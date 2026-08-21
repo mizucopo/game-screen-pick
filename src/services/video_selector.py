@@ -53,6 +53,9 @@ from .ollama_frame_assessor import (
 )
 from .video_frame_extractor import VideoFrameExtractor
 
+GAME_CONTEXT_CHECKPOINT_FILENAME = "game-context-checkpoint.json"
+GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION = 1
+
 logger = logging.getLogger(__name__)
 
 ALGORITHM_VERSION = "multi-video-selection-v5"
@@ -316,6 +319,7 @@ class VideoSelector:
         self.manifest_digest = json_digest(manifest)
         manifest["manifest_digest"] = self.manifest_digest
         self._prepare_output_dir(manifest)
+        self._context_checkpoint_path().unlink(missing_ok=True)
 
     def _read_existing_manifest(self) -> dict[str, Any] | None:
         """保存済みmanifestを外部接続前に読み取る."""
@@ -362,11 +366,17 @@ class VideoSelector:
             )
             return
 
+        checkpoint = self._read_context_checkpoint()
         if not game_title and not requested_context:
             raise ValueError(
                 "--game-titleと--game-contextのどちらか一方を指定してください"
             )
         if requested_context:
+            if checkpoint is not None:
+                raise RuntimeError(
+                    "保存済みのGame Context生成checkpointは直接指定と互換性が"
+                    "ありません。新しい出力フォルダを指定してください"
+                )
             self.game_context = requested_context
             self.game_context_generation = None
             logger.info(
@@ -384,6 +394,14 @@ class VideoSelector:
         host = self.request.ollama_host or os.environ.get(
             "OLLAMA_HOST", "127.0.0.1:11434"
         )
+        if checkpoint is not None:
+            self._restore_context_checkpoint(
+                checkpoint,
+                game_title=game_title,
+                provider=provider,
+                model=model,
+            )
+            return
         logger.info(
             "Game ContextをWeb検索から生成します: provider=%s, model=%s",
             _log_value(provider),
@@ -401,11 +419,104 @@ class VideoSelector:
             "provider": generated.provider,
             "model": generated.model,
         }
+        self._write_context_checkpoint(
+            game_title=game_title,
+            provider=provider,
+            model=model,
+        )
         logger.info(
             "Game Contextを生成しました: provider=%s, model=%s, context=%s",
             _log_value(generated.provider),
             _log_value(generated.model),
             _log_value(generated.game_context),
+        )
+
+    def _context_checkpoint_path(self) -> Path:
+        """manifest作成前のGame Context checkpoint pathを返す."""
+        return self.work_dir / GAME_CONTEXT_CHECKPOINT_FILENAME
+
+    def _read_context_checkpoint(self) -> dict[str, Any] | None:
+        """保存済みGame Context checkpointを読み取る."""
+        checkpoint_path = self._context_checkpoint_path()
+        if not checkpoint_path.is_file():
+            return None
+        checkpoint = read_json(checkpoint_path)
+        if not isinstance(checkpoint, dict):
+            raise RuntimeError("Game Context生成checkpointが不正です")
+        return checkpoint
+
+    def _write_context_checkpoint(
+        self,
+        *,
+        game_title: str,
+        provider: str,
+        model: str,
+    ) -> None:
+        """生成済みcontextを後続preflightより前にatomic保存する."""
+        if self.game_context_generation is None:
+            raise RuntimeError("Game Context生成metadataがありません")
+        write_json_atomic(
+            self._context_checkpoint_path(),
+            {
+                "schema_version": GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION,
+                "request": {
+                    "game_title": game_title,
+                    "provider": provider,
+                    "model": model,
+                },
+                "result": {
+                    "game_context": self.game_context,
+                    **self.game_context_generation,
+                },
+            },
+        )
+
+    def _restore_context_checkpoint(
+        self,
+        checkpoint: dict[str, Any],
+        *,
+        game_title: str,
+        provider: str,
+        model: str,
+    ) -> None:
+        """同じ生成条件のcheckpointだけを再利用する."""
+        expected_request = {
+            "game_title": game_title,
+            "provider": provider,
+            "model": model,
+        }
+        if (
+            checkpoint.get("schema_version") != GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION
+            or checkpoint.get("request") != expected_request
+        ):
+            raise RuntimeError(
+                "保存済みのGame Context生成条件が今回と異なります。"
+                "新しい出力フォルダを指定してください"
+            )
+        result = checkpoint.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("Game Context生成checkpointが不正です")
+        game_context = result.get("game_context")
+        generated_provider = result.get("provider")
+        generated_model = result.get("model")
+        if (
+            not isinstance(game_context, str)
+            or not game_context.strip()
+            or generated_provider != provider
+            or not isinstance(generated_model, str)
+            or not generated_model.strip()
+        ):
+            raise RuntimeError("Game Context生成checkpointが不正です")
+        self.game_context = game_context
+        self.game_context_generation = {
+            "provider": generated_provider,
+            "model": generated_model,
+        }
+        logger.info(
+            "checkpointのGame Contextを再利用します: provider=%s, model=%s, context=%s",
+            _log_value(generated_provider),
+            _log_value(generated_model),
+            _log_value(game_context),
         )
 
     @staticmethod
@@ -447,7 +558,8 @@ class VideoSelector:
             non_manifest_entries.extend(
                 entry
                 for entry in self.work_dir.iterdir()
-                if entry.name != RUN_LOCK_FILENAME
+                if entry.name
+                not in {RUN_LOCK_FILENAME, GAME_CONTEXT_CHECKPOINT_FILENAME}
             )
         if non_manifest_entries and not manifest_path.is_file():
             raise RuntimeError(

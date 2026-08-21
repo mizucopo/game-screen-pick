@@ -51,12 +51,13 @@ class RecordingRequester:
             {
                 "model": "openai-used",
                 "output": [
+                    {"type": "web_search_call", "status": "completed"},
                     {
                         "type": "message",
                         "content": [
                             {"type": "output_text", "text": json.dumps(VALID_RESULT)}
                         ],
-                    }
+                    },
                 ],
             },
         ),
@@ -67,11 +68,13 @@ class RecordingRequester:
             "google_search",
             {
                 "model": "gemini-used",
-                "steps": [
+                "outputs": [
                     {
-                        "type": "model_output",
-                        "content": [{"type": "text", "text": json.dumps(VALID_RESULT)}],
-                    }
+                        "type": "google_search_call",
+                        "arguments": {"queries": ["ドラクエ11"]},
+                    },
+                    {"type": "google_search_result", "call_id": "search-call"},
+                    {"type": "text", "text": json.dumps(VALID_RESULT)},
                 ],
             },
         ),
@@ -83,12 +86,13 @@ class RecordingRequester:
             {
                 "model": "xai-used",
                 "output": [
+                    {"type": "web_search_call", "status": "completed"},
                     {
                         "type": "message",
                         "content": [
                             {"type": "output_text", "text": json.dumps(VALID_RESULT)}
                         ],
-                    }
+                    },
                 ],
             },
         ),
@@ -125,8 +129,97 @@ def test_integrated_provider_uses_only_selected_web_search_api(
     assert any(value.endswith("secret") for value in headers.values())
     assert payload["model"] == f"{provider}-requested"
     assert payload["tools"] == [{"type": tool_type}]
+    assert payload["tool_choice"] == ("any" if provider == "gemini" else "required")
     assert "ドラクエ11" in json.dumps(payload, ensure_ascii=False)
     assert "信頼できない外部データ" in json.dumps(payload, ensure_ascii=False)
+
+
+def test_gemini_accepts_current_steps_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemini Interactions APIの現行steps形式も受け入れること."""
+    monkeypatch.setenv("GEMINI_API_KEY", "secret")
+    response = {
+        "model": "gemini-used",
+        "steps": [
+            {
+                "type": "google_search_call",
+                "arguments": {"queries": ["ドラクエ11"]},
+            },
+            {"type": "google_search_result", "call_id": "search-call"},
+            {
+                "type": "model_output",
+                "content": [{"type": "text", "text": json.dumps(VALID_RESULT)}],
+            },
+        ],
+    }
+
+    result = GameContextGenerator(requester=RecordingRequester([response])).generate(
+        game_title="ドラクエ11",
+        provider="gemini",
+        model="gemini-requested",
+        ollama_host="127.0.0.1:11434",
+        timeout_seconds=42.0,
+    )
+
+    assert result.game_context == VALID_RESULT["game_context"]
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_key_name", "response"),
+    [
+        (
+            "openai",
+            "OPENAI_API_KEY",
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": json.dumps(VALID_RESULT)}
+                        ],
+                    }
+                ]
+            },
+        ),
+        (
+            "gemini",
+            "GEMINI_API_KEY",
+            {"outputs": [{"type": "text", "text": json.dumps(VALID_RESULT)}]},
+        ),
+        (
+            "xai",
+            "XAI_API_KEY",
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": json.dumps(VALID_RESULT)}
+                        ],
+                    }
+                ]
+            },
+        ),
+    ],
+)
+def test_integrated_provider_rejects_context_without_search_call(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    api_key_name: str,
+    response: dict[str, Any],
+) -> None:
+    """検索toolの実行記録がないcontextを保存対象にしないこと."""
+    monkeypatch.setenv(api_key_name, "secret")
+
+    with pytest.raises(GameContextGenerationError, match=f"{provider}.*検索tool"):
+        GameContextGenerator(requester=RecordingRequester([response])).generate(
+            game_title="ドラクエ11",
+            provider=provider,
+            model=f"{provider}-requested",
+            ollama_host="127.0.0.1:11434",
+            timeout_seconds=42.0,
+        )
 
 
 def test_ollama_searches_cloud_then_generates_with_selected_local_model(
@@ -180,6 +273,7 @@ def test_generation_rejects_unresolved_game_identity_or_sources(
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     response = {
         "output": [
+            {"type": "web_search_call", "status": "completed"},
             {
                 "type": "message",
                 "content": [
@@ -193,7 +287,7 @@ def test_generation_rejects_unresolved_game_identity_or_sources(
                         ),
                     }
                 ],
-            }
+            },
         ]
     }
 
@@ -233,6 +327,7 @@ def test_generation_reports_invalid_context_with_provider(
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     response = {
         "output": [
+            {"type": "web_search_call", "status": "completed"},
             {
                 "type": "message",
                 "content": [
@@ -247,7 +342,7 @@ def test_generation_reports_invalid_context_with_provider(
                         ),
                     }
                 ],
-            }
+            },
         ]
     }
 

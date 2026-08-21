@@ -457,6 +457,70 @@ def test_context_generation_failure_stops_before_video_probe(tmp_path: Path) -> 
     assert extractor.probe_calls == 0
 
 
+def test_generated_context_is_checkpointed_before_video_probe(
+    tmp_path: Path,
+) -> None:
+    """probe失敗後の再実行では課金済みcontext生成を繰り返さないこと."""
+
+    class FailingProbeExtractor(FakeFrameExtractor):
+        def probe(self, video: Path) -> VideoMetadata:
+            del video
+            raise RuntimeError("probe failed")
+
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title="ドラクエ11",
+        game_context="",
+        game_context_provider="openai",
+        game_context_model="gpt-context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    generator = FakeContextGenerator()
+
+    with pytest.raises(RuntimeError, match="probe failed"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FailingProbeExtractor(),
+            assessor=FakeAssessor(),
+            context_generator=generator,
+        ).run()
+
+    checkpoint_path = output_dir / ".game-screen-pick" / "game-context-checkpoint.json"
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["request"] == {
+        "game_title": "ドラクエ11",
+        "provider": "openai",
+        "model": "gpt-context",
+    }
+    assert checkpoint["result"] == {
+        "game_context": "生成済みのGame Context",
+        "provider": "openai",
+        "model": "gpt-context:resolved",
+    }
+
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+        context_generator=ExplodingContextGenerator(),
+    ).run()
+
+    assert len(generator.calls) == 1
+    assert not checkpoint_path.exists()
+
+
 def test_pipeline_reuses_game_context_from_legacy_manifest(tmp_path: Path) -> None:
     """旧manifestのtitleを選定へ戻さず、保存済みcontextだけを再利用すること."""
     video = tmp_path / "recording.mp4"
