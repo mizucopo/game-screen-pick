@@ -70,3 +70,10 @@ class VideoSelectionRequest:
         for name, value in values.items():
             object.__setattr__(self, name, value)
         object.__setattr__(self, "input_videos", tuple(input_videos))
+
+    @property
+    def input_video(self) -> str | None:
+        """旧単一入力属性をread-onlyで公開し、複数入力ではNoneを返す."""
+        if len(self.input_videos) != 1:
+            return None
+        return self.input_videos[0]

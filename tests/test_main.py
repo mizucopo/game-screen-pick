@@ -27,6 +27,7 @@ def test_video_selection_request_preserves_legacy_positional_constructor() -> No
     )
 
     assert request.input_videos == ("input.mp4",)
+    assert request.input_video == "input.mp4"
     assert request.output_dir == "output"
     assert request.output_count == 12
     assert request.debug is True
@@ -94,6 +95,7 @@ def test_cli_translates_multiple_inputs_to_video_selection_request(
             debug=True,
         )
     ]
+    assert captured_requests[0].input_video is None
 
 
 @pytest.mark.parametrize(
