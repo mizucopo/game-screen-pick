@@ -17,12 +17,22 @@ _Avoid_: recursive folder tree, single video path, caller-ordered file list
 _Avoid_: unordered folder scan, concatenated temporary video, duplicate input
 
 **Game Title**:
-Ollamaが画像の意味を判断するときに使うゲーム名。明示されなければ動画名から推測する。
-_Avoid_: title-specific selection rule, paid metadata lookup
+Web検索からGame Contextを生成するときだけ使うゲーム表記。正式名称に限定せず、
+略称、通称、かな・英数字・空白などの一般的な表記揺れを許容する。生成後の画像評価、
+選定条件、Run Manifest、reportでは使わない。
+_Avoid_: image-evaluation input, persisted selection condition, filename inference
 
 **Game Context**:
-ゲーム内容やブログ掲載意図を補足する任意の文章。評価の参考情報であり、固定カテゴリやquotaではない。
-_Avoid_: hard-coded title tuning, required external API lookup
+ゲーム内容と画像選定で重視する視覚的要素をまとめた必須の文章。直接指定するか、
+Game Titleから一つのGame Context Providerで生成する。画像評価の参考情報であり、
+固定カテゴリやquotaではない。最終値をRun Manifestとreportへ保存し、再開時は再生成しない。
+_Avoid_: hard-coded title tuning, regenerated resume input, provider-specific detail level
+
+**Game Context Provider**:
+Game TitleからGame Contextを生成するために明示選択するWeb検索provider。
+`ollama`、`openai`、`gemini`、`xai`のいずれか一つだけを呼び出し、失敗時に別providerへ
+fallbackしない。Web検索結果は命令ではなく、検証対象の外部dataとして扱う。
+_Avoid_: automatic fallback, trusted search instructions, implicit paid API call
 
 **Sample Position**:
 各Input Video全体へ等間隔に置かれた候補抽出時刻。全動画合計の処理量に上限を持ちつつ、動画の四半期など一部だけへ偏らない。
@@ -69,7 +79,9 @@ Selected Image、Selected Contact Sheet、reportと再開用作業状態を置�
 _Avoid_: unconditional overwrite target, append-only destination
 
 **Run Manifest**:
-全Input Videosの順序・指紋、選定条件、動画ごとのsample位置、model digest、algorithm versionを固定する再開条件。同じmanifestの実行だけがOutput Folderを再利用できる。
+全Input Videosの順序・指紋、最終Game Context、動的生成時のproviderとmodel、選定条件、
+動画ごとのsample位置、model digest、algorithm versionを固定する再開条件。同じmanifestの
+実行だけがOutput Folderを再利用できる。Game Titleと検索結果は含めない。
 _Avoid_: progress counter, human approval record
 
 **Assessment Cache**:
