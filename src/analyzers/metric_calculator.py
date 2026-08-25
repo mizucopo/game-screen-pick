@@ -1,7 +1,10 @@
 """メトリクス計算器."""
 
+from typing import cast
+
 import cv2
 import numpy as np
+import numpy.typing as npt
 
 from ..analyzers.metric_normalizer import MetricNormalizer
 from ..models.analyzer_config import AnalyzerConfig
@@ -52,7 +55,7 @@ class MetricCalculator:
         gray_size = gray.size
         gray_mean = cv2.mean(gray)[0]
         kernel = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
-        gray_flat = gray.reshape(-1)
+        gray_flat = cast("npt.NDArray[np.uint8]", gray.reshape(-1))
         gray_hist = np.bincount(gray_flat, minlength=256).astype(np.float32)
         gray_prob = gray_hist / gray_size
         non_zero_prob = gray_prob[gray_prob > 0]
