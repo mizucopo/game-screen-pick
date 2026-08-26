@@ -19,9 +19,10 @@ frame extraction, mechanical analysis, primary assessment, transition context,
 and secondary assessment. Each phase key includes its own version, semantic
 inputs, and the keys of upstream phases. Assessment keys additionally include
 the relevant model digest, prompt version, Game Context, selection settings,
-and GPU requirement. Invalid, corrupt, schema-mismatched, or legacy entries are
-cache misses. Changing one phase version invalidates that phase and dependent
-later phases while preserving compatible earlier phases.
+GPU requirement, and the ordered candidate image digests for the evaluation
+unit. Invalid, corrupt, schema-mismatched, or legacy entries are cache misses.
+Changing one phase version invalidates that phase and dependent later phases
+while preserving compatible earlier phases.
 
 Automatic Sample Positions and Frame Candidate IDs are derived independently
 for each Input Video. They do not depend on the video's position in the current
@@ -38,3 +39,12 @@ absolute paths, mtimes, or source SHA-256 values. Output completion records may
 record the current Input Video Directory and Output Folder locations because
 those values control report regeneration and safe ownership of generated
 artifacts, not Input Video identity.
+
+Output ownership is accepted only from a structurally valid registration for
+the exact resolved Output Folder or from a completion record whose artifact
+size and SHA-256 values still match. When changed conditions reuse a registered
+Output Folder, the next artifacts are completed in cache staging first. The old
+completed artifacts remain usable if probing, model validation, assessment, or
+staging fails, and are replaced only at publication. Managed cache directory
+components must be real directories; symlinked descendants are rejected before
+reads or writes can escape `cache-game-screen-pick/`.

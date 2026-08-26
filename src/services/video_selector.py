@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, replace
 from heapq import heapify, heappop, heappush
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Callable, Sequence
 
 import cv2
@@ -56,6 +57,7 @@ from .video_phase_cache import (
     VideoCacheIdentity,
     build_video_identity,
     phase_key,
+    prepare_cache_directory,
     prepare_cache_root,
     read_phase_data,
     resolve_input_directory,
@@ -95,6 +97,15 @@ ARTIFACT_PHASE_VERSION = 1
 def _log_value(value: object) -> str:
     """動的な値を1物理行へ安全に収まる表示へ変換する."""
     return json.dumps(str(value), ensure_ascii=False)
+
+
+def _is_sha256(value: object) -> bool:
+    """lowercase hexadecimal SHA-256文字列か返す."""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 @dataclass(frozen=True)
@@ -147,6 +158,7 @@ class VideoSelector:
         self._live_validated_model_stages: set[str] = set()
         self._usable_candidates: tuple[FrameCandidate, ...] = ()
         self.manifest_digest = ""
+        self._replace_registered_output = False
 
     def run(self) -> Path:
         """選定を実行し、人間確認用コンタクトシートのパスを返す."""
@@ -248,7 +260,7 @@ class VideoSelector:
             secondary_assessments,
             self.request.output_count,
         )
-        artifacts = self._write_selected_artifacts(selected)
+        artifacts = self._publish_selected_artifacts(selected)
         self._write_completion(artifacts)
         contact_sheet = self.output_dir / "selected-contact-sheet.jpg"
         logger.info("画像選定が完了しました: %s", _log_value(contact_sheet))
@@ -291,6 +303,16 @@ class VideoSelector:
         ):
             raise ValueError("入力動画のcache identityが重複しています")
         self.cache_root = prepare_cache_root(self.input_dir)
+        for directory_name in ("runs", "videos", "game-context"):
+            prepare_cache_directory(
+                self.cache_root,
+                self.cache_root / directory_name,
+            )
+        for identity in self.video_identities:
+            prepare_cache_directory(
+                self.cache_root,
+                self.cache_root / "videos" / identity.key,
+            )
         self.output_dir = Path(self.request.output_dir).expanduser().resolve()
         if self.output_dir.exists() and not self.output_dir.is_dir():
             raise RuntimeError(f"出力先がフォルダではありません: {self.output_dir}")
@@ -302,6 +324,8 @@ class VideoSelector:
         self._resolve_game_context()
         self.run_key = json_digest(self._run_identity_conditions())
         self.work_dir = self.cache_root / "runs" / self.run_key
+        prepare_cache_directory(self.cache_root, self.work_dir)
+        self._replace_registered_output = False
         self._preflight_output_dir()
         probed_sources: list[tuple[Path, VideoCacheIdentity, VideoMetadata, float]] = []
         for index, (video, identity) in enumerate(
@@ -445,6 +469,7 @@ class VideoSelector:
         probe_path = (
             self.cache_root / "videos" / identity.key / "probe" / f"{probe_key}.json"
         )
+        prepare_cache_directory(self.cache_root, probe_path.parent)
         cached = read_phase_data(
             probe_path,
             phase="video-probe",
@@ -775,22 +800,18 @@ class VideoSelector:
             return
         if not any(self.output_dir.iterdir()):
             return
-        if self._completion_path().is_file():
-            return
         output_entries = list(self.output_dir.iterdir())
         managed_artifacts = [
             path for path in output_entries if self._is_managed_artifact(path)
         ]
         if (
-            self._has_valid_output_registration()
+            self._has_valid_output_ownership()
             and managed_artifacts
             and len(managed_artifacts) == len(output_entries)
         ):
-            for artifact in managed_artifacts:
-                artifact.unlink()
-            self._invalidate_output_completions()
+            self._replace_registered_output = True
             logger.info(
-                "登録済みの生成物と旧完了記録を除去しました: %d件",
+                "登録済み生成物をpublication直前まで保持します: %d件",
                 len(managed_artifacts),
             )
             return
@@ -803,21 +824,23 @@ class VideoSelector:
         """外部処理前にOutput Folderの登録有無だけを安価に確認する."""
         if not self.output_dir.exists() or not any(self.output_dir.iterdir()):
             return
-        if not self._has_valid_output_registration():
+        if not self._has_valid_output_ownership():
             raise RuntimeError(
                 "出力フォルダが空ではなく、対応する完了記録もありません: "
                 f"{self.output_dir}"
             )
 
+    def _has_valid_output_ownership(self) -> bool:
+        """正常な所有記録または完了記録が現在のOutputを裏付けるか返す."""
+        return self._has_valid_output_registration() or any(
+            self._completion_establishes_output_ownership(path)
+            for path in self._run_cache_files(self._output_completion_filename())
+        )
+
     def _has_valid_output_registration(self) -> bool:
         """現在のOutput Folderと一致する正常な所有記録があるか返す."""
-        runs_root = self.cache_root / "runs"
-        if not runs_root.is_dir():
-            return False
         registration_name = self._output_registration_filename()
-        for registration_path in runs_root.glob(f"*/{registration_name}"):
-            if not registration_path.is_file() or registration_path.is_symlink():
-                continue
+        for registration_path in self._run_cache_files(registration_name):
             try:
                 payload = read_json(registration_path)
             except (OSError, ValueError):
@@ -827,6 +850,67 @@ class VideoSelector:
             ):
                 return True
         return False
+
+    def _completion_establishes_output_ownership(self, path: Path) -> bool:
+        """完了記録と全成果物が自己矛盾なく一致するか返す."""
+        try:
+            payload = read_json(path)
+        except (OSError, ValueError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        manifest_digest = payload.get("manifest_digest")
+        input_directory = payload.get("input_directory")
+        if (
+            not _is_sha256(manifest_digest)
+            or not isinstance(input_directory, str)
+            or not input_directory
+        ):
+            return False
+        artifacts = payload.get("artifacts")
+        if (
+            not isinstance(artifacts, list)
+            or not artifacts
+            or any(not self._is_valid_artifact_record(item) for item in artifacts)
+        ):
+            return False
+        recorded_paths = [item["path"] for item in artifacts]
+        if len(recorded_paths) != len(set(recorded_paths)) or any(
+            len(Path(recorded_path).parts) != 1 for recorded_path in recorded_paths
+        ):
+            return False
+        required = {"report.json", "selected-contact-sheet.jpg"}
+        selected_paths = set(recorded_paths) - required
+        if not required.issubset(recorded_paths) or not selected_paths:
+            return False
+        output_root = self.output_dir.resolve()
+        for item in artifacts:
+            artifact = (self.output_dir / item["path"]).resolve()
+            try:
+                artifact.relative_to(output_root)
+            except ValueError:
+                return False
+            if (
+                not self._is_managed_artifact(artifact)
+                or artifact.stat().st_size != item["size"]
+                or file_sha256(artifact) != item["sha256"]
+            ):
+                return False
+        return True
+
+    def _run_cache_files(self, filename: str) -> list[Path]:
+        """symlinked run directoryを辿らず直下のmanaged fileだけを返す."""
+        runs_root = self.cache_root / "runs"
+        if not runs_root.is_dir() or runs_root.is_symlink():
+            return []
+        files: list[Path] = []
+        for run_dir in runs_root.iterdir():
+            if not run_dir.is_dir() or run_dir.is_symlink():
+                continue
+            path = run_dir / filename
+            if path.is_file() and not path.is_symlink():
+                files.append(path)
+        return files
 
     @staticmethod
     def _is_managed_artifact(path: Path) -> bool:
@@ -867,11 +951,9 @@ class VideoSelector:
 
     def _invalidate_output_completions(self) -> None:
         """現在のOutput Folderを指す全runの旧完了記録を失効させる."""
-        runs_root = self.cache_root / "runs"
-        if not runs_root.is_dir():
-            return
-        completion_name = self._output_completion_filename()
-        for completion_path in runs_root.glob(f"*/{completion_name}"):
+        for completion_path in self._run_cache_files(
+            self._output_completion_filename()
+        ):
             completion_path.unlink(missing_ok=True)
 
     def _restore_existing_manifest(
@@ -1019,7 +1101,7 @@ class VideoSelector:
     def _verify_completion(self) -> bool:
         """完了記録と全成果物のhashが一致するか検証する."""
         completion_path = self._completion_path()
-        if not completion_path.is_file():
+        if not completion_path.is_file() or completion_path.is_symlink():
             return False
         try:
             payload = read_json(completion_path)
@@ -1086,9 +1168,7 @@ class VideoSelector:
             and isinstance(size, int)
             and not isinstance(size, bool)
             and size >= 0
-            and isinstance(sha256, str)
-            and len(sha256) == 64
-            and all(character in "0123456789abcdef" for character in sha256)
+            and _is_sha256(sha256)
         )
 
     def _extract_candidates(self) -> list[FrameCandidate]:
@@ -1101,6 +1181,7 @@ class VideoSelector:
                 / source.candidate_cache_key
                 / "frames"
             )
+            prepare_cache_directory(self.cache_root, source_dir)
             for sample_index, timestamp in enumerate(source.timestamps, start=1):
                 frame_id = stable_frame_id(source.identity.key, sample_index)
                 candidates.append(
@@ -1260,6 +1341,7 @@ class VideoSelector:
         """正常な動画単位の機械評価cacheを復元する."""
         cache_key = self._mechanical_cache_key(source)
         path = source.cache_dir / "mechanical-analysis" / f"{cache_key}.json"
+        prepare_cache_directory(self.cache_root, path.parent)
         data = read_phase_data(
             path,
             phase="mechanical-analysis",
@@ -1294,6 +1376,7 @@ class VideoSelector:
             candidate.frame_id: candidate for candidate in expected_candidates
         }
         restored: list[FrameCandidate] = []
+        restored_ids: set[str] = set()
         for raw in data["candidates"]:
             if not isinstance(raw, dict):
                 return None
@@ -1301,9 +1384,9 @@ class VideoSelector:
             timestamp = raw.get("timestamp_seconds")
             quality = raw.get("quality_score")
             difference_hash = raw.get("difference_hash")
-            expected = (
-                expected_by_id.get(frame_id) if isinstance(frame_id, str) else None
-            )
+            if not isinstance(frame_id, str):
+                return None
+            expected = expected_by_id.get(frame_id)
             if (
                 expected is None
                 or timestamp != expected.timestamp_seconds
@@ -1313,6 +1396,7 @@ class VideoSelector:
                 or not 0 <= float(quality) <= 100
                 or not isinstance(difference_hash, str)
                 or len(difference_hash) != 16
+                or frame_id in restored_ids
             ):
                 return None
             try:
@@ -1326,6 +1410,7 @@ class VideoSelector:
                     difference_hash=parsed_hash,
                 )
             )
+            restored_ids.add(frame_id)
         return restored
 
     def _save_mechanical_candidates(
@@ -1337,6 +1422,7 @@ class VideoSelector:
         """動画単位の機械評価結果をpath非依存で保存する."""
         cache_key = self._mechanical_cache_key(source)
         path = source.cache_dir / "mechanical-analysis" / f"{cache_key}.json"
+        prepare_cache_directory(self.cache_root, path.parent)
         write_phase_data(
             path,
             phase="mechanical-analysis",
@@ -1366,6 +1452,7 @@ class VideoSelector:
         """候補画像digestを含む機械評価状態のSHA-256を返す."""
         cache_key = self._mechanical_cache_key(source)
         path = source.cache_dir / "mechanical-analysis" / f"{cache_key}.json"
+        prepare_cache_directory(self.cache_root, path.parent)
         if not path.is_file():
             raise RuntimeError(f"機械評価cacheが見つかりません: {path}")
         return file_sha256(path)
@@ -1560,6 +1647,7 @@ class VideoSelector:
         for candidate in candidates:
             source = self._source_for(candidate)
             context_dir = self._context_directory(source)
+            prepare_cache_directory(self.cache_root, context_dir)
             stream_start = source.metadata.start_time_seconds
             stream_end = stream_start + source.metadata.duration_seconds
             context_end = stream_end - source.end_margin_seconds
@@ -1720,6 +1808,7 @@ class VideoSelector:
                         f"{batch[0].frame_id}-{batch[-1].frame_id}.jpg"
                     )
                 )
+                prepare_cache_directory(self.cache_root, sheet_path.parent)
                 build_contact_sheet(batch, sheet_path, context_dir=context_dir)
                 last_error: Exception | None = None
                 for attempt in range(1, 4):
@@ -1799,7 +1888,9 @@ class VideoSelector:
     ) -> Path:
         """動画と評価phaseに対応する追記可能な状態pathを返す."""
         phase_name = "primary" if _is_primary_stage(stage) else "secondary"
-        return source.cache_dir / "assessments" / phase_name / f"{cache_key}.json"
+        path = source.cache_dir / "assessments" / phase_name / f"{cache_key}.json"
+        prepare_cache_directory(self.cache_root, path.parent)
+        return path
 
     def _assessment_cache_key(
         self,
@@ -1933,19 +2024,60 @@ contact sheet内の対象ID: {ids}
                 dict(sorted(self.assessor.gpu_evidence.items())),
             )
 
-    def _write_selected_artifacts(
+    def _publish_selected_artifacts(
         self,
         selected: Sequence[SelectedFrame],
     ) -> list[Path]:
+        """旧成果物を保持したまま新成果物を完成させてpublicationする."""
+        if not self._replace_registered_output:
+            return self._write_selected_artifacts(selected)
+        prepare_cache_directory(self.cache_root, self.work_dir)
+        with TemporaryDirectory(
+            prefix="artifact-staging-",
+            dir=self.work_dir,
+        ) as staging_name:
+            staged_artifacts = self._write_selected_artifacts(
+                selected,
+                artifact_dir=Path(staging_name),
+            )
+            output_entries = list(self.output_dir.iterdir())
+            unknown_entries = [
+                path for path in output_entries if not self._is_managed_artifact(path)
+            ]
+            if unknown_entries:
+                raise RuntimeError(
+                    "成果物publication前に未管理fileが追加されました: "
+                    f"{unknown_entries[0]}"
+                )
+            self._invalidate_output_completions()
+            published: list[Path] = []
+            staged_names = {path.name for path in staged_artifacts}
+            for staged_path in staged_artifacts:
+                published_path = self.output_dir / staged_path.name
+                staged_path.replace(published_path)
+                published.append(published_path)
+            for old_path in output_entries:
+                if old_path.name not in staged_names:
+                    old_path.unlink()
+            logger.info("登録済み生成物を置換しました: %d件", len(published))
+            return published
+
+    def _write_selected_artifacts(
+        self,
+        selected: Sequence[SelectedFrame],
+        *,
+        artifact_dir: Path | None = None,
+    ) -> list[Path]:
         """full resolution画像、report、一覧sheetを出力する."""
         logger.info("最終画像とレポートを出力します: %d件", len(selected))
+        target_dir = artifact_dir or self.output_dir
         width = max(2, len(str(self.request.output_count)))
         report_items: list[dict[str, Any]] = []
         contact_candidates: list[FrameCandidate] = []
         selected_paths: list[Path] = []
         for rank, selected_frame in enumerate(selected, start=1):
             source = self._source_for(selected_frame.candidate)
-            output_path = self.output_dir / f"selected-{rank:0{width}d}.jpg"
+            output_path = target_dir / f"selected-{rank:0{width}d}.jpg"
             self.frame_extractor.extract_frame(
                 source.path,
                 selected_frame.candidate.timestamp_seconds,
@@ -1992,7 +2124,7 @@ contact sheet内の対象ID: {ids}
                 )
             )
 
-        report_path = self.output_dir / "report.json"
+        report_path = target_dir / "report.json"
         write_json_atomic(
             report_path,
             {
@@ -2033,7 +2165,7 @@ contact sheet内の対象ID: {ids}
                 "selected": report_items,
             },
         )
-        contact_sheet_path = self.output_dir / "selected-contact-sheet.jpg"
+        contact_sheet_path = target_dir / "selected-contact-sheet.jpg"
         build_contact_sheet(contact_candidates, contact_sheet_path)
         return [report_path, contact_sheet_path, *selected_paths]
 

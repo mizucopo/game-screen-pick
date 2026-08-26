@@ -174,7 +174,8 @@ cacheはprobe、候補抽出・機械評価、一次評価、二次評価など�
 管理します。各phaseは独立したversionと条件keyを持ち、version、model digest、prompt、
 Game Context、選定設定などが変わると、そのphaseと依存する後続だけを再実行します。
 動的生成したGame Contextも生成条件とともに保存し、同じGame Title、provider、modelの
-再実行ではWeb検索やcontext生成を繰り返しません。
+再実行ではWeb検索やcontext生成を繰り返しません。Ollama providerでは正規化した
+Ollama hostも生成条件に含め、別endpointの同名modelを混同しません。
 動画を追加した場合は既存動画の利用可能なphaseを維持し、新規動画のphaseを追加した後、
 全動画を横断する候補選定、最終選定、Selected Image、Selected Contact Sheet、reportを
 再生成します。

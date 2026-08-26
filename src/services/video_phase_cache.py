@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import stat
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -38,6 +40,29 @@ class VideoCacheIdentity:
     relative_path: str
     size: int
     key: str
+
+
+def prepare_cache_directory(cache_root: Path, directory: Path) -> Path:
+    """cache root配下のsymlinkを辿らずmanaged directoryを用意する."""
+    try:
+        relative = directory.relative_to(cache_root)
+    except ValueError as error:
+        raise RuntimeError(f"cache directoryがcache root外です: {directory}") from error
+    current = cache_root
+    for part in ("", *relative.parts):
+        if part:
+            current /= part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            with suppress(FileExistsError):
+                current.mkdir()
+            mode = current.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise RuntimeError(f"cache directoryにsymlinkは使用できません: {current}")
+        if not stat.S_ISDIR(mode):
+            raise RuntimeError(f"cache pathがdirectoryではありません: {current}")
+    return directory
 
 
 def resolve_input_directory(videos: tuple[Path, ...]) -> Path:
