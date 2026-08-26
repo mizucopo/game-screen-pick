@@ -1,0 +1,23 @@
+[run]
+# game_titleとgame_contextはどちらか一方だけを指定します。
+# game_title = "ゲーム名"
+game_context = """
+ジャンル: RPG。探索と会話を進める。
+代表的な画面はフィールド、会話、戦闘。
+景観と人物が明瞭な画像を重視する。
+"""
+
+num = 30
+game_context_provider = "ollama"
+# game_context_model = "provider固有のmodel名"
+primary_model = "qwen3.8:27b"
+secondary_model = "muse-glimmer:30b"
+
+# 未指定時はOLLAMA_HOST、その後127.0.0.1:11434を使用します。
+# ollama_host = "192.168.1.31:11434"
+ollama_timeout = 900.0
+allow_cpu = false
+
+ffmpeg_workers = 2
+# sample_interval_seconds = 2.5
+debug = false

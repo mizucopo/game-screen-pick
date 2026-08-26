@@ -6,10 +6,13 @@ import os
 import sys
 from importlib import metadata
 from pathlib import Path
+from typing import Callable, TypeVar
 
 import click
+from click.core import ParameterSource
 
 from .application.run_video import run_video_application
+from .models.video_run_config import VideoRunConfig
 from .models.video_selection_request import (
     MAXIMUM_OUTPUT_COUNT,
     MINIMUM_SAMPLE_INTERVAL_SECONDS,
@@ -17,9 +20,8 @@ from .models.video_selection_request import (
 )
 from .services.game_context_generator import SUPPORTED_GAME_CONTEXT_PROVIDERS
 from .utils.elapsed_log_formatter import ElapsedLogFormatter
+from .utils.video_run_config_loader import VideoRunConfigLoader
 
-DEFAULT_PRIMARY_MODEL = "qwen3.8:27b"
-DEFAULT_SECONDARY_MODEL = "muse-glimmer:30b"
 PROJECT_NAME = "game-screen-pick"
 SUPPORTED_VIDEO_EXTENSIONS = frozenset(
     {
@@ -44,6 +46,8 @@ console_handler.setFormatter(ElapsedLogFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[console_handler], force=True)
 logger = logging.getLogger(__name__)
 
+_ConfigValueT = TypeVar("_ConfigValueT")
+
 
 def _project_version() -> str:
     """install済みpackage metadataから実行versionを返す."""
@@ -61,6 +65,7 @@ def _display_ollama_host(ollama_host: str | None) -> str:
 
 def _log_cli_start(
     *,
+    config_path: str | None,
     output_count: int,
     game_title: str | None,
     game_context: str,
@@ -80,6 +85,7 @@ def _log_cli_start(
     """project情報と実際に適用するCLI optionを起動直後に出力する."""
     logger.info("%s %s の画像選定処理を開始します。", PROJECT_NAME, _project_version())
     options: dict[str, object] = {
+        "--config": config_path or "<未指定>",
         "--num": output_count,
         "--game-title": (
             game_title.strip() if game_title and game_title.strip() else ""
@@ -164,6 +170,161 @@ def validate_ffmpeg_workers(value: int | str | None) -> int | None:
     return workers
 
 
+def _with_config_hint(
+    *,
+    key: str,
+    resolve: Callable[[], _ConfigValueT],
+) -> _ConfigValueT:
+    """設定ファイル値の範囲エラーへkey名を付ける."""
+    try:
+        return resolve()
+    except click.BadParameter as error:
+        raise click.BadParameter(error.message, param_hint=f"[run].{key}") from error
+
+
+def _command_line_value(
+    context: click.Context,
+    parameter_name: str,
+    value: _ConfigValueT,
+) -> _ConfigValueT | None:
+    """optionがcommand lineで明示された場合だけ値を返す."""
+    if context.get_parameter_source(parameter_name) is ParameterSource.COMMANDLINE:
+        return value
+    return None
+
+
+def resolve_video_run_config(
+    *,
+    config_path: str | None,
+    output_count: int | None,
+    game_title: str | None,
+    game_context: str | None,
+    game_context_provider: str | None,
+    game_context_model: str | None,
+    primary_model: str | None,
+    secondary_model: str | None,
+    ollama_host: str | None,
+    ollama_timeout: float | None,
+    allow_cpu: bool | None,
+    ffmpeg_workers: int | None,
+    sample_interval_seconds: float | None,
+    debug: bool | None,
+) -> VideoRunConfig:
+    """組み込み既定値、TOML、明示CLI optionの順に実効設定を解決する."""
+    try:
+        file_values = VideoRunConfigLoader.load(config_path)
+    except ValueError as error:
+        raise click.BadParameter(str(error), param_hint="--config") from error
+
+    defaults = VideoRunConfig()
+    values: dict[str, object] = {
+        "num": defaults.output_count,
+        "game_title": defaults.game_title,
+        "game_context": defaults.game_context,
+        "game_context_provider": defaults.game_context_provider,
+        "game_context_model": defaults.game_context_model,
+        "primary_model": defaults.primary_model,
+        "secondary_model": defaults.secondary_model,
+        "ollama_host": defaults.ollama_host,
+        "ollama_timeout": defaults.ollama_timeout,
+        "allow_cpu": defaults.allow_cpu,
+        "ffmpeg_workers": defaults.ffmpeg_workers,
+        "sample_interval_seconds": defaults.sample_interval_seconds,
+        "debug": defaults.debug,
+    }
+    values.update(file_values)
+    cli_values = {
+        "num": output_count,
+        "game_title": game_title,
+        "game_context": game_context,
+        "game_context_provider": game_context_provider,
+        "game_context_model": game_context_model,
+        "primary_model": primary_model,
+        "secondary_model": secondary_model,
+        "ollama_host": ollama_host,
+        "ollama_timeout": ollama_timeout,
+        "allow_cpu": allow_cpu,
+        "ffmpeg_workers": ffmpeg_workers,
+        "sample_interval_seconds": sample_interval_seconds,
+        "debug": debug,
+    }
+    values.update(
+        {key: value for key, value in cli_values.items() if value is not None}
+    )
+
+    provider = str(values["game_context_provider"])
+    if provider not in SUPPORTED_GAME_CONTEXT_PROVIDERS:
+        choices = ", ".join(SUPPORTED_GAME_CONTEXT_PROVIDERS)
+        raise click.BadParameter(
+            f"{choices}から指定してください（実際の値: {provider}）",
+            param_hint="[run].game_context_provider",
+        )
+
+    raw_output_count = values["num"]
+    assert isinstance(raw_output_count, int) and not isinstance(raw_output_count, bool)
+    resolved_output_count = _with_config_hint(
+        key="num",
+        resolve=lambda: validate_output_count(raw_output_count),
+    )
+    raw_ollama_timeout = values["ollama_timeout"]
+    assert isinstance(raw_ollama_timeout, int | float) and not isinstance(
+        raw_ollama_timeout, bool
+    )
+    resolved_ollama_timeout = _with_config_hint(
+        key="ollama_timeout",
+        resolve=lambda: validate_positive_float(float(raw_ollama_timeout)),
+    )
+    raw_ffmpeg_workers = values["ffmpeg_workers"]
+    assert isinstance(raw_ffmpeg_workers, int) and not isinstance(
+        raw_ffmpeg_workers, bool
+    )
+    resolved_ffmpeg_workers = _with_config_hint(
+        key="ffmpeg_workers",
+        resolve=lambda: validate_ffmpeg_workers(raw_ffmpeg_workers),
+    )
+    raw_sample_interval = values["sample_interval_seconds"]
+    assert raw_sample_interval is None or (
+        isinstance(raw_sample_interval, int | float)
+        and not isinstance(raw_sample_interval, bool)
+    )
+    resolved_sample_interval = _with_config_hint(
+        key="sample_interval_seconds",
+        resolve=lambda: validate_sample_interval(
+            float(raw_sample_interval) if raw_sample_interval is not None else None
+        ),
+    )
+    assert isinstance(resolved_output_count, int)
+    assert isinstance(resolved_ollama_timeout, float)
+    assert isinstance(resolved_ffmpeg_workers, int)
+    assert resolved_sample_interval is None or isinstance(
+        resolved_sample_interval, float
+    )
+
+    return VideoRunConfig(
+        output_count=resolved_output_count,
+        game_title=(
+            str(values["game_title"]) if values["game_title"] is not None else None
+        ),
+        game_context=str(values["game_context"]),
+        game_context_provider=provider,
+        game_context_model=(
+            str(values["game_context_model"])
+            if values["game_context_model"] is not None
+            else None
+        ),
+        primary_model=str(values["primary_model"]),
+        secondary_model=str(values["secondary_model"]),
+        ollama_host=(
+            str(values["ollama_host"]) if values["ollama_host"] is not None else None
+        ),
+        ollama_timeout=resolved_ollama_timeout,
+        allow_cpu=bool(values["allow_cpu"]),
+        ffmpeg_workers=resolved_ffmpeg_workers,
+        sample_interval_seconds=resolved_sample_interval,
+        debug=bool(values["debug"]),
+    )
+
+
 def discover_input_videos(input_video_dir: str) -> tuple[str, ...]:
     """入力ディレクトリ直下の対象動画を安定した順序で列挙する."""
     input_path = Path(input_video_dir)
@@ -212,6 +373,14 @@ def validate_game_context_input(
 
 @click.command()
 @click.option(
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=str),
+    default=None,
+    help="TOML設定ファイル",
+)
+@click.option(
     "-n",
     "--num",
     "output_count",
@@ -245,13 +414,13 @@ def validate_game_context_input(
 )
 @click.option(
     "--primary-model",
-    default=DEFAULT_PRIMARY_MODEL,
+    default=VideoRunConfig.primary_model,
     show_default=True,
     help="一次評価に使うOllama vision model",
 )
 @click.option(
     "--secondary-model",
-    default=DEFAULT_SECONDARY_MODEL,
+    default=VideoRunConfig.secondary_model,
     show_default=True,
     help="遷移確認を含む二次評価に使うOllama vision model",
 )
@@ -269,8 +438,8 @@ def validate_game_context_input(
     help="Ollama APIのbatch単位timeout秒数",
 )
 @click.option(
-    "--allow-cpu",
-    is_flag=True,
+    "--allow-cpu/--no-allow-cpu",
+    default=False,
     help="Ollama modelのGPU利用を確認できなくても続行",
 )
 @click.option(
@@ -291,10 +460,13 @@ def validate_game_context_input(
         "未指定時は動画時間と選択枚数から自動決定"
     ),
 )
-@click.option("--debug", is_flag=True, help="デバッグログを有効化")
+@click.option("--debug/--no-debug", default=False, help="デバッグログを有効化")
 @click.argument("input_video_dir", type=click.Path(path_type=str))
 @click.argument("output_dir", type=click.Path(path_type=str))
+@click.pass_context
 def execute(
+    context: click.Context,
+    config_path: str | None,
     output_count: int,
     game_title: str | None,
     game_context: str,
@@ -312,22 +484,47 @@ def execute(
     output_dir: str,
 ) -> None:
     """入力ディレクトリのゲーム動画全体からブログ掲載用画像を選定する."""
+    config = resolve_video_run_config(
+        config_path=config_path,
+        output_count=_command_line_value(context, "output_count", output_count),
+        game_title=_command_line_value(context, "game_title", game_title),
+        game_context=_command_line_value(context, "game_context", game_context),
+        game_context_provider=_command_line_value(
+            context, "game_context_provider", game_context_provider
+        ),
+        game_context_model=_command_line_value(
+            context, "game_context_model", game_context_model
+        ),
+        primary_model=_command_line_value(context, "primary_model", primary_model),
+        secondary_model=_command_line_value(
+            context, "secondary_model", secondary_model
+        ),
+        ollama_host=_command_line_value(context, "ollama_host", ollama_host),
+        ollama_timeout=_command_line_value(context, "ollama_timeout", ollama_timeout),
+        allow_cpu=_command_line_value(context, "allow_cpu", allow_cpu),
+        ffmpeg_workers=_command_line_value(context, "ffmpeg_workers", ffmpeg_workers),
+        sample_interval_seconds=_command_line_value(
+            context, "sample_interval_seconds", sample_interval_seconds
+        ),
+        debug=_command_line_value(context, "debug", debug),
+    )
     input_videos = discover_input_videos(input_video_dir)
-    validate_game_context_input(game_title, game_context, output_dir)
+    validate_game_context_input(config.game_title, config.game_context, output_dir)
     _log_cli_start(
-        output_count=output_count,
-        game_title=game_title,
-        game_context=game_context,
-        game_context_provider=game_context_provider,
-        game_context_model=game_context_model,
-        primary_model=primary_model,
-        secondary_model=secondary_model,
-        ollama_host=ollama_host,
-        ollama_timeout=ollama_timeout,
-        allow_cpu=allow_cpu,
-        ffmpeg_workers=ffmpeg_workers,
-        sample_interval_seconds=sample_interval_seconds,
-        debug=debug,
+        config_path=config_path,
+        output_count=config.output_count,
+        game_title=config.game_title,
+        game_context=config.game_context,
+        game_context_provider=config.game_context_provider,
+        game_context_model=config.game_context_model,
+        primary_model=config.primary_model,
+        secondary_model=config.secondary_model,
+        ollama_host=config.ollama_host,
+        ollama_timeout=config.ollama_timeout,
+        allow_cpu=config.allow_cpu,
+        ffmpeg_workers=config.ffmpeg_workers,
+        sample_interval_seconds=config.sample_interval_seconds,
+        debug=config.debug,
         input_video_dir=input_video_dir,
         output_dir=output_dir,
     )
@@ -335,19 +532,19 @@ def execute(
         VideoSelectionRequest(
             input_videos=input_videos,
             output_dir=output_dir,
-            output_count=output_count,
-            game_title=game_title,
-            game_context=game_context,
-            game_context_provider=game_context_provider,
-            game_context_model=game_context_model,
-            primary_model=primary_model,
-            secondary_model=secondary_model,
-            ollama_host=ollama_host,
-            ollama_timeout=ollama_timeout,
-            allow_cpu=allow_cpu,
-            ffmpeg_workers=ffmpeg_workers,
-            sample_interval_seconds=sample_interval_seconds,
-            debug=debug,
+            output_count=config.output_count,
+            game_title=config.game_title,
+            game_context=config.game_context,
+            game_context_provider=config.game_context_provider,
+            game_context_model=config.game_context_model,
+            primary_model=config.primary_model,
+            secondary_model=config.secondary_model,
+            ollama_host=config.ollama_host,
+            ollama_timeout=config.ollama_timeout,
+            allow_cpu=config.allow_cpu,
+            ffmpeg_workers=config.ffmpeg_workers,
+            sample_interval_seconds=config.sample_interval_seconds,
+            debug=config.debug,
         )
     )
 

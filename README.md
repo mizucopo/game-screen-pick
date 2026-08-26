@@ -26,6 +26,23 @@ uv run game-screen-pick [オプション] <入力動画ディレクトリ> <出�
 標準では30枚を選び、一次評価に`qwen3.8:27b`、二次評価に
 `muse-glimmer:30b`を使います。
 
+繰り返し使うオプションはTOML設定ファイルへまとめ、`-c`または`--config`で
+指定できます。入力動画ディレクトリと出力フォルダはCLIへ残ります。
+
+```bash
+uv run game-screen-pick \
+  -c ./docs/examples/config.toml \
+  ./recordings \
+  ./recordings-selected
+```
+
+設定ファイルは`[run]` tableに、CLI optionのハイフンをアンダースコアへ
+置き換えたkeyを記述します。全項目を記述する必要はありません。明示したCLI option、
+設定ファイル、組み込み既定値の順で値を解決します。`ollama_host`だけは設定ファイルにも
+CLIにもない場合、`OLLAMA_HOST`、`127.0.0.1:11434`の順で解決します。
+未知のsectionやkey、型または範囲が不正な値は処理開始前にエラーになります。
+完全な例は[`docs/examples/config.toml`](docs/examples/config.toml)を参照してください。
+
 ```bash
 OLLAMA_HOST=192.168.1.31:11434 \
   uv run game-screen-pick \
@@ -62,6 +79,7 @@ OPENAI_API_KEY=... \
 
 ### オプション
 
+- `-c`, `--config`: TOML設定ファイル。設定値は明示したCLI optionで上書き可能
 - `-n`, `--num`: 選択枚数（1から600、既定: 30）
 - `--game-title`: Web検索からGame Contextを生成するためのゲーム表記
 - `--game-context`: 画像評価に直接使用するGame Context
