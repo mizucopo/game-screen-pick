@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from ..utils.video_selection_files import json_digest, read_json, write_json_atomic
+from ..utils.video_selection_files import (
+    json_digest,
+    read_json,
+    write_json_atomic,
+    write_text_atomic,
+)
 
 CACHE_DIRECTORY_NAME = "cache-game-screen-pick"
 CACHE_INFO_FILENAME = "CACHE_INFO.txt"
@@ -80,8 +85,12 @@ def prepare_cache_root(input_directory: Path) -> Path:
     info_path = cache_root / CACHE_INFO_FILENAME
     if info_path.is_symlink():
         raise RuntimeError(f"cache説明fileにsymlinkは使用できません: {info_path}")
-    if not info_path.is_file() or info_path.read_text(encoding="utf-8") != _CACHE_INFO:
-        info_path.write_text(_CACHE_INFO, encoding="utf-8")
+    try:
+        current_info = info_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        current_info = None
+    if current_info != _CACHE_INFO:
+        write_text_atomic(info_path, _CACHE_INFO)
     return cache_root
 
 

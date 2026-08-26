@@ -404,6 +404,110 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     assert all("テスト用のGame Context" in prompt for prompt in assessor.prompts)
 
 
+@pytest.mark.parametrize(
+    "corruption",
+    ["truncated", "invalid-artifacts", "missing-artifact"],
+)
+def test_pipeline_regenerates_corrupt_completion_record(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    """読取不能または不正な完了記録をmissとして成果物を再生成すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    completion_path = _completion_path(_single_run_cache(tmp_path))
+    if corruption == "truncated":
+        completion_path.write_text("{", encoding="utf-8")
+    elif corruption == "invalid-artifacts":
+        completion = json.loads(completion_path.read_text(encoding="utf-8"))
+        completion["artifacts"] = {}
+        completion_path.write_text(json.dumps(completion), encoding="utf-8")
+    else:
+        completion = json.loads(completion_path.read_text(encoding="utf-8"))
+        completion["artifacts"].pop()
+        completion_path.write_text(json.dumps(completion), encoding="utf-8")
+    unavailable_assessor = UnavailableAssessor()
+
+    resumed_sheet = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=unavailable_assessor,
+    ).run()
+
+    assert resumed_sheet == output_dir / "selected-contact-sheet.jpg"
+    regenerated = json.loads(completion_path.read_text(encoding="utf-8"))
+    assert len(regenerated["artifacts"]) == 4
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
+def test_pipeline_rewrites_undecodable_cache_info_without_losing_phase_cache(
+    tmp_path: Path,
+) -> None:
+    """decode不能なcache説明fileだけを書き直し、高価なphaseを再利用すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    primary_cache = _assessment_files(tmp_path, "primary")[0]
+    primary_cache_bytes = primary_cache.read_bytes()
+    info_path = _cache_root(tmp_path) / "CACHE_INFO.txt"
+    info_path.write_bytes(b"\xff")
+    unavailable_assessor = UnavailableAssessor()
+
+    resumed_sheet = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=unavailable_assessor,
+    ).run()
+
+    assert resumed_sheet == output_dir / "selected-contact-sheet.jpg"
+    assert "game-screen-pick" in info_path.read_text(encoding="utf-8")
+    assert primary_cache.read_bytes() == primary_cache_bytes
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
 def test_pipeline_generates_context_before_video_processing_and_reuses_it(
     tmp_path: Path,
 ) -> None:

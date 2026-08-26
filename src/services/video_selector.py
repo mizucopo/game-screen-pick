@@ -1033,27 +1033,49 @@ class VideoSelector:
         completion_path = self._completion_path()
         if not completion_path.is_file():
             return False
-        payload = read_json(completion_path)
+        try:
+            payload = read_json(completion_path)
+        except (OSError, ValueError):
+            logger.warning("破損した完了記録を再利用せず成果物を再生成します")
+            return False
         if not isinstance(payload, dict):
-            raise RuntimeError("完了記録が不正です")
+            logger.warning("不正な完了記録を再利用せず成果物を再生成します")
+            return False
         if payload.get("manifest_digest") != self.manifest_digest or payload.get(
             "input_directory"
         ) != str(self.input_dir):
             return False
         artifacts = payload.get("artifacts")
         if not isinstance(artifacts, list):
-            raise RuntimeError("完了記録のartifactsが不正です")
+            logger.warning("不正な完了記録を再利用せず成果物を再生成します")
+            return False
+        if any(not self._is_valid_artifact_record(item) for item in artifacts):
+            logger.warning("不正な完了記録を再利用せず成果物を再生成します")
+            return False
+        width = max(2, len(str(self.request.output_count)))
+        expected_paths = {
+            "report.json",
+            "selected-contact-sheet.jpg",
+            *(
+                f"selected-{rank:0{width}d}.jpg"
+                for rank in range(1, self.request.output_count + 1)
+            ),
+        }
+        recorded_paths = [item["path"] for item in artifacts]
+        if len(recorded_paths) != len(expected_paths) or set(recorded_paths) != (
+            expected_paths
+        ):
+            logger.warning("不正な完了記録を再利用せず成果物を再生成します")
+            return False
         logger.info("完了済み成果物を検証しています: %d件", len(artifacts))
         output_root = self.output_dir.resolve()
         for item in artifacts:
-            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
-                raise RuntimeError("完了記録のartifactが不正です")
             artifact = (self.output_dir / item["path"]).resolve()
             try:
                 artifact.relative_to(output_root)
-            except ValueError as error:
-                message = "成果物パスが出力フォルダ外を指しています"
-                raise RuntimeError(message) from error
+            except ValueError:
+                logger.warning("不正な完了記録を再利用せず成果物を再生成します")
+                return False
             if (
                 not artifact.is_file()
                 or artifact.stat().st_size != item.get("size")
@@ -1061,6 +1083,25 @@ class VideoSelector:
             ):
                 raise RuntimeError(f"完了済み成果物が変更されています: {artifact}")
         return True
+
+    @staticmethod
+    def _is_valid_artifact_record(item: object) -> bool:
+        """成果物変更を検証できる構造の完了記録か返す."""
+        if not isinstance(item, dict):
+            return False
+        path = item.get("path")
+        size = item.get("size")
+        sha256 = item.get("sha256")
+        return (
+            isinstance(path, str)
+            and bool(path)
+            and isinstance(size, int)
+            and not isinstance(size, bool)
+            and size >= 0
+            and isinstance(sha256, str)
+            and len(sha256) == 64
+            and all(character in "0123456789abcdef" for character in sha256)
+        )
 
     def _extract_candidates(self) -> list[FrameCandidate]:
         """全入力動画の等間隔位置から縮小候補フレームを抽出する."""

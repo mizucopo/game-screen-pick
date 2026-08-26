@@ -10,6 +10,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from PIL import Image
@@ -89,6 +90,29 @@ def read_json(path: Path) -> Any:
     """UTF-8のJSONファイルを読む."""
     with path.open(encoding="utf-8") as file:
         return json.load(file)
+
+
+def write_text_atomic(path: Path, content: str) -> None:
+    """UTF-8 textを同一directory内でatomicに置換する."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".partial",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def write_json_atomic(path: Path, payload: Any) -> None:
