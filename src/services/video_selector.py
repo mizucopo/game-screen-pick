@@ -753,8 +753,7 @@ class VideoSelector:
 
     def _output_completion_filename(self) -> str:
         """Output Folderごとの完了記録file名を返す."""
-        output_key = json_digest({"output_path": str(self.output_dir)})
-        return f"completion-{output_key}.json"
+        return f"completion-{self._output_key()}.json"
 
     def _completion_path(self) -> Path:
         """現在のrunとOutput Folderに対応する完了記録pathを返す."""
@@ -762,8 +761,11 @@ class VideoSelector:
 
     def _output_registration_filename(self) -> str:
         """Output Folderごとの所有記録file名を返す."""
-        output_key = json_digest({"output_path": str(self.output_dir)})
-        return f"output-{output_key}.json"
+        return f"output-{self._output_key()}.json"
+
+    def _output_key(self) -> str:
+        """Output Folder pathの安定keyを返す."""
+        return json_digest({"output_path": str(self.output_dir)})
 
     def _register_output(self) -> None:
         """中断後も自身のOutput Folderを識別できるようrunへ記録する."""
