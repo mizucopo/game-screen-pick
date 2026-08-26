@@ -27,10 +27,10 @@ def file_sha256(path: Path) -> str:
 
 
 @contextmanager
-def output_directory_lock(work_dir: Path) -> Iterator[None]:
-    """同一outputのpipelineをadvisory lockで一つに制限する."""
-    work_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = work_dir / RUN_LOCK_FILENAME
+def cache_directory_lock(cache_dir: Path) -> Iterator[None]:
+    """同一cache rootのpipelineをadvisory lockで一つに制限する."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = cache_dir / RUN_LOCK_FILENAME
     lock_file = lock_path.open("a+b")
     locked = False
     try:
@@ -40,7 +40,7 @@ def output_directory_lock(work_dir: Path) -> Iterator[None]:
             if error.errno not in {errno.EACCES, errno.EAGAIN}:
                 raise
             raise RuntimeError(
-                f"同じ出力フォルダを使う処理がすでに実行中です: {work_dir.parent}"
+                f"同じInput Video Directoryの処理がすでに実行中です: {cache_dir.parent}"
             ) from error
         locked = True
         yield

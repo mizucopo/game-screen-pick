@@ -4,4 +4,4 @@ Issue #272 extends the Issue #271 pipeline from one input video to an ordered se
 
 Candidates retain their source video through both Ollama stages and final artifact generation. When enough output slots and valid candidates exist, secondary and final selection cover every source at least once, then balance source, scene, visual, and within-video timeline diversity globally. The report and contact sheet identify the source of every selected image.
 
-Resumability remains a run-level guarantee. The manifest binds the ordered input list, full SHA-256 and metadata for every video, per-video sample positions, model metadata, prompts, and selection settings; changing or reordering any input requires a new output folder.
+Resumability remains a product guarantee, but the run-level full-SHA-256 identity and all-or-nothing reuse decision from this paragraph are superseded by ADR 0008. Adding an Input Video now preserves reusable per-video phases while rerunning input-set-wide selection and artifacts.

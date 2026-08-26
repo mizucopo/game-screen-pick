@@ -136,23 +136,53 @@ recording-selected/
 ├── ...
 ├── selected-30.jpg
 ├── selected-contact-sheet.jpg
-├── report.json
-└── .game-screen-pick/
-    └── 再開用のmanifest、候補画像、評価cache
+└── report.json
 ```
 
 - `selected-XX.jpg`: ブログ掲載候補のfull resolution画像
 - `selected-contact-sheet.jpg`: 選定画像を順位・入力動画・動画時刻付きで一覧できる画像
 - `report.json`: 入力元、選定時刻、score、scene、model評価を含むmachine-readable report
 
-新規実行時の出力フォルダは空である必要があります。途中で中断した場合は、
-同じ入力ディレクトリ内容・選択条件・modelで同じコマンドを再実行してください。
-抽出済みframeと完了済みOllama batchを再利用します。対象動画の追加、削除、改名、
-内容変更などで条件が変わった既存フォルダは上書きせず、新しい出力フォルダを要求します。
+新規実行時の出力フォルダは空である必要があります。途中で中断した場合は、同じ
+入力動画、選択条件、model、Output Folderで同じコマンドを再実行してください。
 完了済み実行では全成果物のsizeとSHA-256を検証し、Ollamaへ接続せずに結果を返します。
-動的生成したGame Context、provider、modelはmanifestへ保存します。再開時は保存済みの
-Game Contextを使用し、Web検索やcontext生成を繰り返しません。従来manifestに保存済みの
-Game Contextも再利用します。
+Input Video Directoryを移動した場合や動画を追加した場合は、新しい空のOutput Folderを
+指定すると、利用可能な動画単位cacheを使って成果物を再生成します。
+
+### 再開cache
+
+再開用cacheはInput Video Directory直下の見えるfolderへ保存します。
+
+```text
+recordings/
+├── game-part1.mp4
+├── game-part2.mp4
+└── cache-game-screen-pick/
+    ├── CACHE_INFO.txt
+    ├── videos/
+    │   └── 動画単位のprobe、候補frame、一次・二次評価cache
+    └── runs/
+        └── 入力集合ごとのmanifest、Output Folder完了記録
+```
+
+Input VideoはInput Video Directoryからの相対ファイル名とfile sizeで識別します。
+SHA-256、mtime、絶対pathは同一性判定へ使いません。そのため、Input Video Directoryと
+`cache-game-screen-pick/`を一緒に移動またはコピーしてもcacheを再利用できます。
+一方、同じ相対ファイル名とsizeのまま動画内容だけを変更しても検出しません。
+
+cacheはprobe、候補抽出・機械評価、一次評価、二次評価などのphaseとInput Video単位で
+管理します。各phaseは独立したversionと条件keyを持ち、version、model digest、prompt、
+Game Context、選定設定などが変わると、そのphaseと依存する後続だけを再実行します。
+動的生成したGame Contextも生成条件とともに保存し、同じGame Title、provider、modelの
+再実行ではWeb検索やcontext生成を繰り返しません。
+動画を追加した場合は既存動画の利用可能なphaseを維持し、新規動画のphaseを追加した後、
+全動画を横断する候補選定、最終選定、Selected Image、Selected Contact Sheet、reportを
+再生成します。
+
+`cache-game-screen-pick/`はgame-screen-pickを実行していないときにfolderごと削除できます。
+次回実行時に必要なcacheを安全に再生成します。同じ相対ファイル名とsizeの内容変更を
+確実に再処理したい場合も、このfolderを削除してください。旧Output Folder内の
+`.game-screen-pick/`や不正・schema不一致のcacheは再利用しません。
 
 候補数は全入力動画の合計で4,000件までです。指定した抽出間隔で上限を超える
 場合は、`config.toml`の`sample_interval_seconds`を広げてください。
@@ -161,11 +191,12 @@ Game Contextも再利用します。
 
 1. 各動画のほぼ先頭から末尾までを等間隔でsampleする
 2. 暗転、白飛び、単色frameを機械的に除外する
-3. 品質と時間分散から選択枚数の最大12倍を一次候補にする
+3. 品質と時間分散から各Input Videoで選択枚数の最大12倍を一次候補にする
 4. 一次modelがブログ掲載価値、遷移、sceneを評価する
-5. 入力動画・場面・見た目・動画時刻を分散させ、最大3倍を二次候補にする
+5. 場面・見た目・動画時刻を分散させ、各Input Videoで最大3倍を二次候補にする
 6. 二次modelが各候補の直前・対象・直後を見て再評価する
-7. 遷移frameを除外し、近い重複とtitle/map/menuへの偏りを抑えて選定する
+7. 全Input Videoの二次候補を統合し、遷移frame、近い重複、
+   title/map/menuへの偏りを抑えて選定する
 8. 個別画像、JSON report、一覧contact sheetを出力する
 
 特定タイトル専用の選定ruleは持ちません。最終Game Contextはmodel判断の補足で、

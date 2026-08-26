@@ -16,6 +16,12 @@ _Avoid_: recursive folder tree, single video path, caller-ordered file list
 一回の画像選定で扱う、Input Video Directoryから安定した順序で列挙した1本以上のInput Video。重複したpathは含めず、各動画の入力元をSelected Imageまで追跡する。
 _Avoid_: unordered folder scan, concatenated temporary video, duplicate input
 
+**Input Video Identity**:
+Input Video Directoryからの相対ファイル名とfile sizeの組。Input Video Directoryの
+移動やコピー後も同じInput Videoとして扱う。SHA-256、mtime、絶対pathはrun間の
+同一性判定へ使わず、同じ相対ファイル名とsizeを保った内容変更は検出対象外とする。
+_Avoid_: content hash, absolute-path identity, mtime identity
+
 **Game Title**:
 Web検索からGame Contextを生成するときだけ使うゲーム表記。正式名称に限定せず、
 略称、通称、かな・英数字・空白などの一般的な表記揺れを許容する。生成後の画像評価、
@@ -75,18 +81,27 @@ _Avoid_: resized evaluation frame, unreviewed candidate
 _Avoid_: Ollama batch input, machine-only report
 
 **Output Folder**:
-Selected Image、Selected Contact Sheet、reportと再開用作業状態を置く実行先。新規時は空で、再開時は同じrun manifestを持つ必要がある。
-_Avoid_: unconditional overwrite target, append-only destination
+Selected Image、Selected Contact Sheet、reportを置く実行先。再開用cacheは置かない。
+新規時は空で、cacheに登録済みの同じOutput Folderだけを中断後に再利用する。
+_Avoid_: phase cache root, unconditional overwrite target, append-only destination
+
+**Phase Cache**:
+Input Video Directory直下の`cache-game-screen-pick/`へ保存する、再生成可能な処理状態。
+Input Videoとphaseごとに独立したversionとsemantic input keyを持つ。phase versionまたは
+結果へ影響する条件が変わった場合は、そのphaseと依存する後続だけを再実行する。
+folder全体を削除でき、`CACHE_INFO.txt`が削除とidentityの契約を説明する。
+_Avoid_: user artifact, hidden Output Folder state, unversioned cache
 
 **Run Manifest**:
-全Input Videosの順序・指紋、最終Game Context、動的生成時のproviderとmodel、選定条件、
-動画ごとのsample位置、model digest、algorithm versionを固定する再開条件。同じmanifestの
-実行だけがOutput Folderを再利用できる。Game Titleと検索結果は含めない。
-_Avoid_: progress counter, human approval record
+Phase Cache内で、Input Video Identityの集合、最終Game Context、動的生成時のproviderと
+model、選定条件、動画ごとのsample位置、phase versionを固定するrun単位の条件。
+絶対path、mtime、Input Video全体のSHA-256、Game Title、検索結果は含めない。
+_Avoid_: Input Video content hash, Output Folder state, progress counter
 
 **Assessment Cache**:
-Ollama評価をbatch完了ごとにatomic保存した再開状態。中断やnetwork切断後は完了batchを再利用する。
-_Avoid_: final completion, cross-manifest cache reuse
+Input Videoと一次・二次phaseごとにOllama評価をbatch完了単位でatomic追記したPhase Cache。
+model digest、prompt、Game Context、選定設定、上流phase keyが一致する評価だけを再利用する。
+_Avoid_: final completion, run全体だけに束ねたcache, condition-free reuse
 
 **Completed Run**:
 指定枚数のSelected Image、report、Selected Contact Sheetが揃い、sizeとSHA-256を記録した状態。
