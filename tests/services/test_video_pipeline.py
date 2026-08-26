@@ -2361,6 +2361,66 @@ def test_pipeline_reuses_valid_completion_when_output_registration_is_corrupt(
     assert unavailable_assessor.assess_calls == 0
 
 
+@pytest.mark.parametrize(
+    "corruption",
+    ["missing-manifest", "manifest-digest", "incomplete-artifacts"],
+)
+def test_pipeline_rejects_completion_without_matching_run_manifest(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    """run manifestと完全一致しない完了記録を所有権根拠にしないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    run_cache = _single_run_cache(tmp_path)
+    next(run_cache.glob("output-*.json")).write_text("{", encoding="utf-8")
+    manifest_path = run_cache / "run-manifest.json"
+    if corruption == "missing-manifest":
+        manifest_path.unlink()
+    elif corruption == "manifest-digest":
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["output_count"] = 1
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    else:
+        completion_path = _completion_path(run_cache)
+        completion = json.loads(completion_path.read_text(encoding="utf-8"))
+        completion["artifacts"].pop()
+        completion_path.write_text(json.dumps(completion), encoding="utf-8")
+    original_artifacts = {path.name: path.read_bytes() for path in output_dir.iterdir()}
+
+    with pytest.raises(RuntimeError, match="対応する完了記録もありません"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=FakeAssessor(),
+        ).run()
+
+    assert {path.name: path.read_bytes() for path in output_dir.iterdir()} == (
+        original_artifacts
+    )
+
+
 def test_pipeline_preserves_completed_output_when_replacement_probe_fails(
     tmp_path: Path,
 ) -> None:
@@ -2805,6 +2865,62 @@ def test_mechanical_cache_rejects_duplicate_candidate_ids(tmp_path: Path) -> Non
     )
     payload = json.loads(mechanical_path.read_text(encoding="utf-8"))
     payload["data"]["candidates"].append(payload["data"]["candidates"][0])
+    mechanical_path.write_text(json.dumps(payload), encoding="utf-8")
+    second_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    second_selector._prepare_run()
+    second_candidates = second_selector._extract_candidates()
+
+    restored = second_selector._load_mechanical_candidates(
+        second_selector.sources[0],
+        second_candidates,
+    )
+
+    assert restored is None
+
+
+@pytest.mark.parametrize(
+    "difference_hash",
+    ["-000000000000001", "000000000000000g"],
+)
+def test_mechanical_cache_rejects_non_hexadecimal_difference_hash(
+    tmp_path: Path,
+    difference_hash: str,
+) -> None:
+    """16桁のunsigned hexadecimalではないdifference hashを拒否すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    first_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    first_selector._prepare_run()
+    candidates = first_selector._extract_candidates()
+    first_selector._preselect_candidates(candidates)
+    mechanical_path = next(
+        (_cache_root(tmp_path) / "videos").glob("*/mechanical-analysis/*.json")
+    )
+    payload = json.loads(mechanical_path.read_text(encoding="utf-8"))
+    payload["data"]["candidates"][0]["difference_hash"] = difference_hash
     mechanical_path.write_text(json.dumps(payload), encoding="utf-8")
     second_selector = SingleVideoSelector(
         request,

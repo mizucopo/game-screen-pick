@@ -99,13 +99,18 @@ def _log_value(value: object) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
-def _is_sha256(value: object) -> bool:
-    """lowercase hexadecimal SHA-256文字列か返す."""
+def _is_lower_hexadecimal(value: object, length: int) -> bool:
+    """指定桁数のlowercase hexadecimal文字列か返す."""
     return (
         isinstance(value, str)
-        and len(value) == 64
+        and len(value) == length
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _is_sha256(value: object) -> bool:
+    """lowercase hexadecimal SHA-256文字列か返す."""
+    return _is_lower_hexadecimal(value, 64)
 
 
 @dataclass(frozen=True)
@@ -867,6 +872,31 @@ class VideoSelector:
             or not input_directory
         ):
             return False
+        manifest_path = path.parent / "run-manifest.json"
+        if not manifest_path.is_file() or manifest_path.is_symlink():
+            return False
+        try:
+            manifest = read_json(manifest_path)
+        except (OSError, ValueError):
+            return False
+        if not isinstance(manifest, dict):
+            return False
+        stored_manifest_digest = manifest.get("manifest_digest")
+        manifest_body = {
+            key: value for key, value in manifest.items() if key != "manifest_digest"
+        }
+        output_count = manifest.get("output_count")
+        if (
+            stored_manifest_digest != manifest_digest
+            or not _is_sha256(stored_manifest_digest)
+            or json_digest(manifest_body) != stored_manifest_digest
+            or manifest.get("schema_version") != RUN_MANIFEST_SCHEMA_VERSION
+            or manifest.get("run_key") != path.parent.name
+            or not isinstance(output_count, int)
+            or isinstance(output_count, bool)
+            or not 1 <= output_count <= MAXIMUM_OUTPUT_COUNT
+        ):
+            return False
         artifacts = payload.get("artifacts")
         if (
             not isinstance(artifacts, list)
@@ -875,13 +905,10 @@ class VideoSelector:
         ):
             return False
         recorded_paths = [item["path"] for item in artifacts]
-        if len(recorded_paths) != len(set(recorded_paths)) or any(
-            len(Path(recorded_path).parts) != 1 for recorded_path in recorded_paths
+        expected_paths = self._expected_artifact_paths(output_count)
+        if len(recorded_paths) != len(expected_paths) or set(recorded_paths) != (
+            expected_paths
         ):
-            return False
-        required = {"report.json", "selected-contact-sheet.jpg"}
-        selected_paths = set(recorded_paths) - required
-        if not required.issubset(recorded_paths) or not selected_paths:
             return False
         output_root = self.output_dir.resolve()
         for item in artifacts:
@@ -1122,15 +1149,7 @@ class VideoSelector:
         if any(not self._is_valid_artifact_record(item) for item in artifacts):
             logger.warning("不正な完了記録を再利用せず成果物を再生成します")
             return False
-        width = max(2, len(str(self.request.output_count)))
-        expected_paths = {
-            "report.json",
-            "selected-contact-sheet.jpg",
-            *(
-                f"selected-{rank:0{width}d}.jpg"
-                for rank in range(1, self.request.output_count + 1)
-            ),
-        }
+        expected_paths = self._expected_artifact_paths(self.request.output_count)
         recorded_paths = [item["path"] for item in artifacts]
         if len(recorded_paths) != len(expected_paths) or set(recorded_paths) != (
             expected_paths
@@ -1170,6 +1189,16 @@ class VideoSelector:
             and size >= 0
             and _is_sha256(sha256)
         )
+
+    @staticmethod
+    def _expected_artifact_paths(output_count: int) -> set[str]:
+        """指定枚数runが生成するOutput Folder直下のfile名を返す."""
+        width = max(2, len(str(output_count)))
+        return {
+            "report.json",
+            "selected-contact-sheet.jpg",
+            *(f"selected-{rank:0{width}d}.jpg" for rank in range(1, output_count + 1)),
+        }
 
     def _extract_candidates(self) -> list[FrameCandidate]:
         """全入力動画の等間隔位置から縮小候補フレームを抽出する."""
@@ -1395,7 +1424,7 @@ class VideoSelector:
                 or not math.isfinite(float(quality))
                 or not 0 <= float(quality) <= 100
                 or not isinstance(difference_hash, str)
-                or len(difference_hash) != 16
+                or not _is_lower_hexadecimal(difference_hash, 16)
                 or frame_id in restored_ids
             ):
                 return None
