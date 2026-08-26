@@ -2782,6 +2782,54 @@ def test_pipeline_reuses_valid_completion_when_output_registration_is_corrupt(
     assert unavailable_assessor.assess_calls == 0
 
 
+def test_pipeline_rejects_unrecorded_artifact_with_only_completion_ownership(
+    tmp_path: Path,
+) -> None:
+    """完了記録にないmanaged風成果物を所有対象へ含めないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    next(_single_run_cache(tmp_path).glob("output-*.json")).write_text(
+        "{",
+        encoding="utf-8",
+    )
+    unrecorded = output_dir / "selected-03.jpg"
+    shutil.copyfile(output_dir / "selected-02.jpg", unrecorded)
+    unrecorded_hash = file_sha256(unrecorded)
+    unavailable_assessor = UnavailableAssessor()
+
+    with pytest.raises(RuntimeError, match="対応する完了記録もありません"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=unavailable_assessor,
+        ).run()
+
+    assert file_sha256(unrecorded) == unrecorded_hash
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
 @pytest.mark.parametrize(
     "corruption",
     ["missing-manifest", "manifest-digest", "incomplete-artifacts"],
@@ -3051,7 +3099,8 @@ def test_automatic_sample_positions_stay_stable_when_video_is_added(
         assessor=FakeAssessor(),
     )
     first_selector._prepare_run()
-    first_selector._extract_candidates()
+    first_candidates = first_selector._extract_candidates()
+    first_selector._preselect_candidates(first_candidates)
     first_timestamps = first_selector.sources[0].timestamps
     second_video.write_bytes(bytes(range(256)) * 16)
     extractor = MediumVideoExtractor()
@@ -3212,6 +3261,47 @@ def test_mechanical_cache_reextracts_changed_candidate_image(tmp_path: Path) -> 
 
     assert extractor.candidate_videos == [video.name]
     assert second_key == first_key
+
+
+def test_candidate_cache_reextracts_without_recorded_digests(tmp_path: Path) -> None:
+    """機械評価記録のない候補JPEGを抽出cache hitにしないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    first_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    first_selector._prepare_run()
+    first_candidates = first_selector._extract_candidates()
+    shutil.copyfile(first_candidates[1].path, first_candidates[0].path)
+    extractor = TrackingFrameExtractor()
+    second_selector = SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=FakeAssessor(),
+    )
+    second_selector._prepare_run()
+
+    second_candidates = second_selector._extract_candidates()
+
+    assert len(extractor.candidate_videos) == len(second_candidates)
+    assert set(extractor.candidate_videos) == {video.name}
 
 
 def test_primary_cache_key_tracks_batch_composition(tmp_path: Path) -> None:
@@ -3591,6 +3681,7 @@ def test_pipeline_reextracts_symlinked_cached_image(
     candidates = selector._extract_candidates()
     context_candidate: FrameCandidate | None = None
     if cache_image == "candidate":
+        selector._preselect_candidates(candidates)
         cached_path = Path(candidates[0].path)
     else:
         primary_candidates = selector._preselect_candidates(candidates)
@@ -3688,6 +3779,7 @@ def test_pipeline_reextracts_cached_image_outside_extraction_contract(
     )
     selector._prepare_run()
     candidates = selector._extract_candidates()
+    selector._preselect_candidates(candidates)
     cached_path = Path(candidates[0].path)
     if invalid_cache_image == "too-wide":
         Image.new("RGB", (961, 10), "white").save(cached_path, format="JPEG")

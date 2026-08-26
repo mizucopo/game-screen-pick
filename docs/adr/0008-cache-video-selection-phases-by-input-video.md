@@ -23,9 +23,10 @@ Context, selection settings, GPU requirement, and the ordered candidate image
 digests for the evaluation unit. Invalid, corrupt, schema-mismatched, or legacy
 entries are cache misses.
 Probe metadata is reusable only when its stream endpoint and minimum-interval
-sample-count arithmetic remain finite. A candidate JPEG whose SHA-256 no longer
-matches the mechanical analysis record is re-extracted before that analysis is
-reused or rerun. Transition-context extraction similarly persists each
+sample-count arithmetic remain finite. A candidate JPEG without a mechanical
+analysis digest record, or whose SHA-256 no longer matches that record, is
+re-extracted before the analysis is reused or rerun. Transition-context
+extraction similarly persists each
 before/after JPEG digest and re-extracts only a requested frame whose bytes no
 longer match.
 An assessment checkpoint is reusable only when it contains the complete prefix
@@ -55,7 +56,8 @@ artifacts, not Input Video identity.
 
 Output ownership is accepted only from a structurally valid registration for
 the exact resolved Output Folder or from a completion record whose artifact
-size and SHA-256 values still match. The report also records its schema and the
+size and SHA-256 values still match and whose artifact set exactly covers every
+managed-looking Output Folder entry. The report also records its schema and the
 size and SHA-256 of every JPEG artifact, allowing an intact application output
 set to reestablish ownership after the visible cache is deliberately deleted.
 That report-derived set must exactly cover every managed-looking artifact in the

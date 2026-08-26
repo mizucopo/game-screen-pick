@@ -1023,8 +1023,15 @@ class VideoSelector:
             return False
         recorded_paths = [item["path"] for item in artifacts]
         expected_paths = self._expected_artifact_paths(output_count)
-        if len(recorded_paths) != len(expected_paths) or set(recorded_paths) != (
-            expected_paths
+        actual_paths = {
+            output_path.name
+            for output_path in self.output_dir.iterdir()
+            if self._is_managed_artifact(output_path)
+        }
+        if (
+            actual_paths != expected_paths
+            or len(recorded_paths) != len(expected_paths)
+            or set(recorded_paths) != expected_paths
         ):
             return False
         output_root = self.output_dir.resolve()
@@ -1349,10 +1356,8 @@ class VideoSelector:
                 path = Path(candidate.path)
                 recorded_digest = recorded_digests.get(candidate.frame_id)
                 is_valid = _is_valid_cached_image(path)
-                digest_changed = (
-                    recorded_digest is not None
-                    and is_valid
-                    and file_sha256(path) != recorded_digest
+                digest_changed = recorded_digest is None or (
+                    is_valid and file_sha256(path) != recorded_digest
                 )
                 if not is_valid or digest_changed:
                     pending.append(candidate)
