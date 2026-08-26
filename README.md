@@ -83,11 +83,12 @@ editionを一意に判別できない場合、情報が不足する場合、情�
 
 ```bash
 OPENAI_API_KEY=... uv run game-screen-pick \
-  -c ./config-openai.toml \
   --game-title "ドラクエ11" \
   ./recordings \
   ./recordings-selected
 ```
+
+この例では、事前に`config.toml`の`game_context_provider`を`openai`へ変更します。
 
 ### オプション
 
