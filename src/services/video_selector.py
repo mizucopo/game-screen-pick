@@ -936,13 +936,9 @@ class VideoSelector:
             ):
                 return False
         expected_integrity_paths = {"selected-contact-sheet.jpg", *selected_names}
-        actual_artifact_paths = {
-            path.name
-            for path in self.output_dir.iterdir()
-            if self._is_managed_artifact(path)
-        }
         if (
-            actual_artifact_paths != self._expected_artifact_paths(output_count)
+            self._actual_managed_artifact_paths()
+            != self._expected_artifact_paths(output_count)
             or len(integrity) != len(expected_integrity_paths)
             or any(not self._is_valid_artifact_record(item) for item in integrity)
             or {item["path"] for item in integrity} != expected_integrity_paths
@@ -1023,13 +1019,8 @@ class VideoSelector:
             return False
         recorded_paths = [item["path"] for item in artifacts]
         expected_paths = self._expected_artifact_paths(output_count)
-        actual_paths = {
-            output_path.name
-            for output_path in self.output_dir.iterdir()
-            if self._is_managed_artifact(output_path)
-        }
         if (
-            actual_paths != expected_paths
+            self._actual_managed_artifact_paths() != expected_paths
             or len(recorded_paths) != len(expected_paths)
             or set(recorded_paths) != expected_paths
         ):
@@ -1275,8 +1266,10 @@ class VideoSelector:
             return False
         expected_paths = self._expected_artifact_paths(self.request.output_count)
         recorded_paths = [item["path"] for item in artifacts]
-        if len(recorded_paths) != len(expected_paths) or set(recorded_paths) != (
-            expected_paths
+        if (
+            self._actual_managed_artifact_paths() != expected_paths
+            or len(recorded_paths) != len(expected_paths)
+            or set(recorded_paths) != expected_paths
         ):
             logger.warning("不正な完了記録を再利用せず成果物を再生成します")
             return False
@@ -1322,6 +1315,14 @@ class VideoSelector:
             "report.json",
             "selected-contact-sheet.jpg",
             *(f"selected-{rank:0{width}d}.jpg" for rank in range(1, output_count + 1)),
+        }
+
+    def _actual_managed_artifact_paths(self) -> set[str]:
+        """Output Folderに実在するmanaged artifact名を返す."""
+        return {
+            path.name
+            for path in self.output_dir.iterdir()
+            if self._is_managed_artifact(path)
         }
 
     def _extract_candidates(self) -> list[FrameCandidate]:
@@ -1576,55 +1577,60 @@ class VideoSelector:
         expected_by_id = {
             candidate.frame_id: candidate for candidate in expected_candidates
         }
-        restored: list[FrameCandidate] = []
-        restored_ids: set[str] = set()
+        raw_by_id: dict[str, dict[str, Any]] = {}
+        recorded_ids: list[str] = []
         for raw in data["candidates"]:
             if not isinstance(raw, dict):
                 return None
             frame_id = raw.get("frame_id")
-            timestamp = raw.get("timestamp_seconds")
+            if (
+                not isinstance(frame_id, str)
+                or frame_id not in expected_by_id
+                or frame_id in raw_by_id
+            ):
+                return None
+            raw_by_id[frame_id] = raw
+            recorded_ids.append(frame_id)
+
+        restored: list[FrameCandidate] = []
+        expected_rejected_ids: list[str] = []
+        for expected in expected_candidates:
+            try:
+                measured = measure_candidate(expected)
+            except (OSError, ValueError, Image.DecompressionBombError):
+                return None
+            if measured is None:
+                expected_rejected_ids.append(expected.frame_id)
+                continue
+            raw = raw_by_id.get(expected.frame_id)
+            if raw is None:
+                return None
             quality = raw.get("quality_score")
             difference_hash = raw.get("difference_hash")
-            if not isinstance(frame_id, str):
-                return None
-            expected = expected_by_id.get(frame_id)
             if (
-                expected is None
-                or timestamp != expected.timestamp_seconds
+                raw.get("timestamp_seconds") != expected.timestamp_seconds
                 or not isinstance(quality, int | float)
                 or isinstance(quality, bool)
                 or not math.isfinite(float(quality))
                 or not 0 <= float(quality) <= 100
                 or not isinstance(difference_hash, str)
                 or not _is_lower_hexadecimal(difference_hash, 16)
-                or frame_id in restored_ids
             ):
                 return None
             try:
                 parsed_hash = int(difference_hash, 16)
             except ValueError:
                 return None
-            try:
-                with Image.open(expected.path) as image:
-                    actual_hash = image_difference_hash(image)
-            except OSError:
+            if (
+                float(quality) != measured.quality_score
+                or parsed_hash != measured.difference_hash
+            ):
                 return None
-            if parsed_hash != actual_hash:
-                return None
-            restored.append(
-                replace(
-                    expected,
-                    quality_score=float(quality),
-                    difference_hash=parsed_hash,
-                )
-            )
-            restored_ids.add(frame_id)
-        expected_rejected_ids = [
-            candidate.frame_id
-            for candidate in expected_candidates
-            if candidate.frame_id not in restored_ids
-        ]
-        if data["rejected_frame_ids"] != expected_rejected_ids:
+            restored.append(measured)
+        if (
+            recorded_ids != [candidate.frame_id for candidate in restored]
+            or data["rejected_frame_ids"] != expected_rejected_ids
+        ):
             return None
         return restored
 

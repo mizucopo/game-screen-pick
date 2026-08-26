@@ -2830,6 +2830,49 @@ def test_pipeline_rejects_unrecorded_artifact_with_only_completion_ownership(
     assert unavailable_assessor.assess_calls == 0
 
 
+def test_pipeline_regenerates_completion_with_extra_managed_artifact(
+    tmp_path: Path,
+) -> None:
+    """現runの完了記録にないmanaged風成果物を残して即returnしないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    unrecorded = output_dir / "selected-03.jpg"
+    shutil.copyfile(output_dir / "selected-02.jpg", unrecorded)
+    unavailable_assessor = UnavailableAssessor()
+
+    resumed_sheet = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=unavailable_assessor,
+    ).run()
+
+    assert resumed_sheet == output_dir / "selected-contact-sheet.jpg"
+    assert not unrecorded.exists()
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
 @pytest.mark.parametrize(
     "corruption",
     ["missing-manifest", "manifest-digest", "incomplete-artifacts"],
@@ -3348,8 +3391,12 @@ def test_primary_cache_key_tracks_batch_composition(tmp_path: Path) -> None:
     assert changed_key != first_key
 
 
-def test_mechanical_cache_rejects_out_of_range_quality_score(tmp_path: Path) -> None:
-    """live計算では生成されないquality scoreをcache hitにしないこと."""
+@pytest.mark.parametrize("quality_corruption", ["out-of-range", "in-range"])
+def test_mechanical_cache_rejects_changed_quality_score(
+    tmp_path: Path,
+    quality_corruption: str,
+) -> None:
+    """JPEGから再計算した値と異なるquality scoreをcache hitにしないこと."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
@@ -3379,7 +3426,14 @@ def test_mechanical_cache_rejects_out_of_range_quality_score(tmp_path: Path) -> 
         (_cache_root(tmp_path) / "videos").glob("*/mechanical-analysis/*.json")
     )
     payload = json.loads(mechanical_path.read_text(encoding="utf-8"))
-    payload["data"]["candidates"][0]["quality_score"] = 1e300
+    original_quality = payload["data"]["candidates"][0]["quality_score"]
+    if quality_corruption == "out-of-range":
+        changed_quality = 1e300
+    elif original_quality == 0.0:
+        changed_quality = 1.0
+    else:
+        changed_quality = 0.0
+    payload["data"]["candidates"][0]["quality_score"] = changed_quality
     mechanical_path.write_text(json.dumps(payload), encoding="utf-8")
     second_selector = SingleVideoSelector(
         request,
@@ -3397,12 +3451,15 @@ def test_mechanical_cache_rejects_out_of_range_quality_score(tmp_path: Path) -> 
     assert restored is None
 
 
-@pytest.mark.parametrize("candidate_corruption", ["duplicate", "missing"])
-def test_mechanical_cache_rejects_incomplete_or_duplicate_candidate_ids(
+@pytest.mark.parametrize(
+    "candidate_corruption",
+    ["duplicate", "missing", "reclassified"],
+)
+def test_mechanical_cache_rejects_candidate_membership_corruption(
     tmp_path: Path,
     candidate_corruption: str,
 ) -> None:
-    """機械評価cacheのframe ID欠落と重複をmissとして扱うこと."""
+    """機械評価cacheのframe ID欠落・重複・分類変更をmissにすること."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
@@ -3434,8 +3491,16 @@ def test_mechanical_cache_rejects_incomplete_or_duplicate_candidate_ids(
     payload = json.loads(mechanical_path.read_text(encoding="utf-8"))
     if candidate_corruption == "duplicate":
         payload["data"]["candidates"].append(payload["data"]["candidates"][0])
-    else:
+    elif candidate_corruption == "missing":
         payload["data"]["candidates"].pop(0)
+    else:
+        moved_id = payload["data"]["candidates"].pop(0)["frame_id"]
+        rejected_ids = {*payload["data"]["rejected_frame_ids"], moved_id}
+        payload["data"]["rejected_frame_ids"] = [
+            frame["frame_id"]
+            for frame in payload["data"]["source_frames"]
+            if frame["frame_id"] in rejected_ids
+        ]
     mechanical_path.write_text(json.dumps(payload), encoding="utf-8")
     second_selector = SingleVideoSelector(
         request,
