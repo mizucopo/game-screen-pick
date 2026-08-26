@@ -630,13 +630,19 @@ class VideoSelector:
             model=model,
         )
         if checkpoint is not None:
-            self._restore_context_checkpoint(
-                checkpoint,
-                game_title=game_title,
-                provider=provider,
-                model=model,
-            )
-            return
+            try:
+                self._restore_context_checkpoint(
+                    checkpoint,
+                    game_title=game_title,
+                    provider=provider,
+                    model=model,
+                )
+            except RuntimeError:
+                logger.warning(
+                    "不正なGame Context生成checkpointを再利用せず再生成します"
+                )
+            else:
+                return
         logger.info(
             "Game ContextをWeb検索から生成します: provider=%s, model=%s",
             _log_value(provider),
@@ -699,9 +705,14 @@ class VideoSelector:
         )
         if not checkpoint_path.is_file():
             return None
-        checkpoint = read_json(checkpoint_path)
+        try:
+            checkpoint = read_json(checkpoint_path)
+        except (OSError, ValueError):
+            logger.warning("破損したGame Context生成checkpointを再利用せず再生成します")
+            return None
         if not isinstance(checkpoint, dict):
-            raise RuntimeError("Game Context生成checkpointが不正です")
+            logger.warning("不正なGame Context生成checkpointを再利用せず再生成します")
+            return None
         return checkpoint
 
     def _write_context_checkpoint(
@@ -1270,6 +1281,7 @@ class VideoSelector:
                 or not isinstance(quality, int | float)
                 or isinstance(quality, bool)
                 or not math.isfinite(float(quality))
+                or not 0 <= float(quality) <= 100
                 or not isinstance(difference_hash, str)
                 or len(difference_hash) != 16
             ):

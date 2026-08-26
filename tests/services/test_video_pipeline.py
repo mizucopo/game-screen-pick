@@ -1782,6 +1782,62 @@ def test_pipeline_rejects_nonempty_output_before_generating_context(
     assert context_generator.calls == []
 
 
+@pytest.mark.parametrize("corrupt_payload", ["{", "{}"])
+def test_pipeline_regenerates_corrupt_game_context_checkpoint(
+    tmp_path: Path,
+    corrupt_payload: str,
+) -> None:
+    """読取不能または不正なGame Context checkpointをmissとして再生成すること."""
+
+    class FailingProbeExtractor(FakeFrameExtractor):
+        """checkpoint保存後に最初のrunを停止するfake."""
+
+        def probe(self, video: Path) -> VideoMetadata:
+            del video
+            raise RuntimeError("probe failed")
+
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title="テストゲーム",
+        game_context="",
+        game_context_provider="openai",
+        game_context_model="gpt-context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    with pytest.raises(RuntimeError, match="probe failed"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FailingProbeExtractor(),
+            assessor=FakeAssessor(),
+            context_generator=FakeContextGenerator(),
+        ).run()
+    checkpoint_path = next((_cache_root(tmp_path) / "game-context").glob("*.json"))
+    checkpoint_path.write_text(corrupt_payload, encoding="utf-8")
+    generator = FakeContextGenerator()
+
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+        context_generator=generator,
+    ).run()
+
+    assert len(generator.calls) == 1
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["result"]["game_context"] == "生成済みのGame Context"
+
+
 def test_pipeline_treats_unreadable_run_manifest_as_cache_miss(
     tmp_path: Path,
 ) -> None:
@@ -2268,6 +2324,55 @@ def test_mechanical_cache_verifies_candidate_image_bytes(tmp_path: Path) -> None
 
     assert extractor.candidate_videos == []
     assert second_key != first_key
+
+
+def test_mechanical_cache_rejects_out_of_range_quality_score(tmp_path: Path) -> None:
+    """live計算では生成されないquality scoreをcache hitにしないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    first_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    first_selector._prepare_run()
+    candidates = first_selector._extract_candidates()
+    first_selector._preselect_candidates(candidates)
+    mechanical_path = next(
+        (_cache_root(tmp_path) / "videos").glob("*/mechanical-analysis/*.json")
+    )
+    payload = json.loads(mechanical_path.read_text(encoding="utf-8"))
+    payload["data"]["candidates"][0]["quality_score"] = 1e300
+    mechanical_path.write_text(json.dumps(payload), encoding="utf-8")
+    second_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    second_selector._prepare_run()
+    second_candidates = second_selector._extract_candidates()
+
+    restored = second_selector._load_mechanical_candidates(
+        second_selector.sources[0],
+        second_candidates,
+    )
+
+    assert restored is None
 
 
 def test_pipeline_rejects_concurrent_run_for_same_input_cache(tmp_path: Path) -> None:
