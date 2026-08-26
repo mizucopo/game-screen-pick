@@ -144,7 +144,7 @@ class VideoSelector:
         self.game_context = ""
         self.game_context_generation: dict[str, str] | None = None
         self.model_metadata: dict[str, dict[str, Any]] = {}
-        self._live_validated_models: set[str] = set()
+        self._live_validated_model_stages: set[str] = set()
         self._usable_candidates: tuple[FrameCandidate, ...] = ()
         self.manifest_digest = ""
 
@@ -298,6 +298,7 @@ class VideoSelector:
     def _prepare_run(self) -> None:
         """入力・モデル・manifestを検証して実行状態を確定する."""
         self._prepare_paths()
+        self._preflight_output_ownership()
         self._resolve_game_context()
         self.run_key = json_digest(self._run_identity_conditions())
         self.work_dir = self.cache_root / "runs" / self.run_key
@@ -407,8 +408,12 @@ class VideoSelector:
             "Ollamaモデル情報を確認しています: %s",
             _log_value(", ".join(sorted(requested_models))),
         )
-        self.model_metadata = self.assessor.fetch_model_metadata(requested_models)
-        self._live_validated_models.update(self.model_metadata)
+        fetched_metadata = self.assessor.fetch_model_metadata(requested_models)
+        self.model_metadata = {
+            "primary": fetched_metadata[self.request.primary_model],
+            "secondary": fetched_metadata[self.request.secondary_model],
+        }
+        self._live_validated_model_stages.update({"primary", "secondary"})
         self._write_current_manifest()
 
     def _read_existing_manifest(self) -> dict[str, Any] | None:
@@ -416,9 +421,14 @@ class VideoSelector:
         manifest_path = self.work_dir / "run-manifest.json"
         if not manifest_path.is_file():
             return None
-        existing = read_json(manifest_path)
+        try:
+            existing = read_json(manifest_path)
+        except (OSError, ValueError):
+            logger.warning("破損したrun manifestを再利用せず再生成します")
+            return None
         if not isinstance(existing, dict):
-            raise RuntimeError("再開manifestが不正です")
+            logger.warning("不正なrun manifestを再利用せず再生成します")
+            return None
         return existing
 
     def _probe_video(
@@ -810,6 +820,24 @@ class VideoSelector:
             f"完了記録もありません: {self.output_dir}"
         )
 
+    def _preflight_output_ownership(self) -> None:
+        """外部処理前にOutput Folderの登録有無だけを安価に確認する."""
+        if not self.output_dir.exists() or not any(self.output_dir.iterdir()):
+            return
+        runs_root = self.cache_root / "runs"
+        names = (
+            self._output_completion_filename(),
+            self._output_registration_filename(),
+        )
+        registered = runs_root.is_dir() and any(
+            path.is_file() for name in names for path in runs_root.glob(f"*/{name}")
+        )
+        if not registered:
+            raise RuntimeError(
+                "出力フォルダが空ではなく、対応する完了記録もありません: "
+                f"{self.output_dir}"
+            )
+
     @staticmethod
     def _is_managed_artifact(path: Path) -> bool:
         """Output Folder直下のgame-screen-pick生成物か返す."""
@@ -888,11 +916,7 @@ class VideoSelector:
                 logger.warning("不正なmodel cacheを再利用せず再生成します")
                 return False
             metadata = {key: value for key, value in raw_model.items() if key != "name"}
-            previous = model_metadata.get(requested_model)
-            if previous is not None and previous != metadata:
-                logger.warning("矛盾するmodel cacheを再利用せず再生成します")
-                return False
-            model_metadata[requested_model] = metadata
+            model_metadata[stage] = metadata
 
         self.model_metadata = model_metadata
         expected = self._build_manifest()
@@ -902,22 +926,23 @@ class VideoSelector:
             self.manifest_digest = stored_digest
         return True
 
-    def _validate_live_model_metadata(self, model: str) -> None:
+    def _validate_live_model_metadata(self, model: str, stage: str) -> None:
         """未評価batchの実行前に保存済みmodelとの同一性を確認する."""
-        if model in self._live_validated_models:
+        model_stage = "primary" if _is_primary_stage(stage) else "secondary"
+        if model_stage in self._live_validated_model_stages:
             return
         if self.assessor is None:
             raise RuntimeError("Ollama assessorが初期化されていません")
         logger.info("Ollamaモデル情報を再確認しています: %s", _log_value(model))
         live_metadata = self.assessor.fetch_model_metadata({model})
-        if live_metadata.get(model) != self.model_metadata.get(model):
+        if live_metadata.get(model) != self.model_metadata.get(model_stage):
             logger.info(
                 "Ollama model変更のため対応phaseを再実行します: %s",
                 _log_value(model),
             )
-            self.model_metadata[model] = live_metadata[model]
+            self.model_metadata[model_stage] = live_metadata[model]
             self._write_current_manifest()
-        self._live_validated_models.add(model)
+        self._live_validated_model_stages.add(model_stage)
 
     def _build_manifest(self) -> dict[str, Any]:
         """結果に影響する入力だけを含む再開manifestを作る."""
@@ -951,11 +976,11 @@ class VideoSelector:
             "models": {
                 "primary": {
                     "name": self.request.primary_model,
-                    **self.model_metadata[self.request.primary_model],
+                    **self.model_metadata["primary"],
                 },
                 "secondary": {
                     "name": self.request.secondary_model,
-                    **self.model_metadata[self.request.secondary_model],
+                    **self.model_metadata["secondary"],
                 },
             },
             "candidate_multipliers": {
@@ -1561,6 +1586,29 @@ class VideoSelector:
             / "frames"
         )
 
+    def _context_frame_digests(
+        self,
+        source: VideoSource,
+        candidates: Sequence[FrameCandidate] | None = None,
+    ) -> list[dict[str, str]]:
+        """保存済み遷移判定frameのfile名とSHA-256を返す."""
+        context_dir = self._context_directory(source)
+        if not context_dir.is_dir():
+            return []
+        if candidates is not None:
+            paths = [
+                context_frame_path(context_dir, candidate, position)
+                for candidate in candidates
+                for position in ("before", "after")
+            ]
+        else:
+            paths = list(context_dir.glob("*.jpg"))
+        return [
+            {"name": path.name, "sha256": file_sha256(path)}
+            for path in sorted(paths)
+            if path.is_file()
+        ]
+
     def _assess_candidates(
         self,
         *,
@@ -1582,7 +1630,12 @@ class VideoSelector:
             ]
             if not source_candidates:
                 continue
-            cache_key = self._assessment_cache_key(model, stage, source)
+            cache_key = self._assessment_cache_key(
+                model,
+                stage,
+                source,
+                source_candidates,
+            )
             state_path = self._assessment_state_path(source, stage, cache_key)
             state = self._load_assessment_state_or_miss(state_path, cache_key)
             missing = [
@@ -1591,8 +1644,13 @@ class VideoSelector:
                 if candidate.frame_id not in state
             ]
             if missing:
-                self._validate_live_model_metadata(model)
-                refreshed_key = self._assessment_cache_key(model, stage, source)
+                self._validate_live_model_metadata(model, stage)
+                refreshed_key = self._assessment_cache_key(
+                    model,
+                    stage,
+                    source,
+                    source_candidates,
+                )
                 if refreshed_key != cache_key:
                     cache_key = refreshed_key
                     state_path = self._assessment_state_path(source, stage, cache_key)
@@ -1627,8 +1685,16 @@ class VideoSelector:
                     started = time.monotonic()
                     try:
                         assessments = self.assessor.assess(
-                            model=str(self.model_metadata[model]["resolved_name"]),
-                            model_digest=str(self.model_metadata[model]["digest"]),
+                            model=str(
+                                self.model_metadata[
+                                    "primary" if primary_stage else "secondary"
+                                ]["resolved_name"]
+                            ),
+                            model_digest=str(
+                                self.model_metadata[
+                                    "primary" if primary_stage else "secondary"
+                                ]["digest"]
+                            ),
                             prompt=self._model_prompt(stage, batch),
                             candidates=batch,
                             contact_sheet=sheet_path,
@@ -1699,6 +1765,7 @@ class VideoSelector:
         model: str,
         stage: str,
         source: VideoSource,
+        candidates: Sequence[FrameCandidate] | None = None,
     ) -> str:
         """評価入力とmodelを含むcache keyを返す."""
         primary_stage = _is_primary_stage(stage)
@@ -1718,7 +1785,9 @@ class VideoSelector:
                 "mechanical_state_digest": self._mechanical_state_digest(source),
                 "prompt_version": PROMPT_VERSION,
                 "model": model,
-                "model_digest": self.model_metadata[model]["digest"],
+                "model_digest": self.model_metadata[
+                    "primary" if primary_stage else "secondary"
+                ]["digest"],
                 "game_context": self.game_context,
                 "output_count": self.request.output_count,
                 "require_gpu": not self.request.allow_cpu,
@@ -1727,6 +1796,11 @@ class VideoSelector:
                 ),
                 "context_cache_key": (
                     None if primary_stage else self._context_cache_key(source)
+                ),
+                "context_frame_digests": (
+                    None
+                    if primary_stage
+                    else self._context_frame_digests(source, candidates)
                 ),
                 "primary_assessment_cache_key": (
                     None
@@ -1884,21 +1958,17 @@ contact sheet内の対象ID: {ids}
                 "models": {
                     "primary": {
                         "name": self.request.primary_model,
-                        "resolved_name": self.model_metadata[
-                            self.request.primary_model
-                        ]["resolved_name"],
-                        "digest": self.model_metadata[self.request.primary_model][
-                            "digest"
+                        "resolved_name": self.model_metadata["primary"][
+                            "resolved_name"
                         ],
+                        "digest": self.model_metadata["primary"]["digest"],
                     },
                     "secondary": {
                         "name": self.request.secondary_model,
-                        "resolved_name": self.model_metadata[
-                            self.request.secondary_model
-                        ]["resolved_name"],
-                        "digest": self.model_metadata[self.request.secondary_model][
-                            "digest"
+                        "resolved_name": self.model_metadata["secondary"][
+                            "resolved_name"
                         ],
+                        "digest": self.model_metadata["secondary"]["digest"],
                     },
                 },
                 "selected": report_items,

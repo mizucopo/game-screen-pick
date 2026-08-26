@@ -1743,6 +1743,229 @@ def test_pipeline_rejects_nonempty_output_before_contacting_ollama(
         ).run()
 
 
+def test_pipeline_rejects_nonempty_output_before_generating_context(
+    tmp_path: Path,
+) -> None:
+    """未登録の非空Output FolderはWeb検索より前に拒否すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    output_dir.mkdir()
+    (output_dir / "existing.txt").write_text("keep", encoding="utf-8")
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title="テストゲーム",
+        game_context="",
+        game_context_provider="openai",
+        game_context_model="gpt-context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    context_generator = FakeContextGenerator()
+
+    with pytest.raises(RuntimeError, match="対応する完了記録もありません"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=FakeAssessor(),
+            context_generator=context_generator,
+        ).run()
+
+    assert context_generator.calls == []
+
+
+def test_pipeline_treats_unreadable_run_manifest_as_cache_miss(
+    tmp_path: Path,
+) -> None:
+    """parse不能なrun manifestは再生成して処理を継続すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    manifest_path = _single_run_cache(tmp_path) / "run-manifest.json"
+    manifest_path.write_text("{", encoding="utf-8")
+    assessor = FakeAssessor()
+
+    resumed_sheet = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=assessor,
+    ).run()
+
+    assert resumed_sheet == output_dir / "selected-contact-sheet.jpg"
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["run_key"]
+    assert assessor.assess_calls == 0
+
+
+def test_secondary_cache_key_tracks_context_frame_bytes(tmp_path: Path) -> None:
+    """遷移前後JPEGのbyte変更で二次評価cache keyを更新すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    first_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    first_selector.run()
+    first_key = first_selector._assessment_cache_key(
+        request.secondary_model,
+        "secondary",
+        first_selector.sources[0],
+    )
+    context_frames = sorted(
+        (_cache_root(tmp_path) / "videos").glob("*/secondary-context/*/frames/*.jpg")
+    )
+    assert len(context_frames) >= 2
+    shutil.copyfile(context_frames[1], context_frames[0])
+    second_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    second_selector._prepare_run()
+
+    second_key = second_selector._assessment_cache_key(
+        request.secondary_model,
+        "secondary",
+        second_selector.sources[0],
+    )
+
+    assert second_key != first_key
+
+
+def test_same_model_name_keeps_stage_specific_digests_on_partial_resume(
+    tmp_path: Path,
+) -> None:
+    """同名model更新時も完了済み一次評価のdigestを正確に保持すること."""
+
+    class DigestAssessor(FakeAssessor):
+        """同じmodel名へ任意のdigestを返すfake."""
+
+        def __init__(self, digest: str) -> None:
+            super().__init__()
+            self.digest = digest
+            self.assessed_digests: list[str] = []
+
+        def fetch_model_metadata(
+            self,
+            requested_models: set[str],
+        ) -> dict[str, dict[str, Any]]:
+            return {
+                model: {
+                    "digest": self.digest,
+                    "resolved_name": model,
+                    "capabilities": ["vision"],
+                    "details": {},
+                }
+                for model in requested_models
+            }
+
+        def assess(
+            self,
+            *,
+            model: str,
+            model_digest: str,
+            prompt: str,
+            candidates: Sequence[FrameCandidate],
+            contact_sheet: Path,
+        ) -> list[FrameAssessment]:
+            del model, prompt
+            assert contact_sheet.is_file()
+            self.assess_calls += 1
+            self.assessed_digests.append(model_digest)
+            return [
+                FrameAssessment(
+                    frame_id=candidate.frame_id,
+                    blog_score=75.0,
+                    is_transition=False,
+                    scene="探索",
+                    reason="test",
+                )
+                for candidate in candidates
+            ]
+
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="shared",
+        secondary_model="shared",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=DigestAssessor("digest-old"),
+    ).run()
+    _completion_path(_single_run_cache(tmp_path)).unlink()
+    for state_path in _assessment_files(tmp_path, "secondary"):
+        state_path.unlink()
+    assessor = DigestAssessor("digest-new")
+
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=assessor,
+    ).run()
+
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["models"]["primary"]["digest"] == "digest-old"
+    assert report["models"]["secondary"]["digest"] == "digest-new"
+    assert set(assessor.assessed_digests) == {"digest-new"}
+
+
 def test_pipeline_replaces_managed_output_registered_by_different_run(
     tmp_path: Path,
 ) -> None:
