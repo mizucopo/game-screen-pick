@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -92,6 +93,7 @@ SECONDARY_ASSESSMENT_PHASE_VERSION = 1
 GLOBAL_CANDIDATE_SELECTION_PHASE_VERSION = 1
 FINAL_SELECTION_PHASE_VERSION = 1
 ARTIFACT_PHASE_VERSION = 1
+PUBLICATION_STAGING_PREFIX = ".game-screen-pick-publication-"
 
 
 def _log_value(value: object) -> str:
@@ -111,6 +113,11 @@ def _is_lower_hexadecimal(value: object, length: int) -> bool:
 def _is_sha256(value: object) -> bool:
     """lowercase hexadecimal SHA-256文字列か返す."""
     return _is_lower_hexadecimal(value, 64)
+
+
+def _is_valid_cached_image(path: Path) -> bool:
+    """leaf symlinkでない正常なcache画像か返す."""
+    return not path.is_symlink() and is_valid_image(path)
 
 
 @dataclass(frozen=True)
@@ -819,14 +826,40 @@ class VideoSelector:
         if not self.output_dir.exists() or not any(self.output_dir.iterdir()):
             return []
         output_entries = list(self.output_dir.iterdir())
-        if not self._has_valid_output_ownership() or any(
-            not self._is_managed_artifact(path) for path in output_entries
-        ):
+        if not self._has_valid_output_ownership():
+            raise RuntimeError(
+                "出力フォルダが空ではなく、対応する完了記録もありません: "
+                f"{self.output_dir}"
+            )
+        abandoned_staging = [
+            path
+            for path in output_entries
+            if self._is_publication_staging_directory(path)
+        ]
+        for staging_dir in abandoned_staging:
+            shutil.rmtree(staging_dir)
+            logger.info(
+                "中断されたpublication stagingを回収しました: %s",
+                _log_value(staging_dir),
+            )
+        output_entries = [
+            path for path in output_entries if path not in abandoned_staging
+        ]
+        if any(not self._is_managed_artifact(path) for path in output_entries):
             raise RuntimeError(
                 "出力フォルダが空ではなく、対応する完了記録もありません: "
                 f"{self.output_dir}"
             )
         return output_entries
+
+    @staticmethod
+    def _is_publication_staging_directory(path: Path) -> bool:
+        """applicationが残したpublication staging実directoryか返す."""
+        return (
+            path.name.startswith(PUBLICATION_STAGING_PREFIX)
+            and not path.is_symlink()
+            and path.is_dir()
+        )
 
     def _has_valid_output_ownership(self) -> bool:
         """正常な所有記録または完了記録が現在のOutputを裏付けるか返す."""
@@ -1221,7 +1254,7 @@ class VideoSelector:
         pending = [
             candidate
             for candidate in candidates
-            if not is_valid_image(Path(candidate.path))
+            if not _is_valid_cached_image(Path(candidate.path))
         ]
         if pending:
             logger.info(
@@ -1247,10 +1280,13 @@ class VideoSelector:
     def _extract_candidate(self, candidate: FrameCandidate) -> None:
         """候補フレームを一枚抽出する."""
         source = self._source_for(candidate)
+        output_path = Path(candidate.path)
+        if output_path.is_symlink():
+            output_path.unlink()
         self.frame_extractor.extract_frame(
             source.path,
             candidate.timestamp_seconds,
-            Path(candidate.path),
+            output_path,
             max_width=960,
             video_stream_index=source.metadata.video_stream_index,
         )
@@ -1390,7 +1426,7 @@ class VideoSelector:
                 raw.get("frame_id") != expected_candidate.frame_id
                 or not isinstance(image_sha256, str)
                 or len(image_sha256) != 64
-                or not is_valid_image(Path(expected_candidate.path))
+                or not _is_valid_cached_image(Path(expected_candidate.path))
                 or file_sha256(Path(expected_candidate.path)) != image_sha256
             ):
                 return None
@@ -1694,9 +1730,10 @@ class VideoSelector:
                 candidate.timestamp_seconds + CONTEXT_OFFSET_SECONDS,
             )
             for position, timestamp in (("before", before), ("after", after)):
-                if not is_valid_image(
-                    context_frame_path(context_dir, candidate, position)
-                ):
+                context_path = context_frame_path(context_dir, candidate, position)
+                if not _is_valid_cached_image(context_path):
+                    if context_path.is_symlink():
+                        context_path.unlink()
                     jobs.append((candidate, context_dir, position, timestamp))
         if jobs:
             logger.info("遷移判定用フレームを抽出します: %d件", len(jobs))
@@ -1764,7 +1801,7 @@ class VideoSelector:
         return [
             {"name": path.name, "sha256": file_sha256(path)}
             for path in sorted(paths)
-            if path.is_file()
+            if not path.is_symlink() and path.is_file()
         ]
 
     def _assess_candidates(
@@ -2061,7 +2098,7 @@ contact sheet内の対象ID: {ids}
         if not self._replace_registered_output:
             return self._write_selected_artifacts(selected)
         with TemporaryDirectory(
-            prefix=".game-screen-pick-publication-",
+            prefix=PUBLICATION_STAGING_PREFIX,
             dir=self.output_dir,
         ) as staging_name:
             staging_dir = Path(staging_name)

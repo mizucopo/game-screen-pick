@@ -32,6 +32,7 @@ from src.services.ollama_frame_assessor import (
 from src.services.video_frame_extractor import VideoFrameExtractor
 from src.services.video_phase_cache import CACHE_DIRECTORY_NAME
 from src.services.video_selector import VideoSelector as SingleVideoSelector
+from src.utils.contact_sheet import context_frame_path
 from src.utils.video_selection_files import file_sha256, json_digest
 
 
@@ -2317,6 +2318,95 @@ def test_pipeline_publishes_replacement_without_cross_device_rename(
     assert report["output_count"] == 2
 
 
+def test_pipeline_recovers_abandoned_publication_staging_directory(
+    tmp_path: Path,
+) -> None:
+    """強制終了で残ったpublication stagingを回収して再開すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    abandoned = output_dir / ".game-screen-pick-publication-abandoned"
+    abandoned.mkdir()
+    (abandoned / "selected-01.jpg").write_bytes(b"partial")
+    unavailable_assessor = UnavailableAssessor()
+
+    resumed_sheet = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=unavailable_assessor,
+    ).run()
+
+    assert resumed_sheet == output_dir / "selected-contact-sheet.jpg"
+    assert not abandoned.exists()
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
+def test_pipeline_does_not_follow_publication_staging_symlink(
+    tmp_path: Path,
+) -> None:
+    """publication staging風のsymlinkを回収対象にしないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    external = outside / "user-owned.txt"
+    external.write_text("user-owned", encoding="utf-8")
+    staging_symlink = output_dir / ".game-screen-pick-publication-symlink"
+    staging_symlink.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="出力フォルダが空ではなく"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=FakeAssessor(),
+        ).run()
+
+    assert staging_symlink.is_symlink()
+    assert external.read_text(encoding="utf-8") == "user-owned"
+
+
 def test_pipeline_rejects_unmanaged_output_before_game_context_generation(
     tmp_path: Path,
 ) -> None:
@@ -3083,6 +3173,67 @@ def test_mechanical_cache_rejects_difference_hash_not_matching_image(
     )
 
     assert restored is None
+
+
+@pytest.mark.parametrize("cache_image", ["candidate", "context"])
+def test_pipeline_reextracts_symlinked_cached_image(
+    tmp_path: Path,
+    cache_image: str,
+) -> None:
+    """candidateとcontextのleaf symlinkをcache hitにしないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    extractor = FakeFrameExtractor()
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+    candidates = selector._extract_candidates()
+    context_candidate: FrameCandidate | None = None
+    if cache_image == "candidate":
+        cached_path = Path(candidates[0].path)
+    else:
+        primary_candidates = selector._preselect_candidates(candidates)
+        context_candidate = primary_candidates[0]
+        selector._extract_context_frames([context_candidate])
+        cached_path = context_frame_path(
+            selector._context_directory(selector._source_for(context_candidate)),
+            context_candidate,
+            "before",
+        )
+    external = tmp_path / f"external-{cache_image}.jpg"
+    shutil.copyfile(cached_path, external)
+    external_hash = file_sha256(external)
+    cached_path.unlink()
+    cached_path.symlink_to(external)
+    extractor.extract_calls = 0
+
+    if cache_image == "candidate":
+        selector._extract_candidates()
+    else:
+        assert context_candidate is not None
+        selector._extract_context_frames([context_candidate])
+
+    assert extractor.extract_calls == 1
+    assert not cached_path.is_symlink()
+    assert file_sha256(external) == external_hash
 
 
 @pytest.mark.parametrize("cache_directory", ["run", "video"])

@@ -46,6 +46,9 @@ size and SHA-256 values still match. When changed conditions reuse a registered
 Output Folder, the next artifacts are completed in staging within that Output
 Folder first. The old completed artifacts remain usable if probing, model
 validation, assessment, or staging fails, and are replaced atomically on the
-same filesystem only at publication. Managed cache directory components must be
-real directories; symlinked descendants are rejected before reads or writes can
-escape `cache-game-screen-pick/`.
+same filesystem only at publication. Abandoned application publication staging
+directories are removed after output ownership is established; staging
+symlinks remain unmanaged and are rejected. Managed cache directory components
+must be real directories, and cached candidate or context image leaf symlinks
+are regenerated before use so reads or writes cannot escape
+`cache-game-screen-pick/`.
