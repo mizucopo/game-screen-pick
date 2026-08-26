@@ -57,5 +57,9 @@ ownership is established; staging symlinks remain unmanaged and are rejected.
 An Output Folder equal to or below `cache-game-screen-pick/` is rejected so
 deleting regenerable state cannot delete user artifacts. Managed cache
 directory components must be real directories, and cached candidate or context
-image leaf symlinks are regenerated before use so reads or writes cannot escape
+image leaf symlinks, non-JPEG files, images wider than the 960-pixel extraction
+contract, and Pillow decompression bombs are regenerated before use. The cache
+lock uses no-follow semantics and accepts only a regular file. JSON, contact
+sheet, and extracted-frame publication use exclusive unpredictable temporary
+files so fixed temporary leaf symlinks cannot redirect writes outside
 `cache-game-screen-pick/`.

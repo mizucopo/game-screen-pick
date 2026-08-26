@@ -7,6 +7,7 @@ import math
 import shutil
 import subprocess
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from ..models.video_selection import VideoMetadata
@@ -187,8 +188,13 @@ class VideoFrameExtractor:
     ) -> None:
         """指定時刻の映像フレームをJPEGとしてatomicに出力する."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = output_path.with_name(f".{output_path.stem}.partial.jpg")
-        temporary.unlink(missing_ok=True)
+        with NamedTemporaryFile(
+            dir=output_path.parent,
+            prefix=f".{output_path.stem}.",
+            suffix=".partial.jpg",
+            delete=False,
+        ) as temporary_file:
+            temporary = Path(temporary_file.name)
         command = [
             "ffmpeg",
             "-nostdin",

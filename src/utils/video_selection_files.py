@@ -7,6 +7,7 @@ import fcntl
 import hashlib
 import json
 import os
+import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,11 +33,28 @@ def cache_directory_lock(cache_dir: Path) -> Iterator[None]:
     """同一cache rootのpipelineをadvisory lockで一つに制限する."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     lock_path = cache_dir / RUN_LOCK_FILENAME
-    lock_file = lock_path.open("a+b")
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | os.O_APPEND
+        | os.O_NONBLOCK
+        | getattr(os, "O_CLOEXEC", 0)
+        | os.O_NOFOLLOW
+    )
+    try:
+        lock_fd = os.open(lock_path, flags, 0o600)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise RuntimeError(
+                f"cache lockにsymlinkは使用できません: {lock_path}"
+            ) from error
+        raise
     locked = False
     try:
+        if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+            raise RuntimeError(f"cache lockがregular fileではありません: {lock_path}")
         try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as error:
             if error.errno not in {errno.EACCES, errno.EAGAIN}:
                 raise
@@ -47,8 +65,8 @@ def cache_directory_lock(cache_dir: Path) -> Iterator[None]:
         yield
     finally:
         if locked:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-        lock_file.close()
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
 
 
 @contextmanager
@@ -130,5 +148,5 @@ def is_valid_image(path: Path) -> bool:
             image.verify()
         with Image.open(path) as image:
             return image.width > 0 and image.height > 0
-    except (OSError, ValueError):
+    except (OSError, ValueError, Image.DecompressionBombError):
         return False

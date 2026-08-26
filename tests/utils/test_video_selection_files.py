@@ -3,7 +3,27 @@
 import json
 from pathlib import Path
 
-from src.utils.video_selection_files import write_json_atomic
+import pytest
+
+from src.utils.video_selection_files import cache_directory_lock, write_json_atomic
+
+
+def test_cache_directory_lock_rejects_symlink_without_creating_target(
+    tmp_path: Path,
+) -> None:
+    """run.lock symlinkを辿らず外部targetも作成しないこと."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    external = tmp_path / "external.lock"
+    (cache_dir / "run.lock").symlink_to(external)
+
+    with (
+        pytest.raises(RuntimeError, match="cache lock.*symlink"),
+        cache_directory_lock(cache_dir),
+    ):
+        pass
+
+    assert not external.exists()
 
 
 def test_write_json_atomic_does_not_follow_fixed_temporary_symlink(

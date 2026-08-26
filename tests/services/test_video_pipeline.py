@@ -3441,6 +3441,87 @@ def test_pipeline_reextracts_symlinked_cached_image(
     assert file_sha256(external) == external_hash
 
 
+def test_pipeline_reextracts_cached_image_over_decompression_bomb_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pillowの展開上限を超えるcache画像をabortせずcache missにすること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    extractor = FakeFrameExtractor()
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+    candidates = selector._extract_candidates()
+    extractor.extract_calls = 0
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1)
+
+    selector._extract_candidates()
+
+    assert extractor.extract_calls == len(candidates)
+
+
+@pytest.mark.parametrize("invalid_cache_image", ["too-wide", "not-jpeg"])
+def test_pipeline_reextracts_cached_image_outside_extraction_contract(
+    tmp_path: Path,
+    invalid_cache_image: str,
+) -> None:
+    """最大幅を超える画像と非JPEGをcache hitにしないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    extractor = FakeFrameExtractor()
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+    candidates = selector._extract_candidates()
+    cached_path = Path(candidates[0].path)
+    if invalid_cache_image == "too-wide":
+        Image.new("RGB", (961, 10), "white").save(cached_path, format="JPEG")
+    else:
+        Image.new("RGB", (320, 180), "white").save(cached_path, format="PNG")
+    extractor.extract_calls = 0
+
+    selector._extract_candidates()
+
+    assert extractor.extract_calls == 1
+
+
 @pytest.mark.parametrize("cache_directory", ["run", "video"])
 def test_pipeline_rejects_symlinked_cache_directories(
     tmp_path: Path,

@@ -223,3 +223,31 @@ def test_extract_frame_maps_the_selected_video_stream(
     mapping_index = commands[0].index("-map")
     assert commands[0][mapping_index + 1] == "0:2"
     assert output.is_file()
+
+
+def test_extract_frame_does_not_reuse_fixed_temporary_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """予測可能な旧temporary pathを削除せずsymlinkも辿らないこと."""
+
+    def run(command: list[str], **_kwargs: Any) -> None:
+        Path(command[-1]).write_bytes(b"jpeg")
+
+    monkeypatch.setattr("src.services.video_frame_extractor.subprocess.run", run)
+    monkeypatch.setattr(
+        "src.services.video_frame_extractor.is_valid_image",
+        lambda _path: True,
+    )
+    extractor = VideoFrameExtractor.__new__(VideoFrameExtractor)
+    output = tmp_path / "frame.jpg"
+    legacy_temporary = tmp_path / ".frame.partial.jpg"
+    external = tmp_path / "external.txt"
+    external.write_text("user-owned", encoding="utf-8")
+    legacy_temporary.symlink_to(external)
+
+    extractor.extract_frame(Path("sample.mp4"), 1.0, output, max_width=None)
+
+    assert output.read_bytes() == b"jpeg"
+    assert legacy_temporary.is_symlink()
+    assert external.read_text(encoding="utf-8") == "user-owned"

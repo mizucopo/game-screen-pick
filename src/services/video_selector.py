@@ -117,8 +117,16 @@ def _is_sha256(value: object) -> bool:
 
 
 def _is_valid_cached_image(path: Path) -> bool:
-    """leaf symlinkでない正常なcache画像か返す."""
-    return not path.is_symlink() and is_valid_image(path)
+    """leaf symlinkでない抽出契約内のcache JPEGか返す."""
+    if path.is_symlink() or not is_valid_image(path):
+        return False
+    try:
+        with Image.open(path) as image:
+            return (
+                image.format == "JPEG" and 0 < image.width <= 960 and image.height > 0
+            )
+    except (OSError, ValueError, Image.DecompressionBombError):
+        return False
 
 
 @dataclass(frozen=True)
