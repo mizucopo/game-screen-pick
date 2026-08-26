@@ -572,6 +572,89 @@ def test_pipeline_generates_context_before_video_processing_and_reuses_it(
     assert unavailable_assessor.metadata_calls == 0
 
 
+def test_ollama_context_checkpoint_identity_includes_normalized_host(
+    tmp_path: Path,
+) -> None:
+    """Ollama host変更時だけGame Contextを再生成すること."""
+
+    class HostContextGenerator(GameContextGenerator):
+        """正規化前hostをcontextへ埋め込むgenerator."""
+
+        def __init__(self) -> None:
+            self.hosts: list[str] = []
+
+        def generate(
+            self,
+            *,
+            game_title: str,
+            provider: str,
+            model: str,
+            ollama_host: str,
+            timeout_seconds: float,
+        ) -> GeneratedGameContext:
+            del game_title, timeout_seconds
+            self.hosts.append(ollama_host)
+            return GeneratedGameContext(
+                game_context=f"Game Context from {ollama_host}",
+                provider=provider,
+                model=model,
+            )
+
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected-first"),
+        output_count=2,
+        game_title="テストゲーム",
+        game_context="",
+        game_context_provider="ollama",
+        game_context_model="context-model",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="first-host:11434",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    generator = HostContextGenerator()
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+        context_generator=generator,
+    ).run()
+    second_request = replace(
+        request,
+        output_dir=str(tmp_path / "selected-second"),
+        ollama_host="second-host:11434",
+    )
+
+    SingleVideoSelector(
+        second_request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+        context_generator=generator,
+    ).run()
+
+    assert generator.hosts == ["first-host:11434", "second-host:11434"]
+    third_output = tmp_path / "selected-third"
+    SingleVideoSelector(
+        replace(
+            request,
+            output_dir=str(third_output),
+            ollama_host="http://first-host:11434/",
+        ),
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+        context_generator=ExplodingContextGenerator(),
+    ).run()
+    report = json.loads((third_output / "report.json").read_text(encoding="utf-8"))
+    assert report["game_context"] == "Game Context from first-host:11434"
+
+
 def test_context_generation_failure_stops_before_video_probe(tmp_path: Path) -> None:
     """検索・生成失敗では長い動画処理へ進まないこと."""
 
@@ -2167,6 +2250,21 @@ def test_pipeline_replaces_managed_output_registered_by_different_run(
     report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
     assert report["output_count"] == 2
 
+    unavailable_assessor = UnavailableAssessor()
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=unavailable_assessor,
+    ).run()
+
+    assert stale_output.is_file()
+    restored_report = json.loads(
+        (output_dir / "report.json").read_text(encoding="utf-8")
+    )
+    assert restored_report["output_count"] == 3
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
 
 def test_pipeline_rejects_concurrent_run_for_same_output_folder(
     tmp_path: Path,
@@ -2408,6 +2506,7 @@ def test_mechanical_cache_verifies_candidate_image_bytes(tmp_path: Path) -> None
         request.primary_model,
         "primary",
         first_selector.sources[0],
+        first_candidates,
     )
     shutil.copyfile(first_candidates[1].path, first_candidates[0].path)
     extractor = TrackingFrameExtractor()
@@ -2424,10 +2523,55 @@ def test_mechanical_cache_verifies_candidate_image_bytes(tmp_path: Path) -> None
         request.primary_model,
         "primary",
         second_selector.sources[0],
+        second_candidates,
     )
 
     assert extractor.candidate_videos == []
     assert second_key != first_key
+
+
+def test_primary_cache_key_tracks_batch_composition(tmp_path: Path) -> None:
+    """一次評価cacheを候補の順序・画像byteが等しい評価単位だけで再利用すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+    candidates = selector._extract_candidates()
+    selector._preselect_candidates(candidates)
+
+    first_key = selector._assessment_cache_key(
+        request.primary_model,
+        "primary",
+        selector.sources[0],
+        candidates[:3],
+    )
+    changed_key = selector._assessment_cache_key(
+        request.primary_model,
+        "primary",
+        selector.sources[0],
+        candidates[1:4],
+    )
+
+    assert changed_key != first_key
 
 
 def test_mechanical_cache_rejects_out_of_range_quality_score(tmp_path: Path) -> None:

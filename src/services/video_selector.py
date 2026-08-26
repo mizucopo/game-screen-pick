@@ -84,7 +84,7 @@ RUN_MANIFEST_SCHEMA_VERSION = 1
 VIDEO_PROBE_PHASE_VERSION = 1
 CANDIDATE_EXTRACTION_PHASE_VERSION = 1
 MECHANICAL_ANALYSIS_PHASE_VERSION = 2
-PRIMARY_ASSESSMENT_PHASE_VERSION = 1
+PRIMARY_ASSESSMENT_PHASE_VERSION = 2
 SECONDARY_CONTEXT_PHASE_VERSION = 1
 SECONDARY_ASSESSMENT_PHASE_VERSION = 1
 GLOBAL_CANDIDATE_SELECTION_PHASE_VERSION = 1
@@ -624,19 +624,16 @@ class VideoSelector:
         host = self.request.ollama_host or os.environ.get(
             "OLLAMA_HOST", "127.0.0.1:11434"
         )
-        checkpoint = self._read_context_checkpoint(
+        checkpoint_request = self._context_checkpoint_request(
             game_title=game_title,
             provider=provider,
             model=model,
+            ollama_host=host,
         )
+        checkpoint = self._read_context_checkpoint(checkpoint_request)
         if checkpoint is not None:
             try:
-                self._restore_context_checkpoint(
-                    checkpoint,
-                    game_title=game_title,
-                    provider=provider,
-                    model=model,
-                )
+                self._restore_context_checkpoint(checkpoint, checkpoint_request)
             except RuntimeError:
                 logger.warning(
                     "不正なGame Context生成checkpointを再利用せず再生成します"
@@ -660,11 +657,7 @@ class VideoSelector:
             "provider": generated.provider,
             "model": generated.model,
         }
-        self._write_context_checkpoint(
-            game_title=game_title,
-            provider=provider,
-            model=model,
-        )
+        self._write_context_checkpoint(checkpoint_request)
         logger.info(
             "Game Contextを生成しました: provider=%s, model=%s, context=%s",
             _log_value(generated.provider),
@@ -672,37 +665,42 @@ class VideoSelector:
             _log_value(generated.game_context),
         )
 
-    def _context_checkpoint_path(
-        self,
-        *,
-        game_title: str,
-        provider: str,
-        model: str,
-    ) -> Path:
+    def _context_checkpoint_path(self, request: dict[str, str]) -> Path:
         """manifest作成前のGame Context checkpoint pathを返す."""
         checkpoint_key = json_digest(
             {
                 "schema_version": GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION,
-                "game_title": game_title,
-                "provider": provider,
-                "model": model,
+                **request,
             }
         )
         return self.cache_root / "game-context" / f"{checkpoint_key}.json"
 
-    def _read_context_checkpoint(
-        self,
+    @staticmethod
+    def _context_checkpoint_request(
         *,
         game_title: str,
         provider: str,
         model: str,
+        ollama_host: str,
+    ) -> dict[str, str]:
+        """Game Context生成endpointを含むcheckpoint条件を返す."""
+        return {
+            "game_title": game_title,
+            "provider": provider,
+            "model": model,
+            **(
+                {"ollama_host": OllamaFrameAssessor.normalize_host(ollama_host)}
+                if provider == "ollama"
+                else {}
+            ),
+        }
+
+    def _read_context_checkpoint(
+        self,
+        request: dict[str, str],
     ) -> dict[str, Any] | None:
         """保存済みGame Context checkpointを読み取る."""
-        checkpoint_path = self._context_checkpoint_path(
-            game_title=game_title,
-            provider=provider,
-            model=model,
-        )
+        checkpoint_path = self._context_checkpoint_path(request)
         if not checkpoint_path.is_file():
             return None
         try:
@@ -715,29 +713,15 @@ class VideoSelector:
             return None
         return checkpoint
 
-    def _write_context_checkpoint(
-        self,
-        *,
-        game_title: str,
-        provider: str,
-        model: str,
-    ) -> None:
+    def _write_context_checkpoint(self, request: dict[str, str]) -> None:
         """生成済みcontextを後続preflightより前にatomic保存する."""
         if self.game_context_generation is None:
             raise RuntimeError("Game Context生成metadataがありません")
         write_json_atomic(
-            self._context_checkpoint_path(
-                game_title=game_title,
-                provider=provider,
-                model=model,
-            ),
+            self._context_checkpoint_path(request),
             {
                 "schema_version": GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION,
-                "request": {
-                    "game_title": game_title,
-                    "provider": provider,
-                    "model": model,
-                },
+                "request": request,
                 "result": {
                     "game_context": self.game_context,
                     **self.game_context_generation,
@@ -748,17 +732,9 @@ class VideoSelector:
     def _restore_context_checkpoint(
         self,
         checkpoint: dict[str, Any],
-        *,
-        game_title: str,
-        provider: str,
-        model: str,
+        expected_request: dict[str, str],
     ) -> None:
         """同じ生成条件のcheckpointだけを再利用する."""
-        expected_request = {
-            "game_title": game_title,
-            "provider": provider,
-            "model": model,
-        }
         if (
             checkpoint.get("schema_version") != GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION
             or checkpoint.get("request") != expected_request
@@ -776,7 +752,7 @@ class VideoSelector:
         if (
             not isinstance(game_context, str)
             or not game_context.strip()
-            or generated_provider != provider
+            or generated_provider != expected_request["provider"]
             or not isinstance(generated_model, str)
             or not generated_model.strip()
         ):
@@ -799,30 +775,29 @@ class VideoSelector:
             return
         if not any(self.output_dir.iterdir()):
             return
-        known_output = (
-            self._completion_path().is_file()
-            or (self.work_dir / self._output_registration_filename()).is_file()
-        )
-        if known_output:
+        if self._completion_path().is_file():
             return
         registration_name = self._output_registration_filename()
         runs_root = self.cache_root / "runs"
-        registered_by_other_run = runs_root.is_dir() and any(
-            path.is_file() for path in runs_root.glob(f"*/{registration_name}")
+        registered_output = (
+            (self.work_dir / registration_name).is_file()
+            or runs_root.is_dir()
+            and any(path.is_file() for path in runs_root.glob(f"*/{registration_name}"))
         )
         output_entries = list(self.output_dir.iterdir())
         managed_artifacts = [
             path for path in output_entries if self._is_managed_artifact(path)
         ]
         if (
-            registered_by_other_run
+            registered_output
             and managed_artifacts
             and len(managed_artifacts) == len(output_entries)
         ):
             for artifact in managed_artifacts:
                 artifact.unlink()
+            self._invalidate_output_completions()
             logger.info(
-                "別の実行条件で生成した成果物を除去しました: %d件",
+                "登録済みの生成物と旧完了記録を除去しました: %d件",
                 len(managed_artifacts),
             )
             return
@@ -885,6 +860,15 @@ class VideoSelector:
             self.work_dir / self._output_registration_filename(),
             {"output_path": str(self.output_dir)},
         )
+
+    def _invalidate_output_completions(self) -> None:
+        """現在のOutput Folderを指す全runの旧完了記録を失効させる."""
+        runs_root = self.cache_root / "runs"
+        if not runs_root.is_dir():
+            return
+        completion_name = self._output_completion_filename()
+        for completion_path in runs_root.glob(f"*/{completion_name}"):
+            completion_path.unlink(missing_ok=True)
 
     def _restore_existing_manifest(
         self,
@@ -1847,6 +1831,11 @@ class VideoSelector:
                 "batch_size": (
                     PRIMARY_BATCH_SIZE if primary_stage else SECONDARY_BATCH_SIZE
                 ),
+                "candidate_frame_digests": (
+                    self._candidate_frame_digests(candidates)
+                    if primary_stage and candidates is not None
+                    else None
+                ),
                 "context_cache_key": (
                     None if primary_stage else self._context_cache_key(source)
                 ),
@@ -1867,6 +1856,19 @@ class VideoSelector:
                 "model_options": MODEL_OPTIONS,
             },
         )
+
+    @staticmethod
+    def _candidate_frame_digests(
+        candidates: Sequence[FrameCandidate],
+    ) -> list[dict[str, str]]:
+        """評価順を保った候補IDとJPEG SHA-256を返す."""
+        return [
+            {
+                "frame_id": candidate.frame_id,
+                "sha256": file_sha256(Path(candidate.path)),
+            }
+            for candidate in candidates
+        ]
 
     def _model_prompt(
         self,
@@ -2033,6 +2035,7 @@ contact sheet内の対象ID: {ids}
 
     def _write_completion(self, artifacts: Sequence[Path]) -> None:
         """人が使う全成果物のhashを完了記録へ保存する."""
+        self._invalidate_output_completions()
         write_json_atomic(
             self._completion_path(),
             {
