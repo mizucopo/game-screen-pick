@@ -21,10 +21,16 @@ inputs, and the keys of upstream phases. Assessment keys additionally include
 the relevant model digest, prompt version, Game Context, selection settings,
 GPU requirement, and the ordered candidate image digests for the evaluation
 unit. Invalid, corrupt, schema-mismatched, or legacy entries are cache misses.
+Probe metadata is reusable only when its stream endpoint and minimum-interval
+sample-count arithmetic remain finite. A candidate JPEG whose SHA-256 no longer
+matches the mechanical analysis record is re-extracted before that analysis is
+reused or rerun.
 An assessment checkpoint is reusable only when it contains the complete prefix
 of batches that the current evaluation unit could have saved; a hole or a
-regrouped partial batch invalidates the whole phase checkpoint. Cached scene and
-reason text must also match the live normalized 80- and 300-character limits.
+regrouped partial batch invalidates the whole phase checkpoint. A generated Game
+Context checkpoint must retain the live normalized four-heading contract and
+2,400-character limit. Cached scene and reason text must also match the live
+normalized 80- and 300-character limits.
 Changing one phase version invalidates that phase and dependent later phases
 while preserving compatible earlier phases.
 

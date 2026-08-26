@@ -390,7 +390,11 @@ def _parse_generated_context(content: str, *, provider: str) -> str:
     identified_title = payload.get("identified_title")
     if not isinstance(identified_title, str) or not identified_title.strip():
         raise ValueError("identified_titleがありません")
-    game_context = payload.get("game_context")
+    return normalize_generated_context(payload.get("game_context"))
+
+
+def normalize_generated_context(game_context: object) -> str:
+    """生成Game Contextをlive生成とcheckpointで共通検証する."""
     if not isinstance(game_context, str) or not game_context.strip():
         raise ValueError("game_contextがありません")
     normalized = game_context.strip()

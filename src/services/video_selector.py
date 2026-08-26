@@ -46,6 +46,7 @@ from ..utils.video_selection_files import (
 )
 from .game_context_generator import (
     GameContextGenerator,
+    normalize_generated_context,
     resolve_game_context_model,
 )
 from .ollama_frame_assessor import (
@@ -587,6 +588,8 @@ class VideoSelector:
             or video_stream_index < 0
             or not math.isfinite(start_time)
             or start_time < 0
+            or not math.isfinite(start_time + duration)
+            or not math.isfinite(duration / MINIMUM_SAMPLE_INTERVAL_SECONDS)
             or (
                 last_frame_timestamp is not None
                 and (
@@ -799,15 +802,19 @@ class VideoSelector:
         game_context = result.get("game_context")
         generated_provider = result.get("provider")
         generated_model = result.get("model")
+        try:
+            normalized_context = normalize_generated_context(game_context)
+        except ValueError as error:
+            raise RuntimeError("Game Context生成checkpointが不正です") from error
         if (
-            not isinstance(game_context, str)
-            or not game_context.strip()
+            game_context != normalized_context
             or generated_provider != expected_request["provider"]
             or not isinstance(generated_model, str)
             or not generated_model.strip()
+            or generated_model != generated_model.strip()
         ):
             raise RuntimeError("Game Context生成checkpointが不正です")
-        self.game_context = game_context
+        self.game_context = normalized_context
         self.game_context_generation = {
             "provider": generated_provider,
             "model": generated_model,
@@ -1309,6 +1316,7 @@ class VideoSelector:
     def _extract_candidates(self) -> list[FrameCandidate]:
         """全入力動画の等間隔位置から縮小候補フレームを抽出する."""
         candidates: list[FrameCandidate] = []
+        pending: list[FrameCandidate] = []
         for source in self.sources:
             source_dir = (
                 source.cache_dir
@@ -1317,9 +1325,10 @@ class VideoSelector:
                 / "frames"
             )
             prepare_cache_directory(self.cache_root, source_dir)
+            source_candidates: list[FrameCandidate] = []
             for sample_index, timestamp in enumerate(source.timestamps, start=1):
                 frame_id = stable_frame_id(source.identity.key, sample_index)
-                candidates.append(
+                source_candidates.append(
                     FrameCandidate(
                         frame_id=frame_id,
                         timestamp_seconds=timestamp,
@@ -1328,14 +1337,25 @@ class VideoSelector:
                         source_label=source.label,
                     )
                 )
+            recorded_digests = self._recorded_candidate_digests(
+                source,
+                source_candidates,
+            )
+            for candidate in source_candidates:
+                path = Path(candidate.path)
+                recorded_digest = recorded_digests.get(candidate.frame_id)
+                is_valid = _is_valid_cached_image(path)
+                digest_changed = (
+                    recorded_digest is not None
+                    and is_valid
+                    and file_sha256(path) != recorded_digest
+                )
+                if not is_valid or digest_changed:
+                    pending.append(candidate)
+            candidates.extend(source_candidates)
         frame_ids = [candidate.frame_id for candidate in candidates]
         if len(set(frame_ids)) != len(frame_ids):
             raise RuntimeError("Input Video間でframe IDが衝突しました")
-        pending = [
-            candidate
-            for candidate in candidates
-            if not _is_valid_cached_image(Path(candidate.path))
-        ]
         if pending:
             logger.info(
                 "候補フレームを抽出します: %d/%d件", len(pending), len(candidates)
@@ -1356,6 +1376,32 @@ class VideoSelector:
         else:
             executor.shutdown()
         return candidates
+
+    def _recorded_candidate_digests(
+        self,
+        source: VideoSource,
+        expected_candidates: Sequence[FrameCandidate],
+    ) -> dict[str, str]:
+        """機械評価cacheが記録した候補JPEG digestを返す."""
+        data = self._read_mechanical_phase_data(source)
+        if data is None or not isinstance(data.get("source_frames"), list):
+            return {}
+        source_frames = data["source_frames"]
+        if len(source_frames) != len(expected_candidates):
+            return {}
+        digests: dict[str, str] = {}
+        for raw, expected in zip(source_frames, expected_candidates, strict=True):
+            if not isinstance(raw, dict):
+                return {}
+            image_sha256 = raw.get("image_sha256")
+            if (
+                raw.get("frame_id") != expected.frame_id
+                or not isinstance(image_sha256, str)
+                or not _is_sha256(image_sha256)
+            ):
+                return {}
+            digests[expected.frame_id] = image_sha256
+        return digests
 
     def _extract_candidate(self, candidate: FrameCandidate) -> None:
         """候補フレームを一枚抽出する."""
@@ -1471,21 +1517,28 @@ class VideoSelector:
             {"candidate_cache_key": source.candidate_cache_key},
         )
 
+    def _read_mechanical_phase_data(
+        self,
+        source: VideoSource,
+    ) -> dict[str, Any] | None:
+        """共通envelopeを検証して機械評価phase dataを返す."""
+        cache_key = self._mechanical_cache_key(source)
+        path = source.cache_dir / "mechanical-analysis" / f"{cache_key}.json"
+        prepare_cache_directory(self.cache_root, path.parent)
+        return read_phase_data(
+            path,
+            phase="mechanical-analysis",
+            phase_version=MECHANICAL_ANALYSIS_PHASE_VERSION,
+            expected_key=cache_key,
+        )
+
     def _load_mechanical_candidates(
         self,
         source: VideoSource,
         expected_candidates: Sequence[FrameCandidate],
     ) -> list[FrameCandidate] | None:
         """正常な動画単位の機械評価cacheを復元する."""
-        cache_key = self._mechanical_cache_key(source)
-        path = source.cache_dir / "mechanical-analysis" / f"{cache_key}.json"
-        prepare_cache_directory(self.cache_root, path.parent)
-        data = read_phase_data(
-            path,
-            phase="mechanical-analysis",
-            phase_version=MECHANICAL_ANALYSIS_PHASE_VERSION,
-            expected_key=cache_key,
-        )
+        data = self._read_mechanical_phase_data(source)
         if (
             data is None
             or not isinstance(data.get("source_frames"), list)

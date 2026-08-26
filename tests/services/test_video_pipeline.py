@@ -62,6 +62,14 @@ def _assessment_files(input_directory: Path, stage: str) -> list[Path]:
     )
 
 
+GENERATED_GAME_CONTEXT = (
+    "ジャンル: ロールプレイングゲーム\n"
+    "基本的なゲーム進行と主なプレイ要素: 世界を探索して戦う。\n"
+    "代表的な画面や場面: フィールド探索と戦闘。\n"
+    "画像選定で重視する視覚的要素: 景観と戦況が明瞭な画面。"
+)
+
+
 class FakeFrameExtractor(VideoFrameExtractor):
     """実動画を使わず決定的なframeを生成するfake."""
 
@@ -315,7 +323,7 @@ class FakeContextGenerator(GameContextGenerator):
             }
         )
         return GeneratedGameContext(
-            game_context="生成済みのGame Context",
+            game_context=GENERATED_GAME_CONTEXT,
             provider=provider,
             model=f"{model}:resolved",
         )
@@ -587,14 +595,14 @@ def test_pipeline_generates_context_before_video_processing_and_reuses_it(
         }
     ]
     report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
-    assert report["game_context"] == "生成済みのGame Context"
+    assert report["game_context"] == GENERATED_GAME_CONTEXT
     assert report["game_context_generation"] == {
         "provider": "openai",
         "model": "gpt-context:resolved",
     }
     assert "game_title" not in report
     assert all("ドラクエ11" not in prompt for prompt in assessor.prompts)
-    assert all("生成済みのGame Context" in prompt for prompt in assessor.prompts)
+    assert all(GENERATED_GAME_CONTEXT in prompt for prompt in assessor.prompts)
 
     unavailable_assessor = UnavailableAssessor()
     SingleVideoSelector(
@@ -630,7 +638,7 @@ def test_ollama_context_checkpoint_identity_includes_normalized_host(
             del game_title, timeout_seconds
             self.hosts.append(ollama_host)
             return GeneratedGameContext(
-                game_context=f"Game Context from {ollama_host}",
+                game_context=f"{GENERATED_GAME_CONTEXT}\nEndpoint: {ollama_host}",
                 provider=provider,
                 model=model,
             )
@@ -687,7 +695,9 @@ def test_ollama_context_checkpoint_identity_includes_normalized_host(
         context_generator=ExplodingContextGenerator(),
     ).run()
     report = json.loads((third_output / "report.json").read_text(encoding="utf-8"))
-    assert report["game_context"] == "Game Context from first-host:11434"
+    assert report["game_context"] == (
+        f"{GENERATED_GAME_CONTEXT}\nEndpoint: first-host:11434"
+    )
 
 
 def test_context_generation_failure_stops_before_video_probe(tmp_path: Path) -> None:
@@ -786,7 +796,7 @@ def test_generated_context_is_checkpointed_before_video_probe(
         "model": "gpt-context",
     }
     assert checkpoint["result"] == {
-        "game_context": "生成済みのGame Context",
+        "game_context": GENERATED_GAME_CONTEXT,
         "provider": "openai",
         "model": "gpt-context:resolved",
     }
@@ -2004,10 +2014,13 @@ def test_pipeline_rejects_nonempty_output_before_generating_context(
     assert context_generator.calls == []
 
 
-@pytest.mark.parametrize("corrupt_payload", ["{", "{}"])
+@pytest.mark.parametrize(
+    "checkpoint_corruption",
+    ["truncated", "empty", "missing-heading", "whitespace", "oversized"],
+)
 def test_pipeline_regenerates_corrupt_game_context_checkpoint(
     tmp_path: Path,
-    corrupt_payload: str,
+    checkpoint_corruption: str,
 ) -> None:
     """読取不能または不正なGame Context checkpointをmissとして再生成すること."""
 
@@ -2045,7 +2058,19 @@ def test_pipeline_regenerates_corrupt_game_context_checkpoint(
             context_generator=FakeContextGenerator(),
         ).run()
     checkpoint_path = next((_cache_root(tmp_path) / "game-context").glob("*.json"))
-    checkpoint_path.write_text(corrupt_payload, encoding="utf-8")
+    if checkpoint_corruption == "truncated":
+        checkpoint_path.write_text("{", encoding="utf-8")
+    elif checkpoint_corruption == "empty":
+        checkpoint_path.write_text("{}", encoding="utf-8")
+    else:
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        invalid_contexts = {
+            "missing-heading": "ジャンル: RPG",
+            "whitespace": f" {GENERATED_GAME_CONTEXT}\n",
+            "oversized": f"{GENERATED_GAME_CONTEXT}\n{'x' * 2_400}",
+        }
+        checkpoint["result"]["game_context"] = invalid_contexts[checkpoint_corruption]
+        checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
     generator = FakeContextGenerator()
 
     SingleVideoSelector(
@@ -2057,7 +2082,7 @@ def test_pipeline_regenerates_corrupt_game_context_checkpoint(
 
     assert len(generator.calls) == 1
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert checkpoint["result"]["game_context"] == "生成済みのGame Context"
+    assert checkpoint["result"]["game_context"] == GENERATED_GAME_CONTEXT
 
 
 def test_pipeline_treats_unreadable_run_manifest_as_cache_miss(
@@ -3042,8 +3067,55 @@ def test_pipeline_rejects_excessive_independent_automatic_samples(
         )._prepare_run()
 
 
-def test_mechanical_cache_verifies_candidate_image_bytes(tmp_path: Path) -> None:
-    """候補JPEGのbyte変更で機械評価と後続評価のcache keyを更新すること."""
+@pytest.mark.parametrize("corruption", ["endpoint", "sample-count"])
+def test_probe_cache_rejects_nonfinite_derived_arithmetic(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    """後続timestamp計算がoverflowするprobe cacheをmissにすること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )._prepare_run()
+    probe_path = next((_cache_root(tmp_path) / "videos").glob("*/probe/*.json"))
+    payload = json.loads(probe_path.read_text(encoding="utf-8"))
+    payload["data"]["metadata"]["duration_seconds"] = 1e308
+    if corruption == "endpoint":
+        payload["data"]["metadata"]["start_time_seconds"] = 1e308
+    probe_path.write_text(json.dumps(payload), encoding="utf-8")
+    extractor = FakeFrameExtractor()
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=FakeAssessor(),
+    )
+
+    selector._prepare_run()
+
+    assert extractor.probe_calls == 1
+    assert selector.sources[0].metadata.duration_seconds == 4.0
+
+
+def test_mechanical_cache_reextracts_changed_candidate_image(tmp_path: Path) -> None:
+    """記録済みdigestと異なる候補JPEGを動画から再抽出すること."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
@@ -3093,8 +3165,8 @@ def test_mechanical_cache_verifies_candidate_image_bytes(tmp_path: Path) -> None
         second_candidates,
     )
 
-    assert extractor.candidate_videos == []
-    assert second_key != first_key
+    assert extractor.candidate_videos == [video.name]
+    assert second_key == first_key
 
 
 def test_primary_cache_key_tracks_batch_composition(tmp_path: Path) -> None:
