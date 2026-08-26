@@ -659,7 +659,7 @@ def test_pipeline_logs_concrete_processing_without_generic_status(
         'Ollamaモデル情報を確認しています: "primary\\nmodel, '
         'secondary\\u001bmodel"' in messages
     )
-    assert "候補フレームを抽出します: 13/13件" in messages
+    assert "候補フレームを抽出します: 16/16件" in messages
     assert all(
         control not in message
         for message in messages
@@ -1741,6 +1741,165 @@ def test_pipeline_rejects_nonempty_output_before_contacting_ollama(
             frame_extractor=FakeFrameExtractor(),
             assessor=UnavailableAssessor(),
         ).run()
+
+
+def test_pipeline_replaces_managed_output_registered_by_different_run(
+    tmp_path: Path,
+) -> None:
+    """別条件のrun登録では古い生成物を除去してから再生成すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=3,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    stale_output = output_dir / "selected-03.jpg"
+    assessor = FakeAssessor()
+
+    SingleVideoSelector(
+        replace(request, output_count=2),
+        frame_extractor=FakeFrameExtractor(),
+        assessor=assessor,
+    ).run()
+
+    assert not stale_output.exists()
+    assert assessor.assess_calls > 0
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["output_count"] == 2
+
+
+def test_pipeline_rejects_concurrent_run_for_same_output_folder(
+    tmp_path: Path,
+) -> None:
+    """異なるInput Video Directoryでも同じOutput Folderへ同時出力しないこと."""
+    metadata_started = Event()
+    release_metadata = Event()
+
+    class BlockingAssessor(FakeAssessor):
+        """最初のrunをOutput Folder lock保持中に待機させるfake."""
+
+        def fetch_model_metadata(
+            self,
+            requested_models: set[str],
+        ) -> dict[str, dict[str, Any]]:
+            metadata_started.set()
+            if not release_metadata.wait(timeout=5):
+                raise TimeoutError("concurrency test timed out")
+            return super().fetch_model_metadata(requested_models)
+
+    first_input = tmp_path / "first-input"
+    second_input = tmp_path / "second-input"
+    first_input.mkdir()
+    second_input.mkdir()
+    first_video = first_input / "Sample Game.mp4"
+    second_video = second_input / "Sample Game.mp4"
+    first_video.write_bytes(bytes(range(256)) * 16)
+    second_video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(first_video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_run = executor.submit(
+            SingleVideoSelector(
+                request,
+                frame_extractor=FakeFrameExtractor(),
+                assessor=BlockingAssessor(),
+            ).run
+        )
+        assert metadata_started.wait(timeout=2)
+        try:
+            with pytest.raises(RuntimeError, match="同じOutput Folder.*実行中"):
+                SingleVideoSelector(
+                    replace(request, input_videos=(str(second_video),)),
+                    frame_extractor=FakeFrameExtractor(),
+                    assessor=FakeAssessor(),
+                ).run()
+        finally:
+            release_metadata.set()
+
+        assert first_run.result(timeout=10).is_file()
+
+
+@pytest.mark.parametrize(
+    ("sample_interval_seconds", "expected_count"),
+    [(None, 4_000), (600.0, 600)],
+)
+def test_pipeline_allocates_sample_minimum_across_long_input_videos(
+    tmp_path: Path,
+    sample_interval_seconds: float | None,
+    expected_count: int,
+) -> None:
+    """選択枚数の最低sample数を動画ごとに増幅せず全入力へ配分すること."""
+
+    class LongVideoExtractor(FakeFrameExtractor):
+        """長時間動画のmetadataを返すfake."""
+
+        def probe(self, video: Path) -> VideoMetadata:
+            assert video.is_file()
+            self.probe_calls += 1
+            return VideoMetadata(3600.0, 320, 180, "fake", "30/1")
+
+    video_count = 12 if sample_interval_seconds is None else 7
+    videos = tuple(
+        tmp_path / f"Sample Game Part{index}.mp4" for index in range(video_count)
+    )
+    for video in videos:
+        video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_videos=tuple(str(video) for video in videos),
+        output_dir=str(tmp_path / "selected"),
+        output_count=30 if sample_interval_seconds is None else 600,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=sample_interval_seconds,
+        debug=False,
+    )
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=LongVideoExtractor(),
+        assessor=FakeAssessor(),
+    )
+
+    selector._prepare_run()
+
+    assert sum(len(source.timestamps) for source in selector.sources) == expected_count
 
 
 def test_pipeline_rejects_concurrent_run_for_same_input_cache(tmp_path: Path) -> None:

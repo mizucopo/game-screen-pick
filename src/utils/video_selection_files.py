@@ -50,6 +50,30 @@ def cache_directory_lock(cache_dir: Path) -> Iterator[None]:
         lock_file.close()
 
 
+@contextmanager
+def output_directory_lock(output_dir: Path) -> Iterator[None]:
+    """同一Output Folderへのartifact書き込みを一つに制限する."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(output_dir, flags)
+    locked = False
+    try:
+        try:
+            fcntl.flock(directory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
+            raise RuntimeError(
+                f"同じOutput Folderを使う処理がすでに実行中です: {output_dir}"
+            ) from error
+        locked = True
+        yield
+    finally:
+        if locked:
+            fcntl.flock(directory_fd, fcntl.LOCK_UN)
+        os.close(directory_fd)
+
+
 def json_digest(payload: Any) -> str:
     """JSON互換値の決定的なSHA-256を返す."""
     encoded = json.dumps(

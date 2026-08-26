@@ -38,6 +38,7 @@ from ..utils.video_selection_files import (
     file_sha256,
     is_valid_image,
     json_digest,
+    output_directory_lock,
     read_json,
     write_json_atomic,
 )
@@ -154,11 +155,14 @@ class VideoSelector:
             "入力動画cacheの実行状態を確認しています: %s",
             _log_value(self.cache_root),
         )
-        with cache_directory_lock(self.cache_root):
+        with (
+            cache_directory_lock(self.cache_root),
+            output_directory_lock(self.output_dir),
+        ):
             return self._run_locked()
 
     def _run_locked(self) -> Path:
-        """outputの排他lockを保持した状態でpipelineを実行する."""
+        """cacheとOutput Folderの排他lockを保持してpipelineを実行する."""
         self._prepare_run()
         self._register_output()
         if self._verify_completion():
@@ -232,9 +236,10 @@ class VideoSelector:
                 f"二次評価の有効候補{global_count}件が"
                 f"選択枚数{self.request.output_count}件を下回りました"
             )
-        globally_selected_candidates = select_diverse_candidates(
+        globally_selected_candidates = select_global_candidates(
             global_pool,
             primary_assessments,
+            secondary_assessments,
             global_count,
         )
         selected = select_final_frames(
@@ -287,12 +292,16 @@ class VideoSelector:
             raise ValueError("入力動画のcache identityが重複しています")
         self.cache_root = prepare_cache_root(self.input_dir)
         self.output_dir = Path(self.request.output_dir).expanduser().resolve()
-        self._preflight_output_dir()
+        if self.output_dir.exists() and not self.output_dir.is_dir():
+            raise RuntimeError(f"出力先がフォルダではありません: {self.output_dir}")
 
     def _prepare_run(self) -> None:
         """入力・モデル・manifestを検証して実行状態を確定する."""
         self._prepare_paths()
         self._resolve_game_context()
+        self.run_key = json_digest(self._run_identity_conditions())
+        self.work_dir = self.cache_root / "runs" / self.run_key
+        self._preflight_output_dir()
         probed_sources: list[tuple[Path, VideoCacheIdentity, VideoMetadata, float]] = []
         for index, (video, identity) in enumerate(
             zip(self.videos, self.video_identities, strict=True),
@@ -311,20 +320,39 @@ class VideoSelector:
             )
             probed_sources.append((video, identity, metadata, end_margin_seconds))
 
+        metadata_items = tuple(item[2] for item in probed_sources)
+        sample_counts = (
+            allocate_automatic_sample_counts(
+                metadata_items,
+                self.request.output_count,
+            )
+            if self.request.sample_interval_seconds is None
+            else _allocate_minimum_sample_counts(
+                metadata_items,
+                self.request.output_count,
+            )
+        )
         sources: list[VideoSource] = []
-        for index, (
-            video,
-            identity,
-            metadata,
-            end_margin_seconds,
-        ) in enumerate(probed_sources):
+        for (
+            index,
+            (video, identity, metadata, end_margin_seconds),
+        ), sample_count in zip(
+            enumerate(probed_sources),
+            sample_counts,
+            strict=True,
+        ):
             timestamps = make_timestamps(
                 metadata.duration_seconds,
-                self.request.output_count,
+                sample_count,
                 self.request.sample_interval_seconds,
                 minimum_end_margin_seconds=end_margin_seconds,
                 start_time_seconds=metadata.start_time_seconds,
                 last_frame_timestamp_seconds=metadata.last_frame_timestamp_seconds,
+                automatic_sample_count=(
+                    sample_count
+                    if self.request.sample_interval_seconds is None
+                    else None
+                ),
             )
             candidate_cache_key = phase_key(
                 "candidate-extraction",
@@ -361,8 +389,6 @@ class VideoSelector:
                 f"抽出可能な候補{sample_count}件が"
                 f"選択枚数{self.request.output_count}件を下回ります"
             )
-        self.run_key = json_digest(self._run_identity_conditions())
-        self.work_dir = self.cache_root / "runs" / self.run_key
         existing_manifest = self._read_existing_manifest()
         has_existing_manifest = self._restore_existing_manifest(existing_manifest)
 
@@ -489,19 +515,39 @@ class VideoSelector:
             )
         ):
             return None
+        duration = float(duration_seconds)
+        start_time = float(start_time_seconds)
+        last_frame_timestamp = (
+            float(last_frame_timestamp_seconds)
+            if last_frame_timestamp_seconds is not None
+            else None
+        )
+        if (
+            not math.isfinite(duration)
+            or duration <= 0
+            or width <= 0
+            or height <= 0
+            or video_stream_index < 0
+            or not math.isfinite(start_time)
+            or start_time < 0
+            or (
+                last_frame_timestamp is not None
+                and (
+                    not math.isfinite(last_frame_timestamp)
+                    or last_frame_timestamp < start_time
+                )
+            )
+        ):
+            return None
         return VideoMetadata(
-            duration_seconds=float(duration_seconds),
+            duration_seconds=duration,
             width=width,
             height=height,
             codec_name=codec_name,
             average_frame_rate=average_frame_rate,
             video_stream_index=video_stream_index,
-            start_time_seconds=float(start_time_seconds),
-            last_frame_timestamp_seconds=(
-                float(last_frame_timestamp_seconds)
-                if last_frame_timestamp_seconds is not None
-                else None
-            ),
+            start_time_seconds=start_time,
+            last_frame_timestamp_seconds=last_frame_timestamp,
         )
 
     def _run_identity_conditions(self) -> dict[str, Any]:
@@ -733,23 +779,53 @@ class VideoSelector:
         """再開不能なoutputを外部処理より前に拒否する."""
         if not self.output_dir.exists():
             return
-        if not self.output_dir.is_dir():
-            raise RuntimeError(f"出力先がフォルダではありません: {self.output_dir}")
         if not any(self.output_dir.iterdir()):
             return
-        completion_name = self._output_completion_filename()
+        known_output = (
+            self._completion_path().is_file()
+            or (self.work_dir / self._output_registration_filename()).is_file()
+        )
+        if known_output:
+            return
         registration_name = self._output_registration_filename()
         runs_root = self.cache_root / "runs"
-        known_output = runs_root.is_dir() and any(
-            path.is_file()
-            for name in (completion_name, registration_name)
-            for path in runs_root.glob(f"*/{name}")
+        registered_by_other_run = runs_root.is_dir() and any(
+            path.is_file() for path in runs_root.glob(f"*/{registration_name}")
         )
-        if not known_output:
-            raise RuntimeError(
-                f"出力フォルダが空ではなく、対応する完了記録もありません: "
-                f"{self.output_dir}"
+        output_entries = list(self.output_dir.iterdir())
+        managed_artifacts = [
+            path for path in output_entries if self._is_managed_artifact(path)
+        ]
+        if (
+            registered_by_other_run
+            and managed_artifacts
+            and len(managed_artifacts) == len(output_entries)
+        ):
+            for artifact in managed_artifacts:
+                artifact.unlink()
+            logger.info(
+                "別の実行条件で生成した成果物を除去しました: %d件",
+                len(managed_artifacts),
             )
+            return
+        raise RuntimeError(
+            "出力フォルダが空ではなく、現在の実行条件に対応する"
+            f"完了記録もありません: {self.output_dir}"
+        )
+
+    @staticmethod
+    def _is_managed_artifact(path: Path) -> bool:
+        """Output Folder直下のgame-screen-pick生成物か返す."""
+        if not path.is_file():
+            return False
+        if path.name in {"report.json", "selected-contact-sheet.jpg"}:
+            return True
+        prefix = "selected-"
+        return (
+            path.name.startswith(prefix)
+            and path.suffix == ".jpg"
+            and path.stem.removeprefix(prefix).isdigit()
+        )
 
     def _output_completion_filename(self) -> str:
         """Output Folderごとの完了記録file名を返す."""
@@ -1832,25 +1908,6 @@ def allocate_automatic_sample_counts(
         raise ValueError("入力動画を1本以上指定してください")
     if output_count <= 0:
         raise ValueError("選択枚数は正の整数で指定してください")
-    if len(metadata_items) == 1:
-        metadata = metadata_items[0]
-        return (
-            len(
-                make_timestamps(
-                    metadata.duration_seconds,
-                    output_count,
-                    None,
-                    minimum_end_margin_seconds=max(
-                        MINIMUM_ENDPOINT_MARGIN_SECONDS,
-                        frame_interval_seconds(metadata.average_frame_rate),
-                    ),
-                    start_time_seconds=metadata.start_time_seconds,
-                    last_frame_timestamp_seconds=(
-                        metadata.last_frame_timestamp_seconds
-                    ),
-                )
-            ),
-        )
     capacities = tuple(_sample_capacity(metadata) for metadata in metadata_items)
     base_counts = tuple(
         min(
@@ -2688,6 +2745,19 @@ def select_final_frames(
             item.candidate.timestamp_seconds,
         ),
     )
+
+
+def select_global_candidates(
+    candidates: Sequence[FrameCandidate],
+    primary: dict[str, FrameAssessment],
+    secondary: dict[str, FrameAssessment],
+    count: int,
+) -> list[FrameCandidate]:
+    """一次・二次の合成評価で最終選定前のglobal poolを絞る."""
+    return [
+        selected.candidate
+        for selected in select_final_frames(candidates, primary, secondary, count)
+    ]
 
 
 def _source_balanced_pool(
