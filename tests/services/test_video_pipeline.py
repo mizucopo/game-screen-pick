@@ -700,6 +700,53 @@ def test_ollama_context_checkpoint_identity_includes_normalized_host(
     )
 
 
+def test_assessment_identity_includes_normalized_ollama_host(tmp_path: Path) -> None:
+    """評価endpoint変更時だけ完了runと評価cacheを再利用しないこと."""
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="first-host:11434",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    changed_assessor = FakeAssessor()
+
+    SingleVideoSelector(
+        replace(request, ollama_host="second-host:11434"),
+        frame_extractor=FakeFrameExtractor(),
+        assessor=changed_assessor,
+    ).run()
+
+    assert changed_assessor.assess_calls > 0
+    assert len(list((_cache_root(tmp_path) / "runs").iterdir())) == 2
+
+    unavailable_assessor = UnavailableAssessor()
+    SingleVideoSelector(
+        replace(request, ollama_host="http://second-host:11434/"),
+        frame_extractor=FakeFrameExtractor(),
+        assessor=unavailable_assessor,
+    ).run()
+
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
 def test_context_generation_failure_stops_before_video_probe(tmp_path: Path) -> None:
     """検索・生成失敗では長い動画処理へ進まないこと."""
 
@@ -2127,8 +2174,8 @@ def test_pipeline_treats_unreadable_run_manifest_as_cache_miss(
     assert assessor.assess_calls == 0
 
 
-def test_secondary_cache_key_tracks_context_frame_bytes(tmp_path: Path) -> None:
-    """遷移前後JPEGのbyte変更で二次評価cache keyを更新すること."""
+def test_secondary_context_reextracts_changed_frame(tmp_path: Path) -> None:
+    """記録済みdigestと異なる遷移JPEGを動画から再抽出すること."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
@@ -2146,36 +2193,34 @@ def test_secondary_cache_key_tracks_context_frame_bytes(tmp_path: Path) -> None:
         sample_interval_seconds=None,
         debug=False,
     )
-    first_selector = SingleVideoSelector(
+    extractor = FakeFrameExtractor()
+    selector = SingleVideoSelector(
         request,
-        frame_extractor=FakeFrameExtractor(),
+        frame_extractor=extractor,
         assessor=FakeAssessor(),
     )
-    first_selector.run()
-    first_key = first_selector._assessment_cache_key(
-        request.secondary_model,
-        "secondary",
-        first_selector.sources[0],
-    )
+    selector.run()
     context_frames = sorted(
         (_cache_root(tmp_path) / "videos").glob("*/secondary-context/*/frames/*.jpg")
     )
     assert len(context_frames) >= 2
+    changed_path = context_frames[0]
+    original_hash = file_sha256(changed_path)
     shutil.copyfile(context_frames[1], context_frames[0])
-    second_selector = SingleVideoSelector(
-        request,
-        frame_extractor=FakeFrameExtractor(),
-        assessor=FakeAssessor(),
+    changed_frame_id = changed_path.name.removesuffix("-before.jpg").removesuffix(
+        "-after.jpg"
     )
-    second_selector._prepare_run()
-
-    second_key = second_selector._assessment_cache_key(
-        request.secondary_model,
-        "secondary",
-        second_selector.sources[0],
+    candidate = next(
+        candidate
+        for candidate in selector._extract_candidates()
+        if candidate.frame_id == changed_frame_id
     )
+    extractor.extract_calls = 0
 
-    assert second_key != first_key
+    selector._extract_context_frames([candidate])
+
+    assert extractor.extract_calls == 1
+    assert file_sha256(changed_path) == original_hash
 
 
 def test_same_model_name_keeps_stage_specific_digests_on_partial_resume(

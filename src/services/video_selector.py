@@ -89,7 +89,7 @@ VIDEO_PROBE_PHASE_VERSION = 1
 CANDIDATE_EXTRACTION_PHASE_VERSION = 1
 MECHANICAL_ANALYSIS_PHASE_VERSION = 3
 PRIMARY_ASSESSMENT_PHASE_VERSION = 2
-SECONDARY_CONTEXT_PHASE_VERSION = 1
+SECONDARY_CONTEXT_PHASE_VERSION = 2
 SECONDARY_ASSESSMENT_PHASE_VERSION = 1
 GLOBAL_CANDIDATE_SELECTION_PHASE_VERSION = 1
 FINAL_SELECTION_PHASE_VERSION = 1
@@ -174,6 +174,7 @@ class VideoSelector:
         self.output_dir = Path()
         self.work_dir = Path()
         self.run_key = ""
+        self.ollama_endpoint = ""
         self.game_context = ""
         self.game_context_generation: dict[str, str] | None = None
         self.model_metadata: dict[str, dict[str, Any]] = {}
@@ -303,6 +304,11 @@ class VideoSelector:
             raise ValueError(
                 f"sample intervalは{MINIMUM_SAMPLE_INTERVAL_SECONDS}秒以上で"
                 "指定してください"
+            )
+        if not self.ollama_endpoint:
+            self.ollama_endpoint = OllamaFrameAssessor.normalize_host(
+                self.request.ollama_host
+                or os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
             )
 
         self.videos = tuple(
@@ -440,11 +446,8 @@ class VideoSelector:
         existing_manifest = self._read_existing_manifest()
         has_existing_manifest = self._restore_existing_manifest(existing_manifest)
 
-        host = self.request.ollama_host or os.environ.get(
-            "OLLAMA_HOST", "127.0.0.1:11434"
-        )
         self.assessor = self._provided_assessor or OllamaFrameAssessor(
-            host,
+            self.ollama_endpoint,
             timeout_seconds=self.request.ollama_timeout,
             require_gpu=not self.request.allow_cpu,
         )
@@ -630,6 +633,7 @@ class VideoSelector:
             "sample_interval_seconds": self.request.sample_interval_seconds,
             "primary_model": self.request.primary_model,
             "secondary_model": self.request.secondary_model,
+            "ollama_endpoint": self.ollama_endpoint,
             "require_gpu": not self.request.allow_cpu,
         }
 
@@ -1856,10 +1860,18 @@ class VideoSelector:
     ) -> None:
         """二次評価候補の直前・直後フレームを抽出する."""
         jobs: list[tuple[FrameCandidate, Path, str, float]] = []
+        records_by_source: dict[int, dict[str, str]] = {}
+        expected_paths_by_source: dict[int, list[Path]] = {}
         for candidate in candidates:
             source = self._source_for(candidate)
             context_dir = self._context_directory(source)
             prepare_cache_directory(self.cache_root, context_dir)
+            if source.index not in records_by_source:
+                records_by_source[source.index] = (
+                    self._read_context_frame_records(source) or {}
+                )
+                expected_paths_by_source[source.index] = []
+            records = records_by_source[source.index]
             stream_start = source.metadata.start_time_seconds
             stream_end = stream_start + source.metadata.duration_seconds
             context_end = stream_end - source.end_margin_seconds
@@ -1878,7 +1890,13 @@ class VideoSelector:
             )
             for position, timestamp in (("before", before), ("after", after)):
                 context_path = context_frame_path(context_dir, candidate, position)
-                if not _is_valid_cached_image(context_path):
+                expected_paths_by_source[source.index].append(context_path)
+                recorded_digest = records.get(context_path.name)
+                is_valid = _is_valid_cached_image(context_path)
+                digest_changed = recorded_digest is None or (
+                    is_valid and file_sha256(context_path) != recorded_digest
+                )
+                if not is_valid or digest_changed:
                     if context_path.is_symlink():
                         context_path.unlink()
                     jobs.append((candidate, context_dir, position, timestamp))
@@ -1906,6 +1924,13 @@ class VideoSelector:
             raise
         else:
             executor.shutdown()
+        for source_index, expected_paths in expected_paths_by_source.items():
+            records = dict(records_by_source[source_index])
+            for path in expected_paths:
+                if not _is_valid_cached_image(path):
+                    raise RuntimeError(f"遷移判定frameの抽出に失敗しました: {path}")
+                records[path.name] = file_sha256(path)
+            self._write_context_frame_records(self.sources[source_index], records)
 
     def _context_cache_key(self, source: VideoSource) -> str:
         """候補抽出に依存する二次評価context frameのcache keyを返す."""
@@ -1926,6 +1951,59 @@ class VideoSelector:
             / "secondary-context"
             / self._context_cache_key(source)
             / "frames"
+        )
+
+    def _read_context_frame_records(
+        self,
+        source: VideoSource,
+    ) -> dict[str, str] | None:
+        """構造が正常な遷移frame抽出記録を返す."""
+        context_dir = self._context_directory(source)
+        cache_key = self._context_cache_key(source)
+        data = read_phase_data(
+            context_dir.parent / "frames.json",
+            phase="secondary-context",
+            phase_version=SECONDARY_CONTEXT_PHASE_VERSION,
+            expected_key=cache_key,
+        )
+        if data is None or not isinstance(data.get("frames"), list):
+            return None
+        records: dict[str, str] = {}
+        for raw in data["frames"]:
+            if not isinstance(raw, dict):
+                return None
+            name = raw.get("name")
+            sha256 = raw.get("sha256")
+            if (
+                not isinstance(name, str)
+                or Path(name).name != name
+                or not name.endswith(("-before.jpg", "-after.jpg"))
+                or name in records
+                or not isinstance(sha256, str)
+                or not _is_sha256(sha256)
+            ):
+                return None
+            records[name] = sha256
+        return records
+
+    def _write_context_frame_records(
+        self,
+        source: VideoSource,
+        records: dict[str, str],
+    ) -> None:
+        """遷移frame抽出記録をatomic保存する."""
+        context_dir = self._context_directory(source)
+        cache_key = self._context_cache_key(source)
+        write_phase_data(
+            context_dir.parent / "frames.json",
+            phase="secondary-context",
+            phase_version=SECONDARY_CONTEXT_PHASE_VERSION,
+            cache_key=cache_key,
+            data={
+                "frames": [
+                    {"name": name, "sha256": records[name]} for name in sorted(records)
+                ]
+            },
         )
 
     def _context_frame_digests(
@@ -2152,6 +2230,7 @@ class VideoSelector:
                 "mechanical_state_digest": self._mechanical_state_digest(source),
                 "prompt_version": PROMPT_VERSION,
                 "model": model,
+                "ollama_endpoint": self.ollama_endpoint,
                 "model_digest": self.model_metadata[
                     "primary" if primary_stage else "secondary"
                 ]["digest"],

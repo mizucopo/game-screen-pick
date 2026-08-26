@@ -18,13 +18,16 @@ The cache is divided into versioned per-video phases: video probe, candidate
 frame extraction, mechanical analysis, primary assessment, transition context,
 and secondary assessment. Each phase key includes its own version, semantic
 inputs, and the keys of upstream phases. Assessment keys additionally include
-the relevant model digest, prompt version, Game Context, selection settings,
-GPU requirement, and the ordered candidate image digests for the evaluation
-unit. Invalid, corrupt, schema-mismatched, or legacy entries are cache misses.
+the normalized Ollama endpoint, relevant model digest, prompt version, Game
+Context, selection settings, GPU requirement, and the ordered candidate image
+digests for the evaluation unit. Invalid, corrupt, schema-mismatched, or legacy
+entries are cache misses.
 Probe metadata is reusable only when its stream endpoint and minimum-interval
 sample-count arithmetic remain finite. A candidate JPEG whose SHA-256 no longer
 matches the mechanical analysis record is re-extracted before that analysis is
-reused or rerun.
+reused or rerun. Transition-context extraction similarly persists each
+before/after JPEG digest and re-extracts only a requested frame whose bytes no
+longer match.
 An assessment checkpoint is reusable only when it contains the complete prefix
 of batches that the current evaluation unit could have saved; a hole or a
 regrouped partial batch invalidates the whole phase checkpoint. A generated Game
