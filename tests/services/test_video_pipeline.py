@@ -876,6 +876,9 @@ def test_generated_context_is_checkpointed_before_video_probe(
         "provider": "openai",
         "model": "gpt-context:resolved",
     }
+    assert checkpoint["payload_digest"] == json_digest(
+        {"request": checkpoint["request"], "result": checkpoint["result"]}
+    )
 
     SingleVideoSelector(
         request,
@@ -2092,7 +2095,14 @@ def test_pipeline_rejects_nonempty_output_before_generating_context(
 
 @pytest.mark.parametrize(
     "checkpoint_corruption",
-    ["truncated", "empty", "missing-heading", "whitespace", "oversized"],
+    [
+        "truncated",
+        "empty",
+        "missing-heading",
+        "whitespace",
+        "oversized",
+        "digest-context",
+    ],
 )
 def test_pipeline_regenerates_corrupt_game_context_checkpoint(
     tmp_path: Path,
@@ -2144,8 +2154,15 @@ def test_pipeline_regenerates_corrupt_game_context_checkpoint(
             "missing-heading": "ジャンル: RPG",
             "whitespace": f" {GENERATED_GAME_CONTEXT}\n",
             "oversized": f"{GENERATED_GAME_CONTEXT}\n{'x' * 2_400}",
+            "digest-context": GENERATED_GAME_CONTEXT.replace(
+                "世界を探索して戦う。", "町を探索して戦う。"
+            ),
         }
         checkpoint["result"]["game_context"] = invalid_contexts[checkpoint_corruption]
+        if checkpoint_corruption != "digest-context":
+            checkpoint["payload_digest"] = json_digest(
+                {"request": checkpoint["request"], "result": checkpoint["result"]}
+            )
         checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
     generator = FakeContextGenerator()
 

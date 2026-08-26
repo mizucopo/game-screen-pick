@@ -67,7 +67,7 @@ from .video_phase_cache import (
     write_phase_data,
 )
 
-GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION = 1
+GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION = 2
 
 logger = logging.getLogger(__name__)
 
@@ -787,15 +787,19 @@ class VideoSelector:
         """生成済みcontextを後続preflightより前にatomic保存する."""
         if self.game_context_generation is None:
             raise RuntimeError("Game Context生成metadataがありません")
+        checkpoint_payload = {
+            "request": request,
+            "result": {
+                "game_context": self.game_context,
+                **self.game_context_generation,
+            },
+        }
         write_json_atomic(
             self._context_checkpoint_path(request),
             {
                 "schema_version": GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION,
-                "request": request,
-                "result": {
-                    "game_context": self.game_context,
-                    **self.game_context_generation,
-                },
+                **checkpoint_payload,
+                "payload_digest": json_digest(checkpoint_payload),
             },
         )
 
@@ -805,15 +809,19 @@ class VideoSelector:
         expected_request: dict[str, str],
     ) -> None:
         """同じ生成条件のcheckpointだけを再利用する."""
+        request = checkpoint.get("request")
+        result = checkpoint.get("result")
+        checkpoint_payload = {"request": request, "result": result}
         if (
             checkpoint.get("schema_version") != GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION
-            or checkpoint.get("request") != expected_request
+            or request != expected_request
+            or not _is_sha256(checkpoint.get("payload_digest"))
+            or checkpoint["payload_digest"] != json_digest(checkpoint_payload)
         ):
             raise RuntimeError(
                 "保存済みのGame Context生成条件が今回と異なります。"
                 "新しい出力フォルダを指定してください"
             )
-        result = checkpoint.get("result")
         if not isinstance(result, dict):
             raise RuntimeError("Game Context生成checkpointが不正です")
         game_context = result.get("game_context")

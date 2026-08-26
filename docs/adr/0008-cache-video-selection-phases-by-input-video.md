@@ -36,7 +36,8 @@ of batches that the current evaluation unit could have saved; a hole or a
 regrouped partial batch invalidates the whole phase checkpoint. Its cache key
 and complete assessment mapping must also match the recorded payload digest. A
 generated Game Context checkpoint must retain the live normalized four-heading
-contract and 2,400-character limit. Cached scene and reason text must also match
+contract and 2,400-character limit, and its request and complete result must
+match the recorded payload digest. Cached scene and reason text must also match
 the live normalized 80- and 300-character limits.
 Changing one phase version invalidates that phase and dependent later phases
 while preserving compatible earlier phases.
