@@ -2317,6 +2317,48 @@ def test_pipeline_publishes_replacement_without_cross_device_rename(
     assert report["output_count"] == 2
 
 
+def test_pipeline_rejects_unmanaged_output_before_game_context_generation(
+    tmp_path: Path,
+) -> None:
+    """登録済みOutput Folderの未管理fileを外部context生成前に拒否すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    (output_dir / "notes.txt").write_text("user-owned", encoding="utf-8")
+    generator = FakeContextGenerator()
+
+    with pytest.raises(RuntimeError, match="出力フォルダが空ではなく"):
+        SingleVideoSelector(
+            replace(request, game_title="Sample Game", game_context=""),
+            frame_extractor=FakeFrameExtractor(),
+            assessor=FakeAssessor(),
+            context_generator=generator,
+        ).run()
+
+    assert generator.calls == []
+    assert (output_dir / "notes.txt").read_text(encoding="utf-8") == "user-owned"
+
+
 @pytest.mark.parametrize(
     "registration_payload",
     ["{", "{}", '{"output_path":"/different"}'],

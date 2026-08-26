@@ -801,39 +801,32 @@ class VideoSelector:
 
     def _preflight_output_dir(self) -> None:
         """再開不能なoutputを外部処理より前に拒否する."""
-        if not self.output_dir.exists():
+        output_entries = self._validated_output_entries()
+        if not output_entries:
             return
-        if not any(self.output_dir.iterdir()):
-            return
-        output_entries = list(self.output_dir.iterdir())
-        managed_artifacts = [
-            path for path in output_entries if self._is_managed_artifact(path)
-        ]
-        if (
-            self._has_valid_output_ownership()
-            and managed_artifacts
-            and len(managed_artifacts) == len(output_entries)
-        ):
-            self._replace_registered_output = True
-            logger.info(
-                "登録済み生成物をpublication直前まで保持します: %d件",
-                len(managed_artifacts),
-            )
-            return
-        raise RuntimeError(
-            "出力フォルダが空ではなく、現在の実行条件に対応する"
-            f"完了記録もありません: {self.output_dir}"
+        self._replace_registered_output = True
+        logger.info(
+            "登録済み生成物をpublication直前まで保持します: %d件",
+            len(output_entries),
         )
 
     def _preflight_output_ownership(self) -> None:
-        """外部処理前にOutput Folderの登録有無だけを安価に確認する."""
+        """外部処理前にOutput Folderの所有と内容を確認する."""
+        self._validated_output_entries()
+
+    def _validated_output_entries(self) -> list[Path]:
+        """所有記録が裏付けるmanaged artifact一覧を返す."""
         if not self.output_dir.exists() or not any(self.output_dir.iterdir()):
-            return
-        if not self._has_valid_output_ownership():
+            return []
+        output_entries = list(self.output_dir.iterdir())
+        if not self._has_valid_output_ownership() or any(
+            not self._is_managed_artifact(path) for path in output_entries
+        ):
             raise RuntimeError(
                 "出力フォルダが空ではなく、対応する完了記録もありません: "
                 f"{self.output_dir}"
             )
+        return output_entries
 
     def _has_valid_output_ownership(self) -> bool:
         """正常な所有記録または完了記録が現在のOutputを裏付けるか返す."""
