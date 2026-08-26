@@ -21,6 +21,9 @@ inputs, and the keys of upstream phases. Assessment keys additionally include
 the relevant model digest, prompt version, Game Context, selection settings,
 GPU requirement, and the ordered candidate image digests for the evaluation
 unit. Invalid, corrupt, schema-mismatched, or legacy entries are cache misses.
+An assessment checkpoint is reusable only when it contains the complete prefix
+of batches that the current evaluation unit could have saved; a hole or a
+regrouped partial batch invalidates the whole phase checkpoint.
 Changing one phase version invalidates that phase and dependent later phases
 while preserving compatible earlier phases.
 
@@ -42,13 +45,17 @@ artifacts, not Input Video identity.
 
 Output ownership is accepted only from a structurally valid registration for
 the exact resolved Output Folder or from a completion record whose artifact
-size and SHA-256 values still match. When changed conditions reuse a registered
-Output Folder, the next artifacts are completed in staging within that Output
-Folder first. The old completed artifacts remain usable if probing, model
-validation, assessment, or staging fails, and are replaced atomically on the
-same filesystem only at publication. Abandoned application publication staging
-directories are removed after output ownership is established; staging
-symlinks remain unmanaged and are rejected. Managed cache directory components
-must be real directories, and cached candidate or context image leaf symlinks
-are regenerated before use so reads or writes cannot escape
+size and SHA-256 values still match. The report also records its schema and the
+size and SHA-256 of every JPEG artifact, allowing an intact application output
+set to reestablish ownership after the visible cache is deliberately deleted.
+When changed conditions reuse an owned Output Folder, the next artifacts are
+completed in staging within that Output Folder first. The old completed
+artifacts remain usable if probing, model validation, assessment, or staging
+fails, and are replaced atomically on the same filesystem only at publication.
+Abandoned application publication staging directories are removed after output
+ownership is established; staging symlinks remain unmanaged and are rejected.
+An Output Folder equal to or below `cache-game-screen-pick/` is rejected so
+deleting regenerable state cannot delete user artifacts. Managed cache
+directory components must be real directories, and cached candidate or context
+image leaf symlinks are regenerated before use so reads or writes cannot escape
 `cache-game-screen-pick/`.

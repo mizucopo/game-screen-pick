@@ -92,7 +92,8 @@ SECONDARY_CONTEXT_PHASE_VERSION = 1
 SECONDARY_ASSESSMENT_PHASE_VERSION = 1
 GLOBAL_CANDIDATE_SELECTION_PHASE_VERSION = 1
 FINAL_SELECTION_PHASE_VERSION = 1
-ARTIFACT_PHASE_VERSION = 1
+ARTIFACT_PHASE_VERSION = 2
+REPORT_SCHEMA_VERSION = 1
 PUBLICATION_STAGING_PREFIX = ".game-screen-pick-publication-"
 
 
@@ -326,6 +327,10 @@ class VideoSelector:
                 self.cache_root / "videos" / identity.key,
             )
         self.output_dir = Path(self.request.output_dir).expanduser().resolve()
+        if self.output_dir.is_relative_to(self.cache_root):
+            raise ValueError(
+                "Output Folderはcache-game-screen-pick配下に指定できません"
+            )
         if self.output_dir.exists() and not self.output_dir.is_dir():
             raise RuntimeError(f"出力先がフォルダではありません: {self.output_dir}")
 
@@ -455,7 +460,7 @@ class VideoSelector:
     def _read_existing_manifest(self) -> dict[str, Any] | None:
         """保存済みmanifestを外部接続前に読み取る."""
         manifest_path = self.work_dir / "run-manifest.json"
-        if not manifest_path.is_file():
+        if not manifest_path.is_file() or manifest_path.is_symlink():
             return None
         try:
             existing = read_json(manifest_path)
@@ -738,7 +743,7 @@ class VideoSelector:
     ) -> dict[str, Any] | None:
         """保存済みGame Context checkpointを読み取る."""
         checkpoint_path = self._context_checkpoint_path(request)
-        if not checkpoint_path.is_file():
+        if not checkpoint_path.is_file() or checkpoint_path.is_symlink():
             return None
         try:
             checkpoint = read_json(checkpoint_path)
@@ -863,10 +868,71 @@ class VideoSelector:
 
     def _has_valid_output_ownership(self) -> bool:
         """正常な所有記録または完了記録が現在のOutputを裏付けるか返す."""
-        return self._has_valid_output_registration() or any(
-            self._completion_establishes_output_ownership(path)
-            for path in self._run_cache_files(self._output_completion_filename())
+        return (
+            self._has_valid_output_registration()
+            or any(
+                self._completion_establishes_output_ownership(path)
+                for path in self._run_cache_files(self._output_completion_filename())
+            )
+            or self._self_describing_output_establishes_ownership()
         )
+
+    def _self_describing_output_establishes_ownership(self) -> bool:
+        """integrity付きreportと全成果物が所有を裏付けるか返す."""
+        report_path = self.output_dir / "report.json"
+        if not report_path.is_file() or report_path.is_symlink():
+            return False
+        try:
+            report = read_json(report_path)
+        except (OSError, ValueError):
+            return False
+        if not isinstance(report, dict):
+            return False
+        output_count = report.get("output_count")
+        selected = report.get("selected")
+        integrity = report.get("artifact_integrity")
+        if (
+            report.get("report_schema_version") != REPORT_SCHEMA_VERSION
+            or not _is_sha256(report.get("manifest_digest"))
+            or not isinstance(output_count, int)
+            or isinstance(output_count, bool)
+            or not 1 <= output_count <= MAXIMUM_OUTPUT_COUNT
+            or not isinstance(selected, list)
+            or len(selected) != output_count
+            or not isinstance(integrity, list)
+        ):
+            return False
+        width = max(2, len(str(output_count)))
+        selected_names = [
+            f"selected-{rank:0{width}d}.jpg" for rank in range(1, output_count + 1)
+        ]
+        for rank, (item, expected_name) in enumerate(
+            zip(selected, selected_names, strict=True),
+            start=1,
+        ):
+            if (
+                not isinstance(item, dict)
+                or item.get("rank") != rank
+                or item.get("output_path") != expected_name
+            ):
+                return False
+        expected_integrity_paths = {"selected-contact-sheet.jpg", *selected_names}
+        if (
+            len(integrity) != len(expected_integrity_paths)
+            or any(not self._is_valid_artifact_record(item) for item in integrity)
+            or {item["path"] for item in integrity} != expected_integrity_paths
+        ):
+            return False
+        for item in integrity:
+            artifact = self.output_dir / item["path"]
+            if (
+                artifact.is_symlink()
+                or not is_valid_image(artifact)
+                or artifact.stat().st_size != item["size"]
+                or file_sha256(artifact) != item["sha256"]
+            ):
+                return False
+        return True
 
     def _has_valid_output_registration(self) -> bool:
         """現在のOutput Folderと一致する正常な所有記録があるか返す."""
@@ -1832,7 +1898,12 @@ class VideoSelector:
                 source_candidates,
             )
             state_path = self._assessment_state_path(source, stage, cache_key)
-            state = self._load_assessment_state_or_miss(state_path, cache_key)
+            state = self._load_assessment_state_or_miss(
+                state_path,
+                cache_key,
+                source_candidates,
+                batch_size,
+            )
             missing = [
                 candidate
                 for candidate in source_candidates
@@ -1852,6 +1923,8 @@ class VideoSelector:
                     state = self._load_assessment_state_or_miss(
                         state_path,
                         cache_key,
+                        source_candidates,
+                        batch_size,
                     )
                     missing = [
                         candidate
@@ -1939,12 +2012,27 @@ class VideoSelector:
     def _load_assessment_state_or_miss(
         state_path: Path,
         cache_key: str,
+        candidates: Sequence[FrameCandidate],
+        batch_size: int,
     ) -> dict[str, FrameAssessment]:
-        """破損・旧形式の評価cacheをmissとして扱う."""
+        """正常な完了batch prefixだけを復元する."""
         try:
-            return load_assessment_state(state_path, cache_key)
+            state = load_assessment_state(state_path, cache_key)
         except (OSError, ValueError, RuntimeError):
             return {}
+        completed_count = len(state)
+        expected_ids = {
+            candidate.frame_id for candidate in candidates[:completed_count]
+        }
+        if (
+            completed_count > len(candidates)
+            or (
+                completed_count != len(candidates) and completed_count % batch_size != 0
+            )
+            or set(state) != expected_ids
+        ):
+            return {}
+        return state
 
     def _assessment_state_path(
         self,
@@ -2192,10 +2280,14 @@ contact sheet内の対象ID: {ids}
                 )
             )
 
+        contact_sheet_path = target_dir / "selected-contact-sheet.jpg"
+        build_contact_sheet(contact_candidates, contact_sheet_path)
+        integrity_paths = [contact_sheet_path, *selected_paths]
         report_path = target_dir / "report.json"
         write_json_atomic(
             report_path,
             {
+                "report_schema_version": REPORT_SCHEMA_VERSION,
                 "manifest_digest": self.manifest_digest,
                 "videos": [
                     {
@@ -2231,10 +2323,16 @@ contact sheet内の対象ID: {ids}
                     },
                 },
                 "selected": report_items,
+                "artifact_integrity": [
+                    {
+                        "path": path.name,
+                        "size": path.stat().st_size,
+                        "sha256": file_sha256(path),
+                    }
+                    for path in integrity_paths
+                ],
             },
         )
-        contact_sheet_path = target_dir / "selected-contact-sheet.jpg"
-        build_contact_sheet(contact_candidates, contact_sheet_path)
         return [report_path, contact_sheet_path, *selected_paths]
 
     def _write_completion(self, artifacts: Sequence[Path]) -> None:
@@ -3210,7 +3308,7 @@ def load_assessment_state(
     expected_cache_key: str,
 ) -> dict[str, FrameAssessment]:
     """同じcache keyの評価済み状態を読む."""
-    if not path.is_file():
+    if not path.is_file() or path.is_symlink():
         return {}
     payload = read_json(path)
     if not isinstance(payload, dict) or payload.get("cache_key") != expected_cache_key:

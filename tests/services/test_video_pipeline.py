@@ -406,6 +406,39 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     assert all("テスト用のGame Context" in prompt for prompt in assessor.prompts)
 
 
+@pytest.mark.parametrize("cache_relative_output", [".", "output"])
+def test_pipeline_rejects_output_folder_inside_regenerable_cache(
+    tmp_path: Path,
+    cache_relative_output: str,
+) -> None:
+    """Output Folderを削除可能なcache root以下に置かないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = _cache_root(tmp_path) / cache_relative_output
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    with pytest.raises(ValueError, match="Output Folder.*cache"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=FakeAssessor(),
+        )._prepare_paths()
+
+
 @pytest.mark.parametrize(
     "corruption",
     ["truncated", "invalid-artifacts", "missing-artifact"],
@@ -2362,6 +2395,96 @@ def test_pipeline_recovers_abandoned_publication_staging_directory(
     assert unavailable_assessor.assess_calls == 0
 
 
+def test_pipeline_regenerates_output_after_visible_cache_is_deleted(
+    tmp_path: Path,
+) -> None:
+    """cache削除後も既存成果物から所有を再確立して再生成すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    shutil.rmtree(_cache_root(tmp_path))
+    replacement_bytes = bytes(reversed(range(256))) * 16
+    assert len(replacement_bytes) == video.stat().st_size
+    video.write_bytes(replacement_bytes)
+    extractor = FakeFrameExtractor()
+    assessor = FakeAssessor()
+
+    regenerated_sheet = SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=assessor,
+    ).run()
+
+    assert regenerated_sheet == output_dir / "selected-contact-sheet.jpg"
+    assert extractor.extract_calls > 0
+    assert assessor.assess_calls > 0
+
+
+def test_pipeline_rejects_tampered_output_after_visible_cache_is_deleted(
+    tmp_path: Path,
+) -> None:
+    """cache削除後もreportと不一致な既存成果物を所有済みにしないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    shutil.rmtree(_cache_root(tmp_path))
+    selected_path = output_dir / "selected-01.jpg"
+    shutil.copyfile(output_dir / "selected-02.jpg", selected_path)
+    tampered_hash = file_sha256(selected_path)
+    unavailable_assessor = UnavailableAssessor()
+
+    with pytest.raises(RuntimeError, match="対応する完了記録もありません"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=unavailable_assessor,
+        ).run()
+
+    assert file_sha256(selected_path) == tampered_hash
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
 def test_pipeline_does_not_follow_publication_staging_symlink(
     tmp_path: Path,
 ) -> None:
@@ -2548,11 +2671,11 @@ def test_pipeline_reuses_valid_completion_when_output_registration_is_corrupt(
     "corruption",
     ["missing-manifest", "manifest-digest", "incomplete-artifacts"],
 )
-def test_pipeline_rejects_completion_without_matching_run_manifest(
+def test_pipeline_ignores_completion_without_matching_run_manifest(
     tmp_path: Path,
     corruption: str,
 ) -> None:
-    """run manifestと完全一致しない完了記録を所有権根拠にしないこと."""
+    """run manifestと完全一致しない完了記録自体は所有根拠にしないこと."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     output_dir = tmp_path / "selected"
@@ -2591,14 +2714,20 @@ def test_pipeline_rejects_completion_without_matching_run_manifest(
         completion["artifacts"].pop()
         completion_path.write_text(json.dumps(completion), encoding="utf-8")
     original_artifacts = {path.name: path.read_bytes() for path in output_dir.iterdir()}
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_paths()
 
-    with pytest.raises(RuntimeError, match="対応する完了記録もありません"):
-        SingleVideoSelector(
-            request,
-            frame_extractor=FakeFrameExtractor(),
-            assessor=FakeAssessor(),
-        ).run()
+    assert not selector._completion_establishes_output_ownership(
+        _completion_path(run_cache)
+    )
 
+    resumed_sheet = selector.run()
+
+    assert resumed_sheet == output_dir / "selected-contact-sheet.jpg"
     assert {path.name: path.read_bytes() for path in output_dir.iterdir()} == (
         original_artifacts
     )
@@ -3173,6 +3302,82 @@ def test_mechanical_cache_rejects_difference_hash_not_matching_image(
     )
 
     assert restored is None
+
+
+def test_assessment_cache_rejects_non_prefix_checkpoint(tmp_path: Path) -> None:
+    """完了batchのprefixでない評価checkpointをphase全体のmissにすること."""
+
+    class BatchTrackingAssessor(FakeAssessor):
+        """評価batchの候補数を記録するfake."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.batch_sizes: list[int] = []
+
+        def assess(
+            self,
+            *,
+            model: str,
+            model_digest: str,
+            prompt: str,
+            candidates: Sequence[FrameCandidate],
+            contact_sheet: Path,
+        ) -> list[FrameAssessment]:
+            self.batch_sizes.append(len(candidates))
+            return super().assess(
+                model=model,
+                model_digest=model_digest,
+                prompt=prompt,
+                candidates=candidates,
+                contact_sheet=contact_sheet,
+            )
+
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    assessor = BatchTrackingAssessor()
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=assessor,
+    )
+    selector._prepare_run()
+    candidates = selector._extract_candidates()
+    primary_candidates = selector._preselect_candidates(candidates)
+    selector._assess_candidates(
+        model=request.primary_model,
+        stage="primary",
+        candidates=primary_candidates,
+    )
+    state_path = _assessment_files(tmp_path, "primary")[0]
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    first_frame_id = primary_candidates[0].frame_id
+    payload["assessments"].pop(first_frame_id)
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    assessor.batch_sizes.clear()
+
+    selector._assess_candidates(
+        model=request.primary_model,
+        stage="primary",
+        candidates=primary_candidates,
+    )
+
+    assert sum(assessor.batch_sizes) == len(primary_candidates)
+    assert assessor.batch_sizes[0] > 1
 
 
 @pytest.mark.parametrize("cache_image", ["candidate", "context"])
