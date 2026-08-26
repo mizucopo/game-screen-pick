@@ -2266,6 +2266,56 @@ def test_pipeline_replaces_managed_output_registered_by_different_run(
     assert unavailable_assessor.assess_calls == 0
 
 
+@pytest.mark.parametrize(
+    "registration_payload",
+    ["{", "{}", '{"output_path":"/different"}'],
+)
+def test_pipeline_rejects_invalid_output_registration_without_deleting_files(
+    tmp_path: Path,
+    registration_payload: str,
+) -> None:
+    """不正な所有記録だけでは管理対象風の既存fileを削除しないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    run_cache = _single_run_cache(tmp_path)
+    _completion_path(run_cache).unlink()
+    registration_path = next(run_cache.glob("output-*.json"))
+    registration_path.write_text(registration_payload, encoding="utf-8")
+    report_path = output_dir / "report.json"
+    report_path.write_bytes(b"user-owned")
+
+    with pytest.raises(RuntimeError, match="対応する完了記録もありません"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=FakeAssessor(),
+        ).run()
+
+    assert report_path.read_bytes() == b"user-owned"
+    assert (output_dir / "selected-01.jpg").is_file()
+
+
 def test_pipeline_rejects_concurrent_run_for_same_output_folder(
     tmp_path: Path,
 ) -> None:
@@ -2687,7 +2737,7 @@ def test_candidate_extraction_cancels_queued_jobs_on_interrupt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Ctrl+C時にexecutorが未開始jobを取消して待ち続けないこと."""
+    """Ctrl+C時に未開始jobを取消し、active cache writerの終了を待つこと."""
     shutdown_calls: list[tuple[bool, bool]] = []
 
     class RecordingExecutor(ThreadPoolExecutor):
@@ -2733,14 +2783,14 @@ def test_candidate_extraction_cancels_queued_jobs_on_interrupt(
     with pytest.raises(KeyboardInterrupt):
         selector._extract_candidates()
 
-    assert (False, True) in shutdown_calls
+    assert (True, True) in shutdown_calls
 
 
 def test_context_extraction_cancels_queued_jobs_on_interrupt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """遷移判定frameの抽出中も未開始jobを取消すこと."""
+    """遷移frame抽出中も未開始jobを取消し、active writerの終了を待つこと."""
     shutdown_calls: list[tuple[bool, bool]] = []
 
     class RecordingExecutor(ThreadPoolExecutor):
@@ -2788,7 +2838,7 @@ def test_context_extraction_cancels_queued_jobs_on_interrupt(
             [FrameCandidate("f00001", 2.0, str(tmp_path / "candidate.jpg"))]
         )
 
-    assert (False, True) in shutdown_calls
+    assert (True, True) in shutdown_calls
 
 
 def test_mechanical_preselection_cancels_queued_jobs_on_interrupt(

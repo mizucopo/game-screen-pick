@@ -777,19 +777,12 @@ class VideoSelector:
             return
         if self._completion_path().is_file():
             return
-        registration_name = self._output_registration_filename()
-        runs_root = self.cache_root / "runs"
-        registered_output = (
-            (self.work_dir / registration_name).is_file()
-            or runs_root.is_dir()
-            and any(path.is_file() for path in runs_root.glob(f"*/{registration_name}"))
-        )
         output_entries = list(self.output_dir.iterdir())
         managed_artifacts = [
             path for path in output_entries if self._is_managed_artifact(path)
         ]
         if (
-            registered_output
+            self._has_valid_output_registration()
             and managed_artifacts
             and len(managed_artifacts) == len(output_entries)
         ):
@@ -810,19 +803,30 @@ class VideoSelector:
         """外部処理前にOutput Folderの登録有無だけを安価に確認する."""
         if not self.output_dir.exists() or not any(self.output_dir.iterdir()):
             return
-        runs_root = self.cache_root / "runs"
-        names = (
-            self._output_completion_filename(),
-            self._output_registration_filename(),
-        )
-        registered = runs_root.is_dir() and any(
-            path.is_file() for name in names for path in runs_root.glob(f"*/{name}")
-        )
-        if not registered:
+        if not self._has_valid_output_registration():
             raise RuntimeError(
                 "出力フォルダが空ではなく、対応する完了記録もありません: "
                 f"{self.output_dir}"
             )
+
+    def _has_valid_output_registration(self) -> bool:
+        """現在のOutput Folderと一致する正常な所有記録があるか返す."""
+        runs_root = self.cache_root / "runs"
+        if not runs_root.is_dir():
+            return False
+        registration_name = self._output_registration_filename()
+        for registration_path in runs_root.glob(f"*/{registration_name}"):
+            if not registration_path.is_file() or registration_path.is_symlink():
+                continue
+            try:
+                payload = read_json(registration_path)
+            except (OSError, ValueError):
+                continue
+            if isinstance(payload, dict) and payload.get("output_path") == str(
+                self.output_dir
+            ):
+                return True
+        return False
 
     @staticmethod
     def _is_managed_artifact(path: Path) -> bool:
@@ -1131,7 +1135,7 @@ class VideoSelector:
                 if completed % 50 == 0 or completed == len(futures):
                     logger.info("候補フレーム抽出: %d/%d件", completed, len(futures))
         except BaseException:
-            executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
             raise
         else:
             executor.shutdown()
@@ -1597,7 +1601,7 @@ class VideoSelector:
             for future in as_completed(futures):
                 future.result()
         except BaseException:
-            executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
             raise
         else:
             executor.shutdown()
