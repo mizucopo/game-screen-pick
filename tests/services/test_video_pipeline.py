@@ -659,7 +659,7 @@ def test_pipeline_logs_concrete_processing_without_generic_status(
         'Ollamaモデル情報を確認しています: "primary\\nmodel, '
         'secondary\\u001bmodel"' in messages
     )
-    assert "候補フレームを抽出します: 16/16件" in messages
+    assert "候補フレームを抽出します: 13/13件" in messages
     assert all(
         control not in message
         for message in messages
@@ -1851,16 +1851,10 @@ def test_pipeline_rejects_concurrent_run_for_same_output_folder(
         assert first_run.result(timeout=10).is_file()
 
 
-@pytest.mark.parametrize(
-    ("sample_interval_seconds", "expected_count"),
-    [(None, 4_000), (600.0, 600)],
-)
-def test_pipeline_allocates_sample_minimum_across_long_input_videos(
+def test_pipeline_allocates_explicit_sample_minimum_across_long_input_videos(
     tmp_path: Path,
-    sample_interval_seconds: float | None,
-    expected_count: int,
 ) -> None:
-    """選択枚数の最低sample数を動画ごとに増幅せず全入力へ配分すること."""
+    """明示intervalの最低sample数を動画ごとに増幅せず全入力へ配分すること."""
 
     class LongVideoExtractor(FakeFrameExtractor):
         """長時間動画のmetadataを返すfake."""
@@ -1870,7 +1864,7 @@ def test_pipeline_allocates_sample_minimum_across_long_input_videos(
             self.probe_calls += 1
             return VideoMetadata(3600.0, 320, 180, "fake", "30/1")
 
-    video_count = 12 if sample_interval_seconds is None else 7
+    video_count = 7
     videos = tuple(
         tmp_path / f"Sample Game Part{index}.mp4" for index in range(video_count)
     )
@@ -1879,7 +1873,7 @@ def test_pipeline_allocates_sample_minimum_across_long_input_videos(
     request = VideoSelectionRequest(
         input_videos=tuple(str(video) for video in videos),
         output_dir=str(tmp_path / "selected"),
-        output_count=30 if sample_interval_seconds is None else 600,
+        output_count=600,
         game_title=None,
         game_context="テスト用のGame Context",
         primary_model="primary",
@@ -1888,7 +1882,7 @@ def test_pipeline_allocates_sample_minimum_across_long_input_videos(
         ollama_timeout=1.0,
         allow_cpu=True,
         ffmpeg_workers=2,
-        sample_interval_seconds=sample_interval_seconds,
+        sample_interval_seconds=600.0,
         debug=False,
     )
     selector = SingleVideoSelector(
@@ -1899,7 +1893,158 @@ def test_pipeline_allocates_sample_minimum_across_long_input_videos(
 
     selector._prepare_run()
 
-    assert sum(len(source.timestamps) for source in selector.sources) == expected_count
+    assert sum(len(source.timestamps) for source in selector.sources) == 600
+
+
+def test_automatic_sample_positions_stay_stable_when_video_is_added(
+    tmp_path: Path,
+) -> None:
+    """自動sample位置を入力集合に依存させず既存動画の抽出cacheを保つこと."""
+
+    class MediumVideoExtractor(TrackingFrameExtractor):
+        """入力集合依存のsample配分差が出る長さを返すfake."""
+
+        def probe(self, video: Path) -> VideoMetadata:
+            self.probed_videos.append(video.name)
+            self.probe_calls += 1
+            return VideoMetadata(600.0, 320, 180, "fake", "30/1")
+
+    first_video = tmp_path / "Sample Game Part1.mp4"
+    second_video = tmp_path / "Sample Game Part2.mp4"
+    first_video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(first_video),
+        output_dir=str(tmp_path / "selected-first"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    first_selector = SingleVideoSelector(
+        request,
+        frame_extractor=MediumVideoExtractor(),
+        assessor=FakeAssessor(),
+    )
+    first_selector._prepare_run()
+    first_selector._extract_candidates()
+    first_timestamps = first_selector.sources[0].timestamps
+    second_video.write_bytes(bytes(range(256)) * 16)
+    extractor = MediumVideoExtractor()
+    second_selector = SingleVideoSelector(
+        replace(
+            request,
+            input_videos=(str(first_video), str(second_video)),
+            output_dir=str(tmp_path / "selected-second"),
+        ),
+        frame_extractor=extractor,
+        assessor=FakeAssessor(),
+    )
+
+    second_selector._prepare_run()
+    second_selector._extract_candidates()
+
+    assert second_selector.sources[0].timestamps == first_timestamps
+    assert set(extractor.candidate_videos) == {second_video.name}
+
+
+def test_pipeline_rejects_excessive_independent_automatic_samples(
+    tmp_path: Path,
+) -> None:
+    """動画単位の自動sample合計が上限超過なら明示intervalを案内すること."""
+
+    class LongVideoExtractor(FakeFrameExtractor):
+        """大量の自動sampleが必要な長時間動画を返すfake."""
+
+        def probe(self, video: Path) -> VideoMetadata:
+            assert video.is_file()
+            self.probe_calls += 1
+            return VideoMetadata(3600.0, 320, 180, "fake", "30/1")
+
+    videos = tuple(tmp_path / f"Sample Game Part{index}.mp4" for index in range(4))
+    for video in videos:
+        video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_videos=tuple(str(video) for video in videos),
+        output_dir=str(tmp_path / "selected"),
+        output_count=30,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    with pytest.raises(ValueError, match="明示sample interval"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=LongVideoExtractor(),
+            assessor=FakeAssessor(),
+        )._prepare_run()
+
+
+def test_mechanical_cache_verifies_candidate_image_bytes(tmp_path: Path) -> None:
+    """候補JPEGのbyte変更で機械評価と後続評価のcache keyを更新すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    first_selector = SingleVideoSelector(
+        request,
+        frame_extractor=TrackingFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    first_selector._prepare_run()
+    first_candidates = first_selector._extract_candidates()
+    first_selector._preselect_candidates(first_candidates)
+    first_key = first_selector._assessment_cache_key(
+        request.primary_model,
+        "primary",
+        first_selector.sources[0],
+    )
+    shutil.copyfile(first_candidates[1].path, first_candidates[0].path)
+    extractor = TrackingFrameExtractor()
+    second_selector = SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=FakeAssessor(),
+    )
+
+    second_selector._prepare_run()
+    second_candidates = second_selector._extract_candidates()
+    second_selector._preselect_candidates(second_candidates)
+    second_key = second_selector._assessment_cache_key(
+        request.primary_model,
+        "primary",
+        second_selector.sources[0],
+    )
+
+    assert extractor.candidate_videos == []
+    assert second_key != first_key
 
 
 def test_pipeline_rejects_concurrent_run_for_same_input_cache(tmp_path: Path) -> None:

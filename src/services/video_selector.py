@@ -83,7 +83,7 @@ MINIMUM_DISTINCT_DHASH_DISTANCE = 5
 RUN_MANIFEST_SCHEMA_VERSION = 1
 VIDEO_PROBE_PHASE_VERSION = 1
 CANDIDATE_EXTRACTION_PHASE_VERSION = 1
-MECHANICAL_ANALYSIS_PHASE_VERSION = 1
+MECHANICAL_ANALYSIS_PHASE_VERSION = 2
 PRIMARY_ASSESSMENT_PHASE_VERSION = 1
 SECONDARY_CONTEXT_PHASE_VERSION = 1
 SECONDARY_ASSESSMENT_PHASE_VERSION = 1
@@ -322,10 +322,7 @@ class VideoSelector:
 
         metadata_items = tuple(item[2] for item in probed_sources)
         sample_counts = (
-            allocate_automatic_sample_counts(
-                metadata_items,
-                self.request.output_count,
-            )
+            (self.request.output_count,) * len(metadata_items)
             if self.request.sample_interval_seconds is None
             else _allocate_minimum_sample_counts(
                 metadata_items,
@@ -348,11 +345,6 @@ class VideoSelector:
                 minimum_end_margin_seconds=end_margin_seconds,
                 start_time_seconds=metadata.start_time_seconds,
                 last_frame_timestamp_seconds=metadata.last_frame_timestamp_seconds,
-                automatic_sample_count=(
-                    sample_count
-                    if self.request.sample_interval_seconds is None
-                    else None
-                ),
             )
             candidate_cache_key = phase_key(
                 "candidate-extraction",
@@ -380,6 +372,11 @@ class VideoSelector:
         self.sources = tuple(sources)
         sample_count = sum(len(source.timestamps) for source in self.sources)
         if sample_count > MAXIMUM_RAW_CANDIDATES:
+            if self.request.sample_interval_seconds is None:
+                raise ValueError(
+                    "全入力動画の自動候補数が上限4,000件を超えます。"
+                    "入力動画を減らすか、明示sample intervalを指定してください"
+                )
             raise ValueError(
                 "全入力動画の候補数が上限4,000件を超えます。"
                 "sample intervalを広げてください"
@@ -1134,7 +1131,11 @@ class VideoSelector:
                 measured = [
                     candidate for candidate in measured_results if candidate is not None
                 ]
-                self._save_mechanical_candidates(source, measured)
+                self._save_mechanical_candidates(
+                    source,
+                    source_candidates,
+                    measured,
+                )
             else:
                 logger.info(
                     "機械評価cacheを再利用します: %s %d件",
@@ -1200,11 +1201,30 @@ class VideoSelector:
             phase_version=MECHANICAL_ANALYSIS_PHASE_VERSION,
             expected_key=cache_key,
         )
-        if data is None or not isinstance(data.get("candidates"), list):
+        if (
+            data is None
+            or not isinstance(data.get("source_frames"), list)
+            or not isinstance(data.get("candidates"), list)
+        ):
             return None
-        expected_frame_ids = [candidate.frame_id for candidate in expected_candidates]
-        if data.get("source_frame_ids") != expected_frame_ids:
+        if len(data["source_frames"]) != len(expected_candidates):
             return None
+        for raw, expected_candidate in zip(
+            data["source_frames"],
+            expected_candidates,
+            strict=True,
+        ):
+            if not isinstance(raw, dict):
+                return None
+            image_sha256 = raw.get("image_sha256")
+            if (
+                raw.get("frame_id") != expected_candidate.frame_id
+                or not isinstance(image_sha256, str)
+                or len(image_sha256) != 64
+                or not is_valid_image(Path(expected_candidate.path))
+                or file_sha256(Path(expected_candidate.path)) != image_sha256
+            ):
+                return None
         expected_by_id = {
             candidate.frame_id: candidate for candidate in expected_candidates
         }
@@ -1224,9 +1244,9 @@ class VideoSelector:
                 or timestamp != expected.timestamp_seconds
                 or not isinstance(quality, int | float)
                 or isinstance(quality, bool)
+                or not math.isfinite(float(quality))
                 or not isinstance(difference_hash, str)
                 or len(difference_hash) != 16
-                or not is_valid_image(Path(expected.path))
             ):
                 return None
             try:
@@ -1245,6 +1265,7 @@ class VideoSelector:
     def _save_mechanical_candidates(
         self,
         source: VideoSource,
+        source_candidates: Sequence[FrameCandidate],
         candidates: Sequence[FrameCandidate],
     ) -> None:
         """動画単位の機械評価結果をpath非依存で保存する."""
@@ -1256,12 +1277,12 @@ class VideoSelector:
             phase_version=MECHANICAL_ANALYSIS_PHASE_VERSION,
             cache_key=cache_key,
             data={
-                "source_frame_ids": [
-                    stable_frame_id(source.identity.key, sample_index)
-                    for sample_index, _timestamp in enumerate(
-                        source.timestamps,
-                        start=1,
-                    )
+                "source_frames": [
+                    {
+                        "frame_id": candidate.frame_id,
+                        "image_sha256": file_sha256(Path(candidate.path)),
+                    }
+                    for candidate in source_candidates
                 ],
                 "candidates": [
                     {
@@ -1274,6 +1295,14 @@ class VideoSelector:
                 ],
             },
         )
+
+    def _mechanical_state_digest(self, source: VideoSource) -> str:
+        """候補画像digestを含む機械評価状態のSHA-256を返す."""
+        cache_key = self._mechanical_cache_key(source)
+        path = source.cache_dir / "mechanical-analysis" / f"{cache_key}.json"
+        if not path.is_file():
+            raise RuntimeError(f"機械評価cacheが見つかりません: {path}")
+        return file_sha256(path)
 
     def _assess_with_source_backfill(
         self,
@@ -1686,6 +1715,7 @@ class VideoSelector:
                 "video_identity_key": source.identity.key,
                 "candidate_cache_key": source.candidate_cache_key,
                 "mechanical_cache_key": self._mechanical_cache_key(source),
+                "mechanical_state_digest": self._mechanical_state_digest(source),
                 "prompt_version": PROMPT_VERSION,
                 "model": model,
                 "model_digest": self.model_metadata[model]["digest"],
@@ -2874,9 +2904,12 @@ def load_assessment_state(
             or not isinstance(reason, str)
         ):
             raise RuntimeError(f"評価cacheが不正です: {path}")
+        numeric_score = float(score)
+        if not math.isfinite(numeric_score) or not 0 <= numeric_score <= 100:
+            raise RuntimeError(f"評価cacheが不正です: {path}")
         state[frame_id] = FrameAssessment(
             frame_id=frame_id,
-            blog_score=float(score),
+            blog_score=numeric_score,
             is_transition=transition,
             scene=scene,
             reason=reason,

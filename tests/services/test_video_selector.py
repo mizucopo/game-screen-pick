@@ -1,5 +1,6 @@
 """単一動画選定の純粋ロジックを検証する."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from src.services.video_selector import (
     VideoSelector,
     allocate_automatic_sample_counts,
     difference_hash_distance,
+    load_assessment_state,
     make_timestamps,
     measure_candidate,
     select_final_frames,
@@ -245,6 +247,34 @@ def test_global_candidate_pruning_uses_primary_and_secondary_scores() -> None:
     selected = select_global_candidates(candidates, primary, secondary, 1)
 
     assert [candidate.frame_id for candidate in selected] == ["f00002"]
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf"), -0.1, 100.1])
+def test_cached_assessment_rejects_invalid_blog_score(
+    tmp_path: Path,
+    score: float,
+) -> None:
+    """live評価では生成されないscoreをcache hitとして扱わないこと."""
+    state_path = tmp_path / "assessment.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "cache_key": "expected",
+                "assessments": {
+                    "f00001": {
+                        "blog_score": score,
+                        "is_transition": False,
+                        "scene": "探索",
+                        "reason": "test",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="評価cacheが不正です"):
+        load_assessment_state(state_path, "expected")
 
 
 def test_legacy_single_video_selector_import_path_is_available() -> None:
