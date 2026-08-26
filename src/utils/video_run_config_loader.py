@@ -9,25 +9,20 @@ class VideoRunConfigLoader:
     """TOMLの `[run]` tableを厳格に読み込む."""
 
     _STRING_KEYS = {
-        "game_title",
-        "game_context",
         "game_context_provider",
         "game_context_model",
         "primary_model",
         "secondary_model",
         "ollama_host",
     }
-    _INTEGER_KEYS = {"num", "ffmpeg_workers"}
+    _INTEGER_KEYS = {"ffmpeg_workers"}
     _NUMBER_KEYS = {"ollama_timeout", "sample_interval_seconds"}
     _BOOLEAN_KEYS = {"allow_cpu", "debug"}
     _KNOWN_KEYS = _STRING_KEYS | _INTEGER_KEYS | _NUMBER_KEYS | _BOOLEAN_KEYS
 
     @classmethod
-    def load(cls, path: str | None) -> dict[str, object]:
+    def load(cls, path: str) -> dict[str, object]:
         """設定pathから検証済みの部分設定を返す."""
-        if path is None:
-            return {}
-
         config_path = Path(path)
         try:
             with config_path.open("rb") as file:

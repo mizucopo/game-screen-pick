@@ -5,11 +5,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class VideoRunConfig:
-    """設定ファイルとCLI optionを統合した実効設定."""
+    """設定ファイルから読み込む実効設定."""
 
-    output_count: int = 30
-    game_title: str | None = None
-    game_context: str = ""
     game_context_provider: str = "ollama"
     game_context_model: str | None = None
     primary_model: str = "qwen3.8:27b"
