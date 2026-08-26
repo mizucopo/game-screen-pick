@@ -91,6 +91,7 @@ OPENAI_API_KEY=... \
 - `--ollama-timeout`: Ollama APIのbatch単位timeout秒数（既定: 900）
 - `--ffmpeg-workers`: フレーム抽出の並列数（1から4、既定: 2）
 - `--sample-interval-seconds`: 候補抽出の最大間隔（0.25秒以上）。通常は自動設定を推奨。候補が4,000件を超える指定は拒否
+- `--auto-sample-interval`: 設定ファイルの候補抽出間隔を自動決定へ戻す
 - `--allow-cpu`: GPU利用を確認できなくても続行する
 - `--debug`: debug logを有効化する
 

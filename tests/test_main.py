@@ -367,6 +367,65 @@ debug = true
     assert request.debug is False
 
 
+def test_cli_can_restore_automatic_sample_interval_over_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """設定ファイルの抽出間隔をCLIから自動決定へ戻せること."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "picker.toml"
+    config_path.write_text(
+        """[run]
+game_context = "設定ファイルの文脈"
+sample_interval_seconds = 2.5
+""",
+        encoding="utf-8",
+    )
+    captured_requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", captured_requests.append)
+
+    run(
+        [
+            "--config",
+            str(config_path),
+            "--auto-sample-interval",
+            str(input_dir),
+            str(tmp_path / "selected"),
+        ]
+    )
+
+    assert captured_requests[0].sample_interval_seconds is None
+
+
+def test_cli_rejects_numeric_and_automatic_sample_interval_together(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """抽出間隔の数値指定と自動指定を同時に受け付けないこと."""
+    monkeypatch.setattr(
+        "src.main.run_video_application",
+        lambda _request: pytest.fail("applicationは呼ばれないこと"),
+    )
+
+    with pytest.raises(SystemExit):
+        run(
+            [
+                "--sample-interval-seconds",
+                "2.5",
+                "--auto-sample-interval",
+                "input",
+                "output",
+            ]
+        )
+
+    assert (
+        "--sample-interval-secondsと--auto-sample-intervalは同時に指定できません"
+        in capsys.readouterr().err
+    )
+
+
 @pytest.mark.parametrize(
     "config_text,error_pattern",
     [

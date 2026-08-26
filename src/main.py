@@ -208,6 +208,7 @@ def resolve_video_run_config(
     allow_cpu: bool | None,
     ffmpeg_workers: int | None,
     sample_interval_seconds: float | None,
+    auto_sample_interval: bool,
     debug: bool | None,
 ) -> VideoRunConfig:
     """組み込み既定値、TOML、明示CLI optionの順に実効設定を解決する."""
@@ -251,6 +252,8 @@ def resolve_video_run_config(
     values.update(
         {key: value for key, value in cli_values.items() if value is not None}
     )
+    if auto_sample_interval:
+        values["sample_interval_seconds"] = None
 
     provider = str(values["game_context_provider"])
     if provider not in SUPPORTED_GAME_CONTEXT_PROVIDERS:
@@ -460,6 +463,11 @@ def validate_game_context_input(
         "未指定時は動画時間と選択枚数から自動決定"
     ),
 )
+@click.option(
+    "--auto-sample-interval",
+    is_flag=True,
+    help="設定ファイルの候補抽出間隔を自動決定へ戻す",
+)
 @click.option("--debug/--no-debug", default=False, help="デバッグログを有効化")
 @click.argument("input_video_dir", type=click.Path(path_type=str))
 @click.argument("output_dir", type=click.Path(path_type=str))
@@ -479,11 +487,19 @@ def execute(
     allow_cpu: bool,
     ffmpeg_workers: int,
     sample_interval_seconds: float | None,
+    auto_sample_interval: bool,
     debug: bool,
     input_video_dir: str,
     output_dir: str,
 ) -> None:
     """入力ディレクトリのゲーム動画全体からブログ掲載用画像を選定する."""
+    explicit_sample_interval = _command_line_value(
+        context, "sample_interval_seconds", sample_interval_seconds
+    )
+    if auto_sample_interval and explicit_sample_interval is not None:
+        raise click.UsageError(
+            "--sample-interval-secondsと--auto-sample-intervalは同時に指定できません"
+        )
     config = resolve_video_run_config(
         config_path=config_path,
         output_count=_command_line_value(context, "output_count", output_count),
@@ -503,9 +519,8 @@ def execute(
         ollama_timeout=_command_line_value(context, "ollama_timeout", ollama_timeout),
         allow_cpu=_command_line_value(context, "allow_cpu", allow_cpu),
         ffmpeg_workers=_command_line_value(context, "ffmpeg_workers", ffmpeg_workers),
-        sample_interval_seconds=_command_line_value(
-            context, "sample_interval_seconds", sample_interval_seconds
-        ),
+        sample_interval_seconds=explicit_sample_interval,
+        auto_sample_interval=auto_sample_interval,
         debug=_command_line_value(context, "debug", debug),
     )
     input_videos = discover_input_videos(input_video_dir)
