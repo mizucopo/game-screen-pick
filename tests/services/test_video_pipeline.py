@@ -1,5 +1,6 @@
 """1本以上の動画を扱うproduction pipelineの小さな結合テスト."""
 
+import errno
 import json
 import logging
 import os
@@ -2266,6 +2267,56 @@ def test_pipeline_replaces_managed_output_registered_by_different_run(
     assert unavailable_assessor.assess_calls == 0
 
 
+def test_pipeline_publishes_replacement_without_cross_device_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cacheとOutput Folderが別filesystemでも成果物を置換できること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=3,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    cache_root = _cache_root(tmp_path)
+    original_replace = Path.replace
+
+    def reject_cross_device_replace(source: Path, target: Path) -> Path:
+        target_path = Path(target)
+        if cache_root in source.parents and target_path.parent == output_dir:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return original_replace(source, target_path)
+
+    monkeypatch.setattr(Path, "replace", reject_cross_device_replace)
+
+    SingleVideoSelector(
+        replace(request, output_count=2),
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+
+    assert not (output_dir / "selected-03.jpg").exists()
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["output_count"] == 2
+
+
 @pytest.mark.parametrize(
     "registration_payload",
     ["{", "{}", '{"output_path":"/different"}'],
@@ -2921,6 +2972,60 @@ def test_mechanical_cache_rejects_non_hexadecimal_difference_hash(
     )
     payload = json.loads(mechanical_path.read_text(encoding="utf-8"))
     payload["data"]["candidates"][0]["difference_hash"] = difference_hash
+    mechanical_path.write_text(json.dumps(payload), encoding="utf-8")
+    second_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    second_selector._prepare_run()
+    second_candidates = second_selector._extract_candidates()
+
+    restored = second_selector._load_mechanical_candidates(
+        second_selector.sources[0],
+        second_candidates,
+    )
+
+    assert restored is None
+
+
+def test_mechanical_cache_rejects_difference_hash_not_matching_image(
+    tmp_path: Path,
+) -> None:
+    """JPEGと一致しないvalidなdifference hashを拒否すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    first_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    first_selector._prepare_run()
+    candidates = first_selector._extract_candidates()
+    first_selector._preselect_candidates(candidates)
+    mechanical_path = next(
+        (_cache_root(tmp_path) / "videos").glob("*/mechanical-analysis/*.json")
+    )
+    payload = json.loads(mechanical_path.read_text(encoding="utf-8"))
+    stored_hash = payload["data"]["candidates"][0]["difference_hash"]
+    payload["data"]["candidates"][0]["difference_hash"] = (
+        f"{int(stored_hash, 16) ^ 1:016x}"
+    )
     mechanical_path.write_text(json.dumps(payload), encoding="utf-8")
     second_selector = SingleVideoSelector(
         request,

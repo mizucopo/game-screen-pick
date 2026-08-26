@@ -43,8 +43,9 @@ artifacts, not Input Video identity.
 Output ownership is accepted only from a structurally valid registration for
 the exact resolved Output Folder or from a completion record whose artifact
 size and SHA-256 values still match. When changed conditions reuse a registered
-Output Folder, the next artifacts are completed in cache staging first. The old
-completed artifacts remain usable if probing, model validation, assessment, or
-staging fails, and are replaced only at publication. Managed cache directory
-components must be real directories; symlinked descendants are rejected before
-reads or writes can escape `cache-game-screen-pick/`.
+Output Folder, the next artifacts are completed in staging within that Output
+Folder first. The old completed artifacts remain usable if probing, model
+validation, assessment, or staging fails, and are replaced atomically on the
+same filesystem only at publication. Managed cache directory components must be
+real directories; symlinked descendants are rejected before reads or writes can
+escape `cache-game-screen-pick/`.

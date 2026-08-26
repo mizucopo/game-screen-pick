@@ -1432,6 +1432,13 @@ class VideoSelector:
                 parsed_hash = int(difference_hash, 16)
             except ValueError:
                 return None
+            try:
+                with Image.open(expected.path) as image:
+                    actual_hash = image_difference_hash(image)
+            except OSError:
+                return None
+            if parsed_hash != actual_hash:
+                return None
             restored.append(
                 replace(
                     expected,
@@ -2060,16 +2067,18 @@ contact sheet内の対象ID: {ids}
         """旧成果物を保持したまま新成果物を完成させてpublicationする."""
         if not self._replace_registered_output:
             return self._write_selected_artifacts(selected)
-        prepare_cache_directory(self.cache_root, self.work_dir)
         with TemporaryDirectory(
-            prefix="artifact-staging-",
-            dir=self.work_dir,
+            prefix=".game-screen-pick-publication-",
+            dir=self.output_dir,
         ) as staging_name:
+            staging_dir = Path(staging_name)
             staged_artifacts = self._write_selected_artifacts(
                 selected,
-                artifact_dir=Path(staging_name),
+                artifact_dir=staging_dir,
             )
-            output_entries = list(self.output_dir.iterdir())
+            output_entries = [
+                path for path in self.output_dir.iterdir() if path != staging_dir
+            ]
             unknown_entries = [
                 path for path in output_entries if not self._is_managed_artifact(path)
             ]
