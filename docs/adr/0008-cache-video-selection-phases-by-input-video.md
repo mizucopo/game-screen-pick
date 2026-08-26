@@ -33,10 +33,11 @@ before/after JPEG digest and re-extracts only a requested frame whose bytes no
 longer match.
 An assessment checkpoint is reusable only when it contains the complete prefix
 of batches that the current evaluation unit could have saved; a hole or a
-regrouped partial batch invalidates the whole phase checkpoint. A generated Game
-Context checkpoint must retain the live normalized four-heading contract and
-2,400-character limit. Cached scene and reason text must also match the live
-normalized 80- and 300-character limits.
+regrouped partial batch invalidates the whole phase checkpoint. Its cache key
+and complete assessment mapping must also match the recorded payload digest. A
+generated Game Context checkpoint must retain the live normalized four-heading
+contract and 2,400-character limit. Cached scene and reason text must also match
+the live normalized 80- and 300-character limits.
 Changing one phase version invalidates that phase and dependent later phases
 while preserving compatible earlier phases.
 
@@ -76,10 +77,11 @@ deleting regenerable state cannot delete user artifacts. Managed cache
 directory components must be real directories, and cached candidate or context
 image leaf symlinks, non-JPEG files, images wider than the 960-pixel extraction
 contract, and Pillow decompression bombs are regenerated before use. The cache
-lock uses no-follow semantics and accepts only a regular file. JSON, contact
-sheet, and extracted-frame publication use exclusive unpredictable temporary
-files with the normal process-umask-derived mode, so fixed temporary leaf
-symlinks cannot redirect writes outside `cache-game-screen-pick/` or make
-published artifacts unexpectedly private. Mechanical analysis records both
-usable and rejected frame IDs and is reusable only when they cover every source
-frame.
+lock uses no-follow semantics and accepts only a regular file. `CACHE_INFO.txt`
+is read only when `lstat` identifies a regular file; other non-symlink file
+types are atomically replaced without opening them. JSON, contact sheet, and
+extracted-frame publication use exclusive unpredictable temporary files with
+the normal process-umask-derived mode, so fixed temporary leaf symlinks cannot
+redirect writes outside `cache-game-screen-pick/` or make published artifacts
+unexpectedly private. Mechanical analysis records both usable and rejected
+frame IDs and is reusable only when they cover every source frame.

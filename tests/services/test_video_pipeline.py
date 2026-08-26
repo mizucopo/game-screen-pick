@@ -30,7 +30,11 @@ from src.services.ollama_frame_assessor import (
     OllamaModelValidationError,
 )
 from src.services.video_frame_extractor import VideoFrameExtractor
-from src.services.video_phase_cache import CACHE_DIRECTORY_NAME
+from src.services.video_phase_cache import (
+    CACHE_DIRECTORY_NAME,
+    CACHE_INFO_FILENAME,
+    prepare_cache_root,
+)
 from src.services.video_selector import VideoSelector as SingleVideoSelector
 from src.utils.contact_sheet import context_frame_path
 from src.utils.video_selection_files import file_sha256, json_digest
@@ -549,6 +553,31 @@ def test_pipeline_rewrites_undecodable_cache_info_without_losing_phase_cache(
     assert primary_cache.read_bytes() == primary_cache_bytes
     assert unavailable_assessor.metadata_calls == 0
     assert unavailable_assessor.assess_calls == 0
+
+
+def test_prepare_cache_root_replaces_fifo_cache_info_without_opening(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FIFOのcache説明fileをopenせず通常fileへ置換すること."""
+    cache_root = tmp_path / CACHE_DIRECTORY_NAME
+    cache_root.mkdir()
+    info_path = cache_root / CACHE_INFO_FILENAME
+    os.mkfifo(info_path)
+    original_read_text = Path.read_text
+
+    def reject_fifo_read(path: Path, *args: Any, **kwargs: Any) -> str:
+        if path == info_path:
+            raise AssertionError("FIFOをread_textしてはなりません")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", reject_fifo_read)
+
+    prepared = prepare_cache_root(tmp_path)
+
+    assert prepared == cache_root
+    assert info_path.is_file()
+    assert "game-screen-pick" in original_read_text(info_path, encoding="utf-8")
 
 
 def test_pipeline_generates_context_before_video_processing_and_reuses_it(
@@ -1227,7 +1256,7 @@ def test_secondary_phase_version_change_reuses_preceding_video_phases(
     ).run()
     monkeypatch.setattr(
         "src.services.video_selector.SECONDARY_ASSESSMENT_PHASE_VERSION",
-        2,
+        3,
     )
     extractor = TrackingFrameExtractor()
     assessor = FakeAssessor()
@@ -3631,7 +3660,10 @@ def test_mechanical_cache_rejects_difference_hash_not_matching_image(
     assert restored is None
 
 
-@pytest.mark.parametrize("checkpoint_corruption", ["non-prefix", "scene", "reason"])
+@pytest.mark.parametrize(
+    "checkpoint_corruption",
+    ["non-prefix", "scene", "reason", "digest-score", "digest-transition"],
+)
 def test_assessment_cache_rejects_corrupt_checkpoint(
     tmp_path: Path,
     checkpoint_corruption: str,
@@ -3699,10 +3731,26 @@ def test_assessment_cache_rejects_corrupt_checkpoint(
     first_frame_id = primary_candidates[0].frame_id
     if checkpoint_corruption == "non-prefix":
         payload["assessments"].pop(first_frame_id)
+    elif checkpoint_corruption == "digest-score":
+        original_score = payload["assessments"][first_frame_id]["blog_score"]
+        payload["assessments"][first_frame_id]["blog_score"] = (
+            0.0 if original_score != 0.0 else 1.0
+        )
+    elif checkpoint_corruption == "digest-transition":
+        original_transition = payload["assessments"][first_frame_id]["is_transition"]
+        payload["assessments"][first_frame_id][
+            "is_transition"
+        ] = not original_transition
     else:
         field = checkpoint_corruption
         limit = 80 if field == "scene" else 300
         payload["assessments"][first_frame_id][field] = "x" * (limit + 1)
+    if not checkpoint_corruption.startswith("digest-"):
+        assessment_payload = {
+            "cache_key": payload["cache_key"],
+            "assessments": payload["assessments"],
+        }
+        payload["payload_digest"] = json_digest(assessment_payload)
     state_path.write_text(json.dumps(payload), encoding="utf-8")
     assessor.batch_sizes.clear()
 

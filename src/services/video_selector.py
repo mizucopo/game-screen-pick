@@ -88,9 +88,9 @@ RUN_MANIFEST_SCHEMA_VERSION = 1
 VIDEO_PROBE_PHASE_VERSION = 2
 CANDIDATE_EXTRACTION_PHASE_VERSION = 1
 MECHANICAL_ANALYSIS_PHASE_VERSION = 3
-PRIMARY_ASSESSMENT_PHASE_VERSION = 2
+PRIMARY_ASSESSMENT_PHASE_VERSION = 3
 SECONDARY_CONTEXT_PHASE_VERSION = 2
-SECONDARY_ASSESSMENT_PHASE_VERSION = 1
+SECONDARY_ASSESSMENT_PHASE_VERSION = 2
 GLOBAL_CANDIDATE_SELECTION_PHASE_VERSION = 1
 FINAL_SELECTION_PHASE_VERSION = 1
 ARTIFACT_PHASE_VERSION = 2
@@ -3498,7 +3498,15 @@ def load_assessment_state(
     if not isinstance(payload, dict) or payload.get("cache_key") != expected_cache_key:
         raise RuntimeError(f"評価cacheが今回の実行と一致しません: {path}")
     raw_assessments = payload.get("assessments")
-    if not isinstance(raw_assessments, dict):
+    assessment_payload = {
+        "cache_key": payload.get("cache_key"),
+        "assessments": raw_assessments,
+    }
+    if (
+        not isinstance(raw_assessments, dict)
+        or not _is_sha256(payload.get("payload_digest"))
+        or payload["payload_digest"] != json_digest(assessment_payload)
+    ):
         raise RuntimeError(f"評価cacheが不正です: {path}")
     state: dict[str, FrameAssessment] = {}
     for frame_id, item in raw_assessments.items():
@@ -3543,14 +3551,18 @@ def save_assessment_state(
     state: dict[str, FrameAssessment],
 ) -> None:
     """評価済み状態をbatchごとにatomic保存する."""
+    assessment_payload = {
+        "cache_key": cache_key,
+        "assessments": {
+            frame_id: asdict(assessment)
+            for frame_id, assessment in sorted(state.items())
+        },
+    }
     write_json_atomic(
         path,
         {
-            "cache_key": cache_key,
-            "assessments": {
-                frame_id: asdict(assessment)
-                for frame_id, assessment in sorted(state.items())
-            },
+            **assessment_payload,
+            "payload_digest": json_digest(assessment_payload),
         },
     )
 

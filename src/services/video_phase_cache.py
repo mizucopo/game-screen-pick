@@ -108,12 +108,20 @@ def prepare_cache_root(input_directory: Path) -> Path:
         raise RuntimeError(f"cache directoryにsymlinkは使用できません: {cache_root}")
     cache_root.mkdir(parents=True, exist_ok=True)
     info_path = cache_root / CACHE_INFO_FILENAME
-    if info_path.is_symlink():
-        raise RuntimeError(f"cache説明fileにsymlinkは使用できません: {info_path}")
     try:
-        current_info = info_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+        info_mode = info_path.lstat().st_mode
+    except FileNotFoundError:
         current_info = None
+    else:
+        if stat.S_ISLNK(info_mode):
+            raise RuntimeError(f"cache説明fileにsymlinkは使用できません: {info_path}")
+        if stat.S_ISREG(info_mode):
+            try:
+                current_info = info_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                current_info = None
+        else:
+            current_info = None
     if current_info != _CACHE_INFO:
         write_text_atomic(info_path, _CACHE_INFO)
     return cache_root
