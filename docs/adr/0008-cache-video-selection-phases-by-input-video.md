@@ -22,8 +22,9 @@ the normalized Ollama endpoint, relevant model digest, prompt version, Game
 Context, selection settings, GPU requirement, and the ordered candidate image
 digests for the evaluation unit. Invalid, corrupt, schema-mismatched, or legacy
 entries are cache misses.
-Probe metadata is reusable only when its stream endpoint and minimum-interval
-sample-count arithmetic remain finite. A candidate JPEG without a mechanical
+Probe metadata is reusable only when its complete payload matches the recorded
+digest and its stream endpoint and minimum-interval sample-count arithmetic
+remain finite. A candidate JPEG without a mechanical
 analysis digest record, or whose SHA-256 no longer matches that record, is
 re-extracted before the analysis is reused or rerun. Mechanical cache reuse also
 recomputes rejection classification, quality score, and dHash from every

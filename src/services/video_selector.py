@@ -85,7 +85,7 @@ CONTEXT_OFFSET_SECONDS = 0.35
 MAXIMUM_OUTPUT_DHASH_DISTANCE = 10
 MINIMUM_DISTINCT_DHASH_DISTANCE = 5
 RUN_MANIFEST_SCHEMA_VERSION = 1
-VIDEO_PROBE_PHASE_VERSION = 1
+VIDEO_PROBE_PHASE_VERSION = 2
 CANDIDATE_EXTRACTION_PHASE_VERSION = 1
 MECHANICAL_ANALYSIS_PHASE_VERSION = 3
 PRIMARY_ASSESSMENT_PHASE_VERSION = 2
@@ -506,29 +506,42 @@ class VideoSelector:
             expected_key=probe_key,
         )
         if cached is not None:
-            metadata = self._metadata_from_json(cached.get("metadata"))
-            cached_identity = cached.get("identity")
-            if metadata is not None and cached_identity == {
-                "relative_path": identity.relative_path,
-                "size": identity.size,
-            }:
+            cached_payload = {
+                "identity": cached.get("identity"),
+                "metadata": cached.get("metadata"),
+            }
+            metadata = self._metadata_from_json(cached_payload["metadata"])
+            if (
+                _is_sha256(cached.get("probe_payload_digest"))
+                and cached["probe_payload_digest"] == json_digest(cached_payload)
+                and metadata is not None
+                and cached_payload["identity"]
+                == {
+                    "relative_path": identity.relative_path,
+                    "size": identity.size,
+                }
+            ):
                 logger.info(
                     "動画情報cacheを再利用します: %s",
                     _log_value(identity.relative_path),
                 )
                 return metadata
         metadata = self.frame_extractor.probe(video)
+        probe_payload = {
+            "identity": {
+                "relative_path": identity.relative_path,
+                "size": identity.size,
+            },
+            "metadata": self._metadata_to_json(metadata),
+        }
         write_phase_data(
             probe_path,
             phase="video-probe",
             phase_version=VIDEO_PROBE_PHASE_VERSION,
             cache_key=probe_key,
             data={
-                "identity": {
-                    "relative_path": identity.relative_path,
-                    "size": identity.size,
-                },
-                "metadata": self._metadata_to_json(metadata),
+                **probe_payload,
+                "probe_payload_digest": json_digest(probe_payload),
             },
         )
         return metadata

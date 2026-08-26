@@ -3204,12 +3204,12 @@ def test_pipeline_rejects_excessive_independent_automatic_samples(
         )._prepare_run()
 
 
-@pytest.mark.parametrize("corruption", ["endpoint", "sample-count"])
-def test_probe_cache_rejects_nonfinite_derived_arithmetic(
+@pytest.mark.parametrize("corruption", ["endpoint", "sample-count", "payload"])
+def test_probe_cache_rejects_corrupt_payload(
     tmp_path: Path,
     corruption: str,
 ) -> None:
-    """後続timestamp計算がoverflowするprobe cacheをmissにすること."""
+    """digest不一致または後続演算overflowのprobe cacheをmissにすること."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
@@ -3234,9 +3234,12 @@ def test_probe_cache_rejects_nonfinite_derived_arithmetic(
     )._prepare_run()
     probe_path = next((_cache_root(tmp_path) / "videos").glob("*/probe/*.json"))
     payload = json.loads(probe_path.read_text(encoding="utf-8"))
-    payload["data"]["metadata"]["duration_seconds"] = 1e308
-    if corruption == "endpoint":
-        payload["data"]["metadata"]["start_time_seconds"] = 1e308
+    if corruption == "payload":
+        payload["data"]["metadata"]["video_stream_index"] = 1
+    else:
+        payload["data"]["metadata"]["duration_seconds"] = 1e308
+        if corruption == "endpoint":
+            payload["data"]["metadata"]["start_time_seconds"] = 1e308
     probe_path.write_text(json.dumps(payload), encoding="utf-8")
     extractor = FakeFrameExtractor()
     selector = SingleVideoSelector(
