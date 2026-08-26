@@ -1,0 +1,8 @@
+[run]
+game_context_provider = "ollama"
+primary_model = "qwen3.8:27b"
+secondary_model = "muse-glimmer:30b"
+ollama_timeout = 900.0
+allow_cpu = false
+ffmpeg_workers = 2
+debug = false

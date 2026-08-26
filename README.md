@@ -23,8 +23,38 @@ uv sync
 uv run game-screen-pick [オプション] <入力動画ディレクトリ> <出力フォルダ>
 ```
 
-標準では30枚を選び、一次評価に`qwen3.8:27b`、二次評価に
-`muse-glimmer:30b`を使います。
+標準では30枚を選び、repository直下の`config.toml`に設定した
+`qwen3.8:27b`を一次評価、`muse-glimmer:30b`を二次評価に使います。
+
+繰り返し使う値はTOML設定ファイルへまとめます。既定では実行時のcurrent directoryに
+ある`config.toml`を読み込み、別の設定を使う場合だけ`-c`または`--config`で指定します。
+選択枚数、Game TitleまたはGame Context、入力動画ディレクトリ、出力フォルダは
+実行ごとにCLIへ指定します。
+
+```bash
+uv run game-screen-pick \
+  --game-context "ジャンル: RPG。探索と会話を進める。代表的な画面はフィールド、会話、戦闘。景観と人物が明瞭な画像を重視する。" \
+  ./recordings \
+  ./recordings-selected
+```
+
+設定ファイルは`[run]` tableへ次のkeyを記述します。`num`、`game_title`、
+`game_context`は設定ファイルでは受け付けません。全項目を記述する必要はありません。
+`ollama_host`がない場合は`OLLAMA_HOST`、`127.0.0.1:11434`の順で解決します。
+未知のsectionやkey、型または範囲が不正な値は処理開始前にエラーになります。
+
+| key | 内容 | 組み込み既定値 |
+| --- | --- | --- |
+| `game_context_provider` | Game Context検索provider | `ollama` |
+| `game_context_model` | context生成model | provider既定 |
+| `primary_model` | 一次評価用Ollama vision model | `qwen3.8:27b` |
+| `secondary_model` | 二次評価用Ollama vision model | `muse-glimmer:30b` |
+| `ollama_host` | Ollama host | 環境変数またはlocalhost |
+| `ollama_timeout` | Ollama APIのbatch単位timeout秒数 | `900.0` |
+| `allow_cpu` | GPU利用を確認できなくても続行するか | `false` |
+| `ffmpeg_workers` | フレーム抽出の並列数（1から4） | `2` |
+| `sample_interval_seconds` | 候補抽出の最大間隔（0.25秒以上） | 自動決定 |
+| `debug` | debug logを有効にするか | `false` |
 
 ```bash
 OLLAMA_HOST=192.168.1.31:11434 \
@@ -52,29 +82,20 @@ editionを一意に判別できない場合、情報が不足する場合、情�
 使用しません。
 
 ```bash
-OPENAI_API_KEY=... \
-  uv run game-screen-pick \
+OPENAI_API_KEY=... uv run game-screen-pick \
   --game-title "ドラクエ11" \
-  --game-context-provider openai \
   ./recordings \
   ./recordings-selected
 ```
 
+この例では、事前に`config.toml`の`game_context_provider`を`openai`へ変更します。
+
 ### オプション
 
+- `-c`, `--config`: TOML設定ファイル（既定: `config.toml`）
 - `-n`, `--num`: 選択枚数（1から600、既定: 30）
 - `--game-title`: Web検索からGame Contextを生成するためのゲーム表記
 - `--game-context`: 画像評価に直接使用するGame Context
-- `--game-context-provider`: `--game-title`指定時の検索provider。`ollama`、`openai`、`gemini`、`xai`から選択（既定: `ollama`）
-- `--game-context-model`: context生成model。未指定時はprovider既定
-- `--primary-model`: 一次評価用Ollama vision model
-- `--secondary-model`: 遷移確認を含む二次評価用Ollama vision model
-- `--ollama-host`: Ollama host。CLI、`OLLAMA_HOST`、localhostの順で解決
-- `--ollama-timeout`: Ollama APIのbatch単位timeout秒数（既定: 900）
-- `--ffmpeg-workers`: フレーム抽出の並列数（1から4、既定: 2）
-- `--sample-interval-seconds`: 候補抽出の最大間隔（0.25秒以上）。通常は自動設定を推奨。候補が4,000件を超える指定は拒否
-- `--allow-cpu`: GPU利用を確認できなくても続行する
-- `--debug`: debug logを有効化する
 
 model名は切り替えられます。どちらもOllamaの`/api/show`でvision対応が
 確認できる必要があります。標準では各modelのロード後に`/api/ps`を確認し、
@@ -90,7 +111,7 @@ model memoryの50%以上がVRAMにある場合だけ処理を継続します。
 
 | provider | API key | 未指定時の生成model | 検索・生成方法 |
 | --- | --- | --- | --- |
-| `ollama` | `OLLAMA_API_KEY` | `--primary-model`と同じmodel | Ollama Web Search APIの結果を`--ollama-host`のOllama modelで生成 |
+| `ollama` | `OLLAMA_API_KEY` | `primary_model`と同じmodel | Ollama Web Search APIの結果を`ollama_host`のOllama modelで生成 |
 | `openai` | `OPENAI_API_KEY` | `gpt-5.6` | OpenAI Responses APIの`web_search` |
 | `gemini` | `GEMINI_API_KEY` | `gemini-3.7-flash` | Gemini Interactions APIのGoogle Search |
 | `xai` | `XAI_API_KEY` | `grok-4.6` | xAI Responses APIの`web_search` |
@@ -134,7 +155,7 @@ Game Contextを使用し、Web検索やcontext生成を繰り返しません。�
 Game Contextも再利用します。
 
 候補数は全入力動画の合計で4,000件までです。指定した抽出間隔で上限を超える
-場合は、`--sample-interval-seconds`を広げてください。
+場合は、`config.toml`の`sample_interval_seconds`を広げてください。
 
 ## 選定の流れ
 

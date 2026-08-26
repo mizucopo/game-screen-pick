@@ -56,6 +56,22 @@ def test_cli_translates_sorted_directory_videos_to_video_selection_request(
     external_video.write_bytes(b"video")
     (input_dir / "linked.mp4").symlink_to(external_video)
     captured_requests: list[VideoSelectionRequest] = []
+    config_path = tmp_path / "picker.toml"
+    config_path.write_text(
+        """[run]
+game_context_provider = "openai"
+game_context_model = "gpt-context"
+primary_model = "primary:latest"
+secondary_model = "secondary:latest"
+ollama_host = "192.168.1.31:11434"
+ollama_timeout = 120
+allow_cpu = true
+ffmpeg_workers = 4
+sample_interval_seconds = 2.5
+debug = true
+""",
+        encoding="utf-8",
+    )
 
     def capture_request(request: VideoSelectionRequest) -> None:
         captured_requests.append(request)
@@ -68,24 +84,8 @@ def test_cli_translates_sorted_directory_videos_to_video_selection_request(
             "12",
             "--game-title",
             "ゲーム名",
-            "--game-context-provider",
-            "openai",
-            "--game-context-model",
-            "gpt-context",
-            "--primary-model",
-            "primary:latest",
-            "--secondary-model",
-            "secondary:latest",
-            "--ollama-host",
-            "192.168.1.31:11434",
-            "--ollama-timeout",
-            "120",
-            "--allow-cpu",
-            "--ffmpeg-workers",
-            "4",
-            "--sample-interval-seconds",
-            "2.5",
-            "--debug",
+            "--config",
+            str(config_path),
             str(input_dir),
             str(output_dir),
         ]
@@ -113,12 +113,12 @@ def test_cli_translates_sorted_directory_videos_to_video_selection_request(
     assert captured_requests[0].input_video is None
 
 
-def test_cli_logs_project_version_and_all_effective_options(
+def test_cli_logs_project_version_and_all_effective_settings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """起動直後にproject情報とdefaultを含む全optionを確認できること."""
+    """起動直後にproject情報とdefaultを含む全設定を確認できること."""
     input_dir = tmp_path / "recordings"
     input_dir.mkdir()
     (input_dir / "Sample Game Part1.mp4").write_bytes(b"video")
@@ -132,21 +132,22 @@ def test_cli_logs_project_version_and_all_effective_options(
 
     messages = [record.getMessage() for record in caplog.records]
     assert "game-screen-pick 1.8.0-test の画像選定処理を開始します。" in messages
-    assert "起動オプション:" in messages
+    assert "実効設定:" in messages
     assert [message for message in messages if message.startswith("  ")] == [
+        '  --config: "config.toml"',
         "  --num: 30",
         '  --game-title: ""',
         '  --game-context: "探索を含む"',
-        '  --game-context-provider: "ollama"',
-        '  --game-context-model: "<provider既定>"',
-        '  --primary-model: "qwen3.8:27b"',
-        '  --secondary-model: "muse-glimmer:30b"',
-        '  --ollama-host: "http://ollama.example:11434（自動決定: OLLAMA_HOST）"',
-        "  --ollama-timeout: 900.0",
-        "  --allow-cpu: false",
-        "  --ffmpeg-workers: 2",
-        '  --sample-interval-seconds: "<自動決定: 動画時間と選択枚数>"',
-        "  --debug: false",
+        '  [run].game_context_provider: "ollama"',
+        '  [run].game_context_model: "<provider既定>"',
+        '  [run].primary_model: "qwen3.8:27b"',
+        '  [run].secondary_model: "muse-glimmer:30b"',
+        '  [run].ollama_host: "http://ollama.example:11434（自動決定: OLLAMA_HOST）"',
+        "  [run].ollama_timeout: 900.0",
+        "  [run].allow_cpu: false",
+        "  [run].ffmpeg_workers: 2",
+        '  [run].sample_interval_seconds: "<自動決定: 動画時間と選択枚数>"',
+        "  [run].debug: false",
         f"  INPUT_VIDEO_DIR: {json.dumps(str(input_dir), ensure_ascii=False)}",
         f"  OUTPUT_DIR: {json.dumps(str(output_dir), ensure_ascii=False)}",
     ]
@@ -157,11 +158,6 @@ def test_cli_logs_project_version_and_all_effective_options(
     [
         (["-n", "0"], "正の整数"),
         (["-n", "-1"], "正の整数"),
-        (["--ollama-timeout", "0"], "正の数"),
-        (["--sample-interval-seconds", "-1"], "正の数"),
-        (["--sample-interval-seconds", "0.1"], "0.25以上"),
-        (["--ffmpeg-workers", "0"], "正の整数"),
-        (["--ffmpeg-workers", "5"], "1から4"),
         (["-n", "601"], "600以下"),
     ],
 )
@@ -230,12 +226,30 @@ def test_cli_rejects_directory_without_supported_videos(
 
 
 def test_cli_help_describes_directory_input() -> None:
-    """helpが入力動画ディレクトリと出力フォルダを案内すること."""
+    """helpが実行時入力だけをCLI optionとして案内すること."""
     result = CliRunner().invoke(execute, ["--help"])
 
     assert result.exit_code == 0
     assert "INPUT_VIDEO_DIR OUTPUT_DIR" in result.output
     assert "INPUT_VIDEO..." not in result.output
+    assert "-c, --config FILE" in result.output
+    assert "-n, --num INTEGER" in result.output
+    assert "--game-title TEXT" in result.output
+    assert "--game-context TEXT" in result.output
+    for removed_option in (
+        "--game-context-provider",
+        "--game-context-model",
+        "--primary-model",
+        "--secondary-model",
+        "--ollama-host",
+        "--ollama-timeout",
+        "--allow-cpu",
+        "--ffmpeg-workers",
+        "--sample-interval-seconds",
+        "--auto-sample-interval",
+        "--debug",
+    ):
+        assert removed_option not in result.output
 
 
 @pytest.mark.parametrize(
@@ -266,3 +280,176 @@ def test_cli_rejects_game_title_and_game_context_without_exactly_one_input(
         run([*context_args, str(input_dir), str(tmp_path / "selected")])
 
     assert "--game-titleと--game-contextのどちらか一方" in capsys.readouterr().err
+
+
+def test_cli_loads_all_run_options_from_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """反復するoptionを設定ファイルだけからrequestへ渡せること."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    input_video = input_dir / "game.mp4"
+    input_video.write_bytes(b"video")
+    output_dir = tmp_path / "selected"
+    config_path = tmp_path / "picker.toml"
+    config_path.write_text(
+        """[run]
+game_context_provider = "openai"
+game_context_model = "gpt-context"
+primary_model = "primary:latest"
+secondary_model = "secondary:latest"
+ollama_host = "192.168.1.31:11434"
+ollama_timeout = 120
+allow_cpu = true
+ffmpeg_workers = 4
+sample_interval_seconds = 2.5
+debug = true
+""",
+        encoding="utf-8",
+    )
+    captured_requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", captured_requests.append)
+
+    run(
+        [
+            "-c",
+            str(config_path),
+            "-n",
+            "12",
+            "--game-title",
+            "ゲーム名",
+            str(input_dir),
+            str(output_dir),
+        ]
+    )
+
+    assert captured_requests == [
+        VideoSelectionRequest(
+            input_videos=(str(input_video),),
+            output_dir=str(output_dir),
+            output_count=12,
+            game_title="ゲーム名",
+            game_context="",
+            game_context_provider="openai",
+            game_context_model="gpt-context",
+            primary_model="primary:latest",
+            secondary_model="secondary:latest",
+            ollama_host="192.168.1.31:11434",
+            ollama_timeout=120.0,
+            allow_cpu=True,
+            ffmpeg_workers=4,
+            sample_interval_seconds=2.5,
+            debug=True,
+        )
+    ]
+
+
+def test_cli_uses_config_toml_from_current_directory_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """config未指定時はcurrent directoryのconfig.tomlを使うこと."""
+    monkeypatch.chdir(tmp_path)
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """[run]
+primary_model = "configured-primary"
+allow_cpu = true
+debug = true
+""",
+        encoding="utf-8",
+    )
+    captured_requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", captured_requests.append)
+
+    run(
+        [
+            "--num",
+            "20",
+            "--game-context",
+            "CLIの文脈",
+            str(input_dir),
+            str(tmp_path / "selected"),
+        ]
+    )
+
+    request = captured_requests[0]
+    assert request.output_count == 20
+    assert request.game_context == "CLIの文脈"
+    assert request.primary_model == "configured-primary"
+    assert request.allow_cpu is True
+    assert request.debug is True
+
+
+@pytest.mark.parametrize(
+    "removed_args",
+    [
+        ["--game-context-provider", "openai"],
+        ["--game-context-model", "model"],
+        ["--primary-model", "model"],
+        ["--secondary-model", "model"],
+        ["--ollama-host", "localhost:11434"],
+        ["--ollama-timeout", "120"],
+        ["--allow-cpu"],
+        ["--ffmpeg-workers", "4"],
+        ["--sample-interval-seconds", "2.5"],
+        ["--auto-sample-interval"],
+        ["--debug"],
+    ],
+)
+def test_cli_rejects_config_only_options(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    removed_args: list[str],
+) -> None:
+    """設定ファイル専用項目をCLI optionとして受け付けないこと."""
+    monkeypatch.setattr(
+        "src.main.run_video_application",
+        lambda _request: pytest.fail("applicationは呼ばれないこと"),
+    )
+
+    with pytest.raises(SystemExit):
+        run([*removed_args, "input", "output"])
+
+    assert "No such option" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "config_text,error_pattern",
+    [
+        ("[unknown]\nvalue = 1\n", "未知の設定セクション"),
+        ("[run]\nunknown = 1\n", "未知の設定キー"),
+        ("[run]\nnum = 30\n", "未知の設定キー"),
+        ('[run]\ngame_title = "Game"\n', "未知の設定キー"),
+        ('[run]\ngame_context = "Context"\n', "未知の設定キー"),
+        ('[run]\nollama_timeout = "30"\n', "number"),
+        ("[run]\nollama_timeout = 0\n", "正の数"),
+        ("[run]\nffmpeg_workers = 5\n", "1から4"),
+        ("[run]\nsample_interval_seconds = 0.1\n", "0.25以上"),
+        ('[run]\ngame_context_provider = "invalid"\n', "ollama, openai"),
+        ("[run\n", "設定ファイルを読み込めません"),
+    ],
+)
+def test_cli_rejects_invalid_config_before_application(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    config_text: str,
+    error_pattern: str,
+) -> None:
+    """設定契約違反をapplication開始前に拒否すること."""
+    config_path = tmp_path / "invalid.toml"
+    config_path.write_text(config_text, encoding="utf-8")
+    monkeypatch.setattr(
+        "src.main.run_video_application",
+        lambda _request: pytest.fail("applicationは呼ばれないこと"),
+    )
+
+    with pytest.raises(SystemExit):
+        run(["-c", str(config_path), "missing-input", "output"])
+
+    assert error_pattern in capsys.readouterr().err
