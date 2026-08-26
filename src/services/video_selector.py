@@ -86,7 +86,7 @@ MINIMUM_DISTINCT_DHASH_DISTANCE = 5
 RUN_MANIFEST_SCHEMA_VERSION = 1
 VIDEO_PROBE_PHASE_VERSION = 1
 CANDIDATE_EXTRACTION_PHASE_VERSION = 1
-MECHANICAL_ANALYSIS_PHASE_VERSION = 2
+MECHANICAL_ANALYSIS_PHASE_VERSION = 3
 PRIMARY_ASSESSMENT_PHASE_VERSION = 2
 SECONDARY_CONTEXT_PHASE_VERSION = 1
 SECONDARY_ASSESSMENT_PHASE_VERSION = 1
@@ -925,8 +925,14 @@ class VideoSelector:
             ):
                 return False
         expected_integrity_paths = {"selected-contact-sheet.jpg", *selected_names}
+        actual_artifact_paths = {
+            path.name
+            for path in self.output_dir.iterdir()
+            if self._is_managed_artifact(path)
+        }
         if (
-            len(integrity) != len(expected_integrity_paths)
+            actual_artifact_paths != self._expected_artifact_paths(output_count)
+            or len(integrity) != len(expected_integrity_paths)
             or any(not self._is_valid_artifact_record(item) for item in integrity)
             or {item["path"] for item in integrity} != expected_integrity_paths
         ):
@@ -1484,6 +1490,7 @@ class VideoSelector:
             data is None
             or not isinstance(data.get("source_frames"), list)
             or not isinstance(data.get("candidates"), list)
+            or not isinstance(data.get("rejected_frame_ids"), list)
         ):
             return None
         if len(data["source_frames"]) != len(expected_candidates):
@@ -1550,6 +1557,13 @@ class VideoSelector:
                 )
             )
             restored_ids.add(frame_id)
+        expected_rejected_ids = [
+            candidate.frame_id
+            for candidate in expected_candidates
+            if candidate.frame_id not in restored_ids
+        ]
+        if data["rejected_frame_ids"] != expected_rejected_ids:
+            return None
         return restored
 
     def _save_mechanical_candidates(
@@ -1562,6 +1576,7 @@ class VideoSelector:
         cache_key = self._mechanical_cache_key(source)
         path = source.cache_dir / "mechanical-analysis" / f"{cache_key}.json"
         prepare_cache_directory(self.cache_root, path.parent)
+        usable_ids = {candidate.frame_id for candidate in candidates}
         write_phase_data(
             path,
             phase="mechanical-analysis",
@@ -1583,6 +1598,11 @@ class VideoSelector:
                         "difference_hash": f"{candidate.difference_hash:016x}",
                     }
                     for candidate in candidates
+                ],
+                "rejected_frame_ids": [
+                    candidate.frame_id
+                    for candidate in source_candidates
+                    if candidate.frame_id not in usable_ids
                 ],
             },
         )
@@ -3332,12 +3352,20 @@ def load_assessment_state(
         transition = item.get("is_transition")
         scene = item.get("scene")
         reason = item.get("reason")
+        stored_frame_id = item.get("frame_id")
         if (
-            not isinstance(score, int | float)
+            stored_frame_id != frame_id
+            or not frame_id
+            or not isinstance(score, int | float)
             or isinstance(score, bool)
             or not isinstance(transition, bool)
             or not isinstance(scene, str)
             or not isinstance(reason, str)
+            or not scene
+            or scene != scene.strip()
+            or len(scene) > 80
+            or reason != reason.strip()
+            or len(reason) > 300
         ):
             raise RuntimeError(f"評価cacheが不正です: {path}")
         numeric_score = float(score)

@@ -7,16 +7,36 @@ import fcntl
 import hashlib
 import json
 import os
+import secrets
 import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any
 
 from PIL import Image
 
 RUN_LOCK_FILENAME = "run.lock"
+
+
+def create_exclusive_temporary_file(
+    directory: Path,
+    *,
+    prefix: str,
+    suffix: str,
+) -> tuple[int, Path]:
+    """umaskを反映した予測不能なexclusive fileを作る."""
+    directory.mkdir(parents=True, exist_ok=True)
+    flags = (
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    )
+    for _attempt in range(100):
+        path = directory / f"{prefix}{secrets.token_hex(16)}{suffix}"
+        try:
+            return os.open(path, flags, 0o666), path
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"temporary fileを作成できません: {directory}")
 
 
 def file_sha256(path: Path) -> str:
@@ -112,25 +132,23 @@ def read_json(path: Path) -> Any:
 
 def write_text_atomic(path: Path, content: str) -> None:
     """UTF-8 textを同一directory内でatomicに置換する."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
+    temporary_fd, temporary_path = create_exclusive_temporary_file(
+        path.parent,
+        prefix=f".{path.name}.",
+        suffix=".partial",
+    )
     try:
-        with NamedTemporaryFile(
+        with os.fdopen(
+            temporary_fd,
             mode="w",
             encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".partial",
-            delete=False,
         ) as temporary:
-            temporary_path = Path(temporary.name)
             temporary.write(content)
             temporary.flush()
             os.fsync(temporary.fileno())
         temporary_path.replace(path)
     finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+        temporary_path.unlink(missing_ok=True)
 
 
 def write_json_atomic(path: Path, payload: Any) -> None:

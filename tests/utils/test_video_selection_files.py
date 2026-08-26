@@ -1,6 +1,7 @@
 """video selection用file操作の単体テスト."""
 
 import json
+import stat
 from pathlib import Path
 
 import pytest
@@ -37,9 +38,13 @@ def test_write_json_atomic_does_not_follow_fixed_temporary_symlink(
     external = tmp_path / "external.txt"
     external.write_text("user-owned", encoding="utf-8")
     legacy_temporary.symlink_to(external)
+    mode_probe = tmp_path / "mode-probe"
+    mode_probe.touch()
+    expected_mode = stat.S_IMODE(mode_probe.stat().st_mode)
 
     write_json_atomic(target, {"status": "complete"})
 
     assert external.read_text(encoding="utf-8") == "user-owned"
     assert legacy_temporary.is_symlink()
     assert json.loads(target.read_text(encoding="utf-8")) == {"status": "complete"}
+    assert stat.S_IMODE(target.stat().st_mode) == expected_mode

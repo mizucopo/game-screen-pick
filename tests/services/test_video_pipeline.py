@@ -2485,6 +2485,51 @@ def test_pipeline_rejects_tampered_output_after_visible_cache_is_deleted(
     assert unavailable_assessor.assess_calls == 0
 
 
+def test_pipeline_rejects_unrecorded_managed_artifact_after_cache_is_deleted(
+    tmp_path: Path,
+) -> None:
+    """reportに記録のないmanaged風成果物を所有済みにしないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    ).run()
+    shutil.rmtree(_cache_root(tmp_path))
+    unrecorded = output_dir / "selected-03.jpg"
+    shutil.copyfile(output_dir / "selected-02.jpg", unrecorded)
+    unrecorded_hash = file_sha256(unrecorded)
+    unavailable_assessor = UnavailableAssessor()
+
+    with pytest.raises(RuntimeError, match="対応する完了記録もありません"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=unavailable_assessor,
+        ).run()
+
+    assert file_sha256(unrecorded) == unrecorded_hash
+    assert unavailable_assessor.metadata_calls == 0
+    assert unavailable_assessor.assess_calls == 0
+
+
 def test_pipeline_does_not_follow_publication_staging_symlink(
     tmp_path: Path,
 ) -> None:
@@ -3145,8 +3190,12 @@ def test_mechanical_cache_rejects_out_of_range_quality_score(tmp_path: Path) -> 
     assert restored is None
 
 
-def test_mechanical_cache_rejects_duplicate_candidate_ids(tmp_path: Path) -> None:
-    """同じframe IDを重複収録した機械評価cacheをmissとして扱うこと."""
+@pytest.mark.parametrize("candidate_corruption", ["duplicate", "missing"])
+def test_mechanical_cache_rejects_incomplete_or_duplicate_candidate_ids(
+    tmp_path: Path,
+    candidate_corruption: str,
+) -> None:
+    """機械評価cacheのframe ID欠落と重複をmissとして扱うこと."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
@@ -3176,7 +3225,10 @@ def test_mechanical_cache_rejects_duplicate_candidate_ids(tmp_path: Path) -> Non
         (_cache_root(tmp_path) / "videos").glob("*/mechanical-analysis/*.json")
     )
     payload = json.loads(mechanical_path.read_text(encoding="utf-8"))
-    payload["data"]["candidates"].append(payload["data"]["candidates"][0])
+    if candidate_corruption == "duplicate":
+        payload["data"]["candidates"].append(payload["data"]["candidates"][0])
+    else:
+        payload["data"]["candidates"].pop(0)
     mechanical_path.write_text(json.dumps(payload), encoding="utf-8")
     second_selector = SingleVideoSelector(
         request,
@@ -3304,8 +3356,12 @@ def test_mechanical_cache_rejects_difference_hash_not_matching_image(
     assert restored is None
 
 
-def test_assessment_cache_rejects_non_prefix_checkpoint(tmp_path: Path) -> None:
-    """完了batchのprefixでない評価checkpointをphase全体のmissにすること."""
+@pytest.mark.parametrize("checkpoint_corruption", ["non-prefix", "scene", "reason"])
+def test_assessment_cache_rejects_corrupt_checkpoint(
+    tmp_path: Path,
+    checkpoint_corruption: str,
+) -> None:
+    """batch prefixまたはtext契約が不正な評価cacheをmissにすること."""
 
     class BatchTrackingAssessor(FakeAssessor):
         """評価batchの候補数を記録するfake."""
@@ -3366,7 +3422,12 @@ def test_assessment_cache_rejects_non_prefix_checkpoint(tmp_path: Path) -> None:
     state_path = _assessment_files(tmp_path, "primary")[0]
     payload = json.loads(state_path.read_text(encoding="utf-8"))
     first_frame_id = primary_candidates[0].frame_id
-    payload["assessments"].pop(first_frame_id)
+    if checkpoint_corruption == "non-prefix":
+        payload["assessments"].pop(first_frame_id)
+    else:
+        field = checkpoint_corruption
+        limit = 80 if field == "scene" else 300
+        payload["assessments"][first_frame_id][field] = "x" * (limit + 1)
     state_path.write_text(json.dumps(payload), encoding="utf-8")
     assessor.batch_sizes.clear()
 

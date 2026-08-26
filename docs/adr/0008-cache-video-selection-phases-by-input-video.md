@@ -23,7 +23,8 @@ GPU requirement, and the ordered candidate image digests for the evaluation
 unit. Invalid, corrupt, schema-mismatched, or legacy entries are cache misses.
 An assessment checkpoint is reusable only when it contains the complete prefix
 of batches that the current evaluation unit could have saved; a hole or a
-regrouped partial batch invalidates the whole phase checkpoint.
+regrouped partial batch invalidates the whole phase checkpoint. Cached scene and
+reason text must also match the live normalized 80- and 300-character limits.
 Changing one phase version invalidates that phase and dependent later phases
 while preserving compatible earlier phases.
 
@@ -48,6 +49,8 @@ the exact resolved Output Folder or from a completion record whose artifact
 size and SHA-256 values still match. The report also records its schema and the
 size and SHA-256 of every JPEG artifact, allowing an intact application output
 set to reestablish ownership after the visible cache is deliberately deleted.
+That report-derived set must exactly cover every managed-looking artifact in the
+Output Folder.
 When changed conditions reuse an owned Output Folder, the next artifacts are
 completed in staging within that Output Folder first. The old completed
 artifacts remain usable if probing, model validation, assessment, or staging
@@ -61,5 +64,8 @@ image leaf symlinks, non-JPEG files, images wider than the 960-pixel extraction
 contract, and Pillow decompression bombs are regenerated before use. The cache
 lock uses no-follow semantics and accepts only a regular file. JSON, contact
 sheet, and extracted-frame publication use exclusive unpredictable temporary
-files so fixed temporary leaf symlinks cannot redirect writes outside
-`cache-game-screen-pick/`.
+files with the normal process-umask-derived mode, so fixed temporary leaf
+symlinks cannot redirect writes outside `cache-game-screen-pick/` or make
+published artifacts unexpectedly private. Mechanical analysis records both
+usable and rejected frame IDs and is reusable only when they cover every source
+frame.

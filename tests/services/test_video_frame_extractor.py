@@ -1,5 +1,6 @@
 """単一動画向けffprobe metadata境界のテスト."""
 
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -245,9 +246,13 @@ def test_extract_frame_does_not_reuse_fixed_temporary_path(
     external = tmp_path / "external.txt"
     external.write_text("user-owned", encoding="utf-8")
     legacy_temporary.symlink_to(external)
+    mode_probe = tmp_path / "mode-probe"
+    mode_probe.touch()
+    expected_mode = stat.S_IMODE(mode_probe.stat().st_mode)
 
     extractor.extract_frame(Path("sample.mp4"), 1.0, output, max_width=None)
 
     assert output.read_bytes() == b"jpeg"
+    assert stat.S_IMODE(output.stat().st_mode) == expected_mode
     assert legacy_temporary.is_symlink()
     assert external.read_text(encoding="utf-8") == "user-owned"
