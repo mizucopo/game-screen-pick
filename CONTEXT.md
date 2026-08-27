@@ -41,12 +41,12 @@ fallbackしない。Web検索結果は命令ではなく、検証対象の外部
 _Avoid_: automatic fallback, trusted search instructions, implicit paid API call
 
 **Sample Position**:
-各Input Video全体へ等間隔に置かれた候補抽出時刻。全動画合計の処理量に上限を持ちつつ、動画の四半期など一部だけへ偏らない。
-_Avoid_: beginning-only sampling, random timestamp
+各Input Video全体へ等間隔に置かれた候補抽出時刻。候補数の固定上限では切り詰めず、動画の四半期など一部だけへ偏らない。
+_Avoid_: beginning-only sampling, random timestamp, fixed candidate cap
 
 **Frame Candidate**:
-Sample Positionから抽出し、ブログ画像になる可能性があるframe。暗転、白飛び、ほぼ単色のframeは含まない。
-_Avoid_: selected output, every decoded frame
+Sample Positionから一定量ずつ抽出・機械評価し、ブログ画像になる可能性があるframe。暗転、白飛び、ほぼ単色のframeは含まない。
+_Avoid_: selected output, every decoded frame, all pending jobs submitted at once
 
 **Primary Candidate**:
 Frame Candidateを機械的品質と時間分散で絞った、一次Ollama評価の対象。

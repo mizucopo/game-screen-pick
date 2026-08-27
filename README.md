@@ -185,8 +185,12 @@ Ollama hostも生成条件に含め、別endpointの同名modelを混同しま�
 確実に再処理したい場合も、このfolderを削除してください。旧Output Folder内の
 `.game-screen-pick/`や不正・schema不一致のcacheは再利用しません。
 
-候補数は全入力動画の合計で4,000件までです。指定した抽出間隔で上限を超える
-場合は、`config.toml`の`sample_interval_seconds`を広げてください。
+候補数には全Input Video合計・Input Video単位とも固定上限を設けません。自動modeは
+各動画の時間と選択枚数から決めた等間隔のSample Positionで、ほぼ先頭から末尾までを
+覆います。`sample_interval_seconds`を指定した場合も、候補数を理由に拒否したり、指定した
+最大間隔を暗黙に広げたりしません。候補抽出と機械評価は未処理jobを一定量に抑えて進め、
+開始前に全候補数と一次・二次評価の初期予定数・追補時上限を表示し、全追補完了後に
+実際の評価対象数を表示します。
 
 ## 選定の流れ
 
