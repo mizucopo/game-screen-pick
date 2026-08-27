@@ -9,12 +9,12 @@ import os
 import shutil
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, replace
 from heapq import heapify, heappop, heappush
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, TypeVar
 
 import cv2
 import numpy as np
@@ -71,12 +71,11 @@ GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION = 2
 
 logger = logging.getLogger(__name__)
 
-ALGORITHM_VERSION = "multi-video-selection-v6"
+ALGORITHM_VERSION = "multi-video-selection-v7"
 PROMPT_VERSION = "blog-image-selection-v5"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
 MINIMUM_ENDPOINT_MARGIN_SECONDS = 0.05
 INTERVAL_COUNT_TOLERANCE = 1e-9
-MAXIMUM_RAW_CANDIDATES = 4_000
 PRIMARY_CANDIDATE_MULTIPLIER = 12
 SECONDARY_CANDIDATE_MULTIPLIER = 3
 PRIMARY_BATCH_SIZE = 12
@@ -97,6 +96,9 @@ ARTIFACT_PHASE_VERSION = 2
 REPORT_SCHEMA_VERSION = 1
 PUBLICATION_STAGING_PREFIX = ".game-screen-pick-publication-"
 
+_JobT = TypeVar("_JobT")
+_ResultT = TypeVar("_ResultT")
+
 
 def _log_value(value: object) -> str:
     """動的な値を1物理行へ安全に収まる表示へ変換する."""
@@ -115,6 +117,51 @@ def _is_lower_hexadecimal(value: object, length: int) -> bool:
 def _is_sha256(value: object) -> bool:
     """lowercase hexadecimal SHA-256文字列か返す."""
     return _is_lower_hexadecimal(value, 64)
+
+
+def _bounded_parallel_map(
+    items: Sequence[_JobT],
+    worker: Callable[[_JobT], _ResultT],
+    *,
+    max_workers: int,
+    wait_on_error: bool,
+    on_complete: Callable[[int, int], None] | None = None,
+) -> list[_ResultT]:
+    """未完了futureをworker数の2倍までに抑えて順序付き結果を返す."""
+    if not items:
+        return []
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    iterator = iter(enumerate(items))
+    pending: dict[Future[_ResultT], int] = {}
+    results: dict[int, _ResultT] = {}
+
+    def submit_next() -> bool:
+        try:
+            index, item = next(iterator)
+        except StopIteration:
+            return False
+        pending[executor.submit(worker, item)] = index
+        return True
+
+    for _ in range(min(len(items), max_workers * 2)):
+        submit_next()
+    completed_count = 0
+    try:
+        while pending:
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                index = pending.pop(future)
+                results[index] = future.result()
+                completed_count += 1
+                if on_complete is not None:
+                    on_complete(completed_count, len(items))
+                submit_next()
+    except BaseException:
+        executor.shutdown(wait=wait_on_error, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown()
+    return [results[index] for index in range(len(items))]
 
 
 def _is_valid_cached_image(path: Path) -> bool:
@@ -207,6 +254,10 @@ class VideoSelector:
 
         candidates = self._extract_candidates()
         primary_candidates = self._preselect_candidates(candidates)
+        logger.info(
+            "一次評価対象が確定しました: %d件",
+            len(primary_candidates),
+        )
         primary_candidates, primary_assessments = self._assess_with_source_backfill(
             self._usable_candidates,
             primary_candidates,
@@ -249,6 +300,10 @@ class VideoSelector:
                 item.timestamp_seconds,
                 item.frame_id,
             )
+        )
+        logger.info(
+            "二次評価対象が確定しました: %d件",
+            len(secondary_candidates),
         )
         secondary_candidates, secondary_assessments = (
             self._assess_secondary_with_primary_backfill(
@@ -428,21 +483,32 @@ class VideoSelector:
             )
         self.sources = tuple(sources)
         sample_count = sum(len(source.timestamps) for source in self.sources)
-        if sample_count > MAXIMUM_RAW_CANDIDATES:
-            if self.request.sample_interval_seconds is None:
-                raise ValueError(
-                    "全入力動画の自動候補数が上限4,000件を超えます。"
-                    "入力動画を減らすか、明示sample intervalを指定してください"
-                )
-            raise ValueError(
-                "全入力動画の候補数が上限4,000件を超えます。"
-                "sample intervalを広げてください"
-            )
         if sample_count < self.request.output_count:
             raise ValueError(
                 f"抽出可能な候補{sample_count}件が"
                 f"選択枚数{self.request.output_count}件を下回ります"
             )
+        primary_planned_count = sum(
+            min(
+                len(source.timestamps),
+                self.request.output_count * PRIMARY_CANDIDATE_MULTIPLIER,
+            )
+            for source in self.sources
+        )
+        secondary_planned_count = sum(
+            min(
+                len(source.timestamps),
+                self.request.output_count * SECONDARY_CANDIDATE_MULTIPLIER,
+            )
+            for source in self.sources
+        )
+        logger.info(
+            "処理予定: 全候補数=%d件, 一次評価予定数=%d件（上限）, "
+            "二次評価予定数=%d件（上限）",
+            sample_count,
+            primary_planned_count,
+            secondary_planned_count,
+        )
         existing_manifest = self._read_existing_manifest()
         has_existing_manifest = self._restore_existing_manifest(existing_manifest)
 
@@ -1391,21 +1457,18 @@ class VideoSelector:
             logger.info(
                 "候補フレームを抽出します: %d/%d件", len(pending), len(candidates)
             )
-        executor = ThreadPoolExecutor(max_workers=self.request.ffmpeg_workers)
-        try:
-            futures = [
-                executor.submit(self._extract_candidate, candidate)
-                for candidate in pending
-            ]
-            for completed, future in enumerate(as_completed(futures), start=1):
-                future.result()
-                if completed % 50 == 0 or completed == len(futures):
-                    logger.info("候補フレーム抽出: %d/%d件", completed, len(futures))
-        except BaseException:
-            executor.shutdown(wait=True, cancel_futures=True)
-            raise
-        else:
-            executor.shutdown()
+
+        def log_progress(completed: int, total: int) -> None:
+            if completed % 50 == 0 or completed == total:
+                logger.info("候補フレーム抽出: %d/%d件", completed, total)
+
+        _bounded_parallel_map(
+            pending,
+            self._extract_candidate,
+            max_workers=self.request.ffmpeg_workers,
+            wait_on_error=True,
+            on_complete=log_progress,
+        )
         return candidates
 
     def _recorded_candidate_digests(
@@ -1477,18 +1540,12 @@ class VideoSelector:
                     _log_value(source.label),
                     len(source_candidates),
                 )
-                executor = ThreadPoolExecutor(
-                    max_workers=min(8, self.request.ffmpeg_workers * 2)
+                measured_results = _bounded_parallel_map(
+                    source_candidates,
+                    measure_candidate,
+                    max_workers=min(8, self.request.ffmpeg_workers * 2),
+                    wait_on_error=False,
                 )
-                try:
-                    measured_results = list(
-                        executor.map(measure_candidate, source_candidates)
-                    )
-                except BaseException:
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    raise
-                else:
-                    executor.shutdown()
                 measured = [
                     candidate for candidate in measured_results if candidate is not None
                 ]
@@ -1934,28 +1991,26 @@ class VideoSelector:
                     jobs.append((candidate, context_dir, position, timestamp))
         if jobs:
             logger.info("遷移判定用フレームを抽出します: %d件", len(jobs))
-        executor = ThreadPoolExecutor(max_workers=self.request.ffmpeg_workers)
-        try:
-            futures = [
-                executor.submit(
-                    self.frame_extractor.extract_frame,
-                    self._source_for(candidate).path,
-                    timestamp,
-                    context_frame_path(context_dir, candidate, position),
-                    max_width=960,
-                    video_stream_index=(
-                        self._source_for(candidate).metadata.video_stream_index
-                    ),
-                )
-                for candidate, context_dir, position, timestamp in jobs
-            ]
-            for future in as_completed(futures):
-                future.result()
-        except BaseException:
-            executor.shutdown(wait=True, cancel_futures=True)
-            raise
-        else:
-            executor.shutdown()
+
+        def extract_context_frame(
+            job: tuple[FrameCandidate, Path, str, float],
+        ) -> None:
+            candidate, context_dir, position, timestamp = job
+            source = self._source_for(candidate)
+            self.frame_extractor.extract_frame(
+                source.path,
+                timestamp,
+                context_frame_path(context_dir, candidate, position),
+                max_width=960,
+                video_stream_index=source.metadata.video_stream_index,
+            )
+
+        _bounded_parallel_map(
+            jobs,
+            extract_context_frame,
+            max_workers=self.request.ffmpeg_workers,
+            wait_on_error=True,
+        )
         for source_index, expected_paths in expected_paths_by_source.items():
             records = dict(records_by_source[source_index])
             for path in expected_paths:
@@ -2122,12 +2177,13 @@ class VideoSelector:
                         for candidate in source_candidates
                         if candidate.frame_id not in state
                     ]
-            batches = [
-                missing[index : index + batch_size]
-                for index in range(0, len(missing), batch_size)
-            ]
+            batch_count = math.ceil(len(missing) / batch_size)
             context_dir = None if primary_stage else self._context_directory(source)
-            for batch_index, batch in enumerate(batches, start=1):
+            for batch_index, batch_start in enumerate(
+                range(0, len(missing), batch_size),
+                start=1,
+            ):
+                batch = missing[batch_start : batch_start + batch_size]
                 sheet_path = (
                     self.work_dir
                     / "contact-sheets"
@@ -2171,7 +2227,7 @@ class VideoSelector:
                             "%s評価: %d/%d batch (%.1f秒)",
                             stage,
                             batch_index,
-                            len(batches),
+                            batch_count,
                             time.monotonic() - started,
                         )
                         last_error = None
@@ -2549,48 +2605,6 @@ contact sheet内の対象ID: {ids}
         }
 
 
-def allocate_automatic_sample_counts(
-    metadata_items: Sequence[VideoMetadata],
-    output_count: int,
-) -> tuple[int, ...]:
-    """全入力へ共有する自動sample budgetを動画時間に応じて配分する."""
-    if not metadata_items:
-        raise ValueError("入力動画を1本以上指定してください")
-    if output_count <= 0:
-        raise ValueError("選択枚数は正の整数で指定してください")
-    capacities = tuple(_sample_capacity(metadata) for metadata in metadata_items)
-    base_counts = tuple(
-        min(
-            capacity,
-            math.ceil(metadata.duration_seconds / DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS)
-            + 1,
-        )
-        for metadata, capacity in zip(metadata_items, capacities, strict=True)
-    )
-    desired_count = max(
-        output_count * PRIMARY_CANDIDATE_MULTIPLIER * 3,
-        120,
-        sum(base_counts),
-        len(metadata_items),
-    )
-    target_count = min(
-        desired_count,
-        sum(capacities),
-        MAXIMUM_RAW_CANDIDATES,
-    )
-    if target_count < len(metadata_items):
-        raise ValueError("入力動画数が候補数の上限4,000件を超えます")
-    minimum_counts = (
-        base_counts if sum(base_counts) <= target_count else (1,) * len(metadata_items)
-    )
-    return _allocate_sample_counts(
-        capacities,
-        [metadata.duration_seconds for metadata in metadata_items],
-        target_count,
-        minimum_counts,
-    )
-
-
 def _allocate_minimum_sample_counts(
     metadata_items: Sequence[VideoMetadata],
     output_count: int,
@@ -2667,10 +2681,9 @@ def _sample_capacity(metadata: VideoMetadata) -> int:
             metadata.last_frame_timestamp_seconds - metadata.start_time_seconds,
         )
     span = max(0.0, relative_end - relative_start)
-    return min(
-        MAXIMUM_RAW_CANDIDATES,
+    return (
         math.floor(span / MINIMUM_SAMPLE_INTERVAL_SECONDS + INTERVAL_COUNT_TOLERANCE)
-        + 1,
+        + 1
     )
 
 
@@ -2682,14 +2695,8 @@ def make_timestamps(
     minimum_end_margin_seconds: float = MINIMUM_ENDPOINT_MARGIN_SECONDS,
     start_time_seconds: float = 0.0,
     last_frame_timestamp_seconds: float | None = None,
-    automatic_sample_count: int | None = None,
 ) -> tuple[float, ...]:
     """動画のほぼ先頭から末尾までを等間隔で覆う時刻列を返す."""
-    if automatic_sample_count is not None:
-        if automatic_sample_count <= 0:
-            raise ValueError("自動sample数は正の整数で指定してください")
-        if requested_interval_seconds is not None:
-            raise ValueError("明示intervalと自動sample数は同時に指定できません")
     if requested_interval_seconds is not None:
         if (
             not math.isfinite(requested_interval_seconds)
@@ -2719,8 +2726,7 @@ def make_timestamps(
     )
     default_start_margin = min(0.5, duration_seconds / 4.0)
     default_end_margin = max(default_start_margin, minimum_end_margin)
-    required_count = automatic_sample_count or output_count
-    required_output_span = max(0, required_count - 1) * MINIMUM_SAMPLE_INTERVAL_SECONDS
+    required_output_span = max(0, output_count - 1) * MINIMUM_SAMPLE_INTERVAL_SECONDS
     available_margin = max(0.0, duration_seconds - required_output_span)
     minimum_total_margin = minimum_start_margin + minimum_end_margin
     default_total_margin = default_start_margin + default_end_margin
@@ -2760,9 +2766,7 @@ def make_timestamps(
             math.ceil(span / interval - INTERVAL_COUNT_TOLERANCE) + 1,
             output_count,
         )
-        if sample_count > MAXIMUM_RAW_CANDIDATES:
-            raise ValueError("指定したsample intervalでは候補数が上限4,000件を超えます")
-    elif automatic_sample_count is None:
+    else:
         base_count = (
             math.ceil(duration_seconds / DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS) + 1
         )
@@ -2771,15 +2775,12 @@ def make_timestamps(
             120,
         )
         sample_count = max(base_count, desired_count)
-    else:
-        sample_count = automatic_sample_count
     maximum_by_interval = (
         math.floor(span / MINIMUM_SAMPLE_INTERVAL_SECONDS + INTERVAL_COUNT_TOLERANCE)
         + 1
     )
     sample_count = min(
         sample_count,
-        MAXIMUM_RAW_CANDIDATES,
         maximum_by_interval,
     )
     sample_count = max(1, sample_count)

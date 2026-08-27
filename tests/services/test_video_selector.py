@@ -9,7 +9,6 @@ from PIL import Image, ImageDraw
 from src.models.video_selection import FrameAssessment, FrameCandidate, VideoMetadata
 from src.services.video_selector import (
     VideoSelector,
-    allocate_automatic_sample_counts,
     difference_hash_distance,
     load_assessment_state,
     make_timestamps,
@@ -54,17 +53,22 @@ def test_make_timestamps_rejects_an_interval_below_supported_floor() -> None:
         make_timestamps(60.0, 30, 0.1)
 
 
-def test_make_timestamps_rejects_interval_requiring_too_many_candidates() -> None:
-    """候補上限によって明示した最大間隔を広げないこと."""
-    with pytest.raises(ValueError, match="4,000件"):
-        make_timestamps(3600.0, 30, 0.25)
+def test_make_timestamps_accepts_explicit_interval_above_legacy_limit() -> None:
+    """明示intervalの候補数が旧上限を超えても全編を覆うこと."""
+    timestamps = make_timestamps(3600.0, 30, 0.25)
+
+    assert len(timestamps) > 4_000
+    assert timestamps[0] == 0.5
+    assert timestamps[-1] == 3599.5
 
 
-def test_make_timestamps_accepts_exact_explicit_interval_candidate_limit() -> None:
-    """浮動小数点誤差で4,000件ちょうどの候補を拒否しないこと."""
-    timestamps = make_timestamps(1200.7, 30, 0.3)
+def test_make_timestamps_accepts_automatic_count_above_legacy_limit() -> None:
+    """長尺動画の自動候補数を旧上限で切り詰めないこと."""
+    timestamps = make_timestamps(50_000.0, 30, None)
 
-    assert len(timestamps) == 4_000
+    assert len(timestamps) == 5_001
+    assert timestamps[0] == 0.5
+    assert timestamps[-1] == 49_999.5
 
 
 def test_make_timestamps_adapts_endpoint_margin_for_short_video() -> None:
@@ -129,70 +133,6 @@ def test_make_timestamps_keeps_exact_minimum_interval_after_rounding() -> None:
     timestamps = make_timestamps(0.45, 2, None)
 
     assert timestamps == (0.1, 0.35)
-
-
-def test_automatic_sample_budget_is_allocated_across_all_videos() -> None:
-    """自動sample数を各動画で増幅せず全入力の時間へ配分すること."""
-    metadata = [VideoMetadata(3600.0, 320, 180, "fake", "30/1")] * 4
-
-    counts = allocate_automatic_sample_counts(metadata, output_count=30)
-
-    assert counts == (361, 361, 361, 361)
-    assert sum(counts) <= 4_000
-    assert all(
-        len(
-            make_timestamps(
-                item.duration_seconds,
-                1,
-                None,
-                automatic_sample_count=count,
-            )
-        )
-        == count
-        for item, count in zip(metadata, counts, strict=True)
-    )
-
-
-def test_automatic_sample_budget_caps_long_combined_inputs() -> None:
-    """既定間隔の合計が上限を超えても自動modeは4,000件へ配分すること."""
-    metadata = [VideoMetadata(3600.0, 320, 180, "fake", "30/1")] * 12
-
-    counts = allocate_automatic_sample_counts(metadata, output_count=30)
-
-    assert sum(counts) == 4_000
-    assert all(count > 0 for count in counts)
-
-
-def test_automatic_sample_budget_matches_early_last_frame_capacity() -> None:
-    """最終frameが早い場合も配分数と生成timestamp数が一致すること."""
-    metadata = [
-        VideoMetadata(
-            100.0,
-            320,
-            180,
-            "fake",
-            "30/1",
-            last_frame_timestamp_seconds=1.0,
-        )
-    ] * 2
-
-    counts = allocate_automatic_sample_counts(metadata, output_count=8)
-
-    assert counts == (4, 4)
-    assert all(
-        len(
-            make_timestamps(
-                item.duration_seconds,
-                8,
-                None,
-                minimum_end_margin_seconds=1 / 30,
-                last_frame_timestamp_seconds=item.last_frame_timestamp_seconds,
-                automatic_sample_count=count,
-            )
-        )
-        == count
-        for item, count in zip(metadata, counts, strict=True)
-    )
 
 
 @pytest.mark.parametrize(

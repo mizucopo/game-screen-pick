@@ -36,6 +36,7 @@ from src.services.video_phase_cache import (
     prepare_cache_root,
 )
 from src.services.video_selector import VideoSelector as SingleVideoSelector
+from src.services.video_selector import measure_candidate
 from src.utils.contact_sheet import context_frame_path
 from src.utils.video_selection_files import file_sha256, json_digest
 
@@ -971,6 +972,12 @@ def test_pipeline_logs_concrete_processing_without_generic_status(
         'secondary\\u001bmodel"' in messages
     )
     assert "候補フレームを抽出します: 13/13件" in messages
+    assert (
+        "処理予定: 全候補数=13件, 一次評価予定数=13件（上限）, "
+        "二次評価予定数=6件（上限）" in messages
+    )
+    assert "一次評価対象が確定しました: 13件" in messages
+    assert "二次評価対象が確定しました: 6件" in messages
     assert all(
         control not in message
         for message in messages
@@ -3151,6 +3158,55 @@ def test_pipeline_allocates_explicit_sample_minimum_across_long_input_videos(
     assert sum(len(source.timestamps) for source in selector.sources) == 600
 
 
+def test_pipeline_plans_more_than_legacy_combined_candidate_limit(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """1時間動画4本の自動modeで4,320候補と評価上限を計画すること."""
+
+    class LongVideoExtractor(FakeFrameExtractor):
+        """1時間動画のmetadataを返すfake."""
+
+        def probe(self, video: Path) -> VideoMetadata:
+            assert video.is_file()
+            self.probe_calls += 1
+            return VideoMetadata(3600.0, 320, 180, "fake", "30/1")
+
+    videos = tuple(tmp_path / f"Sample Game Part{index}.mp4" for index in range(4))
+    for video in videos:
+        video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_videos=tuple(str(video) for video in videos),
+        output_dir=str(tmp_path / "selected"),
+        output_count=30,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=LongVideoExtractor(),
+        assessor=FakeAssessor(),
+    )
+    caplog.set_level(logging.INFO)
+
+    selector._prepare_run()
+
+    assert sum(len(source.timestamps) for source in selector.sources) == 4_320
+    assert (
+        "処理予定: 全候補数=4320件, 一次評価予定数=1440件（上限）, "
+        "二次評価予定数=360件（上限）"
+        in [record.getMessage() for record in caplog.records]
+    )
+
+
 def test_automatic_sample_positions_stay_stable_when_video_is_added(
     tmp_path: Path,
 ) -> None:
@@ -4128,6 +4184,160 @@ def test_candidate_extraction_cancels_queued_jobs_on_interrupt(
         selector._extract_candidates()
 
     assert (True, True) in shutdown_calls
+
+
+def test_candidate_extraction_keeps_pending_jobs_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """候補総数分の抽出jobを一度にexecutorへ投入しないこと."""
+    extraction_started = Event()
+    release_extraction = Event()
+    submission_window_filled = Event()
+    submitted_futures: list[object] = []
+
+    class BlockingFrameExtractor(FakeFrameExtractor):
+        """releaseまで候補抽出を停止するfake."""
+
+        def extract_frame(
+            self,
+            video: Path,
+            timestamp_seconds: float,
+            output_path: Path,
+            *,
+            max_width: int | None,
+            video_stream_index: int = 0,
+        ) -> None:
+            extraction_started.set()
+            assert release_extraction.wait(timeout=2)
+            super().extract_frame(
+                video,
+                timestamp_seconds,
+                output_path,
+                max_width=max_width,
+                video_stream_index=video_stream_index,
+            )
+
+    class RecordingExecutor(ThreadPoolExecutor):
+        """投入されたfutureを記録するexecutor."""
+
+        def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+            future = super().submit(fn, *args, **kwargs)
+            submitted_futures.append(future)
+            if len(submitted_futures) == 2:
+                submission_window_filled.set()
+            return future
+
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=1,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=BlockingFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+    monkeypatch.setattr(
+        "src.services.video_selector.ThreadPoolExecutor",
+        RecordingExecutor,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        extraction = executor.submit(selector._extract_candidates)
+        assert extraction_started.wait(timeout=2)
+        assert submission_window_filled.wait(timeout=2)
+        try:
+            assert len(submitted_futures) == 2
+            assert len(submitted_futures) < len(selector.sources[0].timestamps)
+        finally:
+            release_extraction.set()
+        assert len(extraction.result(timeout=10)) == 13
+
+
+def test_mechanical_evaluation_keeps_pending_jobs_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """候補総数分の機械評価jobを一度にexecutorへ投入しないこと."""
+    evaluation_started = Event()
+    release_evaluation = Event()
+    submission_window_filled = Event()
+    submitted_futures: list[object] = []
+
+    class RecordingExecutor(ThreadPoolExecutor):
+        """投入されたfutureを記録するexecutor."""
+
+        def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+            future = super().submit(fn, *args, **kwargs)
+            submitted_futures.append(future)
+            if len(submitted_futures) == 4:
+                submission_window_filled.set()
+            return future
+
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=1,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+    candidates = selector._extract_candidates()
+    original_measure_candidate = measure_candidate
+
+    def blocking_measure_candidate(candidate: FrameCandidate) -> FrameCandidate | None:
+        evaluation_started.set()
+        assert release_evaluation.wait(timeout=2)
+        return original_measure_candidate(candidate)
+
+    monkeypatch.setattr(
+        "src.services.video_selector.ThreadPoolExecutor",
+        RecordingExecutor,
+    )
+    monkeypatch.setattr(
+        "src.services.video_selector.measure_candidate",
+        blocking_measure_candidate,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        evaluation = executor.submit(selector._preselect_candidates, candidates)
+        assert evaluation_started.wait(timeout=2)
+        assert submission_window_filled.wait(timeout=2)
+        try:
+            assert len(submitted_futures) == 4
+            assert len(submitted_futures) < len(candidates)
+        finally:
+            release_evaluation.set()
+        assert evaluation.result(timeout=10)
 
 
 def test_context_extraction_cancels_queued_jobs_on_interrupt(
