@@ -4150,6 +4150,67 @@ def test_candidate_extraction_cancels_queued_jobs_on_interrupt(
     assert (True, True) in shutdown_calls
 
 
+def test_candidate_extraction_shuts_down_when_initial_submission_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """初期windowのjob投入失敗時もexecutorを安全に停止すること."""
+    shutdown_calls: list[tuple[bool, bool]] = []
+    submit_count = 0
+
+    class FailingExecutor(ThreadPoolExecutor):
+        """2件目のjob投入を失敗させるexecutor."""
+
+        def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+            nonlocal submit_count
+            submit_count += 1
+            if submit_count == 2:
+                raise RuntimeError("job submission failed")
+            return super().submit(fn, *args, **kwargs)
+
+        def shutdown(
+            self,
+            wait: bool = True,
+            *,
+            cancel_futures: bool = False,
+        ) -> None:
+            shutdown_calls.append((wait, cancel_futures))
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(
+        "src.services.video_selector.ThreadPoolExecutor",
+        FailingExecutor,
+    )
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=1,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+
+    with pytest.raises(RuntimeError, match="job submission failed"):
+        selector._extract_candidates()
+
+    assert (True, True) in shutdown_calls
+
+
 def test_candidate_extraction_keeps_pending_jobs_bounded(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

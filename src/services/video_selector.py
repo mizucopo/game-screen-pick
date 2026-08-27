@@ -142,10 +142,10 @@ def _bounded_parallel_map(
             return
         pending[executor.submit(worker, item)] = index
 
-    for _ in range(min(len(items), max_workers * 2)):
-        submit_next()
     completed_count = 0
     try:
+        for _ in range(min(len(items), max_workers * 2)):
+            submit_next()
         while pending:
             completed, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in completed:
