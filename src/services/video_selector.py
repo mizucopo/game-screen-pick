@@ -784,15 +784,6 @@ class VideoSelector:
             else ""
         )
         requested_context = self.request.game_context.strip()
-        if game_title and requested_context:
-            raise ValueError(
-                "--game-titleと--game-contextのどちらか一方だけを指定してください"
-            )
-
-        if not game_title and not requested_context:
-            raise ValueError(
-                "--game-titleと--game-contextのどちらか一方を指定してください"
-            )
         if requested_context:
             self.game_context = requested_context
             self.game_context_generation = None
