@@ -148,7 +148,7 @@ def test_cli_logs_project_version_and_all_effective_settings(
         '  --game-title: ""',
         '  --game-context: "探索を含む"',
         '  [run].game_context_provider: "ollama"',
-        '  [run].game_context_model: "<provider既定>"',
+        '  [run].game_context_model: "qwen3.8:27b"',
         '  [run].primary_model: "qwen3.8:27b"',
         '  [run].secondary_model: "muse-glimmer:30b"',
         '  [run].ollama_host: "http://ollama.example:11434（自動決定: OLLAMA_HOST）"',
@@ -340,6 +340,87 @@ def test_cli_rejects_game_title_and_game_context_without_exactly_one_input(
         run(["-n", "1", *context_args, str(input_dir), str(tmp_path / "selected")])
 
     assert "--game-titleと--game-contextのどちらか一方" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("config_text", "missing_key"),
+    [
+        ('[run]\ngame_context_model = "context-model"\n', "game_context_provider"),
+        (
+            '[run]\ngame_context_provider = ""\ngame_context_model = "context-model"\n',
+            "game_context_provider",
+        ),
+        ('[run]\ngame_context_provider = "openai"\n', "game_context_model"),
+        (
+            '[run]\ngame_context_provider = "openai"\ngame_context_model = "  "\n',
+            "game_context_model",
+        ),
+    ],
+)
+def test_cli_requires_explicit_context_provider_and_model_for_game_title(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    config_text: str,
+    missing_key: str,
+) -> None:
+    """titleから生成する場合はproviderとmodelの明示指定を必須にすること."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "picker.toml"
+    config_path.write_text(config_text, encoding="utf-8")
+    monkeypatch.setattr(
+        "src.main.run_video_application",
+        lambda _request: pytest.fail("applicationは呼ばれないこと"),
+    )
+
+    with pytest.raises(SystemExit):
+        run(
+            [
+                "-n",
+                "1",
+                "--game-title",
+                "Game",
+                "-c",
+                str(config_path),
+                str(input_dir),
+                str(tmp_path / "selected"),
+            ]
+        )
+
+    assert f"[run].{missing_key}" in capsys.readouterr().err
+
+
+def test_cli_allows_direct_context_without_context_provider_or_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """直接指定では未設定のproviderとmodelを要求しないこと."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    input_video = input_dir / "game.mp4"
+    input_video.write_bytes(b"video")
+    config_path = tmp_path / "picker.toml"
+    config_path.write_text("[run]\n", encoding="utf-8")
+    captured_requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", captured_requests.append)
+
+    run(
+        [
+            "-n",
+            "1",
+            "--game-context",
+            "直接指定",
+            "-c",
+            str(config_path),
+            str(input_dir),
+            str(tmp_path / "selected"),
+        ]
+    )
+
+    assert captured_requests[0].game_context_provider is None
+    assert captured_requests[0].game_context_model is None
 
 
 def test_cli_loads_all_run_options_from_config(

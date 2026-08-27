@@ -878,6 +878,8 @@ def test_context_generation_failure_stops_before_video_probe(tmp_path: Path) -> 
         output_count=2,
         game_title="Game",
         game_context="",
+        game_context_provider="ollama",
+        game_context_model="context-model",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -894,6 +896,54 @@ def test_context_generation_failure_stops_before_video_probe(tmp_path: Path) -> 
             frame_extractor=extractor,
             assessor=FakeAssessor(),
             context_generator=FailingContextGenerator(),
+        ).run()
+
+    assert extractor.probe_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "missing_key"),
+    [
+        (None, "context-model", "game_context_provider"),
+        ("  ", "context-model", "game_context_provider"),
+        ("openai", None, "game_context_model"),
+        ("openai", "  ", "game_context_model"),
+    ],
+)
+def test_pipeline_requires_explicit_context_provider_and_model_before_probe(
+    tmp_path: Path,
+    provider: str | None,
+    model: str | None,
+    missing_key: str,
+) -> None:
+    """programmatic title生成もproviderとmodelの未指定をprobe前に拒否すること."""
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(b"video")
+    extractor = FakeFrameExtractor()
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title="Game",
+        game_context="",
+        game_context_provider=provider,
+        game_context_model=model,
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    with pytest.raises(ValueError, match=rf"\[run\]\.{missing_key}"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=extractor,
+            assessor=FakeAssessor(),
+            context_generator=ExplodingContextGenerator(),
         ).run()
 
     assert extractor.probe_calls == 0
@@ -2838,7 +2888,13 @@ def test_pipeline_rejects_unmanaged_output_before_game_context_generation(
 
     with pytest.raises(RuntimeError, match="出力フォルダが空ではなく"):
         SingleVideoSelector(
-            replace(request, game_title="Sample Game", game_context=""),
+            replace(
+                request,
+                game_title="Sample Game",
+                game_context="",
+                game_context_provider="openai",
+                game_context_model="context-model",
+            ),
             frame_extractor=FakeFrameExtractor(),
             assessor=FakeAssessor(),
             context_generator=generator,

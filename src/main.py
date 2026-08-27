@@ -68,7 +68,7 @@ def _log_cli_start(
     output_count: int,
     game_title: str | None,
     game_context: str,
-    game_context_provider: str,
+    game_context_provider: str | None,
     game_context_model: str | None,
     primary_model: str,
     secondary_model: str,
@@ -90,8 +90,8 @@ def _log_cli_start(
             game_title.strip() if game_title and game_title.strip() else ""
         ),
         "--game-context": game_context.strip(),
-        "[run].game_context_provider": game_context_provider,
-        "[run].game_context_model": game_context_model or "<provider既定>",
+        "[run].game_context_provider": game_context_provider or "",
+        "[run].game_context_model": game_context_model or "",
         "[run].primary_model": primary_model,
         "[run].secondary_model": secondary_model,
         "[run].ollama_host": _display_ollama_host(ollama_host),
@@ -206,8 +206,10 @@ def resolve_video_run_config(
     }
     values.update(file_values)
 
-    provider = str(values["game_context_provider"])
-    if provider not in SUPPORTED_GAME_CONTEXT_PROVIDERS:
+    raw_provider = values["game_context_provider"]
+    assert raw_provider is None or isinstance(raw_provider, str)
+    provider = raw_provider.strip() if raw_provider is not None else None
+    if provider and provider not in SUPPORTED_GAME_CONTEXT_PROVIDERS:
         choices = ", ".join(SUPPORTED_GAME_CONTEXT_PROVIDERS)
         raise click.BadParameter(
             f"{choices}から指定してください（実際の値: {provider}）",
@@ -247,11 +249,14 @@ def resolve_video_run_config(
         resolved_sample_interval, float
     )
 
+    raw_game_context_model = values["game_context_model"]
+    assert raw_game_context_model is None or isinstance(raw_game_context_model, str)
+
     return VideoRunConfig(
         game_context_provider=provider,
         game_context_model=(
-            str(values["game_context_model"])
-            if values["game_context_model"] is not None
+            raw_game_context_model.strip()
+            if raw_game_context_model is not None
             else None
         ),
         primary_model=str(values["primary_model"]),
@@ -309,6 +314,27 @@ def validate_game_context_input(
         )
 
 
+def validate_game_context_generation_config(
+    *,
+    game_title: str | None,
+    game_context_provider: str | None,
+    game_context_model: str | None,
+) -> None:
+    """Game Title生成時だけproviderとmodelの明示指定を要求する."""
+    if not game_title or not game_title.strip():
+        return
+    if not game_context_provider or not game_context_provider.strip():
+        raise click.BadParameter(
+            "Game Contextを生成する場合は空でない文字列を指定してください",
+            param_hint="[run].game_context_provider",
+        )
+    if not game_context_model or not game_context_model.strip():
+        raise click.BadParameter(
+            "Game Contextを生成する場合は空でない文字列を指定してください",
+            param_hint="[run].game_context_model",
+        )
+
+
 @click.command()
 @click.option(
     "-c",
@@ -352,6 +378,11 @@ def execute(
     config = resolve_video_run_config(config_path=config_path)
     input_videos = discover_input_videos(input_video_dir)
     validate_game_context_input(game_title, game_context)
+    validate_game_context_generation_config(
+        game_title=game_title,
+        game_context_provider=config.game_context_provider,
+        game_context_model=config.game_context_model,
+    )
     _log_cli_start(
         config_path=config_path,
         output_count=output_count,

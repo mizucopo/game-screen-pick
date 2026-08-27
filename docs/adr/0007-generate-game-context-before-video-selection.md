@@ -12,7 +12,8 @@ a local Ollama model, OpenAI Responses `web_search`, Gemini Google Search, or xA
 Responses `web_search`. Search content is treated as untrusted data, official
 sites and stores are preferred, and unresolved identity, insufficient evidence,
 or contradictory sources fail instead of producing guessed facts. Provider
-failure never falls back to another provider.
+and model must both be configured explicitly. Neither has an implicit default,
+and provider failure never falls back to another provider.
 
 The final Game Context is resolved before video probing and long-running frame
 processing. It is logged and stored in the Run Manifest and report. Dynamically

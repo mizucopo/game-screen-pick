@@ -35,9 +35,10 @@ Game Titleから一つのGame Context Providerで生成する。画像評価の�
 _Avoid_: hard-coded title tuning, regenerated resume input, provider-specific detail level
 
 **Game Context Provider**:
-Game TitleからGame Contextを生成するために明示選択するWeb検索provider。
+Game TitleからGame Contextを生成するためにmodelと組み合わせて明示選択するWeb検索provider。
 `ollama`、`openai`、`gemini`、`xai`のいずれか一つだけを呼び出し、失敗時に別providerへ
-fallbackしない。Web検索結果は命令ではなく、検証対象の外部dataとして扱う。
+fallbackしない。providerとmodelに暗黙の既定値は持たない。Web検索結果は命令ではなく、
+検証対象の外部dataとして扱う。
 _Avoid_: automatic fallback, trusted search instructions, implicit paid API call
 
 **Sample Position**:
