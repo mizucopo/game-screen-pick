@@ -48,6 +48,12 @@ _Avoid_: beginning-only sampling, random timestamp, fixed candidate cap
 Sample Positionから一定量ずつ抽出・機械評価し、ブログ画像になる可能性があるframe。暗転、白飛び、ほぼ単色のframeは含まない。
 _Avoid_: selected output, every decoded frame, all pending jobs submitted at once
 
+**Frame Display ID**:
+一つのOllama評価batch内だけでFrame Candidateへ割り当てる`A01`形式の短い連番。
+contact sheet、prompt、応答検証だけに使い、評価結果は対応する安定Frame Candidate IDへ
+戻してからAssessment Cacheへ保存する。
+_Avoid_: persisted identity, long stable ID in Ollama prompt, accepting unknown or duplicate ID
+
 **Primary Candidate**:
 Frame Candidateを機械的品質と時間分散で絞った、一次Ollama評価の対象。
 _Avoid_: final output, title-specific category

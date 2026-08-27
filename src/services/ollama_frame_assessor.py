@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlsplit, urlunsplit
@@ -14,6 +15,14 @@ from ..models.video_selection import FrameAssessment, FrameCandidate
 
 MODEL_OPTIONS = {"temperature": 0, "seed": 271}
 MINIMUM_GPU_MEMORY_RATIO = 0.5
+
+
+def batch_display_frame_ids(candidate_count: int) -> tuple[str, ...]:
+    """Ollama batch内だけで使う短い連番表示IDを返す."""
+    if candidate_count < 0:
+        raise ValueError("candidate数は0以上で指定してください")
+    width = max(2, len(str(candidate_count)))
+    return tuple(f"A{index:0{width}d}" for index in range(1, candidate_count + 1))
 
 
 class OllamaModelValidationError(RuntimeError):
@@ -150,21 +159,24 @@ class OllamaFrameAssessor:
         assessments_by_id: dict[str, FrameAssessment] = {}
         for item in frames:
             assessment = self._assessment_from_item(item)
-            previous = assessments_by_id.get(assessment.frame_id)
-            if previous is not None and previous != assessment:
+            if assessment.frame_id in assessments_by_id:
                 raise ValueError(
-                    f"Ollama応答の重複frame評価が一致しません: {assessment.frame_id}"
+                    f"Ollama応答に重複表示IDがあります: {assessment.frame_id}"
                 )
             assessments_by_id[assessment.frame_id] = assessment
 
-        expected_ids = {candidate.frame_id for candidate in candidates}
+        display_ids = batch_display_frame_ids(len(candidates))
+        expected_ids = set(display_ids)
         actual_ids = set(assessments_by_id)
         if actual_ids != expected_ids:
             raise ValueError(
-                "Ollama応答のframe IDが一致しません: "
+                "Ollama応答の表示IDが一致しません: "
                 f"expected={sorted(expected_ids)}, actual={sorted(actual_ids)}"
             )
-        return [assessments_by_id[candidate.frame_id] for candidate in candidates]
+        return [
+            replace(assessments_by_id[display_id], frame_id=candidate.frame_id)
+            for display_id, candidate in zip(display_ids, candidates, strict=True)
+        ]
 
     def _verify_gpu_use(self, model: str, model_digest: str) -> None:
         """各batchでloaded modelのdigestとGPU配置を確認する."""

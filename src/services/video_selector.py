@@ -53,6 +53,7 @@ from .ollama_frame_assessor import (
     MODEL_OPTIONS,
     OllamaFrameAssessor,
     OllamaModelValidationError,
+    batch_display_frame_ids,
 )
 from .video_frame_extractor import VideoFrameExtractor
 from .video_phase_cache import (
@@ -72,7 +73,7 @@ GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION = 2
 logger = logging.getLogger(__name__)
 
 ALGORITHM_VERSION = "multi-video-selection-v7"
-PROMPT_VERSION = "blog-image-selection-v5"
+PROMPT_VERSION = "blog-image-selection-v6"
 DEFAULT_MAX_SAMPLE_INTERVAL_SECONDS = 10.0
 MINIMUM_ENDPOINT_MARGIN_SECONDS = 0.05
 INTERVAL_COUNT_TOLERANCE = 1e-9
@@ -2205,11 +2206,23 @@ class VideoSelector:
                     )
                 )
                 prepare_cache_directory(self.cache_root, sheet_path.parent)
-                build_contact_sheet(batch, sheet_path, context_dir=context_dir)
+                display_ids = batch_display_frame_ids(len(batch))
+                build_contact_sheet(
+                    batch,
+                    sheet_path,
+                    context_dir=context_dir,
+                    display_ids=display_ids,
+                )
+                base_prompt = self._model_prompt(stage, batch)
                 last_error: Exception | None = None
                 for attempt in range(1, 4):
                     started = time.monotonic()
                     try:
+                        prompt = (
+                            self._retry_prompt(base_prompt, batch, last_error)
+                            if isinstance(last_error, ValueError)
+                            else base_prompt
+                        )
                         assessments = self.assessor.assess(
                             model=str(
                                 self.model_metadata[
@@ -2221,7 +2234,7 @@ class VideoSelector:
                                     "primary" if primary_stage else "secondary"
                                 ]["digest"]
                             ),
-                            prompt=self._model_prompt(stage, batch),
+                            prompt=prompt,
                             candidates=batch,
                             contact_sheet=sheet_path,
                         )
@@ -2388,7 +2401,7 @@ class VideoSelector:
         source = self._source_for(candidates[0])
         if any(self._source_for(candidate) != source for candidate in candidates):
             raise ValueError("一つの評価batchへ複数Input Videoを混在できません")
-        ids = ", ".join(candidate.frame_id for candidate in candidates)
+        ids = ", ".join(batch_display_frame_ids(len(candidates)))
         if _is_primary_stage(stage):
             stage_note = "動画全体を時間分散と機械的品質で絞った一次候補です。"
             context_note = ""
@@ -2425,8 +2438,24 @@ contact sheet内の対象ID: {ids}
 画面も残してください。タイトル固有のルールは設けないでください。
 ゲームジャンルに存在しない場面を無理に仮定しないでください。
 全IDを1回ずつ含め、JSON以外は返さないでください。
-形式: {{"frames":[{{"id":"f00001","blog_score":80,"transition":false,
+形式: {{"frames":[{{"id":"A01","blog_score":80,"transition":false,
 "scene":"探索","reason":"人物とフィールドが明瞭"}}]}}"""
+
+    @staticmethod
+    def _retry_prompt(
+        base_prompt: str,
+        candidates: Sequence[FrameCandidate],
+        previous_error: ValueError,
+    ) -> str:
+        """不正応答後の再試行へ検証結果と期待表示IDを加える."""
+        expected_ids = ", ".join(batch_display_frame_ids(len(candidates)))
+        return f"""{base_prompt}
+
+前回の応答は次の検証に失敗しました:
+{previous_error}
+contact sheetを再確認し、欠落・未知・重複のないJSONへ修正してください。
+期待する表示ID: {expected_ids}
+各表示IDを必ず1回だけ返してください。"""
 
     def _write_gpu_evidence(self) -> None:
         """実行中に確認したGPU利用証跡を保存する."""

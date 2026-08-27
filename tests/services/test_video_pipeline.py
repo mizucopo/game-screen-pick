@@ -1076,6 +1076,12 @@ def test_pipeline_logs_assessment_completion_and_failure_without_batch_start(
     class RetryOnceAssessor(FakeAssessor):
         """最初の評価だけ一時失敗するfake."""
 
+        def __init__(self) -> None:
+            """試行promptを記録する."""
+            super().__init__()
+            self.attempted_prompts: list[str] = []
+            self.attempted_candidate_ids: list[tuple[str, ...]] = []
+
         def assess(
             self,
             *,
@@ -1086,9 +1092,16 @@ def test_pipeline_logs_assessment_completion_and_failure_without_batch_start(
             contact_sheet: Path,
         ) -> list[FrameAssessment]:
             """一度だけ失敗し、その後は固定評価を返す."""
+            self.attempted_prompts.append(prompt)
+            self.attempted_candidate_ids.append(
+                tuple(candidate.frame_id for candidate in candidates)
+            )
             if self.assess_calls == 0:
                 self.assess_calls += 1
-                raise ConnectionError("temporary failure")
+                raise ValueError(
+                    "Ollama応答の表示IDが一致しません: "
+                    "expected=['A01', 'A02'], actual=['A01', 'A99']"
+                )
             return super().assess(
                 model=model,
                 model_digest=model_digest,
@@ -1117,17 +1130,33 @@ def test_pipeline_logs_assessment_completion_and_failure_without_batch_start(
     )
     caplog.set_level(logging.INFO)
 
+    assessor = RetryOnceAssessor()
     SingleVideoSelector(
         request,
         frame_extractor=FakeFrameExtractor(),
-        assessor=RetryOnceAssessor(),
+        assessor=assessor,
     ).run()
 
     messages = [record.getMessage() for record in caplog.records]
     assert all("評価を開始します" not in message for message in messages)
     assert any(message.startswith("primary評価: ") for message in messages)
     assert any(message.startswith("secondary評価: ") for message in messages)
-    assert "primary評価batch 1の試行1が失敗しました: temporary failure" in messages
+    assert any(
+        message.startswith(
+            "primary評価batch 1の試行1が失敗しました: Ollama応答の表示IDが一致しません"
+        )
+        for message in messages
+    )
+    first_prompt, retry_prompt = assessor.attempted_prompts[:2]
+    assert "contact sheet内の対象ID: A01, A02" in first_prompt
+    assert all(
+        internal_id not in first_prompt
+        for internal_id in assessor.attempted_candidate_ids[0]
+    )
+    assert retry_prompt != first_prompt
+    assert "前回の応答は次の検証に失敗しました" in retry_prompt
+    assert "actual=['A01', 'A99']" in retry_prompt
+    assert "期待する表示ID: A01, A02" in retry_prompt
 
 
 def test_pipeline_selects_from_multiple_videos_and_reports_each_source(
