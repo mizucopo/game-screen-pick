@@ -200,6 +200,8 @@ class VideoSource:
 class VideoSelector:
     """フレーム抽出、Ollama評価、選定、成果物生成を順に実行する."""
 
+    CANDIDATE_CACHE_CHECK_PROGRESS_INTERVAL = 500
+
     def __init__(
         self,
         request: VideoSelectionRequest,
@@ -1438,6 +1440,10 @@ class VideoSelector:
             ]
         ] = []
         self._candidate_manifest_digests.clear()
+        total_candidates = sum(len(source.timestamps) for source in self.sources)
+        checked_count = 0
+        cache_hits = 0
+        logger.info("候補フレームcacheを確認しています: %d件", total_candidates)
         for source in self.sources:
             source_dir = (
                 source.cache_dir
@@ -1468,16 +1474,32 @@ class VideoSelector:
             pending_ids: set[str] = set()
             for candidate in source_candidates:
                 record = cached_records.get(candidate.frame_id)
-                if record is None or not self._matches_candidate_file(
-                    Path(candidate.path),
-                    record["file_size"],
-                ):
+                cache_hit = record is not None and self._matches_candidate_file(
+                    Path(candidate.path), record["file_size"]
+                )
+                if cache_hit:
+                    cache_hits += 1
+                else:
                     pending.append(candidate)
                     pending_ids.add(candidate.frame_id)
+                checked_count += 1
+                if checked_count % self.CANDIDATE_CACHE_CHECK_PROGRESS_INTERVAL == 0:
+                    logger.info(
+                        "候補フレームcache確認中: %d/%d件 (hit=%d件, miss=%d件)",
+                        checked_count,
+                        total_candidates,
+                        cache_hits,
+                        checked_count - cache_hits,
+                    )
             candidates.extend(source_candidates)
             source_states.append(
                 (source, source_candidates, cached_records, pending_ids)
             )
+        logger.info(
+            "候補フレームcache: hit=%d件, miss=%d件",
+            cache_hits,
+            checked_count - cache_hits,
+        )
         frame_ids = [candidate.frame_id for candidate in candidates]
         if len(set(frame_ids)) != len(frame_ids):
             raise RuntimeError("Input Video間でframe IDが衝突しました")
