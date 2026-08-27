@@ -638,12 +638,11 @@ gemini_api_key = "  "
     assert captured_requests[0].game_context_api_key == "environment-secret"
 
 
-def test_cli_rejects_missing_selected_provider_api_key_before_application(
+def test_cli_defers_missing_selected_provider_api_key_for_checkpoint_reuse(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """選択providerの認証値が両方なければapplication開始前に拒否すること."""
+    """認証値がなくてもcheckpointを確認できるようapplicationへ渡すこと."""
     input_dir = tmp_path / "recordings"
     input_dir.mkdir()
     (input_dir / "game.mp4").write_bytes(b"video")
@@ -655,28 +654,23 @@ game_context_model = "grok-test"
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        "src.main.run_video_application",
-        lambda _request: pytest.fail("applicationは呼ばれないこと"),
+    captured_requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", captured_requests.append)
+
+    run(
+        [
+            "-n",
+            "1",
+            "--game-title",
+            "Game",
+            "-c",
+            str(config_path),
+            str(input_dir),
+            str(tmp_path / "selected"),
+        ]
     )
 
-    with pytest.raises(SystemExit):
-        run(
-            [
-                "-n",
-                "1",
-                "--game-title",
-                "Game",
-                "-c",
-                str(config_path),
-                str(input_dir),
-                str(tmp_path / "selected"),
-            ]
-        )
-
-    error = capsys.readouterr().err
-    assert "[run].xai_api_key" in error
-    assert "XAI_API_KEY" in error
+    assert captured_requests[0].game_context_api_key is None
 
 
 def test_local_config_directory_is_ignored_except_gitkeep() -> None:

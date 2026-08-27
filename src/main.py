@@ -334,9 +334,8 @@ def validate_game_context_generation_config(
     game_title: str | None,
     game_context_provider: str | None,
     game_context_model: str | None,
-    game_context_api_key: str | None,
 ) -> None:
-    """Game Title生成時だけprovider、model、認証値を要求する."""
+    """Game Title生成時だけproviderとmodelの明示指定を要求する."""
     if not game_title or not game_title.strip():
         return
     if not game_context_provider or not game_context_provider.strip():
@@ -348,12 +347,6 @@ def validate_game_context_generation_config(
         raise click.BadParameter(
             "Game Contextを生成する場合は空でない文字列を指定してください",
             param_hint="[run].game_context_model",
-        )
-    if not game_context_api_key:
-        api_key_name = GAME_CONTEXT_API_KEY_ENV_VARS[game_context_provider]
-        raise click.BadParameter(
-            "設定ファイルまたは対応する環境変数へAPI keyを設定してください",
-            param_hint=(f"[run].{game_context_provider}_api_key / {api_key_name}"),
         )
 
 
@@ -428,7 +421,6 @@ def execute(
         game_title=game_title,
         game_context_provider=config.game_context_provider,
         game_context_model=config.game_context_model,
-        game_context_api_key=game_context_api_key,
     )
     _log_cli_start(
         config_path=config_path,

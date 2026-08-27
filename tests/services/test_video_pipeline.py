@@ -718,7 +718,7 @@ def test_pipeline_generates_context_before_video_processing_and_reuses_it(
 
     unavailable_assessor = UnavailableAssessor()
     SingleVideoSelector(
-        request,
+        replace(request, game_context_api_key=None),
         frame_extractor=FakeFrameExtractor(),
         assessor=unavailable_assessor,
         context_generator=ExplodingContextGenerator(),
@@ -902,6 +902,43 @@ def test_context_generation_failure_stops_before_video_probe(tmp_path: Path) -> 
             frame_extractor=extractor,
             assessor=FakeAssessor(),
             context_generator=FailingContextGenerator(),
+        ).run()
+
+    assert extractor.probe_calls == 0
+
+
+def test_missing_api_key_stops_on_cache_miss_before_video_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """checkpoint miss時は認証未設定を外部接続・動画処理より前に示すこと."""
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    video = tmp_path / "recording.mp4"
+    video.write_bytes(b"video")
+    extractor = FakeFrameExtractor()
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title="Game",
+        game_context="",
+        game_context_provider="ollama",
+        game_context_model="context-model",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+
+    with pytest.raises(GameContextGenerationError, match="ollama.*OLLAMA_API_KEY"):
+        SingleVideoSelector(
+            request,
+            frame_extractor=extractor,
+            assessor=FakeAssessor(),
         ).run()
 
     assert extractor.probe_calls == 0

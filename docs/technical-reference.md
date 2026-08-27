@@ -69,7 +69,8 @@ providerごとに`config/ollama.toml`、`config/openai.toml`など複数の実�
 `num`、`game_title`、`game_context`は設定ファイルでは受け付けません。
 
 選択中providerのAPI keyは、対応する設定ファイルの非空値、環境変数の順で解決します。
-設定値が未指定または空文字列なら環境変数を使い、両方になければ外部API接続前に
+設定値が未指定または空文字列なら環境変数を使います。生成済みcheckpointを再利用する
+場合はAPI keyがなくても再開でき、生成が必要なcache missで両方になければ外部API接続前に
 エラーになります。利用しないproviderのAPI keyは不要です。API keyは起動log、
 Run Manifest、report、checkpoint、例外messageへ出力しません。
 

@@ -1,6 +1,7 @@
 """Web検索を使うGame Context生成境界のテスト."""
 
 import json
+import traceback
 from typing import Any
 
 import pytest
@@ -206,6 +207,15 @@ def test_api_key_is_redacted_from_provider_error(
 
     assert "configured-secret" not in str(error_info.value)
     assert "<redacted>" in str(error_info.value)
+    assert error_info.value.__cause__ is None
+    formatted = "".join(
+        traceback.format_exception(
+            error_info.type,
+            error_info.value,
+            error_info.tb,
+        )
+    )
+    assert "configured-secret" not in formatted
 
 
 def test_gemini_accepts_current_steps_response(

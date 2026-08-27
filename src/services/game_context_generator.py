@@ -129,25 +129,23 @@ class GameContextGenerator:
             context = _parse_generated_context(response_text, provider=provider)
         except GameContextGenerationError as error:
             safe_message = _redact_secret(str(error), api_key)
-            if safe_message == str(error):
-                raise
-            raise GameContextGenerationError(safe_message) from error
+            raise GameContextGenerationError(safe_message) from None
         except HTTPError as error:
             detail = _redact_secret(_http_error_detail(error), api_key)
             raise GameContextGenerationError(
                 f"{provider}: Web検索またはcontext生成のHTTP error "
                 f"{error.code}: {detail}"
-            ) from error
+            ) from None
         except (URLError, TimeoutError, OSError) as error:
             raise GameContextGenerationError(
                 f"{provider}: Web検索またはcontext生成の通信error: "
                 f"{_redact_secret(str(error), api_key)}"
-            ) from error
+            ) from None
         except (TypeError, ValueError, KeyError) as error:
             raise GameContextGenerationError(
                 f"{provider}: Web検索またはcontext生成の応答error: "
                 f"{_redact_secret(str(error), api_key)}"
-            ) from error
+            ) from None
 
         return GeneratedGameContext(context, provider, used_model)
 
