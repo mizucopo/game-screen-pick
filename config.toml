@@ -1,5 +1,6 @@
 [run]
 game_context_provider = "ollama"
+game_context_model = "qwen3.8:27b"
 primary_model = "qwen3.8:27b"
 secondary_model = "muse-glimmer:30b"
 ollama_timeout = 900.0

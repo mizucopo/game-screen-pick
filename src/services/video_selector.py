@@ -46,9 +46,9 @@ from ..utils.video_selection_files import (
     write_json_atomic,
 )
 from .game_context_generator import (
+    SUPPORTED_GAME_CONTEXT_PROVIDERS,
     GameContextGenerator,
     normalize_generated_context,
-    resolve_game_context_model,
 )
 from .ollama_frame_assessor import (
     MODEL_OPTIONS,
@@ -372,6 +372,7 @@ class VideoSelector:
                 f"sample intervalは{MINIMUM_SAMPLE_INTERVAL_SECONDS}秒以上で"
                 "指定してください"
             )
+        self._validate_game_context_request()
         if not self.ollama_endpoint:
             self.ollama_endpoint = OllamaFrameAssessor.normalize_host(
                 self.request.ollama_host
@@ -415,6 +416,41 @@ class VideoSelector:
             )
         if self.output_dir.exists() and not self.output_dir.is_dir():
             raise RuntimeError(f"出力先がフォルダではありません: {self.output_dir}")
+
+    def _validate_game_context_request(self) -> None:
+        """Game Context入力と動的生成設定を外部処理より前に検証する."""
+        has_title = bool(self.request.game_title and self.request.game_title.strip())
+        has_context = bool(self.request.game_context.strip())
+        if has_title and has_context:
+            raise ValueError(
+                "--game-titleと--game-contextのどちらか一方だけを指定してください"
+            )
+        if not has_title and not has_context:
+            raise ValueError(
+                "--game-titleと--game-contextのどちらか一方を指定してください"
+            )
+        if not has_title:
+            return
+
+        provider = self.request.game_context_provider
+        if not provider or not provider.strip():
+            raise ValueError(
+                "Game Contextを生成する場合は"
+                "[run].game_context_providerを空でない文字列で指定してください"
+            )
+        normalized_provider = provider.strip()
+        if normalized_provider not in SUPPORTED_GAME_CONTEXT_PROVIDERS:
+            choices = ", ".join(SUPPORTED_GAME_CONTEXT_PROVIDERS)
+            raise ValueError(
+                f"[run].game_context_providerは{choices}から指定してください"
+                f"（実際の値: {normalized_provider}）"
+            )
+        model = self.request.game_context_model
+        if not model or not model.strip():
+            raise ValueError(
+                "Game Contextを生成する場合は"
+                "[run].game_context_modelを空でない文字列で指定してください"
+            )
 
     def _prepare_run(self) -> None:
         """入力・モデル・manifestを検証して実行状態を確定する."""
@@ -767,11 +803,11 @@ class VideoSelector:
             return
 
         provider = self.request.game_context_provider
-        model = resolve_game_context_model(
-            provider,
-            self.request.game_context_model,
-            ollama_default_model=self.request.primary_model,
-        )
+        model = self.request.game_context_model
+        assert provider is not None
+        assert model is not None
+        provider = provider.strip()
+        model = model.strip()
         host = self.request.ollama_host or os.environ.get(
             "OLLAMA_HOST", "127.0.0.1:11434"
         )

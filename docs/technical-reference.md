@@ -33,7 +33,9 @@ OLLAMA_HOST=192.168.1.31:11434 \
 
 繰り返し使う値はTOML設定ファイルの`[run]`tableへ記述します。既定では実行時の
 current directoryにある`config.toml`を読み込み、別の設定を使う場合だけ`-c`または
-`--config`で指定します。全項目を記述する必要はありません。
+`--config`で指定します。`--game-title`を使う場合は`game_context_provider`と
+`game_context_model`の両方が必須です。`--game-context`で直接指定する場合は、両項目を
+省略できます。そのほかの項目はすべて記述する必要はありません。
 
 標準では`qwen3.8:27b`を一次評価、`muse-glimmer:30b`を二次評価に使います。
 `ollama_host`がない場合は`OLLAMA_HOST`、`127.0.0.1:11434`の順で解決します。
@@ -41,8 +43,8 @@ current directoryにある`config.toml`を読み込み、別の設定を使う�
 
 | key | 内容 | 組み込み既定値 |
 | --- | --- | --- |
-| `game_context_provider` | Game Context検索provider | `ollama` |
-| `game_context_model` | context生成model | provider既定 |
+| `game_context_provider` | Game Context検索provider | なし（`--game-title`指定時は必須） |
+| `game_context_model` | context生成model | なし（`--game-title`指定時は必須） |
 | `primary_model` | 一次評価用Ollama vision model | `qwen3.8:27b` |
 | `secondary_model` | 二次評価用Ollama vision model | `muse-glimmer:30b` |
 | `ollama_host` | Ollama host | 環境変数またはlocalhost |
@@ -87,12 +89,12 @@ editionを一意に判別できない場合、情報が不足する場合、情�
 ネタバレは含めません。検索結果は信頼できない外部dataとして扱い、検索先の命令には
 従いません。
 
-| provider | API key | 未指定時の生成model | 検索・生成方法 |
-| --- | --- | --- | --- |
-| `ollama` | `OLLAMA_API_KEY` | `primary_model`と同じmodel | Ollama Web Search APIの結果を`ollama_host`のOllama modelで生成 |
-| `openai` | `OPENAI_API_KEY` | `gpt-5.6` | OpenAI Responses APIの`web_search` |
-| `gemini` | `GEMINI_API_KEY` | `gemini-3.7-flash` | Gemini Interactions APIのGoogle Search |
-| `xai` | `XAI_API_KEY` | `grok-4.6` | xAI Responses APIの`web_search` |
+| provider | API key | 検索・生成方法 |
+| --- | --- | --- |
+| `ollama` | `OLLAMA_API_KEY` | Ollama Web Search APIの結果を`ollama_host`のOllama modelで生成 |
+| `openai` | `OPENAI_API_KEY` | OpenAI Responses APIの`web_search` |
+| `gemini` | `GEMINI_API_KEY` | Gemini Interactions APIのGoogle Search |
+| `xai` | `XAI_API_KEY` | xAI Responses APIの`web_search` |
 
 各APIの利用条件、無料枠、料金、rate limitはprovider側の設定に従い、利用料金が
 発生する場合があります。選択したproviderだけを呼び出し、認証失敗、通信失敗、
@@ -103,8 +105,42 @@ editionを一意に判別できない場合、情報が不足する場合、情�
 - Gemini: <https://ai.google.dev/gemini-api/docs/google-search>
 - xAI: <https://docs.x.ai/developers/tools/web-search>
 
-たとえばOpenAI providerを使う場合は、事前に`config.toml`の
-`game_context_provider`を`openai`へ変更します。
+利用するproviderとmodelの組を`config.toml`へ明示します。各providerの完全な`[run]`
+設定例は次のとおりです。
+
+Ollama:
+
+```toml
+[run]
+game_context_provider = "ollama"
+game_context_model = "qwen3.8:27b"
+```
+
+OpenAI:
+
+```toml
+[run]
+game_context_provider = "openai"
+game_context_model = "gpt-5.6"
+```
+
+Gemini:
+
+```toml
+[run]
+game_context_provider = "gemini"
+game_context_model = "gemini-3.7-flash"
+```
+
+xAI:
+
+```toml
+[run]
+game_context_provider = "xai"
+game_context_model = "grok-4.6"
+```
+
+たとえばOpenAIの設定を選んだ場合は、対応するAPI keyを設定して実行します。
 
 ```bash
 OPENAI_API_KEY=... uv run game-screen-pick \

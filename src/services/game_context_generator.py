@@ -12,11 +12,6 @@ from urllib.request import Request, urlopen
 from .ollama_frame_assessor import OllamaFrameAssessor
 
 SUPPORTED_GAME_CONTEXT_PROVIDERS = ("ollama", "openai", "gemini", "xai")
-DEFAULT_GAME_CONTEXT_MODELS = {
-    "openai": "gpt-5.6",
-    "gemini": "gemini-3.7-flash",
-    "xai": "grok-4.6",
-}
 REQUIRED_CONTEXT_HEADINGS = (
     "ジャンル:",
     "基本的なゲーム進行と主なプレイ要素:",
@@ -68,23 +63,6 @@ class JsonRequester(Protocol):
         payload: dict[str, Any],
         timeout_seconds: float,
     ) -> dict[str, Any]: ...
-
-
-def resolve_game_context_model(
-    provider: str,
-    requested_model: str | None,
-    *,
-    ollama_default_model: str,
-) -> str:
-    """明示modelまたはprovider既定modelを返す."""
-    if requested_model and requested_model.strip():
-        return requested_model.strip()
-    if provider == "ollama":
-        return ollama_default_model
-    try:
-        return DEFAULT_GAME_CONTEXT_MODELS[provider]
-    except KeyError as error:
-        raise ValueError(f"未対応のgame context providerです: {provider}") from error
 
 
 class GameContextGenerator:
