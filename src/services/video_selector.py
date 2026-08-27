@@ -254,7 +254,7 @@ class VideoSelector:
         candidates = self._extract_candidates()
         primary_candidates = self._preselect_candidates(candidates)
         logger.info(
-            "一次評価対象が確定しました: %d件",
+            "一次評価初期対象数: %d件",
             len(primary_candidates),
         )
         primary_candidates, primary_assessments = self._assess_with_source_backfill(
@@ -301,7 +301,7 @@ class VideoSelector:
             )
         )
         logger.info(
-            "二次評価対象が確定しました: %d件",
+            "二次評価初期対象数: %d件",
             len(secondary_candidates),
         )
         secondary_candidates, secondary_assessments = (
@@ -310,6 +310,14 @@ class VideoSelector:
                 primary_assessments,
                 secondary_candidates,
             )
+        )
+        logger.info(
+            "一次評価対象が確定しました: %d件",
+            len(primary_candidates),
+        )
+        logger.info(
+            "二次評価対象が確定しました: %d件",
+            len(secondary_candidates),
         )
         global_pool = [
             candidate
@@ -487,14 +495,14 @@ class VideoSelector:
                 f"抽出可能な候補{sample_count}件が"
                 f"選択枚数{self.request.output_count}件を下回ります"
             )
-        primary_planned_count = sum(
+        primary_initial_planned_count = sum(
             min(
                 len(source.timestamps),
                 self.request.output_count * PRIMARY_CANDIDATE_MULTIPLIER,
             )
             for source in self.sources
         )
-        secondary_planned_count = sum(
+        secondary_initial_planned_count = sum(
             min(
                 len(source.timestamps),
                 self.request.output_count * SECONDARY_CANDIDATE_MULTIPLIER,
@@ -502,11 +510,14 @@ class VideoSelector:
             for source in self.sources
         )
         logger.info(
-            "処理予定: 全候補数=%d件, 一次評価予定数=%d件（上限）, "
-            "二次評価予定数=%d件（上限）",
+            "処理予定: 全候補数=%d件, "
+            "一次評価初期予定数=%d件（追補時上限=%d件）, "
+            "二次評価初期予定数=%d件（追補時上限=%d件）",
             sample_count,
-            primary_planned_count,
-            secondary_planned_count,
+            primary_initial_planned_count,
+            sample_count,
+            secondary_initial_planned_count,
+            sample_count,
         )
         existing_manifest = self._read_existing_manifest()
         has_existing_manifest = self._restore_existing_manifest(existing_manifest)

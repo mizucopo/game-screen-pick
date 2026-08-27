@@ -49,9 +49,9 @@ Issue #300 removes the fixed per-video and combined-run candidate limits without
 changing that identity contract. Candidate extraction and mechanical analysis
 keep only a worker-bounded window of unfinished jobs, while Ollama assessment
 advances and checkpoints one batch at a time. Before candidate work begins, the
-pipeline logs the total candidate count and the planned upper bounds for primary
-and secondary assessment; it logs the actual target count when each assessment
-stage becomes concrete.
+pipeline logs the total candidate count, initial planned assessment counts, and
+the true backfill upper bounds for primary and secondary assessment; it logs the
+actual target counts after all backfill completes.
 Per-video primary and secondary candidate pools are evaluated and cached before
 the current input set is combined. Global candidate selection, final selection,
 Selected Images, Selected Contact Sheet, and report are rerun whenever the input

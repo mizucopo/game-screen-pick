@@ -973,9 +973,12 @@ def test_pipeline_logs_concrete_processing_without_generic_status(
     )
     assert "候補フレームを抽出します: 13/13件" in messages
     assert (
-        "処理予定: 全候補数=13件, 一次評価予定数=13件（上限）, "
-        "二次評価予定数=6件（上限）" in messages
+        "処理予定: 全候補数=13件, "
+        "一次評価初期予定数=13件（追補時上限=13件）, "
+        "二次評価初期予定数=6件（追補時上限=13件）" in messages
     )
+    assert "一次評価初期対象数: 13件" in messages
+    assert "二次評価初期対象数: 6件" in messages
     assert "一次評価対象が確定しました: 13件" in messages
     assert "二次評価対象が確定しました: 6件" in messages
     assert all(
@@ -3201,8 +3204,9 @@ def test_pipeline_plans_more_than_legacy_combined_candidate_limit(
 
     assert sum(len(source.timestamps) for source in selector.sources) == 4_320
     assert (
-        "処理予定: 全候補数=4320件, 一次評価予定数=1440件（上限）, "
-        "二次評価予定数=360件（上限）"
+        "処理予定: 全候補数=4320件, "
+        "一次評価初期予定数=1440件（追補時上限=4320件）, "
+        "二次評価初期予定数=360件（追補時上限=4320件）"
         in [record.getMessage() for record in caplog.records]
     )
 
