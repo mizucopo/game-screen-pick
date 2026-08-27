@@ -95,6 +95,8 @@ _Avoid_: phase cache root, unconditional overwrite target, append-only destinati
 Input Video Directory直下の`cache-game-screen-pick/`へ保存する、再生成可能な処理状態。
 Input Videoとphaseごとに独立したversionとsemantic input keyを持つ。phase versionまたは
 結果へ影響する条件が変わった場合は、そのphaseと依存する後続だけを再実行する。
+候補抽出manifestと機械評価payloadのdigestを照合し、正常な再開では候補JPEG本文を
+全件再読込せずregular fileとsizeだけを軽量に確認する。
 folder全体を削除でき、`CACHE_INFO.txt`が削除とidentityの契約を説明する。
 _Avoid_: user artifact, hidden Output Folder state, unversioned cache
 

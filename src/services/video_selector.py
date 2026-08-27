@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import shutil
+import stat
 import time
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -86,8 +87,8 @@ MAXIMUM_OUTPUT_DHASH_DISTANCE = 10
 MINIMUM_DISTINCT_DHASH_DISTANCE = 5
 RUN_MANIFEST_SCHEMA_VERSION = 1
 VIDEO_PROBE_PHASE_VERSION = 2
-CANDIDATE_EXTRACTION_PHASE_VERSION = 1
-MECHANICAL_ANALYSIS_PHASE_VERSION = 3
+CANDIDATE_EXTRACTION_PHASE_VERSION = 2
+MECHANICAL_ANALYSIS_PHASE_VERSION = 4
 PRIMARY_ASSESSMENT_PHASE_VERSION = 3
 SECONDARY_CONTEXT_PHASE_VERSION = 2
 SECONDARY_ASSESSMENT_PHASE_VERSION = 2
@@ -227,6 +228,7 @@ class VideoSelector:
         self.model_metadata: dict[str, dict[str, Any]] = {}
         self._live_validated_model_stages: set[str] = set()
         self._usable_candidates: tuple[FrameCandidate, ...] = ()
+        self._candidate_manifest_digests: dict[int, str] = {}
         self.manifest_digest = ""
         self._replace_registered_output = False
 
@@ -1427,6 +1429,15 @@ class VideoSelector:
         """全入力動画の等間隔位置から縮小候補フレームを抽出する."""
         candidates: list[FrameCandidate] = []
         pending: list[FrameCandidate] = []
+        source_states: list[
+            tuple[
+                VideoSource,
+                list[FrameCandidate],
+                dict[str, dict[str, Any]],
+                set[str],
+            ]
+        ] = []
+        self._candidate_manifest_digests.clear()
         for source in self.sources:
             source_dir = (
                 source.cache_dir
@@ -1447,20 +1458,26 @@ class VideoSelector:
                         source_label=source.label,
                     )
                 )
-            recorded_digests = self._recorded_candidate_digests(
+            manifest = self._load_candidate_manifest(
                 source,
                 source_candidates,
             )
+            cached_records = manifest[0] if manifest is not None else {}
+            if manifest is not None:
+                self._candidate_manifest_digests[source.index] = manifest[1]
+            pending_ids: set[str] = set()
             for candidate in source_candidates:
-                path = Path(candidate.path)
-                recorded_digest = recorded_digests.get(candidate.frame_id)
-                is_valid = _is_valid_cached_image(path)
-                digest_changed = recorded_digest is None or (
-                    is_valid and file_sha256(path) != recorded_digest
-                )
-                if not is_valid or digest_changed:
+                record = cached_records.get(candidate.frame_id)
+                if record is None or not self._matches_candidate_file(
+                    Path(candidate.path),
+                    record["file_size"],
+                ):
                     pending.append(candidate)
+                    pending_ids.add(candidate.frame_id)
             candidates.extend(source_candidates)
+            source_states.append(
+                (source, source_candidates, cached_records, pending_ids)
+            )
         frame_ids = [candidate.frame_id for candidate in candidates]
         if len(set(frame_ids)) != len(frame_ids):
             raise RuntimeError("Input Video間でframe IDが衝突しました")
@@ -1480,33 +1497,113 @@ class VideoSelector:
             wait_on_error=True,
             on_complete=log_progress,
         )
+        for source, source_candidates, cached_records, pending_ids in source_states:
+            if pending_ids:
+                self._save_candidate_manifest(
+                    source,
+                    source_candidates,
+                    cached_records,
+                    pending_ids,
+                )
         return candidates
 
-    def _recorded_candidate_digests(
+    @staticmethod
+    def _matches_candidate_file(path: Path, expected_size: int) -> bool:
+        """manifestと一致するregular fileか本文を読まずに返す."""
+        try:
+            status = path.lstat()
+        except OSError:
+            return False
+        return stat.S_ISREG(status.st_mode) and status.st_size == expected_size
+
+    def _candidate_manifest_path(self, source: VideoSource) -> Path:
+        """候補抽出phase manifestのpathを返す."""
+        path = (
+            source.cache_dir
+            / "candidate-extraction"
+            / source.candidate_cache_key
+            / "manifest.json"
+        )
+        prepare_cache_directory(self.cache_root, path.parent)
+        return path
+
+    def _load_candidate_manifest(
         self,
         source: VideoSource,
         expected_candidates: Sequence[FrameCandidate],
-    ) -> dict[str, str]:
-        """機械評価cacheが記録した候補JPEG digestを返す."""
-        data = self._read_mechanical_phase_data(source)
+    ) -> tuple[dict[str, dict[str, Any]], str] | None:
+        """完全な候補抽出manifestとそのpayload digestを返す."""
+        data = read_phase_data(
+            self._candidate_manifest_path(source),
+            phase="candidate-extraction",
+            phase_version=CANDIDATE_EXTRACTION_PHASE_VERSION,
+            expected_key=source.candidate_cache_key,
+        )
         if data is None or not isinstance(data.get("source_frames"), list):
-            return {}
+            return None
         source_frames = data["source_frames"]
-        if len(source_frames) != len(expected_candidates):
-            return {}
-        digests: dict[str, str] = {}
+        manifest_payload = {"source_frames": source_frames}
+        payload_digest = data.get("payload_digest")
+        if (
+            len(source_frames) != len(expected_candidates)
+            or not _is_sha256(payload_digest)
+            or payload_digest != json_digest(manifest_payload)
+        ):
+            return None
+        records: dict[str, dict[str, Any]] = {}
         for raw, expected in zip(source_frames, expected_candidates, strict=True):
             if not isinstance(raw, dict):
-                return {}
+                return None
+            file_size = raw.get("file_size")
             image_sha256 = raw.get("image_sha256")
             if (
                 raw.get("frame_id") != expected.frame_id
+                or raw.get("timestamp_seconds") != expected.timestamp_seconds
+                or not isinstance(file_size, int)
+                or isinstance(file_size, bool)
+                or file_size <= 0
                 or not isinstance(image_sha256, str)
                 or not _is_sha256(image_sha256)
             ):
-                return {}
-            digests[expected.frame_id] = image_sha256
-        return digests
+                return None
+            records[expected.frame_id] = raw
+        return records, payload_digest
+
+    def _save_candidate_manifest(
+        self,
+        source: VideoSource,
+        source_candidates: Sequence[FrameCandidate],
+        cached_records: dict[str, dict[str, Any]],
+        extracted_ids: set[str],
+    ) -> None:
+        """抽出済みJPEGのportableな完全性情報をatomic保存する."""
+        source_frames: list[dict[str, Any]] = []
+        for candidate in source_candidates:
+            cached = cached_records.get(candidate.frame_id)
+            if candidate.frame_id not in extracted_ids and cached is not None:
+                source_frames.append(cached)
+                continue
+            path = Path(candidate.path)
+            if not _is_valid_cached_image(path):
+                raise RuntimeError(f"候補フレームを正常に抽出できませんでした: {path}")
+            source_frames.append(
+                {
+                    "frame_id": candidate.frame_id,
+                    "timestamp_seconds": candidate.timestamp_seconds,
+                    "file_size": path.stat().st_size,
+                    "image_sha256": file_sha256(path),
+                }
+            )
+        manifest_payload = {"source_frames": source_frames}
+        payload_digest = json_digest(manifest_payload)
+        write_phase_data(
+            self._candidate_manifest_path(source),
+            phase="candidate-extraction",
+            phase_version=CANDIDATE_EXTRACTION_PHASE_VERSION,
+            cache_key=source.candidate_cache_key,
+            data={**manifest_payload, "payload_digest": payload_digest},
+        )
+        self._candidate_manifest_digests[source.index] = payload_digest
 
     def _extract_candidate(self, candidate: FrameCandidate) -> None:
         """候補フレームを一枚抽出する."""
@@ -1640,34 +1737,46 @@ class VideoSelector:
         data = self._read_mechanical_phase_data(source)
         if (
             data is None
-            or not isinstance(data.get("source_frames"), list)
             or not isinstance(data.get("candidates"), list)
             or not isinstance(data.get("rejected_frame_ids"), list)
         ):
             return None
-        if len(data["source_frames"]) != len(expected_candidates):
-            return None
-        for raw, expected_candidate in zip(
-            data["source_frames"],
-            expected_candidates,
-            strict=True,
+        mechanical_payload = {
+            "source_frames_digest": data.get("source_frames_digest"),
+            "candidates": data["candidates"],
+            "rejected_frame_ids": data["rejected_frame_ids"],
+        }
+        if (
+            not _is_sha256(data.get("payload_digest"))
+            or data["payload_digest"] != json_digest(mechanical_payload)
+            or data.get("source_frames_digest")
+            != self._candidate_manifest_digests.get(source.index)
         ):
-            if not isinstance(raw, dict):
-                return None
-            image_sha256 = raw.get("image_sha256")
-            if (
-                raw.get("frame_id") != expected_candidate.frame_id
-                or not isinstance(image_sha256, str)
-                or len(image_sha256) != 64
-                or not _is_valid_cached_image(Path(expected_candidate.path))
-                or file_sha256(Path(expected_candidate.path)) != image_sha256
-            ):
-                return None
+            return None
         expected_by_id = {
             candidate.frame_id: candidate for candidate in expected_candidates
         }
-        raw_by_id: dict[str, dict[str, Any]] = {}
+        rejected_ids = data["rejected_frame_ids"]
+        if any(
+            not isinstance(frame_id, str) or frame_id not in expected_by_id
+            for frame_id in rejected_ids
+        ) or len(set(rejected_ids)) != len(rejected_ids):
+            return None
+        rejected_id_set = set(rejected_ids)
+        if rejected_ids != [
+            candidate.frame_id
+            for candidate in expected_candidates
+            if candidate.frame_id in rejected_id_set
+        ]:
+            return None
+        expected_usable_ids = [
+            candidate.frame_id
+            for candidate in expected_candidates
+            if candidate.frame_id not in rejected_id_set
+        ]
         recorded_ids: list[str] = []
+        recorded_id_set: set[str] = set()
+        restored: list[FrameCandidate] = []
         for raw in data["candidates"]:
             if not isinstance(raw, dict):
                 return None
@@ -1675,25 +1784,12 @@ class VideoSelector:
             if (
                 not isinstance(frame_id, str)
                 or frame_id not in expected_by_id
-                or frame_id in raw_by_id
+                or frame_id in recorded_id_set
             ):
                 return None
-            raw_by_id[frame_id] = raw
             recorded_ids.append(frame_id)
-
-        restored: list[FrameCandidate] = []
-        expected_rejected_ids: list[str] = []
-        for expected in expected_candidates:
-            try:
-                measured = measure_candidate(expected)
-            except (OSError, ValueError, Image.DecompressionBombError):
-                return None
-            if measured is None:
-                expected_rejected_ids.append(expected.frame_id)
-                continue
-            raw = raw_by_id.get(expected.frame_id)
-            if raw is None:
-                return None
+            recorded_id_set.add(frame_id)
+            expected = expected_by_id[frame_id]
             quality = raw.get("quality_score")
             difference_hash = raw.get("difference_hash")
             if (
@@ -1710,16 +1806,14 @@ class VideoSelector:
                 parsed_hash = int(difference_hash, 16)
             except ValueError:
                 return None
-            if (
-                float(quality) != measured.quality_score
-                or parsed_hash != measured.difference_hash
-            ):
-                return None
-            restored.append(measured)
-        if (
-            recorded_ids != [candidate.frame_id for candidate in restored]
-            or data["rejected_frame_ids"] != expected_rejected_ids
-        ):
+            restored.append(
+                replace(
+                    expected,
+                    quality_score=float(quality),
+                    difference_hash=parsed_hash,
+                )
+            )
+        if recorded_ids != expected_usable_ids:
             return None
         return restored
 
@@ -1734,33 +1828,34 @@ class VideoSelector:
         path = source.cache_dir / "mechanical-analysis" / f"{cache_key}.json"
         prepare_cache_directory(self.cache_root, path.parent)
         usable_ids = {candidate.frame_id for candidate in candidates}
+        source_frames_digest = self._candidate_manifest_digests.get(source.index)
+        if source_frames_digest is None:
+            raise RuntimeError("候補抽出manifestが確定していません")
+        mechanical_payload = {
+            "source_frames_digest": source_frames_digest,
+            "candidates": [
+                {
+                    "frame_id": candidate.frame_id,
+                    "timestamp_seconds": candidate.timestamp_seconds,
+                    "quality_score": candidate.quality_score,
+                    "difference_hash": f"{candidate.difference_hash:016x}",
+                }
+                for candidate in candidates
+            ],
+            "rejected_frame_ids": [
+                candidate.frame_id
+                for candidate in source_candidates
+                if candidate.frame_id not in usable_ids
+            ],
+        }
         write_phase_data(
             path,
             phase="mechanical-analysis",
             phase_version=MECHANICAL_ANALYSIS_PHASE_VERSION,
             cache_key=cache_key,
             data={
-                "source_frames": [
-                    {
-                        "frame_id": candidate.frame_id,
-                        "image_sha256": file_sha256(Path(candidate.path)),
-                    }
-                    for candidate in source_candidates
-                ],
-                "candidates": [
-                    {
-                        "frame_id": candidate.frame_id,
-                        "timestamp_seconds": candidate.timestamp_seconds,
-                        "quality_score": candidate.quality_score,
-                        "difference_hash": f"{candidate.difference_hash:016x}",
-                    }
-                    for candidate in candidates
-                ],
-                "rejected_frame_ids": [
-                    candidate.frame_id
-                    for candidate in source_candidates
-                    if candidate.frame_id not in usable_ids
-                ],
+                **mechanical_payload,
+                "payload_digest": json_digest(mechanical_payload),
             },
         )
 

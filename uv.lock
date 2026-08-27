@@ -214,7 +214,7 @@ wheels = [
 
 [[package]]
 name = "game-screen-pick"
-version = "1.14.1"
+version = "1.14.2"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

@@ -162,6 +162,12 @@ SHA-256、mtime、絶対pathは同一性判定へ使いません。そのため�
 cacheはprobe、候補抽出・機械評価、一次評価、二次評価などのphaseとInput Video単位で
 管理します。各phaseは独立したversionと条件keyを持ち、version、model digest、prompt、
 Game Context、選定設定などが変わると、そのphaseと依存する後続だけを再実行します。
+候補抽出phaseはframe ID、時刻、JPEG size、生成時SHA-256をpayload digest付きmanifestへ
+保存します。正常な再開ではmanifestの完全性と各JPEGのregular file・sizeだけを確認し、
+全候補JPEGの再読込や機械評価を繰り返しません。manifestの欠損・破損、JPEGの欠損・
+symlink・size不一致、機械評価payloadのdigest不一致はcache missとして再生成します。
+この軽量確認では同じsizeを保った候補JPEGの置換は検出しないため、確実に再生成したい
+場合はcache folderを削除してください。
 動的生成したGame Contextも生成条件とともに保存し、同じGame Title、provider、modelの
 再実行ではWeb検索やcontext生成を繰り返しません。Ollama providerでは正規化した
 Ollama hostも生成条件に含め、別endpointの同名modelを混同しません。
