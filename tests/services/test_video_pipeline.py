@@ -3425,8 +3425,10 @@ def test_probe_cache_rejects_corrupt_payload(
     assert selector.sources[0].metadata.duration_seconds == 4.0
 
 
-def test_mechanical_cache_reextracts_changed_candidate_image(tmp_path: Path) -> None:
-    """記録済みdigestと異なる候補JPEGを動画から再抽出すること."""
+def test_mechanical_cache_reextracts_changed_size_candidate_image(
+    tmp_path: Path,
+) -> None:
+    """manifestとsizeが異なる候補JPEGを動画から再抽出すること."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
@@ -3458,7 +3460,7 @@ def test_mechanical_cache_reextracts_changed_candidate_image(tmp_path: Path) -> 
         first_selector.sources[0],
         first_candidates,
     )
-    shutil.copyfile(first_candidates[1].path, first_candidates[0].path)
+    Path(first_candidates[0].path).write_bytes(b"broken candidate cache")
     extractor = TrackingFrameExtractor()
     second_selector = SingleVideoSelector(
         request,
@@ -3480,8 +3482,8 @@ def test_mechanical_cache_reextracts_changed_candidate_image(tmp_path: Path) -> 
     assert second_key == first_key
 
 
-def test_candidate_cache_reextracts_without_recorded_digests(tmp_path: Path) -> None:
-    """機械評価記録のない候補JPEGを抽出cache hitにしないこと."""
+def test_candidate_cache_reextracts_without_manifest(tmp_path: Path) -> None:
+    """manifestのない候補JPEGを抽出cache hitにしないこと."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
@@ -3505,8 +3507,13 @@ def test_candidate_cache_reextracts_without_recorded_digests(tmp_path: Path) -> 
         assessor=FakeAssessor(),
     )
     first_selector._prepare_run()
-    first_candidates = first_selector._extract_candidates()
-    shutil.copyfile(first_candidates[1].path, first_candidates[0].path)
+    first_selector._extract_candidates()
+    manifest_path = next(
+        (_cache_root(tmp_path) / "videos").glob(
+            "*/candidate-extraction/*/manifest.json"
+        )
+    )
+    manifest_path.unlink()
     extractor = TrackingFrameExtractor()
     second_selector = SingleVideoSelector(
         request,
@@ -3519,6 +3526,112 @@ def test_candidate_cache_reextracts_without_recorded_digests(tmp_path: Path) -> 
 
     assert len(extractor.candidate_videos) == len(second_candidates)
     assert set(extractor.candidate_videos) == {video.name}
+
+
+def test_candidate_cache_reextracts_corrupt_manifest(tmp_path: Path) -> None:
+    """payload digestと一致しない候補manifestをcache missにすること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    first_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    first_selector._prepare_run()
+    first_selector._extract_candidates()
+    manifest_path = next(
+        (_cache_root(tmp_path) / "videos").glob(
+            "*/candidate-extraction/*/manifest.json"
+        )
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["data"]["source_frames"][0]["file_size"] += 1
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    extractor = TrackingFrameExtractor()
+    second_selector = SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=FakeAssessor(),
+    )
+    second_selector._prepare_run()
+
+    candidates = second_selector._extract_candidates()
+
+    assert len(extractor.candidate_videos) == len(candidates)
+
+
+def test_resume_reuses_mechanical_cache_without_reading_candidate_jpegs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """正常な再開では候補JPEGの検証と機械評価を繰り返さないこと."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    first_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    first_selector._prepare_run()
+    candidates = first_selector._extract_candidates()
+    expected = first_selector._preselect_candidates(candidates)
+
+    def fail_candidate_read(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("候補JPEGを再読込しました")
+
+    monkeypatch.setattr(
+        "src.services.video_selector._is_valid_cached_image",
+        fail_candidate_read,
+    )
+    monkeypatch.setattr(
+        "src.services.video_selector.file_sha256",
+        fail_candidate_read,
+    )
+    monkeypatch.setattr(
+        "src.services.video_selector.measure_candidate",
+        fail_candidate_read,
+    )
+    second_selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    second_selector._prepare_run()
+
+    restored_candidates = second_selector._extract_candidates()
+    restored = second_selector._preselect_candidates(restored_candidates)
+
+    assert restored == expected
 
 
 def test_primary_cache_key_tracks_batch_composition(tmp_path: Path) -> None:
@@ -3671,9 +3784,9 @@ def test_mechanical_cache_rejects_candidate_membership_corruption(
         moved_id = payload["data"]["candidates"].pop(0)["frame_id"]
         rejected_ids = {*payload["data"]["rejected_frame_ids"], moved_id}
         payload["data"]["rejected_frame_ids"] = [
-            frame["frame_id"]
-            for frame in payload["data"]["source_frames"]
-            if frame["frame_id"] in rejected_ids
+            candidate.frame_id
+            for candidate in candidates
+            if candidate.frame_id in rejected_ids
         ]
     mechanical_path.write_text(json.dumps(payload), encoding="utf-8")
     second_selector = SingleVideoSelector(
@@ -3968,11 +4081,11 @@ def test_pipeline_reextracts_symlinked_cached_image(
     assert file_sha256(external) == external_hash
 
 
-def test_pipeline_reextracts_cached_image_over_decompression_bomb_limit(
+def test_pipeline_does_not_decode_manifest_backed_candidate_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pillowの展開上限を超えるcache画像をabortせずcache missにすること."""
+    """正常な候補manifest hitではPillowによるJPEG再検証を省くこと."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
@@ -4003,7 +4116,8 @@ def test_pipeline_reextracts_cached_image_over_decompression_bomb_limit(
 
     selector._extract_candidates()
 
-    assert extractor.extract_calls == len(candidates)
+    assert candidates
+    assert extractor.extract_calls == 0
 
 
 @pytest.mark.parametrize("invalid_cache_image", ["too-wide", "not-jpeg"])

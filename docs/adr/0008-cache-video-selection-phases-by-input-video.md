@@ -24,13 +24,24 @@ digests for the evaluation unit. Invalid, corrupt, schema-mismatched, or legacy
 entries are cache misses.
 Probe metadata is reusable only when its complete payload matches the recorded
 digest and its stream endpoint and minimum-interval sample-count arithmetic
-remain finite. A candidate JPEG without a mechanical
-analysis digest record, or whose SHA-256 no longer matches that record, is
-re-extracted before the analysis is reused or rerun. Mechanical cache reuse also
-recomputes rejection classification, quality score, and dHash from every
-validated candidate JPEG. Transition-context extraction similarly persists each
-before/after JPEG digest and re-extracts only a requested frame whose bytes no
-longer match.
+remain finite. Candidate extraction atomically records an ordered manifest of
+frame IDs, timestamps, JPEG sizes, and creation-time SHA-256 values, protected by
+a complete payload digest. A normal resume validates that manifest and uses
+regular-file type and size checks instead of reopening and hashing every JPEG.
+A missing or corrupt manifest invalidates the extraction phase, while a missing,
+symlinked, non-regular, empty, or differently sized JPEG is re-extracted. The
+accepted performance trade-off is that a candidate JPEG replacement preserving
+the recorded size is not detected by the bulk resume check; deleting the cache
+forces regeneration in that case.
+
+Mechanical analysis records the candidate-manifest payload digest and protects
+its complete candidate, rejection, quality-score, and dHash mapping with a
+second payload digest. When both digests and the structural contract match, the
+stored mechanical results are restored directly instead of decoding and
+remeasuring every candidate JPEG. A manifest change or mechanical payload
+mismatch reruns mechanical analysis. Transition-context extraction similarly
+persists each before/after JPEG digest and re-extracts only a requested frame
+whose bytes no longer match.
 An assessment checkpoint is reusable only when it contains the complete prefix
 of batches that the current evaluation unit could have saved; a hole or a
 regrouped partial batch invalidates the whole phase checkpoint. Its cache key
