@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 from typing import Sequence
 
 from PIL import Image, ImageDraw
 
 from ..models.video_selection import FrameCandidate
+from .video_selection_files import create_exclusive_temporary_file
 
 
 def context_frame_path(
@@ -95,12 +97,22 @@ def build_contact_sheet(
             )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output_path.with_name(f".{output_path.stem}.partial.jpg")
+    temporary_fd, temporary_path = create_exclusive_temporary_file(
+        output_path.parent,
+        prefix=f".{output_path.stem}.",
+        suffix=".partial.jpg",
+    )
     try:
-        sheet.save(temporary, format="JPEG", quality=91)
-        temporary.replace(output_path)
+        with os.fdopen(
+            temporary_fd,
+            mode="w+b",
+        ) as temporary:
+            sheet.save(temporary, format="JPEG", quality=91)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        temporary_path.replace(output_path)
     finally:
-        temporary.unlink(missing_ok=True)
+        temporary_path.unlink(missing_ok=True)
         sheet.close()
 
 

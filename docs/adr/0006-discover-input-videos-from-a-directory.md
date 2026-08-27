@@ -16,5 +16,6 @@ contact sheet.
 A missing or non-directory input and a directory with no matching videos are
 rejected before the application pipeline starts. A single video file is not a
 valid public CLI input. The internal `VideoSelectionRequest` continues to carry
-an ordered tuple of video paths so the multi-video selection implementation and
-manifest validation do not need a second directory-specific execution model.
+an ordered tuple of video paths. The selector requires those paths to share one
+direct parent so ADR 0008 can place the visible phase cache in the corresponding
+Input Video Directory.

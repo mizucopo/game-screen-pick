@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from ..models.video_selection import VideoMetadata
-from ..utils.video_selection_files import is_valid_image
+from ..utils.video_selection_files import (
+    create_exclusive_temporary_file,
+    is_valid_image,
+)
 
 LAST_PACKET_PROBE_WINDOW_SECONDS = 60.0
 
@@ -187,8 +191,12 @@ class VideoFrameExtractor:
     ) -> None:
         """指定時刻の映像フレームをJPEGとしてatomicに出力する."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = output_path.with_name(f".{output_path.stem}.partial.jpg")
-        temporary.unlink(missing_ok=True)
+        temporary_fd, temporary = create_exclusive_temporary_file(
+            output_path.parent,
+            prefix=f".{output_path.stem}.",
+            suffix=".partial.jpg",
+        )
+        os.close(temporary_fd)
         command = [
             "ffmpeg",
             "-nostdin",

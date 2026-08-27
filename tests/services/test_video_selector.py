@@ -1,5 +1,6 @@
 """単一動画選定の純粋ロジックを検証する."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -7,11 +8,14 @@ from PIL import Image, ImageDraw
 
 from src.models.video_selection import FrameAssessment, FrameCandidate, VideoMetadata
 from src.services.video_selector import (
+    VideoSelector,
     allocate_automatic_sample_counts,
     difference_hash_distance,
+    load_assessment_state,
     make_timestamps,
     measure_candidate,
     select_final_frames,
+    select_global_candidates,
     select_primary_candidates,
     select_source_backfill_candidates,
     source_time_scales,
@@ -189,6 +193,88 @@ def test_automatic_sample_budget_matches_early_last_frame_capacity() -> None:
         == count
         for item, count in zip(metadata, counts, strict=True)
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("duration_seconds", -1.0),
+        ("duration_seconds", float("nan")),
+        ("width", 0),
+        ("height", 0),
+        ("video_stream_index", -1),
+        ("start_time_seconds", -1.0),
+        ("start_time_seconds", float("inf")),
+        ("last_frame_timestamp_seconds", float("nan")),
+        ("last_frame_timestamp_seconds", -1.0),
+    ],
+)
+def test_cached_video_metadata_rejects_invalid_numeric_values(
+    field: str,
+    value: float,
+) -> None:
+    """live probeでは生成されない数値をcache hitとして扱わないこと."""
+    metadata = {
+        "duration_seconds": 4.0,
+        "width": 320,
+        "height": 180,
+        "codec_name": "fake",
+        "average_frame_rate": "30/1",
+        "video_stream_index": 0,
+        "start_time_seconds": 0.0,
+        "last_frame_timestamp_seconds": 3.9,
+    }
+    metadata[field] = value
+
+    assert VideoSelector._metadata_from_json(metadata) is None
+
+
+def test_global_candidate_pruning_uses_primary_and_secondary_scores() -> None:
+    """二次評価後のglobal絞り込みで一次scoreだけへ逆戻りしないこと."""
+    candidates = [
+        FrameCandidate("f00001", 1.0, "unused", video_index=0),
+        FrameCandidate("f00002", 2.0, "unused", video_index=0),
+    ]
+    primary = {
+        "f00001": FrameAssessment("f00001", 100.0, False, "探索", "primary"),
+        "f00002": FrameAssessment("f00002", 0.0, False, "探索", "primary"),
+    }
+    secondary = {
+        "f00001": FrameAssessment("f00001", 0.0, False, "探索", "secondary"),
+        "f00002": FrameAssessment("f00002", 100.0, False, "探索", "secondary"),
+    }
+
+    selected = select_global_candidates(candidates, primary, secondary, 1)
+
+    assert [candidate.frame_id for candidate in selected] == ["f00002"]
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf"), -0.1, 100.1])
+def test_cached_assessment_rejects_invalid_blog_score(
+    tmp_path: Path,
+    score: float,
+) -> None:
+    """live評価では生成されないscoreをcache hitとして扱わないこと."""
+    state_path = tmp_path / "assessment.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "cache_key": "expected",
+                "assessments": {
+                    "f00001": {
+                        "blog_score": score,
+                        "is_transition": False,
+                        "scene": "探索",
+                        "reason": "test",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="評価cacheが不正です"):
+        load_assessment_state(state_path, "expected")
 
 
 def test_legacy_single_video_selector_import_path_is_available() -> None:

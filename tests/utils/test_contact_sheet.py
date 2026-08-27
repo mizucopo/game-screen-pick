@@ -1,5 +1,6 @@
 """コンタクトシート生成のテスト."""
 
+import stat
 from pathlib import Path
 
 from PIL import Image
@@ -49,3 +50,28 @@ def test_build_context_sheet_uses_before_and_after_frames(tmp_path: Path) -> Non
 
     with Image.open(output_path) as sheet:
         assert sheet.size == (1920, 222)
+
+
+def test_build_contact_sheet_does_not_follow_fixed_temporary_symlink(
+    tmp_path: Path,
+) -> None:
+    """予測可能な旧temporary pathのsymlinkを辿らないこと."""
+    candidate_path = tmp_path / "candidate.jpg"
+    Image.new("RGB", (320, 180), "white").save(candidate_path)
+    candidate = FrameCandidate("f00001", 10.0, str(candidate_path))
+    output_path = tmp_path / "contact-sheet.jpg"
+    legacy_temporary = tmp_path / ".contact-sheet.partial.jpg"
+    external = tmp_path / "external.txt"
+    external.write_text("user-owned", encoding="utf-8")
+    legacy_temporary.symlink_to(external)
+    mode_probe = tmp_path / "mode-probe"
+    mode_probe.touch()
+    expected_mode = stat.S_IMODE(mode_probe.stat().st_mode)
+
+    build_contact_sheet([candidate], output_path)
+
+    assert external.read_text(encoding="utf-8") == "user-owned"
+    assert legacy_temporary.is_symlink()
+    assert stat.S_IMODE(output_path.stat().st_mode) == expected_mode
+    with Image.open(output_path) as sheet:
+        assert sheet.format == "JPEG"

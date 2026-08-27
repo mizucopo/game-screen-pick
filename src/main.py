@@ -295,19 +295,15 @@ def discover_input_videos(input_video_dir: str) -> tuple[str, ...]:
 def validate_game_context_input(
     game_title: str | None,
     game_context: str,
-    output_dir: str,
 ) -> None:
-    """新規実行のGame TitleとGame ContextをXORへ制限する."""
+    """Game TitleとGame Contextを常にXORへ制限する."""
     has_title = bool(game_title and game_title.strip())
     has_context = bool(game_context.strip())
-    resume_manifest = (
-        Path(output_dir).expanduser() / ".game-screen-pick" / "run-manifest.json"
-    )
     if has_title and has_context:
         raise click.UsageError(
             "--game-titleと--game-contextのどちらか一方だけを指定してください"
         )
-    if not has_title and not has_context and not resume_manifest.is_file():
+    if not has_title and not has_context:
         raise click.UsageError(
             "--game-titleと--game-contextのどちらか一方を指定してください"
         )
@@ -356,7 +352,7 @@ def execute(
     """入力ディレクトリのゲーム動画全体からブログ掲載用画像を選定する."""
     config = resolve_video_run_config(config_path=config_path)
     input_videos = discover_input_videos(input_video_dir)
-    validate_game_context_input(game_title, game_context, output_dir)
+    validate_game_context_input(game_title, game_context)
     _log_cli_start(
         config_path=config_path,
         output_count=output_count,
