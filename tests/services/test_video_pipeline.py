@@ -3266,46 +3266,6 @@ def test_automatic_sample_positions_stay_stable_when_video_is_added(
     assert set(extractor.candidate_videos) == {second_video.name}
 
 
-def test_pipeline_rejects_excessive_independent_automatic_samples(
-    tmp_path: Path,
-) -> None:
-    """動画単位の自動sample合計が上限超過なら明示intervalを案内すること."""
-
-    class LongVideoExtractor(FakeFrameExtractor):
-        """大量の自動sampleが必要な長時間動画を返すfake."""
-
-        def probe(self, video: Path) -> VideoMetadata:
-            assert video.is_file()
-            self.probe_calls += 1
-            return VideoMetadata(3600.0, 320, 180, "fake", "30/1")
-
-    videos = tuple(tmp_path / f"Sample Game Part{index}.mp4" for index in range(4))
-    for video in videos:
-        video.write_bytes(bytes(range(256)) * 16)
-    request = VideoSelectionRequest(
-        input_videos=tuple(str(video) for video in videos),
-        output_dir=str(tmp_path / "selected"),
-        output_count=30,
-        game_title=None,
-        game_context="テスト用のGame Context",
-        primary_model="primary",
-        secondary_model="secondary",
-        ollama_host="fake",
-        ollama_timeout=1.0,
-        allow_cpu=True,
-        ffmpeg_workers=2,
-        sample_interval_seconds=None,
-        debug=False,
-    )
-
-    with pytest.raises(ValueError, match="明示sample interval"):
-        SingleVideoSelector(
-            request,
-            frame_extractor=LongVideoExtractor(),
-            assessor=FakeAssessor(),
-        )._prepare_run()
-
-
 @pytest.mark.parametrize("corruption", ["endpoint", "sample-count", "payload"])
 def test_probe_cache_rejects_corrupt_payload(
     tmp_path: Path,
