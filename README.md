@@ -19,21 +19,21 @@ Ollamaのvision modelで画面遷移中のframeや近い重複を避けながら
 uv sync
 ```
 
-Game Contextと、動画を置いたInput Video Directory、空のOutput Folderを指定して
+ゲームタイトルと、動画を置いたInput Video Directory、空のOutput Folderを指定して
 実行します。標準では30枚を選びます。
 
 ```bash
 uv run game-screen-pick \
-  --game-context "ジャンル: RPG。探索と会話を進める。代表的な画面はフィールド、会話、戦闘。景観と人物が明瞭な画像を重視する。" \
+  --game-title "ドラクエ11" \
   ./recordings \
   ./recordings-selected
 ```
 
-Game Contextを直接書く代わりに、`--game-title`からWeb検索で生成することもできます。
+Web検索でGame Contextを生成する代わりに、直接指定することもできます。
 
 ```bash
-OLLAMA_API_KEY=... uv run game-screen-pick \
-  --game-title "ドラクエ11" \
+uv run game-screen-pick \
+  --game-context "ジャンル: RPG。探索と会話を進める。代表的な画面はフィールド、会話、戦闘。景観と人物が明瞭な画像を重視する。" \
   ./recordings \
   ./recordings-selected
 ```
