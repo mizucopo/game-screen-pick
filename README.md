@@ -20,7 +20,8 @@ uv sync
 ```
 
 ゲームタイトルと、動画を置いたInput Video Directory、空のOutput Folderを指定して
-実行します。標準では30枚を選びます。
+実行します。`--game-title`を使う場合は、事前に環境変数`OLLAMA_API_KEY`を
+設定してください。標準では30枚を選びます。
 
 ```bash
 uv run game-screen-pick \
