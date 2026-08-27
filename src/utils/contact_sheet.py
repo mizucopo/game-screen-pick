@@ -12,6 +12,8 @@ from PIL import Image, ImageDraw
 from ..models.video_selection import FrameCandidate
 from .video_selection_files import create_exclusive_temporary_file
 
+_MAXIMUM_JPEG_DIMENSION = 65_000
+
 
 def context_frame_path(
     context_dir: Path,
@@ -49,6 +51,18 @@ def build_contact_sheet(
         columns = 3
 
     rows = math.ceil(len(candidates) / columns)
+    width = cell_width * columns
+    height = (image_height + label_height) * rows
+    scale = min(
+        1.0,
+        _MAXIMUM_JPEG_DIMENSION / width,
+        _MAXIMUM_JPEG_DIMENSION / height,
+    )
+    if scale < 1.0:
+        cell_width = max(1, math.floor(cell_width * scale))
+        image_height = max(1, math.floor(image_height * scale))
+        label_height = max(1, math.floor(label_height * scale))
+
     sheet = Image.new(
         "RGB",
         (cell_width * columns, (image_height + label_height) * rows),

@@ -141,7 +141,7 @@ def validate_positive_float(value: float | str | None) -> float | None:
 
 
 def validate_output_count(value: int | str | None) -> int | None:
-    """選択枚数をcontact sheetがJPEGに収まる範囲へ制限する."""
+    """選択枚数を対応範囲へ制限する."""
     output_count = validate_positive_int(value)
     if output_count is not None and output_count > MAXIMUM_OUTPUT_COUNT:
         raise click.BadParameter(
@@ -323,8 +323,7 @@ def validate_game_context_input(
     "-n",
     "--num",
     "output_count",
-    default=30,
-    show_default=True,
+    required=True,
     type=int,
     callback=lambda _ctx, _param, value: validate_output_count(value),
     help=f"選択枚数（1から{MAXIMUM_OUTPUT_COUNT}）",

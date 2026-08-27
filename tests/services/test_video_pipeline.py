@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw
 from src.models.video_selection import (
     FrameAssessment,
     FrameCandidate,
+    SelectedFrame,
     VideoMetadata,
 )
 from src.models.video_selection_request import VideoSelectionRequest
@@ -417,6 +418,81 @@ def test_pipeline_outputs_artifacts_and_reuses_completed_run(tmp_path: Path) -> 
     assert "game_context_generation" not in manifest
     assert all("ゲーム『" not in prompt for prompt in assessor.prompts)
     assert all("テスト用のGame Context" in prompt for prompt in assessor.prompts)
+
+
+def test_pipeline_writes_all_final_artifacts_for_999_selected_images(
+    tmp_path: Path,
+) -> None:
+    """999枚の個別画像、report、読み取り可能な一覧sheetを出力すること."""
+
+    class LongVideoExtractor(FakeFrameExtractor):
+        """999枚分のSample Positionを持てる動画情報を返すfake."""
+
+        def probe(self, video: Path) -> VideoMetadata:
+            assert video.is_file()
+            self.probe_calls += 1
+            return VideoMetadata(1000.0, 320, 180, "fake", "30/1")
+
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    output_dir = tmp_path / "selected"
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(output_dir),
+        output_count=999,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    extractor = LongVideoExtractor()
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=FakeAssessor(),
+    )
+    selector._prepare_run()
+    candidate_path = tmp_path / "candidate.jpg"
+    extractor.extract_frame(
+        video,
+        0.0,
+        candidate_path,
+        max_width=960,
+    )
+    measured = measure_candidate(FrameCandidate("f00001", 0.0, str(candidate_path)))
+    assert measured is not None
+    selected = []
+    for index in range(1, 1000):
+        frame_id = f"f{index:05d}"
+        candidate = replace(measured, frame_id=frame_id)
+        assessment = FrameAssessment(
+            frame_id=frame_id,
+            blog_score=80.0,
+            is_transition=False,
+            scene="探索",
+            reason="test",
+        )
+        selected.append(SelectedFrame(candidate, 80.0, assessment, assessment))
+
+    selector._write_selected_artifacts(selected)
+
+    selected_paths = sorted(output_dir.glob("selected-[0-9][0-9][0-9].jpg"))
+    assert len(selected_paths) == 999
+    assert selected_paths[0].name == "selected-001.jpg"
+    assert selected_paths[-1].name == "selected-999.jpg"
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["output_count"] == 999
+    assert len(report["selected"]) == 999
+    with Image.open(output_dir / "selected-contact-sheet.jpg") as sheet:
+        assert sheet.format == "JPEG"
+        assert max(sheet.size) <= 65_000
+        sheet.verify()
 
 
 @pytest.mark.parametrize("cache_relative_output", [".", "output"])
@@ -2001,16 +2077,16 @@ def test_pipeline_uses_resolved_ollama_model_name(tmp_path: Path) -> None:
     assert set(assessor.assessed_models) == {"llava:latest"}
 
 
-def test_pipeline_rejects_output_count_above_contact_sheet_limit(
+def test_pipeline_rejects_output_count_above_maximum(
     tmp_path: Path,
 ) -> None:
-    """JPEG一覧を生成できない枚数を高価な処理前に拒否すること."""
+    """上限を超える選択枚数を高価な処理前に拒否すること."""
     video = tmp_path / "Sample Game.mp4"
     video.write_bytes(bytes(range(256)) * 16)
     request = VideoSelectionRequest(
         input_video=str(video),
         output_dir=str(tmp_path / "selected"),
-        output_count=601,
+        output_count=1000,
         game_title=None,
         game_context="テスト用のGame Context",
         primary_model="primary",
@@ -2023,7 +2099,7 @@ def test_pipeline_rejects_output_count_above_contact_sheet_limit(
         debug=False,
     )
 
-    with pytest.raises(ValueError, match="600以下"):
+    with pytest.raises(ValueError, match="999以下"):
         SingleVideoSelector(
             request,
             frame_extractor=FakeFrameExtractor(),
@@ -3138,7 +3214,7 @@ def test_pipeline_allocates_explicit_sample_minimum_across_long_input_videos(
     request = VideoSelectionRequest(
         input_videos=tuple(str(video) for video in videos),
         output_dir=str(tmp_path / "selected"),
-        output_count=600,
+        output_count=999,
         game_title=None,
         game_context="テスト用のGame Context",
         primary_model="primary",
@@ -3158,7 +3234,7 @@ def test_pipeline_allocates_explicit_sample_minimum_across_long_input_videos(
 
     selector._prepare_run()
 
-    assert sum(len(source.timestamps) for source in selector.sources) == 600
+    assert sum(len(source.timestamps) for source in selector.sources) == 999
 
 
 def test_pipeline_plans_more_than_legacy_combined_candidate_limit(
