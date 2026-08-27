@@ -4120,6 +4120,56 @@ def test_pipeline_does_not_decode_manifest_backed_candidate_cache(
     assert extractor.extract_calls == 0
 
 
+def test_pipeline_logs_candidate_cache_check_progress_and_summary(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """候補cache確認中の件数とhit/miss集計を再開時にも出力すること."""
+    video = tmp_path / "Sample Game.mp4"
+    video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_video=str(video),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=FakeAssessor(),
+    )
+    monkeypatch.setattr(
+        SingleVideoSelector,
+        "CANDIDATE_CACHE_CHECK_PROGRESS_INTERVAL",
+        2,
+    )
+    caplog.set_level(logging.INFO)
+    selector._prepare_run()
+
+    selector._extract_candidates()
+
+    first_messages = [record.getMessage() for record in caplog.records]
+    assert "候補フレームcache確認中: 2/13件 (hit=0件, miss=2件)" in first_messages
+    assert "候補フレームcache: hit=0件, miss=13件" in first_messages
+
+    caplog.clear()
+    selector._extract_candidates()
+
+    resumed_messages = [record.getMessage() for record in caplog.records]
+    assert "候補フレームcache確認中: 2/13件 (hit=2件, miss=0件)" in resumed_messages
+    assert "候補フレームcache: hit=13件, miss=0件" in resumed_messages
+
+
 @pytest.mark.parametrize("invalid_cache_image", ["too-wide", "not-jpeg"])
 def test_pipeline_reextracts_cached_image_outside_extraction_contract(
     tmp_path: Path,
