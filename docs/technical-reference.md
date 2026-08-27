@@ -12,7 +12,7 @@ uv run game-screen-pick [オプション] <入力動画ディレクトリ> <出�
 ### オプション
 
 - `-c`, `--config`: TOML設定ファイル（既定: `config.toml`）
-- `-n`, `--num`: 選択枚数（1から600、既定: 30）
+- `-n`, `--num`: 選択枚数（必須、1から999）
 - `--game-title`: Web検索からGame Contextを生成するためのゲーム表記
 - `--game-context`: 画像評価に直接使用するGame Context
 
@@ -108,6 +108,7 @@ editionを一意に判別できない場合、情報が不足する場合、情�
 
 ```bash
 OPENAI_API_KEY=... uv run game-screen-pick \
+  -n 30 \
   --game-title "ドラクエ11" \
   ./recordings \
   ./recordings-selected

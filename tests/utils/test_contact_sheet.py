@@ -33,6 +33,30 @@ def test_build_contact_sheet_outputs_readable_selected_image(
         assert sheet.size == (1440, 604)
 
 
+def test_build_contact_sheet_outputs_readable_jpeg_for_999_images(
+    tmp_path: Path,
+) -> None:
+    """999枚の選定画像をJPEGの寸法上限内の一枚へまとめること."""
+    image_path = tmp_path / "candidate.jpg"
+    Image.new("RGB", (16, 9), "white").save(image_path)
+    candidates = [
+        FrameCandidate(
+            frame_id=f"{index:03d}",
+            timestamp_seconds=float(index),
+            path=str(image_path),
+        )
+        for index in range(1, 1000)
+    ]
+    output_path = tmp_path / "selected-contact-sheet.jpg"
+
+    build_contact_sheet(candidates, output_path)
+
+    with Image.open(output_path) as sheet:
+        assert sheet.format == "JPEG"
+        assert max(sheet.size) <= 65_000
+        sheet.verify()
+
+
 def test_build_context_sheet_uses_before_and_after_frames(tmp_path: Path) -> None:
     """二次評価sheetが直前・対象・直後の三枚を含むこと."""
     candidate_path = tmp_path / "candidate.jpg"

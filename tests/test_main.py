@@ -118,7 +118,7 @@ def test_cli_logs_project_version_and_all_effective_settings(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """起動直後にproject情報とdefaultを含む全設定を確認できること."""
+    """起動直後にproject情報と明示した選択枚数を含む全設定を確認できること."""
     input_dir = tmp_path / "recordings"
     input_dir.mkdir()
     (input_dir / "Sample Game Part1.mp4").write_bytes(b"video")
@@ -128,7 +128,16 @@ def test_cli_logs_project_version_and_all_effective_settings(
     monkeypatch.setattr("src.main.run_video_application", lambda _request: None)
     caplog.set_level(logging.INFO)
 
-    run(["--game-context", "探索を含む", str(input_dir), str(output_dir)])
+    run(
+        [
+            "-n",
+            "30",
+            "--game-context",
+            "探索を含む",
+            str(input_dir),
+            str(output_dir),
+        ]
+    )
 
     messages = [record.getMessage() for record in caplog.records]
     assert "game-screen-pick 1.8.0-test の画像選定処理を開始します。" in messages
@@ -158,7 +167,7 @@ def test_cli_logs_project_version_and_all_effective_settings(
     [
         (["-n", "0"], "正の整数"),
         (["-n", "-1"], "正の整数"),
-        (["-n", "601"], "600以下"),
+        (["-n", "1000"], "999以下"),
     ],
 )
 def test_cli_rejects_invalid_numeric_options(
@@ -183,6 +192,55 @@ def test_cli_rejects_invalid_numeric_options(
     assert error_pattern in capsys.readouterr().err
 
 
+def test_cli_requires_output_count_before_application(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """選択枚数を省略するとapplication開始前のusage errorになること."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    monkeypatch.setattr(
+        "src.main.run_video_application",
+        lambda _request: pytest.fail("applicationは呼ばれないこと"),
+    )
+
+    result = CliRunner().invoke(
+        execute,
+        ["--game-context", "探索を含む", str(input_dir), str(tmp_path / "selected")],
+    )
+
+    assert result.exit_code == 2
+    assert "Missing option '-n' / '--num'" in result.output
+
+
+@pytest.mark.parametrize("output_count", [1, 999])
+def test_cli_accepts_boundary_output_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    output_count: int,
+) -> None:
+    """選択枚数の下限と上限をapplicationへ渡すこと."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    captured_requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", captured_requests.append)
+
+    run(
+        [
+            "-n",
+            str(output_count),
+            "--game-context",
+            "探索を含む",
+            str(input_dir),
+            str(tmp_path / "selected"),
+        ]
+    )
+
+    assert captured_requests[0].output_count == output_count
+
+
 def test_cli_rejects_a_file_as_input(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -197,7 +255,7 @@ def test_cli_rejects_a_file_as_input(
     )
 
     with pytest.raises(SystemExit):
-        run([str(input_video), str(tmp_path / "selected")])
+        run(["-n", "1", str(input_video), str(tmp_path / "selected")])
 
     assert "入力動画ディレクトリが見つかりません" in capsys.readouterr().err
 
@@ -220,7 +278,7 @@ def test_cli_rejects_directory_without_supported_videos(
     )
 
     with pytest.raises(SystemExit):
-        run([str(input_dir), str(tmp_path / "selected")])
+        run(["-n", "1", str(input_dir), str(tmp_path / "selected")])
 
     assert "処理対象の動画が見つかりません" in capsys.readouterr().err
 
@@ -234,6 +292,8 @@ def test_cli_help_describes_directory_input() -> None:
     assert "INPUT_VIDEO..." not in result.output
     assert "-c, --config FILE" in result.output
     assert "-n, --num INTEGER" in result.output
+    assert "選択枚数（1から999）" in result.output
+    assert "[required]" in result.output
     assert "--game-title TEXT" in result.output
     assert "--game-context TEXT" in result.output
     for removed_option in (
@@ -277,7 +337,7 @@ def test_cli_rejects_game_title_and_game_context_without_exactly_one_input(
     )
 
     with pytest.raises(SystemExit):
-        run([*context_args, str(input_dir), str(tmp_path / "selected")])
+        run(["-n", "1", *context_args, str(input_dir), str(tmp_path / "selected")])
 
     assert "--game-titleと--game-contextのどちらか一方" in capsys.readouterr().err
 
@@ -450,6 +510,6 @@ def test_cli_rejects_invalid_config_before_application(
     )
 
     with pytest.raises(SystemExit):
-        run(["-c", str(config_path), "missing-input", "output"])
+        run(["-n", "1", "-c", str(config_path), "missing-input", "output"])
 
     assert error_pattern in capsys.readouterr().err
