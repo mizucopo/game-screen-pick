@@ -135,13 +135,12 @@ def _bounded_parallel_map(
     pending: dict[Future[_ResultT], int] = {}
     results: dict[int, _ResultT] = {}
 
-    def submit_next() -> bool:
+    def submit_next() -> None:
         try:
             index, item = next(iterator)
         except StopIteration:
-            return False
+            return
         pending[executor.submit(worker, item)] = index
-        return True
 
     for _ in range(min(len(items), max_workers * 2)):
         submit_next()
