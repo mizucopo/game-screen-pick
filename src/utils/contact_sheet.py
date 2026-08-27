@@ -29,6 +29,7 @@ def build_contact_sheet(
     output_path: Path,
     *,
     context_dir: Path | None = None,
+    display_ids: Sequence[str] | None = None,
 ) -> None:
     """候補一覧を一枚のJPEGへまとめる.
 
@@ -37,6 +38,13 @@ def build_contact_sheet(
     """
     if not candidates:
         raise ValueError("空の候補からコンタクトシートは作成できません")
+    labels = (
+        tuple(candidate.frame_id for candidate in candidates)
+        if display_ids is None
+        else tuple(display_ids)
+    )
+    if len(labels) != len(candidates) or any(not label for label in labels):
+        raise ValueError("表示IDは候補と同じ件数の空でない文字列にしてください")
 
     contextual = context_dir is not None
     if contextual:
@@ -77,7 +85,7 @@ def build_contact_sheet(
         draw.text(
             (x + 10, y + 8),
             (
-                f"{candidate.frame_id}  "
+                f"{labels[index]}  "
                 f"{_format_timestamp(candidate.timestamp_seconds)}{source}{suffix}"
             ),
             fill="white",

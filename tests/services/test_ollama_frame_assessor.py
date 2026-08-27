@@ -67,7 +67,7 @@ class ChangingDigestAssessor(OllamaFrameAssessor):
                         {
                             "frames": [
                                 {
-                                    "id": "f00001",
+                                    "id": "A01",
                                     "blog_score": 80,
                                     "transition": False,
                                     "scene": "探索",
@@ -215,34 +215,35 @@ def test_assess_revalidates_loaded_model_digest_for_every_batch(
     assert assessor.ps_calls == 2
 
 
-def test_assess_accepts_identical_duplicates_in_candidate_order(
+def test_assess_maps_short_display_ids_to_internal_ids_in_candidate_order(
     tmp_path: Path,
 ) -> None:
-    """完全一致する重複を除き、入力candidate順で返すこと."""
-    first = frame_response("f00001", blog_score=81)
-    second = frame_response("f00002", blog_score=72)
+    """短い表示IDを長い内部IDへ戻し、入力candidate順で返すこと."""
+    first = frame_response("A01", blog_score=81)
+    second = frame_response("A02", blog_score=72)
+    candidate_ids = [
+        "f1193384472080815349902201",
+        "f1193384472080815349902202",
+    ]
 
     assessments = assess_frames(
         tmp_path,
-        [second, first, second.copy(), first.copy()],
-        ["f00001", "f00002"],
+        [second, first],
+        candidate_ids,
     )
 
-    assert [assessment.frame_id for assessment in assessments] == [
-        "f00001",
-        "f00002",
-    ]
+    assert [assessment.frame_id for assessment in assessments] == candidate_ids
     assert [assessment.blog_score for assessment in assessments] == [81.0, 72.0]
 
 
-def test_assess_rejects_conflicting_duplicate(tmp_path: Path) -> None:
-    """同じframe IDで内容が異なる重複を拒否すること."""
-    with pytest.raises(ValueError, match="f00001"):
+def test_assess_rejects_duplicate_display_id(tmp_path: Path) -> None:
+    """内容が同じでも重複する表示IDを拒否すること."""
+    with pytest.raises(ValueError, match="A01"):
         assess_frames(
             tmp_path,
             [
-                frame_response("f00001", blog_score=80),
-                frame_response("f00001", blog_score=81),
+                frame_response("A01", blog_score=80),
+                frame_response("A01", blog_score=80),
             ],
             ["f00001"],
         )
@@ -250,19 +251,19 @@ def test_assess_rejects_conflicting_duplicate(tmp_path: Path) -> None:
 
 def test_assess_rejects_missing_frame_id(tmp_path: Path) -> None:
     """要求したframe IDが欠落する応答を拒否すること."""
-    with pytest.raises(ValueError, match="frame IDが一致しません"):
+    with pytest.raises(ValueError, match="表示IDが一致しません"):
         assess_frames(
             tmp_path,
-            [frame_response("f00001")],
+            [frame_response("A01")],
             ["f00001", "f00002"],
         )
 
 
 def test_assess_rejects_unknown_frame_id(tmp_path: Path) -> None:
     """要求していないframe IDを含む応答を拒否すること."""
-    with pytest.raises(ValueError, match="frame IDが一致しません"):
+    with pytest.raises(ValueError, match="表示IDが一致しません"):
         assess_frames(
             tmp_path,
-            [frame_response("f00001"), frame_response("f99999")],
+            [frame_response("A01"), frame_response("A99")],
             ["f00001"],
         )

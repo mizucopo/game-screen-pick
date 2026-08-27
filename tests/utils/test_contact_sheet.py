@@ -3,10 +3,51 @@
 import stat
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from src.models.video_selection import FrameCandidate
 from src.utils.contact_sheet import build_contact_sheet, context_frame_path
+
+
+def test_build_contact_sheet_uses_short_display_ids_without_renaming_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Ollama用sheetには内部IDでなくbatch内表示IDを描くこと."""
+    drawn_labels: list[str] = []
+
+    class RecordingDraw:
+        """描画文字列だけを記録するfake."""
+
+        def text(
+            self,
+            _position: tuple[int, int],
+            value: str,
+            *,
+            fill: str,
+        ) -> None:
+            """labelを記録する."""
+            assert fill == "white"
+            drawn_labels.append(value)
+
+    monkeypatch.setattr(
+        "src.utils.contact_sheet.ImageDraw.Draw",
+        lambda _sheet: RecordingDraw(),
+    )
+    candidate_path = tmp_path / "candidate.jpg"
+    Image.new("RGB", (320, 180), "white").save(candidate_path)
+    internal_id = "f1193384472080815349902201"
+    candidate = FrameCandidate(internal_id, 10.0, str(candidate_path))
+
+    build_contact_sheet(
+        [candidate],
+        tmp_path / "contact-sheet.jpg",
+        display_ids=["A01"],
+    )
+
+    assert drawn_labels == ["A01  00:10"]
+    assert candidate.frame_id == internal_id
 
 
 def test_build_contact_sheet_outputs_readable_selected_image(
