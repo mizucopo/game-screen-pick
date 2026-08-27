@@ -1775,6 +1775,7 @@ class VideoSelector:
             if candidate.frame_id not in rejected_id_set
         ]
         recorded_ids: list[str] = []
+        recorded_id_set: set[str] = set()
         restored: list[FrameCandidate] = []
         for raw in data["candidates"]:
             if not isinstance(raw, dict):
@@ -1783,10 +1784,11 @@ class VideoSelector:
             if (
                 not isinstance(frame_id, str)
                 or frame_id not in expected_by_id
-                or frame_id in recorded_ids
+                or frame_id in recorded_id_set
             ):
                 return None
             recorded_ids.append(frame_id)
+            recorded_id_set.add(frame_id)
             expected = expected_by_id[frame_id]
             quality = raw.get("quality_score")
             difference_hash = raw.get("difference_hash")
