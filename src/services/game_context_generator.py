@@ -12,6 +12,12 @@ from urllib.request import Request, urlopen
 from .ollama_frame_assessor import OllamaFrameAssessor
 
 SUPPORTED_GAME_CONTEXT_PROVIDERS = ("ollama", "openai", "gemini", "xai")
+GAME_CONTEXT_API_KEY_ENV_VARS = {
+    "ollama": "OLLAMA_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "xai": "XAI_API_KEY",
+}
 REQUIRED_CONTEXT_HEADINGS = (
     "ジャンル:",
     "基本的なゲーム進行と主なプレイ要素:",
@@ -68,9 +74,15 @@ class JsonRequester(Protocol):
 class GameContextGenerator:
     """明示された一つの検索providerだけでGame Contextを生成する."""
 
-    def __init__(self, *, requester: JsonRequester | None = None) -> None:
-        """差し替え可能なJSON transportを保持する."""
+    def __init__(
+        self,
+        *,
+        requester: JsonRequester | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        """差し替え可能なJSON transportと設定ファイルの認証値を保持する."""
         self._requester = requester or _post_json
+        self._configured_api_key = api_key.strip() if api_key else ""
 
     def generate(
         self,
@@ -91,6 +103,12 @@ class GameContextGenerator:
             raise GameContextGenerationError(
                 f"{provider}: 未対応のgame context providerです"
             )
+        api_key_name = GAME_CONTEXT_API_KEY_ENV_VARS[provider]
+        api_key = _required_api_key(
+            provider,
+            api_key_name,
+            configured_value=self._configured_api_key,
+        )
         try:
             if provider == "ollama":
                 response_text, used_model = self._generate_with_ollama(
@@ -98,6 +116,7 @@ class GameContextGenerator:
                     model=model,
                     ollama_host=ollama_host,
                     timeout_seconds=timeout_seconds,
+                    api_key=api_key,
                 )
             else:
                 response_text, used_model = self._generate_with_integrated_search(
@@ -105,23 +124,29 @@ class GameContextGenerator:
                     provider=provider,
                     model=model,
                     timeout_seconds=timeout_seconds,
+                    api_key=api_key,
                 )
             context = _parse_generated_context(response_text, provider=provider)
-        except GameContextGenerationError:
-            raise
+        except GameContextGenerationError as error:
+            safe_message = _redact_secret(str(error), api_key)
+            if safe_message == str(error):
+                raise
+            raise GameContextGenerationError(safe_message) from error
         except HTTPError as error:
-            detail = _http_error_detail(error)
+            detail = _redact_secret(_http_error_detail(error), api_key)
             raise GameContextGenerationError(
                 f"{provider}: Web検索またはcontext生成のHTTP error "
                 f"{error.code}: {detail}"
             ) from error
         except (URLError, TimeoutError, OSError) as error:
             raise GameContextGenerationError(
-                f"{provider}: Web検索またはcontext生成の通信error: {error}"
+                f"{provider}: Web検索またはcontext生成の通信error: "
+                f"{_redact_secret(str(error), api_key)}"
             ) from error
         except (TypeError, ValueError, KeyError) as error:
             raise GameContextGenerationError(
-                f"{provider}: Web検索またはcontext生成の応答error: {error}"
+                f"{provider}: Web検索またはcontext生成の応答error: "
+                f"{_redact_secret(str(error), api_key)}"
             ) from error
 
         return GeneratedGameContext(context, provider, used_model)
@@ -133,29 +158,26 @@ class GameContextGenerator:
         provider: str,
         model: str,
         timeout_seconds: float,
+        api_key: str,
     ) -> tuple[str, str]:
         """検索tool組み込みproviderへ一回の生成requestを送る."""
-        endpoint, api_key_name, auth_header, tool_type = {
+        endpoint, auth_header, tool_type = {
             "openai": (
                 "https://api.openai.com/v1/responses",
-                "OPENAI_API_KEY",
                 "Authorization",
                 "web_search",
             ),
             "gemini": (
                 "https://generativelanguage.googleapis.com/v1beta/interactions",
-                "GEMINI_API_KEY",
                 "x-goog-api-key",
                 "google_search",
             ),
             "xai": (
                 "https://api.x.ai/v1/responses",
-                "XAI_API_KEY",
                 "Authorization",
                 "web_search",
             ),
         }[provider]
-        api_key = _required_api_key(provider, api_key_name)
         header_value = (
             api_key if auth_header == "x-goog-api-key" else f"Bearer {api_key}"
         )
@@ -187,9 +209,9 @@ class GameContextGenerator:
         model: str,
         ollama_host: str,
         timeout_seconds: float,
+        api_key: str,
     ) -> tuple[str, str]:
         """Ollama Web Search結果を一つのlocal Ollama modelで要約する."""
-        api_key = _required_api_key("ollama", "OLLAMA_API_KEY")
         search_response = self._requester(
             "https://ollama.com/api/web_search",
             {
@@ -241,14 +263,26 @@ class GameContextGenerator:
         return content, _response_model(response, model)
 
 
-def _required_api_key(provider: str, name: str) -> str:
-    """providerのAPI keyを環境変数から取得する."""
-    value = os.environ.get(name, "").strip()
+def _required_api_key(
+    provider: str,
+    name: str,
+    *,
+    configured_value: str = "",
+) -> str:
+    """設定ファイルの非空値、環境変数の順でproviderのAPI keyを解決する."""
+    value = configured_value.strip() or os.environ.get(name, "").strip()
     if not value:
         raise GameContextGenerationError(
             f"{provider}: 認証に必要な{name}が設定されていません"
         )
     return value
+
+
+def _redact_secret(message: str, secret: str) -> str:
+    """外部errorに認証値が含まれても例外messageへ残さない."""
+    if not secret:
+        return message
+    return message.replace(secret, "<redacted>")
 
 
 def _post_json(

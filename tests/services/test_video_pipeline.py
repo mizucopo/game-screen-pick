@@ -672,6 +672,7 @@ def test_pipeline_generates_context_before_video_processing_and_reuses_it(
         game_context="",
         game_context_provider="openai",
         game_context_model="gpt-context",
+        game_context_api_key="do-not-persist-secret",
         primary_model="primary",
         secondary_model="secondary",
         ollama_host="fake",
@@ -709,6 +710,11 @@ def test_pipeline_generates_context_before_video_processing_and_reuses_it(
     assert "game_title" not in report
     assert all("ドラクエ11" not in prompt for prompt in assessor.prompts)
     assert all(GENERATED_GAME_CONTEXT in prompt for prompt in assessor.prompts)
+    persisted_texts = [
+        path.read_text(encoding="utf-8")
+        for path in [output_dir / "report.json", *_cache_root(tmp_path).rglob("*.json")]
+    ]
+    assert all("do-not-persist-secret" not in text for text in persisted_texts)
 
     unavailable_assessor = UnavailableAssessor()
     SingleVideoSelector(

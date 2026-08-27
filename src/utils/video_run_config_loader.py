@@ -11,6 +11,10 @@ class VideoRunConfigLoader:
     _STRING_KEYS = {
         "game_context_provider",
         "game_context_model",
+        "ollama_api_key",
+        "openai_api_key",
+        "gemini_api_key",
+        "xai_api_key",
         "primary_model",
         "secondary_model",
         "ollama_host",

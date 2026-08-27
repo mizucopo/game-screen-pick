@@ -1,6 +1,6 @@
 """1本以上の動画を扱う画像選定リクエスト."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 MAXIMUM_OUTPUT_COUNT = 999
 MINIMUM_SAMPLE_INTERVAL_SECONDS = 0.25
@@ -26,6 +26,7 @@ class VideoSelectionRequest:
     input_videos: tuple[str, ...]
     game_context_provider: str | None
     game_context_model: str | None
+    game_context_api_key: str | None = field(default=None, repr=False)
 
     def __init__(
         self,
@@ -46,6 +47,7 @@ class VideoSelectionRequest:
         input_videos: tuple[str, ...] = (),
         game_context_provider: str | None = None,
         game_context_model: str | None = None,
+        game_context_api_key: str | None = None,
     ) -> None:
         """旧位置指定と新しい複数入力keywordを同じrequestへ正規化する."""
         values = {
@@ -76,6 +78,7 @@ class VideoSelectionRequest:
         object.__setattr__(self, "input_videos", tuple(input_videos))
         object.__setattr__(self, "game_context_provider", game_context_provider)
         object.__setattr__(self, "game_context_model", game_context_model)
+        object.__setattr__(self, "game_context_api_key", game_context_api_key)
 
     @property
     def input_video(self) -> str | None:

@@ -139,6 +139,75 @@ def test_integrated_provider_uses_only_selected_web_search_api(
     assert "信頼できない外部データ" in json.dumps(payload, ensure_ascii=False)
 
 
+def test_configured_api_key_overrides_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """設定ファイル由来の非空値を環境変数より優先すること."""
+    monkeypatch.setenv("OPENAI_API_KEY", "environment-secret")
+    requester = RecordingRequester(
+        [
+            {
+                "output": [
+                    {"type": "web_search_call", "status": "completed"},
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(VALID_RESULT),
+                            }
+                        ],
+                    },
+                ]
+            }
+        ]
+    )
+
+    GameContextGenerator(
+        requester=requester,
+        api_key="configured-secret",
+    ).generate(
+        game_title="ドラクエ11",
+        provider="openai",
+        model="gpt-test",
+        ollama_host="127.0.0.1:11434",
+        timeout_seconds=42.0,
+    )
+
+    assert requester.calls[0][1]["Authorization"] == "Bearer configured-secret"
+
+
+def test_api_key_is_redacted_from_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """外部応答errorに認証値が混ざっても例外messageへ残さないこと."""
+    monkeypatch.setenv("OPENAI_API_KEY", "environment-secret")
+
+    def raise_secret_error(
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        del url, headers, payload, timeout_seconds
+        raise ValueError("provider echoed configured-secret")
+
+    with pytest.raises(GameContextGenerationError) as error_info:
+        GameContextGenerator(
+            requester=raise_secret_error,
+            api_key="configured-secret",
+        ).generate(
+            game_title="ドラクエ11",
+            provider="openai",
+            model="gpt-test",
+            ollama_host="127.0.0.1:11434",
+            timeout_seconds=42.0,
+        )
+
+    assert "configured-secret" not in str(error_info.value)
+    assert "<redacted>" in str(error_info.value)
+
+
 def test_gemini_accepts_current_steps_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

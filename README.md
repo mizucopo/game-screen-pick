@@ -17,13 +17,19 @@ Ollamaのvision modelで画面遷移中のframeや近い重複を避けながら
 
 ```bash
 uv sync
+cp config.example.toml config/config.toml
 ```
+
+`config/config.toml`へ利用するGame Context provider、model、API keyを設定します。
+`config/`配下の実設定はGit管理対象外です。用途別の設定は
+`config/openai.toml`など別名で保存し、`-c config/openai.toml`で切り替えられます。
 
 選択枚数、Game Title、動画を置いたInput Video Directory、空のOutput Folderを
 指定して実行します。
 
 ```bash
 uv run game-screen-pick \
+  -c config/config.toml \
   -n 30 \
   --game-title "ドラクエ11" \
   ./recordings \
@@ -40,7 +46,10 @@ uv run game-screen-pick \
   ./recordings-selected
 ```
 
-modelやproviderなど、繰り返し使う値はcurrent directoryの`config.toml`で変更できます。
+modelやproviderなど、繰り返し使う値はcurrent directoryの
+`config/config.toml`で変更できます。API keyは設定ファイルの非空値を優先し、未指定・
+空文字列の場合だけproviderに対応する環境変数を使います。実設定はコミットしないで
+ください（`.gitignore`は`git add -f`による強制追加までは防ぎません）。
 
 ## 出力
 
