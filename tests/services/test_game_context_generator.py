@@ -1,8 +1,11 @@
 """Web検索を使うGame Context生成境界のテスト."""
 
+import io
 import json
 import traceback
+from email.message import Message
 from typing import Any
+from urllib.error import HTTPError
 
 import pytest
 
@@ -216,6 +219,38 @@ def test_api_key_is_redacted_from_provider_error(
         )
     )
     assert "configured-secret" not in formatted
+
+
+def test_http_error_redacts_api_key_before_detail_truncation() -> None:
+    """500文字境界をまたぐ認証値も部分文字列を残さず伏せること."""
+    api_key = "credential-fragment-that-is-secret"
+
+    def raise_http_error(
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        del headers, payload, timeout_seconds
+        body = f"{'x' * 490}{api_key}tail".encode()
+        raise HTTPError(url, 401, "Unauthorized", Message(), io.BytesIO(body))
+
+    with pytest.raises(GameContextGenerationError) as error_info:
+        GameContextGenerator(
+            requester=raise_http_error,
+            api_key=api_key,
+        ).generate(
+            game_title="ドラクエ11",
+            provider="openai",
+            model="gpt-test",
+            ollama_host="127.0.0.1:11434",
+            timeout_seconds=42.0,
+        )
+
+    message = str(error_info.value)
+    assert api_key not in message
+    assert "credential" not in message
+    assert "<redacted>" in message
 
 
 def test_gemini_accepts_current_steps_response(

@@ -131,7 +131,7 @@ class GameContextGenerator:
             safe_message = _redact_secret(str(error), api_key)
             raise GameContextGenerationError(safe_message) from None
         except HTTPError as error:
-            detail = _redact_secret(_http_error_detail(error), api_key)
+            detail = _redact_secret(_http_error_detail(error), api_key)[:500]
             raise GameContextGenerationError(
                 f"{provider}: Web検索またはcontext生成のHTTP error "
                 f"{error.code}: {detail}"
@@ -441,9 +441,9 @@ def _parse_json_object(content: str) -> dict[str, Any]:
 
 
 def _http_error_detail(error: HTTPError) -> str:
-    """HTTP error responseを短い一行へ整形する."""
+    """HTTP error responseを伏せ字処理前の一行へ整形する."""
     try:
         detail = error.read().decode("utf-8", errors="replace")
     except OSError:
         detail = str(error.reason)
-    return " ".join(detail.split())[:500] or str(error.reason)
+    return " ".join(detail.split()) or str(error.reason)
