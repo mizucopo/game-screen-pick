@@ -17,7 +17,10 @@ from .models.video_selection_request import (
     MINIMUM_SAMPLE_INTERVAL_SECONDS,
     VideoSelectionRequest,
 )
-from .services.game_context_generator import SUPPORTED_GAME_CONTEXT_PROVIDERS
+from .services.game_context_generator import (
+    GAME_CONTEXT_API_KEY_ENV_VARS,
+    SUPPORTED_GAME_CONTEXT_PROVIDERS,
+)
 from .utils.elapsed_log_formatter import ElapsedLogFormatter
 from .utils.video_run_config_loader import VideoRunConfigLoader
 
@@ -195,6 +198,10 @@ def resolve_video_run_config(
     values: dict[str, object] = {
         "game_context_provider": defaults.game_context_provider,
         "game_context_model": defaults.game_context_model,
+        "ollama_api_key": defaults.ollama_api_key,
+        "openai_api_key": defaults.openai_api_key,
+        "gemini_api_key": defaults.gemini_api_key,
+        "xai_api_key": defaults.xai_api_key,
         "primary_model": defaults.primary_model,
         "secondary_model": defaults.secondary_model,
         "ollama_host": defaults.ollama_host,
@@ -252,6 +259,13 @@ def resolve_video_run_config(
     raw_game_context_model = values["game_context_model"]
     assert raw_game_context_model is None or isinstance(raw_game_context_model, str)
 
+    api_keys: dict[str, str | None] = {}
+    for provider_name in SUPPORTED_GAME_CONTEXT_PROVIDERS:
+        key = f"{provider_name}_api_key"
+        raw_api_key = values[key]
+        assert raw_api_key is None or isinstance(raw_api_key, str)
+        api_keys[key] = raw_api_key.strip() if raw_api_key is not None else None
+
     return VideoRunConfig(
         game_context_provider=provider,
         game_context_model=(
@@ -259,6 +273,7 @@ def resolve_video_run_config(
             if raw_game_context_model is not None
             else None
         ),
+        **api_keys,
         primary_model=str(values["primary_model"]),
         secondary_model=str(values["secondary_model"]),
         ollama_host=(
@@ -335,13 +350,33 @@ def validate_game_context_generation_config(
         )
 
 
+def resolve_game_context_api_key(
+    *,
+    config: VideoRunConfig,
+    game_title: str | None,
+) -> str | None:
+    """選択中providerの設定値を環境変数より優先して解決する."""
+    if not game_title or not game_title.strip() or not config.game_context_provider:
+        return None
+    provider = config.game_context_provider
+    configured_value = {
+        "ollama": config.ollama_api_key,
+        "openai": config.openai_api_key,
+        "gemini": config.gemini_api_key,
+        "xai": config.xai_api_key,
+    }[provider]
+    if configured_value:
+        return configured_value
+    return os.environ.get(GAME_CONTEXT_API_KEY_ENV_VARS[provider], "").strip() or None
+
+
 @click.command()
 @click.option(
     "-c",
     "--config",
     "config_path",
     type=click.Path(exists=True, dir_okay=False, path_type=str),
-    default="config.toml",
+    default="config/config.toml",
     show_default=True,
     help="TOML設定ファイル",
 )
@@ -376,6 +411,10 @@ def execute(
 ) -> None:
     """入力ディレクトリのゲーム動画全体からブログ掲載用画像を選定する."""
     config = resolve_video_run_config(config_path=config_path)
+    game_context_api_key = resolve_game_context_api_key(
+        config=config,
+        game_title=game_title,
+    )
     input_videos = discover_input_videos(input_video_dir)
     validate_game_context_input(game_title, game_context)
     validate_game_context_generation_config(
@@ -410,6 +449,7 @@ def execute(
             game_context=game_context,
             game_context_provider=config.game_context_provider,
             game_context_model=config.game_context_model,
+            game_context_api_key=game_context_api_key,
             primary_model=config.primary_model,
             secondary_model=config.secondary_model,
             ollama_host=config.ollama_host,

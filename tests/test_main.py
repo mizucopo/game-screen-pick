@@ -2,6 +2,7 @@
 
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,33 @@ from click.testing import CliRunner
 
 from src.main import execute, run
 from src.models.video_selection_request import VideoSelectionRequest
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _isolated_default_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """各CLI testへ秘密値を持たない既定configと隔離済み環境を用意する."""
+    for name in (
+        "OLLAMA_API_KEY",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "XAI_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_text(
+        """[run]
+game_context_provider = "ollama"
+game_context_model = "qwen3.8:27b"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
 
 
 def test_video_selection_request_preserves_legacy_positional_constructor() -> None:
@@ -61,6 +89,7 @@ def test_cli_translates_sorted_directory_videos_to_video_selection_request(
         """[run]
 game_context_provider = "openai"
 game_context_model = "gpt-context"
+openai_api_key = "configured-secret"
 primary_model = "primary:latest"
 secondary_model = "secondary:latest"
 ollama_host = "192.168.1.31:11434"
@@ -100,6 +129,7 @@ debug = true
             game_context="",
             game_context_provider="openai",
             game_context_model="gpt-context",
+            game_context_api_key="configured-secret",
             primary_model="primary:latest",
             secondary_model="secondary:latest",
             ollama_host="192.168.1.31:11434",
@@ -143,7 +173,7 @@ def test_cli_logs_project_version_and_all_effective_settings(
     assert "game-screen-pick 1.8.0-test の画像選定処理を開始します。" in messages
     assert "実効設定:" in messages
     assert [message for message in messages if message.startswith("  ")] == [
-        '  --config: "config.toml"',
+        '  --config: "config/config.toml"',
         "  --num: 30",
         '  --game-title: ""',
         '  --game-context: "探索を含む"',
@@ -438,6 +468,7 @@ def test_cli_loads_all_run_options_from_config(
         """[run]
 game_context_provider = "openai"
 game_context_model = "gpt-context"
+openai_api_key = "configured-secret"
 primary_model = "primary:latest"
 secondary_model = "secondary:latest"
 ollama_host = "192.168.1.31:11434"
@@ -474,6 +505,7 @@ debug = true
             game_context="",
             game_context_provider="openai",
             game_context_model="gpt-context",
+            game_context_api_key="configured-secret",
             primary_model="primary:latest",
             secondary_model="secondary:latest",
             ollama_host="192.168.1.31:11434",
@@ -486,16 +518,16 @@ debug = true
     ]
 
 
-def test_cli_uses_config_toml_from_current_directory_by_default(
+def test_cli_uses_config_directory_toml_from_current_directory_by_default(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """config未指定時はcurrent directoryのconfig.tomlを使うこと."""
+    """config未指定時はcurrent directoryのconfig/config.tomlを使うこと."""
     monkeypatch.chdir(tmp_path)
     input_dir = tmp_path / "recordings"
     input_dir.mkdir()
     (input_dir / "game.mp4").write_bytes(b"video")
-    config_path = tmp_path / "config.toml"
+    config_path = tmp_path / "config" / "config.toml"
     config_path.write_text(
         """[run]
 primary_model = "configured-primary"
@@ -524,6 +556,141 @@ debug = true
     assert request.primary_model == "configured-primary"
     assert request.allow_cpu is True
     assert request.debug is True
+
+
+def test_cli_prefers_non_empty_config_api_key_over_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """選択providerの設定値を環境変数より優先し、秘密値をlogへ出さないこと."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "picker.toml"
+    config_path.write_text(
+        """[run]
+game_context_provider = "openai"
+game_context_model = "gpt-context"
+openai_api_key = "configured-secret"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "environment-secret")
+    captured_requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", captured_requests.append)
+    caplog.set_level(logging.INFO)
+
+    run(
+        [
+            "-n",
+            "1",
+            "--game-title",
+            "Game",
+            "-c",
+            str(config_path),
+            str(input_dir),
+            str(tmp_path / "selected"),
+        ]
+    )
+
+    assert captured_requests[0].game_context_api_key == "configured-secret"
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "configured-secret" not in log_text
+    assert "environment-secret" not in log_text
+    assert "configured-secret" not in repr(captured_requests[0])
+
+
+def test_cli_falls_back_to_selected_provider_environment_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """設定値が空なら選択providerの環境変数だけを使用すること."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "picker.toml"
+    config_path.write_text(
+        """[run]
+game_context_provider = "gemini"
+game_context_model = "gemini-test"
+gemini_api_key = "  "
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GEMINI_API_KEY", "environment-secret")
+    captured_requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", captured_requests.append)
+
+    run(
+        [
+            "-n",
+            "1",
+            "--game-title",
+            "Game",
+            "-c",
+            str(config_path),
+            str(input_dir),
+            str(tmp_path / "selected"),
+        ]
+    )
+
+    assert captured_requests[0].game_context_api_key == "environment-secret"
+
+
+def test_cli_defers_missing_selected_provider_api_key_for_checkpoint_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """認証値がなくてもcheckpointを確認できるようapplicationへ渡すこと."""
+    input_dir = tmp_path / "recordings"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "picker.toml"
+    config_path.write_text(
+        """[run]
+game_context_provider = "xai"
+game_context_model = "grok-test"
+""",
+        encoding="utf-8",
+    )
+    captured_requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", captured_requests.append)
+
+    run(
+        [
+            "-n",
+            "1",
+            "--game-title",
+            "Game",
+            "-c",
+            str(config_path),
+            str(input_dir),
+            str(tmp_path / "selected"),
+        ]
+    )
+
+    assert captured_requests[0].game_context_api_key is None
+
+
+def test_local_config_directory_is_ignored_except_gitkeep() -> None:
+    """任意名のlocal configを通常のgit add対象から除外すること."""
+    ignored_results = [
+        subprocess.run(
+            ["git", "check-ignore", "--quiet", path],
+            cwd=PROJECT_ROOT,
+            check=False,
+        )
+        for path in ("config/config.toml", "config/openai.toml")
+    ]
+    tracked_placeholder = subprocess.run(
+        ["git", "check-ignore", "--quiet", "config/.gitkeep"],
+        cwd=PROJECT_ROOT,
+        check=False,
+    )
+
+    assert all(result.returncode == 0 for result in ignored_results)
+    assert tracked_placeholder.returncode == 1
 
 
 @pytest.mark.parametrize(
@@ -568,6 +735,7 @@ def test_cli_rejects_config_only_options(
         ('[run]\ngame_title = "Game"\n', "未知の設定キー"),
         ('[run]\ngame_context = "Context"\n', "未知の設定キー"),
         ('[run]\nollama_timeout = "30"\n', "number"),
+        ("[run]\nopenai_api_key = 123\n", "string"),
         ("[run]\nollama_timeout = 0\n", "正の数"),
         ("[run]\nffmpeg_workers = 5\n", "1から4"),
         ("[run]\nsample_interval_seconds = 0.1\n", "0.25以上"),

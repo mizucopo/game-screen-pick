@@ -1,6 +1,10 @@
 [run]
 game_context_provider = "ollama"
 game_context_model = "qwen3.8:27b"
+# ollama_api_key = "your-ollama-api-key"
+# openai_api_key = "your-openai-api-key"
+# gemini_api_key = "your-gemini-api-key"
+# xai_api_key = "your-xai-api-key"
 primary_model = "qwen3.8:27b"
 secondary_model = "muse-glimmer:30b"
 ollama_timeout = 900.0

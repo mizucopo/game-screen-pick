@@ -11,7 +11,7 @@ uv run game-screen-pick [オプション] <入力動画ディレクトリ> <出�
 
 ### オプション
 
-- `-c`, `--config`: TOML設定ファイル（既定: `config.toml`）
+- `-c`, `--config`: TOML設定ファイル（既定: `config/config.toml`）
 - `-n`, `--num`: 選択枚数（必須、1から999）
 - `--game-title`: Web検索からGame Contextを生成するためのゲーム表記
 - `--game-context`: 画像評価に直接使用するGame Context
@@ -31,9 +31,17 @@ OLLAMA_HOST=192.168.1.31:11434 \
 
 ## 設定
 
-繰り返し使う値はTOML設定ファイルの`[run]`tableへ記述します。既定では実行時の
-current directoryにある`config.toml`を読み込み、別の設定を使う場合だけ`-c`または
-`--config`で指定します。`--game-title`を使う場合は`game_context_provider`と
+繰り返し使う値はTOML設定ファイルの`[run]`tableへ記述します。初回は秘密情報を含まない
+sampleをGit管理対象外の既定設定へコピーします。
+
+```bash
+cp config.example.toml config/config.toml
+```
+
+既定では実行時のcurrent directoryにある`config/config.toml`を読み込みます。用途や
+providerごとに`config/ollama.toml`、`config/openai.toml`など複数の実設定を作り、
+`-c config/openai.toml`または`--config config/openai.toml`で切り替えられます。
+`--game-title`を使う場合は`game_context_provider`と
 `game_context_model`の両方が必須です。`--game-context`で直接指定する場合は、両項目を
 省略できます。そのほかの項目はすべて記述する必要はありません。
 
@@ -45,6 +53,10 @@ current directoryにある`config.toml`を読み込み、別の設定を使う�
 | --- | --- | --- |
 | `game_context_provider` | Game Context検索provider | なし（`--game-title`指定時は必須） |
 | `game_context_model` | context生成model | なし（`--game-title`指定時は必須） |
+| `ollama_api_key` | Ollama Web Search API key | `OLLAMA_API_KEY`へfallback |
+| `openai_api_key` | OpenAI API key | `OPENAI_API_KEY`へfallback |
+| `gemini_api_key` | Gemini API key | `GEMINI_API_KEY`へfallback |
+| `xai_api_key` | xAI API key | `XAI_API_KEY`へfallback |
 | `primary_model` | 一次評価用Ollama vision model | `qwen3.8:27b` |
 | `secondary_model` | 二次評価用Ollama vision model | `muse-glimmer:30b` |
 | `ollama_host` | Ollama host | 環境変数またはlocalhost |
@@ -55,6 +67,17 @@ current directoryにある`config.toml`を読み込み、別の設定を使う�
 | `debug` | debug logを有効にするか | `false` |
 
 `num`、`game_title`、`game_context`は設定ファイルでは受け付けません。
+
+選択中providerのAPI keyは、対応する設定ファイルの非空値、環境変数の順で解決します。
+設定値が未指定または空文字列なら環境変数を使います。生成済みcheckpointを再利用する
+場合はAPI keyがなくても再開でき、生成が必要なcache missで両方になければ外部API接続前に
+エラーになります。利用しないproviderのAPI keyは不要です。API keyは起動log、
+Run Manifest、report、checkpoint、例外messageへ出力しません。
+
+`config/`配下は`.gitkeep`を除いて`.gitignore`対象です。任意名の複数設定を通常の
+`git add`で誤って追加できませんが、`git add -f`などの強制追加までは防げません。
+実設定や本物のAPI keyはコミットしないでください。Git管理する設定例はrootの
+`config.example.toml`だけです。
 
 model名は切り替えられます。一次・二次modelともOllamaの`/api/show`でvision対応が
 確認できる必要があります。標準では各modelのロード後に`/api/ps`を確認し、model
@@ -89,12 +112,12 @@ editionを一意に判別できない場合、情報が不足する場合、情�
 ネタバレは含めません。検索結果は信頼できない外部dataとして扱い、検索先の命令には
 従いません。
 
-| provider | API key | 検索・生成方法 |
+| provider | 設定key / fallback環境変数 | 検索・生成方法 |
 | --- | --- | --- |
-| `ollama` | `OLLAMA_API_KEY` | Ollama Web Search APIの結果を`ollama_host`のOllama modelで生成 |
-| `openai` | `OPENAI_API_KEY` | OpenAI Responses APIの`web_search` |
-| `gemini` | `GEMINI_API_KEY` | Gemini Interactions APIのGoogle Search |
-| `xai` | `XAI_API_KEY` | xAI Responses APIの`web_search` |
+| `ollama` | `ollama_api_key` / `OLLAMA_API_KEY` | Ollama Web Search APIの結果を`ollama_host`のOllama modelで生成 |
+| `openai` | `openai_api_key` / `OPENAI_API_KEY` | OpenAI Responses APIの`web_search` |
+| `gemini` | `gemini_api_key` / `GEMINI_API_KEY` | Gemini Interactions APIのGoogle Search |
+| `xai` | `xai_api_key` / `XAI_API_KEY` | xAI Responses APIの`web_search` |
 
 各APIの利用条件、無料枠、料金、rate limitはprovider側の設定に従い、利用料金が
 発生する場合があります。選択したproviderだけを呼び出し、認証失敗、通信失敗、
@@ -105,7 +128,7 @@ editionを一意に判別できない場合、情報が不足する場合、情�
 - Gemini: <https://ai.google.dev/gemini-api/docs/google-search>
 - xAI: <https://docs.x.ai/developers/tools/web-search>
 
-利用するproviderとmodelの組を`config.toml`へ明示します。各providerの完全な`[run]`
+利用するprovider、model、API keyの組を実設定へ明示できます。各providerの完全な`[run]`
 設定例は次のとおりです。
 
 Ollama:
@@ -114,6 +137,7 @@ Ollama:
 [run]
 game_context_provider = "ollama"
 game_context_model = "qwen3.8:27b"
+ollama_api_key = "your-ollama-api-key"
 ```
 
 OpenAI:
@@ -122,6 +146,7 @@ OpenAI:
 [run]
 game_context_provider = "openai"
 game_context_model = "gpt-5.6"
+openai_api_key = "your-openai-api-key"
 ```
 
 Gemini:
@@ -130,6 +155,7 @@ Gemini:
 [run]
 game_context_provider = "gemini"
 game_context_model = "gemini-3.7-flash"
+gemini_api_key = "your-gemini-api-key"
 ```
 
 xAI:
@@ -138,12 +164,15 @@ xAI:
 [run]
 game_context_provider = "xai"
 game_context_model = "grok-4.6"
+xai_api_key = "your-xai-api-key"
 ```
 
-たとえばOpenAIの設定を選んだ場合は、対応するAPI keyを設定して実行します。
+API keyの行を省略または空文字列にした場合は、対応する環境変数へfallbackします。
+たとえばOpenAIの環境変数を使う場合は次のように実行します。
 
 ```bash
 OPENAI_API_KEY=... uv run game-screen-pick \
+  -c config/openai.toml \
   -n 30 \
   --game-title "ドラクエ11" \
   ./recordings \

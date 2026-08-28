@@ -214,7 +214,9 @@ class VideoSelector:
         self.request = request
         self.frame_extractor = frame_extractor or VideoFrameExtractor()
         self._provided_assessor = assessor
-        self.context_generator = context_generator or GameContextGenerator()
+        self.context_generator = context_generator or GameContextGenerator(
+            api_key=request.game_context_api_key
+        )
         self.assessor: OllamaFrameAssessor | None = None
         self.videos: tuple[Path, ...] = ()
         self.video_identities: tuple[VideoCacheIdentity, ...] = ()
