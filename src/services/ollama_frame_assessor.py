@@ -25,6 +25,44 @@ def batch_display_frame_ids(candidate_count: int) -> tuple[str, ...]:
     return tuple(f"A{index:0{width}d}" for index in range(1, candidate_count + 1))
 
 
+def assessment_response_schema(display_ids: Sequence[str]) -> dict[str, Any]:
+    """frame評価batch用のOllama Structured Outputs schemaを返す."""
+    return {
+        "type": "object",
+        "properties": {
+            "frames": {
+                "type": "array",
+                "minItems": len(display_ids),
+                "maxItems": len(display_ids),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "enum": list(display_ids)},
+                        "blog_score": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 100,
+                        },
+                        "transition": {"type": "boolean"},
+                        "scene": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": [
+                        "id",
+                        "blog_score",
+                        "transition",
+                        "scene",
+                        "reason",
+                    ],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["frames"],
+        "additionalProperties": False,
+    }
+
+
 class OllamaModelValidationError(RuntimeError):
     """model identityまたはGPU実行条件が満たされないerror."""
 
@@ -122,10 +160,11 @@ class OllamaFrameAssessor:
         contact_sheet: Path,
     ) -> list[FrameAssessment]:
         """一枚のコンタクトシート内の全候補を評価する."""
+        display_ids = batch_display_frame_ids(len(candidates))
         payload = {
             "model": model,
             "stream": False,
-            "format": "json",
+            "format": assessment_response_schema(display_ids),
             "think": False,
             "keep_alive": "1h",
             "options": MODEL_OPTIONS,
@@ -165,7 +204,6 @@ class OllamaFrameAssessor:
                 )
             assessments_by_id[assessment.frame_id] = assessment
 
-        display_ids = batch_display_frame_ids(len(candidates))
         expected_ids = set(display_ids)
         actual_ids = set(assessments_by_id)
         if actual_ids != expected_ids:

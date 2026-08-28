@@ -62,6 +62,11 @@ consistently in the contact sheet, prompt, and response validation, and maps an
 exactly-once complete response back to stable IDs before checkpointing. A retry
 after an invalid response includes the validation error and expected display
 IDs instead of repeating the identical deterministic prompt.
+Each Ollama request also supplies a JSON Schema that requires every assessment
+field, constrains `blog_score` to a number from 0 through 100, constrains
+`transition` to a boolean, and limits the response to the current batch's Frame
+Display IDs and count. The existing local type, range, and exactly-once ID
+validation remains authoritative before any assessment is checkpointed.
 Issue #300 removes the fixed per-video and combined-run candidate limits without
 changing that identity contract. Candidate extraction and mechanical analysis
 keep only a worker-bounded window of unfinished jobs, while Ollama assessment
