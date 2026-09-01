@@ -252,6 +252,8 @@ class VideoSelector:
 
     def run(self) -> Path:
         """選定を実行し、人間確認用コンタクトシートのパスを返す."""
+        self._assessment_completed_batches.clear()
+        self._assessment_total_batches.clear()
         self._prepare_paths()
         logger.info(
             "入力動画cacheの実行状態を確認しています: %s",

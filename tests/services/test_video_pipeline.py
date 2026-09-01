@@ -1252,6 +1252,89 @@ def test_pipeline_logs_assessment_completion_and_failure_without_batch_start(
     assert "期待する表示ID: A01, A02" in retry_prompt
 
 
+def test_pipeline_resets_assessment_progress_when_same_selector_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """失敗後に同じselectorを再実行しても前runの評価進捗を持ち越さないこと."""
+
+    class FailingAfterOneBatchAssessor(FakeAssessor):
+        """最初のbatch完了後はrunを失敗させるfake."""
+
+        def __init__(self) -> None:
+            """最初のrunだけ失敗する状態で初期化する."""
+            super().__init__()
+            self.fail_run = True
+
+        def assess(
+            self,
+            *,
+            model: str,
+            model_digest: str,
+            prompt: str,
+            candidates: Sequence[FrameCandidate],
+            contact_sheet: Path,
+        ) -> list[FrameAssessment]:
+            """1 batch保存後の呼び出しを失敗させる."""
+            if self.fail_run and self.assess_calls == 1:
+                raise RuntimeError("最初のrunを中断します")
+            return super().assess(
+                model=model,
+                model_digest=model_digest,
+                prompt=prompt,
+                candidates=candidates,
+                contact_sheet=contact_sheet,
+            )
+
+    monkeypatch.setattr("src.services.video_selector.time.sleep", lambda _: None)
+    videos = (
+        tmp_path / "Sample Game Part1.mp4",
+        tmp_path / "Sample Game Part2.mp4",
+    )
+    for video in videos:
+        video.write_bytes(bytes(range(256)) * 16)
+    request = VideoSelectionRequest(
+        input_videos=tuple(str(video) for video in videos),
+        output_dir=str(tmp_path / "selected"),
+        output_count=2,
+        game_title=None,
+        game_context="テスト用のGame Context",
+        primary_model="primary",
+        secondary_model="secondary",
+        ollama_host="fake",
+        ollama_timeout=1.0,
+        allow_cpu=True,
+        ffmpeg_workers=2,
+        sample_interval_seconds=None,
+        debug=False,
+    )
+    assessor = FailingAfterOneBatchAssessor()
+    selector = SingleVideoSelector(
+        request,
+        frame_extractor=FakeFrameExtractor(),
+        assessor=assessor,
+    )
+    caplog.set_level(logging.INFO)
+
+    with pytest.raises(RuntimeError, match="最初のrunを中断します"):
+        selector.run()
+    assessor.fail_run = False
+    caplog.clear()
+
+    selector.run()
+
+    assert [
+        record.getMessage().rsplit(" (", maxsplit=1)[0]
+        for record in caplog.records
+        if record.getMessage().startswith("primary評価:")
+    ] == [
+        'primary評価: 1/3 batch（暫定, Input Video="Sample Game Part1.mp4"）',
+        'primary評価: 2/3 batch（暫定, Input Video="Sample Game Part2.mp4"）',
+        'primary評価: 3/3 batch（暫定, Input Video="Sample Game Part2.mp4"）',
+    ]
+
+
 def test_pipeline_selects_from_multiple_videos_and_reports_each_source(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
