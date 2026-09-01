@@ -1254,8 +1254,9 @@ def test_pipeline_logs_assessment_completion_and_failure_without_batch_start(
 
 def test_pipeline_selects_from_multiple_videos_and_reports_each_source(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """複数入力を一つのrunとして選定し各入力元をreportへ残すこと."""
+    """複数入力を一つのrunとして選定し評価進捗と入力元を累計表示すること."""
     videos = (
         tmp_path / "Sample Game Part1.mp4",
         tmp_path / "Sample Game Part2.mp4",
@@ -1281,12 +1282,32 @@ def test_pipeline_selects_from_multiple_videos_and_reports_each_source(
 
     extractor = FakeFrameExtractor()
     assessor = FakeAssessor()
+    caplog.set_level(logging.INFO)
     contact_sheet = SingleVideoSelector(
         request,
         frame_extractor=extractor,
         assessor=assessor,
     ).run()
 
+    messages = [record.getMessage() for record in caplog.records]
+    assert [
+        message.rsplit(" (", maxsplit=1)[0]
+        for message in messages
+        if message.startswith("primary評価:")
+    ] == [
+        'primary評価: 1/4 batch（暫定, Input Video="Sample Game Part1.mp4"）',
+        'primary評価: 2/4 batch（暫定, Input Video="Sample Game Part1.mp4"）',
+        'primary評価: 3/4 batch（暫定, Input Video="Sample Game Part2.mp4"）',
+        'primary評価: 4/4 batch（暫定, Input Video="Sample Game Part2.mp4"）',
+    ]
+    assert [
+        message.rsplit(" (", maxsplit=1)[0]
+        for message in messages
+        if message.startswith("secondary評価:")
+    ] == [
+        'secondary評価: 1/2 batch（暫定, Input Video="Sample Game Part1.mp4"）',
+        'secondary評価: 2/2 batch（暫定, Input Video="Sample Game Part2.mp4"）',
+    ]
     report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
     assert [item["path"] for item in report["videos"]] == [
         str(video.resolve()) for video in videos
@@ -1376,6 +1397,7 @@ def test_pipeline_reuses_video_phase_cache_after_input_directory_move(
 
 def test_pipeline_processes_only_added_video_before_global_reselection(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """動画追加時は既存動画phaseを保ち、新規動画だけを処理すること."""
     input_dir = tmp_path / "recordings"
@@ -1414,6 +1436,8 @@ def test_pipeline_processes_only_added_video_before_global_reselection(
     )
     extractor = TrackingFrameExtractor()
     assessor = FakeAssessor()
+    caplog.clear()
+    caplog.set_level(logging.INFO)
 
     SingleVideoSelector(
         second_request,
@@ -1421,6 +1445,16 @@ def test_pipeline_processes_only_added_video_before_global_reselection(
         assessor=assessor,
     ).run()
 
+    progress_messages = [
+        record.getMessage().rsplit(" (", maxsplit=1)[0]
+        for record in caplog.records
+        if record.getMessage().startswith(("primary評価:", "secondary評価:"))
+    ]
+    assert progress_messages == [
+        'primary評価: 1/2 batch（暫定, Input Video="Sample Game Part2.mp4"）',
+        'primary評価: 2/2 batch（暫定, Input Video="Sample Game Part2.mp4"）',
+        'secondary評価: 1/1 batch（暫定, Input Video="Sample Game Part2.mp4"）',
+    ]
     assert extractor.probed_videos == [second_video.name]
     assert extractor.candidate_videos
     assert set(extractor.candidate_videos) == {second_video.name}
@@ -1529,6 +1563,7 @@ def test_deleted_cache_directory_is_safely_regenerated(tmp_path: Path) -> None:
 def test_pipeline_backfills_source_when_reserved_primary_candidates_fail(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """入力元の予約候補が全遷移なら未評価候補を追加評価すること."""
     failed_primary_ids: set[str] = set()
@@ -1604,12 +1639,36 @@ def test_pipeline_backfills_source_when_reserved_primary_candidates_fail(
     )
 
     extractor = FakeFrameExtractor()
+    caplog.set_level(logging.INFO)
     SingleVideoSelector(
         request,
         frame_extractor=extractor,
         assessor=ReservedCandidateFailingAssessor(),
     ).run()
 
+    messages = [record.getMessage() for record in caplog.records]
+    normalized_messages = [message.rsplit(" (", maxsplit=1)[0] for message in messages]
+    adjustment_index = messages.index(
+        "primary評価の進捗母数を調整します: "
+        "変更前=2 batch, 変更後=4 batch, 理由=候補補充による追加評価"
+    )
+    additional_progress_index = normalized_messages.index(
+        "primary評価（追加評価）: 3/4 batch"
+        '（暫定, Input Video="Sample Game Part1.mp4"）'
+    )
+    assert adjustment_index < additional_progress_index
+    assert [
+        message.rsplit(" (", maxsplit=1)[0]
+        for message in messages
+        if message.startswith(("primary評価:", "primary評価（追加評価）:"))
+    ] == [
+        'primary評価: 1/2 batch（暫定, Input Video="Sample Game Part1.mp4"）',
+        'primary評価: 2/2 batch（暫定, Input Video="Sample Game Part2.mp4"）',
+        "primary評価（追加評価）: 3/4 batch"
+        '（暫定, Input Video="Sample Game Part1.mp4"）',
+        "primary評価（追加評価）: 4/4 batch"
+        '（暫定, Input Video="Sample Game Part2.mp4"）',
+    ]
     work_dir = _single_run_cache(tmp_path)
     report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
     assert _assessment_files(tmp_path, "primary")

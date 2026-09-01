@@ -197,6 +197,18 @@ class VideoSource:
         return self.identity.relative_path
 
 
+@dataclass
+class _AssessmentPlan:
+    """一つのInput Videoに必要な評価作業を保持する."""
+
+    source: VideoSource
+    candidates: list[FrameCandidate]
+    state_path: Path
+    cache_key: str
+    state: dict[str, FrameAssessment]
+    missing: list[FrameCandidate]
+
+
 class VideoSelector:
     """フレーム抽出、Ollama評価、選定、成果物生成を順に実行する."""
 
@@ -235,6 +247,8 @@ class VideoSelector:
         self._candidate_manifest_digests: dict[int, str] = {}
         self.manifest_digest = ""
         self._replace_registered_output = False
+        self._assessment_completed_batches: Counter[str] = Counter()
+        self._assessment_total_batches: Counter[str] = Counter()
 
     def run(self) -> Path:
         """選定を実行し、人間確認用コンタクトシートのパスを返す."""
@@ -2284,8 +2298,10 @@ class VideoSelector:
         if self.assessor is None:
             raise RuntimeError("Ollama assessorが初期化されていません")
         primary_stage = _is_primary_stage(stage)
+        progress_stage = "primary" if primary_stage else "secondary"
         batch_size = PRIMARY_BATCH_SIZE if primary_stage else SECONDARY_BATCH_SIZE
         result: dict[str, FrameAssessment] = {}
+        plans: list[_AssessmentPlan] = []
         for source in self.sources:
             source_candidates = [
                 candidate
@@ -2334,7 +2350,40 @@ class VideoSelector:
                         for candidate in source_candidates
                         if candidate.frame_id not in state
                     ]
-            batch_count = math.ceil(len(missing) / batch_size)
+            plans.append(
+                _AssessmentPlan(
+                    source=source,
+                    candidates=source_candidates,
+                    state_path=state_path,
+                    cache_key=cache_key,
+                    state=state,
+                    missing=missing,
+                )
+            )
+
+        added_batch_count = sum(
+            math.ceil(len(plan.missing) / batch_size) for plan in plans
+        )
+        previous_total = self._assessment_total_batches[progress_stage]
+        new_total = previous_total + added_batch_count
+        if added_batch_count > 0 and (previous_total > 0 or stage != progress_stage):
+            logger.info(
+                "%s評価の進捗母数を調整します: "
+                "変更前=%d batch, 変更後=%d batch, 理由=%s",
+                progress_stage,
+                previous_total,
+                new_total,
+                self._assessment_progress_adjustment_reason(stage),
+            )
+        self._assessment_total_batches[progress_stage] = new_total
+
+        for plan in plans:
+            source = plan.source
+            source_candidates = plan.candidates
+            state_path = plan.state_path
+            cache_key = plan.cache_key
+            state = plan.state
+            missing = plan.missing
             context_dir = None if primary_stage else self._context_directory(source)
             for batch_index, batch_start in enumerate(
                 range(0, len(missing), batch_size),
@@ -2392,11 +2441,17 @@ class VideoSelector:
                         )
                         save_assessment_state(state_path, cache_key, state)
                         self._write_gpu_evidence()
+                        self._assessment_completed_batches[progress_stage] += 1
+                        additional_label = (
+                            "（追加評価）" if stage != progress_stage else ""
+                        )
                         logger.info(
-                            "%s評価: %d/%d batch (%.1f秒)",
-                            stage,
-                            batch_index,
-                            batch_count,
+                            "%s評価%s: %d/%d batch（暫定, Input Video=%s） (%.1f秒)",
+                            progress_stage,
+                            additional_label,
+                            self._assessment_completed_batches[progress_stage],
+                            self._assessment_total_batches[progress_stage],
+                            _log_value(source.label),
                             time.monotonic() - started,
                         )
                         last_error = None
@@ -2423,6 +2478,15 @@ class VideoSelector:
                 }
             )
         return result
+
+    @staticmethod
+    def _assessment_progress_adjustment_reason(stage: str) -> str:
+        """評価stage名から進捗母数を増やす利用者向け理由を返す."""
+        if stage.startswith("primary-secondary-backfill-"):
+            return "二次候補補充に伴う一次追加評価"
+        if "-backfill-" in stage:
+            return "候補補充による追加評価"
+        return "同一run内の追加評価"
 
     @staticmethod
     def _load_assessment_state_or_miss(
