@@ -1,4 +1,5 @@
 [run]
+selection_method = "sampled_frames"
 game_context_provider = "ollama"
 game_context_model = "qwen3.8:27b"
 # ollama_api_key = "your-ollama-api-key"
@@ -11,3 +12,13 @@ ollama_timeout = 900.0
 allow_cpu = false
 ffmpeg_workers = 2
 debug = false
+
+# 動画理解を使う場合はselection_methodを"semantic_video"へ変更します。
+# 動画・画像対応modelを提供する起動済みvLLMサーバーを指定してください。
+# vllm_base_url = "http://127.0.0.1:8000/v1"
+# vllm_model = "YOUR_SERVED_VIDEO_MODEL"
+# vllm_api_key = "your-key" # 未指定時はVLLM_API_KEY
+# vllm_timeout = 900.0
+# vllm_cache_revision = "1" # 重みやサーバー設定を変更したら更新
+# semantic_chunk_seconds = 30.0
+# semantic_overlap_seconds = 2.0

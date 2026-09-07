@@ -14,6 +14,53 @@ from src.models.video_selection_request import VideoSelectionRequest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_cli_configures_video_understanding_without_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """動画理解の接続条件がrequestへ渡り、認証値はログへ出ないこと."""
+    input_dir = tmp_path / "videos"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "semantic.toml"
+    config_path.write_text(
+        '[run]\nselection_method = "semantic_video"\n'
+        'vllm_base_url = "http://vision:8000/v1"\n'
+        'vllm_model = "video-model"\n'
+        'vllm_api_key = "private-video-token"\n'
+        'vllm_cache_revision = "weights-and-processor-2"\n'
+        "semantic_chunk_seconds = 20\n",
+        encoding="utf-8",
+    )
+    requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", requests.append)
+    with caplog.at_level(logging.INFO):
+        run(
+            [
+                "--config",
+                str(config_path),
+                "--num",
+                "2",
+                "--game-context",
+                "探索とボス戦",
+                str(input_dir),
+                str(tmp_path / "out"),
+            ]
+        )
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.selection_method == "semantic_video"
+    assert request.vllm_config is not None
+    assert request.vllm_config.model == "video-model"
+    assert request.vllm_config.cache_revision == "weights-and-processor-2"
+    assert request.vllm_config.api_key == "private-video-token"
+    assert request.semantic_options.chunk_seconds == 20.0
+    assert "private-video-token" not in caplog.text
+    assert "private-video-token" not in repr(request)
+    assert "semantic_video" in caplog.text
+
+
 @pytest.fixture(autouse=True)
 def _isolated_default_config(
     monkeypatch: pytest.MonkeyPatch,

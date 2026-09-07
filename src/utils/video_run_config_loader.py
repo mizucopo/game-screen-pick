@@ -18,9 +18,20 @@ class VideoRunConfigLoader:
         "primary_model",
         "secondary_model",
         "ollama_host",
+        "selection_method",
+        "vllm_base_url",
+        "vllm_model",
+        "vllm_api_key",
+        "vllm_cache_revision",
     }
     _INTEGER_KEYS = {"ffmpeg_workers"}
-    _NUMBER_KEYS = {"ollama_timeout", "sample_interval_seconds"}
+    _NUMBER_KEYS = {
+        "ollama_timeout",
+        "sample_interval_seconds",
+        "vllm_timeout",
+        "semantic_chunk_seconds",
+        "semantic_overlap_seconds",
+    }
     _BOOLEAN_KEYS = {"allow_cpu", "debug"}
     _KNOWN_KEYS = _STRING_KEYS | _INTEGER_KEYS | _NUMBER_KEYS | _BOOLEAN_KEYS
 

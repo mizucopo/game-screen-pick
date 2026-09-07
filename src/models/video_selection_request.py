@@ -2,6 +2,9 @@
 
 from dataclasses import dataclass, field
 
+from .semantic_video import SemanticVideoOptions
+from .vllm_config import VllmConfig
+
 MAXIMUM_OUTPUT_COUNT = 999
 MINIMUM_SAMPLE_INTERVAL_SECONDS = 0.25
 _MISSING = object()
@@ -27,6 +30,9 @@ class VideoSelectionRequest:
     game_context_provider: str | None
     game_context_model: str | None
     game_context_api_key: str | None = field(default=None, repr=False)
+    selection_method: str = "sampled_frames"
+    vllm_config: VllmConfig | None = None
+    semantic_options: SemanticVideoOptions = field(default_factory=SemanticVideoOptions)
 
     def __init__(
         self,
@@ -48,6 +54,9 @@ class VideoSelectionRequest:
         game_context_provider: str | None = None,
         game_context_model: str | None = None,
         game_context_api_key: str | None = None,
+        selection_method: str = "sampled_frames",
+        vllm_config: VllmConfig | None = None,
+        semantic_options: SemanticVideoOptions | None = None,
     ) -> None:
         """旧位置指定と新しい複数入力keywordを同じrequestへ正規化する."""
         values = {
@@ -79,6 +88,11 @@ class VideoSelectionRequest:
         object.__setattr__(self, "game_context_provider", game_context_provider)
         object.__setattr__(self, "game_context_model", game_context_model)
         object.__setattr__(self, "game_context_api_key", game_context_api_key)
+        object.__setattr__(self, "selection_method", selection_method)
+        object.__setattr__(self, "vllm_config", vllm_config)
+        object.__setattr__(
+            self, "semantic_options", semantic_options or SemanticVideoOptions()
+        )
 
     @property
     def input_video(self) -> str | None:

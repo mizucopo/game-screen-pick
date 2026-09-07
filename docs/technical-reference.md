@@ -51,6 +51,7 @@ providerごとに`config/ollama.toml`、`config/openai.toml`など複数の実�
 
 | key | 内容 | 組み込み既定値 |
 | --- | --- | --- |
+| `selection_method` | 候補発見方式（`sampled_frames` / `semantic_video`） | `sampled_frames` |
 | `game_context_provider` | Game Context検索provider | なし（`--game-title`指定時は必須） |
 | `game_context_model` | context生成model | なし（`--game-title`指定時は必須） |
 | `ollama_api_key` | Ollama Web Search API key | `OLLAMA_API_KEY`へfallback |
@@ -79,9 +80,51 @@ Run Manifest、report、checkpoint、例外messageへ出力しません。
 実設定や本物のAPI keyはコミットしないでください。Git管理する設定例はrootの
 `config.example.toml`だけです。
 
-model名は切り替えられます。一次・二次modelともOllamaの`/api/show`でvision対応が
+`sampled_frames`ではmodel名を切り替えられます。一次・二次modelともOllamaの`/api/show`でvision対応が
 確認できる必要があります。標準では各modelのロード後に`/api/ps`を確認し、model
 memoryの50%以上がVRAMにある場合だけ処理を継続します。
+
+## 動画理解による選定
+
+`selection_method = "semantic_video"`では、起動済みvLLMサーバーの動画・画像対応modelを
+使用します。動画理解と一次・二次画像評価は同じmodelへ送信します。
+`primary_model`、`secondary_model`、`ollama_timeout`、`allow_cpu`は画像選定に使いません。
+`ollama_host`はGame ContextをOllamaで生成するときだけ使用します。
+`sample_interval_seconds`の指定はエラーになります。
+
+| key | 内容 | 既定値 |
+| --- | --- | --- |
+| `vllm_base_url` | HTTP(S)のOpenAI互換API接続先 | `http://127.0.0.1:8000/v1` |
+| `vllm_model` | サーバーが提供する動画・画像対応model名 | 必須 |
+| `vllm_api_key` | API認証。logやcacheへ保存しない | `VLLM_API_KEY` |
+| `vllm_timeout` | API requestごとのtimeout秒数 | `900.0` |
+| `vllm_cache_revision` | 重み・量子化・processor・サーバー設定変更時に更新するcache識別子 | `"1"` |
+| `semantic_chunk_seconds` | 解析する区間の秒数（1から120） | `30.0` |
+| `semantic_overlap_seconds` | 隣接区間の重複秒数。区間の前進幅は1秒以上 | `2.0` |
+
+映像streamの先頭から末尾までを重複付きで分割し、各区間を低解像度の短いMP4として
+`video_url`へ送ります。既定は1 fps・最大幅512 px、1区間の送信前サイズ上限は16 MiBです。
+音声は解析しません。動画理解から重要区間、概算時刻、説明、重要度、遷移の除外区間を
+求め、概算時刻の前後1秒以内を0.5秒刻みで候補にします。候補は重要区間内に限定し、
+重複をまとめ、除外区間を取り除きます。短い場面の検出精度はmodelと動画のsamplingに依存します。
+
+重要度と機械的品質を等しい重みで一次候補の優先順位へ反映し、動画から得た場面の説明を
+両段階の画像評価にも渡します。最終画像は元動画の同じ時刻からfull resolutionで抽出し、
+評価候補との見た目の一致を確認します。reportの各画像に`semantic_provenance`、動画ごとに
+解析結果を保存します。候補不足や解析失敗はエラーになり、別方式へ自動切替しません。
+
+動画解析はInput Videoと区間ごとに検証済み結果をatomicに保存します。選択枚数の変更は
+動画解析を無効にせず、途中の区間だけが欠損・破損していても後続の正常な解析を再利用します。
+cacheの条件には動画identity、probe結果、区間、処理条件、接続先、model、cache revision、
+Game Context、prompt/schema versionを含めます。結果の変更も後続の抽出・評価へ伝わります。
+全cache hit時はvLLMへ通信しません。
+
+`/v1/models`では提供model名を確認しますが、重みの実体やGPU配置までは検証しません。
+reportのvLLM `digest`は設定から作ったcache fingerprintです。同じmodel名のままサーバーを
+変更する場合は必ず`vllm_cache_revision`を更新してください。vLLMの導入、起動・停止、
+モデル対応とcontext長の設定、GPU管理はこのCLIの外で行います。
+API契約は[vLLM Multimodal Inputs](https://docs.vllm.ai/en/latest/features/multimodal_inputs/)と
+[Structured Outputs](https://docs.vllm.ai/en/latest/features/structured_outputs/)を参照してください。
 
 ## Input Video Directory
 
@@ -246,7 +289,7 @@ Ollama hostも生成条件に含め、別endpointの同名modelを混同しま�
 確実に再処理したい場合も、このfolderを削除してください。旧Output Folder内の
 `.game-screen-pick/`や不正・schema不一致のcacheは再利用しません。
 
-## 選定の流れ
+## sampled_framesの選定の流れ
 
 1. 各動画のほぼ先頭から末尾までを等間隔でsampleする
 2. 暗転、白飛び、単色frameを機械的に除外する

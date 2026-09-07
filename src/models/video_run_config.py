@@ -2,6 +2,9 @@
 
 from dataclasses import dataclass, field
 
+from .semantic_video import SemanticVideoOptions
+from .vllm_config import VllmConfig
+
 
 @dataclass(frozen=True)
 class VideoRunConfig:
@@ -21,3 +24,6 @@ class VideoRunConfig:
     ffmpeg_workers: int = 2
     sample_interval_seconds: float | None = None
     debug: bool = False
+    selection_method: str = "sampled_frames"
+    vllm_config: VllmConfig | None = None
+    semantic_options: SemanticVideoOptions = field(default_factory=SemanticVideoOptions)
