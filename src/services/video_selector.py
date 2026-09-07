@@ -215,7 +215,7 @@ class _AssessmentPlan:
 
 
 class VideoSelector:
-    """フレーム抽出、Ollama評価、選定、成果物生成を順に実行する."""
+    """候補発見、フレーム抽出、画像評価、選定、成果物生成を順に実行する."""
 
     CANDIDATE_CACHE_CHECK_PROGRESS_INTERVAL = 500
 
@@ -243,8 +243,8 @@ class VideoSelector:
             else None
         )
         self.primary_model = (
-            request.vllm_config.model
-            if self.vllm_client is not None and request.vllm_config is not None
+            self.vllm_client.config.model
+            if self.vllm_client is not None
             else request.primary_model
         )
         self.secondary_model = (
@@ -854,8 +854,8 @@ class VideoSelector:
 
     def _inference_conditions(self) -> dict[str, Any]:
         """従来cacheの条件を保ち、動画理解では実効vLLM条件を返す."""
-        if self.vllm_client is not None and self.request.vllm_config is not None:
-            config = self.request.vllm_config
+        if self.vllm_client is not None:
+            config = self.vllm_client.config
             return {
                 "selection_method": "semantic_video",
                 "vllm_endpoint": config.base_url,
@@ -864,7 +864,7 @@ class VideoSelector:
             }
         return {
             "ollama_endpoint": self.ollama_endpoint,
-            "require_gpu": self.vllm_client is None and not self.request.allow_cpu,
+            "require_gpu": not self.request.allow_cpu,
         }
 
     def _write_current_manifest(self) -> None:
@@ -1783,7 +1783,7 @@ class VideoSelector:
         self,
         candidates: Sequence[FrameCandidate],
     ) -> list[FrameCandidate]:
-        """機械的品質と時間分散で一次Ollama評価候補を絞る."""
+        """品質、時間分散と動画理解の重要度から一次評価候補を絞る."""
         usable: list[FrameCandidate] = []
         by_source = {
             source.index: [
@@ -2704,7 +2704,7 @@ class VideoSelector:
         stage: str,
         candidates: Sequence[FrameCandidate],
     ) -> str:
-        """検証済みの汎用選定方針をOllama向けpromptにする."""
+        """汎用選定方針と候補の文脈を画像評価向けpromptにする."""
         if not candidates:
             raise ValueError("評価候補を1件以上指定してください")
         source = self._source_for(candidates[0])
