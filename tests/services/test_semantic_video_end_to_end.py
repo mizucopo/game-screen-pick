@@ -100,7 +100,10 @@ def test_semantic_video_cli_decodes_video_and_extracts_event_image(
     def runtime_http(request: Request, *, timeout: float) -> io.BytesIO:
         assert managed_runtime
         assert timeout > 0
-        if request.full_url.startswith("http://configured-ollama.invalid:11434/"):
+        if request.full_url in {
+            "http://configured-ollama.invalid:11434/api/ps",
+            "http://configured-ollama.invalid:11434/api/generate",
+        }:
             assert request.get_header("Authorization") == "Bearer ollama-test-token"
             if request.full_url.endswith("/api/ps"):
                 return io.BytesIO(
@@ -116,7 +119,10 @@ def test_semantic_video_cli_decodes_video_and_extracts_event_image(
             loaded_models.clear()
             lifecycle.append("unload")
             return io.BytesIO(b'{"done": true, "done_reason": "unload"}')
-        assert request.full_url.startswith("http://inference.invalid/")
+        assert request.full_url in {
+            "http://inference.invalid/health",
+            "http://inference.invalid/v1/models",
+        }
         if not server_running:
             raise URLError(ConnectionRefusedError("stopped test server"))
         if request.full_url.endswith("/health"):
