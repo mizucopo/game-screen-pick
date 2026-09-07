@@ -62,6 +62,28 @@ def test_config_normalizes_endpoint_and_keeps_api_key_private() -> None:
         config.model = "changed"  # type: ignore[misc]
 
 
+def test_runtime_is_acquired_only_before_live_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        assert timeout > 0
+        assert events[-1] == "ready"
+        events.append(request.full_url)
+        return io.BytesIO(b'{"data": [{"id": "video-model"}]}')
+
+    monkeypatch.setattr("src.services.vllm_client.urlopen", http)
+    client = VllmClient(
+        VllmConfig(model="video-model"),
+        before_request=lambda: events.append("ready"),
+    )
+    assert client.model_metadata()["resolved_name"] == "video-model"
+    assert events == []
+    client.fetch_model_metadata({"video-model"})
+    assert events == ["ready", "http://127.0.0.1:8000/v1/models"]
+
+
 @pytest.mark.parametrize(
     "values",
     [

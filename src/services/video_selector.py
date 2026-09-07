@@ -72,6 +72,7 @@ from .video_phase_cache import (
     write_phase_data,
 )
 from .vllm_client import VllmClient
+from .vllm_runtime_session import VllmRuntimeSession
 
 GAME_CONTEXT_CHECKPOINT_SCHEMA_VERSION = 2
 
@@ -232,8 +233,12 @@ class VideoSelector:
         self.request = request
         self.frame_extractor = frame_extractor or VideoFrameExtractor()
         self._provided_assessor = assessor
+        self._runtime_session: VllmRuntimeSession | None = None
         self.vllm_client = (
-            VllmClient(request.vllm_config)
+            VllmClient(
+                request.vllm_config,
+                before_request=self._ensure_vllm_runtime,
+            )
             if request.selection_method == "semantic_video" and request.vllm_config
             else None
         )
@@ -289,7 +294,26 @@ class VideoSelector:
             cache_directory_lock(self.cache_root),
             output_directory_lock(self.output_dir),
         ):
-            return self._run_locked()
+            if self.vllm_client is None:
+                return self._run_locked()
+            with VllmRuntimeSession(
+                self.request.vllm_runtime_config,
+                self.vllm_client.config,
+                ollama_host=self.ollama_endpoint or None,
+                ollama_api_key=self.request.ollama_api_key,
+                ollama_timeout_seconds=self.request.ollama_timeout,
+            ) as runtime:
+                self._runtime_session = runtime
+                try:
+                    return self._run_locked()
+                finally:
+                    self._runtime_session = None
+
+    def _ensure_vllm_runtime(self) -> None:
+        """cache missで通信するときだけ、このrunの推論環境を準備する."""
+        if self._runtime_session is None:
+            raise RuntimeError("vLLM通信には実行中のruntime sessionが必要です")
+        self._runtime_session.ensure_ready()
 
     def _run_locked(self) -> Path:
         """cacheとOutput Folderの排他lockを保持してpipelineを実行する."""
@@ -405,6 +429,13 @@ class VideoSelector:
         if self.request.selection_method not in {"sampled_frames", "semantic_video"}:
             raise ValueError("候補発見方式はsampled_frames / semantic_videoです")
         if (
+            self.request.vllm_runtime_config.enabled
+            and self.request.selection_method != "semantic_video"
+        ):
+            raise ValueError(
+                "vLLM起動停止とOllama解放はsemantic_videoでのみ指定できます"
+            )
+        if (
             self.semantic_planner is not None
             and self.request.selection_method != "semantic_video"
         ):
@@ -431,9 +462,13 @@ class VideoSelector:
                 "指定してください"
             )
         self._validate_game_context_request()
-        uses_ollama = self.vllm_client is None or (
-            bool(self.request.game_title)
-            and self.request.game_context_provider == "ollama"
+        uses_ollama = (
+            self.vllm_client is None
+            or self.request.vllm_runtime_config.unload_ollama
+            or (
+                bool(self.request.game_title)
+                and self.request.game_context_provider == "ollama"
+            )
         )
         if not self.ollama_endpoint and uses_ollama:
             self.ollama_endpoint = OllamaFrameAssessor.normalize_host(
@@ -928,6 +963,8 @@ class VideoSelector:
             _log_value(provider),
             _log_value(model),
         )
+        if provider == "ollama" and self._runtime_session is not None:
+            self._runtime_session.check_ollama_available()
         generated = self.context_generator.generate(
             game_title=game_title,
             provider=provider,

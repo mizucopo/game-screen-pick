@@ -6,7 +6,7 @@ import os
 import sys
 from importlib import metadata
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import Callable, TypeVar, cast
 
 import click
 
@@ -19,6 +19,7 @@ from .models.video_selection_request import (
     VideoSelectionRequest,
 )
 from .models.vllm_config import VllmConfig
+from .models.vllm_runtime_config import VllmRuntimeConfig
 from .services.game_context_generator import (
     GAME_CONTEXT_API_KEY_ENV_VARS,
     SUPPORTED_GAME_CONTEXT_PROVIDERS,
@@ -234,6 +235,32 @@ def resolve_video_run_config(
             "sampled_frames / semantic_videoから指定してください",
             param_hint="[run].selection_method",
         )
+    try:
+        runtime_config = VllmRuntimeConfig(
+            unload_ollama=bool(file_values.get("ollama_unload_before_vllm", False)),
+            start_command=cast(
+                tuple[str, ...], file_values.get("vllm_start_command", ())
+            ),
+            stop_command=cast(
+                tuple[str, ...], file_values.get("vllm_stop_command", ())
+            ),
+            command_timeout_seconds=float(
+                str(file_values.get("vllm_command_timeout", 60.0))
+            ),
+            startup_timeout_seconds=float(
+                str(file_values.get("vllm_startup_timeout", 900.0))
+            ),
+            shutdown_timeout_seconds=float(
+                str(file_values.get("vllm_shutdown_timeout", 60.0))
+            ),
+        )
+    except ValueError as error:
+        raise click.BadParameter(str(error), param_hint="[run] vllm runtime") from error
+    if runtime_config.enabled and selection_method != "semantic_video":
+        raise click.BadParameter(
+            "Ollama解放とvLLM起動停止はsemantic_videoでのみ指定できます",
+            param_hint="[run].selection_method",
+        )
     vllm_config = None
     semantic_options = SemanticVideoOptions()
     if selection_method == "semantic_video":
@@ -324,6 +351,7 @@ def resolve_video_run_config(
         selection_method=selection_method,
         vllm_config=vllm_config,
         semantic_options=semantic_options,
+        vllm_runtime_config=runtime_config,
         game_context_provider=provider,
         game_context_model=(
             raw_game_context_model.strip()
@@ -511,6 +539,14 @@ def execute(
             selection_method=config.selection_method,
             vllm_config=config.vllm_config,
             semantic_options=config.semantic_options,
+            vllm_runtime_config=config.vllm_runtime_config,
+            ollama_api_key=(
+                config.ollama_api_key
+                or os.environ.get("OLLAMA_API_KEY", "").strip()
+                or None
+            )
+            if config.selection_method == "semantic_video"
+            else None,
             input_videos=input_videos,
             output_dir=output_dir,
             output_count=output_count,

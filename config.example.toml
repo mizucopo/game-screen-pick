@@ -22,3 +22,19 @@ debug = false
 # vllm_cache_revision = "1" # 重みやサーバー設定を変更したら更新
 # semantic_chunk_seconds = 30.0
 # semantic_overlap_seconds = 2.0
+
+# 以下は任意です。未設定のアンロード・起動停止操作は実行しません。
+# trueの場合だけ、既存ollama_host（未指定時はOLLAMA_HOST）を使って全modelを解放。
+# ollama_unload_before_vllm = false
+# ollama_host = "http://127.0.0.1:11434"
+# 起動/停止は両方指定。scriptは利用環境に用意し、制御操作後に終了させてください。
+# {model} は上のvllm_modelに置換されます。
+# vllm_start_command = ["/opt/game-screen-pick/start-vllm", "{model}"]
+# vllm_stop_command = ["/opt/game-screen-pick/stop-vllm"]
+# リモート操作は明示的にsshを指定し、vllm_base_url/ollama_hostも実際の接続先へ設定。
+# remote POSIX shellへ渡すmodel引数は引用付きの{model_shell}を使います。
+# vllm_start_command = ["ssh", "-o", "BatchMode=yes", "gpu-host", "/opt/game-screen-pick/start-vllm", "{model_shell}"]
+# vllm_stop_command = ["ssh", "-o", "BatchMode=yes", "gpu-host", "/opt/game-screen-pick/stop-vllm"]
+# vllm_command_timeout = 60.0
+# vllm_startup_timeout = 900.0
+# vllm_shutdown_timeout = 60.0

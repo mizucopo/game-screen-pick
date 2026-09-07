@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -24,9 +24,15 @@ from .ollama_frame_assessor import (
 class VllmClient:
     """動画と画像を同じserved modelへ送り、構造化応答を返す."""
 
-    def __init__(self, config: VllmConfig) -> None:
+    def __init__(
+        self,
+        config: VllmConfig,
+        *,
+        before_request: Callable[[], None] | None = None,
+    ) -> None:
         """接続設定とGPUの未検証状態を保持する."""
         self.config = config
+        self._before_request = before_request
         self.host = config.base_url
         self.gpu_evidence: dict[str, dict[str, Any]] = {}
 
@@ -207,6 +213,8 @@ class VllmClient:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """認証付きHTTP requestを送りJSON objectを読む."""
+        if self._before_request is not None:
+            self._before_request()
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"

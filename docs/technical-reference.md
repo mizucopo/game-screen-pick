@@ -86,10 +86,10 @@ memoryの50%以上がVRAMにある場合だけ処理を継続します。
 
 ## 動画理解による選定
 
-`selection_method = "semantic_video"`では、起動済みvLLMサーバーの動画・画像対応modelを
+`selection_method = "semantic_video"`では、vLLMサーバーの動画・画像対応modelを
 使用します。動画理解と一次・二次画像評価は同じmodelへ送信します。
 `primary_model`、`secondary_model`、`ollama_timeout`、`allow_cpu`は画像選定に使いません。
-`ollama_host`はGame ContextをOllamaで生成するときだけ使用します。
+`ollama_host`はGame Context生成と、明示的に有効にしたモデル解放に使用します。
 `sample_interval_seconds`の指定はエラーになります。
 
 | key | 内容 | 既定値 |
@@ -101,6 +101,44 @@ memoryの50%以上がVRAMにある場合だけ処理を継続します。
 | `vllm_cache_revision` | 重み・量子化・processor・サーバー設定変更時に更新するcache識別子 | `"1"` |
 | `semantic_chunk_seconds` | 解析する区間の秒数（1から120） | `30.0` |
 | `semantic_overlap_seconds` | 隣接区間の重複秒数。区間の前進幅は1秒以上 | `2.0` |
+| `ollama_unload_before_vllm` | `true`のときだけ既存Ollama接続先の全ロード済みmodelを解放 | `false` |
+| `vllm_start_command` | 起動制御commandの文字列配列。`{model}`を`vllm_model`へ置換 | 未設定 |
+| `vllm_stop_command` | 停止制御commandの文字列配列。startと両方指定が必要 | 未設定 |
+| `vllm_command_timeout` | 起動・停止commandそれぞれの実行期限（秒） | `60.0` |
+| `vllm_startup_timeout` | サーバーの状態・起動準備の確認期限（秒） | `900.0` |
+| `vllm_shutdown_timeout` | 停止command成功後、接続終了の確認期限（秒） | `60.0` |
+
+起動停止の設定がなければ既存サーバーへそのまま接続します。アンロードが未設定・
+`false`ならOllamaの状態確認も行いません。有効な起動停止・解放設定は`semantic_video`
+だけで使用でき、`sampled_frames`との組合せは操作前に設定エラーになります。
+
+最初の動画解析または画像評価のcache missで、設定された操作だけを順に実行します。
+Ollamaは既存`ollama_host`、`ollama_api_key`（未指定時は対応する環境変数）を使い、
+`/api/ps`で列挙した各modelへ`/api/generate`の`keep_alive: 0`を送り、一覧が空になるまで
+`ollama_timeout`以内で確認します。失敗時はvLLMを起動しません。
+[Ollama API](https://docs.ollama.com/api/ps)、[解放方法](https://docs.ollama.com/faq#how-do-i-keep-a-model-loaded-in-memory-or-make-it-unload-immediately)。
+
+commandはshellを介さずargvとして実行します。ローカルのDocker、systemctl、管理script、
+または明示的な`ssh` commandを使用します。ローカルの引数にはそのままの`{model}`、
+SSHのremote POSIX shellへ渡す一つの引数には引用付きの`{model_shell}`を使います。
+`{model_shell}`にさらに引用符を重ねないでください。remote shellがPOSIX以外の場合は
+対応するlauncherを用意します。`~`・環境変数・pipeをアプリ側では暗黙に展開しません。
+制御commandの標準入出力は破棄するため、serviceの診断logは起動先で保存してください。
+起動commandはバックグラウンドのサーバーを開始して終了する形式とし、停止commandは
+対応するworkerも終了させます。フォアグラウンドで動き続ける`vllm serve`を直接指定せず、
+制御scriptなどから起動してください。
+
+起動前に接続先が既に応答していれば、Ollama解放やcommand実行をせずエラーにします。
+OllamaでGame Contextを新規生成する場合も、生成前にこの確認を行います。起動後は
+`/health`と`/v1/models`のmodel名で準備を確認します。停止確認は接続拒否を条件とするため、
+停止中も応答を返すproxyではなく、管理するサーバーの直接endpointを指定してください。
+各profileは実行中に排他的に使用してください。入力・出力のlockは別入力や別端末からの
+同一GPU使用を排他せず、ほかのアプリからのOllama再ロードも制御しません。
+
+一度でも起動を試みたrunは、正常終了・起動失敗・timeout・例外・通常の中断のいずれでも
+停止commandを試みます。停止失敗はエラーとして報告し、処理本体のエラーと生成済み成果物を
+保持します。Ollama server自体は停止せず、modelの自動再ロードもしません。
+強制killや端末切断時の保証は管理script/service側で用意してください。
 
 映像streamの先頭から末尾までを重複付きで分割し、各区間を低解像度の短いMP4として
 `video_url`へ送ります。既定は1 fps・最大幅512 px、1区間の送信前サイズ上限は16 MiBです。
@@ -121,8 +159,9 @@ Game Context、prompt/schema versionを含めます。結果の変更も後続�
 
 `/v1/models`では提供model名を確認しますが、重みの実体やGPU配置までは検証しません。
 reportのvLLM `digest`は設定から作ったcache fingerprintです。同じmodel名のままサーバーを
-変更する場合は必ず`vllm_cache_revision`を更新してください。vLLMの導入、起動・停止、
-モデル対応とcontext長の設定、GPU管理はこのCLIの外で行います。
+変更する場合は必ず`vllm_cache_revision`を更新してください。commandとtimeoutは推論結果の
+cache条件に含めず、全cache hit時は起動停止・解放も行いません。vLLMの導入、model対応と
+context長の設定、GPU管理、および起動停止script/serviceの用意は運用側で行います。
 API契約は[vLLM Multimodal Inputs](https://docs.vllm.ai/en/latest/features/multimodal_inputs/)と
 [Structured Outputs](https://docs.vllm.ai/en/latest/features/structured_outputs/)を参照してください。
 

@@ -10,6 +10,7 @@ from click.testing import CliRunner
 
 from src.main import execute, run
 from src.models.video_selection_request import VideoSelectionRequest
+from src.models.vllm_runtime_config import VllmRuntimeConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -100,9 +101,214 @@ def test_cli_configures_video_understanding_without_ollama(
     assert request.vllm_config.cache_revision == "weights-and-processor-2"
     assert request.vllm_config.api_key == "private-video-token"
     assert request.semantic_options.chunk_seconds == 20.0
+    assert request.vllm_runtime_config == VllmRuntimeConfig()
     assert "private-video-token" not in caplog.text
     assert "private-video-token" not in repr(request)
     assert "semantic_video" in caplog.text
+
+
+def test_cli_passes_optional_runtime_actions_and_reuses_ollama_host(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    input_dir = tmp_path / "videos"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "runtime.toml"
+    config_path.write_text(
+        '[run]\nselection_method = "semantic_video"\nvllm_model = "video-model"\n'
+        'ollama_host = "http://existing-ollama:11434"\n'
+        "ollama_unload_before_vllm = true\n"
+        'vllm_start_command = ["runner", "start", "{model}", "private-argument"]\n'
+        'vllm_stop_command = ["runner", "stop"]\n'
+        "vllm_command_timeout = 12\nvllm_startup_timeout = 45\n"
+        "vllm_shutdown_timeout = 20\n",
+        encoding="utf-8",
+    )
+    requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", requests.append)
+    with caplog.at_level(logging.INFO):
+        result = CliRunner().invoke(
+            execute,
+            [
+                "--config",
+                str(config_path),
+                "--num",
+                "2",
+                "--game-context",
+                "探索",
+                str(input_dir),
+                str(tmp_path / "out"),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    request = requests[0]
+    assert request.ollama_host == "http://existing-ollama:11434"
+    assert request.vllm_runtime_config == VllmRuntimeConfig(
+        unload_ollama=True,
+        start_command=("runner", "start", "{model}", "private-argument"),
+        stop_command=("runner", "stop"),
+        command_timeout_seconds=12,
+        startup_timeout_seconds=45,
+        shutdown_timeout_seconds=20,
+    )
+    assert request.vllm_config is not None
+    assert request.vllm_config.model == "video-model"
+    assert "private-argument" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("configured_key", "environment_key", "expected_key"),
+    [
+        (" ollama-config-secret ", "ollama-env-secret", "ollama-config-secret"),
+        ("  ", " ollama-env-secret ", "ollama-env-secret"),
+        ("", "  ", None),
+    ],
+)
+def test_cli_keeps_ollama_runtime_credentials_separate_from_game_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    configured_key: str,
+    environment_key: str,
+    expected_key: str | None,
+) -> None:
+    input_dir = tmp_path / "videos"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "runtime.toml"
+    config_path.write_text(
+        '[run]\nselection_method = "semantic_video"\nvllm_model = "video-model"\n'
+        "ollama_unload_before_vllm = true\n"
+        f"ollama_api_key = {json.dumps(configured_key)}\n"
+        'game_context_provider = "openai"\ngame_context_model = "context-model"\n'
+        'openai_api_key = "openai-context-secret"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OLLAMA_API_KEY", environment_key)
+    requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", requests.append)
+    with caplog.at_level(logging.INFO):
+        result = CliRunner().invoke(
+            execute,
+            [
+                "--config",
+                str(config_path),
+                "--num",
+                "1",
+                "--game-title",
+                "Game",
+                str(input_dir),
+                str(tmp_path / "out"),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert requests[0].ollama_api_key == expected_key
+    assert requests[0].game_context_api_key == "openai-context-secret"
+    for secret in (
+        "ollama-config-secret",
+        "ollama-env-secret",
+        "openai-context-secret",
+    ):
+        assert secret not in repr(requests[0])
+        assert secret not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "ollama_unload_before_vllm = true",
+        'vllm_start_command = ["start"]\nvllm_stop_command = ["stop"]',
+    ],
+)
+def test_cli_rejects_runtime_actions_for_sampled_frames_before_application(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, setting: str
+) -> None:
+    config_path = tmp_path / "runtime.toml"
+    config_path.write_text(f"[run]\n{setting}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "src.main.run_video_application",
+        lambda _request: pytest.fail("applicationは呼ばれないこと"),
+    )
+
+    result = CliRunner().invoke(
+        execute, ["--config", str(config_path), "--num", "1", "missing-input", "out"]
+    )
+
+    assert result.exit_code == 2
+    assert "semantic_video" in result.output
+
+
+def test_cli_allows_passive_runtime_settings_for_sampled_frames(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    input_dir = tmp_path / "videos"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "runtime.toml"
+    config_path.write_text(
+        "[run]\nollama_unload_before_vllm = false\n"
+        "vllm_start_command = []\nvllm_stop_command = []\n"
+        "vllm_startup_timeout = 10\n",
+        encoding="utf-8",
+    )
+    requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", requests.append)
+
+    result = CliRunner().invoke(
+        execute,
+        [
+            "--config",
+            str(config_path),
+            "--num",
+            "1",
+            "--game-context",
+            "探索",
+            str(input_dir),
+            str(tmp_path / "out"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not requests[0].vllm_runtime_config.enabled
+    assert requests[0].vllm_runtime_config.startup_timeout_seconds == 10
+
+
+@pytest.mark.parametrize(
+    ("setting", "error_field"),
+    [
+        ('vllm_start_command = ["start"]', "vllm_stop_command"),
+        ("vllm_command_timeout = 0", "vllm_command_timeout"),
+        ("vllm_startup_timeout = inf", "vllm_startup_timeout"),
+        ("vllm_shutdown_timeout = nan", "vllm_shutdown_timeout"),
+    ],
+)
+def test_cli_rejects_invalid_runtime_configuration_before_application(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    setting: str,
+    error_field: str,
+) -> None:
+    config_path = tmp_path / "runtime.toml"
+    config_path.write_text(
+        '[run]\nselection_method = "semantic_video"\nvllm_model = "video-model"\n'
+        f"{setting}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "src.main.run_video_application",
+        lambda _request: pytest.fail("applicationは呼ばれないこと"),
+    )
+
+    result = CliRunner().invoke(
+        execute, ["--config", str(config_path), "--num", "1", "missing-input", "out"]
+    )
+
+    assert result.exit_code == 2
+    assert error_field in result.output
 
 
 @pytest.fixture(autouse=True)

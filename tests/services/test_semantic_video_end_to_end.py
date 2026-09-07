@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
 from urllib.request import Request
 
 import pytest
@@ -19,9 +20,11 @@ from src.main import run
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="実動画の統合テストにはffmpegとffprobeが必要です",
 )
+@pytest.mark.parametrize("managed_runtime", [False, True])
 def test_semantic_video_cli_decodes_video_and_extracts_event_image(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    managed_runtime: bool,
 ) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
@@ -54,6 +57,15 @@ def test_semantic_video_cli_decodes_video_and_extracts_event_image(
         'vllm_api_key = "test-only-token"\n',
         encoding="utf-8",
     )
+    if managed_runtime:
+        with config.open("a", encoding="utf-8") as file:
+            file.write(
+                'ollama_host = "http://configured-ollama.invalid:11434"\n'
+                'ollama_api_key = "ollama-test-token"\n'
+                "ollama_unload_before_vllm = true\n"
+                'vllm_start_command = ["/fake/runtime-start", "{model}"]\n'
+                'vllm_stop_command = ["/fake/runtime-stop"]\n'
+            )
     event = {
         "start_seconds": 2.4,
         "end_seconds": 2.6,
@@ -64,9 +76,58 @@ def test_semantic_video_cli_decodes_video_and_extracts_event_image(
     requests: list[Request] = []
     videos: list[tuple[Path, dict[str, Any]]] = []
     images: list[bytes] = []
+    lifecycle: list[str] = []
+    server_running = not managed_runtime
+    loaded_models = ["old-model"]
+    original_run = subprocess.run
+
+    def command_run(
+        command: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[Any]:
+        nonlocal server_running
+        if command[0] == "/fake/runtime-start":
+            assert loaded_models == []
+            assert command == ["/fake/runtime-start", "video-model"]
+            lifecycle.append("start")
+            server_running = True
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[0] == "/fake/runtime-stop":
+            lifecycle.append("stop")
+            server_running = False
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return original_run(command, **kwargs)
+
+    def runtime_http(request: Request, *, timeout: float) -> io.BytesIO:
+        assert managed_runtime
+        assert timeout > 0
+        if request.full_url.startswith("http://configured-ollama.invalid:11434/"):
+            assert request.get_header("Authorization") == "Bearer ollama-test-token"
+            if request.full_url.endswith("/api/ps"):
+                return io.BytesIO(
+                    json.dumps(
+                        {"models": [{"name": name} for name in loaded_models]}
+                    ).encode()
+                )
+            assert request.full_url.endswith("/api/generate")
+            assert isinstance(request.data, bytes)
+            body = json.loads(request.data)
+            assert body["model"] == "old-model"
+            assert body["keep_alive"] == 0
+            loaded_models.clear()
+            lifecycle.append("unload")
+            return io.BytesIO(b'{"done": true, "done_reason": "unload"}')
+        assert request.full_url.startswith("http://inference.invalid/")
+        if not server_running:
+            raise URLError(ConnectionRefusedError("stopped test server"))
+        if request.full_url.endswith("/health"):
+            return io.BytesIO(b"")
+        assert request.full_url.endswith("/v1/models")
+        return io.BytesIO(b'{"data": [{"id": "video-model"}]}')
 
     def http_response(request: Request, *, timeout: float) -> io.BytesIO:
         assert timeout > 0
+        assert server_running
+        lifecycle.append("inference")
         requests.append(request)
         assert request.get_header("Authorization") == "Bearer test-only-token"
         if request.full_url == "http://inference.invalid/v1/models":
@@ -121,6 +182,9 @@ def test_semantic_video_cli_decodes_video_and_extracts_event_image(
 
     monkeypatch.setattr("src.services.vllm_client.urlopen", http_response)
     monkeypatch.setattr("src.services.ollama_frame_assessor.urlopen", http_response)
+    if managed_runtime:
+        monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", runtime_http)
+        monkeypatch.setattr(subprocess, "run", command_run)
     output_dir = tmp_path / "selected"
 
     run(
@@ -137,6 +201,12 @@ def test_semantic_video_cli_decodes_video_and_extracts_event_image(
     )
 
     assert all("/v1/" in request.full_url for request in requests)
+    if managed_runtime:
+        assert lifecycle[:2] == ["unload", "start"]
+        assert lifecycle[-1] == "stop"
+        assert lifecycle.count("start") == lifecycle.count("stop") == 1
+    else:
+        assert set(lifecycle) == {"inference"}
     assert len(videos) == 1
     assert len(images) == 2
     received_video, media_options = videos[0]
@@ -213,3 +283,24 @@ def test_semantic_video_cli_decodes_video_and_extracts_event_image(
             actual.convert("RGB"), reference.convert("RGB")
         )
         assert max(ImageStat.Stat(difference).mean) < 1.0
+
+    # 完了cacheの再利用は、起動コマンドを変更してもruntimeへ触れない。
+    previous_events = list(lifecycle)
+    if managed_runtime:
+        config.write_text(
+            config.read_text().replace("/fake/runtime-start", "/fake/changed-start"),
+            encoding="utf-8",
+        )
+    run(
+        [
+            "--config",
+            str(config),
+            "--num",
+            "1",
+            "--game-context",
+            "移動する対象の記録",
+            str(input_dir),
+            str(output_dir),
+        ]
+    )
+    assert lifecycle == previous_events

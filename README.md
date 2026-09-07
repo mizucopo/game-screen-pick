@@ -78,7 +78,37 @@ Ollamaによる既存方式は `selection_method = "sampled_frames"`（既定値
 
 解析済み区間は中断後や選択枚数の変更時にも再利用します。サーバーの重み・量子化・
 processor・vLLM設定を変更した場合は `vllm_cache_revision` を変更してください。
-サーバーの起動・停止とGPU配置の確認は運用側で行います。詳しい設定と制限は
+起動・停止も管理する場合は、同じ `[run]` に任意設定を追加します。
+
+```toml
+ollama_host = "http://127.0.0.1:11434"
+ollama_unload_before_vllm = true
+vllm_start_command = ["/opt/game-screen-pick/start-vllm", "{model}"]
+vllm_stop_command = ["/opt/game-screen-pick/stop-vllm"]
+```
+
+アンロードは `true` の場合だけ、既存の `ollama_host` に対して実行します。
+未設定・`false` ならアンロード用の通信もしません。起動・停止コマンドも未設定なら
+実行せず、起動済みサーバーを使用します。コマンドは両方指定する必要があります。
+
+上のscriptは利用環境に用意する起動・停止用の実行ファイルです。起動側はサーバーを
+バックグラウンドで起動して終了し、停止側はそのサーバーとworkerを終了させてください。
+`{model}` は `vllm_model` に置換します。Dockerやsystemctlの制御コマンドも設定でき、
+リモートの場合は `ssh` を明示します。
+
+```toml
+vllm_base_url = "http://gpu-host:8000/v1"
+ollama_host = "http://gpu-host:11434"
+vllm_start_command = ["ssh", "-o", "BatchMode=yes", "gpu-host", "/opt/game-screen-pick/start-vllm", "{model_shell}"]
+vllm_stop_command = ["ssh", "-o", "BatchMode=yes", "gpu-host", "/opt/game-screen-pick/stop-vllm"]
+```
+
+SSHのremote shellへ渡すモデル引数には、引用付きの `{model_shell}` を使います。
+この例はリモート側がPOSIX shellの環境を対象にしています。
+
+推論が必要になった時だけ、Ollamaの全ロード済みモデルを解放・確認してからvLLMを
+起動し、処理後に停止します。cacheだけで完了する場合は操作しません。
+モデル導入とGPU配置は運用側で設定します。詳しい設定と制限は
 [技術リファレンス](docs/technical-reference.md#動画理解による選定)を参照してください。
 
 ## 出力
