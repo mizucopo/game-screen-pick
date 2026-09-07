@@ -14,6 +14,50 @@ from src.models.video_selection_request import VideoSelectionRequest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize(
+    ("configured_key", "environment_key", "expected_key"),
+    [
+        ("   ", " environment-key ", "environment-key"),
+        (" configured-key ", "environment-key", "configured-key"),
+        ("", "   ", None),
+    ],
+)
+def test_vllm_api_key_normalizes_whitespace_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    configured_key: str,
+    environment_key: str,
+    expected_key: str | None,
+) -> None:
+    """空白keyは環境変数へfallbackし、認証値の前後空白を除くこと."""
+    input_dir = tmp_path / "videos"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "semantic.toml"
+    config_path.write_text(
+        '[run]\nselection_method = "semantic_video"\nvllm_model = "video-model"\n'
+        f"vllm_api_key = {json.dumps(configured_key)}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VLLM_API_KEY", environment_key)
+    requests: list[VideoSelectionRequest] = []
+    monkeypatch.setattr("src.main.run_video_application", requests.append)
+    run(
+        [
+            "--config",
+            str(config_path),
+            "--num",
+            "1",
+            "--game-context",
+            "探索",
+            str(input_dir),
+            str(tmp_path / "out"),
+        ]
+    )
+    assert requests[0].vllm_config is not None
+    assert requests[0].vllm_config.api_key == expected_key
+
+
 def test_cli_configures_video_understanding_without_ollama(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -72,6 +116,7 @@ def _isolated_default_config(
         "OPENAI_API_KEY",
         "GEMINI_API_KEY",
         "XAI_API_KEY",
+        "VLLM_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
     config_dir = tmp_path / "config"

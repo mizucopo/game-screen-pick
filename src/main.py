@@ -248,10 +248,8 @@ def resolve_video_run_config(
                     file_values.get("vllm_base_url", "http://127.0.0.1:8000/v1")
                 ),
                 model=str(file_values.get("vllm_model", "")),
-                api_key=str(
-                    file_values.get("vllm_api_key")
-                    or os.environ.get("VLLM_API_KEY", "")
-                )
+                api_key=str(file_values.get("vllm_api_key", "")).strip()
+                or os.environ.get("VLLM_API_KEY", "").strip()
                 or None,
                 timeout_seconds=float(str(file_values.get("vllm_timeout", 900.0))),
                 cache_revision=str(file_values.get("vllm_cache_revision", "1")),

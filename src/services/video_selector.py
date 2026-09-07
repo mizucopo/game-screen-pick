@@ -404,6 +404,11 @@ class VideoSelector:
         """安価なrequest検証と入出力pathの確定を行う."""
         if self.request.selection_method not in {"sampled_frames", "semantic_video"}:
             raise ValueError("候補発見方式はsampled_frames / semantic_videoです")
+        if (
+            self.semantic_planner is not None
+            and self.request.selection_method != "semantic_video"
+        ):
+            raise ValueError("semantic_plannerはsemantic_videoでのみ指定できます")
         if self.request.selection_method == "semantic_video":
             if self.vllm_client is None:
                 raise ValueError("semantic_videoにはvLLMの接続先とモデルが必要です")
@@ -1842,13 +1847,7 @@ class VideoSelector:
                 replace(
                     candidate,
                     video_index=0,
-                    quality_score=(
-                        0.5 * candidate.quality_score
-                        + 0.5
-                        * source.semantic_plan.importance(candidate.timestamp_seconds)
-                        if source.semantic_plan is not None
-                        else candidate.quality_score
-                    ),
+                    quality_score=self._primary_selection_score(candidate),
                 )
                 for candidate in source_candidates
             ]
@@ -1869,6 +1868,25 @@ class VideoSelector:
         )
         logger.info("一次評価候補を絞りました: %d/%d件", len(result), len(usable))
         return result
+
+    def _primary_selection_score(self, candidate: FrameCandidate) -> float:
+        """保存済み品質値を変えず、一次候補の重要度を含む順位scoreを返す."""
+        plan = self._source_for(candidate).semantic_plan
+        if plan is None:
+            return candidate.quality_score
+        return 0.5 * candidate.quality_score + 0.5 * plan.importance(
+            candidate.timestamp_seconds
+        )
+
+    def _primary_selection_order(
+        self, candidate: FrameCandidate
+    ) -> tuple[float, float, str]:
+        """一次追補を初期候補と同じ品質・重要度の優先順位で比較する."""
+        return (
+            -self._primary_selection_score(candidate),
+            candidate.timestamp_seconds,
+            candidate.frame_id,
+        )
 
     def _mechanical_cache_key(self, source: VideoSource) -> str:
         """候補抽出phaseへ依存する機械評価cache keyを返す."""
@@ -2088,6 +2106,9 @@ class VideoSelector:
                 assessments,
                 source_count=len(self.sources),
                 output_count=self.request.output_count,
+                candidate_order=self._primary_selection_order
+                if primary_stage
+                else None,
             )
             if not backfill and expand_candidate_pool is not None:
                 additions = expand_candidate_pool(candidates, assessments)
@@ -2103,6 +2124,9 @@ class VideoSelector:
                     assessments,
                     source_count=len(self.sources),
                     output_count=self.request.output_count,
+                    candidate_order=self._primary_selection_order
+                    if primary_stage
+                    else None,
                 )
             if not backfill:
                 labels = ", ".join(
@@ -2171,6 +2195,7 @@ class VideoSelector:
                     primary_candidates,
                     source_order,
                     target_count,
+                    candidate_order=self._primary_selection_order,
                 )
                 if not new_candidates:
                     return ()
@@ -3424,6 +3449,7 @@ def select_source_backfill_candidates(
     *,
     source_count: int,
     output_count: int,
+    candidate_order: Callable[[FrameCandidate], tuple[float, float, str]] | None = None,
 ) -> list[FrameCandidate]:
     """入力元の欠落または生存候補の不足を未評価候補で追補する."""
     source_order, target_count = _source_backfill_requirements(
@@ -3437,6 +3463,7 @@ def select_source_backfill_candidates(
         assessed_candidates,
         source_order,
         target_count,
+        candidate_order=candidate_order,
     )
 
 
@@ -3490,6 +3517,8 @@ def _select_unassessed_source_candidates(
     assessed_candidates: Sequence[FrameCandidate],
     source_order: Sequence[int],
     target_count: int,
+    *,
+    candidate_order: Callable[[FrameCandidate], tuple[float, float, str]] | None = None,
 ) -> list[FrameCandidate]:
     """指定した入力元順で未評価候補を見た目も分散して選ぶ."""
     assessed_ids = {candidate.frame_id for candidate in assessed_candidates}
@@ -3501,7 +3530,7 @@ def _select_unassessed_source_candidates(
         if candidate.frame_id not in assessed_ids:
             available_by_source.setdefault(candidate.video_index, []).append(candidate)
     for candidates in available_by_source.values():
-        candidates.sort(key=_primary_candidate_order)
+        candidates.sort(key=candidate_order or _primary_candidate_order)
 
     selected_by_source: dict[int, list[FrameCandidate]] = {
         video_index: [] for video_index in source_order
