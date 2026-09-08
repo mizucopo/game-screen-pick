@@ -174,6 +174,31 @@ def test_video_meaning_drives_extraction_assessment_and_report(tmp_path: Path) -
     assert extractor.extract_calls == extraction_calls
 
 
+def test_whitespace_title_does_not_activate_unused_ollama(tmp_path: Path) -> None:
+    request = replace(
+        semantic_request(tmp_path),
+        game_title="   ",
+        game_context_provider="ollama",
+    )
+    assert request.vllm_config is not None
+    planner = Mock()
+    planner.plan.return_value = semantic_plan()
+    context_generator = Mock()
+
+    assert (
+        VideoSelector(
+            request,
+            frame_extractor=FakeFrameExtractor(),
+            assessor=SemanticAssessor(request.vllm_config),
+            semantic_planner=planner,
+            context_generator=context_generator,
+        )
+        .run()
+        .is_file()
+    )
+    context_generator.generate.assert_not_called()
+
+
 def test_semantic_failure_preserves_previous_completed_images(tmp_path: Path) -> None:
     request = semantic_request(tmp_path)
     assert request.vllm_config is not None

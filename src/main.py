@@ -123,10 +123,11 @@ def _log_cli_start(
             "sample_interval_seconds",
         ):
             options.pop(f"[run].{key}")
-        if not ollama_unload_before_vllm and not game_title:
+        has_game_title = bool(game_title and game_title.strip())
+        if not ollama_unload_before_vllm and not has_game_title:
             options.pop("[run].ollama_timeout")
         if not ollama_unload_before_vllm and (
-            not game_title or game_context_provider != "ollama"
+            not has_game_title or game_context_provider != "ollama"
         ):
             options.pop("[run].ollama_host")
     logger.info("実効設定:")

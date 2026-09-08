@@ -160,12 +160,13 @@ def test_cli_passes_optional_runtime_actions_and_reuses_ollama_host(
 
 
 @pytest.mark.parametrize(
-    ("provider", "unload", "show_timeout", "show_host"),
+    ("provider", "unload", "title", "show_timeout", "show_host"),
     [
-        (None, False, False, False),
-        (None, True, True, True),
-        ("ollama", False, True, True),
-        ("openai", False, True, False),
+        (None, False, None, False, False),
+        (None, True, None, True, True),
+        ("ollama", False, "Game", True, True),
+        ("openai", False, "Game", True, False),
+        ("ollama", False, "   ", False, False),
     ],
 )
 def test_semantic_cli_logs_connection_settings_used_by_runtime_or_context(
@@ -174,6 +175,7 @@ def test_semantic_cli_logs_connection_settings_used_by_runtime_or_context(
     caplog: pytest.LogCaptureFixture,
     provider: str | None,
     unload: bool,
+    title: str | None,
     show_timeout: bool,
     show_host: bool,
 ) -> None:
@@ -202,8 +204,8 @@ def test_semantic_cli_logs_connection_settings_used_by_runtime_or_context(
                 str(config_path),
                 "--num",
                 "1",
-                "--game-title" if provider else "--game-context",
-                "Game",
+                *(["--game-title", title] if title is not None else []),
+                *(["--game-context", "Game"] if not title or not title.strip() else []),
                 str(input_dir),
                 str(tmp_path / "out"),
             ],

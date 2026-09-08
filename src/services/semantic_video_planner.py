@@ -25,6 +25,7 @@ from .vllm_client import VllmClient
 logger = logging.getLogger(__name__)
 
 SEMANTIC_VIDEO_PHASE_VERSION = 1
+SEMANTIC_VIDEO_PLAN_VERSION = 2
 VIDEO_FPS = 1.0
 VIDEO_MAX_WIDTH = 512
 VIDEO_MAX_BYTES = 16 * 1024 * 1024
@@ -153,7 +154,10 @@ class SemanticVideoPlanner:
         if metadata.last_frame_timestamp_seconds is not None:
             last_timestamp = min(last_timestamp, metadata.last_frame_timestamp_seconds)
         else:
-            last_timestamp -= min(0.05, metadata.duration_seconds / 2)
+            last_timestamp -= min(
+                _fallback_end_margin(metadata.average_frame_rate),
+                metadata.duration_seconds,
+            )
         timestamps = sorted(
             {
                 round(event["timestamp_seconds"] + offset, 6)
@@ -180,7 +184,7 @@ class SemanticVideoPlanner:
             timestamps=tuple(timestamps),
             cache_key=phase_key(
                 "semantic_video_plan",
-                SEMANTIC_VIDEO_PHASE_VERSION,
+                SEMANTIC_VIDEO_PLAN_VERSION,
                 {
                     "request_key": cache_key,
                     "evidence": evidence,
@@ -189,6 +193,20 @@ class SemanticVideoPlanner:
             ),
             evidence=evidence,
         )
+
+
+def _fallback_end_margin(average_frame_rate: str) -> float:
+    """最終frame不明時はsampled候補と同じ1frame以上の終端余白を使う."""
+    try:
+        numerator, separator, denominator = average_frame_rate.partition("/")
+        frames_per_second = float(numerator) / (
+            float(denominator) if separator else 1.0
+        )
+    except (ValueError, ZeroDivisionError):
+        return 0.05
+    if not math.isfinite(frames_per_second) or frames_per_second <= 0:
+        return 0.05
+    return max(0.05, 1.0 / frames_per_second)
 
 
 def _read_chunk(path: Path, key: str, duration: float) -> dict[str, Any] | None:

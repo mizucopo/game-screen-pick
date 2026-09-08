@@ -81,6 +81,7 @@ def run_plan(
     duration: float = 10,
     start: float = 5,
     last_frame: float | None = None,
+    average_frame_rate: str = "30/1",
     options: SemanticVideoOptions | None = None,
     game_context: str = "仲間との旅を紹介する",
 ) -> SemanticVideoPlan:
@@ -91,7 +92,7 @@ def run_plan(
             width=1920,
             height=1080,
             codec_name="h264",
-            average_frame_rate="30/1",
+            average_frame_rate=average_frame_rate,
             video_stream_index=2,
             start_time_seconds=start,
             last_frame_timestamp_seconds=last_frame,
@@ -149,6 +150,36 @@ def test_cache_reuses_all_chunks_without_http_or_ffmpeg_and_repairs_middle_hole(
     complete.assert_called_once()
     metadata.assert_called_once()
     assert "33.000000 - 63.000000" in complete.call_args.kwargs["prompt"]
+
+
+def test_new_candidate_plan_version_reuses_existing_video_understanding_chunks(
+    tmp_path: Path,
+    client: VllmClient,
+    ffmpeg: Mock,
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            "src.services.semantic_video_planner.SEMANTIC_VIDEO_PLAN_VERSION", 1
+        )
+        legacy_plan = run_plan(tmp_path, client)
+    ffmpeg.reset_mock()
+    complete = mocker.patch.object(
+        client, "complete_json", side_effect=AssertionError("offline")
+    )
+    metadata = mocker.patch.object(
+        client, "fetch_model_metadata", side_effect=AssertionError("offline")
+    )
+
+    updated_plan = run_plan(tmp_path, client)
+
+    assert updated_plan.timestamps == legacy_plan.timestamps
+    assert updated_plan.evidence == legacy_plan.evidence
+    assert updated_plan.cache_key != legacy_plan.cache_key
+    ffmpeg.assert_not_called()
+    complete.assert_not_called()
+    metadata.assert_not_called()
 
 
 def test_repaired_chunk_changes_plan_identity_when_meaning_changes(
@@ -210,6 +241,64 @@ def test_refinement_stays_at_or_before_last_video_frame(
     plan = run_plan(tmp_path, client, last_frame=13.5)
 
     assert plan.timestamps == (13.0, 13.5)
+    ffmpeg.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("average_frame_rate", "expected"),
+    [
+        ("1/1", (13.0, 13.5, 14.0)),
+        ("2/1", (13.0, 13.5, 14.0, 14.5)),
+        ("0.5", (13.0,)),
+    ],
+)
+def test_endpoint_event_candidates_respect_frame_interval_without_last_frame_probe(
+    tmp_path: Path,
+    client: VllmClient,
+    ffmpeg: Mock,
+    mocker: MockerFixture,
+    average_frame_rate: str,
+    expected: tuple[float, ...],
+) -> None:
+    mocker.patch.object(
+        client,
+        "complete_json",
+        return_value=event_response(start=8, end=10, timestamp=9),
+    )
+
+    plan = run_plan(tmp_path, client, average_frame_rate=average_frame_rate)
+
+    assert plan.timestamps == expected
+    ffmpeg.assert_called_once()
+
+
+def test_known_last_frame_takes_priority_over_frame_rate_fallback(
+    tmp_path: Path, client: VllmClient, ffmpeg: Mock, mocker: MockerFixture
+) -> None:
+    mocker.patch.object(
+        client,
+        "complete_json",
+        return_value=event_response(start=8, end=9.5, timestamp=9),
+    )
+
+    plan = run_plan(tmp_path, client, average_frame_rate="1/1", last_frame=14.5)
+
+    assert plan.timestamps == (13.0, 13.5, 14.0, 14.5)
+    ffmpeg.assert_called_once()
+
+
+def test_frame_interval_fallback_never_moves_candidates_before_video_start(
+    tmp_path: Path, client: VllmClient, ffmpeg: Mock, mocker: MockerFixture
+) -> None:
+    mocker.patch.object(
+        client,
+        "complete_json",
+        return_value=event_response(start=0, end=0.5, timestamp=0),
+    )
+
+    plan = run_plan(tmp_path, client, duration=0.5, average_frame_rate="1/1")
+
+    assert plan.timestamps == (5.0,)
     ffmpeg.assert_called_once()
 
 

@@ -8,7 +8,13 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from email.message import Message
+from http.client import RemoteDisconnected
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -244,10 +250,11 @@ def test_http_error_still_counts_as_existing_server(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     transport = RuntimeTransport(monkeypatch)
+    error_body = io.BytesIO(b"unused error payload")
 
     def unavailable_http(request: Request, *, timeout: float) -> io.BytesIO:
         del timeout
-        raise HTTPError(request.full_url, 503, "secret-body", Message(), None)
+        raise HTTPError(request.full_url, 503, "secret-body", Message(), error_body)
 
     monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", unavailable_http)
     with (
@@ -256,6 +263,7 @@ def test_http_error_still_counts_as_existing_server(
     ):
         session.ensure_ready()
     assert transport.commands == []
+    assert error_body.closed
 
 
 @pytest.mark.parametrize(
@@ -555,3 +563,254 @@ def test_repeated_acquisition_preserves_original_error_without_restarting(
     assert transport.commands == [["start"], ["stop"]]
     with pytest.raises(RuntimeError, match="終了"):
         session.ensure_ready()
+
+
+@contextmanager
+def drip_ollama_server(mode: str) -> Iterator[tuple[str, threading.Event]]:
+    completed = threading.Event()
+
+    class DripHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = b'{"models":[]}'
+            header = b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\n"
+            try:
+                if mode == "fast":
+                    completed.set()
+                    self.connection.sendall(header + body)
+                elif mode == "headers":
+                    for value in header:
+                        self.connection.sendall(bytes([value]))
+                        time.sleep(0.02)
+                    completed.set()
+                    self.connection.sendall(body)
+                elif mode == "chunked":
+                    self.connection.sendall(
+                        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                    )
+                    for value in b"d; slow=framing\r\n":
+                        self.connection.sendall(bytes([value]))
+                        time.sleep(0.02)
+                    completed.set()
+                    self.connection.sendall(body + b"\r\n0\r\n\r\n")
+                else:
+                    self.connection.sendall(header)
+                    for index, value in enumerate(body):
+                        if index == len(body) - 1:
+                            completed.set()
+                        self.connection.sendall(bytes([value]))
+                        time.sleep(0.02)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def log_message(self, format: str, *args: Any) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DripHandler)
+    worker = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}
+    )
+    worker.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", completed
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+
+
+@pytest.mark.parametrize("mode", ["headers", "body", "chunked"])
+def test_unload_deadline_expires_while_server_keeps_streaming(mode: str) -> None:
+    with (
+        drip_ollama_server(mode) as (host, completed),
+        VllmRuntimeSession(
+            VllmRuntimeConfig(unload_ollama=True),
+            VllmConfig(model="game-model"),
+            ollama_host=host,
+            ollama_timeout_seconds=0.08,
+        ) as session,
+    ):
+        with pytest.raises(RuntimeError):
+            session.ensure_ready()
+        assert not completed.is_set()
+
+
+def test_unload_accepts_complete_http_response_before_deadline() -> None:
+    with (
+        drip_ollama_server("fast") as (host, completed),
+        VllmRuntimeSession(
+            VllmRuntimeConfig(unload_ollama=True),
+            VllmConfig(model="game-model"),
+            ollama_host=host,
+            ollama_timeout_seconds=1,
+        ) as session,
+    ):
+        session.ensure_ready()
+        assert completed.is_set()
+
+
+@pytest.mark.parametrize("elapsed", [0.05, 0.2])
+def test_unload_accepts_eof_only_before_total_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    elapsed: float,
+) -> None:
+    transport = RuntimeTransport(monkeypatch)
+
+    class TimedResponse(io.BytesIO):
+        def read(self, size: int | None = -1) -> bytes:
+            transport.clock += elapsed
+            return super().read(size)
+
+    def http(request: Request, *, timeout: float) -> TimedResponse:
+        del request, timeout
+        return TimedResponse(b'{"models":[]}')
+
+    monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", http)
+    with VllmRuntimeSession(
+        VllmRuntimeConfig(unload_ollama=True),
+        VllmConfig(model="game-model"),
+        ollama_host="http://ollama:11434",
+        ollama_timeout_seconds=0.1,
+    ) as session:
+        if elapsed < 0.1:
+            session.ensure_ready()
+        else:
+            with pytest.raises(RuntimeError, match="時間切れ"):
+                session.ensure_ready()
+
+
+@pytest.mark.parametrize("reset", [ConnectionResetError(), RemoteDisconnected("")])
+def test_shutdown_retries_reset_until_connection_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    reset: OSError,
+) -> None:
+    transport = RuntimeTransport(monkeypatch)
+    resets_remaining = 1
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        nonlocal resets_remaining
+        if transport.commands == [["start"], ["stop"]] and resets_remaining:
+            resets_remaining -= 1
+            raise reset
+        return transport.http(request, timeout=timeout)
+
+    monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", http)
+    with VllmRuntimeSession(
+        managed_config(), VllmConfig(model="game-model")
+    ) as session:
+        session.ensure_ready()
+    assert transport.clock == 0.5
+    assert transport.commands == [["start"], ["stop"]]
+
+
+def test_persistent_shutdown_resets_reach_shutdown_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = RuntimeTransport(monkeypatch)
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        if transport.commands == [["start"], ["stop"]]:
+            raise URLError(ConnectionResetError(errno.ECONNRESET, "reset"))
+        return transport.http(request, timeout=timeout)
+
+    monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", http)
+    with (
+        pytest.raises(RuntimeError, match="停止確認.*時間切れ"),
+        VllmRuntimeSession(managed_config(), VllmConfig(model="game-model")) as session,
+    ):
+        session.ensure_ready()
+    assert transport.clock == 1.0
+
+
+def test_unknown_shutdown_connection_error_does_not_confirm_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = RuntimeTransport(monkeypatch)
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        if transport.commands == [["start"], ["stop"]]:
+            raise URLError(OSError(errno.EHOSTUNREACH, "unreachable"))
+        return transport.http(request, timeout=timeout)
+
+    monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", http)
+    with (
+        pytest.raises(RuntimeError, match="接続状態"),
+        VllmRuntimeSession(managed_config(), VllmConfig(model="game-model")) as session,
+    ):
+        session.ensure_ready()
+    assert transport.clock == 0.0
+
+
+def test_unload_http_error_closes_response_and_prevents_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = RuntimeTransport(monkeypatch)
+    error_body = io.BytesIO(b"unused error payload")
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        if request.full_url.endswith("/api/ps"):
+            raise HTTPError(
+                request.full_url, 500, "private error", Message(), error_body
+            )
+        return transport.http(request, timeout=timeout)
+
+    monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", http)
+    with (
+        pytest.raises(RuntimeError),
+        VllmRuntimeSession(
+            managed_config(unload_ollama=True),
+            VllmConfig(model="game-model"),
+            ollama_host="http://ollama:11434",
+        ) as session,
+    ):
+        session.ensure_ready()
+    assert transport.commands == []
+    assert error_body.closed
+
+
+def test_startup_rejects_models_response_finishing_after_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = RuntimeTransport(monkeypatch)
+
+    class LateResponse(io.BytesIO):
+        def read(self, size: int | None = -1) -> bytes:
+            transport.clock += 2
+            return super().read(size)
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        response = transport.http(request, timeout=timeout)
+        if request.full_url.endswith("/v1/models"):
+            return LateResponse(response.getvalue())
+        return response
+
+    monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", http)
+    with (
+        pytest.raises(RuntimeError, match="起動確認.*時間切れ"),
+        VllmRuntimeSession(managed_config(), VllmConfig(model="game-model")) as session,
+    ):
+        session.ensure_ready()
+    assert transport.commands == [["start"], ["stop"]]
+
+
+def test_reset_during_preflight_never_grants_runtime_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = RuntimeTransport(monkeypatch)
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        del request, timeout
+        raise RemoteDisconnected("")
+
+    monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", http)
+    with (
+        pytest.raises(RuntimeError, match="既に応答"),
+        VllmRuntimeSession(
+            managed_config(unload_ollama=True),
+            VllmConfig(model="game-model"),
+            ollama_host="http://ollama:11434",
+        ) as session,
+    ):
+        session.ensure_ready()
+    assert transport.commands == []
+    assert transport.loaded_models == ["ollama-model"]

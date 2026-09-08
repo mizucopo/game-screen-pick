@@ -466,7 +466,7 @@ class VideoSelector:
             self.vllm_client is None
             or self.request.vllm_runtime_config.unload_ollama
             or (
-                bool(self.request.game_title)
+                bool(self.request.game_title and self.request.game_title.strip())
                 and self.request.game_context_provider == "ollama"
             )
         )
