@@ -42,25 +42,29 @@ fallbackしない。providerとmodelに暗黙の既定値は持たない。Web�
 _Avoid_: automatic fallback, trusted search instructions, implicit paid API call
 
 **Sample Position**:
-各Input Video全体へ等間隔に置かれた候補抽出時刻。候補数の固定上限では切り詰めず、動画の四半期など一部だけへ偏らない。
+各Input Videoから画像候補を抽出する時刻。等間隔方式では全編へ均等に置き、動画理解方式では全編の文脈から見つけた重要場面の周辺へ置く。
 _Avoid_: beginning-only sampling, random timestamp, fixed candidate cap
+
+**Semantic Event**:
+動画の前後関係から見つけた、ブログで伝える価値のある場面。原動画内の区間と代表時刻、場面の説明、重要度を持ち、画像候補の根拠になる。
+_Avoid_: isolated image score, selected output, fixed scene quota
 
 **Frame Candidate**:
 Sample Positionから一定量ずつ抽出・機械評価し、ブログ画像になる可能性があるframe。暗転、白飛び、ほぼ単色のframeは含まない。
 _Avoid_: selected output, every decoded frame, all pending jobs submitted at once
 
 **Frame Display ID**:
-一つのOllama評価batch内だけでFrame Candidateへ割り当てる`A01`形式の短い連番。
+一つの画像評価batch内だけでFrame Candidateへ割り当てる`A01`形式の短い連番。
 contact sheet、prompt、応答検証だけに使い、評価結果は対応する安定Frame Candidate IDへ
 戻してからAssessment Cacheへ保存する。
 _Avoid_: persisted identity, long stable ID in Ollama prompt, accepting unknown or duplicate ID
 
 **Primary Candidate**:
-Frame Candidateを機械的品質と時間分散で絞った、一次Ollama評価の対象。
+Frame Candidateを品質と時間分散で絞った一次画像評価の対象。動画理解方式ではSemantic Eventの重要度も考慮する。
 _Avoid_: final output, title-specific category
 
 **Secondary Candidate**:
-一次評価後にscene、見た目、動画時刻を分散させた、二次Ollama評価の対象。
+一次評価後にscene、見た目、動画時刻を分散させた、二次画像評価の対象。
 _Avoid_: selected output, all primary candidates
 
 **Transition Context**:
@@ -68,7 +72,7 @@ Secondary Candidateの直前・対象・直後の三frame。対象frameが暗転
 _Avoid_: three independently selectable images, gameplay category
 
 **Scene**:
-Ollamaが同種の画面をまとめるために返す短い場面名。最終選定の多様性に使うが、実行前の固定catalogは持たない。
+画像評価modelが同種の画面をまとめるために返す短い場面名。最終選定の多様性に使うが、実行前の固定catalogは持たない。
 _Avoid_: fixed scene catalog, title-specific quota
 
 **Normal Progress Screen**:
@@ -108,8 +112,8 @@ model、選定条件、動画ごとのsample位置、phase versionを固定す�
 _Avoid_: Input Video content hash, Output Folder state, progress counter
 
 **Assessment Cache**:
-Input Videoと一次・二次phaseごとにOllama評価をbatch完了単位でatomic追記したPhase Cache。
-model digest、prompt、Game Context、選定設定、上流phase keyが一致する評価だけを再利用する。
+Input Videoと一次・二次phaseごとに画像評価をbatch完了単位でatomic追記したPhase Cache。
+modelの識別条件、prompt、Game Context、選定設定、上流phase keyが一致する評価だけを再利用する。
 _Avoid_: final completion, run全体だけに束ねたcache, condition-free reuse
 
 **Completed Run**:

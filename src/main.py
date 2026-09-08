@@ -6,17 +6,20 @@ import os
 import sys
 from importlib import metadata
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import Callable, TypeVar, cast
 
 import click
 
 from .application.run_video import run_video_application
+from .models.semantic_video import SemanticVideoOptions
 from .models.video_run_config import VideoRunConfig
 from .models.video_selection_request import (
     MAXIMUM_OUTPUT_COUNT,
     MINIMUM_SAMPLE_INTERVAL_SECONDS,
     VideoSelectionRequest,
 )
+from .models.vllm_config import VllmConfig
+from .models.vllm_runtime_config import VllmRuntimeConfig
 from .services.game_context_generator import (
     GAME_CONTEXT_API_KEY_ENV_VARS,
     SUPPORTED_GAME_CONTEXT_PROVIDERS,
@@ -83,6 +86,8 @@ def _log_cli_start(
     debug: bool,
     input_video_dir: str,
     output_dir: str,
+    selection_method: str = "sampled_frames",
+    ollama_unload_before_vllm: bool = False,
 ) -> None:
     """project情報と実際に適用する実効設定を起動直後に出力する."""
     logger.info("%s %s の画像選定処理を開始します。", PROJECT_NAME, _project_version())
@@ -110,6 +115,21 @@ def _log_cli_start(
         "INPUT_VIDEO_DIR": input_video_dir,
         "OUTPUT_DIR": output_dir,
     }
+    if selection_method == "semantic_video":
+        for key in (
+            "primary_model",
+            "secondary_model",
+            "allow_cpu",
+            "sample_interval_seconds",
+        ):
+            options.pop(f"[run].{key}")
+        has_game_title = bool(game_title and game_title.strip())
+        if not ollama_unload_before_vllm and not has_game_title:
+            options.pop("[run].ollama_timeout")
+        if not ollama_unload_before_vllm and (
+            not has_game_title or game_context_provider != "ollama"
+        ):
+            options.pop("[run].ollama_host")
     logger.info("実効設定:")
     for option, value in options.items():
         logger.info("  %s: %s", option, json.dumps(value, ensure_ascii=False))
@@ -212,6 +232,72 @@ def resolve_video_run_config(
         "debug": defaults.debug,
     }
     values.update(file_values)
+    selection_method = str(
+        file_values.get("selection_method", "sampled_frames")
+    ).strip()
+    if selection_method not in {"sampled_frames", "semantic_video"}:
+        raise click.BadParameter(
+            "sampled_frames / semantic_videoから指定してください",
+            param_hint="[run].selection_method",
+        )
+    try:
+        runtime_config = VllmRuntimeConfig(
+            unload_ollama=bool(file_values.get("ollama_unload_before_vllm", False)),
+            start_command=cast(
+                tuple[str, ...], file_values.get("vllm_start_command", ())
+            ),
+            stop_command=cast(
+                tuple[str, ...], file_values.get("vllm_stop_command", ())
+            ),
+            command_timeout_seconds=float(
+                str(file_values.get("vllm_command_timeout", 60.0))
+            ),
+            startup_timeout_seconds=float(
+                str(file_values.get("vllm_startup_timeout", 900.0))
+            ),
+            shutdown_timeout_seconds=float(
+                str(file_values.get("vllm_shutdown_timeout", 60.0))
+            ),
+        )
+    except ValueError as error:
+        raise click.BadParameter(str(error), param_hint="[run] vllm runtime") from error
+    if runtime_config.enabled and selection_method != "semantic_video":
+        raise click.BadParameter(
+            "Ollama解放とvLLM起動停止はsemantic_videoでのみ指定できます",
+            param_hint="[run].selection_method",
+        )
+    vllm_config = None
+    semantic_options = SemanticVideoOptions()
+    if selection_method == "semantic_video":
+        if values["sample_interval_seconds"] is not None:
+            raise click.BadParameter(
+                "semantic_videoでは指定できません。動画理解から抽出時刻を決めます",
+                param_hint="[run].sample_interval_seconds",
+            )
+        try:
+            vllm_config = VllmConfig(
+                base_url=str(
+                    file_values.get("vllm_base_url", "http://127.0.0.1:8000/v1")
+                ),
+                model=str(file_values.get("vllm_model", "")),
+                api_key=str(file_values.get("vllm_api_key", "")).strip()
+                or os.environ.get("VLLM_API_KEY", "").strip()
+                or None,
+                timeout_seconds=float(str(file_values.get("vllm_timeout", 900.0))),
+                cache_revision=str(file_values.get("vllm_cache_revision", "1")),
+            )
+            semantic_options = SemanticVideoOptions(
+                chunk_seconds=float(
+                    str(file_values.get("semantic_chunk_seconds", 30.0))
+                ),
+                overlap_seconds=float(
+                    str(file_values.get("semantic_overlap_seconds", 2.0))
+                ),
+            )
+        except ValueError as error:
+            raise click.BadParameter(
+                str(error), param_hint="[run] semantic_video"
+            ) from error
 
     raw_provider = values["game_context_provider"]
     assert raw_provider is None or isinstance(raw_provider, str)
@@ -267,6 +353,10 @@ def resolve_video_run_config(
         api_keys[key] = raw_api_key.strip() if raw_api_key is not None else None
 
     return VideoRunConfig(
+        selection_method=selection_method,
+        vllm_config=vllm_config,
+        semantic_options=semantic_options,
+        vllm_runtime_config=runtime_config,
         game_context_provider=provider,
         game_context_model=(
             raw_game_context_model.strip()
@@ -423,6 +513,8 @@ def execute(
         game_context_model=config.game_context_model,
     )
     _log_cli_start(
+        selection_method=config.selection_method,
+        ollama_unload_before_vllm=config.vllm_runtime_config.unload_ollama,
         config_path=config_path,
         output_count=output_count,
         game_title=game_title,
@@ -440,8 +532,27 @@ def execute(
         input_video_dir=input_video_dir,
         output_dir=output_dir,
     )
+    logger.info("候補発見方式: %s", config.selection_method)
+    if config.vllm_config is not None:
+        logger.info(
+            "動画理解・画像評価: vLLM model=%s endpoint=%s cache_revision=%s",
+            config.vllm_config.model,
+            config.vllm_config.base_url,
+            config.vllm_config.cache_revision,
+        )
     run_video_application(
         VideoSelectionRequest(
+            selection_method=config.selection_method,
+            vllm_config=config.vllm_config,
+            semantic_options=config.semantic_options,
+            vllm_runtime_config=config.vllm_runtime_config,
+            ollama_api_key=(
+                config.ollama_api_key
+                or os.environ.get("OLLAMA_API_KEY", "").strip()
+                or None
+            )
+            if config.selection_method == "semantic_video"
+            else None,
             input_videos=input_videos,
             output_dir=output_dir,
             output_count=output_count,
