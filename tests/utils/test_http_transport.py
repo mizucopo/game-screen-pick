@@ -78,7 +78,7 @@ def test_same_origin_redirect_preserves_authorization(absolute: bool) -> None:
                 self.send_response(302)
                 location = "/final"
                 if absolute:
-                    location = "http://" + self.headers["Host"] + location
+                    location = origin + location
                 self.send_header("Location", location)
                 self.end_headers()
             else:
