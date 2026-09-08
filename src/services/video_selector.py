@@ -2299,7 +2299,7 @@ class VideoSelector:
             context_end = stream_end - source.end_margin_seconds
             if source.metadata.last_frame_timestamp_seconds is not None:
                 context_end = min(
-                    context_end,
+                    stream_end if source.semantic_plan is not None else context_end,
                     source.metadata.last_frame_timestamp_seconds,
                 )
             before = max(

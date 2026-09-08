@@ -3,93 +3,24 @@
 from __future__ import annotations
 
 import errno
-import io
 import json
 import logging
 import math
 import re
 import shlex
-import socket
 import subprocess
 import time
-from http.client import HTTPConnection, HTTPResponse, HTTPSConnection
+from http.client import HTTPException
 from types import TracebackType
-from typing import Any, cast
+from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPHandler, HTTPSHandler, Request, build_opener
+from urllib.request import Request
 
 from ..models.vllm_config import VllmConfig
 from ..models.vllm_runtime_config import VllmRuntimeConfig
+from ..utils.http_transport import urlopen
 
 logger = logging.getLogger(__name__)
-
-
-class _DeadlineReader(io.RawIOBase):
-    """status、header、chunk framing、bodyの各recvへ残り時間を適用する."""
-
-    def __init__(self, connection: socket.socket, deadline: float) -> None:
-        self._connection = connection
-        self._raw = connection.makefile("rb", buffering=0)
-        self._deadline = deadline
-
-    def readable(self) -> bool:
-        return True
-
-    def readinto(self, buffer: Any) -> int | None:
-        try:
-            remaining = self._deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("GPU runtime HTTP deadline exceeded")
-            self._connection.settimeout(remaining)
-            result = self._raw.readinto(buffer)
-            if time.monotonic() >= self._deadline:
-                raise TimeoutError("GPU runtime HTTP deadline exceeded")
-            return result
-        except BaseException:
-            self._raw.close()
-            raise
-
-    def close(self) -> None:
-        try:
-            self._raw.close()
-        finally:
-            super().close()
-
-
-def urlopen(request: Request, *, timeout: float) -> HTTPResponse:
-    """lifecycle用HTTPを総受信deadline付きで開く。worker threadは作らない."""
-    deadline = time.monotonic() + timeout
-
-    class DeadlineResponse(HTTPResponse):
-        def __init__(
-            self,
-            sock: socket.socket,
-            debuglevel: int = 0,
-            method: str | None = None,
-            url: str | None = None,
-        ) -> None:
-            super().__init__(sock, debuglevel=debuglevel, method=method, url=url)
-            original = self.fp
-            self.fp = io.BufferedReader(_DeadlineReader(sock, deadline))
-            if original is not None:
-                original.close()
-
-    class DeadlineHTTPConnection(HTTPConnection):
-        response_class = DeadlineResponse
-
-    class DeadlineHTTPSConnection(HTTPSConnection):
-        response_class = DeadlineResponse
-
-    class DeadlineHTTPHandler(HTTPHandler):
-        def http_open(self, request: Request) -> HTTPResponse:
-            return self.do_open(DeadlineHTTPConnection, request)
-
-    class DeadlineHTTPSHandler(HTTPSHandler):
-        def https_open(self, request: Request) -> HTTPResponse:
-            return self.do_open(DeadlineHTTPSConnection, request)
-
-    opener = build_opener(DeadlineHTTPHandler(), DeadlineHTTPSHandler())
-    return cast(HTTPResponse, opener.open(request, timeout=timeout))
 
 
 class VllmRuntimeSession:
@@ -309,7 +240,7 @@ class VllmRuntimeSession:
         except HTTPError as error:
             error.close()
             raise RuntimeError("GPU runtime HTTP要求に失敗しました") from None
-        except (URLError, OSError):
+        except (URLError, OSError, HTTPException):
             raise RuntimeError("GPU runtime HTTP要求に失敗しました") from None
 
     @staticmethod

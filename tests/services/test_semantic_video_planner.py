@@ -152,16 +152,19 @@ def test_cache_reuses_all_chunks_without_http_or_ffmpeg_and_repairs_middle_hole(
     assert "33.000000 - 63.000000" in complete.call_args.kwargs["prompt"]
 
 
+@pytest.mark.parametrize("legacy_version", [1, 2])
 def test_new_candidate_plan_version_reuses_existing_video_understanding_chunks(
     tmp_path: Path,
     client: VllmClient,
     ffmpeg: Mock,
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
+    legacy_version: int,
 ) -> None:
     with monkeypatch.context() as legacy:
         legacy.setattr(
-            "src.services.semantic_video_planner.SEMANTIC_VIDEO_PLAN_VERSION", 1
+            "src.services.semantic_video_planner.SEMANTIC_VIDEO_PLAN_VERSION",
+            legacy_version,
         )
         legacy_plan = run_plan(tmp_path, client)
     ffmpeg.reset_mock()
@@ -287,7 +290,7 @@ def test_known_last_frame_takes_priority_over_frame_rate_fallback(
     ffmpeg.assert_called_once()
 
 
-def test_frame_interval_fallback_never_moves_candidates_before_video_start(
+def test_short_low_fps_video_without_safe_context_positions_returns_no_candidates(
     tmp_path: Path, client: VllmClient, ffmpeg: Mock, mocker: MockerFixture
 ) -> None:
     mocker.patch.object(
@@ -298,7 +301,52 @@ def test_frame_interval_fallback_never_moves_candidates_before_video_start(
 
     plan = run_plan(tmp_path, client, duration=0.5, average_frame_rate="1/1")
 
-    assert plan.timestamps == (5.0,)
+    assert plan.timestamps == ()
+    ffmpeg.assert_called_once()
+
+
+@pytest.mark.parametrize("start", [0.0, 5.0])
+def test_opening_event_candidates_respect_transition_context_leading_margin(
+    tmp_path: Path,
+    client: VllmClient,
+    ffmpeg: Mock,
+    mocker: MockerFixture,
+    start: float,
+) -> None:
+    mocker.patch.object(
+        client,
+        "complete_json",
+        return_value=event_response(start=0, end=1, timestamp=0),
+    )
+
+    plan = run_plan(tmp_path, client, start=start)
+
+    assert plan.timestamps == (start + 0.5, start + 1.0)
+    ffmpeg.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("duration", "last_frame", "expected"),
+    [(0.1, None, (5.05,)), (0.1, 5.09, (5.05,)), (0.08, None, ()), (0.1, 5.04, ())],
+)
+def test_short_video_respects_both_context_margins_without_moving_event_anchor(
+    tmp_path: Path,
+    client: VllmClient,
+    ffmpeg: Mock,
+    mocker: MockerFixture,
+    duration: float,
+    last_frame: float | None,
+    expected: tuple[float, ...],
+) -> None:
+    mocker.patch.object(
+        client,
+        "complete_json",
+        return_value=event_response(start=0, end=0.06, timestamp=0.05),
+    )
+
+    plan = run_plan(tmp_path, client, duration=duration, last_frame=last_frame)
+
+    assert plan.timestamps == expected
     ffmpeg.assert_called_once()
 
 

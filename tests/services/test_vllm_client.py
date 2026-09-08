@@ -2,8 +2,14 @@
 
 import io
 import json
+import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
 from email.message import Message
+from http.client import BadStatusLine, IncompleteRead
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -82,6 +88,111 @@ def test_runtime_is_acquired_only_before_live_http(
     assert events == []
     client.fetch_model_metadata({"video-model"})
     assert events == ["ready", "http://127.0.0.1:8000/v1/models"]
+
+
+@contextmanager
+def drip_vllm_server(part: str) -> Iterator[str]:
+    body = json.dumps(chat_response({"events": []})).encode()
+    header = (
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        if part == "chunk_header"
+        else f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+    )
+
+    class DripHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            if part == "headers":
+                before, slow, after = b"", header, body
+            elif part == "body":
+                before, slow, after = header, body, b""
+            else:
+                before = header
+                slow = f"{len(body):x};padding=".encode() + b"x" * 40 + b"\r\n"
+                after = body + b"\r\n0\r\n\r\n"
+            try:
+                self.connection.sendall(before)
+                for value in slow:
+                    self.connection.sendall(bytes([value]))
+                    time.sleep(0.005)
+                self.connection.sendall(after)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def log_message(self, format: str, *args: Any) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DripHandler)
+    worker = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}
+    )
+    worker.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+
+
+@pytest.mark.parametrize("part", ["headers", "body", "chunk_header"])
+def test_complete_json_limits_total_receive_time_while_response_keeps_arriving(
+    part: str,
+) -> None:
+    with drip_vllm_server(part) as endpoint:
+        client = VllmClient(
+            VllmConfig(model="game-model", base_url=endpoint, timeout_seconds=0.08)
+        )
+        with pytest.raises(RuntimeError, match="vLLM"):
+            client.complete_json(
+                prompt="inspect",
+                media={"type": "video_url", "video_url": {"url": "unused"}},
+                schema={"type": "object"},
+                schema_name="test",
+            )
+
+
+@pytest.mark.parametrize("response_seconds", [0.05, 0.2])
+def test_http_deadline_starts_after_runtime_and_rejects_late_eof(
+    monkeypatch: pytest.MonkeyPatch,
+    response_seconds: float,
+) -> None:
+    clock = 0.0
+
+    def start_runtime() -> None:
+        nonlocal clock
+        clock += 50.0
+
+    class TimedResponse(io.BytesIO):
+        def read(self, size: int | None = -1) -> bytes:
+            nonlocal clock
+            clock += response_seconds
+            return super().read(size)
+
+    response = TimedResponse(b'{"data":[{"id":"game-model"}]}')
+
+    def http(request: Request, *, timeout: float) -> TimedResponse:
+        del request
+        assert clock == 50.0
+        assert 0 < timeout <= 0.1
+        return response
+
+    monkeypatch.setattr(time, "monotonic", lambda: clock)
+    monkeypatch.setattr("src.services.vllm_client.urlopen", http)
+    client = VllmClient(
+        VllmConfig(model="game-model", timeout_seconds=0.1),
+        before_request=start_runtime,
+    )
+
+    if response_seconds < 0.1:
+        assert client.fetch_model_metadata({"game-model"}) == {
+            "game-model": client.model_metadata()
+        }
+    else:
+        with pytest.raises(RuntimeError, match="vLLM"):
+            client.fetch_model_metadata({"game-model"})
+    assert response.closed
 
 
 @pytest.mark.parametrize(
@@ -231,6 +342,7 @@ def test_complete_json_rejects_unfinished_refused_or_invalid_responses(
         HTTPError("http://server", 401, "secret-key", Message(), None),
         URLError("secret-key"),
         TimeoutError("secret-key"),
+        BadStatusLine("secret-key"),
     ],
 )
 def test_request_failure_does_not_expose_response_or_credentials(
@@ -254,6 +366,49 @@ def test_request_failure_does_not_expose_response_or_credentials(
 
     assert "secret-key" not in str(error.value)
     assert error.value.__suppress_context__
+
+
+def test_http_error_closes_response_without_exposing_error_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = io.BytesIO(b"private error body")
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        del timeout
+        raise HTTPError(request.full_url, 401, "private error", Message(), response)
+
+    monkeypatch.setattr("src.services.vllm_client.urlopen", http)
+    client = VllmClient(VllmConfig(model="game-model"))
+
+    with pytest.raises(RuntimeError, match="401") as error:
+        client.fetch_model_metadata({"game-model"})
+
+    assert response.closed
+    assert "private" not in str(error.value)
+
+
+def test_truncated_response_closes_and_normalizes_http_protocol_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TruncatedResponse(io.BytesIO):
+        def read(self, size: int | None = -1) -> bytes:
+            del size
+            raise IncompleteRead(b"private response", 100)
+
+    response = TruncatedResponse()
+
+    def http(request: Request, *, timeout: float) -> TruncatedResponse:
+        del request, timeout
+        return response
+
+    monkeypatch.setattr("src.services.vllm_client.urlopen", http)
+    client = VllmClient(VllmConfig(model="game-model"))
+
+    with pytest.raises(RuntimeError, match="vLLM") as error:
+        client.fetch_model_metadata({"game-model"})
+
+    assert response.closed
+    assert "private" not in str(error.value)
 
 
 def test_model_identity_is_local_revision_bound_and_verifies_served_name(

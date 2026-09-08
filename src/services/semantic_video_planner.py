@@ -25,7 +25,7 @@ from .vllm_client import VllmClient
 logger = logging.getLogger(__name__)
 
 SEMANTIC_VIDEO_PHASE_VERSION = 1
-SEMANTIC_VIDEO_PLAN_VERSION = 2
+SEMANTIC_VIDEO_PLAN_VERSION = 3
 VIDEO_FPS = 1.0
 VIDEO_MAX_WIDTH = 512
 VIDEO_MAX_BYTES = 16 * 1024 * 1024
@@ -150,6 +150,7 @@ class SemanticVideoPlanner:
                 "動画理解 %s: chunk %d/%d 完了", video.name, index + 1, len(chunks)
             )
 
+        first_timestamp = metadata.start_time_seconds + 0.05
         last_timestamp = metadata.start_time_seconds + metadata.duration_seconds
         if metadata.last_frame_timestamp_seconds is not None:
             last_timestamp = min(last_timestamp, metadata.last_frame_timestamp_seconds)
@@ -163,7 +164,7 @@ class SemanticVideoPlanner:
                 round(event["timestamp_seconds"] + offset, 6)
                 for event in events
                 for offset in _CANDIDATE_OFFSETS
-                if event["start_seconds"]
+                if max(event["start_seconds"], first_timestamp)
                 <= round(event["timestamp_seconds"] + offset, 6)
                 <= min(event["end_seconds"], last_timestamp)
                 and not any(

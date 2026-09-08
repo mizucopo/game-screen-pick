@@ -5,15 +5,18 @@ from __future__ import annotations
 import base64
 import json
 import math
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import replace
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from ..models.video_selection import FrameAssessment, FrameCandidate
 from ..models.vllm_config import VllmConfig
+from ..utils.http_transport import urlopen
 from ..utils.video_selection_files import json_digest
 from .ollama_frame_assessor import (
     assessment_response_schema,
@@ -215,6 +218,7 @@ class VllmClient:
         """認証付きHTTP requestを送りJSON objectを読む."""
         if self._before_request is not None:
             self._before_request()
+        deadline = time.monotonic() + self.config.timeout_seconds
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
@@ -227,13 +231,20 @@ class VllmClient:
             method="POST" if payload is not None else "GET",
         )
         try:
-            with urlopen(request, timeout=self.config.timeout_seconds) as response:
-                result: Any = json.loads(response.read().decode("utf-8"))
+            remaining = min(self.config.timeout_seconds, deadline - time.monotonic())
+            if remaining <= 0:
+                raise TimeoutError("vLLM HTTP deadline exceeded")
+            with urlopen(request, timeout=remaining) as response:
+                body = response.read()
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("vLLM HTTP deadline exceeded")
+                result: Any = json.loads(body.decode("utf-8"))
         except HTTPError as error:
+            error.close()
             raise RuntimeError(
                 f"vLLM HTTP requestに失敗しました: {error.code}"
             ) from None
-        except (URLError, OSError):
+        except (URLError, OSError, HTTPException):
             raise RuntimeError("vLLMへの接続または応答読み取りに失敗しました") from None
         except (json.JSONDecodeError, UnicodeError):
             raise ValueError("vLLM API応答が有効なJSONではありません") from None

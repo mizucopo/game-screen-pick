@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from src.models.semantic_video import SemanticVideoPlan
-from src.models.video_selection import FrameAssessment, FrameCandidate
+from src.models.video_selection import FrameAssessment, FrameCandidate, VideoMetadata
 from src.models.video_selection_request import VideoSelectionRequest
 from src.models.vllm_config import VllmConfig
 from src.services.video_selector import VideoSelector
@@ -96,6 +96,45 @@ class SameImageExtractor(FakeFrameExtractor):
         )
 
 
+class LowFpsTailExtractor(FakeFrameExtractor):
+    """平均fpsによる推定終端より後の実frameとcontext抽出時刻を記録する."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.context_timestamps: dict[str, float] = {}
+
+    def probe(self, video: Path) -> VideoMetadata:
+        super().probe(video)
+        return VideoMetadata(
+            duration_seconds=10,
+            width=320,
+            height=180,
+            codec_name="fake",
+            average_frame_rate="1/1",
+            start_time_seconds=5,
+            last_frame_timestamp_seconds=14.5,
+        )
+
+    def extract_frame(
+        self,
+        video: Path,
+        timestamp_seconds: float,
+        output_path: Path,
+        *,
+        max_width: int | None,
+        video_stream_index: int = 0,
+    ) -> None:
+        if output_path.name.endswith(("-before.jpg", "-after.jpg")):
+            self.context_timestamps[output_path.name] = timestamp_seconds
+        super().extract_frame(
+            video,
+            timestamp_seconds,
+            output_path,
+            max_width=max_width,
+            video_stream_index=video_stream_index,
+        )
+
+
 def semantic_request(tmp_path: Path) -> VideoSelectionRequest:
     video = tmp_path / "game.mp4"
     video.write_bytes(b"test video")
@@ -172,6 +211,78 @@ def test_video_meaning_drives_extraction_assessment_and_report(tmp_path: Path) -
     ).run()
     assert assessor.assess_calls == calls
     assert extractor.extract_calls == extraction_calls
+
+
+def test_semantic_context_after_keeps_known_last_frame_at_or_after_target(
+    tmp_path: Path,
+) -> None:
+    request = replace(semantic_request(tmp_path), output_count=1)
+    assert request.vllm_config is not None
+    extractor = LowFpsTailExtractor()
+    planner = Mock()
+    planner.plan.return_value = SemanticVideoPlan(
+        timestamps=(14.5,),
+        cache_key="known-tail-semantic-plan",
+        evidence={
+            "events": [
+                {
+                    "start_seconds": 13,
+                    "end_seconds": 14.5,
+                    "timestamp_seconds": 14.5,
+                    "summary": "ボス撃破",
+                    "importance": 95,
+                }
+            ]
+        },
+    )
+
+    result = VideoSelector(
+        request,
+        frame_extractor=extractor,
+        assessor=SemanticAssessor(request.vllm_config),
+        semantic_planner=planner,
+    ).run()
+
+    assert result.is_file()
+    before = [
+        timestamp
+        for name, timestamp in extractor.context_timestamps.items()
+        if name.endswith("-before.jpg")
+    ]
+    after = [
+        timestamp
+        for name, timestamp in extractor.context_timestamps.items()
+        if name.endswith("-after.jpg")
+    ]
+    assert before == [14.15]
+    assert after == [14.5]
+
+
+def test_sampled_context_keeps_existing_frame_rate_margin_with_known_last_frame(
+    tmp_path: Path,
+) -> None:
+    request = replace(
+        semantic_request(tmp_path),
+        selection_method="sampled_frames",
+        vllm_config=None,
+        ollama_host="http://fake-ollama",
+        output_count=1,
+        allow_cpu=True,
+    )
+    extractor = LowFpsTailExtractor()
+
+    result = VideoSelector(
+        request, frame_extractor=extractor, assessor=FakeAssessor()
+    ).run()
+
+    assert result.is_file()
+    after = [
+        timestamp
+        for name, timestamp in extractor.context_timestamps.items()
+        if name.endswith("-after.jpg")
+    ]
+    assert after
+    assert max(after) <= 14.0
 
 
 def test_whitespace_title_does_not_activate_unused_ollama(tmp_path: Path) -> None:

@@ -13,7 +13,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from email.message import Message
-from http.client import RemoteDisconnected
+from http.client import IncompleteRead, RemoteDisconnected
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -814,3 +814,85 @@ def test_reset_during_preflight_never_grants_runtime_ownership(
         session.ensure_ready()
     assert transport.commands == []
     assert transport.loaded_models == ["ollama-model"]
+
+
+class TruncatedResponse(io.BytesIO):
+    def read(self, size: int | None = -1) -> bytes:
+        del size
+        raise IncompleteRead(b"private-partial-body", 20)
+
+
+@pytest.mark.parametrize("endpoint", ["/health", "/v1/models"])
+def test_startup_retries_truncated_probe_response_until_ready(
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+) -> None:
+    transport = RuntimeTransport(monkeypatch)
+    truncated: list[TruncatedResponse] = []
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        response = transport.http(request, timeout=timeout)
+        if request.full_url.endswith(endpoint) and not truncated:
+            partial = TruncatedResponse()
+            truncated.append(partial)
+            return partial
+        return response
+
+    monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", http)
+    with VllmRuntimeSession(
+        managed_config(), VllmConfig(model="game-model")
+    ) as session:
+        session.ensure_ready()
+        assert transport.live
+        assert transport.commands == [["start"]]
+    assert transport.clock == 0.5
+    assert len(truncated) == 1
+    assert truncated[0].closed
+    assert transport.commands == [["start"], ["stop"]]
+
+
+def test_persistent_truncated_startup_response_reaches_deadline_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = RuntimeTransport(monkeypatch)
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        response = transport.http(request, timeout=timeout)
+        if request.full_url.endswith("/v1/models"):
+            return TruncatedResponse()
+        return response
+
+    monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", http)
+    with (
+        pytest.raises(RuntimeError, match="起動確認.*時間切れ"),
+        VllmRuntimeSession(managed_config(), VllmConfig(model="game-model")) as session,
+    ):
+        session.ensure_ready()
+    assert transport.clock == 1.0
+    assert transport.commands == [["start"], ["stop"]]
+
+
+def test_truncated_ollama_response_prevents_start_and_hides_partial_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = RuntimeTransport(monkeypatch)
+    partial = TruncatedResponse()
+
+    def http(request: Request, *, timeout: float) -> io.BytesIO:
+        if request.full_url.endswith("/api/ps"):
+            return partial
+        return transport.http(request, timeout=timeout)
+
+    monkeypatch.setattr("src.services.vllm_runtime_session.urlopen", http)
+    with (
+        pytest.raises(RuntimeError) as error,
+        VllmRuntimeSession(
+            managed_config(unload_ollama=True),
+            VllmConfig(model="game-model"),
+            ollama_host="http://ollama:11434",
+        ) as session,
+    ):
+        session.ensure_ready()
+    assert transport.commands == []
+    assert partial.closed
+    assert "private-partial-body" not in str(error.value)
