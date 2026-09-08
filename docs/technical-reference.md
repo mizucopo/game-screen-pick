@@ -88,7 +88,8 @@ memoryの50%以上がVRAMにある場合だけ処理を継続します。
 
 `selection_method = "semantic_video"`では、vLLMサーバーの動画・画像対応modelを
 使用します。動画理解と一次・二次画像評価は同じmodelへ送信します。
-`primary_model`、`secondary_model`、`ollama_timeout`、`allow_cpu`は画像選定に使いません。
+`primary_model`、`secondary_model`、`allow_cpu`は画像選定に使いません。
+`ollama_timeout`はGame Context生成と、有効にしたOllamaモデル解放に適用します。
 `ollama_host`はGame Context生成と、明示的に有効にしたモデル解放に使用します。
 `sample_interval_seconds`の指定はエラーになります。
 

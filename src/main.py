@@ -87,6 +87,7 @@ def _log_cli_start(
     input_video_dir: str,
     output_dir: str,
     selection_method: str = "sampled_frames",
+    ollama_unload_before_vllm: bool = False,
 ) -> None:
     """project情報と実際に適用する実効設定を起動直後に出力する."""
     logger.info("%s %s の画像選定処理を開始します。", PROJECT_NAME, _project_version())
@@ -118,12 +119,15 @@ def _log_cli_start(
         for key in (
             "primary_model",
             "secondary_model",
-            "ollama_timeout",
             "allow_cpu",
             "sample_interval_seconds",
         ):
             options.pop(f"[run].{key}")
-        if not game_title or game_context_provider != "ollama":
+        if not ollama_unload_before_vllm and not game_title:
+            options.pop("[run].ollama_timeout")
+        if not ollama_unload_before_vllm and (
+            not game_title or game_context_provider != "ollama"
+        ):
             options.pop("[run].ollama_host")
     logger.info("実効設定:")
     for option, value in options.items():
@@ -509,6 +513,7 @@ def execute(
     )
     _log_cli_start(
         selection_method=config.selection_method,
+        ollama_unload_before_vllm=config.vllm_runtime_config.unload_ollama,
         config_path=config_path,
         output_count=output_count,
         game_title=game_title,

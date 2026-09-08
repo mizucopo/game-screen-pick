@@ -160,6 +160,61 @@ def test_cli_passes_optional_runtime_actions_and_reuses_ollama_host(
 
 
 @pytest.mark.parametrize(
+    ("provider", "unload", "show_timeout", "show_host"),
+    [
+        (None, False, False, False),
+        (None, True, True, True),
+        ("ollama", False, True, True),
+        ("openai", False, True, False),
+    ],
+)
+def test_semantic_cli_logs_connection_settings_used_by_runtime_or_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    provider: str | None,
+    unload: bool,
+    show_timeout: bool,
+    show_host: bool,
+) -> None:
+    input_dir = tmp_path / "videos"
+    input_dir.mkdir()
+    (input_dir / "game.mp4").write_bytes(b"video")
+    config_path = tmp_path / "runtime.toml"
+    config_text = (
+        '[run]\nselection_method = "semantic_video"\nvllm_model = "video-model"\n'
+        'ollama_host = "http://configured-ollama:11434"\nollama_timeout = 17\n'
+        f"ollama_unload_before_vllm = {str(unload).lower()}\n"
+    )
+    if provider is not None:
+        config_text += (
+            f'game_context_provider = "{provider}"\n'
+            'game_context_model = "context-model"\n'
+            f'{provider}_api_key = "private-context-key"\n'
+        )
+    config_path.write_text(config_text, encoding="utf-8")
+    monkeypatch.setattr("src.main.run_video_application", lambda _request: None)
+    with caplog.at_level(logging.INFO):
+        result = CliRunner().invoke(
+            execute,
+            [
+                "--config",
+                str(config_path),
+                "--num",
+                "1",
+                "--game-title" if provider else "--game-context",
+                "Game",
+                str(input_dir),
+                str(tmp_path / "out"),
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    assert ("[run].ollama_timeout: 17.0" in caplog.text) is show_timeout
+    assert ("[run].ollama_host:" in caplog.text) is show_host
+    assert "private-context-key" not in caplog.text
+
+
+@pytest.mark.parametrize(
     ("configured_key", "environment_key", "expected_key"),
     [
         (" ollama-config-secret ", "ollama-env-secret", "ollama-config-secret"),
