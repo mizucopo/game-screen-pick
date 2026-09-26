@@ -49,6 +49,10 @@ pnpm-debug.log*
 # Coverage
 coverage/
 
+# Ansible runtime state
+.ansible/tmp/
+.ansible/cp/
+
 # macOS
 .DS_Store
 

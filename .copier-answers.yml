@@ -1,10 +1,10 @@
-_commit: 56e724389877f2a8ab75420e9920cfadfaa07f11
+_commit: fa41199
 _src_path: git@github.com:mizucopo/repo-template.git
 author_email: mizu.copo@gmail.com
 author_name: みず
 project_description: ゲームスクリーンショットから品質・多様性を考慮して最適な画像を自動選択するAIツール
 project_name: game-screen-pick
-project_version: 1.19.2
+project_version: 1.19.3
 python_project_kind: application
 python_version: '3.13'
 use_chrome_extension: false
