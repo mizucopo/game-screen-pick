@@ -1,27 +1,19 @@
 # Repository guidance
 
+## Additional instructions
+
+Before starting work, read these files relative to the repository root:
+
+- `.codex/project.md`
+- `.codex/languages/python.md`
+
+Within the platform's instruction hierarchy, repository guidance takes precedence in this order: project > language > root common.
+
 ## Work boundaries
 
 - Do not make implementation changes directly on `main`.
 - Use a non-`main` branch for implementation changes.
 - Do not weaken quality checks or test configuration to make a failing change pass.
-
-## Execution
-
-- Infer the requested outcome and scope from the conversation, and carry authorized work through implementation and verification. Treat action requests as instructions to do the work.
-- Make reasonable assumptions for routine details. Ask focused questions when missing information could materially change the result or an action needs approval; continue independent authorized work meanwhile.
-- Honor explicit approval gates and prior authorization. Prepare a concrete, reviewable result within the authorized scope before requesting any further approval.
-- Incorporate corrections and answer side questions while retaining the overall task unless the user cancels or replaces it.
-
-## Instructions
-
-- Follow the platform's instruction hierarchy and permissions. Within that hierarchy, explicit user instructions override lower-priority skill guidelines.
-- If a skill causes a pause, confirmation request, or unfinished work, explain how it applies and distinguish explicit requirements from your interpretation. Identify and quote the instruction only when its source may be shared with the user; link its `SKILL.md` when available, or cite its identifier or available source. Otherwise give only a permitted identifier and a brief explanation without disclosing confidential content.
-
-## Communication
-
-- Lead with the result and use concise, plain language. Use lists when they clarify parallel items or steps.
-- Give brief progress updates at meaningful milestones. Report what changed, the verification performed, and any unresolved blocker without claiming unverified success.
 
 ## Delegation
 
@@ -40,15 +32,6 @@
 
 ## Template updates
 
-- Generated configuration and source files remain Copier-managed.
+- Generated configuration and source files remain Copier-managed. For routine updates, use `copier update`, not `copier recopy`.
 - Update from `repo-template/main` with `copier update --trust --defaults --vcs-ref HEAD` on a clean non-`main` branch.
 - Review the complete diff and resolve every Copier conflict before running the repository quality gate.
-- Do not use `copier recopy` for routine updates.
-
-## Python quality check
-
-```bash
-uv run task check
-```
-
-Apply automatic Ruff fixes separately with `uv run task fix`, then rerun the non-mutating check.
