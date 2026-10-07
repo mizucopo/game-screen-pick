@@ -7,5 +7,15 @@
 - Preserve `.gitignore` entries for `config/*` (except `config/.gitkeep`) and
   `.game-screen-pick/`. They exclude local configuration that may contain API
   keys and generated runtime cache.
-- The PR quality workflow retains the Dependabot-updated `setup-uv` v10.1.0
-  pin until the template provides it. Refs mizucopo/repo-template#104.
+- Preserve the `src` package initializer and import contract test, and the
+  mypy `files`/`mypy_path` mapping. The CLI imports `src.main` and its modules
+  use package-relative imports; the template's flat application layout does
+  not match this project.
+- Keep direct pytest execution in the quality task: this project has an
+  established test suite, so empty collection must remain a failing gate.
+- Run Ruff over the whole repository in quality and fix tasks so the release
+  controller remains covered when CI delegates to `task check`.
+- The SemVer release workflow marks prereleases with `--prerelease`, using
+  the prepared version before build metadata, and skips their Latest lookup.
+  This is a temporary template exception until the generic release workflow
+  supplies the same behavior (tracked in mizucopo/repo-template#167).

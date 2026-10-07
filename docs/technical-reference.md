@@ -363,5 +363,6 @@ Ollama hostも生成条件に含め、別endpointの同名modelを混同しま�
 
 ## バージョンとリリース
 
-`main`を対象にするすべてのPull Requestは、ドキュメントやテストだけの変更も含めて、
-`pyproject.toml`を未公開の新しいversionへ更新します。
+Pull Requestでversionを採番せず、公開する場合はリリース分類と理由を記載します。
+分類と公開の選択は[CONTRIBUTING.md](../CONTRIBUTING.md#リリース分類)、
+採番・公開の設定と復旧は[docs/release.md](release.md)を参照してください。
