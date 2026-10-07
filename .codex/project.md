@@ -13,8 +13,9 @@
   not match this project.
 - Keep direct pytest execution in the quality task: this project has an
   established test suite, so empty collection must remain a failing gate.
+- Run Ruff over the whole repository in quality and fix tasks so the release
+  controller remains covered when CI delegates to `task check`.
 - The SemVer release workflow marks prereleases with `--prerelease`, using
   the prepared version before build metadata, and skips their Latest lookup.
   This is a temporary template exception until the generic release workflow
-  supplies the same behavior (the related Tauri change was tracked in
-  mizucopo/repo-template#100).
+  supplies the same behavior (tracked in mizucopo/repo-template#167).
