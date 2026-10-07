@@ -7,5 +7,7 @@
 - Preserve `.gitignore` entries for `config/*` (except `config/.gitkeep`) and
   `.game-screen-pick/`. They exclude local configuration that may contain API
   keys and generated runtime cache.
-- The PR quality workflow retains the Dependabot-updated `setup-uv` v10.1.0
-  pin until the template provides it. Refs mizucopo/repo-template#104.
+- Preserve the `src` package initializer and import contract test, and the
+  mypy `files`/`mypy_path` mapping. The CLI imports `src.main` and its modules
+  use package-relative imports; the template's flat application layout does
+  not match this project.

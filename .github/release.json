@@ -1,0 +1,23 @@
+{
+  "version": {
+    "scheme": "semver",
+    "sources": [
+      {
+        "path": "pyproject.toml",
+        "format": "toml",
+        "key": ["project", "version"]
+      }
+    ],
+    "locks": [
+      { "path": "uv.lock", "format": "toml-lock", "package": "game-screen-pick", "optional": true }
+    ]
+  },
+  "publication": {
+    "release_tag": "{version}",
+    "github_release": true,
+
+    "release_paths": ["pyproject.toml"],
+    "latest_image": null,
+    "images": []
+  }
+}
