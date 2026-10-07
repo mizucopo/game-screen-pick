@@ -221,7 +221,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.release_tag }}
-        run: gh release create "$TAG" --verify-tag --latest=false --title "$TAG" --generate-notes
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          release_args=(--verify-tag --latest=false --title "$TAG" --generate-notes)
+          if [[ "${VERSION%%+*}" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${release_args[@]}"
 
   promote-latest:
     needs: [prepare, release]
@@ -249,7 +255,13 @@ jobs:
         id: latest-state
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 -I .github/scripts/release.py latest
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if [[ "${VERSION%%+*}" == *-* ]]; then
+            echo "promote_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            python3 -I .github/scripts/release.py latest
+          fi
       - name: Mark GitHub Release as latest
         if: steps.latest-state.outputs.promote_latest == 'true'
         env:

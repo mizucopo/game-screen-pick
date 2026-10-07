@@ -69,7 +69,7 @@ files = ["src", "tests"]
 mypy_path = "src:stubs"
 
 [tool.taskipy.tasks]
-check = "ruff check src tests stubs && ruff format --check src tests stubs && mypy && python tests/run_pytest.py"
+check = "ruff check src tests stubs && ruff format --check src tests stubs && mypy && pytest"
 fix = "ruff check --fix src tests stubs && ruff format src tests stubs"
 test = "task check"
 
