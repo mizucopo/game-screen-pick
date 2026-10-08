@@ -7,7 +7,9 @@ import io
 import json
 import math
 import shutil
+import subprocess
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from urllib.request import Request
 
@@ -31,6 +33,187 @@ def load_json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(value, dict)
     return value
+
+
+def _request_without_media(body: dict[str, Any]) -> dict[str, Any]:
+    """Retain prompt, schema, labels and clip options, replacing only inline bytes."""
+    result: dict[str, Any] = json.loads(json.dumps(body))
+    message = result["messages"][0]
+    if "images" in message:
+        assert len(message["images"]) == 1
+        message["images"][0] = "<inference-media>"
+    else:
+        assert len(message["content"]) == 2
+        media = message["content"][1]
+        media[media["type"]]["url"] = "<inference-media>"
+    return result
+
+
+def _decoded_video_media(
+    encoded: bytes,
+) -> tuple[dict[str, Any], list[Image.Image]]:
+    """Probe PTS and decode every submitted video frame with native FFmpeg."""
+    with TemporaryDirectory(prefix="migration-inference-media-") as directory:
+        video = Path(directory) / "submitted.mp4"
+        video.write_bytes(encoded)
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_streams",
+                "-show_frames",
+                "-show_format",
+                "-of",
+                "json",
+                str(video),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(probe.stdout)
+        assert len(payload["streams"]) == 1, "video media must contain one video stream"
+        stream = payload["streams"][0]
+        assert stream["codec_type"] == "video"
+        fields = (
+            "codec_type",
+            "codec_name",
+            "width",
+            "height",
+            "pix_fmt",
+            "avg_frame_rate",
+        )
+        metadata = {field: stream[field] for field in fields}
+        metadata["color_range"] = stream.get("color_range", "unspecified")
+        metadata.update(
+            {
+                "start_seconds": float(payload["format"].get("start_time", 0)),
+                "duration_seconds": float(payload["format"]["duration"]),
+                "frame_timestamps": [
+                    float(frame["best_effort_timestamp_time"])
+                    for frame in payload["frames"]
+                ],
+            }
+        )
+        decoded = subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-v",
+                "error",
+                "-i",
+                str(video),
+                "-map",
+                "0:v:0",
+                "-fps_mode",
+                "passthrough",
+                "-pix_fmt",
+                "rgb24",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ],
+            check=True,
+            capture_output=True,
+        ).stdout
+    dimensions = (stream["width"], stream["height"])
+    frame_size = dimensions[0] * dimensions[1] * 3
+    assert len(decoded) == frame_size * len(metadata["frame_timestamps"])
+    images = [
+        Image.frombytes("RGB", dimensions, decoded[offset : offset + frame_size])
+        for offset in range(0, len(decoded), frame_size)
+    ]
+    return metadata, images
+
+
+def _video_semantic_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Compare pixel layout; range encodings must also pass the decoded RGB gate."""
+    result = dict(metadata)
+    if result["pix_fmt"] == "yuvj420p":
+        result["pix_fmt"] = "yuv420p"
+    # Full/limited encodings can preserve the same decoded content. Retain their
+    # raw tags in the recording, but reject incorrect interpretation by pixels.
+    result.pop("color_range")
+    return result
+
+
+def _assert_media_pixels(
+    actual: Image.Image, reference: Image.Image, label: str
+) -> None:
+    """Apply the declared RGB gate to the complete image, including sheet labels."""
+    assert actual.size == reference.size, f"{label}: dimensions changed"
+    assert image_difference_hash(actual) == image_difference_hash(reference), (
+        f"{label}: dHash changed"
+    )
+    actual_pixels = np.asarray(actual.convert("RGB"), dtype=np.int16)
+    expected_pixels = np.asarray(reference.convert("RGB"), dtype=np.int16)
+    difference = np.abs(actual_pixels - expected_pixels)
+    assert float(difference.mean(axis=(0, 1)).max()) <= 1.0, f"{label}: channel MAE"
+    assert int(difference.max()) <= 16, f"{label}: maximum pixel difference"
+    mse = float(np.mean(np.square(difference.astype(np.float64))))
+    assert mse == 0 or 10 * math.log10(255**2 / mse) >= 40, f"{label}: PSNR"
+
+
+def assert_inference_media(
+    method: str, kind: str, encoded: bytes, body: dict[str, Any]
+) -> None:
+    """Compare every AI input pixel and video PTS with reviewed, stored references."""
+    directory = FIXTURE_ROOT / "inference-media" / method
+    expected = load_json(directory / f"{kind}.json")
+    assert _request_without_media(body) == expected["request"], (
+        f"{method}/{kind}: inference prompt/schema/media options changed"
+    )
+    if kind == "video":
+        metadata, frames = _decoded_video_media(encoded)
+        assert _video_semantic_metadata(metadata) == _video_semantic_metadata(
+            expected["video_metadata"]
+        ), "video timing/stream changed"
+        assert len(frames) == len(expected["decoded_frames"])
+        for index, (frame, name) in enumerate(
+            zip(frames, expected["decoded_frames"], strict=True)
+        ):
+            with frame, Image.open(directory / name) as reference:
+                _assert_media_pixels(frame, reference, f"video frame {index}")
+    else:
+        with (
+            Image.open(io.BytesIO(encoded)) as actual,
+            Image.open(directory / expected["decoded_frames"][0]) as reference,
+        ):
+            assert actual.format == "JPEG", "inference sheet must be JPEG"
+            _assert_media_pixels(actual, reference, f"{method}/{kind} sheet")
+
+
+def record_inference_media(
+    directory: Path, kind: str, encoded: bytes, body: dict[str, Any]
+) -> None:
+    """Record public AI input only during the explicit reviewed baseline command."""
+    directory.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, Any] = {
+        "source_revision": subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip(),
+        "request": _request_without_media(body),
+    }
+    if kind == "video":
+        (directory / "video.mp4").write_bytes(encoded)
+        video_metadata, frames = _decoded_video_media(encoded)
+        metadata["video_metadata"] = video_metadata
+        names = [f"video-frame-{index:03d}.png" for index in range(len(frames))]
+    else:
+        (directory / f"{kind}.jpg").write_bytes(encoded)
+        frames = [Image.open(io.BytesIO(encoded)).convert("RGB")]
+        names = [f"{kind}.png"]
+    metadata["decoded_frames"] = names
+    for frame, name in zip(frames, names, strict=True):
+        with frame:
+            frame.save(directory / name)
+    (directory / f"{kind}.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 class RecordingExtractor(VideoFrameExtractor):
@@ -67,7 +250,15 @@ class RecordingExtractor(VideoFrameExtractor):
 class FixtureHttp:
     """Substitute only HTTP I/O with committed Ollama and vLLM JSON responses."""
 
-    def __init__(self, method: str, *, interrupt_secondary: bool = False) -> None:
+    def __init__(
+        self,
+        method: str,
+        *,
+        interrupt_secondary: bool = False,
+        record_media_directory: Path | None = None,
+    ) -> None:
+        self.method = method
+        self.record_media_directory = record_media_directory
         self.responses = load_json(FIXTURE_ROOT / "responses" / f"{method}.json")
         self.interrupt_secondary = interrupt_secondary
         self.calls: list[str] = []
@@ -124,6 +315,10 @@ class FixtureHttp:
                     with Image.open(io.BytesIO(decoded)) as image:
                         image.verify()
                     kind = "secondary" if "3コマ" in prompt else "primary"
+            if self.record_media_directory is None:
+                assert_inference_media(self.method, kind, decoded, body)
+            else:
+                record_inference_media(self.record_media_directory, kind, decoded, body)
             if kind != "video":
                 response = self.responses[kind]
                 message = (
@@ -201,6 +396,15 @@ def restore_stored_cache(
         assert matches, f"fixture replay glob matched nothing: {operation['glob']}"
         for path in matches:
             path.write_text(operation["content"], encoding="utf-8")
+    for operation in recipes[state].get("change_payload_digest", []):
+        matches = list(root.glob(operation["glob"]))
+        assert matches, f"fixture replay glob matched nothing: {operation['glob']}"
+        for path in matches:
+            value = load_json(path)
+            value["data"]["payload_digest"] = operation["value"]
+            path.write_text(
+                json.dumps(value, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
 
 
 def schema(value: Any) -> Any:
@@ -383,15 +587,7 @@ def assert_reference_images(request: VideoSelectionRequest, method: str) -> None
                 FIXTURE_ROOT / "reference-images" / method / f"{name}.png"
             ) as reference,
         ):
-            assert actual.size == reference.size
-            assert image_difference_hash(actual) == image_difference_hash(reference)
-            pixels = np.asarray(actual.convert("RGB"), dtype=np.int16)
-            reference_pixels = np.asarray(reference.convert("RGB"), dtype=np.int16)
-            difference = np.abs(pixels - reference_pixels)
-            assert float(difference.mean(axis=(0, 1)).max()) <= 1.0
-            assert int(difference.max()) <= 16
-            mse = float(np.mean(np.square(difference.astype(np.float64))))
-            assert mse == 0 or 10 * math.log10(255**2 / mse) >= 40.0
+            _assert_media_pixels(actual, reference, f"{method}/{name} output")
 
 
 def assert_contract(

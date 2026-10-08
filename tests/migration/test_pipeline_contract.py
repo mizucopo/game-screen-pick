@@ -91,13 +91,28 @@ def test_pipeline_fixture_resumes_after_interrupt(
 
 
 @pytest.mark.parametrize("method", METHODS)
-@pytest.mark.parametrize("state", ("normal", "partial", "corrupt"))
+@pytest.mark.parametrize("state", ("normal", "partial", "corrupt", "corrupt-digest"))
 def test_pipeline_fixture_replays_stored_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, state: str
 ) -> None:
     """Replay committed old bytes rather than building a new cache during the test."""
     request = request_for(tmp_path, method)
     restore_stored_cache(request, method, state)
+    if state == "corrupt-digest":
+        for path in cache_root(request).glob("videos/*/mechanical-analysis/*.json"):
+            original = load_json(
+                FIXTURE_ROOT
+                / "stored-cache"
+                / method
+                / path.relative_to(cache_root(request))
+            )
+            corrupt = load_json(path)
+            assert corrupt["data"]["payload_digest"] == "0" * 64
+            assert (
+                corrupt["data"]["payload_digest"] != original["data"]["payload_digest"]
+            )
+            corrupt["data"]["payload_digest"] = original["data"]["payload_digest"]
+            assert corrupt == original, "key and complete payload must stay valid"
     http = FixtureHttp(method)
     http.forbid_calls = state != "partial"
     http.install(monkeypatch)
@@ -120,7 +135,7 @@ def test_pipeline_fixture_replays_stored_cache(
     assert "video" not in http.calls
     if state == "partial":
         assert http.calls.count("secondary") == 1
-    if state == "corrupt":
+    if state in {"corrupt", "corrupt-digest"}:
         assert len(measured_ids) == (6 if method == "sampled_frames" else 3)
     else:
         assert measured_ids == []

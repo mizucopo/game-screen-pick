@@ -35,12 +35,18 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reviewed-update", action="store_true", required=True)
-    parser.parse_args()
+    parser.add_argument("--inference-media-only", action="store_true")
+    args = parser.parse_args()
     for method in ("sampled_frames", "semantic_video"):
         with TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as patch:
             request = request_for(Path(directory), method)
-            FixtureHttp(method).install(patch)
+            FixtureHttp(
+                method,
+                record_media_directory=FIXTURE_ROOT / "inference-media" / method,
+            ).install(patch)
             VideoSelector(request, frame_extractor=RecordingExtractor()).run()
+            if args.inference_media_only:
+                continue
             write_json(
                 FIXTURE_ROOT / "expected" / f"{method}.json", pipeline_contract(request)
             )
@@ -62,6 +68,8 @@ def main() -> None:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with Image.open(Path(request.output_dir) / f"{name}.jpg") as image:
                     image.convert("RGB").save(target)
+    if args.inference_media_only:
+        return
     write_json(
         FIXTURE_ROOT / "baseline-provenance.json",
         {
@@ -90,6 +98,7 @@ def main() -> None:
                         "stored-cache",
                         "reference-images",
                         "responses",
+                        "inference-media",
                     )
                     for path in sorted((FIXTURE_ROOT / folder).rglob("*"))
                     if path.is_file()

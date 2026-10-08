@@ -40,6 +40,35 @@ HTTP 境界以外は production の FFmpeg、ffprobe、画像計算、選定、c
 使用します。Ollama の `/api/ps` 応答も fixture で、CPU 許可設定です。
 GPU、モデル download、外部 network は不要です。
 
+`pipeline/inference-media/` は実際に AI へ送った primary / secondary JPEG、
+動画 MP4、decode 済み reference PNG、媒体 bytes を marker に置換した HTTP request
+を保存します。通常の `FixtureHttp` は prompt・schema・表示 ID・media options を
+厳密照合し、sheet 全体（label・padding・候補の順・before/selected/after の順も含む）
+を既宣言の RGB gate と dHash で比較します。今回の Pillow default font は bundled
+なので、label 領域は mask しません。動画は codec・寸法・fps・duration・全 frame の
+PTS と、順序付きの全 decoded frame を照合します。6 frame の MP4 は PTS
+0–5 秒・duration 6 秒、prompt の原動画区間は 0–5.8 秒です。blank、候補の並び替え、
+label 欠落、before/after 入れ替え、動画の逆順・PTS 変更・誤区間の negative test と、
+JPEG 再 encode だけなら合格する positive control を用意しています。
+各 media reference の JSON に記録元 revision を残します。通常テストは生成せず、
+媒体だけの明示更新には次の command を使います。
+
+```bash
+PYTHONPATH=. uv run python tests/fixtures/rust_migration/pipeline/record_baseline.py --reviewed-update --inference-media-only
+```
+
+この command は既存 report / cache golden と `baseline-provenance.json` を更新しません。
+媒体変更を review したあとに provenance の inventory を明示更新してください。
+
+動画 metadata は native の `pix_fmt` と明示 `color_range`（未表示なら
+`unspecified`）を保存します。FFmpeg 9 の clip は `yuvj420p` / `pc`、FFmpeg 6 は
+`yuv420p` / range 未表示になり、decoded RGB は channel MAE 最大約 0.617・最大差 1
+でした。意味比較では 8-bit YUV420 layout の別名 `yuvj420p` を `yuv420p` と扱い、
+range 表記単独で同一 pixel の意味を決めません。全 decoded frame の既宣言 RGB
+gate と dHash は必須、codec・寸法・fps・PTS・duration は厳密一致のままです。
+正しい full→limited 変換の positive control は合格し、pixel を変換せず SPS の
+range flag だけ変えた negative control は decoded pixel の相違で不合格になります。
+
 | 方式 | 抽出・採否 | 固定した最終選択 |
 | --- | --- | --- |
 | `sampled_frames` | 0.5–5.5 秒の 6 候補。暗転 2.5 秒を機械評価で除外。一次 AI 評価で 3.5 秒を transition とする | rank 1 = 1.5 秒 / 戦闘、rank 2 = 4.5 秒 / 会話 |
@@ -63,6 +92,8 @@ context JPEG / envelope、primary / secondary assessment、semantic chunk が含
 - `partial`: secondary assessment だけ削除し、固定済み primary / context から再開。
 - `corrupt`: mechanical cache を wrong-key / broken-digest envelope に置換し、
   機械評価だけ再生成。候補画像・AI 評価は正常 cache から再利用。
+- `corrupt-digest`: 正しい key と完全な payload を保ち、digest だけ変更する。
+  digest 検証だけで拒否して機械評価を再生成し、他の正常 cache は再利用する。
 
 別の中断テストは cold run の primary batch 保存後、secondary の HTTP 境界で
 `KeyboardInterrupt` を送出します。再開後は secondary と最終出力だけ実行します。

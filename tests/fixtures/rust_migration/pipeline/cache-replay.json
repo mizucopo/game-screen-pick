@@ -10,5 +10,13 @@
         "content": "{\"cache_schema_version\":1,\"phase\":\"mechanical-analysis\",\"phase_version\":4,\"cache_key\":\"wrong-key\",\"data\":{\"candidates\":[],\"rejected_frame_ids\":[],\"payload_digest\":\"broken\"}}\n"
       }
     ]
+  },
+  "corrupt-digest": {
+    "change_payload_digest": [
+      {
+        "glob": "videos/*/mechanical-analysis/*.json",
+        "value": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
   }
 }

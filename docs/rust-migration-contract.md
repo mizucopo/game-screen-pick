@@ -171,7 +171,7 @@ log進捗をCompleted RunやHuman Reviewの合格と解釈しない。動的文�
 ## 同等性gateとfixture
 
 保存fixtureは[tests/fixtures/rust_migration](../tests/fixtures/rust_migration/)、検証は[tests/migration](../tests/migration/)に置く。
-合成動画とpixel recipeからの境界画像、固定AI応答、期待report、正常／partial／corrupt cacheを使い、実録画・API key・検索結果を入れない。
+合成動画とpixel recipeからの境界画像、固定AI入力媒体・応答、期待report、正常／partial／corrupt／digestのみ破損したcacheを使い、実録画・API key・検索結果を入れない。
 テストはネット・実GPU不要。動画fixtureの検証には外部FFmpeg／ffprobeが必要で、不在skipを配布targetの合格と扱わない。
 Pythonコードをtest中に再実装したoracleだけで判定せず、保存された期待値と実行結果を比較する。後続Rust版は同じfixtureを読む。
 
@@ -189,7 +189,7 @@ Pythonコードをtest中に再実装したoracleだけで判定せず、保存�
 画像処理方式を替えるために後から許容値を広げる場合は、threshold前後・AI入力・最終品質の影響とHuman Reviewを示す別の設計判断が必要。期待値の無説明再生成で差を隠さない。
 
 固定goldenの入口は[image_expectations.json](../tests/fixtures/rust_migration/image_expectations.json)（15種類のPNGとpixel recipe）、[wire_expectations.json](../tests/fixtures/rust_migration/wire_expectations.json)（UTF-8 canonical JSON、Identity、stable frame ID、phase key）、[game_context_expectations.json](../tests/fixtures/rust_migration/game_context_expectations.json)（trim／CRLF／生成失敗）である。
-動画は[pipeline/synthetic-game.mkv](../tests/fixtures/rust_migration/pipeline/synthetic-game.mkv)と[生成recipe](../tests/fixtures/rust_migration/pipeline/generate_video.py)、固定応答は`pipeline/responses/`、期待値は`pipeline/expected/`、保存cacheは`pipeline/stored-cache/`、再開条件は[cache-replay.json](../tests/fixtures/rust_migration/pipeline/cache-replay.json)に置く。
+動画は[pipeline/synthetic-game.mkv](../tests/fixtures/rust_migration/pipeline/synthetic-game.mkv)と[生成recipe](../tests/fixtures/rust_migration/pipeline/generate_video.py)、固定応答は`pipeline/responses/`、期待値は`pipeline/expected/`、保存cacheは`pipeline/stored-cache/`、再開条件は[cache-replay.json](../tests/fixtures/rust_migration/pipeline/cache-replay.json)に置く。`pipeline/inference-media/`は実際のAI入力request・sheet全体・動画全frame／PTSを固定し、誤った媒体でも同じ応答が返る比較抜けを防ぐ。
 
 主要fixture/testの対応は次のとおり。既存テストは移行fixtureだけで置き換えず保持する。
 

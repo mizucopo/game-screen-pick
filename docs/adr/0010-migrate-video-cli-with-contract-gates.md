@@ -37,6 +37,18 @@ Run both implementations on separate copies of the same Input Video Directory, c
 
 Fixed-response tests compare exact candidate decisions, frame ID/time/rank, scenes, transitions, tie ordering and resume outcomes. Use the contract's predeclared numerical/image tolerances for floating point and codec/rendering differences. Cache digest vectors are byte-contract checks, while output JPEG byte hashes are verified within each implementation. Do not discard a discrepancy by regenerating golden files or broadening tolerances after seeing it. Live provider/model changes use a separate repeated same-input comparison and signed Human Review; no Ollama/vLLM response identity is required.
 
+### Copier migration checkpoints
+
+Keep [.copier-answers.yml](../../.copier-answers.yml) consistent with the implemented stage. Copier changes are required migration work, with these completion conditions:
+
+| Stage | Answers and completion condition |
+| --- | --- |
+| #338: baseline | Keep `use_python: true`, `use_rust: false`, `python_project_kind: application` and `python_version: '3.13'`. The existing Python package, CLI, quality gate and fixtures still work; do not generate a Rust project or switch runtime settings in this stage. |
+| [#339: Rust foundation](https://github.com/mizucopo/game-screen-pick/issues/339) | Set `use_rust: true` and record the tested toolchain in `rust_version`, while retaining the Python answers above. Complete only when the answers, Cargo project, `rust-toolchain.toml`, language guidance and both Python/Rust quality workflows agree, both gates pass, and Python remains executable as the comparison oracle. |
+| [#344: cutover](https://github.com/mizucopo/game-screen-pick/issues/344) | After #343 equivalence and cutover qualification, set `use_python: false`, retain `use_rust: true`/`rust_version`, and remove unused Python-only answers (`python_version`, `python_project_kind`, any `python_package_name`) and generated files/guidance/CI after checking references. Complete only when `.github/release.json` uses `Cargo.toml` as its sole version source and synchronizes `Cargo.lock`, ordinary quality/build runs without Python/uv, and packaged artifacts pass the Python-free target smoke tests. Retain fixtures and a reproducible historical Python oracle. |
+
+The current [template contract](https://github.com/mizucopo/repo-template/blob/2a67f0495a8c17695f83181814207272814730d2/copier.yml) permits Python and Rust together and selects Python's version source while `use_python` is true. It has `rust_version`, not separate `project_type` or `runtime` questions. Keep `use_version_management` and `use_gh_actions_release` true, and `use_docker`, `use_tauri` and `use_chrome_extension` false; an auxiliary Docker verification tool does not change the project's distribution type. Run `copier update` under [repository guidance](../../AGENTS.md#template-updates), inspect all generated changes/conflicts and preserve the project exceptions. Changing answer flags alone is not completion. Let the release controller update `project_version`; do not preassign 2.0.0 or hand-edit `_commit` without an actual template update.
+
 ## Cache migration boundaries
 
 Keep ADR 0008's filename/size Input Video Identity, stable frame IDs, visible regenerable cache, versioned semantic keys, payload integrity, ownership checks and failure protection. Language alone is not a reason to invalidate a compatible phase. Conversely, a matching filename is not sufficient evidence of compatible semantics.

@@ -10,7 +10,7 @@
   "ffmpeg": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
   "input_sha256": "6a3fcee7e6b67c2cd932968136f0407f3f89a364a2f06324e7d78092f902bb7b",
   "files": {
-    "cache-replay.json": "2b96290076aa57c3fdbcc86f38d59507df19e23bf044b2fd17fa61af9261f29d",
+    "cache-replay.json": "15d1335b40e71eee7f969352aa0ad123fad6b833b88256513c815fc6600433c3",
     "expected/sampled_frames.json": "0f08c3e1e165e73e56e3f514b5a45412c0645b2a7f163fc4460c3a6ffc2ee777",
     "expected/semantic_video.json": "41e36d27e93e9333c14063b19362a14c72338dae66b6ff9c0024e294659f6870",
     "stored-cache/sampled_frames/runs/edd6be0ceac85d80fb9cc14f8e3efcb2e6db19226b922c80ba4de8093063384c/run-manifest.json": "17e2cda60166421792cfc53dfc46336051c257a9ed69ae47043dcee8a417e71a",
@@ -56,6 +56,26 @@
     "reference-images/semantic_video/selected-01.png": "08d21b83b5ad5290e1b93587b604ce3d3e489570b4227990ca24ac523f0df310",
     "reference-images/semantic_video/selected-02.png": "e22fc30dee9410c7d179556ec6e9e2bd696a42a7bd9d885f8f29a638df23f2a3",
     "responses/sampled_frames.json": "9d1b5739b94f9f284002d41a34b10acdf47cca9729a16f5de18fdfa2670851a1",
-    "responses/semantic_video.json": "ae0a3370055e6b7810d3d780c72ddb035fe2b610916b11331cf0b51618e5c547"
+    "responses/semantic_video.json": "ae0a3370055e6b7810d3d780c72ddb035fe2b610916b11331cf0b51618e5c547",
+    "inference-media/sampled_frames/primary.jpg": "f33ffa9f8e365171f3401663e34140bc824ac46bb81f7920691ddd92f225a209",
+    "inference-media/sampled_frames/primary.json": "ff06c283b9b688f5765b6d74b697ebfcacd242da8d41d23173e1075a2b2df4c9",
+    "inference-media/sampled_frames/primary.png": "56c4550b6a3199887880f9aee851515b016dd5510063820100d8c85306aca526",
+    "inference-media/sampled_frames/secondary.jpg": "53900593c47071d41e2fc436d36a40741d84abc839d669058f1d3fc291b55143",
+    "inference-media/sampled_frames/secondary.json": "3fcf658550caf5512a87e6f96b85a2726ba463833937a1dbe992d4aefe5dd4d7",
+    "inference-media/sampled_frames/secondary.png": "639b6d3d5b3f8e640ade740e5e8da4192adfcbc5e70ba8a7b0d3db10a97dbbfa",
+    "inference-media/semantic_video/primary.jpg": "5022bb2de008b6e1b1753dbdaef90dec027ae6da134b7ba63218c6b364f15fd9",
+    "inference-media/semantic_video/primary.json": "133697f87548044b5681d9c589b380f61b4495c42ada73c2a38e78c31917a258",
+    "inference-media/semantic_video/primary.png": "a406f4c0127cd0f4c04a56e4ad644f24e952885bb120625456ecc0dd6aaba654",
+    "inference-media/semantic_video/secondary.jpg": "f5f0dcd89db822b304011553a130cc41619d6c8ac64f470322abce489d4d2eb0",
+    "inference-media/semantic_video/secondary.json": "a7ea4b5ed6c1d1ace73e2a23d259c3617206c31d6c8aa2a2671a7f09f3f927df",
+    "inference-media/semantic_video/secondary.png": "624528b8ce700a784bb48e81c7b38e54fe91ce6f3955690f4319ac01915977b4",
+    "inference-media/semantic_video/video-frame-000.png": "d924d3f88dafc95aabc0b558ff957ed6947c1d89ce5e15ab20d0c82068ac7032",
+    "inference-media/semantic_video/video-frame-001.png": "08d21b83b5ad5290e1b93587b604ce3d3e489570b4227990ca24ac523f0df310",
+    "inference-media/semantic_video/video-frame-002.png": "88ecdfaf82804bd8a96b204c94fece88b49f6b475b6e67c9826d645845ab51b2",
+    "inference-media/semantic_video/video-frame-003.png": "40b6d0792bf5e2a802a3255fe1ee3fbce8cc1b5145b38e284f71d606015a97a1",
+    "inference-media/semantic_video/video-frame-004.png": "e22fc30dee9410c7d179556ec6e9e2bd696a42a7bd9d885f8f29a638df23f2a3",
+    "inference-media/semantic_video/video-frame-005.png": "09e49f53acdacecd1d71a0b21c5cf3e53f99f3485e09ac19e5bd25cffbeadfe1",
+    "inference-media/semantic_video/video.json": "524eb0eddb006b82b965fdd924120b754f047cde5458da788d2d13c9a1f3c538",
+    "inference-media/semantic_video/video.mp4": "43f0258860a6df7a00633a16241b4e4c0cd38035d6c24a4f0027fe8aaa51bf44"
   }
 }
