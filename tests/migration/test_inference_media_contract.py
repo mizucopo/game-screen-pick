@@ -103,6 +103,28 @@ def test_fixture_http_accepts_verified_alternate_font(
 
 
 @pytest.mark.parametrize(("method", "kind"), SHEETS)
+def test_fixture_http_rejects_shared_font_template_drift(
+    method: str, kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production and expected template moving together cannot approve new glyphs."""
+    original_loader = ImageFont.load_default
+    monkeypatch.setattr(
+        ImageFont, "load_default", lambda **_kwargs: original_loader(size=11)
+    )
+    contract = sheet_contract(method, kind)
+    with _sheet(method, kind) as image, image.copy() as reference:
+        redraw_sheet_labels(image, contract, ImageFont.load_default(size=10))
+        for index in range(len(contract.labels)):
+            x, _, right, bottom = contract.label_box(index)
+            thumbnail = (x, bottom, right, bottom + contract.image_height)
+            with image.crop(thumbnail) as actual, reference.crop(thumbnail) as original:
+                assert actual.tobytes() == original.tobytes()
+        request = _request(method, kind, _jpeg(image))
+    with pytest.raises(AssertionError, match="unreviewed font profile"):
+        FixtureHttp(method)(request, timeout=1)
+
+
+@pytest.mark.parametrize(("method", "kind"), SHEETS)
 @pytest.mark.parametrize(
     "mutation",
     (

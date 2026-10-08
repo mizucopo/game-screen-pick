@@ -1,7 +1,10 @@
 """Reviewed sheet labels and portable font profiles, independent of output JSON."""
 
+import hashlib
+import json
 from dataclasses import dataclass
-from typing import Callable
+from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -11,6 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 class SheetContract:
     """Fix cell geometry and text observed in the six committed sheet bitmaps."""
 
+    fixture_key: str
     columns: int
     cell_width: int
     label_height: int
@@ -35,6 +39,11 @@ _TIMES = {
     ("semantic_video", "selected"): ("00:02", "00:04"),
 }
 
+_PROFILE_PINS = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures/rust_migration/sheet-label-profiles.json"
+)
+
 
 def sheet_contract(method: str, kind: str) -> SheetContract:
     """Return the immutable meaning and geometry of a reviewed fixture sheet."""
@@ -46,6 +55,7 @@ def sheet_contract(method: str, kind: str) -> SheetContract:
         for index, timestamp in enumerate(_TIMES[method, kind], start=1)
     )
     return SheetContract(
+        fixture_key=f"{method}/{kind}",
         columns=2 if contextual else 3,
         cell_width=960 if contextual else 480,
         label_height=42 if contextual else 32,
@@ -92,6 +102,45 @@ def _labels_match(
     return True
 
 
+def _reviewed_profile_pins(
+    contract: SheetContract, dimensions: tuple[int, int]
+) -> dict[str, Any]:
+    """Read the committed oracle; ordinary comparison never records new hashes."""
+    pins = json.loads(_PROFILE_PINS.read_text(encoding="utf-8"))
+    assert isinstance(pins, dict) and pins["schema_version"] == 1
+    assert pins["pixels"]["mode"] == "RGB"
+    assert pins["pixels"]["hash_algorithm"] == "sha256"
+    assert pins["sheet_contracts"][contract.fixture_key] == {
+        "columns": contract.columns,
+        "cell_width": contract.cell_width,
+        "label_height": contract.label_height,
+        "image_height": contract.image_height,
+        "image_size": list(dimensions),
+        "text_origin": [10, 8],
+        "labels": list(contract.labels),
+        "label_boxes": [
+            list(contract.label_box(index)) for index in range(len(contract.labels))
+        ],
+    }, "reviewed sheet label contract changed"
+    return pins
+
+
+def _template_is_pinned(
+    template: Image.Image,
+    contract: SheetContract,
+    profile: str,
+    pins: dict[str, Any],
+) -> bool:
+    """Require exact audited raw RGB, independently of the current font runtime."""
+    digests = []
+    for index in range(len(contract.labels)):
+        with template.crop(contract.label_box(index)) as strip:
+            digests.append(hashlib.sha256(strip.tobytes()).hexdigest())
+    expected = pins["profiles"][profile]["label_strip_sha256"][contract.fixture_key]
+    assert isinstance(expected, list)
+    return digests == expected
+
+
 def assert_sheet_pixels(
     actual: Image.Image,
     reference: Image.Image,
@@ -101,7 +150,8 @@ def assert_sheet_pixels(
 ) -> None:
     """Verify label meaning before excluding glyphs from the unchanged pixel gate.
 
-    The approved profiles are Pillow's bundled Aileron 10 and bitmap default.
+    The approved profiles have committed raw RGB label-strip hashes; regenerating
+    a matching template with a changed Pillow font/rasterizer cannot approve it.
     Unregistered fonts fail closed until separately reviewed and qualified.
     No submitted JSON, font name or renderer claim establishes label meaning.
     """
@@ -111,15 +161,18 @@ def assert_sheet_pixels(
         rows * (contract.label_height + contract.image_height),
     )
     assert actual.size == reference.size == dimensions, f"{label}: dimensions changed"
+    pins = _reviewed_profile_pins(contract, dimensions)
     with actual.convert("RGB") as actual_rgb, reference.convert("RGB") as reference_rgb:
         verified = False
-        for font in (
-            ImageFont.load_default(size=10),
-            ImageFont.load_default_imagefont(),
+        for profile, font in (
+            ("pillow-aileron-10", ImageFont.load_default(size=10)),
+            ("pillow-bitmap-default", ImageFont.load_default_imagefont()),
         ):
             with Image.new("RGB", dimensions, "black") as template:
                 redraw_sheet_labels(template, contract, font)
-                if _labels_match(actual_rgb, template, contract):
+                if _template_is_pinned(
+                    template, contract, profile, pins
+                ) and _labels_match(actual_rgb, template, contract):
                     verified = True
                     break
         assert verified, (

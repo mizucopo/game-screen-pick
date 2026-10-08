@@ -511,6 +511,18 @@ def _assert_jpeg_receipts(
     return names
 
 
+def _stored_phase_data(request: VideoSelectionRequest, path: Path) -> dict[str, Any]:
+    """Read the unchanged Python recipe, independent of the submitted records."""
+    reference = (
+        FIXTURE_ROOT
+        / "stored-cache"
+        / request.selection_method
+        / path.relative_to(cache_root(request))
+    )
+    data: dict[str, Any] = load_json(reference)["data"]
+    return data
+
+
 def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
     """Capture fixed decisions and durable cache contracts without temporary paths."""
     root = cache_root(request)
@@ -556,20 +568,22 @@ def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
                 assert json_digest(data["result"]) == data["result_digest"]
             video_identity = path.relative_to(root / "videos").parts[0]
             if phase == "candidate-extraction":
-                _assert_jpeg_receipts(path, data, candidate=True)
+                names = _assert_jpeg_receipts(path, data, candidate=True)
+                required_names = {
+                    f"{record['frame_id']}.jpg"
+                    for record in _stored_phase_data(request, path)["source_frames"]
+                }
+                assert (
+                    len(names) == len(required_names) and set(names) == required_names
+                ), "candidate record names changed"
                 assert video_identity not in candidate_manifest_digests
                 candidate_manifest_digests[video_identity] = data["payload_digest"]
             if phase == "secondary-context":
                 # The unchanged stored Python recipe independently fixes the
                 # required names; do not infer completeness from the new writer.
-                reference = (
-                    FIXTURE_ROOT
-                    / "stored-cache"
-                    / request.selection_method
-                    / path.relative_to(root)
-                )
                 required_names = {
-                    record["name"] for record in load_json(reference)["data"]["frames"]
+                    record["name"]
+                    for record in _stored_phase_data(request, path)["frames"]
                 }
                 context_record_names.append(
                     {

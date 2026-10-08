@@ -98,6 +98,32 @@ def test_output_contract_accepts_verified_alternate_font(
     assert_contract(request, method)
 
 
+def test_output_contract_rejects_shared_font_template_drift(
+    completed_output: tuple[VideoSelectionRequest, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Valid integrity and a jointly changed renderer/template do not approve glyphs."""
+    request, method = completed_output
+    sheet = Path(request.output_dir) / "selected-contact-sheet.jpg"
+    original_loader = ImageFont.load_default
+    monkeypatch.setattr(
+        ImageFont, "load_default", lambda **_kwargs: original_loader(size=11)
+    )
+    contract = sheet_contract(method, "selected")
+    with Image.open(sheet) as original:
+        image = original.convert("RGB")
+    with image, image.copy() as reference:
+        redraw_sheet_labels(image, contract, ImageFont.load_default(size=10))
+        for index in range(len(contract.labels)):
+            x, _, right, bottom = contract.label_box(index)
+            thumbnail = (x, bottom, right, bottom + contract.image_height)
+            with image.crop(thumbnail) as actual, reference.crop(thumbnail) as original:
+                assert actual.tobytes() == original.tobytes()
+        image.save(sheet, format="JPEG", quality=100, subsampling=0)
+    _refresh_sheet_integrity(request)
+    with pytest.raises(AssertionError, match="unreviewed font profile"):
+        assert_contract(request, method)
+
+
 @pytest.mark.parametrize(
     "mutation",
     (

@@ -118,6 +118,22 @@ def test_candidate_receipt_rejects_fabricated_hash(
         assert_contract(request, method)
 
 
+@pytest.mark.parametrize("record_index", (0, -1))
+def test_candidate_receipt_rejects_missing_frame(
+    durable_output: tuple[VideoSelectionRequest, str], record_index: int
+) -> None:
+    """A retained JPEG/mechanical record cannot mask an omitted source receipt."""
+    request, method = durable_output
+    path = _phase(request, "candidate-extraction")
+    candidate = load_json(path)
+    omitted = candidate["data"]["source_frames"].pop(record_index)
+    assert (path.parent / "frames" / f"{omitted['frame_id']}.jpg").is_file()
+    _write(path, candidate)
+    _link_candidate_manifest(request)
+    with pytest.raises(AssertionError, match="candidate record names"):
+        assert_contract(request, method)
+
+
 @pytest.mark.parametrize(
     "mutation", ("wrong_sha", "wrong_last_sha", "missing_before", "missing_after")
 )

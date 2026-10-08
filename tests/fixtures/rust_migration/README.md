@@ -104,6 +104,10 @@ FFmpeg / 元 revision と各 fixture の SHA-256 を記録しています。
 `sheet_contract.py` の label / cell geometry は6つの保存 PNG から独立に転記した
 期待値です。実画像の占有 label strip を、Pillow 同梱 Aileron Regular 10px または
 bitmap default の完全な文字 / 背景 template と既存 RGB 閾値で照合します。
+[sheet-label-profiles.json](sheet-label-profiles.json) に各 strip の RGB pixel SHA-256、
+label / geometry と監査した環境を固定保存し、そのhashに一致するtemplateだけを
+使います。実行時のfontやrasterizerがactualとtemplateを同時に変えても、未承認の
+描画を合格にしません。通常testでprofile hashを再生成・更新しません。
 rank / Frame Display ID、動画名、時刻、context legend、x/y位置と黒い余白を検証後、
 既知の32px / 42px stripだけを比較の双方で黒くします。thumbnail の先頭 pixel row
 と未使用 cell は除外しません。request / report の文字や提出 font 名だけでは
@@ -176,6 +180,8 @@ completion は、各実装が生成した artifact の size / SHA-256 と完全�
 も保存した中身から再計算して照合します。欠落 field を正規化で消しません。
 
 candidate manifest の各 `image_sha256` とsizeは各実装自身の候補JPEGへ照合し、
+固定stored-cache recipeの候補ID集合とexact countを確認します。JPEGとmechanical
+記録を残したままreceiptだけ欠落させ、全digestを整合させても拒否します。
 mechanical の `source_frames_digest` は同じ動画のcandidate payload digestへ照合します。
 secondary-context は必要なreceipt SHAを自身のJPEGへ照合し、保存goldenの
 `context_record_names` で必要な before / after のname集合・順序を確認します。
