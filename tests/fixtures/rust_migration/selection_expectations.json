@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline_commit": "e5e19c01d65cb48e9c5e1d6ccc171b4e2082228c",
-  "note": "Saved candidates and fixed primary/secondary AI assessment responses. Selected IDs and aggregate scores are literal contract expectations; normal tests do not regenerate them.",
+  "note": "Saved candidates and fixed primary/secondary AI assessment responses. Ordered secondary candidate IDs, final selected IDs, and aggregate scores are literal contract expectations; normal tests do not regenerate them.",
   "cases": [
     {
       "name": "scene_unicode_casefold",
@@ -75,6 +75,10 @@
           "reason": "fixed synthetic assessment response"
         }
       ],
+      "expected_secondary_candidates": [
+        "f00001",
+        "f00003"
+      ],
       "expected_selected": [
         {
           "frame_id": "f00001",
@@ -87,6 +91,10 @@
       ],
       "negative_control": {
         "normalization": "lower",
+        "expected_secondary_candidates": [
+          "f00001",
+          "f00002"
+        ],
         "expected_selected": [
           {
             "frame_id": "f00001",
@@ -171,6 +179,10 @@
           "reason": "fixed synthetic assessment response"
         }
       ],
+      "expected_secondary_candidates": [
+        "f00001",
+        "f00003"
+      ],
       "expected_selected": [
         {
           "frame_id": "f00001",
@@ -183,6 +195,10 @@
       ],
       "negative_control": {
         "normalization": "ascii_alnum",
+        "expected_secondary_candidates": [
+          "f00001",
+          "f00002"
+        ],
         "expected_selected": [
           {
             "frame_id": "f00001",

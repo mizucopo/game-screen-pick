@@ -1,10 +1,11 @@
 """Final contact sheets must preserve selected images, rank and timestamp labels."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageFont
 
 from src.models.video_selection_request import VideoSelectionRequest
 from src.services.video_selector import VideoSelector
@@ -17,6 +18,7 @@ from tests.migration.support.pipeline_fixture import (
     load_json,
     request_for,
 )
+from tests.migration.support.sheet_contract import redraw_sheet_labels, sheet_contract
 
 
 @pytest.fixture(params=("sampled_frames", "semantic_video"))
@@ -64,6 +66,96 @@ def test_output_contract_accepts_reencoded_contact_sheet(
     assert sheet.read_bytes() != original_bytes
     _refresh_sheet_integrity(request)
     assert_contract(request, method)
+
+
+@pytest.mark.parametrize("quality", (91, 100))
+def test_output_contract_accepts_verified_alternate_font(
+    completed_output: tuple[VideoSelectionRequest, str], quality: int
+) -> None:
+    """A second bundled font preserves rank/time/source and actual thumbnail pixels."""
+    request, method = completed_output
+    sheet = Path(request.output_dir) / "selected-contact-sheet.jpg"
+    contract = sheet_contract(method, "selected")
+    with Image.open(sheet) as original:
+        image = original.convert("RGB")
+    with image, image.copy() as reference:
+        redraw_sheet_labels(image, contract, ImageFont.load_default_imagefont())
+        with (
+            image.crop(contract.label_box(0)) as actual_label,
+            reference.crop(contract.label_box(0)) as original_label,
+        ):
+            assert actual_label.tobytes() != original_label.tobytes()
+        for index in range(len(contract.labels)):
+            x, _, right, bottom = contract.label_box(index)
+            thumbnail = (x, bottom, right, bottom + contract.image_height)
+            with (
+                image.crop(thumbnail) as actual_thumbnail,
+                reference.crop(thumbnail) as original_thumbnail,
+            ):
+                assert actual_thumbnail.tobytes() == original_thumbnail.tobytes()
+        image.save(sheet, format="JPEG", quality=quality, subsampling=0)
+    _refresh_sheet_integrity(request)
+    assert_contract(request, method)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing_label",
+        "wrong_rank",
+        "wrong_time",
+        "wrong_source",
+        "reordered_labels",
+        "offset",
+        "unreviewed_font",
+        "label_padding",
+        "thumbnail_edge",
+        "unused_cell",
+    ),
+)
+def test_output_contract_rejects_wrong_alternate_font_bitmap(
+    completed_output: tuple[VideoSelectionRequest, str], mutation: str
+) -> None:
+    """Correct integrity cannot hide wrong rank/time/source/position pixels."""
+    request, method = completed_output
+    sheet = Path(request.output_dir) / "selected-contact-sheet.jpg"
+    contract = sheet_contract(method, "selected")
+    labels = list(contract.labels)
+    if mutation == "wrong_rank":
+        labels[0] = "09" + labels[0][2:]
+    elif mutation == "wrong_time":
+        labels[0] = labels[0].replace("00:", "09:", 1)
+    elif mutation == "wrong_source":
+        labels[0] = labels[0].replace("synthetic-game", "synthetic-gamo", 1)
+    elif mutation == "reordered_labels":
+        labels[0], labels[1] = labels[1], labels[0]
+    font = (
+        ImageFont.load_default(size=18)
+        if mutation == "unreviewed_font"
+        else ImageFont.load_default_imagefont()
+    )
+    with Image.open(sheet) as original:
+        image = original.convert("RGB")
+    with image:
+        redraw_sheet_labels(image, replace(contract, labels=tuple(labels)), font)
+        x, y, right, bottom = contract.label_box(0)
+        if mutation == "missing_label":
+            image.paste("black", contract.label_box(0))
+        elif mutation == "offset":
+            with image.crop(contract.label_box(0)) as shifted:
+                image.paste("black", contract.label_box(0))
+                image.paste(shifted, (x + 1, y))
+        elif mutation == "label_padding":
+            image.putpixel((right - 10, y + 8), (255, 255, 255))
+        elif mutation == "thumbnail_edge":
+            image.putpixel((x + 1, bottom), (255, 255, 255))
+        elif mutation == "unused_cell":
+            with image.crop(contract.label_box(0)) as extra:
+                image.paste(extra, (2 * contract.cell_width, 0))
+        image.save(sheet, format="JPEG", quality=100, subsampling=0)
+    _refresh_sheet_integrity(request)
+    with pytest.raises(AssertionError, match="selected-contact-sheet output"):
+        assert_contract(request, method)
 
 
 @pytest.mark.parametrize("mutation", ("blank", "reordered", "mislabel"))

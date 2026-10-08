@@ -11,8 +11,8 @@
   "input_sha256": "6a3fcee7e6b67c2cd932968136f0407f3f89a364a2f06324e7d78092f902bb7b",
   "files": {
     "cache-replay.json": "15d1335b40e71eee7f969352aa0ad123fad6b833b88256513c815fc6600433c3",
-    "expected/sampled_frames.json": "07935dcd00ea3e9e3823e309cdda1f14cd76c748d08e4cd8e8ad467599084c4b",
-    "expected/semantic_video.json": "29d9d96a83552402a03815d78ff721493f78d5267b22d801e7ae570022546f18",
+    "expected/sampled_frames.json": "9e5f140c6151ff0e1397663ec9bbd34c05dd177533907e295583183e810430b8",
+    "expected/semantic_video.json": "6d55ce0a69bfd9dfe79a761b64b06758e70bef057f406ad82be5d823d3158a09",
     "stored-cache/sampled_frames/runs/edd6be0ceac85d80fb9cc14f8e3efcb2e6db19226b922c80ba4de8093063384c/run-manifest.json": "17e2cda60166421792cfc53dfc46336051c257a9ed69ae47043dcee8a417e71a",
     "stored-cache/sampled_frames/videos/7117224508dd00fe4b807b6cc1b405877feb09282f3333e7b5aac5787e589132/assessments/primary/81d7316c82c40691731d640b41e9daddde9cdb33eb6cb4781b01e096604ea9a7.json": "93ab9aa78da89929e4b025e3dc626f5b5f2ab72659abc8289614228b73ebe9bc",
     "stored-cache/sampled_frames/videos/7117224508dd00fe4b807b6cc1b405877feb09282f3333e7b5aac5787e589132/assessments/secondary/8ccfbd4caacf539853526415b43d1670ea0ce40071da85c7645a8b1083594f99.json": "bad5344c164a4820ff38069db080c5b3986dda87974bd30a69feda57d1b79e2e",

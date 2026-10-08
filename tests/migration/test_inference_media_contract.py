@@ -4,12 +4,13 @@ import base64
 import io
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from urllib.request import Request
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageFont
 
 from tests.migration.support.pipeline_fixture import (
     FIXTURE_ROOT,
@@ -17,6 +18,7 @@ from tests.migration.support.pipeline_fixture import (
     _decoded_video_media,
     load_json,
 )
+from tests.migration.support.sheet_contract import redraw_sheet_labels, sheet_contract
 
 SHEETS = (
     ("sampled_frames", "primary"),
@@ -49,9 +51,9 @@ def _sheet(method: str, kind: str) -> Image.Image:
         return image.convert("RGB")
 
 
-def _jpeg(image: Image.Image) -> bytes:
+def _jpeg(image: Image.Image, *, quality: int = 100) -> bytes:
     buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=100, subsampling=0)
+    image.save(buffer, format="JPEG", quality=quality, subsampling=0)
     return buffer.getvalue()
 
 
@@ -74,6 +76,105 @@ def test_fixture_http_accepts_reencoded_sheet(method: str, kind: str) -> None:
 
 
 @pytest.mark.parametrize(("method", "kind"), SHEETS)
+@pytest.mark.parametrize("quality", (91, 100))
+def test_fixture_http_accepts_verified_alternate_font(
+    method: str, kind: str, quality: int
+) -> None:
+    """Different actual glyph pixels retain independently fixed text and positions."""
+    contract = sheet_contract(method, kind)
+    with _sheet(method, kind) as image, image.copy() as reference:
+        redraw_sheet_labels(image, contract, ImageFont.load_default_imagefont())
+        with (
+            image.crop(contract.label_box(0)) as actual_label,
+            reference.crop(contract.label_box(0)) as original_label,
+        ):
+            assert actual_label.tobytes() != original_label.tobytes()
+        for index in range(len(contract.labels)):
+            x, _, right, bottom = contract.label_box(index)
+            thumbnail = (x, bottom, right, bottom + contract.image_height)
+            with (
+                image.crop(thumbnail) as actual_thumbnail,
+                reference.crop(thumbnail) as original_thumbnail,
+            ):
+                assert actual_thumbnail.tobytes() == original_thumbnail.tobytes()
+        FixtureHttp(method)(
+            _request(method, kind, _jpeg(image, quality=quality)), timeout=1
+        )
+
+
+@pytest.mark.parametrize(("method", "kind"), SHEETS)
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing_label",
+        "wrong_display_id",
+        "wrong_time",
+        "wrong_source",
+        "reordered_labels",
+        "offset",
+        "unreviewed_font",
+        "label_padding",
+        "thumbnail_edge",
+    ),
+)
+def test_fixture_http_rejects_wrong_alternate_font_bitmap(
+    method: str, kind: str, mutation: str
+) -> None:
+    """Correct request text cannot vouch for incorrect meaning in actual pixels."""
+    contract = sheet_contract(method, kind)
+    labels = list(contract.labels)
+    if mutation == "wrong_display_id":
+        labels[0] = labels[0].replace("A01", "A09", 1)
+    elif mutation == "wrong_time":
+        labels[0] = labels[0].replace("00:", "09:", 1)
+    elif mutation == "wrong_source":
+        labels[0] = labels[0].replace("synthetic-game", "synthetic-gamo", 1)
+    elif mutation == "reordered_labels":
+        labels[0], labels[1] = labels[1], labels[0]
+    font = (
+        ImageFont.load_default(size=18)
+        if mutation == "unreviewed_font"
+        else ImageFont.load_default_imagefont()
+    )
+    with _sheet(method, kind) as image:
+        redraw_sheet_labels(image, replace(contract, labels=tuple(labels)), font)
+        x, y, right, bottom = contract.label_box(0)
+        if mutation == "missing_label":
+            image.paste("black", contract.label_box(0))
+        elif mutation == "offset":
+            with image.crop(contract.label_box(0)) as shifted:
+                image.paste("black", contract.label_box(0))
+                image.paste(shifted, (x + 1, y))
+        elif mutation == "label_padding":
+            image.putpixel((right - 10, y + 8), (255, 255, 255))
+        elif mutation == "thumbnail_edge":
+            # The first row immediately below the label must never be excluded.
+            image.putpixel((x + 1, bottom), (255, 255, 255))
+        request = _request(method, kind, _jpeg(image))
+    with pytest.raises(AssertionError, match="sheet"):
+        FixtureHttp(method)(request, timeout=1)
+
+
+@pytest.mark.parametrize("method", ("sampled_frames", "semantic_video"))
+def test_fixture_http_rejects_wrong_context_order_label(method: str) -> None:
+    """Correct before/after panels cannot excuse a swapped bitmap legend."""
+    contract = sheet_contract(method, "secondary")
+    labels = tuple(
+        label.replace("before | selected | after", "after | selected | before")
+        for label in contract.labels
+    )
+    with _sheet(method, "secondary") as image:
+        redraw_sheet_labels(
+            image,
+            replace(contract, labels=labels),
+            ImageFont.load_default_imagefont(),
+        )
+        request = _request(method, "secondary", _jpeg(image))
+    with pytest.raises(AssertionError, match="label meaning/position"):
+        FixtureHttp(method)(request, timeout=1)
+
+
+@pytest.mark.parametrize(("method", "kind"), SHEETS)
 @pytest.mark.parametrize("mutation", ("blank", "reordered", "missing_label"))
 def test_fixture_http_rejects_changed_sheet(
     method: str, kind: str, mutation: str
@@ -87,7 +188,7 @@ def test_fixture_http_rejects_changed_sheet(
         if mutation == "blank":
             image.paste("black", (0, 0, image.width, image.height))
         elif mutation == "missing_label":
-            # No font region is masked: a missing A01/time/source label must fail.
+            # Glyph exclusion requires independently verified A01/time/source text.
             image.paste("black", (0, 0, cell_width, label_height))
         else:
             first = (0, label_height, cell_width, row_height)
