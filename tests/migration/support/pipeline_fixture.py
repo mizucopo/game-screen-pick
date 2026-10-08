@@ -568,14 +568,17 @@ def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
                 assert json_digest(data["result"]) == data["result_digest"]
             video_identity = path.relative_to(root / "videos").parts[0]
             if phase == "candidate-extraction":
-                names = _assert_jpeg_receipts(path, data, candidate=True)
-                required_names = {
-                    f"{record['frame_id']}.jpg"
+                _assert_jpeg_receipts(path, data, candidate=True)
+                # Python's reader requires the complete ordered ID/time vector.
+                # Keep encoder-dependent size/SHA tied to this run's own JPEGs.
+                expected_records = [
+                    (record["frame_id"], record["timestamp_seconds"])
                     for record in _stored_phase_data(request, path)["source_frames"]
-                }
-                assert (
-                    len(names) == len(required_names) and set(names) == required_names
-                ), "candidate record names changed"
+                ]
+                assert [
+                    (record["frame_id"], record["timestamp_seconds"])
+                    for record in data["source_frames"]
+                ] == expected_records, "candidate record names/order/time changed"
                 assert video_identity not in candidate_manifest_digests
                 candidate_manifest_digests[video_identity] = data["payload_digest"]
             if phase == "secondary-context":

@@ -134,6 +134,25 @@ def test_candidate_receipt_rejects_missing_frame(
         assert_contract(request, method)
 
 
+@pytest.mark.parametrize("mutation", ("reversed_receipts", "wrong_timestamp"))
+def test_candidate_receipt_rejects_changed_order_or_time(
+    durable_output: tuple[VideoSelectionRequest, str], mutation: str
+) -> None:
+    """Valid JPEGs and linked self-digests cannot bless unreadable receipts."""
+    request, method = durable_output
+    path = _phase(request, "candidate-extraction")
+    candidate = load_json(path)
+    records = candidate["data"]["source_frames"]
+    if mutation == "reversed_receipts":
+        records.reverse()
+    else:
+        records[0]["timestamp_seconds"] += 0.125
+    _write(path, candidate)
+    _link_candidate_manifest(request)
+    with pytest.raises(AssertionError, match="candidate record names/order/time"):
+        assert_contract(request, method)
+
+
 @pytest.mark.parametrize(
     "mutation", ("wrong_sha", "wrong_last_sha", "missing_before", "missing_after")
 )

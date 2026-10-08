@@ -180,8 +180,8 @@ completion は、各実装が生成した artifact の size / SHA-256 と完全�
 も保存した中身から再計算して照合します。欠落 field を正規化で消しません。
 
 candidate manifest の各 `image_sha256` とsizeは各実装自身の候補JPEGへ照合し、
-固定stored-cache recipeの候補ID集合とexact countを確認します。JPEGとmechanical
-記録を残したままreceiptだけ欠落させ、全digestを整合させても拒否します。
+固定stored-cache recipeの全候補ID・順序・時刻を確認します。JPEGとmechanical
+記録を残してreceiptの欠落・並べ替え・時刻変更を行い、全digestを整合させても拒否します。
 mechanical の `source_frames_digest` は同じ動画のcandidate payload digestへ照合します。
 secondary-context は必要なreceipt SHAを自身のJPEGへ照合し、保存goldenの
 `context_record_names` で必要な before / after のname集合・順序を確認します。
