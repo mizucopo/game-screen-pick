@@ -11,8 +11,8 @@
   "input_sha256": "6a3fcee7e6b67c2cd932968136f0407f3f89a364a2f06324e7d78092f902bb7b",
   "files": {
     "cache-replay.json": "15d1335b40e71eee7f969352aa0ad123fad6b833b88256513c815fc6600433c3",
-    "expected/sampled_frames.json": "0f08c3e1e165e73e56e3f514b5a45412c0645b2a7f163fc4460c3a6ffc2ee777",
-    "expected/semantic_video.json": "41e36d27e93e9333c14063b19362a14c72338dae66b6ff9c0024e294659f6870",
+    "expected/sampled_frames.json": "07935dcd00ea3e9e3823e309cdda1f14cd76c748d08e4cd8e8ad467599084c4b",
+    "expected/semantic_video.json": "29d9d96a83552402a03815d78ff721493f78d5267b22d801e7ae570022546f18",
     "stored-cache/sampled_frames/runs/edd6be0ceac85d80fb9cc14f8e3efcb2e6db19226b922c80ba4de8093063384c/run-manifest.json": "17e2cda60166421792cfc53dfc46336051c257a9ed69ae47043dcee8a417e71a",
     "stored-cache/sampled_frames/videos/7117224508dd00fe4b807b6cc1b405877feb09282f3333e7b5aac5787e589132/assessments/primary/81d7316c82c40691731d640b41e9daddde9cdb33eb6cb4781b01e096604ea9a7.json": "93ab9aa78da89929e4b025e3dc626f5b5f2ab72659abc8289614228b73ebe9bc",
     "stored-cache/sampled_frames/videos/7117224508dd00fe4b807b6cc1b405877feb09282f3333e7b5aac5787e589132/assessments/secondary/8ccfbd4caacf539853526415b43d1670ea0ce40071da85c7645a8b1083594f99.json": "bad5344c164a4820ff38069db080c5b3986dda87974bd30a69feda57d1b79e2e",
@@ -78,6 +78,7 @@
     "inference-media/semantic_video/video.json": "524eb0eddb006b82b965fdd924120b754f047cde5458da788d2d13c9a1f3c538",
     "inference-media/semantic_video/video.mp4": "43f0258860a6df7a00633a16241b4e4c0cd38035d6c24a4f0027fe8aaa51bf44",
     "reference-images/sampled_frames/selected-contact-sheet.png": "681b6f1f29c8bd20fbdd720b52fb7cc7879a2c7be1d142505465aed136a95f17",
-    "reference-images/semantic_video/selected-contact-sheet.png": "681b6f1f29c8bd20fbdd720b52fb7cc7879a2c7be1d142505465aed136a95f17"
+    "reference-images/semantic_video/selected-contact-sheet.png": "681b6f1f29c8bd20fbdd720b52fb7cc7879a2c7be1d142505465aed136a95f17",
+    "expected/run-manifest-provenance.json": "e3802d444b6c8ae582c7c44d25fe6a8ddf6e923598bb2ac23c4dfd34a54175d6"
   }
 }

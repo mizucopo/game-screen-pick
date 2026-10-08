@@ -100,6 +100,25 @@ thumbnail の並び替え、誤った rank / time label を、自己 hash / size
 `baseline-provenance.json` に Python / dependency /
 FFmpeg / 元 revision と各 fixture の SHA-256 を記録しています。
 
+`run_manifest` は保存した Run Manifest 全体、`run_manifest_schema` は全 field の
+nested type の固定 snapshot です。`run_identity`、全 models / provider metadata、
+candidate multipliers、batch sizes、context offset、model options、GPU 条件と
+自己 digest を含め、欠落・追加・型・値を厳密比較します。現 fixture の manifest は
+relative input path と固定モデル条件だけで、絶対 root や JPEG bytes 由来の digest
+を含まないため、manifest に対する正規化 allowlist は空です。既存 subset の keys も
+保持します。manifest / report / completion の digest と artifact integrity を全て
+再計算した誤設定でも、出力 report の採否・選択が同じなら合格とすることはありません。
+
+完全 manifest snapshot だけの明示更新には次の command を使います。既存 golden の
+他の keys、旧 cache、選定画像、AI 入力媒体、`baseline-provenance.json` は更新しません。
+`pipeline/expected/run-manifest-provenance.json` に capture 元 revision（初回
+`660a811e`）と両 manifest の JSON digest を残します。snapshot 差分を review した
+あとに provenance の inventory を明示更新してください。
+
+```bash
+PYTHONPATH=. uv run python tests/fixtures/rust_migration/pipeline/record_baseline.py --reviewed-update --run-manifest-only
+```
+
 最終 sheet だけを記録する場合は、次の明示 command を使います。選定画像、
 report / cache golden、AI 入力媒体、`baseline-provenance.json` は更新しません。
 PNG text の `source_revision` に capture 元の revision（初回は `9713b663`）を残し、

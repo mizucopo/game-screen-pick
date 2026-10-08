@@ -557,6 +557,8 @@ def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
     return {
         "report_schema": schema(report),
         "report": normalized_report(report),
+        "run_manifest": manifest,
+        "run_manifest_schema": schema(manifest),
         "run_key": manifest["run_key"],
         "run_manifest_schema_version": manifest["schema_version"],
         "algorithm_version": manifest["algorithm_version"],
@@ -604,6 +606,14 @@ def assert_contract(
 ) -> None:
     expected = load_json(FIXTURE_ROOT / "expected" / f"{method}.json")
     actual = pipeline_contract(request)
+    # The current fixture manifest has only relative input paths and fixed model
+    # metadata, with no native JPEG digest dependencies. Normalize no field here.
+    assert actual["run_manifest_schema"] == expected["run_manifest_schema"], (
+        "run manifest schema changed"
+    )
+    assert actual["run_manifest"] == expected["run_manifest"], (
+        "run manifest values changed"
+    )
     if not exact_assessment_keys:
         # Their fixed values remain in the golden and stored cache. Across permitted
         # JPEG encoders only these keys depend on native JPEG bytes and raw floats.
