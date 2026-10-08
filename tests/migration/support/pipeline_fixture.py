@@ -388,7 +388,7 @@ def assert_reference_images(request: VideoSelectionRequest, method: str) -> None
             pixels = np.asarray(actual.convert("RGB"), dtype=np.int16)
             reference_pixels = np.asarray(reference.convert("RGB"), dtype=np.int16)
             difference = np.abs(pixels - reference_pixels)
-            assert float(difference.mean()) <= 1.0
+            assert float(difference.mean(axis=(0, 1)).max()) <= 1.0
             assert int(difference.max()) <= 16
             mse = float(np.mean(np.square(difference.astype(np.float64))))
             assert mse == 0 or 10 * math.log10(255**2 / mse) >= 40.0
