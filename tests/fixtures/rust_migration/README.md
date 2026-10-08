@@ -7,16 +7,26 @@
 
 ## 数値・wire・Game Context
 
-- `images/` と `image_expectations.json`: 15 個の公開合成 pixel recipe と計算済み
+- `images/` と `image_expectations.json`: 16 個の公開合成 pixel recipe と計算済み
   brightness / contrast / Laplacian variance / entropy / quality / 64-bit dHash。
   暗転、白飛び、低コントラストの境界、gray step / stripe、RGB edge pattern、
-  dHash の向き・bit 順を固定します。採否・dHash は厳密一致、raw float は
+  dHash の向き・bit 順を固定します。9 × 8 gray pixel rows の
+  `0a55555555555555` は、実際の候補 JSON writer が先頭ゼロを含む16桁の
+  lowercase hex を維持することも検証します。採否・dHash は厳密一致、raw float は
   `abs <= 1e-6` または `rel <= 1e-8` です。
 - `wire_expectations.json`: cache の canonical UTF-8 JSON / float 表現、digest、
   phase key、stable frame ID の固定 vector。旧 cache の再利用には wire の
   完全一致が必要です。
-- `game_context_expectations.json`: Game Context の固定値と 4 つの固定 HTTP 応答。
+- `game_context_expectations.json`: Game Context の固定値と 6 つの固定 HTTP 応答。
   見出しの欠落・曖昧さ・全角 colon を拒否し、trim 後の CRLF を保ちます。
+  日本語と非 BMP emoji を含む trim 後の2,400 Unicode codepoints
+  （UTF-8 8,347 bytes）を受理し、2,401（8,351 bytes）を拒否します。
+  長さはUTF-8 bytesやUTF-16 code unitsでは数えません。
+- `selection_expectations.json`: 保存した候補と両 AI 評価から、scene名の
+  Unicode casefold / isalnum が最終選択へ及ぼす2つの固定 vector。
+  `Straße` と `STRASSE`、`探索２` と `探索-２` は同じ集計 bucketになります。
+  どちらも同 bucket の高得点候補を抑えて別 scene の候補を選び、`lower`だけの
+  変換やASCIIだけの抽出では異なる候補が選ばれるnegative controlを備えます。
 
 ## 両パイプライン
 
@@ -33,12 +43,17 @@ JPEG 変換で最大 2 pixel 値の差を生み、同じ decoded pixel 用の数
 できませんでした。素材を YUV・DCT 境界へ整列させ、上記の両 tool で候補画像の
 decoded RGB・quality・dHash が完全一致することを確認して、明示的に基準を
 更新しました。数値・画像の許容値、採否・時刻・順位の厳密比較は変更していません。
-RGB/gray の色変換・閾値計算は 15 個の固定 PNG で別途検証します。
+RGB/gray の色変換・閾値計算は 16 個の固定 PNG で別途検証します。
 
 `pipeline/responses/` は Ollama / vLLM の HTTP response JSON を固定します。
 HTTP 境界以外は production の FFmpeg、ffprobe、画像計算、選定、cache、出力処理を
 使用します。Ollama の `/api/ps` 応答も fixture で、CPU 許可設定です。
 GPU、モデル download、外部 network は不要です。
+Cold run の推論 sequence は `sampled_frames` が primary → secondary、
+`semantic_video` が video → primary → secondary で、各 stage を厳密に 1 回ずつ
+呼びます。重複した同一要求が同じ report を返しても不合格にします。
+モデル metadata の HTTP call 数は固定しません。warm / resume の再利用条件も
+既存の検証を維持します。
 
 `pipeline/inference-media/` は実際に AI へ送った primary / secondary JPEG、
 動画 MP4、decode 済み reference PNG、媒体 bytes を marker に置換した HTTP request
@@ -76,9 +91,23 @@ range flag だけ変えた negative control は decoded pixel の相違で不合
 
 `pipeline/expected/` は frame ID、時刻、順位、scene、transition、採否、report の
 全 field / nested type、phase version / key / payload shape、機械評価、両 AI 評価、
-出力 JPEG の寸法を保存した golden です。`reference-images/` は最終 JPEG を
-decode した固定 RGB PNG です。`baseline-provenance.json` に Python / dependency /
+出力 JPEG の寸法を保存した golden です。`reference-images/` は選定した 2 画像と
+最終 `selected-contact-sheet.jpg` を decode した固定 RGB PNG です。sheet 全体の
+rank / timestamp / source label、画像の並び、padding も比較します。blank、
+thumbnail の並び替え、誤った rank / time label を、自己 hash / size を整合させた
+実 pipeline 出力へ適用する negative test と、JPEG 再 encode の positive control を
+用意しています。Pillow default font は bundled なので label mask は使いません。
+`baseline-provenance.json` に Python / dependency /
 FFmpeg / 元 revision と各 fixture の SHA-256 を記録しています。
+
+最終 sheet だけを記録する場合は、次の明示 command を使います。選定画像、
+report / cache golden、AI 入力媒体、`baseline-provenance.json` は更新しません。
+PNG text の `source_revision` に capture 元の revision（初回は `9713b663`）を残し、
+sheet 差分を review したあとに provenance の inventory を明示更新してください。
+
+```bash
+PYTHONPATH=. uv run python tests/fixtures/rust_migration/pipeline/record_baseline.py --reviewed-update --selected-contact-sheet-only
+```
 
 `pipeline/stored-cache/` は実際に現行 Python が保存した旧 cache の bytes です。
 run manifest、probe、candidate JPEG / manifest、mechanical envelope、secondary
@@ -117,11 +146,12 @@ context JPEG bytes に依存します。cold / interrupted run の golden 比較
 `<jpeg-content-dependent>` に置換します。元 key は golden と旧 cache に残しており、
 保存済み cache replay では厳密一致します。他の key は置換しません。
 
-最終画像は同寸法、decoded RGB の MAE ≤ 1.0、最大差 ≤ 16、PSNR ≥ 40 dB とし、
+最終画像と最終 contact sheet は同寸法、decoded RGB の channel MAE ≤ 1.0、
+最大差 ≤ 16、PSNR ≥ 40 dB とし、
 固定 reference の dHash も厳密一致させます。JPEG file 自体の byte 完全一致は
-cross-encoder の条件にしません。contact sheet は format / 寸法と自身の完全性を
-検証します。font や rasterizer が異なる移植版は契約文書に従い label 位置・内容を
-別途比較し、この fixture の寸法だけで合格にしないでください。
+cross-encoder の条件にしません。sheet の全 label pixel も比較し、format / 寸法と
+自身の完全性の照合を併用します。font や rasterizer が異なる移植版は契約文書の
+label 位置・内容の比較と Human Review を適用してください。
 
 ## 実行と期待値の更新
 

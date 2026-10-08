@@ -12,6 +12,7 @@ from PIL import Image
 
 from src.models.video_selection import FrameAssessment, FrameCandidate
 from src.services.video_selector import (
+    candidate_to_json,
     image_difference_hash,
     image_entropy,
     measure_candidate,
@@ -24,6 +25,8 @@ EXPECTATIONS = json.loads((FIXTURE_ROOT / "image_expectations.json").read_text()
 
 def _recipe_pixels(recipe: dict[str, Any]) -> np.ndarray[Any, Any]:
     """言語非依存のpixel recipeを復元する（期待値の再計算はしない）."""
+    if recipe["kind"] == "rows":
+        return np.array(recipe["values"], dtype=np.uint8)
     if recipe["kind"] == "columns":
         return np.tile(
             np.array(recipe["values"], dtype=np.uint8), (recipe["height"], 1)
@@ -83,7 +86,10 @@ def test_fixed_image_measurement_contract(expected: dict[str, Any]) -> None:
             abs=EXPECTATIONS["numeric_absolute_tolerance"],
             rel=EXPECTATIONS["numeric_relative_tolerance"],
         )
-        assert f"{candidate.difference_hash:016x}" == expected["difference_hash"]
+        assert (
+            candidate_to_json(candidate)["difference_hash"]
+            == expected["difference_hash"]
+        )
 
 
 @pytest.mark.parametrize(

@@ -21,6 +21,12 @@ EXPECTED = json.loads(
 def test_game_context_response_contract(case: dict[str, Any]) -> None:
     """旧providerはmockのみ。4項目契約はBrave+vLLMにも維持する."""
     calls: list[str] = []
+    if "unicode_codepoints" in case:
+        response_text = case["http_response"]["output"][1]["content"][0]["text"]
+        raw_context = json.loads(response_text)["game_context"]
+        normalized = raw_context.strip()
+        assert len(normalized) == case["unicode_codepoints"]
+        assert len(normalized.encode("utf-8")) == case["utf8_byte_length"]
 
     def requester(
         url: str,

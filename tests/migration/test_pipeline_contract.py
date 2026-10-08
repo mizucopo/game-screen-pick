@@ -1,6 +1,8 @@
 """Protect both video methods, durable old caches, and existing output artifacts."""
 
+import io
 from pathlib import Path
+from urllib.request import Request
 
 import pytest
 
@@ -11,6 +13,7 @@ from tests.migration.support.pipeline_fixture import (
     FIXTURE_ROOT,
     FixtureHttp,
     RecordingExtractor,
+    assert_cold_inference_calls,
     assert_contract,
     cache_root,
     load_json,
@@ -42,8 +45,7 @@ def test_pipeline_fixture_cold_warm_contract(
     cold_extractor = RecordingExtractor()
     VideoSelector(request, frame_extractor=cold_extractor).run()
     assert cold_extractor.probes == 1
-    assert "primary" in http.calls and "secondary" in http.calls
-    assert ("video" in http.calls) == (method == "semantic_video")
+    assert_cold_inference_calls(http)
     assert_contract(request, method)
     old_artifacts = {
         path.name: file_sha256(path) for path in Path(request.output_dir).iterdir()
@@ -59,6 +61,47 @@ def test_pipeline_fixture_cold_warm_contract(
     assert {
         path.name: file_sha256(path) for path in Path(request.output_dir).iterdir()
     } == old_artifacts
+
+
+@pytest.mark.parametrize(
+    ("method", "duplicate_kind"),
+    (
+        ("sampled_frames", "primary"),
+        ("sampled_frames", "secondary"),
+        ("semantic_video", "video"),
+        ("semantic_video", "primary"),
+        ("semantic_video", "secondary"),
+    ),
+)
+def test_pipeline_fixture_rejects_duplicate_cold_inference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    duplicate_kind: str,
+) -> None:
+    """Identical extra HTTP inference must fail even if report and media still match."""
+
+    captured: dict[str, Request] = {}
+
+    class CapturingHttp(FixtureHttp):
+        def __call__(self, request: Request, *, timeout: float) -> io.BytesIO:
+            response = super().__call__(request, timeout=timeout)
+            if self.calls[-1] == duplicate_kind:
+                captured[duplicate_kind] = request
+            return response
+
+    request = request_for(tmp_path, method)
+    http = CapturingHttp(method)
+    http.install(monkeypatch)
+    VideoSelector(request, frame_extractor=RecordingExtractor()).run()
+    # Replay the exact emitted request independently. Each media check performs
+    # real FFmpeg work; nesting both in one HTTP call would consume its deadline.
+    with http(captured[duplicate_kind], timeout=1):
+        pass
+    assert http.calls.count(duplicate_kind) == 2
+    assert_contract(request, method)
+    with pytest.raises(AssertionError, match="cold inference sequence"):
+        assert_cold_inference_calls(http)
 
 
 @pytest.mark.parametrize("method", METHODS)

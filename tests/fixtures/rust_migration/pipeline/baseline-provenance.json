@@ -76,6 +76,8 @@
     "inference-media/semantic_video/video-frame-004.png": "e22fc30dee9410c7d179556ec6e9e2bd696a42a7bd9d885f8f29a638df23f2a3",
     "inference-media/semantic_video/video-frame-005.png": "09e49f53acdacecd1d71a0b21c5cf3e53f99f3485e09ac19e5bd25cffbeadfe1",
     "inference-media/semantic_video/video.json": "524eb0eddb006b82b965fdd924120b754f047cde5458da788d2d13c9a1f3c538",
-    "inference-media/semantic_video/video.mp4": "43f0258860a6df7a00633a16241b4e4c0cd38035d6c24a4f0027fe8aaa51bf44"
+    "inference-media/semantic_video/video.mp4": "43f0258860a6df7a00633a16241b4e4c0cd38035d6c24a4f0027fe8aaa51bf44",
+    "reference-images/sampled_frames/selected-contact-sheet.png": "681b6f1f29c8bd20fbdd720b52fb7cc7879a2c7be1d142505465aed136a95f17",
+    "reference-images/semantic_video/selected-contact-sheet.png": "681b6f1f29c8bd20fbdd720b52fb7cc7879a2c7be1d142505465aed136a95f17"
   }
 }

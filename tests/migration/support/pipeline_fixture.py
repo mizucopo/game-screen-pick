@@ -341,6 +341,15 @@ class FixtureHttp:
         monkeypatch.setattr("src.services.vllm_client.urlopen", self)
 
 
+def assert_cold_inference_calls(http: FixtureHttp) -> None:
+    """Require one call per inference stage without fixing metadata HTTP probes."""
+    expected = ["primary", "secondary"]
+    if http.method == "semantic_video":
+        expected.insert(0, "video")
+    actual = [call for call in http.calls if call in {"primary", "secondary", "video"}]
+    assert actual == expected, f"cold inference sequence: {actual!r} != {expected!r}"
+
+
 def request_for(root: Path, method: str) -> VideoSelectionRequest:
     """Copy the fixed video and return identical public settings for each replay."""
     input_dir = root / "input"
@@ -580,7 +589,7 @@ def _assert_values(actual: Any, expected: Any, *, field: str = "") -> None:
 
 def assert_reference_images(request: VideoSelectionRequest, method: str) -> None:
     """Enforce decoded RGB tolerances and strict dHash against checked-in PNGs."""
-    for name in ("selected-01", "selected-02"):
+    for name in ("selected-01", "selected-02", "selected-contact-sheet"):
         with (
             Image.open(Path(request.output_dir) / f"{name}.jpg") as actual,
             Image.open(
