@@ -254,6 +254,12 @@ python tests/fixtures/rust_migration/pipeline/generate_video.py /tmp/synthetic-g
 PYTHONPATH=. uv run python tests/fixtures/rust_migration/pipeline/record_baseline.py --reviewed-update
 ```
 
+全基準の明示更新だけは、これから置き換える旧候補画像とのpixel比較を省きます。
+own receipt、固定ID・順序・時刻、phase linkなどの整合検証は維持します。
+通常比較と`--run-manifest-only`は候補画素を検証し、部分更新で旧候補基準を
+置き換えません。recorderの回帰テストは一時コピーだけを更新し、repositoryの
+固定画像・provenanceが不変であることも確認します。
+
 Rust 実装との比較にはこの保存済み golden と旧 cache を入力し、Rust 側で期待値を
 自動生成し直さないでください。実モデル・実 GPU・実録画での運用検証は、この
 固定応答による意味的互換性確認とは別の段階で行います。

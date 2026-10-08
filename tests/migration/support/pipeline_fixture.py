@@ -527,8 +527,13 @@ def _stored_phase_data(request: VideoSelectionRequest, path: Path) -> dict[str, 
     return data
 
 
-def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
-    """Capture fixed decisions and durable cache contracts without temporary paths."""
+def pipeline_contract(
+    request: VideoSelectionRequest, *, compare_candidate_pixels: bool = True
+) -> dict[str, Any]:
+    """Capture fixed decisions and durable cache contracts without temporary paths.
+
+    Only the full reviewed recorder skips the pixels it is about to replace.
+    """
     root = cache_root(request)
     manifest_paths = list((root / "runs").glob("*/run-manifest.json"))
     assert len(manifest_paths) == 1
@@ -583,21 +588,26 @@ def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
                     (record["frame_id"], record["timestamp_seconds"])
                     for record in data["source_frames"]
                 ] == expected_records, "candidate record names/order/time changed"
-                reference_frames = _stored_phase_path(request, path).parent / "frames"
-                for record in data["source_frames"]:
-                    name = f"{record['frame_id']}.jpg"
-                    label = f"candidate pixels {request.selection_method}/{name}"
-                    with (
-                        Image.open(path.parent / "frames" / name) as actual,
-                        Image.open(reference_frames / name) as reference,
-                    ):
-                        assert actual.format == reference.format == "JPEG", (
-                            f"{label}: JPEG format changed"
-                        )
-                        assert actual.getexif().get(274, 1) == reference.getexif().get(
-                            274, 1
-                        ), f"{label}: orientation changed"
-                        _assert_media_pixels(actual, reference, label)
+                if compare_candidate_pixels:
+                    reference_frames = (
+                        _stored_phase_path(request, path).parent / "frames"
+                    )
+                    for record in data["source_frames"]:
+                        name = f"{record['frame_id']}.jpg"
+                        label = f"candidate pixels {request.selection_method}/{name}"
+                        with (
+                            Image.open(path.parent / "frames" / name) as actual,
+                            Image.open(reference_frames / name) as reference,
+                        ):
+                            assert actual.format == reference.format == "JPEG", (
+                                f"{label}: JPEG format changed"
+                            )
+                            assert actual.getexif().get(
+                                274, 1
+                            ) == reference.getexif().get(274, 1), (
+                                f"{label}: orientation changed"
+                            )
+                            _assert_media_pixels(actual, reference, label)
                 assert video_identity not in candidate_manifest_digests
                 candidate_manifest_digests[video_identity] = data["payload_digest"]
             if phase == "secondary-context":
