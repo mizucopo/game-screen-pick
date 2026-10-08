@@ -183,6 +183,16 @@ completion は、各実装が生成した artifact の size / SHA-256 と完全�
 candidate manifest の各 `image_sha256` とsizeは各実装自身の候補JPEGへ照合し、
 固定stored-cache recipeの全候補ID・順序・時刻を確認します。JPEGとmechanical
 記録を残してreceiptの欠落・並べ替え・時刻変更を行い、全digestを整合させても拒否します。
+さらに両方式の全候補（sampled 6枚／semantic 3枚）を、同じ方式・video identity・
+candidate keyの`stored-cache/`内JPEGへID・時刻を対応させてdecode比較します。
+採用／棄却、AI未送信、最終未選定を問わず、JPEG形式・寸法・EXIF向き（未指定と1は
+同じ向き）・dHashを厳密に確認し、既宣言のchannel MAE ≤ 1.0、最大差 ≤ 16、
+PSNR ≥ 40 dBを適用します。方式間で同じframe IDが別時刻を指すため、IDだけで
+referenceを共有しません。既存`baseline-provenance.json`でSHA固定されたJPEGを
+独立referenceとして使い、提出runから基準を再生成しません。
+`test_candidate_pixel_contract.py`は棄却候補を別の正常かつ依然棄却されるJPEGへ替え、
+own receipt・phase link・実依存から計算する全assessment keyを整合させても拒否する
+回帰を含みます。最終出力やAI応答が同じだけでは、候補抽出の同等性を合格にしません。
 mechanical の `source_frames_digest` は同じ動画のcandidate payload digestへ照合します。
 secondary-context は必要なreceipt SHAを自身のJPEGへ照合し、保存goldenの
 `context_record_names` で必要な before / after のname集合・順序を確認します。

@@ -511,15 +511,19 @@ def _assert_jpeg_receipts(
     return names
 
 
-def _stored_phase_data(request: VideoSelectionRequest, path: Path) -> dict[str, Any]:
-    """Read the unchanged Python recipe, independent of the submitted records."""
-    reference = (
+def _stored_phase_path(request: VideoSelectionRequest, path: Path) -> Path:
+    """Bind the reference to this method, video identity, and phase key."""
+    return (
         FIXTURE_ROOT
         / "stored-cache"
         / request.selection_method
         / path.relative_to(cache_root(request))
     )
-    data: dict[str, Any] = load_json(reference)["data"]
+
+
+def _stored_phase_data(request: VideoSelectionRequest, path: Path) -> dict[str, Any]:
+    """Read the unchanged Python recipe, independent of the submitted records."""
+    data: dict[str, Any] = load_json(_stored_phase_path(request, path))["data"]
     return data
 
 
@@ -579,6 +583,21 @@ def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
                     (record["frame_id"], record["timestamp_seconds"])
                     for record in data["source_frames"]
                 ] == expected_records, "candidate record names/order/time changed"
+                reference_frames = _stored_phase_path(request, path).parent / "frames"
+                for record in data["source_frames"]:
+                    name = f"{record['frame_id']}.jpg"
+                    label = f"candidate pixels {request.selection_method}/{name}"
+                    with (
+                        Image.open(path.parent / "frames" / name) as actual,
+                        Image.open(reference_frames / name) as reference,
+                    ):
+                        assert actual.format == reference.format == "JPEG", (
+                            f"{label}: JPEG format changed"
+                        )
+                        assert actual.getexif().get(274, 1) == reference.getexif().get(
+                            274, 1
+                        ), f"{label}: orientation changed"
+                        _assert_media_pixels(actual, reference, label)
                 assert video_identity not in candidate_manifest_digests
                 candidate_manifest_digests[video_identity] = data["payload_digest"]
             if phase == "secondary-context":
