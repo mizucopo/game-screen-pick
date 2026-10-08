@@ -1,0 +1,34 @@
+{
+  "cache_schema_version": 1,
+  "phase": "secondary-context",
+  "phase_version": 2,
+  "cache_key": "5aaa3535a419cd6e87b38350b25a3794cee921b95739df6f75036acb6d35ff4b",
+  "data": {
+    "frames": [
+      {
+        "name": "f0814901973064699110200001-after.jpg",
+        "sha256": "087bf45f317ab4effd1ce3c5f2da33a6ad746d8c08b4c30e21c4a9631f3bd1e9"
+      },
+      {
+        "name": "f0814901973064699110200001-before.jpg",
+        "sha256": "fca4679112939ae38c0d58540d70c40830efa7f118f15ed84370a0840532e8f0"
+      },
+      {
+        "name": "f0814901973064699110200002-after.jpg",
+        "sha256": "c5c6d0ac940c54920a5c2115d74a1b06006415134ada1d41d488ec0016fea232"
+      },
+      {
+        "name": "f0814901973064699110200002-before.jpg",
+        "sha256": "bf869c9ab1866b5bf37333d098f829cff91b10fa9e04a2293c5c51d93f536dfe"
+      },
+      {
+        "name": "f0814901973064699110200003-after.jpg",
+        "sha256": "c5c6d0ac940c54920a5c2115d74a1b06006415134ada1d41d488ec0016fea232"
+      },
+      {
+        "name": "f0814901973064699110200003-before.jpg",
+        "sha256": "c5c6d0ac940c54920a5c2115d74a1b06006415134ada1d41d488ec0016fea232"
+      }
+    ]
+  }
+}

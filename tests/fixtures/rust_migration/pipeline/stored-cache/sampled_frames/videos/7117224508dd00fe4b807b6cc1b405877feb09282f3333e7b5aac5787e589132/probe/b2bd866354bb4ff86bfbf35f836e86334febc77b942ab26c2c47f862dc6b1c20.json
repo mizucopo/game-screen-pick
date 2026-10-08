@@ -1,0 +1,23 @@
+{
+  "cache_schema_version": 1,
+  "phase": "video-probe",
+  "phase_version": 2,
+  "cache_key": "b2bd866354bb4ff86bfbf35f836e86334febc77b942ab26c2c47f862dc6b1c20",
+  "data": {
+    "identity": {
+      "relative_path": "synthetic-game.mkv",
+      "size": 13338
+    },
+    "metadata": {
+      "duration_seconds": 6.0,
+      "width": 160,
+      "height": 96,
+      "codec_name": "ffv1",
+      "average_frame_rate": "4/1",
+      "video_stream_index": 0,
+      "start_time_seconds": 0.0,
+      "last_frame_timestamp_seconds": 5.75
+    },
+    "probe_payload_digest": "dfbd226e1080dc60b44e67733524f2c40adb6388320c70671a4727c767f611ea"
+  }
+}

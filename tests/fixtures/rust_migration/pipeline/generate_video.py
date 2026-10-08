@@ -9,26 +9,26 @@ WIDTH = 160
 HEIGHT = 96
 FPS = 4
 SECONDS = 6
+BLOCK_SIZE = 16
 
 
-def frame_rgb(second: int) -> bytes:
-    """Return a coarse high-margin pattern, or the deliberately black third scene."""
-    if second == 2:
-        return bytes(WIDTH * HEIGHT * 3)
+def frame_yuv(second: int) -> bytes:
+    """Align full-range luma blocks to JPEG DCT boundaries and use neutral chroma."""
     generator = random.Random(338 + second)
     levels = [
-        [generator.choice((35, 100, 170, 235)) for _ in range(9)] for _ in range(8)
+        [generator.choice((32, 96, 160, 224)) for _ in range(WIDTH // BLOCK_SIZE)]
+        for _ in range(HEIGHT // BLOCK_SIZE)
     ]
-    pixels = bytearray()
-    for y in range(HEIGHT):
-        for x in range(WIDTH):
-            level = levels[y * 8 // HEIGHT][x * 9 // WIDTH]
-            pixels.extend((level, max(0, level - 15), min(255, level + 15)))
-    return bytes(pixels)
+    luma = bytes(
+        0 if second == 2 else levels[y // BLOCK_SIZE][x // BLOCK_SIZE]
+        for y in range(HEIGHT)
+        for x in range(WIDTH)
+    )
+    return luma + bytes([128]) * (WIDTH * HEIGHT * 2)
 
 
 def main() -> None:
-    """Encode fixed RGB frames; fixture tests use the committed file, not a rebuild."""
+    """Encode fixed YUV frames; fixture tests use the committed file, not a rebuild."""
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
@@ -42,7 +42,7 @@ def main() -> None:
             "-f",
             "rawvideo",
             "-pixel_format",
-            "rgb24",
+            "yuv444p",
             "-video_size",
             f"{WIDTH}x{HEIGHT}",
             "-framerate",
@@ -55,7 +55,9 @@ def main() -> None:
             "-level",
             "3",
             "-pix_fmt",
-            "bgr0",
+            "yuv444p",
+            "-color_range",
+            "pc",
             "-threads",
             "1",
             "-fflags",
@@ -67,7 +69,7 @@ def main() -> None:
             "-y",
             str(args.output),
         ],
-        input=b"".join(frame_rgb(second) * FPS for second in range(SECONDS)),
+        input=b"".join(frame_yuv(second) * FPS for second in range(SECONDS)),
         capture_output=True,
         check=True,
     )

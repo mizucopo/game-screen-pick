@@ -162,7 +162,7 @@
               "index": 0,
               "start_seconds": 0.0,
               "end_seconds": 5.8,
-              "cache_key": "7c3d4f790d9b289e2cf7968a8ef3fdfe64bda83d91330abe5d29eb2ff128ed2e"
+              "cache_key": "8349df6ae98777b83d96c326b70c85cf9eedd7dbb45a79a7854a9e920cec62db"
             }
           ],
           "events": [
@@ -229,7 +229,7 @@
       {
         "rank": 1,
         "output_path": "selected-01.jpg",
-        "frame_id": "f1554447465314106206400001",
+        "frame_id": "f0814901973064699110200001",
         "video_index": 1,
         "video": "synthetic-game.mkv",
         "video_name": "synthetic-game.mkv",
@@ -237,14 +237,14 @@
         "aggregate_score": 96.0,
         "candidate_output_dhash_distance": 0,
         "primary": {
-          "frame_id": "f1554447465314106206400001",
+          "frame_id": "f0814901973064699110200001",
           "blog_score": 96.0,
           "is_transition": false,
           "scene": "戦闘",
           "reason": "戦況が明瞭"
         },
         "secondary": {
-          "frame_id": "f1554447465314106206400001",
+          "frame_id": "f0814901973064699110200001",
           "blog_score": 96.0,
           "is_transition": false,
           "scene": "戦闘",
@@ -264,7 +264,7 @@
       {
         "rank": 2,
         "output_path": "selected-02.jpg",
-        "frame_id": "f1554447465314106206400002",
+        "frame_id": "f0814901973064699110200002",
         "video_index": 1,
         "video": "synthetic-game.mkv",
         "video_name": "synthetic-game.mkv",
@@ -272,14 +272,14 @@
         "aggregate_score": 91.0,
         "candidate_output_dhash_distance": 0,
         "primary": {
-          "frame_id": "f1554447465314106206400002",
+          "frame_id": "f0814901973064699110200002",
           "blog_score": 91.0,
           "is_transition": false,
           "scene": "会話",
           "reason": "人物が明瞭"
         },
         "secondary": {
-          "frame_id": "f1554447465314106206400002",
+          "frame_id": "f0814901973064699110200002",
           "blog_score": 91.0,
           "is_transition": false,
           "scene": "会話",
@@ -315,7 +315,7 @@
       }
     ]
   },
-  "run_key": "93ee1e4506e0d41cf03abf888f5978304df5e7b428996986ec47bd7f132fad5c",
+  "run_key": "af4aeae78228aa28237fa3c36be85d82a448f5ee4e0114e199c3d523877587a0",
   "run_manifest_schema_version": 1,
   "algorithm_version": "multi-video-selection-v7",
   "prompt_version": "blog-image-selection-v6",
@@ -334,8 +334,8 @@
     {
       "video_index": 1,
       "relative_path": "synthetic-game.mkv",
-      "size": 15399,
-      "identity_key": "d7b91156c08951b01ea45f3478503e534c30728180535b6c472657aee157c313",
+      "size": 13338,
+      "identity_key": "7117224508dd00fe4b807b6cc1b405877feb09282f3333e7b5aac5787e589132",
       "duration_seconds": 6.0,
       "width": 160,
       "height": 96,
@@ -350,30 +350,30 @@
         4.5,
         5.5
       ],
-      "candidate_cache_key": "13bd173ff8a69bb5eed78978e872ec25e811aee2ea46d108e0f4595853054b37",
-      "semantic_plan_key": "4f6ad08ae255358f7dddf8241f07afe9215de79047c1e2e16a911f55dfaedb56"
+      "candidate_cache_key": "e0925582513fcd00e0492c98178d007ba48e2d4bdfb4b68836dde186c86db06b",
+      "semantic_plan_key": "6e5f6305eb9335f0dae67052740e5dbc7b313138f93dd19c94bdf7eab76bba86"
     }
   ],
   "mechanical": [
     {
       "candidates": [
         {
-          "frame_id": "f1554447465314106206400001",
+          "frame_id": "f0814901973064699110200001",
           "timestamp_seconds": 1.5,
-          "quality_score": 82.94601116943359,
-          "difference_hash": "cdad25ce8bc95764"
+          "quality_score": 77.88352142206827,
+          "difference_hash": "da56169974642c6a"
         },
         {
-          "frame_id": "f1554447465314106206400002",
+          "frame_id": "f0814901973064699110200002",
           "timestamp_seconds": 4.5,
-          "quality_score": 82.51142333984374,
-          "difference_hash": "9aaa2d55d28bb212"
+          "quality_score": 77.78325838724773,
+          "difference_hash": "911c2cad8e6c6c66"
         },
         {
-          "frame_id": "f1554447465314106206400003",
+          "frame_id": "f0814901973064699110200003",
           "timestamp_seconds": 5.5,
-          "quality_score": 83.03492555745443,
-          "difference_hash": "ad2b129819d1c435"
+          "quality_score": 77.93629088974,
+          "difference_hash": "8baf0e9acc8d8d68"
         }
       ],
       "rejected_frame_ids": []
@@ -381,22 +381,22 @@
   ],
   "assessments": {
     "primary": {
-      "f1554447465314106206400001": {
-        "frame_id": "f1554447465314106206400001",
+      "f0814901973064699110200001": {
+        "frame_id": "f0814901973064699110200001",
         "blog_score": 96.0,
         "is_transition": false,
         "scene": "戦闘",
         "reason": "戦況が明瞭"
       },
-      "f1554447465314106206400002": {
-        "frame_id": "f1554447465314106206400002",
+      "f0814901973064699110200002": {
+        "frame_id": "f0814901973064699110200002",
         "blog_score": 91.0,
         "is_transition": false,
         "scene": "会話",
         "reason": "人物が明瞭"
       },
-      "f1554447465314106206400003": {
-        "frame_id": "f1554447465314106206400003",
+      "f0814901973064699110200003": {
+        "frame_id": "f0814901973064699110200003",
         "blog_score": 88.0,
         "is_transition": false,
         "scene": "イベント",
@@ -404,22 +404,22 @@
       }
     },
     "secondary": {
-      "f1554447465314106206400001": {
-        "frame_id": "f1554447465314106206400001",
+      "f0814901973064699110200001": {
+        "frame_id": "f0814901973064699110200001",
         "blog_score": 96.0,
         "is_transition": false,
         "scene": "戦闘",
         "reason": "戦況が明瞭"
       },
-      "f1554447465314106206400002": {
-        "frame_id": "f1554447465314106206400002",
+      "f0814901973064699110200002": {
+        "frame_id": "f0814901973064699110200002",
         "blog_score": 91.0,
         "is_transition": false,
         "scene": "会話",
         "reason": "人物が明瞭"
       },
-      "f1554447465314106206400003": {
-        "frame_id": "f1554447465314106206400003",
+      "f0814901973064699110200003": {
+        "frame_id": "f0814901973064699110200003",
         "blog_score": 88.0,
         "is_transition": false,
         "scene": "イベント",
@@ -430,24 +430,24 @@
   "assessment_envelopes": [
     {
       "phase": "primary",
-      "cache_key": "40f158809b7dee207a5c9550d4b0b2c5df01541010f6fba6f0ac5ae3096644ff",
+      "cache_key": "d259f13d8e4a79ea0803ba1ed5c8aa8e003cd07fb4138099002fe67d374b2ca5",
       "payload_schema": {
         "assessments": {
-          "f1554447465314106206400001": {
+          "f0814901973064699110200001": {
             "blog_score": "number",
             "frame_id": "string",
             "is_transition": "boolean",
             "reason": "string",
             "scene": "string"
           },
-          "f1554447465314106206400002": {
+          "f0814901973064699110200002": {
             "blog_score": "number",
             "frame_id": "string",
             "is_transition": "boolean",
             "reason": "string",
             "scene": "string"
           },
-          "f1554447465314106206400003": {
+          "f0814901973064699110200003": {
             "blog_score": "number",
             "frame_id": "string",
             "is_transition": "boolean",
@@ -461,24 +461,24 @@
     },
     {
       "phase": "secondary",
-      "cache_key": "511433c35147e2a9c4c8b3cadf4eb7deb4328cd1ff8900b62cee17efd4a70a10",
+      "cache_key": "a33b4e6d2374c7bb4f67e2e5ce9c1ab5ad92832b72e485e327e6bc58e39e54c7",
       "payload_schema": {
         "assessments": {
-          "f1554447465314106206400001": {
+          "f0814901973064699110200001": {
             "blog_score": "number",
             "frame_id": "string",
             "is_transition": "boolean",
             "reason": "string",
             "scene": "string"
           },
-          "f1554447465314106206400002": {
+          "f0814901973064699110200002": {
             "blog_score": "number",
             "frame_id": "string",
             "is_transition": "boolean",
             "reason": "string",
             "scene": "string"
           },
-          "f1554447465314106206400003": {
+          "f0814901973064699110200003": {
             "blog_score": "number",
             "frame_id": "string",
             "is_transition": "boolean",
@@ -496,7 +496,7 @@
       "phase": "candidate-extraction",
       "cache_schema_version": 1,
       "phase_version": 2,
-      "cache_key": "13bd173ff8a69bb5eed78978e872ec25e811aee2ea46d108e0f4595853054b37",
+      "cache_key": "e0925582513fcd00e0492c98178d007ba48e2d4bdfb4b68836dde186c86db06b",
       "data_schema": {
         "payload_digest": "string",
         "source_frames": [
@@ -513,7 +513,7 @@
       "phase": "mechanical-analysis",
       "cache_schema_version": 1,
       "phase_version": 4,
-      "cache_key": "32fc52618ac7ad811aa4752b98d09405ba98ab3662c58d18636e5c18ef0a2113",
+      "cache_key": "2aae5f9af26112e5bf9c37b5ea560a9b712108aab0657269e18858582d046f02",
       "data_schema": {
         "candidates": [
           {
@@ -532,7 +532,7 @@
       "phase": "secondary-context",
       "cache_schema_version": 1,
       "phase_version": 2,
-      "cache_key": "a2dcd0022fcdb7bbae5444911a984e4c6a4d85a9bcbca42df5149334963711a1",
+      "cache_key": "5aaa3535a419cd6e87b38350b25a3794cee921b95739df6f75036acb6d35ff4b",
       "data_schema": {
         "frames": [
           {
@@ -546,7 +546,7 @@
       "phase": "semantic_video_chunk",
       "cache_schema_version": 1,
       "phase_version": 1,
-      "cache_key": "7c3d4f790d9b289e2cf7968a8ef3fdfe64bda83d91330abe5d29eb2ff128ed2e",
+      "cache_key": "8349df6ae98777b83d96c326b70c85cf9eedd7dbb45a79a7854a9e920cec62db",
       "data_schema": {
         "result": {
           "events": [
@@ -573,7 +573,7 @@
       "phase": "video-probe",
       "cache_schema_version": 1,
       "phase_version": 2,
-      "cache_key": "c4eb1431bb4d1a49d3ca4aa0adc1b26d9ef7578e2961366cd718239507af699e",
+      "cache_key": "b2bd866354bb4ff86bfbf35f836e86334febc77b942ab26c2c47f862dc6b1c20",
       "data_schema": {
         "identity": {
           "relative_path": "string",

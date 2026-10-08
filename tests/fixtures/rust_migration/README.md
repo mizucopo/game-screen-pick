@@ -20,12 +20,20 @@
 
 ## 両パイプライン
 
-`pipeline/synthetic-game.mkv` は 160 × 96、4 fps、6 秒の RGB lossless FFV1 動画です。
-決定的な粗い pattern を 1 秒ずつ切り替え、2–3 秒を黒にしています。
+`pipeline/synthetic-game.mkv` は 160 × 96、4 fps、6 秒の full-range YUV444 lossless
+FFV1 動画です。neutral chroma、16 × 16 pixel に整列した luma block の決定的な
+pattern を 1 秒ずつ切り替え、2–3 秒を黒にしています。
 探索・戦闘・会話などの名前は固定 AI fixture の架空の分類で、モデルの認識性能を
 評価する素材ではありません。`pipeline/generate_video.py` は pixel recipe と
 FFmpeg command を公開しています。Matroska container / encoder の version 差で
 再生成時の file bytes や size が変わり得るため、回帰テストは保存済み動画を使います。
+
+初期 RGB pattern の非整列 block は Mac FFmpeg 9.0.2 と Ubuntu FFmpeg 6.1.1 の
+JPEG 変換で最大 2 pixel 値の差を生み、同じ decoded pixel 用の数値 gate を適用
+できませんでした。素材を YUV・DCT 境界へ整列させ、上記の両 tool で候補画像の
+decoded RGB・quality・dHash が完全一致することを確認して、明示的に基準を
+更新しました。数値・画像の許容値、採否・時刻・順位の厳密比較は変更していません。
+RGB/gray の色変換・閾値計算は 15 個の固定 PNG で別途検証します。
 
 `pipeline/responses/` は Ollama / vLLM の HTTP response JSON を固定します。
 HTTP 境界以外は production の FFmpeg、ffprobe、画像計算、選定、cache、出力処理を
