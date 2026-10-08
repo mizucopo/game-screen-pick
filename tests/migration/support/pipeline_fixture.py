@@ -24,6 +24,7 @@ from src.services.video_frame_extractor import VideoFrameExtractor
 from src.services.video_phase_cache import CACHE_DIRECTORY_NAME
 from src.services.video_selector import image_difference_hash
 from src.utils.video_selection_files import file_sha256, json_digest
+from tests.migration.support.sheet_contract import assert_sheet_pixels, sheet_contract
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "fixtures/rust_migration/pipeline"
 
@@ -141,7 +142,7 @@ def _video_semantic_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 def _assert_media_pixels(
     actual: Image.Image, reference: Image.Image, label: str
 ) -> None:
-    """Apply the declared RGB gate to the complete image, including sheet labels."""
+    """Apply the unchanged RGB/dHash gate to every submitted image pixel."""
     assert actual.size == reference.size, f"{label}: dimensions changed"
     assert image_difference_hash(actual) == image_difference_hash(reference), (
         f"{label}: dHash changed"
@@ -181,7 +182,13 @@ def assert_inference_media(
             Image.open(directory / expected["decoded_frames"][0]) as reference,
         ):
             assert actual.format == "JPEG", "inference sheet must be JPEG"
-            _assert_media_pixels(actual, reference, f"{method}/{kind} sheet")
+            assert_sheet_pixels(
+                actual,
+                reference,
+                f"{method}/{kind} sheet",
+                sheet_contract(method, kind),
+                _assert_media_pixels,
+            )
 
 
 def record_inference_media(
@@ -449,6 +456,73 @@ def normalized_report(report: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _assert_report_input_paths(
+    report: dict[str, Any], request: VideoSelectionRequest
+) -> None:
+    """Prove source provenance before removing only the permitted temporary root."""
+    inputs = {
+        index: str(Path(path).resolve())
+        for index, path in enumerate(request.input_videos, start=1)
+    }
+    for collection, field in (("videos", "path"), ("selected", "video")):
+        for record in report[collection]:
+            assert record[field] == inputs.get(record["video_index"]), (
+                f"report absolute input path: {collection}.{field}"
+            )
+
+
+def _assert_jpeg_receipts(
+    path: Path,
+    data: dict[str, Any],
+    *,
+    candidate: bool,
+    required_names: set[str] | None = None,
+) -> list[str]:
+    """Keep encoder-dependent hashes truthful instead of comparing native bytes."""
+    records = data["source_frames" if candidate else "frames"]
+    label = "candidate JPEG receipt" if candidate else "context JPEG receipt"
+    names: list[str] = []
+    for record in records:
+        name = f"{record['frame_id']}.jpg" if candidate else record["name"]
+        assert (
+            isinstance(name, str) and Path(name).name == name and name not in names
+        ), f"{label}: name"
+        if not candidate:
+            assert name.endswith(("-before.jpg", "-after.jpg")), f"{label}: name"
+        names.append(name)
+        digest = record["image_sha256" if candidate else "sha256"]
+        assert (
+            isinstance(digest, str)
+            and len(digest) == 64
+            and set(digest) <= set("0123456789abcdef")
+        ), f"{label}: SHA-256 format"
+        # Prior unused context receipts survive Python resume even when their
+        # JPEGs are gone. Truth-check only images requested by this fixed run.
+        if required_names is not None and name not in required_names:
+            continue
+        image = path.parent / "frames" / name
+        assert image.is_file() and not image.is_symlink(), f"{label}: missing image"
+        if candidate:
+            assert image.stat().st_size == record["file_size"], f"{label}: size"
+        assert file_sha256(image) == digest, f"{label}: SHA-256"
+    if required_names is not None:
+        assert required_names <= set(names), "context record names missing"
+        return [name for name in names if name in required_names]
+    return names
+
+
+def _stored_phase_data(request: VideoSelectionRequest, path: Path) -> dict[str, Any]:
+    """Read the unchanged Python recipe, independent of the submitted records."""
+    reference = (
+        FIXTURE_ROOT
+        / "stored-cache"
+        / request.selection_method
+        / path.relative_to(cache_root(request))
+    )
+    data: dict[str, Any] = load_json(reference)["data"]
+    return data
+
+
 def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
     """Capture fixed decisions and durable cache contracts without temporary paths."""
     root = cache_root(request)
@@ -461,7 +535,10 @@ def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
     assert json_digest(manifest_body) == manifest["manifest_digest"]
     report = load_json(Path(request.output_dir) / "report.json")
     assert report["manifest_digest"] == manifest["manifest_digest"]
+    _assert_report_input_paths(report, request)
     mechanical: list[dict[str, Any]] = []
+    candidate_manifest_digests: dict[str, str] = {}
+    context_record_names: list[dict[str, Any]] = []
     assessments: dict[str, Any] = {}
     assessment_envelopes: list[dict[str, Any]] = []
     envelopes: list[dict[str, Any]] = []
@@ -489,6 +566,37 @@ def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
                 )
             if phase == "semantic_video_chunk":
                 assert json_digest(data["result"]) == data["result_digest"]
+            video_identity = path.relative_to(root / "videos").parts[0]
+            if phase == "candidate-extraction":
+                _assert_jpeg_receipts(path, data, candidate=True)
+                # Python's reader requires the complete ordered ID/time vector.
+                # Keep encoder-dependent size/SHA tied to this run's own JPEGs.
+                expected_records = [
+                    (record["frame_id"], record["timestamp_seconds"])
+                    for record in _stored_phase_data(request, path)["source_frames"]
+                ]
+                assert [
+                    (record["frame_id"], record["timestamp_seconds"])
+                    for record in data["source_frames"]
+                ] == expected_records, "candidate record names/order/time changed"
+                assert video_identity not in candidate_manifest_digests
+                candidate_manifest_digests[video_identity] = data["payload_digest"]
+            if phase == "secondary-context":
+                # The unchanged stored Python recipe independently fixes the
+                # required names; do not infer completeness from the new writer.
+                required_names = {
+                    record["name"]
+                    for record in _stored_phase_data(request, path)["frames"]
+                }
+                context_record_names.append(
+                    {
+                        "video_identity_key": video_identity,
+                        "cache_key": value["cache_key"],
+                        "frame_names": _assert_jpeg_receipts(
+                            path, data, candidate=False, required_names=required_names
+                        ),
+                    }
+                )
             envelopes.append(
                 {
                     "phase": phase,
@@ -499,6 +607,9 @@ def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
                 }
             )
             if phase == "mechanical-analysis":
+                assert data["source_frames_digest"] == candidate_manifest_digests.get(
+                    video_identity
+                ), "mechanical candidate-manifest link"
                 mechanical.append(
                     {
                         "candidates": data["candidates"],
@@ -531,12 +642,16 @@ def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
     assert completion["input_directory"] == str(
         Path(request.input_videos[0]).resolve().parent
     )
-    assert {item["path"] for item in completion["artifacts"]} == {
+    expected_artifacts = {
         "report.json",
         "selected-contact-sheet.jpg",
         "selected-01.jpg",
         "selected-02.jpg",
     }
+    assert len(completion["artifacts"]) == len(expected_artifacts), (
+        "completion artifact count"
+    )
+    assert {item["path"] for item in completion["artifacts"]} == expected_artifacts
     for item in [*report["artifact_integrity"], *completion["artifacts"]]:
         artifact = Path(request.output_dir) / item["path"]
         assert artifact.stat().st_size == item["size"]
@@ -566,6 +681,7 @@ def pipeline_contract(request: VideoSelectionRequest) -> dict[str, Any]:
         "phase_versions": manifest["phase_versions"],
         "inputs": manifest["inputs"],
         "mechanical": mechanical,
+        "context_record_names": context_record_names,
         "assessments": assessments,
         "assessment_envelopes": assessment_envelopes,
         "phase_envelopes": sorted(envelopes, key=lambda item: item["phase"]),
@@ -598,7 +714,17 @@ def assert_reference_images(request: VideoSelectionRequest, method: str) -> None
                 FIXTURE_ROOT / "reference-images" / method / f"{name}.png"
             ) as reference,
         ):
-            _assert_media_pixels(actual, reference, f"{method}/{name} output")
+            label = f"{method}/{name} output"
+            if name == "selected-contact-sheet":
+                assert_sheet_pixels(
+                    actual,
+                    reference,
+                    label,
+                    sheet_contract(method, "selected"),
+                    _assert_media_pixels,
+                )
+            else:
+                _assert_media_pixels(actual, reference, label)
 
 
 def assert_contract(
@@ -613,6 +739,9 @@ def assert_contract(
     )
     assert actual["run_manifest"] == expected["run_manifest"], (
         "run manifest values changed"
+    )
+    assert actual["context_record_names"] == expected["context_record_names"], (
+        "context record names changed"
     )
     if not exact_assessment_keys:
         # Their fixed values remain in the golden and stored cache. Across permitted

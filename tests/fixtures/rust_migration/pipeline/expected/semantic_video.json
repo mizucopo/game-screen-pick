@@ -831,5 +831,19 @@
     },
     "run_key": "string",
     "schema_version": "integer"
-  }
+  },
+  "context_record_names": [
+    {
+      "video_identity_key": "7117224508dd00fe4b807b6cc1b405877feb09282f3333e7b5aac5787e589132",
+      "cache_key": "5aaa3535a419cd6e87b38350b25a3794cee921b95739df6f75036acb6d35ff4b",
+      "frame_names": [
+        "f0814901973064699110200001-after.jpg",
+        "f0814901973064699110200001-before.jpg",
+        "f0814901973064699110200002-after.jpg",
+        "f0814901973064699110200002-before.jpg",
+        "f0814901973064699110200003-after.jpg",
+        "f0814901973064699110200003-before.jpg"
+      ]
+    }
+  ]
 }

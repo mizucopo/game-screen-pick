@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.request import Request
 
 import pytest
+from PIL import Image
 
 from src.models.video_selection import FrameCandidate
 from src.services.video_selector import VideoSelector, measure_candidate
@@ -22,6 +23,25 @@ from tests.migration.support.pipeline_fixture import (
 )
 
 METHODS = ("sampled_frames", "semantic_video")
+
+
+def _tamper_jpeg_comment(encoded: bytes) -> bytes:
+    """Change one comment byte without changing length or decoded image pixels."""
+    assert encoded[:2] == b"\xff\xd8", "expected the generated JPEG's SOI marker"
+    offset = 2
+    while offset + 4 <= len(encoded):
+        assert encoded[offset] == 0xFF, "invalid JPEG header marker"
+        marker = encoded[offset + 1]
+        if marker == 0xDA:  # Stop before scan data; only metadata may be changed.
+            break
+        size = int.from_bytes(encoded[offset + 2 : offset + 4], "big")
+        assert size >= 2 and offset + size + 2 <= len(encoded)
+        if marker == 0xFE and size > 2:
+            tampered = bytearray(encoded)
+            tampered[offset + 4] ^= 1
+            return bytes(tampered)
+        offset += size + 2
+    raise AssertionError("generated FFmpeg JPEG must have a nonempty COM marker")
 
 
 def test_pipeline_fixture_inventory_is_fixed() -> None:
@@ -204,3 +224,71 @@ def test_pipeline_fixture_preserves_modified_completed_output(
         VideoSelector(request, frame_extractor=RecordingExtractor()).run()
 
     assert {path.name: path.read_bytes() for path in output.iterdir()} == before
+
+
+@pytest.mark.parametrize("method", METHODS)
+def test_pipeline_fixture_rejects_same_size_completed_jpeg_tamper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """Completion reuse must reject a pixel-identical, valid same-length JPEG edit."""
+    request = request_for(tmp_path, method)
+    http = FixtureHttp(method)
+    http.install(monkeypatch)
+    VideoSelector(request, frame_extractor=RecordingExtractor()).run()
+    assert_contract(request, method)
+    output = Path(request.output_dir)
+    selected = output / "selected-01.jpg"
+    original = selected.read_bytes()
+    completion_path = next(cache_root(request).glob("runs/*/completion-*.json"))
+    completion_bytes = completion_path.read_bytes()
+    registration_path = next(cache_root(request).glob("runs/*/output-*.json"))
+    registration_bytes = registration_path.read_bytes()
+    receipt = next(
+        item
+        for item in load_json(completion_path)["artifacts"]
+        if item["path"] == selected.name
+    )
+    assert receipt["size"] == len(original)
+    assert receipt["sha256"] == file_sha256(selected)
+
+    tampered = _tamper_jpeg_comment(original)
+    assert len(tampered) == len(original)
+    assert (
+        sum(left != right for left, right in zip(original, tampered, strict=True)) == 1
+    )
+    with (
+        Image.open(io.BytesIO(original)) as original_image,
+        Image.open(io.BytesIO(tampered)) as tampered_image,
+    ):
+        assert original_image.format == tampered_image.format == "JPEG"
+        original_image.load()
+        tampered_image.load()
+        assert tampered_image.size == original_image.size
+        with (
+            original_image.convert("RGB") as reference,
+            tampered_image.convert("RGB") as changed,
+        ):
+            assert changed.tobytes() == reference.tobytes()
+    selected.write_bytes(tampered)
+    assert file_sha256(selected) != receipt["sha256"]
+    before = {path.name: path.read_bytes() for path in output.iterdir()}
+    previous_calls = list(http.calls)
+    http.forbid_calls = True
+    extractor = RecordingExtractor()
+    selector = VideoSelector(request, frame_extractor=extractor)
+    selector._prepare_paths()
+    # The real registration takes the ownership shortcut. Other ownership hash
+    # guards remain enabled and already reject this edit; completion must too.
+    assert selector._has_valid_output_registration()
+    assert not selector._completion_establishes_output_ownership(completion_path)
+    assert not selector._self_describing_output_establishes_ownership()
+
+    with pytest.raises(RuntimeError, match="完了済み成果物が変更されています"):
+        selector.run()
+
+    assert extractor.probes == 0
+    assert extractor.extractions == []
+    assert http.calls == previous_calls
+    assert {path.name: path.read_bytes() for path in output.iterdir()} == before
+    assert completion_path.read_bytes() == completion_bytes
+    assert registration_path.read_bytes() == registration_bytes

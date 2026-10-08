@@ -22,11 +22,13 @@
   日本語と非 BMP emoji を含む trim 後の2,400 Unicode codepoints
   （UTF-8 8,347 bytes）を受理し、2,401（8,351 bytes）を拒否します。
   長さはUTF-8 bytesやUTF-16 code unitsでは数えません。
-- `selection_expectations.json`: 保存した候補と両 AI 評価から、scene名の
-  Unicode casefold / isalnum が最終選択へ及ぼす2つの固定 vector。
+- `selection_expectations.json`: 既存の最終選択2 vectorを保持し、7候補から
+  output_count 2 × production multiplier 3 = 6件を二次評価へ送る別の2 vectorを保存。
+  実際のcallerの件数計算・diversity選定・時刻sortを通した候補 ID / 順序を照合します。
   `Straße` と `STRASSE`、`探索２` と `探索-２` は同じ集計 bucketになります。
   どちらも同 bucket の高得点候補を抑えて別 scene の候補を選び、`lower`だけの
   変換やASCIIだけの抽出では異なる候補が選ばれるnegative controlを備えます。
+  二次 pool だけ誤正規化した場合も、最終選択が正常なまま検出します。
 
 ## 両パイプライン
 
@@ -58,9 +60,9 @@ Cold run の推論 sequence は `sampled_frames` が primary → secondary、
 `pipeline/inference-media/` は実際に AI へ送った primary / secondary JPEG、
 動画 MP4、decode 済み reference PNG、媒体 bytes を marker に置換した HTTP request
 を保存します。通常の `FixtureHttp` は prompt・schema・表示 ID・media options を
-厳密照合し、sheet 全体（label・padding・候補の順・before/selected/after の順も含む）
-を既宣言の RGB gate と dHash で比較します。今回の Pillow default font は bundled
-なので、label 領域は mask しません。動画は codec・寸法・fps・duration・全 frame の
+厳密照合します。sheet の label は後述の実 bitmap による意味 / 位置確認を行ってから
+glyph 領域を除外し、thumbnail・padding・候補の順・before/selected/after の順を
+既宣言の RGB gate と dHash で比較します。動画は codec・寸法・fps・duration・全 frame の
 PTS と、順序付きの全 decoded frame を照合します。6 frame の MP4 は PTS
 0–5 秒・duration 6 秒、prompt の原動画区間は 0–5.8 秒です。blank、候補の並び替え、
 label 欠落、before/after 入れ替え、動画の逆順・PTS 変更・誤区間の negative test と、
@@ -96,9 +98,24 @@ range flag だけ変えた negative control は decoded pixel の相違で不合
 rank / timestamp / source label、画像の並び、padding も比較します。blank、
 thumbnail の並び替え、誤った rank / time label を、自己 hash / size を整合させた
 実 pipeline 出力へ適用する negative test と、JPEG 再 encode の positive control を
-用意しています。Pillow default font は bundled なので label mask は使いません。
+用意しています。AI 入力と最終 sheet に同じ文字検証を適用します。
 `baseline-provenance.json` に Python / dependency /
 FFmpeg / 元 revision と各 fixture の SHA-256 を記録しています。
+
+`sheet_contract.py` の label / cell geometry は6つの保存 PNG から独立に転記した
+期待値です。実画像の占有 label strip を、Pillow 同梱 Aileron Regular 10px または
+bitmap default の完全な文字 / 背景 template と既存 RGB 閾値で照合します。
+[sheet-label-profiles.json](sheet-label-profiles.json) に各 strip の RGB pixel SHA-256、
+label / geometry と監査した環境を固定保存し、そのhashに一致するtemplateだけを
+使います。実行時のfontやrasterizerがactualとtemplateを同時に変えても、未承認の
+描画を合格にしません。通常testでprofile hashを再生成・更新しません。
+rank / Frame Display ID、動画名、時刻、context legend、x/y位置と黒い余白を検証後、
+既知の32px / 42px stripだけを比較の双方で黒くします。thumbnail の先頭 pixel row
+と未使用 cell は除外しません。request / report の文字や提出 font 名だけでは
+合格にしません。未登録 font / rasterizer は拒否し、同じ意味・配置を保つ profile の
+独立確認、positive / negative controls、Human Review を行ってから別途追加します。
+正しい別 font の JPEG再encodeは合格し、blank・誤ID/rank/time/source・文字順・1pxの
+位置差・context legend・label余白・thumbnail境界・未使用cellの改変は不合格です。
 
 `run_manifest` は保存した Run Manifest 全体、`run_manifest_schema` は全 field の
 nested type の固定 snapshot です。`run_identity`、全 models / provider metadata、
@@ -154,11 +171,37 @@ probe / candidate / semantic key、phase version は厳密一致です。
 機械評価の `quality_score` だけ raw float の許容誤差を適用し、report の
 `aggregate_score` は現行の小数 2 桁丸めを含め厳密一致します。
 
-report の入力絶対 path は basename へ置換します。`manifest_digest` と出力 JPEG の
+report の `videos[].path` / `selected[].video` は、`video_index` に対応する
+実入力の resolved absolute path と一致することを先に確認してから basename へ
+置換します。basenameだけや同じbasenameの foreign root は許容しません。
+`manifest_digest` と出力 JPEG の
 byte size / SHA-256 は report 比較用の marker へ置換します。ただし実際の report と
 completion は、各実装が生成した artifact の size / SHA-256 と完全一致することを
 別途検証します。全 phase payload digest、assessment payload digest、manifest digest
 も保存した中身から再計算して照合します。欠落 field を正規化で消しません。
+
+candidate manifest の各 `image_sha256` とsizeは各実装自身の候補JPEGへ照合し、
+固定stored-cache recipeの全候補ID・順序・時刻を確認します。JPEGとmechanical
+記録を残してreceiptの欠落・並べ替え・時刻変更を行い、全digestを整合させても拒否します。
+mechanical の `source_frames_digest` は同じ動画のcandidate payload digestへ照合します。
+secondary-context は必要なreceipt SHAを自身のJPEGへ照合し、保存goldenの
+`context_record_names` で必要な before / after のname集合・順序を確認します。
+必要集合は変更しないstored-cache recipeから独立に取得します。過去の未使用receiptは
+構造・nameの一意性・SHA形式を確認して保持でき、そのJPEGの存在やhashは要求しません。
+必要名だけをsnapshotに残し、未使用JPEGが欠損した正常resumeを誤って拒否しません。
+このfieldは既存Python stored-cacheのrecordから追加し、旧goldenの全項目と媒体は
+維持しました。candidate通常cache hitのsize-only shortcutやcompleted warm runの
+無操作をproduction側で変更するものではありません。完了artifactはexpected setに加え
+exact record countを検証してvalidな重複も拒否します。
+`test_durable_integrity_contract.py` は誤receipt・欠落・誤link・誤raw path・重複を
+自己digest/size/hashが整合する状態で拒否します。別encoderのpositiveはcandidate/contextを
+productionのreceipt保存前に再圧縮してcold pipeline全体を実行し、全assessment keyを
+実際の依存bytesから照合してからgolden比較します。completionを除いて再開しても
+推論・probe・candidate/context再抽出なしで同じkeyを再利用することを確認します。
+必要contextだけを再抽出する部分再開、completed shortcutでcontextを読まない条件、誤mechanical
+linkで機械評価だけmissし旧AI keyを保つ条件も確認します。
+completionの同size・正常JPEGのCOM byte改変は
+metadata不変のまま拒否し、正規registration経路でもSHA検査が必要なことを証明します。
 
 `assessment_envelopes[*].cache_key` は候補 JPEG bytes / mechanical payload bytes /
 context JPEG bytes に依存します。cold / interrupted run の golden 比較時だけ
@@ -168,9 +211,9 @@ context JPEG bytes に依存します。cold / interrupted run の golden 比較
 最終画像と最終 contact sheet は同寸法、decoded RGB の channel MAE ≤ 1.0、
 最大差 ≤ 16、PSNR ≥ 40 dB とし、
 固定 reference の dHash も厳密一致させます。JPEG file 自体の byte 完全一致は
-cross-encoder の条件にしません。sheet の全 label pixel も比較し、format / 寸法と
-自身の完全性の照合を併用します。font や rasterizer が異なる移植版は契約文書の
-label 位置・内容の比較と Human Review を適用してください。
+cross-encoder の条件にしません。sheet は上記の独立した文字 / 位置検証に通った
+label stripだけを除外し、それ以外の全pixelを同じgateで比較します。format / 寸法と
+自身の完全性の照合も必須です。AI入力sheetのHuman Reviewも維持します。
 
 ## 実行と期待値の更新
 
