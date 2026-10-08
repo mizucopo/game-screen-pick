@@ -15,6 +15,7 @@ from src.utils.video_selection_files import file_sha256, json_digest
 from tests.migration.support.pipeline_fixture import (
     FixtureHttp,
     RecordingExtractor,
+    assert_cold_inference_calls,
     assert_contract,
     cache_root,
     load_json,
@@ -62,6 +63,79 @@ def _link_candidate_manifest(request: VideoSelectionRequest) -> None:
     mechanical["data"]["source_frames_digest"] = candidate["data"]["payload_digest"]
     _refresh_payload(mechanical["data"])
     _write(mechanical_path, mechanical)
+
+
+def _assert_current_assessment_keys(
+    request: VideoSelectionRequest, selector: VideoSelector
+) -> dict[str, str]:
+    """Verify actual cache-reader keys before the cross-encoder projection."""
+    source = selector.sources[0]
+    mechanical = load_json(_phase(request, "mechanical-analysis"))["data"]
+    candidate_dir = _phase(request, "candidate-extraction").parent / "frames"
+    candidates = {
+        record["frame_id"]: FrameCandidate(
+            frame_id=record["frame_id"],
+            timestamp_seconds=record["timestamp_seconds"],
+            path=str(candidate_dir / f"{record['frame_id']}.jpg"),
+            video_index=source.index,
+        )
+        for record in mechanical["candidates"]
+    }
+    keys: dict[str, str] = {}
+    for stage, model in (
+        ("primary", selector.primary_model),
+        ("secondary", selector.secondary_model),
+    ):
+        paths = list(cache_root(request).glob(f"videos/*/assessments/{stage}/*.json"))
+        assert len(paths) == 1
+        path = paths[0]
+        assessment = load_json(path)
+        expected_key = selector._assessment_cache_key(
+            model,
+            stage,
+            source,
+            [candidates[frame_id] for frame_id in assessment["assessments"]],
+        )
+        assert path.stem == assessment["cache_key"] == expected_key, (
+            "assessment dependency key changed"
+        )
+        keys[stage] = expected_key
+    return keys
+
+
+class ReencodingExtractor(RecordingExtractor):
+    """Use Pillow for one JPEG before production writes receipts and cache keys."""
+
+    def __init__(self, phase: str) -> None:
+        super().__init__()
+        self.phase = phase
+        self.reencoded_path: Path | None = None
+
+    def extract_frame(
+        self,
+        video: Path,
+        timestamp_seconds: float,
+        output_path: Path,
+        *,
+        max_width: int | None,
+        video_stream_index: int = 0,
+    ) -> None:
+        super().extract_frame(
+            video,
+            timestamp_seconds,
+            output_path,
+            max_width=max_width,
+            video_stream_index=video_stream_index,
+        )
+        if self.phase not in output_path.parts or self.reencoded_path is not None:
+            return
+        original = output_path.read_bytes()
+        with Image.open(output_path) as image:
+            image.convert("RGB").save(
+                output_path, format="JPEG", quality=100, subsampling=0
+            )
+        assert output_path.read_bytes() != original
+        self.reencoded_path = output_path
 
 
 @pytest.fixture(scope="module", params=("sampled_frames", "semantic_video"))
@@ -230,29 +304,45 @@ def test_completion_contract_rejects_valid_duplicate(
 
 @pytest.mark.parametrize("phase", ("candidate-extraction", "secondary-context"))
 def test_receipt_contract_accepts_own_reencoded_jpeg(
-    durable_output: tuple[VideoSelectionRequest, str], phase: str
+    completed_pipeline: tuple[VideoSelectionRequest, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
 ) -> None:
-    """JPEG hashes differ across encoders but must be truthful within each output."""
-    request, method = durable_output
-    path = _phase(request, phase)
-    envelope = load_json(path)
-    candidate = phase == "candidate-extraction"
-    record = envelope["data"]["source_frames" if candidate else "frames"][0]
-    image_path = (
-        path.parent
-        / "frames"
-        / (f"{record['frame_id']}.jpg" if candidate else record["name"])
-    )
-    original = image_path.read_bytes()
-    with Image.open(image_path) as image:
-        image.convert("RGB").save(image_path, format="JPEG", quality=100, subsampling=0)
-    assert image_path.read_bytes() != original
-    record["image_sha256" if candidate else "sha256"] = file_sha256(image_path)
-    if candidate:
-        record["file_size"] = image_path.stat().st_size
-    _write(path, envelope)
-    if candidate:
-        _link_candidate_manifest(request)
+    """A separately encoded cold run must write usable, current assessment keys."""
+    baseline, method = completed_pipeline
+    baseline_keys = {
+        stage: next(
+            cache_root(baseline).glob(f"videos/*/assessments/{stage}/*.json")
+        ).stem
+        for stage in ("primary", "secondary")
+    }
+    request = request_for(tmp_path, method)
+    http = FixtureHttp(method)
+    http.install(monkeypatch)
+    extractor = ReencodingExtractor(phase)
+    selector = VideoSelector(request, frame_extractor=extractor)
+    selector.run()
+    assert extractor.reencoded_path is not None
+    assert_cold_inference_calls(http)
+    keys = _assert_current_assessment_keys(request, selector)
+    assert keys["secondary"] != baseline_keys["secondary"]
+    if phase == "candidate-extraction":
+        assert keys["primary"] != baseline_keys["primary"]
+    else:
+        assert keys["primary"] == baseline_keys["primary"]
+    assert_contract(request, method)
+
+    # Force the intermediate readers, rather than the completed-output shortcut.
+    next(cache_root(request).glob("runs/*/completion-*.json")).unlink()
+    http.forbid_calls = True
+    resumed_extractor = RecordingExtractor()
+    resumed = VideoSelector(request, frame_extractor=resumed_extractor)
+    resumed.run()
+    assert resumed_extractor.probes == 0
+    assert len(resumed_extractor.extractions) == 2
+    assert all(width is None for _, width in resumed_extractor.extractions)
+    assert _assert_current_assessment_keys(request, resumed) == keys
     assert_contract(request, method)
 
 

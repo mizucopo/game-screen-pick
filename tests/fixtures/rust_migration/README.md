@@ -22,8 +22,9 @@
   日本語と非 BMP emoji を含む trim 後の2,400 Unicode codepoints
   （UTF-8 8,347 bytes）を受理し、2,401（8,351 bytes）を拒否します。
   長さはUTF-8 bytesやUTF-16 code unitsでは数えません。
-- `selection_expectations.json`: 保存した候補と両 AI 評価から、scene名の
-  Unicode casefold / isalnum が二次候補 ID / 順序と最終選択へ及ぼす2つの固定 vector。
+- `selection_expectations.json`: 既存の最終選択2 vectorを保持し、7候補から
+  output_count 2 × production multiplier 3 = 6件を二次評価へ送る別の2 vectorを保存。
+  実際のcallerの件数計算・diversity選定・時刻sortを通した候補 ID / 順序を照合します。
   `Straße` と `STRASSE`、`探索２` と `探索-２` は同じ集計 bucketになります。
   どちらも同 bucket の高得点候補を抑えて別 scene の候補を選び、`lower`だけの
   変換やASCIIだけの抽出では異なる候補が選ばれるnegative controlを備えます。
@@ -193,8 +194,11 @@ secondary-context は必要なreceipt SHAを自身のJPEGへ照合し、保存go
 無操作をproduction側で変更するものではありません。完了artifactはexpected setに加え
 exact record countを検証してvalidな重複も拒否します。
 `test_durable_integrity_contract.py` は誤receipt・欠落・誤link・誤raw path・重複を
-自己digest/size/hashが整合する状態で拒否し、正しい別encoderのreceiptと、必要context
-だけを再抽出する部分再開、completed shortcutでcontextを読まない条件、誤mechanical
+自己digest/size/hashが整合する状態で拒否します。別encoderのpositiveはcandidate/contextを
+productionのreceipt保存前に再圧縮してcold pipeline全体を実行し、全assessment keyを
+実際の依存bytesから照合してからgolden比較します。completionを除いて再開しても
+推論・probe・candidate/context再抽出なしで同じkeyを再利用することを確認します。
+必要contextだけを再抽出する部分再開、completed shortcutでcontextを読まない条件、誤mechanical
 linkで機械評価だけmissし旧AI keyを保つ条件も確認します。
 completionの同size・正常JPEGのCOM byte改変は
 metadata不変のまま拒否し、正規registration経路でもSHA検査が必要なことを証明します。

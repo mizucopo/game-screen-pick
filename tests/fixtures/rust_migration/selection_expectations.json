@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline_commit": "e5e19c01d65cb48e9c5e1d6ccc171b4e2082228c",
-  "note": "Saved candidates and fixed primary/secondary AI assessment responses. Ordered secondary candidate IDs, final selected IDs, and aggregate scores are literal contract expectations; normal tests do not regenerate them.",
+  "note": "Saved candidates and fixed AI assessment responses. Final cases retain the original three-candidate vectors. Separate secondary cases use output_count 2 with seven non-transition candidates, so the production caller selects six and timestamp-sorts them. Ordered secondary IDs, final IDs, and scores are literal contract expectations; normal tests do not regenerate them.",
   "cases": [
     {
       "name": "scene_unicode_casefold",
@@ -75,10 +75,6 @@
           "reason": "fixed synthetic assessment response"
         }
       ],
-      "expected_secondary_candidates": [
-        "f00001",
-        "f00003"
-      ],
       "expected_selected": [
         {
           "frame_id": "f00001",
@@ -91,10 +87,6 @@
       ],
       "negative_control": {
         "normalization": "lower",
-        "expected_secondary_candidates": [
-          "f00001",
-          "f00002"
-        ],
         "expected_selected": [
           {
             "frame_id": "f00001",
@@ -179,10 +171,6 @@
           "reason": "fixed synthetic assessment response"
         }
       ],
-      "expected_secondary_candidates": [
-        "f00001",
-        "f00003"
-      ],
       "expected_selected": [
         {
           "frame_id": "f00001",
@@ -195,10 +183,6 @@
       ],
       "negative_control": {
         "normalization": "ascii_alnum",
-        "expected_secondary_candidates": [
-          "f00001",
-          "f00002"
-        ],
         "expected_selected": [
           {
             "frame_id": "f00001",
@@ -208,6 +192,260 @@
             "frame_id": "f00002",
             "aggregate_score": 96.0
           }
+        ]
+      }
+    }
+  ],
+  "secondary_cases": [
+    {
+      "name": "secondary_unicode_casefold",
+      "count": 2,
+      "expected_pool_count": 6,
+      "candidates": [
+        {
+          "frame_id": "f00001",
+          "timestamp_seconds": 30.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00002",
+          "timestamp_seconds": 5.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00003",
+          "timestamp_seconds": 20.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00004",
+          "timestamp_seconds": 10.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00005",
+          "timestamp_seconds": 25.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00006",
+          "timestamp_seconds": 15.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00007",
+          "timestamp_seconds": 0.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        }
+      ],
+      "primary_response": [
+        {
+          "frame_id": "f00001",
+          "blog_score": 100.0,
+          "is_transition": false,
+          "scene": "Straße",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00002",
+          "blog_score": 60.0,
+          "is_transition": false,
+          "scene": "STRASSE",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00003",
+          "blog_score": 96.0,
+          "is_transition": false,
+          "scene": "different3",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00004",
+          "blog_score": 92.0,
+          "is_transition": false,
+          "scene": "different4",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00005",
+          "blog_score": 88.0,
+          "is_transition": false,
+          "scene": "different5",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00006",
+          "blog_score": 84.0,
+          "is_transition": false,
+          "scene": "different6",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00007",
+          "blog_score": 56.0,
+          "is_transition": false,
+          "scene": "different7",
+          "reason": "fixed synthetic assessment response"
+        }
+      ],
+      "expected_secondary_candidates": [
+        "f00007",
+        "f00004",
+        "f00006",
+        "f00003",
+        "f00005",
+        "f00001"
+      ],
+      "negative_control": {
+        "normalization": "lower",
+        "expected_secondary_candidates": [
+          "f00002",
+          "f00004",
+          "f00006",
+          "f00003",
+          "f00005",
+          "f00001"
+        ]
+      }
+    },
+    {
+      "name": "secondary_unicode_isalnum",
+      "count": 2,
+      "expected_pool_count": 6,
+      "candidates": [
+        {
+          "frame_id": "f00001",
+          "timestamp_seconds": 30.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00002",
+          "timestamp_seconds": 5.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00003",
+          "timestamp_seconds": 20.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00004",
+          "timestamp_seconds": 10.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00005",
+          "timestamp_seconds": 25.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00006",
+          "timestamp_seconds": 15.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        },
+        {
+          "frame_id": "f00007",
+          "timestamp_seconds": 0.0,
+          "path": "unused",
+          "quality_score": 0.0,
+          "difference_hash": "0f0f0f0f0f0f0f0f"
+        }
+      ],
+      "primary_response": [
+        {
+          "frame_id": "f00001",
+          "blog_score": 100.0,
+          "is_transition": false,
+          "scene": "探索２",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00002",
+          "blog_score": 60.0,
+          "is_transition": false,
+          "scene": "探索-２",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00003",
+          "blog_score": 96.0,
+          "is_transition": false,
+          "scene": "戦闘３",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00004",
+          "blog_score": 92.0,
+          "is_transition": false,
+          "scene": "戦闘４",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00005",
+          "blog_score": 88.0,
+          "is_transition": false,
+          "scene": "戦闘５",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00006",
+          "blog_score": 84.0,
+          "is_transition": false,
+          "scene": "戦闘６",
+          "reason": "fixed synthetic assessment response"
+        },
+        {
+          "frame_id": "f00007",
+          "blog_score": 56.0,
+          "is_transition": false,
+          "scene": "戦闘７",
+          "reason": "fixed synthetic assessment response"
+        }
+      ],
+      "expected_secondary_candidates": [
+        "f00007",
+        "f00004",
+        "f00006",
+        "f00003",
+        "f00005",
+        "f00001"
+      ],
+      "negative_control": {
+        "normalization": "ascii_alnum",
+        "expected_secondary_candidates": [
+          "f00002",
+          "f00004",
+          "f00006",
+          "f00003",
+          "f00005",
+          "f00001"
         ]
       }
     }
