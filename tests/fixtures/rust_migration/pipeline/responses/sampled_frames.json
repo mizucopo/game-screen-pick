@@ -1,0 +1,50 @@
+{
+  "tags": {
+    "models": [
+      {
+        "name": "fixture-primary",
+        "digest": "digest-fixture-primary"
+      },
+      {
+        "name": "fixture-secondary",
+        "digest": "digest-fixture-secondary"
+      }
+    ]
+  },
+  "show": {
+    "capabilities": [
+      "vision"
+    ],
+    "details": {
+      "family": "fixture-only"
+    }
+  },
+  "primary": {
+    "message": {
+      "role": "assistant",
+      "content": "{\"frames\": [{\"id\": \"A01\", \"blog_score\": 80, \"transition\": false, \"scene\": \"探索\", \"reason\": \"地形が明瞭\"}, {\"id\": \"A02\", \"blog_score\": 95, \"transition\": false, \"scene\": \"戦闘\", \"reason\": \"戦況が明瞭\"}, {\"id\": \"A03\", \"blog_score\": 50, \"transition\": true, \"scene\": \"ロード\", \"reason\": \"遷移中\"}, {\"id\": \"A04\", \"blog_score\": 90, \"transition\": false, \"scene\": \"会話\", \"reason\": \"人物が明瞭\"}, {\"id\": \"A05\", \"blog_score\": 85, \"transition\": false, \"scene\": \"イベント\", \"reason\": \"出来事が明瞭\"}]}"
+    }
+  },
+  "secondary": {
+    "message": {
+      "role": "assistant",
+      "content": "{\"frames\": [{\"id\": \"A01\", \"blog_score\": 70, \"transition\": false, \"scene\": \"探索\", \"reason\": \"地形が明瞭\"}, {\"id\": \"A02\", \"blog_score\": 96, \"transition\": false, \"scene\": \"戦闘\", \"reason\": \"戦況が明瞭\"}, {\"id\": \"A03\", \"blog_score\": 91, \"transition\": false, \"scene\": \"会話\", \"reason\": \"人物が明瞭\"}, {\"id\": \"A04\", \"blog_score\": 88, \"transition\": false, \"scene\": \"イベント\", \"reason\": \"出来事が明瞭\"}]}"
+    }
+  },
+  "ps": {
+    "models": [
+      {
+        "name": "fixture-primary",
+        "digest": "digest-fixture-primary",
+        "size": 100,
+        "size_vram": 0
+      },
+      {
+        "name": "fixture-secondary",
+        "digest": "digest-fixture-secondary",
+        "size": 100,
+        "size_vram": 0
+      }
+    ]
+  }
+}

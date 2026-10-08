@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "note": "Current integrated-search transport only; Rust Brave+vLLM intentionally replaces provider/cache identity. No live search facts or keys.",
+  "cases": [
+    {
+      "name": "trimmed_success_preserves_crlf",
+      "expected_context": "ジャンル: 合成パズル\r\n基本的なゲーム進行と主なプレイ要素: 色の異なる図形を移動する。\r\n代表的な画面や場面: 図形の配置、移動、暗転。\r\n画像選定で重視する視覚的要素: 図形の位置と色が明瞭な画面。",
+      "http_response": {
+        "model": "fixture-context-model",
+        "output": [
+          {
+            "type": "web_search_call",
+            "status": "completed"
+          },
+          {
+            "type": "message",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "{\"status\": \"ok\", \"identified_title\": \"合成 fixture game\", \"game_context\": \"  ジャンル: 合成パズル\\r\\n基本的なゲーム進行と主なプレイ要素: 色の異なる図形を移動する。\\r\\n代表的な画面や場面: 図形の配置、移動、暗転。\\r\\n画像選定で重視する視覚的要素: 図形の位置と色が明瞭な画面。  \"}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "ambiguous",
+      "expected_error": "ambiguous",
+      "http_response": {
+        "model": "fixture-context-model",
+        "output": [
+          {
+            "type": "web_search_call",
+            "status": "completed"
+          },
+          {
+            "type": "message",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "{\"status\": \"ambiguous\", \"error\": \"合成作品を一意に特定できない\"}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing_heading",
+      "expected_error": "共通項目が不足",
+      "http_response": {
+        "model": "fixture-context-model",
+        "output": [
+          {
+            "type": "web_search_call",
+            "status": "completed"
+          },
+          {
+            "type": "message",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "{\"status\": \"ok\", \"identified_title\": \"合成 fixture game\", \"game_context\": \"ジャンル: 合成パズル\"}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "fullwidth_colon_rejected",
+      "http_response": {
+        "model": "fixture-context-model",
+        "output": [
+          {
+            "type": "web_search_call",
+            "status": "completed"
+          },
+          {
+            "type": "message",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "{\"status\": \"ok\", \"identified_title\": \"合成 fixture game\", \"game_context\": \"  ジャンル： 合成パズル\\r\\n基本的なゲーム進行と主なプレイ要素： 色の異なる図形を移動する。\\r\\n代表的な画面や場面： 図形の配置、移動、暗転。\\r\\n画像選定で重視する視覚的要素： 図形の位置と色が明瞭な画面。  \"}"
+              }
+            ]
+          }
+        ]
+      },
+      "expected_error": "共通項目が不足"
+    }
+  ]
+}

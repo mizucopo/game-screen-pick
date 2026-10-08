@@ -1,0 +1,379 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "e5e19c01d65cb48e9c5e1d6ccc171b4e2082228c",
+  "baseline_version": "1.19.4",
+  "libraries": {
+    "opencv": "4.13.0",
+    "numpy": "2.5.3",
+    "pillow": "12.3.0"
+  },
+  "numeric_absolute_tolerance": 1e-06,
+  "numeric_relative_tolerance": 1e-08,
+  "images": [
+    {
+      "name": "dark_below",
+      "file": "images/dark_below.png",
+      "recipe": {
+        "kind": "half",
+        "low": 3,
+        "high": 9,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "335cf6b56e766d1541bfe654b4b5fcdf3d895a03fe638d6a48817a7860878643",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 6.0,
+      "contrast": 3.0,
+      "sharpness": 1.125,
+      "entropy": 1.0,
+      "accepted": false,
+      "quality_score": null,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "dark_equal",
+      "file": "images/dark_equal.png",
+      "recipe": {
+        "kind": "half",
+        "low": 4,
+        "high": 10,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "048e4165ea942986bd76c017b154780b08b7aa93b53cd1b720ac0dd898b9a773",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 7.0,
+      "contrast": 3.0,
+      "sharpness": 1.125,
+      "entropy": 1.0,
+      "accepted": true,
+      "quality_score": 9.577369609095737,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "dark_above",
+      "file": "images/dark_above.png",
+      "recipe": {
+        "kind": "half",
+        "low": 5,
+        "high": 11,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "84084cd73c3b750f28f4e679e1fbd7bbe270b21fa61d0c93adad0ed9860e98fb",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 8.0,
+      "contrast": 3.0,
+      "sharpness": 1.125,
+      "entropy": 1.0,
+      "accepted": true,
+      "quality_score": 9.657369609095737,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "dark_contrast_equal",
+      "file": "images/dark_contrast_equal.png",
+      "recipe": {
+        "kind": "half",
+        "low": 2,
+        "high": 10,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "bd0d37aec0e86adbdbc63b15e0ce7fb41214094f2e49f1e4aa59d5e1c07f641b",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 6.0,
+      "contrast": 4.0,
+      "sharpness": 2.0,
+      "entropy": 1.0,
+      "accepted": true,
+      "quality_score": 11.659727548598747,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "white_above",
+      "file": "images/white_above.png",
+      "recipe": {
+        "kind": "half",
+        "low": 246,
+        "high": 252,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "fbd059dfd2ee30d403266d334828826341d80b828f8fcae1b4490a0a8a9c9e29",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 249.0,
+      "contrast": 3.0,
+      "sharpness": 1.125,
+      "entropy": 1.0,
+      "accepted": false,
+      "quality_score": null,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "white_equal",
+      "file": "images/white_equal.png",
+      "recipe": {
+        "kind": "half",
+        "low": 245,
+        "high": 251,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "9b4faa2afbd6670780efe28b63e09134a09013fc3b321836d5803cb56f2d0b95",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 248.0,
+      "contrast": 3.0,
+      "sharpness": 1.125,
+      "entropy": 1.0,
+      "accepted": true,
+      "quality_score": 9.177369609095736,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "white_below",
+      "file": "images/white_below.png",
+      "recipe": {
+        "kind": "half",
+        "low": 244,
+        "high": 250,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "aa413199327ac823ec43897b09f613d3ce1892f100ad212c4aac8824d0656b27",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 247.0,
+      "contrast": 3.0,
+      "sharpness": 1.125,
+      "entropy": 1.0,
+      "accepted": true,
+      "quality_score": 9.257369609095738,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "white_contrast_equal",
+      "file": "images/white_contrast_equal.png",
+      "recipe": {
+        "kind": "half",
+        "low": 245,
+        "high": 253,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "6d4e447f46d4c9b6b527d842e48a7a77868ccb4e50b50402c3c5d5ebb56a75cf",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 249.0,
+      "contrast": 4.0,
+      "sharpness": 2.0,
+      "entropy": 1.0,
+      "accepted": true,
+      "quality_score": 11.259727548598747,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "contrast_below",
+      "file": "images/contrast_below.png",
+      "recipe": {
+        "kind": "half",
+        "low": 125,
+        "high": 128,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "bf18b1958b05799acb35bbe352d7bffb874803ae72d80e8776c1c5a0f7a08b5a",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 126.5,
+      "contrast": 1.5,
+      "sharpness": 0.28125,
+      "entropy": 1.0,
+      "accepted": false,
+      "quality_score": null,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "contrast_equal",
+      "file": "images/contrast_equal.png",
+      "recipe": {
+        "kind": "half",
+        "low": 124,
+        "high": 128,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "53cabe40768bc821dac083e49963c9a392de6367d0f27c9a4ec5872ace531d3a",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 126.0,
+      "contrast": 2.0,
+      "sharpness": 0.5,
+      "entropy": 1.0,
+      "accepted": true,
+      "quality_score": 16.75686632075322,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "contrast_above",
+      "file": "images/contrast_above.png",
+      "recipe": {
+        "kind": "half",
+        "low": 124,
+        "high": 129,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "8ce61f96d48d3988c10f24bb3994cceb0b1a13e94d321d73e2766f924e72505c",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 126.5,
+      "contrast": 2.5,
+      "sharpness": 0.78125,
+      "entropy": 1.0,
+      "accepted": true,
+      "quality_score": 17.795061453743813,
+      "difference_hash": "1818181818181818"
+    },
+    {
+      "name": "sharpness_below",
+      "file": "images/sharpness_below.png",
+      "recipe": {
+        "kind": "stripes2",
+        "low": 127,
+        "high": 128,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "507298ef1e08ed39d2b2b60f8c8431db0b01eb7ef6160a41a3f063dca2f28471",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 127.5,
+      "contrast": 0.5,
+      "sharpness": 0.96875,
+      "entropy": 1.0,
+      "accepted": false,
+      "quality_score": null,
+      "difference_hash": "a5a5a5a5a5a5a5a5"
+    },
+    {
+      "name": "sharpness_above",
+      "file": "images/sharpness_above.png",
+      "recipe": {
+        "kind": "stripes1",
+        "low": 127,
+        "high": 128,
+        "width": 64,
+        "height": 32
+      },
+      "sha256": "74c7d8057c41ad8f3c4a1822c6aa64d190e1b0e39b5c6b131f3e4710655dae06",
+      "dimensions": [
+        64,
+        32
+      ],
+      "brightness": 127.5,
+      "contrast": 0.5,
+      "sharpness": 4.0,
+      "entropy": 1.0,
+      "accepted": true,
+      "quality_score": 22.403862857926303,
+      "difference_hash": "a9a9a9a9a9a9a9a9"
+    },
+    {
+      "name": "sharpness_equal",
+      "file": "images/sharpness_equal.png",
+      "recipe": {
+        "kind": "columns",
+        "values": [
+          127,
+          127,
+          127,
+          128,
+          127,
+          127,
+          128,
+          128
+        ],
+        "height": 8
+      },
+      "sha256": "002cbded528d571087c2bb38a7b69ddd5336efa729ee1853af1029b5456b6c6b",
+      "dimensions": [
+        8,
+        8
+      ],
+      "brightness": 127.375,
+      "contrast": 0.4841229182759271,
+      "sharpness": 1.0,
+      "entropy": 0.9544340372085571,
+      "accepted": true,
+      "quality_score": 17.429212704635443,
+      "difference_hash": "2222222222222222"
+    },
+    {
+      "name": "rgb_edges",
+      "file": "images/rgb_edges.png",
+      "recipe": {
+        "kind": "rgb_grid",
+        "width": 33,
+        "height": 19,
+        "channels": [
+          [
+            37,
+            17
+          ],
+          [
+            13,
+            71
+          ],
+          [
+            97,
+            29
+          ]
+        ],
+        "modulus": 256
+      },
+      "sha256": "120b03a7f14b791ba7230d7cb2e5219bd90066ab8cdafc812aebdf902b538ed9",
+      "dimensions": [
+        33,
+        19
+      ],
+      "brightness": 126.48006379585327,
+      "contrast": 49.20731297677871,
+      "sharpness": 24606.341328164548,
+      "entropy": 7.275909423828125,
+      "accepted": true,
+      "quality_score": 91.55927294049377,
+      "difference_hash": "aa11555254aaaab4"
+    }
+  ]
+}

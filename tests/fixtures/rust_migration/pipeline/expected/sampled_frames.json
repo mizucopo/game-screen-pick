@@ -1,0 +1,493 @@
+{
+  "report_schema": {
+    "artifact_integrity": [
+      {
+        "path": "string",
+        "sha256": "string",
+        "size": "integer"
+      }
+    ],
+    "game_context": "string",
+    "manifest_digest": "string",
+    "models": {
+      "primary": {
+        "digest": "string",
+        "name": "string",
+        "resolved_name": "string"
+      },
+      "secondary": {
+        "digest": "string",
+        "name": "string",
+        "resolved_name": "string"
+      }
+    },
+    "output_count": "integer",
+    "report_schema_version": "integer",
+    "sample_count": "integer",
+    "selected": [
+      {
+        "aggregate_score": "number",
+        "candidate_output_dhash_distance": "integer",
+        "frame_id": "string",
+        "output_path": "string",
+        "primary": {
+          "blog_score": "number",
+          "frame_id": "string",
+          "is_transition": "boolean",
+          "reason": "string",
+          "scene": "string"
+        },
+        "rank": "integer",
+        "secondary": {
+          "blog_score": "number",
+          "frame_id": "string",
+          "is_transition": "boolean",
+          "reason": "string",
+          "scene": "string"
+        },
+        "timestamp_seconds": "number",
+        "video": "string",
+        "video_index": "integer",
+        "video_name": "string"
+      }
+    ],
+    "videos": [
+      {
+        "duration_seconds": "number",
+        "path": "string",
+        "sample_count": "integer",
+        "video_index": "integer"
+      }
+    ]
+  },
+  "report": {
+    "report_schema_version": 1,
+    "manifest_digest": "<manifest-digest>",
+    "videos": [
+      {
+        "video_index": 1,
+        "path": "synthetic-game.mkv",
+        "duration_seconds": 6.0,
+        "sample_count": 6
+      }
+    ],
+    "game_context": "公開合成fixture: 探索・戦闘・会話・イベントを記録する。",
+    "output_count": 2,
+    "sample_count": 6,
+    "models": {
+      "primary": {
+        "name": "fixture-primary",
+        "resolved_name": "fixture-primary",
+        "digest": "digest-fixture-primary"
+      },
+      "secondary": {
+        "name": "fixture-secondary",
+        "resolved_name": "fixture-secondary",
+        "digest": "digest-fixture-secondary"
+      }
+    },
+    "selected": [
+      {
+        "rank": 1,
+        "output_path": "selected-01.jpg",
+        "frame_id": "f1554447465314106206400002",
+        "video_index": 1,
+        "video": "synthetic-game.mkv",
+        "video_name": "synthetic-game.mkv",
+        "timestamp_seconds": 1.5,
+        "aggregate_score": 95.6,
+        "candidate_output_dhash_distance": 0,
+        "primary": {
+          "frame_id": "f1554447465314106206400002",
+          "blog_score": 95.0,
+          "is_transition": false,
+          "scene": "戦闘",
+          "reason": "戦況が明瞭"
+        },
+        "secondary": {
+          "frame_id": "f1554447465314106206400002",
+          "blog_score": 96.0,
+          "is_transition": false,
+          "scene": "戦闘",
+          "reason": "戦況が明瞭"
+        }
+      },
+      {
+        "rank": 2,
+        "output_path": "selected-02.jpg",
+        "frame_id": "f1554447465314106206400005",
+        "video_index": 1,
+        "video": "synthetic-game.mkv",
+        "video_name": "synthetic-game.mkv",
+        "timestamp_seconds": 4.5,
+        "aggregate_score": 90.6,
+        "candidate_output_dhash_distance": 0,
+        "primary": {
+          "frame_id": "f1554447465314106206400005",
+          "blog_score": 90.0,
+          "is_transition": false,
+          "scene": "会話",
+          "reason": "人物が明瞭"
+        },
+        "secondary": {
+          "frame_id": "f1554447465314106206400005",
+          "blog_score": 91.0,
+          "is_transition": false,
+          "scene": "会話",
+          "reason": "人物が明瞭"
+        }
+      }
+    ],
+    "artifact_integrity": [
+      {
+        "path": "selected-contact-sheet.jpg",
+        "size": "<jpeg-size>",
+        "sha256": "<jpeg-sha256>"
+      },
+      {
+        "path": "selected-01.jpg",
+        "size": "<jpeg-size>",
+        "sha256": "<jpeg-sha256>"
+      },
+      {
+        "path": "selected-02.jpg",
+        "size": "<jpeg-size>",
+        "sha256": "<jpeg-sha256>"
+      }
+    ]
+  },
+  "run_key": "f90e7f8dd9e28cea71386a055cbc25ee3cf8f47375abfca14489e800b193d747",
+  "run_manifest_schema_version": 1,
+  "algorithm_version": "multi-video-selection-v7",
+  "prompt_version": "blog-image-selection-v6",
+  "phase_versions": {
+    "video_probe": 2,
+    "candidate_extraction": 2,
+    "mechanical_analysis": 4,
+    "primary_assessment": 3,
+    "secondary_context": 2,
+    "secondary_assessment": 2,
+    "global_candidate_selection": 1,
+    "final_selection": 1,
+    "artifacts": 2
+  },
+  "inputs": [
+    {
+      "video_index": 1,
+      "relative_path": "synthetic-game.mkv",
+      "size": 15399,
+      "identity_key": "d7b91156c08951b01ea45f3478503e534c30728180535b6c472657aee157c313",
+      "duration_seconds": 6.0,
+      "width": 160,
+      "height": 96,
+      "codec_name": "ffv1",
+      "average_frame_rate": "4/1",
+      "video_stream_index": 0,
+      "start_time_seconds": 0.0,
+      "last_frame_timestamp_seconds": 5.75,
+      "end_margin_seconds": 0.25,
+      "timestamps": [
+        0.5,
+        1.5,
+        2.5,
+        3.5,
+        4.5,
+        5.5
+      ],
+      "candidate_cache_key": "92ec83fedd9cc2e0d3d2bc4a59fe77aadb3dbc46f77931669e297fffa35451d6"
+    }
+  ],
+  "mechanical": [
+    {
+      "candidates": [
+        {
+          "frame_id": "f1554447465314106206400001",
+          "timestamp_seconds": 0.5,
+          "quality_score": 81.6892220993042,
+          "difference_hash": "a316111dad6593a3"
+        },
+        {
+          "frame_id": "f1554447465314106206400002",
+          "timestamp_seconds": 1.5,
+          "quality_score": 82.94601116943359,
+          "difference_hash": "cdad25ce8bc95764"
+        },
+        {
+          "frame_id": "f1554447465314106206400004",
+          "timestamp_seconds": 3.5,
+          "quality_score": 82.3613050918579,
+          "difference_hash": "366599a8092dafce"
+        },
+        {
+          "frame_id": "f1554447465314106206400005",
+          "timestamp_seconds": 4.5,
+          "quality_score": 82.51142333984374,
+          "difference_hash": "9aaa2d55d28bb212"
+        },
+        {
+          "frame_id": "f1554447465314106206400006",
+          "timestamp_seconds": 5.5,
+          "quality_score": 83.03492555745443,
+          "difference_hash": "ad2b129819d1c435"
+        }
+      ],
+      "rejected_frame_ids": [
+        "f1554447465314106206400003"
+      ]
+    }
+  ],
+  "assessments": {
+    "primary": {
+      "f1554447465314106206400001": {
+        "frame_id": "f1554447465314106206400001",
+        "blog_score": 80.0,
+        "is_transition": false,
+        "scene": "探索",
+        "reason": "地形が明瞭"
+      },
+      "f1554447465314106206400002": {
+        "frame_id": "f1554447465314106206400002",
+        "blog_score": 95.0,
+        "is_transition": false,
+        "scene": "戦闘",
+        "reason": "戦況が明瞭"
+      },
+      "f1554447465314106206400004": {
+        "frame_id": "f1554447465314106206400004",
+        "blog_score": 50.0,
+        "is_transition": true,
+        "scene": "ロード",
+        "reason": "遷移中"
+      },
+      "f1554447465314106206400005": {
+        "frame_id": "f1554447465314106206400005",
+        "blog_score": 90.0,
+        "is_transition": false,
+        "scene": "会話",
+        "reason": "人物が明瞭"
+      },
+      "f1554447465314106206400006": {
+        "frame_id": "f1554447465314106206400006",
+        "blog_score": 85.0,
+        "is_transition": false,
+        "scene": "イベント",
+        "reason": "出来事が明瞭"
+      }
+    },
+    "secondary": {
+      "f1554447465314106206400001": {
+        "frame_id": "f1554447465314106206400001",
+        "blog_score": 70.0,
+        "is_transition": false,
+        "scene": "探索",
+        "reason": "地形が明瞭"
+      },
+      "f1554447465314106206400002": {
+        "frame_id": "f1554447465314106206400002",
+        "blog_score": 96.0,
+        "is_transition": false,
+        "scene": "戦闘",
+        "reason": "戦況が明瞭"
+      },
+      "f1554447465314106206400005": {
+        "frame_id": "f1554447465314106206400005",
+        "blog_score": 91.0,
+        "is_transition": false,
+        "scene": "会話",
+        "reason": "人物が明瞭"
+      },
+      "f1554447465314106206400006": {
+        "frame_id": "f1554447465314106206400006",
+        "blog_score": 88.0,
+        "is_transition": false,
+        "scene": "イベント",
+        "reason": "出来事が明瞭"
+      }
+    }
+  },
+  "assessment_envelopes": [
+    {
+      "phase": "primary",
+      "cache_key": "54ad786143c5c8515395dc0850a7142a9ddc934b838b968bc65d3dfeb801da32",
+      "payload_schema": {
+        "assessments": {
+          "f1554447465314106206400001": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f1554447465314106206400002": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f1554447465314106206400004": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f1554447465314106206400005": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f1554447465314106206400006": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          }
+        },
+        "cache_key": "string",
+        "payload_digest": "string"
+      }
+    },
+    {
+      "phase": "secondary",
+      "cache_key": "979af3b896a40749cb0514594ba05eb018bc409cc9d630cd9b8ea777e4813d8f",
+      "payload_schema": {
+        "assessments": {
+          "f1554447465314106206400001": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f1554447465314106206400002": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f1554447465314106206400005": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f1554447465314106206400006": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          }
+        },
+        "cache_key": "string",
+        "payload_digest": "string"
+      }
+    }
+  ],
+  "phase_envelopes": [
+    {
+      "phase": "candidate-extraction",
+      "cache_schema_version": 1,
+      "phase_version": 2,
+      "cache_key": "92ec83fedd9cc2e0d3d2bc4a59fe77aadb3dbc46f77931669e297fffa35451d6",
+      "data_schema": {
+        "payload_digest": "string",
+        "source_frames": [
+          {
+            "file_size": "integer",
+            "frame_id": "string",
+            "image_sha256": "string",
+            "timestamp_seconds": "number"
+          }
+        ]
+      }
+    },
+    {
+      "phase": "mechanical-analysis",
+      "cache_schema_version": 1,
+      "phase_version": 4,
+      "cache_key": "98daa46bb00e86311ec2a8a0f196f8ad38f755b9081266bbed25b51024e670c6",
+      "data_schema": {
+        "candidates": [
+          {
+            "difference_hash": "string",
+            "frame_id": "string",
+            "quality_score": "number",
+            "timestamp_seconds": "number"
+          }
+        ],
+        "payload_digest": "string",
+        "rejected_frame_ids": [
+          "string"
+        ],
+        "source_frames_digest": "string"
+      }
+    },
+    {
+      "phase": "secondary-context",
+      "cache_schema_version": 1,
+      "phase_version": 2,
+      "cache_key": "553295457246858374b5b661fd39ddd452cd45703bd32f704478e4b846b27c9c",
+      "data_schema": {
+        "frames": [
+          {
+            "name": "string",
+            "sha256": "string"
+          }
+        ]
+      }
+    },
+    {
+      "phase": "video-probe",
+      "cache_schema_version": 1,
+      "phase_version": 2,
+      "cache_key": "c4eb1431bb4d1a49d3ca4aa0adc1b26d9ef7578e2961366cd718239507af699e",
+      "data_schema": {
+        "identity": {
+          "relative_path": "string",
+          "size": "integer"
+        },
+        "metadata": {
+          "average_frame_rate": "string",
+          "codec_name": "string",
+          "duration_seconds": "number",
+          "height": "integer",
+          "last_frame_timestamp_seconds": "number",
+          "start_time_seconds": "number",
+          "video_stream_index": "integer",
+          "width": "integer"
+        },
+        "probe_payload_digest": "string"
+      }
+    }
+  ],
+  "images": [
+    {
+      "path": "selected-01.jpg",
+      "format": "JPEG",
+      "mode": "RGB",
+      "width": 160,
+      "height": 96
+    },
+    {
+      "path": "selected-02.jpg",
+      "format": "JPEG",
+      "mode": "RGB",
+      "width": 160,
+      "height": 96
+    },
+    {
+      "path": "selected-contact-sheet.jpg",
+      "format": "JPEG",
+      "mode": "RGB",
+      "width": 1440,
+      "height": 302
+    }
+  ]
+}

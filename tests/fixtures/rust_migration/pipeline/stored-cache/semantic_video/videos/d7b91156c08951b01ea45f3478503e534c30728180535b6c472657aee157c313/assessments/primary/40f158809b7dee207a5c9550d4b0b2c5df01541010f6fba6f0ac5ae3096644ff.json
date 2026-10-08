@@ -1,0 +1,27 @@
+{
+  "cache_key": "40f158809b7dee207a5c9550d4b0b2c5df01541010f6fba6f0ac5ae3096644ff",
+  "assessments": {
+    "f1554447465314106206400001": {
+      "frame_id": "f1554447465314106206400001",
+      "blog_score": 96.0,
+      "is_transition": false,
+      "scene": "戦闘",
+      "reason": "戦況が明瞭"
+    },
+    "f1554447465314106206400002": {
+      "frame_id": "f1554447465314106206400002",
+      "blog_score": 91.0,
+      "is_transition": false,
+      "scene": "会話",
+      "reason": "人物が明瞭"
+    },
+    "f1554447465314106206400003": {
+      "frame_id": "f1554447465314106206400003",
+      "blog_score": 88.0,
+      "is_transition": false,
+      "scene": "イベント",
+      "reason": "出来事が明瞭"
+    }
+  },
+  "payload_digest": "9045438bc45a5be6a97fefb9e3bb24fb5485f60436761f0970407df305c85d99"
+}

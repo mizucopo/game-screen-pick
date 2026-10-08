@@ -1,0 +1,29 @@
+{
+  "cache_schema_version": 1,
+  "phase": "candidate-extraction",
+  "phase_version": 2,
+  "cache_key": "13bd173ff8a69bb5eed78978e872ec25e811aee2ea46d108e0f4595853054b37",
+  "data": {
+    "source_frames": [
+      {
+        "frame_id": "f1554447465314106206400001",
+        "timestamp_seconds": 1.5,
+        "file_size": 2078,
+        "image_sha256": "c8d56b3413504d6f40c5ecb45990385f81c54effc652bd32b184c7e7d53b8144"
+      },
+      {
+        "frame_id": "f1554447465314106206400002",
+        "timestamp_seconds": 4.5,
+        "file_size": 2016,
+        "image_sha256": "d673c84b33fc60978d97bf26f2084b4b80556aa0a905686af6322e5efae22a2d"
+      },
+      {
+        "frame_id": "f1554447465314106206400003",
+        "timestamp_seconds": 5.5,
+        "file_size": 2067,
+        "image_sha256": "1f531bd669638dd6f7617478f286624d79e06a2bab069eddc1646a6aeb9f11f9"
+      }
+    ],
+    "payload_digest": "0c2ef4109ef451755c69c620515188f7f68b7f5e7314e23f9726fc5210b3a6ca"
+  }
+}

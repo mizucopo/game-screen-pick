@@ -1,0 +1,34 @@
+{
+  "cache_schema_version": 1,
+  "phase": "secondary-context",
+  "phase_version": 2,
+  "cache_key": "a2dcd0022fcdb7bbae5444911a984e4c6a4d85a9bcbca42df5149334963711a1",
+  "data": {
+    "frames": [
+      {
+        "name": "f1554447465314106206400001-after.jpg",
+        "sha256": "087bf45f317ab4effd1ce3c5f2da33a6ad746d8c08b4c30e21c4a9631f3bd1e9"
+      },
+      {
+        "name": "f1554447465314106206400001-before.jpg",
+        "sha256": "c8d56b3413504d6f40c5ecb45990385f81c54effc652bd32b184c7e7d53b8144"
+      },
+      {
+        "name": "f1554447465314106206400002-after.jpg",
+        "sha256": "1f531bd669638dd6f7617478f286624d79e06a2bab069eddc1646a6aeb9f11f9"
+      },
+      {
+        "name": "f1554447465314106206400002-before.jpg",
+        "sha256": "d673c84b33fc60978d97bf26f2084b4b80556aa0a905686af6322e5efae22a2d"
+      },
+      {
+        "name": "f1554447465314106206400003-after.jpg",
+        "sha256": "1f531bd669638dd6f7617478f286624d79e06a2bab069eddc1646a6aeb9f11f9"
+      },
+      {
+        "name": "f1554447465314106206400003-before.jpg",
+        "sha256": "1f531bd669638dd6f7617478f286624d79e06a2bab069eddc1646a6aeb9f11f9"
+      }
+    ]
+  }
+}

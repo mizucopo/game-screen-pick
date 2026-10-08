@@ -1,0 +1,34 @@
+{
+  "cache_key": "979af3b896a40749cb0514594ba05eb018bc409cc9d630cd9b8ea777e4813d8f",
+  "assessments": {
+    "f1554447465314106206400001": {
+      "frame_id": "f1554447465314106206400001",
+      "blog_score": 70.0,
+      "is_transition": false,
+      "scene": "探索",
+      "reason": "地形が明瞭"
+    },
+    "f1554447465314106206400002": {
+      "frame_id": "f1554447465314106206400002",
+      "blog_score": 96.0,
+      "is_transition": false,
+      "scene": "戦闘",
+      "reason": "戦況が明瞭"
+    },
+    "f1554447465314106206400005": {
+      "frame_id": "f1554447465314106206400005",
+      "blog_score": 91.0,
+      "is_transition": false,
+      "scene": "会話",
+      "reason": "人物が明瞭"
+    },
+    "f1554447465314106206400006": {
+      "frame_id": "f1554447465314106206400006",
+      "blog_score": 88.0,
+      "is_transition": false,
+      "scene": "イベント",
+      "reason": "出来事が明瞭"
+    }
+  },
+  "payload_digest": "d91b502281e96ceb168903db15816796d77d453f48fed6d0c1a6aea1ca71bd02"
+}
