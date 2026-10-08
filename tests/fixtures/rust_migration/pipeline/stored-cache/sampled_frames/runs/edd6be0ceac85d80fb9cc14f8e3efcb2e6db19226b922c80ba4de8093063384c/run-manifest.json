@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "run_key": "edd6be0ceac85d80fb9cc14f8e3efcb2e6db19226b922c80ba4de8093063384c",
+  "run_identity": {
+    "inputs": [
+      {
+        "relative_path": "synthetic-game.mkv",
+        "size": 13338
+      }
+    ],
+    "game_context": "公開合成fixture: 探索・戦闘・会話・イベントを記録する。",
+    "output_count": 2,
+    "sample_interval_seconds": 1.0,
+    "primary_model": "fixture-primary",
+    "secondary_model": "fixture-secondary",
+    "ollama_endpoint": "http://fixture-ollama.invalid:11434",
+    "require_gpu": false
+  },
+  "algorithm_version": "multi-video-selection-v7",
+  "prompt_version": "blog-image-selection-v6",
+  "phase_versions": {
+    "video_probe": 2,
+    "candidate_extraction": 2,
+    "mechanical_analysis": 4,
+    "primary_assessment": 3,
+    "secondary_context": 2,
+    "secondary_assessment": 2,
+    "global_candidate_selection": 1,
+    "final_selection": 1,
+    "artifacts": 2
+  },
+  "inputs": [
+    {
+      "video_index": 1,
+      "relative_path": "synthetic-game.mkv",
+      "size": 13338,
+      "identity_key": "7117224508dd00fe4b807b6cc1b405877feb09282f3333e7b5aac5787e589132",
+      "duration_seconds": 6.0,
+      "width": 160,
+      "height": 96,
+      "codec_name": "ffv1",
+      "average_frame_rate": "4/1",
+      "video_stream_index": 0,
+      "start_time_seconds": 0.0,
+      "last_frame_timestamp_seconds": 5.75,
+      "end_margin_seconds": 0.25,
+      "timestamps": [
+        0.5,
+        1.5,
+        2.5,
+        3.5,
+        4.5,
+        5.5
+      ],
+      "candidate_cache_key": "da25d2fa0990c2aa2e45f193c2a2560d210f625b4e637a9c5396d5ba2da4db53"
+    }
+  ],
+  "game_context": "公開合成fixture: 探索・戦闘・会話・イベントを記録する。",
+  "output_count": 2,
+  "models": {
+    "primary": {
+      "name": "fixture-primary",
+      "digest": "digest-fixture-primary",
+      "resolved_name": "fixture-primary",
+      "capabilities": [
+        "vision"
+      ],
+      "details": {
+        "family": "fixture-only"
+      }
+    },
+    "secondary": {
+      "name": "fixture-secondary",
+      "digest": "digest-fixture-secondary",
+      "resolved_name": "fixture-secondary",
+      "capabilities": [
+        "vision"
+      ],
+      "details": {
+        "family": "fixture-only"
+      }
+    }
+  },
+  "candidate_multipliers": {
+    "primary": 12,
+    "secondary": 3
+  },
+  "batch_sizes": {
+    "primary": 12,
+    "secondary": 6
+  },
+  "context_offset_seconds": 0.35,
+  "model_options": {
+    "temperature": 0,
+    "seed": 271
+  },
+  "require_gpu": false,
+  "manifest_digest": "a41499bd400d44ed4fb95879e6d93aef5a57b39a0ae49d261d9958901b9148f8"
+}

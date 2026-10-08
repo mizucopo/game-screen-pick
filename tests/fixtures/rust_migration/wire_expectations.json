@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "json_digest_vectors": [
+    {
+      "payload": {
+        "identity_version": 1,
+        "relative_path": "合成 video.MP4",
+        "size": 12345
+      },
+      "canonical_utf8": "{\"identity_version\":1,\"relative_path\":\"合成 video.MP4\",\"size\":12345}",
+      "sha256": "bc131ae200b88a230959ac0b3e4159c41fd877ee5616158188a5ef4f74453e40"
+    },
+    {
+      "payload": {
+        "z": "日本語/é",
+        "a": [
+          1,
+          1.0,
+          0.0,
+          1e-06,
+          true,
+          null
+        ],
+        "text": "line\nquote\"backslash\\"
+      },
+      "canonical_utf8": "{\"a\":[1,1.0,0.0,1e-06,true,null],\"text\":\"line\\nquote\\\"backslash\\\\\",\"z\":\"日本語/é\"}",
+      "sha256": "953d9668e6aa01ea5eab7bdbac09b34d7920f40bb0ef3fff6b0400f1525b0c30"
+    }
+  ],
+  "identity": {
+    "relative_path": "合成 video.MP4",
+    "size": 12345,
+    "key": "bc131ae200b88a230959ac0b3e4159c41fd877ee5616158188a5ef4f74453e40",
+    "frame_ids": [
+      {
+        "sample_index": 1,
+        "frame_id": "f1355220526166497949100001"
+      },
+      {
+        "sample_index": 12,
+        "frame_id": "f1355220526166497949100012"
+      },
+      {
+        "sample_index": 100001,
+        "frame_id": "f13552205261664979491100001"
+      }
+    ]
+  },
+  "phase": {
+    "name": "candidate_extraction",
+    "version": 2,
+    "conditions": {
+      "video_key": "bc131ae200b88a230959ac0b3e4159c41fd877ee5616158188a5ef4f74453e40",
+      "timestamp_seconds": 0.5,
+      "upstream": "abababababababababababababababababababababababababababababababab"
+    },
+    "key": "f9dcf18d243eee996efed59a97c1869f595425b2083155edd9116b18af1b23b8"
+  }
+}

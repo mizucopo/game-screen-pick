@@ -1,0 +1,45 @@
+{
+  "cache_schema_version": 1,
+  "phase": "mechanical-analysis",
+  "phase_version": 4,
+  "cache_key": "7da6ae94cdeea082ba394611d23018cc1abc3e039873989299c7c8dfe044fb09",
+  "data": {
+    "source_frames_digest": "045710c66343c98e1b3a814b3460bed826a6bf6f83a7fed3ef5c00579f52a491",
+    "candidates": [
+      {
+        "frame_id": "f0814901973064699110200001",
+        "timestamp_seconds": 0.5,
+        "quality_score": 76.03067834091186,
+        "difference_hash": "a72b0acee59696bb"
+      },
+      {
+        "frame_id": "f0814901973064699110200002",
+        "timestamp_seconds": 1.5,
+        "quality_score": 77.88352142206827,
+        "difference_hash": "da56169974642c6a"
+      },
+      {
+        "frame_id": "f0814901973064699110200004",
+        "timestamp_seconds": 3.5,
+        "quality_score": 77.37194428507487,
+        "difference_hash": "2495d5e64cb2b2cd"
+      },
+      {
+        "frame_id": "f0814901973064699110200005",
+        "timestamp_seconds": 4.5,
+        "quality_score": 77.78325838724773,
+        "difference_hash": "911c2cad8e6c6c66"
+      },
+      {
+        "frame_id": "f0814901973064699110200006",
+        "timestamp_seconds": 5.5,
+        "quality_score": 77.93629088974,
+        "difference_hash": "8baf0e9acc8d8d68"
+      }
+    ],
+    "rejected_frame_ids": [
+      "f0814901973064699110200003"
+    ],
+    "payload_digest": "3dbcf07ac66745876d17ea159edc5bfbea14d674cecd4eefb9616c1bff1acc40"
+  }
+}

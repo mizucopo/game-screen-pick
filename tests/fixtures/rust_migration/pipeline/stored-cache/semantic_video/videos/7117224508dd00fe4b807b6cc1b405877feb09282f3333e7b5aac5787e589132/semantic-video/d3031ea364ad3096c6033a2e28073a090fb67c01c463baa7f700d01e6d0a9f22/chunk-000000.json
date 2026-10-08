@@ -1,0 +1,48 @@
+{
+  "cache_schema_version": 1,
+  "phase": "semantic_video_chunk",
+  "phase_version": 1,
+  "cache_key": "8349df6ae98777b83d96c326b70c85cf9eedd7dbb45a79a7854a9e920cec62db",
+  "data": {
+    "result": {
+      "events": [
+        {
+          "start_seconds": 1.4,
+          "end_seconds": 1.6,
+          "timestamp_seconds": 1.5,
+          "summary": "対象と対峙する",
+          "importance": 96.0
+        },
+        {
+          "start_seconds": 2.4,
+          "end_seconds": 2.6,
+          "timestamp_seconds": 2.5,
+          "summary": "画面が暗転する",
+          "importance": 40.0
+        },
+        {
+          "start_seconds": 4.4,
+          "end_seconds": 4.6,
+          "timestamp_seconds": 4.5,
+          "summary": "人物と話す",
+          "importance": 91.0
+        },
+        {
+          "start_seconds": 5.4,
+          "end_seconds": 5.6,
+          "timestamp_seconds": 5.5,
+          "summary": "イベントを迎える",
+          "importance": 88.0
+        }
+      ],
+      "excluded_intervals": [
+        {
+          "start_seconds": 2.4,
+          "end_seconds": 2.6,
+          "reason": "暗転"
+        }
+      ]
+    },
+    "result_digest": "69cb63a582f57fd4b4604614a4e3d3876c0f8c9295f7fdd00f06b8318a9602f6"
+  }
+}

@@ -15,6 +15,9 @@
   established test suite, so empty collection must remain a failing gate.
 - Run Ruff over the whole repository in quality and fix tasks so the release
   controller remains covered when CI delegates to `task check`.
+- Preserve FFmpeg/ffprobe installation before both PR and release quality
+  gates. Migration fixtures require real video decoding and must fail rather
+  than skip when the tools are absent.
 - The SemVer release workflow marks prereleases with `--prerelease`, using
   the prepared version before build metadata, and skips their Latest lookup.
   This is a temporary template exception until the generic release workflow

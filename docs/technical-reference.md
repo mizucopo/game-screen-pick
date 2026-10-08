@@ -366,3 +366,8 @@ Ollama hostも生成条件に含め、別endpointの同名modelを混同しま�
 Pull Requestでversionを採番せず、公開する場合はリリース分類と理由を記載します。
 分類と公開の選択は[CONTRIBUTING.md](../CONTRIBUTING.md#リリース分類)、
 採番・公開の設定と復旧は[docs/release.md](release.md)を参照してください。
+
+Rust移行の現行契約、比較fixture、同等性gateは
+[Rust移行の比較契約](rust-migration-contract.md)を参照してください。
+段階的な切替とcache移行・rollbackの判断は
+[ADR 0010](adr/0010-migrate-video-cli-with-contract-gates.md)に記録します。

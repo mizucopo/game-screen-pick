@@ -1,0 +1,835 @@
+{
+  "report_schema": {
+    "artifact_integrity": [
+      {
+        "path": "string",
+        "sha256": "string",
+        "size": "integer"
+      }
+    ],
+    "game_context": "string",
+    "manifest_digest": "string",
+    "models": {
+      "primary": {
+        "digest": "string",
+        "name": "string",
+        "resolved_name": "string"
+      },
+      "secondary": {
+        "digest": "string",
+        "name": "string",
+        "resolved_name": "string"
+      }
+    },
+    "output_count": "integer",
+    "report_schema_version": "integer",
+    "sample_count": "integer",
+    "selected": [
+      {
+        "aggregate_score": "number",
+        "candidate_output_dhash_distance": "integer",
+        "frame_id": "string",
+        "output_path": "string",
+        "primary": {
+          "blog_score": "number",
+          "frame_id": "string",
+          "is_transition": "boolean",
+          "reason": "string",
+          "scene": "string"
+        },
+        "rank": "integer",
+        "secondary": {
+          "blog_score": "number",
+          "frame_id": "string",
+          "is_transition": "boolean",
+          "reason": "string",
+          "scene": "string"
+        },
+        "semantic_provenance": [
+          {
+            "chunk_index": "integer",
+            "end_seconds": "number",
+            "importance": "number",
+            "start_seconds": "number",
+            "summary": "string",
+            "timestamp_seconds": "number"
+          }
+        ],
+        "timestamp_seconds": "number",
+        "video": "string",
+        "video_index": "integer",
+        "video_name": "string"
+      }
+    ],
+    "selection_method": "string",
+    "video_understanding": {
+      "model": "string",
+      "selection_method": "string",
+      "semantic_options": {
+        "chunk_seconds": "number",
+        "overlap_seconds": "number"
+      },
+      "vllm_cache_revision": "string",
+      "vllm_endpoint": "string"
+    },
+    "videos": [
+      {
+        "duration_seconds": "number",
+        "path": "string",
+        "sample_count": "integer",
+        "semantic_analysis": {
+          "chunks": [
+            {
+              "cache_key": "string",
+              "end_seconds": "number",
+              "index": "integer",
+              "start_seconds": "number"
+            }
+          ],
+          "events": [
+            {
+              "chunk_index": "integer",
+              "end_seconds": "number",
+              "importance": "number",
+              "start_seconds": "number",
+              "summary": "string",
+              "timestamp_seconds": "number"
+            }
+          ],
+          "excluded_intervals": [
+            {
+              "chunk_index": "integer",
+              "end_seconds": "number",
+              "reason": "string",
+              "start_seconds": "number"
+            }
+          ],
+          "model": {
+            "base_url": "string",
+            "cache_revision": "string",
+            "capabilities": [
+              "string"
+            ],
+            "capabilities_source": "string",
+            "digest": "string",
+            "identity_source": "string",
+            "model": "string",
+            "provider": "string",
+            "resolved_name": "string"
+          }
+        },
+        "video_index": "integer"
+      }
+    ]
+  },
+  "report": {
+    "report_schema_version": 1,
+    "manifest_digest": "<manifest-digest>",
+    "selection_method": "semantic_video",
+    "video_understanding": {
+      "model": "fixture-video",
+      "selection_method": "semantic_video",
+      "vllm_endpoint": "http://fixture-vllm.invalid/v1",
+      "vllm_cache_revision": "fixture-338-v1",
+      "semantic_options": {
+        "chunk_seconds": 30.0,
+        "overlap_seconds": 2.0
+      }
+    },
+    "videos": [
+      {
+        "video_index": 1,
+        "path": "synthetic-game.mkv",
+        "duration_seconds": 6.0,
+        "sample_count": 3,
+        "semantic_analysis": {
+          "model": {
+            "provider": "vllm",
+            "base_url": "http://fixture-vllm.invalid/v1",
+            "model": "fixture-video",
+            "cache_revision": "fixture-338-v1",
+            "digest": "4391e86728db449ea1c2a05d84019671aec93e73d11f121814401a09dedd7290",
+            "resolved_name": "fixture-video",
+            "identity_source": "configured_cache_revision",
+            "capabilities": [
+              "vision",
+              "video"
+            ],
+            "capabilities_source": "required_by_client"
+          },
+          "chunks": [
+            {
+              "index": 0,
+              "start_seconds": 0.0,
+              "end_seconds": 5.8,
+              "cache_key": "8349df6ae98777b83d96c326b70c85cf9eedd7dbb45a79a7854a9e920cec62db"
+            }
+          ],
+          "events": [
+            {
+              "start_seconds": 1.4,
+              "end_seconds": 1.6,
+              "timestamp_seconds": 1.5,
+              "summary": "対象と対峙する",
+              "importance": 96.0,
+              "chunk_index": 0
+            },
+            {
+              "start_seconds": 2.4,
+              "end_seconds": 2.6,
+              "timestamp_seconds": 2.5,
+              "summary": "画面が暗転する",
+              "importance": 40.0,
+              "chunk_index": 0
+            },
+            {
+              "start_seconds": 4.4,
+              "end_seconds": 4.6,
+              "timestamp_seconds": 4.5,
+              "summary": "人物と話す",
+              "importance": 91.0,
+              "chunk_index": 0
+            },
+            {
+              "start_seconds": 5.4,
+              "end_seconds": 5.6,
+              "timestamp_seconds": 5.5,
+              "summary": "イベントを迎える",
+              "importance": 88.0,
+              "chunk_index": 0
+            }
+          ],
+          "excluded_intervals": [
+            {
+              "start_seconds": 2.4,
+              "end_seconds": 2.6,
+              "reason": "暗転",
+              "chunk_index": 0
+            }
+          ]
+        }
+      }
+    ],
+    "game_context": "公開合成fixture: 探索・戦闘・会話・イベントを記録する。",
+    "output_count": 2,
+    "sample_count": 3,
+    "models": {
+      "primary": {
+        "name": "fixture-video",
+        "resolved_name": "fixture-video",
+        "digest": "4391e86728db449ea1c2a05d84019671aec93e73d11f121814401a09dedd7290"
+      },
+      "secondary": {
+        "name": "fixture-video",
+        "resolved_name": "fixture-video",
+        "digest": "4391e86728db449ea1c2a05d84019671aec93e73d11f121814401a09dedd7290"
+      }
+    },
+    "selected": [
+      {
+        "rank": 1,
+        "output_path": "selected-01.jpg",
+        "frame_id": "f0814901973064699110200001",
+        "video_index": 1,
+        "video": "synthetic-game.mkv",
+        "video_name": "synthetic-game.mkv",
+        "timestamp_seconds": 1.5,
+        "aggregate_score": 96.0,
+        "candidate_output_dhash_distance": 0,
+        "primary": {
+          "frame_id": "f0814901973064699110200001",
+          "blog_score": 96.0,
+          "is_transition": false,
+          "scene": "戦闘",
+          "reason": "戦況が明瞭"
+        },
+        "secondary": {
+          "frame_id": "f0814901973064699110200001",
+          "blog_score": 96.0,
+          "is_transition": false,
+          "scene": "戦闘",
+          "reason": "戦況が明瞭"
+        },
+        "semantic_provenance": [
+          {
+            "start_seconds": 1.4,
+            "end_seconds": 1.6,
+            "timestamp_seconds": 1.5,
+            "summary": "対象と対峙する",
+            "importance": 96.0,
+            "chunk_index": 0
+          }
+        ]
+      },
+      {
+        "rank": 2,
+        "output_path": "selected-02.jpg",
+        "frame_id": "f0814901973064699110200002",
+        "video_index": 1,
+        "video": "synthetic-game.mkv",
+        "video_name": "synthetic-game.mkv",
+        "timestamp_seconds": 4.5,
+        "aggregate_score": 91.0,
+        "candidate_output_dhash_distance": 0,
+        "primary": {
+          "frame_id": "f0814901973064699110200002",
+          "blog_score": 91.0,
+          "is_transition": false,
+          "scene": "会話",
+          "reason": "人物が明瞭"
+        },
+        "secondary": {
+          "frame_id": "f0814901973064699110200002",
+          "blog_score": 91.0,
+          "is_transition": false,
+          "scene": "会話",
+          "reason": "人物が明瞭"
+        },
+        "semantic_provenance": [
+          {
+            "start_seconds": 4.4,
+            "end_seconds": 4.6,
+            "timestamp_seconds": 4.5,
+            "summary": "人物と話す",
+            "importance": 91.0,
+            "chunk_index": 0
+          }
+        ]
+      }
+    ],
+    "artifact_integrity": [
+      {
+        "path": "selected-contact-sheet.jpg",
+        "size": "<jpeg-size>",
+        "sha256": "<jpeg-sha256>"
+      },
+      {
+        "path": "selected-01.jpg",
+        "size": "<jpeg-size>",
+        "sha256": "<jpeg-sha256>"
+      },
+      {
+        "path": "selected-02.jpg",
+        "size": "<jpeg-size>",
+        "sha256": "<jpeg-sha256>"
+      }
+    ]
+  },
+  "run_key": "af4aeae78228aa28237fa3c36be85d82a448f5ee4e0114e199c3d523877587a0",
+  "run_manifest_schema_version": 1,
+  "algorithm_version": "multi-video-selection-v7",
+  "prompt_version": "blog-image-selection-v6",
+  "phase_versions": {
+    "video_probe": 2,
+    "candidate_extraction": 2,
+    "mechanical_analysis": 4,
+    "primary_assessment": 3,
+    "secondary_context": 2,
+    "secondary_assessment": 2,
+    "global_candidate_selection": 1,
+    "final_selection": 1,
+    "artifacts": 2
+  },
+  "inputs": [
+    {
+      "video_index": 1,
+      "relative_path": "synthetic-game.mkv",
+      "size": 13338,
+      "identity_key": "7117224508dd00fe4b807b6cc1b405877feb09282f3333e7b5aac5787e589132",
+      "duration_seconds": 6.0,
+      "width": 160,
+      "height": 96,
+      "codec_name": "ffv1",
+      "average_frame_rate": "4/1",
+      "video_stream_index": 0,
+      "start_time_seconds": 0.0,
+      "last_frame_timestamp_seconds": 5.75,
+      "end_margin_seconds": 0.25,
+      "timestamps": [
+        1.5,
+        4.5,
+        5.5
+      ],
+      "candidate_cache_key": "e0925582513fcd00e0492c98178d007ba48e2d4bdfb4b68836dde186c86db06b",
+      "semantic_plan_key": "6e5f6305eb9335f0dae67052740e5dbc7b313138f93dd19c94bdf7eab76bba86"
+    }
+  ],
+  "mechanical": [
+    {
+      "candidates": [
+        {
+          "frame_id": "f0814901973064699110200001",
+          "timestamp_seconds": 1.5,
+          "quality_score": 77.88352142206827,
+          "difference_hash": "da56169974642c6a"
+        },
+        {
+          "frame_id": "f0814901973064699110200002",
+          "timestamp_seconds": 4.5,
+          "quality_score": 77.78325838724773,
+          "difference_hash": "911c2cad8e6c6c66"
+        },
+        {
+          "frame_id": "f0814901973064699110200003",
+          "timestamp_seconds": 5.5,
+          "quality_score": 77.93629088974,
+          "difference_hash": "8baf0e9acc8d8d68"
+        }
+      ],
+      "rejected_frame_ids": []
+    }
+  ],
+  "assessments": {
+    "primary": {
+      "f0814901973064699110200001": {
+        "frame_id": "f0814901973064699110200001",
+        "blog_score": 96.0,
+        "is_transition": false,
+        "scene": "戦闘",
+        "reason": "戦況が明瞭"
+      },
+      "f0814901973064699110200002": {
+        "frame_id": "f0814901973064699110200002",
+        "blog_score": 91.0,
+        "is_transition": false,
+        "scene": "会話",
+        "reason": "人物が明瞭"
+      },
+      "f0814901973064699110200003": {
+        "frame_id": "f0814901973064699110200003",
+        "blog_score": 88.0,
+        "is_transition": false,
+        "scene": "イベント",
+        "reason": "出来事が明瞭"
+      }
+    },
+    "secondary": {
+      "f0814901973064699110200001": {
+        "frame_id": "f0814901973064699110200001",
+        "blog_score": 96.0,
+        "is_transition": false,
+        "scene": "戦闘",
+        "reason": "戦況が明瞭"
+      },
+      "f0814901973064699110200002": {
+        "frame_id": "f0814901973064699110200002",
+        "blog_score": 91.0,
+        "is_transition": false,
+        "scene": "会話",
+        "reason": "人物が明瞭"
+      },
+      "f0814901973064699110200003": {
+        "frame_id": "f0814901973064699110200003",
+        "blog_score": 88.0,
+        "is_transition": false,
+        "scene": "イベント",
+        "reason": "出来事が明瞭"
+      }
+    }
+  },
+  "assessment_envelopes": [
+    {
+      "phase": "primary",
+      "cache_key": "d259f13d8e4a79ea0803ba1ed5c8aa8e003cd07fb4138099002fe67d374b2ca5",
+      "payload_schema": {
+        "assessments": {
+          "f0814901973064699110200001": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f0814901973064699110200002": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f0814901973064699110200003": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          }
+        },
+        "cache_key": "string",
+        "payload_digest": "string"
+      }
+    },
+    {
+      "phase": "secondary",
+      "cache_key": "a33b4e6d2374c7bb4f67e2e5ce9c1ab5ad92832b72e485e327e6bc58e39e54c7",
+      "payload_schema": {
+        "assessments": {
+          "f0814901973064699110200001": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f0814901973064699110200002": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          },
+          "f0814901973064699110200003": {
+            "blog_score": "number",
+            "frame_id": "string",
+            "is_transition": "boolean",
+            "reason": "string",
+            "scene": "string"
+          }
+        },
+        "cache_key": "string",
+        "payload_digest": "string"
+      }
+    }
+  ],
+  "phase_envelopes": [
+    {
+      "phase": "candidate-extraction",
+      "cache_schema_version": 1,
+      "phase_version": 2,
+      "cache_key": "e0925582513fcd00e0492c98178d007ba48e2d4bdfb4b68836dde186c86db06b",
+      "data_schema": {
+        "payload_digest": "string",
+        "source_frames": [
+          {
+            "file_size": "integer",
+            "frame_id": "string",
+            "image_sha256": "string",
+            "timestamp_seconds": "number"
+          }
+        ]
+      }
+    },
+    {
+      "phase": "mechanical-analysis",
+      "cache_schema_version": 1,
+      "phase_version": 4,
+      "cache_key": "2aae5f9af26112e5bf9c37b5ea560a9b712108aab0657269e18858582d046f02",
+      "data_schema": {
+        "candidates": [
+          {
+            "difference_hash": "string",
+            "frame_id": "string",
+            "quality_score": "number",
+            "timestamp_seconds": "number"
+          }
+        ],
+        "payload_digest": "string",
+        "rejected_frame_ids": [],
+        "source_frames_digest": "string"
+      }
+    },
+    {
+      "phase": "secondary-context",
+      "cache_schema_version": 1,
+      "phase_version": 2,
+      "cache_key": "5aaa3535a419cd6e87b38350b25a3794cee921b95739df6f75036acb6d35ff4b",
+      "data_schema": {
+        "frames": [
+          {
+            "name": "string",
+            "sha256": "string"
+          }
+        ]
+      }
+    },
+    {
+      "phase": "semantic_video_chunk",
+      "cache_schema_version": 1,
+      "phase_version": 1,
+      "cache_key": "8349df6ae98777b83d96c326b70c85cf9eedd7dbb45a79a7854a9e920cec62db",
+      "data_schema": {
+        "result": {
+          "events": [
+            {
+              "end_seconds": "number",
+              "importance": "number",
+              "start_seconds": "number",
+              "summary": "string",
+              "timestamp_seconds": "number"
+            }
+          ],
+          "excluded_intervals": [
+            {
+              "end_seconds": "number",
+              "reason": "string",
+              "start_seconds": "number"
+            }
+          ]
+        },
+        "result_digest": "string"
+      }
+    },
+    {
+      "phase": "video-probe",
+      "cache_schema_version": 1,
+      "phase_version": 2,
+      "cache_key": "b2bd866354bb4ff86bfbf35f836e86334febc77b942ab26c2c47f862dc6b1c20",
+      "data_schema": {
+        "identity": {
+          "relative_path": "string",
+          "size": "integer"
+        },
+        "metadata": {
+          "average_frame_rate": "string",
+          "codec_name": "string",
+          "duration_seconds": "number",
+          "height": "integer",
+          "last_frame_timestamp_seconds": "number",
+          "start_time_seconds": "number",
+          "video_stream_index": "integer",
+          "width": "integer"
+        },
+        "probe_payload_digest": "string"
+      }
+    }
+  ],
+  "images": [
+    {
+      "path": "selected-01.jpg",
+      "format": "JPEG",
+      "mode": "RGB",
+      "width": 160,
+      "height": 96
+    },
+    {
+      "path": "selected-02.jpg",
+      "format": "JPEG",
+      "mode": "RGB",
+      "width": 160,
+      "height": 96
+    },
+    {
+      "path": "selected-contact-sheet.jpg",
+      "format": "JPEG",
+      "mode": "RGB",
+      "width": 1440,
+      "height": 302
+    }
+  ],
+  "run_manifest": {
+    "schema_version": 1,
+    "run_key": "af4aeae78228aa28237fa3c36be85d82a448f5ee4e0114e199c3d523877587a0",
+    "run_identity": {
+      "inputs": [
+        {
+          "relative_path": "synthetic-game.mkv",
+          "size": 13338
+        }
+      ],
+      "game_context": "公開合成fixture: 探索・戦闘・会話・イベントを記録する。",
+      "output_count": 2,
+      "sample_interval_seconds": null,
+      "primary_model": "fixture-video",
+      "secondary_model": "fixture-video",
+      "selection_method": "semantic_video",
+      "vllm_endpoint": "http://fixture-vllm.invalid/v1",
+      "vllm_cache_revision": "fixture-338-v1",
+      "semantic_options": {
+        "chunk_seconds": 30.0,
+        "overlap_seconds": 2.0
+      }
+    },
+    "algorithm_version": "multi-video-selection-v7",
+    "prompt_version": "blog-image-selection-v6",
+    "phase_versions": {
+      "video_probe": 2,
+      "candidate_extraction": 2,
+      "mechanical_analysis": 4,
+      "primary_assessment": 3,
+      "secondary_context": 2,
+      "secondary_assessment": 2,
+      "global_candidate_selection": 1,
+      "final_selection": 1,
+      "artifacts": 2
+    },
+    "inputs": [
+      {
+        "video_index": 1,
+        "relative_path": "synthetic-game.mkv",
+        "size": 13338,
+        "identity_key": "7117224508dd00fe4b807b6cc1b405877feb09282f3333e7b5aac5787e589132",
+        "duration_seconds": 6.0,
+        "width": 160,
+        "height": 96,
+        "codec_name": "ffv1",
+        "average_frame_rate": "4/1",
+        "video_stream_index": 0,
+        "start_time_seconds": 0.0,
+        "last_frame_timestamp_seconds": 5.75,
+        "end_margin_seconds": 0.25,
+        "timestamps": [
+          1.5,
+          4.5,
+          5.5
+        ],
+        "candidate_cache_key": "e0925582513fcd00e0492c98178d007ba48e2d4bdfb4b68836dde186c86db06b",
+        "semantic_plan_key": "6e5f6305eb9335f0dae67052740e5dbc7b313138f93dd19c94bdf7eab76bba86"
+      }
+    ],
+    "game_context": "公開合成fixture: 探索・戦闘・会話・イベントを記録する。",
+    "output_count": 2,
+    "models": {
+      "primary": {
+        "name": "fixture-video",
+        "provider": "vllm",
+        "base_url": "http://fixture-vllm.invalid/v1",
+        "model": "fixture-video",
+        "cache_revision": "fixture-338-v1",
+        "digest": "4391e86728db449ea1c2a05d84019671aec93e73d11f121814401a09dedd7290",
+        "resolved_name": "fixture-video",
+        "identity_source": "configured_cache_revision",
+        "capabilities": [
+          "vision",
+          "video"
+        ],
+        "capabilities_source": "required_by_client"
+      },
+      "secondary": {
+        "name": "fixture-video",
+        "provider": "vllm",
+        "base_url": "http://fixture-vllm.invalid/v1",
+        "model": "fixture-video",
+        "cache_revision": "fixture-338-v1",
+        "digest": "4391e86728db449ea1c2a05d84019671aec93e73d11f121814401a09dedd7290",
+        "resolved_name": "fixture-video",
+        "identity_source": "configured_cache_revision",
+        "capabilities": [
+          "vision",
+          "video"
+        ],
+        "capabilities_source": "required_by_client"
+      }
+    },
+    "candidate_multipliers": {
+      "primary": 12,
+      "secondary": 3
+    },
+    "batch_sizes": {
+      "primary": 12,
+      "secondary": 6
+    },
+    "context_offset_seconds": 0.35,
+    "model_options": {
+      "temperature": 0,
+      "seed": 271
+    },
+    "require_gpu": false,
+    "manifest_digest": "6800d80a85cfeba7a57a50f3596501201c92cb5c1e34550be874a85d23dd8640"
+  },
+  "run_manifest_schema": {
+    "algorithm_version": "string",
+    "batch_sizes": {
+      "primary": "integer",
+      "secondary": "integer"
+    },
+    "candidate_multipliers": {
+      "primary": "integer",
+      "secondary": "integer"
+    },
+    "context_offset_seconds": "number",
+    "game_context": "string",
+    "inputs": [
+      {
+        "average_frame_rate": "string",
+        "candidate_cache_key": "string",
+        "codec_name": "string",
+        "duration_seconds": "number",
+        "end_margin_seconds": "number",
+        "height": "integer",
+        "identity_key": "string",
+        "last_frame_timestamp_seconds": "number",
+        "relative_path": "string",
+        "semantic_plan_key": "string",
+        "size": "integer",
+        "start_time_seconds": "number",
+        "timestamps": [
+          "number"
+        ],
+        "video_index": "integer",
+        "video_stream_index": "integer",
+        "width": "integer"
+      }
+    ],
+    "manifest_digest": "string",
+    "model_options": {
+      "seed": "integer",
+      "temperature": "integer"
+    },
+    "models": {
+      "primary": {
+        "base_url": "string",
+        "cache_revision": "string",
+        "capabilities": [
+          "string"
+        ],
+        "capabilities_source": "string",
+        "digest": "string",
+        "identity_source": "string",
+        "model": "string",
+        "name": "string",
+        "provider": "string",
+        "resolved_name": "string"
+      },
+      "secondary": {
+        "base_url": "string",
+        "cache_revision": "string",
+        "capabilities": [
+          "string"
+        ],
+        "capabilities_source": "string",
+        "digest": "string",
+        "identity_source": "string",
+        "model": "string",
+        "name": "string",
+        "provider": "string",
+        "resolved_name": "string"
+      }
+    },
+    "output_count": "integer",
+    "phase_versions": {
+      "artifacts": "integer",
+      "candidate_extraction": "integer",
+      "final_selection": "integer",
+      "global_candidate_selection": "integer",
+      "mechanical_analysis": "integer",
+      "primary_assessment": "integer",
+      "secondary_assessment": "integer",
+      "secondary_context": "integer",
+      "video_probe": "integer"
+    },
+    "prompt_version": "string",
+    "require_gpu": "boolean",
+    "run_identity": {
+      "game_context": "string",
+      "inputs": [
+        {
+          "relative_path": "string",
+          "size": "integer"
+        }
+      ],
+      "output_count": "integer",
+      "primary_model": "string",
+      "sample_interval_seconds": "null",
+      "secondary_model": "string",
+      "selection_method": "string",
+      "semantic_options": {
+        "chunk_seconds": "number",
+        "overlap_seconds": "number"
+      },
+      "vllm_cache_revision": "string",
+      "vllm_endpoint": "string"
+    },
+    "run_key": "string",
+    "schema_version": "integer"
+  }
+}
