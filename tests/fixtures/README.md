@@ -19,7 +19,8 @@
   `R=(37x+17y)%256, G=(13x+71y)%256, B=(97x+29y)%256`。
   採否閾値や品質の式は #340 が成果物品質から決める。
 
-`tests/fixture_inputs.rs` は FFprobe の寸法・PTS と FFmpeg decode の全画素を入力の事実へ照合する。
+`tests/fixture_inputs.rs` は FFprobe の寸法・codec・pixel format・color range・時間条件と
+FFmpeg decode の全画素を入力の事実へ照合する。固定応答の semantic event と source／候補時刻の対応も確認する。
 Rust 標準 library のみで動き、Python や製品の選定処理を呼ばない。
 通常の確認は入力や期待値を書き換えない。FFmpeg/FFprobe 不在は失敗とする。
 
@@ -36,7 +37,7 @@ sh tests/check-fixtures.sh
 `responses.json` は用途側の論理応答と、表示 ID → source／時刻／前後 context の小さな台本。
 二段階画像評価、同点、暗転除外、semantic event、直接/生成 Game Context と不正応答の負例を使える。
 探索・戦闘・会話は合成模様に付けた架空の scene 名で、実ゲームの認識能力の証拠ではない。
-semantic の台本は一つ目の source 向け。二つ目にも同じ時区間の台本を用い、media は必ず反転 source と照合する。
+semantic の台本は source 別に定義し、各代表時刻を同じ source の候補・前後 context に対応させる。
 単一動画の試験では `B01` を候補・応答から除く。各 stage は実際に要求した ID のみを応答に含める。
 
 #362／#342 は Rust の request/schema に合わせてこの台本を mock HTTP の契約へ接続する。

@@ -21,14 +21,25 @@
       {"id": "B01", "blog_score": 85, "transition": false, "scene": "戦闘", "reason": "前後が同じ安定画面"}
     ]
   },
-  "semantic_video": {
-    "chunk_seconds": [0, 6],
-    "events": [
-      {"start_seconds": 0, "end_seconds": 1, "representative_seconds": 0.5, "importance": 80, "scene": "探索", "reason": "先頭のブロック模様"},
-      {"start_seconds": 4, "end_seconds": 5, "representative_seconds": 4.5, "importance": 80, "scene": "会話", "reason": "後半の異なるブロック模様"}
-    ],
-    "transitions": [{"start_seconds": 2, "end_seconds": 3, "reason": "黒画面"}]
-  },
+  "semantic_video": [
+    {
+      "source": "01-blocks.mkv",
+      "chunk_seconds": [0, 6],
+      "events": [
+        {"start_seconds": 0, "end_seconds": 1, "representative_seconds": 0.5, "importance": 80, "scene": "探索", "reason": "先頭のブロック模様"},
+        {"start_seconds": 4, "end_seconds": 5, "representative_seconds": 4.5, "importance": 80, "scene": "会話", "reason": "後半の異なるブロック模様"}
+      ],
+      "transitions": [{"start_seconds": 2, "end_seconds": 3, "reason": "黒画面"}]
+    },
+    {
+      "source": "02-mirrored.mkv",
+      "chunk_seconds": [0, 6],
+      "events": [
+        {"start_seconds": 1, "end_seconds": 2, "representative_seconds": 1.5, "importance": 85, "scene": "戦闘", "reason": "別入力の左右反転したブロック模様"}
+      ],
+      "transitions": [{"start_seconds": 2, "end_seconds": 3, "reason": "黒画面"}]
+    }
+  ],
   "invalid_response_mutations": [
     "malformed_json", "unknown_id", "missing_id", "duplicate_id", "non_finite_score",
     "timestamp_outside_chunk", "reversed_event_interval", "refusal", "truncated_response", "unsupported_media"

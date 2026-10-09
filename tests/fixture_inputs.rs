@@ -150,17 +150,29 @@ fn videos_match_every_frame_pts_content_and_orientation() {
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "stream=width,height,r_frame_rate,start_time",
+                "stream=codec_name,width,height,pix_fmt,color_range,r_frame_rate,start_time:format=duration",
                 "-of",
                 "default=noprint_wrappers=1",
             ],
             &path,
             &[],
         );
-        assert_eq!(
-            String::from_utf8(metadata).unwrap(),
-            "width=160\nheight=96\nr_frame_rate=4/1\nstart_time=0.000000\n"
-        );
+        let metadata = String::from_utf8(metadata).unwrap();
+        for field in [
+            "codec_name=ffv1",
+            "width=160",
+            "height=96",
+            "pix_fmt=yuv444p",
+            "color_range=pc",
+            "r_frame_rate=4/1",
+            "start_time=0.000000",
+            "duration=6.000000",
+        ] {
+            assert!(
+                metadata.lines().any(|line| line == field),
+                "{file}: missing {field}"
+            );
+        }
         let timestamps = output(
             "ffprobe",
             &[
