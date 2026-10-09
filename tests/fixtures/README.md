@@ -11,6 +11,11 @@
   回転なし。各秒内の4 frame は同じ模様で、2≤t<3 は黒。
 - `videos/02-mirrored.mkv`: 同じ条件で各 frame を左右反転した別 source。
   同一 PTS でも黒区間以外の内容が違うため、入力取り違え・向きを確認できる。
+- `videos/03-multitrack-rotated.mov`: lossless PNG／RGB24 full range の2映像 track。
+  両方とも160×96・4 fps・6秒・24 frame。stream 0 は blocks、非 default、90°反時計回りの display metadata を持つ。
+  stream 1 は mirrored、default、回転なし。どちらも attached picture ではない。
+  選ぶ stream は最小 index の0で、表示は96×160。表示座標 `(x,y)` は元画像の `(159-y,x)` に対応する。
+  neutral chroma から RGB 各 channel は luma と同値。全 PTS・raw pixels・表示寸法と回転後 pixels を照合する。
 - `video-tiles.tsv`: `second, tile_y, 10個のluma` の36行。各 tile は16×16、U/V は全画素128。
   原点は左上、x は右向き、y は下向き。二つ目の動画は tile_x を `9-tile_x` とする。
   この入力 recipe は製品の選定・cache から独立している。
@@ -21,7 +26,7 @@
 
 `tests/check-fixtures.sh` は Rust の確認処理で FFprobe の寸法・codec・pixel format・color range・時間条件と
 FFmpeg decode の全画素を入力の事実へ照合する。画像 facts と媒体 directory の file 集合、
-semantic 台本の source 集合・非空 event・候補時刻の対応と、非空の scenario matrix／ケースも確認する。
+固定応答・scenario の必須一覧と、ID・source・候補時刻・chunk/event/transition の整合性も確認する。
 Rust 標準 library のみで動き、Python や製品の選定処理を呼ばない。
 通常の確認は入力や期待値を書き換えない。FFmpeg/FFprobe 不在は失敗とする。
 
@@ -29,9 +34,10 @@ Rust 標準 library のみで動き、Python や製品の選定処理を呼ば�
 sh tests/check-fixtures.sh
 ```
 
-必要な開発 tool は rustc/rustfmt、FFmpeg/FFprobe、JSON 構文確認用 jq。
+必要な開発 tool は rustc/rustfmt、FFmpeg/FFprobe、JSON 確認用 jq。明示生成には `-display_rotation` 対応の FFmpeg 6+ が必要。
 #339 がこの facts を実際の Rust 抽出 API のテストに接続し、start offset・端点・VFR・attached picture・
-異常 probe・日本語/空白 path を追加する。入力媒体自体の確認は製品抽出テストの代わりにはならない。
+異常 probe・日本語/空白 path を追加する。`extraction_cases` の複数 track／display rotation も製品経路で確認する。
+入力媒体自体の確認は製品抽出テストの代わりにはならない。最小 FFmpeg 対応条件の製品実測は #344 が行う。
 
 ## 固定応答と実 model
 
@@ -53,7 +59,7 @@ image/video/JSON 能力と上限、実録画の問題画像・reviewer・合否�
 
 `scenarios.json` は両方式×単一/複数入力×直接/生成 mock context×cold/warm/途中再開の最小 matrix と期待する成果物。
 cache の bytes/schema を先取りせず、#341 の Rust run 自身が作った checkpoint に破損・欠損・中断を注入する。
-context 変更による無効化、編集済み出力の保持、warm の decode/hash/I/O 上限、未所有出力、
+生成 title／生成条件／解決済み context／接続先変更による無効化、編集済み出力の保持、warm の decode/hash/I/O 上限、未所有出力、
 競合、symlink、HTTP・disk・公開・runtime 失敗も同じ記録から試験できる。
 これは後続 Issue のテスト入力で、#338 では製品 E2E を実行済みとは扱わない。
 
@@ -71,7 +77,7 @@ context 変更による無効化、編集済み出力の保持、warm の decode
 
 3. 新旧入力の内容・PTS・向きと影響する抽出/選定テストを確認する。
    変更理由、facts の根拠、検証 command/結果、reviewer を PR に記録して必要な素材だけ取り込む。
-   追加した recipe/source は `fixture_inputs.rs` の入力一覧・検証と #339 以降の Rust テストへ接続する。
+   追加した recipe/source と台本/case は `fixture_inputs.rs`／`fixture_contract.jq` の必須一覧・検証と #339 以降の Rust テストへ接続する。
    通常テストには生成 command を入れず、失敗を消すために期待値を再生成しない。
 
 初回採用（#338）: 4 PNG と一つ目の動画の内容を入力として再利用し、独立した decode/probe で上記 facts を確認した。

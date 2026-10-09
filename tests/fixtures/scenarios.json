@@ -6,6 +6,9 @@
     "runs": ["cold", "warm", "interrupted_after_first_batch_or_chunk"]
   },
   "count": 2,
+  "extraction_cases": [
+    {"input": "03-multitrack-rotated.mov", "stream_index": 0, "raw_dimensions": [160, 96], "display_dimensions": [96, 160], "counter_clockwise_degrees": 90}
+  ],
   "artifact_expectations": {
     "image_count": 2,
     "dimensions": [160, 96],
@@ -22,7 +25,8 @@
     {"name": "missing_media", "setup": "Remove one cached candidate image after a cold Rust run.", "expect": "Detect the missing image before use; regenerate only necessary work."},
     {"name": "wrong_reference", "setup": "Change one Rust checkpoint reference to the other source at the same PTS.", "expect": "Reject mismatched content/metadata; never output the wrong source."},
     {"name": "input_added_moved_count_changed", "setup": "Add the second source, relocate the input directory, then change count separately.", "expect": "Reuse each unaffected phase; record recalculation and call counts for each change."},
-    {"name": "inference_changed", "setup": "Change backend, model, inference level, prompt/schema, media processing or revision separately.", "expect": "Invalidate dependent results without storing credentials."},
+    {"name": "inference_changed", "setup": "Change backend, normalized base URL/service identity, model, inference level, prompt/schema, media processing or revision separately.", "expect": "Invalidate dependent results without storing credentials."},
+    {"name": "context_generation_changed", "setup": "Change only game title after a cold generated-context run; separately change search conditions/specification, generation backend, normalized endpoint, model, inference level, prompt/schema or revision.", "expect": "Miss the generated-context checkpoint and invalidate dependent results; reuse context-independent extraction. Never reuse the previous game's context."},
     {"name": "context_changed", "setup": "Change only the direct context, then separately change the resolved generated context after a cold run.", "expect": "Invalidate every context-dependent plan, assessment and selection; reuse context-independent extraction."},
     {"name": "unowned_output", "setup": "Place notes.txt and an unknown report in the output directory; request generated context.", "expect": "Reject before any external call, preserve every byte, and suggest an empty output directory. Search/inference/runtime calls are zero."},
     {"name": "modified_output", "setup": "Replace a completed selected JPEG with a different valid same-name JPEG; repeat for the sheet. Retain the original Rust report and request generated context.", "expect": "Reject the content digest mismatch before external calls; preserve the edited image and all other output bytes."},

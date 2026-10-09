@@ -22,7 +22,8 @@ game-screen-pick --config config.toml --count 2 \
   設定 file の不在や誤りで暗黙に別の設定へ切り替えない。
 - 入力直下の通常 file のみを、拡張子を大文字小文字無視で `.mp4`／`.mkv`／`.mov`／`.webm` と判定し、
   UTF-8 ファイル名の順で探索する。再帰探索・symlink 追跡はしない。対象動画の symlink、不正 path、空集合は拒否する。
-- 時刻は、attached picture を除いた映像 stream の最初の有効 PTS を 0 秒とした動画内秒数。
+- attached picture を除く映像 stream のうち、最小の stream index を選ぶ。probe・抽出・semantic chunk は同じ index を使う。
+  時刻は、その stream の最初の有効 PTS を 0 秒とした動画内秒数。
   report には要求時刻と実際に抽出した時刻を区別する。start offset、端点、VFR は frame の有効 PTS で照合する。
   抽出の内容・向き・寸法を既知の入力 recipe と直接比較し、選定や cache の試験で代用しない。
 - 終了 code は `0`＝全成果物の公開・検証完了（または help/version）、`2`＝引数・設定・入力の誤り、
@@ -47,8 +48,10 @@ game-screen-pick --config config.toml --count 2 \
 ## 再開と出力保護（#341）
 
 新しい namespace/schema の Rust cache を使う。入力同一性と変更検出範囲は #341 で決定・明記する。
+生成 context の key は game title と実効生成条件（検索条件／仕様、生成用 backend・正規化接続先・model・
+推論レベル・prompt/schema・revision）を含む。title または生成条件が変われば生成とその依存結果を無効化する。
 解決済みの直接／生成 Game Context を、それに依存する計画・評価・選定の cache key に含める。
-context、backend/model、推論レベル、prompt/schema、media 処理、revision の意味が変われば依存結果を無効化し、
+context、backend・認証を除く正規化接続先/service identity・model、推論レベル、prompt/schema、media 処理、revision の意味が変われば依存結果を無効化し、
 認証値を key や保存内容に含めない。動画追加・directory 移動・枚数変更でも再利用可能な処理を保つ。
 
 warm は推論・検索・runtime 操作が 0 件。batch/chunk 完了後の中断は完了済み結果を再利用し、欠損だけ処理する。

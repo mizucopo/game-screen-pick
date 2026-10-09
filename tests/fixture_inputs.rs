@@ -8,6 +8,7 @@ const HEIGHT: usize = 96;
 const FPS: usize = 4;
 const SECONDS: usize = 6;
 const VIDEOS: [(&str, bool); 2] = [("01-blocks.mkv", false), ("02-mirrored.mkv", true)];
+const MULTITRACK_VIDEO: &str = "03-multitrack-rotated.mov";
 #[cfg(test)]
 const IMAGES: [&str; 4] = [
     "near-black.png",
@@ -53,6 +54,30 @@ fn video_frames(mirrored: bool) -> Vec<u8> {
         }
     }
     frames
+}
+
+#[cfg(test)]
+fn video_rgb_frames(mirrored: bool, rotated: bool) -> Vec<u8> {
+    let mut pixels = Vec::new();
+    let (width, height) = if rotated {
+        (HEIGHT, WIDTH)
+    } else {
+        (WIDTH, HEIGHT)
+    };
+    for frame in video_frames(mirrored).chunks_exact(WIDTH * HEIGHT * 3) {
+        for y in 0..height {
+            for x in 0..width {
+                // Display rotation +90 is counter-clockwise; neutral chroma makes RGB = luma.
+                let source = if rotated {
+                    x * WIDTH + WIDTH - 1 - y
+                } else {
+                    y * WIDTH + x
+                };
+                pixels.extend([frame[source]; 3]);
+            }
+        }
+    }
+    pixels
 }
 
 fn image_pixels(row: &[String]) -> Vec<u8> {
@@ -118,6 +143,34 @@ fn output(tool: &str, args: &[&str], path: &Path, tail: &[&str]) -> Vec<u8> {
     result.stdout
 }
 
+#[cfg(test)]
+fn assert_timestamps(path: &Path, stream: &str) {
+    let timestamps = output(
+        "ffprobe",
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            stream,
+            "-show_entries",
+            "frame=best_effort_timestamp_time",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ],
+        path,
+        &[],
+    );
+    let timestamps: Vec<f64> = String::from_utf8(timestamps)
+        .unwrap()
+        .lines()
+        .map(|line| line.parse().unwrap())
+        .collect();
+    assert_eq!(timestamps.len(), FPS * SECONDS);
+    for (index, timestamp) in timestamps.iter().enumerate() {
+        assert_eq!(*timestamp, index as f64 / FPS as f64);
+    }
+}
+
 #[test]
 fn images_match_dimensions_channels_and_orientation() {
     let facts = rows("image-facts.tsv");
@@ -175,7 +228,7 @@ fn images_match_dimensions_channels_and_orientation() {
 
 #[test]
 fn videos_match_every_frame_pts_content_and_orientation() {
-    assert_inventory("videos", &VIDEOS.map(|(file, _)| file));
+    assert_inventory("videos", &[VIDEOS[0].0, VIDEOS[1].0, MULTITRACK_VIDEO]);
     for (file, mirrored) in VIDEOS {
         let path = root().join("videos").join(file);
         let metadata = output(
@@ -209,30 +262,7 @@ fn videos_match_every_frame_pts_content_and_orientation() {
                 "{file}: missing {field}"
             );
         }
-        let timestamps = output(
-            "ffprobe",
-            &[
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "frame=best_effort_timestamp_time",
-                "-of",
-                "csv=p=0",
-            ],
-            &path,
-            &[],
-        );
-        let timestamps: Vec<f64> = String::from_utf8(timestamps)
-            .unwrap()
-            .lines()
-            .map(|line| line.parse().unwrap())
-            .collect();
-        assert_eq!(timestamps.len(), FPS * SECONDS);
-        for (index, timestamp) in timestamps.iter().enumerate() {
-            assert_eq!(*timestamp, index as f64 / FPS as f64);
-        }
+        assert_timestamps(&path, "v:0");
         let frames = output(
             "ffmpeg",
             &["-nostdin", "-v", "error", "-i"],
@@ -243,6 +273,120 @@ fn videos_match_every_frame_pts_content_and_orientation() {
         );
         assert!(frames == video_frames(mirrored), "frame facts: {file}");
     }
+}
+
+#[test]
+fn multiple_tracks_preserve_raw_content_and_selected_display_rotation() {
+    let path = root().join("videos").join(MULTITRACK_VIDEO);
+    let metadata = output(
+        "ffprobe",
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "v",
+            "-show_entries",
+            "stream=index,codec_name,width,height,pix_fmt,color_range,r_frame_rate,start_time:stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration",
+            "-of",
+            "default",
+        ],
+        &path,
+        &[],
+    );
+    let metadata = String::from_utf8(metadata).unwrap();
+    assert!(metadata.lines().any(|line| line == "duration=6.000000"));
+    let streams: Vec<&str> = metadata
+        .split("[STREAM]\n")
+        .skip(1)
+        .map(|stream| stream.split("[/STREAM]").next().unwrap())
+        .collect();
+    assert_eq!(streams.len(), 2, "two ordinary video tracks");
+    for (index, stream) in streams.iter().enumerate() {
+        for field in [
+            format!("index={index}"),
+            "codec_name=png".into(),
+            "width=160".into(),
+            "height=96".into(),
+            "pix_fmt=rgb24".into(),
+            "color_range=pc".into(),
+            "r_frame_rate=4/1".into(),
+            "start_time=0.000000".into(),
+            "DISPOSITION:attached_pic=0".into(),
+            format!("DISPOSITION:default={index}"),
+        ] {
+            assert!(stream.lines().any(|line| line == field), "missing {field}");
+        }
+        let rotations: Vec<&str> = stream
+            .lines()
+            .filter(|line| line.starts_with("rotation="))
+            .collect();
+        assert_eq!(
+            rotations,
+            if index == 0 {
+                vec!["rotation=90"]
+            } else {
+                vec![]
+            }
+        );
+        assert_timestamps(&path, &index.to_string());
+        let frames = output(
+            "ffmpeg",
+            &["-nostdin", "-v", "error", "-noautorotate", "-i"],
+            &path,
+            &[
+                "-map",
+                &format!("0:{index}"),
+                "-an",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ],
+        );
+        assert!(
+            frames == video_rgb_frames(index == 1, false),
+            "raw track {index}"
+        );
+    }
+    // Select index 0 even though track 1 is marked default. Its display size is 96x160.
+    let png = output(
+        "ffmpeg",
+        &["-nostdin", "-v", "error", "-i"],
+        &path,
+        &[
+            "-map",
+            "0:0",
+            "-frames:v",
+            "1",
+            "-c:v",
+            "png",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ],
+    );
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(
+        u32::from_be_bytes(png[16..20].try_into().unwrap()),
+        HEIGHT as u32
+    );
+    assert_eq!(
+        u32::from_be_bytes(png[20..24].try_into().unwrap()),
+        WIDTH as u32
+    );
+    let frames = output(
+        "ffmpeg",
+        &["-nostdin", "-v", "error", "-i"],
+        &path,
+        &[
+            "-map", "0:0", "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+        ],
+    );
+    assert!(
+        frames == video_rgb_frames(false, true),
+        "selected track display orientation"
+    );
 }
 
 #[test]
@@ -338,4 +482,40 @@ fn main() {
             &video_frames(mirrored),
         );
     }
+    let result = Command::new("ffmpeg")
+        .args([
+            "-nostdin",
+            "-v",
+            "error",
+            "-n",
+            "-display_rotation:v:0",
+            "90",
+            "-noautorotate",
+            "-i",
+        ])
+        .arg(destination.join("videos").join(VIDEOS[0].0))
+        .arg("-i")
+        .arg(destination.join("videos").join(VIDEOS[1].0))
+        .args([
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:v:0",
+            "-c:v",
+            "png",
+            "-pix_fmt",
+            "rgb24",
+            "-threads",
+            "1",
+            "-map_metadata",
+            "-1",
+            "-disposition:v:0",
+            "0",
+            "-disposition:v:1",
+            "default",
+        ])
+        .arg(destination.join("videos").join(MULTITRACK_VIDEO))
+        .status()
+        .expect("FFmpeg must support display_rotation");
+    assert!(result.success(), "encode {MULTITRACK_VIDEO}");
 }
