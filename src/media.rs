@@ -82,7 +82,7 @@ pub struct ChunkArtifact {
 
 impl ChunkArtifact {
     pub fn path(&self) -> PathBuf {
-        self.directory.path().join("chunk.mkv")
+        self.directory.path().join("chunk.mov")
     }
 }
 
@@ -220,7 +220,7 @@ impl MediaTools {
             let pts = optional_number(&frame["pts_time"], "frame PTS")?;
             let Some(pts) = pts else { continue };
             let start_seconds = *start.get_or_insert(pts);
-            let seconds = pts - start_seconds;
+            let seconds = probe_seconds(pts - start_seconds);
             ensure!(
                 seconds.is_finite() && seconds >= 0.0,
                 "invalid frame time relative to first PTS"
@@ -251,9 +251,9 @@ impl MediaTools {
         let last = frames.last().context("video has no frames")?;
         let last_seconds = last.seconds;
         let duration_seconds = if last.duration_seconds > 0.0 {
-            last.seconds + last.duration_seconds
+            probe_seconds(last.seconds + last.duration_seconds)
         } else if let Some(duration) = declared_duration {
-            declared_start.unwrap_or(start_seconds) + duration - start_seconds
+            probe_seconds(declared_start.unwrap_or(start_seconds) + duration - start_seconds)
         } else {
             bail!("video has no usable final frame duration or stream duration");
         };
@@ -262,12 +262,13 @@ impl MediaTools {
             "video duration does not include its final valid frame"
         );
         for index in 0..frames.len().saturating_sub(1) {
-            frames[index].duration_seconds = frames[index + 1].seconds - frames[index].seconds;
+            frames[index].duration_seconds =
+                probe_seconds(frames[index + 1].seconds - frames[index].seconds);
         }
         frames
             .last_mut()
             .expect("validated nonempty frames")
-            .duration_seconds = duration_seconds - last_seconds;
+            .duration_seconds = probe_seconds(duration_seconds - last_seconds);
         Ok(Video {
             source,
             stream_index,
@@ -364,7 +365,10 @@ impl MediaTools {
     }
 
     /// Lossless video intermediate for later semantic requests. Frames retain
-    /// their VFR spacing, start at zero, and use the same selected source stream.
+    /// their VFR spacing and full final display interval, start at zero, and use
+    /// the same selected source stream. PNG-in-MOV stores per-frame duration;
+    /// setts restores the final hold which encoders otherwise replace with a
+    /// nominal frame interval. The microsecond timebase matches probed PTS precision.
     pub fn extract_chunk(
         &self,
         video: &Video,
@@ -395,7 +399,7 @@ impl MediaTools {
             .prefix("game-screen-pick-chunk-")
             .tempdir()
             .context("cannot create private chunk workspace")?;
-        let path = directory.path().join("chunk.mkv");
+        let path = directory.path().join("chunk.mov");
         let mut command = self.decoder(video);
         command.args([
             "-vf",
@@ -406,9 +410,19 @@ impl MediaTools {
             "-fps_mode",
             "passthrough",
             "-c:v",
-            "ffv1",
+            "png",
             "-pix_fmt",
-            "bgr0",
+            "rgb24",
+            "-enc_time_base",
+            "1:1000000",
+            "-video_track_timescale",
+            "1000000",
+            "-bsf:v",
+            &format!(
+                "setts=duration=if(eq(N\\,{})\\,round({}/TB)\\,NEXT_PTS-PTS)",
+                last.decode_index - first.decode_index,
+                last.duration_seconds
+            ),
         ]);
         command.arg(&path);
         run(
@@ -427,7 +441,7 @@ impl MediaTools {
             requested_start_seconds: start_seconds,
             requested_end_seconds: end_seconds,
             actual_start_seconds: first.seconds,
-            actual_end_seconds: last.seconds + last.duration_seconds,
+            actual_end_seconds: probe_seconds(last.seconds + last.duration_seconds),
             width: video.width,
             height: video.height,
         })
@@ -471,6 +485,13 @@ fn dimension(value: &Value, name: &str) -> Result<u32> {
         "video {name} is outside 1..=65535"
     );
     Ok(dimension as u32)
+}
+
+// FFprobe's *_time fields use microsecond precision. Keep subtraction and
+// duration arithmetic on that same grid so a literal PTS remains an endpoint,
+// rather than falling just after it through binary floating-point roundoff.
+fn probe_seconds(seconds: f64) -> f64 {
+    (seconds * 1_000_000.0).round() / 1_000_000.0
 }
 
 fn optional_number(value: &Value, name: &str) -> Result<Option<f64>> {

@@ -80,6 +80,44 @@ fn help_and_version_need_no_config_input_or_external_commands() {
 }
 
 #[test]
+fn parser_errors_escape_dynamic_controls_and_keep_usage_readable() {
+    let directory = sandbox();
+    for value in [
+        "a\nerror: forged",
+        "a\rforged",
+        "a\tforged",
+        "a\u{009b}2Jforged",
+    ] {
+        for args in [
+            vec!["extract", "--at", value, "input.mkv", "output"],
+            vec!["--count", value],
+            vec![value],
+        ] {
+            let output = command(directory.path(), &args);
+            assert_eq!(output.status.code(), Some(2));
+            let diagnostic = String::from_utf8(output.stderr).unwrap();
+            assert!(
+                !diagnostic.contains(value),
+                "raw user value leaked: {diagnostic:?}"
+            );
+            assert!(!diagnostic.contains("\nerror: forged"));
+            assert!(
+                !diagnostic
+                    .chars()
+                    .any(|character| character.is_control() && character != '\n')
+            );
+            assert!(diagnostic.starts_with("error: "));
+        }
+    }
+    let output = command(directory.path(), &[]);
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("\nUsage:")
+    );
+}
+
+#[test]
 fn argument_requirements_and_boundaries_are_enforced() {
     let directory = sandbox();
     setup(directory.path());

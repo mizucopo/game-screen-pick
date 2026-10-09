@@ -152,6 +152,27 @@ fn safe(value: &str) -> String {
     text
 }
 
+pub fn sanitize_parse_error(error: &mut clap::Error) {
+    use clap::error::ContextValue;
+    // Escape dynamic contexts before Clap adds its trusted help/usage layout.
+    let contexts: Vec<_> = error
+        .context()
+        .filter_map(|(kind, value)| {
+            let escaped = match value {
+                ContextValue::String(value) => ContextValue::String(safe(value)),
+                ContextValue::Strings(values) => {
+                    ContextValue::Strings(values.iter().map(|value| safe(value)).collect())
+                }
+                _ => return None,
+            };
+            Some((kind, escaped))
+        })
+        .collect();
+    for (kind, value) in contexts {
+        error.insert(kind, value);
+    }
+}
+
 /// Reject symlinks in every existing path component, traversal, and special files.
 fn checked_path(path: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {

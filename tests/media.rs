@@ -275,16 +275,140 @@ fn nonzero_offset_and_vfr_use_actual_decoded_pts_at_endpoints() {
         assert_eq!(image.actual_seconds, actual);
         assert_eq!(pixels(&image.path()).2, expected(second, false, false));
     }
-    let chunk = tools.extract_chunk(&video, 0.25, 3.0, &cancelled).unwrap();
+    for (start, end, indices) in [
+        (0.25, 1.0, vec![1]),
+        (0.25, 2.0, vec![1, 2]),
+        (0.0, 0.2, vec![0]),
+        (0.25, 3.0, vec![1, 2, 3]),
+    ] {
+        let chunk = tools.extract_chunk(&video, start, end, &cancelled).unwrap();
+        let chunk_video = tools.probe(&chunk.path(), &cancelled).unwrap();
+        assert_eq!(
+            chunk_video.duration_seconds,
+            chunk.actual_end_seconds - chunk.actual_start_seconds
+        );
+        assert_eq!(chunk_video.frames.len(), indices.len());
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_frames",
+                "-show_entries",
+                "frame=pts_time,duration_time,pkt_duration_time",
+                "-of",
+                "json",
+            ])
+            .arg(chunk.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let raw: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        for (ordinal, index) in indices.into_iter().enumerate() {
+            let original = &video.frames[index];
+            let decoded = &chunk_video.frames[ordinal];
+            assert_eq!(
+                decoded.seconds,
+                original.seconds - chunk.actual_start_seconds
+            );
+            assert_eq!(decoded.duration_seconds, original.duration_seconds);
+            let raw_duration = raw["frames"][ordinal]["duration_time"]
+                .as_str()
+                .or_else(|| raw["frames"][ordinal]["pkt_duration_time"].as_str())
+                .unwrap()
+                .parse::<f64>()
+                .unwrap();
+            assert_eq!(raw_duration, original.duration_seconds);
+            let image = tools
+                .extract(&chunk_video, decoded.seconds, &cancelled)
+                .unwrap();
+            assert_eq!(
+                pixels(&image.path()).2,
+                expected([0, 1, 3, 5][index], false, false)
+            );
+        }
+    }
+}
+
+#[test]
+fn chunk_preserves_submillisecond_vfr_pts_and_each_original_display_interval() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("microsecond VFR.mov");
+    checked_command(Command::new("ffmpeg").args(["-v", "error", "-nostdin", "-i"]).arg(fixture("01-blocks.mkv"))
+        .args(["-vf", "select='eq(n,0)+eq(n,4)+eq(n,12)+eq(n,20)',settb=1/1000000,setpts='if(eq(N,0),3000000,if(eq(N,1),3010001,if(eq(N,2),3020005,3030011)))'", "-fps_mode", "passthrough", "-c:v", "png", "-pix_fmt", "rgb24", "-enc_time_base", "1:1000000", "-video_track_timescale", "1000000", "-bsf:v", "setts=duration=if(eq(N\\,3)\\,7013\\,NEXT_PTS-PTS)"])
+        .arg(&source));
+    let tools = MediaTools::default();
+    let cancelled = AtomicBool::new(false);
+    let video = tools.probe(&source, &cancelled).unwrap();
+    assert_eq!(video.start_seconds, 3.0);
+    let expected_pts = [0.0, 0.010001, 0.020005, 0.030011];
+    for (frame, expected) in video.frames.iter().zip(expected_pts) {
+        assert!((frame.seconds - expected).abs() < 0.000000001);
+    }
+    for (index, seconds) in expected_pts.into_iter().enumerate() {
+        let image = tools.extract(&video, seconds, &cancelled).unwrap();
+        assert!(
+            (image.actual_seconds - seconds).abs() < 0.000000001,
+            "literal PTS {seconds} extracted {}",
+            image.actual_seconds
+        );
+        assert_eq!(
+            pixels(&image.path()).2,
+            expected([0, 1, 3, 5][index], false, false)
+        );
+    }
+    let chunk = tools
+        .extract_chunk(&video, video.frames[1].seconds, 0.03, &cancelled)
+        .unwrap();
     let chunk_video = tools.probe(&chunk.path(), &cancelled).unwrap();
-    assert_eq!(
-        chunk_video
-            .frames
-            .iter()
-            .map(|frame| frame.seconds)
-            .collect::<Vec<_>>(),
-        [0.0, 1.25, 2.5]
+    assert_eq!(chunk_video.frames.len(), 2);
+    assert!(
+        (chunk_video.duration_seconds - (chunk.actual_end_seconds - chunk.actual_start_seconds))
+            .abs()
+            < 0.000000001
     );
+    for (ordinal, source_index) in [1, 2].into_iter().enumerate() {
+        let original = &video.frames[source_index];
+        let decoded = &chunk_video.frames[ordinal];
+        assert!(
+            (decoded.seconds - (original.seconds - chunk.actual_start_seconds)).abs() < 0.000000001
+        );
+        assert!((decoded.duration_seconds - original.duration_seconds).abs() < 0.000000001);
+        let image = tools
+            .extract(&chunk_video, decoded.seconds, &cancelled)
+            .unwrap();
+        assert_eq!(
+            pixels(&image.path()).2,
+            expected([0, 1, 3, 5][source_index], false, false)
+        );
+    }
+    for (index, frame) in video.frames.iter().enumerate() {
+        let end = if index == 0 {
+            0.005
+        } else {
+            frame.seconds + frame.duration_seconds / 2.0
+        };
+        let chunk = tools
+            .extract_chunk(&video, frame.seconds, end, &cancelled)
+            .unwrap();
+        let decoded = tools.probe(&chunk.path(), &cancelled).unwrap();
+        assert_eq!(decoded.frames.len(), 1);
+        assert!(
+            (decoded.duration_seconds - frame.duration_seconds).abs() < 0.000000001,
+            "frame {index}: actual {}, source {}",
+            decoded.duration_seconds,
+            frame.duration_seconds
+        );
+        assert!(
+            (decoded.duration_seconds - (chunk.actual_end_seconds - chunk.actual_start_seconds))
+                .abs()
+                < 0.000000001
+        );
+        let image = tools.extract(&decoded, 0.0, &cancelled).unwrap();
+        assert_eq!(
+            pixels(&image.path()).2,
+            expected([0, 1, 3, 5][index], false, false)
+        );
+    }
 }
 
 #[cfg(unix)]

@@ -9,8 +9,9 @@ use game_screen_pick::cli::Cli;
 fn main() {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
-        Err(error) => {
+        Err(mut error) => {
             let code = error.exit_code();
+            game_screen_pick::cli::sanitize_parse_error(&mut error);
             let _ = error.print();
             std::process::exit(code);
         }
