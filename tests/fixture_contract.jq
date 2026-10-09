@@ -48,11 +48,13 @@ length == 1 and (.[0] | . as $script |
   (.game_context | text) and
   (.candidates | map(.id) | inventory($ids)) and
   (.candidates | map(.source) | unique | inventory($sources)) and
-  all(.candidates[];
+  all(.candidates[]; . as $candidate |
     (.time_seconds | type == "number" and isfinite and . >= 0 and . < 6) and
     (.context_seconds | type == "array" and length == 3 and . == (sort | unique) and
       all(.[]; type == "number" and isfinite and . >= 0 and . < 6)) and
-    .context_seconds[1] == .time_seconds) and
+    .context_seconds[1] == .time_seconds and
+    all(.context_seconds[];
+      if $candidate.id == "A02" then . >= 2 and . < 3 else . < 2 or . >= 3 end)) and
   (.primary.frames | map(.id) | inventory($ids)) and all(.primary.frames[]; assessment) and
   (.secondary.frames | map(.id) | inventory($useful_ids)) and
   all(.secondary.frames[]; assessment and .transition == false and .blog_score > 0) and
