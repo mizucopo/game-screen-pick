@@ -22,7 +22,7 @@
     {"name": "wrong_reference", "setup": "Change one Rust checkpoint reference to the other source at the same PTS.", "expect": "Reject mismatched content/metadata; never output the wrong source."},
     {"name": "input_added_moved_count_changed", "setup": "Add the second source, relocate the input directory, then change count separately.", "expect": "Reuse each unaffected phase; record recalculation and call counts for each change."},
     {"name": "inference_changed", "setup": "Change backend, model, inference level, prompt/schema, media processing or revision separately.", "expect": "Invalidate dependent results without storing credentials."},
-    {"name": "unowned_output", "setup": "Place notes.txt and an unknown report in the output directory.", "expect": "Reject reuse, preserve every byte, and suggest an empty output directory."},
+    {"name": "unowned_output", "setup": "Place notes.txt and an unknown report in the output directory; request generated context.", "expect": "Reject before any external call, preserve every byte, and suggest an empty output directory. Search/inference/runtime calls are zero."},
     {"name": "cache_removed", "setup": "Remove the Rust cache after a completed run; leave output intact.", "expect": "Validate ownership from the Rust report and output set without harming images."},
     {"name": "unsafe_paths", "setup": "Use symlinks, special files, path traversal or overlapping input/cache/output paths.", "expect": "Reject unsafe access without changing targets."},
     {"name": "concurrent_run", "setup": "Run two processes against the same cache or output.", "expect": "One owner; the other reports contention and changes nothing."},

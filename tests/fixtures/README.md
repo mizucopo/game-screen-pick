@@ -20,7 +20,8 @@
   採否閾値や品質の式は #340 が成果物品質から決める。
 
 `tests/fixture_inputs.rs` は FFprobe の寸法・codec・pixel format・color range・時間条件と
-FFmpeg decode の全画素を入力の事実へ照合する。固定応答の semantic event と source／候補時刻の対応も確認する。
+FFmpeg decode の全画素を入力の事実へ照合する。画像 facts と媒体 directory の file 集合、
+空でない semantic 台本/event と source／候補時刻の対応も確認する。
 Rust 標準 library のみで動き、Python や製品の選定処理を呼ばない。
 通常の確認は入力や期待値を書き換えない。FFmpeg/FFprobe 不在は失敗とする。
 
@@ -69,7 +70,7 @@ cache の bytes/schema を先取りせず、#341 の Rust run 自身が作った
 
 3. 新旧入力の内容・PTS・向きと影響する抽出/選定テストを確認する。
    変更理由、facts の根拠、検証 command/結果、reviewer を PR に記録して必要な素材だけ取り込む。
-   追加した recipe/source は `fixture_inputs.rs` と #339 以降の Rust テストへ接続する。
+   追加した recipe/source は `fixture_inputs.rs` の入力一覧・検証と #339 以降の Rust テストへ接続する。
    通常テストには生成 command を入れず、失敗を消すために期待値を再生成しない。
 
 初回採用（#338）: 4 PNG と一つ目の動画の内容を入力として再利用し、独立した decode/probe で上記 facts を確認した。

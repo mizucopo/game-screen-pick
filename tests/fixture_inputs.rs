@@ -8,6 +8,13 @@ const HEIGHT: usize = 96;
 const FPS: usize = 4;
 const SECONDS: usize = 6;
 const VIDEOS: [(&str, bool); 2] = [("01-blocks.mkv", false), ("02-mirrored.mkv", true)];
+#[cfg(test)]
+const IMAGES: [&str; 4] = [
+    "near-black.png",
+    "near-white.png",
+    "low-contrast.png",
+    "rgb-grid.png",
+];
 
 fn root() -> PathBuf {
     std::env::var_os("GSP_FIXTURES")
@@ -75,6 +82,26 @@ fn image_pixels(row: &[String]) -> Vec<u8> {
 }
 
 #[cfg(test)]
+fn assert_inventory(directory: &str, expected: &[&str]) {
+    use std::collections::BTreeSet;
+    let actual: BTreeSet<String> = fs::read_dir(root().join(directory))
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            assert!(
+                entry.file_type().unwrap().is_file(),
+                "regular fixture file required"
+            );
+            entry.file_name().into_string().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        expected.iter().map(|name| String::from(*name)).collect()
+    );
+}
+
+#[cfg(test)]
 fn output(tool: &str, args: &[&str], path: &Path, tail: &[&str]) -> Vec<u8> {
     let result = Command::new(tool)
         .args(args)
@@ -93,7 +120,15 @@ fn output(tool: &str, args: &[&str], path: &Path, tail: &[&str]) -> Vec<u8> {
 
 #[test]
 fn images_match_dimensions_channels_and_orientation() {
-    for row in rows("image-facts.tsv") {
+    let facts = rows("image-facts.tsv");
+    assert_eq!(facts.len(), IMAGES.len(), "image facts inventory");
+    let mut names: Vec<&str> = facts.iter().map(|row| row[0].as_str()).collect();
+    names.sort_unstable();
+    let mut expected = IMAGES;
+    expected.sort_unstable();
+    assert_eq!(names, expected);
+    assert_inventory("images", &IMAGES);
+    for row in facts {
         let path = root().join("images").join(&row[0]);
         let dimensions = output(
             "ffprobe",
@@ -140,6 +175,7 @@ fn images_match_dimensions_channels_and_orientation() {
 
 #[test]
 fn videos_match_every_frame_pts_content_and_orientation() {
+    assert_inventory("videos", &VIDEOS.map(|(file, _)| file));
     for (file, mirrored) in VIDEOS {
         let path = root().join("videos").join(file);
         let metadata = output(

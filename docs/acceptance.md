@@ -55,6 +55,8 @@ payload 破損・誤参照・画像欠損を正常な hit にしない。warm �
 
 未所有 file・未知 report・symlink・特殊 file・path 逸脱・競合実行を拒否し、既存 file を保持して空の別出力先を案内する。
 Rust report と出力集合の整合性で所有権を検証でき、cache 消失だけで正常出力を失わない。
+入力・設定・path・出力所有権と cache/output の排他を、FFmpeg/FFprobe・Brave 検索・推論接続・runtime 操作より先に確認する。
+事前確認で拒否した run は外部呼出を 0 件とし、検索枠や server 起動に影響させない。
 公開前の失敗は以前の正常成果物を保持する。staging／公開途中の失敗も不完全・混在した出力を成功扱いせず復旧する。
 lock、同一 filesystem 内の atomic 書込、cleanup の保証を対象 OS で検証する。未実測の強制 kill／filesystem 横断 transaction は約束しない。
 
