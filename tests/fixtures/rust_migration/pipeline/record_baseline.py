@@ -1,4 +1,4 @@
-"""Explicitly record a reviewed Python baseline; never invoked by regression tests."""
+"""Explicitly record a reviewed Python baseline; requires --reviewed-update."""
 
 import argparse
 import importlib.metadata
@@ -88,7 +88,9 @@ def main() -> None:
                     image.convert("RGB").save(target, pnginfo=metadata)
             if args.inference_media_only or args.selected_contact_sheet_only:
                 continue
-            contract = pipeline_contract(request)
+            # The full reviewed update replaces these pixel references below.
+            # Retain receipt/recipe/integrity checks without comparing old pixels.
+            contract = pipeline_contract(request, compare_candidate_pixels=False)
             write_json(FIXTURE_ROOT / "expected" / f"{method}.json", contract)
             manifest_digests[method] = json_digest(contract["run_manifest"])
             destination = FIXTURE_ROOT / "stored-cache" / method

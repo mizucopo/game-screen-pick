@@ -183,6 +183,16 @@ completion は、各実装が生成した artifact の size / SHA-256 と完全�
 candidate manifest の各 `image_sha256` とsizeは各実装自身の候補JPEGへ照合し、
 固定stored-cache recipeの全候補ID・順序・時刻を確認します。JPEGとmechanical
 記録を残してreceiptの欠落・並べ替え・時刻変更を行い、全digestを整合させても拒否します。
+さらに両方式の全候補（sampled 6枚／semantic 3枚）を、同じ方式・video identity・
+candidate keyの`stored-cache/`内JPEGへID・時刻を対応させてdecode比較します。
+採用／棄却、AI未送信、最終未選定を問わず、JPEG形式・寸法・EXIF向き（未指定と1は
+同じ向き）・dHashを厳密に確認し、既宣言のchannel MAE ≤ 1.0、最大差 ≤ 16、
+PSNR ≥ 40 dBを適用します。方式間で同じframe IDが別時刻を指すため、IDだけで
+referenceを共有しません。既存`baseline-provenance.json`でSHA固定されたJPEGを
+独立referenceとして使い、提出runから基準を再生成しません。
+`test_candidate_pixel_contract.py`は棄却候補を別の正常かつ依然棄却されるJPEGへ替え、
+own receipt・phase link・実依存から計算する全assessment keyを整合させても拒否する
+回帰を含みます。最終出力やAI応答が同じだけでは、候補抽出の同等性を合格にしません。
 mechanical の `source_frames_digest` は同じ動画のcandidate payload digestへ照合します。
 secondary-context は必要なreceipt SHAを自身のJPEGへ照合し、保存goldenの
 `context_record_names` で必要な before / after のname集合・順序を確認します。
@@ -243,6 +253,12 @@ python tests/fixtures/rust_migration/pipeline/generate_video.py /tmp/synthetic-g
 # 固定動画・固定 HTTP 応答から、明示的に Python の基準を再記録する。
 PYTHONPATH=. uv run python tests/fixtures/rust_migration/pipeline/record_baseline.py --reviewed-update
 ```
+
+全基準の明示更新だけは、これから置き換える旧候補画像とのpixel比較を省きます。
+own receipt、固定ID・順序・時刻、phase linkなどの整合検証は維持します。
+通常比較と`--run-manifest-only`は候補画素を検証し、部分更新で旧候補基準を
+置き換えません。recorderの回帰テストは一時コピーだけを更新し、repositoryの
+固定画像・provenanceが不変であることも確認します。
 
 Rust 実装との比較にはこの保存済み golden と旧 cache を入力し、Rust 側で期待値を
 自動生成し直さないでください。実モデル・実 GPU・実録画での運用検証は、この
