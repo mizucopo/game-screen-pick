@@ -47,14 +47,18 @@ game-screen-pick --config config.toml --count 2 \
 ## 再開と出力保護（#341）
 
 新しい namespace/schema の Rust cache を使う。入力同一性と変更検出範囲は #341 で決定・明記する。
-backend/model、推論レベル、prompt/schema、media 処理、revision の意味が変われば依存結果を無効化し、
+解決済みの直接／生成 Game Context を、それに依存する計画・評価・選定の cache key に含める。
+context、backend/model、推論レベル、prompt/schema、media 処理、revision の意味が変われば依存結果を無効化し、
 認証値を key や保存内容に含めない。動画追加・directory 移動・枚数変更でも再利用可能な処理を保つ。
 
 warm は推論・検索・runtime 操作が 0 件。batch/chunk 完了後の中断は完了済み結果を再利用し、欠損だけ処理する。
-payload 破損・誤参照・画像欠損を正常な hit にしない。warm 検証の時間・decode/hash 回数を測定する。
+payload 破損・誤参照・画像欠損を正常な hit にしない。同じ入力・条件の正常な warm は media decode、
+元動画と未使用候補の content hash を 0 件とする。検証 I/O は入力 file の metadata と使用する checkpoint・
+公開済み成果物の内容に限り、動画時間や未使用候補数に比例した走査をしない。時間・読取 bytes・decode/hash 回数を測定する。
 
 未所有 file・未知 report・symlink・特殊 file・path 逸脱・競合実行を拒否し、既存 file を保持して空の別出力先を案内する。
-Rust report と出力集合の整合性で所有権を検証でき、cache 消失だけで正常出力を失わない。
+Rust report の出力集合と各画像・sheet の内容 digest で所有権を検証し、同名の有効な画像への編集も検出して保持する。
+cache 消失だけで正常出力を失わない。
 入力・設定・path・出力所有権と cache/output の排他を、FFmpeg/FFprobe・Brave 検索・推論接続・runtime 操作より先に確認する。
 事前確認で拒否した run は外部呼出を 0 件とし、検索枠や server 起動に影響させない。
 公開前の失敗は以前の正常成果物を保持する。staging／公開途中の失敗も不完全・混在した出力を成功扱いせず復旧する。

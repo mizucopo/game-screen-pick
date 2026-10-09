@@ -13,6 +13,7 @@
     "source_and_actual_pts_match": true,
     "sheet_and_report_rank_match": true,
     "warm_calls": {"inference": 0, "search": 0, "runtime": 0},
+    "warm_processing": {"media_decode": 0, "source_content_hash": 0, "unused_candidate_content_hash": 0, "io_bound": "Input file metadata plus used checkpoints and published artifacts; no scan proportional to video duration or unused candidate count."},
     "resume": "Reuse every committed batch/chunk; run only missing work; match the cold Rust selection."
   },
   "cases": [
@@ -22,8 +23,10 @@
     {"name": "wrong_reference", "setup": "Change one Rust checkpoint reference to the other source at the same PTS.", "expect": "Reject mismatched content/metadata; never output the wrong source."},
     {"name": "input_added_moved_count_changed", "setup": "Add the second source, relocate the input directory, then change count separately.", "expect": "Reuse each unaffected phase; record recalculation and call counts for each change."},
     {"name": "inference_changed", "setup": "Change backend, model, inference level, prompt/schema, media processing or revision separately.", "expect": "Invalidate dependent results without storing credentials."},
+    {"name": "context_changed", "setup": "Change only the direct context, then separately change the resolved generated context after a cold run.", "expect": "Invalidate every context-dependent plan, assessment and selection; reuse context-independent extraction."},
     {"name": "unowned_output", "setup": "Place notes.txt and an unknown report in the output directory; request generated context.", "expect": "Reject before any external call, preserve every byte, and suggest an empty output directory. Search/inference/runtime calls are zero."},
-    {"name": "cache_removed", "setup": "Remove the Rust cache after a completed run; leave output intact.", "expect": "Validate ownership from the Rust report and output set without harming images."},
+    {"name": "modified_output", "setup": "Replace a completed selected JPEG with a different valid same-name JPEG; repeat for the sheet. Retain the original Rust report and request generated context.", "expect": "Reject the content digest mismatch before external calls; preserve the edited image and all other output bytes."},
+    {"name": "cache_removed", "setup": "Remove the Rust cache after a completed run; leave output intact.", "expect": "Validate ownership from the Rust report, output set and artifact content digests without harming images."},
     {"name": "unsafe_paths", "setup": "Use symlinks, special files, path traversal or overlapping input/cache/output paths.", "expect": "Reject unsafe access without changing targets."},
     {"name": "concurrent_run", "setup": "Run two processes against the same cache or output.", "expect": "One owner; the other reports contention and changes nothing."},
     {"name": "interrupt", "setup": "Send SIGINT after a committed batch/chunk and separately during extraction.", "expect": "Exit 130; clean temporary files/children; preserve committed work and previous output."},

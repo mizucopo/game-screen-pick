@@ -19,9 +19,9 @@
   `R=(37x+17y)%256, G=(13x+71y)%256, B=(97x+29y)%256`。
   採否閾値や品質の式は #340 が成果物品質から決める。
 
-`tests/fixture_inputs.rs` は FFprobe の寸法・codec・pixel format・color range・時間条件と
+`tests/check-fixtures.sh` は Rust の確認処理で FFprobe の寸法・codec・pixel format・color range・時間条件と
 FFmpeg decode の全画素を入力の事実へ照合する。画像 facts と媒体 directory の file 集合、
-空でない semantic 台本/event と source／候補時刻の対応も確認する。
+semantic 台本の source 集合・非空 event・候補時刻の対応と、非空の scenario matrix／ケースも確認する。
 Rust 標準 library のみで動き、Python や製品の選定処理を呼ばない。
 通常の確認は入力や期待値を書き換えない。FFmpeg/FFprobe 不在は失敗とする。
 
@@ -53,7 +53,8 @@ image/video/JSON 能力と上限、実録画の問題画像・reviewer・合否�
 
 `scenarios.json` は両方式×単一/複数入力×直接/生成 mock context×cold/warm/途中再開の最小 matrix と期待する成果物。
 cache の bytes/schema を先取りせず、#341 の Rust run 自身が作った checkpoint に破損・欠損・中断を注入する。
-未所有出力、既存の正常出力、競合、symlink、HTTP・disk・公開・runtime 失敗も同じ記録から試験できる。
+context 変更による無効化、編集済み出力の保持、warm の decode/hash/I/O 上限、未所有出力、
+競合、symlink、HTTP・disk・公開・runtime 失敗も同じ記録から試験できる。
 これは後続 Issue のテスト入力で、#338 では製品 E2E を実行済みとは扱わない。
 
 ## 素材と期待値の更新
