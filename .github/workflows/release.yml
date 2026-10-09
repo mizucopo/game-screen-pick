@@ -82,6 +82,8 @@ jobs:
         run: |
           uv sync --locked
           uv run task check
+      - name: Verify Rust input fixtures
+        run: sh tests/check-fixtures.sh
       - name: Inspect release state
         id: release-state
         env:
