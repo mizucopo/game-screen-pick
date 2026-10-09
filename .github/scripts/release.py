@@ -146,7 +146,8 @@ def publication(policy, version, revision=None):
     try:
         tag = spec["release_tag"].format_map(context)
         images = [
-            {**image, "tag": image["tag"].format_map(context)}
+            # SemVer cannot contain '_'; preserve metadata without aliasing '-'.
+            {**image, "tag": image["tag"].format_map(context).replace("+", "_")}
             for image in spec["images"]
         ]
     except (KeyError, ValueError) as exc:
@@ -188,6 +189,8 @@ def publication(policy, version, revision=None):
         "release_paths": spec["release_paths"],
         "latest_image": spec.get("latest_image"),
         "github_release": spec["github_release"],
+        "is_prerelease": policy["version"]["scheme"] != "chrome"
+        and version_key(version, "semver")[1] == 0,
     }
 
 
@@ -220,16 +223,22 @@ def choose(
             floor = revision_number(explicit_revision)
         revision = f"r{floor}"
     else:
-        if (
-            scheme == "semver"
-            and SEMVER.fullmatch(base_version).group(4)
-            and level != "patch"
-        ):
+        pre = SEMVER.fullmatch(base_version).group(4) if scheme == "semver" else None
+        if pre and level != "patch":
             require(
                 explicit_minimum is not None,
                 "Prerelease core/stable transition needs an explicit version minimum",
             )
-        version = bump(base_version, level, scheme)
+        if (
+            pre
+            and level == "patch"
+            and not pre.split(".")[-1].isdigit()
+            and explicit_minimum is not None
+        ):
+            # No automatic sequence exists; an explicit transition must exceed base.
+            version = base_version
+        else:
+            version = bump(base_version, level, scheme)
         if explicit_minimum is not None:
             minimum_key = version_key(explicit_minimum, scheme)
             required_key = version_key(version, scheme)
@@ -238,7 +247,9 @@ def choose(
                 # Existing prerelease patch sequences still use full precedence.
                 minimum_key, required_key = minimum_key[0], required_key[0]
             require(
-                minimum_key >= required_key,
+                minimum_key >= required_key
+                and version_key(explicit_minimum, scheme)
+                > version_key(base_version, scheme),
                 f"Explicit minimum {explicit_minimum} does not meet {level} "
                 f"increment from {base_version}",
             )
@@ -246,6 +257,10 @@ def choose(
         revision = None
     for _ in range(100):
         plan = publication(policy, version, revision)
+        require(
+            not plan["release_tag"].startswith("-"),
+            "Release tag must not start with '-'",
+        )
         collisions = occupied(plan)
         if not collisions:
             return version, revision, plan
@@ -902,6 +917,7 @@ def remote_collisions(gh, plan):
 
 
 def prepared(git, record):
+    require(not record["Tag"].startswith("-"), "Release tag must not start with '-'")
     require(
         git.text("rev-parse", "refs/tags/" + record["Tag"] + "^{commit}")
         == record["commit"],
@@ -1135,6 +1151,8 @@ def checkout_plan(git):
 
 
 def latest(git, gh, commit):
+    if publication_at(git, commit)["is_prerelease"]:
+        return False
     completed = [
         r for r in gh.pages("/releases") if not r["draft"] and not r.get("prerelease")
     ]
@@ -1144,7 +1162,10 @@ def latest(git, gh, commit):
     )
     releases = {r["tag_name"]: r for r in completed}
     for record in records(git, git.fetch_main()):
-        if record["Tag"] in releases:
+        if (
+            record["Tag"] in releases
+            and not publication_at(git, record["commit"])["is_prerelease"]
+        ):
             prepared(git, record)
             return record["commit"] == commit
     raise PreparationError("No completed release exists on main")

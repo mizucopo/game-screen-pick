@@ -8,11 +8,8 @@ CLI/config/media、選定、cache/output、AI 接続の必要最小限の責務�
 Brave 検索と任意 runtime 管理は用途側に置く。model・推論レベルは明示し、media 非対応を成功扱いしない。
 画像と動画の実能力、固定応答、実 model の成果物品質を別々に確認する。
 
-この判断は ADR 0004／0007／0009 の provider 選択、ADR 0008 の具体的な identity/cache 形式、および従来の ADR 0010 を置き換える。
-Python との並行比較、旧 config 変換、旧 cache 読込、厳密な score/ID/pixel 一致、切戻し環境は要求しない。
-Python 実装・依存・専用テスト/CI・旧 pipeline・比較文書/素材は必要がなくなった段階で削除する。
-履歴保持のためのファイルは残さず、現在の Rust テストに使う入力の事実と必要な文書だけを採用する。
-Git 履歴や過去 Issue、利用者の入力・設定・出力・cache の削除は行わない。
+現在の実装・テストに必要な入力の事実と文書だけを採用する。
+利用者の入力・設定・出力・cache は削除しない。
 
 Rust は新しい config と cache で開始する。所有権を証明できない出力は保持して別の空出力先を案内する。
 staging と完了検証で既存成果物を保護し、強制 kill や filesystem に関する保証は実測の範囲に限る。

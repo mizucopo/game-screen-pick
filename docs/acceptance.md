@@ -29,6 +29,9 @@ game-screen-pick --config config.toml --count 2 \
 - 終了 code は `0`＝全成果物の公開・検証完了（または help/version）、`2`＝引数・設定・入力の誤り、
   `1`＝処理失敗・候補不足・非対応経路、`130`＝通常の SIGINT 中断。
   中断以外の signal は成功扱いしない。未実装経路は `1` で理由を示す。
+- 基盤の診断 command `validate` は外部呼出・書込なしの事前確認、`extract` は元 frame/context と
+  出典・要求／実時刻 JSON のみを新規 directory に作る。各診断の完了は `0` とし、
+  選定・AI・cache・成果物セットの完成を意味しない。通常選定は未実装部分があれば `1` で停止する。
 - stderr の進捗は方式、工程、完了／予定数、追補理由、cache 再利用、失敗と復旧方法が分かること。
   動的文字列を安全に表示し、認証値・HTTP header/body の秘密情報を表示しない。
 

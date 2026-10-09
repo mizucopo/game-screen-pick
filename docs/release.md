@@ -7,6 +7,7 @@
 - 標準 GITHUB_TOKEN に contents:write と pull-requests:read を許す。main とタグへの直接 push を許す repository 設定を使う。force push は不要。PR 必須等の設定で拒否される場合は設定を確認し、workflow 側で保護を回避しない。
 - Docker Hub は DOCKERHUB_TOKEN、ECR は AWS_ROLE_ARN と OIDC の権限を設定する。採番時にも公開先を照会するため、image の照会権限が必要。
 - version source、lockfile、公開タグ・画像は .github/release.json の version と publication に宣言する。専用 App、署名鍵、CI 登録、初回移行 helper は不要。
+- この CLI の version source は `Cargo.toml` の `package.version`、lockfile は `Cargo.lock` の `game-screen-pick` package とする。`project_version` は Copier の初期値であり、採番の正本ではない。PR・公開前の検証は FFmpeg／ffprobe を用意して `sh tests/check.sh` を実行する。各 platform の配布 archive は #344 の担当範囲とする。
 
 ## 通常の流れ
 
@@ -34,7 +35,11 @@ Git tag、draft を含む Release、設定した image tag の未使用を確認
 
 後続 job は採番 commit の SHA を checkout する。GITHUB_SHA は元イベントの SHA のままなので、公開対象には使わない。タグ作成による別 workflow の起動を待たず、同じ run の後続 job で完結させる。
 
-全検証・配布物が完成してから Release を公開する。GitHub Latest・Docker latest は最新の完成済み Release にだけ更新する。Tauri の prerelease は Latest と Tap 通知の対象外。
+全検証・配布物が完成してから Release を公開する。GitHub Latest・Docker latest は最新の完成済み安定版 Release にだけ更新する。汎用 GitHub Release、Docker、Docker project、Tauri の prerelease は Latest の照会・昇格対象外で、初回公開でも Latest を変更しない。過去に通常 Release として公開された prerelease も採番記録から除外する。Tauri の prerelease は Tap 通知の対象外。
+
+Release の分類は共通公開計画で採番済み VERSION と方式から決める。build metadata は分類に影響しない。通常 SemVer の 1.2.3-r1 は prerelease。upstream-revision の上流 VERSION が 1.2.3 なら公開 tag 1.2.3-r1 は通常 Release・Latest 候補で、上流 VERSION が 1.2.3-rc.1 なら prerelease。公開 tag の revision suffix だけで分類しない。
+
+Docker image tag は展開後の `+` を `_` に変換する（例 `1.2.3+build.1` → `1.2.3_build.1`）。SemVer に `_` は使えないため prerelease の `-` と衝突せず、Git version・tag・Release 名は元の値を保持する。有効な既存 image tag は変わらない。変換後にも tag の長さ・形式・使用済み状態・所有者を検証する。
 
 ## 失敗と復旧
 

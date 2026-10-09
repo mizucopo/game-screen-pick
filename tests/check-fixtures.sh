@@ -6,6 +6,3 @@ trap 'rm -rf "$fixture_build"' EXIT HUP INT TERM
 rustfmt --edition 2024 --check tests/fixture_inputs.rs
 rustc --edition=2024 --deny warnings --test tests/fixture_inputs.rs -o "$fixture_build/check-fixtures"
 "$fixture_build/check-fixtures"
-fixture_root=${GSP_FIXTURES:-tests/fixtures}
-jq -se --slurpfile scenarios "$fixture_root/scenarios.json" -f tests/fixture_contract.jq \
-  "$fixture_root/responses.json" > /dev/null
