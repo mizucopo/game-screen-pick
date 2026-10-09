@@ -1,0 +1,5 @@
+# file width height recipe left right
+near-black.png	64	32	half	3	9
+near-white.png	64	32	half	246	252
+low-contrast.png	64	32	half	125	128
+rgb-grid.png	33	19	rgb-grid	0	0

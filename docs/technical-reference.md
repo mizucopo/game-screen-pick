@@ -367,7 +367,6 @@ Pull Requestでversionを採番せず、公開する場合はリリース分類�
 分類と公開の選択は[CONTRIBUTING.md](../CONTRIBUTING.md#リリース分類)、
 採番・公開の設定と復旧は[docs/release.md](release.md)を参照してください。
 
-Rust移行の現行契約、比較fixture、同等性gateは
-[Rust移行の比較契約](rust-migration-contract.md)を参照してください。
-段階的な切替とcache移行・rollbackの判断は
-[ADR 0010](adr/0010-migrate-video-cli-with-contract-gates.md)に記録します。
+Rust CLI の成果物・検証素材・担当境界は
+[受入基準](acceptance.md) と [ADR 0010](adr/0010-rust-product-boundaries.md) に従います。
+この文書の既存 CLI の設定・内部形式・選定の数値は Rust の実装条件にはしません。

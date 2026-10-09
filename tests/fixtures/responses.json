@@ -1,0 +1,36 @@
+{
+  "game_context": "公開合成素材。異なるブロック模様を探索・戦闘・会話に見立て、明瞭で多様な場面を選ぶ。黒画面は選ばない。",
+  "candidates": [
+    {"id": "A01", "source": "01-blocks.mkv", "time_seconds": 0.5, "context_seconds": [0.25, 0.5, 0.75]},
+    {"id": "A02", "source": "01-blocks.mkv", "time_seconds": 2.5, "context_seconds": [2.25, 2.5, 2.75]},
+    {"id": "A03", "source": "01-blocks.mkv", "time_seconds": 4.5, "context_seconds": [4.25, 4.5, 4.75]},
+    {"id": "B01", "source": "02-mirrored.mkv", "time_seconds": 1.5, "context_seconds": [1.25, 1.5, 1.75]}
+  ],
+  "primary": {
+    "frames": [
+      {"id": "A01", "blog_score": 80, "transition": false, "scene": "探索", "reason": "異なるブロックが明瞭"},
+      {"id": "A02", "blog_score": 0, "transition": true, "scene": "暗転", "reason": "黒画面"},
+      {"id": "A03", "blog_score": 80, "transition": false, "scene": "会話", "reason": "別の模様が明瞭。同点の順序検証に使う"},
+      {"id": "B01", "blog_score": 85, "transition": false, "scene": "戦闘", "reason": "別入力の異なる模様"}
+    ]
+  },
+  "secondary": {
+    "frames": [
+      {"id": "A01", "blog_score": 80, "transition": false, "scene": "探索", "reason": "前後が同じ安定画面"},
+      {"id": "A03", "blog_score": 80, "transition": false, "scene": "会話", "reason": "前後が同じ安定画面"},
+      {"id": "B01", "blog_score": 85, "transition": false, "scene": "戦闘", "reason": "前後が同じ安定画面"}
+    ]
+  },
+  "semantic_video": {
+    "chunk_seconds": [0, 6],
+    "events": [
+      {"start_seconds": 0, "end_seconds": 1, "representative_seconds": 0.5, "importance": 80, "scene": "探索", "reason": "先頭のブロック模様"},
+      {"start_seconds": 4, "end_seconds": 5, "representative_seconds": 4.5, "importance": 80, "scene": "会話", "reason": "後半の異なるブロック模様"}
+    ],
+    "transitions": [{"start_seconds": 2, "end_seconds": 3, "reason": "黒画面"}]
+  },
+  "invalid_response_mutations": [
+    "malformed_json", "unknown_id", "missing_id", "duplicate_id", "non_finite_score",
+    "timestamp_outside_chunk", "reversed_event_interval", "refusal", "truncated_response", "unsupported_media"
+  ]
+}

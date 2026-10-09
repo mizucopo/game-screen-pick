@@ -1,0 +1,35 @@
+{
+  "matrix": {
+    "methods": ["sampled_frames", "semantic_video"],
+    "inputs": [["01-blocks.mkv"], ["01-blocks.mkv", "02-mirrored.mkv"]],
+    "contexts": ["direct", "generated_mock"],
+    "runs": ["cold", "warm", "interrupted_after_first_batch_or_chunk"]
+  },
+  "count": 2,
+  "artifact_expectations": {
+    "image_count": 2,
+    "dimensions": [160, 96],
+    "black_interval_excluded": [2, 3],
+    "source_and_actual_pts_match": true,
+    "sheet_and_report_rank_match": true,
+    "warm_calls": {"inference": 0, "search": 0, "runtime": 0},
+    "resume": "Reuse every committed batch/chunk; run only missing work; match the cold Rust selection."
+  },
+  "cases": [
+    {"name": "insufficient_candidates", "setup": "Request 999 images from the tiny corpus.", "expect": "Fail with a shortage reason; no completed run."},
+    {"name": "corrupt_payload", "setup": "After a cold Rust run, truncate one committed assessment JSON.", "expect": "Reject that hit and recompute its affected dependencies; preserve unrelated checkpoints."},
+    {"name": "missing_media", "setup": "Remove one cached candidate image after a cold Rust run.", "expect": "Detect the missing image before use; regenerate only necessary work."},
+    {"name": "wrong_reference", "setup": "Change one Rust checkpoint reference to the other source at the same PTS.", "expect": "Reject mismatched content/metadata; never output the wrong source."},
+    {"name": "input_added_moved_count_changed", "setup": "Add the second source, relocate the input directory, then change count separately.", "expect": "Reuse each unaffected phase; record recalculation and call counts for each change."},
+    {"name": "inference_changed", "setup": "Change backend, model, inference level, prompt/schema, media processing or revision separately.", "expect": "Invalidate dependent results without storing credentials."},
+    {"name": "unowned_output", "setup": "Place notes.txt and an unknown report in the output directory.", "expect": "Reject reuse, preserve every byte, and suggest an empty output directory."},
+    {"name": "cache_removed", "setup": "Remove the Rust cache after a completed run; leave output intact.", "expect": "Validate ownership from the Rust report and output set without harming images."},
+    {"name": "unsafe_paths", "setup": "Use symlinks, special files, path traversal or overlapping input/cache/output paths.", "expect": "Reject unsafe access without changing targets."},
+    {"name": "concurrent_run", "setup": "Run two processes against the same cache or output.", "expect": "One owner; the other reports contention and changes nothing."},
+    {"name": "interrupt", "setup": "Send SIGINT after a committed batch/chunk and separately during extraction.", "expect": "Exit 130; clean temporary files/children; preserve committed work and previous output."},
+    {"name": "staging_failure", "setup": "Inject a disk/write failure before publishing a new output set.", "expect": "Fail and preserve the previous completed output byte for byte."},
+    {"name": "publication_failure", "setup": "Interrupt after the first publication write.", "expect": "Detect incomplete/mixed output; recover without reporting success."},
+    {"name": "http_failure", "setup": "Inject timeout, auth failure, cross-origin redirect or invalid response through mock HTTP.", "expect": "Finite failure, secret-free diagnostics, preserved completed output."},
+    {"name": "runtime_failure", "setup": "Fail startup, interrupt inference, then fail cleanup separately.", "expect": "Protect pre-existing servers; clean only an owned session; retain the primary error."}
+  ]
+}

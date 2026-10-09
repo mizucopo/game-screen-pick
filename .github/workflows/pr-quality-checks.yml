@@ -37,3 +37,7 @@ jobs:
       - name: Run quality gate
         timeout-minutes: 15
         run: uv run task check
+
+      - name: Verify Rust input fixtures
+        timeout-minutes: 5
+        run: sh tests/check-fixtures.sh

@@ -134,3 +134,6 @@ recordings-selected/
 
 CLI option、設定項目、対応動画、Game Context provider、cache、選定処理、
 release規約は[技術リファレンス](docs/technical-reference.md)を参照してください。
+
+Rust CLI の成果物と担当境界は [受入基準](docs/acceptance.md)、検証に使う入力の事実と更新手順は
+[検証素材](tests/fixtures/README.md) にまとめています。
