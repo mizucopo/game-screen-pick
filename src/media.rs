@@ -354,11 +354,15 @@ impl MediaTools {
             "context interval must be finite and positive"
         );
         Ok([
-            self.extract(video, (seconds - delta_seconds).max(0.0), cancelled)?,
+            self.extract(
+                video,
+                probe_seconds((seconds - delta_seconds).max(0.0)),
+                cancelled,
+            )?,
             self.extract(video, seconds, cancelled)?,
             self.extract(
                 video,
-                (seconds + delta_seconds).min(video.duration_seconds),
+                probe_seconds((seconds + delta_seconds).min(video.duration_seconds)),
                 cancelled,
             )?,
         ])
@@ -488,7 +492,7 @@ fn dimension(value: &Value, name: &str) -> Result<u32> {
 }
 
 // FFprobe's *_time fields use microsecond precision. Keep subtraction and
-// duration arithmetic on that same grid so a literal PTS remains an endpoint,
+// duration/context arithmetic on that same grid so a literal PTS remains an endpoint,
 // rather than falling just after it through binary floating-point roundoff.
 fn probe_seconds(seconds: f64) -> f64 {
     (seconds * 1_000_000.0).round() / 1_000_000.0

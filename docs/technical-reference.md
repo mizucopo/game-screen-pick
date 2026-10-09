@@ -25,7 +25,7 @@ stream metadata は1 MiB、frame metadata は64 MiBを上限とし、超過を�
 現在の cold probe は全 frame metadata を読み、抽出は decode 順序で原画像を確定します。
 長い録画の probe/反復抽出コスト削減と warm 再利用は後続の cache/選定工程で扱います。
 時刻は最初の有効 PTS からの動画内秒数です。
-PTS 差分と duration は FFprobe の microsecond 精度へ丸め、小数 offset の引算誤差で端点を飛ばさないようにします。
+PTS 差分、duration、前後 context の計算時刻は FFprobe の microsecond 精度へ丸め、小数の加減算誤差で端点を飛ばさないようにします。
 抽出は要求時刻以降の最初の frame、最終端点は最後の frame とし、範囲外・非有限値は拒否します。
 FFmpeg の表示回転を適用した full-resolution PNG を抽出し、要求／実時刻を区別します。
 前後 context は指定 delta から両端点へ clip し、中央の source/stream と一致させます。

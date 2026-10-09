@@ -14,7 +14,7 @@ use crate::{
 };
 
 #[derive(Parser)]
-#[command(version, about = "Pick blog images from game recordings", color = ColorChoice::Never,
+#[command(version, bin_name = "game-screen-pick", about = "Pick blog images from game recordings", color = ColorChoice::Never,
     subcommand_negates_reqs = true, args_conflicts_with_subcommands = true,
     after_help = "Selection is not implemented yet. Use validate for input/config checks or extract for an original full-resolution frame.")]
 pub struct Cli {

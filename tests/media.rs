@@ -356,6 +356,18 @@ fn chunk_preserves_submillisecond_vfr_pts_and_each_original_display_interval() {
             expected([0, 1, 3, 5][index], false, false)
         );
     }
+    let context = tools
+        .extract_context(&video, 0.030011, 0.010006, &cancelled)
+        .unwrap();
+    assert_eq!(context[0].requested_seconds, 0.020005);
+    assert_eq!(context[0].actual_seconds, 0.020005);
+    assert_eq!(pixels(&context[0].path()).2, expected(3, false, false));
+    let context = tools
+        .extract_context(&video, 0.010001, 0.010004, &cancelled)
+        .unwrap();
+    assert_eq!(context[2].requested_seconds, 0.020005);
+    assert_eq!(context[2].actual_seconds, 0.020005);
+    assert_eq!(pixels(&context[2].path()).2, expected(3, false, false));
     let chunk = tools
         .extract_chunk(&video, video.frames[1].seconds, 0.03, &cancelled)
         .unwrap();

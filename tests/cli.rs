@@ -117,6 +117,40 @@ fn parser_errors_escape_dynamic_controls_and_keep_usage_readable() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn invocation_name_cannot_inject_controls_into_help_or_usage() {
+    use std::os::unix::process::CommandExt;
+    let directory = sandbox();
+    for name in [
+        "renamed\nerror: forged",
+        "renamed\rforged",
+        "renamed\u{009b}2Jforged",
+    ] {
+        for args in [vec!["--help"], vec!["--bad"], vec![]] {
+            let output = Command::new(BINARY)
+                .current_dir(directory.path())
+                .arg0(name)
+                .args(args)
+                .output()
+                .unwrap();
+            let text = format!(
+                "{}{}",
+                String::from_utf8(output.stdout).unwrap(),
+                String::from_utf8(output.stderr).unwrap()
+            );
+            assert!(!text.contains(name), "unsafe invocation name: {text:?}");
+            assert!(!text.contains("\nerror: forged"));
+            assert!(
+                !text
+                    .chars()
+                    .any(|character| character.is_control() && character != '\n')
+            );
+            assert!(text.contains("game-screen-pick"));
+        }
+    }
+}
+
 #[test]
 fn argument_requirements_and_boundaries_are_enforced() {
     let directory = sandbox();
