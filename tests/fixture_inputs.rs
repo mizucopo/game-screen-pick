@@ -405,6 +405,18 @@ fn known_times_distinguish_sources_and_black_interval() {
     );
 }
 
+#[test]
+fn fixed_responses_match_the_fixture_contract() {
+    let result = Command::new("jq")
+        .args(["-se", "--slurpfile", "scenarios"])
+        .arg(root().join("scenarios.json"))
+        .args(["-f", "tests/fixture_contract.jq"])
+        .arg(root().join("responses.json"))
+        .output()
+        .expect("jq must be installed");
+    assert!(result.status.success(), "fixed response contract failed");
+}
+
 #[cfg(not(test))]
 fn encode(path: &Path, input_args: &[&str], output_args: &[&str], pixels: &[u8]) {
     use std::io::Write;

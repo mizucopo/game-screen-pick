@@ -51,6 +51,8 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      is_prerelease: ${{ steps.metadata.outputs.is_prerelease }}
     env:
       RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
     steps:
@@ -67,23 +69,24 @@ jobs:
           export RELEASE_PLAN_OUTPUT="$RUNNER_TEMP/release-plan.json"
           printf 'RELEASE_PLAN_OUTPUT=%s\n' "$RELEASE_PLAN_OUTPUT" >> "$GITHUB_ENV"
           python3 -I .github/scripts/release.py plan
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version-file: .python-version
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Install Rust toolchain
+        run: rustup show
       - name: Install video tools
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           ffmpeg -version
           ffprobe -version
-      - name: Validate Python release
+      - name: Validate Rust release
+        timeout-minutes: 15
         run: |
-          uv sync --locked
-          uv run task check
-      - name: Verify Rust input fixtures
-        run: sh tests/check-fixtures.sh
+          sh tests/check.sh
+          cargo build --release --locked
+      - name: Classify release version
+        id: metadata
+        run: |
+          is_prerelease="$(jq -er '.publication.is_prerelease | select(type == "boolean") | tostring' "$RELEASE_PLAN_OUTPUT")"
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
       - name: Inspect release state
         id: release-state
         env:
@@ -229,16 +232,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.release_tag }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          IS_PRERELEASE: ${{ steps.metadata.outputs.is_prerelease }}
         run: |
           release_args=(--verify-tag --latest=false --title "$TAG" --generate-notes)
-          if [[ "${VERSION%%+*}" == *-* ]]; then
+          if [ "$IS_PRERELEASE" = "true" ]; then
             release_args+=(--prerelease)
           fi
           gh release create "$TAG" "${release_args[@]}"
 
   promote-latest:
     needs: [prepare, release]
+    if: needs.release.outputs.is_prerelease == 'false'
     runs-on: ubuntu-latest
     env:
       RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
@@ -263,13 +267,7 @@ jobs:
         id: latest-state
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          if [[ "${VERSION%%+*}" == *-* ]]; then
-            echo "promote_latest=false" >> "$GITHUB_OUTPUT"
-          else
-            python3 -I .github/scripts/release.py latest
-          fi
+        run: python3 -I .github/scripts/release.py latest
       - name: Mark GitHub Release as latest
         if: steps.latest-state.outputs.promote_latest == 'true'
         env:
