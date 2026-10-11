@@ -500,6 +500,7 @@ fn alternative_subset(
     let mut chosen: Vec<usize> = Vec::new();
     let mut best = previous.to_vec();
     let mut best_coverage = subset_coverage(&best, candidates, scene_names);
+    let mut updated = false;
     let mut cursors = vec![0];
     let mut special_count = 0;
     let mut comparisons = BTreeMap::new();
@@ -510,6 +511,7 @@ fn alternative_subset(
             if chosen.len() > best.len() || coverage > best_coverage {
                 best.clone_from(&chosen);
                 best_coverage = coverage;
+                updated = true;
             }
         }
         if chosen.len() < count
@@ -534,7 +536,7 @@ fn alternative_subset(
                     conflict
                 } else {
                     if comparisons.len() == MAX_CANDIDATES {
-                        return (best.len() > previous.len()).then_some(best);
+                        return updated.then_some(best);
                     }
                     let conflict = candidates[index]
                         .quality
@@ -559,5 +561,5 @@ fn alternative_subset(
             special_count -= usize::from(ratings[index].special);
         }
     }
-    (best.len() > previous.len()).then_some(best)
+    updated.then_some(best)
 }

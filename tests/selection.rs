@@ -324,29 +324,208 @@ fn duplicate_reselection_preserves_source_scene_and_time_diversity() {
             }
             _ => unreachable!(),
         }
-        let selected = select(&frames, &ratings, 3).unwrap();
-        let ids = selected
-            .indices
-            .iter()
-            .map(|&index| frames[index].id.clone())
-            .collect::<Vec<_>>();
-        if !ids.iter().any(|id| id == "T") {
-            lost_diversity.push((dimension, ids.clone()));
-        }
-        assert!(!ids.iter().any(|id| id == "A"));
-        frames.reverse();
-        ratings.rotate_left(1);
-        assert_eq!(
-            select(&frames, &ratings, 3)
-                .unwrap()
+        for count in [3, 5] {
+            let selected = select_up_to(&frames, &ratings, count).unwrap();
+            assert_eq!(selected.indices.len(), count.min(4));
+            let ids = selected
                 .indices
                 .iter()
                 .map(|&index| frames[index].id.clone())
-                .collect::<Vec<_>>(),
-            ids,
-            "{dimension} repair changed with callback order"
-        );
+                .collect::<Vec<_>>();
+            if !ids.iter().any(|id| id == "T") {
+                lost_diversity.push((dimension, count, ids.clone()));
+            }
+            assert!(!ids.iter().any(|id| id == "A"));
+            if count == 5 {
+                assert!(
+                    select(&frames, &ratings, count)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("requested 5, found 4")
+                );
+            }
+            frames.reverse();
+            ratings.rotate_left(1);
+            assert_eq!(
+                select_up_to(&frames, &ratings, count)
+                    .unwrap()
+                    .indices
+                    .iter()
+                    .map(|&index| frames[index].id.clone())
+                    .collect::<Vec<_>>(),
+                ids,
+                "{dimension} repair changed with callback order"
+            );
+        }
     }
+    assert!(
+        lost_diversity.is_empty(),
+        "lost diversity: {lost_diversity:?}"
+    );
+}
+
+#[test]
+fn partial_duplicate_reselection_returns_same_cardinality_coverage_improvements() {
+    let directory = tempfile::tempdir().unwrap();
+    let (template, _) = candidates(directory.path(), 1);
+    let original = image::open(&template[0].image).unwrap().to_rgb8();
+    let mut frames = Vec::new();
+    let mut ratings = Vec::new();
+    for (index, (id, red, green, score)) in [
+        ("A", 0, 0, 100.0),
+        ("D", 18, 18, 99.0),
+        ("B", 0, 18, 90.0),
+        ("T", 18, 0, 80.0),
+        ("E", 9, 9, 70.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut image = original.clone();
+        for pixel in image.pixels_mut() {
+            pixel[0] = (i16::from(pixel[0]) + red).clamp(0, 255) as u8;
+            pixel[1] = (i16::from(pixel[1]) + green).clamp(0, 255) as u8;
+        }
+        let mut frame = template[0].clone();
+        frame.id = id.into();
+        frame.image = directory.path().join(format!("{id}.png"));
+        image.save(&frame.image).unwrap();
+        frame.quality = analyze(&frame.image).unwrap();
+        frame.source = "X.mkv".into();
+        frame.actual_seconds = index as f64;
+        frame.requested_seconds = index as f64;
+        frames.push(frame);
+        ratings.push(Assessment {
+            id: id.into(),
+            blog_score: score,
+            transition: false,
+            scene: "探索".into(),
+            reason: "鮮明な通常進行の実画像".into(),
+            special: false,
+        });
+    }
+    assert!(frames.iter().all(|frame| frame.quality.rejection.is_none()));
+    for left in 0..frames.len() {
+        for right in left + 1..frames.len() {
+            assert_eq!(
+                frames[left].quality.near_duplicate(&frames[right].quality),
+                !matches!((left, right), (0, 1) | (2, 3))
+            );
+        }
+    }
+    // A/D and B/T are the only feasible pairs. Greedy A/D has one source,
+    // scene and time band; B/T improves coverage without adding an image.
+    let mut lost_diversity = Vec::new();
+    for dimension in ["source", "scene", "time"] {
+        for all_special in [false, true] {
+            let mut frames = frames.clone();
+            let mut ratings = ratings.clone();
+            match dimension {
+                "source" => frames[3].source = "Y.mkv".into(),
+                "scene" => ratings[3].scene = "戦闘".into(),
+                "time" => {
+                    frames[3].actual_seconds = 29.0;
+                    frames[3].requested_seconds = 29.0;
+                }
+                _ => unreachable!(),
+            }
+            for rating in &mut ratings {
+                rating.special = all_special;
+            }
+            for count in [3, 5] {
+                let selected = select_up_to(&frames, &ratings, count).unwrap();
+                assert_eq!(selected.indices.len(), 2);
+                let ids = selected
+                    .indices
+                    .iter()
+                    .map(|&index| frames[index].id.clone())
+                    .collect::<Vec<_>>();
+                if !ids.iter().any(|id| id == "T") {
+                    lost_diversity.push((dimension, count, all_special, ids.clone()));
+                }
+                assert_eq!(selected.exclusions.len(), 3);
+                assert!(selected.exclusions.iter().all(|item| {
+                    !ids.contains(&item.id) && item.reason == "near duplicate of selected image"
+                }));
+                assert!(
+                    select(&frames, &ratings, count)
+                        .unwrap_err()
+                        .to_string()
+                        .contains(&format!("requested {count}, found 2"))
+                );
+                frames.reverse();
+                ratings.rotate_left(1);
+                assert_eq!(
+                    select_up_to(&frames, &ratings, count)
+                        .unwrap()
+                        .indices
+                        .iter()
+                        .map(|&index| frames[index].id.clone())
+                        .collect::<Vec<_>>(),
+                    ids
+                );
+            }
+        }
+    }
+    // A repair must still keep both normal images when T is special.
+    ratings[3].special = true;
+    frames[3].source = "Y.mkv".into();
+    assert_eq!(select_up_to(&frames, &ratings, 5).unwrap().indices, [0, 1]);
+
+    // An independent first choice leaves the same pair repair necessary.
+    // Repeated T images exhaust the distance cache after B/T improves coverage.
+    let (extras, mut extra_ratings) = candidates(directory.path(), 2);
+    let mut independent = extras[1].clone();
+    independent.id = "Z".into();
+    independent.source = "Z.mkv".into();
+    assert!(
+        frames
+            .iter()
+            .all(|frame| { !independent.quality.near_duplicate(&frame.quality) })
+    );
+    for rating in &mut ratings {
+        rating.special = false;
+        rating.blog_score -= 20.0;
+    }
+    frames.push(independent);
+    extra_ratings[1].id = "Z".into();
+    extra_ratings[1].blog_score = 100.0;
+    ratings.push(extra_ratings[1].clone());
+    assert_eq!(select(&frames, &ratings, 1).unwrap().indices, [5]);
+    for index in 0..900 {
+        let mut frame = frames[3].clone();
+        frame.id = format!("Q{index:04}");
+        let mut rating = ratings[3].clone();
+        rating.id = frame.id.clone();
+        rating.blog_score = 30.0;
+        frames.push(frame);
+        ratings.push(rating);
+    }
+    let selected = select_up_to(&frames, &ratings, 5).unwrap();
+    let ids = selected
+        .indices
+        .iter()
+        .map(|&index| frames[index].id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ids.len(), 3);
+    if !ids.iter().any(|id| id == "T") {
+        lost_diversity.push(("source/distance-budget", 5, false, ids.clone()));
+    }
+    assert_eq!(selected.exclusions.len(), frames.len() - 3);
+    assert!(selected.exclusions.iter().all(|item| {
+        !ids.contains(&item.id) && item.reason == "near duplicate of selected image"
+    }));
+    frames.reverse();
+    ratings.rotate_left(1);
+    assert_eq!(
+        select_up_to(&frames, &ratings, 5)
+            .unwrap()
+            .indices
+            .iter()
+            .map(|&index| frames[index].id.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
     assert!(
         lost_diversity.is_empty(),
         "lost diversity: {lost_diversity:?}"
