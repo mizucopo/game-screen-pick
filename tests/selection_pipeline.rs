@@ -9,7 +9,7 @@ use game_screen_pick::pipeline::{
     AssessmentBatch, AssessmentPhase, ModelConditions, PipelineOptions, run,
 };
 use game_screen_pick::selection::{Assessment, SemanticEvent};
-use image::RgbImage;
+use image::{Pixel, RgbImage};
 use serde_json::Value;
 
 fn fixture(name: &str) -> PathBuf {
@@ -308,6 +308,19 @@ fn retain_qa(workspace: &Path, case: &str) {
     }
 }
 
+fn retain_qa_batch(batch: &AssessmentBatch<'_>, case: &str) {
+    let Some(root) = std::env::var_os("GSP_QA_DIR") else {
+        return;
+    };
+    let destination = PathBuf::from(root)
+        .join(case)
+        .join(format!("{:?}-{}", batch.phase, batch.candidates[0].id));
+    fs::create_dir_all(&destination).unwrap();
+    for sheet in &batch.sheets {
+        fs::copy(sheet, destination.join(sheet.file_name().unwrap())).unwrap();
+    }
+}
+
 #[test]
 fn both_methods_single_and_multiple_inputs_produce_real_ranked_artifacts() {
     let tools = MediaTools::default();
@@ -315,23 +328,25 @@ fn both_methods_single_and_multiple_inputs_produce_real_ranked_artifacts() {
         for multiple in [false, true] {
             let options = options(2, semantic, multiple);
             let videos = probe(multiple);
+            let case = format!(
+                "{}-{}",
+                if semantic { "semantic" } else { "sampled" },
+                if multiple { "multiple" } else { "single" }
+            );
             let artifacts = run(
                 &tools,
                 &videos,
                 &options,
                 &AtomicBool::new(false),
-                fixed_assessments,
+                |batch| {
+                    let response = fixed_assessments(batch)?;
+                    retain_qa_batch(batch, &case);
+                    Ok(response)
+                },
             )
             .unwrap();
             let path = artifacts.path();
-            retain_qa(
-                path.parent().unwrap(),
-                &format!(
-                    "{}-{}",
-                    if semantic { "semantic" } else { "sampled" },
-                    if multiple { "multiple" } else { "single" }
-                ),
-            );
+            retain_qa(path.parent().unwrap(), &case);
             let report: Value =
                 serde_json::from_slice(&fs::read(path.join("report.json")).unwrap()).unwrap();
             assert_eq!(
@@ -925,4 +940,249 @@ fn semantic_replenishment_is_identical_for_permuted_equal_width_windows() {
         results[0], results[1],
         "event permutation must preserve actual replenishment work, selection and report"
     );
+}
+
+#[test]
+fn assessment_scratch_exists_only_during_its_callback() {
+    let mut options = options(1, false, false);
+    options.samples_per_video = 1;
+    let mut previous = Vec::<PathBuf>::new();
+    let artifacts = run(
+        &MediaTools::default(),
+        &probe(false),
+        &options,
+        &AtomicBool::new(false),
+        |batch| {
+            assert!(
+                previous.iter().all(|path| !path.exists()),
+                "completed assessment images and sheets must be removed before the next callback"
+            );
+            let mut response = fixed_assessments(batch)?;
+            previous = batch.sheets.clone();
+            previous.extend(
+                batch
+                    .contexts
+                    .iter()
+                    .flat_map(|context| context.frames.iter().map(|frame| frame.image.clone())),
+            );
+            if batch.phase == AssessmentPhase::Secondary {
+                for assessment in &mut response {
+                    if batch.candidates.iter().any(|candidate| {
+                        candidate.id == assessment.id && candidate.actual_seconds == 3.0
+                    }) {
+                        assessment.transition = true;
+                    }
+                }
+            }
+            Ok(response)
+        },
+    )
+    .unwrap();
+    assert!(previous.iter().all(|path| !path.exists()));
+    let root_entries = fs::read_dir(artifacts.path().parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        root_entries,
+        ["artifacts"],
+        "a completed artifact must not retain candidates, context PNGs or assessment sheets"
+    );
+}
+
+#[test]
+fn actual_pts_survives_a_narrow_event_when_another_event_contains_it() {
+    let mut options = options(1, true, false);
+    let event = |start, end, representative, importance| SemanticEvent {
+        source: "01-blocks.mkv".to_owned(),
+        start_seconds: start,
+        end_seconds: end,
+        representative_seconds: representative,
+        importance,
+        scene: "探索".to_owned(),
+        reason: "実 PTS を含む区間の根拠".to_owned(),
+    };
+    options.semantic_events = Some(vec![
+        event(0.05, 0.15, 0.1, 99.0),
+        event(0.25, 0.5, 0.25, 60.0),
+    ]);
+    let artifacts = run(
+        &MediaTools::default(),
+        &probe(false),
+        &options,
+        &AtomicBool::new(false),
+        |batch| {
+            verify_batch(batch);
+            Ok(batch
+                .candidates
+                .iter()
+                .map(|candidate| Assessment {
+                    id: candidate.id.clone(),
+                    blog_score: 80.0,
+                    transition: batch.phase == AssessmentPhase::Secondary
+                        && candidate.actual_seconds != 0.25,
+                    scene: "探索".to_owned(),
+                    reason: "既知の画像と実 PTS を照合".to_owned(),
+                    special: false,
+                })
+                .collect())
+        },
+    )
+    .unwrap();
+    let selected = &artifacts.report().selected[0];
+    assert_eq!(selected.actual_seconds, 0.25);
+    assert!(selected.requested_seconds < 0.15);
+    let event = selected.event.as_ref().unwrap();
+    assert_eq!(
+        (event.start_seconds, event.end_seconds, event.importance),
+        (0.25, 0.5, 60.0)
+    );
+}
+
+#[test]
+fn terminal_primary_rejections_release_their_images_and_remain_explained() {
+    let mut options = options(1, false, false);
+    options.samples_per_video = 1;
+    let mut rejected_images = Vec::<PathBuf>::new();
+    let artifacts = run(
+        &MediaTools::default(),
+        &probe(false),
+        &options,
+        &AtomicBool::new(false),
+        |batch| {
+            assert!(
+                rejected_images.iter().all(|path| !path.exists()),
+                "terminal primary images must not remain as pending secondary work"
+            );
+            let mut response = fixed_assessments(batch)?;
+            for assessment in &mut response {
+                let candidate = batch
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.id == assessment.id)
+                    .unwrap();
+                if batch.phase == AssessmentPhase::Primary
+                    && [1.5, 3.0].contains(&candidate.actual_seconds)
+                {
+                    rejected_images.push(candidate.image.clone());
+                    assessment.transition = candidate.actual_seconds == 3.0;
+                    assessment.blog_score = 10.0;
+                }
+                if batch.phase == AssessmentPhase::Secondary {
+                    assert!(![1.5, 3.0].contains(&candidate.actual_seconds));
+                }
+            }
+            Ok(response)
+        },
+    )
+    .unwrap();
+    assert_eq!(rejected_images.len(), 2);
+    for reason in [
+        "primary: transition/context rejection",
+        "primary: low blog usefulness",
+    ] {
+        assert!(
+            artifacts
+                .report()
+                .exclusions
+                .iter()
+                .any(|exclusion| exclusion.reason.contains(reason))
+        );
+    }
+}
+
+#[test]
+fn report_exclusions_describe_the_final_winners_after_replenishment() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("rank-switch.mkv");
+    let center = expected("01-blocks.mkv", 0.0);
+    let shift = |delta: i16| {
+        RgbImage::from_fn(center.width(), center.height(), |x, y| {
+            center
+                .get_pixel(x, y)
+                .map(|value| (i16::from(value) + delta) as u8)
+        })
+    };
+    let images = [
+        center.clone(),
+        shift(-6),
+        expected("01-blocks.mkv", 3.0),
+        shift(6),
+        RgbImage::new(160, 96),
+    ];
+    for (index, image) in images.iter().enumerate() {
+        image
+            .save(directory.path().join(format!("frame-{index:02}.png")))
+            .unwrap();
+    }
+    let generated = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-framerate", "4", "-i"])
+        .arg(directory.path().join("frame-%02d.png"))
+        .args(["-c:v", "ffv1", "-pix_fmt", "bgr0"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let tools = MediaTools::default();
+    let cancelled = AtomicBool::new(false);
+    let videos = [tools.probe(&source, &cancelled).unwrap()];
+    let mut options = options(2, false, false);
+    options.samples_per_video = 3;
+    let artifacts = run(&tools, &videos, &options, &cancelled, |batch| {
+        for candidate in batch.candidates {
+            assert_eq!(
+                image::open(&candidate.image).unwrap().to_rgb8(),
+                images[(candidate.actual_seconds * 4.0) as usize]
+            );
+        }
+        for context in &batch.contexts {
+            for frame in &context.frames {
+                assert_eq!(
+                    image::open(&frame.image).unwrap().to_rgb8(),
+                    images[(frame.actual_seconds * 4.0) as usize]
+                );
+            }
+        }
+        Ok(batch
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let ordinal = (candidate.actual_seconds * 4.0) as usize;
+                Assessment {
+                    id: candidate.id.clone(),
+                    blog_score: [90.0, 100.0, 95.0, 80.0, 0.0][ordinal],
+                    transition: false,
+                    scene: if ordinal == 2 { "会話" } else { "探索" }.to_owned(),
+                    reason: "既知の模様と明度差を照合".to_owned(),
+                    special: false,
+                }
+            })
+            .collect())
+    })
+    .unwrap();
+    assert_eq!(
+        artifacts
+            .report()
+            .selected
+            .iter()
+            .map(|frame| frame.actual_seconds)
+            .collect::<Vec<_>>(),
+        [0.25, 0.5]
+    );
+    let excluded = artifacts
+        .report()
+        .exclusions
+        .iter()
+        .find(|exclusion| exclusion.id == "V0001-F00000003")
+        .unwrap();
+    assert!(
+        !excluded.reason.contains("near duplicate"),
+        "an intermediate winner's duplicate explanation must not survive after the winner changes: {}",
+        excluded.reason
+    );
+    assert!(excluded.reason.contains("ranking"));
 }

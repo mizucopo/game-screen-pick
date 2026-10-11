@@ -123,3 +123,40 @@ fn oversized_video_frame_is_refused_before_running_a_decoder() {
             .contains("pixel limit")
     );
 }
+
+#[test]
+fn aspect_boundary_has_the_same_duplicate_result_in_both_directions() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut qualities = Vec::new();
+    for (width, height) in [
+        (1000, 1000),
+        (1049, 1000),
+        (1051, 1000),
+        (200, 190),
+        (210, 190),
+    ] {
+        let path = directory.path().join(format!("{width}-{height}.png"));
+        RgbImage::from_fn(width, height, |x, y| {
+            let value = if (x * 8 / width + y * 8 / height) % 2 == 0 {
+                64
+            } else {
+                192
+            };
+            Rgb([value, value, value])
+        })
+        .save(&path)
+        .unwrap();
+        let quality = analyze(&path).unwrap();
+        assert!(quality.rejection.is_none());
+        qualities.push(quality);
+    }
+    for (left, right, duplicate) in [(0, 1, true), (0, 2, false), (3, 4, true)] {
+        let left = &qualities[left];
+        let right = &qualities[right];
+        let forward = left.distance(right);
+        let reverse = right.distance(left);
+        assert_eq!(forward, reverse, "aspect mismatch must be symmetric");
+        assert_eq!(left.near_duplicate(right), duplicate);
+        assert_eq!(right.near_duplicate(left), duplicate);
+    }
+}

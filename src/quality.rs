@@ -141,9 +141,9 @@ impl Quality {
     /// Mean RGB thumbnail distance; aspect mismatch separates portrait/landscape
     /// content and colour differences distinguish equal-luminance scenes.
     pub fn distance(&self, other: &Self) -> f64 {
-        let ratio = f64::from(self.width) / f64::from(self.height);
-        let other_ratio = f64::from(other.width) / f64::from(other.height);
-        if (ratio / other_ratio - 1.0).abs() > 0.05 {
+        let ratio = u128::from(self.width) * u128::from(other.height);
+        let other_ratio = u128::from(other.width) * u128::from(self.height);
+        if ratio.max(other_ratio) * 20 > ratio.min(other_ratio) * 21 {
             return 1.0;
         }
         self.fingerprint

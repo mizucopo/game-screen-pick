@@ -43,11 +43,14 @@ SIGINT は130、SIGTERM/HUPも成功にせず停止します。強制 kill や f
 
 `pipeline::run` は probe 済み動画と同期評価 callback を受け取り、専用 temporary directory の
 `Artifacts` を返します。一次/二次 callback へは実際の候補 ID・画像・sheet・前後 context を渡します。
+評価用 sheet と前後 context は各 callback の実行中だけ存在し、完了後に削除します。
+成功時は候補原画像も削除し、完成した JPEG・一覧・report だけを保持します。
 HTTP・応答 retry は #362/#342、cache・再開・所有権・公開は #341 の責務です。
 この段階の固定応答テストは外部 API を呼ばず、通常 CLI の完成を意味しません。
 
 等間隔 sampling は両端を含み、1候補なら中央を使います。semantic event は有効区間・代表時刻・重要度・
 scene・根拠・source を検証し、代表とその両側の候補を抽出します。同じ実 PTS は一度だけ評価します。
+抽出した実 PTS に対応する event が複数ある場合は、共通の優先規則で根拠を選びます。
 二次評価で不足した場合は、抽出済みの未評価候補を先に試します。それでも不足すると、未抽出の最も広い時間の隙間を
 入力元ごとに交互に追補し、semantic 方式では event 区間内に限ります。event の並びを重要度・source・区間・代表時刻・scene・根拠で固定します。
 初期計画を含む実候補数は4096、評価 batch は12、抽出/decode/job は逐次です。
@@ -74,7 +77,8 @@ sheet は200MPの RGB canvas を上限とし、一度に1画像だけ decode/res
 不足 glyph・不正な rank/context 順序・異常 metadata は読めない一覧のまま成功させません。
 
 Selected JPEG は縮小せず品質95で encode し、report は rank・source・要求/実時刻・寸法・一次/二次評価・event根拠・
-除外理由・非秘密の model 条件を記録します。Game Context は保存可能と確認した caller だけ明示して渡します。
+除外理由・非秘密の model 条件を記録します。遷移・低有用性等の確定除外と、最終選定に基づく重複・順位理由を分けます。
+Game Context は保存可能と確認した caller だけ明示して渡します。
 
 ## 検証
 

@@ -219,3 +219,21 @@ fn semantic_importance_selects_best_valid_event_and_keeps_its_evidence() {
     candidates[1].actual_seconds = 6.0;
     assert!(select(&candidates, &ratings, 1).is_err());
 }
+
+#[test]
+fn normal_preference_reason_requires_an_actually_blocked_special_screen() {
+    let directory = tempfile::tempdir().unwrap();
+    let (candidates, mut ratings) = candidates(directory.path(), 4);
+    for (normal_count, requested, expects_normal_preference) in
+        [(0, 1, false), (1, 3, false), (1, 1, true)]
+    {
+        for (index, rating) in ratings.iter_mut().enumerate() {
+            rating.special = index >= normal_count;
+        }
+        let result = select(&candidates, &ratings, requested).unwrap();
+        assert_eq!(result.indices.len(), requested);
+        assert!(result.exclusions.iter().all(|exclusion| {
+            exclusion.reason.contains("favor normal progress") == expects_normal_preference
+        }));
+    }
+}

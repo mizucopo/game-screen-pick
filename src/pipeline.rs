@@ -1,7 +1,7 @@
 //! Private selection artifacts. Transport and safe publication belong to #342/#341.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -65,6 +65,8 @@ pub struct CandidateContext {
 
 /// A synchronous bounded batch. The callback must inspect these exact IDs and
 /// images; any network transport and response retries are a caller concern.
+/// Sheet and context paths exist only during this callback; copy any QA evidence
+/// before returning. Completed artifacts retain none of this assessment scratch.
 pub struct AssessmentBatch<'a> {
     pub phase: AssessmentPhase,
     pub candidates: &'a [Candidate],
@@ -135,6 +137,7 @@ struct Work<'a> {
     attempts: usize,
     candidates: Vec<Candidate>,
     primary: Vec<Assessment>,
+    secondary_pending: BTreeSet<usize>,
     secondary_candidates: Vec<Candidate>,
     secondary: Vec<Assessment>,
     exclusions: BTreeMap<String, BTreeSet<String>>,
@@ -174,7 +177,6 @@ pub fn run(
         .tempdir()
         .context("cannot create private selection workspace")?;
     fs::create_dir(directory.path().join("candidates"))?;
-    fs::create_dir(directory.path().join("contexts"))?;
     fs::create_dir(directory.path().join("artifacts"))?;
     let mut work = Work {
         tools,
@@ -187,6 +189,7 @@ pub fn run(
         attempts: 0,
         candidates: Vec::new(),
         primary: Vec::new(),
+        secondary_pending: BTreeSet::new(),
         secondary_candidates: Vec::new(),
         secondary: Vec::new(),
         exclusions: BTreeMap::new(),
@@ -195,15 +198,15 @@ pub fn run(
     // Interleave sources, so a long first input cannot consume the entire budget.
     for ordinal in 0..plans.iter().map(Vec::len).max().unwrap_or(0) {
         for (source, plan) in plans.iter().enumerate() {
-            if let Some((seconds, event)) = plan.get(ordinal) {
-                work.extract(source, *seconds, event.clone())?;
+            if let Some(seconds) = plan.get(ordinal) {
+                work.extract(source, *seconds)?;
             }
         }
     }
     loop {
         work.assess_primary(&mut assessor)?;
         let assessed_before = work.secondary.len();
-        work.assess_secondary(&mut assessor)?;
+        let primary_pool_exclusions = work.assess_secondary(&mut assessor)?;
         let newly_assessed = work.secondary.len() - assessed_before;
         let selected = if work.secondary_candidates.is_empty() {
             None
@@ -214,12 +217,14 @@ pub fn run(
                 options.count,
             )?)
         };
+        let mut secondary_exclusions = Vec::new();
         if let Some(selection) = selected {
-            work.record_exclusions("secondary", selection.exclusions);
             if selection.indices.len() == options.count {
+                work.record_exclusions("secondary", selection.exclusions);
                 work.notes.extend(selection.notes);
                 return work.finish(&selection.indices);
             }
+            secondary_exclusions = selection.exclusions;
         }
         // Try the remaining eligible primary candidates before decoding more
         // frames or declaring exhaustion. Every pass consumes distinct IDs.
@@ -233,6 +238,16 @@ pub fn run(
                 .values()
                 .flatten()
                 .cloned()
+                .chain(
+                    primary_pool_exclusions
+                        .into_iter()
+                        .map(|item| format!("primary: {}", item.reason)),
+                )
+                .chain(
+                    secondary_exclusions
+                        .into_iter()
+                        .map(|item| format!("secondary: {}", item.reason)),
+                )
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>()
@@ -317,7 +332,7 @@ fn validate_options(videos: &[Video], options: &PipelineOptions) -> Result<()> {
     Ok(())
 }
 
-type InitialPlan = Vec<(f64, Option<SemanticEvent>)>;
+type InitialPlan = Vec<f64>;
 
 fn initial_plans(
     videos: &[Video],
@@ -344,11 +359,7 @@ fn initial_plans(
                 total <= MAX_CANDIDATES,
                 "semantic event windows exceed the {MAX_CANDIDATES} candidate limit"
             );
-            plans[index].extend(
-                positions
-                    .into_iter()
-                    .map(|seconds| (seconds, Some(event.clone()))),
-            );
+            plans[index].extend(positions);
         }
         ensure!(
             plans.iter().all(|plan| !plan.is_empty()),
@@ -358,25 +369,13 @@ fn initial_plans(
     } else {
         videos
             .iter()
-            .map(|video| {
-                Ok(
-                    sample_positions(video.duration_seconds, options.samples_per_video)?
-                        .into_iter()
-                        .map(|seconds| (seconds, None))
-                        .collect(),
-                )
-            })
+            .map(|video| sample_positions(video.duration_seconds, options.samples_per_video))
             .collect()
     }
 }
 
 impl Work<'_> {
-    fn extract(
-        &mut self,
-        source: usize,
-        seconds: f64,
-        event: Option<SemanticEvent>,
-    ) -> Result<bool> {
+    fn extract(&mut self, source: usize, seconds: f64) -> Result<bool> {
         check_cancelled(self.cancelled)?;
         if self.attempts == MAX_CANDIDATES {
             return Ok(false);
@@ -396,14 +395,12 @@ impl Work<'_> {
             source + 1,
             video.frames[frame].decode_index
         );
-        if event.as_ref().is_some_and(|event| {
-            artifact.actual_seconds < event.start_seconds
-                || artifact.actual_seconds > event.end_seconds
-        }) {
+        let event = self.semantic_event(source, artifact.actual_seconds);
+        if self.options.semantic_events.is_some() && event.is_none() {
             self.exclusions
                 .entry(id)
                 .or_default()
-                .insert("extracted PTS falls outside semantic event window".to_owned());
+                .insert("extracted PTS falls outside every semantic event window".to_owned());
             return Ok(true);
         }
         let quality = analyze(&artifact.path())?;
@@ -442,13 +439,14 @@ impl Work<'_> {
             check_cancelled(self.cancelled)?;
             let end = (offset + ASSESSMENT_BATCH).min(self.candidates.len());
             let candidates = &self.candidates[offset..end];
-            let scratch = self.directory.path().join(format!("primary-{offset:04}"));
-            fs::create_dir(&scratch)?;
+            let scratch = tempfile::Builder::new()
+                .prefix("primary-")
+                .tempdir_in(self.directory.path())?;
             let entries = candidates
                 .iter()
                 .map(|candidate| sheet_entry(candidate, None, None, ""))
                 .collect::<Vec<_>>();
-            let sheets = render_candidate_sheets(&entries, &scratch)?;
+            let sheets = render_candidate_sheets(&entries, scratch.path())?;
             let batch = AssessmentBatch {
                 phase: AssessmentPhase::Primary,
                 candidates,
@@ -459,7 +457,22 @@ impl Work<'_> {
             check_cancelled(self.cancelled)?;
             validate_assessments(candidates, &assessments)?;
             // Keep assessments aligned with candidate order even when model output is shuffled.
-            self.primary.extend(aligned(candidates, assessments));
+            let assessments = aligned(candidates, assessments);
+            for (index, assessment) in assessments.iter().enumerate() {
+                let index = offset + index;
+                if let Some(reason) = assessment.rejection() {
+                    let candidate = &self.candidates[index];
+                    self.exclusions
+                        .entry(candidate.id.clone())
+                        .or_default()
+                        .insert(format!("primary: {reason}"));
+                    fs::remove_file(&candidate.image)
+                        .context("cannot remove rejected primary image")?;
+                } else {
+                    self.secondary_pending.insert(index);
+                }
+            }
+            self.primary.extend(assessments);
             offset = end;
         }
         Ok(())
@@ -468,38 +481,32 @@ impl Work<'_> {
     fn assess_secondary(
         &mut self,
         assessor: &mut impl FnMut(&AssessmentBatch<'_>) -> Result<Vec<Assessment>>,
-    ) -> Result<()> {
-        let checked = self
-            .secondary
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<BTreeSet<_>>();
-        let unchecked = self
-            .candidates
-            .iter()
-            .zip(&self.primary)
-            .filter(|(candidate, _)| !checked.contains(candidate.id.as_str()))
-            .map(|(candidate, assessment)| (candidate.clone(), assessment.clone()))
-            .collect::<Vec<_>>();
-        if unchecked.is_empty() {
-            return Ok(());
+    ) -> Result<Vec<Exclusion>> {
+        let pending = self.secondary_pending.iter().copied().collect::<Vec<_>>();
+        if pending.is_empty() {
+            return Ok(Vec::new());
         }
-        let (candidates, assessments): (Vec<_>, Vec<_>) = unchecked.into_iter().unzip();
+        let (candidates, assessments): (Vec<_>, Vec<_>) = pending
+            .iter()
+            .map(|&index| (self.candidates[index].clone(), self.primary[index].clone()))
+            .unzip();
         let pool = select_up_to(
             &candidates,
             &assessments,
             (self.options.count * 3).min(MAX_CANDIDATES),
         )?;
-        self.record_exclusions("primary", pool.exclusions);
         for chunk in pool.indices.chunks(ASSESSMENT_BATCH) {
             check_cancelled(self.cancelled)?;
             let candidates = chunk
                 .iter()
                 .map(|&index| candidates[index].clone())
                 .collect::<Vec<_>>();
+            let scratch = tempfile::Builder::new()
+                .prefix("secondary-")
+                .tempdir_in(self.directory.path())?;
             let contexts = candidates
                 .iter()
-                .map(|candidate| self.context(candidate))
+                .map(|candidate| self.context(candidate, scratch.path()))
                 .collect::<Result<Vec<_>>>()?;
             let entries = candidates
                 .iter()
@@ -518,12 +525,7 @@ impl Work<'_> {
                     sheet_entry(candidate, None, Some(images), scene)
                 })
                 .collect::<Vec<_>>();
-            let scratch = self
-                .directory
-                .path()
-                .join(format!("secondary-{:04}", self.secondary.len()));
-            fs::create_dir(&scratch)?;
-            let sheets = render_candidate_sheets(&entries, &scratch)?;
+            let sheets = render_candidate_sheets(&entries, scratch.path())?;
             let batch = AssessmentBatch {
                 phase: AssessmentPhase::Secondary,
                 candidates: &candidates,
@@ -533,13 +535,16 @@ impl Work<'_> {
             let assessments = assessor(&batch).context("secondary assessment failed")?;
             check_cancelled(self.cancelled)?;
             validate_assessments(&candidates, &assessments)?;
+            for &index in chunk {
+                self.secondary_pending.remove(&pending[index]);
+            }
             self.secondary.extend(aligned(&candidates, assessments));
             self.secondary_candidates.extend(candidates);
         }
-        Ok(())
+        Ok(pool.exclusions)
     }
 
-    fn context(&self, candidate: &Candidate) -> Result<CandidateContext> {
+    fn context(&self, candidate: &Candidate, scratch: &Path) -> Result<CandidateContext> {
         let source = self
             .sources
             .iter()
@@ -553,11 +558,7 @@ impl Work<'_> {
         )?;
         let mut frames = Vec::new();
         for (index, artifact) in artifacts.into_iter().enumerate() {
-            let image = self
-                .directory
-                .path()
-                .join("contexts")
-                .join(format!("{}-{index}.png", candidate.id));
+            let image = scratch.join(format!("{}-{index}.png", candidate.id));
             fs::copy(artifact.path(), &image).context("cannot retain private context frame")?;
             frames.push(ContextFrame {
                 source: candidate.source.clone(),
@@ -590,22 +591,7 @@ impl Work<'_> {
                     &self.sources[source],
                 ) {
                     let seconds = self.videos[source].frames[frame].seconds;
-                    let event = self
-                        .options
-                        .semantic_events
-                        .as_ref()
-                        .and_then(|events| {
-                            events
-                                .iter()
-                                .filter(|event| {
-                                    event.source == self.sources[source]
-                                        && seconds >= event.start_seconds
-                                        && seconds <= event.end_seconds
-                                })
-                                .min_by(|left, right| event_preference(left, right))
-                        })
-                        .cloned();
-                    progress |= self.extract(source, seconds, event)?;
+                    progress |= self.extract(source, seconds)?;
                 }
             }
             if !progress {
@@ -622,6 +608,22 @@ impl Work<'_> {
                 .or_default()
                 .insert(format!("{phase}: {}", exclusion.reason));
         }
+    }
+
+    fn semantic_event(&self, source: usize, seconds: f64) -> Option<SemanticEvent> {
+        self.options
+            .semantic_events
+            .as_ref()
+            .and_then(|events| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        event.source == self.sources[source]
+                            && (event.start_seconds..=event.end_seconds).contains(&seconds)
+                    })
+                    .min_by(|left, right| event_preference(left, right))
+            })
+            .cloned()
     }
 
     fn finish(mut self, indices: &[usize]) -> Result<Artifacts> {
@@ -709,6 +711,8 @@ impl Work<'_> {
         check_cancelled(self.cancelled)?;
         serde_json::to_writer_pretty(File::create(output.join("report.json"))?, &report)
             .context("cannot write selection report")?;
+        fs::remove_dir_all(self.directory.path().join("candidates"))
+            .context("cannot remove completed candidate scratch")?;
         check_cancelled(self.cancelled)?;
         Ok(Artifacts {
             directory: self.directory,

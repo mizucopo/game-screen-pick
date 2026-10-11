@@ -17,6 +17,18 @@ pub struct Assessment {
     pub special: bool,
 }
 
+impl Assessment {
+    pub fn rejection(&self) -> Option<&'static str> {
+        if self.transition {
+            Some("transition/context rejection")
+        } else if self.blog_score < 20.0 {
+            Some("low blog usefulness")
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SemanticEvent {
@@ -256,15 +268,11 @@ pub fn select_up_to(
     };
     let mut available = Vec::new();
     for (index, candidate) in candidates.iter().enumerate() {
-        let rejection = candidate.quality.rejection.clone().or_else(|| {
-            if ratings[index].transition {
-                Some("transition/context rejection".into())
-            } else if ratings[index].blog_score < 20.0 {
-                Some("low blog usefulness".into())
-            } else {
-                None
-            }
-        });
+        let rejection = candidate
+            .quality
+            .rejection
+            .clone()
+            .or_else(|| ratings[index].rejection().map(str::to_owned));
         if let Some(reason) = rejection {
             result.exclusions.push(Exclusion {
                 id: candidate.id.clone(),
@@ -280,6 +288,7 @@ pub fn select_up_to(
     let mut special_count = 0;
     let special_limit = if count == 1 { 0 } else { (count / 3).max(1) };
     let mut nearest = vec![1.0_f64; candidates.len()];
+    let mut special_blocked = vec![false; candidates.len()];
     while !available.is_empty() && result.indices.len() < count {
         // Remove duplicates only against chosen images, so the best useful
         // representative survives even when it arrived later in a callback.
@@ -309,9 +318,10 @@ pub fn select_up_to(
             .iter()
             .copied()
             .filter(|&index| {
-                !ratings[index].special
-                    || !normal_available
-                    || (special_count < special_limit && !result.indices.is_empty())
+                special_blocked[index] = ratings[index].special
+                    && normal_available
+                    && (special_count >= special_limit || result.indices.is_empty());
+                !special_blocked[index]
             })
             .collect();
         // Coverage is lexicographic: unseen source, scene, source time-third,
@@ -354,7 +364,7 @@ pub fn select_up_to(
                 .near_duplicate(&candidates[chosen].quality)
         }) {
             "near duplicate of selected image"
-        } else if ratings[index].special && special_count >= special_limit {
+        } else if special_blocked[index] {
             "special screen limited to favor normal progress"
         } else {
             "not selected by diversity and usefulness ranking"
@@ -368,9 +378,7 @@ pub fn select_up_to(
         .iter()
         .enumerate()
         .filter(|(index, candidate)| {
-            candidate.quality.rejection.is_none()
-                && !ratings[*index].transition
-                && ratings[*index].blog_score >= 20.0
+            candidate.quality.rejection.is_none() && ratings[*index].rejection().is_none()
         })
         .map(|(_, candidate)| &candidate.source)
         .collect();
