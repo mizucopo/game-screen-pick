@@ -1,7 +1,7 @@
 //! Verified Rust output ownership and recoverable, same-directory publication.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -643,7 +643,27 @@ fn stage_artifacts(source: &Path, target: &Path, cancelled: &AtomicBool) -> Resu
     let mut files = BTreeMap::new();
     for name in expected {
         check_cancelled(cancelled)?;
-        let digest = copy_image(&source.join(&name), &target.join(&name), cancelled)?;
+        let staged = target.join(&name);
+        let digest = copy_image(&source.join(&name), &staged, cancelled)?;
+        let image = image::ImageReader::with_format(
+            BufReader::new(storage::open_regular(&staged)?),
+            image::ImageFormat::Jpeg,
+        )
+        .decode()
+        .context("private artifact is not a decodable JPEG")?;
+        if let Some(frame) = report["selected"]
+            .as_array()
+            .expect("validated selected records")
+            .iter()
+            .find(|frame| frame["image"].as_str() == Some(&name))
+        {
+            ensure!(
+                frame["width"].as_u64() == Some(u64::from(image.width()))
+                    && frame["height"].as_u64() == Some(u64::from(image.height())),
+                "private image dimensions do not match report"
+            );
+        }
+        check_cancelled(cancelled)?;
         files.insert(name, digest);
     }
     let manifest = Manifest {
@@ -918,6 +938,57 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+    }
+
+    #[test]
+    fn staged_corrupt_jpegs_preserve_previous_output() {
+        let (_directory, root) = workspace();
+        let first = artifacts(&root, "first", 15);
+        let path = root.join("result");
+        let mut output = Output::prepare(&path, &[]).unwrap();
+        let original = publish(&mut output, &first);
+        for (ordinal, name) in ["selected-01.jpg", "selected-contact-sheet.jpg"]
+            .into_iter()
+            .enumerate()
+        {
+            let second = artifacts(&root, &format!("second-{ordinal}"), 85);
+            fs::write(second.join(name), [0xff, 0xd8, 0xff, 0xd9]).unwrap();
+            assert!(image::open(second.join(name)).is_err());
+            assert!(
+                output
+                    .publish_directory(&second, &cancelled(), |_| Ok(()))
+                    .is_err()
+            );
+            assert_eq!(
+                output.verify_existing().unwrap().unwrap().fingerprint,
+                original.fingerprint
+            );
+            assert!(!output.journal.exists());
+        }
+    }
+
+    #[test]
+    fn staged_image_dimensions_must_match_report() {
+        let (_directory, root) = workspace();
+        let first = artifacts(&root, "first", 15);
+        let second = artifacts(&root, "second", 85);
+        let path = root.join("result");
+        let mut output = Output::prepare(&path, &[]).unwrap();
+        let original = publish(&mut output, &first);
+        RgbImage::from_pixel(32, 40, Rgb([7, 8, 9]))
+            .save(second.join("selected-01.jpg"))
+            .unwrap();
+        assert!(image::open(second.join("selected-01.jpg")).is_ok());
+        assert!(
+            output
+                .publish_directory(&second, &cancelled(), |_| Ok(()))
+                .is_err()
+        );
+        assert_eq!(
+            output.verify_existing().unwrap().unwrap().fingerprint,
+            original.fingerprint
+        );
+        assert!(!output.journal.exists());
     }
 
     #[test]
