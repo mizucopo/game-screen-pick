@@ -14,7 +14,7 @@ use crate::quality::read_image;
 
 const PAGE_SIZE: usize = 12;
 const MAX_ENTRIES: usize = 999;
-const MAX_SHEET_PIXELS: u64 = 200_000_000;
+pub(crate) const MAX_SHEET_PIXELS: u64 = 200_000_000;
 const BORDER: u32 = 12;
 const GAP: u32 = 12;
 const BACKGROUND: Rgb<u8> = Rgb([235, 240, 245]);

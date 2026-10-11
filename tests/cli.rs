@@ -254,6 +254,228 @@ fn validation_is_read_only_and_selection_remains_unavailable() {
 }
 
 #[test]
+fn normal_command_reports_cache_and_output_lock_contention_as_processing_failure() {
+    let directory = sandbox();
+    setup(directory.path());
+    let root = directory.path().canonicalize().unwrap();
+    let cache_parent = root.join(".game-screen-pick-cache");
+    fs::create_dir(&cache_parent).unwrap();
+    let invoke = || {
+        Command::new(BINARY)
+            .current_dir(&root)
+            .env("PATH", "")
+            .args(request())
+            .output()
+            .unwrap()
+    };
+    let cache = game_screen_pick::cache::Cache::open(&cache_parent).unwrap();
+    let output = invoke();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "cache lock contention: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("locked by another run"));
+    drop(cache);
+
+    let guard = game_screen_pick::output::Output::prepare(
+        &root.join("output"),
+        &[],
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    let output = invoke();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "output lock contention: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("locked by another run"));
+    assert!(!root.join("output").exists());
+    #[cfg(target_os = "macos")]
+    {
+        let mut aliases = request();
+        aliases[7] = "OUTPUT";
+        let output = Command::new(BINARY)
+            .current_dir(&root)
+            .env("PATH", "")
+            .args(aliases)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("locked by another run"));
+        assert!(!root.join("OUTPUT").exists());
+    }
+    drop(guard);
+
+    fs::create_dir(root.join("output")).unwrap();
+    fs::write(root.join("output/notes.txt"), b"preserve me").unwrap();
+    let invalid = invoke();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert_eq!(
+        fs::read(root.join("output/notes.txt")).unwrap(),
+        b"preserve me"
+    );
+}
+
+#[test]
+fn validate_and_normal_reject_control_names_and_hard_link_aliases_without_writes() {
+    for hard_link in [false, true] {
+        let directory = sandbox();
+        setup(directory.path());
+        let inputs = directory.path().join("録画 空白");
+        let message = if hard_link {
+            fs::hard_link(inputs.join("動画.mkv"), inputs.join("alias.mkv")).unwrap();
+            "input paths refer to the same file more than once"
+        } else {
+            fs::copy(fixture(), inputs.join("control\nname.mkv")).unwrap();
+            "video source names must not contain controls"
+        };
+        for diagnostic in [true, false] {
+            let mut args = request();
+            if diagnostic {
+                args.insert(0, "validate");
+            }
+            let output = Command::new(BINARY)
+                .current_dir(directory.path())
+                .env("PATH", "")
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(2));
+            assert!(String::from_utf8_lossy(&output.stderr).contains(message));
+        }
+        assert!(!directory.path().join("output").exists());
+        assert!(!directory.path().join(".game-screen-pick-cache").exists());
+        assert!(!directory.path().join(".gsp-output-locks").exists());
+    }
+}
+
+#[test]
+fn parentless_output_is_an_input_error_in_normal_and_validate_commands() {
+    let directory = sandbox();
+    setup(directory.path());
+    for diagnostic in [false, true] {
+        let mut args = request();
+        args[7] = "/";
+        if diagnostic {
+            args.insert(0, "validate");
+        }
+        let output = Command::new(BINARY)
+            .current_dir(directory.path())
+            .env("PATH", "")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("output requires an existing parent directory"));
+        assert!(!error.contains("panicked"));
+    }
+}
+
+#[test]
+fn validate_enforces_the_same_input_count_limit_as_normal_preflight() {
+    let directory = sandbox();
+    setup(directory.path());
+    let inputs = directory.path().join("録画 空白");
+    for index in 1..game_screen_pick::selection::MAX_CANDIDATES {
+        fs::write(inputs.join(format!("video-{index:04}.mkv")), []).unwrap();
+    }
+    let invoke = |diagnostic: bool| {
+        let mut args = request();
+        if diagnostic {
+            args.insert(0, "validate");
+        }
+        Command::new(BINARY)
+            .current_dir(directory.path())
+            .env("PATH", "")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert_eq!(invoke(true).status.code(), Some(0));
+    fs::write(inputs.join("one-too-many.mkv"), []).unwrap();
+    for diagnostic in [true, false] {
+        let output = invoke(diagnostic);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("input count exceeds 4096"));
+    }
+    assert!(!directory.path().join("output").exists());
+    assert!(!directory.path().join(".game-screen-pick-cache").exists());
+}
+
+#[test]
+fn normal_command_reports_cache_directory_creation_failures_as_processing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for existing_parent in [false, true] {
+        let directory = sandbox();
+        setup(directory.path());
+        let root = directory.path().canonicalize().unwrap();
+        let blocked = root.join("read-only");
+        fs::create_dir(&blocked).unwrap();
+        let permissions = fs::metadata(&blocked).unwrap().permissions();
+        let cache = if existing_parent {
+            blocked.clone()
+        } else {
+            blocked.join("cache")
+        };
+        let mut args = request();
+        args.extend(["--cache-directory", cache.to_str().unwrap()]);
+        let invoke = |args: &[&str]| {
+            Command::new(BINARY)
+                .current_dir(&root)
+                .env("PATH", "")
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o500)).unwrap();
+        let mut validate = args.clone();
+        validate.insert(0, "validate");
+        let diagnostic = invoke(&validate);
+        let normal = invoke(&args);
+        fs::set_permissions(&blocked, permissions).unwrap();
+        assert_eq!(diagnostic.status.code(), Some(0));
+        let expected = if existing_parent {
+            "cannot create Rust cache namespace"
+        } else {
+            "cannot create cache directory"
+        };
+        assert!(String::from_utf8_lossy(&normal.stderr).contains(expected));
+        assert_eq!(
+            normal.status.code(),
+            Some(1),
+            "{expected}: {}",
+            String::from_utf8_lossy(&normal.stderr)
+        );
+        assert!(!root.join("output").exists());
+        assert!(!cache.join(game_screen_pick::cache::NAMESPACE).exists());
+    }
+
+    let directory = sandbox();
+    setup(directory.path());
+    let root = directory.path().canonicalize().unwrap();
+    let cache = root.join("cache");
+    fs::create_dir(&cache).unwrap();
+    let unexpected = cache.join(game_screen_pick::cache::NAMESPACE);
+    fs::write(&unexpected, b"preserve unknown file").unwrap();
+    let mut args = request();
+    args.extend(["--cache-directory", cache.to_str().unwrap()]);
+    let invalid = Command::new(BINARY)
+        .current_dir(&root)
+        .env("PATH", "")
+        .args(args)
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert_eq!(fs::read(unexpected).unwrap(), b"preserve unknown file");
+}
+
+#[test]
 fn unsafe_paths_and_invalid_config_are_rejected_before_commands() {
     let directory = sandbox();
     setup(directory.path());

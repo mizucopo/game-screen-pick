@@ -1,6 +1,6 @@
 use std::{
     fs, io,
-    path::{Component, Path, PathBuf},
+    path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -11,12 +11,14 @@ use serde::Serialize;
 use crate::{
     config::Config,
     media::{MediaTools, discover_inputs},
+    run::{RunPaths, Session},
+    storage::{OperationalError, checked_path},
 };
 
 #[derive(Parser)]
 #[command(version, bin_name = "game-screen-pick", about = "Pick blog images from game recordings", color = ColorChoice::Never,
     subcommand_negates_reqs = true, args_conflicts_with_subcommands = true,
-    after_help = "AI assessment and safe artifact publication are not implemented yet. Use validate for input/config checks or extract for an original full-resolution frame.")]
+    after_help = "AI assessment and generated Game Context are not implemented yet. Use validate for input/config checks or extract for an original full-resolution frame.")]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -50,9 +52,12 @@ struct Request {
     /// Directory containing regular .mp4/.mkv/.mov/.webm files
     #[arg(required = true)]
     input_directory: Option<PathBuf>,
-    /// Empty or new output directory, separate from inputs/config
+    /// Empty, new, or verified Rust-owned output directory, separate from inputs/config/cache
     #[arg(required = true)]
     output_directory: Option<PathBuf>,
+    /// Rust cache parent; defaults to .game-screen-pick-cache beside the output
+    #[arg(long)]
+    cache_directory: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -87,6 +92,13 @@ impl CliError {
             message: safe(&error.to_string()),
         }
     }
+    fn preparation(error: anyhow::Error) -> Self {
+        if error.downcast_ref::<OperationalError>().is_some() {
+            Self::processing(error)
+        } else {
+            Self::input(error)
+        }
+    }
 }
 
 impl Cli {
@@ -94,7 +106,7 @@ impl Cli {
         match self.command {
             Some(Command::Extract(args)) => extract(args, cancelled),
             Some(Command::Validate(request)) => {
-                let (_, inputs) = validate(request).map_err(CliError::input)?;
+                let (_, inputs, _) = validate(request, true, cancelled).map_err(CliError::input)?;
                 eprintln!(
                     "validated: configuration, arguments and {} input video(s); no processing performed",
                     inputs.len()
@@ -102,14 +114,17 @@ impl Cli {
                 Ok(())
             }
             None => {
-                let (config, inputs) = validate(self.request).map_err(CliError::input)?;
+                let (config, inputs, paths) =
+                    validate(self.request, false, cancelled).map_err(CliError::input)?;
+                let _session =
+                    Session::prepare(&paths, cancelled).map_err(CliError::preparation)?;
                 eprintln!(
                     "{}: preflight complete ({} input video(s))",
                     config.selection.method,
                     inputs.len()
                 );
                 Err(CliError::processing(anyhow::anyhow!(
-                    "AI assessment and safe artifact publication are not implemented yet; use extract to inspect original frames"
+                    "AI assessment and generated Game Context are not implemented yet; use extract to inspect original frames"
                 )))
             }
         }
@@ -173,49 +188,11 @@ pub fn sanitize_parse_error(error: &mut clap::Error) {
     }
 }
 
-/// Reject symlinks in every existing path component, traversal, and special files.
-fn checked_path(path: &Path) -> Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_owned()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let mut current = PathBuf::new();
-    for component in absolute.components() {
-        if matches!(component, Component::ParentDir) {
-            bail!("parent traversal is not allowed in paths");
-        }
-        current.push(component.as_os_str());
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                bail!("symlink path components are not allowed")
-            }
-            Ok(metadata) if !metadata.is_dir() && !metadata.is_file() => {
-                bail!("special files are not allowed")
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => bail!("cannot inspect path"),
-        }
-    }
-    // Normalize the existing ancestor so lexical aliases cannot bypass overlap checks.
-    let mut ancestor = absolute.as_path();
-    let mut suffix = Vec::new();
-    while !ancestor.exists() {
-        suffix.push(ancestor.file_name().context("invalid path")?.to_owned());
-        ancestor = ancestor.parent().context("invalid path")?;
-    }
-    if !suffix.is_empty() && !ancestor.is_dir() {
-        bail!("path parent must be an ordinary directory");
-    }
-    let mut normalized = ancestor.canonicalize().context("cannot resolve path")?;
-    for part in suffix.into_iter().rev() {
-        normalized.push(part);
-    }
-    Ok(normalized)
-}
-
-fn validate(request: Request) -> Result<(Config, Vec<PathBuf>)> {
+fn validate(
+    request: Request,
+    diagnostic: bool,
+    cancelled: &AtomicBool,
+) -> Result<(Config, Vec<PathBuf>, RunPaths)> {
     crate::domain::GameInput::new(request.game_title, request.game_context)?;
     if !request
         .count
@@ -236,19 +213,37 @@ fn validate(request: Request) -> Result<(Config, Vec<PathBuf>)> {
             .as_deref()
             .context("output directory is required")?,
     )?;
-    if output.starts_with(&input) || input.starts_with(&output) || config_path.starts_with(&output)
-    {
-        bail!("input, output and configuration paths must not overlap");
+    let output_parent = output
+        .parent()
+        .context("output requires an existing parent directory")?;
+    let cache = checked_path(
+        &request
+            .cache_directory
+            .unwrap_or_else(|| output_parent.join(".game-screen-pick-cache")),
+    )?;
+    if cache.starts_with(&input) || input.starts_with(&cache) || config_path.starts_with(&cache) {
+        bail!("input, output, cache and configuration paths must not overlap");
     }
-    if output.exists() && (!output.is_dir() || fs::read_dir(&output)?.next().is_some()) {
-        bail!(
-            "output is not an empty directory; preserve it and choose a new empty output directory"
-        );
+    if cache.exists() && !cache.is_dir() {
+        bail!("cache parent must be an ordinary directory");
+    }
+    if diagnostic {
+        crate::output::Output::validate(&output, &[&input, &cache, &config_path], cancelled)?;
     }
     let config = Config::load(&config_path)?;
     let inputs = discover_inputs(&input)?;
+    crate::run::validate_inputs(&inputs)?;
     // Authentication is resolved only by the future common client; it is never printed here.
-    Ok((config, inputs))
+    Ok((
+        config,
+        inputs,
+        RunPaths {
+            input_directory: input,
+            output_directory: output,
+            cache_directory: cache,
+            config: Some(config_path),
+        },
+    ))
 }
 
 #[derive(Serialize)]
@@ -375,4 +370,19 @@ fn extract(args: ExtractArgs, cancelled: &AtomicBool) -> std::result::Result<(),
         Ok(())
     })();
     result.map_err(CliError::processing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preparation_preserves_operational_context_through_error_chain() {
+        let failure = anyhow::Error::new(io::Error::from(io::ErrorKind::PermissionDenied))
+            .context(OperationalError("cannot restore previous output"))
+            .context("cannot prepare output");
+        assert_eq!(CliError::preparation(failure).code, 1);
+        let invalid = anyhow::anyhow!("unknown output owner").context("cannot prepare output");
+        assert_eq!(CliError::preparation(invalid).code, 2);
+    }
 }

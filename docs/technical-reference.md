@@ -12,7 +12,7 @@
 認証値を診断・Debug・report・cache へ出しません。AI 通信はまだ行いません。
 
 `validate` は設定・枚数・Game Title/Context の排他・入力探索・出力 path を確認します。
-通常実行も同じ事前確認を行い、未接続の生成 context・AI 接続・安全な公開を成功扱いしません。
+通常実行も同じ事前確認とcache/outputの排他取得を行い、未接続の生成 context・AI 接続を成功扱いしません。
 
 ## media
 
@@ -36,7 +36,7 @@ semantic 用の内部 chunk は lossless PNG/MOV、microsecond timebase と `set
 FFmpeg/FFprobe は shell を経由せず argv で実行します。媒体は専用の排他的 temporary directory 内へ作り、
 失敗・通常中断では一時 file を削除し、所有した子 process を停止・回収します。
 `extract` の出力は新規 directory に限定し、失敗時はこの command が作った file だけを片付けます。
-cache/output の排他・完成済み画像セットの staging/公開・再開は別途実装します。
+完成済み選定のcache/output排他・staging/公開・再開は以下のRust libraryで扱います。
 SIGINT は130、SIGTERM/HUPも成功にせず停止します。強制 kill や filesystem transaction の保証は含めません。
 
 ## 品質・選定・一覧（#340）
@@ -46,7 +46,7 @@ SIGINT は130、SIGTERM/HUPも成功にせず停止します。強制 kill や f
 候補は最大12枚ずつ抽出して一次評価し、評価後は ID・時刻・品質指標を保持して原画像を削除します。
 二次評価と最終 JPEG には必要な元 frame だけを再抽出します。評価用の原画像・sheet・前後 context は
 各 callback の実行中だけ存在し、完了後に削除します。成功後は完成した JPEG・一覧・report だけを保持します。
-HTTP・応答 retry は #362/#342、cache・再開・所有権・公開は #341 の責務です。
+HTTP・応答 retry は #362/#342、cache・再開・所有権・公開は `run::Session` の責務です。
 この段階の固定応答テストは外部 API を呼ばず、通常 CLI の完成を意味しません。
 
 等間隔 sampling は両端を含み、1候補なら中央を使います。semantic event は有効区間・代表時刻・重要度・
@@ -88,6 +88,36 @@ Selected JPEG は縮小せず品質95で encode し、番号は全枚数が100�
 report は rank・source・要求/実時刻・寸法・一次/二次評価・event根拠・
 除外理由・非秘密の model 条件を記録します。遷移・低有用性等の確定除外と、最終選定に基づく重複・順位理由を分けます。
 Game Context は保存可能と確認した caller だけ明示して渡します。
+
+## cache・再開・出力保護（#341）
+
+`run::Session::prepare` は入力・設定・path・既存出力の所有権を確認し、cache/outputを排他にしてから
+処理callbackを受け付けます。`Session::run` は `pipeline::run` の実画像評価と公開を接続します。
+CLIのcache親は出力と同じ親の `.game-screen-pick-cache`、変更は `--cache-directory` で指定します。
+既存の親directoryが必要です。専用 `game-screen-pick-rust-v1` namespaceだけへ書込み、旧cacheを読み込みません。
+
+入力は初回にSHA-256を計算し、以後はdevice/inode・サイズ・mtime/ctimeのnanosecondを確認します。
+親directoryの移動は再利用でき、通常の編集・置換は再hashします。全metadataの偽装復元や不整合なfilesystemの変更検出は保証しません。
+処理中の入力変更は前後のmetadata照合で拒否します。probe済みstream/PTSは内容identityでcheckpointし、絶対pathを保存しません。
+評価はphase・表示IDと順序・入力identity・要求/実時刻・実画像/context/sheet・実効条件が同じ完了batch単位です。
+枚数変更は評価入力が同じbatchを再利用します。動画追加でIDやbatch構成が変わった部分は再評価します。
+backend・認証を除く正規化service URL・model・推論レベル・prompt/schema/media revision・解決済みcontextをkeyに含めます。
+認証値や保存禁止のcontext本文はkey/checkpointへ保存しません。完了応答だけを検証してatomic書込みし、不正・途中結果はhitにしません。
+`semantic_chunk` はsource/区間/条件ごとに検証したeventだけを保存し、欠損chunkだけ再処理します。
+生成contextの `generated_context` は生成前の入力条件をkeyにし、保存許可をcallerが確認した場合だけ再利用します。Brave生応答は扱いません。
+
+完成したrunは公開reportのkeyと画像集合/digestを検証して返します。正常なwarmはFFprobe/FFmpeg・画像decode・動画content hash・
+評価callbackが0件で、入力metadataとidentity checkpoint、公開済み画像・一覧・reportだけを読みます。
+`RunOutcome.metrics` は`Session::prepare`からの累積checkpoint/入力content読取bytes・評価key用の実画像/context/sheet hash読取bytes（`assessment_bytes_read`）・input hash/probe回数・評価/context生成/semantic callback回数・公開と検証の読取bytes・経過時間を返します。`warm`は今回の完成済み出力の再利用を示し、同じSessionの先行処理も計測値に含みます。
+部分再開や条件変更では必要な候補を再抽出しますが、同じ完了評価を再推論しません。
+
+reportにはschema・宣言された出力集合・画像/sheetのdigest・report本文digestを記録します。
+cache消失後も所有権を確認でき、同名の有効JPEGへの編集、欠損、未知file、旧report、symlinkや特殊fileを拒否して保持します。
+lockは出力の親側 `.gsp-output-locks` 内でfilesystemの同名判定を使い、取得後も名前を削除しません。公開は同じ親の排他的stagingとbackupを使い、
+旧成果物を再確認してrenameします。完了検証前の失敗・通常中断は旧集合を復元し、journalから再開時にも回復します。
+完了後のcleanup失敗は未処理journalとして検出し、検証できない変更を推測で削除しません。
+macOS/Linuxのlock・rename・通常中断を検証します。hostileな同時filesystem書換え、強制kill/停電での完全atomicity、
+filesystemをまたぐtransactionは保証しません。実AI接続と実録画品質・配布検証は後続Issueで確認します。
 
 ## 検証
 
