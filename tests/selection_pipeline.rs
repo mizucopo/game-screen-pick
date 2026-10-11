@@ -1353,3 +1353,224 @@ fn vfr_context_is_centered_on_actual_pts_and_final_export_retains_original_reque
         "final re-extraction must retain the source frame at the selected actual PTS"
     );
 }
+
+#[test]
+fn semantic_inputs_without_events_allow_other_sources_to_fill_the_selection() {
+    let videos = probe(true);
+    let mut options = options(1, true, false);
+    options.semantic_events = Some(vec![SemanticEvent {
+        source: "01-blocks.mkv".to_owned(),
+        start_seconds: 0.0,
+        end_seconds: 1.0,
+        representative_seconds: 0.5,
+        importance: 80.0,
+        scene: "探索".to_owned(),
+        reason: "他入力に event がなくても有効な実画像を採用".to_owned(),
+    }]);
+    let mut secondary_calls = 0;
+    let artifacts = run(
+        &MediaTools::default(),
+        &videos,
+        &options,
+        &AtomicBool::new(false),
+        |batch| {
+            verify_batch(batch);
+            assert!(
+                batch
+                    .candidates
+                    .iter()
+                    .all(|candidate| candidate.source == "01-blocks.mkv")
+            );
+            secondary_calls += usize::from(batch.phase == AssessmentPhase::Secondary);
+            Ok(batch
+                .candidates
+                .iter()
+                .map(|candidate| Assessment {
+                    id: candidate.id.clone(),
+                    blog_score: 80.0,
+                    transition: batch.phase == AssessmentPhase::Secondary
+                        && candidate.actual_seconds.fract() != 0.0,
+                    scene: "探索".to_owned(),
+                    reason: "整数 PTS の実画像と前後を照合".to_owned(),
+                    special: false,
+                })
+                .collect())
+        },
+    )
+    .unwrap();
+    assert!(
+        secondary_calls > 1,
+        "the empty source must also be skipped safely during replenishment"
+    );
+    assert_eq!(
+        artifacts.report().sources,
+        ["01-blocks.mkv", "02-mirrored.mkv"]
+    );
+    assert_eq!(artifacts.report().selected_count, 1);
+    assert_eq!(artifacts.report().selected[0].source, "01-blocks.mkv");
+    assert!(artifacts.report().selected[0].actual_seconds.fract() == 0.0);
+}
+
+#[test]
+fn replenishment_continues_its_source_cycle_across_batches() {
+    let tools = MediaTools::default();
+    let cancelled = AtomicBool::new(false);
+    let mut videos = probe(true);
+    videos.push(
+        tools
+            .probe(&fixture("03-multitrack-rotated.mov"), &cancelled)
+            .unwrap(),
+    );
+    let sources = videos
+        .iter()
+        .map(|video| {
+            video
+                .source
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    let mut options = options(2, false, true);
+    options.samples_per_video = 1;
+    let mut primary_batches = Vec::new();
+    let mut ids = std::collections::BTreeSet::new();
+    let mut workspace = None;
+    let error = run(&tools, &videos, &options, &cancelled, |batch| {
+        assert_eq!(batch.phase, AssessmentPhase::Primary);
+        assert!(batch.candidates.len() <= 12);
+        workspace = Some(
+            batch.candidates[0]
+                .image
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf(),
+        );
+        let mut ordinals = Vec::new();
+        for candidate in batch.candidates {
+            let source = sources
+                .iter()
+                .position(|source| source == &candidate.source)
+                .unwrap();
+            assert_eq!(
+                candidate.id,
+                format!(
+                    "V{:04}-F{:08}",
+                    source + 1,
+                    (candidate.actual_seconds * 4.0) as usize
+                )
+            );
+            assert_eq!(
+                image::open(&candidate.image).unwrap().to_rgb8(),
+                expected(&candidate.source, candidate.actual_seconds)
+            );
+            assert!(
+                ids.insert(candidate.id.clone()),
+                "actual frames must never be reassessed"
+            );
+            ordinals.push(source);
+        }
+        primary_batches.push(ordinals);
+        if primary_batches.len() == 3 {
+            assert_eq!(
+                primary_batches,
+                [vec![0, 1, 2], vec![0, 1, 2, 0], vec![1, 2, 0, 1]],
+                "the next bounded replenishment must resume after the last source"
+            );
+            bail!("source fairness verified");
+        }
+        Ok(batch
+            .candidates
+            .iter()
+            .map(|candidate| Assessment {
+                id: candidate.id.clone(),
+                blog_score: 10.0,
+                transition: false,
+                scene: "探索".to_owned(),
+                reason: "低評価で追補を継続し入力順を照合".to_owned(),
+                special: false,
+            })
+            .collect())
+    })
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("source fairness verified"));
+    assert!(
+        !workspace.unwrap().exists(),
+        "callback failure must clean all private files"
+    );
+}
+
+#[test]
+fn repeated_semantic_requests_count_distinct_actual_frames_before_the_limit() {
+    let videos = probe(false);
+    let mut options = options(1, true, false);
+    let event = options.semantic_events.as_ref().unwrap()[0].clone();
+    let mut reports = Vec::new();
+    for count in [1, 1366, 4096] {
+        options.semantic_events = Some(vec![event.clone(); count]);
+        let mut primary_ids = std::collections::BTreeSet::new();
+        let artifacts = run(
+            &MediaTools::default(),
+            &videos,
+            &options,
+            &AtomicBool::new(false),
+            |batch| {
+                let response = fixed_assessments(batch)?;
+                if batch.phase == AssessmentPhase::Primary {
+                    for candidate in batch.candidates {
+                        assert!(
+                            primary_ids.insert(candidate.id.clone()),
+                            "overlapping event requests must assess each actual frame once"
+                        );
+                    }
+                }
+                Ok(response)
+            },
+        )
+        .unwrap();
+        assert_eq!(primary_ids.len(), 3);
+        reports.push(serde_json::to_value(artifacts.report()).unwrap());
+    }
+    assert!(
+        reports.windows(2).all(|reports| reports[0] == reports[1]),
+        "up to 12288 raw requests must retain the same selected frame, original request and canonical event evidence"
+    );
+}
+
+#[test]
+fn dense_sampling_requests_are_bounded_by_distinct_actual_frames_across_sources() {
+    let videos = probe(true);
+    let mut options = options(1, false, true);
+    options.samples_per_video = 4096;
+    let mut primary_ids = std::collections::BTreeSet::new();
+    let artifacts = run(
+        &MediaTools::default(),
+        &videos,
+        &options,
+        &AtomicBool::new(false),
+        |batch| {
+            let response = fixed_assessments(batch)?;
+            if batch.phase == AssessmentPhase::Primary {
+                for candidate in batch.candidates {
+                    assert!(
+                        primary_ids.insert(candidate.id.clone()),
+                        "dense grid requests must retain only one candidate per actual frame"
+                    );
+                }
+            }
+            Ok(response)
+        },
+    )
+    .unwrap();
+    assert!(
+        primary_ids.len() > 12
+            && primary_ids.len() <= videos.iter().map(|video| video.frames.len()).sum::<usize>()
+    );
+    assert_eq!(artifacts.report().selected_count, 1);
+    assert_eq!(artifacts.report().samples_per_video, 4096);
+    assert_eq!(artifacts.report().max_candidates, 4096);
+}

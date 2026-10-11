@@ -235,13 +235,14 @@ pub fn select(
     }
     ensure!(
         selected.indices.len() == count,
-        "insufficient valid distinct candidates: requested {count}, available {}; exclusions {reasons:?}; sample more frames or provide more recordings",
-        selected.indices.len()
+        "insufficient valid distinct candidates: requested {count}, found {}; exclusions {reasons:?}; {:?}; sample more frames or provide more recordings",
+        selected.indices.len(),
+        selected.notes
     );
     Ok(selected)
 }
 
-/// Best available subset for replenishment/secondary planning. The final caller
+/// Deterministic subset for replenishment/secondary planning. The final caller
 /// must use select, which fails rather than filling missing slots with rejects.
 pub fn select_up_to(
     candidates: &[Candidate],
@@ -283,81 +284,46 @@ pub fn select_up_to(
             available.push(index);
         }
     }
-    let mut sources = BTreeSet::new();
-    let mut scenes = BTreeSet::new();
-    let mut bands = BTreeSet::new();
-    let mut special_count = 0;
-    let special_limit = if count == 1 { 0 } else { (count / 3).max(1) };
-    let mut nearest = vec![1.0_f64; candidates.len()];
-    let mut special_blocked = vec![false; candidates.len()];
-    while !available.is_empty() && result.indices.len() < count {
-        // Remove duplicates only against chosen images, so the best useful
-        // representative survives even when it arrived later in a callback.
-        available.retain(|&index| {
-            if let Some(&chosen) = result.indices.last() {
-                nearest[index] = nearest[index].min(
-                    candidates[index]
-                        .quality
-                        .distance(&candidates[chosen].quality),
-                );
-            }
-            if nearest[index] < NEAR_DUPLICATE_DISTANCE {
-                result.exclusions.push(Exclusion {
-                    id: candidates[index].id.clone(),
-                    reason: "near duplicate of selected image".into(),
-                });
-                false
-            } else {
-                true
-            }
-        });
-        if available.is_empty() {
-            break;
+    let (mut indices, mut special_blocked) =
+        rank(candidates, &ratings, &scene_names, count, available.clone());
+    if indices.len() < count {
+        if let Some(alternative) =
+            alternative_subset(candidates, &ratings, count, &available, &indices)
+        {
+            (indices, special_blocked) =
+                rank(candidates, &ratings, &scene_names, count, alternative);
         }
-        let normal_available = available.iter().any(|&index| !ratings[index].special);
-        let permitted: Vec<_> = available
-            .iter()
-            .copied()
-            .filter(|&index| {
-                special_blocked[index] = ratings[index].special
-                    && normal_available
-                    && (special_count >= special_limit || result.indices.is_empty());
-                !special_blocked[index]
-            })
-            .collect();
-        // Coverage is lexicographic: unseen source, scene, source time-third,
-        // then usefulness with a visual-distance bonus. No quota demands absent scenes.
-        let coverage = |index: usize| {
-            let candidate = &candidates[index];
-            (
-                !sources.contains(candidate.source.as_str()),
-                !scenes.contains(&scene_names[index]),
-                !bands.contains(&(candidate.source.as_str(), time_band(candidate))),
-            )
-        };
-        let best = *permitted
-            .iter()
-            .min_by(|&&left, &&right| {
-                coverage(right).cmp(&coverage(left)).then_with(|| {
-                    let value = |index: usize| {
-                        merit(&candidates[index], ratings[index]) + 20.0 * nearest[index]
-                    };
-                    value(right)
-                        .total_cmp(&value(left))
-                        .then_with(|| tie(left, right, candidates, &ratings))
-                })
-            })
-            .expect("at least one permissible candidate");
-        sources.insert(candidates[best].source.as_str());
-        scenes.insert(scene_names[best].clone());
-        bands.insert((
-            candidates[best].source.as_str(),
-            time_band(&candidates[best]),
-        ));
-        special_count += usize::from(ratings[best].special);
-        result.indices.push(best);
-        available.retain(|&index| index != best);
+        if indices.len() < count {
+            result.notes.push("duplicate representative search exhausted its bounded alternatives; no maximum-cardinality guarantee".into());
+        }
     }
+    result.indices = indices;
+    available.retain(|index| !result.indices.contains(index));
+    let sources: BTreeSet<_> = result
+        .indices
+        .iter()
+        .map(|&index| candidates[index].source.as_str())
+        .collect();
+    let scenes: BTreeSet<_> = result
+        .indices
+        .iter()
+        .map(|&index| &scene_names[index])
+        .collect();
+    let bands: BTreeSet<_> = result
+        .indices
+        .iter()
+        .map(|&index| {
+            (
+                candidates[index].source.as_str(),
+                time_band(&candidates[index]),
+            )
+        })
+        .collect();
+    let special_count = result
+        .indices
+        .iter()
+        .filter(|&&index| ratings[index].special)
+        .count();
     for index in available {
         let reason = if result.indices.iter().any(|&chosen| {
             candidates[index]
@@ -397,4 +363,175 @@ pub fn select_up_to(
         .exclusions
         .sort_by(|left, right| left.id.cmp(&right.id));
     Ok(result)
+}
+
+fn rank(
+    candidates: &[Candidate],
+    ratings: &[&Assessment],
+    scene_names: &[String],
+    count: usize,
+    mut available: Vec<usize>,
+) -> (Vec<usize>, Vec<bool>) {
+    let mut indices: Vec<usize> = Vec::new();
+    let mut sources = BTreeSet::new();
+    let mut scenes = BTreeSet::new();
+    let mut bands = BTreeSet::new();
+    let mut special_count = 0;
+    let special_limit = special_limit(count);
+    let mut nearest = vec![1.0_f64; candidates.len()];
+    let mut special_blocked = vec![false; candidates.len()];
+    while !available.is_empty() && indices.len() < count {
+        // Remove duplicates only against chosen images, so the best useful
+        // representative survives even when it arrived later in a callback.
+        available.retain(|&index| {
+            if let Some(&chosen) = indices.last() {
+                nearest[index] = nearest[index].min(
+                    candidates[index]
+                        .quality
+                        .distance(&candidates[chosen].quality),
+                );
+            }
+            nearest[index] >= NEAR_DUPLICATE_DISTANCE
+        });
+        if available.is_empty() {
+            break;
+        }
+        let normal_available = available.iter().any(|&index| !ratings[index].special);
+        let permitted: Vec<_> = available
+            .iter()
+            .copied()
+            .filter(|&index| {
+                special_blocked[index] = ratings[index].special
+                    && normal_available
+                    && (special_count >= special_limit || indices.is_empty());
+                !special_blocked[index]
+            })
+            .collect();
+        // Coverage is lexicographic: unseen source, scene, source time-third,
+        // then usefulness with a visual-distance bonus. No quota demands absent scenes.
+        let coverage = |index: usize| {
+            let candidate = &candidates[index];
+            (
+                !sources.contains(candidate.source.as_str()),
+                !scenes.contains(&scene_names[index]),
+                !bands.contains(&(candidate.source.as_str(), time_band(candidate))),
+            )
+        };
+        let best = *permitted
+            .iter()
+            .min_by(|&&left, &&right| {
+                coverage(right).cmp(&coverage(left)).then_with(|| {
+                    let value = |index: usize| {
+                        merit(&candidates[index], ratings[index]) + 20.0 * nearest[index]
+                    };
+                    value(right)
+                        .total_cmp(&value(left))
+                        .then_with(|| tie(left, right, candidates, ratings))
+                })
+            })
+            .expect("at least one permissible candidate");
+        sources.insert(candidates[best].source.as_str());
+        scenes.insert(scene_names[best].clone());
+        bands.insert((
+            candidates[best].source.as_str(),
+            time_band(&candidates[best]),
+        ));
+        special_count += usize::from(ratings[best].special);
+        indices.push(best);
+        available.retain(|&index| index != best);
+    }
+    (indices, special_blocked)
+}
+
+fn special_limit(count: usize) -> usize {
+    if count == 1 { 0 } else { (count / 3).max(1) }
+}
+
+/// Reconsider representatives only on shortage. Iterative backtracking has a
+/// shared 4096-node/4096-new-distance budget and caches at most 4096 pairs.
+/// Preserve the greedy subset's normal count and already permitted specials.
+fn alternative_subset(
+    candidates: &[Candidate],
+    ratings: &[&Assessment],
+    count: usize,
+    available: &[usize],
+    previous: &[usize],
+) -> Option<Vec<usize>> {
+    let minimum_normal = previous
+        .iter()
+        .filter(|&&index| !ratings[index].special)
+        .count();
+    let maximum_special = if available.iter().all(|&index| ratings[index].special) {
+        count
+    } else {
+        special_limit(count).max(previous.len() - minimum_normal)
+    };
+    let mut ordered = available.to_vec();
+    ordered.sort_by(|&left, &right| {
+        ratings[left]
+            .special
+            .cmp(&ratings[right].special)
+            .then_with(|| tie(left, right, candidates, ratings))
+    });
+    let mut chosen: Vec<usize> = Vec::new();
+    let mut best = previous.to_vec();
+    let mut cursors = vec![0];
+    let mut special_count = 0;
+    let mut comparisons = BTreeMap::new();
+    let mut nodes = 0;
+    while let Some(&next) = cursors.last() {
+        if chosen.len() > best.len() && chosen.len() - special_count >= minimum_normal {
+            best.clone_from(&chosen);
+            if best.len() == count {
+                return Some(best);
+            }
+        }
+        if chosen.len() < count
+            && next < ordered.len()
+            && ordered.len() - next > best.len().saturating_sub(chosen.len())
+        {
+            *cursors.last_mut().unwrap() += 1;
+            nodes += 1;
+            if nodes > MAX_CANDIDATES {
+                break;
+            }
+            let index = ordered[next];
+            if ratings[index].special
+                && (special_count >= maximum_special || (chosen.is_empty() && minimum_normal > 0))
+            {
+                continue;
+            }
+            let mut duplicate = false;
+            for &selected in &chosen {
+                let pair = (index.min(selected), index.max(selected));
+                let conflict = if let Some(&conflict) = comparisons.get(&pair) {
+                    conflict
+                } else {
+                    if comparisons.len() == MAX_CANDIDATES {
+                        return (best.len() > previous.len()).then_some(best);
+                    }
+                    let conflict = candidates[index]
+                        .quality
+                        .near_duplicate(&candidates[selected].quality);
+                    comparisons.insert(pair, conflict);
+                    conflict
+                };
+                if conflict {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if !duplicate {
+                chosen.push(index);
+                special_count += usize::from(ratings[index].special);
+                cursors.push(next + 1);
+            }
+            continue;
+        }
+        cursors.pop();
+        if let Some(index) = chosen.pop() {
+            special_count -= usize::from(ratings[index].special);
+        }
+    }
+    (best.len() > previous.len()).then_some(best)
 }

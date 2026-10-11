@@ -1,8 +1,8 @@
 use game_screen_pick::{
     quality::analyze,
     selection::{
-        Assessment, Candidate, SemanticEvent, event_positions, sample_positions, select,
-        select_up_to, validate_assessments,
+        Assessment, Candidate, MAX_CANDIDATES, SemanticEvent, event_positions, sample_positions,
+        select, select_up_to, validate_assessments,
     },
 };
 use image::{Rgb, RgbImage};
@@ -121,6 +121,181 @@ fn tied_responses_and_candidate_permutations_have_the_same_order() {
 }
 
 #[test]
+fn nontransitive_duplicate_group_keeps_a_feasible_pair() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut frames, mut ratings) = candidates(directory.path(), 1);
+    let original = image::open(&frames[0].image).unwrap().to_rgb8();
+    ratings[0].blog_score = 100.0;
+    for (index, delta) in [(1, -6_i16), (2, 6_i16)] {
+        let mut image = original.clone();
+        for pixel in image.pixels_mut() {
+            for value in &mut pixel.0 {
+                *value = (i16::from(*value) + delta).clamp(0, 255) as u8;
+            }
+        }
+        let path = directory.path().join(format!("exposure-{index}.png"));
+        image.save(&path).unwrap();
+        let mut frame = frames[0].clone();
+        frame.id = format!("F{index:04}");
+        frame.image = path;
+        frame.quality = analyze(&frame.image).unwrap();
+        frame.requested_seconds = index as f64;
+        frame.actual_seconds = index as f64;
+        let mut rating = ratings[0].clone();
+        rating.id = frame.id.clone();
+        rating.blog_score = 90.0;
+        frames.push(frame);
+        ratings.push(rating);
+    }
+    assert!(frames.iter().all(|frame| frame.quality.rejection.is_none()));
+    assert!(frames[0].quality.near_duplicate(&frames[1].quality));
+    assert!(frames[0].quality.near_duplicate(&frames[2].quality));
+    assert!(!frames[1].quality.near_duplicate(&frames[2].quality));
+    let selected = select(&frames, &ratings, 2).unwrap();
+    let ids = selected
+        .indices
+        .iter()
+        .map(|&index| frames[index].id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["F0001", "F0002"]);
+    assert!(
+        selected
+            .exclusions
+            .iter()
+            .any(|item| item.id == "F0000" && item.reason.contains("near duplicate"))
+    );
+    frames.reverse();
+    ratings.rotate_left(1);
+    let permuted = select(&frames, &ratings, 2).unwrap();
+    assert_eq!(
+        permuted
+            .indices
+            .iter()
+            .map(|&index| frames[index].id.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    for rating in &mut ratings {
+        rating.special = true;
+    }
+    assert_eq!(select(&frames, &ratings, 2).unwrap().indices.len(), 2);
+}
+
+#[test]
+fn duplicate_reselection_can_replace_two_representatives_and_preserves_normal_priority() {
+    let directory = tempfile::tempdir().unwrap();
+    let (template, _) = candidates(directory.path(), 1);
+    let original = RgbImage::from_fn(96, 64, |x, y| {
+        let tile = (x / 8 + y / 8 * 12) as usize;
+        Rgb([
+            32 + ((tile * 73) % 192) as u8,
+            32 + ((tile * 41) % 192) as u8,
+            32 + ((tile * 97) % 192) as u8,
+        ])
+    });
+    let mut frames = Vec::new();
+    let mut ratings = Vec::new();
+    for (index, (id, red, green, score)) in [
+        ("A", -24, 0, 100.0),
+        ("D", 24, 0, 100.0),
+        ("B", -30, -18, 90.0),
+        ("C", 30, -18, 90.0),
+        ("E", 0, 0, 90.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut image = original.clone();
+        for pixel in image.pixels_mut() {
+            pixel[0] = (i16::from(pixel[0]) + red) as u8;
+            pixel[1] = (i16::from(pixel[1]) + green) as u8;
+        }
+        let path = directory.path().join(format!("{id}.png"));
+        image.save(&path).unwrap();
+        let mut frame = template[0].clone();
+        frame.id = id.into();
+        frame.image = path;
+        frame.quality = analyze(&frame.image).unwrap();
+        frame.actual_seconds = index as f64;
+        frame.requested_seconds = index as f64;
+        frames.push(frame);
+        ratings.push(Assessment {
+            id: id.into(),
+            blog_score: score,
+            transition: false,
+            scene: "探索".into(),
+            reason: "正常進行の実画像".into(),
+            special: false,
+        });
+    }
+    assert!(frames.iter().all(|frame| frame.quality.rejection.is_none()));
+    for (left, right) in [(0, 2), (0, 4), (1, 3), (1, 4)] {
+        assert!(frames[left].quality.near_duplicate(&frames[right].quality));
+    }
+    for (left, right) in [(0, 1), (2, 3), (2, 4), (3, 4)] {
+        assert!(!frames[left].quality.near_duplicate(&frames[right].quality));
+    }
+    // A/D are the preferred hubs; B/C/E are the only feasible three-image set.
+    for count in [3, 9] {
+        let result = select_up_to(&frames, &ratings, count).unwrap();
+        let chosen: std::collections::BTreeSet<_> = result
+            .indices
+            .iter()
+            .map(|&index| frames[index].id.as_str())
+            .collect();
+        assert_eq!(chosen, std::collections::BTreeSet::from(["B", "C", "E"]));
+        assert!(
+            result
+                .notes
+                .iter()
+                .any(|note| note.starts_with("3 normal progress / 0 special"))
+        );
+    }
+    for rating in &mut ratings[2..] {
+        rating.special = true;
+    }
+    let result = select_up_to(&frames, &ratings, 3).unwrap();
+    assert_eq!(result.indices.len(), 2);
+    assert!(result.indices.iter().all(|&index| !ratings[index].special));
+}
+
+#[test]
+fn maximal_duplicate_pool_stops_without_filling_slots_with_repeats() {
+    let directory = tempfile::tempdir().unwrap();
+    let (template, ratings) = candidates(directory.path(), 1);
+    let frames = (0..MAX_CANDIDATES)
+        .map(|index| {
+            let mut frame = template[0].clone();
+            frame.id = format!("F{index:04}");
+            frame
+        })
+        .collect::<Vec<_>>();
+    let ratings = frames
+        .iter()
+        .map(|frame| {
+            let mut rating = ratings[0].clone();
+            rating.id = frame.id.clone();
+            rating
+        })
+        .collect::<Vec<_>>();
+    let result = select_up_to(&frames, &ratings, 999).unwrap();
+    assert_eq!(result.indices, [0]);
+    assert_eq!(result.exclusions.len(), MAX_CANDIDATES - 1);
+    assert!(
+        result
+            .exclusions
+            .iter()
+            .all(|item| item.reason == "near duplicate of selected image")
+    );
+    assert!(
+        result
+            .notes
+            .iter()
+            .any(|note| note.contains("bounded alternatives"))
+    );
+}
+
+#[test]
 fn diversity_covers_sources_scenes_and_time_without_menu_dominance() {
     let directory = tempfile::tempdir().unwrap();
     let (mut candidates, mut ratings) = candidates(directory.path(), 8);
@@ -189,7 +364,7 @@ fn duplicates_transitions_and_quality_rejects_explain_shortage() {
     candidates[3].quality.rejection = Some("dark/black frame".into());
     ratings[4].blog_score = 0.0;
     let error = select(&candidates, &ratings, 2).unwrap_err().to_string();
-    assert!(error.contains("requested 2, available 1"));
+    assert!(error.contains("requested 2, found 1"));
     assert!(error.contains("duplicate") && error.contains("transition") && error.contains("dark"));
     let result = select_up_to(&candidates, &ratings, 5).unwrap();
     assert_eq!(result.indices, [1]);

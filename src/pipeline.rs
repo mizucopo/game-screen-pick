@@ -15,8 +15,8 @@ use crate::contact_sheet::{
 use crate::media::{FrameArtifact, Interrupted, MediaTools, Video};
 use crate::quality::{MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS, analyze, read_image};
 use crate::selection::{
-    Assessment, Candidate, Exclusion, MAX_CANDIDATES, SemanticEvent, event_positions,
-    sample_positions, select_up_to, validate_assessments,
+    Assessment, Candidate, Exclusion, MAX_CANDIDATES, SemanticEvent, event_positions, select_up_to,
+    validate_assessments,
 };
 
 const ASSESSMENT_BATCH: usize = 12;
@@ -135,6 +135,7 @@ struct Work<'a> {
     sources: Vec<String>,
     attempted: Vec<BTreeSet<usize>>,
     attempts: usize,
+    next_source: usize,
     candidates: Vec<Candidate>,
     primary: Vec<Assessment>,
     secondary_pending: BTreeSet<usize>,
@@ -187,6 +188,7 @@ pub fn run(
         sources,
         attempted: vec![BTreeSet::new(); videos.len()],
         attempts: 0,
+        next_source: 0,
         candidates: Vec::new(),
         primary: Vec::new(),
         secondary_pending: BTreeSet::new(),
@@ -282,11 +284,6 @@ fn validate_options(videos: &[Video], options: &PipelineOptions) -> Result<()> {
         "sample count must be within 1..={MAX_CANDIDATES}"
     );
     ensure!(
-        options.semantic_events.is_some()
-            || options.samples_per_video <= MAX_CANDIDATES / videos.len(),
-        "initial samples exceed the {MAX_CANDIDATES} candidate limit"
-    );
-    ensure!(
         options.context_delta_seconds.is_finite() && options.context_delta_seconds > 0.0,
         "context interval must be finite and positive"
     );
@@ -339,13 +336,25 @@ fn initial_plans(
     sources: &[String],
     options: &PipelineOptions,
 ) -> Result<Vec<InitialPlan>> {
+    let mut plans = vec![Vec::new(); videos.len()];
+    let mut planned = vec![BTreeSet::new(); videos.len()];
+    let mut total = 0;
+    let mut add = |source: usize, seconds: f64| -> Result<()> {
+        if planned[source].insert(frame_ordinal(&videos[source], seconds)) {
+            total += 1;
+            ensure!(
+                total <= MAX_CANDIDATES,
+                "initial plans exceed the {MAX_CANDIDATES} actual-frame candidate limit"
+            );
+            plans[source].push(seconds);
+        }
+        Ok(())
+    };
     if let Some(events) = &options.semantic_events {
         ensure!(
             !events.is_empty() && events.len() <= MAX_CANDIDATES,
             "semantic events must be nonempty and within the candidate limit"
         );
-        let mut plans = vec![Vec::new(); videos.len()];
-        let mut total = 0;
         let mut ordered = events.iter().collect::<Vec<_>>();
         ordered.sort_by(|left, right| event_preference(left, right));
         for event in ordered {
@@ -353,25 +362,61 @@ fn initial_plans(
                 .iter()
                 .position(|source| source == &event.source)
                 .context("semantic event refers to an unknown video source")?;
-            let positions = event_positions(event, videos[index].duration_seconds)?;
-            total += positions.len();
-            ensure!(
-                total <= MAX_CANDIDATES,
-                "semantic event windows exceed the {MAX_CANDIDATES} candidate limit"
-            );
-            plans[index].extend(positions);
+            for seconds in event_positions(event, videos[index].duration_seconds)? {
+                add(index, seconds)?;
+            }
         }
-        ensure!(
-            plans.iter().all(|plan| !plan.is_empty()),
-            "semantic events must cover every input video"
-        );
-        Ok(plans)
     } else {
-        videos
-            .iter()
-            .map(|video| sample_positions(video.duration_seconds, options.samples_per_video))
-            .collect()
+        for (source, video) in videos.iter().enumerate() {
+            for seconds in sampled_requests(video, options.samples_per_video) {
+                add(source, seconds)?;
+            }
+        }
     }
+    Ok(plans)
+}
+
+fn frame_ordinal(video: &Video, seconds: f64) -> usize {
+    video
+        .frames
+        .partition_point(|frame| frame.seconds < seconds)
+        .min(video.frames.len() - 1)
+}
+
+/// Preserve the first original grid request for each actual frame. Skip grids
+/// inside VFR gaps without materializing or visiting every duplicate request.
+fn sampled_requests(video: &Video, count: usize) -> impl Iterator<Item = f64> + '_ {
+    let position = move |index: usize| {
+        if count == 1 {
+            video.duration_seconds / 2.0
+        } else {
+            video.duration_seconds * index as f64 / (count - 1) as f64
+        }
+    };
+    let mut next = 0;
+    std::iter::from_fn(move || {
+        if next == count {
+            return None;
+        }
+        let seconds = position(next);
+        let frame = frame_ordinal(video, seconds);
+        if frame == video.frames.len() - 1 {
+            next = count;
+        } else {
+            let mut begin = next + 1;
+            let mut end = count;
+            while begin < end {
+                let midpoint = begin + (end - begin) / 2;
+                if position(midpoint) <= video.frames[frame].seconds {
+                    begin = midpoint + 1;
+                } else {
+                    end = midpoint;
+                }
+            }
+            next = begin;
+        }
+        Some(seconds)
+    })
 }
 
 impl Work<'_> {
@@ -394,10 +439,7 @@ impl Work<'_> {
             return Ok(false);
         }
         let video = &self.videos[source];
-        let frame = video
-            .frames
-            .partition_point(|frame| frame.seconds < seconds)
-            .min(video.frames.len() - 1);
+        let frame = frame_ordinal(video, seconds);
         if !self.attempted[source].insert(frame) {
             return Ok(false);
         }
@@ -598,25 +640,22 @@ impl Work<'_> {
         let target = (self.options.count * 2)
             .max(self.videos.len())
             .min(MAX_CANDIDATES - before);
-        while self.attempts - before < target {
-            let mut progress = false;
-            for source in 0..self.videos.len() {
-                if self.attempts - before == target {
-                    break;
-                }
-                if let Some(frame) = next_unattempted(
-                    &self.videos[source],
-                    &self.attempted[source],
-                    self.options.semantic_events.as_deref(),
-                    &self.sources[source],
-                ) {
-                    let seconds = self.videos[source].frames[frame].seconds;
-                    progress |= self.produce(source, seconds, assessor)?;
-                }
-            }
-            if !progress {
-                break;
-            }
+        let mut skipped = 0;
+        while self.attempts - before < target && skipped < self.videos.len() {
+            let source = self.next_source;
+            self.next_source = (source + 1) % self.videos.len();
+            let frame = next_unattempted(
+                &self.videos[source],
+                &self.attempted[source],
+                self.options.semantic_events.as_deref(),
+                &self.sources[source],
+            );
+            let progress = if let Some(frame) = frame {
+                self.produce(source, self.videos[source].frames[frame].seconds, assessor)?
+            } else {
+                false
+            };
+            skipped = if progress { 0 } else { skipped + 1 };
         }
         Ok(self.attempts - before)
     }
@@ -655,7 +694,7 @@ impl Work<'_> {
             let candidate = &self.secondary_candidates[index];
             let assessment = &self.secondary[index];
             let rank = ordinal + 1;
-            let name = format!("selected-{rank:02}.jpg");
+            let name = selected_filename(rank, indices.len());
             let path = output.join(&name);
             let source = self
                 .sources
@@ -870,4 +909,195 @@ fn event_preference(left: &SemanticEvent, right: &SemanticEvent) -> std::cmp::Or
         })
         .then_with(|| left.scene.cmp(&right.scene))
         .then_with(|| left.reason.cmp(&right.reason))
+}
+
+fn selected_filename(rank: usize, count: usize) -> String {
+    let width = if count < 100 { 2 } else { 3 };
+    format!("selected-{rank:0width$}.jpg")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::media::FrameTime;
+    use crate::selection::sample_positions;
+
+    fn options(samples_per_video: usize) -> PipelineOptions {
+        PipelineOptions {
+            count: 1,
+            samples_per_video,
+            context_delta_seconds: 0.25,
+            semantic_events: None,
+            model: ModelConditions {
+                backend: "strata".to_owned(),
+                model: "fixture".to_owned(),
+                inference_level: "none".to_owned(),
+                timeout_seconds: 60,
+                cache_revision: "test".to_owned(),
+            },
+            game_context: None,
+        }
+    }
+
+    fn video(times: &[f64], duration_seconds: f64) -> Video {
+        Video {
+            source: "synthetic.mkv".into(),
+            stream_index: 0,
+            start_seconds: 0.0,
+            duration_seconds,
+            width: 16,
+            height: 16,
+            frames: times
+                .iter()
+                .enumerate()
+                .map(|(decode_index, &seconds)| FrameTime {
+                    decode_index,
+                    seconds,
+                    duration_seconds: 0.25,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn sampled_plans_preserve_the_first_grid_request_for_each_actual_frame() {
+        for video in [
+            video(&[0.0], 0.25),
+            video(&[0.0, 0.25, 0.5, 0.75], 1.0),
+            video(&[0.0, 10.0, 11.0, 12.0], 12.25),
+        ] {
+            for count in [1, 2, 3, 5, 4096] {
+                let mut ordinals = BTreeSet::new();
+                let expected = sample_positions(video.duration_seconds, count)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|seconds| {
+                        let frame = video
+                            .frames
+                            .iter()
+                            .position(|frame| frame.seconds >= *seconds)
+                            .unwrap_or(video.frames.len() - 1);
+                        ordinals.insert(frame)
+                    })
+                    .map(f64::to_bits)
+                    .collect::<Vec<_>>();
+                let plans = initial_plans(
+                    std::slice::from_ref(&video),
+                    &["synthetic.mkv".to_owned()],
+                    &options(count),
+                )
+                .unwrap();
+                assert_eq!(
+                    plans[0]
+                        .iter()
+                        .copied()
+                        .map(f64::to_bits)
+                        .collect::<Vec<_>>(),
+                    expected,
+                    "must preserve exact grid values at midpoint, first/final frames and VFR gaps for count {count}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn distinct_initial_frames_over_the_budget_fail_before_decode() {
+        let times = (0..MAX_CANDIDATES)
+            .map(|index| index as f64 * 0.25)
+            .collect::<Vec<_>>();
+        let videos = [
+            video(&times, MAX_CANDIDATES as f64 * 0.25),
+            video(&times, MAX_CANDIDATES as f64 * 0.25),
+        ];
+        let result = initial_plans(
+            &videos,
+            &["one.mkv".to_owned(), "two.mkv".to_owned()],
+            &options(MAX_CANDIDATES),
+        );
+        assert!(
+            result.is_err(),
+            "the actual candidate budget must apply to all sources before any decoder or callback runs"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("4096 actual-frame candidate limit")
+        );
+
+        let times = (0..8196)
+            .map(|index| index as f64 * 0.5)
+            .collect::<Vec<_>>();
+        let videos = [video(&times, 4098.0)];
+        let mut options = options(1);
+        options.semantic_events = Some(
+            (0..1366)
+                .map(|index| SemanticEvent {
+                    source: "synthetic.mkv".to_owned(),
+                    start_seconds: index as f64 * 3.0,
+                    representative_seconds: index as f64 * 3.0 + 1.0,
+                    end_seconds: index as f64 * 3.0 + 2.0,
+                    importance: 80.0,
+                    scene: "exploration".to_owned(),
+                    reason: "distinct actual-frame limit".to_owned(),
+                })
+                .collect(),
+        );
+        let error = initial_plans(&videos, &["synthetic.mkv".to_owned()], &options).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("4096 actual-frame candidate limit")
+        );
+    }
+
+    #[test]
+    fn maximal_sparse_inputs_keep_only_one_request_per_actual_frame() {
+        let sources = (0..MAX_CANDIDATES)
+            .map(|index| format!("source-{index:04}.mkv"))
+            .collect::<Vec<_>>();
+        let videos = sources
+            .iter()
+            .map(|source| {
+                let mut video = video(&[0.0], 0.25);
+                video.source = source.into();
+                video
+            })
+            .collect::<Vec<_>>();
+        let plans = initial_plans(&videos, &sources, &options(MAX_CANDIDATES)).unwrap();
+        assert_eq!(plans.len(), MAX_CANDIDATES);
+        assert!(
+            plans.iter().all(|plan| plan == &[0.0]),
+            "4096 samples for each of 4096 one-frame sources must retain only 4096 first requests, without materializing the 16M duplicate grid"
+        );
+    }
+
+    #[test]
+    fn selected_filenames_sort_by_rank_across_99_100_and_999_boundaries() {
+        for count in [99, 100, 999] {
+            let ranked = (1..=count)
+                .map(|rank| selected_filename(rank, count))
+                .collect::<Vec<_>>();
+            let mut sorted = ranked.clone();
+            sorted.sort();
+            assert_eq!(
+                sorted, ranked,
+                "filenames must preserve numeric ranks for {count} selections"
+            );
+            assert_eq!(
+                ranked[98],
+                if count == 99 {
+                    "selected-99.jpg"
+                } else {
+                    "selected-099.jpg"
+                }
+            );
+            if count >= 100 {
+                assert_eq!(ranked[99], "selected-100.jpg");
+            }
+            if count == 999 {
+                assert_eq!(ranked[998], "selected-999.jpg");
+            }
+        }
+    }
 }

@@ -116,8 +116,8 @@ fn validate_entries(entries: &[SheetEntry], selected: bool) -> Result<()> {
             "contact sheet candidate IDs must be nonempty, unique, and at most 32 bytes"
         );
         ensure!(
-            !entry.source.trim().is_empty() && entry.source.len() <= 255,
-            "contact sheet input source must be nonempty and at most 255 bytes"
+            entry.source.encode_utf16().take(256).count() <= 255 && !entry.source.trim().is_empty(),
+            "contact sheet input source must be nonempty and at most 255 UTF-16 units"
         );
         ensure!(
             entry.scene.len() <= 512,
@@ -331,12 +331,18 @@ fn sheet_layout(
             grid,
         })
     };
-    // Escaping a maximum-length UTF-8 filename can exceed the canvas limit.
+    // Escaping a maximum-length source filename can exceed the canvas limit.
     // Retry only the dense final overview, using the same layout measurements.
-    match prepare(main) {
-        Err(_) if width == 160 && !show_context => prepare(main.with_font_size(font, 12.0)),
-        result => result,
+    let mut result = prepare(main);
+    if width == 160 && !show_context {
+        for font_size in [12.0, 10.0, 8.0] {
+            if result.is_ok() {
+                break;
+            }
+            result = prepare(main.with_font_size(font, font_size));
+        }
     }
+    result
 }
 
 fn grid(labels: &[Labels], layout: Layout, context_layout: Layout, columns: u32) -> Result<Grid> {
@@ -664,5 +670,55 @@ mod tests {
         let dimensions = prepared.grid;
         assert!(dimensions.width <= 65_535 && dimensions.height <= 65_535);
         assert!(u64::from(dimensions.width) * u64::from(dimensions.height) <= MAX_SHEET_PIXELS);
+    }
+
+    #[test]
+    fn utf16_sized_sources_fit_the_largest_selected_sheet_without_truncation() {
+        let font = font().unwrap();
+        let widest_missing = |range: std::ops::RangeInclusive<u32>| {
+            range
+                .filter_map(char::from_u32)
+                .filter(|scalar| !scalar.is_control() && font.lookup_glyph_index(*scalar) == 0)
+                .max_by(|left, right| {
+                    text_width(font, &display_text(font, &left.to_string()), 14.0).total_cmp(
+                        &text_width(font, &display_text(font, &right.to_string()), 14.0),
+                    )
+                })
+                .unwrap()
+        };
+        let id_scalar = widest_missing(0xa0..=0x7ff);
+        let source_scalar = widest_missing(0xa0..=0xffff);
+        for (source, font_size) in [
+            (format!("{}.mp4", "録".repeat(251)), 14.0),
+            (format!("{}.webm", "🎮".repeat(125)), 10.0),
+            (
+                format!("{}.mp4", source_scalar.to_string().repeat(251)),
+                8.0,
+            ),
+        ] {
+            let entry = SheetEntry {
+                id: id_scalar.to_string().repeat(16),
+                rank: Some(999),
+                source,
+                requested_seconds: 9999.125,
+                actual_seconds: 9999.25,
+                scene: id_scalar.to_string().repeat(256),
+                image: PathBuf::new(),
+                context: None,
+            };
+            assert!(entry.source.encode_utf16().count() <= 255);
+            let prepared =
+                sheet_layout(&vec![entry.clone(); MAX_ENTRIES], font, 160, 6, false).unwrap();
+            assert_eq!(prepared.main.font_size, font_size);
+            assert_eq!(
+                prepared.labels[0].source.concat(),
+                format!("入力: {}", display_text(font, &entry.source))
+            );
+            assert!(prepared.grid.width <= 65_535 && prepared.grid.height <= 65_535);
+            assert!(
+                u64::from(prepared.grid.width) * u64::from(prepared.grid.height)
+                    <= MAX_SHEET_PIXELS
+            );
+        }
     }
 }

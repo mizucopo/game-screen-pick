@@ -273,6 +273,47 @@ fn expanded_unicode_source_wraps_in_full_and_retains_the_original_scene() {
 }
 
 #[test]
+fn filesystem_sized_unicode_sources_render_in_full() {
+    let temp = TempDir::new().unwrap();
+    let mut original = entry(1, solid(temp.path(), "frame.png", [40, 100, 180]));
+    original.rank = Some(1);
+    for source in [
+        format!("{}.mp4", "録".repeat(90)),
+        format!("{}.mp4", "録".repeat(251)),
+        format!("{}.webm", "🎮".repeat(125)),
+    ] {
+        assert!(source.len() > 255);
+        assert!(source.encode_utf16().count() <= 255);
+        if cfg!(target_os = "macos") {
+            let named_file = temp.path().join(&source);
+            std::fs::write(&named_file, b"filename proof").unwrap();
+            assert_eq!(std::fs::read(named_file).unwrap(), b"filename proof");
+        }
+        original.source = source.clone();
+        let path =
+            render_selected_sheet(std::slice::from_ref(&original), &temp.path().join("sheet"))
+                .unwrap();
+        let sheet = load(&path);
+        close_color(&sheet, 184, 138, [40, 100, 180]);
+        assert!(sheet.height() > 384);
+        assert_eq!(original.source, source);
+    }
+    original.source = format!("{}.mp4", "録".repeat(251));
+    let path =
+        render_selected_sheet(std::slice::from_ref(&original), &temp.path().join("long")).unwrap();
+    let sheet = load(&path);
+    original.source = format!("{}画.mp4", "録".repeat(250));
+    let changed_path =
+        render_selected_sheet(std::slice::from_ref(&original), &temp.path().join("tail")).unwrap();
+    let changed = load(&changed_path);
+    assert_eq!(sheet.dimensions(), changed.dimensions());
+    assert_ne!(
+        region(&sheet, 24, sheet.height() - 144, 320, 48),
+        region(&changed, 24, changed.height() - 144, 320, 48)
+    );
+}
+
+#[test]
 fn invalid_labels_metadata_corruption_and_context_fail_clearly() {
     let temp = TempDir::new().unwrap();
     let valid = entry(1, solid(temp.path(), "frame.png", [40, 100, 180]));
@@ -286,6 +327,14 @@ fn invalid_labels_metadata_corruption_and_context_fail_clearly() {
     let mut invalid = valid.clone();
     invalid.source = "f".repeat(256);
     assert!(render_candidate_sheets(&[invalid], &scratch).is_err());
+    for source in [
+        format!("{}.mp4", "録".repeat(252)),
+        format!("{}.mp4", "🎮".repeat(126)),
+    ] {
+        let mut invalid = valid.clone();
+        invalid.source = source;
+        assert!(render_candidate_sheets(&[invalid], &scratch).is_err());
+    }
     let mut invalid = valid.clone();
     invalid.scene = "s".repeat(513);
     assert!(render_candidate_sheets(&[invalid], &scratch).is_err());
