@@ -255,8 +255,10 @@ impl Cache {
             let digest = match index.get(&metadata) {
                 Some(digest) => digest.clone(),
                 None => {
-                    let (bytes, digest) = storage::digest_file_cancelled(&path, cancelled)?;
-                    self.stats.bytes_read += bytes;
+                    let (bytes, digest) =
+                        storage::digest_file_cancelled(&path, cancelled, |bytes| {
+                            self.stats.bytes_read += bytes;
+                        })?;
                     self.stats.input_hashes += 1;
                     ensure!(
                         bytes == metadata.length && stamp(&path)? == metadata,
@@ -377,4 +379,37 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
         return Err(Interrupted.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_input_hash_counts_partial_bytes_before_same_cache_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let source = root.join("recording.mkv");
+        let contents = vec![7; 256 * 1024];
+        fs::write(&source, &contents).unwrap();
+        let parent = root.join("cache");
+        fs::create_dir(&parent).unwrap();
+        let mut cache = Cache::open(&parent).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let interruption = storage::interrupt_digest_after(64 * 1024);
+        let error = cache
+            .identify(std::slice::from_ref(&source), &cancelled)
+            .unwrap_err();
+        drop(interruption);
+        assert!(error.downcast_ref::<Interrupted>().is_some());
+        assert_eq!(cache.stats().bytes_read, 64 * 1024);
+        assert_eq!(cache.stats().input_hashes, 0);
+        cancelled.store(false, Ordering::Relaxed);
+        let identities = cache
+            .identify(std::slice::from_ref(&source), &cancelled)
+            .unwrap();
+        assert_eq!(identities[0].content_digest, storage::sha256(&contents));
+        assert_eq!(cache.stats().bytes_read, 64 * 1024 + contents.len() as u64);
+        assert_eq!(cache.stats().input_hashes, 1);
+    }
 }

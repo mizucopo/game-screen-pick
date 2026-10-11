@@ -828,8 +828,10 @@ fn inspect(
             storage::open_regular(&path.join(name))?.metadata()?.len() == wanted.bytes,
             "output image {name:?} size changed; preserve it and choose a new empty output directory"
         );
-        let (length, digest) = storage::digest_file_cancelled(&path.join(name), cancelled)?;
-        bytes_read_total.set(bytes_read_total.get() + length);
+        let (length, digest) =
+            storage::digest_file_cancelled(&path.join(name), cancelled, |bytes| {
+                bytes_read_total.set(bytes_read_total.get() + bytes);
+            })?;
         ensure!(
             length == wanted.bytes && digest == wanted.sha256,
             "output image {name:?} was edited or damaged; preserve it and choose a new empty output directory"
@@ -1406,6 +1408,10 @@ mod tests {
         let journal = (operation == "recover").then(|| pending(output.as_ref().unwrap(), &source));
         let journal_path = output.as_ref().unwrap().journal.clone();
         let journal_bytes = journal.as_ref().map(|_| fs::read(&journal_path).unwrap());
+        let bytes_read_before = output.as_ref().unwrap().bytes_read();
+        let partial_bytes = before["report.json"].len() as u64
+            + 64 * 1024
+            + journal_bytes.as_ref().map_or(0, |bytes| bytes.len() as u64);
         let flag = AtomicBool::new(false);
         let interruption = storage::interrupt_digest_after(64 * 1024);
         let result = match operation {
@@ -1426,12 +1432,37 @@ mod tests {
         let error = result.unwrap_err();
         assert!(error.downcast_ref::<Interrupted>().is_some(), "{error:#}");
         assert_eq!(snapshot(), before);
+        if matches!(operation, "verify" | "recover") {
+            assert_eq!(
+                output.as_ref().unwrap().bytes_read() - bytes_read_before,
+                partial_bytes,
+                "count the report and the image chunk read before interruption"
+            );
+        }
+        if operation == "verify" {
+            let output = output.as_ref().unwrap();
+            let retried = output.verify_existing(&cancelled()).unwrap().unwrap();
+            assert_eq!(
+                output.bytes_read() - bytes_read_before,
+                partial_bytes + retried.bytes_read,
+                "a retry on the same output keeps the interrupted read cost"
+            );
+        }
         if let Some(journal) = journal {
             let bytes = fs::read(&journal_path).unwrap();
             assert_eq!(Some(&bytes), journal_bytes.as_ref());
             assert!(serde_json::from_slice::<Journal>(&bytes).is_ok());
             assert!(root.join(journal.stage).join("report.json").is_file());
-            output.as_ref().unwrap().recover(&cancelled()).unwrap();
+            let output = output.as_ref().unwrap();
+            output.recover(&cancelled()).unwrap();
+            // This prepared transaction checks the target twice and the stage
+            // three times, then reads the unchanged journal before unlinking.
+            let retry_bytes = 5 * original.bytes_read + 2 * bytes.len() as u64;
+            assert_eq!(
+                output.bytes_read() - bytes_read_before,
+                partial_bytes + retry_bytes,
+                "recovery on the same output keeps the interrupted read cost"
+            );
         }
         drop(output);
         let output = Output::prepare(&path, &[], &cancelled()).unwrap();

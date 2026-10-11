@@ -517,8 +517,9 @@ impl Session {
     }
 
     fn assessment_digest(&mut self, path: &Path, cancelled: &AtomicBool) -> Result<String> {
-        let (bytes, digest) = storage::digest_file_cancelled(path, cancelled)?;
-        self.assessment_bytes_read += bytes;
+        let (_, digest) = storage::digest_file_cancelled(path, cancelled, |bytes| {
+            self.assessment_bytes_read += bytes;
+        })?;
         Ok(digest)
     }
 
@@ -639,4 +640,43 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
         return Err(Interrupted.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_assessment_hash_counts_partial_bytes_before_same_session_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let input = root.join("input");
+        fs::create_dir(&input).unwrap();
+        fs::write(input.join("recording.mkv"), b"input").unwrap();
+        let paths = RunPaths {
+            input_directory: input,
+            output_directory: root.join("output"),
+            cache_directory: root.join("cache"),
+            config: None,
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut session = Session::prepare(&paths, &cancelled).unwrap();
+        let image = root.join("candidate.png");
+        let contents = vec![7; 256 * 1024];
+        fs::write(&image, &contents).unwrap();
+        let interruption = storage::interrupt_digest_after(64 * 1024);
+        let error = session.assessment_digest(&image, &cancelled).unwrap_err();
+        drop(interruption);
+        assert!(error.downcast_ref::<Interrupted>().is_some());
+        assert_eq!(session.metrics().assessment_bytes_read, 64 * 1024);
+        cancelled.store(false, Ordering::Relaxed);
+        assert_eq!(
+            session.assessment_digest(&image, &cancelled).unwrap(),
+            storage::sha256(&contents)
+        );
+        assert_eq!(
+            session.metrics().assessment_bytes_read,
+            64 * 1024 + contents.len() as u64
+        );
+    }
 }

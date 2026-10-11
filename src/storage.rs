@@ -117,7 +117,11 @@ pub(crate) fn interrupt_digest_after(bytes: u64) -> DigestInterruption {
     DigestInterruption
 }
 
-pub fn digest_file_cancelled(path: &Path, cancelled: &AtomicBool) -> Result<(u64, String)> {
+pub fn digest_file_cancelled(
+    path: &Path,
+    cancelled: &AtomicBool,
+    mut on_read: impl FnMut(u64),
+) -> Result<(u64, String)> {
     let mut file = open_regular(path)?;
     let mut buffer = [0; 64 * 1024];
     let mut digest = Sha256::new();
@@ -130,6 +134,7 @@ pub fn digest_file_cancelled(path: &Path, cancelled: &AtomicBool) -> Result<(u64
         if read == 0 {
             break;
         }
+        on_read(read as u64);
         length += read as u64;
         digest.update(&buffer[..read]);
         #[cfg(test)]
