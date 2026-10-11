@@ -2,7 +2,8 @@
 
 ゲーム録画からブログ用画像を選ぶ Rust CLI。現在は設定・入力検証と、元動画の full-resolution frame／前後 context 抽出を実装しています。
 Rust library は品質判定・多様性選定・二段階評価の候補/context sheet・full-resolution JPEG と最終一覧/report の作成まで実装しています。
-cache・AI 接続・安全な成果物公開は未実装です。通常の選定 command は理由を示して終了 code 1 で停止します。
+Rust library の cache・完了batch/chunkの再開・所有権検証と安全な成果物公開も実装しています。
+AI 接続は未実装で、通常の選定 command は事前確認・排他取得後、理由を示して終了 code 1 で停止します。
 
 開発に Rust 1.88 以上（stable）、FFmpeg／FFprobe、jq が必要です。日本語描画 font は binary に含めます。
 
@@ -26,7 +27,9 @@ cargo run --locked -- validate --config config/local.toml --count 2 \
 
 `--game-context` または `--game-title` の一方だけを指定します。枚数は 1〜999。
 入力 directory 直下の通常動画を名前順に扱い、symlink は追跡しません。
-出力は入力・設定と重ならない空または新しい directory を指定します。
+出力は入力・設定・cacheと重ならない空、新規、または内容を検証できるRust所有の directory を指定します。
+cacheは出力の親にある `.game-screen-pick-cache` を使い、`--cache-directory` で変更できます。
+`validate` は所有権まで確認しますが、lock・cache作成・復旧は通常commandが行います。
 
 抽出の確認は、既存の親 directory の下に新しい出力 directory を指定して行います。
 

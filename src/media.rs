@@ -1,5 +1,6 @@
 //! Input discovery and owned, full-resolution FFmpeg intermediates.
 use anyhow::{Context, Result, bail, ensure};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsStr;
 use std::fs;
@@ -31,7 +32,8 @@ impl Default for MediaTools {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FrameTime {
     /// Decode ordinal, including frames without a usable timestamp.
     pub decode_index: usize,
@@ -40,7 +42,8 @@ pub struct FrameTime {
     pub duration_seconds: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Video {
     pub source: PathBuf,
     pub stream_index: u32,

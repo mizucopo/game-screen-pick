@@ -1,0 +1,510 @@
+//! Cached selection and publication; AI transports remain caller supplied.
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+use anyhow::{Context, Result, ensure};
+use serde::Serialize;
+use serde_json::{Value, json};
+use url::Url;
+
+use crate::cache::{self, Cache, CacheStats, InputIdentity};
+use crate::media::{ChunkArtifact, Interrupted, MediaTools, Video, discover_inputs};
+use crate::output::Output;
+use crate::pipeline::{self, AssessmentBatch, AssessmentPhase, ModelConditions, PipelineOptions};
+use crate::selection::{
+    Assessment, MAX_CANDIDATES, SemanticEvent, event_positions, validate_assessments,
+};
+use crate::storage;
+
+const ALGORITHM: &str = "rust-selection-v1";
+const PROBE: &str = "ffprobe-pts-v1";
+
+pub struct RunPaths {
+    pub input_directory: PathBuf,
+    pub output_directory: PathBuf,
+    pub cache_directory: PathBuf,
+    pub config: Option<PathBuf>,
+}
+
+/// Effective dependencies, never credentials. Resolved context participates in
+/// keys even when its text is not permitted in a report or context checkpoint.
+#[derive(Clone, Debug, Serialize)]
+pub struct CacheConditions {
+    pub service_url: String,
+    pub prompt_revision: String,
+    pub response_schema_revision: String,
+    pub media_revision: String,
+    pub resolved_game_context: String,
+}
+
+impl CacheConditions {
+    fn normalized(&self) -> Result<Self> {
+        let service = Url::parse(&self.service_url).context("invalid inference service URL")?;
+        ensure!(
+            ["http", "https"].contains(&service.scheme())
+                && service.host_str().is_some()
+                && service.username().is_empty()
+                && service.password().is_none()
+                && service.query().is_none()
+                && service.fragment().is_none(),
+            "inference service URL must be HTTP(S) without credentials, query or fragment"
+        );
+        ensure!(
+            [
+                &self.prompt_revision,
+                &self.response_schema_revision,
+                &self.media_revision,
+                &self.resolved_game_context
+            ]
+            .iter()
+            .all(|value| !value.trim().is_empty()),
+            "cache conditions must not be blank"
+        );
+        Ok(Self {
+            service_url: service.to_string(),
+            ..self.clone()
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunMetrics {
+    pub cache: CacheStats,
+    pub output_bytes_read: u64,
+    pub probe_calls: u64,
+    pub assessment_calls: u64,
+    pub elapsed_seconds: f64,
+}
+
+#[derive(Debug)]
+pub struct RunOutcome {
+    pub warm: bool,
+    pub report: Value,
+    pub metrics: RunMetrics,
+}
+
+/// Holds both locks across preflight, callbacks, checkpoints and publication.
+pub struct Session {
+    inputs: Vec<PathBuf>,
+    cache: Cache,
+    output: Output,
+    output_bytes_read: u64,
+    prepared_at: Option<Instant>,
+}
+
+impl Session {
+    /// No external command, search, inference or runtime operation occurs here.
+    pub fn prepare(paths: &RunPaths) -> Result<Self> {
+        let prepared_at = Instant::now();
+        let input = storage::checked_path(&paths.input_directory)?;
+        let output = storage::checked_path(&paths.output_directory)?;
+        let cache_path = storage::checked_path(&paths.cache_directory)?;
+        let config = paths
+            .config
+            .as_deref()
+            .map(storage::checked_path)
+            .transpose()?;
+        let protected = [&input, &cache_path]
+            .into_iter()
+            .chain(config.as_ref())
+            .collect::<Vec<_>>();
+        ensure!(
+            !input.starts_with(&cache_path) && !cache_path.starts_with(&input),
+            "cache and input paths must not overlap"
+        );
+        if let Some(config) = &config {
+            ensure!(
+                fs::symlink_metadata(config)?.is_file(),
+                "configuration must be an ordinary file"
+            );
+            ensure!(
+                !config.starts_with(&cache_path),
+                "cache must not contain configuration"
+            );
+            crate::config::Config::load(config)?;
+        }
+        let inputs = discover_inputs(&input)?;
+        ensure!(inputs.len() <= MAX_CANDIDATES, "input count exceeds 4096");
+        let mut aliases = BTreeSet::new();
+        for path in &inputs {
+            ensure!(
+                !source_name(path)?.chars().any(char::is_control),
+                "video source names must not contain controls"
+            );
+            let metadata = fs::symlink_metadata(path)?;
+            ensure!(
+                aliases.insert((metadata.dev(), metadata.ino())),
+                "input paths refer to the same file more than once"
+            );
+        }
+        let output = Output::prepare(
+            &output,
+            &protected.iter().map(|p| p.as_path()).collect::<Vec<_>>(),
+        )?;
+        let output_bytes_read = output.preflight_bytes_read();
+        if !cache_path.exists() {
+            fs::create_dir(&cache_path).context("cannot create cache directory")?;
+        }
+        let cache = Cache::open(&cache_path)?;
+        Ok(Self {
+            inputs,
+            cache,
+            output,
+            output_bytes_read,
+            prepared_at: Some(prepared_at),
+        })
+    }
+
+    pub fn run(
+        &mut self,
+        tools: &MediaTools,
+        options: &PipelineOptions,
+        conditions: &CacheConditions,
+        cancelled: &AtomicBool,
+        mut assessor: impl FnMut(&AssessmentBatch<'_>) -> Result<Vec<Assessment>>,
+    ) -> Result<RunOutcome> {
+        let started = self.prepared_at.take().unwrap_or_else(Instant::now);
+        check_cancelled(cancelled)?;
+        let baseline = self.cache.stats();
+        let conditions = conditions.normalized()?;
+        pipeline::validate_parameters(options)?;
+        ensure!(
+            options
+                .game_context
+                .as_ref()
+                .is_none_or(|context| context == &conditions.resolved_game_context),
+            "persisted context must match resolved inference context"
+        );
+        if let Some(events) = &options.semantic_events {
+            ensure!(!events.is_empty(), "semantic events must be nonempty");
+            let sources = self
+                .inputs
+                .iter()
+                .map(|path| source_name(path))
+                .collect::<Result<BTreeSet<_>>>()?;
+            for event in events {
+                check_cancelled(cancelled)?;
+                ensure!(
+                    sources.contains(event.source.as_str()),
+                    "semantic event refers to an unknown video source"
+                );
+                event_positions(event, event.end_seconds)?;
+            }
+        }
+        let identities = self.cache.identify(&self.inputs, cancelled)?;
+        let named = self
+            .inputs
+            .iter()
+            .zip(&identities)
+            .map(|(path, identity)| {
+                (
+                    source_name(path).map(str::to_owned),
+                    &identity.content_digest,
+                )
+            })
+            .map(|(name, digest)| Ok((name?, digest)))
+            .collect::<Result<Vec<_>>>()?;
+        let run_key = cache::key(
+            &json!({"algorithm":ALGORITHM,"probe":PROBE,"inputs":named,"options":options,"conditions":conditions}),
+        )?;
+        let previous = self.output.verify_existing()?;
+        let mut output_bytes = std::mem::take(&mut self.output_bytes_read)
+            + previous.as_ref().map_or(0, |owned| owned.bytes_read);
+        if let Some(owned) = previous.filter(|owned| {
+            owned.report["cache"]["namespace"] == cache::NAMESPACE
+                && owned.report["cache"]["key"] == run_key
+        }) {
+            cache::verify_inputs(&self.inputs, &identities)?;
+            check_cancelled(cancelled)?;
+            return Ok(RunOutcome {
+                warm: true,
+                report: owned.report,
+                metrics: self.metrics(&baseline, output_bytes, 0, 0, started),
+            });
+        }
+        let mut probe_calls = 0;
+        let mut videos = Vec::with_capacity(self.inputs.len());
+        for (path, identity) in self.inputs.iter().zip(&identities) {
+            videos.push(probe(
+                &mut self.cache,
+                tools,
+                path,
+                identity,
+                cancelled,
+                &mut probe_calls,
+            )?);
+        }
+        let by_source = self
+            .inputs
+            .iter()
+            .zip(&identities)
+            .map(|(path, identity)| {
+                Ok((
+                    source_name(path)?.to_owned(),
+                    identity.content_digest.clone(),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let mut assessment_calls = 0;
+        let artifacts = pipeline::run(tools, &videos, options, cancelled, |batch| {
+            check_cancelled(cancelled)?;
+            cache::verify_inputs(&self.inputs, &identities)?;
+            let candidates = batch.candidates.iter().map(|candidate| Ok(json!({
+                "id":candidate.id,"source":candidate.source,"input":by_source.get(&candidate.source).context("unknown assessment source")?,
+                "requested":candidate.requested_seconds,"actual":candidate.actual_seconds,"duration":candidate.duration_seconds,
+                "quality":candidate.quality,"event":candidate.event,"image":storage::digest_file(&candidate.image)?.1
+            }))).collect::<Result<Vec<_>>>()?;
+            let contexts = batch.contexts.iter().map(|context| {
+                let frames = context.frames.iter().map(|frame| Ok(json!({"source":frame.source,"requested":frame.requested_seconds,"actual":frame.actual_seconds,"image":storage::digest_file(&frame.image)?.1}))).collect::<Result<Vec<_>>>()?;
+                Ok(json!({"id":context.id,"frames":frames}))
+            }).collect::<Result<Vec<_>>>()?;
+            let sheets = batch
+                .sheets
+                .iter()
+                .map(|path| storage::digest_file(path).map(|(_, digest)| digest))
+                .collect::<Result<Vec<_>>>()?;
+            let key = cache::key(
+                &json!({"algorithm":ALGORITHM,"phase":match batch.phase {AssessmentPhase::Primary=>"primary",AssessmentPhase::Secondary=>"secondary"},"model":options.model,"conditions":conditions,"candidates":candidates,"contexts":contexts,"sheets":sheets}),
+            )?;
+            if let Some(cached) = self.cache.read::<Vec<Assessment>>("assessments", &key)?
+                && validate_assessments(batch.candidates, &cached).is_ok()
+            {
+                check_cancelled(cancelled)?;
+                return Ok(cached);
+            }
+            assessment_calls += 1;
+            let result = assessor(batch)?;
+            validate_assessments(batch.candidates, &result)?;
+            // A complete response survives a signal received just after it.
+            self.cache.write("assessments", &key, &result)?;
+            check_cancelled(cancelled)?;
+            Ok(result)
+        })?;
+        cache::verify_inputs(&self.inputs, &identities)?;
+        check_cancelled(cancelled)?;
+        let report_path = artifacts.path().canonicalize()?.join("report.json");
+        let mut report: Value =
+            serde_json::from_slice(&storage::read_regular(&report_path, 64 * 1024 * 1024)?)?;
+        report["cache"] = json!({"namespace":cache::NAMESPACE,"key":run_key,"algorithm":ALGORITHM,"probe":PROBE,
+            "service_url":conditions.service_url,"prompt_revision":conditions.prompt_revision,
+            "response_schema_revision":conditions.response_schema_revision,"media_revision":conditions.media_revision,
+            "context_digest":storage::sha256(conditions.resolved_game_context.as_bytes())});
+        storage::atomic_write(&report_path, &serde_json::to_vec_pretty(&report)?)?;
+        let owned = self.output.publish(&artifacts, cancelled)?;
+        output_bytes += owned.bytes_read;
+        Ok(RunOutcome {
+            warm: false,
+            report: owned.report,
+            metrics: self.metrics(
+                &baseline,
+                output_bytes,
+                probe_calls,
+                assessment_calls,
+                started,
+            ),
+        })
+    }
+
+    /// Checkpoint one validated semantic chunk; missing/corrupt chunks alone
+    /// invoke the caller again. Events use source-relative original video times.
+    #[allow(clippy::too_many_arguments)]
+    pub fn semantic_chunk(
+        &mut self,
+        tools: &MediaTools,
+        source: &Path,
+        start: f64,
+        end: f64,
+        model: &ModelConditions,
+        conditions: &CacheConditions,
+        cancelled: &AtomicBool,
+        mut understand: impl FnMut(&ChunkArtifact) -> Result<Vec<SemanticEvent>>,
+    ) -> Result<Vec<SemanticEvent>> {
+        check_cancelled(cancelled)?;
+        let conditions = conditions.normalized()?;
+        pipeline::validate_model(model)?;
+        ensure!(
+            start.is_finite() && end.is_finite() && start >= 0.0 && end > start,
+            "invalid semantic chunk range"
+        );
+        let source = storage::checked_path(source)?;
+        let index = self
+            .inputs
+            .iter()
+            .position(|path| path == &source)
+            .context("semantic chunk source is not an input")?;
+        let identities = self.cache.identify(&self.inputs, cancelled)?;
+        let identity = &identities[index];
+        let video = probe(&mut self.cache, tools, &source, identity, cancelled, &mut 0)?;
+        ensure!(
+            start.is_finite()
+                && end.is_finite()
+                && start >= 0.0
+                && end > start
+                && end <= video.duration_seconds,
+            "invalid semantic chunk range"
+        );
+        let name = source_name(&source)?;
+        let key = cache::key(
+            &json!({"probe":PROBE,"input":identity.content_digest,"source":name,"stream":video.stream_index,"start":start,"end":end,"model":model,"conditions":conditions}),
+        )?;
+        let validate = |events: &Vec<SemanticEvent>| -> Result<()> {
+            for event in events {
+                event_positions(event, video.duration_seconds)?;
+                ensure!(
+                    event.source == name
+                        && event.start_seconds >= start
+                        && event.end_seconds <= end,
+                    "semantic event is outside its source/chunk"
+                );
+            }
+            Ok(())
+        };
+        if let Some(events) = self.cache.read::<Vec<SemanticEvent>>("semantic", &key)?
+            && validate(&events).is_ok()
+        {
+            cache::verify_inputs(&self.inputs, &identities)?;
+            check_cancelled(cancelled)?;
+            return Ok(events);
+        }
+        let chunk = tools.extract_chunk(&video, start, end, cancelled)?;
+        let events = understand(&chunk)?;
+        validate(&events)?;
+        cache::verify_inputs(&self.inputs, &identities)?;
+        self.cache.write("semantic", &key, &events)?;
+        check_cancelled(cancelled)?;
+        Ok(events)
+    }
+
+    /// Only call with persist=true after the search contract permits storing the
+    /// generated text. Raw search responses have no persistence path here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn generated_context(
+        &mut self,
+        title: &str,
+        search_conditions: &str,
+        generation_conditions: &CacheConditions,
+        model: &ModelConditions,
+        persist: bool,
+        cancelled: &AtomicBool,
+        mut generate: impl FnMut() -> Result<String>,
+    ) -> Result<String> {
+        check_cancelled(cancelled)?;
+        ensure!(!title.trim().is_empty(), "game title must not be blank");
+        ensure!(
+            !search_conditions.trim().is_empty(),
+            "search conditions must not be blank"
+        );
+        let conditions = generation_conditions.normalized()?;
+        pipeline::validate_model(model)?;
+        let key = cache::key(
+            &json!({"title":title,"search":search_conditions,"generation":conditions,"model":model}),
+        )?;
+        if persist
+            && let Some(context) = self.cache.read::<String>("contexts", &key)?
+            && !context.trim().is_empty()
+        {
+            check_cancelled(cancelled)?;
+            return Ok(context);
+        }
+        let context = generate()?;
+        ensure!(
+            !context.trim().is_empty(),
+            "generated game context must not be blank"
+        );
+        if persist {
+            self.cache.write("contexts", &key, &context)?;
+        }
+        check_cancelled(cancelled)?;
+        Ok(context)
+    }
+
+    fn metrics(
+        &self,
+        baseline: &CacheStats,
+        output_bytes_read: u64,
+        probe_calls: u64,
+        assessment_calls: u64,
+        started: Instant,
+    ) -> RunMetrics {
+        let stats = self.cache.stats();
+        let elapsed_seconds = started.elapsed().as_secs_f64();
+        RunMetrics {
+            cache: CacheStats {
+                bytes_read: stats.bytes_read - baseline.bytes_read,
+                input_hashes: stats.input_hashes - baseline.input_hashes,
+                hits: stats.hits - baseline.hits,
+                misses: stats.misses - baseline.misses,
+                elapsed_seconds,
+            },
+            output_bytes_read,
+            probe_calls,
+            assessment_calls,
+            elapsed_seconds,
+        }
+    }
+}
+
+fn probe(
+    cache: &mut Cache,
+    tools: &MediaTools,
+    path: &Path,
+    identity: &InputIdentity,
+    cancelled: &AtomicBool,
+    calls: &mut u64,
+) -> Result<Video> {
+    let key = cache::key(&json!({"probe":PROBE,"input":identity.content_digest}))?;
+    if let Some(mut video) = cache.read::<Video>("probe", &key)? {
+        video.source = path.to_owned();
+        if valid_video(&video) {
+            return Ok(video);
+        }
+    }
+    *calls += 1;
+    let mut video = tools.probe(path, cancelled)?;
+    cache::verify_inputs(&[path.to_owned()], std::slice::from_ref(identity))?;
+    ensure!(valid_video(&video), "invalid probed video checkpoint");
+    let source = video.source.clone();
+    video.source = PathBuf::new();
+    cache.write("probe", &key, &video)?;
+    video.source = source;
+    Ok(video)
+}
+
+fn valid_video(video: &Video) -> bool {
+    video.start_seconds.is_finite()
+        && video.duration_seconds.is_finite()
+        && video.duration_seconds > 0.0
+        && video.width >= 16
+        && video.height >= 16
+        && video.width <= crate::quality::MAX_IMAGE_EDGE
+        && video.height <= crate::quality::MAX_IMAGE_EDGE
+        && u64::from(video.width) * u64::from(video.height) <= crate::quality::MAX_IMAGE_PIXELS
+        && !video.frames.is_empty()
+        && video.frames[0].seconds == 0.0
+        && video.frames.iter().all(|frame| {
+            frame.seconds.is_finite()
+                && frame.seconds >= 0.0
+                && frame.duration_seconds.is_finite()
+                && frame.duration_seconds > 0.0
+                && frame.seconds + frame.duration_seconds <= video.duration_seconds + 0.000001
+        })
+        && video.frames.windows(2).all(|pair| {
+            pair[0].seconds < pair[1].seconds && pair[0].decode_index < pair[1].decode_index
+        })
+}
+
+fn source_name(path: &Path) -> Result<&str> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .context("UTF-8 source filename required")
+}
+fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(Interrupted.into());
+    }
+    Ok(())
+}

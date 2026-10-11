@@ -30,7 +30,7 @@ pub struct ModelConditions {
     pub cache_revision: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PipelineOptions {
     pub count: usize,
     pub samples_per_video: usize,
@@ -273,44 +273,10 @@ pub fn run(
 }
 
 fn validate_options(videos: &[Video], options: &PipelineOptions) -> Result<()> {
-    ensure!(
-        (1..=999).contains(&options.count),
-        "selected count must be within 1..=999"
-    );
+    validate_parameters(options)?;
     ensure!(
         !videos.is_empty() && videos.len() <= MAX_CANDIDATES,
         "video count must be within 1..={MAX_CANDIDATES}"
-    );
-    ensure!(
-        (1..=MAX_CANDIDATES).contains(&options.samples_per_video),
-        "sample count must be within 1..={MAX_CANDIDATES}"
-    );
-    ensure!(
-        options.context_delta_seconds.is_finite() && options.context_delta_seconds > 0.0,
-        "context interval must be finite and positive"
-    );
-    ensure!(
-        ["strata", "vllm"].contains(&options.model.backend.as_str()),
-        "unsupported assessment backend"
-    );
-    ensure!(
-        ["none", "low", "medium", "high"].contains(&options.model.inference_level.as_str()),
-        "unsupported inference level"
-    );
-    ensure!(
-        !options.model.model.trim().is_empty() && !options.model.cache_revision.trim().is_empty(),
-        "assessment model and cache revision must not be blank"
-    );
-    ensure!(
-        (1..=3600).contains(&options.model.timeout_seconds),
-        "assessment timeout must be within 1..=3600 seconds"
-    );
-    ensure!(
-        options
-            .game_context
-            .as_ref()
-            .is_none_or(|context| !context.trim().is_empty()),
-        "persisted game context must not be blank"
     );
     for video in videos {
         ensure!(
@@ -328,6 +294,50 @@ fn validate_options(videos: &[Video], options: &PipelineOptions) -> Result<()> {
             "video display dimensions exceed the image processing limits"
         );
     }
+    Ok(())
+}
+
+pub(crate) fn validate_parameters(options: &PipelineOptions) -> Result<()> {
+    ensure!(
+        (1..=999).contains(&options.count),
+        "selected count must be within 1..=999"
+    );
+    ensure!(
+        (1..=MAX_CANDIDATES).contains(&options.samples_per_video),
+        "sample count must be within 1..={MAX_CANDIDATES}"
+    );
+    ensure!(
+        options.context_delta_seconds.is_finite() && options.context_delta_seconds > 0.0,
+        "context interval must be finite and positive"
+    );
+    validate_model(&options.model)?;
+    ensure!(
+        options
+            .game_context
+            .as_ref()
+            .is_none_or(|context| !context.trim().is_empty()),
+        "persisted game context must not be blank"
+    );
+    Ok(())
+}
+
+pub(crate) fn validate_model(model: &ModelConditions) -> Result<()> {
+    ensure!(
+        ["strata", "vllm"].contains(&model.backend.as_str()),
+        "unsupported assessment backend"
+    );
+    ensure!(
+        ["none", "low", "medium", "high"].contains(&model.inference_level.as_str()),
+        "unsupported inference level"
+    );
+    ensure!(
+        !model.model.trim().is_empty() && !model.cache_revision.trim().is_empty(),
+        "assessment model and cache revision must not be blank"
+    );
+    ensure!(
+        (1..=3600).contains(&model.timeout_seconds),
+        "assessment timeout must be within 1..=3600 seconds"
+    );
     Ok(())
 }
 
