@@ -1,9 +1,10 @@
 # Game Screen Pick
 
 ゲーム録画からブログ用画像を選ぶ Rust CLI。現在は設定・入力検証と、元動画の full-resolution frame／前後 context 抽出を実装しています。
-画像評価・選定・contact sheet・cache・AI 接続・成果物公開は未実装です。通常の選定 command は理由を示して終了 code 1 で停止します。
+Rust library は品質判定・多様性選定・二段階評価の候補/context sheet・full-resolution JPEG と最終一覧/report の作成まで実装しています。
+cache・AI 接続・安全な成果物公開は未実装です。通常の選定 command は理由を示して終了 code 1 で停止します。
 
-開発に Rust stable、FFmpeg／FFprobe、jq が必要です。
+開発に Rust 1.88 以上（stable）、FFmpeg／FFprobe、jq が必要です。日本語描画 font は binary に含めます。
 
 ```sh
 cargo build --locked
