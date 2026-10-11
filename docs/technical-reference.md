@@ -1,4 +1,4 @@
-# 設定と抽出
+# 設定・抽出・選定
 
 ## 設定
 
@@ -12,7 +12,7 @@
 認証値を診断・Debug・report・cache へ出しません。AI 通信はまだ行いません。
 
 `validate` は設定・枚数・Game Title/Context の排他・入力探索・出力 path を確認します。
-通常実行も同じ事前確認を行い、未実装の選定・生成 context・AI 接続を成功扱いしません。
+通常実行も同じ事前確認を行い、未接続の生成 context・AI 接続・安全な公開を成功扱いしません。
 
 ## media
 
@@ -39,9 +39,46 @@ FFmpeg/FFprobe は shell を経由せず argv で実行します。媒体は専�
 cache/output の排他・完成済み画像セットの staging/公開・再開は別途実装します。
 SIGINT は130、SIGTERM/HUPも成功にせず停止します。強制 kill や filesystem transaction の保証は含めません。
 
+## 品質・選定・一覧（#340）
+
+`pipeline::run` は probe 済み動画と同期評価 callback を受け取り、専用 temporary directory の
+`Artifacts` を返します。一次/二次 callback へは実際の候補 ID・画像・sheet・前後 context を渡します。
+HTTP・応答 retry は #362/#342、cache・再開・所有権・公開は #341 の責務です。
+この段階の固定応答テストは外部 API を呼ばず、通常 CLI の完成を意味しません。
+
+等間隔 sampling は両端を含み、1候補なら中央を使います。semantic event は有効区間・代表時刻・重要度・
+scene・根拠・source を検証し、代表とその両側の候補を抽出します。同じ実 PTS は一度だけ評価します。
+不足時は未評価の最も広い時間の隙間を入力元ごとに交互に追補し、semantic 方式では event 区間内に限ります。
+初期計画を含む実候補数は4096、評価 batch は12、抽出/decode/job は逐次です。
+有効な異なる画像が指定枚数に達しなければ、除外・不足理由を示して停止します。
+
+PNG/JPEG は decode 前に encoded file を64 MiB、各辺を16384、画素を3200万、縦横比を32までに制限します。
+16未満の寸法、壊れた画像、symlink/特殊 file も拒否します。JPEG の向き情報を反映します。
+512px以内の preview の RGB 輝度平均・標準偏差・隣接勾配を使い、近黒/近白が96%超、平均が2.5%未満/97.5%超、
+標準偏差2.5%未満、平均勾配0.2%未満を除外します。遷移と有用性20点未満は評価結果から除外します。
+この保守的な機械判定は実ゲーム品質の保証ではなく、#343 の実録画確認で評価します。
+
+32×18 RGB の平均距離3.5%未満を近似重複とします。日本語等の scene を空白・英字大小だけ正規化し、
+未知 source、重複/欠落/未知 ID、非有限/範囲外 score、空 scene/根拠を拒否します。
+通常進行を最初に選び、通常進行が残る間は特別画面を概ね3分の1（2枚時は1枚）に抑えます。
+許容候補から未採用 source、scene、source内の時間3分割を優先し、次に有用性80%＋機械品質20%＋event重要度15%と
+見た目の距離で選びます。同点は有用性、source の UTF-8 順、実時刻、要求時刻、ID 順です。
+枠・近似重複・通常進行の優先で達成できない source 分散を report に説明します。
+
+候補 sheet は12枚ごとの JPEG。二次評価は before/center/after を実時刻付きで表示します。
+最終一覧は全選定画像を一度ずつ rank 順で、ID・source・要求/実時刻・scene と表示します。
+縦横比を維持して余白を付け、日本語の Noto Sans JP（[OFL](../assets/OFL.txt)）を同梱します。
+sheet は200MPの RGB canvas を上限とし、一度に1画像だけ decode/resize します。上限の canvas 自体は600MBです。
+通常の枚数では小さい canvas を使います。999枚や長い入力名の一覧は拡大して確認してください。
+不足 glyph・不正な rank/context 順序・異常 metadata は読めない一覧のまま成功させません。
+
+Selected JPEG は縮小せず品質95で encode し、report は rank・source・要求/実時刻・寸法・一次/二次評価・event根拠・
+除外理由・非秘密の model 条件を記録します。Game Context は保存可能と確認した caller だけ明示して渡します。
+
 ## 検証
 
 `sh tests/check.sh` が format・Clippy・unit/integration と入力素材の確認を行う単一の品質 gate です。
 実 FFmpeg の抽出を [独立した入力 recipe](../tests/fixtures/README.md) の全画素・PTS・向きへ照合します。
 素材確認の単独実行と明示生成は同 README を参照してください。
-製品の選定・AI 能力・配布 target の最小 OS 条件は、それぞれ担当機能の検証後に確定します。
+固定応答の選定と一覧の pixel/source/PTS/向き検証は Rust integration test で行います。
+実 model の品質・AI 能力・配布 target の最小 OS 条件は、それぞれ担当機能の検証後に確定します。

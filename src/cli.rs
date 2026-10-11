@@ -16,7 +16,7 @@ use crate::{
 #[derive(Parser)]
 #[command(version, bin_name = "game-screen-pick", about = "Pick blog images from game recordings", color = ColorChoice::Never,
     subcommand_negates_reqs = true, args_conflicts_with_subcommands = true,
-    after_help = "Selection is not implemented yet. Use validate for input/config checks or extract for an original full-resolution frame.")]
+    after_help = "AI assessment and safe artifact publication are not implemented yet. Use validate for input/config checks or extract for an original full-resolution frame.")]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -109,7 +109,7 @@ impl Cli {
                     inputs.len()
                 );
                 Err(CliError::processing(anyhow::anyhow!(
-                    "selection, AI assessment and artifact publication are not implemented yet; use extract to inspect original frames"
+                    "AI assessment and safe artifact publication are not implemented yet; use extract to inspect original frames"
                 )))
             }
         }

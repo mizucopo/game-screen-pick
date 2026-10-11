@@ -288,6 +288,13 @@ impl MediaTools {
         requested_seconds: f64,
         cancelled: &AtomicBool,
     ) -> Result<FrameArtifact> {
+        ensure!(
+            video.width <= crate::quality::MAX_IMAGE_EDGE
+                && video.height <= crate::quality::MAX_IMAGE_EDGE
+                && u64::from(video.width) * u64::from(video.height)
+                    <= crate::quality::MAX_IMAGE_PIXELS,
+            "video frame exceeds the supported image dimensions/pixel limit"
+        );
         let frame = frame_at(video, requested_seconds)?;
         check_cancelled(cancelled)?;
         let directory = Builder::new()

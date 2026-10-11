@@ -64,7 +64,10 @@ fn video_rgb_frames(mirrored: bool, rotated: bool) -> Vec<u8> {
     } else {
         (WIDTH, HEIGHT)
     };
-    for frame in video_frames(mirrored).chunks_exact(WIDTH * HEIGHT * 3) {
+    for frame in video_frames(mirrored)
+        .as_chunks::<{ WIDTH * HEIGHT * 3 }>()
+        .0
+    {
         for y in 0..height {
             for x in 0..width {
                 // Display rotation +90 is counter-clockwise; neutral chroma makes RGB = luma.
