@@ -48,6 +48,7 @@ pub struct Candidate {
     pub requested_seconds: f64,
     pub actual_seconds: f64,
     pub duration_seconds: f64,
+    /// Pipeline callback paths exist only for that synchronous callback.
     pub image: PathBuf,
     pub quality: Quality,
     pub event: Option<SemanticEvent>,

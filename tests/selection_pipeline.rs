@@ -166,9 +166,9 @@ fn verify_batch(batch: &AssessmentBatch<'_>) {
             for (context, candidate) in batch.contexts.iter().zip(batch.candidates) {
                 assert_eq!(context.id, candidate.id);
                 let requested = [
-                    (candidate.requested_seconds - 0.25).max(0.0),
-                    candidate.requested_seconds,
-                    (candidate.requested_seconds + 0.25).min(candidate.duration_seconds),
+                    (candidate.actual_seconds - 0.25).max(0.0),
+                    candidate.actual_seconds,
+                    (candidate.actual_seconds + 0.25).min(candidate.duration_seconds),
                 ];
                 for (frame, requested) in context.frames.iter().zip(requested) {
                     assert_eq!(frame.source, candidate.source);
@@ -1185,4 +1185,171 @@ fn report_exclusions_describe_the_final_winners_after_replenishment() {
         excluded.reason
     );
     assert!(excluded.reason.contains("ranking"));
+}
+
+#[test]
+fn primary_production_retains_at_most_one_batch_of_original_pngs() {
+    let mut options = options(1, false, false);
+    options.samples_per_video = 48; // Covers every actual fixture frame, including repeats.
+    let mut previous = Vec::<PathBuf>::new();
+    let mut primary_batches = 0;
+    let artifacts = run(&MediaTools::default(), &probe(false), &options, &AtomicBool::new(false), |batch| {
+        assert!(previous.iter().all(|path| !path.exists()), "accepted primary originals must be discarded before the next batch");
+        let response = fixed_assessments(batch)?;
+        if batch.phase == AssessmentPhase::Primary {
+            primary_batches += 1;
+            let live = fs::read_dir(batch.candidates[0].image.parent().unwrap()).unwrap().count();
+            assert!(live <= 12, "initial producer must assess before storing more than 12 full-resolution originals; found {live}");
+            assert_eq!(live, batch.candidates.len());
+            previous.extend(batch.candidates.iter().map(|candidate| candidate.image.clone()));
+        }
+        Ok(response)
+    }).unwrap();
+    assert!(primary_batches >= 2);
+    assert!(previous.iter().all(|path| !path.exists()));
+    assert_eq!(artifacts.report().selected_count, 1);
+}
+
+#[test]
+fn secondary_terminal_originals_are_removed_before_more_candidate_work() {
+    for transition in [false, true] {
+        let mut options = options(1, false, false);
+        options.samples_per_video = 1;
+        let mut rejected = Vec::<PathBuf>::new();
+        let artifacts = run(
+            &MediaTools::default(),
+            &probe(false),
+            &options,
+            &AtomicBool::new(false),
+            |batch| {
+                assert!(
+                    rejected.iter().all(|path| !path.exists()),
+                    "completed terminal secondary images must not survive into replenishment"
+                );
+                let mut response = fixed_assessments(batch)?;
+                if batch.phase == AssessmentPhase::Secondary {
+                    for assessment in &mut response {
+                        let candidate = batch
+                            .candidates
+                            .iter()
+                            .find(|candidate| candidate.id == assessment.id)
+                            .unwrap();
+                        if candidate.actual_seconds == 3.0 {
+                            rejected.push(candidate.image.clone());
+                            assessment.transition = transition;
+                            assessment.blog_score = 10.0;
+                        }
+                    }
+                }
+                Ok(response)
+            },
+        )
+        .unwrap();
+        assert!(!rejected.is_empty());
+        assert!(rejected.iter().all(|path| !path.exists()));
+        assert_ne!(artifacts.report().selected[0].actual_seconds, 3.0);
+    }
+}
+
+#[test]
+fn vfr_context_is_centered_on_actual_pts_and_final_export_retains_original_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("VFR-context.mkv");
+    let generated = Command::new("ffmpeg").args(["-v", "error", "-nostdin", "-i"])
+        .arg(fixture("01-blocks.mkv")).args([
+            "-vf", "select='eq(n,0)+eq(n,4)+eq(n,12)+eq(n,20)',setpts='if(eq(N,0),0,if(eq(N,1),10,if(eq(N,2),11,12)))/TB'",
+            "-fps_mode", "passthrough", "-c:v", "ffv1",
+        ]).arg(&source).output().unwrap();
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let tools = MediaTools::default();
+    let cancelled = AtomicBool::new(false);
+    let videos = [tools.probe(&source, &cancelled).unwrap()];
+    assert_eq!(
+        videos[0]
+            .frames
+            .iter()
+            .map(|frame| frame.seconds)
+            .collect::<Vec<_>>(),
+        [0.0, 10.0, 11.0, 12.0]
+    );
+    let mut options = options(1, true, false);
+    options.context_delta_seconds = 1.0;
+    options.semantic_events = Some(vec![SemanticEvent {
+        source: "VFR-context.mkv".to_owned(),
+        start_seconds: 5.0,
+        end_seconds: 11.0,
+        representative_seconds: 5.0,
+        importance: 80.0,
+        scene: "探索".to_owned(),
+        reason: "実 PTS の前後を確認".to_owned(),
+    }]);
+    let artifacts = run(&tools, &videos, &options, &cancelled, |batch| {
+        assert_eq!(batch.candidates.len(), 1);
+        let candidate = &batch.candidates[0];
+        assert_eq!(
+            (candidate.requested_seconds, candidate.actual_seconds),
+            (5.0, 10.0)
+        );
+        assert_eq!(candidate.source, "VFR-context.mkv");
+        assert_eq!(
+            image::open(&candidate.image).unwrap().to_rgb8(),
+            expected("01-blocks.mkv", 1.0)
+        );
+        if batch.phase == AssessmentPhase::Secondary {
+            let context = &batch.contexts[0];
+            assert_eq!(
+                context
+                    .frames
+                    .each_ref()
+                    .map(|frame| frame.requested_seconds),
+                [9.0, 10.0, 11.0]
+            );
+            assert_eq!(
+                context.frames.each_ref().map(|frame| frame.actual_seconds),
+                [10.0, 10.0, 11.0]
+            );
+            for (frame, recipe_second) in context.frames.iter().zip([1.0, 1.0, 3.0]) {
+                assert_eq!(frame.source, "VFR-context.mkv");
+                assert_eq!(
+                    image::open(&frame.image).unwrap().to_rgb8(),
+                    expected("01-blocks.mkv", recipe_second)
+                );
+            }
+        }
+        Ok(vec![Assessment {
+            id: candidate.id.clone(),
+            blog_score: 80.0,
+            transition: false,
+            scene: "探索".to_owned(),
+            reason: "既知の VFR 画像の実時刻と前後を照合".to_owned(),
+            special: false,
+        }])
+    })
+    .unwrap();
+    let selected = &artifacts.report().selected[0];
+    assert_eq!(
+        (selected.requested_seconds, selected.actual_seconds),
+        (5.0, 10.0)
+    );
+    assert_eq!(selected.source, "VFR-context.mkv");
+    let image = image::open(artifacts.path().join(&selected.image))
+        .unwrap()
+        .to_rgb8();
+    let original = expected("01-blocks.mkv", 1.0);
+    assert_eq!(image.dimensions(), original.dimensions());
+    let error = image
+        .as_raw()
+        .iter()
+        .zip(original.as_raw())
+        .map(|(actual, wanted)| f64::from(actual.abs_diff(*wanted)))
+        .sum::<f64>()
+        / image.as_raw().len() as f64;
+    assert!(
+        error < 4.0,
+        "final re-extraction must retain the source frame at the selected actual PTS"
+    );
 }

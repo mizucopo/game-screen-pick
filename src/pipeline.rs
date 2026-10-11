@@ -12,7 +12,7 @@ use tempfile::TempDir;
 use crate::contact_sheet::{
     ContextImage, SheetEntry, render_candidate_sheets, render_selected_sheet,
 };
-use crate::media::{Interrupted, MediaTools, Video};
+use crate::media::{FrameArtifact, Interrupted, MediaTools, Video};
 use crate::quality::{MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS, analyze, read_image};
 use crate::selection::{
     Assessment, Candidate, Exclusion, MAX_CANDIDATES, SemanticEvent, event_positions,
@@ -65,7 +65,7 @@ pub struct CandidateContext {
 
 /// A synchronous bounded batch. The callback must inspect these exact IDs and
 /// images; any network transport and response retries are a caller concern.
-/// Sheet and context paths exist only during this callback; copy any QA evidence
+/// Candidate, sheet and context paths exist only during this callback; copy QA evidence
 /// before returning. Completed artifacts retain none of this assessment scratch.
 pub struct AssessmentBatch<'a> {
     pub phase: AssessmentPhase,
@@ -199,7 +199,7 @@ pub fn run(
     for ordinal in 0..plans.iter().map(Vec::len).max().unwrap_or(0) {
         for (source, plan) in plans.iter().enumerate() {
             if let Some(seconds) = plan.get(ordinal) {
-                work.extract(source, *seconds)?;
+                work.produce(source, *seconds, &mut assessor)?;
             }
         }
     }
@@ -231,7 +231,7 @@ pub fn run(
         if newly_assessed > 0 {
             continue;
         }
-        let added = work.replenish()?;
+        let added = work.replenish(&mut assessor)?;
         if added == 0 {
             let reasons = work
                 .exclusions
@@ -375,6 +375,19 @@ fn initial_plans(
 }
 
 impl Work<'_> {
+    fn produce(
+        &mut self,
+        source: usize,
+        seconds: f64,
+        assessor: &mut impl FnMut(&AssessmentBatch<'_>) -> Result<Vec<Assessment>>,
+    ) -> Result<bool> {
+        let progress = self.extract(source, seconds)?;
+        if self.candidates.len() - self.primary.len() == ASSESSMENT_BATCH {
+            self.assess_primary(assessor)?;
+        }
+        Ok(progress)
+    }
+
     fn extract(&mut self, source: usize, seconds: f64) -> Result<bool> {
         check_cancelled(self.cancelled)?;
         if self.attempts == MAX_CANDIDATES {
@@ -460,17 +473,17 @@ impl Work<'_> {
             let assessments = aligned(candidates, assessments);
             for (index, assessment) in assessments.iter().enumerate() {
                 let index = offset + index;
+                let candidate = &self.candidates[index];
                 if let Some(reason) = assessment.rejection() {
-                    let candidate = &self.candidates[index];
                     self.exclusions
                         .entry(candidate.id.clone())
                         .or_default()
                         .insert(format!("primary: {reason}"));
-                    fs::remove_file(&candidate.image)
-                        .context("cannot remove rejected primary image")?;
                 } else {
                     self.secondary_pending.insert(index);
                 }
+                fs::remove_file(&candidate.image)
+                    .context("cannot remove completed primary image")?;
             }
             self.primary.extend(assessments);
             offset = end;
@@ -497,7 +510,7 @@ impl Work<'_> {
         )?;
         for chunk in pool.indices.chunks(ASSESSMENT_BATCH) {
             check_cancelled(self.cancelled)?;
-            let candidates = chunk
+            let mut candidates = chunk
                 .iter()
                 .map(|&index| candidates[index].clone())
                 .collect::<Vec<_>>();
@@ -508,6 +521,9 @@ impl Work<'_> {
                 .iter()
                 .map(|candidate| self.context(candidate, scratch.path()))
                 .collect::<Result<Vec<_>>>()?;
+            for (candidate, context) in candidates.iter_mut().zip(&contexts) {
+                candidate.image = context.frames[1].image.clone();
+            }
             let entries = candidates
                 .iter()
                 .zip(&contexts)
@@ -552,10 +568,11 @@ impl Work<'_> {
             .expect("candidate source came from this work");
         let artifacts = self.tools.extract_context(
             &self.videos[source],
-            candidate.requested_seconds,
+            candidate.actual_seconds,
             self.options.context_delta_seconds,
             self.cancelled,
         )?;
+        verify_frame(&self.videos[source], candidate, &artifacts[1])?;
         let mut frames = Vec::new();
         for (index, artifact) in artifacts.into_iter().enumerate() {
             let image = scratch.join(format!("{}-{index}.png", candidate.id));
@@ -573,7 +590,10 @@ impl Work<'_> {
         })
     }
 
-    fn replenish(&mut self) -> Result<usize> {
+    fn replenish(
+        &mut self,
+        assessor: &mut impl FnMut(&AssessmentBatch<'_>) -> Result<Vec<Assessment>>,
+    ) -> Result<usize> {
         let before = self.attempts;
         let target = (self.options.count * 2)
             .max(self.videos.len())
@@ -591,7 +611,7 @@ impl Work<'_> {
                     &self.sources[source],
                 ) {
                     let seconds = self.videos[source].frames[frame].seconds;
-                    progress |= self.extract(source, seconds)?;
+                    progress |= self.produce(source, seconds, assessor)?;
                 }
             }
             if !progress {
@@ -637,7 +657,18 @@ impl Work<'_> {
             let rank = ordinal + 1;
             let name = format!("selected-{rank:02}.jpg");
             let path = output.join(&name);
-            let image = read_image(&candidate.image)?;
+            let source = self
+                .sources
+                .iter()
+                .position(|source| source == &candidate.source)
+                .expect("candidate source came from this work");
+            let artifact = self.tools.extract(
+                &self.videos[source],
+                candidate.actual_seconds,
+                self.cancelled,
+            )?;
+            verify_frame(&self.videos[source], candidate, &artifact)?;
+            let image = read_image(&artifact.path())?;
             JpegEncoder::new_with_quality(File::create(&path)?, 95)
                 .encode_image(&image)
                 .context("cannot encode selected full-resolution JPEG")?;
@@ -719,6 +750,17 @@ impl Work<'_> {
             report,
         })
     }
+}
+
+fn verify_frame(video: &Video, candidate: &Candidate, artifact: &FrameArtifact) -> Result<()> {
+    ensure!(
+        artifact.source == video.source
+            && artifact.actual_seconds == candidate.actual_seconds
+            && (artifact.width, artifact.height)
+                == (candidate.quality.width, candidate.quality.height),
+        "re-extracted frame source, actual PTS or dimensions differ from the assessed candidate"
+    );
+    Ok(())
 }
 
 fn aligned(candidates: &[Candidate], assessments: Vec<Assessment>) -> Vec<Assessment> {

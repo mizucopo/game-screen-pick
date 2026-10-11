@@ -43,8 +43,9 @@ SIGINT は130、SIGTERM/HUPも成功にせず停止します。強制 kill や f
 
 `pipeline::run` は probe 済み動画と同期評価 callback を受け取り、専用 temporary directory の
 `Artifacts` を返します。一次/二次 callback へは実際の候補 ID・画像・sheet・前後 context を渡します。
-評価用 sheet と前後 context は各 callback の実行中だけ存在し、完了後に削除します。
-成功時は候補原画像も削除し、完成した JPEG・一覧・report だけを保持します。
+候補は最大12枚ずつ抽出して一次評価し、評価後は ID・時刻・品質指標を保持して原画像を削除します。
+二次評価と最終 JPEG には必要な元 frame だけを再抽出します。評価用の原画像・sheet・前後 context は
+各 callback の実行中だけ存在し、完了後に削除します。成功後は完成した JPEG・一覧・report だけを保持します。
 HTTP・応答 retry は #362/#342、cache・再開・所有権・公開は #341 の責務です。
 この段階の固定応答テストは外部 API を呼ばず、通常 CLI の完成を意味しません。
 
@@ -69,12 +70,15 @@ PNG/JPEG は decode 前に encoded file を64 MiB、各辺を16384、画素を32
 見た目の距離で選びます。同点は有用性、source の UTF-8 順、実時刻、要求時刻、ID 順です。
 枠・近似重複・通常進行の優先で達成できない source 分散を report に説明します。
 
-候補 sheet は12枚ごとの JPEG。二次評価は before/center/after を実時刻付きで表示します。
+候補 sheet は12枚ごとの JPEG。二次評価の before/center/after は候補の実 PTS を中心に抽出し、実時刻付きで表示します。
 最終一覧は全選定画像を一度ずつ rank 順で、ID・source・要求/実時刻・scene と表示します。
 縦横比を維持して余白を付け、日本語の Noto Sans JP（[OFL](../assets/OFL.txt)）を同梱します。
 sheet は200MPの RGB canvas を上限とし、一度に1画像だけ decode/resize します。上限の canvas 自体は600MBです。
 通常の枚数では小さい canvas を使います。999枚や長い入力名の一覧は拡大して確認してください。
-不足 glyph・不正な rank/context 順序・異常 metadata は読めない一覧のまま成功させません。
+未収録の Unicode 文字は、元の文字を識別できる ASCII code point 表記へ置き換えて表示します。
+元の source・scene は保持し、表示の計測・折り返しにも同じ置換を適用します。
+小型の最終一覧は通常14pxで表示し、長い名前の展開で canvas 上限に収まらない場合だけ12pxで再計測します。
+不正な rank/context 順序・異常 metadata は読めない一覧のまま成功させません。
 
 Selected JPEG は縮小せず品質95で encode し、report は rank・source・要求/実時刻・寸法・一次/二次評価・event根拠・
 除外理由・非秘密の model 条件を記録します。遷移・低有用性等の確定除外と、最終選定に基づく重複・順位理由を分けます。

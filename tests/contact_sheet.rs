@@ -188,12 +188,97 @@ fn long_source_wraps_without_overlapping_or_discarding_the_last_glyphs() {
 }
 
 #[test]
+fn unsupported_unicode_renders_identifiable_labels_without_changing_images_or_metadata() {
+    let temp = TempDir::new().unwrap();
+    let before = solid(temp.path(), "before.png", [210, 40, 30]);
+    let center = solid(temp.path(), "center.png", [20, 190, 40]);
+    let after = solid(temp.path(), "after.png", [20, 40, 220]);
+    let mut original = entry(1, center.clone());
+    original.rank = Some(1);
+    original.source = "日本語🎮_नमस्ते.mp4".to_owned();
+    original.scene = "探索🎮क".to_owned();
+    original.context = Some([
+        ContextImage {
+            image: before,
+            actual_seconds: 11.125,
+        },
+        ContextImage {
+            image: center,
+            actual_seconds: 12.125,
+        },
+        ContextImage {
+            image: after,
+            actual_seconds: 13.125,
+        },
+    ]);
+    let mut escaped = original.clone();
+    escaped.source = "日本語\\U0001F3AE_\\u0928\\u092E\\u0938\\u094D\\u0924\\u0947.mp4".to_owned();
+    escaped.scene = "探索\\U0001F3AE\\u0915".to_owned();
+    let actual = render_candidate_sheets(
+        std::slice::from_ref(&original),
+        &temp.path().join("unicode"),
+    )
+    .unwrap();
+    let expected =
+        render_candidate_sheets(std::slice::from_ref(&escaped), &temp.path().join("escaped"))
+            .unwrap();
+    assert_eq!(
+        std::fs::read(&actual[0]).unwrap(),
+        std::fs::read(&expected[0]).unwrap()
+    );
+    let actual = render_selected_sheet(
+        std::slice::from_ref(&original),
+        &temp.path().join("selected-unicode"),
+    )
+    .unwrap();
+    let expected = render_selected_sheet(
+        std::slice::from_ref(&escaped),
+        &temp.path().join("selected-escaped"),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(actual).unwrap(),
+        std::fs::read(expected).unwrap()
+    );
+    assert_eq!(original.source, "日本語🎮_नमस्ते.mp4");
+    assert_eq!(original.scene, "探索🎮क");
+}
+
+#[test]
+fn expanded_unicode_source_wraps_in_full_and_retains_the_original_scene() {
+    let temp = TempDir::new().unwrap();
+    let mut original = entry(1, solid(temp.path(), "frame.png", [40, 100, 180]));
+    original.rank = Some(1);
+    original.source = format!("{}.mp4", "🎮".repeat(62));
+    original.scene = "🎮".repeat(128);
+    let path =
+        render_selected_sheet(std::slice::from_ref(&original), &temp.path().join("long")).unwrap();
+    let sheet = load(&path);
+    assert!(sheet.height() > 600);
+    assert!(u64::from(sheet.width()) * u64::from(sheet.height()) <= 200_000_000);
+    original.source = format!("{}🎯.mp4", "🎮".repeat(61));
+    let changed_path =
+        render_selected_sheet(std::slice::from_ref(&original), &temp.path().join("tail")).unwrap();
+    let changed = load(&changed_path);
+    assert_eq!(sheet.dimensions(), changed.dimensions());
+    assert_eq!(
+        region(&sheet, 24, 240, 320, 24),
+        region(&changed, 24, 240, 320, 24)
+    );
+    assert_ne!(
+        region(&sheet, 24, sheet.height() - 144, 320, 48),
+        region(&changed, 24, changed.height() - 144, 320, 48)
+    );
+    assert_eq!(original.scene, "🎮".repeat(128));
+}
+
+#[test]
 fn invalid_labels_metadata_corruption_and_context_fail_clearly() {
     let temp = TempDir::new().unwrap();
     let valid = entry(1, solid(temp.path(), "frame.png", [40, 100, 180]));
     let scratch = temp.path().join("sheets");
     let mut invalid = valid.clone();
-    invalid.source.push('\u{10ffff}');
+    invalid.source.push('\0');
     assert!(render_candidate_sheets(&[invalid], &scratch).is_err());
     let mut invalid = valid.clone();
     invalid.id = "c".repeat(33);

@@ -4,7 +4,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use fontdue::{Font, FontSettings};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{FilterType, resize};
@@ -110,7 +110,6 @@ fn validate_entries(entries: &[SheetEntry], selected: bool) -> Result<()> {
     );
     let mut ids = HashSet::new();
     let mut ranks = HashSet::new();
-    let font = font()?;
     for entry in entries {
         ensure!(
             !entry.id.trim().is_empty() && entry.id.len() <= 32 && ids.insert(&entry.id),
@@ -125,7 +124,7 @@ fn validate_entries(entries: &[SheetEntry], selected: bool) -> Result<()> {
             "contact sheet scene label exceeds 512 bytes"
         );
         for text in [&entry.id, &entry.source, &entry.scene] {
-            validate_glyphs(font, text)?;
+            validate_label(text)?;
         }
         for seconds in [entry.requested_seconds, entry.actual_seconds] {
             ensure!(
@@ -157,16 +156,29 @@ fn validate_entries(entries: &[SheetEntry], selected: bool) -> Result<()> {
     Ok(())
 }
 
-fn validate_glyphs(font: &Font, text: &str) -> Result<()> {
+fn validate_label(text: &str) -> Result<()> {
+    ensure!(
+        !text.chars().any(char::is_control),
+        "contact sheet labels must not contain control characters"
+    );
+    Ok(())
+}
+
+fn display_text(font: &Font, text: &str) -> String {
+    let mut display = String::with_capacity(text.len());
     for character in text.chars() {
         if font.lookup_glyph_index(character) == 0 {
-            bail!(
-                "contact sheet font cannot display character U+{:04X}",
-                u32::from(character)
-            );
+            let codepoint = u32::from(character);
+            display.push_str(&if codepoint <= 0xffff {
+                format!("\\u{codepoint:04X}")
+            } else {
+                format!("\\U{codepoint:08X}")
+            });
+        } else {
+            display.push(character);
         }
     }
-    Ok(())
+    display
 }
 
 #[derive(Clone, Copy)]
@@ -181,18 +193,24 @@ struct Layout {
 impl Layout {
     fn new(width: u32, font: &Font) -> Self {
         let font_size = if width >= 320 { 16.0 } else { 14.0 };
-        let line_height = font
-            .horizontal_line_metrics(font_size)
-            .expect("bundled font has horizontal metrics")
-            .new_line_size
-            .ceil() as u32;
         Self {
             thumbnail_width: width,
             thumbnail_height: width * 9 / 16,
             font_size,
-            line_height,
+            line_height: 0,
             cell_width: width + 2 * BORDER,
         }
+        .with_font_size(font, font_size)
+    }
+
+    fn with_font_size(mut self, font: &Font, font_size: f32) -> Self {
+        self.font_size = font_size;
+        self.line_height = font
+            .horizontal_line_metrics(font_size)
+            .expect("bundled font has horizontal metrics")
+            .new_line_size
+            .ceil() as u32;
+        self
     }
 }
 
@@ -284,6 +302,43 @@ struct Grid {
     row_heights: Vec<u32>,
 }
 
+struct SheetLayout {
+    main: Layout,
+    context: Layout,
+    labels: Vec<Labels>,
+    grid: Grid,
+}
+
+fn sheet_layout(
+    entries: &[SheetEntry],
+    font: &Font,
+    width: u32,
+    columns: u32,
+    show_context: bool,
+) -> Result<SheetLayout> {
+    let main = Layout::new(width, font);
+    let context = Layout::new((width - 2 * GAP) / 3, font);
+    let prepare = |main: Layout| {
+        let labels = entries
+            .iter()
+            .map(|entry| Labels::new(entry, font, main, show_context))
+            .collect::<Vec<_>>();
+        let grid = grid(&labels, main, context, columns)?;
+        Ok(SheetLayout {
+            main,
+            context,
+            labels,
+            grid,
+        })
+    };
+    // Escaping a maximum-length UTF-8 filename can exceed the canvas limit.
+    // Retry only the dense final overview, using the same layout measurements.
+    match prepare(main) {
+        Err(_) if width == 160 && !show_context => prepare(main.with_font_size(font, 12.0)),
+        result => result,
+    }
+}
+
 fn grid(labels: &[Labels], layout: Layout, context_layout: Layout, columns: u32) -> Result<Grid> {
     let mut columns = columns.min(labels.len() as u32);
     loop {
@@ -326,13 +381,12 @@ fn render(
     columns: u32,
     show_context: bool,
 ) -> Result<()> {
-    let layout = Layout::new(width, font);
-    let context_layout = Layout::new((width - 2 * GAP) / 3, font);
-    let labels = entries
-        .iter()
-        .map(|entry| Labels::new(entry, font, layout, show_context))
-        .collect::<Vec<_>>();
-    let grid = grid(&labels, layout, context_layout, columns)?;
+    let SheetLayout {
+        main: layout,
+        context: context_layout,
+        labels,
+        grid,
+    } = sheet_layout(entries, font, width, columns, show_context)?;
     let mut canvas = RgbImage::from_pixel(grid.width, grid.height, BACKGROUND);
     let mut row_y = GAP;
     for (index, (entry, labels)) in entries.iter().zip(&labels).enumerate() {
@@ -447,6 +501,7 @@ fn draw_image(
 }
 
 fn wrapped_lines(font: &Font, text: &str, size: f32, width: u32, limit: usize) -> Vec<String> {
+    let text = display_text(font, text);
     let mut lines = Vec::new();
     let mut line = String::new();
     let mut used_width = 0.0;
@@ -536,23 +591,22 @@ mod tests {
     fn japanese_glyphs_and_wrapping_fit_the_label_box() {
         let font = font().unwrap();
         let text = "探索・戦闘・会話の画像と前後の時刻。日本語録画の長い入力ファイル名.mp4";
-        validate_glyphs(font, text).unwrap();
-        let lines = wrapped_lines(font, text, 14.0, 100, 2);
-        assert_eq!(lines.len(), 2);
-        assert!(
-            lines
-                .iter()
-                .all(|line| text_width(font, line, 14.0) <= 100.0)
-        );
-        assert!(lines[1].ends_with('…'));
+        validate_label(text).unwrap();
+        let lines = wrapped_lines(font, text, 14.0, 100, usize::MAX);
+        assert!(lines.len() > 2);
+        assert_eq!(lines.concat(), text);
+        assert!(lines.iter().all(|line| {
+            line.chars()
+                .map(|ch| font.metrics(ch, 14.0).advance_width)
+                .sum::<f32>()
+                <= 100.0
+        }));
         assert!(font.rasterize('戦', 16.0).1.iter().any(|alpha| *alpha > 0));
     }
 
     #[test]
     fn largest_selected_sheet_and_long_sources_have_bounded_jpeg_dimensions() {
         let font = font().unwrap();
-        let layout = Layout::new(160, font);
-        let context = Layout::new((160 - 2 * GAP) / 3, font);
         let entry = SheetEntry {
             id: "c000001".to_owned(),
             rank: Some(999),
@@ -563,12 +617,52 @@ mod tests {
             image: PathBuf::new(),
             context: None,
         };
-        let labels = (0..MAX_ENTRIES)
-            .map(|_| Labels::new(&entry, font, layout, false))
-            .collect::<Vec<_>>();
-        let dimensions = grid(&labels, layout, context, 6).unwrap();
+        let entries = vec![entry.clone(); MAX_ENTRIES];
+        let prepared = sheet_layout(&entries, font, 160, 6, false).unwrap();
+        assert_eq!(prepared.main.font_size, 14.0);
+        let labels = &prepared.labels;
+        let dimensions = prepared.grid;
         assert!(dimensions.width <= 65_535 && dimensions.height <= 65_535);
         assert!(u64::from(dimensions.width) * u64::from(dimensions.height) <= MAX_SHEET_PIXELS);
         assert_eq!(labels[0].source.concat(), format!("入力: {}", entry.source));
+    }
+
+    #[test]
+    fn largest_selected_sheet_fully_wraps_the_widest_unsupported_source_and_maximum_id() {
+        let font = font().unwrap();
+        let scalar = (0xa0..=0x7ff)
+            .filter_map(char::from_u32)
+            .filter(|scalar| font.lookup_glyph_index(*scalar) == 0)
+            .max_by(|left, right| {
+                text_width(font, &display_text(font, &left.to_string()), 14.0).total_cmp(
+                    &text_width(font, &display_text(font, &right.to_string()), 14.0),
+                )
+            })
+            .unwrap();
+        let entry = SheetEntry {
+            id: scalar.to_string().repeat(16),
+            rank: Some(999),
+            source: format!("W{}.mp4", scalar.to_string().repeat(125)),
+            requested_seconds: 9999.125,
+            actual_seconds: 9999.25,
+            scene: scalar.to_string().repeat(256),
+            image: PathBuf::new(),
+            context: None,
+        };
+        assert_eq!(entry.id.len(), 32);
+        assert_eq!(entry.source.len(), 255);
+        assert_eq!(entry.scene.len(), 512);
+        let entries = vec![entry.clone(); MAX_ENTRIES];
+        let prepared = sheet_layout(&entries, font, 160, 6, false).unwrap();
+        assert_eq!(prepared.main.font_size, 12.0);
+        let labels = &prepared.labels;
+        assert_eq!(
+            labels[0].source.concat(),
+            format!("入力: {}", display_text(font, &entry.source))
+        );
+        assert_eq!(labels[0].scene.len(), 1);
+        let dimensions = prepared.grid;
+        assert!(dimensions.width <= 65_535 && dimensions.height <= 65_535);
+        assert!(u64::from(dimensions.width) * u64::from(dimensions.height) <= MAX_SHEET_PIXELS);
     }
 }
