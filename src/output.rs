@@ -645,12 +645,16 @@ fn stage_artifacts(source: &Path, target: &Path, cancelled: &AtomicBool) -> Resu
         check_cancelled(cancelled)?;
         let staged = target.join(&name);
         let digest = copy_image(&source.join(&name), &staged, cancelled)?;
-        let image = image::ImageReader::with_format(
+        let mut reader = image::ImageReader::with_format(
             BufReader::new(storage::open_regular(&staged)?),
             image::ImageFormat::Jpeg,
-        )
-        .decode()
-        .context("private artifact is not a decodable JPEG")?;
+        );
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(4 * crate::contact_sheet::MAX_SHEET_PIXELS);
+        reader.limits(limits);
+        let image = reader
+            .decode()
+            .context("private artifact is not a decodable JPEG")?;
         if let Some(frame) = report["selected"]
             .as_array()
             .expect("validated selected records")
