@@ -316,6 +316,74 @@ fn normal_command_reports_cache_and_output_lock_contention_as_processing_failure
 }
 
 #[test]
+fn normal_command_reports_cache_directory_creation_failures_as_processing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for existing_parent in [false, true] {
+        let directory = sandbox();
+        setup(directory.path());
+        let root = directory.path().canonicalize().unwrap();
+        let blocked = root.join("read-only");
+        fs::create_dir(&blocked).unwrap();
+        let permissions = fs::metadata(&blocked).unwrap().permissions();
+        let cache = if existing_parent {
+            blocked.clone()
+        } else {
+            blocked.join("cache")
+        };
+        let mut args = request();
+        args.extend(["--cache-directory", cache.to_str().unwrap()]);
+        let invoke = |args: &[&str]| {
+            Command::new(BINARY)
+                .current_dir(&root)
+                .env("PATH", "")
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o500)).unwrap();
+        let mut validate = args.clone();
+        validate.insert(0, "validate");
+        let diagnostic = invoke(&validate);
+        let normal = invoke(&args);
+        fs::set_permissions(&blocked, permissions).unwrap();
+        assert_eq!(diagnostic.status.code(), Some(0));
+        let expected = if existing_parent {
+            "cannot create Rust cache namespace"
+        } else {
+            "cannot create cache directory"
+        };
+        assert!(String::from_utf8_lossy(&normal.stderr).contains(expected));
+        assert_eq!(
+            normal.status.code(),
+            Some(1),
+            "{expected}: {}",
+            String::from_utf8_lossy(&normal.stderr)
+        );
+        assert!(!root.join("output").exists());
+        assert!(!cache.join(game_screen_pick::cache::NAMESPACE).exists());
+    }
+
+    let directory = sandbox();
+    setup(directory.path());
+    let root = directory.path().canonicalize().unwrap();
+    let cache = root.join("cache");
+    fs::create_dir(&cache).unwrap();
+    let unexpected = cache.join(game_screen_pick::cache::NAMESPACE);
+    fs::write(&unexpected, b"preserve unknown file").unwrap();
+    let mut args = request();
+    args.extend(["--cache-directory", cache.to_str().unwrap()]);
+    let invalid = Command::new(BINARY)
+        .current_dir(&root)
+        .env("PATH", "")
+        .args(args)
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert_eq!(fs::read(unexpected).unwrap(), b"preserve unknown file");
+}
+
+#[test]
 fn unsafe_paths_and_invalid_config_are_rejected_before_commands() {
     let directory = sandbox();
     setup(directory.path());

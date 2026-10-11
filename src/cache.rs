@@ -112,7 +112,11 @@ impl Cache {
         match fs::create_dir(&root) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error).context("cannot create Rust cache namespace"),
+            Err(error) => {
+                return Err(error).context(storage::OperationalError(
+                    "cannot create Rust cache namespace",
+                ));
+            }
         }
         ensure!(
             fs::symlink_metadata(&root)?.is_dir(),

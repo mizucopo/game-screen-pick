@@ -150,7 +150,8 @@ impl Session {
         )?;
         let output_bytes_read = output.preflight_bytes_read();
         if !cache_path.exists() {
-            fs::create_dir(&cache_path).context("cannot create cache directory")?;
+            fs::create_dir(&cache_path)
+                .context(storage::OperationalError("cannot create cache directory"))?;
         }
         let cache = Cache::open(&cache_path)?;
         Ok(Self {
