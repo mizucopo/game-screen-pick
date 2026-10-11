@@ -12,7 +12,7 @@ fn output_lock_probe() {
     let Some(path) = std::env::var_os("GSP_OUTPUT_LOCK_PROBE") else {
         return;
     };
-    let result = Output::prepare(Path::new(&path), &[]);
+    let result = Output::prepare(Path::new(&path), &[], &AtomicBool::new(false));
     assert_eq!(
         result.is_ok(),
         std::env::var("GSP_OUTPUT_LOCK_EXPECTED").unwrap() == "available"
@@ -23,7 +23,7 @@ fn output_lock_probe() {
 fn output_lock_excludes_a_separate_process_and_releases_on_drop() {
     let workspace = tempfile::tempdir().unwrap();
     let path = workspace.path().canonicalize().unwrap().join("result");
-    let output = Output::prepare(&path, &[]).unwrap();
+    let output = Output::prepare(&path, &[], &AtomicBool::new(false)).unwrap();
     let probe = |expected: &str| {
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "output_lock_probe", "--nocapture"])
@@ -49,7 +49,8 @@ fn real_pipeline_images_sheet_and_rank_metadata_survive_safe_publication() {
     let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/videos/01-blocks.mkv");
     let cancelled = AtomicBool::new(false);
     let tools = MediaTools::default();
-    let mut output = Output::prepare(&root.join("result"), &[&input]).unwrap();
+    let mut output =
+        Output::prepare(&root.join("result"), &[&input], &AtomicBool::new(false)).unwrap();
     let video = tools.probe(&input, &cancelled).unwrap();
     let options = PipelineOptions {
         count: 2,
@@ -137,10 +138,14 @@ fn real_pipeline_images_sheet_and_rank_metadata_survive_safe_publication() {
     let path = output.path().to_owned();
     drop(output);
     drop(artifacts);
-    let output = Output::prepare(&path, &[&input]).unwrap();
+    let output = Output::prepare(&path, &[&input], &AtomicBool::new(false)).unwrap();
     assert!(output.bytes_read() > 0);
     assert_eq!(
-        output.verify_existing().unwrap().unwrap().fingerprint,
+        output
+            .verify_existing(&AtomicBool::new(false))
+            .unwrap()
+            .unwrap()
+            .fingerprint,
         fingerprint
     );
     if let Some(qa) = std::env::var_os("GSP_QA_DIR") {

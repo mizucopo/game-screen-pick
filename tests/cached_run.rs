@@ -11,7 +11,7 @@ use game_screen_pick::media::{ChunkArtifact, Interrupted, MediaTools};
 use game_screen_pick::pipeline::{
     AssessmentBatch, AssessmentPhase, ModelConditions, PipelineOptions,
 };
-use game_screen_pick::run::{CacheConditions, RunPaths, Session};
+use game_screen_pick::run::{CacheConditions, ResolvedGameContext, RunPaths, Session};
 use game_screen_pick::selection::{Assessment, SemanticEvent};
 use image::RgbImage;
 use serde_json::Value;
@@ -91,7 +91,9 @@ fn conditions() -> CacheConditions {
         prompt_revision: "fixture-prompt-v1".to_owned(),
         response_schema_revision: "fixture-assessment-v1".to_owned(),
         media_revision: "ffmpeg-pts-png-v1".to_owned(),
-        resolved_game_context: responses()["game_context"].as_str().unwrap().to_owned(),
+        resolved_game_context: ResolvedGameContext::direct(
+            responses()["game_context"].as_str().unwrap(),
+        ),
     }
 }
 
@@ -226,7 +228,7 @@ fn cold_and_warm_both_methods_publish_identical_actual_artifacts_without_media_c
             let paths = setup_paths(root.path(), multiple);
             let options = options(2, semantic, multiple);
             let conditions = conditions();
-            let cold = Session::prepare(&paths)
+            let cold = Session::prepare(&paths, &AtomicBool::new(false))
                 .unwrap()
                 .run(
                     &MediaTools::default(),
@@ -245,7 +247,7 @@ fn cold_and_warm_both_methods_publish_identical_actual_artifacts_without_media_c
             assert!(cold.metrics.assessment_calls > 0);
             verify_outputs(&paths.output_directory, &cold.report, 2);
             let completed = snapshot(&paths.output_directory);
-            let warm = Session::prepare(&paths)
+            let warm = Session::prepare(&paths, &AtomicBool::new(false))
                 .unwrap()
                 .run(
                     &unavailable_tools(),
@@ -315,29 +317,27 @@ fn metrics_include_prerun_context_semantic_and_preflight_work() {
     for kind in ["contexts", "inputs", "probe", "semantic"] {
         fs::remove_dir_all(paths.cache_directory.join(NAMESPACE).join(kind)).unwrap();
     }
-    let conditions = conditions();
+    let mut conditions = conditions();
     let cancelled = AtomicBool::new(false);
     let source = paths.input_directory.join("01-blocks.mkv");
-    let mut session = Session::prepare(&paths).unwrap();
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
     let before_run = Instant::now();
     let mut context_calls = 0;
-    options.game_context = Some(
-        session
-            .generated_context(
-                "合成ゲーム",
-                "brave-fixed-query-v1",
-                &conditions,
-                &options.model,
-                true,
-                &cancelled,
-                || {
-                    context_calls += 1;
-                    std::thread::sleep(Duration::from_millis(20));
-                    Ok(conditions.resolved_game_context.clone())
-                },
-            )
-            .unwrap(),
-    );
+    conditions.resolved_game_context = session
+        .generated_context(
+            "合成ゲーム",
+            "brave-fixed-query-v1",
+            &conditions,
+            &options.model,
+            true,
+            &cancelled,
+            || {
+                context_calls += 1;
+                std::thread::sleep(Duration::from_millis(20));
+                Ok(conditions.resolved_game_context.text().to_owned())
+            },
+        )
+        .unwrap();
     let mut semantic_calls = 0;
     options.semantic_events = Some(
         session
@@ -395,22 +395,20 @@ fn metrics_include_warm_prerun_checkpoint_reads_without_callbacks() {
     let paths = setup_paths(root.path(), false);
     let mut options = completed_semantic_workflow(&paths);
     let previous = snapshot(&paths.output_directory);
-    let conditions = conditions();
+    let mut conditions = conditions();
     let cancelled = AtomicBool::new(false);
-    let mut session = Session::prepare(&paths).unwrap();
-    options.game_context = Some(
-        session
-            .generated_context(
-                "合成ゲーム",
-                "brave-fixed-query-v1",
-                &conditions,
-                &options.model,
-                true,
-                &cancelled,
-                || panic!("warm context must not invoke generation"),
-            )
-            .unwrap(),
-    );
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
+    conditions.resolved_game_context = session
+        .generated_context(
+            "合成ゲーム",
+            "brave-fixed-query-v1",
+            &conditions,
+            &options.model,
+            true,
+            &cancelled,
+            || panic!("warm context must not invoke generation"),
+        )
+        .unwrap();
     options.semantic_events = Some(
         session
             .semantic_chunk(
@@ -459,7 +457,7 @@ fn metrics_accumulate_across_cold_and_warm_runs_in_one_session() {
     let options = options(1, false, false);
     let conditions = conditions();
     let cancelled = AtomicBool::new(false);
-    let mut session = Session::prepare(&paths).unwrap();
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
     let cold = session
         .run(
             &MediaTools::default(),
@@ -473,6 +471,7 @@ fn metrics_accumulate_across_cold_and_warm_runs_in_one_session() {
     assert_eq!(cold.metrics.cache.input_hashes, 1);
     assert_eq!(cold.metrics.probe_calls, 1);
     assert!(cold.metrics.assessment_calls > 0);
+    assert!(cold.metrics.assessment_bytes_read > 0);
     let warm = session
         .run(
             &unavailable_tools(),
@@ -490,6 +489,10 @@ fn metrics_accumulate_across_cold_and_warm_runs_in_one_session() {
     );
     assert_eq!(warm.metrics.probe_calls, cold.metrics.probe_calls);
     assert_eq!(warm.metrics.assessment_calls, cold.metrics.assessment_calls);
+    assert_eq!(
+        warm.metrics.assessment_bytes_read,
+        cold.metrics.assessment_bytes_read
+    );
     assert_eq!(warm.metrics.context_calls, cold.metrics.context_calls);
     assert_eq!(warm.metrics.semantic_calls, cold.metrics.semantic_calls);
     assert!(warm.metrics.cache.bytes_read >= cold.metrics.cache.bytes_read);
@@ -500,23 +503,21 @@ fn metrics_accumulate_across_cold_and_warm_runs_in_one_session() {
 }
 
 fn completed_semantic_workflow(paths: &RunPaths) -> PipelineOptions {
-    let conditions = conditions();
+    let mut conditions = conditions();
     let cancelled = AtomicBool::new(false);
     let mut options = options(1, true, false);
-    let mut session = Session::prepare(paths).unwrap();
-    options.game_context = Some(
-        session
-            .generated_context(
-                "合成ゲーム",
-                "brave-fixed-query-v1",
-                &conditions,
-                &options.model,
-                true,
-                &cancelled,
-                || Ok(conditions.resolved_game_context.clone()),
-            )
-            .unwrap(),
-    );
+    let mut session = Session::prepare(paths, &AtomicBool::new(false)).unwrap();
+    conditions.resolved_game_context = session
+        .generated_context(
+            "合成ゲーム",
+            "brave-fixed-query-v1",
+            &conditions,
+            &options.model,
+            true,
+            &cancelled,
+            || Ok(conditions.resolved_game_context.text().to_owned()),
+        )
+        .unwrap();
     options.semantic_events = Some(
         session
             .semantic_chunk(
@@ -552,7 +553,7 @@ fn completed_primary_and_secondary_batches_survive_immediate_interruption() {
         let conditions = conditions();
         let cancelled = AtomicBool::new(false);
         let mut completed = Vec::new();
-        let error = Session::prepare(&paths)
+        let error = Session::prepare(&paths, &AtomicBool::new(false))
             .unwrap()
             .run(
                 &MediaTools::default(),
@@ -580,7 +581,7 @@ fn completed_primary_and_secondary_batches_survive_immediate_interruption() {
         assert!(error.downcast_ref::<Interrupted>().is_some());
         assert!(!paths.output_directory.exists());
         cancelled.store(false, Ordering::Relaxed);
-        let resumed = Session::prepare(&paths)
+        let resumed = Session::prepare(&paths, &AtomicBool::new(false))
             .unwrap()
             .run(
                 &MediaTools::default(),
@@ -606,7 +607,7 @@ fn completed_primary_and_secondary_batches_survive_immediate_interruption() {
         verify_outputs(&paths.output_directory, &resumed.report, 2);
         let clean_root = tempfile::tempdir().unwrap();
         let clean_paths = setup_paths(clean_root.path(), true);
-        let clean = Session::prepare(&clean_paths)
+        let clean = Session::prepare(&clean_paths, &AtomicBool::new(false))
             .unwrap()
             .run(
                 &MediaTools::default(),
@@ -630,7 +631,7 @@ fn count_change_reuses_primary_assessment_and_probed_input() {
     let paths = setup_paths(root.path(), false);
     let mut options = options(1, false, false);
     let conditions = conditions();
-    Session::prepare(&paths)
+    Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &MediaTools::default(),
@@ -641,7 +642,7 @@ fn count_change_reuses_primary_assessment_and_probed_input() {
         )
         .unwrap();
     options.count = 2;
-    let changed = Session::prepare(&paths)
+    let changed = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &MediaTools::default(),
@@ -670,7 +671,7 @@ fn input_directory_move_preserves_warm_and_added_video_only_probes_new_content()
     let mut paths = setup_paths(root.path(), true);
     let options = options(2, false, true);
     let conditions = conditions();
-    let first = Session::prepare(&paths)
+    let first = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &MediaTools::default(),
@@ -687,7 +688,7 @@ fn input_directory_move_preserves_warm_and_added_video_only_probes_new_content()
         .join("moved recordings");
     fs::rename(&paths.input_directory, &moved).unwrap();
     paths.input_directory = moved;
-    let moved = Session::prepare(&paths)
+    let moved = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &unavailable_tools(),
@@ -705,7 +706,7 @@ fn input_directory_move_preserves_warm_and_added_video_only_probes_new_content()
         paths.input_directory.join("00-before.mov"),
     )
     .unwrap();
-    let added = Session::prepare(&paths)
+    let added = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &MediaTools::default(),
@@ -740,7 +741,7 @@ fn semantic_effective_condition_changes_invalidate_only_dependent_results() {
     let paths = setup_paths(root.path(), false);
     let initial_options = options(1, false, false);
     let initial_conditions = conditions();
-    Session::prepare(&paths)
+    Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &MediaTools::default(),
@@ -765,13 +766,14 @@ fn semantic_effective_condition_changes_invalidate_only_dependent_results() {
             "schema" => conditions.response_schema_revision = "fixture-assessment-v2".to_owned(),
             "media" => conditions.media_revision = "other-media-processing-v2".to_owned(),
             "context" => {
-                conditions.resolved_game_context = "別の解決済みゲーム説明".to_owned();
+                conditions.resolved_game_context =
+                    ResolvedGameContext::direct("別の解決済みゲーム説明");
                 options.game_context = None;
             }
             _ => unreachable!(),
         }
         let mut calls = 0;
-        let result = Session::prepare(&paths)
+        let result = Session::prepare(&paths, &AtomicBool::new(false))
             .unwrap()
             .run(
                 &MediaTools::default(),
@@ -819,7 +821,7 @@ fn preflight_rejects_unowned_edited_overlapping_and_competing_outputs_without_ca
         b"preserve user notes",
     )
     .unwrap();
-    assert!(Session::prepare(&paths).is_err());
+    assert!(Session::prepare(&paths, &AtomicBool::new(false)).is_err());
     assert_eq!(
         fs::read(paths.output_directory.join("notes.txt")).unwrap(),
         b"preserve user notes"
@@ -831,7 +833,7 @@ fn preflight_rejects_unowned_edited_overlapping_and_competing_outputs_without_ca
     )
     .unwrap();
     let old_report = fs::read(paths.output_directory.join("report.json")).unwrap();
-    assert!(Session::prepare(&paths).is_err());
+    assert!(Session::prepare(&paths, &AtomicBool::new(false)).is_err());
     assert_eq!(
         fs::read(paths.output_directory.join("report.json")).unwrap(),
         old_report
@@ -839,15 +841,15 @@ fn preflight_rejects_unowned_edited_overlapping_and_competing_outputs_without_ca
     fs::remove_dir_all(&paths.output_directory).unwrap();
     let original_output = paths.output_directory.clone();
     paths.output_directory = paths.input_directory.join("overlap");
-    assert!(Session::prepare(&paths).is_err());
+    assert!(Session::prepare(&paths, &AtomicBool::new(false)).is_err());
     paths.output_directory = original_output;
-    let session = Session::prepare(&paths).unwrap();
+    let session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
     assert!(
-        Session::prepare(&paths).is_err(),
+        Session::prepare(&paths, &AtomicBool::new(false)).is_err(),
         "same output/cache cannot have competing sessions"
     );
     drop(session);
-    let result = Session::prepare(&paths)
+    let result = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &MediaTools::default(),
@@ -866,7 +868,7 @@ fn preflight_rejects_unowned_edited_overlapping_and_competing_outputs_without_ca
     .unwrap();
     let edited = snapshot(&paths.output_directory);
     assert!(
-        Session::prepare(&paths).is_err(),
+        Session::prepare(&paths, &AtomicBool::new(false)).is_err(),
         "report edits are not owned output"
     );
     assert_eq!(snapshot(&paths.output_directory), edited);
@@ -878,7 +880,7 @@ fn valid_jpeg_edit_is_preserved_and_cache_loss_does_not_destroy_owned_output() {
     let paths = setup_paths(root.path(), false);
     let options = options(1, false, false);
     let conditions = conditions();
-    Session::prepare(&paths)
+    Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &MediaTools::default(),
@@ -890,7 +892,7 @@ fn valid_jpeg_edit_is_preserved_and_cache_loss_does_not_destroy_owned_output() {
         .unwrap();
     let valid = snapshot(&paths.output_directory);
     fs::remove_dir_all(paths.cache_directory.join(NAMESPACE)).unwrap();
-    let recovered = Session::prepare(&paths)
+    let recovered = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &unavailable_tools(),
@@ -904,7 +906,7 @@ fn valid_jpeg_edit_is_preserved_and_cache_loss_does_not_destroy_owned_output() {
     assert_eq!(recovered.metrics.probe_calls, 0);
     assert_eq!(recovered.metrics.cache.input_hashes, 1);
     assert_eq!(snapshot(&paths.output_directory), valid);
-    let error = Session::prepare(&paths)
+    let error = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &unavailable_tools(),
@@ -928,7 +930,7 @@ fn valid_jpeg_edit_is_preserved_and_cache_loss_does_not_destroy_owned_output() {
     assert!(image::open(&selected).is_ok());
     let edited = snapshot(&paths.output_directory);
     assert!(
-        Session::prepare(&paths).is_err(),
+        Session::prepare(&paths, &AtomicBool::new(false)).is_err(),
         "even a valid same-name JPEG edit must not be overwritten"
     );
     assert_eq!(snapshot(&paths.output_directory), edited);
@@ -944,21 +946,21 @@ fn symlinks_hardlink_aliases_and_special_inputs_fail_before_media() {
     let source = paths.input_directory.join("01-blocks.mkv");
     let alias = paths.input_directory.join("alias.mkv");
     symlink(&source, &alias).unwrap();
-    assert!(Session::prepare(&paths).is_err());
+    assert!(Session::prepare(&paths, &AtomicBool::new(false)).is_err());
     fs::remove_file(&alias).unwrap();
     fs::hard_link(&source, &alias).unwrap();
     assert!(
-        Session::prepare(&paths).is_err(),
+        Session::prepare(&paths, &AtomicBool::new(false)).is_err(),
         "path aliases must fail in preflight before probing"
     );
     fs::remove_file(&alias).unwrap();
     let fifo = paths.input_directory.join("special.mkv");
     let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
-    assert!(Session::prepare(&paths).is_err());
+    assert!(Session::prepare(&paths, &AtomicBool::new(false)).is_err());
     fs::remove_file(&fifo).unwrap();
     symlink(&paths.input_directory, &paths.output_directory).unwrap();
-    assert!(Session::prepare(&paths).is_err());
+    assert!(Session::prepare(&paths, &AtomicBool::new(false)).is_err());
     assert!(source.is_file(), "unsafe preflight must preserve the input");
 }
 
@@ -975,7 +977,7 @@ fn malformed_misreferenced_and_invalid_batch_records_are_recomputed_when_used() 
     let paths = setup_paths(root.path(), false);
     let mut options = options(1, false, false);
     let conditions = conditions();
-    Session::prepare(&paths)
+    Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &MediaTools::default(),
@@ -1011,7 +1013,7 @@ fn malformed_misreferenced_and_invalid_batch_records_are_recomputed_when_used() 
             _ => unreachable!(),
         }
         if damage == "json" {
-            let warm = Session::prepare(&paths)
+            let warm = Session::prepare(&paths, &AtomicBool::new(false))
                 .unwrap()
                 .run(
                     &unavailable_tools(),
@@ -1028,7 +1030,7 @@ fn malformed_misreferenced_and_invalid_batch_records_are_recomputed_when_used() 
         }
         options.count = if options.count == 1 { 2 } else { 1 };
         let mut primary_calls = 0;
-        let result = Session::prepare(&paths)
+        let result = Session::prepare(&paths, &AtomicBool::new(false))
             .unwrap()
             .run(
                 &MediaTools::default(),
@@ -1109,12 +1111,12 @@ fn invalid_settings_and_context_fail_before_probe_or_any_assessment() {
                 "credentials"
             }
             "empty_resolved_context" => {
-                conditions.resolved_game_context.clear();
+                conditions.resolved_game_context = ResolvedGameContext::direct("");
                 "cache conditions"
             }
             _ => unreachable!(),
         };
-        let error = Session::prepare(&paths)
+        let error = Session::prepare(&paths, &AtomicBool::new(false))
             .unwrap()
             .run(
                 &unavailable_tools(),
@@ -1144,7 +1146,9 @@ fn invalid_settings_and_context_fail_before_probe_or_any_assessment() {
     let config = paths.cache_directory.parent().unwrap().join("invalid.toml");
     fs::write(&config, b"[ai\napi_key = 'never-print-fixture-key'").unwrap();
     paths.config = Some(config);
-    let error = Session::prepare(&paths).err().unwrap();
+    let error = Session::prepare(&paths, &AtomicBool::new(false))
+        .err()
+        .unwrap();
     assert!(!format!("{error:#}").contains("never-print-fixture-key"));
 }
 
@@ -1185,7 +1189,7 @@ fn completed_semantic_chunk_survives_interruption_and_only_missing_chunk_repeats
     let options = options(1, true, false);
     let conditions = conditions();
     let cancelled = AtomicBool::new(false);
-    let error = Session::prepare(&paths)
+    let error = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .semantic_chunk(
             &MediaTools::default(),
@@ -1205,7 +1209,7 @@ fn completed_semantic_chunk_survives_interruption_and_only_missing_chunk_repeats
         .unwrap();
     assert!(error.downcast_ref::<Interrupted>().is_some());
     cancelled.store(false, Ordering::Relaxed);
-    let mut session = Session::prepare(&paths).unwrap();
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
     let first = session
         .semantic_chunk(
             &unavailable_tools(),
@@ -1241,7 +1245,7 @@ fn completed_semantic_chunk_survives_interruption_and_only_missing_chunk_repeats
         })
         .unwrap();
     fs::remove_file(&missing).unwrap();
-    let mut session = Session::prepare(&paths).unwrap();
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
     session
         .semantic_chunk(
             &unavailable_tools(),
@@ -1296,7 +1300,7 @@ fn generated_context_requires_persistence_permission_and_generation_dependency_m
     let model = options(1, false, false).model;
     let mut conditions = conditions();
     let cancelled = AtomicBool::new(false);
-    let mut session = Session::prepare(&paths).unwrap();
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
     for _ in 0..2 {
         let text = session
             .generated_context(
@@ -1309,7 +1313,7 @@ fn generated_context_requires_persistence_permission_and_generation_dependency_m
                 || Ok("transient-context-not-approved-for-storage".to_owned()),
             )
             .unwrap();
-        assert_eq!(text, "transient-context-not-approved-for-storage");
+        assert_eq!(text.text(), "transient-context-not-approved-for-storage");
     }
     assert!(
         !paths
@@ -1480,19 +1484,21 @@ fn semantic_chunk_rejects_fresh_event_before_actual_start_inside_requested_range
     let paths = setup_paths(root.path(), false);
     let source = sparse_vfr_source(&paths);
     let model = options(1, true, false).model;
-    let result = Session::prepare(&paths).unwrap().semantic_chunk(
-        &MediaTools::default(),
-        &source,
-        0.1,
-        1.0,
-        &model,
-        &conditions(),
-        &AtomicBool::new(false),
-        |chunk| {
-            inspect_sparse_chunk(chunk);
-            Ok(sparse_event(0.1, 0.2))
-        },
-    );
+    let result = Session::prepare(&paths, &AtomicBool::new(false))
+        .unwrap()
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            0.1,
+            1.0,
+            &model,
+            &conditions(),
+            &AtomicBool::new(false),
+            |chunk| {
+                inspect_sparse_chunk(chunk);
+                Ok(sparse_event(0.1, 0.2))
+            },
+        );
     assert!(
         result.is_err(),
         "no pixels before actual start 0.25 were submitted for semantic inference"
@@ -1505,7 +1511,7 @@ fn semantic_chunk_rejects_cached_event_before_actual_start_and_recomputes_that_c
     let paths = setup_paths(root.path(), false);
     let source = sparse_vfr_source(&paths);
     let model = options(1, true, false).model;
-    Session::prepare(&paths)
+    Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .semantic_chunk(
             &MediaTools::default(),
@@ -1529,7 +1535,7 @@ fn semantic_chunk_rejects_cached_event_before_actual_start_and_recomputes_that_c
             .into();
     fs::write(&checkpoint, serde_json::to_vec(&envelope).unwrap()).unwrap();
     let mut calls = 0;
-    let events = Session::prepare(&paths)
+    let events = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .semantic_chunk(
             &MediaTools::default(),
@@ -1560,7 +1566,7 @@ fn semantic_chunk_accepts_and_reuses_actual_trailing_display_beyond_requested_en
     let source = sparse_vfr_source(&paths);
     let model = options(1, true, false).model;
     let conditions = conditions();
-    let events = Session::prepare(&paths)
+    let events = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .semantic_chunk(
             &MediaTools::default(),
@@ -1580,7 +1586,7 @@ fn semantic_chunk_accepts_and_reuses_actual_trailing_display_beyond_requested_en
         events[0].representative_seconds, 1.25,
         "events use original video seconds rather than chunk-relative timestamps"
     );
-    let cached = Session::prepare(&paths)
+    let cached = Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .semantic_chunk(
             &unavailable_tools(),
@@ -1605,8 +1611,8 @@ fn generated_context_cold_empty_resolved_text_then_returned_text_reuses_generati
     let paths = setup_paths(root.path(), false);
     let model = options(1, false, false).model;
     let mut conditions = conditions();
-    conditions.resolved_game_context.clear();
-    let mut session = Session::prepare(&paths).unwrap();
+    conditions.resolved_game_context = ResolvedGameContext::direct("");
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
     let context = session
         .generated_context(
             "合成ゲーム",
@@ -1647,7 +1653,7 @@ fn generated_context_returned_text_does_not_invalidate_generation_key() {
     let paths = setup_paths(root.path(), false);
     let model = options(1, false, false).model;
     let mut conditions = conditions();
-    let mut session = Session::prepare(&paths).unwrap();
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
     let saved = session
         .generated_context(
             "合成ゲーム",
@@ -1738,7 +1744,7 @@ fn workflow_rejects_replaced_video_between_semantic_chunks_before_new_inference(
     let model = options(1, true, false).model;
     let conditions = conditions();
     let cancelled = AtomicBool::new(false);
-    let mut session = Session::prepare(&paths).unwrap();
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
     session
         .semantic_chunk(
             &MediaTools::default(),
@@ -1801,7 +1807,7 @@ fn workflow_rejects_replaced_video_between_semantic_events_and_run_preserving_ou
     let conditions = conditions();
     let cancelled = AtomicBool::new(false);
     let mut options = options(1, false, false);
-    Session::prepare(&paths)
+    Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &MediaTools::default(),
@@ -1813,7 +1819,7 @@ fn workflow_rejects_replaced_video_between_semantic_events_and_run_preserving_ou
         .unwrap();
     let existing = snapshot(&paths.output_directory);
     let source = paths.input_directory.join("01-blocks.mkv");
-    let mut session = Session::prepare(&paths).unwrap();
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
     let events = session
         .semantic_chunk(
             &MediaTools::default(),
@@ -1856,7 +1862,7 @@ fn workflow_rejects_video_added_after_prepare_in_cold_and_warm_runs_before_media
         let conditions = conditions();
         let cancelled = AtomicBool::new(false);
         let previous = warm.then(|| {
-            Session::prepare(&paths)
+            Session::prepare(&paths, &AtomicBool::new(false))
                 .unwrap()
                 .run(
                     &MediaTools::default(),
@@ -1868,7 +1874,7 @@ fn workflow_rejects_video_added_after_prepare_in_cold_and_warm_runs_before_media
                 .unwrap();
             snapshot(&paths.output_directory)
         });
-        let mut session = Session::prepare(&paths).unwrap();
+        let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
         fs::copy(
             fixture("02-mirrored.mkv"),
             paths.input_directory.join("02-mirrored.mkv"),
@@ -1903,7 +1909,7 @@ fn workflow_rejects_video_added_during_assessment_and_keeps_previous_artifacts()
     let conditions = conditions();
     let cancelled = AtomicBool::new(false);
     let mut options = options(1, false, false);
-    Session::prepare(&paths)
+    Session::prepare(&paths, &AtomicBool::new(false))
         .unwrap()
         .run(
             &MediaTools::default(),
@@ -1917,24 +1923,26 @@ fn workflow_rejects_video_added_during_assessment_and_keeps_previous_artifacts()
     options.count = 2;
     options.model.cache_revision = "membership-injection".to_owned();
     let mut calls = 0;
-    let result = Session::prepare(&paths).unwrap().run(
-        &MediaTools::default(),
-        &options,
-        &conditions,
-        &cancelled,
-        |batch| {
-            calls += 1;
-            let response = assess(batch)?;
-            if calls == 1 {
-                fs::copy(
-                    fixture("02-mirrored.mkv"),
-                    paths.input_directory.join("02-mirrored.mkv"),
-                )
-                .unwrap();
-            }
-            Ok(response)
-        },
-    );
+    let result = Session::prepare(&paths, &AtomicBool::new(false))
+        .unwrap()
+        .run(
+            &MediaTools::default(),
+            &options,
+            &conditions,
+            &cancelled,
+            |batch| {
+                calls += 1;
+                let response = assess(batch)?;
+                if calls == 1 {
+                    fs::copy(
+                        fixture("02-mirrored.mkv"),
+                        paths.input_directory.join("02-mirrored.mkv"),
+                    )
+                    .unwrap();
+                }
+                Ok(response)
+            },
+        );
     assert!(
         result.is_err(),
         "newly added recordings cannot silently be omitted from published results"
@@ -1952,24 +1960,26 @@ fn workflow_rejects_video_added_during_semantic_callback_before_checkpointing() 
     let paths = setup_paths(root.path(), false);
     let source = paths.input_directory.join("01-blocks.mkv");
     let model = options(1, true, false).model;
-    let result = Session::prepare(&paths).unwrap().semantic_chunk(
-        &MediaTools::default(),
-        &source,
-        0.0,
-        1.0,
-        &model,
-        &conditions(),
-        &AtomicBool::new(false),
-        |chunk| {
-            let events = understand(chunk)?;
-            fs::copy(
-                fixture("02-mirrored.mkv"),
-                paths.input_directory.join("02-mirrored.mkv"),
-            )
-            .unwrap();
-            Ok(events)
-        },
-    );
+    let result = Session::prepare(&paths, &AtomicBool::new(false))
+        .unwrap()
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            0.0,
+            1.0,
+            &model,
+            &conditions(),
+            &AtomicBool::new(false),
+            |chunk| {
+                let events = understand(chunk)?;
+                fs::copy(
+                    fixture("02-mirrored.mkv"),
+                    paths.input_directory.join("02-mirrored.mkv"),
+                )
+                .unwrap();
+                Ok(events)
+            },
+        );
     assert!(
         result.is_err(),
         "completed responses are only valid for the workflow's verified input set"
@@ -1982,4 +1992,567 @@ fn workflow_rejects_video_added_during_semantic_callback_before_checkpointing() 
             .exists()
     );
     assert!(!paths.output_directory.exists());
+}
+
+fn recover_shortened_probe_duration(final_frame: bool) {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let source = paths.input_directory.join("01-blocks.mkv");
+    let options = options(1, false, false);
+    let conditions = conditions();
+    let cancelled = AtomicBool::new(false);
+    let (start, end, damaged_frame) = if final_frame {
+        (5.0, 6.0, 23)
+    } else {
+        (0.0, 1.0, 3)
+    };
+    let expected_events = Session::prepare(&paths, &AtomicBool::new(false))
+        .unwrap()
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            start,
+            end,
+            &options.model,
+            &conditions,
+            &cancelled,
+            understand,
+        )
+        .unwrap();
+    let checkpoint = checkpoints(&paths, "probe").pop().unwrap();
+    let mut envelope: Value = serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
+    envelope["payload"]["frames"][damaged_frame]["duration_seconds"] = 0.125.into();
+    envelope["payload_digest"] =
+        game_screen_pick::storage::sha256(&serde_json::to_vec(&envelope["payload"]).unwrap())
+            .into();
+    fs::write(&checkpoint, serde_json::to_vec(&envelope).unwrap()).unwrap();
+    let mut session = Session::prepare(&paths, &AtomicBool::new(false)).unwrap();
+    let recovered_events = session.semantic_chunk(
+        &MediaTools::default(), &source, start, end, &options.model, &conditions,
+        &cancelled,
+        |_| panic!("valid semantic evidence must remain reusable after repairing corrupt probe duration"),
+    ).unwrap();
+    assert_eq!(
+        serde_json::to_value(recovered_events).unwrap(),
+        serde_json::to_value(expected_events).unwrap(),
+    );
+    let repaired: Value = serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
+    assert_eq!(
+        repaired["payload"]["frames"][damaged_frame]["duration_seconds"],
+        0.25
+    );
+    let result = session
+        .run(
+            &MediaTools::default(),
+            &options,
+            &conditions,
+            &cancelled,
+            assess,
+        )
+        .unwrap();
+    assert_eq!(
+        result.metrics.probe_calls, 1,
+        "invalid duration is a miss requiring re-probe"
+    );
+    assert_eq!(
+        result.metrics.semantic_calls, 0,
+        "the already completed understanding stays reusable"
+    );
+    verify_outputs(&paths.output_directory, &result.report, 1);
+}
+
+#[test]
+fn probe_duration_gap_is_recomputed_before_reusing_semantic_chunk() {
+    recover_shortened_probe_duration(false);
+}
+
+#[test]
+fn probe_duration_final_frame_is_recomputed_before_reusing_semantic_chunk() {
+    recover_shortened_probe_duration(true);
+}
+
+fn assessment_bytes(batch: &AssessmentBatch<'_>) -> u64 {
+    batch
+        .candidates
+        .iter()
+        .map(|candidate| &candidate.image)
+        .chain(
+            batch
+                .contexts
+                .iter()
+                .flat_map(|context| context.frames.iter().map(|frame| &frame.image)),
+        )
+        .chain(batch.sheets.iter())
+        .map(|path| fs::metadata(path).unwrap().len())
+        .sum()
+}
+
+#[test]
+fn metrics_count_actual_assessment_media_in_cold_partial_and_warm_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let mut options = options(1, false, false);
+    let conditions = conditions();
+    let cancelled = AtomicBool::new(false);
+    let mut cold_bytes = 0;
+    let mut primary_bytes = 0;
+    let cold = Session::prepare(&paths, &AtomicBool::new(false))
+        .unwrap()
+        .run(
+            &MediaTools::default(),
+            &options,
+            &conditions,
+            &cancelled,
+            |batch| {
+                let result = assess(batch)?;
+                let bytes = assessment_bytes(batch);
+                cold_bytes += bytes;
+                if batch.phase == AssessmentPhase::Primary {
+                    primary_bytes += bytes;
+                }
+                Ok(result)
+            },
+        )
+        .unwrap();
+    assert!(primary_bytes > 0);
+    assert!(
+        cold_bytes > primary_bytes,
+        "secondary contexts and sheets must also contribute"
+    );
+    assert_eq!(
+        serde_json::to_value(&cold.metrics).unwrap()["assessment_bytes_read"].as_u64(),
+        Some(cold_bytes)
+    );
+    options.count = 2;
+    let mut secondary_bytes = 0;
+    let partial = Session::prepare(&paths, &AtomicBool::new(false))
+        .unwrap()
+        .run(
+            &MediaTools::default(),
+            &options,
+            &conditions,
+            &cancelled,
+            |batch| {
+                assert_eq!(
+                    batch.phase,
+                    AssessmentPhase::Secondary,
+                    "unchanged primary assessments are cached"
+                );
+                let result = assess(batch)?;
+                secondary_bytes += assessment_bytes(batch);
+                Ok(result)
+            },
+        )
+        .unwrap();
+    assert_eq!(partial.metrics.probe_calls, 0);
+    assert_eq!(partial.metrics.cache.input_hashes, 0);
+    assert_eq!(
+        serde_json::to_value(&partial.metrics).unwrap()["assessment_bytes_read"].as_u64(),
+        Some(primary_bytes + secondary_bytes),
+        "cached primary batches still read their exact media for key verification"
+    );
+    verify_outputs(&paths.output_directory, &partial.report, 2);
+    let warm = Session::prepare(&paths, &AtomicBool::new(false))
+        .unwrap()
+        .run(
+            &unavailable_tools(),
+            &options,
+            &conditions,
+            &cancelled,
+            |_| panic!("completed warm output must not load assessment media"),
+        )
+        .unwrap();
+    assert!(warm.warm);
+    assert_eq!(
+        serde_json::to_value(&warm.metrics).unwrap()["assessment_bytes_read"].as_u64(),
+        Some(0)
+    );
+}
+
+#[test]
+fn generation_provenance_changes_reassess_identical_text_and_then_reuse_completed_output() {
+    for dependency in ["title", "search", "model"] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = setup_paths(root.path(), false);
+        let options = options(1, false, false);
+        let mut conditions = conditions();
+        let generation = conditions.clone();
+        let text = conditions.resolved_game_context.text().to_owned();
+        let cancelled = AtomicBool::new(false);
+        let mut session = Session::prepare(&paths, &cancelled).unwrap();
+        conditions.resolved_game_context = session
+            .generated_context(
+                "合成ゲーム",
+                "search-v1",
+                &generation,
+                &options.model,
+                true,
+                &cancelled,
+                || Ok(text.clone()),
+            )
+            .unwrap();
+        let cold = session
+            .run(
+                &MediaTools::default(),
+                &options,
+                &conditions,
+                &cancelled,
+                assess,
+            )
+            .unwrap();
+        drop(session);
+        let mut title = "合成ゲーム";
+        let mut search = "search-v1";
+        let mut model = options.model.clone();
+        match dependency {
+            "title" => title = "新しいタイトル",
+            "search" => search = "search-v2",
+            "model" => model.model = "different-generation-model".to_owned(),
+            _ => unreachable!(),
+        }
+        let persist = dependency != "search";
+        let mut generation_calls = 0;
+        let before_contexts = checkpoints(&paths, "contexts").len();
+        let mut session = Session::prepare(&paths, &cancelled).unwrap();
+        conditions.resolved_game_context = session
+            .generated_context(
+                title,
+                search,
+                &generation,
+                &model,
+                persist,
+                &cancelled,
+                || {
+                    generation_calls += 1;
+                    Ok(text.clone())
+                },
+            )
+            .unwrap();
+        assert_eq!(generation_calls, 1);
+        if !persist {
+            assert_eq!(checkpoints(&paths, "contexts").len(), before_contexts);
+        }
+        let changed = session
+            .run(
+                &MediaTools::default(),
+                &options,
+                &conditions,
+                &cancelled,
+                assess,
+            )
+            .unwrap();
+        assert!(
+            !changed.warm,
+            "{dependency} changed generation input despite returning identical text"
+        );
+        assert_ne!(changed.report["cache"]["key"], cold.report["cache"]["key"]);
+        assert!(changed.metrics.assessment_calls > 0);
+        assert_eq!(changed.metrics.probe_calls, 0);
+        assert_eq!(changed.metrics.cache.input_hashes, 0);
+        verify_outputs(&paths.output_directory, &changed.report, 1);
+        drop(session);
+        let mut session = Session::prepare(&paths, &cancelled).unwrap();
+        conditions.resolved_game_context = session
+            .generated_context(
+                title,
+                search,
+                &generation,
+                &model,
+                persist,
+                &cancelled,
+                || {
+                    assert!(
+                        !persist,
+                        "approved identical generation must hit its checkpoint"
+                    );
+                    Ok(text.clone())
+                },
+            )
+            .unwrap();
+        let warm = session
+            .run(
+                &unavailable_tools(),
+                &options,
+                &conditions,
+                &cancelled,
+                |_| panic!("unchanged generation provenance must keep completed output warm"),
+            )
+            .unwrap();
+        assert!(warm.warm);
+        assert_eq!(warm.metrics.assessment_calls, 0);
+        assert_eq!(warm.report, changed.report);
+    }
+}
+
+#[test]
+fn generation_provenance_changes_semantic_dependencies_without_reprobing_input() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let source = paths.input_directory.join("01-blocks.mkv");
+    let options = options(1, false, false);
+    let mut conditions = conditions();
+    let generation = conditions.clone();
+    let text = conditions.resolved_game_context.text().to_owned();
+    let cancelled = AtomicBool::new(false);
+    let mut session = Session::prepare(&paths, &cancelled).unwrap();
+    conditions.resolved_game_context = session
+        .generated_context(
+            "合成ゲーム",
+            "search-v1",
+            &generation,
+            &options.model,
+            true,
+            &cancelled,
+            || Ok(text.clone()),
+        )
+        .unwrap();
+    let original = session
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            0.0,
+            1.0,
+            &options.model,
+            &conditions,
+            &cancelled,
+            understand,
+        )
+        .unwrap();
+    drop(session);
+    let mut session = Session::prepare(&paths, &cancelled).unwrap();
+    conditions.resolved_game_context = session
+        .generated_context(
+            "合成ゲーム",
+            "search-v1",
+            &generation,
+            &options.model,
+            true,
+            &cancelled,
+            || panic!("same generated context must hit"),
+        )
+        .unwrap();
+    session
+        .semantic_chunk(
+            &unavailable_tools(),
+            &source,
+            0.0,
+            1.0,
+            &options.model,
+            &conditions,
+            &cancelled,
+            |_| panic!("same provenance must reuse understanding"),
+        )
+        .unwrap();
+    let mut generation_model = options.model.clone();
+    generation_model.cache_revision = "generation-v2".to_owned();
+    conditions.resolved_game_context = session
+        .generated_context(
+            "合成ゲーム",
+            "search-v1",
+            &generation,
+            &generation_model,
+            false,
+            &cancelled,
+            || Ok(text.clone()),
+        )
+        .unwrap();
+    let mut calls = 0;
+    let changed = session
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            0.0,
+            1.0,
+            &options.model,
+            &conditions,
+            &cancelled,
+            |chunk| {
+                calls += 1;
+                understand(chunk)
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        calls, 1,
+        "changed generation provenance invalidates dependent understanding"
+    );
+    assert_eq!(
+        serde_json::to_value(original).unwrap(),
+        serde_json::to_value(changed).unwrap()
+    );
+    assert_eq!(checkpoints(&paths, "semantic").len(), 2);
+    let result = session
+        .run(
+            &MediaTools::default(),
+            &options,
+            &conditions,
+            &cancelled,
+            assess,
+        )
+        .unwrap();
+    assert_eq!(result.metrics.probe_calls, 0);
+    assert_eq!(result.metrics.cache.input_hashes, 0);
+}
+
+#[test]
+fn direct_context_does_not_inherit_unused_generation_provenance() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let source = paths.input_directory.join("01-blocks.mkv");
+    let options = options(1, false, false);
+    let mut conditions = conditions();
+    let cancelled = AtomicBool::new(false);
+    let mut session = Session::prepare(&paths, &cancelled).unwrap();
+    let cold = session
+        .run(
+            &MediaTools::default(),
+            &options,
+            &conditions,
+            &cancelled,
+            assess,
+        )
+        .unwrap();
+    let semantic = session
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            0.0,
+            1.0,
+            &options.model,
+            &conditions,
+            &cancelled,
+            understand,
+        )
+        .unwrap();
+    let generated = session
+        .generated_context(
+            "合成ゲーム",
+            "search-v1",
+            &conditions,
+            &options.model,
+            false,
+            &cancelled,
+            || Ok(conditions.resolved_game_context.text().to_owned()),
+        )
+        .unwrap();
+    // An explicitly direct value has no generated identity, even with equal text.
+    conditions.resolved_game_context = ResolvedGameContext::direct(generated.text());
+    session
+        .generated_context(
+            "無関係なゲーム",
+            "search-v2",
+            &conditions,
+            &options.model,
+            false,
+            &cancelled,
+            || Ok("無関係な説明".to_owned()),
+        )
+        .unwrap();
+    let cached = session
+        .semantic_chunk(
+            &unavailable_tools(),
+            &source,
+            0.0,
+            1.0,
+            &options.model,
+            &conditions,
+            &cancelled,
+            |_| panic!("unused generated values cannot invalidate direct semantic evidence"),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(cached).unwrap(),
+        serde_json::to_value(semantic).unwrap()
+    );
+    let warm = session
+        .run(
+            &unavailable_tools(),
+            &options,
+            &conditions,
+            &cancelled,
+            |_| panic!("direct context must retain completed output after unused generation"),
+        )
+        .unwrap();
+    assert!(warm.warm);
+    assert_eq!(warm.report, cold.report);
+    assert!(
+        !paths
+            .cache_directory
+            .join(NAMESPACE)
+            .join("contexts")
+            .exists()
+    );
+}
+
+#[test]
+fn cancelled_cold_and_warm_sessions_stop_before_preflight_or_reuse() {
+    for warm in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = setup_paths(root.path(), false);
+        let options = options(1, false, false);
+        let conditions = conditions();
+        let cancelled = AtomicBool::new(false);
+        if warm {
+            Session::prepare(&paths, &cancelled)
+                .unwrap()
+                .run(
+                    &MediaTools::default(),
+                    &options,
+                    &conditions,
+                    &cancelled,
+                    assess,
+                )
+                .unwrap();
+        }
+        let before = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<std::collections::BTreeSet<_>>();
+        let previous = warm.then(|| snapshot(&paths.output_directory));
+        cancelled.store(true, Ordering::Relaxed);
+        let error = Session::prepare(&paths, &cancelled).err().unwrap();
+        assert!(error.downcast_ref::<Interrupted>().is_some());
+        let after = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            before, after,
+            "cancelled preflight does not create lock/cache/output files"
+        );
+        if let Some(previous) = previous {
+            assert_eq!(snapshot(&paths.output_directory), previous);
+            cancelled.store(false, Ordering::Relaxed);
+            let mut session = Session::prepare(&paths, &cancelled).unwrap();
+            cancelled.store(true, Ordering::Relaxed);
+            let error = session
+                .run(
+                    &unavailable_tools(),
+                    &options,
+                    &conditions,
+                    &cancelled,
+                    |_| panic!("cancelled warm reuse must not assess"),
+                )
+                .err()
+                .unwrap();
+            assert!(error.downcast_ref::<Interrupted>().is_some());
+            assert_eq!(snapshot(&paths.output_directory), previous);
+            cancelled.store(false, Ordering::Relaxed);
+            assert!(
+                session
+                    .run(
+                        &unavailable_tools(),
+                        &options,
+                        &conditions,
+                        &cancelled,
+                        |_| panic!("cancellation must preserve reusable completed output"),
+                    )
+                    .unwrap()
+                    .warm
+            );
+        } else {
+            assert!(!paths.cache_directory.join(NAMESPACE).exists());
+            assert!(!paths.output_directory.exists());
+        }
+    }
 }

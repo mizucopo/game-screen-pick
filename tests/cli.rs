@@ -279,7 +279,12 @@ fn normal_command_reports_cache_and_output_lock_contention_as_processing_failure
     assert!(String::from_utf8_lossy(&output.stderr).contains("locked by another run"));
     drop(cache);
 
-    let guard = game_screen_pick::output::Output::prepare(&root.join("output"), &[]).unwrap();
+    let guard = game_screen_pick::output::Output::prepare(
+        &root.join("output"),
+        &[],
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
     let output = invoke();
     assert_eq!(
         output.status.code(),
@@ -313,6 +318,39 @@ fn normal_command_reports_cache_and_output_lock_contention_as_processing_failure
         fs::read(root.join("output/notes.txt")).unwrap(),
         b"preserve me"
     );
+}
+
+#[test]
+fn validate_and_normal_reject_control_names_and_hard_link_aliases_without_writes() {
+    for hard_link in [false, true] {
+        let directory = sandbox();
+        setup(directory.path());
+        let inputs = directory.path().join("録画 空白");
+        let message = if hard_link {
+            fs::hard_link(inputs.join("動画.mkv"), inputs.join("alias.mkv")).unwrap();
+            "input paths refer to the same file more than once"
+        } else {
+            fs::copy(fixture(), inputs.join("control\nname.mkv")).unwrap();
+            "video source names must not contain controls"
+        };
+        for diagnostic in [true, false] {
+            let mut args = request();
+            if diagnostic {
+                args.insert(0, "validate");
+            }
+            let output = Command::new(BINARY)
+                .current_dir(directory.path())
+                .env("PATH", "")
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(2));
+            assert!(String::from_utf8_lossy(&output.stderr).contains(message));
+        }
+        assert!(!directory.path().join("output").exists());
+        assert!(!directory.path().join(".game-screen-pick-cache").exists());
+        assert!(!directory.path().join(".gsp-output-locks").exists());
+    }
 }
 
 #[test]

@@ -106,7 +106,7 @@ impl Cli {
         match self.command {
             Some(Command::Extract(args)) => extract(args, cancelled),
             Some(Command::Validate(request)) => {
-                let (_, inputs, _) = validate(request, true).map_err(CliError::input)?;
+                let (_, inputs, _) = validate(request, true, cancelled).map_err(CliError::input)?;
                 eprintln!(
                     "validated: configuration, arguments and {} input video(s); no processing performed",
                     inputs.len()
@@ -115,8 +115,9 @@ impl Cli {
             }
             None => {
                 let (config, inputs, paths) =
-                    validate(self.request, false).map_err(CliError::input)?;
-                let _session = Session::prepare(&paths).map_err(CliError::preparation)?;
+                    validate(self.request, false, cancelled).map_err(CliError::input)?;
+                let _session =
+                    Session::prepare(&paths, cancelled).map_err(CliError::preparation)?;
                 eprintln!(
                     "{}: preflight complete ({} input video(s))",
                     config.selection.method,
@@ -187,7 +188,11 @@ pub fn sanitize_parse_error(error: &mut clap::Error) {
     }
 }
 
-fn validate(request: Request, diagnostic: bool) -> Result<(Config, Vec<PathBuf>, RunPaths)> {
+fn validate(
+    request: Request,
+    diagnostic: bool,
+    cancelled: &AtomicBool,
+) -> Result<(Config, Vec<PathBuf>, RunPaths)> {
     crate::domain::GameInput::new(request.game_title, request.game_context)?;
     if !request
         .count
@@ -223,13 +228,11 @@ fn validate(request: Request, diagnostic: bool) -> Result<(Config, Vec<PathBuf>,
         bail!("cache parent must be an ordinary directory");
     }
     if diagnostic {
-        crate::output::Output::validate(&output, &[&input, &cache, &config_path])?;
+        crate::output::Output::validate(&output, &[&input, &cache, &config_path], cancelled)?;
     }
     let config = Config::load(&config_path)?;
     let inputs = discover_inputs(&input)?;
-    if inputs.len() > crate::selection::MAX_CANDIDATES {
-        bail!("input count exceeds 4096");
-    }
+    crate::run::validate_inputs(&inputs)?;
     // Authentication is resolved only by the future common client; it is never printed here.
     Ok((
         config,

@@ -30,6 +30,28 @@ pub struct RunPaths {
     pub config: Option<PathBuf>,
 }
 
+/// A resolved description paired with the conditions that generated it.
+/// Direct descriptions carry no generation provenance.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ResolvedGameContext {
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation_key: Option<String>,
+}
+
+impl ResolvedGameContext {
+    pub fn direct(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            generation_key: None,
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
 /// Effective dependencies, never credentials. Resolved context participates in
 /// keys even when its text is not permitted in a report or context checkpoint.
 #[derive(Clone, Debug, Serialize)]
@@ -38,7 +60,7 @@ pub struct CacheConditions {
     pub prompt_revision: String,
     pub response_schema_revision: String,
     pub media_revision: String,
-    pub resolved_game_context: String,
+    pub resolved_game_context: ResolvedGameContext,
 }
 
 impl CacheConditions {
@@ -64,7 +86,7 @@ impl CacheConditions {
             "cache conditions must not be blank"
         );
         ensure!(
-            !require_context || !self.resolved_game_context.trim().is_empty(),
+            !require_context || !self.resolved_game_context.text().trim().is_empty(),
             "cache conditions must not be blank"
         );
         Ok(Self {
@@ -81,6 +103,8 @@ impl CacheConditions {
 pub struct RunMetrics {
     pub cache: CacheStats,
     pub output_bytes_read: u64,
+    /// Candidate images, context frames and sheets read for assessment keys.
+    pub assessment_bytes_read: u64,
     pub probe_calls: u64,
     pub assessment_calls: u64,
     pub context_calls: u64,
@@ -103,6 +127,7 @@ pub struct Session {
     cache: Cache,
     output: Output,
     report_bytes_read: u64,
+    assessment_bytes_read: u64,
     prepared_at: Instant,
     probe_calls: u64,
     assessment_calls: u64,
@@ -112,8 +137,9 @@ pub struct Session {
 
 impl Session {
     /// No external command, search, inference or runtime operation occurs here.
-    pub fn prepare(paths: &RunPaths) -> Result<Self> {
+    pub fn prepare(paths: &RunPaths, cancelled: &AtomicBool) -> Result<Self> {
         let prepared_at = Instant::now();
+        check_cancelled(cancelled)?;
         let input = storage::checked_path(&paths.input_directory)?;
         let output = storage::checked_path(&paths.output_directory)?;
         let cache_path = storage::checked_path(&paths.cache_directory)?;
@@ -142,28 +168,19 @@ impl Session {
             crate::config::Config::load(config)?;
         }
         let inputs = discover_inputs(&input)?;
-        ensure!(inputs.len() <= MAX_CANDIDATES, "input count exceeds 4096");
-        let mut aliases = BTreeSet::new();
-        for path in &inputs {
-            ensure!(
-                !source_name(path)?.chars().any(char::is_control),
-                "video source names must not contain controls"
-            );
-            let metadata = fs::symlink_metadata(path)?;
-            ensure!(
-                aliases.insert((metadata.dev(), metadata.ino())),
-                "input paths refer to the same file more than once"
-            );
-        }
+        validate_inputs(&inputs)?;
         let output = Output::prepare(
             &output,
             &protected.iter().map(|p| p.as_path()).collect::<Vec<_>>(),
+            cancelled,
         )?;
+        check_cancelled(cancelled)?;
         if !cache_path.exists() {
             fs::create_dir(&cache_path)
                 .context(storage::OperationalError("cannot create cache directory"))?;
         }
         let cache = Cache::open(&cache_path)?;
+        check_cancelled(cancelled)?;
         Ok(Self {
             input_directory: input,
             inputs,
@@ -171,6 +188,7 @@ impl Session {
             cache,
             output,
             report_bytes_read: 0,
+            assessment_bytes_read: 0,
             prepared_at,
             probe_calls: 0,
             assessment_calls: 0,
@@ -194,7 +212,7 @@ impl Session {
             options
                 .game_context
                 .as_ref()
-                .is_none_or(|context| context == &conditions.resolved_game_context),
+                .is_none_or(|context| context == conditions.resolved_game_context.text()),
             "persisted context must match resolved inference context"
         );
         if let Some(events) = &options.semantic_events {
@@ -229,7 +247,7 @@ impl Session {
         let run_key = cache::key(
             &json!({"algorithm":ALGORITHM,"probe":PROBE,"inputs":named,"options":options,"conditions":conditions}),
         )?;
-        let previous = self.output.verify_existing()?;
+        let previous = self.output.verify_existing(cancelled)?;
         if let Some(owned) = previous.filter(|owned| {
             owned.report["cache"]["namespace"] == cache::NAMESPACE
                 && owned.report["cache"]["key"] == run_key
@@ -272,16 +290,16 @@ impl Session {
             let candidates = batch.candidates.iter().map(|candidate| Ok(json!({
                 "id":candidate.id,"source":candidate.source,"input":by_source.get(&candidate.source).context("unknown assessment source")?,
                 "requested":candidate.requested_seconds,"actual":candidate.actual_seconds,"duration":candidate.duration_seconds,
-                "quality":candidate.quality,"event":candidate.event,"image":storage::digest_file(&candidate.image)?.1
+                "quality":candidate.quality,"event":candidate.event,"image":self.assessment_digest(&candidate.image, cancelled)?
             }))).collect::<Result<Vec<_>>>()?;
             let contexts = batch.contexts.iter().map(|context| {
-                let frames = context.frames.iter().map(|frame| Ok(json!({"source":frame.source,"requested":frame.requested_seconds,"actual":frame.actual_seconds,"image":storage::digest_file(&frame.image)?.1}))).collect::<Result<Vec<_>>>()?;
+                let frames = context.frames.iter().map(|frame| Ok(json!({"source":frame.source,"requested":frame.requested_seconds,"actual":frame.actual_seconds,"image":self.assessment_digest(&frame.image, cancelled)?}))).collect::<Result<Vec<_>>>()?;
                 Ok(json!({"id":context.id,"frames":frames}))
             }).collect::<Result<Vec<_>>>()?;
             let sheets = batch
                 .sheets
                 .iter()
-                .map(|path| storage::digest_file(path).map(|(_, digest)| digest))
+                .map(|path| self.assessment_digest(path, cancelled))
                 .collect::<Result<Vec<_>>>()?;
             let key = cache::key(
                 &json!({"algorithm":ALGORITHM,"phase":match batch.phase {AssessmentPhase::Primary=>"primary",AssessmentPhase::Secondary=>"secondary"},"model":options.model,"conditions":conditions,"candidates":candidates,"contexts":contexts,"sheets":sheets}),
@@ -315,7 +333,7 @@ impl Session {
         report["cache"] = json!({"namespace":cache::NAMESPACE,"key":run_key,"algorithm":ALGORITHM,"probe":PROBE,
             "service_url":conditions.service_url,"prompt_revision":conditions.prompt_revision,
             "response_schema_revision":conditions.response_schema_revision,"media_revision":conditions.media_revision,
-            "context_digest":storage::sha256(conditions.resolved_game_context.as_bytes())});
+            "context_digest":storage::sha256(conditions.resolved_game_context.text().as_bytes())});
         storage::atomic_write(&report_path, &serde_json::to_vec_pretty(&report)?)?;
         let owned = self.output.publish_checked(&artifacts, cancelled, || {
             verify_workflow(&self.input_directory, &self.inputs, Some(&identities))
@@ -431,7 +449,7 @@ impl Session {
         persist: bool,
         cancelled: &AtomicBool,
         mut generate: impl FnMut() -> Result<String>,
-    ) -> Result<String> {
+    ) -> Result<ResolvedGameContext> {
         check_cancelled(cancelled)?;
         ensure!(!title.trim().is_empty(), "game title must not be blank");
         ensure!(
@@ -456,7 +474,10 @@ impl Session {
         {
             self.verify_inputs()?;
             check_cancelled(cancelled)?;
-            return Ok(context);
+            return Ok(ResolvedGameContext {
+                text: context,
+                generation_key: Some(key),
+            });
         }
         self.verify_inputs()?;
         self.context_calls += 1;
@@ -470,7 +491,10 @@ impl Session {
             self.cache.write("contexts", &key, &context)?;
         }
         check_cancelled(cancelled)?;
-        Ok(context)
+        Ok(ResolvedGameContext {
+            text: context,
+            generation_key: Some(key),
+        })
     }
 
     fn verify_inputs(&self) -> Result<()> {
@@ -492,6 +516,12 @@ impl Session {
         Ok(identities)
     }
 
+    fn assessment_digest(&mut self, path: &Path, cancelled: &AtomicBool) -> Result<String> {
+        let (bytes, digest) = storage::digest_file_cancelled(path, cancelled)?;
+        self.assessment_bytes_read += bytes;
+        Ok(digest)
+    }
+
     fn metrics(&self) -> RunMetrics {
         let elapsed_seconds = self.prepared_at.elapsed().as_secs_f64();
         RunMetrics {
@@ -500,6 +530,7 @@ impl Session {
                 ..self.cache.stats()
             },
             output_bytes_read: self.output.bytes_read() + self.report_bytes_read,
+            assessment_bytes_read: self.assessment_bytes_read,
             probe_calls: self.probe_calls,
             assessment_calls: self.assessment_calls,
             context_calls: self.context_calls,
@@ -507,6 +538,23 @@ impl Session {
             elapsed_seconds,
         }
     }
+}
+
+pub(crate) fn validate_inputs(inputs: &[PathBuf]) -> Result<()> {
+    ensure!(inputs.len() <= MAX_CANDIDATES, "input count exceeds 4096");
+    let mut aliases = BTreeSet::new();
+    for path in inputs {
+        ensure!(
+            !source_name(path)?.chars().any(char::is_control),
+            "video source names must not contain controls"
+        );
+        let metadata = fs::symlink_metadata(path)?;
+        ensure!(
+            aliases.insert((metadata.dev(), metadata.ino())),
+            "input paths refer to the same file more than once"
+        );
+    }
+    Ok(())
 }
 
 fn probe(
@@ -570,7 +618,14 @@ fn valid_video(video: &Video) -> bool {
                 && frame.seconds + frame.duration_seconds <= video.duration_seconds + 0.000001
         })
         && video.frames.windows(2).all(|pair| {
-            pair[0].seconds < pair[1].seconds && pair[0].decode_index < pair[1].decode_index
+            pair[0].seconds < pair[1].seconds
+                && pair[0].decode_index < pair[1].decode_index
+                && pair[0].duration_seconds
+                    == crate::media::probe_seconds(pair[1].seconds - pair[0].seconds)
+        })
+        && video.frames.last().is_some_and(|last| {
+            last.duration_seconds
+                == crate::media::probe_seconds(video.duration_seconds - last.seconds)
         })
 }
 

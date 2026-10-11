@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail, ensure};
+use image::ImageDecoder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
@@ -97,7 +98,12 @@ pub struct Output {
 
 impl Output {
     /// Read-only validation for the CLI diagnostic; recovery requires prepare.
-    pub fn validate(path: &Path, protected_paths: &[&Path]) -> Result<Option<OwnedOutput>> {
+    pub fn validate(
+        path: &Path,
+        protected_paths: &[&Path],
+        cancelled: &AtomicBool,
+    ) -> Result<Option<OwnedOutput>> {
+        check_cancelled(cancelled)?;
         let (mut path, parent, mut prefix) = checked_target(path, protected_paths)?;
         let directory = checked_lock_directory(&path, &parent, protected_paths)?;
         let lock_path = directory.join(path.file_name().context("output filename is required")?);
@@ -121,12 +127,13 @@ impl Output {
                 "output publication recovery is pending; run the normal command to recover or choose a new empty output directory"
             ),
         }
-        Ok(inspect(&path, false, &Cell::new(0))?.1)
+        Ok(inspect(&path, false, &Cell::new(0), cancelled)?.1)
     }
 
     /// Call before probe, decode, search, inference, or runtime operations.
     /// Protected paths normally include the input directory, config, and cache.
-    pub fn prepare(path: &Path, protected_paths: &[&Path]) -> Result<Self> {
+    pub fn prepare(path: &Path, protected_paths: &[&Path], cancelled: &AtomicBool) -> Result<Self> {
+        check_cancelled(cancelled)?;
         let (path, parent, _) = checked_target(path, protected_paths)?;
         let directory = checked_lock_directory(&path, &parent, protected_paths)?;
         match fs::create_dir(&directory) {
@@ -156,8 +163,8 @@ impl Output {
             _lock: lock,
         };
         output.check_path()?;
-        output.recover()?;
-        let (initial, _) = output.state(&output.path)?;
+        output.recover(cancelled)?;
+        let (initial, _) = output.state(&output.path, cancelled)?;
         output.initial = initial;
         Ok(output)
     }
@@ -172,22 +179,28 @@ impl Output {
         self.bytes_read.get()
     }
 
-    fn state(&self, path: &Path) -> Result<(State, Option<OwnedOutput>)> {
-        inspect(path, false, &self.bytes_read)
+    fn state(&self, path: &Path, cancelled: &AtomicBool) -> Result<(State, Option<OwnedOutput>)> {
+        inspect(path, false, &self.bytes_read, cancelled)
     }
 
-    fn cleanup_state(&self, path: &Path, expected: &State) -> Result<State> {
-        cleanup_state(path, expected, &self.bytes_read)
+    fn cleanup_state(
+        &self,
+        path: &Path,
+        expected: &State,
+        cancelled: &AtomicBool,
+    ) -> Result<State> {
+        cleanup_state(path, expected, &self.bytes_read, cancelled)
     }
 
-    fn remove_verified(&self, path: &Path, expected: &State) -> Result<()> {
-        remove_verified(path, expected, &self.bytes_read)
+    fn remove_verified(&self, path: &Path, expected: &State, cancelled: &AtomicBool) -> Result<()> {
+        remove_verified(path, expected, &self.bytes_read, cancelled)
     }
 
     /// Does not consult cache and never decodes an image or scans an input video.
-    pub fn verify_existing(&self) -> Result<Option<OwnedOutput>> {
+    pub fn verify_existing(&self, cancelled: &AtomicBool) -> Result<Option<OwnedOutput>> {
+        check_cancelled(cancelled)?;
         self.check_path()?;
-        Ok(self.state(&self.path)?.1)
+        Ok(self.state(&self.path, cancelled)?.1)
     }
 
     pub fn publish(
@@ -241,7 +254,7 @@ impl Output {
         check_cancelled(cancelled)?;
         self.check_path()?;
         ensure!(
-            self.state(&self.path)?.0 == self.initial,
+            self.state(&self.path, cancelled)?.0 == self.initial,
             "output changed after preflight; preserve it and choose a new empty output directory"
         );
         let stage = tempfile::Builder::new()
@@ -250,14 +263,14 @@ impl Output {
             .context("cannot create output staging directory")?;
         step("staging")?;
         stage_artifacts(source, stage.path(), cancelled, &self.bytes_read)?;
-        let staged = self.state(stage.path())?.0;
+        let staged = self.state(stage.path(), cancelled)?.0;
         check_cancelled(cancelled)?;
         step("staged")?;
         before_replace()?;
         // Staging may be lengthy. Recheck the old content, not just its names,
         // immediately before recording a transaction and moving it.
         ensure!(
-            self.state(&self.path)?.0 == self.initial,
+            self.state(&self.path, cancelled)?.0 == self.initial,
             "output changed during staging; preserve it and choose a new empty output directory"
         );
         let backup = if matches!(self.initial, State::Absent) {
@@ -301,7 +314,7 @@ impl Output {
             check_cancelled(cancelled)?;
             self.check_path()?;
             ensure!(
-                self.state(&self.path)?.0 == journal.old,
+                self.state(&self.path, cancelled)?.0 == journal.old,
                 "output changed before replacement"
             );
             before_replace()?;
@@ -316,7 +329,7 @@ impl Output {
             sync_directory(&self.parent)?;
             step("published")?;
             ensure!(
-                self.state(&self.path)?.0 == journal.new,
+                self.state(&self.path, cancelled)?.0 == journal.new,
                 "published output failed completion verification"
             );
             check_cancelled(cancelled)?;
@@ -328,20 +341,24 @@ impl Output {
             Ok(())
         })();
         if let Err(error) = transaction {
-            self.recover()
+            // Complete transaction recovery even after cancellation: prepared
+            // restores the prior output; committed finishes verified cleanup.
+            let rollback = AtomicBool::new(false);
+            self.recover(&rollback)
                 .context("publication failed; previous output recovery could not complete")?;
-            self.initial = self.state(&self.path)?.0;
+            self.initial = self.state(&self.path, &rollback)?.0;
             return Err(error);
         }
-        self.recover()?;
-        self.initial = self.state(&self.path)?.0;
-        self.verify_existing()?
+        self.recover(cancelled)?;
+        self.initial = self.state(&self.path, cancelled)?.0;
+        self.verify_existing(cancelled)?
             .context("published output is missing")
     }
 
     /// Recovery only moves or deletes directories whose exact file set and
     /// content still match this transaction. Unknown data stops recovery.
-    fn recover(&self) -> Result<()> {
+    fn recover(&self, cancelled: &AtomicBool) -> Result<()> {
+        check_cancelled(cancelled)?;
         let bytes = match fs::symlink_metadata(&self.journal) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => {
@@ -374,8 +391,8 @@ impl Output {
                 && backup.is_some() == journal.placeholder.is_some(),
             "invalid output backup record"
         );
-        let (target_state, _) = recovery_read(self.state(&self.path))?;
-        let stage_state = recovery_read(self.cleanup_state(&stage, &journal.new))?;
+        let (target_state, _) = recovery_read(self.state(&self.path, cancelled))?;
+        let stage_state = recovery_read(self.cleanup_state(&stage, &journal.new, cancelled))?;
         ensure!(
             matches!(stage_state, State::Absent) || stage_state == journal.new,
             "staged output changed; preserve recovery files"
@@ -384,9 +401,9 @@ impl Output {
             .as_ref()
             .map(|path| {
                 if journal.phase == Phase::Committed {
-                    recovery_read(self.cleanup_state(path, &journal.old))
+                    recovery_read(self.cleanup_state(path, &journal.old, cancelled))
                 } else {
-                    recovery_read(self.state(path)).map(|value| value.0)
+                    recovery_read(self.state(path, cancelled)).map(|value| value.0)
                 }
             })
             .transpose()?;
@@ -402,6 +419,7 @@ impl Output {
             "previous output changed; preserve recovery files"
         );
 
+        check_cancelled(cancelled)?;
         match journal.phase {
             Phase::Committed => {
                 ensure!(
@@ -415,7 +433,7 @@ impl Output {
                         "previous output backup changed"
                     );
                     if backup_state != Some(State::Absent) {
-                        self.remove_verified(backup, &journal.old)?;
+                        self.remove_verified(backup, &journal.old, cancelled)?;
                     }
                 }
             }
@@ -463,19 +481,20 @@ impl Output {
                             self.remove_verified(
                                 backup,
                                 placeholder.as_ref().expect("checked placeholder"),
+                                cancelled,
                             )?;
                         }
                     }
                 }
                 ensure!(
-                    recovery_read(self.state(&self.path))?.0 == journal.old,
+                    recovery_read(self.state(&self.path, cancelled))?.0 == journal.old,
                     "previous output was not restored"
                 );
                 if !matches!(
-                    recovery_read(self.cleanup_state(&stage, &journal.new))?,
+                    recovery_read(self.cleanup_state(&stage, &journal.new, cancelled))?,
                     State::Absent
                 ) {
-                    self.remove_verified(&stage, &journal.new)?;
+                    self.remove_verified(&stage, &journal.new, cancelled)?;
                 }
             }
         }
@@ -484,6 +503,7 @@ impl Output {
             recovery_read(read_regular(&self.journal, 64 * 1024, &self.bytes_read))? == bytes,
             "output recovery record changed"
         );
+        check_cancelled(cancelled)?;
         fs::remove_file(&self.journal).context(OperationalError(
             "cannot remove completed output recovery record",
         ))?;
@@ -747,14 +767,16 @@ fn directory_files(path: &Path) -> Result<BTreeSet<String>> {
 
 #[cfg(test)]
 fn state(path: &Path) -> Result<(State, Option<OwnedOutput>)> {
-    inspect(path, false, &Cell::new(0))
+    inspect(path, false, &Cell::new(0), &AtomicBool::new(false))
 }
 
 fn inspect(
     path: &Path,
     allow_missing: bool,
     bytes_read_total: &Cell<u64>,
+    cancelled: &AtomicBool,
 ) -> Result<(State, Option<OwnedOutput>)> {
+    check_cancelled(cancelled)?;
     let identity = match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok((State::Absent, None));
@@ -767,6 +789,7 @@ fn inspect(
         return Ok((State::Empty { identity }, None));
     }
     let bytes = read_regular(&path.join("report.json"), MAX_REPORT_BYTES, bytes_read_total).context("output has no valid Rust ownership report; preserve it and choose a new empty output directory")?;
+    check_cancelled(cancelled)?;
     let mut report: Value = serde_json::from_slice(&bytes).context(
         "output has an invalid report; preserve it and choose a new empty output directory",
     )?;
@@ -797,6 +820,7 @@ fn inspect(
     );
     let mut bytes_read = bytes.len() as u64;
     for (name, wanted) in &manifest.files {
+        check_cancelled(cancelled)?;
         if allow_missing && !files.contains(name) {
             continue;
         }
@@ -804,7 +828,7 @@ fn inspect(
             storage::open_regular(&path.join(name))?.metadata()?.len() == wanted.bytes,
             "output image {name:?} size changed; preserve it and choose a new empty output directory"
         );
-        let (length, digest) = storage::digest_file(&path.join(name))?;
+        let (length, digest) = storage::digest_file_cancelled(&path.join(name), cancelled)?;
         bytes_read_total.set(bytes_read_total.get() + length);
         ensure!(
             length == wanted.bytes && digest == wanted.sha256,
@@ -812,6 +836,7 @@ fn inspect(
         );
         bytes_read += length;
     }
+    check_cancelled(cancelled)?;
     report
         .as_object_mut()
         .expect("checked object")
@@ -855,18 +880,8 @@ fn stage_artifacts(
         check_cancelled(cancelled)?;
         let staged = target.join(&name);
         let digest = copy_image(&source.join(&name), &staged, cancelled, bytes_read)?;
-        let mut reader = image::ImageReader::with_format(
-            BufReader::new(CountedFile {
-                file: storage::open_regular(&staged)?,
-                bytes_read,
-            }),
-            image::ImageFormat::Jpeg,
-        );
-        let mut limits = image::Limits::default();
-        limits.max_alloc = Some(4 * crate::contact_sheet::MAX_SHEET_PIXELS);
-        reader.limits(limits);
-        let image = reader
-            .decode()
+        let decoder = artifact_decoder(&staged, name != "selected-contact-sheet.jpg", bytes_read)?;
+        let image = image::DynamicImage::from_decoder(decoder)
             .context("private artifact is not a decodable JPEG")?;
         if let Some(frame) = report["selected"]
             .as_array()
@@ -899,6 +914,43 @@ fn stage_artifacts(
         &serde_json::to_vec_pretty(&report)?,
     )?;
     sync_directory(target)
+}
+
+fn artifact_decoder<'a>(
+    path: &Path,
+    selected: bool,
+    bytes_read: &'a Cell<u64>,
+) -> Result<impl ImageDecoder + 'a> {
+    let mut reader = image::ImageReader::with_format(
+        BufReader::new(CountedFile {
+            file: storage::open_regular(path)?,
+            bytes_read,
+        }),
+        image::ImageFormat::Jpeg,
+    );
+    let max_pixels = if selected {
+        crate::quality::MAX_IMAGE_PIXELS
+    } else {
+        crate::contact_sheet::MAX_SHEET_PIXELS
+    };
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(4 * max_pixels);
+    if selected {
+        limits.max_image_width = Some(crate::quality::MAX_IMAGE_EDGE);
+        limits.max_image_height = Some(crate::quality::MAX_IMAGE_EDGE);
+    }
+    reader.limits(limits.clone());
+    let mut decoder = reader
+        .into_decoder()
+        .context("private artifact has an invalid JPEG header")?;
+    let (width, height) = decoder.dimensions();
+    ensure!(
+        u64::from(width) * u64::from(height) <= max_pixels,
+        "private JPEG exceeds the pixel limit"
+    );
+    limits.reserve(decoder.total_bytes())?;
+    decoder.set_limits(limits)?;
+    Ok(decoder)
 }
 
 fn write_exclusive(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -956,8 +1008,13 @@ fn copy_image(
     })
 }
 
-fn cleanup_state(path: &Path, expected: &State, bytes_read: &Cell<u64>) -> Result<State> {
-    let actual = inspect(path, true, bytes_read)?.0;
+fn cleanup_state(
+    path: &Path,
+    expected: &State,
+    bytes_read: &Cell<u64>,
+    cancelled: &AtomicBool,
+) -> Result<State> {
+    let actual = inspect(path, true, bytes_read, cancelled)?.0;
     // A cleanup can fail after deleting the last report but before rmdir. The
     // original directory identity still proves ownership of that empty node.
     if let (
@@ -973,9 +1030,14 @@ fn cleanup_state(path: &Path, expected: &State, bytes_read: &Cell<u64>) -> Resul
     Ok(actual)
 }
 
-fn remove_verified(path: &Path, expected: &State, bytes_read: &Cell<u64>) -> Result<()> {
+fn remove_verified(
+    path: &Path,
+    expected: &State,
+    bytes_read: &Cell<u64>,
+    cancelled: &AtomicBool,
+) -> Result<()> {
     ensure!(
-        &recovery_read(cleanup_state(path, expected, bytes_read))? == expected,
+        &recovery_read(cleanup_state(path, expected, bytes_read, cancelled))? == expected,
         "refusing to remove changed output recovery data"
     );
     // Never recursively remove an old directory: only its verified flat files.
@@ -983,13 +1045,16 @@ fn remove_verified(path: &Path, expected: &State, bytes_read: &Cell<u64>) -> Res
     // Keep the manifest available if any image deletion fails. Recovery can
     // validate the remaining declared subset without trusting an unknown file.
     for name in files.iter().filter(|name| name.as_str() != "report.json") {
+        check_cancelled(cancelled)?;
         fs::remove_file(path.join(name))
             .context(OperationalError("cannot remove verified recovery image"))?;
     }
     if files.contains("report.json") {
+        check_cancelled(cancelled)?;
         fs::remove_file(path.join("report.json"))
             .context(OperationalError("cannot remove verified recovery report"))?;
     }
+    check_cancelled(cancelled)?;
     fs::remove_dir(path).context(OperationalError(
         "cannot remove verified recovery directory",
     ))?;
@@ -1042,15 +1107,19 @@ mod tests {
         let path = root.join("result");
         let cache = root.join("cache");
         fs::create_dir(&cache).unwrap();
-        let mut output = Output::prepare(&path, &[&cache]).unwrap();
+        let mut output = Output::prepare(&path, &[&cache], &cancelled()).unwrap();
         let owned = publish(&mut output, &source);
         assert_eq!(owned.report["cache"]["key"], "fixture");
         assert!(owned.bytes_read > fs::metadata(path.join("report.json")).unwrap().len());
         drop(output);
         fs::remove_dir(&cache).unwrap();
-        let output = Output::prepare(&path, &[&cache]).unwrap();
+        let output = Output::prepare(&path, &[&cache], &cancelled()).unwrap();
         assert_eq!(
-            output.verify_existing().unwrap().unwrap().fingerprint,
+            output
+                .verify_existing(&cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
             owned.fingerprint
         );
         drop(output);
@@ -1060,7 +1129,7 @@ mod tests {
             .unwrap();
         let edited = fs::read(path.join("selected-01.jpg")).unwrap();
         assert!(image::open(path.join("selected-01.jpg")).is_ok());
-        assert!(Output::prepare(&path, &[]).is_err());
+        assert!(Output::prepare(&path, &[], &cancelled()).is_err());
         assert_eq!(fs::read(path.join("selected-01.jpg")).unwrap(), edited);
         assert_eq!(fs::read(path.join("report.json")).unwrap(), before_report);
     }
@@ -1071,19 +1140,19 @@ mod tests {
         let unknown = root.join("unknown");
         fs::create_dir(&unknown).unwrap();
         fs::write(unknown.join("holiday.txt"), b"keep me").unwrap();
-        assert!(Output::prepare(&unknown, &[]).is_err());
+        assert!(Output::prepare(&unknown, &[], &cancelled()).is_err());
         assert_eq!(fs::read(unknown.join("holiday.txt")).unwrap(), b"keep me");
         let legacy = artifacts(&root, "legacy", 25);
         let before = fs::read(legacy.join("report.json")).unwrap();
-        assert!(Output::prepare(&legacy, &[]).is_err());
+        assert!(Output::prepare(&legacy, &[], &cancelled()).is_err());
         assert_eq!(fs::read(legacy.join("report.json")).unwrap(), before);
 
         let source = artifacts(&root, "artifacts", 15);
         let path = root.join("result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         publish(&mut output, &source);
         fs::write(path.join("notes.txt"), b"my note").unwrap();
-        assert!(output.verify_existing().is_err());
+        assert!(output.verify_existing(&cancelled()).is_err());
         assert!(
             output
                 .publish_directory(&source, &cancelled(), |_| Ok(()))
@@ -1099,7 +1168,7 @@ mod tests {
             serde_json::to_vec(&report).unwrap(),
         )
         .unwrap();
-        assert!(output.verify_existing().is_err());
+        assert!(output.verify_existing(&cancelled()).is_err());
     }
 
     #[test]
@@ -1108,32 +1177,39 @@ mod tests {
         let input = root.join("input");
         fs::create_dir(&input).unwrap();
         let path = root.join("result");
-        assert!(Output::prepare(&input.join("output"), &[&input]).is_err());
-        assert!(Output::prepare(&root, &[&input]).is_err());
-        assert!(Output::prepare(&path, &[&path]).is_err());
-        let output = Output::prepare(&path, &[&input]).unwrap();
-        assert!(Output::prepare(&path, &[&input]).is_err());
+        assert!(Output::prepare(&input.join("output"), &[&input], &cancelled()).is_err());
+        assert!(Output::prepare(&root, &[&input], &cancelled()).is_err());
+        assert!(Output::prepare(&path, &[&path], &cancelled()).is_err());
+        let output = Output::prepare(&path, &[&input], &cancelled()).unwrap();
+        assert!(Output::prepare(&path, &[&input], &cancelled()).is_err());
         drop(output);
-        assert!(Output::prepare(&path, &[&input]).is_ok());
+        assert!(Output::prepare(&path, &[&input], &cancelled()).is_ok());
     }
 
     #[test]
     fn diagnostic_validation_never_creates_locks_or_recovers_output() {
         let (_directory, root) = workspace();
         let path = root.join("result");
-        assert!(Output::validate(&path, &[]).unwrap().is_none());
+        assert!(
+            Output::validate(&path, &[], &cancelled())
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
         let first = artifacts(&root, "first", 15);
         let second = artifacts(&root, "second", 85);
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         let original = publish(&mut output, &first);
         assert_eq!(
-            Output::validate(&path, &[]).unwrap().unwrap().fingerprint,
+            Output::validate(&path, &[], &cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
             original.fingerprint
         );
         let journal = pending(&output, &second);
         let before = fs::read(&output.journal).unwrap();
-        assert!(Output::validate(&path, &[]).is_err());
+        assert!(Output::validate(&path, &[], &cancelled()).is_err());
         assert_eq!(fs::read(&output.journal).unwrap(), before);
         assert!(root.join(journal.stage).exists());
     }
@@ -1142,13 +1218,13 @@ mod tests {
     fn reserved_lock_paths_and_sidecar_collisions_are_rejected_without_deletion() {
         let (_directory, root) = workspace();
         let container = root.join(LOCK_DIRECTORY);
-        assert!(Output::prepare(&container, &[]).is_err());
+        assert!(Output::prepare(&container, &[], &cancelled()).is_err());
         assert!(!container.exists());
         fs::create_dir(&container).unwrap();
-        assert!(Output::prepare(&container.join("nested-output"), &[]).is_err());
+        assert!(Output::prepare(&container.join("nested-output"), &[], &cancelled()).is_err());
         assert_eq!(fs::read_dir(&container).unwrap().count(), 0);
         fs::write(container.join("input.mkv"), b"keep input").unwrap();
-        assert!(Output::prepare(&root.join("result"), &[&container]).is_err());
+        assert!(Output::prepare(&root.join("result"), &[&container], &cancelled()).is_err());
         assert_eq!(
             fs::read(container.join("input.mkv")).unwrap(),
             b"keep input"
@@ -1156,7 +1232,7 @@ mod tests {
         fs::remove_file(container.join("input.mkv")).unwrap();
         fs::remove_dir(&container).unwrap();
         fs::write(&container, b"user-owned file").unwrap();
-        assert!(Output::prepare(&root.join("result"), &[]).is_err());
+        assert!(Output::prepare(&root.join("result"), &[], &cancelled()).is_err());
         assert_eq!(fs::read(&container).unwrap(), b"user-owned file");
     }
 
@@ -1167,13 +1243,13 @@ mod tests {
         let first = artifacts(&root, "first", 15);
         let second = artifacts(&root, "second", 85);
         let path = root.join("result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         let original = publish(&mut output, &first);
         let journal = pending(&output, &second);
         let stage_report = root.join(journal.stage).join("report.json");
         let permission = fs::metadata(&stage_report).unwrap().permissions();
         fs::set_permissions(&stage_report, fs::Permissions::from_mode(0o0)).unwrap();
-        let result = output.recover();
+        let result = output.recover(&cancelled());
         fs::set_permissions(&stage_report, permission).unwrap();
         let error = result.unwrap_err();
         assert!(
@@ -1181,11 +1257,15 @@ mod tests {
             "{error:#}"
         );
         assert_eq!(
-            output.verify_existing().unwrap().unwrap().fingerprint,
+            output
+                .verify_existing(&cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
             original.fingerprint
         );
         fs::write(&output.journal, b"{\"unknown\": true}").unwrap();
-        let error = output.recover().unwrap_err();
+        let error = output.recover(&cancelled()).unwrap_err();
         assert!(
             error.downcast_ref::<OperationalError>().is_none(),
             "{error:#}"
@@ -1199,7 +1279,7 @@ mod tests {
         let first = artifacts(&root, "first", 15);
         let second = artifacts(&root, "second", 85);
         let path = root.join("Result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         let original = publish(&mut output, &first);
         let journal = pending(&output, &second);
         let journal_path = output.journal.clone();
@@ -1210,7 +1290,7 @@ mod tests {
         // but its unchanged lock representative must still find the journal.
         // On a case-sensitive filesystem the original target is absent and
         // recovery also refuses to infer ownership of the renamed directory.
-        assert!(Output::prepare(&path, &[]).is_err());
+        assert!(Output::prepare(&path, &[], &cancelled()).is_err());
         assert_eq!(fs::read(&journal_path).unwrap(), record);
         assert!(root.join(journal.stage).exists());
         assert_eq!(
@@ -1230,18 +1310,18 @@ mod tests {
         fs::create_dir(&target).unwrap();
         let link = root.join("link");
         symlink(&target, &link).unwrap();
-        assert!(Output::prepare(&link, &[]).is_err());
-        assert!(Output::prepare(&link.join("result"), &[]).is_err());
-        assert!(Output::prepare(&root.join("result"), &[&link]).is_err());
-        assert!(Output::prepare(&root.join("real/../result"), &[]).is_err());
+        assert!(Output::prepare(&link, &[], &cancelled()).is_err());
+        assert!(Output::prepare(&link.join("result"), &[], &cancelled()).is_err());
+        assert!(Output::prepare(&root.join("result"), &[&link], &cancelled()).is_err());
+        assert!(Output::prepare(&root.join("real/../result"), &[], &cancelled()).is_err());
         let fifo = root.join("fifo");
         let filename = CString::new(fifo.as_os_str().as_bytes()).unwrap();
         // A FIFO must be inspected without a blocking read or a write.
         assert_eq!(unsafe { libc::mkfifo(filename.as_ptr(), 0o600) }, 0);
-        assert!(Output::prepare(&fifo, &[]).is_err());
+        assert!(Output::prepare(&fifo, &[], &cancelled()).is_err());
         assert!(fs::symlink_metadata(&fifo).is_ok());
         symlink(&fifo, target.join("selected-01.jpg")).unwrap();
-        assert!(Output::prepare(&target, &[]).is_err());
+        assert!(Output::prepare(&target, &[], &cancelled()).is_err());
         assert!(
             fs::symlink_metadata(target.join("selected-01.jpg"))
                 .unwrap()
@@ -1255,7 +1335,7 @@ mod tests {
         let (_directory, root) = workspace();
         let first = artifacts(&root, "first", 15);
         let path = root.join("result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         let original = publish(&mut output, &first);
         for (ordinal, name) in ["selected-01.jpg", "selected-contact-sheet.jpg"]
             .into_iter()
@@ -1270,11 +1350,155 @@ mod tests {
                     .is_err()
             );
             assert_eq!(
-                output.verify_existing().unwrap().unwrap().fingerprint,
+                output
+                    .verify_existing(&cancelled())
+                    .unwrap()
+                    .unwrap()
+                    .fingerprint,
                 original.fingerprint
             );
             assert!(!output.journal.exists());
         }
+    }
+
+    #[test]
+    fn cancelled_preflight_stops_during_output_digest() {
+        assert_cancelled_ownership("prepare");
+    }
+
+    #[test]
+    fn cancelled_diagnostic_stops_during_output_digest() {
+        assert_cancelled_ownership("validate");
+    }
+
+    #[test]
+    fn cancelled_warm_verification_stops_during_output_digest() {
+        assert_cancelled_ownership("verify");
+    }
+
+    #[test]
+    fn cancelled_pending_recovery_retains_its_journal_and_output() {
+        assert_cancelled_ownership("recover");
+    }
+
+    fn assert_cancelled_ownership(operation: &str) {
+        let (_directory, root) = workspace();
+        let source = artifacts(&root, "artifacts", 15);
+        let mut encoded = fs::read(source.join("selected-01.jpg")).unwrap();
+        encoded.resize(256 * 1024, 0);
+        encoded.extend([0xff, 0xd9]);
+        fs::write(source.join("selected-01.jpg"), encoded).unwrap();
+        assert!(image::open(source.join("selected-01.jpg")).is_ok());
+        let path = root.join("result");
+        let mut output = Some(Output::prepare(&path, &[], &cancelled()).unwrap());
+        let original = publish(output.as_mut().unwrap(), &source);
+        let snapshot = || {
+            directory_files(&path)
+                .unwrap()
+                .into_iter()
+                .map(|name| {
+                    let bytes = fs::read(path.join(&name)).unwrap();
+                    (name, bytes)
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let before = snapshot();
+        let journal = (operation == "recover").then(|| pending(output.as_ref().unwrap(), &source));
+        let journal_path = output.as_ref().unwrap().journal.clone();
+        let journal_bytes = journal.as_ref().map(|_| fs::read(&journal_path).unwrap());
+        let flag = AtomicBool::new(false);
+        let interruption = storage::interrupt_digest_after(64 * 1024);
+        let result = match operation {
+            "prepare" => {
+                drop(output.take());
+                Output::prepare(&path, &[], &flag).map(|_| ())
+            }
+            "validate" => Output::validate(&path, &[], &flag).map(|_| ()),
+            "verify" => output.as_ref().unwrap().verify_existing(&flag).map(|_| ()),
+            "recover" => output.as_ref().unwrap().recover(&flag),
+            _ => unreachable!(),
+        };
+        drop(interruption);
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "the caller's flag must change during the actual digest"
+        );
+        let error = result.unwrap_err();
+        assert!(error.downcast_ref::<Interrupted>().is_some(), "{error:#}");
+        assert_eq!(snapshot(), before);
+        if let Some(journal) = journal {
+            let bytes = fs::read(&journal_path).unwrap();
+            assert_eq!(Some(&bytes), journal_bytes.as_ref());
+            assert!(serde_json::from_slice::<Journal>(&bytes).is_ok());
+            assert!(root.join(journal.stage).join("report.json").is_file());
+            output.as_ref().unwrap().recover(&cancelled()).unwrap();
+        }
+        drop(output);
+        let output = Output::prepare(&path, &[], &cancelled()).unwrap();
+        assert_eq!(
+            output
+                .verify_existing(&cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            original.fingerprint
+        );
+    }
+
+    #[test]
+    fn selected_jpeg_headers_are_bounded_before_allocating_pixels() {
+        let (_directory, root) = workspace();
+        let source = artifacts(&root, "headers", 15);
+        let original = fs::read(source.join("selected-01.jpg")).unwrap();
+        let marker = original
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0xc0])
+            .unwrap();
+        let path = source.join("selected-01.jpg");
+        let output_path = root.join("result");
+        let mut output = Output::prepare(&output_path, &[], &cancelled()).unwrap();
+        let owned = publish(&mut output, &source);
+        let dimensions = |width: u16, height: u16| {
+            let mut bytes = original.clone();
+            bytes[marker + 5..marker + 7].copy_from_slice(&height.to_be_bytes());
+            bytes[marker + 7..marker + 9].copy_from_slice(&width.to_be_bytes());
+            fs::write(&path, bytes).unwrap();
+        };
+        for (width, height) in [(6000, 6000), (16_385, 16), (16, 16_385)] {
+            dimensions(width, height);
+            assert!(
+                artifact_decoder(&path, true, &Cell::new(0)).is_err(),
+                "oversized selected header {width}x{height} must fail before pixel decode"
+            );
+            assert!(
+                output
+                    .publish_directory(&source, &cancelled(), |_| Ok(()))
+                    .is_err()
+            );
+            assert_eq!(
+                output
+                    .verify_existing(&cancelled())
+                    .unwrap()
+                    .unwrap()
+                    .fingerprint,
+                owned.fingerprint
+            );
+            assert!(!output.journal.exists());
+        }
+        for (width, height) in [(8000, 4000), (16_384, 16), (10_000, 20_000)] {
+            dimensions(width, height);
+            let selected = height <= 16_384;
+            let bytes_read = Cell::new(0);
+            let decoder = artifact_decoder(&path, selected, &bytes_read).unwrap();
+            assert_eq!(decoder.dimensions(), (u32::from(width), u32::from(height)));
+            assert!(bytes_read.get() < 1024);
+            // Dropping the header decoder never allocates the advertised pixels.
+        }
+        dimensions(10_001, 20_000);
+        assert!(
+            artifact_decoder(&path, false, &Cell::new(0)).is_err(),
+            "contact sheet header above 200MP must fail before pixel decode"
+        );
     }
 
     #[test]
@@ -1283,7 +1507,7 @@ mod tests {
         let first = artifacts(&root, "first", 15);
         let second = artifacts(&root, "second", 85);
         let path = root.join("result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         let original = publish(&mut output, &first);
         RgbImage::from_pixel(32, 40, Rgb([7, 8, 9]))
             .save(second.join("selected-01.jpg"))
@@ -1295,7 +1519,11 @@ mod tests {
                 .is_err()
         );
         assert_eq!(
-            output.verify_existing().unwrap().unwrap().fingerprint,
+            output
+                .verify_existing(&cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
             original.fingerprint
         );
         assert!(!output.journal.exists());
@@ -1311,7 +1539,7 @@ mod tests {
             .enumerate()
         {
             let path = root.join(format!("result-{ordinal}"));
-            let mut output = Output::prepare(&path, &[]).unwrap();
+            let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
             let original = publish(&mut output, &first);
             let error = output
                 .publish_directory(&second, &cancelled(), |step| {
@@ -1321,7 +1549,11 @@ mod tests {
                 .unwrap_err();
             assert!(error.to_string().contains("injected"), "{error:#}");
             assert_eq!(
-                output.verify_existing().unwrap().unwrap().fingerprint,
+                output
+                    .verify_existing(&cancelled())
+                    .unwrap()
+                    .unwrap()
+                    .fingerprint,
                 original.fingerprint
             );
             assert!(!output.journal.exists());
@@ -1344,7 +1576,11 @@ mod tests {
                 .unwrap_err();
             assert!(error.downcast_ref::<Interrupted>().is_some(), "{error:#}");
             assert_eq!(
-                output.verify_existing().unwrap().unwrap().fingerprint,
+                output
+                    .verify_existing(&cancelled())
+                    .unwrap()
+                    .unwrap()
+                    .fingerprint,
                 original.fingerprint
             );
         }
@@ -1359,7 +1595,7 @@ mod tests {
             if empty {
                 fs::create_dir(&path).unwrap();
             }
-            let mut output = Output::prepare(&path, &[]).unwrap();
+            let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
             let before = state(&path).unwrap().0;
             let cancel = cancelled();
             let error = output
@@ -1381,7 +1617,7 @@ mod tests {
         let first = artifacts(&root, "first", 15);
         let second = artifacts(&root, "second", 85);
         let path = root.join("result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         let original = publish(&mut output, &first);
         // A regular file at the destination makes the actual directory rename
         // fail on both target OSes. Recovery must retain this unknown file.
@@ -1405,9 +1641,13 @@ mod tests {
         assert!(root.join(journal.stage).exists());
         drop(output);
         fs::remove_file(&path).unwrap(); // Only the test-created conflict is removed.
-        let output = Output::prepare(&path, &[]).unwrap();
+        let output = Output::prepare(&path, &[], &cancelled()).unwrap();
         assert_eq!(
-            output.verify_existing().unwrap().unwrap().fingerprint,
+            output
+                .verify_existing(&cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
             original.fingerprint
         );
         assert!(!backup.exists());
@@ -1419,7 +1659,7 @@ mod tests {
         let first = artifacts(&root, "first", 15);
         let second = artifacts(&root, "second", 85);
         let path = root.join("result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         publish(&mut output, &first);
         let edited = fs::read(second.join("selected-01.jpg")).unwrap();
         assert!(
@@ -1446,7 +1686,7 @@ mod tests {
         for boundary in ["staged", "backed_up", "verified"] {
             fs::write(&input, b"original input").unwrap();
             let path = root.join(format!("result-{boundary}"));
-            let mut output = Output::prepare(&path, &[&input]).unwrap();
+            let mut output = Output::prepare(&path, &[&input], &cancelled()).unwrap();
             let original = publish(&mut output, &first);
             let checks = Cell::new(0);
             let error = output
@@ -1472,7 +1712,11 @@ mod tests {
             assert!(error.to_string().contains("input changed"), "{error:#}");
             assert!(checks.get() >= 1);
             assert_eq!(
-                output.verify_existing().unwrap().unwrap().fingerprint,
+                output
+                    .verify_existing(&cancelled())
+                    .unwrap()
+                    .unwrap()
+                    .fingerprint,
                 original.fingerprint
             );
             assert!(!output.journal.exists());
@@ -1490,7 +1734,7 @@ mod tests {
                 .unwrap()
                 .len();
         let path = root.join("result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         assert_eq!(output.bytes_read(), 0);
         let journal_bytes = Cell::new(0);
         let journal_path = output.journal.clone();
@@ -1512,10 +1756,10 @@ mod tests {
             output.bytes_read()
         );
         drop(output);
-        let output = Output::prepare(&path, &[]).unwrap();
+        let output = Output::prepare(&path, &[], &cancelled()).unwrap();
         assert_eq!(output.bytes_read(), owned.bytes_read);
         let before = output.bytes_read();
-        output.verify_existing().unwrap();
+        output.verify_existing(&cancelled()).unwrap();
         assert_eq!(output.bytes_read() - before, owned.bytes_read);
     }
 
@@ -1553,7 +1797,7 @@ mod tests {
         let second = artifacts(&root, "second", 85);
         for boundary in 0..3 {
             let path = root.join(format!("result-{boundary}"));
-            let mut output = Output::prepare(&path, &[]).unwrap();
+            let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
             let original = publish(&mut output, &first);
             let journal = pending(&output, &second);
             if boundary >= 1 {
@@ -1563,9 +1807,13 @@ mod tests {
                 fs::rename(root.join(&journal.stage), &path).unwrap();
             }
             drop(output);
-            let output = Output::prepare(&path, &[]).unwrap();
+            let output = Output::prepare(&path, &[], &cancelled()).unwrap();
             assert_eq!(
-                output.verify_existing().unwrap().unwrap().fingerprint,
+                output
+                    .verify_existing(&cancelled())
+                    .unwrap()
+                    .unwrap()
+                    .fingerprint,
                 original.fingerprint
             );
             assert!(!output.journal.exists());
@@ -1580,7 +1828,7 @@ mod tests {
         let first = artifacts(&root, "first", 15);
         let second = artifacts(&root, "second", 85);
         let path = root.join("result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         publish(&mut output, &first);
         let mut journal = pending(&output, &second);
         let backup = root.join(journal.backup.as_ref().unwrap());
@@ -1591,9 +1839,13 @@ mod tests {
         fs::remove_file(backup.join("selected-01.jpg")).unwrap();
         let wanted = state(&path).unwrap().1.unwrap().fingerprint;
         drop(output);
-        let output = Output::prepare(&path, &[]).unwrap();
+        let output = Output::prepare(&path, &[], &cancelled()).unwrap();
         assert_eq!(
-            output.verify_existing().unwrap().unwrap().fingerprint,
+            output
+                .verify_existing(&cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
             wanted
         );
         assert!(!backup.exists());
@@ -1606,22 +1858,26 @@ mod tests {
         let first = artifacts(&root, "first", 15);
         let second = artifacts(&root, "second", 85);
         let path = root.join("result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         let original = publish(&mut output, &first);
         let mut journal = pending(&output, &second);
         let stage = root.join(&journal.stage);
         fs::write(stage.join("user-note.txt"), b"keep").unwrap();
         let record = fs::read(&output.journal).unwrap();
-        assert!(output.recover().is_err());
+        assert!(output.recover(&cancelled()).is_err());
         assert_eq!(fs::read(stage.join("user-note.txt")).unwrap(), b"keep");
         assert_eq!(fs::read(&output.journal).unwrap(), record);
         assert_eq!(
-            output.verify_existing().unwrap().unwrap().fingerprint,
+            output
+                .verify_existing(&cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
             original.fingerprint
         );
         journal.stage = "../outside".to_owned();
         storage::atomic_write(&output.journal, &serde_json::to_vec(&journal).unwrap()).unwrap();
-        assert!(output.recover().is_err());
+        assert!(output.recover(&cancelled()).is_err());
         assert!(stage.exists());
     }
 
@@ -1631,7 +1887,7 @@ mod tests {
         let first = artifacts(&root, "first", 15);
         let second = artifacts(&root, "second", 85);
         let path = root.join("result");
-        let mut output = Output::prepare(&path, &[]).unwrap();
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
         let original = publish(&mut output, &first);
         fs::write(second.join("selected-contact-sheet.jpg"), b"not an image").unwrap();
         assert!(
@@ -1640,7 +1896,11 @@ mod tests {
                 .is_err()
         );
         assert_eq!(
-            output.verify_existing().unwrap().unwrap().fingerprint,
+            output
+                .verify_existing(&cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
             original.fingerprint
         );
         assert!(!output.journal.exists());

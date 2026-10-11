@@ -96,8 +96,25 @@ pub fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-pub fn digest_file(path: &Path) -> Result<(u64, String)> {
-    digest_file_cancelled(path, &AtomicBool::new(false))
+#[cfg(test)]
+thread_local! {
+    static INTERRUPT_DIGEST_AFTER: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct DigestInterruption;
+
+#[cfg(test)]
+impl Drop for DigestInterruption {
+    fn drop(&mut self) {
+        INTERRUPT_DIGEST_AFTER.with(|threshold| threshold.set(None));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn interrupt_digest_after(bytes: u64) -> DigestInterruption {
+    INTERRUPT_DIGEST_AFTER.with(|threshold| threshold.set(Some(bytes)));
+    DigestInterruption
 }
 
 pub fn digest_file_cancelled(path: &Path, cancelled: &AtomicBool) -> Result<(u64, String)> {
@@ -115,6 +132,13 @@ pub fn digest_file_cancelled(path: &Path, cancelled: &AtomicBool) -> Result<(u64
         }
         length += read as u64;
         digest.update(&buffer[..read]);
+        #[cfg(test)]
+        INTERRUPT_DIGEST_AFTER.with(|threshold| {
+            if threshold.get().is_some_and(|bytes| length >= bytes) {
+                threshold.set(None);
+                cancelled.store(true, Ordering::Relaxed);
+            }
+        });
     }
     Ok((length, format!("{:x}", digest.finalize())))
 }

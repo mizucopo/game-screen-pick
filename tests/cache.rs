@@ -98,12 +98,14 @@ fn existing_case_aliases_share_output_lock_and_reject_protected_overlap() {
             .expect("this native regression requires the default case-insensitive macOS volume")
             .ino()
     );
-    let first = game_screen_pick::output::Output::prepare(&actual, &[]).unwrap();
-    let competing = game_screen_pick::output::Output::prepare(&alias, &[]);
+    let first =
+        game_screen_pick::output::Output::prepare(&actual, &[], &AtomicBool::new(false)).unwrap();
+    let competing = game_screen_pick::output::Output::prepare(&alias, &[], &AtomicBool::new(false));
     let lock_blocked = competing.is_err();
     drop(competing);
     drop(first);
-    let overlap = game_screen_pick::output::Output::prepare(&alias, &[&actual]);
+    let overlap =
+        game_screen_pick::output::Output::prepare(&alias, &[&actual], &AtomicBool::new(false));
     assert!(
         lock_blocked && overlap.is_err(),
         "same native directory must share its lock and reject protected overlap: lock_blocked={lock_blocked}, overlap_rejected={}",
@@ -118,13 +120,17 @@ fn absent_case_and_unicode_aliases_share_output_lock_and_reject_protected_overla
         let parent = temporary();
         let actual = parent.path().join(actual_name);
         let alias = parent.path().join(alias_name);
-        let first = game_screen_pick::output::Output::prepare(&actual, &[]).unwrap();
-        let competing = game_screen_pick::output::Output::prepare(&alias, &[]);
+        let first =
+            game_screen_pick::output::Output::prepare(&actual, &[], &AtomicBool::new(false))
+                .unwrap();
+        let competing =
+            game_screen_pick::output::Output::prepare(&alias, &[], &AtomicBool::new(false));
         let lock_blocked = competing.is_err();
         assert!(!actual.exists(), "locking must not precreate the output");
         drop(competing);
         drop(first);
-        let overlap = game_screen_pick::output::Output::prepare(&actual, &[&alias]);
+        let overlap =
+            game_screen_pick::output::Output::prepare(&actual, &[&alias], &AtomicBool::new(false));
         assert!(
             lock_blocked && overlap.is_err(),
             "absent native aliases must share their lock and reject protected overlap: {actual_name:?}/{alias_name:?}, lock_blocked={lock_blocked}, overlap_rejected={}",
@@ -138,11 +144,16 @@ fn absent_case_and_unicode_aliases_share_output_lock_and_reject_protected_overla
 fn native_output_locks_allow_maximum_length_leaf_without_precreation() {
     let parent = temporary();
     let actual = parent.path().join("a".repeat(255));
-    let first = game_screen_pick::output::Output::prepare(&actual, &[]).unwrap();
-    assert!(game_screen_pick::output::Output::prepare(&actual, &[]).is_err());
+    let first =
+        game_screen_pick::output::Output::prepare(&actual, &[], &AtomicBool::new(false)).unwrap();
+    assert!(
+        game_screen_pick::output::Output::prepare(&actual, &[], &AtomicBool::new(false)).is_err()
+    );
     assert!(!actual.exists());
     drop(first);
-    assert!(game_screen_pick::output::Output::prepare(&actual, &[]).is_ok());
+    assert!(
+        game_screen_pick::output::Output::prepare(&actual, &[], &AtomicBool::new(false)).is_ok()
+    );
     assert!(!actual.exists());
 }
 
