@@ -202,7 +202,9 @@ pub fn run(
     }
     loop {
         work.assess_primary(&mut assessor)?;
+        let assessed_before = work.secondary.len();
         work.assess_secondary(&mut assessor)?;
+        let newly_assessed = work.secondary.len() - assessed_before;
         let selected = if work.secondary_candidates.is_empty() {
             None
         } else {
@@ -218,6 +220,11 @@ pub fn run(
                 work.notes.extend(selection.notes);
                 return work.finish(&selection.indices);
             }
+        }
+        // Try the remaining eligible primary candidates before decoding more
+        // frames or declaring exhaustion. Every pass consumes distinct IDs.
+        if newly_assessed > 0 {
+            continue;
         }
         let added = work.replenish()?;
         if added == 0 {
@@ -776,7 +783,12 @@ fn next_unattempted(
         }
     };
     if let Some(events) = events {
-        for event in events.iter().filter(|event| event.source == source) {
+        let mut ordered = events
+            .iter()
+            .filter(|event| event.source == source)
+            .collect::<Vec<_>>();
+        ordered.sort_by(|left, right| event_preference(left, right));
+        for event in ordered {
             let begin = video
                 .frames
                 .partition_point(|frame| frame.seconds < event.start_seconds);

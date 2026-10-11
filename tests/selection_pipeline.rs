@@ -744,3 +744,185 @@ fn final_portrait_jpeg_preserves_selected_stream_rotation_and_context_privacy() 
             .is_none()
     );
 }
+
+#[test]
+fn remaining_primary_candidates_are_assessed_after_actual_frames_are_exhausted() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("four-distinct.mkv");
+    let generated = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(fixture("01-blocks.mkv"))
+        .args([
+            "-vf",
+            "select='eq(n,0)+eq(n,4)+eq(n,12)+eq(n,16)',setpts=N/(4*TB)",
+            "-fps_mode",
+            "passthrough",
+            "-c:v",
+            "ffv1",
+        ])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let tools = MediaTools::default();
+    let cancelled = AtomicBool::new(false);
+    let videos = [tools.probe(&source, &cancelled).unwrap()];
+    assert_eq!(
+        videos[0]
+            .frames
+            .iter()
+            .map(|frame| frame.seconds)
+            .collect::<Vec<_>>(),
+        [0.0, 0.25, 0.5, 0.75]
+    );
+    let mut options = options(1, false, false);
+    options.samples_per_video = 5; // Endpoint repeats final PTS; all four frames are primary candidates.
+    options.context_delta_seconds = 0.125;
+    let mut primary = Vec::new();
+    let mut secondary = Vec::new();
+    let artifacts = run(&tools, &videos, &options, &cancelled, |batch| {
+        let original_second = |seconds: f64| [0.0, 1.0, 3.0, 4.0][(seconds * 4.0) as usize];
+        for candidate in batch.candidates {
+            assert_eq!(candidate.source, "four-distinct.mkv");
+            assert_eq!(
+                candidate.id,
+                format!("V0001-F{:08}", (candidate.actual_seconds * 4.0) as usize)
+            );
+            assert_eq!(
+                image::open(&candidate.image).unwrap().to_rgb8(),
+                expected("01-blocks.mkv", original_second(candidate.actual_seconds))
+            );
+        }
+        for context in &batch.contexts {
+            for frame in &context.frames {
+                assert_eq!(frame.source, "four-distinct.mkv");
+                assert_eq!(
+                    image::open(&frame.image).unwrap().to_rgb8(),
+                    expected("01-blocks.mkv", original_second(frame.actual_seconds))
+                );
+            }
+        }
+        if batch.phase == AssessmentPhase::Primary {
+            primary.extend(
+                batch
+                    .candidates
+                    .iter()
+                    .map(|candidate| candidate.actual_seconds),
+            );
+        } else {
+            secondary.extend(
+                batch
+                    .candidates
+                    .iter()
+                    .map(|candidate| candidate.actual_seconds),
+            );
+        }
+        Ok(batch
+            .candidates
+            .iter()
+            .map(|candidate| Assessment {
+                id: candidate.id.clone(),
+                blog_score: 80.0,
+                transition: batch.phase == AssessmentPhase::Secondary
+                    && candidate.actual_seconds != 0.25,
+                scene: "探索".to_owned(),
+                reason: "既知の四つの異なる模様と前後画像を照合".to_owned(),
+                special: false,
+            })
+            .collect())
+    })
+    .unwrap();
+    assert_eq!(primary, [0.0, 0.25, 0.5, 0.75]);
+    assert_eq!(
+        secondary.len(),
+        4,
+        "assess the remaining eligible primary candidate after the first shortlist is rejected"
+    );
+    assert_eq!(artifacts.report().selected[0].actual_seconds, 0.25);
+    assert!(
+        !artifacts
+            .report()
+            .notes
+            .iter()
+            .any(|note| note.contains("Replenished"))
+    );
+}
+
+#[test]
+fn semantic_replenishment_is_identical_for_permuted_equal_width_windows() {
+    let tools = MediaTools::default();
+    let videos = probe(false);
+    let mut options = options(1, true, false);
+    options.samples_per_video = 1;
+    options.semantic_events = Some(
+        [(0.0, 1.0), (3.0, 4.0), (4.0, 5.0)]
+            .into_iter()
+            .map(|(start, end)| SemanticEvent {
+                source: "01-blocks.mkv".to_owned(),
+                start_seconds: start,
+                end_seconds: end,
+                representative_seconds: (start + end) / 2.0,
+                importance: 80.0,
+                scene: "探索".to_owned(),
+                reason: "既知の同幅の event 区間".to_owned(),
+            })
+            .collect(),
+    );
+    let mut results = Vec::new();
+    for reverse in [false, true] {
+        if reverse {
+            options.semantic_events.as_mut().unwrap().reverse();
+        }
+        let mut primary_times = Vec::new();
+        let artifacts = run(
+            &tools,
+            &videos,
+            &options,
+            &AtomicBool::new(false),
+            |batch| {
+                verify_batch(batch);
+                if batch.phase == AssessmentPhase::Primary {
+                    primary_times.extend(
+                        batch
+                            .candidates
+                            .iter()
+                            .map(|candidate| candidate.actual_seconds),
+                    );
+                }
+                Ok(batch
+                    .candidates
+                    .iter()
+                    .map(|candidate| Assessment {
+                        id: candidate.id.clone(),
+                        blog_score: 80.0,
+                        transition: batch.phase == AssessmentPhase::Secondary
+                            && candidate.actual_seconds.fract() != 0.0,
+                        scene: "探索".to_owned(),
+                        reason: "前後を照合し整数 PTS の模様だけ採用".to_owned(),
+                        special: false,
+                    })
+                    .collect())
+            },
+        )
+        .unwrap();
+        assert!(
+            artifacts
+                .report()
+                .notes
+                .iter()
+                .any(|note| note.contains("Replenished"))
+        );
+        results.push((
+            primary_times,
+            serde_json::to_value(artifacts.report()).unwrap(),
+        ));
+    }
+    assert_eq!(
+        results[0], results[1],
+        "event permutation must preserve actual replenishment work, selection and report"
+    );
+}
