@@ -1510,7 +1510,7 @@ fn repeated_semantic_requests_count_distinct_actual_frames_before_the_limit() {
     let mut options = options(1, true, false);
     let event = options.semantic_events.as_ref().unwrap()[0].clone();
     let mut reports = Vec::new();
-    for count in [1, 1366, 4096] {
+    for count in [1, 1366, 4096, 4097] {
         options.semantic_events = Some(vec![event.clone(); count]);
         let mut primary_ids = std::collections::BTreeSet::new();
         let artifacts = run(
@@ -1537,8 +1537,205 @@ fn repeated_semantic_requests_count_distinct_actual_frames_before_the_limit() {
     }
     assert!(
         reports.windows(2).all(|reports| reports[0] == reports[1]),
-        "up to 12288 raw requests must retain the same selected frame, original request and canonical event evidence"
+        "raw event counts beyond 4096 must retain the same three actual candidates, original request and canonical event evidence"
     );
+}
+
+#[test]
+fn many_events_preserve_canonical_requests_validation_and_cancellation() {
+    let videos = probe(false);
+    let tools = MediaTools::default();
+    let mut options = options(1, true, false);
+    let mut preferred = options.semantic_events.as_ref().unwrap()[0].clone();
+    preferred.importance = 95.0;
+    preferred.scene = "優先探索".to_owned();
+    preferred.reason = "canonical な優先根拠".to_owned();
+    let mut other = preferred.clone();
+    other.importance = 80.0;
+    other.representative_seconds = 0.4;
+    other.reason = "低優先の同一区間".to_owned();
+    let mut events = vec![other; 4096];
+    events.push(preferred.clone());
+    let mut reports = Vec::new();
+    for reverse in [false, true] {
+        if reverse {
+            events.reverse();
+        }
+        options.semantic_events = Some(events.clone());
+        let artifacts = run(&tools, &videos, &options, &AtomicBool::new(false), |batch| {
+            assert!(batch.candidates.iter().all(|candidate| {
+                candidate.requested_seconds == candidate.actual_seconds
+                    && candidate.event.as_ref().unwrap().reason == preferred.reason
+            }), "raw event permutation must keep the preferred event's original grid requests and evidence");
+            fixed_assessments(batch)
+        }).unwrap();
+        reports.push(serde_json::to_value(artifacts.report()).unwrap());
+    }
+    assert_eq!(reports[0], reports[1]);
+
+    options
+        .semantic_events
+        .as_mut()
+        .unwrap()
+        .push(SemanticEvent {
+            reason: String::new(),
+            ..preferred
+        });
+    let missing_tools = MediaTools {
+        ffmpeg: "missing-ffmpeg".into(),
+        ffprobe: "missing-ffprobe".into(),
+    };
+    let error = run(
+        &missing_tools,
+        &videos,
+        &options,
+        &AtomicBool::new(false),
+        |_| panic!("invalid event must fail before decode"),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("semantic event has invalid"),
+        "every raw event must be validated before deduplication: {error:#}"
+    );
+    options.semantic_events.as_mut().unwrap().pop();
+    let cancelled = AtomicBool::new(false);
+    let mut scratch = None;
+    let error = run(&tools, &videos, &options, &cancelled, |batch| {
+        let response = fixed_assessments(batch)?;
+        scratch = Some(
+            batch.candidates[0]
+                .image
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf(),
+        );
+        cancelled.store(true, Ordering::Relaxed);
+        Ok(response)
+    })
+    .unwrap_err();
+    assert!(error.downcast_ref::<Interrupted>().is_some());
+    assert!(!scratch.unwrap().exists());
+}
+
+#[test]
+fn maximal_sparse_semantic_inputs_replenish_active_sources_fairly() {
+    let active = probe(true);
+    let mut videos = vec![active[0].clone()];
+    for source in 1..4095 {
+        let mut video = active[0].clone();
+        video.source = PathBuf::from(format!("inactive-{source:04}.mkv"));
+        videos.push(video);
+    }
+    videos.push(active[1].clone());
+    let mut options = options(2, true, true);
+    options.semantic_events = Some(
+        ["01-blocks.mkv", "02-mirrored.mkv"]
+            .into_iter()
+            .flat_map(|source| {
+                std::iter::repeat_n(
+                    SemanticEvent {
+                        source: source.to_owned(),
+                        start_seconds: 0.0,
+                        end_seconds: 1.0,
+                        representative_seconds: 0.5,
+                        importance: 80.0,
+                        scene: "探索".to_owned(),
+                        reason: "active source の実画像を前後照合".to_owned(),
+                    },
+                    2048,
+                )
+            })
+            .collect(),
+    );
+    let mut replenished = Vec::new();
+    let mut previous = Vec::<PathBuf>::new();
+    let artifacts = run(
+        &MediaTools::default(),
+        &videos,
+        &options,
+        &AtomicBool::new(false),
+        |batch| {
+            assert!(batch.candidates.len() <= 12);
+            assert!(
+                previous.iter().all(|path| !path.exists()),
+                "completed batch scratch must be removed before the next callback"
+            );
+            previous = batch.sheets.clone();
+            for candidate in batch.candidates {
+                let ordinal = match candidate.source.as_str() {
+                    "01-blocks.mkv" => 1,
+                    "02-mirrored.mkv" => 4096,
+                    source => panic!("inactive source was decoded: {source}"),
+                };
+                assert_eq!(
+                    candidate.id,
+                    format!(
+                        "V{ordinal:04}-F{:08}",
+                        (candidate.actual_seconds * 4.0) as usize
+                    )
+                );
+                assert_eq!(
+                    image::open(&candidate.image).unwrap().to_rgb8(),
+                    expected(&candidate.source, candidate.actual_seconds)
+                );
+                previous.push(candidate.image.clone());
+                if batch.phase == AssessmentPhase::Primary
+                    && candidate.actual_seconds.fract() == 0.0
+                {
+                    replenished.push(ordinal);
+                }
+            }
+            for context in &batch.contexts {
+                for frame in &context.frames {
+                    assert_eq!(
+                        image::open(&frame.image).unwrap().to_rgb8(),
+                        expected(&frame.source, frame.actual_seconds)
+                    );
+                    previous.push(frame.image.clone());
+                }
+            }
+            Ok(batch
+                .candidates
+                .iter()
+                .map(|candidate| Assessment {
+                    id: candidate.id.clone(),
+                    blog_score: 80.0,
+                    transition: batch.phase == AssessmentPhase::Secondary
+                        && candidate.actual_seconds.fract() != 0.0,
+                    scene: "探索".to_owned(),
+                    reason: "整数 PTS の実画像と前後を確認".to_owned(),
+                    special: false,
+                })
+                .collect())
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        replenished,
+        [1, 4096, 1, 4096],
+        "the source cursor must cycle across inactive entries without biasing either active source"
+    );
+    assert_eq!(artifacts.report().sources.len(), 4096);
+    assert_eq!(artifacts.report().selected_count, 2);
+    let selected_sources = artifacts
+        .report()
+        .selected
+        .iter()
+        .map(|selected| {
+            assert!(selected.actual_seconds.fract() == 0.0);
+            selected.source.as_str()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        selected_sources,
+        ["01-blocks.mkv", "02-mirrored.mkv"].into()
+    );
+    assert!(previous.iter().all(|path| !path.exists()));
+    let path = artifacts.path();
+    drop(artifacts);
+    assert!(!path.exists());
 }
 
 #[test]

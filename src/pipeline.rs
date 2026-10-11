@@ -133,6 +133,7 @@ struct Work<'a> {
     cancelled: &'a AtomicBool,
     directory: TempDir,
     sources: Vec<String>,
+    events: Option<EventIndex<'a>>,
     attempted: Vec<BTreeSet<usize>>,
     attempts: usize,
     next_source: usize,
@@ -172,7 +173,7 @@ pub fn run(
         sources.iter().collect::<BTreeSet<_>>().len() == sources.len(),
         "video source filenames must be unique"
     );
-    let plans = initial_plans(videos, &sources, options)?;
+    let plans = initial_plans(videos, &sources, options, cancelled)?;
     let directory = tempfile::Builder::new()
         .prefix("game-screen-pick-selection-")
         .tempdir()
@@ -186,6 +187,7 @@ pub fn run(
         cancelled,
         directory,
         sources,
+        events: plans.events,
         attempted: vec![BTreeSet::new(); videos.len()],
         attempts: 0,
         next_source: 0,
@@ -198,8 +200,8 @@ pub fn run(
         notes: Vec::new(),
     };
     // Interleave sources, so a long first input cannot consume the entire budget.
-    for ordinal in 0..plans.iter().map(Vec::len).max().unwrap_or(0) {
-        for (source, plan) in plans.iter().enumerate() {
+    for ordinal in 0..plans.positions.iter().map(Vec::len).max().unwrap_or(0) {
+        for (source, plan) in plans.positions.iter().enumerate() {
             if let Some(seconds) = plan.get(ordinal) {
                 work.produce(source, *seconds, &mut assessor)?;
             }
@@ -329,17 +331,79 @@ fn validate_options(videos: &[Video], options: &PipelineOptions) -> Result<()> {
     Ok(())
 }
 
-type InitialPlan = Vec<f64>;
+type EventIndex<'a> = Vec<BTreeSet<OrderedEvent<'a>>>;
 
-fn initial_plans(
+#[derive(Debug, Clone, Copy)]
+struct OrderedEvent<'a>(&'a SemanticEvent);
+
+impl PartialEq for OrderedEvent<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+impl Eq for OrderedEvent<'_> {}
+impl PartialOrd for OrderedEvent<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for OrderedEvent<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        event_preference(self.0, other.0)
+    }
+}
+
+#[derive(Debug)]
+struct InitialPlans<'a> {
+    positions: Vec<Vec<f64>>,
+    events: Option<EventIndex<'a>>,
+}
+
+fn index_events<'a>(
     videos: &[Video],
     sources: &[String],
-    options: &PipelineOptions,
-) -> Result<Vec<InitialPlan>> {
+    events: Option<&'a [SemanticEvent]>,
+    cancelled: &AtomicBool,
+) -> Result<Option<EventIndex<'a>>> {
+    let Some(events) = events else {
+        return Ok(None);
+    };
+    ensure!(!events.is_empty(), "semantic events must be nonempty");
+    let sources = sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| (source.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut indexed = vec![BTreeSet::new(); videos.len()];
+    for event in events {
+        check_cancelled(cancelled)?;
+        let source = *sources
+            .get(event.source.as_str())
+            .context("semantic event refers to an unknown video source")?;
+        event_positions(event, videos[source].duration_seconds)?;
+        indexed[source].insert(OrderedEvent(event));
+        check_cancelled(cancelled)?;
+    }
+    Ok(Some(indexed))
+}
+
+fn initial_plans<'a>(
+    videos: &[Video],
+    sources: &[String],
+    options: &'a PipelineOptions,
+    cancelled: &AtomicBool,
+) -> Result<InitialPlans<'a>> {
+    let events = index_events(
+        videos,
+        sources,
+        options.semantic_events.as_deref(),
+        cancelled,
+    )?;
     let mut plans = vec![Vec::new(); videos.len()];
     let mut planned = vec![BTreeSet::new(); videos.len()];
     let mut total = 0;
     let mut add = |source: usize, seconds: f64| -> Result<()> {
+        check_cancelled(cancelled)?;
         if planned[source].insert(frame_ordinal(&videos[source], seconds)) {
             total += 1;
             ensure!(
@@ -350,20 +414,13 @@ fn initial_plans(
         }
         Ok(())
     };
-    if let Some(events) = &options.semantic_events {
-        ensure!(
-            !events.is_empty() && events.len() <= MAX_CANDIDATES,
-            "semantic events must be nonempty and within the candidate limit"
-        );
-        let mut ordered = events.iter().collect::<Vec<_>>();
-        ordered.sort_by(|left, right| event_preference(left, right));
-        for event in ordered {
-            let index = sources
-                .iter()
-                .position(|source| source == &event.source)
-                .context("semantic event refers to an unknown video source")?;
-            for seconds in event_positions(event, videos[index].duration_seconds)? {
-                add(index, seconds)?;
+    if let Some(events) = &events {
+        for (source, events) in events.iter().enumerate() {
+            check_cancelled(cancelled)?;
+            for event in events {
+                for seconds in event_positions(event.0, videos[source].duration_seconds)? {
+                    add(source, seconds)?;
+                }
             }
         }
     } else {
@@ -373,7 +430,10 @@ fn initial_plans(
             }
         }
     }
-    Ok(plans)
+    Ok(InitialPlans {
+        positions: plans,
+        events,
+    })
 }
 
 fn frame_ordinal(video: &Video, seconds: f64) -> usize {
@@ -450,7 +510,7 @@ impl Work<'_> {
             source + 1,
             video.frames[frame].decode_index
         );
-        let event = self.semantic_event(source, artifact.actual_seconds);
+        let event = self.semantic_event(source, artifact.actual_seconds)?;
         if self.options.semantic_events.is_some() && event.is_none() {
             self.exclusions
                 .entry(id)
@@ -642,14 +702,15 @@ impl Work<'_> {
             .min(MAX_CANDIDATES - before);
         let mut skipped = 0;
         while self.attempts - before < target && skipped < self.videos.len() {
+            check_cancelled(self.cancelled)?;
             let source = self.next_source;
             self.next_source = (source + 1) % self.videos.len();
             let frame = next_unattempted(
                 &self.videos[source],
                 &self.attempted[source],
-                self.options.semantic_events.as_deref(),
-                &self.sources[source],
-            );
+                self.events.as_ref().map(|events| &events[source]),
+                self.cancelled,
+            )?;
             let progress = if let Some(frame) = frame {
                 self.produce(source, self.videos[source].frames[frame].seconds, assessor)?
             } else {
@@ -669,20 +730,19 @@ impl Work<'_> {
         }
     }
 
-    fn semantic_event(&self, source: usize, seconds: f64) -> Option<SemanticEvent> {
-        self.options
-            .semantic_events
-            .as_ref()
-            .and_then(|events| {
-                events
-                    .iter()
-                    .filter(|event| {
-                        event.source == self.sources[source]
-                            && (event.start_seconds..=event.end_seconds).contains(&seconds)
-                    })
-                    .min_by(|left, right| event_preference(left, right))
-            })
-            .cloned()
+    fn semantic_event(&self, source: usize, seconds: f64) -> Result<Option<SemanticEvent>> {
+        check_cancelled(self.cancelled)?;
+        if let Some(events) = &self.events {
+            for event in &events[source] {
+                #[cfg(test)]
+                tests::record_event_work();
+                check_cancelled(self.cancelled)?;
+                if (event.0.start_seconds..=event.0.end_seconds).contains(&seconds) {
+                    return Ok(Some(event.0.clone()));
+                }
+            }
+        }
+        Ok(None)
     }
 
     fn finish(mut self, indices: &[usize]) -> Result<Artifacts> {
@@ -840,18 +900,20 @@ fn sheet_entry(
 fn next_unattempted(
     video: &Video,
     attempted: &BTreeSet<usize>,
-    events: Option<&[SemanticEvent]>,
-    source: &str,
-) -> Option<usize> {
+    events: Option<&BTreeSet<OrderedEvent<'_>>>,
+    cancelled: &AtomicBool,
+) -> Result<Option<usize>> {
+    check_cancelled(cancelled)?;
     let mut best = None;
     let mut width = -1.0;
-    let mut consider = |begin: usize, limit: usize| {
+    let mut consider = |begin: usize, limit: usize| -> Result<()> {
         let mut start = begin;
         for end in attempted
             .range(begin..limit)
             .copied()
             .chain(std::iter::once(limit))
         {
+            check_cancelled(cancelled)?;
             if start < end {
                 let first = video.frames[start].seconds;
                 let last = video.frames[end - 1].seconds;
@@ -866,26 +928,25 @@ fn next_unattempted(
             }
             start = end.saturating_add(1);
         }
+        Ok(())
     };
     if let Some(events) = events {
-        let mut ordered = events
-            .iter()
-            .filter(|event| event.source == source)
-            .collect::<Vec<_>>();
-        ordered.sort_by(|left, right| event_preference(left, right));
-        for event in ordered {
+        for event in events {
+            #[cfg(test)]
+            tests::EVENT_VISITS.with(|visits| visits.set(visits.get() + 1));
+            let event = event.0;
             let begin = video
                 .frames
                 .partition_point(|frame| frame.seconds < event.start_seconds);
             let limit = video
                 .frames
                 .partition_point(|frame| frame.seconds <= event.end_seconds);
-            consider(begin, limit);
+            consider(begin, limit)?;
         }
     } else {
-        consider(0, video.frames.len());
+        consider(0, video.frames.len())?;
     }
-    best
+    Ok(best)
 }
 
 fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
@@ -897,6 +958,8 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
 }
 
 fn event_preference(left: &SemanticEvent, right: &SemanticEvent) -> std::cmp::Ordering {
+    #[cfg(test)]
+    tests::record_event_work();
     right
         .importance
         .total_cmp(&left.importance)
@@ -921,6 +984,159 @@ mod tests {
     use super::*;
     use crate::media::FrameTime;
     use crate::selection::sample_positions;
+    thread_local! {
+        pub(super) static EVENT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static CANCEL_EVENT_WORK: std::cell::RefCell<Option<(std::sync::Arc<AtomicBool>, usize, usize)>> = const { std::cell::RefCell::new(None) };
+    }
+
+    pub(super) fn record_event_work() {
+        CANCEL_EVENT_WORK.with(|probe| {
+            if let Some((cancelled, work, limit)) = probe.borrow_mut().as_mut() {
+                *work += 1;
+                if *work == *limit {
+                    cancelled.store(true, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn interrupted_event_canonicalization_stops_before_processing_the_whole_input() {
+        let videos = [video(&[0.0, 0.25, 0.5, 0.75], 1.0)];
+        let sources = ["synthetic.mkv".to_owned()];
+        let events = (0..4097)
+            .map(|index| SemanticEvent {
+                source: sources[0].clone(),
+                start_seconds: 0.0,
+                end_seconds: 1.0,
+                representative_seconds: 0.5,
+                importance: 80.0,
+                scene: "exploration".to_owned(),
+                reason: format!("canonical event {index:04}"),
+            })
+            .collect::<Vec<_>>();
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        CANCEL_EVENT_WORK.with(|probe| *probe.borrow_mut() = Some((cancelled.clone(), 0, 64)));
+        let result = index_events(&videos, &sources, Some(&events), &cancelled);
+        let (_, work, _) = CANCEL_EVENT_WORK.with(|probe| probe.borrow_mut().take().unwrap());
+        assert!(result.unwrap_err().downcast_ref::<Interrupted>().is_some());
+        assert!(
+            (64..=128).contains(&work),
+            "canonicalization must stop within one bounded insertion after cancellation, rather than finishing all comparisons: {work}"
+        );
+    }
+
+    #[test]
+    fn interrupted_event_lookup_stops_before_scanning_the_whole_source() {
+        let videos = [video(&[0.0, 0.25, 0.5, 0.75], 1.0)];
+        let sources = vec!["synthetic.mkv".to_owned()];
+        let mut events = (0..4097)
+            .map(|index| SemanticEvent {
+                source: sources[0].clone(),
+                start_seconds: 0.0,
+                end_seconds: 0.25,
+                representative_seconds: 0.125,
+                importance: 80.0,
+                scene: "exploration".to_owned(),
+                reason: format!("narrow event {index:04}"),
+            })
+            .collect::<Vec<_>>();
+        events.push(SemanticEvent {
+            end_seconds: 1.0,
+            representative_seconds: 0.5,
+            importance: 0.0,
+            reason: "last containing event".to_owned(),
+            ..events[0].clone()
+        });
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let indexed = index_events(&videos, &sources, Some(&events), &cancelled).unwrap();
+        let tools = MediaTools::default();
+        let options = options(1);
+        let work = Work {
+            tools: &tools,
+            videos: &videos,
+            options: &options,
+            cancelled: &cancelled,
+            directory: tempfile::tempdir().unwrap(),
+            sources,
+            events: indexed,
+            attempted: vec![BTreeSet::new()],
+            attempts: 0,
+            next_source: 0,
+            candidates: Vec::new(),
+            primary: Vec::new(),
+            secondary_pending: BTreeSet::new(),
+            secondary_candidates: Vec::new(),
+            secondary: Vec::new(),
+            exclusions: BTreeMap::new(),
+            notes: Vec::new(),
+        };
+        CANCEL_EVENT_WORK.with(|probe| *probe.borrow_mut() = Some((cancelled.clone(), 0, 64)));
+        let result = work.semantic_event(0, 0.75);
+        let (_, inspected, _) = CANCEL_EVENT_WORK.with(|probe| probe.borrow_mut().take().unwrap());
+        let error =
+            result.expect_err("lookup must interrupt before returning the last matching event");
+        assert!(error.downcast_ref::<Interrupted>().is_some());
+        assert_eq!(inspected, 64);
+    }
+
+    #[test]
+    fn inactive_sources_do_not_inspect_unrelated_semantic_events() {
+        let video = video(&[0.0, 0.25, 0.5, 0.75], 1.0);
+        let event = SemanticEvent {
+            source: "synthetic.mkv".to_owned(),
+            start_seconds: 0.0,
+            end_seconds: 1.0,
+            representative_seconds: 0.5,
+            importance: 80.0,
+            scene: "exploration".to_owned(),
+            reason: "indexed active source".to_owned(),
+        };
+        let events = vec![event; 4096];
+        let sources = std::iter::once("synthetic.mkv".to_owned())
+            .chain((1..MAX_CANDIDATES).map(|source| format!("inactive-{source:04}.mkv")))
+            .collect::<Vec<_>>();
+        assert_eq!(sources.len(), MAX_CANDIDATES);
+        let videos = vec![video.clone(); sources.len()];
+        let cancelled = AtomicBool::new(false);
+        let indexed = index_events(&videos, &sources, Some(&events), &cancelled)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            indexed[0].len(),
+            1,
+            "identical raw events must share one canonical indexed entry"
+        );
+        EVENT_VISITS.with(|visits| visits.set(0));
+        for events in &indexed[1..] {
+            assert!(
+                next_unattempted(&video, &BTreeSet::new(), Some(events), &cancelled)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        EVENT_VISITS.with(|visits| {
+            assert_eq!(
+                visits.get(),
+                0,
+                "inactive source traversal must inspect no raw semantic events"
+            )
+        });
+        assert_eq!(
+            next_unattempted(&video, &BTreeSet::new(), Some(&indexed[0]), &cancelled).unwrap(),
+            Some(2)
+        );
+        EVENT_VISITS.with(|visits| assert_eq!(visits.get(), 1));
+        cancelled.store(true, Ordering::Relaxed);
+        let error =
+            next_unattempted(&video, &BTreeSet::new(), Some(&indexed[1]), &cancelled).unwrap_err();
+        assert!(
+            error.downcast_ref::<Interrupted>().is_some(),
+            "inactive source traversal must still observe cancellation"
+        );
+        let error = index_events(&videos, &sources, Some(&events), &cancelled).unwrap_err();
+        assert!(error.downcast_ref::<Interrupted>().is_some());
+    }
 
     fn options(samples_per_video: usize) -> PipelineOptions {
         PipelineOptions {
@@ -981,14 +1197,16 @@ mod tests {
                     })
                     .map(f64::to_bits)
                     .collect::<Vec<_>>();
+                let options = options(count);
                 let plans = initial_plans(
                     std::slice::from_ref(&video),
                     &["synthetic.mkv".to_owned()],
-                    &options(count),
+                    &options,
+                    &AtomicBool::new(false),
                 )
                 .unwrap();
                 assert_eq!(
-                    plans[0]
+                    plans.positions[0]
                         .iter()
                         .copied()
                         .map(f64::to_bits)
@@ -1009,10 +1227,12 @@ mod tests {
             video(&times, MAX_CANDIDATES as f64 * 0.25),
             video(&times, MAX_CANDIDATES as f64 * 0.25),
         ];
+        let sampling_options = options(MAX_CANDIDATES);
         let result = initial_plans(
             &videos,
             &["one.mkv".to_owned(), "two.mkv".to_owned()],
-            &options(MAX_CANDIDATES),
+            &sampling_options,
+            &AtomicBool::new(false),
         );
         assert!(
             result.is_err(),
@@ -1043,7 +1263,13 @@ mod tests {
                 })
                 .collect(),
         );
-        let error = initial_plans(&videos, &["synthetic.mkv".to_owned()], &options).unwrap_err();
+        let error = initial_plans(
+            &videos,
+            &["synthetic.mkv".to_owned()],
+            &options,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -1064,10 +1290,11 @@ mod tests {
                 video
             })
             .collect::<Vec<_>>();
-        let plans = initial_plans(&videos, &sources, &options(MAX_CANDIDATES)).unwrap();
-        assert_eq!(plans.len(), MAX_CANDIDATES);
+        let options = options(MAX_CANDIDATES);
+        let plans = initial_plans(&videos, &sources, &options, &AtomicBool::new(false)).unwrap();
+        assert_eq!(plans.positions.len(), MAX_CANDIDATES);
         assert!(
-            plans.iter().all(|plan| plan == &[0.0]),
+            plans.positions.iter().all(|plan| plan == &[0.0]),
             "4096 samples for each of 4096 one-frame sources must retain only 4096 first requests, without materializing the 16M duplicate grid"
         );
     }

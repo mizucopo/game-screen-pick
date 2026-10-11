@@ -425,10 +425,22 @@ fn chunk_preserves_submillisecond_vfr_pts_and_each_original_display_interval() {
 
 #[cfg(unix)]
 fn script(directory: &Path, name: &str, body: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let path = directory.join(name);
-    fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    // Keep writable script FDs out of the parallel test process: another spawn
+    // can inherit them until exec and make Linux reject the script with ETXTBSY.
+    assert!(
+        Command::new("/bin/sh")
+            .args([
+                "-c",
+                "printf '%s' \"$1\" > \"$2\" && chmod 700 \"$2\"",
+                "fixture-script"
+            ])
+            .arg(format!("#!/bin/sh\n{body}\n"))
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
     path
 }
 
@@ -441,6 +453,39 @@ fn metadata_script(directory: &Path, streams: &str, frames: &str) -> PathBuf {
             "case \"$*\" in\n*show_streams*) cat <<'STREAMS'\n{streams}\nSTREAMS\n;;\n*) cat <<'FRAMES'\n{frames}\nFRAMES\n;;\nesac"
         ),
     )
+}
+
+#[cfg(unix)]
+#[test]
+fn parallel_metadata_scripts_preserve_each_probe_response() {
+    std::thread::scope(|scope| {
+        for worker in 0..8 {
+            scope.spawn(move || {
+                let directory = tempfile::Builder::new()
+                    .prefix("probe fixtures ")
+                    .tempdir()
+                    .unwrap();
+                let streams = r#"{"streams":[{"index":0,"codec_type":"video","width":160,"height":96,"duration":"1","disposition":{"attached_pic":0}}]}"#;
+                for iteration in 0..16 {
+                    let start = worker * 16 + iteration;
+                    let frames = format!(
+                        "{{\"frames\":[{{\"pts_time\":\"{start}\",\"duration_time\":\"0.5\"}},{{\"pts_time\":\"{start}.5\",\"duration_time\":\"0.5\"}}]}}"
+                    );
+                    let tools = MediaTools {
+                        ffprobe: metadata_script(directory.path(), streams, &frames),
+                        ..MediaTools::default()
+                    };
+                    let video = tools
+                        .probe(&fixture("01-blocks.mkv"), &AtomicBool::new(false))
+                        .unwrap();
+                    assert_eq!(video.start_seconds, f64::from(start));
+                    assert_eq!(video.duration_seconds, 1.0);
+                    assert_eq!(video.frames.len(), 2);
+                    assert_eq!(video.frames[1].seconds, 0.5);
+                }
+            });
+        }
+    });
 }
 
 #[cfg(unix)]

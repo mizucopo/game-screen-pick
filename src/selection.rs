@@ -287,9 +287,14 @@ pub fn select_up_to(
     let (mut indices, mut special_blocked) =
         rank(candidates, &ratings, &scene_names, count, available.clone());
     if indices.len() < count {
-        if let Some(alternative) =
-            alternative_subset(candidates, &ratings, count, &available, &indices)
-        {
+        if let Some(alternative) = alternative_subset(
+            candidates,
+            &ratings,
+            &scene_names,
+            count,
+            &available,
+            &indices,
+        ) {
             (indices, special_blocked) =
                 rank(candidates, &ratings, &scene_names, count, alternative);
         }
@@ -447,12 +452,31 @@ fn special_limit(count: usize) -> usize {
     if count == 1 { 0 } else { (count / 3).max(1) }
 }
 
+fn subset_coverage(
+    indices: &[usize],
+    candidates: &[Candidate],
+    scene_names: &[String],
+) -> (usize, usize, usize) {
+    let mut sources = BTreeSet::new();
+    let mut scenes = BTreeSet::new();
+    let mut bands = BTreeSet::new();
+    for &index in indices {
+        let candidate = &candidates[index];
+        sources.insert(candidate.source.as_str());
+        scenes.insert(&scene_names[index]);
+        bands.insert((candidate.source.as_str(), time_band(candidate)));
+    }
+    (sources.len(), scenes.len(), bands.len())
+}
+
 /// Reconsider representatives only on shortage. Iterative backtracking has a
 /// shared 4096-node/4096-new-distance budget and caches at most 4096 pairs.
 /// Preserve the greedy subset's normal count and already permitted specials.
+/// Prefer cardinality, then the same source/scene/time coverage order as rank.
 fn alternative_subset(
     candidates: &[Candidate],
     ratings: &[&Assessment],
+    scene_names: &[String],
     count: usize,
     available: &[usize],
     previous: &[usize],
@@ -475,20 +499,24 @@ fn alternative_subset(
     });
     let mut chosen: Vec<usize> = Vec::new();
     let mut best = previous.to_vec();
+    let mut best_coverage = subset_coverage(&best, candidates, scene_names);
+    let mut updated = false;
     let mut cursors = vec![0];
     let mut special_count = 0;
     let mut comparisons = BTreeMap::new();
     let mut nodes = 0;
     while let Some(&next) = cursors.last() {
-        if chosen.len() > best.len() && chosen.len() - special_count >= minimum_normal {
-            best.clone_from(&chosen);
-            if best.len() == count {
-                return Some(best);
+        if chosen.len() >= best.len() && chosen.len() - special_count >= minimum_normal {
+            let coverage = subset_coverage(&chosen, candidates, scene_names);
+            if chosen.len() > best.len() || coverage > best_coverage {
+                best.clone_from(&chosen);
+                best_coverage = coverage;
+                updated = true;
             }
         }
         if chosen.len() < count
             && next < ordered.len()
-            && ordered.len() - next > best.len().saturating_sub(chosen.len())
+            && ordered.len() - next >= best.len().saturating_sub(chosen.len())
         {
             *cursors.last_mut().unwrap() += 1;
             nodes += 1;
@@ -508,7 +536,7 @@ fn alternative_subset(
                     conflict
                 } else {
                     if comparisons.len() == MAX_CANDIDATES {
-                        return (best.len() > previous.len()).then_some(best);
+                        return updated.then_some(best);
                     }
                     let conflict = candidates[index]
                         .quality
@@ -533,5 +561,5 @@ fn alternative_subset(
             special_count -= usize::from(ratings[index].special);
         }
     }
-    (best.len() > previous.len()).then_some(best)
+    updated.then_some(best)
 }
