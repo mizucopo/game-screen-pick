@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use game_screen_pick::cache::{Cache, InputIdentity, NAMESPACE, key, verify_inputs};
+use game_screen_pick::selection::{Assessment, Candidate, validate_assessments};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -18,6 +19,68 @@ fn checkpoint(parent: &Path, kind: &str, cache_key: &str) -> PathBuf {
         .join(NAMESPACE)
         .join(kind)
         .join(format!("{cache_key}.json"))
+}
+
+#[test]
+fn dropping_lock_releases_it_while_a_forked_child_retains_its_descriptor() {
+    use std::io::{Read, Write};
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    let parent = temporary();
+    let path = parent.path().join("run.lock");
+    let guard = game_screen_pick::storage::Lock::acquire(&path).unwrap();
+    let pipe = || {
+        let mut descriptors = [0; 2];
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        descriptors.map(|descriptor| unsafe { File::from_raw_fd(descriptor) })
+    };
+    let [mut ready_read, ready_write] = pipe();
+    let [release_read, mut release_write] = pipe();
+    let ready_read_fd = ready_read.as_raw_fd();
+    let ready_write_fd = ready_write.as_raw_fd();
+    let release_read_fd = release_read.as_raw_fd();
+    let release_write_fd = release_write.as_raw_fd();
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        // Cargo tests are multithreaded: no allocation, Rust destructors or
+        // non-async-signal-safe library calls may run in the forked child.
+        unsafe {
+            libc::close(ready_read_fd);
+            libc::close(release_write_fd);
+            let ready = 1_u8;
+            if libc::write(ready_write_fd, (&ready as *const u8).cast(), 1) != 1 {
+                libc::_exit(91);
+            }
+            let mut release = 0_u8;
+            if libc::read(release_read_fd, (&mut release as *mut u8).cast(), 1) != 1 {
+                libc::_exit(92);
+            }
+            libc::close(ready_write_fd);
+            libc::close(release_read_fd);
+            libc::_exit(0);
+        }
+    }
+    assert!(child > 0);
+    drop(ready_write);
+    drop(release_read);
+    let mut ready = [0];
+    let synchronized = ready_read.read_exact(&mut ready);
+    drop(guard);
+    // The child cannot exit until this acquisition has been attempted.
+    let reacquired = game_screen_pick::storage::Lock::acquire(&path);
+    let released = release_write.write_all(&[1]);
+    let mut status = 0;
+    let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
+    // Always release/reap the child before asserting, including the red case.
+    synchronized.unwrap();
+    released.unwrap();
+    assert_eq!(reaped, child);
+    assert_eq!(status, 0);
+    assert!(
+        reacquired.is_ok(),
+        "the parent run ended while a child still retained its inherited descriptor: {:?}",
+        reacquired.err()
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -225,6 +288,95 @@ fn verified_records_reject_corrupt_payload_wrong_key_schema_and_type() {
 }
 
 #[test]
+fn validated_reads_count_rejected_references_once_and_skip_bad_envelope_validators() {
+    let parent = temporary();
+    let mut cache = Cache::open(parent.path()).unwrap();
+    let image = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/images/rgb-grid.png");
+    let candidate = Candidate {
+        id: "expected-frame".into(),
+        source: "video.mkv".into(),
+        requested_seconds: 0.0,
+        actual_seconds: 0.0,
+        duration_seconds: 1.0,
+        quality: game_screen_pick::quality::analyze(&image).unwrap(),
+        image,
+        event: None,
+    };
+    let cache_key = key(&"typed-reference").unwrap();
+    let mut assessment = Assessment {
+        id: "different-frame".into(),
+        blog_score: 80.0,
+        transition: false,
+        scene: "通常進行".into(),
+        reason: "読みやすい録画場面".into(),
+        special: false,
+    };
+    cache
+        .write("assessments", &cache_key, &vec![assessment.clone()])
+        .unwrap();
+    let validate = |records: &Vec<Assessment>| {
+        validate_assessments(std::slice::from_ref(&candidate), records).is_ok()
+    };
+    assert!(
+        cache
+            .read_validated::<Vec<Assessment>>("assessments", &cache_key, validate)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(cache.stats().hits, 0);
+    assert_eq!(cache.stats().misses, 1);
+    assert!(cache.stats().bytes_read > 0);
+    // The public storage-only API remains usable without a domain validator.
+    assert!(
+        cache
+            .read::<Vec<Assessment>>("assessments", &cache_key)
+            .unwrap()
+            .is_some()
+    );
+    assessment.id = candidate.id.clone();
+    cache
+        .write("assessments", &cache_key, &vec![assessment])
+        .unwrap();
+    assert!(
+        cache
+            .read_validated::<Vec<Assessment>>("assessments", &cache_key, validate)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(cache.stats().hits, 2);
+    assert_eq!(cache.stats().misses, 1);
+    fs::write(checkpoint(parent.path(), "assessments", &cache_key), b"{").unwrap();
+    assert!(
+        cache
+            .read_validated::<Vec<Assessment>>("assessments", &cache_key, |_| {
+                panic!("a corrupt envelope must not reach the domain validator")
+            })
+            .unwrap()
+            .is_none()
+    );
+    cache.write("assessments", &cache_key, &7).unwrap();
+    assert!(
+        cache
+            .read_validated::<Vec<Assessment>>("assessments", &cache_key, |_| {
+                panic!("the wrong payload type must not reach the domain validator")
+            })
+            .unwrap()
+            .is_none()
+    );
+    cache.write("contexts", &cache_key, &"  ").unwrap();
+    assert!(
+        cache
+            .read_validated::<String>("contexts", &cache_key, |context| {
+                !context.trim().is_empty()
+            })
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(cache.stats().hits, 2);
+    assert_eq!(cache.stats().misses, 4);
+}
+
+#[test]
 fn old_namespaces_and_unknown_files_are_preserved_and_never_imported() {
     let parent = temporary();
     let legacy = parent.path().join("python-cache");
@@ -360,7 +512,19 @@ fn oversized_records_and_invalid_identity_index_are_misses_not_hits() {
             .unwrap()
             .is_some()
     );
-    let recovered = cache.identify(&[source], &cancelled).unwrap();
+    let baseline = cache.stats();
+    let recovered = cache
+        .identify(std::slice::from_ref(&source), &cancelled)
+        .unwrap();
     assert_ne!(recovered[0].content_digest, invalid[0].content_digest);
     assert_eq!(cache.stats().input_hashes, 2);
+    assert_eq!(cache.stats().hits, baseline.hits);
+    assert_eq!(cache.stats().misses, baseline.misses + 1);
+    let duplicate = vec![recovered[0].clone(), recovered[0].clone()];
+    cache.write("inputs", &index_key, &duplicate).unwrap();
+    let baseline = cache.stats();
+    assert_eq!(cache.identify(&[source], &cancelled).unwrap(), recovered);
+    assert_eq!(cache.stats().hits, baseline.hits);
+    assert_eq!(cache.stats().misses, baseline.misses + 1);
+    assert_eq!(cache.stats().input_hashes, baseline.input_hashes + 1);
 }

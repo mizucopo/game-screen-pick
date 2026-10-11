@@ -108,7 +108,7 @@ backend・認証を除く正規化service URL・model・推論レベル・prompt
 
 完成したrunは公開reportのkeyと画像集合/digestを検証して返します。正常なwarmはFFprobe/FFmpeg・画像decode・動画content hash・
 評価callbackが0件で、入力metadataとidentity checkpoint、公開済み画像・一覧・reportだけを読みます。
-`RunOutcome.metrics` はcheckpoint/content読取bytes・input hash/probe/評価回数・公開と検証の読取bytes・処理時間を返します。
+`RunOutcome.metrics` は`Session::prepare`からの累積checkpoint/content読取bytes・input hash/probe回数・評価/context生成/semantic callback回数・公開と検証の読取bytes・経過時間を返します。`warm`は今回の完成済み出力の再利用を示し、同じSessionの先行処理も計測値に含みます。
 部分再開や条件変更では必要な候補を再抽出しますが、同じ完了評価を再推論しません。
 
 reportにはschema・宣言された出力集合・画像/sheetのdigest・report本文digestを記録します。

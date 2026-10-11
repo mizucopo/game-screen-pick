@@ -138,7 +138,7 @@ fn real_pipeline_images_sheet_and_rank_metadata_survive_safe_publication() {
     drop(output);
     drop(artifacts);
     let output = Output::prepare(&path, &[&input]).unwrap();
-    assert!(output.preflight_bytes_read() > 0);
+    assert!(output.bytes_read() > 0);
     assert_eq!(
         output.verify_existing().unwrap().unwrap().fingerprint,
         fingerprint

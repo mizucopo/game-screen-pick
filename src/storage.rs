@@ -146,6 +146,16 @@ pub struct Lock {
     _file: File,
 }
 
+impl Drop for Lock {
+    fn drop(&mut self) {
+        // A concurrently forked child can retain this open-file description
+        // until exec/exit. End the parent's run lock before closing our handle.
+        unsafe {
+            libc::flock(self._file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 impl Lock {
     pub fn acquire(path: &Path) -> Result<Self> {
         let path = checked_path(path)?;

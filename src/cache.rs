@@ -138,10 +138,21 @@ impl Cache {
         }
     }
 
-    /// Returns verified storage payloads, not a promise of semantic validity.
-    /// Callers must check DTO invariants and referenced input/image identities.
-    /// Bad schema/key/digest/JSON becomes a miss; unsafe filesystem objects fail.
+    /// Verify the storage envelope/type only. Domain checkpoints should use
+    /// read_validated so rejected references are counted as misses.
     pub fn read<T: DeserializeOwned>(&mut self, kind: &str, key: &str) -> Result<Option<T>> {
+        self.read_validated(kind, key, |_| true)
+    }
+
+    /// A hit is counted only after the typed payload passes its domain checks.
+    /// Missing/corrupt/rejected records count once as a miss. Unsafe filesystem
+    /// objects fail; the validator is never called for a bad envelope/type.
+    pub fn read_validated<T: DeserializeOwned>(
+        &mut self,
+        kind: &str,
+        key: &str,
+        validate: impl FnOnce(&T) -> bool,
+    ) -> Result<Option<T>> {
         let Some(path) = self.record_path(kind, key, false)? else {
             return Ok(self.miss());
         };
@@ -162,6 +173,9 @@ impl Cache {
         let Some(value) = decode::<T>(&bytes, kind, key) else {
             return Ok(self.miss());
         };
+        if !validate(&value) {
+            return Ok(self.miss());
+        }
         self.stats.hits += 1;
         Ok(Some(value))
     }
@@ -227,8 +241,9 @@ impl Cache {
         }
         let index_key = key(&"input-metadata-v1")?;
         let records = self
-            .read::<Vec<InputIdentity>>("inputs", &index_key)?
-            .filter(|records| valid_index(records))
+            .read_validated::<Vec<InputIdentity>>("inputs", &index_key, |records| {
+                valid_index(records)
+            })?
             .unwrap_or_default();
         let mut index = records
             .into_iter()

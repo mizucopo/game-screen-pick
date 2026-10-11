@@ -316,6 +316,60 @@ fn normal_command_reports_cache_and_output_lock_contention_as_processing_failure
 }
 
 #[test]
+fn parentless_output_is_an_input_error_in_normal_and_validate_commands() {
+    let directory = sandbox();
+    setup(directory.path());
+    for diagnostic in [false, true] {
+        let mut args = request();
+        args[7] = "/";
+        if diagnostic {
+            args.insert(0, "validate");
+        }
+        let output = Command::new(BINARY)
+            .current_dir(directory.path())
+            .env("PATH", "")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("output requires an existing parent directory"));
+        assert!(!error.contains("panicked"));
+    }
+}
+
+#[test]
+fn validate_enforces_the_same_input_count_limit_as_normal_preflight() {
+    let directory = sandbox();
+    setup(directory.path());
+    let inputs = directory.path().join("録画 空白");
+    for index in 1..game_screen_pick::selection::MAX_CANDIDATES {
+        fs::write(inputs.join(format!("video-{index:04}.mkv")), []).unwrap();
+    }
+    let invoke = |diagnostic: bool| {
+        let mut args = request();
+        if diagnostic {
+            args.insert(0, "validate");
+        }
+        Command::new(BINARY)
+            .current_dir(directory.path())
+            .env("PATH", "")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert_eq!(invoke(true).status.code(), Some(0));
+    fs::write(inputs.join("one-too-many.mkv"), []).unwrap();
+    for diagnostic in [true, false] {
+        let output = invoke(diagnostic);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("input count exceeds 4096"));
+    }
+    assert!(!directory.path().join("output").exists());
+    assert!(!directory.path().join(".game-screen-pick-cache").exists());
+}
+
+#[test]
 fn normal_command_reports_cache_directory_creation_failures_as_processing() {
     use std::os::unix::fs::PermissionsExt;
 

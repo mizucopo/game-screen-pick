@@ -74,12 +74,17 @@ impl CacheConditions {
     }
 }
 
+/// Cumulative work since `Session::prepare`, including preceding methods/runs.
+/// Callback counts record caller invocations; both elapsed fields share this
+/// session interval. `RunOutcome::warm` describes the current output shortcut.
 #[derive(Debug, Serialize)]
 pub struct RunMetrics {
     pub cache: CacheStats,
     pub output_bytes_read: u64,
     pub probe_calls: u64,
     pub assessment_calls: u64,
+    pub context_calls: u64,
+    pub semantic_calls: u64,
     pub elapsed_seconds: f64,
 }
 
@@ -92,11 +97,17 @@ pub struct RunOutcome {
 
 /// Holds both locks across preflight, callbacks, checkpoints and publication.
 pub struct Session {
+    input_directory: PathBuf,
     inputs: Vec<PathBuf>,
+    identities: Option<Vec<InputIdentity>>,
     cache: Cache,
     output: Output,
-    output_bytes_read: u64,
-    prepared_at: Option<Instant>,
+    report_bytes_read: u64,
+    prepared_at: Instant,
+    probe_calls: u64,
+    assessment_calls: u64,
+    context_calls: u64,
+    semantic_calls: u64,
 }
 
 impl Session {
@@ -148,18 +159,23 @@ impl Session {
             &output,
             &protected.iter().map(|p| p.as_path()).collect::<Vec<_>>(),
         )?;
-        let output_bytes_read = output.preflight_bytes_read();
         if !cache_path.exists() {
             fs::create_dir(&cache_path)
                 .context(storage::OperationalError("cannot create cache directory"))?;
         }
         let cache = Cache::open(&cache_path)?;
         Ok(Self {
+            input_directory: input,
             inputs,
+            identities: None,
             cache,
             output,
-            output_bytes_read,
-            prepared_at: Some(prepared_at),
+            report_bytes_read: 0,
+            prepared_at,
+            probe_calls: 0,
+            assessment_calls: 0,
+            context_calls: 0,
+            semantic_calls: 0,
         })
     }
 
@@ -171,9 +187,7 @@ impl Session {
         cancelled: &AtomicBool,
         mut assessor: impl FnMut(&AssessmentBatch<'_>) -> Result<Vec<Assessment>>,
     ) -> Result<RunOutcome> {
-        let started = self.prepared_at.take().unwrap_or_else(Instant::now);
         check_cancelled(cancelled)?;
-        let baseline = self.cache.stats();
         let conditions = conditions.normalized(true)?;
         pipeline::validate_parameters(options)?;
         ensure!(
@@ -199,7 +213,7 @@ impl Session {
                 event_positions(event, event.end_seconds)?;
             }
         }
-        let identities = self.cache.identify(&self.inputs, cancelled)?;
+        let identities = self.identify_inputs(cancelled)?;
         let named = self
             .inputs
             .iter()
@@ -215,38 +229,31 @@ impl Session {
         let run_key = cache::key(
             &json!({"algorithm":ALGORITHM,"probe":PROBE,"inputs":named,"options":options,"conditions":conditions}),
         )?;
-        let output_baseline =
-            self.output.bytes_read() - std::mem::take(&mut self.output_bytes_read);
         let previous = self.output.verify_existing()?;
         if let Some(owned) = previous.filter(|owned| {
             owned.report["cache"]["namespace"] == cache::NAMESPACE
                 && owned.report["cache"]["key"] == run_key
         }) {
-            cache::verify_inputs(&self.inputs, &identities)?;
+            self.verify_inputs()?;
             check_cancelled(cancelled)?;
             return Ok(RunOutcome {
                 warm: true,
                 report: owned.report,
-                metrics: self.metrics(
-                    &baseline,
-                    self.output.bytes_read() - output_baseline,
-                    0,
-                    0,
-                    started,
-                ),
+                metrics: self.metrics(),
             });
         }
-        let mut probe_calls = 0;
         let mut videos = Vec::with_capacity(self.inputs.len());
         for (path, identity) in self.inputs.iter().zip(&identities) {
+            self.verify_inputs()?;
             videos.push(probe(
                 &mut self.cache,
                 tools,
                 path,
                 identity,
                 cancelled,
-                &mut probe_calls,
+                &mut self.probe_calls,
             )?);
+            self.verify_inputs()?;
         }
         let by_source = self
             .inputs
@@ -259,10 +266,9 @@ impl Session {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let mut assessment_calls = 0;
         let artifacts = pipeline::run(tools, &videos, options, cancelled, |batch| {
             check_cancelled(cancelled)?;
-            cache::verify_inputs(&self.inputs, &identities)?;
+            self.verify_inputs()?;
             let candidates = batch.candidates.iter().map(|candidate| Ok(json!({
                 "id":candidate.id,"source":candidate.source,"input":by_source.get(&candidate.source).context("unknown assessment source")?,
                 "requested":candidate.requested_seconds,"actual":candidate.actual_seconds,"duration":candidate.duration_seconds,
@@ -280,24 +286,31 @@ impl Session {
             let key = cache::key(
                 &json!({"algorithm":ALGORITHM,"phase":match batch.phase {AssessmentPhase::Primary=>"primary",AssessmentPhase::Secondary=>"secondary"},"model":options.model,"conditions":conditions,"candidates":candidates,"contexts":contexts,"sheets":sheets}),
             )?;
-            if let Some(cached) = self.cache.read::<Vec<Assessment>>("assessments", &key)?
-                && validate_assessments(batch.candidates, &cached).is_ok()
+            if let Some(cached) =
+                self.cache
+                    .read_validated::<Vec<Assessment>>("assessments", &key, |cached| {
+                        validate_assessments(batch.candidates, cached).is_ok()
+                    })?
             {
+                self.verify_inputs()?;
                 check_cancelled(cancelled)?;
                 return Ok(cached);
             }
-            assessment_calls += 1;
+            self.verify_inputs()?;
+            self.assessment_calls += 1;
             let result = assessor(batch)?;
             validate_assessments(batch.candidates, &result)?;
+            self.verify_inputs()?;
             // A complete response survives a signal received just after it.
             self.cache.write("assessments", &key, &result)?;
             check_cancelled(cancelled)?;
             Ok(result)
         })?;
-        cache::verify_inputs(&self.inputs, &identities)?;
+        self.verify_inputs()?;
         check_cancelled(cancelled)?;
         let report_path = artifacts.path().canonicalize()?.join("report.json");
         let report_bytes = storage::read_regular(&report_path, 64 * 1024 * 1024)?;
+        self.report_bytes_read += report_bytes.len() as u64;
         let mut report: Value = serde_json::from_slice(&report_bytes)?;
         report["cache"] = json!({"namespace":cache::NAMESPACE,"key":run_key,"algorithm":ALGORITHM,"probe":PROBE,
             "service_url":conditions.service_url,"prompt_revision":conditions.prompt_revision,
@@ -305,18 +318,12 @@ impl Session {
             "context_digest":storage::sha256(conditions.resolved_game_context.as_bytes())});
         storage::atomic_write(&report_path, &serde_json::to_vec_pretty(&report)?)?;
         let owned = self.output.publish_checked(&artifacts, cancelled, || {
-            cache::verify_inputs(&self.inputs, &identities)
+            verify_workflow(&self.input_directory, &self.inputs, Some(&identities))
         })?;
         Ok(RunOutcome {
             warm: false,
             report: owned.report,
-            metrics: self.metrics(
-                &baseline,
-                self.output.bytes_read() - output_baseline + report_bytes.len() as u64,
-                probe_calls,
-                assessment_calls,
-                started,
-            ),
+            metrics: self.metrics(),
         })
     }
 
@@ -347,9 +354,17 @@ impl Session {
             .iter()
             .position(|path| path == &source)
             .context("semantic chunk source is not an input")?;
-        let identities = self.cache.identify(&self.inputs, cancelled)?;
+        let identities = self.identify_inputs(cancelled)?;
         let identity = &identities[index];
-        let video = probe(&mut self.cache, tools, &source, identity, cancelled, &mut 0)?;
+        let video = probe(
+            &mut self.cache,
+            tools,
+            &source,
+            identity,
+            cancelled,
+            &mut self.probe_calls,
+        )?;
+        self.verify_inputs()?;
         ensure!(
             start.is_finite()
                 && end.is_finite()
@@ -378,21 +393,27 @@ impl Session {
                 }
                 Ok(())
             };
-        if let Some(events) = self.cache.read::<Vec<SemanticEvent>>("semantic", &key)?
-            && validate(&events, actual_start, actual_end).is_ok()
+        if let Some(events) =
+            self.cache
+                .read_validated::<Vec<SemanticEvent>>("semantic", &key, |events| {
+                    validate(events, actual_start, actual_end).is_ok()
+                })?
         {
-            cache::verify_inputs(&self.inputs, &identities)?;
+            self.verify_inputs()?;
             check_cancelled(cancelled)?;
             return Ok(events);
         }
+        self.verify_inputs()?;
         let chunk = tools.extract_chunk(&video, start, end, cancelled)?;
+        self.verify_inputs()?;
+        self.semantic_calls += 1;
         let events = understand(&chunk)?;
         validate(
             &events,
             chunk.actual_start_seconds,
             chunk.actual_end_seconds,
         )?;
-        cache::verify_inputs(&self.inputs, &identities)?;
+        self.verify_inputs()?;
         self.cache.write("semantic", &key, &events)?;
         check_cancelled(cancelled)?;
         Ok(events)
@@ -419,6 +440,7 @@ impl Session {
         );
         let conditions = generation_conditions.normalized(false)?;
         pipeline::validate_model(model)?;
+        self.verify_inputs()?;
         let key = cache::key(
             &json!({"title":title,"search":search_conditions,"generation":{
                 "service_url":conditions.service_url,"prompt_revision":conditions.prompt_revision,
@@ -426,17 +448,24 @@ impl Session {
             },"model":model}),
         )?;
         if persist
-            && let Some(context) = self.cache.read::<String>("contexts", &key)?
-            && !context.trim().is_empty()
+            && let Some(context) =
+                self.cache
+                    .read_validated::<String>("contexts", &key, |context| {
+                        !context.trim().is_empty()
+                    })?
         {
+            self.verify_inputs()?;
             check_cancelled(cancelled)?;
             return Ok(context);
         }
+        self.verify_inputs()?;
+        self.context_calls += 1;
         let context = generate()?;
         ensure!(
             !context.trim().is_empty(),
             "generated game context must not be blank"
         );
+        self.verify_inputs()?;
         if persist {
             self.cache.write("contexts", &key, &context)?;
         }
@@ -444,27 +473,37 @@ impl Session {
         Ok(context)
     }
 
-    fn metrics(
-        &self,
-        baseline: &CacheStats,
-        output_bytes_read: u64,
-        probe_calls: u64,
-        assessment_calls: u64,
-        started: Instant,
-    ) -> RunMetrics {
-        let stats = self.cache.stats();
-        let elapsed_seconds = started.elapsed().as_secs_f64();
+    fn verify_inputs(&self) -> Result<()> {
+        verify_workflow(
+            &self.input_directory,
+            &self.inputs,
+            self.identities.as_deref(),
+        )
+    }
+
+    fn identify_inputs(&mut self, cancelled: &AtomicBool) -> Result<Vec<InputIdentity>> {
+        self.verify_inputs()?;
+        if let Some(identities) = &self.identities {
+            return Ok(identities.clone());
+        }
+        let identities = self.cache.identify(&self.inputs, cancelled)?;
+        verify_workflow(&self.input_directory, &self.inputs, Some(&identities))?;
+        self.identities = Some(identities.clone());
+        Ok(identities)
+    }
+
+    fn metrics(&self) -> RunMetrics {
+        let elapsed_seconds = self.prepared_at.elapsed().as_secs_f64();
         RunMetrics {
             cache: CacheStats {
-                bytes_read: stats.bytes_read - baseline.bytes_read,
-                input_hashes: stats.input_hashes - baseline.input_hashes,
-                hits: stats.hits - baseline.hits,
-                misses: stats.misses - baseline.misses,
                 elapsed_seconds,
+                ..self.cache.stats()
             },
-            output_bytes_read,
-            probe_calls,
-            assessment_calls,
+            output_bytes_read: self.output.bytes_read() + self.report_bytes_read,
+            probe_calls: self.probe_calls,
+            assessment_calls: self.assessment_calls,
+            context_calls: self.context_calls,
+            semantic_calls: self.semantic_calls,
             elapsed_seconds,
         }
     }
@@ -479,11 +518,9 @@ fn probe(
     calls: &mut u64,
 ) -> Result<Video> {
     let key = cache::key(&json!({"probe":PROBE,"input":identity.content_digest}))?;
-    if let Some(mut video) = cache.read::<Video>("probe", &key)? {
+    if let Some(mut video) = cache.read_validated::<Video>("probe", &key, valid_video)? {
         video.source = path.to_owned();
-        if valid_video(&video) {
-            return Ok(video);
-        }
+        return Ok(video);
     }
     *calls += 1;
     let mut video = tools.probe(path, cancelled)?;
@@ -494,6 +531,24 @@ fn probe(
     cache.write("probe", &key, &video)?;
     video.source = source;
     Ok(video)
+}
+
+fn verify_workflow(
+    directory: &Path,
+    inputs: &[PathBuf],
+    identities: Option<&[InputIdentity]>,
+) -> Result<()> {
+    let directory = storage::checked_path(directory)?;
+    let current =
+        discover_inputs(&directory).context("input directory changed during processing")?;
+    ensure!(
+        current == inputs,
+        "input directory changed during processing"
+    );
+    if let Some(identities) = identities {
+        cache::verify_inputs(inputs, identities)?;
+    }
+    Ok(())
 }
 
 fn valid_video(video: &Video) -> bool {

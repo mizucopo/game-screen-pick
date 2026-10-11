@@ -91,7 +91,6 @@ pub struct Output {
     prefix: String,
     journal: PathBuf,
     initial: State,
-    preflight_bytes_read: u64,
     bytes_read: Cell<u64>,
     _lock: Lock,
 }
@@ -153,7 +152,6 @@ impl Output {
             parent,
             prefix,
             initial: State::Absent,
-            preflight_bytes_read: 0,
             bytes_read: Cell::new(0),
             _lock: lock,
         };
@@ -161,17 +159,11 @@ impl Output {
         output.recover()?;
         let (initial, _) = output.state(&output.path)?;
         output.initial = initial;
-        output.preflight_bytes_read = output.bytes_read();
         Ok(output)
     }
 
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// Content bytes read by preflight, including any transaction recovery.
-    pub fn preflight_bytes_read(&self) -> u64 {
-        self.preflight_bytes_read
     }
 
     /// Cumulative content reads, including staging, JPEG validation, ownership

@@ -208,12 +208,14 @@ fn validate(request: Request, diagnostic: bool) -> Result<(Config, Vec<PathBuf>,
             .as_deref()
             .context("output directory is required")?,
     )?;
-    let cache = checked_path(&request.cache_directory.unwrap_or_else(|| {
-        output
-            .parent()
-            .expect("checked output parent")
-            .join(".game-screen-pick-cache")
-    }))?;
+    let output_parent = output
+        .parent()
+        .context("output requires an existing parent directory")?;
+    let cache = checked_path(
+        &request
+            .cache_directory
+            .unwrap_or_else(|| output_parent.join(".game-screen-pick-cache")),
+    )?;
     if cache.starts_with(&input) || input.starts_with(&cache) || config_path.starts_with(&cache) {
         bail!("input, output, cache and configuration paths must not overlap");
     }
@@ -225,6 +227,9 @@ fn validate(request: Request, diagnostic: bool) -> Result<(Config, Vec<PathBuf>,
     }
     let config = Config::load(&config_path)?;
     let inputs = discover_inputs(&input)?;
+    if inputs.len() > crate::selection::MAX_CANDIDATES {
+        bail!("input count exceeds 4096");
+    }
     // Authentication is resolved only by the future common client; it is never printed here.
     Ok((
         config,

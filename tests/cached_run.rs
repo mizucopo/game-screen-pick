@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use game_screen_pick::cache::NAMESPACE;
@@ -123,12 +124,19 @@ fn expected(source: &str, seconds: f64) -> RgbImage {
 }
 
 fn assess(batch: &AssessmentBatch<'_>) -> Result<Vec<Assessment>> {
+    assess_recipe(batch, None)
+}
+
+fn assess_recipe(batch: &AssessmentBatch<'_>, recipe: Option<&str>) -> Result<Vec<Assessment>> {
     assert!(!batch.candidates.is_empty());
     assert!(batch.sheets.iter().all(|sheet| image::open(sheet).is_ok()));
     for candidate in batch.candidates {
         assert_eq!(
             image::open(&candidate.image).unwrap().to_rgb8(),
-            expected(&candidate.source, candidate.actual_seconds),
+            expected(
+                recipe.unwrap_or(&candidate.source),
+                candidate.actual_seconds
+            ),
             "response requires this source's actual full-resolution frame"
         );
     }
@@ -143,7 +151,7 @@ fn assess(batch: &AssessmentBatch<'_>) -> Result<Vec<Assessment>> {
                     assert_eq!(frame.source, candidate.source);
                     assert_eq!(
                         image::open(&frame.image).unwrap().to_rgb8(),
-                        expected(&frame.source, frame.actual_seconds),
+                        expected(recipe.unwrap_or(&frame.source), frame.actual_seconds),
                         "response requires the actual ordered before/center/after media"
                     );
                 }
@@ -250,6 +258,8 @@ fn cold_and_warm_both_methods_publish_identical_actual_artifacts_without_media_c
             assert!(warm.warm);
             assert_eq!(warm.metrics.probe_calls, 0);
             assert_eq!(warm.metrics.assessment_calls, 0);
+            assert_eq!(warm.metrics.context_calls, 0);
+            assert_eq!(warm.metrics.semantic_calls, 0);
             assert_eq!(warm.metrics.cache.input_hashes, 0);
             assert_eq!(warm.report, cold.report);
             assert_eq!(snapshot(&paths.output_directory), completed);
@@ -294,6 +304,243 @@ fn cold_and_warm_both_methods_publish_identical_actual_artifacts_without_media_c
             }
         }
     }
+}
+
+#[test]
+fn metrics_include_prerun_context_semantic_and_preflight_work() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let mut options = completed_semantic_workflow(&paths);
+    let previous = snapshot(&paths.output_directory);
+    for kind in ["contexts", "inputs", "probe", "semantic"] {
+        fs::remove_dir_all(paths.cache_directory.join(NAMESPACE).join(kind)).unwrap();
+    }
+    let conditions = conditions();
+    let cancelled = AtomicBool::new(false);
+    let source = paths.input_directory.join("01-blocks.mkv");
+    let mut session = Session::prepare(&paths).unwrap();
+    let before_run = Instant::now();
+    let mut context_calls = 0;
+    options.game_context = Some(
+        session
+            .generated_context(
+                "合成ゲーム",
+                "brave-fixed-query-v1",
+                &conditions,
+                &options.model,
+                true,
+                &cancelled,
+                || {
+                    context_calls += 1;
+                    std::thread::sleep(Duration::from_millis(20));
+                    Ok(conditions.resolved_game_context.clone())
+                },
+            )
+            .unwrap(),
+    );
+    let mut semantic_calls = 0;
+    options.semantic_events = Some(
+        session
+            .semantic_chunk(
+                &MediaTools::default(),
+                &source,
+                0.0,
+                1.0,
+                &options.model,
+                &conditions,
+                &cancelled,
+                |chunk| {
+                    semantic_calls += 1;
+                    understand(chunk)
+                },
+            )
+            .unwrap(),
+    );
+    let prerun_seconds = before_run.elapsed().as_secs_f64();
+    let result = session
+        .run(
+            &unavailable_tools(),
+            &options,
+            &conditions,
+            &cancelled,
+            |_| panic!("identical completed output must skip assessment"),
+        )
+        .unwrap();
+    assert!(result.warm);
+    assert_eq!(context_calls, 1);
+    assert_eq!(semantic_calls, 1);
+    assert_eq!(result.metrics.context_calls, context_calls);
+    assert_eq!(result.metrics.semantic_calls, semantic_calls);
+    assert_eq!(result.metrics.cache.input_hashes, 1);
+    assert_eq!(result.metrics.probe_calls, 1);
+    assert_eq!(result.metrics.assessment_calls, 0);
+    assert!(result.metrics.cache.misses >= 4);
+    assert!(result.metrics.cache.bytes_read >= fs::metadata(&source).unwrap().len());
+    assert!(result.metrics.elapsed_seconds >= prerun_seconds);
+    assert_eq!(
+        result.metrics.cache.elapsed_seconds,
+        result.metrics.elapsed_seconds
+    );
+    let published_bytes = previous
+        .values()
+        .map(|bytes| bytes.len() as u64)
+        .sum::<u64>();
+    assert!(result.metrics.output_bytes_read >= 2 * published_bytes);
+    assert_eq!(snapshot(&paths.output_directory), previous);
+}
+
+#[test]
+fn metrics_include_warm_prerun_checkpoint_reads_without_callbacks() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let mut options = completed_semantic_workflow(&paths);
+    let previous = snapshot(&paths.output_directory);
+    let conditions = conditions();
+    let cancelled = AtomicBool::new(false);
+    let mut session = Session::prepare(&paths).unwrap();
+    options.game_context = Some(
+        session
+            .generated_context(
+                "合成ゲーム",
+                "brave-fixed-query-v1",
+                &conditions,
+                &options.model,
+                true,
+                &cancelled,
+                || panic!("warm context must not invoke generation"),
+            )
+            .unwrap(),
+    );
+    options.semantic_events = Some(
+        session
+            .semantic_chunk(
+                &unavailable_tools(),
+                &paths.input_directory.join("01-blocks.mkv"),
+                0.0,
+                1.0,
+                &options.model,
+                &conditions,
+                &cancelled,
+                |_| panic!("warm chunk must not invoke understanding"),
+            )
+            .unwrap(),
+    );
+    let result = session
+        .run(
+            &unavailable_tools(),
+            &options,
+            &conditions,
+            &cancelled,
+            |_| panic!("warm selection must not invoke assessment"),
+        )
+        .unwrap();
+    assert!(result.warm);
+    assert_eq!(result.metrics.probe_calls, 0);
+    assert_eq!(result.metrics.assessment_calls, 0);
+    assert_eq!(result.metrics.cache.input_hashes, 0);
+    assert_eq!(result.metrics.context_calls, 0);
+    assert_eq!(result.metrics.semantic_calls, 0);
+    assert_eq!(result.metrics.cache.misses, 0);
+    assert!(result.metrics.cache.hits >= 4);
+    assert!(result.metrics.cache.bytes_read > 0);
+    assert!(result.metrics.cache.bytes_read < 128 * 1024);
+    let published_bytes = previous
+        .values()
+        .map(|bytes| bytes.len() as u64)
+        .sum::<u64>();
+    assert!(result.metrics.output_bytes_read >= 2 * published_bytes);
+    assert_eq!(snapshot(&paths.output_directory), previous);
+}
+
+#[test]
+fn metrics_accumulate_across_cold_and_warm_runs_in_one_session() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let options = options(1, false, false);
+    let conditions = conditions();
+    let cancelled = AtomicBool::new(false);
+    let mut session = Session::prepare(&paths).unwrap();
+    let cold = session
+        .run(
+            &MediaTools::default(),
+            &options,
+            &conditions,
+            &cancelled,
+            assess,
+        )
+        .unwrap();
+    assert!(!cold.warm);
+    assert_eq!(cold.metrics.cache.input_hashes, 1);
+    assert_eq!(cold.metrics.probe_calls, 1);
+    assert!(cold.metrics.assessment_calls > 0);
+    let warm = session
+        .run(
+            &unavailable_tools(),
+            &options,
+            &conditions,
+            &cancelled,
+            |_| panic!("second run must reuse completed output"),
+        )
+        .unwrap();
+    assert!(warm.warm);
+    assert_eq!(warm.report, cold.report);
+    assert_eq!(
+        warm.metrics.cache.input_hashes,
+        cold.metrics.cache.input_hashes
+    );
+    assert_eq!(warm.metrics.probe_calls, cold.metrics.probe_calls);
+    assert_eq!(warm.metrics.assessment_calls, cold.metrics.assessment_calls);
+    assert_eq!(warm.metrics.context_calls, cold.metrics.context_calls);
+    assert_eq!(warm.metrics.semantic_calls, cold.metrics.semantic_calls);
+    assert!(warm.metrics.cache.bytes_read >= cold.metrics.cache.bytes_read);
+    assert!(warm.metrics.cache.hits >= cold.metrics.cache.hits);
+    assert!(warm.metrics.cache.misses >= cold.metrics.cache.misses);
+    assert!(warm.metrics.output_bytes_read > cold.metrics.output_bytes_read);
+    assert!(warm.metrics.elapsed_seconds >= cold.metrics.elapsed_seconds);
+}
+
+fn completed_semantic_workflow(paths: &RunPaths) -> PipelineOptions {
+    let conditions = conditions();
+    let cancelled = AtomicBool::new(false);
+    let mut options = options(1, true, false);
+    let mut session = Session::prepare(paths).unwrap();
+    options.game_context = Some(
+        session
+            .generated_context(
+                "合成ゲーム",
+                "brave-fixed-query-v1",
+                &conditions,
+                &options.model,
+                true,
+                &cancelled,
+                || Ok(conditions.resolved_game_context.clone()),
+            )
+            .unwrap(),
+    );
+    options.semantic_events = Some(
+        session
+            .semantic_chunk(
+                &MediaTools::default(),
+                &paths.input_directory.join("01-blocks.mkv"),
+                0.0,
+                1.0,
+                &options.model,
+                &conditions,
+                &cancelled,
+                understand,
+            )
+            .unwrap(),
+    );
+    session
+        .run(
+            &MediaTools::default(),
+            &options,
+            &conditions,
+            &cancelled,
+            assess,
+        )
+        .unwrap();
+    options
 }
 
 #[test]
@@ -802,6 +1049,13 @@ fn malformed_misreferenced_and_invalid_batch_records_are_recomputed_when_used() 
         );
         assert_eq!(result.metrics.probe_calls, 0);
         assert_eq!(result.metrics.cache.input_hashes, 0);
+        if damage == "assessment_id" {
+            assert_eq!(result.metrics.cache.hits, 3);
+            assert_eq!(
+                result.metrics.cache.misses, 1,
+                "a correctly encoded assessment with an unknown ID is a miss, not a hit"
+            );
+        }
         verify_outputs(&paths.output_directory, &result.report, options.count);
     }
 }
@@ -895,6 +1149,10 @@ fn invalid_settings_and_context_fail_before_probe_or_any_assessment() {
 }
 
 fn understand(chunk: &ChunkArtifact) -> Result<Vec<SemanticEvent>> {
+    understand_recipe(chunk, chunk.source.file_name().unwrap().to_str().unwrap())
+}
+
+fn understand_recipe(chunk: &ChunkArtifact, recipe: &str) -> Result<Vec<SemanticEvent>> {
     let tools = MediaTools::default();
     let cancelled = AtomicBool::new(false);
     let video = tools.probe(&chunk.path(), &cancelled)?;
@@ -903,7 +1161,7 @@ fn understand(chunk: &ChunkArtifact) -> Result<Vec<SemanticEvent>> {
         let extracted = tools.extract(&video, frame.seconds, &cancelled)?;
         assert_eq!(
             image::open(extracted.path()).unwrap().to_rgb8(),
-            expected(source, chunk.actual_start_seconds + frame.seconds),
+            expected(recipe, chunk.actual_start_seconds + frame.seconds),
             "semantic response requires the actual chunk's first/last frames and original times"
         );
     }
@@ -1464,4 +1722,264 @@ fn generated_context_returned_text_does_not_invalidate_generation_key() {
         ).unwrap();
         assert_eq!(warm, generated);
     }
+}
+
+fn replace_with_mirrored_video(source: &Path) {
+    let replacement = source.with_extension("replacement");
+    fs::copy(fixture("02-mirrored.mkv"), &replacement).unwrap();
+    fs::rename(replacement, source).unwrap();
+}
+
+#[test]
+fn workflow_rejects_replaced_video_between_semantic_chunks_before_new_inference() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let source = paths.input_directory.join("01-blocks.mkv");
+    let model = options(1, true, false).model;
+    let conditions = conditions();
+    let cancelled = AtomicBool::new(false);
+    let mut session = Session::prepare(&paths).unwrap();
+    session
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            0.0,
+            1.0,
+            &model,
+            &conditions,
+            &cancelled,
+            understand,
+        )
+        .unwrap();
+    replace_with_mirrored_video(&source);
+    let mut calls = 0;
+    let result = session.semantic_chunk(
+        &MediaTools::default(),
+        &source,
+        4.0,
+        5.0,
+        &model,
+        &conditions,
+        &cancelled,
+        |chunk| {
+            calls += 1;
+            understand_recipe(chunk, "02-mirrored.mkv")
+        },
+    );
+    assert!(
+        result.is_err(),
+        "one semantic workflow must not combine events from different video contents"
+    );
+    assert_eq!(
+        calls, 0,
+        "replacement is rejected before decoding or new inference"
+    );
+    let error = session
+        .semantic_chunk(
+            &unavailable_tools(),
+            &source,
+            4.0,
+            5.0,
+            &model,
+            &conditions,
+            &cancelled,
+            |_| panic!("stale workflow must not invoke inference"),
+        )
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("input changed"),
+        "must reject before trying unavailable probe tools: {error:#}"
+    );
+    assert!(!paths.output_directory.exists());
+}
+
+#[test]
+fn workflow_rejects_replaced_video_between_semantic_events_and_run_preserving_output() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let conditions = conditions();
+    let cancelled = AtomicBool::new(false);
+    let mut options = options(1, false, false);
+    Session::prepare(&paths)
+        .unwrap()
+        .run(
+            &MediaTools::default(),
+            &options,
+            &conditions,
+            &cancelled,
+            assess,
+        )
+        .unwrap();
+    let existing = snapshot(&paths.output_directory);
+    let source = paths.input_directory.join("01-blocks.mkv");
+    let mut session = Session::prepare(&paths).unwrap();
+    let events = session
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            0.0,
+            1.0,
+            &options.model,
+            &conditions,
+            &cancelled,
+            understand,
+        )
+        .unwrap();
+    replace_with_mirrored_video(&source);
+    options.semantic_events = Some(events);
+    let mut calls = 0;
+    let result = session.run(
+        &MediaTools::default(),
+        &options,
+        &conditions,
+        &cancelled,
+        |batch| {
+            calls += 1;
+            assess_recipe(batch, Some("02-mirrored.mkv"))
+        },
+    );
+    assert!(
+        result.is_err(),
+        "stale semantic evidence must not be published under the replacement video's digest"
+    );
+    assert_eq!(calls, 0);
+    assert_eq!(snapshot(&paths.output_directory), existing);
+}
+
+#[test]
+fn workflow_rejects_video_added_after_prepare_in_cold_and_warm_runs_before_media() {
+    for warm in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = setup_paths(root.path(), false);
+        let options = options(1, false, false);
+        let conditions = conditions();
+        let cancelled = AtomicBool::new(false);
+        let previous = warm.then(|| {
+            Session::prepare(&paths)
+                .unwrap()
+                .run(
+                    &MediaTools::default(),
+                    &options,
+                    &conditions,
+                    &cancelled,
+                    assess,
+                )
+                .unwrap();
+            snapshot(&paths.output_directory)
+        });
+        let mut session = Session::prepare(&paths).unwrap();
+        fs::copy(
+            fixture("02-mirrored.mkv"),
+            paths.input_directory.join("02-mirrored.mkv"),
+        )
+        .unwrap();
+        let error = session
+            .run(
+                &unavailable_tools(),
+                &options,
+                &conditions,
+                &cancelled,
+                |_| panic!("changed input membership must fail before inference"),
+            )
+            .err()
+            .unwrap();
+        assert!(
+            error.to_string().contains("input directory changed"),
+            "membership must fail before warm completion or any probe: {error:#}"
+        );
+        if let Some(previous) = previous {
+            assert_eq!(snapshot(&paths.output_directory), previous);
+        } else {
+            assert!(!paths.output_directory.exists());
+        }
+    }
+}
+
+#[test]
+fn workflow_rejects_video_added_during_assessment_and_keeps_previous_artifacts() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let conditions = conditions();
+    let cancelled = AtomicBool::new(false);
+    let mut options = options(1, false, false);
+    Session::prepare(&paths)
+        .unwrap()
+        .run(
+            &MediaTools::default(),
+            &options,
+            &conditions,
+            &cancelled,
+            assess,
+        )
+        .unwrap();
+    let previous = snapshot(&paths.output_directory);
+    options.count = 2;
+    options.model.cache_revision = "membership-injection".to_owned();
+    let mut calls = 0;
+    let result = Session::prepare(&paths).unwrap().run(
+        &MediaTools::default(),
+        &options,
+        &conditions,
+        &cancelled,
+        |batch| {
+            calls += 1;
+            let response = assess(batch)?;
+            if calls == 1 {
+                fs::copy(
+                    fixture("02-mirrored.mkv"),
+                    paths.input_directory.join("02-mirrored.mkv"),
+                )
+                .unwrap();
+            }
+            Ok(response)
+        },
+    );
+    assert!(
+        result.is_err(),
+        "newly added recordings cannot silently be omitted from published results"
+    );
+    assert_eq!(
+        calls, 1,
+        "the changed workflow stops before any further inference"
+    );
+    assert_eq!(snapshot(&paths.output_directory), previous);
+}
+
+#[test]
+fn workflow_rejects_video_added_during_semantic_callback_before_checkpointing() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let source = paths.input_directory.join("01-blocks.mkv");
+    let model = options(1, true, false).model;
+    let result = Session::prepare(&paths).unwrap().semantic_chunk(
+        &MediaTools::default(),
+        &source,
+        0.0,
+        1.0,
+        &model,
+        &conditions(),
+        &AtomicBool::new(false),
+        |chunk| {
+            let events = understand(chunk)?;
+            fs::copy(
+                fixture("02-mirrored.mkv"),
+                paths.input_directory.join("02-mirrored.mkv"),
+            )
+            .unwrap();
+            Ok(events)
+        },
+    );
+    assert!(
+        result.is_err(),
+        "completed responses are only valid for the workflow's verified input set"
+    );
+    assert!(
+        !paths
+            .cache_directory
+            .join(NAMESPACE)
+            .join("semantic")
+            .exists()
+    );
+    assert!(!paths.output_directory.exists());
 }
