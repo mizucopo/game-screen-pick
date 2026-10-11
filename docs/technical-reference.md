@@ -70,6 +70,7 @@ PNG/JPEG は decode 前に encoded file を64 MiB、各辺を16384、画素を32
 許容候補から未採用 source、scene、source内の時間3分割を優先し、次に有用性80%＋機械品質20%＋event重要度15%と
 見た目の距離で選びます。同点は有用性、source の UTF-8 順、実時刻、要求時刻、ID 順です。
 不足時は代表画像の選び直しを試し、通常画面の枚数を減らさず、追加比較・探索訪問を各4096回までに制限します。
+探索内では枚数、source・scene・source内の時間帯の分散の順に集合を比較します。
 最大枚数を数学的に保証する探索ではありません。最終集合から順位・除外理由・source 分散の説明を再計算します。
 
 候補 sheet は12枚ごとの JPEG。二次評価の before/center/after は候補の実 PTS を中心に抽出し、実時刻付きで表示します。
@@ -77,7 +78,7 @@ PNG/JPEG は decode 前に encoded file を64 MiB、各辺を16384、画素を32
 縦横比を維持して余白を付け、日本語の Noto Sans JP（[OFL](../assets/OFL.txt)）を同梱します。
 sheet は200MPの RGB canvas を上限とし、一度に1画像だけ decode/resize します。上限の canvas 自体は600MBです。
 通常の枚数では小さい canvas を使います。999枚や長い入力名の一覧は拡大して確認してください。
-未収録の Unicode 文字は、元の文字を識別できる ASCII code point 表記へ置き換えて表示します。
+未収録の Unicode 文字は ASCII code point 表記へ置き換え、元の backslash は二重化して表示を区別します。
 元の source・scene は保持し、表示の計測・折り返しにも同じ置換を適用します。
 source は255 UTF-16 unitsまで表示し、通常の最終一覧は14pxです。小型の最終一覧が長い名前の展開で
 canvas 上限に収まらない場合だけ12・10・8pxの順で再計測します。

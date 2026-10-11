@@ -188,60 +188,74 @@ fn long_source_wraps_without_overlapping_or_discarding_the_last_glyphs() {
 }
 
 #[test]
-fn unsupported_unicode_renders_identifiable_labels_without_changing_images_or_metadata() {
+fn literal_escape_sequences_and_unsupported_unicode_have_distinct_label_pixels() {
     let temp = TempDir::new().unwrap();
-    let before = solid(temp.path(), "before.png", [210, 40, 30]);
-    let center = solid(temp.path(), "center.png", [20, 190, 40]);
-    let after = solid(temp.path(), "after.png", [20, 40, 220]);
-    let mut original = entry(1, center.clone());
+    let mut original = entry(1, solid(temp.path(), "frame.png", [40, 100, 180]));
     original.rank = Some(1);
-    original.source = "日本語🎮_नमस्ते.mp4".to_owned();
-    original.scene = "探索🎮क".to_owned();
-    original.context = Some([
-        ContextImage {
-            image: before,
-            actual_seconds: 11.125,
-        },
-        ContextImage {
-            image: center,
-            actual_seconds: 12.125,
-        },
-        ContextImage {
-            image: after,
-            actual_seconds: 13.125,
-        },
-    ]);
-    let mut escaped = original.clone();
-    escaped.source = "日本語\\U0001F3AE_\\u0928\\u092E\\u0938\\u094D\\u0924\\u0947.mp4".to_owned();
-    escaped.scene = "探索\\U0001F3AE\\u0915".to_owned();
-    let actual = render_candidate_sheets(
-        std::slice::from_ref(&original),
-        &temp.path().join("unicode"),
-    )
-    .unwrap();
-    let expected =
-        render_candidate_sheets(std::slice::from_ref(&escaped), &temp.path().join("escaped"))
-            .unwrap();
-    assert_eq!(
-        std::fs::read(&actual[0]).unwrap(),
-        std::fs::read(&expected[0]).unwrap()
-    );
-    let actual = render_selected_sheet(
-        std::slice::from_ref(&original),
-        &temp.path().join("selected-unicode"),
-    )
-    .unwrap();
-    let expected = render_selected_sheet(
-        std::slice::from_ref(&escaped),
-        &temp.path().join("selected-escaped"),
-    )
-    .unwrap();
-    assert_eq!(
-        std::fs::read(actual).unwrap(),
-        std::fs::read(expected).unwrap()
-    );
-    assert_eq!(original.source, "日本語🎮_नमस्ते.mp4");
-    assert_eq!(original.scene, "探索🎮क");
+    original.context = Some(std::array::from_fn(|index| ContextImage {
+        image: original.image.clone(),
+        actual_seconds: 11.125 + index as f64,
+    }));
+    for (field, unicode, literal, y) in [
+        ("source", "日本語🎮.mp4", r"日本語\U0001F3AE.mp4", 240),
+        ("source", "日本語न.mp4", r"日本語\u0928.mp4", 240),
+        ("scene", "探索🎮", r"探索\U0001F3AE", 336),
+        ("id", "c🎮", r"c\U0001F3AE", 24),
+    ] {
+        let mut unicode_entry = original.clone();
+        let mut literal_entry = original.clone();
+        match field {
+            "source" => {
+                unicode_entry.source = unicode.to_owned();
+                literal_entry.source = literal.to_owned();
+            }
+            "scene" => {
+                unicode_entry.scene = unicode.to_owned();
+                literal_entry.scene = literal.to_owned();
+            }
+            "id" => {
+                unicode_entry.id = unicode.to_owned();
+                literal_entry.id = literal.to_owned();
+            }
+            _ => unreachable!(),
+        }
+        for selected in [false, true] {
+            let render = |entry: &SheetEntry, directory: &str| {
+                if selected {
+                    render_selected_sheet(std::slice::from_ref(entry), &temp.path().join(directory))
+                        .unwrap()
+                } else {
+                    render_candidate_sheets(
+                        std::slice::from_ref(entry),
+                        &temp.path().join(directory),
+                    )
+                    .unwrap()
+                    .remove(0)
+                }
+            };
+            let unicode_image = load(&render(&unicode_entry, "unicode"));
+            let literal_image = load(&render(&literal_entry, "literal"));
+            assert_eq!(unicode_image.dimensions(), literal_image.dimensions());
+            assert!(
+                region(&unicode_image, 24, y, 320, 24) != region(&literal_image, 24, y, 320, 24),
+                "{field} must distinguish Unicode from literal escapes (selected={selected})"
+            );
+            assert_eq!(
+                region(&unicode_image, 24, 48, 320, 180),
+                region(&literal_image, 24, 48, 320, 180)
+            );
+            assert_eq!(
+                region(&unicode_image, 24, 288, 320, 48),
+                region(&literal_image, 24, 288, 320, 48)
+            );
+            if !selected {
+                assert_eq!(
+                    region(&unicode_image, 24, 360, 320, 88),
+                    region(&literal_image, 24, 360, 320, 88)
+                );
+            }
+        }
+    }
 }
 
 #[test]

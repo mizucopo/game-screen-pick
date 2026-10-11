@@ -260,6 +260,100 @@ fn duplicate_reselection_can_replace_two_representatives_and_preserves_normal_pr
 }
 
 #[test]
+fn duplicate_reselection_preserves_source_scene_and_time_diversity() {
+    let directory = tempfile::tempdir().unwrap();
+    let (template, _) = candidates(directory.path(), 1);
+    let original = image::open(&template[0].image).unwrap().to_rgb8();
+    let mut frames = Vec::new();
+    let mut ratings = Vec::new();
+    for (index, (id, red, green, score)) in [
+        ("A", 0, 0, 100.0),
+        ("B", -24, 0, 99.0),
+        ("C", 24, 0, 98.0),
+        ("D", 0, -24, 97.0),
+        ("T", 0, 24, 80.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut image = original.clone();
+        for pixel in image.pixels_mut() {
+            pixel[0] = (i16::from(pixel[0]) + red).clamp(0, 255) as u8;
+            pixel[1] = (i16::from(pixel[1]) + green).clamp(0, 255) as u8;
+        }
+        let mut frame = template[0].clone();
+        frame.id = id.into();
+        frame.image = directory.path().join(format!("{id}.png"));
+        image.save(&frame.image).unwrap();
+        frame.quality = analyze(&frame.image).unwrap();
+        frame.source = "X.mkv".into();
+        frame.actual_seconds = index as f64;
+        frame.requested_seconds = index as f64;
+        frames.push(frame);
+        ratings.push(Assessment {
+            id: id.into(),
+            blog_score: score,
+            transition: false,
+            scene: "探索".into(),
+            reason: "鮮明な通常進行の実画像".into(),
+            special: false,
+        });
+    }
+    assert!(frames.iter().all(|frame| frame.quality.rejection.is_none()));
+    for left in 0..frames.len() {
+        for right in left + 1..frames.len() {
+            assert_eq!(
+                frames[left].quality.near_duplicate(&frames[right].quality),
+                left == 0
+            );
+        }
+    }
+    assert_eq!(select(&frames, &ratings, 1).unwrap().indices, [0]);
+    // A blocks every leaf. B/C/D are useful, but T supplies the only second
+    // source, scene or time band in these otherwise equivalent repair cases.
+    let mut lost_diversity = Vec::new();
+    for dimension in ["source", "scene", "time"] {
+        let mut frames = frames.clone();
+        let mut ratings = ratings.clone();
+        match dimension {
+            "source" => frames[4].source = "Y.mkv".into(),
+            "scene" => ratings[4].scene = "戦闘".into(),
+            "time" => {
+                frames[4].actual_seconds = 29.0;
+                frames[4].requested_seconds = 29.0;
+            }
+            _ => unreachable!(),
+        }
+        let selected = select(&frames, &ratings, 3).unwrap();
+        let ids = selected
+            .indices
+            .iter()
+            .map(|&index| frames[index].id.clone())
+            .collect::<Vec<_>>();
+        if !ids.iter().any(|id| id == "T") {
+            lost_diversity.push((dimension, ids.clone()));
+        }
+        assert!(!ids.iter().any(|id| id == "A"));
+        frames.reverse();
+        ratings.rotate_left(1);
+        assert_eq!(
+            select(&frames, &ratings, 3)
+                .unwrap()
+                .indices
+                .iter()
+                .map(|&index| frames[index].id.clone())
+                .collect::<Vec<_>>(),
+            ids,
+            "{dimension} repair changed with callback order"
+        );
+    }
+    assert!(
+        lost_diversity.is_empty(),
+        "lost diversity: {lost_diversity:?}"
+    );
+}
+
+#[test]
 fn maximal_duplicate_pool_stops_without_filling_slots_with_repeats() {
     let directory = tempfile::tempdir().unwrap();
     let (template, ratings) = candidates(directory.path(), 1);

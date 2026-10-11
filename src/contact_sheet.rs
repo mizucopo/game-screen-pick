@@ -167,7 +167,9 @@ fn validate_label(text: &str) -> Result<()> {
 fn display_text(font: &Font, text: &str) -> String {
     let mut display = String::with_capacity(text.len());
     for character in text.chars() {
-        if font.lookup_glyph_index(character) == 0 {
+        if character == '\\' {
+            display.push_str("\\\\");
+        } else if font.lookup_glyph_index(character) == 0 {
             let codepoint = u32::from(character);
             display.push_str(&if codepoint <= 0xffff {
                 format!("\\u{codepoint:04X}")
@@ -611,6 +613,27 @@ mod tests {
     }
 
     #[test]
+    fn unicode_fallbacks_and_literal_backslashes_remain_distinct_after_wrapping() {
+        let font = font().unwrap();
+        for (raw, expected) in [
+            ("日本語🎮", r"日本語\U0001F3AE"),
+            (r"日本語\U0001F3AE", r"日本語\\U0001F3AE"),
+            ("न", r"\u0928"),
+            (r"\u0928", r"\\u0928"),
+            ("\\🎮", r"\\\U0001F3AE"),
+            (r"\\", r"\\\\"),
+        ] {
+            let lines = wrapped_lines(font, raw, 14.0, 40, usize::MAX);
+            assert_eq!(lines.concat(), expected);
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| text_width(font, line, 14.0) <= 40.0)
+            );
+        }
+    }
+
+    #[test]
     fn largest_selected_sheet_and_long_sources_have_bounded_jpeg_dimensions() {
         let font = font().unwrap();
         let entry = SheetEntry {
@@ -690,6 +713,7 @@ mod tests {
         let source_scalar = widest_missing(0xa0..=0xffff);
         for (source, font_size) in [
             (format!("{}.mp4", "録".repeat(251)), 14.0),
+            ("\\".repeat(255), 14.0),
             (format!("{}.webm", "🎮".repeat(125)), 10.0),
             (
                 format!("{}.mp4", source_scalar.to_string().repeat(251)),
