@@ -42,7 +42,7 @@ pub struct CacheConditions {
 }
 
 impl CacheConditions {
-    fn normalized(&self) -> Result<Self> {
+    fn normalized(&self, require_context: bool) -> Result<Self> {
         let service = Url::parse(&self.service_url).context("invalid inference service URL")?;
         ensure!(
             ["http", "https"].contains(&service.scheme())
@@ -57,11 +57,14 @@ impl CacheConditions {
             [
                 &self.prompt_revision,
                 &self.response_schema_revision,
-                &self.media_revision,
-                &self.resolved_game_context
+                &self.media_revision
             ]
             .iter()
             .all(|value| !value.trim().is_empty()),
+            "cache conditions must not be blank"
+        );
+        ensure!(
+            !require_context || !self.resolved_game_context.trim().is_empty(),
             "cache conditions must not be blank"
         );
         Ok(Self {
@@ -170,7 +173,7 @@ impl Session {
         let started = self.prepared_at.take().unwrap_or_else(Instant::now);
         check_cancelled(cancelled)?;
         let baseline = self.cache.stats();
-        let conditions = conditions.normalized()?;
+        let conditions = conditions.normalized(true)?;
         pipeline::validate_parameters(options)?;
         ensure!(
             options
@@ -211,9 +214,9 @@ impl Session {
         let run_key = cache::key(
             &json!({"algorithm":ALGORITHM,"probe":PROBE,"inputs":named,"options":options,"conditions":conditions}),
         )?;
+        let output_baseline =
+            self.output.bytes_read() - std::mem::take(&mut self.output_bytes_read);
         let previous = self.output.verify_existing()?;
-        let mut output_bytes = std::mem::take(&mut self.output_bytes_read)
-            + previous.as_ref().map_or(0, |owned| owned.bytes_read);
         if let Some(owned) = previous.filter(|owned| {
             owned.report["cache"]["namespace"] == cache::NAMESPACE
                 && owned.report["cache"]["key"] == run_key
@@ -223,7 +226,13 @@ impl Session {
             return Ok(RunOutcome {
                 warm: true,
                 report: owned.report,
-                metrics: self.metrics(&baseline, output_bytes, 0, 0, started),
+                metrics: self.metrics(
+                    &baseline,
+                    self.output.bytes_read() - output_baseline,
+                    0,
+                    0,
+                    started,
+                ),
             });
         }
         let mut probe_calls = 0;
@@ -287,21 +296,22 @@ impl Session {
         cache::verify_inputs(&self.inputs, &identities)?;
         check_cancelled(cancelled)?;
         let report_path = artifacts.path().canonicalize()?.join("report.json");
-        let mut report: Value =
-            serde_json::from_slice(&storage::read_regular(&report_path, 64 * 1024 * 1024)?)?;
+        let report_bytes = storage::read_regular(&report_path, 64 * 1024 * 1024)?;
+        let mut report: Value = serde_json::from_slice(&report_bytes)?;
         report["cache"] = json!({"namespace":cache::NAMESPACE,"key":run_key,"algorithm":ALGORITHM,"probe":PROBE,
             "service_url":conditions.service_url,"prompt_revision":conditions.prompt_revision,
             "response_schema_revision":conditions.response_schema_revision,"media_revision":conditions.media_revision,
             "context_digest":storage::sha256(conditions.resolved_game_context.as_bytes())});
         storage::atomic_write(&report_path, &serde_json::to_vec_pretty(&report)?)?;
-        let owned = self.output.publish(&artifacts, cancelled)?;
-        output_bytes += owned.bytes_read;
+        let owned = self.output.publish_checked(&artifacts, cancelled, || {
+            cache::verify_inputs(&self.inputs, &identities)
+        })?;
         Ok(RunOutcome {
             warm: false,
             report: owned.report,
             metrics: self.metrics(
                 &baseline,
-                output_bytes,
+                self.output.bytes_read() - output_baseline + report_bytes.len() as u64,
                 probe_calls,
                 assessment_calls,
                 started,
@@ -324,7 +334,7 @@ impl Session {
         mut understand: impl FnMut(&ChunkArtifact) -> Result<Vec<SemanticEvent>>,
     ) -> Result<Vec<SemanticEvent>> {
         check_cancelled(cancelled)?;
-        let conditions = conditions.normalized()?;
+        let conditions = conditions.normalized(true)?;
         pipeline::validate_model(model)?;
         ensure!(
             start.is_finite() && end.is_finite() && start >= 0.0 && end > start,
@@ -348,23 +358,27 @@ impl Session {
             "invalid semantic chunk range"
         );
         let name = source_name(&source)?;
+        let (first, last) = crate::media::chunk_frames(&video, start, end)?;
+        let actual_start = first.seconds;
+        let actual_end = crate::media::probe_seconds(last.seconds + last.duration_seconds);
         let key = cache::key(
-            &json!({"probe":PROBE,"input":identity.content_digest,"source":name,"stream":video.stream_index,"start":start,"end":end,"model":model,"conditions":conditions}),
+            &json!({"algorithm":"semantic-chunk-v2","probe":PROBE,"input":identity.content_digest,"source":name,"stream":video.stream_index,"start":start,"end":end,"model":model,"conditions":conditions}),
         )?;
-        let validate = |events: &Vec<SemanticEvent>| -> Result<()> {
-            for event in events {
-                event_positions(event, video.duration_seconds)?;
-                ensure!(
-                    event.source == name
-                        && event.start_seconds >= start
-                        && event.end_seconds <= end,
-                    "semantic event is outside its source/chunk"
-                );
-            }
-            Ok(())
-        };
+        let validate =
+            |events: &Vec<SemanticEvent>, actual_start: f64, actual_end: f64| -> Result<()> {
+                for event in events {
+                    event_positions(event, video.duration_seconds)?;
+                    ensure!(
+                        event.source == name
+                            && event.start_seconds >= actual_start
+                            && event.end_seconds <= actual_end,
+                        "semantic event is outside its source/chunk"
+                    );
+                }
+                Ok(())
+            };
         if let Some(events) = self.cache.read::<Vec<SemanticEvent>>("semantic", &key)?
-            && validate(&events).is_ok()
+            && validate(&events, actual_start, actual_end).is_ok()
         {
             cache::verify_inputs(&self.inputs, &identities)?;
             check_cancelled(cancelled)?;
@@ -372,7 +386,11 @@ impl Session {
         }
         let chunk = tools.extract_chunk(&video, start, end, cancelled)?;
         let events = understand(&chunk)?;
-        validate(&events)?;
+        validate(
+            &events,
+            chunk.actual_start_seconds,
+            chunk.actual_end_seconds,
+        )?;
         cache::verify_inputs(&self.inputs, &identities)?;
         self.cache.write("semantic", &key, &events)?;
         check_cancelled(cancelled)?;
@@ -398,10 +416,13 @@ impl Session {
             !search_conditions.trim().is_empty(),
             "search conditions must not be blank"
         );
-        let conditions = generation_conditions.normalized()?;
+        let conditions = generation_conditions.normalized(false)?;
         pipeline::validate_model(model)?;
         let key = cache::key(
-            &json!({"title":title,"search":search_conditions,"generation":conditions,"model":model}),
+            &json!({"title":title,"search":search_conditions,"generation":{
+                "service_url":conditions.service_url,"prompt_revision":conditions.prompt_revision,
+                "response_schema_revision":conditions.response_schema_revision,"media_revision":conditions.media_revision
+            },"model":model}),
         )?;
         if persist
             && let Some(context) = self.cache.read::<String>("contexts", &key)?

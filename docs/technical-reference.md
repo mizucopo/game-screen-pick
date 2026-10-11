@@ -104,16 +104,16 @@ CLIのcache親は出力と同じ親の `.game-screen-pick-cache`、変更は `--
 backend・認証を除く正規化service URL・model・推論レベル・prompt/schema/media revision・解決済みcontextをkeyに含めます。
 認証値や保存禁止のcontext本文はkey/checkpointへ保存しません。完了応答だけを検証してatomic書込みし、不正・途中結果はhitにしません。
 `semantic_chunk` はsource/区間/条件ごとに検証したeventだけを保存し、欠損chunkだけ再処理します。
-生成contextの `generated_context` は保存許可をcallerが確認した場合だけ再利用し、Brave生応答は扱いません。
+生成contextの `generated_context` は生成前の入力条件をkeyにし、保存許可をcallerが確認した場合だけ再利用します。Brave生応答は扱いません。
 
 完成したrunは公開reportのkeyと画像集合/digestを検証して返します。正常なwarmはFFprobe/FFmpeg・画像decode・動画content hash・
 評価callbackが0件で、入力metadataとidentity checkpoint、公開済み画像・一覧・reportだけを読みます。
-`RunOutcome.metrics` はcheckpoint/content読取bytes・input hash/probe/評価回数・出力検証bytes・処理時間を返します。
+`RunOutcome.metrics` はcheckpoint/content読取bytes・input hash/probe/評価回数・公開と検証の読取bytes・処理時間を返します。
 部分再開や条件変更では必要な候補を再抽出しますが、同じ完了評価を再推論しません。
 
 reportにはschema・宣言された出力集合・画像/sheetのdigest・report本文digestを記録します。
 cache消失後も所有権を確認でき、同名の有効JPEGへの編集、欠損、未知file、旧report、symlinkや特殊fileを拒否して保持します。
-lockは出力の安定した親側fileを使い、取得後も名前を削除しません。公開は同じ親の排他的stagingとbackupを使い、
+lockは出力の親側 `.gsp-output-locks` 内でfilesystemの同名判定を使い、取得後も名前を削除しません。公開は同じ親の排他的stagingとbackupを使い、
 旧成果物を再確認してrenameします。完了検証前の失敗・通常中断は旧集合を復元し、journalから再開時にも回復します。
 完了後のcleanup失敗は未処理journalとして検出し、検証できない変更を推測で削除しません。
 macOS/Linuxのlock・rename・通常中断を検証します。hostileな同時filesystem書換え、強制kill/停電での完全atomicity、

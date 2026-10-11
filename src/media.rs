@@ -390,24 +390,7 @@ impl MediaTools {
         end_seconds: f64,
         cancelled: &AtomicBool,
     ) -> Result<ChunkArtifact> {
-        let first = frame_at(video, start_seconds)?;
-        frame_at(video, end_seconds)?;
-        ensure!(start_seconds < end_seconds, "chunk start must precede end");
-        let last = video
-            .frames
-            .iter()
-            .rev()
-            .find(|frame| frame.seconds < end_seconds && frame.seconds >= first.seconds)
-            .context("chunk interval contains no valid frame PTS")?;
-        ensure!(
-            last.decode_index - first.decode_index + 1
-                == video
-                    .frames
-                    .iter()
-                    .filter(|frame| frame.seconds >= first.seconds && frame.seconds <= last.seconds)
-                    .count(),
-            "semantic chunk contains frames without valid PTS; this media is unsupported"
-        );
+        let (first, last) = chunk_frames(video, start_seconds, end_seconds)?;
         check_cancelled(cancelled)?;
         let directory = Builder::new()
             .prefix("game-screen-pick-chunk-")
@@ -476,6 +459,32 @@ impl MediaTools {
     }
 }
 
+pub(crate) fn chunk_frames(
+    video: &Video,
+    start: f64,
+    end: f64,
+) -> Result<(&FrameTime, &FrameTime)> {
+    let first = frame_at(video, start)?;
+    frame_at(video, end)?;
+    ensure!(start < end, "chunk start must precede end");
+    let last = video
+        .frames
+        .iter()
+        .rev()
+        .find(|frame| frame.seconds < end && frame.seconds >= first.seconds)
+        .context("chunk interval contains no valid frame PTS")?;
+    ensure!(
+        last.decode_index - first.decode_index + 1
+            == video
+                .frames
+                .iter()
+                .filter(|frame| frame.seconds >= first.seconds && frame.seconds <= last.seconds)
+                .count(),
+        "semantic chunk contains frames without valid PTS; this media is unsupported"
+    );
+    Ok((first, last))
+}
+
 fn frame_at(video: &Video, seconds: f64) -> Result<&FrameTime> {
     ensure!(
         seconds.is_finite() && seconds >= 0.0 && seconds <= video.duration_seconds,
@@ -504,7 +513,7 @@ fn dimension(value: &Value, name: &str) -> Result<u32> {
 // FFprobe's *_time fields use microsecond precision. Keep subtraction and
 // duration/context arithmetic on that same grid so a literal PTS remains an endpoint,
 // rather than falling just after it through binary floating-point roundoff.
-fn probe_seconds(seconds: f64) -> f64 {
+pub(crate) fn probe_seconds(seconds: f64) -> f64 {
     (seconds * 1_000_000.0).round() / 1_000_000.0
 }
 

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
@@ -256,7 +257,14 @@ fn cold_and_warm_both_methods_publish_identical_actual_artifacts_without_media_c
                 .values()
                 .map(|bytes| bytes.len() as u64)
                 .sum::<u64>();
-            assert!(warm.metrics.output_bytes_read >= published_bytes);
+            assert!(
+                cold.metrics.output_bytes_read > published_bytes,
+                "cold metrics must include staging reads as well as verification of published output"
+            );
+            assert!(
+                warm.metrics.output_bytes_read >= published_bytes * 2,
+                "warm metrics must include both preflight and current-run ownership verification"
+            );
             assert!(warm.metrics.cache.bytes_read < 128 * 1024);
             assert!(warm.metrics.elapsed_seconds.is_finite());
             eprintln!(
@@ -809,6 +817,7 @@ fn invalid_settings_and_context_fail_before_probe_or_any_assessment() {
         "context",
         "source",
         "credentials",
+        "empty_resolved_context",
     ] {
         let mut options = options(1, false, false);
         let mut conditions = conditions();
@@ -844,6 +853,10 @@ fn invalid_settings_and_context_fail_before_probe_or_any_assessment() {
             "credentials" => {
                 conditions.service_url = "http://fixture-credential@127.0.0.1:8123/v1".to_owned();
                 "credentials"
+            }
+            "empty_resolved_context" => {
+                conditions.resolved_game_context.clear();
+                "cache conditions"
             }
             _ => unreachable!(),
         };
@@ -1145,5 +1158,310 @@ fn generated_context_requires_persistence_permission_and_generation_dependency_m
         let text = fs::read_to_string(record).unwrap();
         assert!(!text.contains("transient-context-not-approved-for-storage"));
         assert!(!text.contains("transient-new-context-without-read-or-write"));
+    }
+}
+
+fn sparse_vfr_source(paths: &RunPaths) -> PathBuf {
+    let source = paths.input_directory.join("sparse-VFR.mkv");
+    let output = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(fixture("01-blocks.mkv"))
+        .args([
+            "-vf",
+            "select='eq(n,0)+eq(n,4)+eq(n,12)+eq(n,20)',setpts='if(eq(N,0),3,if(eq(N,1),3.25,if(eq(N,2),4.5,5.75)))/TB'",
+            "-fps_mode", "passthrough", "-c:v", "ffv1",
+        ])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    source
+}
+
+fn inspect_sparse_chunk(chunk: &ChunkArtifact) {
+    assert_eq!(chunk.source.file_name().unwrap(), "sparse-VFR.mkv");
+    assert_eq!(
+        (chunk.requested_start_seconds, chunk.requested_end_seconds),
+        (0.1, 1.0)
+    );
+    assert_eq!(
+        (chunk.actual_start_seconds, chunk.actual_end_seconds),
+        (0.25, 1.5)
+    );
+    let tools = MediaTools::default();
+    let cancelled = AtomicBool::new(false);
+    let decoded = tools.probe(&chunk.path(), &cancelled).unwrap();
+    assert_eq!(decoded.frames.len(), 1);
+    assert_eq!(decoded.duration_seconds, 1.25);
+    let frame = tools.extract(&decoded, 0.0, &cancelled).unwrap();
+    assert_eq!(
+        image::open(frame.path()).unwrap().to_rgb8(),
+        expected("01-blocks.mkv", 1.0)
+    );
+}
+
+fn sparse_event(start: f64, end: f64) -> Vec<SemanticEvent> {
+    vec![SemanticEvent {
+        source: "sparse-VFR.mkv".to_owned(),
+        start_seconds: start,
+        end_seconds: end,
+        representative_seconds: (start + end) / 2.0,
+        importance: 80.0,
+        scene: "探索".to_owned(),
+        reason: "実際の chunk 表示区間を元入力内の秒で確認".to_owned(),
+    }]
+}
+
+#[test]
+fn semantic_chunk_rejects_fresh_event_before_actual_start_inside_requested_range() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let source = sparse_vfr_source(&paths);
+    let model = options(1, true, false).model;
+    let result = Session::prepare(&paths).unwrap().semantic_chunk(
+        &MediaTools::default(),
+        &source,
+        0.1,
+        1.0,
+        &model,
+        &conditions(),
+        &AtomicBool::new(false),
+        |chunk| {
+            inspect_sparse_chunk(chunk);
+            Ok(sparse_event(0.1, 0.2))
+        },
+    );
+    assert!(
+        result.is_err(),
+        "no pixels before actual start 0.25 were submitted for semantic inference"
+    );
+}
+
+#[test]
+fn semantic_chunk_rejects_cached_event_before_actual_start_and_recomputes_that_chunk() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let source = sparse_vfr_source(&paths);
+    let model = options(1, true, false).model;
+    Session::prepare(&paths)
+        .unwrap()
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            0.1,
+            1.0,
+            &model,
+            &conditions(),
+            &AtomicBool::new(false),
+            |chunk| {
+                inspect_sparse_chunk(chunk);
+                Ok(sparse_event(0.25, 0.75))
+            },
+        )
+        .unwrap();
+    let checkpoint = checkpoints(&paths, "semantic").pop().unwrap();
+    let mut envelope: Value = serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
+    envelope["payload"] = serde_json::to_value(sparse_event(0.1, 0.2)).unwrap();
+    envelope["payload_digest"] =
+        game_screen_pick::storage::sha256(&serde_json::to_vec(&envelope["payload"]).unwrap())
+            .into();
+    fs::write(&checkpoint, serde_json::to_vec(&envelope).unwrap()).unwrap();
+    let mut calls = 0;
+    let events = Session::prepare(&paths)
+        .unwrap()
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            0.1,
+            1.0,
+            &model,
+            &conditions(),
+            &AtomicBool::new(false),
+            |chunk| {
+                calls += 1;
+                inspect_sparse_chunk(chunk);
+                Ok(sparse_event(0.25, 0.75))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        calls, 1,
+        "a valid payload digest does not prove an event lies in the actual submitted chunk"
+    );
+    assert_eq!(events[0].start_seconds, 0.25);
+}
+
+#[test]
+fn semantic_chunk_accepts_and_reuses_actual_trailing_display_beyond_requested_end() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let source = sparse_vfr_source(&paths);
+    let model = options(1, true, false).model;
+    let conditions = conditions();
+    let events = Session::prepare(&paths)
+        .unwrap()
+        .semantic_chunk(
+            &MediaTools::default(),
+            &source,
+            0.1,
+            1.0,
+            &model,
+            &conditions,
+            &AtomicBool::new(false),
+            |chunk| {
+                inspect_sparse_chunk(chunk);
+                Ok(sparse_event(1.0, 1.5))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        events[0].representative_seconds, 1.25,
+        "events use original video seconds rather than chunk-relative timestamps"
+    );
+    let cached = Session::prepare(&paths)
+        .unwrap()
+        .semantic_chunk(
+            &unavailable_tools(),
+            &source,
+            0.1,
+            1.0,
+            &model,
+            &conditions,
+            &AtomicBool::new(false),
+            |_| panic!("the complete trailing display event should be a cache hit"),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(cached).unwrap(),
+        serde_json::to_value(events).unwrap()
+    );
+}
+
+#[test]
+fn generated_context_cold_empty_resolved_text_then_returned_text_reuses_generation() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let model = options(1, false, false).model;
+    let mut conditions = conditions();
+    conditions.resolved_game_context.clear();
+    let mut session = Session::prepare(&paths).unwrap();
+    let context = session
+        .generated_context(
+            "合成ゲーム",
+            "brave-fixed-query-v1",
+            &conditions,
+            &model,
+            true,
+            &AtomicBool::new(false),
+            || Ok("保存可能な生成結果。まだ生成前にこの値は存在しない".to_owned()),
+        )
+        .unwrap();
+    conditions.resolved_game_context = context.clone();
+    let mut calls = 0;
+    let cached = session
+        .generated_context(
+            "合成ゲーム",
+            "brave-fixed-query-v1",
+            &conditions,
+            &model,
+            true,
+            &AtomicBool::new(false),
+            || {
+                calls += 1;
+                Ok("不要な二度目の生成".to_owned())
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        calls, 0,
+        "generation's own output cannot be an input dependency of its cache key"
+    );
+    assert_eq!(cached, context);
+}
+
+#[test]
+fn generated_context_returned_text_does_not_invalidate_generation_key() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = setup_paths(root.path(), false);
+    let model = options(1, false, false).model;
+    let mut conditions = conditions();
+    let mut session = Session::prepare(&paths).unwrap();
+    let saved = session
+        .generated_context(
+            "合成ゲーム",
+            "brave-fixed-query-v1",
+            &conditions,
+            &model,
+            true,
+            &AtomicBool::new(false),
+            || Ok("以前の説明と異なる生成済みの説明".to_owned()),
+        )
+        .unwrap();
+    conditions.resolved_game_context = saved.clone();
+    let mut calls = 0;
+    let reused = session
+        .generated_context(
+            "合成ゲーム",
+            "brave-fixed-query-v1",
+            &conditions,
+            &model,
+            true,
+            &AtomicBool::new(false),
+            || {
+                calls += 1;
+                Ok("生成結果を条件へ反映しても再生成不要".to_owned())
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        calls, 0,
+        "resolved context only influences generation's consumers"
+    );
+    assert_eq!(reused, saved);
+    for dependency in ["title", "search", "model", "prompt", "schema", "media"] {
+        let mut changed_conditions = conditions.clone();
+        let mut changed_model = model.clone();
+        let mut title = "合成ゲーム";
+        let mut search = "brave-fixed-query-v1";
+        match dependency {
+            "title" => title = "変更後のタイトル",
+            "search" => search = "brave-fixed-query-v2",
+            "model" => changed_model.model = "changed-generation-model".to_owned(),
+            "prompt" => changed_conditions.prompt_revision = "changed-generation-prompt".to_owned(),
+            "schema" => {
+                changed_conditions.response_schema_revision = "changed-generation-schema".to_owned()
+            }
+            "media" => changed_conditions.media_revision = "changed-generation-media".to_owned(),
+            _ => unreachable!(),
+        }
+        let mut calls = 0;
+        let generated = session
+            .generated_context(
+                title,
+                search,
+                &changed_conditions,
+                &changed_model,
+                true,
+                &AtomicBool::new(false),
+                || {
+                    calls += 1;
+                    Ok(format!("生成条件の {dependency} 変更後の説明"))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            calls, 1,
+            "{dependency} changes generation input and must invalidate the old result"
+        );
+        changed_conditions.resolved_game_context = generated.clone();
+        let warm = session.generated_context(
+            title, search, &changed_conditions, &changed_model, true, &AtomicBool::new(false),
+            || panic!("{dependency} changed result must become warm independently of returned text"),
+        ).unwrap();
+        assert_eq!(warm, generated);
     }
 }

@@ -20,6 +20,69 @@ fn checkpoint(parent: &Path, kind: &str, cache_key: &str) -> PathBuf {
         .join(format!("{cache_key}.json"))
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn existing_case_aliases_share_output_lock_and_reject_protected_overlap() {
+    use std::os::unix::fs::MetadataExt;
+
+    let parent = temporary();
+    let actual = parent.path().join("Result");
+    let alias = parent.path().join("result");
+    fs::create_dir(&actual).unwrap();
+    assert_eq!(
+        fs::metadata(&actual).unwrap().ino(),
+        fs::metadata(&alias)
+            .expect("this native regression requires the default case-insensitive macOS volume")
+            .ino()
+    );
+    let first = game_screen_pick::output::Output::prepare(&actual, &[]).unwrap();
+    let competing = game_screen_pick::output::Output::prepare(&alias, &[]);
+    let lock_blocked = competing.is_err();
+    drop(competing);
+    drop(first);
+    let overlap = game_screen_pick::output::Output::prepare(&alias, &[&actual]);
+    assert!(
+        lock_blocked && overlap.is_err(),
+        "same native directory must share its lock and reject protected overlap: lock_blocked={lock_blocked}, overlap_rejected={}",
+        overlap.is_err()
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn absent_case_and_unicode_aliases_share_output_lock_and_reject_protected_overlap() {
+    for (actual_name, alias_name) in [("Result", "result"), ("Résult", "Re\u{301}sult")] {
+        let parent = temporary();
+        let actual = parent.path().join(actual_name);
+        let alias = parent.path().join(alias_name);
+        let first = game_screen_pick::output::Output::prepare(&actual, &[]).unwrap();
+        let competing = game_screen_pick::output::Output::prepare(&alias, &[]);
+        let lock_blocked = competing.is_err();
+        assert!(!actual.exists(), "locking must not precreate the output");
+        drop(competing);
+        drop(first);
+        let overlap = game_screen_pick::output::Output::prepare(&actual, &[&alias]);
+        assert!(
+            lock_blocked && overlap.is_err(),
+            "absent native aliases must share their lock and reject protected overlap: {actual_name:?}/{alias_name:?}, lock_blocked={lock_blocked}, overlap_rejected={}",
+            overlap.is_err()
+        );
+        assert!(!actual.exists(), "rejection must not precreate the output");
+    }
+}
+
+#[test]
+fn native_output_locks_allow_maximum_length_leaf_without_precreation() {
+    let parent = temporary();
+    let actual = parent.path().join("a".repeat(255));
+    let first = game_screen_pick::output::Output::prepare(&actual, &[]).unwrap();
+    assert!(game_screen_pick::output::Output::prepare(&actual, &[]).is_err());
+    assert!(!actual.exists());
+    drop(first);
+    assert!(game_screen_pick::output::Output::prepare(&actual, &[]).is_ok());
+    assert!(!actual.exists());
+}
+
 #[test]
 fn cold_warm_identity_survives_directory_move_and_reuses_unchanged_inputs() {
     let workspace = temporary();

@@ -12,7 +12,7 @@ use crate::{
     config::Config,
     media::{MediaTools, discover_inputs},
     run::{RunPaths, Session},
-    storage::checked_path,
+    storage::{OperationalError, checked_path},
 };
 
 #[derive(Parser)]
@@ -92,6 +92,13 @@ impl CliError {
             message: safe(&error.to_string()),
         }
     }
+    fn preparation(error: anyhow::Error) -> Self {
+        if error.downcast_ref::<OperationalError>().is_some() {
+            Self::processing(error)
+        } else {
+            Self::input(error)
+        }
+    }
 }
 
 impl Cli {
@@ -109,7 +116,7 @@ impl Cli {
             None => {
                 let (config, inputs, paths) =
                     validate(self.request, false).map_err(CliError::input)?;
-                let _session = Session::prepare(&paths).map_err(CliError::input)?;
+                let _session = Session::prepare(&paths).map_err(CliError::preparation)?;
                 eprintln!(
                     "{}: preflight complete ({} input video(s))",
                     config.selection.method,
@@ -355,4 +362,19 @@ fn extract(args: ExtractArgs, cancelled: &AtomicBool) -> std::result::Result<(),
         Ok(())
     })();
     result.map_err(CliError::processing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preparation_preserves_operational_context_through_error_chain() {
+        let failure = anyhow::Error::new(io::Error::from(io::ErrorKind::PermissionDenied))
+            .context(OperationalError("cannot restore previous output"))
+            .context("cannot prepare output");
+        assert_eq!(CliError::preparation(failure).code, 1);
+        let invalid = anyhow::anyhow!("unknown output owner").context("cannot prepare output");
+        assert_eq!(CliError::preparation(invalid).code, 2);
+    }
 }

@@ -11,6 +11,19 @@ use sha2::{Digest, Sha256};
 
 use crate::media::Interrupted;
 
+/// A processing failure after valid path/ownership checks, including lock
+/// contention and recovery I/O. Keep invalid input errors unmarked.
+#[derive(Debug)]
+pub struct OperationalError(pub &'static str);
+
+impl std::fmt::Display for OperationalError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for OperationalError {}
+
 pub fn checked_path(path: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_owned()
@@ -45,6 +58,11 @@ pub fn checked_path(path: &Path) -> Result<PathBuf> {
                     && index + 1 == components.len() => {}
             Err(error) => return Err(error).context("cannot inspect path; parent must exist"),
         }
+    }
+    if current.exists() {
+        return current
+            .canonicalize()
+            .context("cannot resolve existing path");
     }
     let parent = current
         .parent()
@@ -131,6 +149,13 @@ pub struct Lock {
 impl Lock {
     pub fn acquire(path: &Path) -> Result<Self> {
         let path = checked_path(path)?;
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => ensure!(metadata.is_file(), "lock must be an ordinary file"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).context(OperationalError("cannot inspect cache/output lock"));
+            }
+        }
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -138,13 +163,24 @@ impl Lock {
             .truncate(false)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(path)
-            .context("cannot open lock file")?;
-        ensure!(file.metadata()?.is_file(), "lock must be an ordinary file");
-        // The descriptor holds the advisory lock; unlinking it would admit a second owner.
+            .context(OperationalError("cannot open cache/output lock"))?;
         ensure!(
-            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "cache/output is already locked by another run"
+            file.metadata()
+                .context(OperationalError("cannot inspect cache/output lock"))?
+                .is_file(),
+            "lock must be an ordinary file"
         );
+        // The descriptor holds the advisory lock; unlinking it would admit a second owner.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            let message = if matches!(error.raw_os_error(), Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN)
+            {
+                "cache/output is already locked by another run"
+            } else {
+                "cannot acquire cache/output lock"
+            };
+            return Err(error).context(OperationalError(message));
+        }
         Ok(Self { _file: file })
     }
 }

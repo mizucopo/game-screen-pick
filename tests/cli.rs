@@ -254,6 +254,68 @@ fn validation_is_read_only_and_selection_remains_unavailable() {
 }
 
 #[test]
+fn normal_command_reports_cache_and_output_lock_contention_as_processing_failure() {
+    let directory = sandbox();
+    setup(directory.path());
+    let root = directory.path().canonicalize().unwrap();
+    let cache_parent = root.join(".game-screen-pick-cache");
+    fs::create_dir(&cache_parent).unwrap();
+    let invoke = || {
+        Command::new(BINARY)
+            .current_dir(&root)
+            .env("PATH", "")
+            .args(request())
+            .output()
+            .unwrap()
+    };
+    let cache = game_screen_pick::cache::Cache::open(&cache_parent).unwrap();
+    let output = invoke();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "cache lock contention: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("locked by another run"));
+    drop(cache);
+
+    let guard = game_screen_pick::output::Output::prepare(&root.join("output"), &[]).unwrap();
+    let output = invoke();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "output lock contention: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("locked by another run"));
+    assert!(!root.join("output").exists());
+    #[cfg(target_os = "macos")]
+    {
+        let mut aliases = request();
+        aliases[7] = "OUTPUT";
+        let output = Command::new(BINARY)
+            .current_dir(&root)
+            .env("PATH", "")
+            .args(aliases)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("locked by another run"));
+        assert!(!root.join("OUTPUT").exists());
+    }
+    drop(guard);
+
+    fs::create_dir(root.join("output")).unwrap();
+    fs::write(root.join("output/notes.txt"), b"preserve me").unwrap();
+    let invalid = invoke();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert_eq!(
+        fs::read(root.join("output/notes.txt")).unwrap(),
+        b"preserve me"
+    );
+}
+
+#[test]
 fn unsafe_paths_and_invalid_config_are_rejected_before_commands() {
     let directory = sandbox();
     setup(directory.path());
