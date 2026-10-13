@@ -81,6 +81,58 @@ rm "$root/escape"
 archive aarch64-apple-darwin
 verify
 
+# rustc's GNU binary may explicitly depend on glibc's loader as well as libc.
+# Exercise that observed dependency while keeping non-system links and a higher
+# glibc requirement forbidden. These commands simulate inspection, not execution.
+cat > "$scratch/tools/uname" <<'EOF'
+#!/bin/sh
+printf 'Linux\n'
+EOF
+cat > "$scratch/tools/file" <<'EOF'
+#!/bin/sh
+printf 'ELF 64-bit LSB pie executable, x86-64\n'
+EOF
+cat > "$scratch/tools/readelf" <<'EOF'
+#!/bin/sh
+case "$1" in
+  -d)
+    for library in libc.so.6 libgcc_s.so.1 ld-linux-x86-64.so.2 ${GSP_FAKE_EXTRA_LIBRARY:-}; do
+      printf ' 0x1 (NEEDED) Shared library: [%s]\n' "$library"
+    done
+    if [ "${GSP_FAKE_RPATH:-false}" = true ]; then printf ' 0x1 (RPATH) [/developer/lib]\n'; fi
+    ;;
+  --version-info) printf 'Name: GLIBC_%s\n' "${GSP_FAKE_GLIBC:-2.35}" ;;
+  *) exit 1 ;;
+esac
+EOF
+cat > "$scratch/tools/ldd" <<'EOF'
+#!/bin/sh
+if [ "${GSP_FAKE_UNRESOLVED:-false}" = true ]; then
+  printf 'libc.so.6 => not found\n'
+else
+  printf 'libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1234)\n'
+fi
+EOF
+chmod +x "$scratch/tools/uname" "$scratch/tools/file" "$scratch/tools/readelf" "$scratch/tools/ldd"
+inspect_linux() {
+  PATH="$scratch/tools:$PATH" sh scripts/inspect-binary.sh "$root/bin/game-screen-pick" \
+    x86_64-unknown-linux-gnu "$scratch/dependencies.txt"
+}
+inspect_linux
+export GSP_FAKE_EXTRA_LIBRARY=libopencv_core.so
+reject inspect_linux
+unset GSP_FAKE_EXTRA_LIBRARY
+export GSP_FAKE_GLIBC=2.36
+reject inspect_linux
+unset GSP_FAKE_GLIBC
+export GSP_FAKE_RPATH=true
+reject inspect_linux
+unset GSP_FAKE_RPATH
+export GSP_FAKE_UNRESOLVED=true
+reject inspect_linux
+unset GSP_FAKE_UNRESOLVED
+rm "$scratch/tools/uname" "$scratch/tools/file" "$scratch/tools/readelf" "$scratch/tools/ldd"
+
 # The publication script's external effects are simulated. Only these fake gh
 # upload/edit operations can touch the scratch state below.
 cat > "$scratch/tools/git" <<'EOF'

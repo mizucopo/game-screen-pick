@@ -33,7 +33,7 @@ case "$target" in
     fi
     readelf -d "$binary" | awk '/\(NEEDED\)/ {gsub(/.*\[/, ""); gsub(/\].*/, ""); print}' \
       | while IFS= read -r dependency; do
-        case "$dependency" in libc.so.6|libm.so.6|libgcc_s.so.1|libpthread.so.0|libdl.so.2|librt.so.1) ;;
+        case "$dependency" in libc.so.6|libm.so.6|libgcc_s.so.1|libpthread.so.0|libdl.so.2|librt.so.1|ld-linux-x86-64.so.2) ;;
           *) printf 'Unsupported dynamic library: %s\n' "$dependency" >&2; exit 1 ;;
         esac
       done
