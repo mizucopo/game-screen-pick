@@ -27,7 +27,8 @@ tools は未使用で、予期しない tool response は拒否します。Brave
 `ai.protocol.media` の不在は画像・動画非対応です。`vision_revision` に encoder/projector と処理条件を記録し、
 画像数（0〜64）・画素（最大200MP）・辺（最大32768）・動画bytes（最大128MiB）・秒数（最大3600）を明示します。
 PNG/JPEG は実 decode と寸法検証を行い、縮小せず inline data URL へ送ります。
-動画は1 request に1本、MP4/MOV の inline bytes を受理します。container header と宣言bytes/秒数を検証します。
+動画は1 request に1本、MP4/MOV の inline bytes を受理します。`ftyp` box の通常／extended header・
+宣言サイズ・brand領域の完全性と、宣言bytes/秒数を検証します。動画全体の decode を保証する検査ではありません。
 実 frame・PTS・duration と MIME の対応は、#342 が既存の `media::ChunkArtifact` と probe 結果から作り、
 用途検証で source と実時間範囲を照合します。client 自身は動画を再 probe/transcode しません。
 時刻付き画像列への代替や1枚への置換は実装していません。

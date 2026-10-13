@@ -279,7 +279,7 @@ impl OpenAiClient {
                         videos == 1
                             && !bytes.is_empty()
                             && ["video/mp4", "video/quicktime"].contains(&mime.as_str())
-                            && bytes.get(4..8) == Some(b"ftyp".as_slice())
+                            && has_video_header(bytes)
                             && media.max_video_bytes > 0
                             && bytes.len() as u64 <= media.max_video_bytes
                             && duration_seconds.is_finite()
@@ -422,6 +422,35 @@ fn remaining(deadline: Instant) -> Result<Duration> {
 
 fn data_url(mime: &str, bytes: &[u8]) -> String {
     format!("data:{mime};base64,{}", STANDARD.encode(bytes))
+}
+
+/// Check the complete ftyp box without probing or decoding the video. The
+/// caller still verifies tracks, frames and timing through MediaTools.
+fn has_video_header(bytes: &[u8]) -> bool {
+    let Some(header) = bytes.get(..8) else {
+        return false;
+    };
+    if &header[4..8] != b"ftyp" {
+        return false;
+    }
+    let short_size = u32::from_be_bytes(header[..4].try_into().expect("four size bytes"));
+    let (size, header_bytes) = match short_size {
+        // A to-EOF ftyp box leaves no video tracks. Require a bounded box;
+        // validating the remaining container is the caller's probe contract.
+        0 => return false,
+        1 => {
+            let Some(extended) = bytes.get(8..16) else {
+                return false;
+            };
+            (
+                u64::from_be_bytes(extended.try_into().expect("eight size bytes")),
+                16,
+            )
+        }
+        size => (u64::from(size), 8),
+    };
+    let required = header_bytes + 8; // major brand and minor version
+    size >= required && size <= bytes.len() as u64 && (size - required) % 4 == 0
 }
 
 fn validate_image(bytes: &[u8], mime: &str, media: &crate::config::MediaConfig) -> Result<()> {

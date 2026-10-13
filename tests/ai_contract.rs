@@ -712,6 +712,33 @@ fn media_mime_shape_count_support_and_request_limits_fail_before_http() {
 }
 
 #[test]
+fn truncated_or_invalid_video_boxes_fail_before_http() {
+    for bytes in [
+        b"\0\0\0\x18ftyp".to_vec(),
+        b"\0\0\0\x08ftypisom\0\0\0\0".to_vec(),
+        b"\0\0\0\x18ftypisom\0\0\0\0".to_vec(),
+        b"\0\0\0\x11ftypisom\0\0\0\0x".to_vec(),
+        b"\0\0\0\x01ftyp\0\0\0\0\0\0\0\x20".to_vec(),
+    ] {
+        let mock = Mock::new(|_, _| success());
+        let mut config = configuration(&mock, "vllm");
+        enable_media(&mut config);
+        let client = OpenAiClient::new(&config).unwrap();
+        let mut request = request();
+        request.content = vec![Content::Video {
+            bytes,
+            mime: "video/mp4".to_owned(),
+            duration_seconds: 1.0,
+        }];
+        error(&client, &request);
+        assert!(
+            mock.requests().is_empty(),
+            "invalid ftyp box must fail before HTTP"
+        );
+    }
+}
+
+#[test]
 fn only_bounded_same_origin_307_and_308_redirects_preserve_post_and_auth() {
     for status in [307, 308] {
         let mock = Mock::new(move |received, index| {
