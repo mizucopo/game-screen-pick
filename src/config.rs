@@ -69,6 +69,8 @@ pub struct AiConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProtocolConfig {
+    /// Canonical response identity when the requested model is a served alias.
+    pub response_model: Option<String>,
     pub reasoning_format: ReasoningFormat,
     pub supported_inference_levels: Vec<InferenceLevel>,
     pub json_schema: bool,
@@ -99,6 +101,15 @@ pub struct MediaConfig {
 
 impl ProtocolConfig {
     pub fn validate(&self, backend: Backend, level: InferenceLevel) -> Result<()> {
+        if self
+            .response_model
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty() || value.trim() != value)
+        {
+            bail!(
+                "ai.protocol.response_model must be a nonblank model identity without surrounding whitespace"
+            );
+        }
         if self.supported_inference_levels.is_empty()
             || !self.supported_inference_levels.contains(&level)
             || self

@@ -8,6 +8,10 @@
 ## 設定と capability の区別
 
 [設定例](../config.example.toml) の `ai.protocol` は client 使用時に必須です。
+`response_model` は応答の canonical identity を別名で明示する場合の設定で、省略時は `ai.model` と照合します。
+[vLLM の served-model-name 仕様](https://docs.vllm.ai/en/latest/cli/serve/#--served-model-name) は複数の別名を受理し、
+応答には先頭の名前を返します。非先頭の名前を `ai.model` で選ぶ場合は `response_model` に先頭の名前を指定します。
+任意の応答 model を無条件には受理せず、この宣言も cache 条件へ反映します。
 `reasoning_format = "reasoning_effort"` は top-level の明示レベルを送り、`chat_template` は
 `none` を `enable_thinking=false`、他レベルを `enable_thinking=true` と同名 `reasoning_effort` にします。
 backend/model/template がその形式と値を受理することを確認して `supported_inference_levels` に列挙してください。
@@ -56,7 +60,9 @@ semantic event の source・実時間範囲・event品質、Game Context の同�
 
 HTTP は proxy 自動利用を無効化し、認証を bearer header だけへ渡します。307/308 の POST を保持する redirect は
 同一 scheme/host/effective port で3回までです。別 origin、userinfo/query/fragment、他の redirect status を拒否します。
-HTTP／schema／用途検証エラーや server body を診断へ転載せず、応答に認証値が含まれた場合も拒否します。
+HTTP／schema／用途検証エラーや server body を診断へ転載せず、生成 JSON の文字列値と認証値の完全一致や Bearer echo を拒否します。
+16 byte 以上の認証値は文字列値／key の部分文字列も拒否します。短い dummy key（`a`／`test` 等）を ordinary word の部分文字列、
+protocol metadata や JSON 構造名（`id` 等）と一致させません。短い値だけでは通常語中の一致を認証 echo と区別できないためです。
 API key を serialization に含めず、config の Debug では redact します。
 
 ## 検証状況と後続確認

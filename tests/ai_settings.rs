@@ -70,6 +70,7 @@ fn explicit_protocol_is_required_only_for_the_inference_boundary() {
 fn invalid_protocol_contracts_fail_without_disclosing_configuration_values() {
     let source = format!("{BASE}api_key = \"PRIVATE_AUTH\"\n{PROTOCOL}");
     for changed in [
+        source.replace("[ai.protocol]", "[ai.protocol]\nresponse_model = \" \""),
         source.replace("reasoning_effort", "PRIVATE_AUTH"),
         source.replace("[\"none\", \"low\"]", "[\"none\", \"none\"]"),
         source.replace("[\"none\", \"low\"]", "[\"high\"]"),
@@ -119,6 +120,10 @@ fn inference_cache_keys_include_all_effective_protocol_and_media_conditions() {
     let source = format!("{BASE}{PROTOCOL}");
     let original = key(&source);
     for (from, to) in [
+        (
+            "[ai.protocol]",
+            "[ai.protocol]\nresponse_model = \"canonical-model\"",
+        ),
         ("fixture-vision", "other-model"),
         ("127.0.0.1:1/custom", "localhost:2/custom"),
         ("inference_level = \"none\"", "inference_level = \"low\""),

@@ -185,6 +185,10 @@ fn read_request(stream: &mut TcpStream) -> Received {
 }
 
 fn configuration(mock: &Mock, backend: &str) -> AiConfig {
+    configuration_with_key(mock, backend, SECRET)
+}
+
+fn configuration_with_key(mock: &Mock, backend: &str, api_key: &str) -> AiConfig {
     Config::parse(&format!(
         r#"
 [selection]
@@ -196,7 +200,7 @@ model = "contract-vision"
 inference_level = "none"
 timeout_seconds = 2
 cache_revision = "contract-v1"
-api_key = "{SECRET}"
+api_key = "{api_key}"
 [ai.protocol]
 reasoning_format = "reasoning_effort"
 supported_inference_levels = ["none", "low", "medium", "high"]
@@ -352,6 +356,24 @@ fn backend_and_reasoning_settings_switch_through_the_same_json_boundary() {
         assert_eq!(client.generate(&request(), validate_ids).unwrap(), valid());
         assert_eq!(mock.requests().len(), 1);
     }
+}
+
+#[test]
+fn served_model_alias_uses_an_explicit_canonical_response_identity() {
+    let mock = Mock::new(|received, _| {
+        assert_eq!(received.body["model"], "contract-vision-alias");
+        success() // vLLM returns the first served name, contract-vision.
+    });
+    let mut config = configuration(&mock, "vllm");
+    config.model = "contract-vision-alias".to_owned();
+    config.protocol.as_mut().unwrap().response_model = Some("contract-vision".to_owned());
+    let client = OpenAiClient::new(&config).unwrap();
+    assert_eq!(client.generate(&request(), validate_ids).unwrap(), valid());
+
+    config.protocol.as_mut().unwrap().response_model = Some("unexpected-model".to_owned());
+    let client = OpenAiClient::new(&config).unwrap();
+    assert!(error(&client, &request()).contains("model mismatch"));
+    assert_eq!(mock.requests().len(), 2);
 }
 
 #[test]
@@ -595,6 +617,58 @@ fn http_errors_and_server_echoed_authentication_never_escape_or_retry() {
         assert!(!format!("{config:?}").contains(SECRET));
         let client = OpenAiClient::new(&config).unwrap();
         error(&client, &request());
+        assert_eq!(mock.requests().len(), 1);
+    }
+}
+
+#[test]
+fn short_dummy_credentials_do_not_match_ordinary_response_words() {
+    for key in [
+        "a",
+        "test",
+        "dummy",
+        "assistant",
+        "contract-vision",
+        "stop",
+        "id",
+        "frames",
+        "score",
+        "reason",
+    ] {
+        let mock = Mock::new(|_, _| {
+            let mut value = valid();
+            value["frames"][0]["reason"] = json!("a tested gameplay scene");
+            Reply::json(envelope(value.to_string()))
+        });
+        let client = OpenAiClient::new(&configuration_with_key(&mock, "vllm", key)).unwrap();
+        let mut request = request();
+        request.schema["properties"]["frames"]["items"]["properties"]["reason"] =
+            json!({"type":"string"});
+        let result = client.generate(&request, validate_ids).unwrap();
+        assert_eq!(result["frames"][0]["reason"], "a tested gameplay scene");
+        assert_eq!(mock.requests().len(), 1);
+    }
+}
+
+#[test]
+fn explicit_short_credential_echoes_are_still_rejected() {
+    for (key, echo) in [
+        ("a", "a"),
+        ("a", "Bearer a"),
+        ("a", "Authorization was \"Bearer a\"."),
+        ("a", "'Bearer a'"),
+        ("a", "`Bearer a`"),
+        ("a", "認証表記「Bearer a」"),
+        ("a.", "Bearer a."),
+    ] {
+        let mock = Mock::new(move |_, _| {
+            let mut value = valid();
+            value["frames"][0]["id"] = json!(echo);
+            Reply::json(envelope(value.to_string()))
+        });
+        let client = OpenAiClient::new(&configuration_with_key(&mock, "vllm", key)).unwrap();
+        let error = client.generate(&request(), validate_ids).unwrap_err();
+        assert!(error.to_string().contains("authentication material"));
         assert_eq!(mock.requests().len(), 1);
     }
 }

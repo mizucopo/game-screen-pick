@@ -15,6 +15,7 @@ cache_revision = "1" # model 重み・server 設定が変わったら更新
 # 共通 client を呼ぶには server/model の契約を明示します。
 # これは実能力の証明ではありません。docs/ai-client.md の確認表に実測を記録します。
 [ai.protocol]
+# response_model = "FIRST_SERVED_MODEL_NAME" # 別名でrequestする場合のresponse.model。省略時はai.model
 reasoning_format = "reasoning_effort" # または chat_template。model/template の仕様に合わせる
 supported_inference_levels = ["none"] # 使用する model で確認した値だけ
 json_schema = false # true は response_format を送る。常にアプリ側でも検証

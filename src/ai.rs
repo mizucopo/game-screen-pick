@@ -375,18 +375,13 @@ impl OpenAiClient {
                 bytes.len() as u64 <= protocol.max_response_bytes,
                 "inference response exceeds byte limit"
             );
-            if let Some(secret) = &self.secret {
-                ensure!(
-                    !bytes
-                        .windows(secret.len())
-                        .any(|part| part == secret.as_bytes()),
-                    "inference response contains authentication material"
-                );
-            }
             let envelope: Value = serde_json::from_slice(&bytes)
                 .map_err(|_| anyhow!("invalid inference response envelope"))?;
-            self.reject_secret(&envelope)?;
-            return completion_text(envelope, &self.config.model);
+            let response_model = protocol
+                .response_model
+                .as_deref()
+                .unwrap_or(&self.config.model);
+            return completion_text(envelope, response_model);
         }
         unreachable!("redirect limit fails before exhausting the loop")
     }
@@ -404,13 +399,48 @@ impl OpenAiClient {
 
 fn contains_secret(value: &Value, secret: &str) -> bool {
     match value {
-        Value::String(text) => text.contains(secret),
+        Value::String(text) => text == secret || embedded_credential_echo(text, secret),
         Value::Array(values) => values.iter().any(|v| contains_secret(v, secret)),
         Value::Object(values) => values
             .iter()
-            .any(|(key, v)| key.contains(secret) || contains_secret(v, secret)),
+            .any(|(key, v)| embedded_credential_echo(key, secret) || contains_secret(v, secret)),
         _ => false,
     }
+}
+
+fn embedded_credential_echo(text: &str, secret: &str) -> bool {
+    // Local servers commonly use dummy credentials such as `a` or `test`.
+    // Substrings cannot distinguish those from ordinary words or JSON fields.
+    if secret.len() >= 16 && text.contains(secret) {
+        return true;
+    }
+    let bytes = text.as_bytes();
+    let marker = b"Bearer ";
+    bytes
+        .windows(marker.len())
+        .enumerate()
+        .any(|(start, prefix)| {
+            if !prefix.eq_ignore_ascii_case(marker) {
+                return false;
+            }
+            // An ASCII marker establishes UTF-8 boundaries before slicing.
+            let framed = text[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|previous| !previous.is_alphanumeric() && previous != '_');
+            if !framed {
+                return false;
+            }
+            // Compare literal credential bytes before inspecting surrounding
+            // punctuation, so a key such as `a.` is never shortened to `a`.
+            text[start + marker.len()..]
+                .strip_prefix(secret)
+                .is_some_and(|tail| {
+                    tail.chars().next().is_none_or(|next| {
+                        !next.is_alphanumeric() && !matches!(next, '_' | '-' | '+' | '/' | '=')
+                    })
+                })
+        })
 }
 
 fn remaining(deadline: Instant) -> Result<Duration> {
