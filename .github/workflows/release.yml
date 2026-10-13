@@ -233,6 +233,19 @@ jobs:
               echo "::error::Could not inspect draft GitHub Releases for $TAG."
               exit 1
             fi
+            if [ -n "${RELEASE_ID:-}" ]; then
+              if ! [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]] \
+                || ! jq -e --argjson id "$RELEASE_ID" \
+                  '. == null or .id == $id' "$RELEASE_RESPONSE" > /dev/null; then
+                echo "::error::Listed GitHub Release differs from retained ID."
+                exit 1
+              fi
+              gh api "/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RELEASE_RESPONSE"
+              if ! jq -e --argjson id "$RELEASE_ID" '.id == $id' "$RELEASE_RESPONSE" > /dev/null; then
+                echo "::error::GitHub Release ID differs from retained ID."
+                exit 1
+              fi
+            fi
             if [ "$(jq -r '. != null' "$RELEASE_RESPONSE")" = "true" ]; then
               release_exists=true
             fi
@@ -243,6 +256,15 @@ jobs:
                 || ! jq -e --arg tag "$TAG" '.tag_name == $tag and (.assets | type == "array")' "$RELEASE_RESPONSE" > /dev/null; then
                 echo "::error::GitHub Release $TAG returned invalid release metadata."
                 exit 1
+              fi
+              if [ "$release_is_draft" = "false" ]; then
+                if ! planned_prerelease="$(jq -er '.publication.is_prerelease | select(type == "boolean") | tostring' "${RELEASE_PLAN_OUTPUT:-}")" \
+                  || ! jq -e --argjson prerelease "$planned_prerelease" \
+                    '(.prerelease | type == "boolean") and .prerelease == $prerelease' \
+                    "$RELEASE_RESPONSE" > /dev/null; then
+                  echo "::error::Published GitHub Release classification differs from publication plan."
+                  exit 1
+                fi
               fi
             fi
           fi
