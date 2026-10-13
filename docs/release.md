@@ -6,10 +6,12 @@ Rust binary の配布対象は次の二つです。これ以外の target は対
 
 | target | build の下限・検査 |
 | --- | --- |
-| `aarch64-apple-darwin` | `MACOSX_DEPLOYMENT_TARGET=14.0` で build し、Mach-O の deployment target と dynamic library を検査する。 |
+| `aarch64-apple-darwin` | `macos-15` ARM64 runner で `MACOSX_DEPLOYMENT_TARGET=14.0` を指定して build し、Mach-O の deployment target と dynamic library を検査する。 |
 | `x86_64-unknown-linux-gnu` | Ubuntu 22.04 で build し、ELF が要求する GLIBC symbol version の最大値を2.35以下に制限する。 |
 
 build の下限宣言とリンク検査は、その最小 OS 上での実行証拠と区別します。
+macOS CI の実行環境は 15 であり、14.0 上の実行を検証したことにはしません。
+`macos-14` runner は [GitHub の廃止予定](https://github.com/actions/runner-images/issues/13518) に従って使いません。
 FFmpeg／FFprobe と推論 endpoint は外部依存です。font は binary に内蔵し、本体の実行に Rust toolchain や Python 環境は要求しません。
 FFmpeg の PNG／FFV1、表示回転、`setts` と実 PTS の保持は製品抽出・動画 chunk の試験で確認します。
 検証した OS／FFmpeg version と dynamic library は配布物の `BUILD-INFO.json`／`DEPENDENCIES.txt` と PR の検証結果に記録します。
@@ -21,7 +23,8 @@ archive 名は `game-screen-pick-<Cargo version>-<target>.tar.gz`、checksum は
 利用者の取得・checksum・配置・設定・更新手順は [README](../README.md) を参照してください。
 
 native の対象環境で、公開せず配布物を作れます。
-Rust toolchain の `rust-docs`／`rust-src`（license収録用）、FFmpeg／FFprobe、jq、checksum tool、GNU tar が必要です。
+Rust toolchain は `rust-toolchain.toml` の **1.99.0** に固定します。Rust を使う品質・配布 CI job は checkout したこの file を rustup で有効にし、元 run の再実行も同じ採番 commit の pin を使います。
+`rust-docs`／`rust-src`（license収録用）、FFmpeg／FFprobe、jq、checksum tool、GNU tar が必要です。
 rustup を使う場合は `rustup component add rust-docs rust-src` で収録用資料を用意します。macOS は GNU tar を `gtar` として用意します。
 
 ```sh
@@ -32,6 +35,8 @@ sh scripts/package-release.sh aarch64-apple-darwin dist
 ```
 
 build は `cargo build --release --locked` を使います。`Cargo.toml` と `Cargo.lock` を一致させ、実行 file・dynamic library・license・archive を確認してから checksum を作ります。
+両 target の配布 CI では `scripts/install-ci-ffmpeg.sh` に記録した公式 FFmpeg **6.1.6** の source と SHA-256 から、CI の一時 prefix に FFmpeg／FFprobe を build します。
+macOS の Homebrew FFmpeg 更新によって archive 内の依存記録が変わることを防ぎます。これは CI tool の準備で、利用者の FFmpeg を自動 install・更新する処理や archive への同梱はありません。
 各 target の clean 環境で展開した binary の help/version、readonly validate、実 FFmpeg 抽出と合成 mock E2E を確認します。
 成功した固定応答 E2E を、実 backend/model の能力、Brave の適用契約と live 接続、実録画の Human Review の証拠にはしません。
 これらの未実施項目と実施条件は [検証状況](verification.md) に残します。
@@ -86,9 +91,16 @@ core を増やす分類ではその core の prerelease も指定でき、巻き
 | `main` 競合 | 自動再計算が三回失敗したら元 run を再実行する。 |
 | push 応答不明 | remote の採番記録と tag を確認し、成功済みなら同じ採番 commit を使う。 |
 | build・検証失敗 | 採番 commit と tag を残す。元 run は同じ番号・source を使う。製品修正は新 PR・新番号にする。 |
-| asset の部分 upload | 元 run を再実行し、同じ採番 commit の不足分を継続する。異なる内容で上書きしない。 |
+| asset の部分 upload | 元 run を再実行し、同じ採番 commit の不足分を継続する。draft に残った期待名の空の `starter` は削除後に再 upload する。異なる内容で上書きしない。 |
 | 公開済み状態の不整合 | 上書きせず停止し、公開状態を確認する。 |
 | 古い run の再実行 | 既存公開は復旧できるが、新しい完成済み Release の Latest を巻き戻さない。 |
 
 元 run の再実行は run ID に対応する採番 commit を再利用し、後から別 PR がマージされても再採番しません。
 前回採番以後に新しいマージ済み PR がない通常の手動実行は、新しい Release を作りません。過去の公開復旧には元 run を使います。
+
+GitHub の [upload API](https://docs.github.com/en/rest/releases/assets#upload-a-release-asset) は upstream 502 の後に空の `starter` を残すことがあります。
+復旧では既存の uploaded asset の bytes をすべて照合した後、draft・source・期待名・asset ID・`starter`・size 0 を再確認したものだけを削除し、不足分として再 upload します。
+公開済み Release、期待外の名前、非空の `starter`、uploaded asset の不一致は削除せず停止します。
+
+Rust version と FFmpeg source の固定は、同じ source を別の tool version で再 build する変化を抑えます。ただし hosted runner image、macOS SDK・system library、C compiler、GNU tar／gzip、FFmpeg の build 環境まで固定した完全な再現 build は保証しません。
+これらが更新されると binary や `DEPENDENCIES.txt`、license 資料、archive bytes が変わる場合があります。元 run の再実行で既存 asset と一致しない場合も上書きせず停止し、元の検証済み成果物と build 環境を確認します。製品・配布の修正は新 PR と新番号で扱います。

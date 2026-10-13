@@ -157,6 +157,16 @@ cat > "$scratch/tools/gh" <<'EOF'
 set -eu
 case "$1:$2" in
   api:--paginate) jq -s '[.]' "$GSP_FAKE_STATE" ;;
+  api:--method)
+    test "$3" = DELETE
+    id=${4##*/}
+    name=$(jq -er --argjson id "$id" '.assets[] | select(.id == $id) | .name' "$GSP_FAKE_STATE")
+    printf 'delete %s\n' "$name" >> "$GSP_FAKE_LOG"
+    if [ "${GSP_FAKE_KEEP_STARTER:-false}" != true ]; then
+      jq --argjson id "$id" '.assets |= map(select(.id != $id))' "$GSP_FAKE_STATE" > "$GSP_FAKE_STATE.new"
+      mv "$GSP_FAKE_STATE.new" "$GSP_FAKE_STATE"
+    fi
+    ;;
   release:download)
     shift 3
     while [ "$#" -gt 0 ]; do
@@ -231,6 +241,41 @@ modify_release '.draft=true | .assets=.assets[0:2]'
 publish
 test "$(grep -c '^upload ' "$GSP_FAKE_LOG")" = 2
 test "$(grep -c '^edit$' "$GSP_FAKE_LOG")" = 1
+# GitHub 502 upload failures can leave a zero-byte starter record. Recovery may
+# delete only that expected-name placeholder from a draft, after checking all
+# already uploaded bytes, then upload its replacement and the missing assets.
+starter_release() {
+  reset_release
+  cp "$scratch/dist/"* "$scratch/remote/"
+  cp "$scratch/complete.json" "$GSP_FAKE_STATE"
+  modify_release '.draft=true | .assets=.assets[0:2] | .assets[1] |= (.id=9 | .state="starter" | .size=0)'
+}
+starter_release
+publish
+test "$(grep -c '^delete ' "$GSP_FAKE_LOG")" = 1
+test "$(grep -c '^upload ' "$GSP_FAKE_LOG")" = 3
+test "$(grep -c '^edit$' "$GSP_FAKE_LOG")" = 1
+: > "$GSP_FAKE_LOG"
+publish
+test ! -s "$GSP_FAKE_LOG"
+for edit in '.draft=false' '.assets[1].size=1' '.assets[1].state="uploaded"' \
+  '.assets[1].id=null' '.assets[1].id=-1' '.assets[1].name="unexpected"'; do
+  starter_release
+  modify_release "$edit"
+  reject publish
+  test ! -s "$GSP_FAKE_LOG"
+done
+starter_release
+first=$(jq -r '.assets[0].name' "$GSP_FAKE_STATE")
+printf 'changed\n' >> "$scratch/remote/$first"
+reject publish
+test ! -s "$GSP_FAKE_LOG"
+cp "$scratch/dist/$first" "$scratch/remote/"
+export GSP_FAKE_KEEP_STARTER=true
+reject publish
+unset GSP_FAKE_KEEP_STARTER
+test "$(grep -c '^delete ' "$GSP_FAKE_LOG")" = 1
+test "$(grep -c '^upload ' "$GSP_FAKE_LOG" || true)" = 0
 reset_release
 export GSP_FAKE_KEEP_DRAFT=true
 reject publish
