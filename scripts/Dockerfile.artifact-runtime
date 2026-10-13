@@ -1,0 +1,12 @@
+FROM ubuntu:22.04
+# A runtime-only image: no Cargo, Rust, Python, uv, venv, OpenCV or source build.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends zlib1g libgcc-s1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.35' \
+    && ! command -v cargo \
+    && ! command -v rustc \
+    && ! command -v python3
+# CI-built FFmpeg 6.1.6 is linked on Ubuntu 22.04, without developer libraries.
+COPY bin/ffmpeg bin/ffprobe /usr/local/bin/
+RUN ffmpeg -version && ffprobe -version

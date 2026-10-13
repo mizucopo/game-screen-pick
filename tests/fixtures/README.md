@@ -22,12 +22,12 @@
 - `image-facts.tsv` と `images/`: 左右二分の近黒・近白・低コントラスト画像（64×32）、
   RGB channel と向きを判別する33×19画像。RGB grid の各値は
   `R=(37x+17y)%256, G=(13x+71y)%256, B=(97x+29y)%256`。
-  採否閾値や品質の式は #340 が成果物品質から決める。
+  採否閾値や品質の式は製品の選定仕様で決める。
 
 `tests/check-fixtures.sh` は Rust の確認処理で FFprobe の寸法・codec・pixel format・color range・時間条件と
 FFmpeg decode の全画素を入力の事実へ照合する。画像 facts と媒体 directory の file 集合、
 固定応答・scenario の必須一覧と、ID・source・候補時刻・chunk/event/transition の整合性も確認する。
-Rust 標準 library のみで動き、Python や製品の選定処理を呼ばない。
+Rust 標準 library のみで動き、製品の選定処理を呼ばない。
 通常の確認は入力や期待値を書き換えない。FFmpeg/FFprobe 不在は失敗とする。
 
 ```sh
@@ -35,9 +35,9 @@ sh tests/check-fixtures.sh
 ```
 
 必要な開発 tool は rustc/rustfmt、FFmpeg/FFprobe、JSON 確認用 jq。明示生成には `-display_rotation` 対応の FFmpeg 6+ が必要。
-#339 がこの facts を実際の Rust 抽出 API のテストに接続し、start offset・端点・VFR・attached picture・
-異常 probe・日本語/空白 path を追加する。`extraction_cases` の複数 track／display rotation も製品経路で確認する。
-入力媒体自体の確認は製品抽出テストの代わりにはならない。最小 FFmpeg 対応条件の製品実測は #344 が行う。
+`tests/media.rs` はこの facts を Rust 抽出 API へ接続し、start offset・端点・VFR・attached picture・
+異常 probe・日本語/空白 path を検証する。`extraction_cases` の複数 track／display rotation も製品経路で確認する。
+入力媒体自体の確認は製品抽出テストの代わりにはならない。FFmpeg 条件の検証範囲は [配布検証](../../docs/release.md#配布対象と検証) を参照する。
 
 ## 固定応答と実 model
 
@@ -61,21 +61,21 @@ Rust の負例は candidate/context と event の同時時刻縮小、event も�
 別の有効な前後時刻、候補 ID と context の取り違えを検査する。JSON はメモリ上で改変し、
 保存済み台本や期待値を更新しない。入力 facts の変更を伴う tuple の改訂は、下記の明示更新手順で行う。
 
-#362／#342 は Rust の request/schema に合わせてこの台本を mock HTTP の契約へ接続する。
+`tests/inference.rs` と `tests/workflow.rs` は Rust の request/schema に合わせてこの台本を mock HTTP の契約へ接続する。
 元動画・実 PTS・画像内容、sheet の表示 ID、前後順序、動画 chunk の frame 順・時間を検証してから固定応答を返す。
 ここでの ID/score は mock の入力であり、製品内部 ID、score 式、最終順位を規定しない。
-選定順位・同点規則は #340 の採用仕様へ固定し、#343 で同じ Rust の cold／warm／再開結果を照合する。
+選定順位・同点規則は Rust の採用仕様へ固定し、CLI E2E で cold／warm／再開結果を照合する。
 
-実 server/model の確認は #362／#343 が別途行う。backend、server/model version、vision 設定、
+実 server/model の確認は未実施であり、固定応答とは別に行う。backend、server/model version、vision 設定、
 image/video/JSON 能力と上限、実録画の問題画像・reviewer・合否を記録し、mock 成功と区別する。
 
 ## 再開・障害ケース
 
 `scenarios.json` は両方式×単一/複数入力×直接/生成 mock context×cold/warm/途中再開の最小 matrix と期待する成果物。
-cache の bytes/schema を先取りせず、#341 の Rust run 自身が作った checkpoint に破損・欠損・中断を注入する。
+cache の bytes/schema を先取りせず、Rust run 自身が作った checkpoint に破損・欠損・中断を注入する。
 生成 title／生成条件／解決済み context／接続先変更による無効化、編集済み出力の保持、warm の decode/hash/I/O 上限、未所有出力、
 競合、symlink、HTTP・disk・公開・runtime 失敗も同じ記録から試験できる。
-これは後続 Issue のテスト入力で、#338 では製品 E2E を実行済みとは扱わない。
+この台本だけでは製品 E2E の証拠にならない。実行した自動 E2E と未実施の実録画確認は [検証状況](../../docs/verification.md) を参照する。
 
 ## 素材と期待値の更新
 
@@ -91,10 +91,8 @@ cache の bytes/schema を先取りせず、#341 の Rust run 自身が作った
 
 3. 新旧入力の内容・PTS・向きと影響する抽出/選定テストを確認する。
    変更理由、facts の根拠、検証 command/結果、reviewer を PR に記録して必要な素材だけ取り込む。
-   追加した recipe/source と台本/case は `fixture_inputs.rs`／`fixture_contract.jq` の必須一覧・検証と #339 以降の Rust テストへ接続する。
+   追加した recipe/source と台本/case は `fixture_inputs.rs`／`fixture_contract.jq` の必須一覧・検証と Rust の製品テストへ接続する。
    通常テストには生成 command を入れず、失敗を消すために期待値を再生成しない。
 
-初回採用（#338）: 4 PNG と一つ目の動画の内容を入力として再利用し、独立した decode/probe で上記 facts を確認した。
-2026-10-09 の確認環境は Mac mini、FFmpeg 9.0.2。保存動画の実 luma は19/93/168/242であり、
-以前の生成 script の32/96/160/224ではなかった。新 recipe は実入力の tile 値を明記し、
-rawvideo の入力・出力とも full range を指定する。容器/JPEG の bytes の同一性は合格条件にしない。
+recipe は実入力の tile 値を明記し、rawvideo の入力・出力とも full range を指定する。
+容器/JPEG の bytes の同一性は合格条件にしない。

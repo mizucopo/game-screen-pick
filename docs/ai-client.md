@@ -1,4 +1,4 @@
-# 共通 AI 接続契約（#362 先行基盤）
+# 共通 AI 接続契約
 
 `ai::OpenAiClient` は Game Context・一次／二次画像評価・動画理解に共有する同期 JSON 呼出境界です。
 `JsonRequest` の prompt・JSON Schema・順序付き content を `POST <base_url>/chat/completions` へ送り、
@@ -37,7 +37,7 @@ PNG/JPEG は実 decode と寸法検証を行い、縮小せず inline data URL �
 [QuickTime の仕様](https://developer.apple.com/documentation/quicktime-file-format/file_type_compatibility_atom)
 では任意なので、`ftyp` のない MOV は完全なトップレベル atom と `moov`／`mdat` を確認します。
 両形式とも宣言bytes/秒数を検証します。動画全体の decode を保証する検査ではありません。
-実 frame・PTS・duration と MIME の対応は、#342 が既存の `media::ChunkArtifact` と probe 結果から作り、
+実 frame・PTS・duration と MIME の対応は、用途側が `media::ChunkArtifact` と probe 結果から作り、
 用途検証で source と実時間範囲を照合します。client 自身は動画を再 probe/transcode しません。
 時刻付き画像列への代替や1枚への置換は実装していません。
 
@@ -60,7 +60,7 @@ prompt/schema/media 処理自体の変更も各 revision を更新します。�
 
 caller は構造検証に続けて `selection::validate_assessments` による全表示 ID の一致・重複／欠落・score と理由、
 semantic event の source・実時間範囲・event品質、Game Context の同定・情報充足を検証します。
-画像／動画を理解したと証明できる用途上の検証と実 model 試験は #342/#343 の責務で、JSONの形だけで成功を宣言しません。
+画像／動画を理解したと証明できる用途上の検証と実 model 試験は分け、JSONの形だけで成功を宣言しません。
 未検証応答を cache／report／成果物へ保存せず、既存の publish/checkpoint 境界を保ちます。
 
 HTTP は proxy 自動利用を無効化し、認証を bearer header だけへ渡します。設定／環境変数から解決した API key がある場合、
@@ -73,7 +73,7 @@ HTTP／schema／用途検証エラーや server body を診断へ転載せず、
 protocol metadata や JSON 構造名（`id` 等）と一致させません。短い値だけでは通常語中の一致を認証 echo と区別できないためです。
 API key を serialization に含めず、config の Debug では redact します。
 
-## 検証状況と後続確認
+## 検証状況
 
 `tests/ai_contract.rs` は loopback HTTP の wire/mock 契約、`tests/ai_settings.rs` は設定と cache 条件を確認します。
 `tests/inference.rs` は用途の実 bytes・ID・前後順序・source時刻、`tests/workflow.rs` は両方式の
@@ -93,4 +93,5 @@ API key を serialization に含めず、config の Debug では redact しま�
 vision encoder/projector、推論形式、解像度・画像／動画frame数・token/context上限、合成素材と応答、
 実 model の画像／動画の理解結果を記録します。`/models` の一覧だけで対応済みにせず、両動画経路の確認前に
 全フロー切替完了としません。Strata動画未対応が続く場合は停止条件として明示し、必要な対応方針を別途確認します。
-実モデルへの接続先・model・認証・vision構成の情報が未提供のため、現段階は #362 の先行基盤までです。
+通常 CLI の用途接続は実装済みですが、実モデルへの接続先・model・認証・vision構成の情報が未提供のため、
+実 server/model の能力確認は未実施です。[実録画と画像評価](verification.md#未実施の実モデルと画像評価) と共に記録してください。

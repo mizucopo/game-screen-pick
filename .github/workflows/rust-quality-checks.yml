@@ -27,3 +27,79 @@ jobs:
       - name: Run quality gate
         timeout-minutes: 15
         run: sh tests/check.sh
+
+  distribution-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install Rust build and license components
+        run: |
+          rustup show
+          rustup target add "$TARGET"
+          rustup component add rust-docs rust-src
+        env:
+          TARGET: ${{ matrix.target }}
+      - name: Install Linux video and inspection tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl xz-utils pkg-config zlib1g-dev jq binutils
+          test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.35'
+          sh scripts/install-ci-ffmpeg.sh "$RUNNER_TEMP/ffmpeg"
+          echo "$RUNNER_TEMP/ffmpeg/bin" >> "$GITHUB_PATH"
+      - name: Install macOS video and archive tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install gnu-tar jq
+          sh scripts/install-ci-ffmpeg.sh "$RUNNER_TEMP/ffmpeg"
+          echo "$RUNNER_TEMP/ffmpeg/bin" >> "$GITHUB_PATH"
+      - name: Run native quality gate on the distribution builder
+        timeout-minutes: 15
+        run: sh tests/check.sh
+      - name: Build archive and run clean runtime smoke
+        timeout-minutes: 25
+        run: sh scripts/build-distribution.sh "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
+      - name: Upload verified target archive and checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rust-distribution-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          overwrite: true
+
+  distribution-verify:
+    needs: distribution-build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install pinned Rust toolchain
+        run: rustup show
+      - name: Download both target assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: rust-distribution-*
+          merge-multiple: true
+          path: dist
+      - name: Verify complete asset set and provenance
+        run: |
+          version="$(cargo metadata --locked --offline --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "game-screen-pick") | .version')"
+          sh scripts/verify-release-assets.sh dist "$version" "$(git rev-parse HEAD)"
