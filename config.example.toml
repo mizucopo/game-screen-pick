@@ -11,3 +11,24 @@ cache_revision = "1" # model 重み・server 設定が変わったら更新
 # api_key = "YOUR_API_KEY"
 # 非空の api_key を優先し、なければ GAME_SCREEN_PICK_API_KEY を使用します。
 # 推論レベルと画像・動画への対応は backend / model ごとの確認が必要です。
+
+# 共通 client を呼ぶには server/model の契約を明示します。
+# これは実能力の証明ではありません。docs/ai-client.md の確認表に実測を記録します。
+[ai.protocol]
+reasoning_format = "reasoning_effort" # または chat_template。model/template の仕様に合わせる
+supported_inference_levels = ["none"] # 使用する model で確認した値だけ
+json_schema = false # true は response_format を送る。常にアプリ側でも検証
+max_output_tokens = 2048 # thinking を含む server 側の出力上限
+max_request_bytes = 16777216 # base64 と prompt/schema を含む JSON body
+max_response_bytes = 1048576
+max_attempts = 3 # JSON/schema/用途契約の修正試行。通信失敗は再試行しない
+
+# vision 未設定では画像・動画を通信前に拒否します。
+# 以下は画像を使う場合の設定形。実際の encoder/projector と上限を確認して有効化します。
+# [ai.protocol.media]
+# vision_revision = "YOUR_ENCODER_PROJECTOR_AND_PREPROCESSING_REVISION"
+# max_images = 12
+# max_image_pixels = 32000000
+# max_image_edge = 16384
+# max_video_bytes = 0 # Strata は必ず0。vLLMも実動画検証までは0
+# max_video_seconds = 0.0

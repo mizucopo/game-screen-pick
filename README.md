@@ -3,7 +3,8 @@
 ゲーム録画からブログ用画像を選ぶ Rust CLI。現在は設定・入力検証と、元動画の full-resolution frame／前後 context 抽出を実装しています。
 Rust library は品質判定・多様性選定・二段階評価の候補/context sheet・full-resolution JPEG と最終一覧/report の作成まで実装しています。
 Rust library の cache・完了batch/chunkの再開・所有権検証と安全な成果物公開も実装しています。
-AI 接続は未実装で、通常の選定 command は事前確認・排他取得後、理由を示して終了 code 1 で停止します。
+Rust library に [共通 OpenAI 互換 client](docs/ai-client.md) と local JSON/schema 検証・有限 retry を実装しています。
+用途別 prompt・Brave・runtime と CLI への接続は #342 で行います。通常の選定 command は事前確認・排他取得後、理由を示して終了 code 1 で停止します。
 
 開発に Rust 1.88 以上（stable）、FFmpeg／FFprobe、jq が必要です。日本語描画 font は binary に含めます。
 
@@ -14,7 +15,8 @@ cargo run --locked -- --help
 ```
 
 `config.example.toml` を `config/local.toml` にコピーし、接続先・model・推論レベルを明示します。
-実際の backend/model の画像・動画能力と推論レベル対応は、AI 接続の実装時に検証します。
+`ai.protocol` に推論形式・対応レベル・受信／送信上限を宣言します。未設定の vision/media は通信前に拒否します。
+実際の backend/model の画像・動画能力と推論レベル対応は、用途接続後に個別検証します。mock 成功は実能力を保証しません。
 認証は非空の `ai.api_key` を優先し、なければ `GAME_SCREEN_PICK_API_KEY` を使う設計です。
 設定や秘密情報を含む `config/` と runtime cache は Git へ登録しません。
 

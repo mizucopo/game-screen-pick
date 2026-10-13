@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod cache;
 pub mod cli;
 pub mod config;
