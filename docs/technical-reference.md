@@ -58,8 +58,12 @@ scene・根拠・source を検証し、代表とその両側の候補を抽出�
 初期計画を含む実候補数は4096、評価 batch は12、抽出/decode/job は逐次です。
 有効な異なる画像が指定枚数に達しなければ、除外・不足理由を示して停止します。
 
-PNG/JPEG は decode 前に encoded file を64 MiB、各辺を16384、画素を3200万、縦横比を32までに制限します。
+候補の PNG/JPEG は decode 前に encoded file を64 MiB、各辺を16384、画素を3200万、縦横比を32までに制限します。
 16未満の寸法、壊れた画像、symlink/特殊 file も拒否します。JPEG の向き情報を反映します。
+最終選定の品質95・4:4:4 JPEGは別の128 MiB上限を生成・一覧への読込・公開で共有します。
+3200万画素の正常入力から64 MiBを超えるJPEGを生成できるためで、数学的な最大圧縮サイズの保証ではありません。
+生成超過はエラーとし、公開前のサイズ検査とcopy中の増大検査で上限超過を拒否します。切詰めを成功扱いしません。
+このencoded上限を200MPのcontact sheetには適用しません。
 512px以内の preview の RGB 輝度平均・標準偏差・隣接勾配を使い、近黒/近白が96%超、平均が2.5%未満/97.5%超、
 標準偏差2.5%未満、平均勾配0.2%未満を除外します。遷移と有用性20点未満は評価結果から除外します。
 この保守的な機械判定は実ゲーム品質の保証ではなく、#343 の実録画確認で評価します。
@@ -105,15 +109,21 @@ backend・認証を除く正規化service URL・model・推論レベル・prompt
 認証値や保存禁止のcontext本文はkey/checkpointへ保存しません。完了応答だけを検証してatomic書込みし、不正・途中結果はhitにしません。
 `semantic_chunk` はsource/区間/条件ごとに検証したeventだけを保存し、欠損chunkだけ再処理します。
 生成contextの `generated_context` は生成前の入力条件をkeyにし、保存許可をcallerが確認した場合だけ再利用します。Brave生応答は扱いません。
+最初のcontext生成callbackより前に入力identityを固定し、保存許可の有無にかかわらず同名入力の書換え・置換を拒否します。
 
 完成したrunは公開reportのkeyと画像集合/digestを検証して返します。正常なwarmはFFprobe/FFmpeg・画像decode・動画content hash・
 評価callbackが0件で、入力metadataとidentity checkpoint、公開済み画像・一覧・reportだけを読みます。
 `RunOutcome.metrics` は`Session::prepare`からの累積checkpoint/入力content読取bytes・評価key用の実画像/context/sheet hash読取bytes（`assessment_bytes_read`）・input hash/probe回数・評価/context生成/semantic callback回数・公開と検証の読取bytes・経過時間を返します。`warm`は今回の完成済み出力の再利用を示し、同じSessionの先行処理も計測値に含みます。
 部分再開や条件変更では必要な候補を再抽出しますが、同じ完了評価を再推論しません。
 
+公開するreportは `Artifacts::report()` の確定記録と照合し、source・時刻・評価・理由を含む選定記録の変更を拒否します。
+`Session::run` が追加するtop-level cache metadataだけを照合から除き、同じreport読取結果を公開します。
 reportにはschema・宣言された出力集合・画像/sheetのdigest・report本文digestを記録します。
 cache消失後も所有権を確認でき、同名の有効JPEGへの編集、欠損、未知file、旧report、symlinkや特殊fileを拒否して保持します。
-lockは出力の親側 `.gsp-output-locks` 内でfilesystemの同名判定を使い、取得後も名前を削除しません。公開は同じ親の排他的stagingとbackupを使い、
+lockは出力の親側 `.gsp-output-locks` 内でfilesystemの同名判定を使い、取得後も名前を削除しません。
+APFSのreadonly `validate` はoutput・保護対象・lock代表が未作成でも、親volumeのcase設定とUnicode full case folding／canonical分解で同親leafの別名重複を拒否します。
+case-sensitive／insensitiveのAPFSで実filesystemの判定との一致を検証しています。その他のfilesystemで未作成Unicode別名まで同じ保証はせず、通常prepareと既存path／lock代表はnative lookupを使います。
+公開は同じ親の排他的stagingとbackupを使い、
 旧成果物を再確認してrenameします。完了検証前の失敗・通常中断は旧集合を復元し、journalから再開時にも回復します。
 完了後のcleanup失敗は未処理journalとして検出し、検証できない変更を推測で削除しません。
 macOS/Linuxのlock・rename・通常中断を検証します。hostileな同時filesystem書換え、強制kill/停電での完全atomicity、

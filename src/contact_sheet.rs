@@ -10,7 +10,7 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{FilterType, resize};
 use image::{ExtendedColorType, Rgb, RgbImage};
 
-use crate::quality::read_image;
+use crate::quality::{MAX_IMAGE_BYTES, MAX_SELECTED_JPEG_BYTES, read_image_with_limit};
 
 const PAGE_SIZE: usize = 12;
 const MAX_ENTRIES: usize = 999;
@@ -422,6 +422,11 @@ fn render(
             image_y,
             layout.thumbnail_width,
             layout.thumbnail_height,
+            if show_context {
+                MAX_IMAGE_BYTES
+            } else {
+                MAX_SELECTED_JPEG_BYTES
+            },
         )?;
         let mut labels_y = image_y + layout.thumbnail_height + GAP;
         for (lines, reserve, color) in [
@@ -443,6 +448,7 @@ fn render(
                     labels_y,
                     context_layout.thumbnail_width,
                     context_layout.thumbnail_height,
+                    MAX_IMAGE_BYTES,
                 )?;
                 draw_wrapped(
                     &mut canvas,
@@ -491,8 +497,9 @@ fn draw_image(
     y: u32,
     width: u32,
     height: u32,
+    max_bytes: u64,
 ) -> Result<()> {
-    let source = read_image(path)
+    let source = read_image_with_limit(path, max_bytes)
         .with_context(|| format!("cannot read contact sheet image: {}", path.display()))?;
     let ratio = (f64::from(width) / f64::from(source.width()))
         .min(f64::from(height) / f64::from(source.height()));

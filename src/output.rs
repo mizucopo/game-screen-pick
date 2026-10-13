@@ -116,7 +116,9 @@ impl Output {
                 let representative = storage::checked_path(&lock_path)?;
                 (path, prefix) = native_target(&parent, &representative, protected_paths)?;
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                validate_native_aliases(&path, &directory, protected_paths)?;
+            }
             Err(error) => return Err(error.into()),
         }
         let journal = parent.join(format!("{prefix}.journal.json"));
@@ -223,7 +225,8 @@ impl Output {
         // user supplied output path. Resolve the system's temporary-directory
         // alias (for example macOS /var) before applying ordinary path checks.
         let source = artifacts.path().canonicalize()?;
-        self.publish_directory_checked(&source, cancelled, before_replace, |_| Ok(()))
+        let record = serde_json::from_slice(&serde_json::to_vec(artifacts.report())?)?;
+        self.publish_directory_checked(&source, &record, cancelled, before_replace, |_| Ok(()))
     }
 
     fn check_path(&self) -> Result<()> {
@@ -241,12 +244,19 @@ impl Output {
         cancelled: &AtomicBool,
         step: impl FnMut(&str) -> Result<()>,
     ) -> Result<OwnedOutput> {
-        self.publish_directory_checked(source, cancelled, || Ok(()), step)
+        self.publish_directory_checked(
+            source,
+            &tests::report_record(source),
+            cancelled,
+            || Ok(()),
+            step,
+        )
     }
 
     fn publish_directory_checked(
         &mut self,
         source: &Path,
+        record: &Value,
         cancelled: &AtomicBool,
         mut before_replace: impl FnMut() -> Result<()>,
         mut step: impl FnMut(&str) -> Result<()>,
@@ -262,7 +272,7 @@ impl Output {
             .tempdir_in(&self.parent)
             .context("cannot create output staging directory")?;
         step("staging")?;
-        stage_artifacts(source, stage.path(), cancelled, &self.bytes_read)?;
+        stage_artifacts(source, stage.path(), record, cancelled, &self.bytes_read)?;
         let staged = self.state(stage.path(), cancelled)?.0;
         check_cancelled(cancelled)?;
         step("staged")?;
@@ -584,6 +594,25 @@ fn checked_lock_directory(
     Ok(directory)
 }
 
+fn validate_native_aliases(path: &Path, directory: &Path, protected_paths: &[&Path]) -> Result<()> {
+    ensure!(
+        !storage::native_sibling_names_equal(path, directory)?,
+        "output path overlaps the reserved lock directory"
+    );
+    for protected in protected_paths {
+        let protected = storage::checked_path(protected)?;
+        ensure!(
+            !storage::native_sibling_names_equal(path, &protected)?,
+            "input, config, cache and output paths must not overlap"
+        );
+        ensure!(
+            !storage::native_sibling_names_equal(&protected, directory)?,
+            "protected path overlaps the reserved output lock directory"
+        );
+    }
+    Ok(())
+}
+
 fn native_target(
     parent: &Path,
     representative: &Path,
@@ -860,6 +889,7 @@ fn inspect(
 fn stage_artifacts(
     source: &Path,
     target: &Path,
+    record: &Value,
     cancelled: &AtomicBool,
     bytes_read: &Cell<u64>,
 ) -> Result<()> {
@@ -870,6 +900,23 @@ fn stage_artifacts(
         report.get("publication").is_none(),
         "private artifacts already contain publication metadata"
     );
+    // Session adds only this top-level metadata after pipeline completion.
+    // Bind every selection field to the immutable pipeline record at the same
+    // read whose contents will be signed, avoiding a separate preflight read.
+    let cache = report
+        .as_object_mut()
+        .context("private artifact report must be an object")?
+        .remove("cache");
+    ensure!(
+        report == *record,
+        "private report does not match the artifact record"
+    );
+    if let Some(cache) = cache {
+        report
+            .as_object_mut()
+            .expect("checked object")
+            .insert("cache".to_owned(), cache);
+    }
     let expected = expected_files(&report)?;
     let mut all = expected.clone();
     all.insert("report.json".to_owned());
@@ -881,8 +928,20 @@ fn stage_artifacts(
     for name in expected {
         check_cancelled(cancelled)?;
         let staged = target.join(&name);
-        let digest = copy_image(&source.join(&name), &staged, cancelled, bytes_read)?;
-        let decoder = artifact_decoder(&staged, name != "selected-contact-sheet.jpg", bytes_read)?;
+        let selected = name != "selected-contact-sheet.jpg";
+        let max_bytes = if selected {
+            crate::quality::MAX_SELECTED_JPEG_BYTES
+        } else {
+            u64::MAX
+        };
+        let digest = copy_image(
+            &source.join(&name),
+            &staged,
+            cancelled,
+            bytes_read,
+            max_bytes,
+        )?;
+        let decoder = artifact_decoder(&staged, selected, bytes_read)?;
         let image = image::DynamicImage::from_decoder(decoder)
             .context("private artifact is not a decodable JPEG")?;
         if let Some(frame) = report["selected"]
@@ -923,11 +982,15 @@ fn artifact_decoder<'a>(
     selected: bool,
     bytes_read: &'a Cell<u64>,
 ) -> Result<impl ImageDecoder + 'a> {
+    let file = storage::open_regular(path)?;
+    if selected {
+        ensure!(
+            file.metadata()?.len() <= crate::quality::MAX_SELECTED_JPEG_BYTES,
+            "selected JPEG exceeds the encoded byte limit"
+        );
+    }
     let mut reader = image::ImageReader::with_format(
-        BufReader::new(CountedFile {
-            file: storage::open_regular(path)?,
-            bytes_read,
-        }),
+        BufReader::new(CountedFile { file, bytes_read }),
         image::ImageFormat::Jpeg,
     );
     let max_pixels = if selected {
@@ -967,15 +1030,31 @@ fn copy_image(
     target: &Path,
     cancelled: &AtomicBool,
     bytes_read: &Cell<u64>,
+    max_bytes: u64,
 ) -> Result<Digest> {
     let mut source = CountedFile {
         file: storage::open_regular(source)?,
         bytes_read,
     };
+    ensure!(
+        source.file.metadata()?.len() <= max_bytes,
+        "selected JPEG exceeds the encoded byte limit"
+    );
     let mut target = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(target)?;
+    let digest = copy_jpeg_stream(&mut source, &mut target, cancelled, max_bytes)?;
+    target.sync_all()?;
+    Ok(digest)
+}
+
+fn copy_jpeg_stream(
+    mut source: impl Read,
+    mut target: impl Write,
+    cancelled: &AtomicBool,
+    max_bytes: u64,
+) -> Result<Digest> {
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut bytes = 0u64;
@@ -983,10 +1062,20 @@ fn copy_image(
     let mut last = [0u8; 2];
     loop {
         check_cancelled(cancelled)?;
-        let read = source.read(&mut buffer)?;
+        // One extra byte detects growth past the cap without publishing a
+        // truncated JPEG or copying/hash-reading the remainder of the file.
+        let read_limit = max_bytes
+            .saturating_sub(bytes)
+            .saturating_add(1)
+            .min(buffer.len() as u64) as usize;
+        let read = source.read(&mut buffer[..read_limit])?;
         if read == 0 {
             break;
         }
+        ensure!(
+            bytes + read as u64 <= max_bytes,
+            "selected JPEG exceeds the encoded byte limit"
+        );
         if first.len() < 2 {
             first.extend_from_slice(&buffer[..read.min(2 - first.len())]);
         }
@@ -1003,7 +1092,6 @@ fn copy_image(
         bytes >= 4 && first == [0xff, 0xd8] && last == [0xff, 0xd9],
         "private artifact is not a completed JPEG"
     );
-    target.sync_all()?;
     Ok(Digest {
         bytes,
         sha256: format!("{:x}", hash.finalize()),
@@ -1068,6 +1156,195 @@ mod tests {
     use super::*;
     use image::{Rgb, RgbImage};
     use serde_json::json;
+
+    pub(super) fn report_record(source: &Path) -> Value {
+        let mut record: Value =
+            serde_json::from_slice(&fs::read(source.join("report.json")).unwrap()).unwrap();
+        record.as_object_mut().unwrap().remove("cache");
+        record
+    }
+
+    #[test]
+    fn oversized_encoded_selected_jpeg_is_rejected_without_reading_it() {
+        use crate::quality::MAX_SELECTED_JPEG_BYTES;
+        let (_directory, root) = workspace();
+        let source = artifacts(&root, "padded", 15);
+        let path = root.join("result");
+        let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
+        let original = publish(&mut output, &source);
+        let image_path = source.join("selected-01.jpg");
+        let mut file = OpenOptions::new().write(true).open(&image_path).unwrap();
+        file.set_len(MAX_SELECTED_JPEG_BYTES + 1).unwrap();
+        file.seek(SeekFrom::End(-2)).unwrap();
+        file.write_all(&[0xff, 0xd9]).unwrap();
+        let decoder_reads = Cell::new(0);
+        assert!(artifact_decoder(&image_path, true, &decoder_reads).is_err());
+        assert_eq!(
+            decoder_reads.get(),
+            0,
+            "reject before the JPEG decoder allocates its encoded buffer"
+        );
+        let before = output.bytes_read();
+        let error = output
+            .publish_directory(&source, &cancelled(), |_| Ok(()))
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("encoded byte limit"),
+            "{error:#}"
+        );
+        assert!(output.bytes_read() - before < original.bytes_read + 64 * 1024);
+        assert_eq!(
+            output
+                .verify_existing(&cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            original.fingerprint
+        );
+        assert!(!output.journal.exists());
+    }
+
+    #[test]
+    fn encoded_copy_accepts_the_limit_and_rejects_growth_without_truncation() {
+        let (_directory, root) = workspace();
+        let source = artifacts(&root, "near-limit", 15).join("selected-01.jpg");
+        let original = fs::read(&source).unwrap();
+        let limit = 64 * 1024 + 4;
+        for size in [limit - 1, limit, limit + 1] {
+            fs::write(&source, &original).unwrap();
+            let mut writer = OpenOptions::new().write(true).open(&source).unwrap();
+            writer.set_len(size).unwrap();
+            writer.seek(SeekFrom::End(-2)).unwrap();
+            writer.write_all(&[0xff, 0xd9]).unwrap();
+            let target = root.join(format!("copied-{size}.jpg"));
+            let reads = Cell::new(0);
+            let result = copy_image(&source, &target, &cancelled(), &reads, limit);
+            if size <= limit {
+                let digest = result.unwrap();
+                assert_eq!(digest.bytes, size);
+                assert_eq!(reads.get(), size);
+                assert_eq!(fs::read(&target).unwrap(), fs::read(&source).unwrap());
+                assert!(image::open(target).is_ok());
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("encoded byte limit")
+                );
+                assert_eq!(reads.get(), 0);
+                assert!(!target.exists());
+            }
+        }
+
+        struct GrowingFile<'a> {
+            reader: File,
+            grow: Option<File>,
+            size: u64,
+            reads: &'a Cell<u64>,
+        }
+        impl Read for GrowingFile<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let read = self.reader.read(buffer)?;
+                self.reads.set(self.reads.get() + read as u64);
+                if let Some(writer) = self.grow.take() {
+                    writer.set_len(self.size)?;
+                }
+                Ok(read)
+            }
+        }
+        fs::write(&source, &original).unwrap();
+        let limit = original.len() as u64 + 1024;
+        let reads = Cell::new(0);
+        let reader = GrowingFile {
+            reader: File::open(&source).unwrap(),
+            grow: Some(OpenOptions::new().write(true).open(&source).unwrap()),
+            size: limit + 1024,
+            reads: &reads,
+        };
+        assert!(reader.reader.metadata().unwrap().len() < limit);
+        let mut copied = Vec::new();
+        let error = copy_jpeg_stream(reader, &mut copied, &cancelled(), limit).unwrap_err();
+        assert!(error.to_string().contains("encoded byte limit"));
+        assert_eq!(reads.get(), limit + 1);
+        assert_eq!(
+            copied, original,
+            "growth is rejected before an over-limit write"
+        );
+    }
+
+    #[test]
+    fn producer_32mp_jpeg_above_candidate_limit_renders_and_publishes() {
+        use crate::contact_sheet::{SheetEntry, render_selected_sheet};
+        use crate::quality::{MAX_IMAGE_BYTES, MAX_SELECTED_JPEG_BYTES};
+        let (_directory, root) = workspace();
+        let source = artifacts(&root, "large-producer", 15);
+        let mut seed = 59u64;
+        let mut tile = [Rgb([0; 3]); 64];
+        for pixel in &mut tile {
+            for channel in &mut pixel.0 {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                *channel = if ((seed >> 24) as u8) & 1 == 0 {
+                    0
+                } else {
+                    255
+                };
+            }
+        }
+        let image = RgbImage::from_fn(8000, 4000, |x, y| tile[((y % 8) * 8 + x % 8) as usize]);
+        let path = source.join("selected-01.jpg");
+        crate::pipeline::encode_selected_jpeg(&image, &path).unwrap();
+        drop(image);
+        let bytes = fs::metadata(&path).unwrap().len();
+        assert!(
+            bytes > MAX_IMAGE_BYTES && bytes <= MAX_SELECTED_JPEG_BYTES,
+            "32 MP quality-95 4:4:4 producer JPEG: {bytes} bytes"
+        );
+        assert!(
+            crate::quality::read_image(&path).is_err(),
+            "candidate budget stays separate"
+        );
+        let sheet = render_selected_sheet(
+            &[SheetEntry {
+                id: "large".to_owned(),
+                rank: Some(1),
+                source: "入力.mkv".to_owned(),
+                requested_seconds: 1.0,
+                actual_seconds: 1.25,
+                scene: "32 MP".to_owned(),
+                image: path,
+                context: None,
+            }],
+            &source,
+        )
+        .unwrap();
+        assert!(image::open(sheet).is_ok());
+        let mut report: Value =
+            serde_json::from_slice(&fs::read(source.join("report.json")).unwrap()).unwrap();
+        report["selected"][0]["width"] = json!(8000);
+        report["selected"][0]["height"] = json!(4000);
+        fs::write(
+            source.join("report.json"),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        let mut output = Output::prepare(&root.join("result"), &[], &cancelled()).unwrap();
+        let owned = publish(&mut output, &source);
+        assert_eq!(
+            owned.report["publication"]["files"]["selected-01.jpg"]["bytes"],
+            bytes
+        );
+        assert_eq!(
+            output
+                .verify_existing(&cancelled())
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            owned.fingerprint
+        );
+    }
 
     fn workspace() -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
@@ -1723,6 +2000,7 @@ mod tests {
             let error = output
                 .publish_directory_checked(
                     &second,
+                    &report_record(&second),
                     &cancelled(),
                     || {
                         checks.set(checks.get() + 1);
@@ -1799,7 +2077,14 @@ mod tests {
             .prefix(&format!("{}-stage-", output.prefix))
             .tempdir_in(&output.parent)
             .unwrap();
-        stage_artifacts(source, stage.path(), &cancelled(), &Cell::new(0)).unwrap();
+        stage_artifacts(
+            source,
+            stage.path(),
+            &report_record(source),
+            &cancelled(),
+            &Cell::new(0),
+        )
+        .unwrap();
         let backup = tempfile::Builder::new()
             .prefix(&format!("{}-backup-", output.prefix))
             .tempdir_in(&output.parent)

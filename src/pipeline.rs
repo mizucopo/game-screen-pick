@@ -1,6 +1,7 @@
 //! Private selection artifacts. Transport and safe publication belong to #342/#341.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -13,13 +14,50 @@ use crate::contact_sheet::{
     ContextImage, SheetEntry, render_candidate_sheets, render_selected_sheet,
 };
 use crate::media::{FrameArtifact, Interrupted, MediaTools, Video};
-use crate::quality::{MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS, analyze, read_image};
+use crate::quality::{
+    MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS, MAX_SELECTED_JPEG_BYTES, analyze, read_image,
+};
 use crate::selection::{
     Assessment, Candidate, Exclusion, MAX_CANDIDATES, SemanticEvent, event_positions, select_up_to,
     validate_assessments,
 };
 
 const ASSESSMENT_BATCH: usize = 12;
+
+struct SelectedJpegWriter {
+    file: BufWriter<File>,
+    bytes: u64,
+}
+
+impl Write for SelectedJpegWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if buffer.len() as u64 > MAX_SELECTED_JPEG_BYTES - self.bytes {
+            return Err(io::Error::other(
+                "selected JPEG exceeds the encoded byte limit",
+            ));
+        }
+        let written = self.file.write(buffer)?;
+        self.bytes += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+pub(crate) fn encode_selected_jpeg(image: &image::RgbImage, path: &Path) -> Result<()> {
+    let mut writer = SelectedJpegWriter {
+        file: BufWriter::new(File::create(path)?),
+        bytes: 0,
+    };
+    JpegEncoder::new_with_quality(&mut writer, 95)
+        .encode_image(image)
+        .context("cannot encode selected full-resolution JPEG")?;
+    writer
+        .flush()
+        .context("cannot flush selected full-resolution JPEG")
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelConditions {
@@ -778,9 +816,7 @@ impl Work<'_> {
             )?;
             verify_frame(&self.videos[source], candidate, &artifact)?;
             let image = read_image(&artifact.path())?;
-            JpegEncoder::new_with_quality(File::create(&path)?, 95)
-                .encode_image(&image)
-                .context("cannot encode selected full-resolution JPEG")?;
+            encode_selected_jpeg(&image, &path)?;
             let primary = self
                 .primary
                 .iter()

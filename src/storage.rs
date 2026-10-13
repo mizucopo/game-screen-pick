@@ -71,6 +71,143 @@ pub fn checked_path(path: &Path) -> Result<PathBuf> {
     Ok(parent.join(current.file_name().context("path needs a filename")?))
 }
 
+/// Read-only comparison of unresolved siblings on modern macOS APFS. Existing
+/// paths and lock representatives still use the filesystem's own lookup. Do
+/// not apply APFS's Unicode equivalence to other filesystem formats.
+pub(crate) fn native_sibling_names_equal(left: &Path, right: &Path) -> Result<bool> {
+    if left == right {
+        return Ok(true);
+    }
+    if left.parent() != right.parent() {
+        return Ok(false);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let (Some(left_name), Some(right_name)) = (
+            left.file_name().and_then(|name| name.to_str()),
+            right.file_name().and_then(|name| name.to_str()),
+        ) else {
+            // Protected paths keep their native byte names; only UTF-8 names
+            // can be Unicode aliases of the validated UTF-8 output leaf.
+            return Ok(false);
+        };
+        let parent = File::open(left.parent().context("path needs a parent")?)?;
+        let mut filesystem = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        if unsafe { libc::fstatfs(parent.as_raw_fd(), filesystem.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error()).context("cannot inspect path filesystem");
+        }
+        let filesystem = unsafe { filesystem.assume_init() };
+        let format = unsafe { std::ffi::CStr::from_ptr(filesystem.f_fstypename.as_ptr()) };
+        if format.to_bytes() != b"apfs" {
+            return Ok(false);
+        }
+        let case_sensitive =
+            unsafe { libc::fpathconf(parent.as_raw_fd(), libc::_PC_CASE_SENSITIVE) };
+        ensure!(
+            case_sensitive >= 0,
+            "cannot inspect filesystem case sensitivity"
+        );
+        macos_names::equal(left_name, right_name, case_sensitive != 0)
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+mod macos_names {
+    use std::ffi::c_void;
+
+    use anyhow::{Result, ensure};
+
+    const UTF8: u32 = 0x0800_0100;
+    const CASE_INSENSITIVE: usize = 1;
+    const NORMALIZATION_D: isize = 0;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringCreateWithBytes(
+            allocator: *const c_void,
+            bytes: *const u8,
+            length: isize,
+            encoding: u32,
+            external_representation: u8,
+        ) -> *const c_void;
+        fn CFStringCreateMutableCopy(
+            allocator: *const c_void,
+            capacity: isize,
+            value: *const c_void,
+        ) -> *mut c_void;
+        fn CFStringNormalize(value: *mut c_void, form: isize);
+        fn CFStringFold(value: *mut c_void, flags: usize, locale: *const c_void);
+        fn CFStringCompare(left: *const c_void, right: *const c_void, flags: usize) -> isize;
+        fn CFRelease(value: *const c_void);
+    }
+
+    struct StringRef(*mut c_void);
+
+    impl StringRef {
+        fn normalized(name: &str, case_sensitive: bool) -> Result<Self> {
+            // CoreFoundation's fold omits these historical Cyrillic letters
+            // from Unicode 9, although APFS treats them as their modern forms.
+            // Official Unicode 9 CaseFolding mappings:
+            // https://raw.githubusercontent.com/unicode-org/icu/release-58-2/icu4c/source/data/unidata/CaseFolding.txt
+            let name = if case_sensitive {
+                name.to_owned()
+            } else {
+                name.chars()
+                    .map(|character| match character {
+                        '\u{1c80}' => '\u{0432}',
+                        '\u{1c81}' => '\u{0434}',
+                        '\u{1c82}' => '\u{043e}',
+                        '\u{1c83}' => '\u{0441}',
+                        '\u{1c84}' | '\u{1c85}' => '\u{0442}',
+                        '\u{1c86}' => '\u{044a}',
+                        '\u{1c87}' => '\u{0463}',
+                        '\u{1c88}' => '\u{a64b}',
+                        _ => character,
+                    })
+                    .collect()
+            };
+            // kCFStringEncodingUTF8; no locale or filesystem writes are used.
+            let value = unsafe {
+                CFStringCreateWithBytes(
+                    std::ptr::null(),
+                    name.as_ptr(),
+                    name.len().try_into()?,
+                    UTF8,
+                    0,
+                )
+            };
+            ensure!(!value.is_null(), "cannot compare APFS path filename");
+            let normalized = unsafe { CFStringCreateMutableCopy(std::ptr::null(), 0, value) };
+            unsafe { CFRelease(value) };
+            ensure!(!normalized.is_null(), "cannot normalize APFS path filename");
+            unsafe {
+                CFStringNormalize(normalized, NORMALIZATION_D);
+                if !case_sensitive {
+                    CFStringFold(normalized, CASE_INSENSITIVE, std::ptr::null());
+                    CFStringNormalize(normalized, NORMALIZATION_D);
+                }
+            }
+            Ok(Self(normalized))
+        }
+    }
+
+    impl Drop for StringRef {
+        fn drop(&mut self) {
+            unsafe { CFRelease(self.0) };
+        }
+    }
+
+    pub(super) fn equal(left: &str, right: &str, case_sensitive: bool) -> Result<bool> {
+        let left = StringRef::normalized(left, case_sensitive)?;
+        let right = StringRef::normalized(right, case_sensitive)?;
+        // Compare the full folded/decomposed values literally. The combined
+        // case/nonliteral comparison omits some full case-fold expansions.
+        Ok(unsafe { CFStringCompare(left.0, right.0, 0) } == 0)
+    }
+}
+
 pub fn open_regular(path: &Path) -> Result<File> {
     let file = OpenOptions::new()
         .read(true)

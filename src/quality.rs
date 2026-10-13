@@ -8,6 +8,10 @@ use serde::Serialize;
 pub const MAX_IMAGE_PIXELS: u64 = 32_000_000;
 pub const MAX_IMAGE_EDGE: u32 = 16_384;
 pub const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+/// Quality-95 RGB JPEGs use 4:4:4 encoding and can exceed the candidate
+/// reader's 64 MiB bound at 32 MP. Encoding and publication share this
+/// separate limit; exceeding it is an error, never a truncated success.
+pub const MAX_SELECTED_JPEG_BYTES: u64 = 128 * 1024 * 1024;
 pub const NEAR_DUPLICATE_DISTANCE: f64 = 0.035;
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,13 +32,17 @@ pub struct Quality {
 /// Decode one image at a time. Check header dimensions before allocating pixels,
 /// including formats whose decoder allocation limit is only best effort.
 pub fn read_image(path: &Path) -> Result<RgbImage> {
+    read_image_with_limit(path, MAX_IMAGE_BYTES)
+}
+
+pub(crate) fn read_image_with_limit(path: &Path, max_bytes: u64) -> Result<RgbImage> {
     let metadata = fs::symlink_metadata(path).context("cannot inspect candidate image")?;
     ensure!(
         metadata.is_file(),
         "candidate image must be an ordinary file"
     );
     ensure!(
-        metadata.len() > 0 && metadata.len() <= MAX_IMAGE_BYTES,
+        metadata.len() > 0 && metadata.len() <= max_bytes,
         "candidate image exceeds the encoded byte limit or is empty"
     );
     let mut reader = ImageReader::new(BufReader::new(fs::File::open(path)?))
