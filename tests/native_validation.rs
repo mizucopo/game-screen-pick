@@ -1,4 +1,8 @@
+#[cfg(unix)]
+use std::ffi::OsString;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 #[cfg(target_os = "macos")]
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -169,4 +173,91 @@ fn distinct_absent_output_and_cache_names_remain_valid() {
     assert!(Output::prepare(&output, &[&protected], &cancelled).is_ok());
     assert!(!output.exists());
     assert!(!protected.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_absent_protected_names_remain_valid_without_readonly_writes() {
+    for kind in ["input", "cache", "config"] {
+        let parent = temporary();
+        let output = parent.path().join("result");
+        let mut bytes = format!("{kind}-").into_bytes();
+        bytes.push(0xff);
+        let protected = parent.path().join(OsString::from_vec(bytes));
+        let cancelled = AtomicBool::new(false);
+        let validation = Output::validate(&output, &[&protected], &cancelled);
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        let preparation = Output::prepare(&output, &[&protected], &cancelled);
+        assert!(
+            preparation.is_ok(),
+            "normal prepare must accept absent {kind}"
+        );
+        assert!(
+            validation.unwrap().is_none(),
+            "readonly validation must agree for absent {kind}"
+        );
+        assert!(!output.exists());
+        assert!(!protected.exists());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn non_utf8_existing_protected_names_remain_valid_without_readonly_writes() {
+    for kind in ["input", "cache", "config"] {
+        let parent = temporary();
+        let output = parent.path().join("result");
+        let mut bytes = format!("{kind}-").into_bytes();
+        bytes.push(0xff);
+        let protected = parent.path().join(OsString::from_vec(bytes));
+        if kind == "config" {
+            fs::write(&protected, b"original config").unwrap();
+        } else {
+            fs::create_dir(&protected).unwrap();
+        }
+        let modified = fs::metadata(&protected).unwrap().modified().unwrap();
+        let cancelled = AtomicBool::new(false);
+        assert!(
+            Output::validate(&output, &[&protected], &cancelled)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 1);
+        assert_eq!(
+            fs::metadata(&protected).unwrap().modified().unwrap(),
+            modified
+        );
+        assert!(Output::prepare(&output, &[&protected], &cancelled).is_ok());
+        assert!(!output.exists());
+        assert_eq!(
+            fs::metadata(&protected).unwrap().modified().unwrap(),
+            modified
+        );
+        if kind == "config" {
+            assert_eq!(fs::read(&protected).unwrap(), b"original config");
+        } else {
+            assert_eq!(fs::read_dir(&protected).unwrap().count(), 0);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_output_name_is_rejected_without_writes() {
+    let parent = temporary();
+    let output = parent
+        .path()
+        .join(OsString::from_vec(b"result-\xff".to_vec()));
+    let cancelled = AtomicBool::new(false);
+    for rejection in [
+        Output::validate(&output, &[], &cancelled).unwrap_err(),
+        Output::prepare(&output, &[], &cancelled).err().unwrap(),
+    ] {
+        assert!(
+            rejection
+                .to_string()
+                .contains("output filename must be UTF-8")
+        );
+    }
+    assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
 }

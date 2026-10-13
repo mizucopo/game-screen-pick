@@ -83,6 +83,14 @@ pub(crate) fn native_sibling_names_equal(left: &Path, right: &Path) -> Result<bo
     }
     #[cfg(target_os = "macos")]
     {
+        let (Some(left_name), Some(right_name)) = (
+            left.file_name().and_then(|name| name.to_str()),
+            right.file_name().and_then(|name| name.to_str()),
+        ) else {
+            // Protected paths keep their native byte names; only UTF-8 names
+            // can be Unicode aliases of the validated UTF-8 output leaf.
+            return Ok(false);
+        };
         let parent = File::open(left.parent().context("path needs a parent")?)?;
         let mut filesystem = std::mem::MaybeUninit::<libc::statfs>::uninit();
         if unsafe { libc::fstatfs(parent.as_raw_fd(), filesystem.as_mut_ptr()) } != 0 {
@@ -99,12 +107,7 @@ pub(crate) fn native_sibling_names_equal(left: &Path, right: &Path) -> Result<bo
             case_sensitive >= 0,
             "cannot inspect filesystem case sensitivity"
         );
-        fn name(path: &Path) -> Result<&str> {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .context("APFS path filename must be UTF-8")
-        }
-        return macos_names::equal(name(left)?, name(right)?, case_sensitive != 0);
+        macos_names::equal(left_name, right_name, case_sensitive != 0)
     }
     #[cfg(not(target_os = "macos"))]
     Ok(false)
