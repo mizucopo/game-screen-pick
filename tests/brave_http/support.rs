@@ -739,6 +739,8 @@ fn every_required_information_field_rejects_explicit_absence_and_placeholders() 
             "TBD",
             "I don't know",
             "No information",
+            "Genre: 000",
+            "Progression: 0",
             "???",
             "...",
             "情報不足",

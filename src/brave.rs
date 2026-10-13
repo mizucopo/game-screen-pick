@@ -660,9 +660,6 @@ pub fn validate_context(title: &str, evidence: &SearchEvidence, value: &Value) -
 /// prose. Keep short real genres and concrete multilingual descriptions valid.
 fn meaningful_information(text: &str) -> bool {
     let lower = text.trim().to_lowercase();
-    if !lower.chars().any(char::is_alphabetic) {
-        return false;
-    }
     let compact: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
     let mut answer = compact.as_str();
     // Only strip known field-label boilerplate, not words from arbitrary prose.
@@ -707,7 +704,7 @@ fn meaningful_information(text: &str) -> bool {
             break;
         }
     }
-    if answer.is_empty() {
+    if !answer.chars().any(char::is_alphabetic) {
         return false;
     }
     // Recognized absence statements only. Concrete prose containing "unknown"
