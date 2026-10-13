@@ -118,7 +118,7 @@ mod macos_names {
 
     const UTF8: u32 = 0x0800_0100;
     const CASE_INSENSITIVE: usize = 1;
-    const NONLITERAL: usize = 16;
+    const NORMALIZATION_D: isize = 0;
 
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
@@ -129,14 +129,42 @@ mod macos_names {
             encoding: u32,
             external_representation: u8,
         ) -> *const c_void;
+        fn CFStringCreateMutableCopy(
+            allocator: *const c_void,
+            capacity: isize,
+            value: *const c_void,
+        ) -> *mut c_void;
+        fn CFStringNormalize(value: *mut c_void, form: isize);
+        fn CFStringFold(value: *mut c_void, flags: usize, locale: *const c_void);
         fn CFStringCompare(left: *const c_void, right: *const c_void, flags: usize) -> isize;
         fn CFRelease(value: *const c_void);
     }
 
-    struct StringRef(*const c_void);
+    struct StringRef(*mut c_void);
 
     impl StringRef {
-        fn new(name: &str) -> Result<Self> {
+        fn normalized(name: &str, case_sensitive: bool) -> Result<Self> {
+            // CoreFoundation's fold omits these historical Cyrillic letters
+            // from Unicode 9, although APFS treats them as their modern forms.
+            // Official Unicode 9 CaseFolding mappings:
+            // https://raw.githubusercontent.com/unicode-org/icu/release-58-2/icu4c/source/data/unidata/CaseFolding.txt
+            let name = if case_sensitive {
+                name.to_owned()
+            } else {
+                name.chars()
+                    .map(|character| match character {
+                        '\u{1c80}' => '\u{0432}',
+                        '\u{1c81}' => '\u{0434}',
+                        '\u{1c82}' => '\u{043e}',
+                        '\u{1c83}' => '\u{0441}',
+                        '\u{1c84}' | '\u{1c85}' => '\u{0442}',
+                        '\u{1c86}' => '\u{044a}',
+                        '\u{1c87}' => '\u{0463}',
+                        '\u{1c88}' => '\u{a64b}',
+                        _ => character,
+                    })
+                    .collect()
+            };
             // kCFStringEncodingUTF8; no locale or filesystem writes are used.
             let value = unsafe {
                 CFStringCreateWithBytes(
@@ -148,7 +176,17 @@ mod macos_names {
                 )
             };
             ensure!(!value.is_null(), "cannot compare APFS path filename");
-            Ok(Self(value))
+            let normalized = unsafe { CFStringCreateMutableCopy(std::ptr::null(), 0, value) };
+            unsafe { CFRelease(value) };
+            ensure!(!normalized.is_null(), "cannot normalize APFS path filename");
+            unsafe {
+                CFStringNormalize(normalized, NORMALIZATION_D);
+                if !case_sensitive {
+                    CFStringFold(normalized, CASE_INSENSITIVE, std::ptr::null());
+                    CFStringNormalize(normalized, NORMALIZATION_D);
+                }
+            }
+            Ok(Self(normalized))
         }
     }
 
@@ -159,12 +197,11 @@ mod macos_names {
     }
 
     pub(super) fn equal(left: &str, right: &str, case_sensitive: bool) -> Result<bool> {
-        let left = StringRef::new(left)?;
-        let right = StringRef::new(right)?;
-        // Canonical Unicode equivalence; case folding follows the actual
-        // volume mode. Accent, width, numeric and locale comparisons are off.
-        let flags = NONLITERAL | if case_sensitive { 0 } else { CASE_INSENSITIVE };
-        Ok(unsafe { CFStringCompare(left.0, right.0, flags) } == 0)
+        let left = StringRef::normalized(left, case_sensitive)?;
+        let right = StringRef::normalized(right, case_sensitive)?;
+        // Compare the full folded/decomposed values literally. The combined
+        // case/nonliteral comparison omits some full case-fold expansions.
+        Ok(unsafe { CFStringCompare(left.0, right.0, 0) } == 0)
     }
 }
 

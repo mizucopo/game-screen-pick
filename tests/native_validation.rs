@@ -25,13 +25,17 @@ fn native_aliases(parent: &Path, name: &str, alias: &str) -> bool {
 #[test]
 fn absent_native_alias_validation_agrees_with_filesystem_and_prepare_without_writes() {
     let cancelled = AtomicBool::new(false);
-    for (name, alias) in [
+    let mut pairs = [
         ("Result", "result"),
         ("Résult", "Re\u{301}sult"),
         ("straße", "STRASSE"),
         ("ﬀ", "ff"),
         ("İ", "i\u{307}"),
         ("Σ", "ς"),
+        ("x\u{1c80}", "x\u{432}"),
+        ("x\u{1f80}", "x\u{1f00}\u{3b9}"),
+        ("x\u{10400}", "x\u{10428}"),
+        ("x\u{2f800}", "x\u{4e3d}"),
         ("Ა", "ა"),
         ("K", "K"),
         ("Ω", "Ω"),
@@ -44,11 +48,31 @@ fn absent_native_alias_validation_agrees_with_filesystem_and_prepare_without_wri
         ("result-1", "result1"),
         ("a\u{ad}", "a"),
         ("x\u{200d}", "x"),
+    ]
+    .map(|(name, alias)| (name.to_owned(), alias.to_owned()))
+    .to_vec();
+    for (historical, modern) in [
+        ('\u{1c80}', '\u{0432}'),
+        ('\u{1c81}', '\u{0434}'),
+        ('\u{1c82}', '\u{043e}'),
+        ('\u{1c83}', '\u{0441}'),
+        ('\u{1c84}', '\u{0442}'),
+        ('\u{1c85}', '\u{0442}'),
+        ('\u{1c86}', '\u{044a}'),
+        ('\u{1c87}', '\u{0463}'),
+        ('\u{1c88}', '\u{a64b}'),
     ] {
+        pairs.push((format!("x{historical}"), format!("x{modern}")));
+        pairs.push((
+            format!("x{historical}"),
+            format!("x{}", modern.to_uppercase()),
+        ));
+    }
+    for (name, alias) in pairs {
         let parent = temporary();
-        let expected_overlap = native_aliases(parent.path(), name, alias);
-        let output = parent.path().join(name);
-        let protected = parent.path().join(alias);
+        let expected_overlap = native_aliases(parent.path(), &name, &alias);
+        let output = parent.path().join(&name);
+        let protected = parent.path().join(&alias);
         let validation = Output::validate(&output, &[&protected], &cancelled);
         assert_eq!(
             fs::read_dir(parent.path()).unwrap().count(),

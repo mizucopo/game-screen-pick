@@ -121,7 +121,7 @@ backend・認証を除く正規化service URL・model・推論レベル・prompt
 reportにはschema・宣言された出力集合・画像/sheetのdigest・report本文digestを記録します。
 cache消失後も所有権を確認でき、同名の有効JPEGへの編集、欠損、未知file、旧report、symlinkや特殊fileを拒否して保持します。
 lockは出力の親側 `.gsp-output-locks` 内でfilesystemの同名判定を使い、取得後も名前を削除しません。
-APFSのreadonly `validate` はoutput・保護対象・lock代表が未作成でも、親volumeのcase設定とUnicode canonical比較で同親leafの別名重複を拒否します。
+APFSのreadonly `validate` はoutput・保護対象・lock代表が未作成でも、親volumeのcase設定とUnicode full case folding／canonical分解で同親leafの別名重複を拒否します。
 case-sensitive／insensitiveのAPFSで実filesystemの判定との一致を検証しています。その他のfilesystemで未作成Unicode別名まで同じ保証はせず、通常prepareと既存path／lock代表はnative lookupを使います。
 公開は同じ親の排他的stagingとbackupを使い、
 旧成果物を再確認してrenameします。完了検証前の失敗・通常中断は旧集合を復元し、journalから再開時にも回復します。
