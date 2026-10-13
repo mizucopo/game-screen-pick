@@ -13,6 +13,7 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use crate::media::Interrupted;
+use crate::metrics::timed_cell;
 use crate::pipeline::Artifacts;
 use crate::storage::{self, Lock, OperationalError};
 
@@ -93,6 +94,7 @@ pub struct Output {
     journal: PathBuf,
     initial: State,
     bytes_read: Cell<u64>,
+    verification_seconds: Cell<f64>,
     _lock: Lock,
 }
 
@@ -162,6 +164,7 @@ impl Output {
             prefix,
             initial: State::Absent,
             bytes_read: Cell::new(0),
+            verification_seconds: Cell::new(0.0),
             _lock: lock,
         };
         output.check_path()?;
@@ -181,8 +184,16 @@ impl Output {
         self.bytes_read.get()
     }
 
+    /// Cumulative output ownership inspections, including preflight, staged and
+    /// published output and recovery checks. Copy/write/delete time is excluded.
+    pub fn verification_seconds(&self) -> f64 {
+        self.verification_seconds.get()
+    }
+
     fn state(&self, path: &Path, cancelled: &AtomicBool) -> Result<(State, Option<OwnedOutput>)> {
-        inspect(path, false, &self.bytes_read, cancelled)
+        timed_cell(&self.verification_seconds, || {
+            inspect(path, false, &self.bytes_read, cancelled)
+        })
     }
 
     fn cleanup_state(
@@ -191,11 +202,19 @@ impl Output {
         expected: &State,
         cancelled: &AtomicBool,
     ) -> Result<State> {
-        cleanup_state(path, expected, &self.bytes_read, cancelled)
+        timed_cell(&self.verification_seconds, || {
+            cleanup_state(path, expected, &self.bytes_read, cancelled)
+        })
     }
 
     fn remove_verified(&self, path: &Path, expected: &State, cancelled: &AtomicBool) -> Result<()> {
-        remove_verified(path, expected, &self.bytes_read, cancelled)
+        remove_verified(
+            path,
+            expected,
+            &self.bytes_read,
+            &self.verification_seconds,
+            cancelled,
+        )
     }
 
     /// Does not consult cache and never decodes an image or scans an input video.
@@ -1124,10 +1143,13 @@ fn remove_verified(
     path: &Path,
     expected: &State,
     bytes_read: &Cell<u64>,
+    verification_seconds: &Cell<f64>,
     cancelled: &AtomicBool,
 ) -> Result<()> {
     ensure!(
-        &recovery_read(cleanup_state(path, expected, bytes_read, cancelled))? == expected,
+        &recovery_read(timed_cell(verification_seconds, || {
+            cleanup_state(path, expected, bytes_read, cancelled)
+        }))? == expected,
         "refusing to remove changed output recovery data"
     );
     // Never recursively remove an old directory: only its verified flat files.

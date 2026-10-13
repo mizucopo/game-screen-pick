@@ -1,4 +1,5 @@
 //! Cached selection and publication; AI transports remain caller supplied.
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -13,6 +14,7 @@ use url::Url;
 
 use crate::cache::{self, Cache, CacheStats, InputIdentity};
 use crate::media::{ChunkArtifact, Interrupted, MediaTools, Video, discover_inputs};
+use crate::metrics::{self, PeakMemory, StageSeconds, timed, timed_cell};
 use crate::output::Output;
 use crate::pipeline::{self, AssessmentBatch, AssessmentPhase, ModelConditions, PipelineOptions};
 use crate::selection::{
@@ -98,8 +100,9 @@ impl CacheConditions {
 }
 
 /// Cumulative work since `Session::prepare`, including preceding methods/runs.
-/// Callback counts record caller invocations; both elapsed fields share this
-/// session interval. `RunOutcome::warm` describes the current output shortcut.
+/// Callback counts record caller invocations; both legacy elapsed fields share
+/// this session interval. Stage intervals measure actual operations instead.
+/// `RunOutcome::warm` describes the current output shortcut.
 #[derive(Debug, Serialize)]
 pub struct RunMetrics {
     pub cache: CacheStats,
@@ -111,6 +114,8 @@ pub struct RunMetrics {
     pub context_calls: u64,
     pub semantic_calls: u64,
     pub elapsed_seconds: f64,
+    pub stage_seconds: StageSeconds,
+    pub peak_memory: PeakMemory,
 }
 
 #[derive(Debug)]
@@ -143,6 +148,8 @@ pub struct Session {
     assessment_calls: u64,
     context_calls: u64,
     semantic_calls: u64,
+    stage_seconds: StageSeconds,
+    input_verification_seconds: Cell<f64>,
     workflow: Option<Value>,
 }
 
@@ -286,6 +293,7 @@ impl Session {
                 identity,
                 cancelled,
                 &mut self.probe_calls,
+                &mut self.stage_seconds.media_probe,
             )?);
             self.verify_inputs()?;
         }
@@ -349,6 +357,8 @@ impl Session {
             assessment_calls: 0,
             context_calls: 0,
             semantic_calls: 0,
+            stage_seconds: StageSeconds::default(),
+            input_verification_seconds: Cell::new(0.0),
             workflow: None,
         })
     }
@@ -429,6 +439,7 @@ impl Session {
                 identity,
                 cancelled,
                 &mut self.probe_calls,
+                &mut self.stage_seconds.media_probe,
             )?);
             self.verify_inputs()?;
         }
@@ -443,46 +454,59 @@ impl Session {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let artifacts = pipeline::run(tools, &videos, options, cancelled, |batch| {
-            check_cancelled(cancelled)?;
-            self.verify_inputs()?;
-            let candidates = batch.candidates.iter().map(|candidate| Ok(json!({
+        let mut pipeline_seconds = StageSeconds::default();
+        let artifacts = pipeline::run_measured(
+            tools,
+            &videos,
+            options,
+            cancelled,
+            &mut pipeline_seconds,
+            |batch| {
+                check_cancelled(cancelled)?;
+                self.verify_inputs()?;
+                let candidates = batch.candidates.iter().map(|candidate| Ok(json!({
                 "id":candidate.id,"source":candidate.source,"input":by_source.get(&candidate.source).context("unknown assessment source")?,
                 "requested":candidate.requested_seconds,"actual":candidate.actual_seconds,"duration":candidate.duration_seconds,
                 "quality":candidate.quality,"event":candidate.event,"image":self.assessment_digest(&candidate.image, cancelled)?
             }))).collect::<Result<Vec<_>>>()?;
-            let contexts = batch.contexts.iter().map(|context| {
+                let contexts = batch.contexts.iter().map(|context| {
                 let frames = context.frames.iter().map(|frame| Ok(json!({"source":frame.source,"requested":frame.requested_seconds,"actual":frame.actual_seconds,"image":self.assessment_digest(&frame.image, cancelled)?}))).collect::<Result<Vec<_>>>()?;
                 Ok(json!({"id":context.id,"frames":frames}))
             }).collect::<Result<Vec<_>>>()?;
-            let sheets = batch
-                .sheets
-                .iter()
-                .map(|path| self.assessment_digest(path, cancelled))
-                .collect::<Result<Vec<_>>>()?;
-            let key = cache::key(
-                &json!({"algorithm":ALGORITHM,"phase":match batch.phase {AssessmentPhase::Primary=>"primary",AssessmentPhase::Secondary=>"secondary"},"model":options.model,"conditions":conditions,"candidates":candidates,"contexts":contexts,"sheets":sheets}),
-            )?;
-            if let Some(cached) =
-                self.cache
-                    .read_validated::<Vec<Assessment>>("assessments", &key, |cached| {
-                        validate_assessments(batch.candidates, cached).is_ok()
-                    })?
-            {
+                let sheets = batch
+                    .sheets
+                    .iter()
+                    .map(|path| self.assessment_digest(path, cancelled))
+                    .collect::<Result<Vec<_>>>()?;
+                let key = cache::key(
+                    &json!({"algorithm":ALGORITHM,"phase":match batch.phase {AssessmentPhase::Primary=>"primary",AssessmentPhase::Secondary=>"secondary"},"model":options.model,"conditions":conditions,"candidates":candidates,"contexts":contexts,"sheets":sheets}),
+                )?;
+                if let Some(cached) =
+                    self.cache
+                        .read_validated::<Vec<Assessment>>("assessments", &key, |cached| {
+                            validate_assessments(batch.candidates, cached).is_ok()
+                        })?
+                {
+                    self.verify_inputs()?;
+                    check_cancelled(cancelled)?;
+                    return Ok(cached);
+                }
                 self.verify_inputs()?;
+                self.assessment_calls += 1;
+                let result = timed(&mut self.stage_seconds.inference_callbacks, || {
+                    assessor(batch)
+                })?;
+                validate_assessments(batch.candidates, &result)?;
+                self.verify_inputs()?;
+                // A complete response survives a signal received just after it.
+                self.cache.write("assessments", &key, &result)?;
                 check_cancelled(cancelled)?;
-                return Ok(cached);
-            }
-            self.verify_inputs()?;
-            self.assessment_calls += 1;
-            let result = assessor(batch)?;
-            validate_assessments(batch.candidates, &result)?;
-            self.verify_inputs()?;
-            // A complete response survives a signal received just after it.
-            self.cache.write("assessments", &key, &result)?;
-            check_cancelled(cancelled)?;
-            Ok(result)
-        })?;
+                Ok(result)
+            },
+        );
+        self.stage_seconds.extraction += pipeline_seconds.extraction;
+        self.stage_seconds.machine_quality += pipeline_seconds.machine_quality;
+        let artifacts = artifacts?;
         self.verify_inputs()?;
         check_cancelled(cancelled)?;
         let report_path = artifacts.path().canonicalize()?.join("report.json");
@@ -498,7 +522,9 @@ impl Session {
         }
         storage::atomic_write(&report_path, &serde_json::to_vec_pretty(&report)?)?;
         let owned = self.output.publish_checked(&artifacts, cancelled, || {
-            verify_workflow(&self.input_directory, &self.inputs, Some(&identities))
+            timed_cell(&self.input_verification_seconds, || {
+                verify_workflow(&self.input_directory, &self.inputs, Some(&identities))
+            })
         })?;
         Ok(RunOutcome {
             warm: false,
@@ -543,6 +569,7 @@ impl Session {
             identity,
             cancelled,
             &mut self.probe_calls,
+            &mut self.stage_seconds.media_probe,
         )?;
         self.verify_inputs()?;
         ensure!(
@@ -584,10 +611,14 @@ impl Session {
             return Ok(events);
         }
         self.verify_inputs()?;
-        let chunk = tools.extract_chunk(&video, start, end, cancelled)?;
+        let chunk = timed(&mut self.stage_seconds.extraction, || {
+            tools.extract_chunk(&video, start, end, cancelled)
+        })?;
         self.verify_inputs()?;
         self.semantic_calls += 1;
-        let events = understand(&chunk)?;
+        let events = timed(&mut self.stage_seconds.inference_callbacks, || {
+            understand(&chunk)
+        })?;
         validate(
             &events,
             chunk.actual_start_seconds,
@@ -667,7 +698,10 @@ impl Session {
         }
         self.verify_inputs()?;
         self.context_calls += 1;
-        let context = generate(self)?;
+        let started = Instant::now();
+        let context = generate(self);
+        self.stage_seconds.inference_callbacks += started.elapsed().as_secs_f64();
+        let context = context?;
         ensure!(
             !context.trim().is_empty(),
             "generated game context must not be blank"
@@ -684,11 +718,13 @@ impl Session {
     }
 
     fn verify_inputs(&self) -> Result<()> {
-        verify_workflow(
-            &self.input_directory,
-            &self.inputs,
-            self.identities.as_deref(),
-        )
+        timed_cell(&self.input_verification_seconds, || {
+            verify_workflow(
+                &self.input_directory,
+                &self.inputs,
+                self.identities.as_deref(),
+            )
+        })
     }
 
     fn identify_inputs(&mut self, cancelled: &AtomicBool) -> Result<Vec<InputIdentity>> {
@@ -697,25 +733,34 @@ impl Session {
             return Ok(identities.clone());
         }
         let identities = self.cache.identify(&self.inputs, cancelled)?;
-        verify_workflow(&self.input_directory, &self.inputs, Some(&identities))?;
+        timed_cell(&self.input_verification_seconds, || {
+            verify_workflow(&self.input_directory, &self.inputs, Some(&identities))
+        })?;
         self.identities = Some(identities.clone());
         Ok(identities)
     }
 
     fn assessment_digest(&mut self, path: &Path, cancelled: &AtomicBool) -> Result<String> {
-        let (_, digest) = storage::digest_file_cancelled(path, cancelled, |bytes| {
-            self.assessment_bytes_read += bytes;
+        let (_, digest) = timed(&mut self.stage_seconds.cache_verification, || {
+            storage::digest_file_cancelled(path, cancelled, |bytes| {
+                self.assessment_bytes_read += bytes;
+            })
         })?;
         Ok(digest)
     }
 
     fn metrics(&self) -> RunMetrics {
         let elapsed_seconds = self.prepared_at.elapsed().as_secs_f64();
+        let cache = CacheStats {
+            elapsed_seconds,
+            ..self.cache.stats()
+        };
+        let mut stage_seconds = self.stage_seconds.clone();
+        stage_seconds.cache_verification += cache.verification_seconds
+            + self.output.verification_seconds()
+            + self.input_verification_seconds.get();
         RunMetrics {
-            cache: CacheStats {
-                elapsed_seconds,
-                ..self.cache.stats()
-            },
+            cache,
             output_bytes_read: self.output.bytes_read() + self.report_bytes_read,
             assessment_bytes_read: self.assessment_bytes_read,
             probe_calls: self.probe_calls,
@@ -723,6 +768,8 @@ impl Session {
             context_calls: self.context_calls,
             semantic_calls: self.semantic_calls,
             elapsed_seconds,
+            stage_seconds,
+            peak_memory: metrics::peak_memory(),
         }
     }
 }
@@ -773,6 +820,7 @@ fn probe(
     identity: &InputIdentity,
     cancelled: &AtomicBool,
     calls: &mut u64,
+    seconds: &mut f64,
 ) -> Result<Video> {
     let key = cache::key(&json!({"probe":PROBE,"input":identity.content_digest}))?;
     if let Some(mut video) = cache.read_validated::<Video>("probe", &key, valid_video)? {
@@ -780,7 +828,7 @@ fn probe(
         return Ok(video);
     }
     *calls += 1;
-    let mut video = tools.probe(path, cancelled)?;
+    let mut video = timed(seconds, || tools.probe(path, cancelled))?;
     cache::verify_inputs(&[path.to_owned()], std::slice::from_ref(identity))?;
     ensure!(valid_video(&video), "invalid probed video checkpoint");
     let source = video.source.clone();
@@ -884,6 +932,75 @@ mod tests {
                 cache_revision: "model-v1".to_owned(),
             },
         )
+    }
+
+    #[test]
+    fn callback_time_retains_failure_and_retry_but_warm_context_adds_no_inference() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = context_test_paths(directory.path());
+        let (conditions, model) = context_test_conditions();
+        let cancelled = AtomicBool::new(false);
+        let mut session = Session::prepare(&paths, &cancelled).unwrap();
+        let delay = std::time::Duration::from_millis(5);
+        let failed = session.generated_context(
+            "test game",
+            "search-v1",
+            &conditions,
+            &model,
+            true,
+            &cancelled,
+            || {
+                std::thread::sleep(delay);
+                anyhow::bail!("controlled callback failure")
+            },
+        );
+        assert!(failed.is_err());
+        let after_failure = session.metrics();
+        assert_eq!(after_failure.context_calls, 1);
+        assert!(after_failure.stage_seconds.inference_callbacks >= delay.as_secs_f64());
+        session
+            .generated_context(
+                "test game",
+                "search-v1",
+                &conditions,
+                &model,
+                true,
+                &cancelled,
+                || {
+                    std::thread::sleep(delay);
+                    Ok("generated context".to_owned())
+                },
+            )
+            .unwrap();
+        let after_retry = session.metrics();
+        assert_eq!(after_retry.context_calls, 2);
+        assert!(
+            after_retry.stage_seconds.inference_callbacks
+                >= after_failure.stage_seconds.inference_callbacks + delay.as_secs_f64()
+        );
+        session
+            .generated_context(
+                "test game",
+                "search-v1",
+                &conditions,
+                &model,
+                true,
+                &cancelled,
+                || panic!("warm context must bypass the callback"),
+            )
+            .unwrap();
+        let warm = session.metrics();
+        assert_eq!(warm.context_calls, 2);
+        assert_eq!(
+            warm.stage_seconds.inference_callbacks,
+            after_retry.stage_seconds.inference_callbacks
+        );
+        assert!(
+            warm.stage_seconds.cache_verification > after_retry.stage_seconds.cache_verification
+        );
+        assert_eq!(warm.stage_seconds.extraction, 0.0);
+        assert_eq!(warm.stage_seconds.machine_quality, 0.0);
+        assert_eq!(warm.stage_seconds.media_probe, 0.0);
     }
 
     #[test]

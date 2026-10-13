@@ -14,6 +14,7 @@ use crate::contact_sheet::{
     ContextImage, SheetEntry, render_candidate_sheets, render_selected_sheet,
 };
 use crate::media::{FrameArtifact, Interrupted, MediaTools, Video};
+use crate::metrics::{StageSeconds, timed};
 use crate::quality::{
     MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS, MAX_SELECTED_JPEG_BYTES, analyze, read_image,
 };
@@ -169,6 +170,7 @@ struct Work<'a> {
     videos: &'a [Video],
     options: &'a PipelineOptions,
     cancelled: &'a AtomicBool,
+    metrics: &'a mut StageSeconds,
     directory: TempDir,
     sources: Vec<String>,
     events: Option<EventIndex<'a>>,
@@ -191,6 +193,25 @@ pub fn run(
     videos: &[Video],
     options: &PipelineOptions,
     cancelled: &AtomicBool,
+    assessor: impl FnMut(&AssessmentBatch<'_>) -> Result<Vec<Assessment>>,
+) -> Result<Artifacts> {
+    run_measured(
+        tools,
+        videos,
+        options,
+        cancelled,
+        &mut StageSeconds::default(),
+        assessor,
+    )
+}
+
+/// Session retains these timings even if extraction or a later callback fails.
+pub(crate) fn run_measured(
+    tools: &MediaTools,
+    videos: &[Video],
+    options: &PipelineOptions,
+    cancelled: &AtomicBool,
+    metrics: &mut StageSeconds,
     mut assessor: impl FnMut(&AssessmentBatch<'_>) -> Result<Vec<Assessment>>,
 ) -> Result<Artifacts> {
     check_cancelled(cancelled)?;
@@ -229,6 +250,7 @@ pub fn run(
         videos,
         options,
         cancelled,
+        metrics,
         directory,
         sources,
         events: plans.events,
@@ -579,7 +601,9 @@ impl Work<'_> {
             return Ok(false);
         }
         self.attempts += 1;
-        let artifact = self.tools.extract(video, seconds, self.cancelled)?;
+        let artifact = timed(&mut self.metrics.extraction, || {
+            self.tools.extract(video, seconds, self.cancelled)
+        })?;
         let id = format!(
             "V{:04}-F{:08}",
             source + 1,
@@ -593,7 +617,9 @@ impl Work<'_> {
                 .insert("extracted PTS falls outside every semantic event window".to_owned());
             return Ok(true);
         }
-        let quality = analyze(&artifact.path())?;
+        let quality = timed(&mut self.metrics.machine_quality, || {
+            analyze(&artifact.path())
+        })?;
         if let Some(reason) = &quality.rejection {
             self.exclusions
                 .entry(id)
@@ -737,18 +763,20 @@ impl Work<'_> {
         Ok(pool.exclusions)
     }
 
-    fn context(&self, candidate: &Candidate, scratch: &Path) -> Result<CandidateContext> {
+    fn context(&mut self, candidate: &Candidate, scratch: &Path) -> Result<CandidateContext> {
         let source = self
             .sources
             .iter()
             .position(|source| source == &candidate.source)
             .expect("candidate source came from this work");
-        let artifacts = self.tools.extract_context(
-            &self.videos[source],
-            candidate.actual_seconds,
-            self.options.context_delta_seconds,
-            self.cancelled,
-        )?;
+        let artifacts = timed(&mut self.metrics.extraction, || {
+            self.tools.extract_context(
+                &self.videos[source],
+                candidate.actual_seconds,
+                self.options.context_delta_seconds,
+                self.cancelled,
+            )
+        })?;
         verify_frame(&self.videos[source], candidate, &artifacts[1])?;
         let mut frames = Vec::new();
         for (index, artifact) in artifacts.into_iter().enumerate() {
@@ -836,11 +864,13 @@ impl Work<'_> {
                 .iter()
                 .position(|source| source == &candidate.source)
                 .expect("candidate source came from this work");
-            let artifact = self.tools.extract(
-                &self.videos[source],
-                candidate.actual_seconds,
-                self.cancelled,
-            )?;
+            let artifact = timed(&mut self.metrics.extraction, || {
+                self.tools.extract(
+                    &self.videos[source],
+                    candidate.actual_seconds,
+                    self.cancelled,
+                )
+            })?;
             verify_frame(&self.videos[source], candidate, &artifact)?;
             let image = read_image(&artifact.path())?;
             encode_selected_jpeg(&image, &path)?;
@@ -1125,11 +1155,13 @@ mod tests {
         let indexed = index_events(&videos, &sources, Some(&events), &cancelled).unwrap();
         let tools = MediaTools::default();
         let options = options(1);
+        let mut metrics = StageSeconds::default();
         let work = Work {
             tools: &tools,
             videos: &videos,
             options: &options,
             cancelled: &cancelled,
+            metrics: &mut metrics,
             directory: tempfile::tempdir().unwrap(),
             sources,
             events: indexed,

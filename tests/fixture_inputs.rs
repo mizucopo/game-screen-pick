@@ -410,14 +410,93 @@ fn known_times_distinguish_sources_and_black_interval() {
 
 #[test]
 fn fixed_responses_match_the_fixture_contract() {
-    let result = Command::new("jq")
+    let responses = fs::read(root().join("responses.json")).expect("fixed responses");
+    let result = fixture_contract(&responses);
+    assert!(
+        result.status.success(),
+        "fixed response contract failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[cfg(test)]
+fn fixture_contract(responses: &[u8]) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new("jq")
         .args(["-se", "--slurpfile", "scenarios"])
         .arg(root().join("scenarios.json"))
         .args(["-f", "tests/fixture_contract.jq"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("jq must be installed");
+    child.stdin.take().unwrap().write_all(responses).unwrap();
+    child.wait_with_output().expect("fixture contract result")
+}
+
+#[cfg(test)]
+fn assert_response_mutation_rejected(mutation: &str) {
+    let result = Command::new("jq")
+        .args(["-c", mutation])
         .arg(root().join("responses.json"))
         .output()
         .expect("jq must be installed");
-    assert!(result.status.success(), "fixed response contract failed");
+    assert!(
+        result.status.success(),
+        "response mutation failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let result = fixture_contract(&result.stdout);
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "mutated fixture must fail the contract: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(result.stdout, b"false\n");
+}
+
+#[test]
+fn fixture_contract_rejects_candidate_and_event_time_contraction() {
+    assert_response_mutation_rejected(
+        r#"(.candidates[] | select(.id == "A03")) |=
+              (.time_seconds = 3.5 | .context_seconds = [3.25, 3.5, 3.75]) |
+           (.semantic_video[] | select(.source == "01-blocks.mkv") |
+              .events[] | select(.representative_seconds == 4.5)) |=
+              (.start_seconds = 3 | .end_seconds = 4 | .representative_seconds = 3.5)"#,
+    );
+}
+
+#[test]
+fn fixture_contract_rejects_source_swap_with_matching_events() {
+    assert_response_mutation_rejected(
+        r#".semantic_video[0].events[0] as $first |
+           .semantic_video[1].events[0] as $second |
+           (.candidates[] | select(.id == "A01")).source = "02-mirrored.mkv" |
+           (.candidates[] | select(.id == "B01")).source = "01-blocks.mkv" |
+           .semantic_video[0].events[0] = $second |
+           .semantic_video[1].events[0] = $first"#,
+    );
+}
+
+#[test]
+fn fixture_contract_rejects_different_valid_context_times() {
+    assert_response_mutation_rejected(
+        r#"(.candidates[] | select(.id == "A01")).context_seconds = [0, 0.5, 1]"#,
+    );
+}
+
+#[test]
+fn fixture_contract_rejects_candidate_context_identity_swap() {
+    assert_response_mutation_rejected(
+        r#".candidates[] |=
+           if .id == "A01" then .id = "A03"
+           elif .id == "A03" then .id = "A01"
+           else . end"#,
+    );
 }
 
 #[cfg(not(test))]

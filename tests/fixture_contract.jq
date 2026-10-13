@@ -9,6 +9,12 @@ def assessment:
   (.scene | text) and (.reason | text);
 
 ["01-blocks.mkv", "02-mirrored.mkv"] as $sources |
+[
+  ["A01", "01-blocks.mkv", 0.5, [0.25, 0.5, 0.75]],
+  ["A02", "01-blocks.mkv", 2.5, [2.25, 2.5, 2.75]],
+  ["A03", "01-blocks.mkv", 4.5, [4.25, 4.5, 4.75]],
+  ["B01", "02-mirrored.mkv", 1.5, [1.25, 1.5, 1.75]]
+] as $candidate_tuples |
 ["A01", "A02", "A03", "B01"] as $ids |
 ["A01", "A03", "B01"] as $useful_ids |
 [
@@ -46,6 +52,8 @@ def assessment:
 
 length == 1 and (.[0] | . as $script |
   (.game_context | text) and
+  (.candidates | map([.id, .source, .time_seconds, .context_seconds]) |
+    inventory($candidate_tuples)) and
   (.candidates | map(.id) | inventory($ids)) and
   (.candidates | map(.source) | unique | inventory($sources)) and
   all(.candidates[]; . as $candidate |
