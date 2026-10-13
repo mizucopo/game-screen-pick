@@ -125,6 +125,9 @@ CLIのcache親は出力と同じ親の `.game-screen-pick-cache`、変更は `--
 backend・認証を除く正規化service URL・model・推論レベル・prompt/schema/media revision・解決済みcontextをkeyに含めます。
 認証値や保存禁止のcontext本文はkey/checkpointへ保存しません。完了応答だけを検証してatomic書込みし、不正・途中結果はhitにしません。
 `semantic_chunk` はsource/区間/条件ごとに検証したeventだけを保存し、欠損chunkだけ再処理します。
+完成したsemantic planは入力identity・source・実効条件・chunk秒数で、durationと最大4096 eventだけをまとめて保存します。
+正常なsemantic warmはこの小さいplanから直接選定結果のkeyを検証し、全frame probeや個別chunk checkpointを読みません。
+planが欠落／破損した場合だけ既存chunk checkpointから再構成します。
 生成contextの `generated_context` は生成前の入力条件をkeyにし、保存許可をcallerが確認した場合だけ再利用します。Brave生応答は扱いません。
 最初のcontext生成callbackより前に入力identityを固定し、保存許可の有無にかかわらず同名入力の書換え・置換を拒否します。
 

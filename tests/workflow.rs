@@ -292,6 +292,22 @@ fn both_methods_use_live_adapters_and_warm_runs_make_no_external_calls() {
             assert!(counts.0 >= 2);
             assert_eq!(counts.1, if generated { 2 } else { 0 });
             let before = fs::read(root.path().join("output/report.json")).unwrap();
+            if method == "semantic_video" {
+                let cache = root
+                    .path()
+                    .join(".game-screen-pick-cache")
+                    .join(game_screen_pick::cache::NAMESPACE);
+                // Completed-plan warm lookup must never touch per-frame probes
+                // or enumerate chunk checkpoints, even when these are absent.
+                fs::remove_dir_all(cache.join("probe")).unwrap();
+                fs::remove_dir_all(cache.join("semantic")).unwrap();
+                let plans = fs::read_dir(cache.join("semantic-plans"))
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                assert_eq!(plans.len(), 1);
+                assert!(plans[0].metadata().unwrap().len() < 20000);
+            }
             // Management changes do not invalidate inference. A warm hit must
             // neither probe /models nor try these deliberately absent commands.
             let config = root.path().join("config.toml");

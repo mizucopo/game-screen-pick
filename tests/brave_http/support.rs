@@ -721,6 +721,74 @@ fn long_source_urls_use_the_same_bound_in_evidence_and_context() {
 }
 
 #[test]
+fn every_required_information_field_rejects_explicit_absence_and_placeholders() {
+    let evidence = evidence();
+    for field in [
+        "identification",
+        "genre",
+        "progression",
+        "representative_screens",
+        "selection_priorities",
+    ] {
+        for placeholder in [
+            "unknown",
+            "The genre is unclear.",
+            "Insufficient information",
+            "Cannot determine from the provided evidence",
+            "N/A",
+            "TBD",
+            "I don't know",
+            "No information",
+            "???",
+            "...",
+            "情報不足",
+            "ジャンルは不明です",
+            "進行構造は未確認です",
+            "情報が不足しているため判断できません",
+        ] {
+            let mut response = context();
+            response[field] = if ["identification", "genre"].contains(&field) {
+                json!(placeholder)
+            } else {
+                json!([placeholder])
+            };
+            assert!(
+                validate_context("Example", &evidence, &response).is_err(),
+                "accepted {field}={placeholder}"
+            );
+        }
+    }
+}
+
+#[test]
+fn short_genres_and_concrete_multilingual_details_remain_valid() {
+    let evidence = evidence();
+    for genre in ["RPG", "RTS", "4X", "アクション", "戦略"] {
+        let mut response = context();
+        response["identification"] = json!("Example");
+        response["genre"] = json!(genre);
+        response["progression"] = json!([
+            "クエストを完了して新しい地域を解放する",
+            "Explore unknown regions after completing quests"
+        ]);
+        response["representative_screens"] = json!(["正体不明の敵が現れる戦闘と探索画面"]);
+        response["selection_priorities"] =
+            json!(["敵の位置と行動、進行状況が読み取れる画面を優先する"]);
+        validate_context("Example", &evidence, &response).unwrap();
+    }
+    // Sentinel-looking names can be real supplied titles; only identity gets
+    // this exact-title exception, while the other required facts remain checked.
+    for title in ["Unknown", "N/A", "2048"] {
+        let mut response = context();
+        response["game_title"] = json!(title);
+        response["identification"] = json!(title);
+        validate_context(title, &evidence, &response).unwrap();
+        response["genre"] = json!("unknown");
+        assert!(validate_context(title, &evidence, &response).is_err());
+    }
+}
+
+#[test]
 fn ambiguous_conflicting_wrong_game_and_unknown_source_contexts_fail() {
     let evidence = evidence();
     let value = context();

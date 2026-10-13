@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -119,6 +119,15 @@ pub struct RunOutcome {
     pub metrics: RunMetrics,
 }
 
+/// Bounded semantic result without all-frame probe metadata. Each event was
+/// validated against its actual chunk before this aggregate was checkpointed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticPlan {
+    pub durations: BTreeMap<String, f64>,
+    pub events: Vec<SemanticEvent>,
+}
+
 /// Holds both locks across preflight, callbacks, checkpoints and publication.
 pub struct Session {
     input_directory: PathBuf,
@@ -136,6 +145,86 @@ pub struct Session {
 }
 
 impl Session {
+    /// Reuse the small completed semantic plan before reading frame checkpoints.
+    /// Individual chunk checkpoints still recover partial/missing plans.
+    pub fn semantic_plan(
+        &mut self,
+        chunk_seconds: f64,
+        model: &ModelConditions,
+        conditions: &CacheConditions,
+        cancelled: &AtomicBool,
+        generate: impl FnOnce(&mut Self) -> Result<SemanticPlan>,
+    ) -> Result<Vec<SemanticEvent>> {
+        check_cancelled(cancelled)?;
+        ensure!(
+            chunk_seconds.is_finite() && (0.1..=3600.0).contains(&chunk_seconds),
+            "invalid semantic plan chunk duration"
+        );
+        pipeline::validate_model(model)?;
+        let conditions = conditions.normalized(true)?;
+        let identities = self.identify_inputs(cancelled)?;
+        let inputs = self
+            .inputs
+            .iter()
+            .zip(&identities)
+            .map(|(path, identity)| {
+                Ok((
+                    source_name(path)?.to_owned(),
+                    identity.content_digest.clone(),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let key = cache::key(&json!({"algorithm":"semantic-plan-v1","probe":PROBE,
+            "inputs":inputs,"chunk_seconds":chunk_seconds,"model":model,"conditions":conditions}))?;
+        let validate = |plan: &SemanticPlan| -> Result<()> {
+            ensure!(
+                plan.durations.len() == inputs.len()
+                    && plan.durations.keys().eq(inputs.keys())
+                    && plan
+                        .durations
+                        .values()
+                        .all(|seconds| seconds.is_finite() && *seconds > 0.0)
+                    && !plan.events.is_empty()
+                    && plan.events.len() <= MAX_CANDIDATES,
+                "semantic plan has invalid sources, duration or event count"
+            );
+            let mut intervals = BTreeSet::new();
+            for event in &plan.events {
+                let duration = plan
+                    .durations
+                    .get(&event.source)
+                    .context("semantic plan contains an unknown source")?;
+                event_positions(event, *duration)?;
+                ensure!(
+                    intervals.insert((
+                        &event.source,
+                        event.start_seconds.to_bits(),
+                        event.end_seconds.to_bits(),
+                        event.representative_seconds.to_bits()
+                    )),
+                    "semantic plan contains duplicate events"
+                );
+            }
+            Ok(())
+        };
+        if let Some(plan) =
+            self.cache
+                .read_validated::<SemanticPlan>("semantic-plans", &key, |plan| {
+                    validate(plan).is_ok()
+                })?
+        {
+            self.verify_inputs()?;
+            check_cancelled(cancelled)?;
+            return Ok(plan.events);
+        }
+        self.verify_inputs()?;
+        let plan = generate(self)?;
+        validate(&plan)?;
+        self.verify_inputs()?;
+        self.cache.write("semantic-plans", &key, &plan)?;
+        check_cancelled(cancelled)?;
+        Ok(plan.events)
+    }
     /// Uses the same validated probe checkpoints as selection and semantic chunks.
     /// A warm semantic plan does not decode inputs or contact inference servers.
     pub fn videos(&mut self, tools: &MediaTools, cancelled: &AtomicBool) -> Result<Vec<Video>> {

@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::domain::{GameInput, SelectionMethod};
 use crate::media::{Interrupted, MediaTools, Video};
 use crate::pipeline::PipelineOptions;
-use crate::run::{ResolvedGameContext, RunOutcome, Session};
+use crate::run::{ResolvedGameContext, RunOutcome, SemanticPlan, Session};
 use crate::runtime::{RuntimeCompletion, RuntimeManager};
 
 pub struct Request<'a> {
@@ -134,50 +134,69 @@ pub fn run(
             resolved.clone(),
         )?;
         let events = if config.selection.method == SelectionMethod::SemanticVideo {
-            let videos = session.videos(tools, cancelled)?;
-            let mut events = Vec::new();
-            let mut chunks = 0;
-            for video in videos {
-                let ranges = semantic_ranges(
-                    &video,
-                    config
-                        .selection
-                        .semantic_chunk_seconds
-                        .min(media.max_video_seconds),
-                )?;
-                chunks += ranges.len();
-                ensure!(
-                    chunks <= crate::selection::MAX_CANDIDATES,
-                    "semantic plan exceeds the chunk limit"
-                );
-                for (index, (start, end)) in ranges.into_iter().enumerate() {
-                    check_cancelled(cancelled)?;
-                    eprintln!(
-                        "semantic_video: chunk {} (checkpoint reuse or inference)",
-                        index + 1
-                    );
-                    events.extend(session.semantic_chunk(
-                        tools,
-                        &video.source,
-                        start,
-                        end,
-                        &model,
-                        &conditions,
-                        cancelled,
-                        |chunk| {
-                            crate::inference::understand(
-                                inference.client()?,
-                                resolved.text(),
-                                chunk,
-                            )
-                        },
-                    )?);
-                }
-            }
-            ensure!(
-                !events.is_empty(),
-                "semantic understanding returned no usable events"
-            );
+            let events = session.semantic_plan(
+                config.selection.semantic_chunk_seconds,
+                &model,
+                &conditions,
+                cancelled,
+                |session| {
+                    let videos = session.videos(tools, cancelled)?;
+                    let mut plan = SemanticPlan {
+                        durations: Default::default(),
+                        events: Vec::new(),
+                    };
+                    let mut chunks = 0;
+                    for video in videos {
+                        let name = video
+                            .source
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .context("semantic source name must be UTF-8")?;
+                        plan.durations
+                            .insert(name.to_owned(), video.duration_seconds);
+                        let ranges = semantic_ranges(
+                            &video,
+                            config
+                                .selection
+                                .semantic_chunk_seconds
+                                .min(media.max_video_seconds),
+                        )?;
+                        chunks += ranges.len();
+                        ensure!(
+                            chunks <= crate::selection::MAX_CANDIDATES,
+                            "semantic plan exceeds the chunk limit"
+                        );
+                        for (index, (start, end)) in ranges.into_iter().enumerate() {
+                            check_cancelled(cancelled)?;
+                            eprintln!(
+                                "semantic_video: chunk {} (checkpoint reuse or inference)",
+                                index + 1
+                            );
+                            plan.events.extend(session.semantic_chunk(
+                                tools,
+                                &video.source,
+                                start,
+                                end,
+                                &model,
+                                &conditions,
+                                cancelled,
+                                |chunk| {
+                                    crate::inference::understand(
+                                        inference.client()?,
+                                        resolved.text(),
+                                        chunk,
+                                    )
+                                },
+                            )?);
+                            ensure!(
+                                plan.events.len() <= crate::selection::MAX_CANDIDATES,
+                                "semantic plan exceeds the event limit"
+                            );
+                        }
+                    }
+                    Ok(plan)
+                },
+            )?;
             Some(events)
         } else {
             None

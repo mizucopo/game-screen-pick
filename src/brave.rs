@@ -14,8 +14,8 @@ use url::{Host, Url};
 use crate::ai::{Content, JsonRequest, OpenAiClient};
 
 pub const SEARCH_REVISION: &str = "brave-web-game-evidence-v1";
-pub const CONTEXT_PROMPT_REVISION: &str = "game-context-evidence-v1";
-pub const CONTEXT_SCHEMA_REVISION: &str = "game-context-json-v1";
+pub const CONTEXT_PROMPT_REVISION: &str = "game-context-evidence-v2";
+pub const CONTEXT_SCHEMA_REVISION: &str = "game-context-json-v2";
 pub const BRAVE_ENDPOINT: &str = "https://api.search.brave.com/res/v1/web/search";
 
 /// Account-specific declarations must come from the applicable subscription or
@@ -547,7 +547,8 @@ pub fn build_context_request(title: &str, evidence: &SearchEvidence) -> Result<J
          Establish the game's identity (including edition/platform when known), genre, gameplay/progression structure, \
          representative gameplay screens and concrete selection priorities grounded in these sources. \
          Do not guess facts unsupported by evidence, resolve unrelated namesakes, or hide conflicting sources. \
-         Set ambiguous=true if the game cannot be identified confidently. Report unresolved contradictions. \
+         Set ambiguous=true if the game cannot be identified confidently or any required information lacks evidence. \
+         Report unresolved contradictions. Never substitute unknown, unclear, N/A, 情報不足 or other placeholders for required details. \
          game_title must exactly equal the requested title. Cite only exact source_urls supplied in the evidence. \
          Return concise original synthesis, without copying snippets. All arrays except contradictions require evidence."
         ),
@@ -619,15 +620,19 @@ pub fn validate_context(title: &str, evidence: &SearchEvidence, value: &Value) -
     );
     for name in ["identification", "genre"] {
         ensure!(
-            value[name].as_str().is_some_and(|s| !s.trim().is_empty()),
-            "Game Context lacks grounded identification/genre"
+            value[name]
+                .as_str()
+                .is_some_and(|s| meaningful_information(s)
+                // A real game's name may itself be Unknown, N/A or numeric.
+                // The exact requested title is a valid identity, not a sentinel.
+                || (name == "identification" && s.trim() == title)),
+            "Game Context lacks meaningful identification/genre information"
         );
     }
     for name in [
         "progression",
         "representative_screens",
         "selection_priorities",
-        "source_urls",
     ] {
         let values = value[name]
             .as_array()
@@ -635,8 +640,8 @@ pub fn validate_context(title: &str, evidence: &SearchEvidence, value: &Value) -
         ensure!(
             values
                 .iter()
-                .all(|s| s.as_str().is_some_and(|s| !s.trim().is_empty())),
-            "Game Context contains blank details"
+                .all(|s| s.as_str().is_some_and(meaningful_information)),
+            "Game Context contains missing or placeholder details"
         );
     }
     let sources = value["source_urls"]
@@ -649,6 +654,75 @@ pub fn validate_context(title: &str, evidence: &SearchEvidence, value: &Value) -
         "Game Context cites a source outside the search evidence"
     );
     serde_json::to_string(value).map_err(|_| anyhow!("cannot encode validated Game Context"))
+}
+
+/// Reject explicit absence/placeholder answers, not infer factual quality from
+/// prose. Keep short real genres and concrete multilingual descriptions valid.
+fn meaningful_information(text: &str) -> bool {
+    let lower = text.trim().to_lowercase();
+    if !lower.chars().any(char::is_alphabetic) {
+        return false;
+    }
+    let compact: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
+    let mut answer = compact.as_str();
+    // Only strip known field-label boilerplate, not words from arbitrary prose.
+    for label in [
+        "identification",
+        "identity",
+        "genre",
+        "progression",
+        "representativescreens",
+        "selectionpriorities",
+    ] {
+        let prefixes = [
+            format!("the{label}is"),
+            format!("{label}is"),
+            format!("the{label}"),
+            label.to_owned(),
+        ];
+        if let Some(detail) = prefixes
+            .iter()
+            .find_map(|prefix| answer.strip_prefix(prefix))
+        {
+            answer = detail;
+            break;
+        }
+    }
+    for prefix in [
+        "ゲームの同定は",
+        "同定は",
+        "ジャンルは",
+        "進行構造は",
+        "代表的な画面は",
+        "選定優先事項は",
+    ] {
+        if let Some(detail) = answer.strip_prefix(prefix) {
+            answer = detail;
+            break;
+        }
+    }
+    for suffix in ["です", "である", "でした"] {
+        if let Some(detail) = answer.strip_suffix(suffix) {
+            answer = detail;
+            break;
+        }
+    }
+    if answer.is_empty() {
+        return false;
+    }
+    // Recognized absence statements only. Concrete prose containing "unknown"
+    // or 不明 (e.g. exploration of unknown regions) is not a factual failure.
+    const ABSENT: &str = "unknown unclear insufficient insufficientinformation insufficientdata insufficientevidence
+        notenoughinformation notenoughdata notenoughevidence notknown notavailable notprovided notidentified
+        unidentified undetermined unspecified unavailable notapplicable na none null tbd todo placeholder pending missing loremipsum xxx
+        idontknow idonotknow noinformation noinformationavailable nodata nodataavailable noevidence noevidenceavailable
+        cannotdeterminefromtheprovidedevidence cannotidentifyfromtheprovidedevidence unknownnotenoughevidence
+        不明 未確認 不詳 わからない 分からない 判明していない 情報不足 根拠不足 情報なし 記載なし データなし なし 未設定
+        十分な情報がありません 情報がありません 情報がない 根拠がありません 根拠がない
+        情報が不足しています 情報が不足している 根拠が不足している 根拠が不足しています
+        情報が不足しているため判断できません 確認できません 確認できない 特定できません 特定できない
+        判断できません 判断できない 未特定 要確認 未定 ジャンル 進行構造 代表的な画面 選定優先事項";
+    !ABSENT.split_whitespace().any(|absent| absent == answer)
 }
 
 pub fn generate_context(
