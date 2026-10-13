@@ -7,8 +7,7 @@ archive=$(sh scripts/package-release.sh "$target")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 cargo test --locked --target "$target" --test workflow --no-run --message-format=json > "$work/build.jsonl"
-runner=$(jq -er 'select(.reason == "compiler-artifact" and .target.name == "workflow" and
-  (.target.kind | index("test")) and .executable != null) | .executable' "$work/build.jsonl")
+runner=$(jq -serf scripts/test-runner.jq "$work/build.jsonl")
 test -x "$runner"
 case "$target" in
   aarch64-apple-darwin)

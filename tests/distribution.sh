@@ -6,6 +6,19 @@ cd "$(dirname "$0")/.."
 repository=$(pwd)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
+printf '%s\n' \
+  '{"reason":"compiler-artifact","target":{"name":"workflow","kind":["test"]},"executable":"/tmp/fixture-runner"}' \
+  '{"reason":"build-finished","success":true}' > "$scratch/cargo.jsonl"
+runner=$(jq -serf scripts/test-runner.jq "$scratch/cargo.jsonl")
+test "$runner" = /tmp/fixture-runner
+printf '%s\n' '{"reason":"build-finished","success":true}' > "$scratch/no-runner.jsonl"
+if jq -serf scripts/test-runner.jq "$scratch/no-runner.jsonl" > /dev/null 2>&1; then
+  printf 'A missing test runner must fail\n' >&2; exit 1
+fi
+cat "$scratch/cargo.jsonl" "$scratch/cargo.jsonl" > "$scratch/duplicate-runner.jsonl"
+if jq -serf scripts/test-runner.jq "$scratch/duplicate-runner.jsonl" > /dev/null 2>&1; then
+  printf 'Multiple test runners must fail\n' >&2; exit 1
+fi
 version=1.0.0
 commit=0123456789012345678901234567890123456789
 mkdir "$scratch/dist" "$scratch/roots" "$scratch/tools" "$scratch/remote"

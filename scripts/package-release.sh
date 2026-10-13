@@ -17,9 +17,13 @@ case "$target" in
   *) printf 'Unsupported distribution target: %s\n' "$target" >&2; exit 1 ;;
 esac
 destination=${2:-dist}
+# Record caller changes before creating output files inside the checkout.
+commit=$(git rev-parse HEAD)
+dirty=false
+if [ -n "$(git status --porcelain)" ]; then dirty=true; fi
 mkdir -p "$destination"
 destination=$(cd "$destination" && pwd)
-work=$(mktemp -d)
+work=$(mktemp -d "$destination/.package.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 cargo build --release --locked --target "$target"
 cargo metadata --locked --offline --format-version 1 --filter-platform "$target" > "$work/metadata.json"
@@ -44,9 +48,8 @@ for document in release technical-reference ai-client brave-search acceptance ve
 done
 cp assets/OFL.txt "$root/assets/OFL.txt"
 sh scripts/collect-licenses.sh "$work/metadata.json" "$root/licenses"
-commit=$(git rev-parse HEAD)
-dirty=false
-if [ -n "$(git status --porcelain)" ]; then dirty=true; fi
+test "$(git rev-parse HEAD)" = "$commit"
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then dirty=true; fi
 binary_sha256=$(shasum -a 256 "$root/bin/game-screen-pick" | awk '{print $1}')
 jq -n --arg version "$version" --arg target "$target" --arg commit "$commit" \
   --argjson dirty "$dirty" --arg minimum_os "$minimum_os" \
@@ -57,7 +60,7 @@ jq -n --arg version "$version" --arg target "$target" --arg commit "$commit" \
     binary_sha256:$binary_sha256, external_commands:["ffmpeg","ffprobe"]}' > "$root/BUILD-INFO.json"
 # Stable metadata and gzip headers make reruns comparable. Changed compilers or
 # inputs can still change bytes; publication refuses to overwrite those assets.
-epoch=$(git show -s --format=%ct HEAD)
+epoch=$(git show -s --format=%ct "$commit")
 "$tar_command" --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
   -C "$work" -cf "$work/archive.tar" "$stem"
 gzip -n -c "$work/archive.tar" > "$work/$stem.tar.gz"

@@ -21,7 +21,8 @@ archive 名は `game-screen-pick-<Cargo version>-<target>.tar.gz`、checksum は
 利用者の取得・checksum・配置・設定・更新手順は [README](../README.md) を参照してください。
 
 native の対象環境で、公開せず配布物を作れます。
-Rust toolchain、FFmpeg／FFprobe、jq、checksum tool、GNU tar が必要です。macOS は GNU tar を `gtar` として用意します。
+Rust toolchain の `rust-docs`／`rust-src`（license収録用）、FFmpeg／FFprobe、jq、checksum tool、GNU tar が必要です。
+rustup を使う場合は `rustup component add rust-docs rust-src` で収録用資料を用意します。macOS は GNU tar を `gtar` として用意します。
 
 ```sh
 sh tests/check.sh
