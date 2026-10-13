@@ -299,13 +299,15 @@ impl BraveClient {
                 !found.is_empty() && found.len() <= self.config.result_count as usize,
                 "Brave returned empty or excessive search results"
             );
+            let before = results.len();
             for result in found {
                 let title = bounded_text(result.get("title"), 1024)?;
                 let url = bounded_text(result.get("url"), 8192)?;
                 validate_source_url(&url)?;
-                let description = bounded_text(result.get("description"), 16 * 1024)?;
+                let description =
+                    optional_text(result.get("description"), 16 * 1024)?.unwrap_or_default();
                 let extra_snippets = match result.get("extra_snippets") {
-                    None => Vec::new(),
+                    None | Some(Value::Null) => Vec::new(),
                     Some(value) => {
                         let snippets = value
                             .as_array()
@@ -313,10 +315,19 @@ impl BraveClient {
                         ensure!(snippets.len() <= 5, "excessive Brave extra snippets");
                         snippets
                             .iter()
-                            .map(|s| bounded_text(Some(s), 16 * 1024))
-                            .collect::<Result<_>>()?
+                            .map(|s| optional_text(Some(s), 16 * 1024))
+                            .collect::<Result<Vec<_>>>()?
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>()
                     }
                 };
+                // Brave permits null/empty descriptions and null snippets. A
+                // result without text contributes no usable grounding; others
+                // in the same query may still supply it.
+                if description.is_empty() && extra_snippets.is_empty() {
+                    continue;
+                }
                 results.push(SearchResult {
                     query_index,
                     title,
@@ -325,6 +336,10 @@ impl BraveClient {
                     extra_snippets,
                 });
             }
+            ensure!(
+                results.len() > before,
+                "Brave query returned no usable text evidence"
+            );
         }
         remaining(deadline)?;
         Ok(SearchEvidence { queries, results })
@@ -467,6 +482,22 @@ fn bounded_text(value: Option<&Value>, limit: usize) -> Result<String> {
     Ok(text.to_owned())
 }
 
+fn optional_text(value: Option<&Value>, limit: usize) -> Result<Option<String>> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let text = value
+                .as_str()
+                .ok_or_else(|| anyhow!("invalid Brave result text"))?;
+            ensure!(
+                text.len() <= limit && !text.contains('\0'),
+                "excessive or invalid Brave result text"
+            );
+            Ok((!text.trim().is_empty()).then(|| text.to_owned()))
+        }
+    }
+}
+
 fn validate_source_url(source: &str) -> Result<()> {
     let url = Url::parse(source).map_err(|_| anyhow!("invalid Brave source URL"))?;
     ensure!(
@@ -548,7 +579,6 @@ fn validate_evidence(evidence: &SearchEvidence) -> Result<()> {
             result.query_index < evidence.queries.len()
                 && !result.title.trim().is_empty()
                 && result.title.len() <= 1024
-                && !result.description.trim().is_empty()
                 && result.description.len() <= 16 * 1024
                 && result.url.len() <= 8192
                 && result.extra_snippets.len() <= 5
@@ -557,6 +587,10 @@ fn validate_evidence(evidence: &SearchEvidence) -> Result<()> {
                     .iter()
                     .all(|s| !s.trim().is_empty() && s.len() <= 16 * 1024),
             "invalid Game Context search result"
+        );
+        ensure!(
+            !result.description.trim().is_empty() || !result.extra_snippets.is_empty(),
+            "Game Context search result has no usable text evidence"
         );
         validate_source_url(&result.url)?;
     }

@@ -626,6 +626,51 @@ fn malformed_empty_api_error_and_credential_echo_responses_are_rejected() {
 }
 
 #[test]
+fn nullable_optional_snippets_and_descriptions_preserve_usable_evidence() {
+    for (description, snippets) in [
+        (json!("Grounded genre and gameplay"), Value::Null),
+        (Value::Null, json!(["Grounded genre and gameplay"])),
+        (json!(""), json!(["Grounded genre and gameplay"])),
+    ] {
+        let mock = Mock::new(move |_, _| {
+            let mut response = result();
+            response["web"]["results"][0]["description"] = description.clone();
+            response["web"]["results"][0]["extra_snippets"] = snippets.clone();
+            response
+                .pointer_mut("/web/results").unwrap().as_array_mut().unwrap()
+                .push(json!({"title":"No text result","url":"https://example.com/no-text","description":null,"extra_snippets":null}));
+            Reply::json(response)
+        });
+        let found = BraveClient::new(&config(&mock.url))
+            .unwrap()
+            .search("Example")
+            .unwrap();
+        assert_eq!(found.results.len(), 2);
+        build_context_request("Example", &found).unwrap();
+        assert_eq!(mock.requests().len(), 2);
+    }
+}
+
+#[test]
+fn a_query_with_no_usable_text_stops_before_more_search_or_generation() {
+    let mock = Mock::new(|_, _| {
+        Reply::json(
+            json!({"web":{"results":[{"title":"No text","url":"https://example.com/no-text",
+        "description":null,"extra_snippets":null}]}}),
+        )
+    });
+    assert!(
+        BraveClient::new(&config(&mock.url))
+            .unwrap()
+            .search("Example")
+            .unwrap_err()
+            .to_string()
+            .contains("usable text")
+    );
+    assert_eq!(mock.requests().len(), 1);
+}
+
+#[test]
 fn invalid_or_secret_title_fails_before_network() {
     let mock = Mock::new(|_, _| Reply::json(result()));
     let client = BraveClient::new(&config(&mock.url)).unwrap();
