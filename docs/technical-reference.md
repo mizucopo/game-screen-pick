@@ -52,7 +52,7 @@ FFprobe の有効な frame PTS を使い、stream offset・VFR を算術的な f
 stream metadata は1 MiB、frame metadata は64 MiBを上限とし、超過を拒否します。
 表示回転は90度単位に対応し、途中の解像度変更・不正な PTS・最終 duration 不明は拒否します。
 現在の cold probe は全 frame metadata を読み、抽出は decode 順序で原画像を確定します。
-長い録画の probe/反復抽出コスト削減と warm 再利用は後続の cache/選定工程で扱います。
+warm では保存済みの probe/選定結果と正常成果物を再利用し、全 frame の再走査を避けます。
 時刻は最初の有効 PTS からの動画内秒数です。
 PTS 差分、duration、前後 context の計算時刻は FFprobe の microsecond 精度へ丸め、小数の加減算誤差で端点を飛ばさないようにします。
 抽出は要求時刻以降の最初の frame、最終端点は最後の frame とし、範囲外・非有限値は拒否します。
@@ -60,7 +60,7 @@ FFmpeg の表示回転を適用した full-resolution PNG を抽出し、要求�
 前後 context は指定 delta から両端点へ clip し、中央の source/stream と一致させます。
 semantic 用の内部 chunk は lossless PNG/MOV、microsecond timebase と `setts` により
 元 frame の間隔と末尾の表示時間を保持します。PNG/FFV1 encode・`setts` 対応を含む
-外部 FFmpeg 条件は対象環境で検証し、最小対応 version は配布検証で確定します。
+外部 FFmpeg 条件と検証した環境は [配布検証](release.md#配布対象と検証) を参照してください。
 
 FFmpeg/FFprobe は shell を経由せず argv で実行します。媒体は専用の排他的 temporary directory 内へ作り、
 失敗・通常中断では一時 file を削除し、所有した子 process を停止・回収します。
@@ -68,14 +68,14 @@ FFmpeg/FFprobe は shell を経由せず argv で実行します。媒体は専�
 完成済み選定のcache/output排他・staging/公開・再開は以下のRust libraryで扱います。
 SIGINT は130、SIGTERM/HUPも成功にせず停止します。強制 kill や filesystem transaction の保証は含めません。
 
-## 品質・選定・一覧（#340）
+## 品質・選定・一覧
 
 `pipeline::run` は probe 済み動画と同期評価 callback を受け取り、専用 temporary directory の
 `Artifacts` を返します。一次/二次 callback へは実際の候補 ID・画像・sheet・前後 context を渡します。
 候補は最大12枚ずつ抽出して一次評価し、評価後は ID・時刻・品質指標を保持して原画像を削除します。
 二次評価と最終 JPEG には必要な元 frame だけを再抽出します。評価用の原画像・sheet・前後 context は
 各 callback の実行中だけ存在し、完了後に削除します。成功後は完成した JPEG・一覧・report だけを保持します。
-HTTP・応答 retry は #362/#342、cache・再開・所有権・公開は `run::Session` の責務です。
+HTTP・応答 retry は共通 client と用途検証、cache・再開・所有権・公開は `run::Session` の責務です。
 固定応答の用途接続はloopback HTTPで検証します。実 model の読解能力・実録画成果物品質の証明にはしません。
 
 等間隔 sampling は両端を含み、1候補なら中央を使います。semantic event は有効区間・代表時刻・重要度・
@@ -95,7 +95,7 @@ scene・根拠・source を検証し、代表とその両側の候補を抽出�
 このencoded上限を200MPのcontact sheetには適用しません。
 512px以内の preview の RGB 輝度平均・標準偏差・隣接勾配を使い、近黒/近白が96%超、平均が2.5%未満/97.5%超、
 標準偏差2.5%未満、平均勾配0.2%未満を除外します。遷移と有用性20点未満は評価結果から除外します。
-この保守的な機械判定は実ゲーム品質の保証ではなく、#343 の実録画確認で評価します。
+この保守的な機械判定だけで実ゲーム品質を保証しません。[実録画確認](verification.md#未実施の実モデルと画像評価) は未実施です。
 
 32×18 RGB の平均距離3.5%未満を近似重複とします。日本語等の scene を空白・英字大小だけ正規化し、
 未知 source、重複/欠落/未知 ID、非有限/範囲外 score、空 scene/根拠を拒否します。
@@ -122,7 +122,7 @@ report は rank・source・要求/実時刻・寸法・一次/二次評価・eve
 除外理由・非秘密の model 条件を記録します。遷移・低有用性等の確定除外と、最終選定に基づく重複・順位理由を分けます。
 Game Context は保存可能と確認した caller だけ明示して渡します。
 
-## cache・再開・出力保護（#341）
+## cache・再開・出力保護
 
 `run::Session::prepare` は入力・設定・path・既存出力の所有権を確認し、cache/outputを排他にしてから
 処理callbackを受け付けます。`Session::run` は `pipeline::run` の実画像評価と公開を接続します。
@@ -162,12 +162,14 @@ case-sensitive／insensitiveのAPFSで実filesystemの判定との一致を検�
 旧成果物を再確認してrenameします。完了検証前の失敗・通常中断は旧集合を復元し、journalから再開時にも回復します。
 完了後のcleanup失敗は未処理journalとして検出し、検証できない変更を推測で削除しません。
 macOS/Linuxのlock・rename・通常中断を検証します。hostileな同時filesystem書換え、強制kill/停電での完全atomicity、
-filesystemをまたぐtransactionは保証しません。実AI接続と実録画品質・配布検証は後続Issueで確認します。
+filesystemをまたぐtransactionは保証しません。実AI接続と実録画品質の [未実施項目](verification.md) と、
+binary の [配布検証](release.md#配布対象と検証) は区別して記録します。
 
 ## 検証
 
 `sh tests/check.sh` が format・Clippy・unit/integration と入力素材の確認を行う単一の品質 gate です。
-実 FFmpeg の抽出を [独立した入力 recipe](../tests/fixtures/README.md) の全画素・PTS・向きへ照合します。
-素材確認の単独実行と明示生成は同 README を参照してください。
+実 FFmpeg の抽出を独立した入力 recipe の全画素・PTS・向きへ照合します。
+recipe、素材確認の単独実行と明示生成は、ソース checkout の `tests/fixtures/README.md` を参照してください。
+archive を検証する場合は `BUILD-INFO.json` の `commit` と同じソースを使います。
 固定応答の選定と一覧の pixel/source/PTS/向き検証は Rust integration test で行います。
-実 model の品質・AI 能力・配布 target の最小 OS 条件は、それぞれ担当機能の検証後に確定します。
+実 model の品質・AI 能力は未検証です。配布 target の build 下限と実行した環境は、実 model の試験と分けて確認します。

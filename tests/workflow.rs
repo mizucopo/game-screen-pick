@@ -19,6 +19,32 @@ mod evidence;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_game-screen-pick");
 
+fn fixture(name: &str) -> std::path::PathBuf {
+    std::env::var_os("GSP_ARTIFACT_FIXTURES")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"))
+        .join("videos")
+        .join(name)
+}
+
+fn binary_command(root: &Path) -> Command {
+    let mut command = if let Some(binary) = std::env::var_os("GSP_ARTIFACT_BINARY") {
+        assert!(Path::new(&binary).is_absolute());
+        let mut command = Command::new(binary);
+        // The harness uses development tools; the unpacked CLI gets only its
+        // declared video tools, a fresh home, and a directory without sources.
+        command
+            .env_clear()
+            .env("PATH", std::env::var_os("GSP_ARTIFACT_TOOLS").unwrap());
+        command.env("HOME", root).env("TMPDIR", root);
+        command
+    } else {
+        Command::new(BINARY)
+    };
+    command.current_dir(root);
+    command
+}
+
 struct Server {
     url: String,
     calls: Arc<AtomicUsize>,
@@ -229,11 +255,7 @@ fn brave() -> Server {
 
 fn setup(root: &Path, ai: &Server, brave: &Server, method: &str, persist: bool) {
     fs::create_dir(root.join("input")).unwrap();
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/videos/01-blocks.mkv"),
-        root.join("input/blocks.mkv"),
-    )
-    .unwrap();
+    fs::copy(fixture("01-blocks.mkv"), root.join("input/blocks.mkv")).unwrap();
     let source = format!(
         r#"
 [selection]
@@ -302,9 +324,9 @@ fn invoke_count(
     tools_path: Option<&Path>,
     count: usize,
 ) -> std::process::Output {
-    let mut command = Command::new(BINARY);
+    let mut command = binary_command(root);
     command.env_remove("GAME_SCREEN_PICK_BRAVE_API_KEY");
-    command.current_dir(root).args([
+    command.args([
         "--config",
         "config.toml",
         "--count",
@@ -457,11 +479,7 @@ fn completed_files(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
 }
 
 fn add_mirrored(root: &Path) {
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/videos/02-mirrored.mkv"),
-        root.join("input/mirrored.mkv"),
-    )
-    .unwrap();
+    fs::copy(fixture("02-mirrored.mkv"), root.join("input/mirrored.mkv")).unwrap();
 }
 
 fn require_success(output: &std::process::Output) -> Value {
@@ -481,6 +499,140 @@ fn require_success(output: &std::process::Output) -> Value {
             .expect("successful CLI emits measurements"),
     )
     .unwrap()
+}
+
+#[test]
+fn cli_help_version_validation_extraction_and_unowned_output() {
+    let root = tempfile::tempdir().unwrap();
+    for arguments in [["--help"], ["--version"]] {
+        let output = binary_command(root.path())
+            .env("PATH", "")
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        if arguments == ["--version"] {
+            assert_eq!(
+                text.trim(),
+                concat!("game-screen-pick ", env!("CARGO_PKG_VERSION"))
+            );
+        } else {
+            assert!(text.contains("--config") && text.contains("--game-context"));
+        }
+    }
+    let ai = evidence_ai();
+    let brave = brave();
+    setup(root.path(), &ai, &brave, "sampled_frames", true);
+    let arguments = [
+        "validate",
+        "--config",
+        "config.toml",
+        "--count",
+        "2",
+        "--game-context",
+        "Pick colored gameplay blocks",
+        "input",
+        "output",
+    ];
+    let valid = binary_command(root.path())
+        .env("PATH", "")
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(
+        valid.status.success(),
+        "{}",
+        String::from_utf8_lossy(&valid.stderr)
+    );
+    assert!(!root.path().join("output").exists());
+    let original = fs::read(root.path().join("config.toml")).unwrap();
+    let example = if let Some(binary) = std::env::var_os("GSP_ARTIFACT_BINARY") {
+        fs::read(
+            Path::new(&binary)
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("config.example.toml"),
+        )
+        .unwrap()
+    } else {
+        include_bytes!("../config.example.toml").to_vec()
+    };
+    fs::write(root.path().join("config.toml"), example).unwrap();
+    let example_valid = binary_command(root.path())
+        .env("PATH", "")
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(
+        example_valid.status.success(),
+        "{}",
+        String::from_utf8_lossy(&example_valid.stderr)
+    );
+    fs::write(
+        root.path().join("config.toml"),
+        "[selection]\nmethod='invalid'\n",
+    )
+    .unwrap();
+    let invalid = binary_command(root.path())
+        .env("PATH", "")
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    fs::write(root.path().join("config.toml"), original).unwrap();
+    let extracted = binary_command(root.path())
+        .args([
+            "extract",
+            "--at",
+            "1",
+            "--context-seconds",
+            "0.25",
+            "input/blocks.mkv",
+            "extracted",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        extracted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&extracted.stderr)
+    );
+    let record: Value =
+        serde_json::from_slice(&fs::read(root.path().join("extracted/extraction.json")).unwrap())
+            .unwrap();
+    assert_eq!(record["source"], "blocks.mkv");
+    let frames = record["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 3);
+    for (frame, seconds) in frames.iter().zip([0.75, 1.0, 1.25]) {
+        assert_eq!(frame["actual_seconds"], seconds);
+        let pixels = image::open(
+            root.path()
+                .join("extracted")
+                .join(frame["file"].as_str().unwrap()),
+        )
+        .unwrap()
+        .to_rgb8();
+        assert_eq!(
+            pixels,
+            evidence::expected("blocks.mkv", frame["actual_seconds"].as_f64().unwrap()).unwrap()
+        );
+    }
+    fs::create_dir(root.path().join("output")).unwrap();
+    fs::write(
+        root.path().join("output/user-image.jpg"),
+        b"keep existing user output",
+    )
+    .unwrap();
+    let rejected = invoke(root.path(), false, false, false);
+    assert_eq!(rejected.status.code(), Some(2));
+    assert_eq!(
+        fs::read(root.path().join("output/user-image.jpg")).unwrap(),
+        b"keep existing user output"
+    );
+    assert_eq!((ai.calls(), brave.calls()), (0, 0));
 }
 
 #[test]
@@ -585,8 +737,7 @@ fn cli_rotated_multitrack_artifacts_keep_full_resolution_display_orientation() {
         setup(root.path(), &ai, &brave, method, true);
         fs::remove_file(root.path().join("input/blocks.mkv")).unwrap();
         fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/videos/03-multitrack-rotated.mov"),
+            fixture("03-multitrack-rotated.mov"),
             root.path().join("input/rotated.mov"),
         )
         .unwrap();

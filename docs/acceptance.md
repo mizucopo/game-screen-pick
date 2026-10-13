@@ -1,10 +1,11 @@
 # Rust CLI の受入基準
 
 ゲーム録画からブログ用の画像を指定枚数選び、画像・一覧・根拠を一緒に確認できることを合格条件とする。
-この仕様と [入力素材](../tests/fixtures/README.md) を各担当 Issue の Rust テストへ接続する。
+この仕様とソース checkout の `tests/fixtures/README.md` にある入力素材を Rust テストへ接続する。
+archive の検証には `BUILD-INFO.json` の `commit` と同じソースを使う。
 検証素材の確認だけでは CLI や実 model の品質が合格したことにはならない。
 
-## 入力と CLI（#339）
+## 入力と CLI
 
 ```text
 game-screen-pick --config config.toml --count 2 \
@@ -17,7 +18,7 @@ game-screen-pick --config config.toml --count 2 \
   `[ai]` は `backend`（`strata`／`vllm`）、`base_url`、`model`、`inference_level`、
   `timeout_seconds`、`cache_revision` を明示必須とする。認証は非空 `api_key` 優先、
   なければ `GAME_SCREEN_PICK_API_KEY` を使う。model／推論レベルに暗黙 default を置かない。
-  その他の検索・media・runtime 設定は #362／#342 で必要なものだけ定義する。
+  検索・media・runtime の契約は [設定・抽出・選定](technical-reference.md) と [AI 接続](ai-client.md) に従う。
 - 未知 key・型・範囲・排他違反・非対応の推論レベル／media を説明して拒否する。
   設定 file の不在や誤りで暗黙に別の設定へ切り替えない。
 - 入力直下の通常 file のみを、拡張子を大文字小文字無視で `.mp4`／`.mkv`／`.mov`／`.webm` と判定し、
@@ -35,7 +36,7 @@ game-screen-pick --config config.toml --count 2 \
 - stderr の進捗は方式、工程、完了／予定数、追補理由、cache 再利用、失敗と復旧方法が分かること。
   動的文字列を安全に表示し、認証値・HTTP header/body の秘密情報を表示しない。
 
-## 成果物（#340／#343）
+## 成果物
 
 | 成果物 | 合格条件 |
 | --- | --- |
@@ -48,9 +49,9 @@ game-screen-pick --config config.toml --count 2 \
 同じ入力・条件の cold／warm／中断再開で、Rust の同じ選定結果を得る。
 内部 ID、score の式、JPEG bytes、font、report 内部 schema はこの仕様で固定しない。
 
-## 再開と出力保護（#341）
+## 再開と出力保護
 
-新しい namespace/schema の Rust cache を使う。入力同一性と変更検出範囲は #341 で決定・明記する。
+専用 namespace/schema の Rust cache を使う。入力同一性と変更検出範囲は [cache 仕様](technical-reference.md) に従う。
 生成 context の key は game title と実効生成条件（検索条件／仕様、生成用 backend・正規化接続先・model・
 推論レベル・prompt/schema・revision）を含む。title または生成条件が変われば生成とその依存結果を無効化する。
 解決済みの直接／生成 Game Context を、それに依存する計画・評価・選定の cache key に含める。
@@ -70,9 +71,9 @@ cache 消失だけで正常出力を失わない。
 公開前の失敗は以前の正常成果物を保持する。staging／公開途中の失敗も不完全・混在した出力を成功扱いせず復旧する。
 lock、同一 filesystem 内の atomic 書込、cleanup の保証を対象 OS で検証する。未実測の強制 kill／filesystem 横断 transaction は約束しない。
 
-## AI と品質確認（#362 → #342 → #362／#343）
+## AI と品質確認
 
-#362 が小さな共通 OpenAI 互換 client・設定・mock 契約を作り、#342 が context 生成、二段階画像評価、動画理解を接続する。
+共通 OpenAI 互換 client・設定・mock 契約を context 生成、二段階画像評価、動画理解へ接続する。
 Brave は固定検索に絞り、無料枠・停止条件・保存条件を確認する。生レスポンスを永続保存せず、
 生成 context の保存・再利用も契約確認前に有効化しない。直接 context は検索しない。有料 API への自動 fallback はしない。
 
@@ -86,23 +87,15 @@ image/video/JSON Schema／必要な tools、解像度・枚数・token/context �
 非対応 `semantic_video` は理由付きで停止し、text-only や一枚の静止画へ黙って置換しない。
 時刻付き画像列を使う場合も順序・時間・上限・成果物品質を検証する。
 
-#343 は両方式×単一／複数動画×直接／生成 context の E2E と、各方式の複数回の実録画・実 model の Human Review を行う。
+両方式×単一／複数動画×直接／生成 context の E2E と、各方式の複数回の実録画・実 model の Human Review を行う。
 reviewer、実行条件、問題画像と理由、合否を記録し、秘密情報や実録画を公開 artifact に入れない。
 抽出・機械評価・推論・cache 確認時間、peak memory、cold／warm／再開の外部呼出数を測定する。速度向上率を推測しない。
 
-## 担当と配布（#344）
-
-| 順序 | 担当 |
-| --- | --- |
-| #338 | この受入仕様、入力の事実・固定応答・障害ケース、簡潔な更新手順 |
-| #339 | Cargo／CLI／Rust config／探索／FFprobe・FFmpeg 抽出、Rust 開発設定・quality gate |
-| #340 | 品質・多様性・候補不足・contact sheet |
-| #341 | Rust cache・必要部分の再計算・所有権・排他・安全な公開 |
-| #362 → #342 | 共通 client・設定・mock → Brave／context／画像／動画／任意 runtime 接続 → backend 別実能力確認 |
-| #343 | 成果物 E2E、負例、実 model 品質、障害回復・性能 |
-| #344 | `aarch64-apple-darwin`／`x86_64-unknown-linux-gnu` artifact の clean 環境検証と短い利用文書 |
+## 配布と実受入
 
 配布 binary は Python／uv／venv／Rust toolchain／OpenCV の利用者 setup を要求しない。
-FFmpeg／FFprobe と推論 server は外部依存。最小 macOS／glibc、dynamic library、FFmpeg 条件は #344 で実測し、
-未検証 target を対応済みとしない。作業 PR は `integration/rust-migration` 向け。
-最終 main PR と公開は全検証後の別工程で、採番は [既存 release 規約](../CONTRIBUTING.md) に従う。
+FFmpeg／FFprobe と推論 server は外部依存。対象は `aarch64-apple-darwin`／`x86_64-unknown-linux-gnu` とし、
+最小 OS の宣言・dynamic library 検査と、実行した OS／FFmpeg 条件の証拠を [配布検証](release.md#配布対象と検証) に分けて記録する。
+未検証 target を対応済みとしない。配布準備の完了だけで実録画・実 backend・Brave 契約や Human Review を合格扱いしない。
+[検証状況](verification.md) の未実施項目は、Issue の close やコード完了から実施済みと推定しない。
+最終 main PR と公開は承認後の別工程で、採番は [既存 release 規約](../CONTRIBUTING.md) に従う。

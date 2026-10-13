@@ -13,7 +13,7 @@
 - The Copier-managed release controller is shared release infrastructure. Keep
   its version source at `Cargo.toml` and its package lock entry at `Cargo.lock`.
   Version numbering remains automatic; do not hand-edit a new product version.
-- Repository-specific template differences are limited to installing video
-  tools, using the single locked-dependency quality command, and listing its
-  Cargo and Copier release inputs. The release controller and prerelease
-  behavior use the template directly.
+- Repository-specific template differences install video tools, use the single
+  locked-dependency quality command, list Cargo and Copier release inputs, and
+  build and smoke-test the two supported binary archives before publication.
+  The release controller and prerelease numbering use the template directly.

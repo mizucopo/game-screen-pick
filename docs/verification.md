@@ -1,8 +1,8 @@
-# 成果物・再開・品質の検証（#343）
+# 成果物・再開・品質の検証
 
 固定応答と合成動画の検証は、Rust CLI の接続・出典対応・障害回復の証拠である。
 実モデルの理解能力、実録画の選定品質、Brave の適用契約や live 接続、本人の画像確認を証明しない。
-#343 の実モデル・Human Review 条件は、その証拠を別に揃えるまで未完了とする。
+実モデル・Human Review の証拠は未実施のまま残す。Issue の close やコード完了から実検証完了を推定しない。
 
 ## 自動検証
 
@@ -11,7 +11,7 @@ sh tests/check.sh
 ```
 
 FFmpeg、FFprobe、jq が必要。CI の同じ quality gate が Rust の固定応答と合成動画 E2E を実行する。
-Python 比較や旧 golden を合格条件にしない。入力 recipe と承認 tuple を通常テストで再生成しない。
+独立した入力 recipe と承認 tuple を使い、通常テストで再生成しない。
 
 | 要件 | 検証 |
 | --- | --- |
@@ -23,9 +23,10 @@ Python 比較や旧 golden を合格条件にしない。入力 recipe と承認
 | 誤画像／時刻／label、不完全出力 | `evidence_rejects_wrong_pixels_times_labels_and_incomplete_artifacts` は前後画素交換、要求 metadata の誤時刻、report のsource／時刻／rank／scene改変、出力画像交換・欠損を拒否する。製品の所有権拒否は `tests/output.rs`、`tests/cached_run.rs` が別に確認する。 |
 | 不足、FFmpeg／HTTP／schema 失敗 | `cli_shortage_http_and_schema_failures_preserve_previous_complete_output`、`cli_ffmpeg_failure_preserves_previous_complete_output_without_inference`。不足理由、有限attempt、以前の正常出力の byte 保持、秘密非出力を確認。 |
 | disk／公開／cleanup／中断 | `src/output.rs` の staging・rename・journal recovery・部分 cleanup の負例、`tests/runtime.rs` の所有session・停止失敗、`tests/http_cancellation.rs`／`tests/workflow.rs` の実 SIGINT と終了130を使用する。強制 kill や任意filesystemの保証へ拡張しない。 |
-| 台本の時間分散 guard | [入力素材](../tests/fixtures/README.md) の固定 tuple を `fixture_contract.jq` が検査。candidate・eventの同時時刻縮小、source交換、context変更、ID取り違えの負例を拒否する。 |
+| 台本の時間分散 guard | ソース checkout の `tests/fixtures/README.md` の固定 tuple を `fixture_contract.jq` が検査。candidate・eventの同時時刻縮小、source交換、context変更、ID取り違えの負例を拒否する。 |
 
 合成素材だけを手元へ保存するには、空の検証用 directory を指定する。
+archive の検証には `BUILD-INFO.json` の `commit` と同じソース checkout を使う。
 
 ```sh
 GSP_QA_DIR=/absolute/path/to/empty-synthetic-qa sh tests/check.sh
@@ -81,4 +82,5 @@ model自動インストール、GPU server構成、秘密設定、認証変更�
 | 問題画像 | privateなrank/source/要求・実時刻と具体的理由。暗転、白飛び、loading/fade、近似重複、出典や向き誤り、偏りを記録する。 |
 | 分散と有用性 | 有効候補と枠がある場合の入力元・時刻・scene分散、通常進行と有用な特別場面。満たせない理由と解決結果。 |
 
-実能力と具体的な画像品質・障害回復・性能の証拠が揃い、利用を妨げる未解決事項がなくなってから #343 の完了を判断する。
+実能力と具体的な画像品質・障害回復・性能の証拠が揃い、利用を妨げる未解決事項がなくなってから製品の実受入を判断する。
+archive の build・checksum・clean 環境検証と、実公開の承認境界は [配布・公開](release.md) を参照する。

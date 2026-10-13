@@ -2,7 +2,7 @@ _commit: 75e92b6
 _src_path: git@github.com:mizucopo/repo-template.git
 author_email: mizu.copo@gmail.com
 author_name: みず
-project_description: ゲームスクリーンショットから品質・多様性を考慮して最適な画像を自動選択するAIツール
+project_description: ゲーム録画からブログ用画像・一覧画像・選定根拠を作るRust CLI
 project_name: game-screen-pick
 project_version: 1.19.4
 rust_version: stable
