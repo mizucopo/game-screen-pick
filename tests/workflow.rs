@@ -14,6 +14,9 @@ use std::time::Duration;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
+#[path = "support/evidence.rs"]
+mod evidence;
+
 const BINARY: &str = env!("CARGO_BIN_EXE_game-screen-pick");
 
 struct Server {
@@ -132,69 +135,80 @@ fn ai() -> Server {
 }
 
 fn ai_with_quiet_chunks(quiet: impl Fn(&Value) -> bool + Send + 'static) -> Server {
-    Server::new(move |header, body| {
-        assert!(header.starts_with("POST /v1/chat/completions "));
-        assert_eq!(body["model"], "fixture-vision");
-        assert_eq!(body["reasoning_effort"], "none");
-        let content = body["messages"][0]["content"].as_array().unwrap();
-        let answer = if content.iter().any(|part| part["type"] == "video_url") {
-            let value = metadata(body, "semantic_chunk_metadata");
-            let url = content
-                .iter()
-                .find(|part| part["type"] == "video_url")
-                .unwrap()["video_url"]["url"]
-                .as_str()
-                .unwrap();
-            assert!(url.starts_with("data:video/quicktime;base64,"));
-            let bytes = STANDARD.decode(url.split_once(',').unwrap().1).unwrap();
-            assert!(bytes.len() > 100 && bytes.windows(4).any(|part| part == b"moov"));
-            assert_eq!(value["width"], 160);
-            assert_eq!(value["height"], 96);
-            let start = value["actual_start_seconds"].as_f64().unwrap();
-            let end = value["actual_end_seconds"].as_f64().unwrap();
-            if quiet(&value) {
-                json!({"events":[]})
-            } else {
-                json!({"events":[{"source":value["source"], "start_seconds":start,"end_seconds":end,
+    Server::new(move |header, body| fixed_answer(header, body, &quiet))
+}
+
+fn fixed_answer(header: &str, body: &Value, quiet: &impl Fn(&Value) -> bool) -> Value {
+    assert!(header.starts_with("POST /v1/chat/completions "));
+    assert_eq!(body["model"], "fixture-vision");
+    assert_eq!(body["reasoning_effort"], "none");
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    let answer = if content.iter().any(|part| part["type"] == "video_url") {
+        let value = metadata(body, "semantic_chunk_metadata");
+        let url = content
+            .iter()
+            .find(|part| part["type"] == "video_url")
+            .unwrap()["video_url"]["url"]
+            .as_str()
+            .unwrap();
+        assert!(url.starts_with("data:video/quicktime;base64,"));
+        let bytes = STANDARD.decode(url.split_once(',').unwrap().1).unwrap();
+        assert!(bytes.len() > 100 && bytes.windows(4).any(|part| part == b"moov"));
+        assert!([(160, 96), (96, 160)].contains(&(
+            value["width"].as_u64().unwrap(),
+            value["height"].as_u64().unwrap()
+        )));
+        let start = value["actual_start_seconds"].as_f64().unwrap();
+        let end = value["actual_end_seconds"].as_f64().unwrap();
+        if quiet(&value) {
+            json!({"events":[]})
+        } else {
+            json!({"events":[{"source":value["source"], "start_seconds":start,"end_seconds":end,
                 "representative_seconds":(start + end) / 2.0,"importance":90,
                 "scene":"colored gameplay blocks","reason":"Colored blocks change in temporal order across the video"}]})
+        }
+    } else if content.iter().any(|part| part["type"] == "image_url") {
+        let value = metadata(body, "assessment_metadata");
+        let mut images = 0;
+        for part in content.iter().filter(|part| part["type"] == "image_url") {
+            let url = part["image_url"]["url"].as_str().unwrap();
+            let bytes = STANDARD.decode(url.split_once(',').unwrap().1).unwrap();
+            let image = image::load_from_memory(&bytes).unwrap();
+            assert!(image.width() >= 16 && image.height() >= 16);
+            images += 1;
+        }
+        let candidates = value["candidates"].as_array().unwrap();
+        assert_eq!(
+            images,
+            if value["phase"] == "secondary" {
+                1 + 3 * candidates.len()
+            } else {
+                1
             }
-        } else if content.iter().any(|part| part["type"] == "image_url") {
-            let value = metadata(body, "assessment_metadata");
-            let mut images = 0;
-            for part in content.iter().filter(|part| part["type"] == "image_url") {
-                let url = part["image_url"]["url"].as_str().unwrap();
-                let bytes = STANDARD.decode(url.split_once(',').unwrap().1).unwrap();
-                let image = image::load_from_memory(&bytes).unwrap();
-                assert!(image.width() >= 16 && image.height() >= 16);
-                images += 1;
-            }
-            let candidates = value["candidates"].as_array().unwrap();
-            assert_eq!(
-                images,
-                if value["phase"] == "secondary" {
-                    1 + 3 * candidates.len()
-                } else {
-                    1
-                }
-            );
-            json!({"assessments":candidates.iter().map(|candidate| json!({
+        );
+        json!({"assessments":candidates.iter().map(|candidate| json!({
                 "id":candidate["id"],"blog_score":90,"transition":false,"special":false,
                 "scene":"colored gameplay blocks","reason":"Colored blocks and readable gameplay elements are clearly visible"
             })).collect::<Vec<_>>()})
-        } else {
-            let text = content
-                .iter()
-                .filter_map(|part| part["text"].as_str())
-                .collect::<String>();
-            assert!(text.contains("Example Game") && text.contains("Gameplay evidence"));
-            json!({"game_title":"Example Game","identification":"Example Game fixture game",
+    } else {
+        let text = content
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<String>();
+        assert!(text.contains("Example Game") && text.contains("Gameplay evidence"));
+        json!({"game_title":"Example Game","identification":"Example Game fixture game",
                 "genre":"puzzle adventure","progression":["Explore changing colored blocks"],
                 "representative_screens":["Colored blocks on a readable gameplay screen"],
                 "selection_priorities":["Clear normal gameplay with changing colors"],
                 "ambiguous":false,"contradictions":[],"source_urls":["https://example.test/game"]})
-        };
-        json!({"model":"fixture-vision","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":answer.to_string()}}]})
+    };
+    json!({"model":"fixture-vision","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":answer.to_string()}}]})
+}
+
+fn evidence_ai() -> Server {
+    Server::new(|header, body| {
+        evidence::verify_request(body).unwrap();
+        fixed_answer(header, body, &|_| false)
     })
 }
 
@@ -278,13 +292,23 @@ fn invoke_with_path(
     cache_only: bool,
     tools_path: Option<&Path>,
 ) -> std::process::Output {
+    invoke_count(root, generated, cache_only, tools_path, 2)
+}
+
+fn invoke_count(
+    root: &Path,
+    generated: bool,
+    cache_only: bool,
+    tools_path: Option<&Path>,
+    count: usize,
+) -> std::process::Output {
     let mut command = Command::new(BINARY);
     command.env_remove("GAME_SCREEN_PICK_BRAVE_API_KEY");
     command.current_dir(root).args([
         "--config",
         "config.toml",
         "--count",
-        "2",
+        &count.to_string(),
         if generated {
             "--game-title"
         } else {
@@ -417,6 +441,436 @@ fn both_methods_use_live_adapters_and_warm_runs_make_no_external_calls() {
             }
         }
     }
+}
+
+fn completed_files(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fs::read_dir(root.join("output"))
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                entry.file_name().into_string().unwrap(),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn add_mirrored(root: &Path) {
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/videos/02-mirrored.mkv"),
+        root.join("input/mirrored.mkv"),
+    )
+    .unwrap();
+}
+
+fn require_success(output: &std::process::Output) -> Value {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for secret in ["search-secret", "fixture-api-secret"] {
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(secret));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+    }
+    serde_json::from_str(
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .find_map(|line| line.strip_prefix("metrics: "))
+            .expect("successful CLI emits measurements"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn cli_evidence_matrix_checks_pixels_labels_events_and_zero_call_warm() {
+    for method in ["sampled_frames", "semantic_video"] {
+        for multiple in [false, true] {
+            for generated in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let ai = evidence_ai();
+                let brave = brave();
+                setup(root.path(), &ai, &brave, method, true);
+                if multiple {
+                    add_mirrored(root.path());
+                }
+                let cold = invoke(root.path(), generated, false, false);
+                let cold_metrics = require_success(&cold);
+                let files = completed_files(root.path());
+                let report: Value = serde_json::from_slice(&files["report.json"]).unwrap();
+                evidence::verify_output(&root.path().join("output"), &report).unwrap();
+                assert_eq!(report["method"], method);
+                assert_eq!(report["model"]["backend"], "vllm");
+                assert_eq!(report["model"]["model"], "fixture-vision");
+                assert_eq!(
+                    report["sources"].as_array().unwrap().len(),
+                    if multiple { 2 } else { 1 }
+                );
+                let selected = report["selected"].as_array().unwrap();
+                if multiple {
+                    assert_ne!(selected[0]["source"], selected[1]["source"]);
+                } else {
+                    assert_ne!(selected[0]["actual_seconds"], selected[1]["actual_seconds"]);
+                }
+                let calls = (ai.calls(), brave.calls());
+                assert_eq!(calls.1, if generated { 2 } else { 0 });
+                let warm = invoke(root.path(), generated, true, true);
+                let warm_metrics = require_success(&warm);
+                assert_eq!((ai.calls(), brave.calls()), calls);
+                assert_eq!(completed_files(root.path()), files);
+                for field in [
+                    "extraction",
+                    "machine_quality",
+                    "inference_callbacks",
+                    "media_probe",
+                ] {
+                    assert_eq!(
+                        warm_metrics["stage_seconds"][field], 0.0,
+                        "warm performs no {field}"
+                    );
+                    assert!(
+                        cold_metrics["stage_seconds"][field]
+                            .as_f64()
+                            .unwrap()
+                            .is_finite()
+                    );
+                }
+                assert!(
+                    cold_metrics["stage_seconds"]["cache_verification"]
+                        .as_f64()
+                        .unwrap()
+                        > 0.0
+                );
+                assert!(
+                    warm_metrics["stage_seconds"]["cache_verification"]
+                        .as_f64()
+                        .unwrap()
+                        > 0.0
+                );
+                assert!(
+                    cold_metrics["peak_memory"]["status"] == "measured"
+                        || cold_metrics["peak_memory"]["status"] == "unavailable"
+                );
+                if cold_metrics["peak_memory"]["status"] == "measured" {
+                    assert!(cold_metrics["peak_memory"]["bytes"].as_u64().unwrap() > 0);
+                }
+                if let Some(qa) = std::env::var_os("GSP_QA_DIR") {
+                    let destination = std::path::PathBuf::from(qa).join(format!(
+                        "cli-{method}-{}-{}",
+                        if multiple { "multiple" } else { "single" },
+                        if generated {
+                            "generated-mock"
+                        } else {
+                            "direct"
+                        }
+                    ));
+                    fs::create_dir_all(&destination).unwrap();
+                    for (name, bytes) in &files {
+                        fs::write(destination.join(name), bytes).unwrap();
+                    }
+                    fs::write(destination.join("measurements.json"), serde_json::to_vec_pretty(&json!({"evidence":"synthetic fixtures and loopback fixed responses; no live capability or human review", "cold":cold_metrics,"warm":warm_metrics,"external_calls":{"cold":{"ai":calls.0,"search":calls.1,"runtime":0},"warm":{"ai":0,"search":0,"runtime":0}}})).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cli_rotated_multitrack_artifacts_keep_full_resolution_display_orientation() {
+    for method in ["sampled_frames", "semantic_video"] {
+        let root = tempfile::tempdir().unwrap();
+        let ai = evidence_ai();
+        let brave = brave();
+        setup(root.path(), &ai, &brave, method, true);
+        fs::remove_file(root.path().join("input/blocks.mkv")).unwrap();
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/videos/03-multitrack-rotated.mov"),
+            root.path().join("input/rotated.mov"),
+        )
+        .unwrap();
+        require_success(&invoke(root.path(), false, false, false));
+        let report: Value =
+            serde_json::from_slice(&completed_files(root.path())["report.json"]).unwrap();
+        evidence::verify_output(&root.path().join("output"), &report).unwrap();
+        assert!(
+            report["selected"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|frame| frame["width"] == 96 && frame["height"] == 160)
+        );
+    }
+}
+
+#[test]
+fn cli_resume_reuses_committed_media_and_context_and_matches_clean_cold() {
+    for method in ["sampled_frames", "semantic_video"] {
+        for multiple in [false, true] {
+            for generated in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let failed_once = Arc::new(AtomicBool::new(false));
+                let accepted = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+                let calls = accepted.clone();
+                let failed = failed_once.clone();
+                let mut media_calls = 0;
+                let ai = Server::with_status(move |header, body| {
+                    evidence::verify_request(body).unwrap();
+                    let key = evidence::metadata(body, "semantic_chunk_metadata")
+                        .or_else(|_| evidence::metadata(body, "assessment_metadata"));
+                    if let Ok(key) = key {
+                        media_calls += 1;
+                        if media_calls == 2 {
+                            failed.store(true, Ordering::Relaxed);
+                            return (401, json!({"error":"fixture-api-secret"}));
+                        }
+                        calls.lock().unwrap().push(key);
+                    }
+                    (200, fixed_answer(header, body, &|_| false))
+                });
+                let brave = brave();
+                setup(root.path(), &ai, &brave, method, true);
+                if multiple {
+                    add_mirrored(root.path());
+                }
+                let interrupted = invoke(root.path(), generated, false, false);
+                assert_eq!(interrupted.status.code(), Some(1));
+                assert!(failed_once.load(Ordering::Relaxed));
+                assert!(!root.path().join("output").exists());
+                assert!(
+                    !String::from_utf8_lossy(&interrupted.stderr).contains("fixture-api-secret")
+                );
+                let first = accepted.lock().unwrap()[0].clone();
+                let partial_calls = (ai.calls(), brave.calls());
+                let resumed = invoke(root.path(), generated, false, false);
+                let resumed_metrics = require_success(&resumed);
+                assert_eq!(
+                    accepted
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|key| **key == first)
+                        .count(),
+                    1,
+                    "completed media must not repeat on resume"
+                );
+                assert_eq!(
+                    brave.calls(),
+                    partial_calls.1,
+                    "completed generated context must not search again"
+                );
+                let files = completed_files(root.path());
+                let report: Value = serde_json::from_slice(&files["report.json"]).unwrap();
+                evidence::verify_output(&root.path().join("output"), &report).unwrap();
+                let resume_calls = (
+                    ai.calls() - partial_calls.0,
+                    brave.calls() - partial_calls.1,
+                );
+                fs::remove_dir_all(root.path().join("output")).unwrap();
+                fs::remove_dir_all(root.path().join(".game-screen-pick-cache")).unwrap();
+                let before_clean = ai.calls();
+                let clean = invoke(root.path(), generated, false, false);
+                let clean_metrics = require_success(&clean);
+                assert_eq!(
+                    completed_files(root.path()),
+                    files,
+                    "resumed artifacts must match clean cold byte for byte"
+                );
+                assert!(resume_calls.0 < ai.calls() - before_clean);
+                if let Some(qa) = std::env::var_os("GSP_QA_DIR") {
+                    let destination = std::path::PathBuf::from(qa).join(format!(
+                        "resume-{method}-{}-{}",
+                        if multiple { "multiple" } else { "single" },
+                        if generated {
+                            "generated-mock"
+                        } else {
+                            "direct"
+                        }
+                    ));
+                    fs::create_dir_all(&destination).unwrap();
+                    fs::write(destination.join("measurements.json"), serde_json::to_vec_pretty(&json!({"evidence":"recoverable HTTP failure after a committed batch/chunk, not a signal interruption", "partial_external_calls":{"ai":partial_calls.0,"search":partial_calls.1,"runtime":0},"resume_external_calls":{"ai":resume_calls.0,"search":resume_calls.1,"runtime":0},"resume":resumed_metrics,"clean_cold":clean_metrics})).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cli_shortage_http_and_schema_failures_preserve_previous_complete_output() {
+    for method in ["sampled_frames", "semantic_video"] {
+        let root = tempfile::tempdir().unwrap();
+        let mode = Arc::new(AtomicUsize::new(0));
+        let current = mode.clone();
+        let ai = Server::with_status(move |header, body| match current.load(Ordering::Relaxed) {
+            1 => (401, json!({"error":"fixture-api-secret"})),
+            2 => (
+                200,
+                json!({"model":"fixture-vision","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"{\"assessments\":[]}"}}]}),
+            ),
+            _ => {
+                evidence::verify_request(body).unwrap();
+                (200, fixed_answer(header, body, &|_| false))
+            }
+        });
+        let brave = brave();
+        setup(root.path(), &ai, &brave, method, true);
+        require_success(&invoke(root.path(), true, false, false));
+        let files = completed_files(root.path());
+        let shortage = invoke_count(root.path(), true, false, None, 999);
+        assert_eq!(shortage.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&shortage.stderr).contains("insufficient"),
+            "{}",
+            String::from_utf8_lossy(&shortage.stderr)
+        );
+        assert_eq!(completed_files(root.path()), files);
+        let config = root.path().join("config.toml");
+        let source = fs::read_to_string(&config).unwrap().replace(
+            "cache_revision = \"fixture-v1\"",
+            "cache_revision = \"changed-for-failure\"",
+        );
+        fs::write(config, source).unwrap();
+        for (failure_mode, expected_calls) in [(1, 1), (2, 2)] {
+            mode.store(failure_mode, Ordering::Relaxed);
+            let before = ai.calls();
+            let rejected = invoke(root.path(), false, false, false);
+            assert_eq!(rejected.status.code(), Some(1));
+            assert_eq!(
+                ai.calls() - before,
+                expected_calls,
+                "finite request attempts"
+            );
+            assert_eq!(completed_files(root.path()), files);
+            assert!(!String::from_utf8_lossy(&rejected.stderr).contains("fixture-api-secret"));
+        }
+        mode.store(0, Ordering::Relaxed);
+        require_success(&invoke(root.path(), false, false, false));
+        evidence::verify_output(
+            &root.path().join("output"),
+            &serde_json::from_slice(&completed_files(root.path())["report.json"]).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_ffmpeg_failure_preserves_previous_complete_output_without_inference() {
+    use std::os::unix::fs::PermissionsExt;
+    for method in ["sampled_frames", "semantic_video"] {
+        let root = tempfile::tempdir().unwrap();
+        let ai = ai();
+        let brave = brave();
+        setup(root.path(), &ai, &brave, method, true);
+        require_success(&invoke(root.path(), false, false, false));
+        let files = completed_files(root.path());
+        let counts = (ai.calls(), brave.calls());
+        let config = root.path().join("config.toml");
+        let source = fs::read_to_string(&config).unwrap().replace(
+            "cache_revision = \"fixture-v1\"",
+            "cache_revision = \"force-extraction-miss\"",
+        );
+        fs::write(config, source).unwrap();
+        let tools = root.path().join("tools");
+        fs::create_dir(&tools).unwrap();
+        let ffprobe = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|directory| directory.join("ffprobe"))
+            .find(|path| path.is_file())
+            .unwrap();
+        std::os::unix::fs::symlink(ffprobe, tools.join("ffprobe")).unwrap();
+        fs::write(tools.join("ffmpeg"), "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(tools.join("ffmpeg"), fs::Permissions::from_mode(0o700)).unwrap();
+        let rejected = invoke_with_path(root.path(), false, false, Some(&tools));
+        assert_eq!(rejected.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("FFmpeg"));
+        assert_eq!((ai.calls(), brave.calls()), counts);
+        assert_eq!(completed_files(root.path()), files);
+        require_success(&invoke(root.path(), false, false, false));
+    }
+}
+
+#[test]
+fn evidence_rejects_wrong_pixels_times_labels_and_incomplete_artifacts() {
+    let root = tempfile::tempdir().unwrap();
+    let captured = Arc::new(std::sync::Mutex::new(None));
+    let capture = captured.clone();
+    let ai = Server::new(move |header, body| {
+        evidence::verify_request(body).unwrap();
+        if evidence::metadata(body, "assessment_metadata")
+            .is_ok_and(|value| value["phase"] == "secondary")
+        {
+            *capture.lock().unwrap() = Some(body.clone());
+        }
+        fixed_answer(header, body, &|_| false)
+    });
+    let brave = brave();
+    setup(root.path(), &ai, &brave, "sampled_frames", true);
+    add_mirrored(root.path());
+    require_success(&invoke(root.path(), false, false, false));
+    let request = captured.lock().unwrap().take().unwrap();
+    let parts = request["messages"][0]["content"].as_array().unwrap();
+    let images = parts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| (value["type"] == "image_url").then_some(index))
+        .collect::<Vec<_>>();
+    let mut swapped = request.clone();
+    let other = images
+        .iter()
+        .skip(2)
+        .find(|index| parts[**index] != parts[images[1]])
+        .expect("fixture has visually distinct contexts");
+    swapped["messages"][0]["content"][images[1]] = parts[*other].clone();
+    assert!(
+        evidence::verify_request(&swapped).is_err(),
+        "same-size context from another source/time must fail"
+    );
+    let mut wrong_label = request.clone();
+    let index = parts
+        .iter()
+        .position(|part| {
+            part["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("assessment_metadata"))
+        })
+        .unwrap();
+    let mut metadata = evidence::metadata(&request, "assessment_metadata").unwrap();
+    metadata["candidates"][0]["actual_seconds"] = json!(5.25);
+    wrong_label["messages"][0]["content"][index]["text"] =
+        json!(format!("external data\n{metadata}"));
+    assert!(
+        evidence::verify_request(&wrong_label).is_err(),
+        "media/time mismatch must fail"
+    );
+    let files = completed_files(root.path());
+    let report: Value = serde_json::from_slice(&files["report.json"]).unwrap();
+    for (pointer, value) in [
+        ("/selected/0/actual_seconds", json!(5.25)),
+        ("/selected/0/source", json!("unknown.mkv")),
+        ("/selected/0/rank", json!(2)),
+        ("/selected/0/assessment/scene", json!("wrong label")),
+    ] {
+        let mut wrong = report.clone();
+        *wrong.pointer_mut(pointer).unwrap() = value;
+        assert!(
+            evidence::verify_output(&root.path().join("output"), &wrong).is_err(),
+            "{pointer}"
+        );
+    }
+    fs::write(
+        root.path().join("output/selected-01.jpg"),
+        &files["selected-02.jpg"],
+    )
+    .unwrap();
+    assert!(evidence::verify_output(&root.path().join("output"), &report).is_err());
+    fs::write(
+        root.path().join("output/selected-01.jpg"),
+        &files["selected-01.jpg"],
+    )
+    .unwrap();
+    fs::remove_file(root.path().join("output/selected-02.jpg")).unwrap();
+    assert!(evidence::verify_output(&root.path().join("output"), &report).is_err());
 }
 
 #[test]

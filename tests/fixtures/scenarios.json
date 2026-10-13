@@ -22,7 +22,7 @@
   "cases": [
     {"name": "insufficient_candidates", "setup": "Request 999 images from the tiny corpus.", "expect": "Fail with a shortage reason; no completed run."},
     {"name": "corrupt_payload", "setup": "After a cold Rust run, truncate one committed assessment JSON.", "expect": "Reject that hit and recompute its affected dependencies; preserve unrelated checkpoints."},
-    {"name": "missing_media", "setup": "Remove one cached candidate image after a cold Rust run.", "expect": "Detect the missing image before use; regenerate only necessary work."},
+    {"name": "missing_media", "setup": "Remove a published selected image or sheet; separately remove a temporary candidate/context image before an assessment callback reads it. Assessment cache stores validated JSON, not persistent candidate images.", "expect": "Reject incomplete owned output without inference and preserve remaining files; reject missing assessment media before returning a fixed response."},
     {"name": "wrong_reference", "setup": "Change one Rust checkpoint reference to the other source at the same PTS.", "expect": "Reject mismatched content/metadata; never output the wrong source."},
     {"name": "input_added_moved_count_changed", "setup": "Add the second source, relocate the input directory, then change count separately.", "expect": "Reuse each unaffected phase; record recalculation and call counts for each change."},
     {"name": "inference_changed", "setup": "Change backend, normalized base URL/service identity, model, inference level, prompt/schema, media processing or revision separately.", "expect": "Invalidate dependent results without storing credentials."},

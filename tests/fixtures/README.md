@@ -47,6 +47,20 @@ sh tests/check-fixtures.sh
 semantic の台本は source 別に定義し、各代表時刻を同じ source の候補・前後 context に対応させる。
 単一動画の試験では `B01` を候補・応答から除く。各 stage は実際に要求した ID のみを応答に含める。
 
+承認済み candidate の `(id, source, time_seconds, context_seconds)` は次の値へ固定する。
+`fixture_contract.jq` は候補と event の相互整合性に加え、この tuple 集合へ照合する。
+
+| ID | source | 時刻（秒） | 前・中央・後（秒） |
+| --- | --- | --- | --- |
+| A01 | `01-blocks.mkv` | 0.5 | `[0.25, 0.5, 0.75]` |
+| A02 | `01-blocks.mkv` | 2.5 | `[2.25, 2.5, 2.75]` |
+| A03 | `01-blocks.mkv` | 4.5 | `[4.25, 4.5, 4.75]` |
+| B01 | `02-mirrored.mkv` | 1.5 | `[1.25, 1.5, 1.75]` |
+
+Rust の負例は candidate/context と event の同時時刻縮小、event も合わせた source 交換、
+別の有効な前後時刻、候補 ID と context の取り違えを検査する。JSON はメモリ上で改変し、
+保存済み台本や期待値を更新しない。入力 facts の変更を伴う tuple の改訂は、下記の明示更新手順で行う。
+
 #362／#342 は Rust の request/schema に合わせてこの台本を mock HTTP の契約へ接続する。
 元動画・実 PTS・画像内容、sheet の表示 ID、前後順序、動画 chunk の frame 順・時間を検証してから固定応答を返す。
 ここでの ID/score は mock の入力であり、製品内部 ID、score 式、最終順位を規定しない。

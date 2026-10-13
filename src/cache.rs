@@ -49,6 +49,9 @@ pub struct CacheStats {
     pub hits: u64,
     pub misses: u64,
     pub elapsed_seconds: f64,
+    /// Actual input identification (including cold hashes/index writes) and
+    /// checkpoint reads/domain validation. Nested lookup time is counted once.
+    pub verification_seconds: f64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -153,6 +156,18 @@ impl Cache {
         key: &str,
         validate: impl FnOnce(&T) -> bool,
     ) -> Result<Option<T>> {
+        let started = Instant::now();
+        let result = self.read_validated_inner(kind, key, validate);
+        self.stats.verification_seconds += started.elapsed().as_secs_f64();
+        result
+    }
+
+    fn read_validated_inner<T: DeserializeOwned>(
+        &mut self,
+        kind: &str,
+        key: &str,
+        validate: impl FnOnce(&T) -> bool,
+    ) -> Result<Option<T>> {
         let Some(path) = self.record_path(kind, key, false)? else {
             return Ok(self.miss());
         };
@@ -216,6 +231,19 @@ impl Cache {
     /// immediately checkpointed, so interruption retains earlier input hashes.
     /// A normal warm lookup reads metadata and this bounded index only.
     pub fn identify(
+        &mut self,
+        paths: &[PathBuf],
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<InputIdentity>> {
+        let started = Instant::now();
+        let preceding_seconds = self.stats.verification_seconds;
+        let result = self.identify_inner(paths, cancelled);
+        // identify includes its read_validated call; avoid counting it twice.
+        self.stats.verification_seconds = preceding_seconds + started.elapsed().as_secs_f64();
+        result
+    }
+
+    fn identify_inner(
         &mut self,
         paths: &[PathBuf],
         cancelled: &AtomicBool,
@@ -404,6 +432,8 @@ mod tests {
         assert!(error.downcast_ref::<Interrupted>().is_some());
         assert_eq!(cache.stats().bytes_read, 64 * 1024);
         assert_eq!(cache.stats().input_hashes, 0);
+        let interrupted_seconds = cache.stats().verification_seconds;
+        assert!(interrupted_seconds > 0.0);
         cancelled.store(false, Ordering::Relaxed);
         let identities = cache
             .identify(std::slice::from_ref(&source), &cancelled)
@@ -411,5 +441,26 @@ mod tests {
         assert_eq!(identities[0].content_digest, storage::sha256(&contents));
         assert_eq!(cache.stats().bytes_read, 64 * 1024 + contents.len() as u64);
         assert_eq!(cache.stats().input_hashes, 1);
+        assert!(cache.stats().verification_seconds > interrupted_seconds);
+    }
+
+    #[test]
+    fn checkpoint_timing_includes_domain_validation_without_idle_time() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().canonicalize().unwrap();
+        let mut cache = Cache::open(&parent).unwrap();
+        let key = key(&"timed-checkpoint").unwrap();
+        cache.write("test", &key, &42_u64).unwrap();
+        let delay = std::time::Duration::from_millis(5);
+        std::thread::sleep(delay);
+        assert_eq!(cache.stats().verification_seconds, 0.0);
+        let hit = cache
+            .read_validated::<u64>("test", &key, |value| {
+                std::thread::sleep(delay);
+                *value == 42
+            })
+            .unwrap();
+        assert_eq!(hit, Some(42));
+        assert!(cache.stats().verification_seconds >= delay.as_secs_f64());
     }
 }

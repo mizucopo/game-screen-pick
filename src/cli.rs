@@ -155,6 +155,11 @@ impl Cli {
                     outcome.metrics.semantic_calls,
                     outcome.metrics.context_calls
                 );
+                eprintln!(
+                    "metrics: {}",
+                    serde_json::to_string(&outcome.metrics)
+                        .map_err(|error| CliError::processing(error.into()))?
+                );
                 Ok(())
             }
         }

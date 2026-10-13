@@ -8,6 +8,7 @@ pub mod domain;
 pub(crate) mod http;
 pub mod inference;
 pub mod media;
+pub mod metrics;
 pub mod output;
 pub mod pipeline;
 pub mod quality;
