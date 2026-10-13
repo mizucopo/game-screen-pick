@@ -55,7 +55,8 @@ cargo run --locked -- --config config/local.toml --count 2 \
 ```
 
 同じ条件の正常な warm run は検索・推論・runtime 操作を行いません。`--cache-only` は欠落時に停止してこれらを禁止します。
-生成 context の保存を許可していない場合、次回の自動生成は再検索が必要で、cache-only は停止します。
+完成済みの所有成果物は、cache 消失後も実効条件と入力が一致すれば外部操作なしで再利用します。
+生成 context の保存を許可していない場合、成果物の再計算には再検索が必要で、cache-only は欠落時に停止します。
 Strata の動画入力、vision 未設定、不適合な推論レベル、未確認の Brave 契約は理由付きで停止します。
 成果物 E2E と実録画／実 model の Human Review は #343、配布検証は #344 の担当です。
 

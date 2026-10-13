@@ -160,7 +160,7 @@ impl RuntimeManager {
             "finish the failed runtime session before retrying startup"
         );
         let deadline = Instant::now() + Duration::from_secs(config.startup_timeout_seconds);
-        if client.is_ready(deadline.min(Instant::now() + PROBE_TIMEOUT))? {
+        if client.is_ready_cancellable(deadline.min(Instant::now() + PROBE_TIMEOUT), cancelled)? {
             check_cancelled(cancelled)?;
             self.ready = true;
             return Ok(());
@@ -196,7 +196,9 @@ impl RuntimeManager {
                 !session.child.has_exited()?,
                 "runtime start command exited before readiness; start must remain foreground"
             );
-            if client.is_ready(deadline.min(Instant::now() + PROBE_TIMEOUT))? {
+            if client
+                .is_ready_cancellable(deadline.min(Instant::now() + PROBE_TIMEOUT), cancelled)?
+            {
                 check_cancelled(cancelled)?;
                 ensure!(
                     !self

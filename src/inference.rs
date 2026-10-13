@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
@@ -36,6 +37,16 @@ pub fn assess(
     context: &str,
     batch: &AssessmentBatch<'_>,
 ) -> Result<Vec<Assessment>> {
+    assess_cancellable(client, context, batch, &AtomicBool::new(false))
+}
+
+pub fn assess_cancellable(
+    client: &OpenAiClient,
+    context: &str,
+    batch: &AssessmentBatch<'_>,
+    cancelled: &AtomicBool,
+) -> Result<Vec<Assessment>> {
+    crate::http::check_cancelled(cancelled)?;
     ensure!(!context.trim().is_empty(), "Game Context must not be blank");
     validate_batch(batch)?;
     let phase = match batch.phase {
@@ -56,6 +67,7 @@ pub fn assess(
     let mut content = vec![external_data(metadata)];
     let mut remaining = MAX_CONTENT_BYTES;
     for (page, sheet) in batch.sheets.iter().enumerate() {
+        crate::http::check_cancelled(cancelled)?;
         content.push(external_data(json!({
             "kind":"candidate_contact_sheet", "page":page + 1,
             "display_ids_in_order":batch.candidates.iter()
@@ -73,6 +85,7 @@ pub fn assess(
         for candidate in batch.candidates {
             let frames = &contexts[candidate.id.as_str()].frames;
             for (frame, position) in frames.iter().zip(["before", "center", "after"]) {
+                crate::http::check_cancelled(cancelled)?;
                 content.push(external_data(json!({
                     "kind":"transition_context_frame", "id":candidate.id,
                     "position":position, "source":frame.source,
@@ -95,7 +108,7 @@ pub fn assess(
         schema: assessment_schema(batch),
         content,
     };
-    client.generate(&request, |value| {
+    client.generate_cancellable(&request, cancelled, |value| {
         let assessments: Vec<Assessment> = serde_json::from_value(value["assessments"].clone())?;
         validate_assessments(batch.candidates, &assessments)?;
         for assessment in &assessments {
@@ -112,6 +125,16 @@ pub fn understand(
     context: &str,
     chunk: &ChunkArtifact,
 ) -> Result<Vec<SemanticEvent>> {
+    understand_cancellable(client, context, chunk, &AtomicBool::new(false))
+}
+
+pub fn understand_cancellable(
+    client: &OpenAiClient,
+    context: &str,
+    chunk: &ChunkArtifact,
+    cancelled: &AtomicBool,
+) -> Result<Vec<SemanticEvent>> {
+    crate::http::check_cancelled(cancelled)?;
     ensure!(!context.trim().is_empty(), "Game Context must not be blank");
     let source = chunk
         .source
@@ -174,7 +197,7 @@ pub fn understand(
             },
         ],
     };
-    client.generate(&request, |value| {
+    client.generate_cancellable(&request, cancelled, |value| {
         let events: Vec<SemanticEvent> = serde_json::from_value(value["events"].clone())?;
         ensure!(
             !events.is_empty() && events.len() <= MAX_CANDIDATES,

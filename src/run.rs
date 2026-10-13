@@ -22,6 +22,7 @@ use crate::storage;
 
 const ALGORITHM: &str = "rust-selection-v1";
 const PROBE: &str = "ffprobe-pts-v1";
+const WORKFLOW: &str = "rust-workflow-v1";
 
 pub struct RunPaths {
     pub input_directory: PathBuf,
@@ -142,9 +143,56 @@ pub struct Session {
     assessment_calls: u64,
     context_calls: u64,
     semantic_calls: u64,
+    workflow: Option<Value>,
 }
 
 impl Session {
+    /// Check completed owned output before generating context, probing media or
+    /// resolving semantic plans. Conditions must describe every requested
+    /// dependency without credentials or raw context/search material; callers
+    /// hash the original game input instead of persisting its text here.
+    /// Input content identities are added internally and may be rehashed after
+    /// cache loss. No external command or callback runs in this method.
+    pub fn prepare_workflow(
+        &mut self,
+        conditions: Value,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<RunOutcome>> {
+        check_cancelled(cancelled)?;
+        ensure!(
+            conditions.is_object()
+                && serde_json::to_vec(&conditions)?.len() <= 1024 * 1024
+                && !has_credential_fields(&conditions),
+            "workflow conditions must be a bounded non-secret object"
+        );
+        let identities = self.identify_inputs(cancelled)?;
+        let inputs = self
+            .inputs
+            .iter()
+            .zip(&identities)
+            .map(|(path, identity)| Ok((source_name(path)?.to_owned(), &identity.content_digest)))
+            .collect::<Result<Vec<_>>>()?;
+        let key = cache::key(&json!({"workflow":WORKFLOW,"algorithm":ALGORITHM,
+            "probe":PROBE,"inputs":inputs,"conditions":conditions}))?;
+        self.workflow = Some(json!({"key":key,"revision":WORKFLOW,"conditions":conditions}));
+        let previous = self.output.verify_existing(cancelled)?;
+        if let Some(owned) = previous.filter(|owned| {
+            owned.report["cache"]["namespace"] == cache::NAMESPACE
+                && owned.report["cache"]["workflow"]["key"] == key
+        }) {
+            self.verify_inputs()?;
+            check_cancelled(cancelled)?;
+            return Ok(Some(RunOutcome {
+                warm: true,
+                report: owned.report,
+                metrics: self.metrics(),
+            }));
+        }
+        self.verify_inputs()?;
+        check_cancelled(cancelled)?;
+        Ok(None)
+    }
+
     /// Reuse the small completed semantic plan before reading frame checkpoints.
     /// Individual chunk checkpoints still recover partial/missing plans.
     pub fn semantic_plan(
@@ -302,6 +350,7 @@ impl Session {
             assessment_calls: 0,
             context_calls: 0,
             semantic_calls: 0,
+            workflow: None,
         })
     }
 
@@ -359,6 +408,9 @@ impl Session {
         if let Some(owned) = previous.filter(|owned| {
             owned.report["cache"]["namespace"] == cache::NAMESPACE
                 && owned.report["cache"]["key"] == run_key
+                && self.workflow.as_ref().is_none_or(|workflow| {
+                    owned.report["cache"]["workflow"]["key"] == workflow["key"]
+                })
         }) {
             self.verify_inputs()?;
             check_cancelled(cancelled)?;
@@ -442,6 +494,9 @@ impl Session {
             "service_url":conditions.service_url,"prompt_revision":conditions.prompt_revision,
             "response_schema_revision":conditions.response_schema_revision,"media_revision":conditions.media_revision,
             "context_digest":storage::sha256(conditions.resolved_game_context.text().as_bytes())});
+        if let Some(workflow) = &self.workflow {
+            report["cache"]["workflow"] = workflow.clone();
+        }
         storage::atomic_write(&report_path, &serde_json::to_vec_pretty(&report)?)?;
         let owned = self.output.publish_checked(&artifacts, cancelled, || {
             verify_workflow(&self.input_directory, &self.inputs, Some(&identities))
@@ -646,6 +701,28 @@ impl Session {
             semantic_calls: self.semantic_calls,
             elapsed_seconds,
         }
+    }
+}
+
+fn has_credential_fields(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(name, value)| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "api_key"
+                    | "apikey"
+                    | "authorization"
+                    | "password"
+                    | "secret"
+                    | "credentials"
+                    | "token"
+                    | "access_token"
+                    | "refresh_token"
+                    | "bearer_token"
+            ) || has_credential_fields(value)
+        }),
+        Value::Array(values) => values.iter().any(has_credential_fields),
+        _ => false,
     }
 }
 

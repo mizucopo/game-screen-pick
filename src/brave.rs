@@ -1,17 +1,17 @@
 //! Fixed Brave search and evidence-backed context generation. Raw search data is
 //! transient; persistence rights are an operator declaration, never inferred.
 use std::fmt;
-use std::io::Read;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail, ensure};
-use reqwest::blocking::Client;
-use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue, LOCATION};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue, LOCATION};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::{Host, Url};
 
 use crate::ai::{Content, JsonRequest, OpenAiClient};
+use crate::http::{self, HttpClient};
 
 pub const SEARCH_REVISION: &str = "brave-web-game-evidence-v1";
 pub const CONTEXT_PROMPT_REVISION: &str = "game-context-evidence-v2";
@@ -99,15 +99,17 @@ impl BraveConfig {
             "invalid Brave timeout/result/response limits"
         );
         ensure!(
-            self.country.len() == 2 && self.country.bytes().all(|c| c.is_ascii_uppercase()),
-            "brave.country must be a two-letter uppercase country code"
+            self.country == "ALL"
+                || (self.country.len() == 2
+                    && self.country.bytes().all(|c| c.is_ascii_uppercase())),
+            "brave.country must be ALL or a two-letter uppercase country code"
         );
         ensure!(
-            (2..=5).contains(&self.search_lang.len())
+            (2..=7).contains(&self.search_lang.len())
                 && self
                     .search_lang
-                    .bytes()
-                    .all(|c| c.is_ascii_lowercase() || c == b'-'),
+                    .split('-')
+                    .all(|part| !part.is_empty() && part.bytes().all(|c| c.is_ascii_lowercase())),
             "invalid brave.search_lang"
         );
         ensure!(
@@ -228,7 +230,7 @@ pub struct SearchResult {
 pub struct BraveClient {
     config: BraveConfig,
     endpoint: Url,
-    http: Client,
+    http: HttpClient,
     token: HeaderValue,
     secret: String,
 }
@@ -251,11 +253,7 @@ impl BraveClient {
         let mut token = HeaderValue::from_str(&secret)
             .map_err(|_| anyhow!("invalid Brave authentication header"))?;
         token.set_sensitive(true);
-        let http = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .build()
-            .map_err(|_| anyhow!("cannot initialize Brave HTTP client"))?;
+        let http = HttpClient::new()?;
         Ok(Self {
             config: config.clone(),
             endpoint: config.checked_endpoint()?,
@@ -268,6 +266,15 @@ impl BraveClient {
     /// Two fixed queries, no pagination, retry, other provider or paid fallback.
     /// One deadline includes both headers and bodies of both queries/redirects.
     pub fn search(&self, title: &str) -> Result<SearchEvidence> {
+        self.search_cancellable(title, &AtomicBool::new(false))
+    }
+
+    pub fn search_cancellable(
+        &self,
+        title: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<SearchEvidence> {
+        http::check_cancelled(cancelled)?;
         validate_title(title)?;
         ensure!(
             !text_contains_secret(title, &self.secret),
@@ -280,8 +287,11 @@ impl BraveClient {
         ];
         let deadline = Instant::now() + Duration::from_secs(self.config.timeout_seconds);
         let mut results = Vec::new();
+        let mut next_ready = Instant::now();
         for (query_index, query) in queries.iter().enumerate() {
-            let value = self.get(query, deadline)?;
+            wait_until(next_ready, deadline, cancelled)?;
+            let (value, ready) = self.get(query, deadline, cancelled)?;
+            next_ready = ready;
             ensure!(
                 !contains_secret(&value, &self.secret),
                 "Brave response contains authentication material"
@@ -341,11 +351,17 @@ impl BraveClient {
                 "Brave query returned no usable text evidence"
             );
         }
+        http::check_cancelled(cancelled)?;
         remaining(deadline)?;
         Ok(SearchEvidence { queries, results })
     }
 
-    fn get(&self, query: &str, deadline: Instant) -> Result<Value> {
+    fn get(
+        &self,
+        query: &str,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<(Value, Instant)> {
         let mut url = self.endpoint.clone();
         url.query_pairs_mut()
             .append_pair("q", query)
@@ -357,36 +373,27 @@ impl BraveClient {
             .append_pair("extra_snippets", "true")
             .append_pair("text_decorations", "false");
         for redirect in 0..=3 {
-            let response = self
+            let request = self
                 .http
                 .get(url.clone())
                 .header(ACCEPT, "application/json")
                 .header("X-Subscription-Token", &self.token)
-                .timeout(remaining(deadline)?)
-                .send()
-                .map_err(|error| {
-                    if error.is_timeout() {
-                        anyhow!("Brave HTTP deadline exceeded")
-                    } else {
-                        anyhow!("Brave HTTP request failed")
-                    }
-                })?;
+                .timeout(remaining(deadline)?);
+            let response = self.http.send(request, deadline, cancelled, "Brave")?;
             let status = response.status();
-            // A redirect is also an API response. Exhaustion must stop before
-            // any follow-up request, including repeated comma-separated fields.
-            for value in response.headers().get_all("X-RateLimit-Remaining") {
-                let values = value
-                    .to_str()
-                    .map_err(|_| anyhow!("invalid Brave quota header"))?
-                    .split(',')
-                    .map(|s| s.trim().parse::<u64>())
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(|_| anyhow!("invalid Brave quota header"))?;
-                ensure!(
-                    !values.is_empty() && values.iter().all(|v| *v > 0),
-                    "Brave reported an exhausted quota/rate window; search stopped"
-                );
+            match status.as_u16() {
+                401 | 403 => bail!("Brave authentication/permission error; search stopped"),
+                429 => {
+                    bail!("Brave quota or rate limit reached; search stopped without paid fallback")
+                }
+                _ => ensure!(
+                    status.is_success() || status.is_redirection(),
+                    "Brave HTTP status {}; search stopped",
+                    status.as_u16()
+                ),
             }
+            // Respect every advertised window before any next query/redirect.
+            let ready = rate_ready_at(response.headers())?;
             if status.is_redirection() {
                 ensure!(
                     [301, 302, 303, 307, 308].contains(&status.as_u16()) && redirect < 3,
@@ -405,19 +412,10 @@ impl BraveClient {
                         && next.fragment().is_none(),
                     "Brave redirect must stay on the configured origin without credentials/fragment"
                 );
+                drop(response);
+                wait_until(ready, deadline, cancelled)?;
                 url = next;
                 continue;
-            }
-            match status.as_u16() {
-                401 | 403 => bail!("Brave authentication/permission error; search stopped"),
-                429 => {
-                    bail!("Brave quota or rate limit reached; search stopped without paid fallback")
-                }
-                _ => ensure!(
-                    status.is_success(),
-                    "Brave HTTP status {}; search stopped",
-                    status.as_u16()
-                ),
             }
             ensure!(
                 response
@@ -436,17 +434,20 @@ impl BraveClient {
                     .is_none_or(|n| n <= self.config.max_response_bytes),
                 "Brave response exceeds byte limit"
             );
-            let mut bytes = Vec::new();
-            response
-                .take(self.config.max_response_bytes + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| anyhow!("Brave response body failed or deadline exceeded"))?;
+            let bytes = self.http.read_body(
+                response,
+                self.config.max_response_bytes,
+                deadline,
+                cancelled,
+                "Brave",
+            )?;
             remaining(deadline)?;
             ensure!(
                 bytes.len() as u64 <= self.config.max_response_bytes,
                 "Brave response exceeds byte limit"
             );
             return serde_json::from_slice(&bytes)
+                .map(|value| (value, ready))
                 .map_err(|_| anyhow!("invalid Brave JSON response"));
         }
         unreachable!("redirect limit checked above")
@@ -460,7 +461,107 @@ fn remaining(deadline: Instant) -> Result<Duration> {
         .ok_or_else(|| anyhow!("Brave HTTP deadline exceeded"))
 }
 
-fn validate_title(title: &str) -> Result<()> {
+/// The documented policy is an aligned list of (limit, window, remaining,
+/// reset). Only its 1-second rate window is paced; exhausted quota windows stop.
+fn rate_ready_at(headers: &HeaderMap) -> Result<Instant> {
+    let policies = header_items(headers, "X-RateLimit-Policy")?;
+    let remaining = header_items(headers, "X-RateLimit-Remaining")?;
+    let resets = header_items(headers, "X-RateLimit-Reset")?;
+    let limits = header_items(headers, "X-RateLimit-Limit")?;
+    let now = Instant::now();
+    if [&policies, &remaining, &resets, &limits]
+        .iter()
+        .all(|v| v.is_empty())
+    {
+        return Ok(now);
+    }
+    ensure!(
+        !policies.is_empty()
+            && policies.len() == remaining.len()
+            && policies.len() == resets.len()
+            && (limits.is_empty() || policies.len() == limits.len()),
+        "incomplete or misaligned Brave rate-limit headers"
+    );
+    let mut windows = Vec::new();
+    let mut delay_seconds = 0;
+    for (i, policy) in policies.iter().enumerate() {
+        let (limit, window) = policy
+            .split_once(';')
+            .ok_or_else(|| anyhow!("invalid Brave rate-limit policy"))?;
+        let limit = header_number(limit.trim())?;
+        let window = header_number(
+            window
+                .trim()
+                .strip_prefix("w=")
+                .ok_or_else(|| anyhow!("invalid Brave rate-limit policy"))?,
+        )?;
+        ensure!(
+            window > 0 && !windows.contains(&window),
+            "invalid or ambiguous Brave rate-limit windows"
+        );
+        windows.push(window);
+        let left = header_number(&remaining[i])?;
+        let reset = header_number(&resets[i])?;
+        ensure!(
+            reset <= window
+                && (limit == 0 || left <= limit)
+                && (limits.is_empty() || header_number(&limits[i])? == limit),
+            "invalid or inconsistent Brave rate-limit headers"
+        );
+        if window == 1 {
+            ensure!(limit > 0, "invalid Brave short-window rate limit");
+            if left == 0 {
+                ensure!(reset > 0, "ambiguous Brave short-window reset");
+                delay_seconds = delay_seconds.max(reset);
+            }
+        } else if limit > 0 && left == 0 {
+            bail!("Brave reported an exhausted quota window; search stopped without paid fallback");
+        }
+        // A long-window limit of zero is documented as unlimited, not exhausted.
+    }
+    Ok(now + Duration::from_secs(delay_seconds))
+}
+
+fn header_items(headers: &HeaderMap, name: &'static str) -> Result<Vec<String>> {
+    let mut parts = Vec::new();
+    for header in headers.get_all(name) {
+        for part in header
+            .to_str()
+            .map_err(|_| anyhow!("invalid Brave rate-limit header"))?
+            .split(',')
+        {
+            let part = part.trim();
+            ensure!(
+                !part.is_empty() && part.len() <= 128 && parts.len() < 8,
+                "invalid or excessive Brave rate-limit header"
+            );
+            parts.push(part.to_owned());
+        }
+    }
+    Ok(parts)
+}
+
+fn header_number(text: &str) -> Result<u64> {
+    ensure!(
+        !text.is_empty() && text.bytes().all(|c| c.is_ascii_digit()),
+        "invalid Brave rate-limit number"
+    );
+    text.parse()
+        .map_err(|_| anyhow!("invalid Brave rate-limit number"))
+}
+
+fn wait_until(ready: Instant, deadline: Instant, cancelled: &AtomicBool) -> Result<()> {
+    loop {
+        http::check_cancelled(cancelled)?;
+        let left = remaining(deadline)?;
+        let Some(delay) = ready.checked_duration_since(Instant::now()) else {
+            return Ok(());
+        };
+        std::thread::sleep(delay.min(left).min(Duration::from_millis(20)));
+    }
+}
+
+pub fn validate_title(title: &str) -> Result<()> {
     ensure!(
         !title.trim().is_empty()
             && title.len() <= 200
@@ -727,8 +828,20 @@ pub fn generate_context(
     title: &str,
     evidence: &SearchEvidence,
 ) -> Result<String> {
+    generate_context_cancellable(client, title, evidence, &AtomicBool::new(false))
+}
+
+pub fn generate_context_cancellable(
+    client: &OpenAiClient,
+    title: &str,
+    evidence: &SearchEvidence,
+    cancelled: &AtomicBool,
+) -> Result<String> {
+    http::check_cancelled(cancelled)?;
     let request = build_context_request(title, evidence)?;
-    client.generate(&request, |value| validate_context(title, evidence, value))
+    client.generate_cancellable(&request, cancelled, |value| {
+        validate_context(title, evidence, value)
+    })
 }
 
 #[cfg(test)]

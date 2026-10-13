@@ -2,6 +2,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, ensure};
+use serde_json::json;
 
 use crate::ai::OpenAiClient;
 use crate::brave::{self, BraveClient};
@@ -27,7 +28,7 @@ struct InferenceSession<'a> {
 }
 
 impl InferenceSession<'_> {
-    fn client(&mut self) -> Result<&OpenAiClient> {
+    fn validate_transport(&mut self) -> Result<()> {
         check_cancelled(self.cancelled)?;
         ensure!(
             !self.cache_only,
@@ -36,6 +37,11 @@ impl InferenceSession<'_> {
         if self.client.is_none() {
             self.client = Some(OpenAiClient::new(&self.config.ai)?);
         }
+        Ok(())
+    }
+
+    fn client(&mut self) -> Result<&OpenAiClient> {
+        self.validate_transport()?;
         let client = self.client.as_ref().expect("initialized inference client");
         self.runtime.ensure_ready(client, self.cancelled)?;
         Ok(client)
@@ -90,13 +96,17 @@ pub fn run(
             .as_ref()
             .context("ai.protocol is required for selection")?;
         protocol.validate(config.ai.backend, config.ai.inference_level)?;
+        ensure!(
+            (1..=999).contains(&count),
+            "selected count must be within 1..=999"
+        );
         let media = protocol
             .media
             .as_ref()
             .context("image selection requires ai.protocol.media vision settings")?;
         ensure!(
-            media.max_images > 0,
-            "image selection is not supported by the configured model contract"
+            media.max_images as usize > 3 * (count * 3).min(crate::pipeline::ASSESSMENT_BATCH),
+            "configured image capacity cannot cover the largest secondary assessment batch for this count"
         );
         if config.selection.method == SelectionMethod::SemanticVideo {
             ensure!(
@@ -105,6 +115,29 @@ pub fn run(
             );
         }
         let model = config.ai.model_conditions();
+        let game_conditions = match game {
+            GameInput::Context(text) => {
+                json!({"kind":"direct","context_digest":crate::storage::sha256(text.as_bytes())})
+            }
+            GameInput::Title(title) => {
+                brave::validate_title(title)?;
+                let search = config.brave.as_ref().context("--game-title requires an explicit Brave search contract; use --game-context or configure [brave]")?;
+                search.validate_search_contract()?;
+                json!({"kind":"generated","title_digest":crate::storage::sha256(title.as_bytes()),
+                    "search":serde_json::from_str::<serde_json::Value>(&search.search_conditions()?)?,
+                    "prompt_revision":brave::CONTEXT_PROMPT_REVISION,"schema_revision":brave::CONTEXT_SCHEMA_REVISION})
+            }
+        };
+        let effective = json!({"revision":"rust-ai-workflow-v2","model":model,"service_url":config.ai.base_url.to_string(),
+            "protocol":protocol,"game":game_conditions,"selection":{"method":config.selection.method.to_string(),
+                "count":count,"samples_per_video":config.selection.samples_per_video,
+                "context_delta_seconds":config.selection.context_delta_seconds,
+                "semantic_chunk_seconds":semantic.then_some(config.selection.semantic_chunk_seconds),
+                "effective_semantic_chunk_seconds":semantic.then(||config.selection.semantic_chunk_seconds.min(media.max_video_seconds))},
+            "prompt_revision":prompt_revision,"schema_revision":schema_revision,"media_revision":crate::inference::MEDIA_REVISION});
+        if let Some(outcome) = session.prepare_workflow(effective, cancelled)? {
+            return Ok(outcome);
+        }
         let (resolved, persist) = match game {
             GameInput::Context(text) => (ResolvedGameContext::direct(text), true),
             GameInput::Title(title) => {
@@ -120,9 +153,10 @@ pub fn run(
                     search.persist_context(), cancelled, || {
                         check_cancelled(cancelled)?;
                         ensure!(!cache_only, "cache-only: generated Game Context checkpoint is missing or persistence is disabled");
-                        let evidence = BraveClient::new(search)?.search(title)?;
+                        inference.validate_transport()?;
+                        let evidence = BraveClient::new(search)?.search_cancellable(title, cancelled)?;
                         check_cancelled(cancelled)?;
-                        brave::generate_context(inference.client()?, title, &evidence)
+                        brave::generate_context_cancellable(inference.client()?, title, &evidence, cancelled)
                     })?;
                 (context, search.persist_context())
             }
@@ -181,10 +215,11 @@ pub fn run(
                                 &conditions,
                                 cancelled,
                                 |chunk| {
-                                    crate::inference::understand(
+                                    crate::inference::understand_cancellable(
                                         inference.client()?,
                                         resolved.text(),
                                         chunk,
+                                        cancelled,
                                     )
                                 },
                             )?);
@@ -216,7 +251,12 @@ pub fn run(
                 batch.phase,
                 batch.candidates.len()
             );
-            crate::inference::assess(inference.client()?, resolved.text(), batch)
+            crate::inference::assess_cancellable(
+                inference.client()?,
+                resolved.text(),
+                batch,
+                cancelled,
+            )
         })
     })();
     Ok(inference.runtime.finish(result))

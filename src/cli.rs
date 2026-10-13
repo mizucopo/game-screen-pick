@@ -233,6 +233,9 @@ fn validate(
     cancelled: &AtomicBool,
 ) -> Result<ValidatedRequest> {
     let game = crate::domain::GameInput::new(request.game_title, request.game_context)?;
+    if let crate::domain::GameInput::Title(title) = &game {
+        crate::brave::validate_title(title)?;
+    }
     if !request
         .count
         .is_some_and(|count| (1..=999).contains(&count))

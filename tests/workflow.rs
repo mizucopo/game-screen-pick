@@ -25,6 +25,10 @@ struct Server {
 
 impl Server {
     fn new(mut answer: impl FnMut(&str, &Value) -> Value + Send + 'static) -> Self {
+        Self::with_status(move |header, body| (200, answer(header, body)))
+    }
+
+    fn with_status(mut answer: impl FnMut(&str, &Value) -> (u16, Value) + Send + 'static) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         listener.set_nonblocking(true).unwrap();
@@ -38,8 +42,14 @@ impl Server {
                     Ok((mut stream, _)) => {
                         let (header, body) = request(&mut stream);
                         thread_calls.fetch_add(1, Ordering::Relaxed);
-                        let response = answer(&header, &body).to_string();
-                        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+                        let (status, response) = answer(&header, &body);
+                        let response = response.to_string();
+                        // A cancellable client may close before the mock writes.
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 {status} Mock\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                            response.len()
+                        );
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5))
@@ -325,6 +335,36 @@ fn both_methods_use_live_adapters_and_warm_runs_make_no_external_calls() {
                 before
             );
             assert!(String::from_utf8_lossy(&warm.stderr).contains("warm=true"));
+            // Cache loss cannot force inference/search prerequisites when the
+            // complete owned output still matches all requested conditions.
+            fs::remove_dir_all(
+                root.path()
+                    .join(".game-screen-pick-cache")
+                    .join(game_screen_pick::cache::NAMESPACE),
+            )
+            .unwrap();
+            let recovered = invoke(root.path(), generated, true, true);
+            assert!(
+                recovered.status.success(),
+                "{}",
+                String::from_utf8_lossy(&recovered.stderr)
+            );
+            assert_eq!((ai.calls(), brave.calls()), counts);
+            assert_eq!(
+                fs::read(root.path().join("output/report.json")).unwrap(),
+                before
+            );
+            let report: Value = serde_json::from_slice(&before).unwrap();
+            if method == "semantic_video" {
+                assert_eq!(
+                    report["cache"]["workflow"]["conditions"]["selection"]["semantic_chunk_seconds"],
+                    1.5
+                );
+                assert_eq!(
+                    report["cache"]["workflow"]["conditions"]["selection"]["effective_semantic_chunk_seconds"],
+                    1.5
+                );
+            }
         }
     }
 }
@@ -359,9 +399,184 @@ fn cache_only_misses_and_unapproved_context_storage_do_not_contact_services() {
             .exists()
     );
     let counts = (ai.calls(), brave.calls());
-    let miss = invoke(root.path(), true, true, true);
-    assert_eq!(miss.status.code(), Some(1));
+    let warm = invoke(root.path(), true, true, true);
+    assert!(
+        warm.status.success(),
+        "{}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
     assert_eq!((ai.calls(), brave.calls()), counts);
+}
+
+#[test]
+fn unusable_image_capacity_and_local_auth_fail_before_brave_or_inference() {
+    for failure in ["images", "auth"] {
+        let root = tempfile::tempdir().unwrap();
+        let ai = ai();
+        let brave = brave();
+        setup(root.path(), &ai, &brave, "sampled_frames", true);
+        let path = root.path().join("config.toml");
+        let source = fs::read_to_string(&path).unwrap();
+        let source = if failure == "images" {
+            source.replace("max_images = 64", "max_images = 1")
+        } else {
+            source.replace(
+                "[ai.protocol]",
+                "api_key = \"invalid\\r\\nheader\"\n[ai.protocol]",
+            )
+        };
+        fs::write(&path, source).unwrap();
+        let rejected = invoke(root.path(), true, false, true);
+        assert_eq!(rejected.status.code(), Some(1));
+        assert_eq!((ai.calls(), brave.calls()), (0, 0));
+        assert!(!root.path().join("output").exists());
+    }
+}
+
+#[test]
+fn invalid_brave_titles_are_input_errors_without_preparation_writes() {
+    for title in ["x".repeat(201), "Example\nGame".into()] {
+        let root = tempfile::tempdir().unwrap();
+        let ai = ai();
+        let brave = brave();
+        setup(root.path(), &ai, &brave, "sampled_frames", true);
+        for diagnostic in [false, true] {
+            let mut command = Command::new(BINARY);
+            command.current_dir(root.path()).env("PATH", "");
+            if diagnostic {
+                command.arg("validate");
+            }
+            let rejected = command
+                .args([
+                    "--config",
+                    "config.toml",
+                    "--count",
+                    "2",
+                    "--game-title",
+                    &title,
+                    "input",
+                    "output",
+                ])
+                .output()
+                .unwrap();
+            assert_eq!(rejected.status.code(), Some(2));
+        }
+        assert!(!root.path().join(".game-screen-pick-cache").exists());
+        assert!(!root.path().join(".gsp-output-locks").exists());
+        assert_eq!((ai.calls(), brave.calls()), (0, 0));
+    }
+}
+
+#[test]
+fn sigint_during_live_http_promptly_cleans_the_owned_runtime() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Instant;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let started = root.join("started");
+    let stopped = root.join("stopped");
+    let requested = root.join("requested");
+    let release = Arc::new(AtomicBool::new(false));
+    let server_release = release.clone();
+    let server_started = started.clone();
+    let server_requested = requested.clone();
+    let ai = Server::with_status(move |header, _| {
+        if header.starts_with("GET /v1/models ") {
+            if server_started.exists() {
+                return (200, json!({"data":[{"id":"fixture-vision"}]}));
+            }
+            return (503, Value::Null);
+        }
+        assert!(header.starts_with("POST /v1/chat/completions "));
+        fs::write(&server_requested, b"headers deliberately delayed").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !server_release.load(Ordering::Relaxed) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        (200, Value::Null)
+    });
+    let brave = brave();
+    setup(&root, &ai, &brave, "sampled_frames", true);
+    let start = root.join("start.sh");
+    let stop = root.join("stop.sh");
+    fs::write(
+        &start,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$1\" > '{}'\nexec /bin/sleep 60\n",
+            started.display()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &stop,
+        format!(
+            "#!/bin/sh\nprintf '%s %s' \"$1\" \"$2\" > '{}'\nkill -TERM \"$1\"\n",
+            stopped.display()
+        ),
+    )
+    .unwrap();
+    for path in [&start, &stop] {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = root.join("config.toml");
+    let source = fs::read_to_string(&path).unwrap();
+    fs::write(&path,format!("{source}\n[runtime]\nbackend = \"vllm\"\nstart_command = [\"{}\", \"{{session}}\"]\nstop_command = [\"{}\", \"{{pid}}\", \"{{session}}\"]\nstartup_timeout_seconds = 10\ncommand_timeout_seconds = 3\n",start.display(),stop.display())).unwrap();
+    let mut child = Command::new(BINARY)
+        .current_dir(&root)
+        .args([
+            "--config",
+            "config.toml",
+            "--count",
+            "2",
+            "--game-context",
+            "colored gameplay",
+            "input",
+            "output",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !requested.exists() {
+        assert!(Instant::now() < deadline, "inference did not start");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let interrupted = Instant::now();
+    unsafe {
+        assert_eq!(libc::kill(child.id() as i32, libc::SIGINT), 0);
+    }
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if interrupted.elapsed() > Duration::from_secs(3) {
+            release.store(true, Ordering::Relaxed);
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("HTTP cancellation did not promptly return and clean runtime");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    release.store(true, Ordering::Relaxed);
+    assert_eq!(status.code(), Some(130));
+    assert!(stopped.exists());
+    let stop_record = fs::read_to_string(&stopped).unwrap();
+    let pid: i32 = stop_record
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    unsafe {
+        assert_eq!(
+            libc::kill(pid, 0),
+            -1,
+            "owned runtime survived cancellation"
+        );
+    }
+    assert!(!root.join("output").exists());
+    assert_eq!(brave.calls(), 0);
 }
 
 #[test]

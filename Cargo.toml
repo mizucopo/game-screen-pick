@@ -16,13 +16,14 @@ libc = "0.2"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 fontdue = "0.9"
 jsonschema = { version = "0.33", default-features = false }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 signal-hook = "0.3"
 tempfile = "3"
 toml = "0.9"
-url = "2"
+tokio = { version = "1", features = ["rt", "time"] }
+url = { version = "2", features = ["serde"] }
 sha2 = "0.10"
 
 [dev-dependencies]

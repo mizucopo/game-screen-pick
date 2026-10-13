@@ -22,7 +22,7 @@ use crate::selection::{
     validate_assessments,
 };
 
-const ASSESSMENT_BATCH: usize = 12;
+pub const ASSESSMENT_BATCH: usize = 12;
 
 struct SelectedJpegWriter {
     file: BufWriter<File>,

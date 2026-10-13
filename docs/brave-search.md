@@ -49,8 +49,8 @@ generated_context_persistence_allowed = false
 ```
 
 `timeout_seconds` は 1–300、`max_response_bytes` は 1 KiB–2 MiB、`result_count` は 1–20。
-`country` は大文字 2 文字、`search_lang` は小文字の言語識別子。
-言語識別子の対応は [Brave Web Search の公式 documentation](https://api-dashboard.search.brave.com/app/documentation/web-search/get-started) と対象アカウントの API を確認する。
+`country` は大文字 2 文字または `ALL`、`search_lang` は 2–7 文字の小文字の言語識別子で `zh-hans` / `zh-hant` も受け付ける。
+対応する値は [Brave Web Search の公式 API reference](https://api-dashboard.search.brave.com/api-reference/web/search/get) と対象アカウントの API を確認する。
 unsupported language などの API error を別値に置き換えて retry しない。
 
 endpoint は `https://api.search.brave.com/res/v1/web/search` に固定。
@@ -66,7 +66,13 @@ HTTP client は proxy を無効化し、remote authentication は公式 HTTPS en
 2 query と redirect 全体でひとつの deadline を共有し、headers 待ち・body 待ちも含める。
 response body は Content-Length の有無にかかわらず設定した上限で読み止める。
 
-401 / 403、429、その他の HTTP / API error、空の検索結果、quota / rate window の残数 0 または壊れた残数 header はその場で停止する。
+401 / 403、429、その他の HTTP / API error、空の検索結果、長期 quota の残数 0、壊れた・対応が曖昧な rate header はその場で停止する。
+[公式 rate-limit guide](https://api-dashboard.search.brave.com/documentation/guides/rate-limiting) の `Remaining: 0,14523` は、1 秒の window を使い切っていても月次 quota が残る正常応答である。
+`Policy` / `Remaining` / `Reset`（`Limit` がある場合はその値も）の各 window を同じ順序で照合する。
+重複 HTTP header は comma list として順に読み、個数不一致・重複 window・非数値等は推測せず停止する。
+1 秒の window だけが 0 の場合、対応する reset まで同じ全体 deadline 内で待って次の固定 query / redirect を送る。
+この待機で query 数を増やさず、HTTP 429 後の retry は行わない。長期 window の limit 0 は公式仕様の unlimited として扱う。
+キャンセルは header・body・rate 待機中に確認し、次の query を送らず所有する HTTP 処理を中止する。
 rate header や本プロセスの query 数は他のアプリによるアカウント利用や課金残高を表さないため、無料枠の無課金停止保証として代用しない。
 raw response / title / snippet は一時メモリだけに置き、ファイルへ保存する経路を持たない。
 キーが API response に混入した場合も、Context 生成前に拒否する。

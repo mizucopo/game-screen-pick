@@ -10,6 +10,7 @@ const SECRET: &str = "BRAVE_AUTHENTICATION_MUST_STAY_PRIVATE";
 
 #[derive(Clone)]
 struct Received {
+    at: Instant,
     target: String,
     headers: String,
     body: Value,
@@ -42,6 +43,20 @@ impl Reply {
             headers: vec![("Location".to_owned(), destination)],
             ..Self::json(json!({}))
         }
+    }
+
+    fn rate(remaining: &str, reset: &str) -> Self {
+        let mut reply = Self::json(result());
+        reply.headers.extend([
+            ("X-RateLimit-Limit".to_owned(), "1, 15000".to_owned()),
+            (
+                "X-RateLimit-Policy".to_owned(),
+                "1;w=1, 15000;w=2592000".to_owned(),
+            ),
+            ("X-RateLimit-Remaining".to_owned(), remaining.to_owned()),
+            ("X-RateLimit-Reset".to_owned(), reset.to_owned()),
+        ]);
+        reply
     }
 }
 
@@ -108,6 +123,7 @@ impl Mock {
                 let first = headers.lines().next().unwrap();
                 assert!(first.starts_with("GET ") || first.starts_with("POST "));
                 let request = Received {
+                    at: Instant::now(),
                     target: first.split_whitespace().nth(1).unwrap().to_owned(),
                     headers,
                     body: if length == 0 {
@@ -413,6 +429,200 @@ fn exhausted_redirect_response_is_not_followed() {
             .is_err()
     );
     assert_eq!(mock.requests().len(), 1);
+}
+
+#[test]
+fn normal_short_window_exhaustion_paces_the_second_fixed_query() {
+    let mock = Mock::new(|_, _| Reply::rate("0, 14523", "1, 1234567"));
+    let evidence = BraveClient::new(&config(&mock.url))
+        .unwrap()
+        .search("Example")
+        .unwrap();
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].at.duration_since(requests[0].at) >= Duration::from_secs(1));
+    assert_eq!(evidence.results.len(), 2);
+}
+
+#[test]
+fn split_repeated_headers_align_windows_without_duplicate_queries() {
+    let mock = Mock::new(|_, _| {
+        let reply = Reply::rate("0, 14523", "1, 1234567");
+        let mut headers = Vec::new();
+        for (name, value) in reply.headers {
+            for part in value.split(',') {
+                headers.push((name.clone(), part.trim().to_owned()));
+            }
+        }
+        Reply {
+            headers,
+            ..Reply::json(result())
+        }
+    });
+    BraveClient::new(&config(&mock.url))
+        .unwrap()
+        .search("Example")
+        .unwrap();
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].at.duration_since(requests[0].at) >= Duration::from_secs(1));
+}
+
+#[test]
+fn exhausted_quota_does_not_wait_or_issue_another_query() {
+    for left in ["0, 0", "1, 0"] {
+        let remaining = left.to_owned();
+        let mock = Mock::new(move |_, _| Reply::rate(&remaining, "1, 1234567"));
+        let start = Instant::now();
+        let error = BraveClient::new(&config(&mock.url))
+            .unwrap()
+            .search("Example")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exhausted quota"));
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert_eq!(mock.requests().len(), 1);
+    }
+}
+
+#[test]
+fn malformed_or_ambiguous_rate_windows_stop_before_more_requests() {
+    for (name, value) in [
+        ("X-RateLimit-Remaining", "0"),
+        ("X-RateLimit-Remaining", "0, 14523, 12"),
+        ("X-RateLimit-Reset", "1, bad"),
+        ("X-RateLimit-Reset", "0, 1234567"),
+        ("X-RateLimit-Reset", "2, 1234567"),
+        ("X-RateLimit-Policy", "1;w=1, 15000;w=1"),
+        ("X-RateLimit-Policy", "1;w=1, invalid"),
+        ("X-RateLimit-Limit", "2, 15000"),
+    ] {
+        let value = value.to_owned();
+        let mock = Mock::new(move |_, _| {
+            let mut reply = Reply::rate("0, 14523", "1, 1234567");
+            reply
+                .headers
+                .iter_mut()
+                .find(|(key, _)| key == name)
+                .unwrap()
+                .1 = value.clone();
+            reply
+        });
+        assert!(
+            BraveClient::new(&config(&mock.url))
+                .unwrap()
+                .search("Example")
+                .is_err()
+        );
+        assert_eq!(mock.requests().len(), 1);
+    }
+    let mock = Mock::new(|_, _| {
+        let mut reply = Reply::rate("0, 14523", "1, 1234567");
+        reply.headers.push((
+            "X-RateLimit-Policy".to_owned(),
+            "1;w=1, 15000;w=2592000".to_owned(),
+        ));
+        reply
+    });
+    assert!(
+        BraveClient::new(&config(&mock.url))
+            .unwrap()
+            .search("Example")
+            .is_err()
+    );
+    assert_eq!(mock.requests().len(), 1);
+}
+
+#[test]
+fn a_rate_wait_uses_the_whole_call_deadline() {
+    let mock = Mock::new(|_, _| Reply::rate("0, 14523", "1, 1234567"));
+    let mut settings = config(&mock.url);
+    settings.timeout_seconds = 1;
+    assert!(
+        BraveClient::new(&settings)
+            .unwrap()
+            .search("Example")
+            .unwrap_err()
+            .to_string()
+            .contains("deadline")
+    );
+    assert_eq!(mock.requests().len(), 1);
+}
+
+#[test]
+fn cancellation_interrupts_rate_wait_before_second_query() {
+    let mock = Mock::new(|_, _| Reply::rate("0, 14523", "1, 1234567"));
+    let client = BraveClient::new(&config(&mock.url)).unwrap();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let flag = cancelled.clone();
+    let worker = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(120));
+        flag.store(true, Ordering::Relaxed);
+    });
+    let start = Instant::now();
+    let error = client
+        .search_cancellable("Example", &cancelled)
+        .unwrap_err();
+    assert!(error.downcast_ref::<crate::media::Interrupted>().is_some());
+    assert!(start.elapsed() < Duration::from_millis(350));
+    worker.join().unwrap();
+    assert_eq!(mock.requests().len(), 1);
+}
+
+#[test]
+fn cancellation_interrupts_headers_or_body_without_later_search() {
+    for body_wait in [false, true] {
+        let mock = Mock::new(move |_, _| Reply {
+            header_delay: if body_wait {
+                Duration::ZERO
+            } else {
+                Duration::from_millis(600)
+            },
+            body_delay: if body_wait {
+                Duration::from_millis(600)
+            } else {
+                Duration::ZERO
+            },
+            ..Reply::json(result())
+        });
+        let client = BraveClient::new(&config(&mock.url)).unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let worker = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(120));
+            flag.store(true, Ordering::Relaxed);
+        });
+        let start = Instant::now();
+        let error = client
+            .search_cancellable("Example", &cancelled)
+            .unwrap_err();
+        assert!(error.downcast_ref::<crate::media::Interrupted>().is_some());
+        assert!(!error.to_string().contains(SECRET));
+        assert!(start.elapsed() < Duration::from_millis(350));
+        worker.join().unwrap();
+        assert_eq!(mock.requests().len(), 1);
+    }
+}
+
+#[test]
+fn chinese_language_variants_and_all_countries_reach_search_unchanged() {
+    for language in ["zh-hans", "zh-hant"] {
+        let mock = Mock::new(|_, _| Reply::json(result()));
+        let mut settings = config(&mock.url);
+        settings.country = "ALL".to_owned();
+        settings.search_lang = language.to_owned();
+        settings.validate().unwrap();
+        BraveClient::new(&settings)
+            .unwrap()
+            .search("Example")
+            .unwrap();
+        for request in mock.requests() {
+            let url = Url::parse(&format!("{}{}", mock.url, request.target)).unwrap();
+            let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+            assert_eq!(query["country"], "ALL");
+            assert_eq!(query["search_lang"], language);
+        }
+    }
 }
 
 #[test]

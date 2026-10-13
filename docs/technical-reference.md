@@ -17,19 +17,22 @@
 `selection.samples_per_video` は既定12（1〜4096）、`context_delta_seconds` は既定0.25（正の有限値）、
 `semantic_chunk_seconds` は既定30（0.1〜3600）です。semantic は実PTS境界で分割し、model の秒数上限も守ります。
 一次は表示ID付きcontact sheet、二次はsheetと各IDのbefore/center/after実画像を順番に送り、中央だけを評価します。
-最大12候補の二次requestは37画像です。model上限に収まらない場合は通信前に停止し、黙って画像を減らしません。
+二次requestの最大候補数は指定枚数の3倍、最大12で、sheet 1枚と候補ごとの3画像を使います（最大37画像）。
+model の画像上限がこの予定最大数を満たさなければ一次推論・Brave検索の前に停止します。
 動画はlossless MOV bytesを送り、元動画source・実区間・PTS offsetを検証します。clip相対時刻、未知source、重複event、空eventを拒否します。
 
 Game Title は [Brave契約](brave-search.md) を明示した固定2検索からJSON contextを生成します。
 同定・genre・進行要素・代表画面・選定優先点・出典と曖昧さ／矛盾を検証します。外部dataの命令に従うagent loopはありません。
-保存許可がない生成context本文はcheckpoint/reportへ入れません。再生成が必要なため同条件でも検索を省けず、
-`--cache-only` はその欠落を推論・検索・runtime操作0件で停止します。直接contextと保存許可済み生成contextのwarmはこれらが0件です。
+保存許可がない生成context本文はcheckpoint/reportへ入れません。所有する完成成果物は入力と実効条件が一致すれば再利用でき、
+cache消失後も検索・推論・media・runtime操作は0件です。再計算で生成contextが必要になりcheckpointもなければ、
+`--cache-only` はその欠落を外部操作0件で停止します。
 
 `[runtime]` は省略できます。両command未設定なら起動済みendpointを使い、管理・health確認は0件です。
 管理時はbackend一致と明示argvを検証し、`/models`で認証・declared modelを確認します。既存healthy endpointは停止しません。
 `start_command`はforeground、`stop_command`は完全argv要素の`{pid}`と`{session}`を必須とし、自己process/sessionだけを停止します。
 shell展開はなく、command/startup timeout、通常中断、起動途中・推論失敗でcleanupします。
-停止失敗は本体errorを置換せず別にstderrへ報告し、本体成功時も終了1にします。自動install／fallback／GPU leaseはありません。
+停止失敗は本体errorを置換せず別にstderrへ報告し、本体成功時も終了1にします。HTTPのheader/body待機と短期rate-window待機も
+通常中断を監視し、遅い応答をAIの最大timeoutまで待たず自己runtimeのcleanupへ進みます。自動install／fallback／GPU leaseはありません。
 
 ## media
 
@@ -114,6 +117,8 @@ Game Context は保存可能と確認した caller だけ明示して渡しま�
 
 `run::Session::prepare` は入力・設定・path・既存出力の所有権を確認し、cache/outputを排他にしてから
 処理callbackを受け付けます。`Session::run` は `pipeline::run` の実画像評価と公開を接続します。
+通常CLIはその前に入力identityと非秘密の依頼条件で所有済みreportを確認し、context生成やsemantic-planの欠落に左右されず完成成果物を返します。
+reportの`cache.workflow.conditions`には生成条件、方式、指定枚数、要求／model上限で制限したsemantic chunk秒数を記録します。
 CLIのcache親は出力と同じ親の `.game-screen-pick-cache`、変更は `--cache-directory` で指定します。
 既存の親directoryが必要です。専用 `game-screen-pick-rust-v1` namespaceだけへ書込み、旧cacheを読み込みません。
 

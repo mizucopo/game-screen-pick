@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod contact_sheet;
 pub mod domain;
+pub(crate) mod http;
 pub mod inference;
 pub mod media;
 pub mod output;

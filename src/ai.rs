@@ -1,15 +1,16 @@
 //! One bounded OpenAI-compatible JSON boundary. No search, runtime or cache I/O.
-use std::io::{Cursor, Read};
+use std::io::Cursor;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
-use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue, LOCATION};
 use serde_json::{Value, json};
 
 use crate::config::{AiConfig, Backend, InferenceLevel, ProtocolConfig, ReasoningFormat};
+use crate::http::{HttpClient, check_cancelled, connection_refused};
 use crate::pipeline::ModelConditions;
 use crate::run::{CacheConditions, ResolvedGameContext};
 
@@ -38,7 +39,7 @@ pub struct JsonRequest {
 
 pub struct OpenAiClient {
     config: AiConfig,
-    http: Client,
+    http: HttpClient,
     authorization: Option<HeaderValue>,
     secret: Option<String>,
 }
@@ -132,11 +133,8 @@ impl OpenAiClient {
                 Ok::<_, anyhow::Error>(value)
             })
             .transpose()?;
-        let http = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .build()
-            .map_err(|_| anyhow!("cannot initialize inference HTTP client"))?;
+        let http =
+            HttpClient::new().map_err(|_| anyhow!("cannot initialize inference HTTP client"))?;
         Ok(Self {
             config: config.clone(),
             http,
@@ -150,6 +148,11 @@ impl OpenAiClient {
     /// a live incompatible, unauthorized or malformed endpoint is an error.
     /// The caller supplies an absolute deadline so startup polling stays bounded.
     pub fn is_ready(&self, deadline: Instant) -> Result<bool> {
+        self.is_ready_cancellable(deadline, &AtomicBool::new(false))
+    }
+
+    pub fn is_ready_cancellable(&self, deadline: Instant, cancelled: &AtomicBool) -> Result<bool> {
+        check_cancelled(cancelled)?;
         let protocol = self.config.checked_protocol()?;
         let deadline =
             deadline.min(Instant::now() + Duration::from_secs(self.config.timeout_seconds));
@@ -163,13 +166,13 @@ impl OpenAiClient {
             if let Some(auth) = &self.authorization {
                 request = request.header(AUTHORIZATION, auth);
             }
-            let response = match request.send() {
+            let response = match self
+                .http
+                .send(request, deadline, cancelled, "inference readiness")
+            {
                 Ok(response) => response,
                 Err(error) if connection_refused(&error) => return Ok(false),
-                Err(error) if error.is_timeout() => {
-                    bail!("inference readiness HTTP deadline exceeded")
-                }
-                Err(_) => bail!("inference readiness HTTP request failed"),
+                Err(error) => return Err(error),
             };
             let status = response.status();
             if status.is_redirection() {
@@ -214,13 +217,14 @@ impl OpenAiClient {
                     .is_none_or(|length| length <= protocol.max_response_bytes),
                 "inference readiness response exceeds byte limit"
             );
-            let mut bytes = Vec::new();
-            response
-                .take(protocol.max_response_bytes + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| {
-                    anyhow!("inference readiness response body failed or deadline exceeded")
-                })?;
+            let bytes = self.http.read_body(
+                response,
+                protocol.max_response_bytes,
+                deadline,
+                cancelled,
+                "inference readiness",
+            )?;
+            check_cancelled(cancelled)?;
             remaining(deadline)?;
             ensure!(
                 bytes.len() as u64 <= protocol.max_response_bytes,
@@ -245,6 +249,7 @@ impl OpenAiClient {
                         .any(|model| model["id"].as_str() == Some(expected)),
                 "inference readiness endpoint does not serve the declared model"
             );
+            check_cancelled(cancelled)?;
             return Ok(true);
         }
         unreachable!("redirect limit fails before exhausting the loop")
@@ -256,8 +261,18 @@ impl OpenAiClient {
     pub fn generate<T>(
         &self,
         request: &JsonRequest,
+        validate: impl FnMut(&Value) -> Result<T>,
+    ) -> Result<T> {
+        self.generate_cancellable(request, &AtomicBool::new(false), validate)
+    }
+
+    pub fn generate_cancellable<T>(
+        &self,
+        request: &JsonRequest,
+        cancelled: &AtomicBool,
         mut validate: impl FnMut(&Value) -> Result<T>,
     ) -> Result<T> {
+        check_cancelled(cancelled)?;
         let protocol = self.config.checked_protocol()?;
         let deadline = Instant::now() + Duration::from_secs(self.config.timeout_seconds);
         ensure!(
@@ -279,6 +294,7 @@ impl OpenAiClient {
         let mut content = self.content(request, protocol)?;
         let mut failure = "invalid JSON";
         for attempt in 0..protocol.max_attempts {
+            check_cancelled(cancelled)?;
             remaining(deadline)?;
             if attempt > 0 {
                 content.push(json!({"type":"text", "text":format!(
@@ -314,7 +330,8 @@ impl OpenAiClient {
                 body.len() as u64 <= protocol.max_request_bytes,
                 "inference request exceeds byte limit"
             );
-            let text = self.post(&body, protocol, deadline)?;
+            let text = self.post(&body, protocol, deadline, cancelled)?;
+            check_cancelled(cancelled)?;
             let value: Value = match serde_json::from_str(&text) {
                 Ok(value) => value,
                 Err(_) => {
@@ -329,6 +346,7 @@ impl OpenAiClient {
             }
             match validate(&value) {
                 Ok(result) => {
+                    check_cancelled(cancelled)?;
                     remaining(deadline)?;
                     return Ok(result);
                 }
@@ -337,6 +355,7 @@ impl OpenAiClient {
                 }
             }
         }
+        check_cancelled(cancelled)?;
         bail!(
             "inference validation failed after {} attempts: {failure}",
             protocol.max_attempts
@@ -413,7 +432,13 @@ impl OpenAiClient {
         Ok(parts)
     }
 
-    fn post(&self, body: &[u8], protocol: &ProtocolConfig, deadline: Instant) -> Result<String> {
+    fn post(
+        &self,
+        body: &[u8],
+        protocol: &ProtocolConfig,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<String> {
         let mut url = self.config.base_url.clone();
         url.path_segments_mut()
             .map_err(|_| anyhow!("invalid inference service path"))?
@@ -430,13 +455,7 @@ impl OpenAiClient {
             if let Some(auth) = &self.authorization {
                 request = request.header(AUTHORIZATION, auth);
             }
-            let response = request.send().map_err(|error| {
-                if error.is_timeout() {
-                    anyhow!("inference HTTP deadline exceeded")
-                } else {
-                    anyhow!("inference HTTP request failed")
-                }
-            })?;
+            let response = self.http.send(request, deadline, cancelled, "inference")?;
             let status = response.status();
             if status.is_redirection() {
                 ensure!(
@@ -482,11 +501,14 @@ impl OpenAiClient {
                     .is_none_or(|n| n <= protocol.max_response_bytes),
                 "inference response exceeds byte limit"
             );
-            let mut bytes = Vec::new();
-            response
-                .take(protocol.max_response_bytes + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| anyhow!("inference response body failed or deadline exceeded"))?;
+            let bytes = self.http.read_body(
+                response,
+                protocol.max_response_bytes,
+                deadline,
+                cancelled,
+                "inference",
+            )?;
+            check_cancelled(cancelled)?;
             remaining(deadline)?;
             ensure!(
                 bytes.len() as u64 <= protocol.max_response_bytes,
@@ -523,22 +545,6 @@ fn contains_secret(value: &Value, secret: &str) -> bool {
             .any(|(key, v)| embedded_credential_echo(key, secret) || contains_secret(v, secret)),
         _ => false,
     }
-}
-
-fn connection_refused(error: &reqwest::Error) -> bool {
-    // is_connect() also includes TLS failures and DNS errors. Those represent
-    // uncertain/incompatible endpoints, not permission to launch a new server.
-    let mut source = std::error::Error::source(error);
-    while let Some(error) = source {
-        if error
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused)
-        {
-            return true;
-        }
-        source = error.source();
-    }
-    false
 }
 
 fn embedded_credential_echo(text: &str, secret: &str) -> bool {
