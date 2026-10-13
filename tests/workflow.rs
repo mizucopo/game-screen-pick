@@ -63,11 +63,15 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        self.thread.take().unwrap().join().unwrap();
+        let result = self.thread.take().unwrap().join();
+        if !thread::panicking() {
+            result.unwrap();
+        }
     }
 }
 
 fn request(stream: &mut TcpStream) -> (String, Value) {
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
