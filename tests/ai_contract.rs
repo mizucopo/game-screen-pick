@@ -12,6 +12,7 @@ use anyhow::{Result, ensure};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use game_screen_pick::ai::{Content, JsonRequest, OpenAiClient};
+use game_screen_pick::brave::{SearchEvidence, SearchResult, build_context_request};
 use game_screen_pick::config::{AiConfig, Config, InferenceLevel};
 use game_screen_pick::contact_sheet::{ContextImage, SheetEntry, render_candidate_sheets};
 use game_screen_pick::media::MediaTools;
@@ -1013,6 +1014,108 @@ fn external_schema_references_fail_without_any_http_or_domain_callback() {
         assert!(result.is_err());
     }
     assert!(mock.requests().is_empty());
+}
+
+#[test]
+fn context_request_that_cannot_fit_1024_bytes_fails_pure_preflight_without_http() {
+    let mock = Mock::new(|_, _| panic!("request preflight must never perform HTTP"));
+    let mut config = configuration(&mock, "vllm");
+    config.protocol.as_mut().unwrap().max_request_bytes = 1024;
+    let client = OpenAiClient::new(&config).unwrap();
+    let evidence = SearchEvidence {
+        queries: vec!["Example gameplay".to_owned(), "Example guide".to_owned()],
+        results: vec![SearchResult {
+            query_index: 0,
+            title: "Example official guide".to_owned(),
+            url: "https://example.com/guide".to_owned(),
+            description: "A guide to exploration and visible gameplay.".to_owned(),
+            extra_snippets: Vec::new(),
+        }],
+    };
+    let request = build_context_request("Example", &evidence).unwrap();
+    assert!(serde_json::to_vec(&request.schema).unwrap().len() > 1024);
+    let error = client.validate_request(&request).unwrap_err();
+    assert!(error.to_string().contains("byte limit"));
+    assert!(!format!("{error:#}").contains(SECRET));
+    assert!(mock.requests().is_empty());
+}
+
+#[test]
+fn pure_preflight_validates_local_schema_and_actual_media_without_http() {
+    let mock = Mock::new(|_, _| panic!("request preflight must never perform HTTP"));
+    let mut config = configuration(&mock, "vllm");
+    enable_media(&mut config);
+    let client = OpenAiClient::new(&config).unwrap();
+    for variant in 0..4 {
+        let mut request = request();
+        match variant {
+            0 => request.prompt = " ".to_owned(),
+            1 => request.schema = json!({"type":"invalid-type"}),
+            2 => request.schema = json!({"$ref":format!("{}/private-schema", mock.url)}),
+            _ => request.content.push(Content::Image {
+                bytes: b"not actual PNG pixels".to_vec(),
+                mime: "image/png".to_owned(),
+            }),
+        }
+        assert!(client.validate_request(&request).is_err());
+    }
+    assert!(mock.requests().is_empty());
+}
+
+#[test]
+fn pure_preflight_byte_boundary_matches_the_actual_encoded_initial_wire_request() {
+    for server_schema in [false, true] {
+        let mock = Mock::new(|received, _| {
+            assert_eq!(
+                data_part(received, "image_url"),
+                [include_bytes!("fixtures/images/rgb-grid.png").as_slice()]
+            );
+            assert_eq!(received.body["reasoning_effort"], "none");
+            success()
+        });
+        let mut config = configuration(&mock, "vllm");
+        enable_media(&mut config);
+        config.protocol.as_mut().unwrap().json_schema = server_schema;
+        let mut request = request();
+        request.content = vec![
+            Content::Text("Metadata containing quotes \" and Unicode 🌱\n".repeat(80)),
+            Content::Image {
+                bytes: include_bytes!("fixtures/images/rgb-grid.png").to_vec(),
+                mime: "image/png".to_owned(),
+            },
+        ];
+        let client = OpenAiClient::new(&config).unwrap();
+        client.validate_request(&request).unwrap();
+        assert!(
+            mock.requests().is_empty(),
+            "accepted preflight is also pure"
+        );
+        client.generate(&request, validate_ids).unwrap();
+        let wire_bytes = serde_json::to_vec(&mock.requests()[0].body).unwrap().len() as u64;
+        assert!(wire_bytes > 1024);
+        config.protocol.as_mut().unwrap().max_request_bytes = wire_bytes;
+        let exact = OpenAiClient::new(&config).unwrap();
+        exact.validate_request(&request).unwrap();
+        exact.generate(&request, validate_ids).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&mock.requests()[1].body).unwrap().len() as u64,
+            wire_bytes
+        );
+        config.protocol.as_mut().unwrap().max_request_bytes = wire_bytes - 1;
+        let too_small = OpenAiClient::new(&config).unwrap();
+        assert!(
+            too_small
+                .validate_request(&request)
+                .unwrap_err()
+                .to_string()
+                .contains("byte limit")
+        );
+        assert_eq!(
+            mock.requests().len(),
+            2,
+            "rejected preflight must not connect"
+        );
+    }
 }
 
 #[test]

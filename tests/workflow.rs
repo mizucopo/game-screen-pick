@@ -128,7 +128,11 @@ fn metadata(body: &Value, kind: &str) -> Value {
 }
 
 fn ai() -> Server {
-    Server::new(|header, body| {
+    ai_with_quiet_chunks(|_| false)
+}
+
+fn ai_with_quiet_chunks(quiet: impl Fn(&Value) -> bool + Send + 'static) -> Server {
+    Server::new(move |header, body| {
         assert!(header.starts_with("POST /v1/chat/completions "));
         assert_eq!(body["model"], "fixture-vision");
         assert_eq!(body["reasoning_effort"], "none");
@@ -148,9 +152,13 @@ fn ai() -> Server {
             assert_eq!(value["height"], 96);
             let start = value["actual_start_seconds"].as_f64().unwrap();
             let end = value["actual_end_seconds"].as_f64().unwrap();
-            json!({"events":[{"source":value["source"], "start_seconds":start,"end_seconds":end,
+            if quiet(&value) {
+                json!({"events":[]})
+            } else {
+                json!({"events":[{"source":value["source"], "start_seconds":start,"end_seconds":end,
                 "representative_seconds":(start + end) / 2.0,"importance":90,
                 "scene":"colored gameplay blocks","reason":"Colored blocks change in temporal order across the video"}]})
+            }
         } else if content.iter().any(|part| part["type"] == "image_url") {
             let value = metadata(body, "assessment_metadata");
             let mut images = 0;
@@ -409,27 +417,150 @@ fn cache_only_misses_and_unapproved_context_storage_do_not_contact_services() {
 }
 
 #[test]
-fn unusable_image_capacity_and_local_auth_fail_before_brave_or_inference() {
-    for failure in ["images", "auth"] {
+fn unusable_capacity_request_schema_and_local_auth_fail_before_brave_or_inference() {
+    for failure in ["images", "request", "auth"] {
         let root = tempfile::tempdir().unwrap();
         let ai = ai();
         let brave = brave();
         setup(root.path(), &ai, &brave, "sampled_frames", true);
         let path = root.path().join("config.toml");
         let source = fs::read_to_string(&path).unwrap();
-        let source = if failure == "images" {
-            source.replace("max_images = 64", "max_images = 1")
-        } else {
-            source.replace(
+        let source = match failure {
+            "images" => source.replace("max_images = 64", "max_images = 1"),
+            "request" => source.replace("max_request_bytes = 33554432", "max_request_bytes = 1024"),
+            "auth" => source.replace(
                 "[ai.protocol]",
                 "api_key = \"invalid\\r\\nheader\"\n[ai.protocol]",
-            )
+            ),
+            _ => unreachable!(),
         };
         fs::write(&path, source).unwrap();
-        let rejected = invoke(root.path(), true, false, true);
+        let rejected = invoke(root.path(), true, false, false);
         assert_eq!(rejected.status.code(), Some(1));
+        let diagnostic = String::from_utf8_lossy(&rejected.stderr);
+        assert!(
+            diagnostic.contains(match failure {
+                "images" => "image capacity",
+                "request" => "byte limit",
+                "auth" => "authentication",
+                _ => unreachable!(),
+            }),
+            "{failure}: {diagnostic}"
+        );
         assert_eq!((ai.calls(), brave.calls()), (0, 0));
         assert!(!root.path().join("output").exists());
+    }
+}
+
+#[test]
+fn unusable_media_fails_before_title_search_context_or_runtime() {
+    for failure in ["corrupt", "ffprobe"] {
+        let root = tempfile::tempdir().unwrap();
+        let ai = ai();
+        let brave = brave();
+        setup(root.path(), &ai, &brave, "sampled_frames", true);
+        if failure == "corrupt" {
+            fs::write(root.path().join("input/blocks.mkv"), b"invalid video").unwrap();
+        }
+        let config = root.path().join("config.toml");
+        let source = fs::read_to_string(&config).unwrap();
+        fs::write(&config, format!("{source}\n[runtime]\nbackend = \"vllm\"\nstart_command = [\"/missing/runtime-start\", \"{{session}}\"]\nstop_command = [\"/missing/runtime-stop\", \"{{pid}}\", \"{{session}}\"]\n")).unwrap();
+        let rejected = invoke(root.path(), true, false, failure == "ffprobe");
+        assert_eq!(rejected.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("FFprobe"));
+        assert_eq!((ai.calls(), brave.calls()), (0, 0));
+        assert!(!root.path().join("output").exists());
+    }
+}
+
+#[test]
+fn contract_references_are_hashed_in_owned_report_and_still_invalidate_reuse() {
+    const SECRET: &str = "CONTRACT_REFERENCE_SECRET_SENTINEL";
+    let root = tempfile::tempdir().unwrap();
+    let ai = ai();
+    let brave = brave();
+    setup(root.path(), &ai, &brave, "sampled_frames", true);
+    let config = root.path().join("config.toml");
+    let source = fs::read_to_string(&config)
+        .unwrap()
+        .replace("mock hard-stop test contract", SECRET);
+    fs::write(&config, &source).unwrap();
+    let cold = invoke(root.path(), true, false, false);
+    assert!(
+        cold.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cold.stderr)
+    );
+    let before = fs::read_to_string(root.path().join("output/report.json")).unwrap();
+    assert!(!before.contains(SECRET));
+    let report: Value = serde_json::from_str(&before).unwrap();
+    let game = &report["cache"]["workflow"]["conditions"]["game"];
+    assert_eq!(game["search_conditions_digest"].as_str().unwrap().len(), 64);
+    assert_eq!(game["search"].as_object().unwrap().len(), 3);
+    let counts = (ai.calls(), brave.calls());
+    fs::write(
+        &config,
+        source.replace(SECRET, "different approved reference"),
+    )
+    .unwrap();
+    let changed = invoke(root.path(), true, false, false);
+    assert!(
+        changed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&changed.stderr)
+    );
+    assert!(ai.calls() > counts.0);
+    assert_eq!(brave.calls(), counts.1 + 2);
+    let after = fs::read_to_string(root.path().join("output/report.json")).unwrap();
+    assert_ne!(before, after);
+    assert!(!after.contains("different approved reference"));
+}
+
+#[test]
+fn quiet_semantic_sources_are_optional_and_an_empty_completed_plan_is_reused() {
+    for all_quiet in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let ai =
+            ai_with_quiet_chunks(move |metadata| all_quiet || metadata["source"] == "quiet.mkv");
+        let brave = brave();
+        setup(root.path(), &ai, &brave, "semantic_video", true);
+        fs::copy(
+            root.path().join("input/blocks.mkv"),
+            root.path().join("input/quiet.mkv"),
+        )
+        .unwrap();
+        let result = invoke(root.path(), false, false, false);
+        if all_quiet {
+            assert_eq!(result.status.code(), Some(1));
+            assert!(
+                String::from_utf8_lossy(&result.stderr)
+                    .contains("no usable events; not enough candidates")
+            );
+            assert!(!root.path().join("output").exists());
+            let counts = (ai.calls(), brave.calls());
+            let repeated = invoke(root.path(), false, true, true);
+            assert_eq!(repeated.status.code(), Some(1));
+            assert!(
+                String::from_utf8_lossy(&repeated.stderr)
+                    .contains("no usable events; not enough candidates")
+            );
+            assert_eq!((ai.calls(), brave.calls()), counts);
+        } else {
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let report = fs::read_to_string(root.path().join("output/report.json")).unwrap();
+            let report: Value = serde_json::from_str(&report).unwrap();
+            assert!(
+                report["selected"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|entry| entry["source"] == "blocks.mkv")
+            );
+        }
     }
 }
 

@@ -196,21 +196,29 @@ impl RuntimeManager {
                 !session.child.has_exited()?,
                 "runtime start command exited before readiness; start must remain foreground"
             );
-            if client
-                .is_ready_cancellable(deadline.min(Instant::now() + PROBE_TIMEOUT), cancelled)?
-            {
-                check_cancelled(cancelled)?;
-                ensure!(
-                    !self
-                        .owned
-                        .as_mut()
-                        .expect("owned runtime")
-                        .child
-                        .has_exited()?,
-                    "runtime start command exited before readiness; start must remain foreground"
-                );
-                self.ready = true;
-                return Ok(());
+            // Once this session owns the foreground process, a slow /models
+            // response can be model loading. Wait within the overall startup
+            // budget and retry only typed HTTP deadlines (the client may cap an
+            // individual request at ai.timeout_seconds). Existing endpoints
+            // above retain their short, uncertainty-preserving initial probe.
+            match client.is_ready_cancellable(deadline, cancelled) {
+                Ok(true) => {
+                    check_cancelled(cancelled)?;
+                    ensure!(
+                        !self
+                            .owned
+                            .as_mut()
+                            .expect("owned runtime")
+                            .child
+                            .has_exited()?,
+                        "runtime start command exited before readiness; start must remain foreground"
+                    );
+                    self.ready = true;
+                    return Ok(());
+                }
+                Ok(false) => {}
+                Err(error) if crate::http::deadline_exceeded(&error) => {}
+                Err(error) => return Err(error),
             }
             thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
         }

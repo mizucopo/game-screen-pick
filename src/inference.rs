@@ -19,8 +19,8 @@ use crate::selection::{
 
 pub const ASSESSMENT_PROMPT_REVISION: &str = "visual-assessment-v1";
 pub const ASSESSMENT_SCHEMA_REVISION: &str = "assessment-evidence-v1";
-pub const VIDEO_PROMPT_REVISION: &str = "source-relative-video-events-v1";
-pub const VIDEO_SCHEMA_REVISION: &str = "semantic-event-evidence-v1";
+pub const VIDEO_PROMPT_REVISION: &str = "source-relative-video-events-v2";
+pub const VIDEO_SCHEMA_REVISION: &str = "semantic-event-evidence-v2";
 pub const MEDIA_REVISION: &str = "contact-sheet-12-context-png-lossless-mov-v1";
 
 // The existing contact-sheet renderer lays out twelve candidates per page.
@@ -176,7 +176,7 @@ pub fn understand_cancellable(
     };
     let request = JsonRequest {
         prompt: format!(
-            "Understand the supplied game recording video and identify meaningful visible events useful for choosing blog images. {DATA_RULE} Inspect the actual video and its temporal order. Return a nonempty bounded set of events with scene, concrete visual reason, and importance in 0..100. Do not invent events based on metadata. All returned times MUST be source-relative seconds: add chunk_time_zero_source_seconds to the time within the supplied clip. start_seconds/end_seconds must remain within the actual source interval, start must precede end, and representative_seconds must lie within the event. Copy the exact supplied source filename. Do not return clip-relative times or duplicate temporal events. Explain visible action or temporal change using at least eight letters/digits. Return only the requested JSON."
+            "Understand the supplied game recording video and identify meaningful visible events useful for choosing blog images. {DATA_RULE} Inspect the actual video and its temporal order. Return a bounded set of events with scene, concrete visual reason, and importance in 0..100. If this chunk contains no useful visible event, such as an uneventful static interval or loading screen, return an empty events array. Do not fabricate an event to fill the array or invent events based on metadata. All returned times MUST be source-relative seconds: add chunk_time_zero_source_seconds to the time within the supplied clip. start_seconds/end_seconds must remain within the actual source interval, start must precede end, and representative_seconds must lie within the event. Copy the exact supplied source filename. Do not return clip-relative times or duplicate temporal events. Explain visible action or temporal change using at least eight letters/digits. Return only the requested JSON."
         ),
         schema: event_schema(source, chunk),
         content: vec![
@@ -200,8 +200,8 @@ pub fn understand_cancellable(
     client.generate_cancellable(&request, cancelled, |value| {
         let events: Vec<SemanticEvent> = serde_json::from_value(value["events"].clone())?;
         ensure!(
-            !events.is_empty() && events.len() <= MAX_CANDIDATES,
-            "semantic events must be nonempty and bounded"
+            events.len() <= MAX_CANDIDATES,
+            "semantic events must be bounded"
         );
         let mut intervals = BTreeSet::new();
         for event in &events {
@@ -381,7 +381,7 @@ fn event_schema(source: &str, chunk: &ChunkArtifact) -> Value {
     let time = json!({"type":"number", "minimum":chunk.actual_start_seconds,
         "maximum":chunk.actual_end_seconds});
     json!({"type":"object", "additionalProperties":false, "required":["events"],
-    "properties":{"events":{"type":"array", "minItems":1, "maxItems":MAX_CANDIDATES,
+    "properties":{"events":{"type":"array", "minItems":0, "maxItems":MAX_CANDIDATES,
         "items":{"type":"object", "additionalProperties":false,
             "required":["source","start_seconds","end_seconds","representative_seconds","importance","scene","reason"],
             "properties":{

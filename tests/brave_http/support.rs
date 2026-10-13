@@ -220,6 +220,32 @@ fn context() -> Value {
         "source_urls":["https://example.com/game"]})
 }
 
+fn inference_configuration(url: &str, request_limit: u64) -> crate::config::AiConfig {
+    crate::config::Config::parse(&format!(
+        r#"
+[selection]
+method = "sampled_frames"
+[ai]
+backend = "strata"
+base_url = "{url}/v1"
+model = "context-contract"
+inference_level = "none"
+timeout_seconds = 5
+cache_revision = "mock-context-v1"
+[ai.protocol]
+reasoning_format = "reasoning_effort"
+supported_inference_levels = ["none"]
+json_schema = true
+max_output_tokens = 1024
+max_request_bytes = {request_limit}
+max_response_bytes = 16384
+max_attempts = 2
+"#
+    ))
+    .unwrap()
+    .ai
+}
+
 #[test]
 fn fixed_queries_parameters_and_transient_evidence() {
     let mock = Mock::new(|_, _| Reply::json(result()));
@@ -642,37 +668,14 @@ fn generation_uses_shared_client_and_retries_domain_contract_failures() {
         assert!(!request.body.to_string().contains(SECRET));
         let mut response = context();
         if i == 0 {
-            response["ambiguous"] = json!(true);
+            response["genre"] = json!("The genre cannot be determined from the provided evidence");
         }
         Reply::json(
             json!({"model":"context-contract","choices":[{"index":0,"finish_reason":"stop",
             "message":{"role":"assistant","content":response.to_string(),"refusal":null}}]}),
         )
     });
-    let settings = crate::config::Config::parse(&format!(
-        r#"
-[selection]
-method = "sampled_frames"
-[ai]
-backend = "strata"
-base_url = "{}/v1"
-model = "context-contract"
-inference_level = "none"
-timeout_seconds = 5
-cache_revision = "mock-context-v1"
-[ai.protocol]
-reasoning_format = "reasoning_effort"
-supported_inference_levels = ["none"]
-json_schema = true
-max_output_tokens = 1024
-max_request_bytes = 1048576
-max_response_bytes = 16384
-max_attempts = 2
-"#,
-        mock.url
-    ))
-    .unwrap()
-    .ai;
+    let settings = inference_configuration(&mock.url, 1048576);
     let client = OpenAiClient::new(&settings).unwrap();
     let generated = generate_context(&client, "Example", &evidence()).unwrap();
     assert_eq!(
@@ -973,6 +976,63 @@ fn every_required_information_field_rejects_explicit_absence_and_placeholders() 
 }
 
 #[test]
+fn full_absence_sentences_are_rejected_for_every_required_information_field() {
+    let evidence = evidence();
+    for (field, english, japanese) in [
+        ("identification", "identity", "同定"),
+        ("genre", "genre", "ジャンル"),
+        ("progression", "progression structure", "進行構造"),
+        (
+            "representative_screens",
+            "representative screens",
+            "代表的な画面",
+        ),
+        (
+            "selection_priorities",
+            "selection priorities",
+            "選定上の優先事項",
+        ),
+    ] {
+        for sentence in [
+            format!("The {english} cannot be determined from the provided evidence."),
+            format!("The {english} cannot be identified from the available evidence."),
+            format!("The {english} could not be determined based on the provided evidence."),
+            format!("The {english} is not possible to identify from available information."),
+            format!("{japanese}は提供された根拠から特定できません"),
+            format!("{japanese}は利用可能な情報から判断できない"),
+            format!("{japanese}は与えられた情報から判定できません"),
+        ] {
+            let mut response = context();
+            response[field] = if ["identification", "genre"].contains(&field) {
+                json!(sentence)
+            } else {
+                json!([sentence])
+            };
+            assert!(
+                validate_context("Example", &evidence, &response).is_err(),
+                "accepted {field}: {sentence}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fixed_context_preflight_uses_the_actual_prompt_and_schema_without_http() {
+    let mock = Mock::new(|_, _| panic!("Context preflight must not perform HTTP"));
+    let too_small = OpenAiClient::new(&inference_configuration(&mock.url, 1024)).unwrap();
+    assert!(preflight_context(&too_small, "Example").is_err());
+    let enough = OpenAiClient::new(&inference_configuration(&mock.url, 1048576)).unwrap();
+    preflight_context(&enough, "Example").unwrap();
+    let fixed = fixed_context_request("Example").unwrap();
+    let actual = build_context_request("Example", &evidence()).unwrap();
+    assert_eq!(fixed.prompt, actual.prompt);
+    assert_eq!(fixed.schema, actual.schema);
+    assert!(fixed.content.is_empty());
+    enough.validate_request(&actual).unwrap();
+    assert!(mock.requests().is_empty());
+}
+
+#[test]
 fn short_genres_and_concrete_multilingual_details_remain_valid() {
     let evidence = evidence();
     for genre in ["RPG", "RTS", "4X", "アクション", "戦略"] {
@@ -995,7 +1055,24 @@ fn short_genres_and_concrete_multilingual_details_remain_valid() {
         response["game_title"] = json!(title);
         response["identification"] = json!(title);
         validate_context(title, &evidence, &response).unwrap();
+        for identity in [
+            format!("The game is {title}."),
+            format!("Game: {title}"),
+            format!("Identity: {title}"),
+            format!("同定は{title}です"),
+            format!("同定は{title}です。"),
+            format!("同定は{title}である。"),
+            format!("同定は{title}でした。"),
+        ] {
+            response["identification"] = json!(identity);
+            validate_context(title, &evidence, &response).unwrap();
+        }
         response["genre"] = json!("unknown");
+        assert!(validate_context(title, &evidence, &response).is_err());
+        response["genre"] = json!("Genre: 2048");
+        assert!(validate_context(title, &evidence, &response).is_err());
+        response["genre"] = json!("RPG");
+        response["progression"] = json!(["Progression: 2048"]);
         assert!(validate_context(title, &evidence, &response).is_err());
     }
 }

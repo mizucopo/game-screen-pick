@@ -3,6 +3,8 @@
 `--game-title` の Context 生成は固定の Brave Web Search を使い、取得した根拠を共通 OpenAI 互換 client に渡す。
 ゲームの同定、ジャンル、進行構造、代表的な画面、選定上の優先事項、参照 URL を JSON にまとめる。
 同名作品の混同、曖昧な同定、未解決の矛盾、検索根拠にない参照 URL は成功扱いしない。
+必要項目を `unknown` / `情報不足` や「提供された根拠から特定できない」等の明示的な欠落文で埋めた応答も拒否する。
+この判定は限定した表現の検査であり、自由な説明文の事実性を機械的に証明するものではない。
 JSON と mock の合格は、実モデルの画像・動画理解や生成内容の事実性を証明しない。
 
 ## 適用契約の確認
@@ -61,6 +63,9 @@ HTTP client は proxy を無効化し、remote authentication は公式 HTTPS en
 ## HTTP と保存の境界
 
 検索は `"ゲーム名" video game genre gameplay` と `"ゲーム名" video game progression screenshots representative scenes` の固定 2 query。
+初回検索の前に、同じ Context prompt / schema の固定 request を共通 AI client の純粋な検証へ渡し、設定した request 容量に収まることを確認する。
+例えば `max_request_bytes=1024` では固定 schema / prompt 自体が収まらないため、検索 quota を使う前に停止する。
+実際の検索根拠を追加した request の容量・構造は検索後にも検証する。事前検証だけで未取得の根拠のサイズを保証しない。
 `safesearch=moderate`、`spellcheck=false`、`extra_snippets=true`、`text_decorations=false` を固定し、pagination・再試行・別 provider・paid fallback はない。
 同一 origin の redirect だけ最大 3 回まで許可し、別 origin にキーを送らない。
 2 query と redirect 全体でひとつの deadline を共有し、headers 待ち・body 待ちも含める。

@@ -570,6 +570,196 @@ fn refused_connection_can_start_but_readiness_timeout_is_uncertain_and_never_sta
 }
 
 #[test]
+fn owned_model_loading_can_stall_beyond_initial_probe_timeout_and_become_ready() {
+    let mut scripts = Scripts::normal();
+    scripts.config.startup_timeout_seconds = 4;
+    let marker = scripts.marker.clone();
+    let mut first_owned_probe = true;
+    let mock = Mock::new(move |_| {
+        if !marker.exists() {
+            return Reply::unavailable();
+        }
+        let delay = if first_owned_probe {
+            first_owned_probe = false;
+            Duration::from_millis(1400)
+        } else {
+            Duration::ZERO
+        };
+        Reply {
+            delay,
+            ..Reply::models("fixture-model")
+        }
+    });
+    let ai = ai_config(&mock.url);
+    let client = OpenAiClient::new(&ai).unwrap();
+    let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+    let started = Instant::now();
+    runtime
+        .ensure_ready(&client, &AtomicBool::new(false))
+        .unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(1400));
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(
+        !scripts.stopped.exists(),
+        "loading must not tear down its session"
+    );
+    let completion = runtime.finish(Ok(()));
+    assert!(completion.cleanup_error.is_none());
+    scripts.assert_stopped();
+}
+
+#[test]
+fn owned_loading_retries_typed_ai_http_timeout_within_startup_budget() {
+    let mut scripts = Scripts::normal();
+    scripts.config.startup_timeout_seconds = 4;
+    let marker = scripts.marker.clone();
+    let owned_probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let probes = owned_probes.clone();
+    let mock = Mock::new(move |_| {
+        if !marker.exists() {
+            return Reply::unavailable();
+        }
+        let first = probes.fetch_add(1, Ordering::Relaxed) == 0;
+        Reply {
+            delay: if first {
+                Duration::from_millis(1300)
+            } else {
+                Duration::ZERO
+            },
+            ..Reply::models("fixture-model")
+        }
+    });
+    let mut ai = ai_config(&mock.url);
+    ai.timeout_seconds = 1;
+    let client = OpenAiClient::new(&ai).unwrap();
+    let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+    runtime
+        .ensure_ready(&client, &AtomicBool::new(false))
+        .unwrap();
+    assert_eq!(owned_probes.load(Ordering::Relaxed), 2);
+    assert!(!scripts.stopped.exists());
+    let completion = runtime.finish(Ok(()));
+    assert!(completion.cleanup_error.is_none());
+    scripts.assert_stopped();
+}
+
+#[test]
+fn owned_readiness_rejects_non_timeout_failures_immediately_and_cleans() {
+    for variant in 0..3 {
+        let mut scripts = Scripts::normal();
+        scripts.config.startup_timeout_seconds = 4;
+        let marker = scripts.marker.clone();
+        let owned_probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let probes = owned_probes.clone();
+        let mock = Mock::new(move |_| {
+            if !marker.exists() {
+                return Reply::unavailable();
+            }
+            probes.fetch_add(1, Ordering::Relaxed);
+            match variant {
+                0 => Reply {
+                    status: 401,
+                    body: SECRET.into(),
+                    ..Reply::models("fixture-model")
+                },
+                1 => Reply {
+                    body: "malformed JSON".into(),
+                    ..Reply::models("fixture-model")
+                },
+                2 => Reply::models("wrong-model"),
+                _ => unreachable!(),
+            }
+        });
+        let ai = ai_config(&mock.url);
+        let client = OpenAiClient::new(&ai).unwrap();
+        let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+        let started = Instant::now();
+        let error = runtime
+            .ensure_ready(&client, &AtomicBool::new(false))
+            .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(owned_probes.load(Ordering::Relaxed), 1);
+        assert!(!format!("{error:#}\n{error:?}").contains(SECRET));
+        let completion = runtime.finish(Err::<(), _>(error));
+        assert!(completion.result.is_err());
+        assert!(completion.cleanup_error.is_none());
+        scripts.assert_stopped();
+    }
+}
+
+#[test]
+fn owned_readiness_timeouts_end_at_overall_startup_deadline_and_cleanup() {
+    let mut scripts = Scripts::normal();
+    scripts.config.startup_timeout_seconds = 2;
+    let marker = scripts.marker.clone();
+    let mock = Mock::new(move |_| {
+        if marker.exists() {
+            Reply {
+                delay: Duration::from_millis(1100),
+                ..Reply::models("fixture-model")
+            }
+        } else {
+            Reply::unavailable()
+        }
+    });
+    let mut ai = ai_config(&mock.url);
+    ai.timeout_seconds = 1;
+    let client = OpenAiClient::new(&ai).unwrap();
+    let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+    let started = Instant::now();
+    let error = runtime
+        .ensure_ready(&client, &AtomicBool::new(false))
+        .unwrap_err();
+    assert_eq!(error.to_string(), "runtime startup deadline exceeded");
+    assert!(started.elapsed() >= Duration::from_secs(2));
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let completion = runtime.finish(Err::<(), _>(error));
+    assert!(completion.cleanup_error.is_none());
+    scripts.assert_stopped();
+}
+
+#[test]
+fn cancellation_during_owned_loading_aborts_http_wait_and_cleans_session() {
+    let mut scripts = Scripts::normal();
+    scripts.config.startup_timeout_seconds = 4;
+    let marker = scripts.marker.clone();
+    let loading = Arc::new(AtomicBool::new(false));
+    let model_loading = loading.clone();
+    let mock = Mock::new(move |_| {
+        if marker.exists() {
+            model_loading.store(true, Ordering::Relaxed);
+            Reply {
+                delay: Duration::from_millis(1500),
+                ..Reply::models("fixture-model")
+            }
+        } else {
+            Reply::unavailable()
+        }
+    });
+    let ai = ai_config(&mock.url);
+    let client = OpenAiClient::new(&ai).unwrap();
+    let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancellation = cancelled.clone();
+    let worker = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !loading.load(Ordering::Relaxed) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(100));
+        cancellation.store(true, Ordering::Relaxed);
+    });
+    let started = Instant::now();
+    let error = runtime.ensure_ready(&client, &cancelled).unwrap_err();
+    worker.join().unwrap();
+    assert!(error.is::<game_screen_pick::media::Interrupted>());
+    assert!(started.elapsed() < Duration::from_secs(1));
+    let completion = runtime.finish(Err::<(), _>(error));
+    assert!(completion.cleanup_error.is_none());
+    scripts.assert_stopped();
+}
+
+#[test]
 fn argv_is_literal_and_spawn_failure_never_runs_stop() -> Result<()> {
     let mut scripts = Scripts::normal();
     let literal_path = scripts._directory.path().join("literal");

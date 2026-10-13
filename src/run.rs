@@ -232,7 +232,6 @@ impl Session {
                         .durations
                         .values()
                         .all(|seconds| seconds.is_finite() && *seconds > 0.0)
-                    && !plan.events.is_empty()
                     && plan.events.len() <= MAX_CANDIDATES,
                 "semantic plan has invalid sources, duration or event count"
             );

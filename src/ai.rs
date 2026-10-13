@@ -44,6 +44,12 @@ pub struct OpenAiClient {
     secret: Option<String>,
 }
 
+struct PreparedRequest {
+    schema: jsonschema::Validator,
+    content: Vec<Value>,
+    body: Vec<u8>,
+}
+
 impl AiConfig {
     /// Safe to compute before a cache hit: no credential resolution or I/O.
     pub fn model_conditions(&self) -> ModelConditions {
@@ -266,6 +272,15 @@ impl OpenAiClient {
         self.generate_cancellable(request, &AtomicBool::new(false), validate)
     }
 
+    /// Validate the actual initial request without HTTP or runtime I/O. Use
+    /// this before spending search quota on a request that cannot be sent.
+    /// Media decoding and complete inline/base64 payload sizing are identical
+    /// to generation; later response-correction prompts are sized separately.
+    pub fn validate_request(&self, request: &JsonRequest) -> Result<()> {
+        self.prepare_request(request, self.config.checked_protocol()?)?;
+        Ok(())
+    }
+
     pub fn generate_cancellable<T>(
         &self,
         request: &JsonRequest,
@@ -275,23 +290,11 @@ impl OpenAiClient {
         check_cancelled(cancelled)?;
         let protocol = self.config.checked_protocol()?;
         let deadline = Instant::now() + Duration::from_secs(self.config.timeout_seconds);
-        ensure!(
-            !request.prompt.trim().is_empty(),
-            "inference prompt must not be blank"
-        );
-        let schema_bytes = serde_json::to_vec(&request.schema)
-            .map_err(|_| anyhow!("cannot encode inference schema"))?;
-        ensure!(
-            schema_bytes.len() as u64 <= protocol.max_request_bytes,
-            "inference schema exceeds request byte limit"
-        );
-        // Remote HTTP/file resolution is disabled in Cargo.toml. A bad schema
-        // fails before any inference and its diagnostic is never echoed.
-        let schema = jsonschema::options()
-            .should_validate_formats(true)
-            .build(&request.schema)
-            .map_err(|_| anyhow!("invalid or nonlocal inference JSON Schema"))?;
-        let mut content = self.content(request, protocol)?;
+        let PreparedRequest {
+            schema,
+            mut content,
+            mut body,
+        } = self.prepare_request(request, protocol)?;
         let mut failure = "invalid JSON";
         for attempt in 0..protocol.max_attempts {
             check_cancelled(cancelled)?;
@@ -300,36 +303,8 @@ impl OpenAiClient {
                 content.push(json!({"type":"text", "text":format!(
                     "The previous response failed: {failure}. Correct it. Return only JSON matching the supplied schema and all requested IDs, media evidence and time/score bounds."
                 )}));
+                body = self.payload_body(request, protocol, &content)?;
             }
-            let mut payload = json!({
-                "model":self.config.model, "stream":false, "max_tokens":protocol.max_output_tokens,
-                "messages":[{"role":"user","content":content}]
-            });
-            match protocol.reasoning_format {
-                ReasoningFormat::ReasoningEffort => {
-                    payload["reasoning_effort"] = json!(self.config.inference_level.to_string());
-                }
-                ReasoningFormat::ChatTemplate => {
-                    payload["chat_template_kwargs"] = if self.config.inference_level
-                        == InferenceLevel::None
-                    {
-                        json!({"enable_thinking":false})
-                    } else {
-                        json!({"enable_thinking":true,"reasoning_effort":self.config.inference_level.to_string()})
-                    };
-                }
-            }
-            if protocol.json_schema {
-                payload["response_format"] = json!({"type":"json_schema", "json_schema":{
-                    "name":"response", "strict":true, "schema":request.schema
-                }});
-            }
-            let body = serde_json::to_vec(&payload)
-                .map_err(|_| anyhow!("cannot encode inference request"))?;
-            ensure!(
-                body.len() as u64 <= protocol.max_request_bytes,
-                "inference request exceeds byte limit"
-            );
             let text = self.post(&body, protocol, deadline, cancelled)?;
             check_cancelled(cancelled)?;
             let value: Value = match serde_json::from_str(&text) {
@@ -360,6 +335,77 @@ impl OpenAiClient {
             "inference validation failed after {} attempts: {failure}",
             protocol.max_attempts
         )
+    }
+
+    fn prepare_request(
+        &self,
+        request: &JsonRequest,
+        protocol: &ProtocolConfig,
+    ) -> Result<PreparedRequest> {
+        ensure!(
+            !request.prompt.trim().is_empty(),
+            "inference prompt must not be blank"
+        );
+        let schema_bytes = serde_json::to_vec(&request.schema)
+            .map_err(|_| anyhow!("cannot encode inference schema"))?;
+        ensure!(
+            schema_bytes.len() as u64 <= protocol.max_request_bytes,
+            "inference schema exceeds request byte limit"
+        );
+        // Remote HTTP/file resolution is disabled in Cargo.toml. A bad schema
+        // fails before any inference and its diagnostic is never echoed.
+        let schema = jsonschema::options()
+            .should_validate_formats(true)
+            .build(&request.schema)
+            .map_err(|_| anyhow!("invalid or nonlocal inference JSON Schema"))?;
+        let content = self.content(request, protocol)?;
+        let body = self.payload_body(request, protocol, &content)?;
+        self.post_request(self.completion_url()?, Vec::new())
+            .build()
+            .map_err(|_| anyhow!("invalid inference HTTP request"))?;
+        Ok(PreparedRequest {
+            schema,
+            content,
+            body,
+        })
+    }
+
+    fn payload_body(
+        &self,
+        request: &JsonRequest,
+        protocol: &ProtocolConfig,
+        content: &[Value],
+    ) -> Result<Vec<u8>> {
+        let mut payload = json!({
+            "model":self.config.model, "stream":false, "max_tokens":protocol.max_output_tokens,
+            "messages":[{"role":"user","content":content}]
+        });
+        match protocol.reasoning_format {
+            ReasoningFormat::ReasoningEffort => {
+                payload["reasoning_effort"] = json!(self.config.inference_level.to_string());
+            }
+            ReasoningFormat::ChatTemplate => {
+                payload["chat_template_kwargs"] = if self.config.inference_level
+                    == InferenceLevel::None
+                {
+                    json!({"enable_thinking":false})
+                } else {
+                    json!({"enable_thinking":true,"reasoning_effort":self.config.inference_level.to_string()})
+                };
+            }
+        }
+        if protocol.json_schema {
+            payload["response_format"] = json!({"type":"json_schema", "json_schema":{
+                "name":"response", "strict":true, "schema":request.schema
+            }});
+        }
+        let body =
+            serde_json::to_vec(&payload).map_err(|_| anyhow!("cannot encode inference request"))?;
+        ensure!(
+            body.len() as u64 <= protocol.max_request_bytes,
+            "inference request exceeds byte limit"
+        );
+        Ok(body)
     }
 
     fn content(&self, request: &JsonRequest, protocol: &ProtocolConfig) -> Result<Vec<Value>> {
@@ -432,6 +478,28 @@ impl OpenAiClient {
         Ok(parts)
     }
 
+    fn completion_url(&self) -> Result<url::Url> {
+        let mut url = self.config.base_url.clone();
+        url.path_segments_mut()
+            .map_err(|_| anyhow!("invalid inference service path"))?
+            .pop_if_empty()
+            .push("chat")
+            .push("completions");
+        Ok(url)
+    }
+
+    fn post_request(&self, url: url::Url, body: Vec<u8>) -> reqwest::RequestBuilder {
+        let mut request = self
+            .http
+            .post(url)
+            .header(CONTENT_TYPE, "application/json")
+            .body(body);
+        if let Some(auth) = &self.authorization {
+            request = request.header(AUTHORIZATION, auth);
+        }
+        request
+    }
+
     fn post(
         &self,
         body: &[u8],
@@ -439,22 +507,11 @@ impl OpenAiClient {
         deadline: Instant,
         cancelled: &AtomicBool,
     ) -> Result<String> {
-        let mut url = self.config.base_url.clone();
-        url.path_segments_mut()
-            .map_err(|_| anyhow!("invalid inference service path"))?
-            .pop_if_empty()
-            .push("chat")
-            .push("completions");
+        let mut url = self.completion_url()?;
         for redirect in 0..=3 {
-            let mut request = self
-                .http
-                .post(url.clone())
-                .timeout(remaining(deadline)?)
-                .header(CONTENT_TYPE, "application/json")
-                .body(body.to_owned());
-            if let Some(auth) = &self.authorization {
-                request = request.header(AUTHORIZATION, auth);
-            }
+            let request = self
+                .post_request(url.clone(), body.to_owned())
+                .timeout(remaining(deadline)?);
             let response = self.http.send(request, deadline, cancelled, "inference")?;
             let status = response.status();
             if status.is_redirection() {

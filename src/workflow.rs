@@ -104,6 +104,10 @@ pub fn run(
             .media
             .as_ref()
             .context("image selection requires ai.protocol.media vision settings")?;
+        let chunk_seconds = config
+            .selection
+            .semantic_chunk_seconds
+            .min(media.max_video_seconds);
         ensure!(
             media.max_images as usize > 3 * (count * 3).min(crate::pipeline::ASSESSMENT_BATCH),
             "configured image capacity cannot cover the largest secondary assessment batch for this count"
@@ -124,20 +128,33 @@ pub fn run(
                 let search = config.brave.as_ref().context("--game-title requires an explicit Brave search contract; use --game-context or configure [brave]")?;
                 search.validate_search_contract()?;
                 json!({"kind":"generated","title_digest":crate::storage::sha256(title.as_bytes()),
-                    "search":serde_json::from_str::<serde_json::Value>(&search.search_conditions()?)?,
+                    "search_conditions_digest":crate::storage::sha256(search.search_conditions()?.as_bytes()),
+                    "search":{"country":search.country,"search_lang":search.search_lang,"result_count":search.result_count},
                     "prompt_revision":brave::CONTEXT_PROMPT_REVISION,"schema_revision":brave::CONTEXT_SCHEMA_REVISION})
             }
         };
-        let effective = json!({"revision":"rust-ai-workflow-v2","model":model,"service_url":config.ai.base_url.to_string(),
+        let effective = json!({"revision":"rust-ai-workflow-v3","model":model,"service_url":config.ai.base_url.to_string(),
             "protocol":protocol,"game":game_conditions,"selection":{"method":config.selection.method.to_string(),
                 "count":count,"samples_per_video":config.selection.samples_per_video,
                 "context_delta_seconds":config.selection.context_delta_seconds,
                 "semantic_chunk_seconds":semantic.then_some(config.selection.semantic_chunk_seconds),
-                "effective_semantic_chunk_seconds":semantic.then(||config.selection.semantic_chunk_seconds.min(media.max_video_seconds))},
+                "effective_semantic_chunk_seconds":semantic.then_some(chunk_seconds)},
             "prompt_revision":prompt_revision,"schema_revision":schema_revision,"media_revision":crate::inference::MEDIA_REVISION});
         if let Some(outcome) = session.prepare_workflow(effective, cancelled)? {
             return Ok(outcome);
         }
+        // Validate every input before spending title-based search/context calls.
+        // Geometry is also counted globally before any semantic inference.
+        let mut title_geometry = if matches!(game, GameInput::Title(_)) {
+            let videos = session.videos(tools, cancelled)?;
+            if semantic {
+                Some(plan_semantic_videos(videos, chunk_seconds, cancelled)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let (resolved, persist) = match game {
             GameInput::Context(text) => (ResolvedGameContext::direct(text), true),
             GameInput::Title(title) => {
@@ -154,6 +171,7 @@ pub fn run(
                         check_cancelled(cancelled)?;
                         ensure!(!cache_only, "cache-only: generated Game Context checkpoint is missing or persistence is disabled");
                         inference.validate_transport()?;
+                        brave::preflight_context(inference.client.as_ref().expect("validated transport"), title)?;
                         let evidence = BraveClient::new(search)?.search_cancellable(title, cancelled)?;
                         check_cancelled(cancelled)?;
                         brave::generate_context_cancellable(inference.client()?, title, &evidence, cancelled)
@@ -174,13 +192,19 @@ pub fn run(
                 &conditions,
                 cancelled,
                 |session| {
-                    let videos = session.videos(tools, cancelled)?;
+                    let videos = match title_geometry.take() {
+                        Some(videos) => videos,
+                        None => plan_semantic_videos(
+                            session.videos(tools, cancelled)?,
+                            chunk_seconds,
+                            cancelled,
+                        )?,
+                    };
                     let mut plan = SemanticPlan {
                         durations: Default::default(),
                         events: Vec::new(),
                     };
-                    let mut chunks = 0;
-                    for video in videos {
+                    for PlannedVideo { video, ranges } in videos {
                         let name = video
                             .source
                             .file_name()
@@ -188,18 +212,6 @@ pub fn run(
                             .context("semantic source name must be UTF-8")?;
                         plan.durations
                             .insert(name.to_owned(), video.duration_seconds);
-                        let ranges = semantic_ranges(
-                            &video,
-                            config
-                                .selection
-                                .semantic_chunk_seconds
-                                .min(media.max_video_seconds),
-                        )?;
-                        chunks += ranges.len();
-                        ensure!(
-                            chunks <= crate::selection::MAX_CANDIDATES,
-                            "semantic plan exceeds the chunk limit"
-                        );
                         for (index, (start, end)) in ranges.into_iter().enumerate() {
                             check_cancelled(cancelled)?;
                             eprintln!(
@@ -232,6 +244,10 @@ pub fn run(
                     Ok(plan)
                 },
             )?;
+            ensure!(
+                !events.is_empty(),
+                "semantic understanding found no usable events; not enough candidates"
+            );
             Some(events)
         } else {
             None
@@ -260,6 +276,31 @@ pub fn run(
         })
     })();
     Ok(inference.runtime.finish(result))
+}
+
+struct PlannedVideo {
+    video: Video,
+    ranges: Vec<(f64, f64)>,
+}
+
+fn plan_semantic_videos(
+    videos: Vec<Video>,
+    limit: f64,
+    cancelled: &AtomicBool,
+) -> Result<Vec<PlannedVideo>> {
+    let mut plan = Vec::with_capacity(videos.len());
+    let mut chunks = 0;
+    for video in videos {
+        check_cancelled(cancelled)?;
+        let ranges = semantic_ranges(&video, limit)?;
+        chunks += ranges.len();
+        ensure!(
+            chunks <= crate::selection::MAX_CANDIDATES,
+            "semantic plan exceeds the chunk limit"
+        );
+        plan.push(PlannedVideo { video, ranges });
+    }
+    Ok(plan)
 }
 
 /// Partition on real PTS boundaries; never create an empty or oversized chunk.
@@ -305,4 +346,52 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
         return Err(Interrupted.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::media::FrameTime;
+
+    fn video(name: &str, count: usize) -> Video {
+        Video {
+            source: name.into(),
+            stream_index: 0,
+            start_seconds: 0.0,
+            duration_seconds: count as f64 * 0.25,
+            width: 16,
+            height: 16,
+            frames: (0..count)
+                .map(|decode_index| FrameTime {
+                    decode_index,
+                    seconds: decode_index as f64 * 0.25,
+                    duration_seconds: 0.25,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn all_input_geometry_is_bounded_before_any_chunk_can_be_inferred() {
+        let cancelled = AtomicBool::new(false);
+        let acceptable = plan_semantic_videos(
+            vec![video("a.mkv", 4000), video("b.mkv", 96)],
+            0.25,
+            &cancelled,
+        )
+        .unwrap();
+        assert_eq!(
+            acceptable
+                .iter()
+                .map(|video| video.ranges.len())
+                .sum::<usize>(),
+            4096
+        );
+        let rejected = plan_semantic_videos(
+            vec![video("a.mkv", 4000), video("b.mkv", 97)],
+            0.25,
+            &cancelled,
+        );
+        assert!(rejected.err().unwrap().to_string().contains("chunk limit"));
+    }
 }

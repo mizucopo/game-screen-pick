@@ -165,9 +165,24 @@ pub(crate) fn connection_refused(error: &anyhow::Error) -> bool {
     error.downcast_ref::<ConnectionRefused>().is_some()
 }
 
+#[derive(Debug)]
+struct DeadlineExceeded(&'static str);
+
+impl std::fmt::Display for DeadlineExceeded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{} HTTP deadline exceeded", self.0)
+    }
+}
+
+impl std::error::Error for DeadlineExceeded {}
+
+pub(crate) fn deadline_exceeded(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<DeadlineExceeded>().is_some()
+}
+
 fn request_error(error: reqwest::Error, operation: &'static str) -> anyhow::Error {
     if error.is_timeout() {
-        return anyhow!("{operation} HTTP deadline exceeded");
+        return DeadlineExceeded(operation).into();
     }
     let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
     while let Some(error) = cause {
@@ -199,7 +214,7 @@ async fn cancellable<T>(
             return Poll::Ready(Err(error));
         }
         if Instant::now() >= deadline {
-            return Poll::Ready(Err(anyhow!("{operation} HTTP deadline exceeded")));
+            return Poll::Ready(Err(DeadlineExceeded(operation).into()));
         }
         if let Poll::Ready(result) = future.as_mut().poll(context) {
             return Poll::Ready(result.map_err(|error| request_error(error, operation)));
@@ -214,4 +229,23 @@ async fn cancellable<T>(
         Poll::Pending
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deadline_classification_uses_type_even_through_context() {
+        let deadline = anyhow::Error::from(DeadlineExceeded("inference readiness"));
+        assert_eq!(
+            deadline.to_string(),
+            "inference readiness HTTP deadline exceeded"
+        );
+        assert!(deadline_exceeded(&deadline.context("owned runtime probe")));
+        assert!(!deadline_exceeded(&anyhow!(
+            "inference readiness HTTP deadline exceeded"
+        )));
+        assert!(!deadline_exceeded(&Interrupted.into()));
+    }
 }

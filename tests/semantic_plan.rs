@@ -78,6 +78,26 @@ fn completed_plan_is_small_and_reused_without_frame_metadata() {
 }
 
 #[test]
+fn completed_empty_plan_is_valid_and_reused_without_invented_events() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = paths(root.path());
+    let (model, conditions) = dependencies();
+    let cancelled = AtomicBool::new(false);
+    for cold in [true, false] {
+        let mut session = Session::prepare(&paths, &cancelled).unwrap();
+        let events = session
+            .semantic_plan(30.0, &model, &conditions, &cancelled, |_| {
+                assert!(cold, "empty completed plan must bypass generator");
+                let mut plan = plan();
+                plan.events.clear();
+                Ok(plan)
+            })
+            .unwrap();
+        assert!(events.is_empty());
+    }
+}
+
+#[test]
 fn generation_conditions_and_input_changes_invalidate_only_the_plan() {
     let root = tempfile::tempdir().unwrap();
     let paths = paths(root.path());

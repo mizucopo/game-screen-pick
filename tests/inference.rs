@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -604,7 +605,7 @@ fn invalid_video_events_retry_and_unsupported_media_stops() {
                     let duplicate = bad["events"][0].clone();
                     bad["events"].as_array_mut().unwrap().push(duplicate);
                 }
-                7 => bad["events"] = json!([]),
+                7 => bad["events"] = json!(null),
                 8 => bad["events"][0]["reason"] = json!("........"),
                 _ => bad["events"][0]["scene"] = json!("\nPRIVATE_VIDEO_MARKER"),
             }
@@ -636,4 +637,68 @@ fn invalid_video_events_retry_and_unsupported_media_stops() {
     config.protocol.as_mut().unwrap().media = None;
     assert!(understand(&OpenAiClient::new(&config).unwrap(), "探索", &chunk).is_err());
     assert!(mock.requests().is_empty());
+}
+
+#[test]
+fn quiet_actual_video_chunk_can_truthfully_return_no_events_without_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("quiet.mkv");
+    let generated = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-nostdin",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x32:r=4:d=1",
+            "-c:v",
+            "ffv1",
+        ])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+    let tools = MediaTools::default();
+    let cancelled = AtomicBool::new(false);
+    let video = tools.probe(&source, &cancelled).unwrap();
+    let chunk = tools.extract_chunk(&video, 0.0, 1.0, &cancelled).unwrap();
+    let chunk_video = tools.probe(&chunk.path(), &cancelled).unwrap();
+    for frame in &chunk_video.frames {
+        let image = tools
+            .extract(&chunk_video, frame.seconds, &cancelled)
+            .unwrap();
+        assert!(
+            image::open(image.path())
+                .unwrap()
+                .to_rgb8()
+                .pixels()
+                .all(|pixel| pixel.0 == [0, 0, 0])
+        );
+    }
+    let bytes = fs::read(chunk.path()).unwrap();
+    let mock = Mock::new(move |request, attempt| {
+        assert_eq!(attempt, 0, "empty events are a valid completed response");
+        assert_eq!(inline_media(request, "video_url"), [bytes.as_slice()]);
+        assert_eq!(metadata(&parts(request)[1]).unwrap()["source"], "quiet.mkv");
+        assert_eq!(
+            request["response_format"]["json_schema"]["schema"]["properties"]["events"]["minItems"],
+            0
+        );
+        assert!(
+            parts(request)[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("empty events array")
+        );
+        Reply::json(json!({"events":[]}))
+    });
+    let events = understand(
+        &OpenAiClient::new(&config(&mock, "vllm")).unwrap(),
+        "探索",
+        &chunk,
+    )
+    .unwrap();
+    assert!(events.is_empty());
+    assert_eq!(mock.requests().len(), 1);
 }
