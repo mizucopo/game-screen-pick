@@ -23,7 +23,9 @@ model の画像上限がこの予定最大数を満たさなければ一次推�
 clip相対時刻、未知source、重複eventを拒否します。静止・loadingなど有用なeventがないchunkは空配列を許し、全chunkが空なら候補不足で停止します。
 
 Game Title は [Brave契約](brave-search.md) を明示した固定2検索からJSON contextを生成します。
-完成成果物が使えない場合、全入力動画をprobeし、固定context schemaと初期requestの送信サイズ・認証を検索前に検証します。
+生成contextのcache missではBraveと推論の認証、固定context schemaと初期requestの送信サイズをprobe前に検証します。
+次に全入力動画をprobeし、modelの画像寸法・画素上限と、samplingの重複排除後の合計4096実frame上限を検索前に確認します。
+生成contextのcache hitはBrave認証・検索を不要とします。直接contextもJSON符号化した本文がrequest上限を超えればmedia/runtime処理前に停止します。
 同定・genre・進行要素・代表画面・選定優先点・出典と曖昧さ／矛盾を検証します。外部dataの命令に従うagent loopはありません。
 保存許可がない生成context本文はcheckpoint/reportへ入れません。所有する完成成果物は入力と実効条件が一致すれば再利用でき、
 cache消失後も検索・推論・media・runtime操作は0件です。再計算で生成contextが必要になりcheckpointもなければ、
@@ -36,6 +38,7 @@ shell展開はなく、command/startup timeout、通常中断、起動途中・�
 既存endpointの確認は1秒までとし、不確かなtimeoutでは起動しません。自己sessionの起動後は全体の起動期限内でHTTP timeoutを再試行します。
 停止失敗は本体errorを置換せず別にstderrへ報告し、本体成功時も終了1にします。HTTPのheader/body待機と短期rate-window待機も
 通常中断を監視し、遅い応答をAIの最大timeoutまで待たず自己runtimeのcleanupへ進みます。自動install／fallback／GPU leaseはありません。
+cleanupも中断を監視し、停止commandに最大500 msの猶予を与えた後、所有した停止command/runtimeのprocess groupだけを回収します。
 
 ## media
 

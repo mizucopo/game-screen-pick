@@ -14,6 +14,10 @@ use crate::config::{AiConfig, Backend};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+// Give an explicit stop command enough time to record/complete ordinary shutdown
+// after cancellation, without allowing a configured multi-minute timeout to
+// delay SIGINT handling. Only this session's owned processes are terminated.
+const CANCELLATION_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -225,13 +229,25 @@ impl RuntimeManager {
     }
 
     pub fn finish<T>(&mut self, result: Result<T>) -> RuntimeCompletion<T> {
+        self.finish_cancellable(result, &AtomicBool::new(false))
+    }
+
+    /// Preserve the body result while reporting shutdown failure separately.
+    /// Cancellation gives the configured stop command at most 500 ms of grace,
+    /// then the owned command/runtime groups are terminated and reaped. The grace
+    /// starts when cancellation is first observed, including at cleanup entry.
+    pub fn finish_cancellable<T>(
+        &mut self,
+        result: Result<T>,
+        cancelled: &AtomicBool,
+    ) -> RuntimeCompletion<T> {
         RuntimeCompletion {
             result,
-            cleanup_error: self.cleanup().err(),
+            cleanup_error: self.cleanup(cancelled).err(),
         }
     }
 
-    fn cleanup(&mut self) -> Result<()> {
+    fn cleanup(&mut self, cancelled: &AtomicBool) -> Result<()> {
         let Some(mut session) = self.owned.take() else {
             return Ok(());
         };
@@ -241,6 +257,9 @@ impl RuntimeManager {
             .as_ref()
             .expect("owned runtime has configuration");
         let deadline = Instant::now() + Duration::from_secs(config.command_timeout_seconds);
+        let mut cancellation_deadline = cancelled
+            .load(Ordering::Relaxed)
+            .then(|| Instant::now() + CANCELLATION_GRACE);
         let result = (|| {
             let child = command(
                 &config.stop_command,
@@ -253,10 +272,12 @@ impl RuntimeManager {
             })?;
             let mut stop = OwnedChild::new(child);
             loop {
-                ensure!(
-                    Instant::now() < deadline,
-                    "runtime cleanup command deadline exceeded"
-                );
+                check_cleanup_deadline(
+                    deadline,
+                    cancelled,
+                    &mut cancellation_deadline,
+                    "runtime cleanup command deadline exceeded",
+                )?;
                 if let Some(status) = stop.try_wait()? {
                     ensure!(
                         status.success(),
@@ -270,10 +291,12 @@ impl RuntimeManager {
                 if session.child.has_exited()? {
                     return Ok(());
                 }
-                ensure!(
-                    Instant::now() < deadline,
-                    "runtime cleanup did not stop its foreground process"
-                );
+                check_cleanup_deadline(
+                    deadline,
+                    cancelled,
+                    &mut cancellation_deadline,
+                    "runtime cleanup did not stop its foreground process",
+                )?;
                 thread::sleep(POLL_INTERVAL);
             }
         })();
@@ -287,7 +310,7 @@ impl RuntimeManager {
 
 impl Drop for RuntimeManager {
     fn drop(&mut self) {
-        let _ = self.cleanup();
+        let _ = self.cleanup(&AtomicBool::new(false));
     }
 }
 
@@ -354,6 +377,25 @@ impl Drop for OwnedChild {
             let _ = self.child.wait();
         }
     }
+}
+
+fn check_cleanup_deadline(
+    deadline: Instant,
+    cancelled: &AtomicBool,
+    cancellation_deadline: &mut Option<Instant>,
+    timeout_message: &'static str,
+) -> Result<()> {
+    if cancelled.load(Ordering::Relaxed) && cancellation_deadline.is_none() {
+        *cancellation_deadline = Some(Instant::now() + CANCELLATION_GRACE);
+    }
+    if cancellation_deadline.is_some_and(|cancel_deadline| {
+        cancel_deadline <= deadline && Instant::now() >= cancel_deadline
+    }) {
+        return Err(anyhow::Error::from(crate::media::Interrupted)
+            .context("runtime cleanup interrupted after cancellation grace"));
+    }
+    ensure!(Instant::now() < deadline, "{timeout_message}");
+    Ok(())
 }
 
 fn command(argv: &[String], token: &str, pid: Option<u32>) -> Command {

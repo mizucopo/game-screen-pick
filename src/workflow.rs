@@ -143,20 +143,17 @@ pub fn run(
         if let Some(outcome) = session.prepare_workflow(effective, cancelled)? {
             return Ok(outcome);
         }
-        // Validate every input before spending title-based search/context calls.
-        // Geometry is also counted globally before any semantic inference.
-        let mut title_geometry = if matches!(game, GameInput::Title(_)) {
-            let videos = session.videos(tools, cancelled)?;
-            if semantic {
-                Some(plan_semantic_videos(videos, chunk_seconds, cancelled)?)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let mut title_geometry = None;
         let (resolved, persist) = match game {
-            GameInput::Context(text) => (ResolvedGameContext::direct(text), true),
+            GameInput::Context(text) => {
+                // Encoded context is a lower bound on every downstream request.
+                // Reject an impossible budget without media/runtime work.
+                ensure!(
+                    serde_json::to_vec(text)?.len() as u64 <= protocol.max_request_bytes,
+                    "direct game context exceeds inference request byte limit"
+                );
+                (ResolvedGameContext::direct(text), true)
+            }
             GameInput::Title(title) => {
                 let search = config.brave.as_ref().context("--game-title requires an explicit Brave search contract; use --game-context or configure [brave]")?;
                 search.validate_search_contract()?;
@@ -166,13 +163,21 @@ pub fn run(
                     brave::SEARCH_REVISION,
                     ResolvedGameContext::direct(""),
                 )?;
-                let context = session.generated_context(title, &search.search_conditions()?, &conditions, &model,
-                    search.persist_context(), cancelled, || {
+                let context = session.generated_context_with_session(title, &search.search_conditions()?, &conditions, &model,
+                    search.persist_context(), cancelled, |session| {
                         check_cancelled(cancelled)?;
                         ensure!(!cache_only, "cache-only: generated Game Context checkpoint is missing or persistence is disabled");
+                        let search_client = BraveClient::new(search)?;
                         inference.validate_transport()?;
                         brave::preflight_context(inference.client.as_ref().expect("validated transport"), title)?;
-                        let evidence = BraveClient::new(search)?.search_cancellable(title, cancelled)?;
+                        let videos = session.videos(tools, cancelled)?;
+                        validate_image_geometry(&videos, media)?;
+                        if semantic {
+                            title_geometry = Some(plan_semantic_videos(videos, chunk_seconds, cancelled)?);
+                        } else {
+                            crate::pipeline::preflight_sampled_plans(&videos, config.selection.samples_per_video, cancelled)?;
+                        }
+                        let evidence = search_client.search_cancellable(title, cancelled)?;
                         check_cancelled(cancelled)?;
                         brave::generate_context_cancellable(inference.client()?, title, &evidence, cancelled)
                     })?;
@@ -275,7 +280,19 @@ pub fn run(
             )
         })
     })();
-    Ok(inference.runtime.finish(result))
+    Ok(inference.runtime.finish_cancellable(result, cancelled))
+}
+
+fn validate_image_geometry(videos: &[Video], limits: &crate::config::MediaConfig) -> Result<()> {
+    ensure!(
+        videos.iter().all(|video| {
+            video.width <= limits.max_image_edge
+                && video.height <= limits.max_image_edge
+                && u64::from(video.width) * u64::from(video.height) <= limits.max_image_pixels
+        }),
+        "input frame geometry exceeds configured image limits"
+    );
+    Ok(())
 }
 
 struct PlannedVideo {

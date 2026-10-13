@@ -612,6 +612,30 @@ impl Session {
         cancelled: &AtomicBool,
         mut generate: impl FnMut() -> Result<String>,
     ) -> Result<ResolvedGameContext> {
+        self.generated_context_with_session(
+            title,
+            search_conditions,
+            generation_conditions,
+            model,
+            persist,
+            cancelled,
+            |_| generate(),
+        )
+    }
+
+    /// A miss callback may validate/probe inputs before generating text.
+    /// Hits still bypass credential, media and transport preparation.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn generated_context_with_session(
+        &mut self,
+        title: &str,
+        search_conditions: &str,
+        generation_conditions: &CacheConditions,
+        model: &ModelConditions,
+        persist: bool,
+        cancelled: &AtomicBool,
+        mut generate: impl FnMut(&mut Self) -> Result<String>,
+    ) -> Result<ResolvedGameContext> {
         check_cancelled(cancelled)?;
         ensure!(!title.trim().is_empty(), "game title must not be blank");
         ensure!(
@@ -643,7 +667,7 @@ impl Session {
         }
         self.verify_inputs()?;
         self.context_calls += 1;
-        let context = generate()?;
+        let context = generate(self)?;
         ensure!(
             !context.trim().is_empty(),
             "generated game context must not be blank"

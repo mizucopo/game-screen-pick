@@ -486,6 +486,198 @@ fn failed_and_timed_out_stop_preserve_body_error_and_reap_owned_children() {
     }
 }
 
+fn recorded_pid(path: &Path) -> libc::pid_t {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Ok(text) = fs::read_to_string(path)
+            && let Ok(pid) = text.trim().parse()
+        {
+            return pid;
+        }
+        assert!(Instant::now() < deadline, "command must record its PID");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn assert_process_group_gone(pid: libc::pid_t) {
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "owned process must be reaped"
+    );
+    assert_eq!(
+        unsafe { libc::kill(-pid, 0) },
+        -1,
+        "owned process group must be gone"
+    );
+}
+
+#[test]
+fn cancelled_cleanup_bounds_a_hung_stop_with_300_second_timeout_and_reaps_both_groups() {
+    for already_cancelled in [true, false] {
+        let mut scripts = Scripts::normal();
+        scripts.config.command_timeout_seconds = 300;
+        scripts.config.startup_timeout_seconds = 3;
+        let stop_pid = scripts._directory.path().join("stop-pid");
+        scripts.config.start_command[0] = script(
+            scripts._directory.path(),
+            "foreground-start",
+            &format!(
+                "printf '%s\\n' \"$GAME_SCREEN_PICK_RUNTIME_SESSION\" > {}\nexec sleep 60",
+                quote(&scripts.marker)
+            ),
+        );
+        scripts.config.stop_command[0] = script(
+            scripts._directory.path(),
+            "hung-stop",
+            &format!(
+                "test \"$2\" = \"$GAME_SCREEN_PICK_RUNTIME_SESSION\"\nprintf '%s\\n%s\\n' \"$1\" \"$2\" > {}\nprintf '%s\\n' \"$$\" > {}\nexec sleep 60",
+                quote(&scripts.stopped),
+                quote(&stop_pid)
+            ),
+        );
+        let mock = scripts.mock();
+        let ai = ai_config(&mock.url);
+        let client = OpenAiClient::new(&ai).unwrap();
+        let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+        runtime
+            .ensure_ready(&client, &AtomicBool::new(false))
+            .unwrap();
+        let cancelled = Arc::new(AtomicBool::new(already_cancelled));
+        let worker = if already_cancelled {
+            None
+        } else {
+            let cancellation = cancelled.clone();
+            let stop_pid = stop_pid.clone();
+            Some(thread::spawn(move || {
+                recorded_pid(&stop_pid);
+                thread::sleep(Duration::from_millis(100));
+                cancellation.store(true, Ordering::Relaxed);
+            }))
+        };
+        let primary = if already_cancelled {
+            anyhow::Error::from(game_screen_pick::media::Interrupted)
+        } else {
+            anyhow!("primary inference failure")
+        };
+        let started = Instant::now();
+        let completion = runtime.finish_cancellable(Err::<(), _>(primary), &cancelled);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        if let Some(worker) = worker {
+            worker.join().unwrap();
+        }
+        let main_error = completion.result.unwrap_err();
+        if already_cancelled {
+            assert!(main_error.is::<game_screen_pick::media::Interrupted>());
+        } else {
+            assert_eq!(main_error.to_string(), "primary inference failure");
+        }
+        let cleanup = completion.cleanup_error.unwrap();
+        assert!(cleanup.is::<game_screen_pick::media::Interrupted>());
+        assert!(cleanup.to_string().contains("cancellation grace"));
+        scripts.assert_stopped();
+        let runtime_pid: libc::pid_t = fs::read_to_string(&scripts.stopped)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_process_group_gone(runtime_pid);
+        assert_process_group_gone(recorded_pid(&stop_pid));
+        assert!(
+            runtime
+                .finish_cancellable(Ok(()), &cancelled)
+                .cleanup_error
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn already_cancelled_cleanup_attempts_normal_stop_and_preserves_stop_marker() {
+    let mut scripts = Scripts::normal();
+    scripts.config.command_timeout_seconds = 300;
+    let mock = scripts.mock();
+    let ai = ai_config(&mock.url);
+    let client = OpenAiClient::new(&ai).unwrap();
+    let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+    runtime
+        .ensure_ready(&client, &AtomicBool::new(false))
+        .unwrap();
+    let completion = runtime.finish_cancellable(
+        Err::<(), _>(game_screen_pick::media::Interrupted.into()),
+        &AtomicBool::new(true),
+    );
+    assert!(
+        completion
+            .result
+            .unwrap_err()
+            .is::<game_screen_pick::media::Interrupted>()
+    );
+    assert!(completion.cleanup_error.is_none());
+    scripts.assert_stopped();
+}
+
+#[test]
+fn cancellation_after_stop_command_exit_bounds_wait_for_its_runtime() {
+    let mut scripts = Scripts::new("exec sleep 60", "exit 0");
+    scripts.config.command_timeout_seconds = 300;
+    let mock = scripts.mock();
+    let ai = ai_config(&mock.url);
+    let client = OpenAiClient::new(&ai).unwrap();
+    let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+    runtime
+        .ensure_ready(&client, &AtomicBool::new(false))
+        .unwrap();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancellation = cancelled.clone();
+    let stopped = scripts.stopped.clone();
+    let worker = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !stopped.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(100));
+        cancellation.store(true, Ordering::Relaxed);
+    });
+    let started = Instant::now();
+    let completion =
+        runtime.finish_cancellable(Err::<(), _>(anyhow!("original failure")), &cancelled);
+    worker.join().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(
+        completion.result.unwrap_err().to_string(),
+        "original failure"
+    );
+    assert!(
+        completion
+            .cleanup_error
+            .unwrap()
+            .is::<game_screen_pick::media::Interrupted>()
+    );
+    scripts.assert_stopped();
+}
+
+#[test]
+fn uncancelled_finish_keeps_normal_stop_timeout_beyond_cancellation_grace() {
+    let mut scripts = Scripts::new("exec sleep 60", "sleep 0.7\nkill -TERM \"$1\"");
+    scripts.config.command_timeout_seconds = 3;
+    let mock = scripts.mock();
+    let ai = ai_config(&mock.url);
+    let client = OpenAiClient::new(&ai).unwrap();
+    let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+    runtime
+        .ensure_ready(&client, &AtomicBool::new(false))
+        .unwrap();
+    let started = Instant::now();
+    let completion = runtime.finish_cancellable(Ok(42), &AtomicBool::new(false));
+    assert_eq!(completion.result.unwrap(), 42);
+    assert!(completion.cleanup_error.is_none());
+    assert!(started.elapsed() >= Duration::from_millis(700));
+    scripts.assert_stopped();
+}
+
 #[test]
 fn drop_cleans_started_runtime_on_early_return() {
     let scripts = Scripts::normal();

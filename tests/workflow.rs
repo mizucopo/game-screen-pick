@@ -265,6 +265,7 @@ storage_contract_reference = "mock generated-context storage test contract"
 
 fn invoke(root: &Path, generated: bool, cache_only: bool, no_tools: bool) -> std::process::Output {
     let mut command = Command::new(BINARY);
+    command.env_remove("GAME_SCREEN_PICK_BRAVE_API_KEY");
     command.current_dir(root).args([
         "--config",
         "config.toml",
@@ -474,6 +475,185 @@ fn unusable_media_fails_before_title_search_context_or_runtime() {
 }
 
 #[test]
+fn probed_frames_outside_model_limits_fail_before_title_calls() {
+    for method in ["sampled_frames", "semantic_video"] {
+        for failure in ["edge", "pixels"] {
+            let root = tempfile::tempdir().unwrap();
+            let ai = ai();
+            let brave = brave();
+            setup(root.path(), &ai, &brave, method, true);
+            let config = root.path().join("config.toml");
+            let source = fs::read_to_string(&config).unwrap();
+            let source = match failure {
+                "edge" => source.replace("max_image_edge = 16384", "max_image_edge = 159"),
+                "pixels" => {
+                    source.replace("max_image_pixels = 32000000", "max_image_pixels = 15359")
+                }
+                _ => unreachable!(),
+            };
+            fs::write(&config, source).unwrap();
+            let rejected = invoke(root.path(), true, false, false);
+            assert_eq!(rejected.status.code(), Some(1));
+            assert!(String::from_utf8_lossy(&rejected.stderr).contains("input frame geometry"));
+            assert_eq!((ai.calls(), brave.calls()), (0, 0));
+            assert!(!root.path().join("output").exists());
+        }
+    }
+}
+
+#[test]
+fn sampled_actual_frame_budget_fails_before_title_calls() {
+    let root = tempfile::tempdir().unwrap();
+    let ai = ai();
+    let brave = brave();
+    setup(root.path(), &ai, &brave, "sampled_frames", true);
+    let made = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-nostdin",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=160x96:r=1000",
+            "-frames:v",
+            "2050",
+            "-c:v",
+            "ffv1",
+        ])
+        .arg(root.path().join("input/blocks.mkv"))
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    fs::copy(
+        root.path().join("input/blocks.mkv"),
+        root.path().join("input/second.mkv"),
+    )
+    .unwrap();
+    let config = root.path().join("config.toml");
+    let source = fs::read_to_string(&config)
+        .unwrap()
+        .replace("samples_per_video = 6", "samples_per_video = 4096");
+    fs::write(&config, source).unwrap();
+    let rejected = invoke(root.path(), true, false, false);
+    assert_eq!(rejected.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("actual-frame candidate limit"));
+    assert_eq!((ai.calls(), brave.calls()), (0, 0));
+    assert!(!root.path().join("output").exists());
+}
+
+#[test]
+fn missing_brave_credentials_fail_before_input_probe() {
+    let root = tempfile::tempdir().unwrap();
+    let ai = ai();
+    let brave = brave();
+    setup(root.path(), &ai, &brave, "sampled_frames", true);
+    let config = root.path().join("config.toml");
+    let source = fs::read_to_string(&config)
+        .unwrap()
+        .replace("api_key = \"search-secret\"\n", "");
+    fs::write(&config, source).unwrap();
+    let rejected = invoke(root.path(), true, false, true);
+    assert_eq!(rejected.status.code(), Some(1));
+    let diagnostic = String::from_utf8_lossy(&rejected.stderr);
+    assert!(diagnostic.contains("Brave API key is required"));
+    assert!(!diagnostic.contains("FFprobe"));
+    assert_eq!((ai.calls(), brave.calls()), (0, 0));
+    let invalid = Command::new(BINARY)
+        .current_dir(root.path())
+        .env("PATH", "")
+        .env("GAME_SCREEN_PICK_BRAVE_API_KEY", "bad\r\nsecret")
+        .args([
+            "--config",
+            "config.toml",
+            "--count",
+            "2",
+            "--game-title",
+            "Example Game",
+            "input",
+            "output",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(1));
+    let diagnostic = String::from_utf8_lossy(&invalid.stderr);
+    assert!(diagnostic.contains("invalid Brave authentication header"));
+    assert!(!diagnostic.contains("FFprobe") && !diagnostic.contains("bad\r\nsecret"));
+    assert_eq!((ai.calls(), brave.calls()), (0, 0));
+}
+
+#[test]
+fn cached_title_context_does_not_require_brave_credentials_for_new_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let ai = ai();
+    let brave = brave();
+    setup(root.path(), &ai, &brave, "sampled_frames", true);
+    let cold = invoke(root.path(), true, false, false);
+    assert!(
+        cold.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cold.stderr)
+    );
+    let counts = (ai.calls(), brave.calls());
+    let config = root.path().join("config.toml");
+    let source = fs::read_to_string(&config)
+        .unwrap()
+        .replace("api_key = \"search-secret\"\n", "")
+        .replace("samples_per_video = 6", "samples_per_video = 7");
+    fs::write(&config, source).unwrap();
+    let changed = invoke(root.path(), true, false, false);
+    assert!(
+        changed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&changed.stderr)
+    );
+    assert!(ai.calls() > counts.0);
+    assert_eq!(brave.calls(), counts.1);
+}
+
+#[test]
+fn oversized_direct_context_fails_before_media_or_runtime() {
+    for text in ["x".repeat(2048), "\"".repeat(600)] {
+        let root = tempfile::tempdir().unwrap();
+        let ai = ai();
+        let brave = brave();
+        setup(root.path(), &ai, &brave, "sampled_frames", true);
+        let config = root.path().join("config.toml");
+        let source = fs::read_to_string(&config)
+            .unwrap()
+            .replace("max_request_bytes = 33554432", "max_request_bytes = 1024");
+        fs::write(&config, format!("{source}\n[runtime]\nbackend = \"vllm\"\nstart_command = [\"/missing/runtime-start\", \"{{session}}\"]\nstop_command = [\"/missing/runtime-stop\", \"{{pid}}\", \"{{session}}\"]\n")).unwrap();
+        let rejected = Command::new(BINARY)
+            .current_dir(root.path())
+            .env("PATH", "")
+            .args([
+                "--config",
+                "config.toml",
+                "--count",
+                "2",
+                "--game-context",
+                &format!("{text}x"),
+                "input",
+                "output",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(rejected.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr)
+                .contains("direct game context exceeds inference request byte limit")
+        );
+        assert_eq!((ai.calls(), brave.calls()), (0, 0));
+        assert!(!root.path().join("output").exists());
+    }
+}
+
+#[test]
 fn contract_references_are_hashed_in_owned_report_and_still_invalidate_reuse() {
     const SECRET: &str = "CONTRACT_REFERENCE_SECRET_SENTINEL";
     let root = tempfile::tempdir().unwrap();
@@ -600,6 +780,15 @@ fn invalid_brave_titles_are_input_errors_without_preparation_writes() {
 
 #[test]
 fn sigint_during_live_http_promptly_cleans_the_owned_runtime() {
+    sigint_during_live_http(false);
+}
+
+#[test]
+fn sigint_also_cancels_a_hung_runtime_stop_command() {
+    sigint_during_live_http(true);
+}
+
+fn sigint_during_live_http(hung_stop: bool) {
     use std::os::unix::fs::PermissionsExt;
     use std::time::Instant;
     let directory = tempfile::tempdir().unwrap();
@@ -638,10 +827,15 @@ fn sigint_during_live_http_promptly_cleans_the_owned_runtime() {
         ),
     )
     .unwrap();
+    let stop_action = if hung_stop {
+        "exec /bin/sleep 60"
+    } else {
+        "kill -TERM \"$1\""
+    };
     fs::write(
         &stop,
         format!(
-            "#!/bin/sh\nprintf '%s %s' \"$1\" \"$2\" > '{}'\nkill -TERM \"$1\"\n",
+            "#!/bin/sh\nprintf '%s %s %s' \"$1\" \"$2\" \"$$\" > '{}'\n{stop_action}\n",
             stopped.display()
         ),
     )
@@ -651,7 +845,8 @@ fn sigint_during_live_http_promptly_cleans_the_owned_runtime() {
     }
     let path = root.join("config.toml");
     let source = fs::read_to_string(&path).unwrap();
-    fs::write(&path,format!("{source}\n[runtime]\nbackend = \"vllm\"\nstart_command = [\"{}\", \"{{session}}\"]\nstop_command = [\"{}\", \"{{pid}}\", \"{{session}}\"]\nstartup_timeout_seconds = 10\ncommand_timeout_seconds = 3\n",start.display(),stop.display())).unwrap();
+    let timeout = if hung_stop { 300 } else { 3 };
+    fs::write(&path,format!("{source}\n[runtime]\nbackend = \"vllm\"\nstart_command = [\"{}\", \"{{session}}\"]\nstop_command = [\"{}\", \"{{pid}}\", \"{{session}}\"]\nstartup_timeout_seconds = 10\ncommand_timeout_seconds = {timeout}\n",start.display(),stop.display())).unwrap();
     let mut child = Command::new(BINARY)
         .current_dir(&root)
         .args([
@@ -693,6 +888,19 @@ fn sigint_during_live_http_promptly_cleans_the_owned_runtime() {
     assert_eq!(status.code(), Some(130));
     assert!(stopped.exists());
     let stop_record = fs::read_to_string(&stopped).unwrap();
+    let stop_pid: i32 = stop_record
+        .split_whitespace()
+        .nth(2)
+        .unwrap()
+        .parse()
+        .unwrap();
+    unsafe {
+        assert_eq!(
+            libc::kill(stop_pid, 0),
+            -1,
+            "owned stop command survived cancellation"
+        );
+    }
     let pid: i32 = stop_record
         .split_whitespace()
         .next()
