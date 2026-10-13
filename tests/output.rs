@@ -6,6 +6,101 @@ use game_screen_pick::media::MediaTools;
 use game_screen_pick::output::Output;
 use game_screen_pick::pipeline::{ModelConditions, PipelineOptions, run};
 use game_screen_pick::selection::Assessment;
+use serde_json::{Value, json};
+
+#[test]
+fn publication_rejects_report_edits_against_the_pipeline_record() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/videos/01-blocks.mkv");
+    let cancelled = AtomicBool::new(false);
+    let tools = MediaTools::default();
+    let video = tools.probe(&input, &cancelled).unwrap();
+    let options = PipelineOptions {
+        count: 1,
+        samples_per_video: 6,
+        context_delta_seconds: 0.25,
+        semantic_events: None,
+        model: ModelConditions {
+            backend: "strata".to_owned(),
+            model: "fixture-vision".to_owned(),
+            inference_level: "high".to_owned(),
+            timeout_seconds: 60,
+            cache_revision: "test".to_owned(),
+        },
+        game_context: Some("fixture context".to_owned()),
+    };
+    let artifacts = run(&tools, &[video], &options, &cancelled, |batch| {
+        Ok(batch
+            .candidates
+            .iter()
+            .map(|candidate| Assessment {
+                id: candidate.id.clone(),
+                blog_score: 80.0,
+                transition: false,
+                scene: "fixture scene".to_owned(),
+                reason: "fixture reason".to_owned(),
+                special: false,
+            })
+            .collect())
+    })
+    .unwrap();
+    let report_path = artifacts.path().join("report.json");
+    let original: Value = serde_json::from_slice(&fs::read(&report_path).unwrap()).unwrap();
+    let mut output = Output::prepare(&root.join("result"), &[&input], &cancelled).unwrap();
+    let owned = output.publish(&artifacts, &cancelled).unwrap();
+    let before_report = fs::read(output.path().join("report.json")).unwrap();
+    let before_image = fs::read(output.path().join("selected-01.jpg")).unwrap();
+    for (pointer, replacement) in [
+        ("/sources/0", json!("invented.mkv")),
+        ("/selected/0/source", json!("invented.mkv")),
+        ("/selected/0/requested_seconds", json!(9998.0)),
+        ("/selected/0/actual_seconds", json!(9999.0)),
+        (
+            "/selected/0/primary_assessment/reason",
+            json!("edited primary reason"),
+        ),
+        ("/selected/0/assessment/reason", json!("edited reason")),
+        ("/selected/0/assessment/scene", json!("edited scene")),
+        ("/selected/0/assessment/blog_score", json!(99.0)),
+        ("/model/model", json!("invented model")),
+        ("/game_context", json!("edited context")),
+    ] {
+        let mut edited = original.clone();
+        *edited.pointer_mut(pointer).unwrap() = replacement;
+        fs::write(&report_path, serde_json::to_vec(&edited).unwrap()).unwrap();
+        let error = output.publish(&artifacts, &cancelled).unwrap_err();
+        assert!(
+            error.to_string().contains("artifact record"),
+            "{pointer}: {error:#}"
+        );
+        assert_eq!(
+            output
+                .verify_existing(&cancelled)
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            owned.fingerprint
+        );
+        assert_eq!(
+            fs::read(output.path().join("report.json")).unwrap(),
+            before_report
+        );
+        assert_eq!(
+            fs::read(output.path().join("selected-01.jpg")).unwrap(),
+            before_image
+        );
+    }
+    let mut with_cache = original;
+    with_cache["cache"] = json!({"namespace": "game-screen-pick-rust-v1", "key": "fixture"});
+    fs::write(
+        &report_path,
+        serde_json::to_vec_pretty(&with_cache).unwrap(),
+    )
+    .unwrap();
+    let owned = output.publish(&artifacts, &cancelled).unwrap();
+    assert_eq!(owned.report["cache"], with_cache["cache"]);
+}
 
 #[test]
 fn output_lock_probe() {

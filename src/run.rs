@@ -458,7 +458,7 @@ impl Session {
         );
         let conditions = generation_conditions.normalized(false)?;
         pipeline::validate_model(model)?;
-        self.verify_inputs()?;
+        self.identify_inputs(cancelled)?;
         let key = cache::key(
             &json!({"title":title,"search":search_conditions,"generation":{
                 "service_url":conditions.service_url,"prompt_revision":conditions.prompt_revision,
@@ -645,6 +645,123 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn context_test_paths(root: &Path) -> RunPaths {
+        let root = root.canonicalize().unwrap();
+        let input = root.join("input");
+        fs::create_dir(&input).unwrap();
+        fs::write(input.join("recording.mkv"), b"input").unwrap();
+        RunPaths {
+            input_directory: input,
+            output_directory: root.join("output"),
+            cache_directory: root.join("cache"),
+            config: None,
+        }
+    }
+
+    fn context_test_conditions() -> (CacheConditions, ModelConditions) {
+        (
+            CacheConditions {
+                service_url: "http://localhost:8000".to_owned(),
+                prompt_revision: "prompt-v1".to_owned(),
+                response_schema_revision: "schema-v1".to_owned(),
+                media_revision: "media-v1".to_owned(),
+                resolved_game_context: ResolvedGameContext::direct(""),
+            },
+            ModelConditions {
+                backend: "vllm".to_owned(),
+                model: "test-model".to_owned(),
+                inference_level: "none".to_owned(),
+                timeout_seconds: 60,
+                cache_revision: "model-v1".to_owned(),
+            },
+        )
+    }
+
+    #[test]
+    fn generated_context_rejects_input_mutations_during_first_callback_without_checkpoint() {
+        for persist in [false, true] {
+            for replace in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let paths = context_test_paths(directory.path());
+                let source = paths.input_directory.join("recording.mkv");
+                let (conditions, model) = context_test_conditions();
+                let cancelled = AtomicBool::new(false);
+                let mut session = Session::prepare(&paths, &cancelled).unwrap();
+                let mut calls = 0;
+                let result = session.generated_context(
+                    "test game",
+                    "search-v1",
+                    &conditions,
+                    &model,
+                    persist,
+                    &cancelled,
+                    || {
+                        calls += 1;
+                        if replace {
+                            let replacement = source.with_extension("replacement");
+                            fs::write(&replacement, b"input").unwrap();
+                            fs::rename(replacement, &source).unwrap();
+                        } else {
+                            fs::write(&source, b"other").unwrap();
+                        }
+                        Ok("generated context".to_owned())
+                    },
+                );
+                let error = result.unwrap_err();
+                assert!(
+                    error.to_string().contains("input changed"),
+                    "persist={persist}, replace={replace}: {error:#}"
+                );
+                assert_eq!(calls, 1);
+                assert!(
+                    !paths
+                        .cache_directory
+                        .join(cache::NAMESPACE)
+                        .join("contexts")
+                        .exists(),
+                    "a context generated while inputs change must not be checkpointed"
+                );
+                assert!(!paths.output_directory.exists());
+            }
+        }
+    }
+
+    #[test]
+    fn generated_context_rejects_changed_input_before_warm_return_or_new_callback() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = context_test_paths(directory.path());
+        let (conditions, model) = context_test_conditions();
+        let cancelled = AtomicBool::new(false);
+        let mut session = Session::prepare(&paths, &cancelled).unwrap();
+        session
+            .generated_context(
+                "test game",
+                "search-v1",
+                &conditions,
+                &model,
+                true,
+                &cancelled,
+                || Ok("saved context".to_owned()),
+            )
+            .unwrap();
+        fs::write(paths.input_directory.join("recording.mkv"), b"other").unwrap();
+        for persist in [false, true] {
+            let error = session
+                .generated_context(
+                    "test game",
+                    "search-v1",
+                    &conditions,
+                    &model,
+                    persist,
+                    &cancelled,
+                    || panic!("changed input must fail before generation"),
+                )
+                .unwrap_err();
+            assert!(error.to_string().contains("input changed"), "{error:#}");
+        }
+        assert_eq!(session.metrics().context_calls, 1);
+    }
 
     #[test]
     fn interrupted_assessment_hash_counts_partial_bytes_before_same_session_retry() {

@@ -71,6 +71,103 @@ pub fn checked_path(path: &Path) -> Result<PathBuf> {
     Ok(parent.join(current.file_name().context("path needs a filename")?))
 }
 
+/// Read-only comparison of unresolved siblings on modern macOS APFS. Existing
+/// paths and lock representatives still use the filesystem's own lookup. Do
+/// not apply APFS's Unicode equivalence to other filesystem formats.
+pub(crate) fn native_sibling_names_equal(left: &Path, right: &Path) -> Result<bool> {
+    if left == right {
+        return Ok(true);
+    }
+    if left.parent() != right.parent() {
+        return Ok(false);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let parent = File::open(left.parent().context("path needs a parent")?)?;
+        let mut filesystem = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        if unsafe { libc::fstatfs(parent.as_raw_fd(), filesystem.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error()).context("cannot inspect path filesystem");
+        }
+        let filesystem = unsafe { filesystem.assume_init() };
+        let format = unsafe { std::ffi::CStr::from_ptr(filesystem.f_fstypename.as_ptr()) };
+        if format.to_bytes() != b"apfs" {
+            return Ok(false);
+        }
+        let case_sensitive =
+            unsafe { libc::fpathconf(parent.as_raw_fd(), libc::_PC_CASE_SENSITIVE) };
+        ensure!(
+            case_sensitive >= 0,
+            "cannot inspect filesystem case sensitivity"
+        );
+        fn name(path: &Path) -> Result<&str> {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .context("APFS path filename must be UTF-8")
+        }
+        return macos_names::equal(name(left)?, name(right)?, case_sensitive != 0);
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+mod macos_names {
+    use std::ffi::c_void;
+
+    use anyhow::{Result, ensure};
+
+    const UTF8: u32 = 0x0800_0100;
+    const CASE_INSENSITIVE: usize = 1;
+    const NONLITERAL: usize = 16;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringCreateWithBytes(
+            allocator: *const c_void,
+            bytes: *const u8,
+            length: isize,
+            encoding: u32,
+            external_representation: u8,
+        ) -> *const c_void;
+        fn CFStringCompare(left: *const c_void, right: *const c_void, flags: usize) -> isize;
+        fn CFRelease(value: *const c_void);
+    }
+
+    struct StringRef(*const c_void);
+
+    impl StringRef {
+        fn new(name: &str) -> Result<Self> {
+            // kCFStringEncodingUTF8; no locale or filesystem writes are used.
+            let value = unsafe {
+                CFStringCreateWithBytes(
+                    std::ptr::null(),
+                    name.as_ptr(),
+                    name.len().try_into()?,
+                    UTF8,
+                    0,
+                )
+            };
+            ensure!(!value.is_null(), "cannot compare APFS path filename");
+            Ok(Self(value))
+        }
+    }
+
+    impl Drop for StringRef {
+        fn drop(&mut self) {
+            unsafe { CFRelease(self.0) };
+        }
+    }
+
+    pub(super) fn equal(left: &str, right: &str, case_sensitive: bool) -> Result<bool> {
+        let left = StringRef::new(left)?;
+        let right = StringRef::new(right)?;
+        // Canonical Unicode equivalence; case folding follows the actual
+        // volume mode. Accent, width, numeric and locale comparisons are off.
+        let flags = NONLITERAL | if case_sensitive { 0 } else { CASE_INSENSITIVE };
+        Ok(unsafe { CFStringCompare(left.0, right.0, flags) } == 0)
+    }
+}
+
 pub fn open_regular(path: &Path) -> Result<File> {
     let file = OpenOptions::new()
         .read(true)
