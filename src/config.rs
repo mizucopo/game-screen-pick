@@ -10,11 +10,16 @@ use crate::domain::SelectionMethod;
 pub struct Config {
     pub selection: SelectionConfig,
     pub ai: AiConfig,
+    pub brave: Option<crate::brave::BraveConfig>,
+    pub runtime: Option<crate::runtime::RuntimeConfig>,
 }
 
 #[derive(Clone, Debug)]
 pub struct SelectionConfig {
     pub method: SelectionMethod,
+    pub samples_per_video: usize,
+    pub context_delta_seconds: f64,
+    pub semantic_chunk_seconds: f64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -188,12 +193,30 @@ impl AiConfig {
 struct RawConfig {
     selection: RawSelectionConfig,
     ai: RawAiConfig,
+    brave: Option<crate::brave::BraveConfig>,
+    runtime: Option<crate::runtime::RuntimeConfig>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSelectionConfig {
     method: String,
+    #[serde(default = "default_samples")]
+    samples_per_video: usize,
+    #[serde(default = "default_context_delta")]
+    context_delta_seconds: f64,
+    #[serde(default = "default_chunk_seconds")]
+    semantic_chunk_seconds: f64,
+}
+
+fn default_samples() -> usize {
+    12
+}
+fn default_context_delta() -> f64 {
+    0.25
+}
+fn default_chunk_seconds() -> f64 {
+    30.0
 }
 
 #[derive(Deserialize)]
@@ -252,6 +275,20 @@ impl Config {
             "vllm" => Backend::Vllm,
             _ => bail!("ai.backend must be strata or vllm"),
         };
+        if !(1..=crate::selection::MAX_CANDIDATES).contains(&raw.selection.samples_per_video)
+            || !raw.selection.context_delta_seconds.is_finite()
+            || raw.selection.context_delta_seconds <= 0.0
+            || !raw.selection.semantic_chunk_seconds.is_finite()
+            || !(0.1..=3600.0).contains(&raw.selection.semantic_chunk_seconds)
+        {
+            bail!("invalid selection sample/context/chunk limits");
+        }
+        if let Some(brave) = &raw.brave {
+            brave.validate()?;
+        }
+        if let Some(runtime) = &raw.runtime {
+            runtime.validate(backend)?;
+        }
         let inference_level = match raw.ai.inference_level.as_str() {
             "none" => InferenceLevel::None,
             "low" => InferenceLevel::Low,
@@ -276,7 +313,12 @@ impl Config {
             .filter(|value| !value.is_empty());
 
         Ok(Self {
-            selection: SelectionConfig { method },
+            selection: SelectionConfig {
+                method,
+                samples_per_video: raw.selection.samples_per_video,
+                context_delta_seconds: raw.selection.context_delta_seconds,
+                semantic_chunk_seconds: raw.selection.semantic_chunk_seconds,
+            },
             ai: AiConfig {
                 backend,
                 base_url,
@@ -287,6 +329,8 @@ impl Config {
                 protocol: raw.ai.protocol,
                 api_key,
             },
+            brave: raw.brave,
+            runtime: raw.runtime,
         })
     }
 }

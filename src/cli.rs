@@ -18,7 +18,7 @@ use crate::{
 #[derive(Parser)]
 #[command(version, bin_name = "game-screen-pick", about = "Pick blog images from game recordings", color = ColorChoice::Never,
     subcommand_negates_reqs = true, args_conflicts_with_subcommands = true,
-    after_help = "AI assessment and generated Game Context are not implemented yet. Use validate for input/config checks or extract for an original full-resolution frame.")]
+    after_help = "Selection requires an explicitly configured vision model. --game-title also requires a verified Brave contract. Use --cache-only to forbid search, inference and runtime operations.")]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -58,6 +58,9 @@ struct Request {
     /// Rust cache parent; defaults to .game-screen-pick-cache beside the output
     #[arg(long)]
     cache_directory: Option<PathBuf>,
+    /// Fail on missing inference/context checkpoints without search or runtime operations
+    #[arg(long)]
+    cache_only: bool,
 }
 
 #[derive(Args)]
@@ -89,7 +92,7 @@ impl CliError {
     fn processing(error: anyhow::Error) -> Self {
         Self {
             code: 1,
-            message: safe(&error.to_string()),
+            message: safe(&format!("{error:#}")),
         }
     }
     fn preparation(error: anyhow::Error) -> Self {
@@ -106,26 +109,53 @@ impl Cli {
         match self.command {
             Some(Command::Extract(args)) => extract(args, cancelled),
             Some(Command::Validate(request)) => {
-                let (_, inputs, _) = validate(request, true, cancelled).map_err(CliError::input)?;
+                let prepared = validate(request, true, cancelled).map_err(CliError::input)?;
                 eprintln!(
                     "validated: configuration, arguments and {} input video(s); no processing performed",
-                    inputs.len()
+                    prepared.inputs.len()
                 );
                 Ok(())
             }
             None => {
-                let (config, inputs, paths) =
-                    validate(self.request, false, cancelled).map_err(CliError::input)?;
-                let _session =
-                    Session::prepare(&paths, cancelled).map_err(CliError::preparation)?;
+                let prepared = validate(self.request, false, cancelled).map_err(CliError::input)?;
+                let mut session =
+                    Session::prepare(&prepared.paths, cancelled).map_err(CliError::preparation)?;
                 eprintln!(
                     "{}: preflight complete ({} input video(s))",
-                    config.selection.method,
-                    inputs.len()
+                    prepared.config.selection.method,
+                    prepared.inputs.len()
                 );
-                Err(CliError::processing(anyhow::anyhow!(
-                    "AI assessment and generated Game Context are not implemented yet; use extract to inspect original frames"
-                )))
+                let completion = crate::workflow::run(
+                    &mut session,
+                    &prepared.config,
+                    &crate::workflow::Request {
+                        game: &prepared.game,
+                        count: prepared.count,
+                        cache_only: prepared.cache_only,
+                    },
+                    &MediaTools::default(),
+                    cancelled,
+                )
+                .map_err(CliError::processing)?;
+                if let Some(error) = &completion.cleanup_error {
+                    eprintln!("runtime cleanup failed: {}", safe(&error.to_string()));
+                }
+                let outcome = completion.result.map_err(CliError::processing)?;
+                if completion.cleanup_error.is_some() {
+                    return Err(CliError::processing(anyhow::anyhow!(
+                        "selection finished, but owned runtime cleanup failed"
+                    )));
+                }
+                eprintln!(
+                    "{}: completed; selected {} images; warm={}; inference assessments={}, semantic chunks={}, context generations={}",
+                    prepared.config.selection.method,
+                    outcome.report["selected_count"],
+                    outcome.warm,
+                    outcome.metrics.assessment_calls,
+                    outcome.metrics.semantic_calls,
+                    outcome.metrics.context_calls
+                );
+                Ok(())
             }
         }
     }
@@ -188,12 +218,21 @@ pub fn sanitize_parse_error(error: &mut clap::Error) {
     }
 }
 
+struct ValidatedRequest {
+    config: Config,
+    inputs: Vec<PathBuf>,
+    paths: RunPaths,
+    game: crate::domain::GameInput,
+    count: usize,
+    cache_only: bool,
+}
+
 fn validate(
     request: Request,
     diagnostic: bool,
     cancelled: &AtomicBool,
-) -> Result<(Config, Vec<PathBuf>, RunPaths)> {
-    crate::domain::GameInput::new(request.game_title, request.game_context)?;
+) -> Result<ValidatedRequest> {
+    let game = crate::domain::GameInput::new(request.game_title, request.game_context)?;
     if !request
         .count
         .is_some_and(|count| (1..=999).contains(&count))
@@ -233,17 +272,20 @@ fn validate(
     let config = Config::load(&config_path)?;
     let inputs = discover_inputs(&input)?;
     crate::run::validate_inputs(&inputs)?;
-    // Authentication is resolved only by the future common client; it is never printed here.
-    Ok((
+    // Authentication is resolved only inside cache-miss transports.
+    Ok(ValidatedRequest {
         config,
         inputs,
-        RunPaths {
+        paths: RunPaths {
             input_directory: input,
             output_directory: output,
             cache_directory: cache,
             config: Some(config_path),
         },
-    ))
+        game,
+        count: usize::from(request.count.expect("validated requested count")),
+        cache_only: request.cache_only,
+    })
 }
 
 #[derive(Serialize)]

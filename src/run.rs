@@ -136,6 +136,25 @@ pub struct Session {
 }
 
 impl Session {
+    /// Uses the same validated probe checkpoints as selection and semantic chunks.
+    /// A warm semantic plan does not decode inputs or contact inference servers.
+    pub fn videos(&mut self, tools: &MediaTools, cancelled: &AtomicBool) -> Result<Vec<Video>> {
+        let identities = self.identify_inputs(cancelled)?;
+        let mut videos = Vec::with_capacity(self.inputs.len());
+        for (path, identity) in self.inputs.iter().zip(&identities) {
+            self.verify_inputs()?;
+            videos.push(probe(
+                &mut self.cache,
+                tools,
+                path,
+                identity,
+                cancelled,
+                &mut self.probe_calls,
+            )?);
+            self.verify_inputs()?;
+        }
+        Ok(videos)
+    }
     /// No external command, search, inference or runtime operation occurs here.
     pub fn prepare(paths: &RunPaths, cancelled: &AtomicBool) -> Result<Self> {
         let prepared_at = Instant::now();

@@ -145,6 +145,111 @@ impl OpenAiClient {
         })
     }
 
+    /// Runtime readiness uses this same authenticated transport. Only a refused
+    /// connection or an explicit temporary-unavailability status means not ready;
+    /// a live incompatible, unauthorized or malformed endpoint is an error.
+    /// The caller supplies an absolute deadline so startup polling stays bounded.
+    pub fn is_ready(&self, deadline: Instant) -> Result<bool> {
+        let protocol = self.config.checked_protocol()?;
+        let deadline =
+            deadline.min(Instant::now() + Duration::from_secs(self.config.timeout_seconds));
+        let mut url = self.config.base_url.clone();
+        url.path_segments_mut()
+            .map_err(|_| anyhow!("invalid inference service path"))?
+            .pop_if_empty()
+            .push("models");
+        for redirect in 0..=3 {
+            let mut request = self.http.get(url.clone()).timeout(remaining(deadline)?);
+            if let Some(auth) = &self.authorization {
+                request = request.header(AUTHORIZATION, auth);
+            }
+            let response = match request.send() {
+                Ok(response) => response,
+                Err(error) if connection_refused(&error) => return Ok(false),
+                Err(error) if error.is_timeout() => {
+                    bail!("inference readiness HTTP deadline exceeded")
+                }
+                Err(_) => bail!("inference readiness HTTP request failed"),
+            };
+            let status = response.status();
+            if status.is_redirection() {
+                ensure!(redirect < 3, "inference readiness redirect limit exceeded");
+                let next = response
+                    .headers()
+                    .get(LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|location| url.join(location).ok())
+                    .ok_or_else(|| anyhow!("invalid inference readiness redirect"))?;
+                ensure!(
+                    next.origin() == self.config.base_url.origin()
+                        && next.username().is_empty()
+                        && next.password().is_none()
+                        && next.query().is_none()
+                        && next.fragment().is_none(),
+                    "inference readiness redirect must stay on the configured origin without credentials/query/fragment"
+                );
+                url = next;
+                continue;
+            }
+            if [502, 503, 504].contains(&status.as_u16()) {
+                return Ok(false);
+            }
+            ensure!(
+                status.is_success(),
+                "inference readiness HTTP status {}",
+                status.as_u16()
+            );
+            ensure!(
+                response
+                    .headers()
+                    .get(CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.split(';').next())
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json")),
+                "inference readiness response must be application/json"
+            );
+            ensure!(
+                response
+                    .content_length()
+                    .is_none_or(|length| length <= protocol.max_response_bytes),
+                "inference readiness response exceeds byte limit"
+            );
+            let mut bytes = Vec::new();
+            response
+                .take(protocol.max_response_bytes + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| {
+                    anyhow!("inference readiness response body failed or deadline exceeded")
+                })?;
+            remaining(deadline)?;
+            ensure!(
+                bytes.len() as u64 <= protocol.max_response_bytes,
+                "inference readiness response exceeds byte limit"
+            );
+            let models: Value = serde_json::from_slice(&bytes)
+                .map_err(|_| anyhow!("invalid inference readiness response"))?;
+            self.reject_secret(&models)?;
+            let identities = models["data"]
+                .as_array()
+                .ok_or_else(|| anyhow!("invalid inference readiness model list"))?;
+            let expected = protocol
+                .response_model
+                .as_deref()
+                .unwrap_or(&self.config.model);
+            ensure!(
+                identities
+                    .iter()
+                    .all(|model| model["id"].as_str().is_some())
+                    && identities
+                        .iter()
+                        .any(|model| model["id"].as_str() == Some(expected)),
+                "inference readiness endpoint does not serve the declared model"
+            );
+            return Ok(true);
+        }
+        unreachable!("redirect limit fails before exhausting the loop")
+    }
+
     /// Always validate JSON Schema locally, then the caller's domain contract
     /// (IDs, scores, media evidence, source/time bounds). Neither /models nor
     /// structural JSON can prove that a model actually understood the media.
@@ -418,6 +523,22 @@ fn contains_secret(value: &Value, secret: &str) -> bool {
             .any(|(key, v)| embedded_credential_echo(key, secret) || contains_secret(v, secret)),
         _ => false,
     }
+}
+
+fn connection_refused(error: &reqwest::Error) -> bool {
+    // is_connect() also includes TLS failures and DNS errors. Those represent
+    // uncertain/incompatible endpoints, not permission to launch a new server.
+    let mut source = std::error::Error::source(error);
+    while let Some(error) = source {
+        if error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused)
+        {
+            return true;
+        }
+        source = error.source();
+    }
+    false
 }
 
 fn embedded_credential_echo(text: &str, secret: &str) -> bool {

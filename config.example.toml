@@ -1,5 +1,8 @@
 [selection]
 method = "sampled_frames" # sampled_frames または semantic_video
+# samples_per_video = 12 # 1〜4096。両方式とも候補不足なら範囲内で追補
+# context_delta_seconds = 0.25 # 正の有限秒数
+# semantic_chunk_seconds = 30.0 # 0.1〜3600。実PTSで区切り、modelの動画秒数上限も守る
 
 [ai]
 backend = "vllm" # strata または vllm
@@ -28,8 +31,35 @@ max_attempts = 3 # JSON/schema/用途契約の修正試行。通信失敗は再�
 # 以下は画像を使う場合の設定形。実際の encoder/projector と上限を確認して有効化します。
 # [ai.protocol.media]
 # vision_revision = "YOUR_ENCODER_PROJECTOR_AND_PREPROCESSING_REVISION"
-# max_images = 12
+# max_images = 37 # 最大12候補の二次評価: sheet 1枚 + before/center/after 36枚
 # max_image_pixels = 32000000
 # max_image_edge = 16384
 # max_video_bytes = 0 # Strata は必ず0。vLLMも実動画検証までは0
 # max_video_seconds = 0.0
+
+# --game-context では以下の検索設定・契約・認証は不要です。
+# --game-title は docs/brave-search.md を読み、適用アカウントの契約確認後だけ有効化します。
+# [brave]
+# api_key = "YOUR_BRAVE_API_KEY" # なければ GAME_SCREEN_PICK_BRAVE_API_KEY
+# timeout_seconds = 30
+# max_response_bytes = 1048576
+# result_count = 5 # 1〜20。固定2検索、agent loopなし
+# country = "US"
+# search_lang = "en"
+# quota_stop_confirmed = true # 適用契約の無料上限hard stop・有料overageなしを確認した場合だけ
+# quota_contract_reference = "YOUR_APPLICABLE_HARD_STOP_CONTRACT_REFERENCE"
+# context_generation_confirmed = true # 検索結果のこの推論用途を確認した場合だけ
+# context_contract_reference = "YOUR_APPLICABLE_INFERENCE_USE_CONTRACT_REFERENCE"
+# generated_context_persistence_allowed = false # 既定false。生成context本文をcheckpoint/reportへ保存しない
+# storage_contract_reference = "YOUR_APPLICABLE_GENERATED_CONTEXT_STORAGE_RIGHTS"
+
+# 管理しない起動済みendpointには[runtime]不要。未設定commandは実行も/models確認もしません。
+# 任意管理はbackend一致・foreground起動・自己sessionだけの停止を明示します。
+# [runtime]
+# backend = "vllm" # ai.backendと同じ値。StrataならStrata用argvだけ指定
+# start_command = ["/absolute/path/start-wrapper", "{session}"]
+# stop_command = ["/absolute/path/stop-wrapper", "{pid}", "{session}"]
+# command_timeout_seconds = 30 # 1〜300
+# startup_timeout_seconds = 300 # 1〜3600
+# wrapperは指定pid/sessionだけを管理し、秘密情報をstdout/stderrへ出さないこと。
+# shell変数や~は展開しません。daemon化・global stop・自動installはしません。
