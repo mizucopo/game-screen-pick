@@ -31,8 +31,11 @@ tools は未使用で、予期しない tool response は拒否します。Brave
 `ai.protocol.media` の不在は画像・動画非対応です。`vision_revision` に encoder/projector と処理条件を記録し、
 画像数（0〜64）・画素（最大200MP）・辺（最大32768）・動画bytes（最大128MiB）・秒数（最大3600）を明示します。
 PNG/JPEG は実 decode と寸法検証を行い、縮小せず inline data URL へ送ります。
-動画は1 request に1本、MP4/MOV の inline bytes を受理します。`ftyp` box の通常／extended header・
-宣言サイズ・brand領域の完全性と、宣言bytes/秒数を検証します。動画全体の decode を保証する検査ではありません。
+動画は1 request に1本、MP4/MOV の inline bytes を受理します。`ftyp` box がある場合は通常／extended header・
+宣言サイズ・brand領域の完全性を検証します。MP4 では必須ですが、
+[QuickTime の仕様](https://developer.apple.com/documentation/quicktime-file-format/file_type_compatibility_atom)
+では任意なので、`ftyp` のない MOV は完全なトップレベル atom と `moov`／`mdat` を確認します。
+両形式とも宣言bytes/秒数を検証します。動画全体の decode を保証する検査ではありません。
 実 frame・PTS・duration と MIME の対応は、#342 が既存の `media::ChunkArtifact` と probe 結果から作り、
 用途検証で source と実時間範囲を照合します。client 自身は動画を再 probe/transcode しません。
 時刻付き画像列への代替や1枚への置換は実装していません。
@@ -58,7 +61,10 @@ semantic event の source・実時間範囲・event品質、Game Context の同�
 画像／動画を理解したと証明できる用途上の検証と実 model 試験は #342/#343 の責務で、JSONの形だけで成功を宣言しません。
 未検証応答を cache／report／成果物へ保存せず、既存の publish/checkpoint 境界を保ちます。
 
-HTTP は proxy 自動利用を無効化し、認証を bearer header だけへ渡します。307/308 の POST を保持する redirect は
+HTTP は proxy 自動利用を無効化し、認証を bearer header だけへ渡します。設定／環境変数から解決した API key がある場合、
+リモート接続には HTTPS を要求し、平文 HTTP は明示的な loopback（IPv4 `127.0.0.0/8`、IPv6 `::1`、
+正規化後の hostname `localhost`）だけに許可します。DNS 解決を使って例外を広げません。認証なしの HTTP も受理します。
+307/308 の POST を保持する redirect は
 同一 scheme/host/effective port で3回までです。別 origin、userinfo/query/fragment、他の redirect status を拒否します。
 HTTP／schema／用途検証エラーや server body を診断へ転載せず、生成 JSON の文字列値と認証値の完全一致や Bearer echo を拒否します。
 16 byte 以上の認証値は文字列値／key の部分文字列も拒否します。短い dummy key（`a`／`test` 等）を ordinary word の部分文字列、

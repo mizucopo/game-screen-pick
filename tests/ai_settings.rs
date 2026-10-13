@@ -67,6 +67,61 @@ fn explicit_protocol_is_required_only_for_the_inference_boundary() {
 }
 
 #[test]
+fn credentials_require_https_except_for_explicit_loopback_hosts() {
+    // Isolate the fallback key without changing this test process's environment.
+    let Ok(mode) = std::env::var("GSP_AUTH_TRANSPORT_TEST") else {
+        for mode in ["config", "environment", "unauthenticated"] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "credentials_require_https_except_for_explicit_loopback_hosts",
+                    "--nocapture",
+                ])
+                .env("GSP_AUTH_TRANSPORT_TEST", mode)
+                .env_remove("GAME_SCREEN_PICK_API_KEY");
+            if mode == "environment" {
+                command.env("GAME_SCREEN_PICK_API_KEY", "TRANSPORT_TEST_CREDENTIAL");
+            }
+            assert!(command.status().unwrap().success(), "{mode}");
+        }
+        return;
+    };
+    let source = if mode == "config" {
+        format!("{BASE}api_key = \"TRANSPORT_TEST_CREDENTIAL\"\n{PROTOCOL}")
+    } else {
+        format!("{BASE}{PROTOCOL}")
+    };
+    for (url, permits_credentials) in [
+        ("http://127.0.0.1:1/v1/", true),
+        ("http://127.22.33.44:1/v1/", true),
+        ("http://[::1]:1/v1/", true),
+        ("http://localhost:1/v1/", true),
+        ("http://LOCALHOST:1/v1/", true),
+        ("http://192.0.2.1:1/v1/", false),
+        ("http://[2001:db8::1]:1/v1/", false),
+        ("http://0.0.0.0:1/v1/", false),
+        ("http://[::]:1/v1/", false),
+        ("http://inference.invalid/v1/", false),
+        ("http://localhost.example/v1/", false),
+        ("http://127.0.0.1.example/v1/", false),
+        ("https://inference.invalid/v1/", true),
+    ] {
+        let mut ai = config(&source).ai;
+        ai.base_url = url.parse().unwrap();
+        let result = OpenAiClient::new(&ai);
+        if permits_credentials || mode == "unauthenticated" {
+            // No server or DNS is required to construct any of these clients.
+            assert!(result.is_ok(), "{url}: {mode}");
+        } else {
+            let error = result.err().expect("remote credentialed HTTP must fail");
+            assert!(error.to_string().contains("HTTPS"), "{error}");
+            assert!(!format!("{error:#}\n{error:?}").contains("TRANSPORT_TEST_CREDENTIAL"));
+        }
+    }
+}
+
+#[test]
 fn invalid_protocol_contracts_fail_without_disclosing_configuration_values() {
     let source = format!("{BASE}api_key = \"PRIVATE_AUTH\"\n{PROTOCOL}");
     for changed in [

@@ -111,6 +111,18 @@ impl OpenAiClient {
     pub fn new(config: &AiConfig) -> Result<Self> {
         config.checked_protocol()?;
         let secret = config.resolved_api_key();
+        let loopback = match config.base_url.host() {
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            Some(url::Host::Domain(name)) => name == "localhost",
+            None => false,
+        };
+        // Check the resolved key, including the environment fallback, before
+        // constructing an authenticated client. Never trust DNS as loopback.
+        ensure!(
+            secret.is_none() || config.base_url.scheme() == "https" || loopback,
+            "inference authentication requires HTTPS for non-loopback hosts"
+        );
         let authorization = secret
             .as_ref()
             .map(|key| {
@@ -279,9 +291,9 @@ impl OpenAiClient {
                         videos == 1
                             && !bytes.is_empty()
                             && ["video/mp4", "video/quicktime"].contains(&mime.as_str())
-                            && has_video_header(bytes)
                             && media.max_video_bytes > 0
                             && bytes.len() as u64 <= media.max_video_bytes
+                            && has_video_header(bytes, mime)
                             && duration_seconds.is_finite()
                             && *duration_seconds > 0.0
                             && *duration_seconds <= media.max_video_seconds,
@@ -454,33 +466,59 @@ fn data_url(mime: &str, bytes: &[u8]) -> String {
     format!("data:{mime};base64,{}", STANDARD.encode(bytes))
 }
 
-/// Check the complete ftyp box without probing or decoding the video. The
-/// caller still verifies tracks, frames and timing through MediaTools.
-fn has_video_header(bytes: &[u8]) -> bool {
-    let Some(header) = bytes.get(..8) else {
+/// Check container headers without probing or decoding. QuickTime permits
+/// legacy movies without ftyp; the caller still verifies tracks and timing.
+fn has_video_header(bytes: &[u8], mime: &str) -> bool {
+    let Some((kind, size, header_bytes)) = atom_header(bytes) else {
         return false;
     };
-    if &header[4..8] != b"ftyp" {
+    if kind == b"ftyp" {
+        let required = header_bytes + 8; // major brand and minor version
+        // A to-EOF ftyp box leaves no video tracks. Require a bounded box.
+        return bytes[..4] != [0; 4] && size >= required && (size - required) % 4 == 0;
+    }
+    if mime != "video/quicktime" {
         return false;
     }
+
+    let mut remaining = bytes;
+    let mut movie = false;
+    let mut media = false;
+    while !remaining.is_empty() {
+        let Some((kind, size, header_bytes)) = atom_header(remaining) else {
+            return false;
+        };
+        match kind {
+            // A later ftyp is not a legacy movie and must not bypass its check.
+            b"ftyp" => return false,
+            b"moov" => movie |= size > header_bytes,
+            b"mdat" => media |= size > header_bytes,
+            _ => {}
+        }
+        remaining = &remaining[size..];
+    }
+    movie && media
+}
+
+/// Return only complete, advancing atoms; size zero extends to EOF.
+fn atom_header(bytes: &[u8]) -> Option<(&[u8], usize, usize)> {
+    let header = bytes.get(..8)?;
     let short_size = u32::from_be_bytes(header[..4].try_into().expect("four size bytes"));
     let (size, header_bytes) = match short_size {
-        // A to-EOF ftyp box leaves no video tracks. Require a bounded box;
-        // validating the remaining container is the caller's probe contract.
-        0 => return false,
+        0 => (bytes.len(), 8),
         1 => {
-            let Some(extended) = bytes.get(8..16) else {
-                return false;
-            };
+            let extended = bytes.get(8..16)?;
             (
-                u64::from_be_bytes(extended.try_into().expect("eight size bytes")),
+                usize::try_from(u64::from_be_bytes(
+                    extended.try_into().expect("eight size bytes"),
+                ))
+                .ok()?,
                 16,
             )
         }
-        size => (u64::from(size), 8),
+        size => (size as usize, 8),
     };
-    let required = header_bytes + 8; // major brand and minor version
-    size >= required && size <= bytes.len() as u64 && (size - required) % 4 == 0
+    (size >= header_bytes && size <= bytes.len()).then_some((&header[4..8], size, header_bytes))
 }
 
 fn validate_image(bytes: &[u8], mime: &str, media: &crate::config::MediaConfig) -> Result<()> {

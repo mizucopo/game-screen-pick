@@ -451,7 +451,51 @@ fn actual_video_bytes_preserve_fixture_frames_and_times_at_the_http_boundary() {
     let cancelled = AtomicBool::new(false);
     let video = tools.probe(&source, &cancelled).unwrap();
     let chunk = tools.extract_chunk(&video, 0.0, 6.0, &cancelled).unwrap();
-    for bytes in [fs::read(&source).unwrap(), fs::read(chunk.path()).unwrap()] {
+    let mut legacy = fs::read(&source).unwrap();
+    assert_eq!(&legacy[4..8], b"ftyp");
+    // Turn the optional type atom into padding without moving chunk offsets.
+    legacy[4..8].copy_from_slice(b"free");
+    let directory = tempfile::tempdir().unwrap();
+    let mut extended_legacy = legacy.clone();
+    extended_legacy[..4].copy_from_slice(&1_u32.to_be_bytes());
+    extended_legacy[8..16].copy_from_slice(&20_u64.to_be_bytes());
+    let faststart_path = directory.path().join("faststart.mov");
+    let output = std::process::Command::new(&tools.ffmpeg)
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(&source)
+        .args(["-map", "0", "-c", "copy", "-movflags", "+faststart"])
+        .arg(&faststart_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "ffmpeg must create a faststart MOV"
+    );
+    let mut movie_first = fs::read(&faststart_path).unwrap();
+    movie_first[4..8].copy_from_slice(b"free");
+    let mut media_to_eof = movie_first.clone();
+    let media_type = media_to_eof
+        .windows(4)
+        .position(|part| part == b"mdat")
+        .unwrap();
+    media_to_eof[media_type - 4..media_type].copy_from_slice(&0_u32.to_be_bytes());
+    for bytes in [
+        fs::read(&source).unwrap(),
+        fs::read(chunk.path()).unwrap(),
+        legacy,
+        extended_legacy,
+        movie_first,
+        media_to_eof,
+    ] {
+        // Verify every alternate container before the caller sends its bytes.
+        let candidate_path = directory.path().join("candidate.mov");
+        fs::write(&candidate_path, &bytes).unwrap();
+        let candidate = tools.probe(&candidate_path, &cancelled).unwrap();
+        assert_eq!(candidate.duration_seconds, video.duration_seconds);
+        assert_eq!(
+            serde_json::to_value(&candidate.frames).unwrap(),
+            serde_json::to_value(&video.frames).unwrap()
+        );
         let expected = bytes.clone();
         let mock = Mock::new(move |received, _| {
             let videos = data_part(received, "video_url");
@@ -757,7 +801,9 @@ fn media_mime_shape_count_support_and_request_limits_fail_before_http() {
                     bytes.resize(1024 * 1024 + 1, 0);
                 }
                 if case == "video_header" {
-                    bytes[4..8].copy_from_slice(b"BAD!");
+                    // An unknown atom can be skipped in legacy QuickTime;
+                    // use a genuinely truncated declared box instead.
+                    bytes[..4].copy_from_slice(&u32::MAX.to_be_bytes());
                 }
                 request.content = vec![Content::Video {
                     bytes,
@@ -788,11 +834,62 @@ fn media_mime_shape_count_support_and_request_limits_fail_before_http() {
 #[test]
 fn truncated_or_invalid_video_boxes_fail_before_http() {
     for bytes in [
+        b"\0\0\0\0ftypisom\0\0\0\0".to_vec(),
         b"\0\0\0\x18ftyp".to_vec(),
         b"\0\0\0\x08ftypisom\0\0\0\0".to_vec(),
         b"\0\0\0\x18ftypisom\0\0\0\0".to_vec(),
         b"\0\0\0\x11ftypisom\0\0\0\0x".to_vec(),
         b"\0\0\0\x01ftyp\0\0\0\0\0\0\0\x20".to_vec(),
+    ] {
+        for mime in ["video/mp4", "video/quicktime"] {
+            let mock = Mock::new(|_, _| success());
+            let mut config = configuration(&mock, "vllm");
+            enable_media(&mut config);
+            let client = OpenAiClient::new(&config).unwrap();
+            let mut request = request();
+            request.content = vec![Content::Video {
+                bytes: bytes.clone(),
+                mime: mime.to_owned(),
+                duration_seconds: 1.0,
+            }];
+            error(&client, &request);
+            assert!(
+                mock.requests().is_empty(),
+                "invalid ftyp box must fail before HTTP"
+            );
+        }
+    }
+}
+
+#[test]
+fn malformed_legacy_mov_and_mp4_without_ftyp_fail_before_http() {
+    let mut legacy = fs::read(fixture("03-multitrack-rotated.mov")).unwrap();
+    legacy[4..8].copy_from_slice(b"free");
+    let mut too_short = legacy.clone();
+    too_short[..4].copy_from_slice(&4_u32.to_be_bytes());
+    let mut too_long = legacy.clone();
+    too_long[..4].copy_from_slice(&u32::MAX.to_be_bytes());
+    let mut truncated = legacy.clone();
+    truncated.pop();
+    let mut no_movie = legacy.clone();
+    let movie_type = no_movie
+        .windows(4)
+        .position(|part| part == b"moov")
+        .unwrap();
+    no_movie[movie_type..movie_type + 4].copy_from_slice(b"free");
+    let mut no_media = legacy.clone();
+    let media_type = no_media
+        .windows(4)
+        .position(|part| part == b"mdat")
+        .unwrap();
+    no_media[media_type..media_type + 4].copy_from_slice(b"free");
+    for (bytes, mime) in [
+        (too_short, "video/quicktime"),
+        (too_long, "video/quicktime"),
+        (truncated, "video/quicktime"),
+        (no_movie, "video/quicktime"),
+        (no_media, "video/quicktime"),
+        (legacy, "video/mp4"),
     ] {
         let mock = Mock::new(|_, _| success());
         let mut config = configuration(&mock, "vllm");
@@ -801,14 +898,11 @@ fn truncated_or_invalid_video_boxes_fail_before_http() {
         let mut request = request();
         request.content = vec![Content::Video {
             bytes,
-            mime: "video/mp4".to_owned(),
-            duration_seconds: 1.0,
+            mime: mime.to_owned(),
+            duration_seconds: 6.0,
         }];
         error(&client, &request);
-        assert!(
-            mock.requests().is_empty(),
-            "invalid ftyp box must fail before HTTP"
-        );
+        assert!(mock.requests().is_empty());
     }
 }
 
