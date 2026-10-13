@@ -3,7 +3,8 @@
 `ai::OpenAiClient` は Game Context・一次／二次画像評価・動画理解に共有する同期 JSON 呼出境界です。
 `JsonRequest` の prompt・JSON Schema・順序付き content を `POST <base_url>/chat/completions` へ送り、
 アプリで schema を検証してから caller の用途検証を呼びます。custom service prefix と percent encoding を保持します。
-用途別 prompt、Brave、runtime 管理、CLI の選定接続は #342 の範囲です。現在の通常 CLI は未接続として停止します。
+`inference` が用途別 prompt と画像／動画の検証を担当し、`workflow` が通常 CLI・cache・公開へ接続します。
+Brave の固定検索と契約は [検索契約](brave-search.md)、任意 runtime は [設定・実行](technical-reference.md) を参照してください。
 
 ## 設定と capability の区別
 
@@ -49,7 +50,8 @@ Strata は動画宣言も `Content::Video` も通信前に拒否します。
 ## caller・cache・出力保護
 
 `Session::prepare` で出力/cache の保護と排他を確立し、cache-miss callback 内から client を呼びます。
-constructor 自身は通信／server 起動／`/models` 取得を行いません。start/stop command や自動 fallback はありません。
+constructor 自身は通信／server 起動／`/models` 取得を行いません。管理 command のある runtime は cache miss callback 内で
+この client の `/models` 確認を使い、自己が開始した foreground session だけを cleanup します。未設定時は確認も管理も行いません。
 `AiConfig::model_conditions()` と `cache_conditions(prompt_revision, schema_revision, media_revision, context)` を
 組で使用します。認証は除外し、backend・URL・model・推論レベル・revision と、protocol／vision／上限／encoding の
 digest を既存 cache 条件へ渡します。model 重み・server version・template 等の変更は `cache_revision` を更新してください。
@@ -74,6 +76,8 @@ API key を serialization に含めず、config の Debug では redact しま�
 ## 検証状況と後続確認
 
 `tests/ai_contract.rs` は loopback HTTP の wire/mock 契約、`tests/ai_settings.rs` は設定と cache 条件を確認します。
+`tests/inference.rs` は用途の実 bytes・ID・前後順序・source時刻、`tests/workflow.rs` は両方式の
+直接／生成 context と通常 CLI の cold/warm/cache-only を固定 HTTP 応答で確認します。
 既存の media／選定／cache／出力保護試験と共に `sh tests/check.sh` で実行します。
 合成画像・動画の bytes が request に保持されても、mock が画像を読んだ／動画を理解した証明にはなりません。
 
@@ -85,7 +89,7 @@ API key を serialization に含めず、config の Debug では redact しま�
 | 動画・順序・PTS・event | 未対応として拒否 | inline wire/mock 契約 | 合成動画の順序・元時刻・eventを実 model で確認 |
 | tools＋JSON | 未使用 | 未使用 | 必要な用途ができた場合だけ追加契約を検証 |
 
-実サーバー試験はまだ行っていません。#342 接続後、各backendについて server version/commit、model revision、
+実サーバー試験はまだ行っていません。用途接続の mock 試験とは分けて、各backendについて server version/commit、model revision、
 vision encoder/projector、推論形式、解像度・画像／動画frame数・token/context上限、合成素材と応答、
 実 model の画像／動画の理解結果を記録します。`/models` の一覧だけで対応済みにせず、両動画経路の確認前に
 全フロー切替完了としません。Strata動画未対応が続く場合は停止条件として明示し、必要な対応方針を別途確認します。

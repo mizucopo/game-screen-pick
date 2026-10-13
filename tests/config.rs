@@ -67,7 +67,7 @@ fn unknown_keys_and_future_settings_are_rejected() {
         format!("extra = 1\n{VALID}"),
         VALID.replace("[ai]", "unexpected = true\n[ai]"),
         format!("{VALID}ollama_api_key = \"SECRET_VALUE\"\n"),
-        format!("{VALID}\n[runtime]\nstart_command = [\"echo\"]\n"),
+        format!("{VALID}\n[runtime]\nbackend = \"vllm\"\nunknown_command = [\"echo\"]\n"),
         format!("{VALID}\n[media]\nworkers = 1\n"),
         format!("{VALID}\n[search]\nprovider = \"brave\"\n"),
     ] {

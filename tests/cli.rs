@@ -216,7 +216,7 @@ fn argument_requirements_and_boundaries_are_enforced() {
 }
 
 #[test]
-fn validation_is_read_only_and_selection_remains_unavailable() {
+fn validation_is_read_only_and_selection_requires_a_vision_contract() {
     let directory = sandbox();
     setup(directory.path());
     let mut args = request();
@@ -241,7 +241,7 @@ fn validation_is_read_only_and_selection_remains_unavailable() {
         .unwrap();
         let output = command(directory.path(), &request());
         assert_eq!(output.status.code(), Some(1));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("not implemented"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("vision settings"));
         assert!(!directory.path().join("output").exists());
     }
     fs::create_dir(directory.path().join("output")).unwrap();

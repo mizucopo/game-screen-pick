@@ -10,10 +10,38 @@
 これは要求設定の検証です。backend/model ごとの実対応は共通 client の能力検証で決定します。
 空白のみの認証値は設定なしとして扱います。config の非空値が環境変数より優先します。
 認証値を診断・Debug・report・cache へ出しません。共通 HTTP client は [AI 接続契約](ai-client.md) を参照してください。
-CLI の用途接続は #342 で行い、`validate` は通信しません。
+通常 CLI は `workflow` から共通 client と cache/publication を接続し、`validate` は通信しません。
 
 `validate` は設定・枚数・Game Title/Context の排他・入力探索・出力 path を確認します。
-通常実行も同じ事前確認とcache/outputの排他取得を行い、未接続の生成 context・AI 接続を成功扱いしません。
+通常実行も同じ事前確認とcache/outputの排他取得を行い、その後 cache miss callback 内だけで接続します。
+`selection.samples_per_video` は既定12（1〜4096）、`context_delta_seconds` は既定0.25（正の有限値）、
+`semantic_chunk_seconds` は既定30（0.1〜3600）です。semantic は実PTS境界で分割し、model の秒数上限も守ります。
+一次は表示ID付きcontact sheet、二次はsheetと各IDのbefore/center/after実画像を順番に送り、中央だけを評価します。
+二次requestの最大候補数は指定枚数の3倍、最大12で、sheet 1枚と候補ごとの3画像を使います（最大37画像）。
+model の画像上限がこの予定最大数を満たさなければ一次推論・Brave検索の前に停止します。
+動画はlossless MOV bytesを送り、元動画source・実区間・PTS offsetを検証します。全入力のchunk数を推論前に合計し、4096件を超えれば停止します。
+clip相対時刻、未知source、重複eventを拒否します。静止・loadingなど有用なeventがないchunkは空配列を許し、全chunkが空なら候補不足で停止します。
+
+Game Title は [Brave契約](brave-search.md) を明示した固定2検索からJSON contextを生成します。
+生成contextのcache missではBraveと推論の認証、固定context schemaと初期requestの送信サイズをprobe前に検証します。
+次に全入力動画をprobeし、modelの画像寸法・画素上限と、samplingの重複排除後の合計4096実frame上限を検索前に確認します。
+一次・二次contact sheetの必須部分の最小寸法もmodel上限と照合します。実際のlabel/mediaで増える寸法・bytesは実requestで再検証します。
+生成contextのcache hitはBrave認証・検索を不要とします。直接contextもJSON符号化した本文がrequest上限を超えればmedia/runtime処理前に停止します。
+解決したcontextを含む一次・二次／動画の共通prompt・schema・metadataのrequest容量下限も、media/runtime処理前に確認します。
+同定・genre・進行要素・代表画面・選定優先点・出典と曖昧さ／矛盾を検証します。外部dataの命令に従うagent loopはありません。
+保存許可がない生成context本文はcheckpoint/reportへ入れません。所有する完成成果物は入力と実効条件が一致すれば再利用でき、
+cache消失後も検索・推論・media・runtime操作は0件です。再計算で生成contextが必要になりcheckpointもなければ、
+`--cache-only` はその欠落を外部操作0件で停止します。
+
+`[runtime]` は省略できます。両command未設定なら起動済みendpointを使い、管理・health確認は0件です。
+管理時はbackend一致と明示argvを検証し、`/models`で認証・declared modelを確認します。既存healthy endpointは停止しません。
+`start_command`はforeground、`stop_command`は完全argv要素の`{pid}`と`{session}`を必須とし、自己process/sessionだけを停止します。
+shell展開はなく、command/startup timeout、通常中断、起動途中・推論失敗でcleanupします。
+既存endpointの確認は1秒までとし、不確かなtimeoutでは起動しません。自己sessionの起動後は全体の起動期限内でHTTP timeoutを再試行します。
+停止失敗は本体errorを置換せず別にstderrへ報告し、本体成功時も終了1にします。HTTPのheader/body待機と短期rate-window待機も
+通常中断を監視し、遅い応答をAIの最大timeoutまで待たず自己runtimeのcleanupへ進みます。自動install／fallback／GPU leaseはありません。
+cleanupも中断を監視し、停止commandに最大500 msの猶予を与えた後、所有した停止command/runtimeのprocess groupだけを回収します。
+停止wrapperが終了しても、その子processを所有groupとして回収し、正常な非同期停止helperにはruntimeの終了まで待機します。
 
 ## media
 
@@ -48,7 +76,7 @@ SIGINT は130、SIGTERM/HUPも成功にせず停止します。強制 kill や f
 二次評価と最終 JPEG には必要な元 frame だけを再抽出します。評価用の原画像・sheet・前後 context は
 各 callback の実行中だけ存在し、完了後に削除します。成功後は完成した JPEG・一覧・report だけを保持します。
 HTTP・応答 retry は #362/#342、cache・再開・所有権・公開は `run::Session` の責務です。
-この段階の固定応答テストは外部 API を呼ばず、通常 CLI の完成を意味しません。
+固定応答の用途接続はloopback HTTPで検証します。実 model の読解能力・実録画成果物品質の証明にはしません。
 
 等間隔 sampling は両端を含み、1候補なら中央を使います。semantic event は有効区間・代表時刻・重要度・
 scene・根拠・source を検証し、代表とその両側の候補を抽出します。event のない入力元も許容します。
@@ -98,6 +126,9 @@ Game Context は保存可能と確認した caller だけ明示して渡しま�
 
 `run::Session::prepare` は入力・設定・path・既存出力の所有権を確認し、cache/outputを排他にしてから
 処理callbackを受け付けます。`Session::run` は `pipeline::run` の実画像評価と公開を接続します。
+通常CLIはその前に入力identityと非秘密の依頼条件で所有済みreportを確認し、context生成やsemantic-planの欠落に左右されず完成成果物を返します。
+reportの`cache.workflow.conditions`には生成条件、方式、指定枚数、要求／model上限で制限したsemantic chunk秒数を記録します。
+Brave契約参照は生文字列を記録せず、検索条件全体のdigestで変更を検出します。country・search_lang・result_countだけを可読値で記録します。
 CLIのcache親は出力と同じ親の `.game-screen-pick-cache`、変更は `--cache-directory` で指定します。
 既存の親directoryが必要です。専用 `game-screen-pick-rust-v1` namespaceだけへ書込み、旧cacheを読み込みません。
 
@@ -109,6 +140,9 @@ CLIのcache親は出力と同じ親の `.game-screen-pick-cache`、変更は `--
 backend・認証を除く正規化service URL・model・推論レベル・prompt/schema/media revision・解決済みcontextをkeyに含めます。
 認証値や保存禁止のcontext本文はkey/checkpointへ保存しません。完了応答だけを検証してatomic書込みし、不正・途中結果はhitにしません。
 `semantic_chunk` はsource/区間/条件ごとに検証したeventだけを保存し、欠損chunkだけ再処理します。
+完成したsemantic planは入力identity・source・実効条件・chunk秒数で、durationと最大4096 eventだけをまとめて保存します。eventが0件でも完了結果として再利用します。
+正常なsemantic warmはこの小さいplanから直接選定結果のkeyを検証し、全frame probeや個別chunk checkpointを読みません。
+planが欠落／破損した場合だけ既存chunk checkpointから再構成します。
 生成contextの `generated_context` は生成前の入力条件をkeyにし、保存許可をcallerが確認した場合だけ再利用します。Brave生応答は扱いません。
 最初のcontext生成callbackより前に入力identityを固定し、保存許可の有無にかかわらず同名入力の書換え・置換を拒否します。
 

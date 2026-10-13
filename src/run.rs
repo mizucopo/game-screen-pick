@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -22,6 +22,7 @@ use crate::storage;
 
 const ALGORITHM: &str = "rust-selection-v1";
 const PROBE: &str = "ffprobe-pts-v1";
+const WORKFLOW: &str = "rust-workflow-v1";
 
 pub struct RunPaths {
     pub input_directory: PathBuf,
@@ -119,6 +120,15 @@ pub struct RunOutcome {
     pub metrics: RunMetrics,
 }
 
+/// Bounded semantic result without all-frame probe metadata. Each event was
+/// validated against its actual chunk before this aggregate was checkpointed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticPlan {
+    pub durations: BTreeMap<String, f64>,
+    pub events: Vec<SemanticEvent>,
+}
+
 /// Holds both locks across preflight, callbacks, checkpoints and publication.
 pub struct Session {
     input_directory: PathBuf,
@@ -133,9 +143,154 @@ pub struct Session {
     assessment_calls: u64,
     context_calls: u64,
     semantic_calls: u64,
+    workflow: Option<Value>,
 }
 
 impl Session {
+    /// Check completed owned output before generating context, probing media or
+    /// resolving semantic plans. Conditions must describe every requested
+    /// dependency without credentials or raw context/search material; callers
+    /// hash the original game input instead of persisting its text here.
+    /// Input content identities are added internally and may be rehashed after
+    /// cache loss. No external command or callback runs in this method.
+    pub fn prepare_workflow(
+        &mut self,
+        conditions: Value,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<RunOutcome>> {
+        check_cancelled(cancelled)?;
+        ensure!(
+            conditions.is_object()
+                && serde_json::to_vec(&conditions)?.len() <= 1024 * 1024
+                && !has_credential_fields(&conditions),
+            "workflow conditions must be a bounded non-secret object"
+        );
+        let identities = self.identify_inputs(cancelled)?;
+        let inputs = self
+            .inputs
+            .iter()
+            .zip(&identities)
+            .map(|(path, identity)| Ok((source_name(path)?.to_owned(), &identity.content_digest)))
+            .collect::<Result<Vec<_>>>()?;
+        let key = cache::key(&json!({"workflow":WORKFLOW,"algorithm":ALGORITHM,
+            "probe":PROBE,"inputs":inputs,"conditions":conditions}))?;
+        self.workflow = Some(json!({"key":key,"revision":WORKFLOW,"conditions":conditions}));
+        let previous = self.output.verify_existing(cancelled)?;
+        if let Some(owned) = previous.filter(|owned| {
+            owned.report["cache"]["namespace"] == cache::NAMESPACE
+                && owned.report["cache"]["workflow"]["key"] == key
+        }) {
+            self.verify_inputs()?;
+            check_cancelled(cancelled)?;
+            return Ok(Some(RunOutcome {
+                warm: true,
+                report: owned.report,
+                metrics: self.metrics(),
+            }));
+        }
+        self.verify_inputs()?;
+        check_cancelled(cancelled)?;
+        Ok(None)
+    }
+
+    /// Reuse the small completed semantic plan before reading frame checkpoints.
+    /// Individual chunk checkpoints still recover partial/missing plans.
+    pub fn semantic_plan(
+        &mut self,
+        chunk_seconds: f64,
+        model: &ModelConditions,
+        conditions: &CacheConditions,
+        cancelled: &AtomicBool,
+        generate: impl FnOnce(&mut Self) -> Result<SemanticPlan>,
+    ) -> Result<Vec<SemanticEvent>> {
+        check_cancelled(cancelled)?;
+        ensure!(
+            chunk_seconds.is_finite() && (0.1..=3600.0).contains(&chunk_seconds),
+            "invalid semantic plan chunk duration"
+        );
+        pipeline::validate_model(model)?;
+        let conditions = conditions.normalized(true)?;
+        let identities = self.identify_inputs(cancelled)?;
+        let inputs = self
+            .inputs
+            .iter()
+            .zip(&identities)
+            .map(|(path, identity)| {
+                Ok((
+                    source_name(path)?.to_owned(),
+                    identity.content_digest.clone(),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let key = cache::key(&json!({"algorithm":"semantic-plan-v1","probe":PROBE,
+            "inputs":inputs,"chunk_seconds":chunk_seconds,"model":model,"conditions":conditions}))?;
+        let validate = |plan: &SemanticPlan| -> Result<()> {
+            ensure!(
+                plan.durations.len() == inputs.len()
+                    && plan.durations.keys().eq(inputs.keys())
+                    && plan
+                        .durations
+                        .values()
+                        .all(|seconds| seconds.is_finite() && *seconds > 0.0)
+                    && plan.events.len() <= MAX_CANDIDATES,
+                "semantic plan has invalid sources, duration or event count"
+            );
+            let mut intervals = BTreeSet::new();
+            for event in &plan.events {
+                let duration = plan
+                    .durations
+                    .get(&event.source)
+                    .context("semantic plan contains an unknown source")?;
+                event_positions(event, *duration)?;
+                ensure!(
+                    intervals.insert((
+                        &event.source,
+                        event.start_seconds.to_bits(),
+                        event.end_seconds.to_bits(),
+                        event.representative_seconds.to_bits()
+                    )),
+                    "semantic plan contains duplicate events"
+                );
+            }
+            Ok(())
+        };
+        if let Some(plan) =
+            self.cache
+                .read_validated::<SemanticPlan>("semantic-plans", &key, |plan| {
+                    validate(plan).is_ok()
+                })?
+        {
+            self.verify_inputs()?;
+            check_cancelled(cancelled)?;
+            return Ok(plan.events);
+        }
+        self.verify_inputs()?;
+        let plan = generate(self)?;
+        validate(&plan)?;
+        self.verify_inputs()?;
+        self.cache.write("semantic-plans", &key, &plan)?;
+        check_cancelled(cancelled)?;
+        Ok(plan.events)
+    }
+    /// Uses the same validated probe checkpoints as selection and semantic chunks.
+    /// A warm semantic plan does not decode inputs or contact inference servers.
+    pub fn videos(&mut self, tools: &MediaTools, cancelled: &AtomicBool) -> Result<Vec<Video>> {
+        let identities = self.identify_inputs(cancelled)?;
+        let mut videos = Vec::with_capacity(self.inputs.len());
+        for (path, identity) in self.inputs.iter().zip(&identities) {
+            self.verify_inputs()?;
+            videos.push(probe(
+                &mut self.cache,
+                tools,
+                path,
+                identity,
+                cancelled,
+                &mut self.probe_calls,
+            )?);
+            self.verify_inputs()?;
+        }
+        Ok(videos)
+    }
     /// No external command, search, inference or runtime operation occurs here.
     pub fn prepare(paths: &RunPaths, cancelled: &AtomicBool) -> Result<Self> {
         let prepared_at = Instant::now();
@@ -194,6 +349,7 @@ impl Session {
             assessment_calls: 0,
             context_calls: 0,
             semantic_calls: 0,
+            workflow: None,
         })
     }
 
@@ -251,6 +407,9 @@ impl Session {
         if let Some(owned) = previous.filter(|owned| {
             owned.report["cache"]["namespace"] == cache::NAMESPACE
                 && owned.report["cache"]["key"] == run_key
+                && self.workflow.as_ref().is_none_or(|workflow| {
+                    owned.report["cache"]["workflow"]["key"] == workflow["key"]
+                })
         }) {
             self.verify_inputs()?;
             check_cancelled(cancelled)?;
@@ -334,6 +493,9 @@ impl Session {
             "service_url":conditions.service_url,"prompt_revision":conditions.prompt_revision,
             "response_schema_revision":conditions.response_schema_revision,"media_revision":conditions.media_revision,
             "context_digest":storage::sha256(conditions.resolved_game_context.text().as_bytes())});
+        if let Some(workflow) = &self.workflow {
+            report["cache"]["workflow"] = workflow.clone();
+        }
         storage::atomic_write(&report_path, &serde_json::to_vec_pretty(&report)?)?;
         let owned = self.output.publish_checked(&artifacts, cancelled, || {
             verify_workflow(&self.input_directory, &self.inputs, Some(&identities))
@@ -450,6 +612,30 @@ impl Session {
         cancelled: &AtomicBool,
         mut generate: impl FnMut() -> Result<String>,
     ) -> Result<ResolvedGameContext> {
+        self.generated_context_with_session(
+            title,
+            search_conditions,
+            generation_conditions,
+            model,
+            persist,
+            cancelled,
+            |_| generate(),
+        )
+    }
+
+    /// A miss callback may validate/probe inputs before generating text.
+    /// Hits still bypass credential, media and transport preparation.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn generated_context_with_session(
+        &mut self,
+        title: &str,
+        search_conditions: &str,
+        generation_conditions: &CacheConditions,
+        model: &ModelConditions,
+        persist: bool,
+        cancelled: &AtomicBool,
+        mut generate: impl FnMut(&mut Self) -> Result<String>,
+    ) -> Result<ResolvedGameContext> {
         check_cancelled(cancelled)?;
         ensure!(!title.trim().is_empty(), "game title must not be blank");
         ensure!(
@@ -481,7 +667,7 @@ impl Session {
         }
         self.verify_inputs()?;
         self.context_calls += 1;
-        let context = generate()?;
+        let context = generate(self)?;
         ensure!(
             !context.trim().is_empty(),
             "generated game context must not be blank"
@@ -538,6 +724,28 @@ impl Session {
             semantic_calls: self.semantic_calls,
             elapsed_seconds,
         }
+    }
+}
+
+fn has_credential_fields(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(name, value)| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "api_key"
+                    | "apikey"
+                    | "authorization"
+                    | "password"
+                    | "secret"
+                    | "credentials"
+                    | "token"
+                    | "access_token"
+                    | "refresh_token"
+                    | "bearer_token"
+            ) || has_credential_fields(value)
+        }),
+        Value::Array(values) => values.iter().any(has_credential_fields),
+        _ => false,
     }
 }
 

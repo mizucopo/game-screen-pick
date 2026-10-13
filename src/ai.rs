@@ -1,15 +1,16 @@
 //! One bounded OpenAI-compatible JSON boundary. No search, runtime or cache I/O.
-use std::io::{Cursor, Read};
+use std::io::Cursor;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
-use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue, LOCATION};
 use serde_json::{Value, json};
 
 use crate::config::{AiConfig, Backend, InferenceLevel, ProtocolConfig, ReasoningFormat};
+use crate::http::{HttpClient, check_cancelled, connection_refused};
 use crate::pipeline::ModelConditions;
 use crate::run::{CacheConditions, ResolvedGameContext};
 
@@ -38,9 +39,15 @@ pub struct JsonRequest {
 
 pub struct OpenAiClient {
     config: AiConfig,
-    http: Client,
+    http: HttpClient,
     authorization: Option<HeaderValue>,
     secret: Option<String>,
+}
+
+struct PreparedRequest {
+    schema: jsonschema::Validator,
+    content: Vec<Value>,
+    body: Vec<u8>,
 }
 
 impl AiConfig {
@@ -132,11 +139,8 @@ impl OpenAiClient {
                 Ok::<_, anyhow::Error>(value)
             })
             .transpose()?;
-        let http = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .build()
-            .map_err(|_| anyhow!("cannot initialize inference HTTP client"))?;
+        let http =
+            HttpClient::new().map_err(|_| anyhow!("cannot initialize inference HTTP client"))?;
         Ok(Self {
             config: config.clone(),
             http,
@@ -145,16 +149,199 @@ impl OpenAiClient {
         })
     }
 
+    /// Runtime readiness uses this same authenticated transport. Only a refused
+    /// connection or an explicit temporary-unavailability status means not ready;
+    /// a live incompatible, unauthorized or malformed endpoint is an error.
+    /// The caller supplies an absolute deadline so startup polling stays bounded.
+    pub fn is_ready(&self, deadline: Instant) -> Result<bool> {
+        self.is_ready_cancellable(deadline, &AtomicBool::new(false))
+    }
+
+    pub fn is_ready_cancellable(&self, deadline: Instant, cancelled: &AtomicBool) -> Result<bool> {
+        check_cancelled(cancelled)?;
+        let protocol = self.config.checked_protocol()?;
+        let deadline =
+            deadline.min(Instant::now() + Duration::from_secs(self.config.timeout_seconds));
+        let mut url = self.config.base_url.clone();
+        url.path_segments_mut()
+            .map_err(|_| anyhow!("invalid inference service path"))?
+            .pop_if_empty()
+            .push("models");
+        for redirect in 0..=3 {
+            let mut request = self.http.get(url.clone()).timeout(remaining(deadline)?);
+            if let Some(auth) = &self.authorization {
+                request = request.header(AUTHORIZATION, auth);
+            }
+            let response = match self
+                .http
+                .send(request, deadline, cancelled, "inference readiness")
+            {
+                Ok(response) => response,
+                Err(error) if connection_refused(&error) => return Ok(false),
+                Err(error) => return Err(error),
+            };
+            let status = response.status();
+            if status.is_redirection() {
+                ensure!(redirect < 3, "inference readiness redirect limit exceeded");
+                let next = response
+                    .headers()
+                    .get(LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|location| url.join(location).ok())
+                    .ok_or_else(|| anyhow!("invalid inference readiness redirect"))?;
+                ensure!(
+                    next.origin() == self.config.base_url.origin()
+                        && next.username().is_empty()
+                        && next.password().is_none()
+                        && next.query().is_none()
+                        && next.fragment().is_none(),
+                    "inference readiness redirect must stay on the configured origin without credentials/query/fragment"
+                );
+                url = next;
+                continue;
+            }
+            if [502, 503, 504].contains(&status.as_u16()) {
+                return Ok(false);
+            }
+            ensure!(
+                status.is_success(),
+                "inference readiness HTTP status {}",
+                status.as_u16()
+            );
+            ensure!(
+                response
+                    .headers()
+                    .get(CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.split(';').next())
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json")),
+                "inference readiness response must be application/json"
+            );
+            ensure!(
+                response
+                    .content_length()
+                    .is_none_or(|length| length <= protocol.max_response_bytes),
+                "inference readiness response exceeds byte limit"
+            );
+            let bytes = self.http.read_body(
+                response,
+                protocol.max_response_bytes,
+                deadline,
+                cancelled,
+                "inference readiness",
+            )?;
+            check_cancelled(cancelled)?;
+            remaining(deadline)?;
+            ensure!(
+                bytes.len() as u64 <= protocol.max_response_bytes,
+                "inference readiness response exceeds byte limit"
+            );
+            let models: Value = serde_json::from_slice(&bytes)
+                .map_err(|_| anyhow!("invalid inference readiness response"))?;
+            self.reject_secret(&models)?;
+            let identities = models["data"]
+                .as_array()
+                .ok_or_else(|| anyhow!("invalid inference readiness model list"))?;
+            let expected = protocol
+                .response_model
+                .as_deref()
+                .unwrap_or(&self.config.model);
+            ensure!(
+                identities
+                    .iter()
+                    .all(|model| model["id"].as_str().is_some())
+                    && identities
+                        .iter()
+                        .any(|model| model["id"].as_str() == Some(expected)),
+                "inference readiness endpoint does not serve the declared model"
+            );
+            check_cancelled(cancelled)?;
+            return Ok(true);
+        }
+        unreachable!("redirect limit fails before exhausting the loop")
+    }
+
     /// Always validate JSON Schema locally, then the caller's domain contract
     /// (IDs, scores, media evidence, source/time bounds). Neither /models nor
     /// structural JSON can prove that a model actually understood the media.
     pub fn generate<T>(
         &self,
         request: &JsonRequest,
+        validate: impl FnMut(&Value) -> Result<T>,
+    ) -> Result<T> {
+        self.generate_cancellable(request, &AtomicBool::new(false), validate)
+    }
+
+    /// Validate the actual initial request without HTTP or runtime I/O. Use
+    /// this before spending search quota on a request that cannot be sent.
+    /// Media decoding and complete inline/base64 payload sizing are identical
+    /// to generation; later response-correction prompts are sized separately.
+    pub fn validate_request(&self, request: &JsonRequest) -> Result<()> {
+        self.prepare_request(request, self.config.checked_protocol()?)?;
+        Ok(())
+    }
+
+    pub fn generate_cancellable<T>(
+        &self,
+        request: &JsonRequest,
+        cancelled: &AtomicBool,
         mut validate: impl FnMut(&Value) -> Result<T>,
     ) -> Result<T> {
+        check_cancelled(cancelled)?;
         let protocol = self.config.checked_protocol()?;
         let deadline = Instant::now() + Duration::from_secs(self.config.timeout_seconds);
+        let PreparedRequest {
+            schema,
+            mut content,
+            mut body,
+        } = self.prepare_request(request, protocol)?;
+        let mut failure = "invalid JSON";
+        for attempt in 0..protocol.max_attempts {
+            check_cancelled(cancelled)?;
+            remaining(deadline)?;
+            if attempt > 0 {
+                content.push(json!({"type":"text", "text":format!(
+                    "The previous response failed: {failure}. Correct it. Return only JSON matching the supplied schema and all requested IDs, media evidence and time/score bounds."
+                )}));
+                body = self.payload_body(request, protocol, &content)?;
+            }
+            let text = self.post(&body, protocol, deadline, cancelled)?;
+            check_cancelled(cancelled)?;
+            let value: Value = match serde_json::from_str(&text) {
+                Ok(value) => value,
+                Err(_) => {
+                    failure = "invalid JSON";
+                    continue;
+                }
+            };
+            self.reject_secret(&value)?;
+            if !schema.is_valid(&value) {
+                failure = "JSON Schema violation";
+                continue;
+            }
+            match validate(&value) {
+                Ok(result) => {
+                    check_cancelled(cancelled)?;
+                    remaining(deadline)?;
+                    return Ok(result);
+                }
+                Err(_) => {
+                    failure = "application contract violation";
+                }
+            }
+        }
+        check_cancelled(cancelled)?;
+        bail!(
+            "inference validation failed after {} attempts: {failure}",
+            protocol.max_attempts
+        )
+    }
+
+    fn prepare_request(
+        &self,
+        request: &JsonRequest,
+        protocol: &ProtocolConfig,
+    ) -> Result<PreparedRequest> {
         ensure!(
             !request.prompt.trim().is_empty(),
             "inference prompt must not be blank"
@@ -171,71 +358,54 @@ impl OpenAiClient {
             .should_validate_formats(true)
             .build(&request.schema)
             .map_err(|_| anyhow!("invalid or nonlocal inference JSON Schema"))?;
-        let mut content = self.content(request, protocol)?;
-        let mut failure = "invalid JSON";
-        for attempt in 0..protocol.max_attempts {
-            remaining(deadline)?;
-            if attempt > 0 {
-                content.push(json!({"type":"text", "text":format!(
-                    "The previous response failed: {failure}. Correct it. Return only JSON matching the supplied schema and all requested IDs, media evidence and time/score bounds."
-                )}));
+        let content = self.content(request, protocol)?;
+        let body = self.payload_body(request, protocol, &content)?;
+        self.post_request(self.completion_url()?, Vec::new())
+            .build()
+            .map_err(|_| anyhow!("invalid inference HTTP request"))?;
+        Ok(PreparedRequest {
+            schema,
+            content,
+            body,
+        })
+    }
+
+    fn payload_body(
+        &self,
+        request: &JsonRequest,
+        protocol: &ProtocolConfig,
+        content: &[Value],
+    ) -> Result<Vec<u8>> {
+        let mut payload = json!({
+            "model":self.config.model, "stream":false, "max_tokens":protocol.max_output_tokens,
+            "messages":[{"role":"user","content":content}]
+        });
+        match protocol.reasoning_format {
+            ReasoningFormat::ReasoningEffort => {
+                payload["reasoning_effort"] = json!(self.config.inference_level.to_string());
             }
-            let mut payload = json!({
-                "model":self.config.model, "stream":false, "max_tokens":protocol.max_output_tokens,
-                "messages":[{"role":"user","content":content}]
-            });
-            match protocol.reasoning_format {
-                ReasoningFormat::ReasoningEffort => {
-                    payload["reasoning_effort"] = json!(self.config.inference_level.to_string());
-                }
-                ReasoningFormat::ChatTemplate => {
-                    payload["chat_template_kwargs"] = if self.config.inference_level
-                        == InferenceLevel::None
-                    {
-                        json!({"enable_thinking":false})
-                    } else {
-                        json!({"enable_thinking":true,"reasoning_effort":self.config.inference_level.to_string()})
-                    };
-                }
-            }
-            if protocol.json_schema {
-                payload["response_format"] = json!({"type":"json_schema", "json_schema":{
-                    "name":"response", "strict":true, "schema":request.schema
-                }});
-            }
-            let body = serde_json::to_vec(&payload)
-                .map_err(|_| anyhow!("cannot encode inference request"))?;
-            ensure!(
-                body.len() as u64 <= protocol.max_request_bytes,
-                "inference request exceeds byte limit"
-            );
-            let text = self.post(&body, protocol, deadline)?;
-            let value: Value = match serde_json::from_str(&text) {
-                Ok(value) => value,
-                Err(_) => {
-                    failure = "invalid JSON";
-                    continue;
-                }
-            };
-            self.reject_secret(&value)?;
-            if !schema.is_valid(&value) {
-                failure = "JSON Schema violation";
-                continue;
-            }
-            match validate(&value) {
-                Ok(result) => {
-                    remaining(deadline)?;
-                    return Ok(result);
-                }
-                Err(_) => {
-                    failure = "application contract violation";
-                }
+            ReasoningFormat::ChatTemplate => {
+                payload["chat_template_kwargs"] = if self.config.inference_level
+                    == InferenceLevel::None
+                {
+                    json!({"enable_thinking":false})
+                } else {
+                    json!({"enable_thinking":true,"reasoning_effort":self.config.inference_level.to_string()})
+                };
             }
         }
-        bail!(
-            "inference validation failed after {} attempts: {failure}",
-            protocol.max_attempts
-        )
+        if protocol.json_schema {
+            payload["response_format"] = json!({"type":"json_schema", "json_schema":{
+                "name":"response", "strict":true, "schema":request.schema
+            }});
+        }
+        let body =
+            serde_json::to_vec(&payload).map_err(|_| anyhow!("cannot encode inference request"))?;
+        ensure!(
+            body.len() as u64 <= protocol.max_request_bytes,
+            "inference request exceeds byte limit"
+        );
+        Ok(body)
     }
 
     fn content(&self, request: &JsonRequest, protocol: &ProtocolConfig) -> Result<Vec<Value>> {
@@ -308,30 +478,41 @@ impl OpenAiClient {
         Ok(parts)
     }
 
-    fn post(&self, body: &[u8], protocol: &ProtocolConfig, deadline: Instant) -> Result<String> {
+    fn completion_url(&self) -> Result<url::Url> {
         let mut url = self.config.base_url.clone();
         url.path_segments_mut()
             .map_err(|_| anyhow!("invalid inference service path"))?
             .pop_if_empty()
             .push("chat")
             .push("completions");
+        Ok(url)
+    }
+
+    fn post_request(&self, url: url::Url, body: Vec<u8>) -> reqwest::RequestBuilder {
+        let mut request = self
+            .http
+            .post(url)
+            .header(CONTENT_TYPE, "application/json")
+            .body(body);
+        if let Some(auth) = &self.authorization {
+            request = request.header(AUTHORIZATION, auth);
+        }
+        request
+    }
+
+    fn post(
+        &self,
+        body: &[u8],
+        protocol: &ProtocolConfig,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<String> {
+        let mut url = self.completion_url()?;
         for redirect in 0..=3 {
-            let mut request = self
-                .http
-                .post(url.clone())
-                .timeout(remaining(deadline)?)
-                .header(CONTENT_TYPE, "application/json")
-                .body(body.to_owned());
-            if let Some(auth) = &self.authorization {
-                request = request.header(AUTHORIZATION, auth);
-            }
-            let response = request.send().map_err(|error| {
-                if error.is_timeout() {
-                    anyhow!("inference HTTP deadline exceeded")
-                } else {
-                    anyhow!("inference HTTP request failed")
-                }
-            })?;
+            let request = self
+                .post_request(url.clone(), body.to_owned())
+                .timeout(remaining(deadline)?);
+            let response = self.http.send(request, deadline, cancelled, "inference")?;
             let status = response.status();
             if status.is_redirection() {
                 ensure!(
@@ -377,11 +558,14 @@ impl OpenAiClient {
                     .is_none_or(|n| n <= protocol.max_response_bytes),
                 "inference response exceeds byte limit"
             );
-            let mut bytes = Vec::new();
-            response
-                .take(protocol.max_response_bytes + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| anyhow!("inference response body failed or deadline exceeded"))?;
+            let bytes = self.http.read_body(
+                response,
+                protocol.max_response_bytes,
+                deadline,
+                cancelled,
+                "inference",
+            )?;
+            check_cancelled(cancelled)?;
             remaining(deadline)?;
             ensure!(
                 bytes.len() as u64 <= protocol.max_response_bytes,

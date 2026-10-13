@@ -22,7 +22,7 @@ use crate::selection::{
     validate_assessments,
 };
 
-const ASSESSMENT_BATCH: usize = 12;
+pub const ASSESSMENT_BATCH: usize = 12;
 
 struct SelectedJpegWriter {
     file: BufWriter<File>,
@@ -211,7 +211,13 @@ pub fn run(
         sources.iter().collect::<BTreeSet<_>>().len() == sources.len(),
         "video source filenames must be unique"
     );
-    let plans = initial_plans(videos, &sources, options, cancelled)?;
+    let plans = initial_plans(
+        videos,
+        &sources,
+        options.semantic_events.as_deref(),
+        options.samples_per_video,
+        cancelled,
+    )?;
     let directory = tempfile::Builder::new()
         .prefix("game-screen-pick-selection-")
         .tempdir()
@@ -312,6 +318,10 @@ pub fn run(
 
 fn validate_options(videos: &[Video], options: &PipelineOptions) -> Result<()> {
     validate_parameters(options)?;
+    validate_videos(videos)
+}
+
+fn validate_videos(videos: &[Video]) -> Result<()> {
     ensure!(
         !videos.is_empty() && videos.len() <= MAX_CANDIDATES,
         "video count must be within 1..={MAX_CANDIDATES}"
@@ -340,10 +350,7 @@ pub(crate) fn validate_parameters(options: &PipelineOptions) -> Result<()> {
         (1..=999).contains(&options.count),
         "selected count must be within 1..=999"
     );
-    ensure!(
-        (1..=MAX_CANDIDATES).contains(&options.samples_per_video),
-        "sample count must be within 1..={MAX_CANDIDATES}"
-    );
+    validate_sample_count(options.samples_per_video)?;
     ensure!(
         options.context_delta_seconds.is_finite() && options.context_delta_seconds > 0.0,
         "context interval must be finite and positive"
@@ -356,6 +363,30 @@ pub(crate) fn validate_parameters(options: &PipelineOptions) -> Result<()> {
             .is_none_or(|context| !context.trim().is_empty()),
         "persisted game context must not be blank"
     );
+    Ok(())
+}
+
+fn validate_sample_count(samples_per_video: usize) -> Result<()> {
+    ensure!(
+        (1..=MAX_CANDIDATES).contains(&samples_per_video),
+        "sample count must be within 1..={MAX_CANDIDATES}"
+    );
+    Ok(())
+}
+
+/// Check the real initial sampling budget before search or context generation.
+/// This shares the exact first-grid-request/actual-frame deduplication used by
+/// selection, and does not require model options, decode frames or perform I/O.
+pub(crate) fn preflight_sampled_plans(
+    videos: &[Video],
+    samples_per_video: usize,
+    cancelled: &AtomicBool,
+) -> Result<()> {
+    check_cancelled(cancelled)?;
+    validate_sample_count(samples_per_video)?;
+    validate_videos(videos)?;
+    // Source labels are needed only when indexing semantic events.
+    initial_plans(videos, &[], None, samples_per_video, cancelled)?;
     Ok(())
 }
 
@@ -438,15 +469,11 @@ fn index_events<'a>(
 fn initial_plans<'a>(
     videos: &[Video],
     sources: &[String],
-    options: &'a PipelineOptions,
+    semantic_events: Option<&'a [SemanticEvent]>,
+    samples_per_video: usize,
     cancelled: &AtomicBool,
 ) -> Result<InitialPlans<'a>> {
-    let events = index_events(
-        videos,
-        sources,
-        options.semantic_events.as_deref(),
-        cancelled,
-    )?;
+    let events = index_events(videos, sources, semantic_events, cancelled)?;
     let mut plans = vec![Vec::new(); videos.len()];
     let mut planned = vec![BTreeSet::new(); videos.len()];
     let mut total = 0;
@@ -473,7 +500,7 @@ fn initial_plans<'a>(
         }
     } else {
         for (source, video) in videos.iter().enumerate() {
-            for seconds in sampled_requests(video, options.samples_per_video) {
+            for seconds in sampled_requests(video, samples_per_video) {
                 add(source, seconds)?;
             }
         }
@@ -1243,11 +1270,11 @@ mod tests {
                     })
                     .map(f64::to_bits)
                     .collect::<Vec<_>>();
-                let options = options(count);
                 let plans = initial_plans(
                     std::slice::from_ref(&video),
                     &["synthetic.mkv".to_owned()],
-                    &options,
+                    None,
+                    count,
                     &AtomicBool::new(false),
                 )
                 .unwrap();
@@ -1273,11 +1300,11 @@ mod tests {
             video(&times, MAX_CANDIDATES as f64 * 0.25),
             video(&times, MAX_CANDIDATES as f64 * 0.25),
         ];
-        let sampling_options = options(MAX_CANDIDATES);
         let result = initial_plans(
             &videos,
             &["one.mkv".to_owned(), "two.mkv".to_owned()],
-            &sampling_options,
+            None,
+            MAX_CANDIDATES,
             &AtomicBool::new(false),
         );
         assert!(
@@ -1312,7 +1339,8 @@ mod tests {
         let error = initial_plans(
             &videos,
             &["synthetic.mkv".to_owned()],
-            &options,
+            options.semantic_events.as_deref(),
+            options.samples_per_video,
             &AtomicBool::new(false),
         )
         .unwrap_err();
@@ -1336,13 +1364,96 @@ mod tests {
                 video
             })
             .collect::<Vec<_>>();
-        let options = options(MAX_CANDIDATES);
-        let plans = initial_plans(&videos, &sources, &options, &AtomicBool::new(false)).unwrap();
+        preflight_sampled_plans(&videos, MAX_CANDIDATES, &AtomicBool::new(false)).unwrap();
+        let plans = initial_plans(
+            &videos,
+            &sources,
+            None,
+            MAX_CANDIDATES,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(plans.positions.len(), MAX_CANDIDATES);
         assert!(
             plans.positions.iter().all(|plan| plan == &[0.0]),
             "4096 samples for each of 4096 one-frame sources must retain only 4096 first requests, without materializing the 16M duplicate grid"
         );
+    }
+
+    #[test]
+    fn sampled_preflight_shares_the_exact_global_actual_frame_boundary() {
+        let times = (0..MAX_CANDIDATES / 2)
+            .map(|index| index as f64 * 0.25)
+            .collect::<Vec<_>>();
+        let duration = MAX_CANDIDATES as f64 / 2.0 * 0.25;
+        let mut videos = vec![video(&times, duration), video(&times, duration)];
+        videos[0].source = "one.mkv".into();
+        videos[1].source = "two.mkv".into();
+        let cancelled = AtomicBool::new(false);
+        preflight_sampled_plans(&videos, MAX_CANDIDATES, &cancelled).unwrap();
+        let plans = initial_plans(&videos, &[], None, MAX_CANDIDATES, &cancelled).unwrap();
+        assert_eq!(
+            plans.positions.iter().map(Vec::len).sum::<usize>(),
+            MAX_CANDIDATES
+        );
+        let mut extra = video(&[0.0], 0.25);
+        extra.source = "extra.mkv".into();
+        videos.push(extra);
+        let error = preflight_sampled_plans(&videos, MAX_CANDIDATES, &cancelled).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("4096 actual-frame candidate limit")
+        );
+    }
+
+    #[test]
+    fn sampled_preflight_does_not_count_dense_grid_requests_twice_in_vfr_gaps() {
+        let mut videos = [
+            video(&[0.0, 0.25, 10.0, 11.0, 12.0], 12.25),
+            video(&[0.0, 0.25, 10.0, 11.0, 12.0], 12.25),
+        ];
+        videos[0].source = "one.mkv".into();
+        videos[1].source = "two.mkv".into();
+        let cancelled = AtomicBool::new(false);
+        // 8192 grid requests resolve to only ten actual frames across sources.
+        preflight_sampled_plans(&videos, MAX_CANDIDATES, &cancelled).unwrap();
+        let plans = initial_plans(&videos, &[], None, MAX_CANDIDATES, &cancelled).unwrap();
+        assert_eq!(plans.positions.iter().map(Vec::len).sum::<usize>(), 10);
+        for (video, positions) in videos.iter().zip(plans.positions) {
+            let ordinals: BTreeSet<_> = positions
+                .iter()
+                .map(|seconds| frame_ordinal(video, *seconds))
+                .collect();
+            assert_eq!(ordinals.len(), positions.len());
+        }
+    }
+
+    #[test]
+    fn sampled_preflight_rejects_invalid_inputs_and_observes_cancellation() {
+        let cancelled = AtomicBool::new(false);
+        assert!(preflight_sampled_plans(&[], 1, &cancelled).is_err());
+        for samples in [0, MAX_CANDIDATES + 1] {
+            assert!(preflight_sampled_plans(&[video(&[0.0], 0.25)], samples, &cancelled).is_err());
+        }
+        for invalid in [
+            video(&[], 0.25),
+            video(&[0.0], 0.0),
+            video(&[0.0], f64::NAN),
+            Video {
+                width: 0,
+                ..video(&[0.0], 0.25)
+            },
+            Video {
+                height: MAX_IMAGE_EDGE + 1,
+                ..video(&[0.0], 0.25)
+            },
+        ] {
+            assert!(preflight_sampled_plans(&[invalid], 1, &cancelled).is_err());
+        }
+        cancelled.store(true, Ordering::Relaxed);
+        let error = preflight_sampled_plans(&[video(&[0.0], 0.25)], 1, &cancelled).unwrap_err();
+        assert!(error.downcast_ref::<Interrupted>().is_some());
     }
 
     #[test]
