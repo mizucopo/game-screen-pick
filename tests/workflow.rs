@@ -482,12 +482,35 @@ fn probed_frames_outside_model_limits_fail_before_title_calls() {
             let ai = ai();
             let brave = brave();
             setup(root.path(), &ai, &brave, method, true);
+            let made = Command::new("ffmpeg")
+                .args([
+                    "-v",
+                    "error",
+                    "-nostdin",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=red:s=1536x256:r=24",
+                    "-frames:v",
+                    "6",
+                    "-c:v",
+                    "ffv1",
+                ])
+                .arg(root.path().join("input/blocks.mkv"))
+                .output()
+                .unwrap();
+            assert!(
+                made.status.success(),
+                "{}",
+                String::from_utf8_lossy(&made.stderr)
+            );
             let config = root.path().join("config.toml");
             let source = fs::read_to_string(&config).unwrap();
             let source = match failure {
-                "edge" => source.replace("max_image_edge = 16384", "max_image_edge = 159"),
+                "edge" => source.replace("max_image_edge = 16384", "max_image_edge = 1535"),
                 "pixels" => {
-                    source.replace("max_image_pixels = 32000000", "max_image_pixels = 15359")
+                    source.replace("max_image_pixels = 32000000", "max_image_pixels = 393215")
                 }
                 _ => unreachable!(),
             };
@@ -498,6 +521,54 @@ fn probed_frames_outside_model_limits_fail_before_title_calls() {
             assert_eq!((ai.calls(), brave.calls()), (0, 0));
             assert!(!root.path().join("output").exists());
         }
+    }
+}
+
+#[test]
+fn impossible_contact_sheet_limits_fail_before_probe_or_title_calls() {
+    for method in ["sampled_frames", "semantic_video"] {
+        let root = tempfile::tempdir().unwrap();
+        let ai = ai();
+        let brave = brave();
+        setup(root.path(), &ai, &brave, method, true);
+        let config = root.path().join("config.toml");
+        let source = fs::read_to_string(&config)
+            .unwrap()
+            .replace("max_image_edge = 16384", "max_image_edge = 200");
+        fs::write(&config, source).unwrap();
+        let rejected = invoke(root.path(), true, false, true);
+        assert_eq!(rejected.status.code(), Some(1));
+        let diagnostic = String::from_utf8_lossy(&rejected.stderr);
+        assert!(
+            diagnostic.contains("candidate contact sheet"),
+            "{diagnostic}"
+        );
+        assert!(!diagnostic.contains("FFprobe"));
+        assert_eq!((ai.calls(), brave.calls()), (0, 0));
+    }
+}
+
+#[test]
+fn fixed_selection_request_budget_fails_before_media_or_runtime() {
+    for method in ["sampled_frames", "semantic_video"] {
+        let root = tempfile::tempdir().unwrap();
+        let ai = ai();
+        let brave = brave();
+        setup(root.path(), &ai, &brave, method, true);
+        let config = root.path().join("config.toml");
+        let source = fs::read_to_string(&config)
+            .unwrap()
+            .replace("max_request_bytes = 33554432", "max_request_bytes = 1024");
+        fs::write(&config, format!("{source}\n[runtime]\nbackend = \"vllm\"\nstart_command = [\"/missing/runtime-start\", \"{{session}}\"]\nstop_command = [\"/missing/runtime-stop\", \"{{pid}}\", \"{{session}}\"]\n")).unwrap();
+        let rejected = invoke(root.path(), false, false, true);
+        assert_eq!(rejected.status.code(), Some(1));
+        let diagnostic = String::from_utf8_lossy(&rejected.stderr);
+        assert!(
+            diagnostic.contains("selection request exceeds configured byte limit"),
+            "{diagnostic}"
+        );
+        assert!(!diagnostic.contains("FFprobe") && !diagnostic.contains("runtime command"));
+        assert_eq!((ai.calls(), brave.calls()), (0, 0));
     }
 }
 

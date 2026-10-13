@@ -143,6 +143,10 @@ pub fn run(
         if let Some(outcome) = session.prepare_workflow(effective, cancelled)? {
             return Ok(outcome);
         }
+        crate::contact_sheet::validate_candidate_sheet_limits(
+            media.max_image_edge,
+            media.max_image_pixels,
+        )?;
         let mut title_geometry = None;
         let (resolved, persist) = match game {
             GameInput::Context(text) => {
@@ -167,6 +171,8 @@ pub fn run(
                     search.persist_context(), cancelled, |session| {
                         check_cancelled(cancelled)?;
                         ensure!(!cache_only, "cache-only: generated Game Context checkpoint is missing or persistence is disabled");
+                        crate::inference::preflight_selection("", semantic, protocol.max_request_bytes)
+                            .context("selection request exceeds configured byte limit")?;
                         let search_client = BraveClient::new(search)?;
                         inference.validate_transport()?;
                         brave::preflight_context(inference.client.as_ref().expect("validated transport"), title)?;
@@ -184,6 +190,12 @@ pub fn run(
                 (context, search.persist_context())
             }
         };
+        crate::inference::preflight_selection(
+            resolved.text(),
+            semantic,
+            protocol.max_request_bytes,
+        )
+        .context("selection request exceeds configured byte limit")?;
         let conditions = config.ai.cache_conditions(
             &prompt_revision,
             &schema_revision,

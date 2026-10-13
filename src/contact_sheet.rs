@@ -13,6 +13,8 @@ use image::{ExtendedColorType, Rgb, RgbImage};
 use crate::quality::{MAX_IMAGE_BYTES, MAX_SELECTED_JPEG_BYTES, read_image_with_limit};
 
 const PAGE_SIZE: usize = 12;
+const CANDIDATE_THUMBNAIL_WIDTH: u32 = 320;
+const CANDIDATE_COLUMNS: u32 = 3;
 const MAX_ENTRIES: usize = 999;
 pub(crate) const MAX_SHEET_PIXELS: u64 = 200_000_000;
 const BORDER: u32 = 12;
@@ -53,7 +55,14 @@ pub fn render_candidate_sheets(entries: &[SheetEntry], scratch: &Path) -> Result
     let mut paths = Vec::new();
     for (page, entries) in entries.chunks(PAGE_SIZE).enumerate() {
         let path = scratch.join(format!("candidate-contact-sheet-{:02}.jpg", page + 1));
-        render(entries, &path, font, 320, 3, true)?;
+        render(
+            entries,
+            &path,
+            font,
+            CANDIDATE_THUMBNAIL_WIDTH,
+            CANDIDATE_COLUMNS,
+            true,
+        )?;
         paths.push(path);
     }
     Ok(paths)
@@ -77,6 +86,58 @@ pub fn render_selected_sheet(entries: &[SheetEntry], scratch: &Path) -> Result<P
     let path = scratch.join("selected-contact-sheet.jpg");
     render(&ordered, &path, font, width, columns, false)?;
     Ok(path)
+}
+
+/// Pure lower bound for both required assessment phases with one candidate.
+/// Secondary review requires the context strip. Font metrics and wrapped labels
+/// add height, so exclude their unknown size rather than assume a maximum page.
+pub(crate) fn minimum_candidate_sheet_geometry() -> (u32, u32) {
+    let width = canvas_width(cell_width(CANDIDATE_THUMBNAIL_WIDTH), 1);
+    let main_height = thumbnail_height(CANDIDATE_THUMBNAIL_WIDTH);
+    let primary = card_height(main_height, 0, 0);
+    let secondary = card_height(
+        main_height,
+        0,
+        context_height(
+            thumbnail_height(context_thumbnail_width(CANDIDATE_THUMBNAIL_WIDTH)),
+            0,
+        ),
+    );
+    let height = canvas_height(&[primary.max(secondary)]);
+    (width, height)
+}
+
+/// Reject only limits that cannot hold even the geometric minimum of one card.
+/// Actual rendered pages still require their usual image geometry validation.
+pub(crate) fn validate_candidate_sheet_limits(edge: u32, pixels: u64) -> Result<()> {
+    let (width, height) = minimum_candidate_sheet_geometry();
+    ensure!(
+        edge >= width.max(height) && pixels >= u64::from(width) * u64::from(height),
+        "configured vision limits cannot fit even one candidate contact sheet"
+    );
+    Ok(())
+}
+
+fn cell_width(thumbnail_width: u32) -> u32 {
+    thumbnail_width + 2 * BORDER
+}
+fn thumbnail_height(thumbnail_width: u32) -> u32 {
+    thumbnail_width * 9 / 16
+}
+fn context_thumbnail_width(thumbnail_width: u32) -> u32 {
+    (thumbnail_width - 2 * GAP) / 3
+}
+fn context_height(thumbnail_height: u32, labels_height: u32) -> u32 {
+    thumbnail_height + labels_height + GAP
+}
+fn card_height(thumbnail_height: u32, labels_height: u32, context_height: u32) -> u32 {
+    thumbnail_height + labels_height + context_height + GAP + 2 * BORDER
+}
+fn canvas_width(cell_width: u32, columns: u32) -> u32 {
+    columns * cell_width + (columns + 1) * GAP
+}
+fn canvas_height(row_heights: &[u32]) -> u32 {
+    row_heights.iter().sum::<u32>() + (row_heights.len() as u32 + 1) * GAP
 }
 
 fn prepare_directory(path: &Path) -> Result<()> {
@@ -197,10 +258,10 @@ impl Layout {
         let font_size = if width >= 320 { 16.0 } else { 14.0 };
         Self {
             thumbnail_width: width,
-            thumbnail_height: width * 9 / 16,
+            thumbnail_height: thumbnail_height(width),
             font_size,
             line_height: 0,
-            cell_width: width + 2 * BORDER,
+            cell_width: cell_width(width),
         }
         .with_font_size(font, font_size)
     }
@@ -251,7 +312,7 @@ impl Labels {
                             format_seconds(frames[index].actual_seconds)
                         ),
                         14.0,
-                        (layout.thumbnail_width - 2 * GAP) / 3,
+                        context_thumbnail_width(layout.thumbnail_width),
                         usize::MAX,
                     )
                 })
@@ -285,15 +346,16 @@ impl Labels {
 
     fn height(&self, layout: Layout, context_layout: Layout) -> u32 {
         let context_height = self.context.as_ref().map_or(0, |labels| {
-            context_layout.thumbnail_height
-                + labels.iter().map(Vec::len).max().unwrap_or(1) as u32 * context_layout.line_height
-                + GAP
+            context_height(
+                context_layout.thumbnail_height,
+                labels.iter().map(Vec::len).max().unwrap_or(1) as u32 * context_layout.line_height,
+            )
         });
-        (self.heading.len() as u32 + self.lower_lines()) * layout.line_height
-            + layout.thumbnail_height
-            + context_height
-            + GAP
-            + 2 * BORDER
+        card_height(
+            layout.thumbnail_height,
+            (self.heading.len() as u32 + self.lower_lines()) * layout.line_height,
+            context_height,
+        )
     }
 }
 
@@ -319,7 +381,7 @@ fn sheet_layout(
     show_context: bool,
 ) -> Result<SheetLayout> {
     let main = Layout::new(width, font);
-    let context = Layout::new((width - 2 * GAP) / 3, font);
+    let context = Layout::new(context_thumbnail_width(width), font);
     let prepare = |main: Layout| {
         let labels = entries
             .iter()
@@ -359,8 +421,8 @@ fn grid(labels: &[Labels], layout: Layout, context_layout: Layout, columns: u32)
                     .unwrap_or(0)
             })
             .collect::<Vec<_>>();
-        let width = columns * layout.cell_width + (columns + 1) * GAP;
-        let height = row_heights.iter().sum::<u32>() + (row_heights.len() as u32 + 1) * GAP;
+        let width = canvas_width(layout.cell_width, columns);
+        let height = canvas_height(&row_heights);
         if height <= 65_535 {
             ensure!(
                 width <= 65_535 && u64::from(width) * u64::from(height) <= MAX_SHEET_PIXELS,
@@ -601,6 +663,62 @@ fn draw_wrapped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn candidate_geometry_lower_bound_matches_one_card_layout_width() {
+        let mut entry = SheetEntry {
+            id: "c000001".to_owned(),
+            rank: None,
+            source: "input.mp4".to_owned(),
+            requested_seconds: 0.0,
+            actual_seconds: 0.0,
+            scene: String::new(),
+            image: PathBuf::new(),
+            context: None,
+        };
+        let prepared = sheet_layout(
+            &[entry.clone()],
+            font().unwrap(),
+            CANDIDATE_THUMBNAIL_WIDTH,
+            CANDIDATE_COLUMNS,
+            true,
+        )
+        .unwrap();
+        let (width, height) = minimum_candidate_sheet_geometry();
+        assert_eq!(width, prepared.grid.width);
+        // The bundled font's primary labels add height beyond the pure bound.
+        assert!(height <= prepared.grid.height);
+        assert!(
+            u64::from(width) * u64::from(height)
+                <= u64::from(prepared.grid.width) * u64::from(prepared.grid.height)
+        );
+        entry.context = Some(std::array::from_fn(|_| ContextImage {
+            image: PathBuf::new(),
+            actual_seconds: 0.0,
+        }));
+        let secondary = sheet_layout(
+            &[entry],
+            font().unwrap(),
+            CANDIDATE_THUMBNAIL_WIDTH,
+            CANDIDATE_COLUMNS,
+            true,
+        )
+        .unwrap();
+        assert_eq!(width, secondary.grid.width);
+        assert!(height <= secondary.grid.height);
+        assert!(secondary.grid.height > prepared.grid.height);
+    }
+
+    #[test]
+    fn candidate_sheet_limits_reject_only_below_the_pure_geometry_boundary() {
+        let (width, height) = minimum_candidate_sheet_geometry();
+        let edge = width.max(height);
+        let pixels = u64::from(width) * u64::from(height);
+        assert!(validate_candidate_sheet_limits(edge - 1, pixels).is_err());
+        assert!(validate_candidate_sheet_limits(edge, pixels - 1).is_err());
+        validate_candidate_sheet_limits(edge, pixels).unwrap();
+        assert!(validate_candidate_sheet_limits(200, u64::MAX).is_err());
+    }
 
     #[test]
     fn japanese_glyphs_and_wrapping_fit_the_label_box() {

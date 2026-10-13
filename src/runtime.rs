@@ -278,7 +278,7 @@ impl RuntimeManager {
                     &mut cancellation_deadline,
                     "runtime cleanup command deadline exceeded",
                 )?;
-                if let Some(status) = stop.try_wait()? {
+                if let Some(status) = stop.exit_status()? {
                     ensure!(
                         status.success(),
                         "runtime cleanup command failed (diagnostics withheld)"
@@ -333,20 +333,13 @@ impl OwnedChild {
         }
     }
 
-    fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>> {
-        let status = self
-            .child
-            .try_wait()
-            .map_err(|_| anyhow!("cannot wait for runtime command"))?;
-        self.reaped |= status.is_some();
-        Ok(status)
-    }
-
-    fn has_exited(&mut self) -> Result<bool> {
+    fn exit_status(&mut self) -> Result<Option<std::process::ExitStatus>> {
         #[cfg(unix)]
         {
-            // WNOWAIT keeps an exited start process unreaped until cleanup, so
-            // its PID cannot be reused while the stop command is targeting it.
+            use std::os::unix::process::ExitStatusExt;
+            // Keep both start and stop leaders unreaped until their whole owned
+            // group is terminated. A wrapper may exit before its descendants;
+            // WNOWAIT reserves the PID so cleanup cannot target a reused group.
             let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
             let result = unsafe {
                 libc::waitid(
@@ -356,13 +349,32 @@ impl OwnedChild {
                     libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
                 )
             };
-            ensure!(result == 0, "cannot inspect runtime foreground process");
-            Ok(unsafe { info.si_pid() } != 0)
+            ensure!(result == 0, "cannot inspect runtime command");
+            if unsafe { info.si_pid() } == 0 {
+                return Ok(None);
+            }
+            let status = unsafe { info.si_status() };
+            let raw = match info.si_code {
+                libc::CLD_EXITED => status << 8,
+                libc::CLD_KILLED => status,
+                libc::CLD_DUMPED => status | 0x80,
+                _ => return Err(anyhow!("invalid runtime command exit status")),
+            };
+            Ok(Some(std::process::ExitStatus::from_raw(raw)))
         }
         #[cfg(not(unix))]
         {
-            Ok(self.try_wait()?.is_some())
+            let status = self
+                .child
+                .try_wait()
+                .map_err(|_| anyhow!("cannot wait for runtime command"))?;
+            self.reaped |= status.is_some();
+            Ok(status)
         }
+    }
+
+    fn has_exited(&mut self) -> Result<bool> {
+        Ok(self.exit_status()?.is_some())
     }
 }
 

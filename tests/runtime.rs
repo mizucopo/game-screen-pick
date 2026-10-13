@@ -500,6 +500,13 @@ fn recorded_pid(path: &Path) -> libc::pid_t {
 }
 
 fn assert_process_group_gone(pid: libc::pid_t) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while (unsafe { libc::kill(pid, 0) } == 0 || unsafe { libc::kill(-pid, 0) } == 0)
+        && Instant::now() < deadline
+    {
+        // Orphaned descendants are reaped asynchronously by the OS init process.
+        thread::sleep(Duration::from_millis(5));
+    }
     assert_eq!(
         unsafe { libc::kill(pid, 0) },
         -1,
@@ -510,6 +517,122 @@ fn assert_process_group_gone(pid: libc::pid_t) {
         -1,
         "owned process group must be gone"
     );
+}
+
+fn forking_stop_scripts(exit_code: u8, stops_runtime: bool) -> (Scripts, PathBuf, PathBuf) {
+    let mut scripts = Scripts::new("exec sleep 60", "exit 0");
+    let stop_pid = scripts._directory.path().join("stop-pid");
+    let helper_pid = scripts._directory.path().join("helper-pid");
+    let fork = if stops_runtime {
+        "(sleep 0.2; kill -TERM \"$1\"; exec sleep 60) &"
+    } else {
+        "sleep 60 &"
+    };
+    scripts.config.stop_command[0] = script(
+        scripts._directory.path(),
+        "forking-stop",
+        &format!(
+            "test \"$2\" = \"$GAME_SCREEN_PICK_RUNTIME_SESSION\"\nprintf '%s\\n%s\\n' \"$1\" \"$2\" > {}\nprintf '%s\\n' \"$$\" > {}\n{fork}\nprintf '%s\\n' \"$!\" > {}\nexit {exit_code}",
+            quote(&scripts.stopped),
+            quote(&stop_pid),
+            quote(&helper_pid)
+        ),
+    );
+    (scripts, stop_pid, helper_pid)
+}
+
+fn assert_forked_stop_gone(stop_pid: &Path, helper_pid: &Path) {
+    assert_process_group_gone(recorded_pid(stop_pid));
+    assert_eq!(
+        unsafe { libc::kill(recorded_pid(helper_pid), 0) },
+        -1,
+        "owned stop descendant must be terminated"
+    );
+}
+
+#[test]
+fn failed_stop_wrapper_exit_preserves_status_and_terminates_background_descendant() {
+    let (scripts, stop_pid, helper_pid) = forking_stop_scripts(8, false);
+    let mock = scripts.mock();
+    let ai = ai_config(&mock.url);
+    let client = OpenAiClient::new(&ai).unwrap();
+    let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+    runtime
+        .ensure_ready(&client, &AtomicBool::new(false))
+        .unwrap();
+    let completion = runtime.finish(Err::<(), _>(anyhow!("primary inference failure")));
+    assert_eq!(
+        completion.result.unwrap_err().to_string(),
+        "primary inference failure"
+    );
+    let cleanup = completion.cleanup_error.unwrap();
+    assert_eq!(
+        cleanup.to_string(),
+        "runtime cleanup command failed (diagnostics withheld)"
+    );
+    scripts.assert_stopped();
+    assert_forked_stop_gone(&stop_pid, &helper_pid);
+}
+
+#[test]
+fn successful_stop_wrapper_exit_keeps_group_owned_until_cancelled_runtime_wait() {
+    let (mut scripts, stop_pid, helper_pid) = forking_stop_scripts(0, false);
+    scripts.config.command_timeout_seconds = 300;
+    let mock = scripts.mock();
+    let ai = ai_config(&mock.url);
+    let client = OpenAiClient::new(&ai).unwrap();
+    let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+    runtime
+        .ensure_ready(&client, &AtomicBool::new(false))
+        .unwrap();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancellation = cancelled.clone();
+    let descendant = helper_pid.clone();
+    let worker = thread::spawn(move || {
+        let pid = recorded_pid(&descendant);
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "successful stop wrapper's helper may continue while runtime is running"
+        );
+        cancellation.store(true, Ordering::Relaxed);
+    });
+    let started = Instant::now();
+    let completion =
+        runtime.finish_cancellable(Err::<(), _>(anyhow!("primary failure")), &cancelled);
+    worker.join().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(
+        completion.result.unwrap_err().to_string(),
+        "primary failure"
+    );
+    assert!(
+        completion
+            .cleanup_error
+            .unwrap()
+            .is::<game_screen_pick::media::Interrupted>()
+    );
+    scripts.assert_stopped();
+    assert_forked_stop_gone(&stop_pid, &helper_pid);
+}
+
+#[test]
+fn successful_stop_background_helper_can_shutdown_runtime_before_group_cleanup() {
+    let (mut scripts, stop_pid, helper_pid) = forking_stop_scripts(0, true);
+    scripts.config.command_timeout_seconds = 3;
+    let mock = scripts.mock();
+    let ai = ai_config(&mock.url);
+    let client = OpenAiClient::new(&ai).unwrap();
+    let mut runtime = RuntimeManager::new(Some(&scripts.config), &ai).unwrap();
+    runtime
+        .ensure_ready(&client, &AtomicBool::new(false))
+        .unwrap();
+    let completion = runtime.finish(Ok(42));
+    assert_eq!(completion.result.unwrap(), 42);
+    assert!(completion.cleanup_error.is_none());
+    scripts.assert_stopped();
+    assert_forked_stop_gone(&stop_pid, &helper_pid);
 }
 
 #[test]
