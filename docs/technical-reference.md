@@ -9,7 +9,8 @@
 推論レベルは `none`／`low`／`medium`／`high` を受け付け、timeout は1〜3600秒とします。
 これは要求設定の検証です。backend/model ごとの実対応は共通 client の能力検証で決定します。
 空白のみの認証値は設定なしとして扱います。config の非空値が環境変数より優先します。
-認証値を診断・Debug・report・cache へ出しません。AI 通信はまだ行いません。
+認証値を診断・Debug・report・cache へ出しません。共通 HTTP client は [AI 接続契約](ai-client.md) を参照してください。
+CLI の用途接続は #342 で行い、`validate` は通信しません。
 
 `validate` は設定・枚数・Game Title/Context の排他・入力探索・出力 path を確認します。
 通常実行も同じ事前確認とcache/outputの排他取得を行い、未接続の生成 context・AI 接続を成功扱いしません。

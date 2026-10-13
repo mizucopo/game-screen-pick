@@ -1,7 +1,7 @@
 use std::{fmt, fs, path::Path};
 
 use anyhow::{Result, anyhow, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::domain::SelectionMethod;
@@ -33,7 +33,8 @@ impl fmt::Display for Backend {
 }
 
 /// Requested inference setting; backend/model capability checks belong to the client.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum InferenceLevel {
     None,
     Low,
@@ -60,7 +61,95 @@ pub struct AiConfig {
     pub inference_level: InferenceLevel,
     pub timeout_seconds: u64,
     pub cache_revision: String,
+    pub protocol: Option<ProtocolConfig>,
     api_key: Option<String>,
+}
+
+/// Operator-declared server/model contract, not proof of live model capability.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolConfig {
+    /// Canonical response identity when the requested model is a served alias.
+    pub response_model: Option<String>,
+    pub reasoning_format: ReasoningFormat,
+    pub supported_inference_levels: Vec<InferenceLevel>,
+    pub json_schema: bool,
+    pub max_output_tokens: u32,
+    pub max_request_bytes: u64,
+    pub max_response_bytes: u64,
+    pub max_attempts: u8,
+    pub media: Option<MediaConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningFormat {
+    ReasoningEffort,
+    ChatTemplate,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MediaConfig {
+    pub vision_revision: String,
+    pub max_images: u32,
+    pub max_image_pixels: u64,
+    pub max_image_edge: u32,
+    pub max_video_bytes: u64,
+    pub max_video_seconds: f64,
+}
+
+impl ProtocolConfig {
+    pub fn validate(&self, backend: Backend, level: InferenceLevel) -> Result<()> {
+        if self
+            .response_model
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty() || value.trim() != value)
+        {
+            bail!(
+                "ai.protocol.response_model must be a nonblank model identity without surrounding whitespace"
+            );
+        }
+        if self.supported_inference_levels.is_empty()
+            || !self.supported_inference_levels.contains(&level)
+            || self
+                .supported_inference_levels
+                .iter()
+                .enumerate()
+                .any(|(i, value)| self.supported_inference_levels[..i].contains(value))
+        {
+            bail!(
+                "ai.protocol must explicitly support the selected inference level without duplicates"
+            );
+        }
+        if !(1..=3).contains(&self.max_attempts)
+            || !(1..=65536).contains(&self.max_output_tokens)
+            || !(1024..=256 * 1024 * 1024).contains(&self.max_request_bytes)
+            || !(1024..=16 * 1024 * 1024).contains(&self.max_response_bytes)
+        {
+            bail!("invalid ai.protocol request/response/token/attempt limits");
+        }
+        if let Some(media) = &self.media {
+            if media.vision_revision.trim().is_empty()
+                || media.max_images > 64
+                || media.max_image_pixels == 0
+                || media.max_image_pixels > 200_000_000
+                || media.max_image_edge == 0
+                || media.max_image_edge > 32768
+                || media.max_video_bytes > 128 * 1024 * 1024
+                || !media.max_video_seconds.is_finite()
+                || media.max_video_seconds < 0.0
+                || media.max_video_seconds > 3600.0
+                || (media.max_video_bytes == 0) != (media.max_video_seconds == 0.0)
+            {
+                bail!("invalid ai.protocol.media vision revision or limits");
+            }
+            if backend == Backend::Strata && media.max_video_bytes != 0 {
+                bail!("Strata semantic_video input is not supported");
+            }
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Debug for AiConfig {
@@ -72,6 +161,7 @@ impl fmt::Debug for AiConfig {
             .field("inference_level", &self.inference_level)
             .field("timeout_seconds", &self.timeout_seconds)
             .field("cache_revision", &self.cache_revision)
+            .field("protocol", &self.protocol)
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .finish()
     }
@@ -116,6 +206,7 @@ struct RawAiConfig {
     timeout_seconds: u64,
     cache_revision: String,
     api_key: Option<String>,
+    protocol: Option<ProtocolConfig>,
 }
 
 impl Config {
@@ -175,6 +266,9 @@ impl Config {
         let cache_revision =
             nonblank(raw.ai.cache_revision, "ai.cache_revision must not be blank")?;
         let base_url = parse_base_url(raw.ai.base_url.trim())?;
+        if let Some(protocol) = &raw.ai.protocol {
+            protocol.validate(backend, inference_level)?;
+        }
         let api_key = raw
             .ai
             .api_key
@@ -190,6 +284,7 @@ impl Config {
                 inference_level,
                 timeout_seconds: raw.ai.timeout_seconds,
                 cache_revision,
+                protocol: raw.ai.protocol,
                 api_key,
             },
         })
