@@ -177,10 +177,10 @@ pub fn run(
                         inference.validate_transport()?;
                         brave::preflight_context(inference.client.as_ref().expect("validated transport"), title)?;
                         let videos = session.videos(tools, cancelled)?;
-                        validate_image_geometry(&videos, media)?;
                         if semantic {
-                            title_geometry = Some(plan_semantic_videos(videos, chunk_seconds, cancelled)?);
+                            title_geometry = Some(plan_semantic_videos(videos, media, chunk_seconds, cancelled)?);
                         } else {
+                            validate_image_geometry(&videos, media)?;
                             crate::pipeline::preflight_sampled_plans(&videos, config.selection.samples_per_video, cancelled)?;
                         }
                         let evidence = search_client.search_cancellable(title, cancelled)?;
@@ -213,6 +213,7 @@ pub fn run(
                         Some(videos) => videos,
                         None => plan_semantic_videos(
                             session.videos(tools, cancelled)?,
+                            media,
                             chunk_seconds,
                             cancelled,
                         )?,
@@ -314,9 +315,11 @@ struct PlannedVideo {
 
 fn plan_semantic_videos(
     videos: Vec<Video>,
+    limits: &crate::config::MediaConfig,
     limit: f64,
     cancelled: &AtomicBool,
 ) -> Result<Vec<PlannedVideo>> {
+    validate_image_geometry(&videos, limits)?;
     let mut plan = Vec::with_capacity(videos.len());
     let mut chunks = 0;
     for video in videos {
@@ -403,8 +406,17 @@ mod tests {
     #[test]
     fn all_input_geometry_is_bounded_before_any_chunk_can_be_inferred() {
         let cancelled = AtomicBool::new(false);
+        let limits = crate::config::MediaConfig {
+            vision_revision: "fixture".into(),
+            max_images: 64,
+            max_image_pixels: 256,
+            max_image_edge: 16,
+            max_video_bytes: 1024,
+            max_video_seconds: 3600.0,
+        };
         let acceptable = plan_semantic_videos(
             vec![video("a.mkv", 4000), video("b.mkv", 96)],
+            &limits,
             0.25,
             &cancelled,
         )
@@ -418,6 +430,7 @@ mod tests {
         );
         let rejected = plan_semantic_videos(
             vec![video("a.mkv", 4000), video("b.mkv", 97)],
+            &limits,
             0.25,
             &cancelled,
         );

@@ -264,6 +264,20 @@ storage_contract_reference = "mock generated-context storage test contract"
 }
 
 fn invoke(root: &Path, generated: bool, cache_only: bool, no_tools: bool) -> std::process::Output {
+    invoke_with_path(
+        root,
+        generated,
+        cache_only,
+        no_tools.then_some(Path::new("")),
+    )
+}
+
+fn invoke_with_path(
+    root: &Path,
+    generated: bool,
+    cache_only: bool,
+    tools_path: Option<&Path>,
+) -> std::process::Output {
     let mut command = Command::new(BINARY);
     command.env_remove("GAME_SCREEN_PICK_BRAVE_API_KEY");
     command.current_dir(root).args([
@@ -287,10 +301,37 @@ fn invoke(root: &Path, generated: bool, cache_only: bool, no_tools: bool) -> std
     if cache_only {
         command.arg("--cache-only");
     }
-    if no_tools {
-        command.env("PATH", "");
+    if let Some(path) = tools_path {
+        command.env("PATH", path);
     }
     command.output().unwrap()
+}
+
+fn write_large_video(path: &Path, geometry: &str) {
+    let input = format!("color=c=red:s={geometry}:r=24");
+    let made = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-nostdin",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            &input,
+            "-frames:v",
+            "6",
+            "-c:v",
+            "ffv1",
+        ])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
 }
 
 #[test]
@@ -482,29 +523,7 @@ fn probed_frames_outside_model_limits_fail_before_title_calls() {
             let ai = ai();
             let brave = brave();
             setup(root.path(), &ai, &brave, method, true);
-            let made = Command::new("ffmpeg")
-                .args([
-                    "-v",
-                    "error",
-                    "-nostdin",
-                    "-y",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "color=c=red:s=1536x256:r=24",
-                    "-frames:v",
-                    "6",
-                    "-c:v",
-                    "ffv1",
-                ])
-                .arg(root.path().join("input/blocks.mkv"))
-                .output()
-                .unwrap();
-            assert!(
-                made.status.success(),
-                "{}",
-                String::from_utf8_lossy(&made.stderr)
-            );
+            write_large_video(&root.path().join("input/blocks.mkv"), "1536x256");
             let config = root.path().join("config.toml");
             let source = fs::read_to_string(&config).unwrap();
             let source = match failure {
@@ -520,6 +539,85 @@ fn probed_frames_outside_model_limits_fail_before_title_calls() {
             assert!(String::from_utf8_lossy(&rejected.stderr).contains("input frame geometry"));
             assert_eq!((ai.calls(), brave.calls()), (0, 0));
             assert!(!root.path().join("output").exists());
+        }
+    }
+}
+
+#[test]
+fn semantic_plan_misses_validate_all_frames_before_extraction_inference_or_runtime() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let ffprobe = Command::new("/usr/bin/which")
+        .arg("ffprobe")
+        .output()
+        .unwrap();
+    assert!(ffprobe.status.success(), "FFprobe is required");
+    let ffprobe = String::from_utf8(ffprobe.stdout).unwrap();
+    for generated in [false, true] {
+        for failure in ["edge", "pixels"] {
+            let root = tempfile::tempdir().unwrap();
+            let ai = ai();
+            let brave = brave();
+            setup(root.path(), &ai, &brave, "sampled_frames", true);
+            let config = root.path().join("config.toml");
+            let source = fs::read_to_string(&config).unwrap();
+            let source = match failure {
+                "edge" => source.replace("max_image_edge = 16384", "max_image_edge = 2047"),
+                "pixels" => {
+                    source.replace("max_image_pixels = 32000000", "max_image_pixels = 2097151")
+                }
+                _ => unreachable!(),
+            };
+            fs::write(&config, &source).unwrap();
+            let previous_output = if generated {
+                // Prime a real persisted context under the same model/protocol.
+                let cold = invoke(root.path(), true, false, false);
+                assert!(
+                    cold.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&cold.stderr)
+                );
+                assert_eq!(brave.calls(), 2);
+                Some(fs::read(root.path().join("output/report.json")).unwrap())
+            } else {
+                None
+            };
+            let counts = (ai.calls(), brave.calls());
+            let source = source
+                .replace("method = \"sampled_frames\"", "method = \"semantic_video\"")
+                .replace("api_key = \"search-secret\"\n", "");
+            fs::write(&config, format!("{source}\n[runtime]\nbackend = \"vllm\"\nstart_command = [\"/bin/sh\", \"-c\", \": > runtime-started; exit 1\", \"{{session}}\"]\nstop_command = [\"/bin/sh\", \"-c\", \": > runtime-stopped; exit 1\", \"{{pid}}\", \"{{session}}\"]\n")).unwrap();
+            // A valid first input must not cause extraction before the later
+            // oversized input has been checked. The aggregate plan is absent.
+            write_large_video(&root.path().join("input/z-large.mkv"), "2048x1024");
+            let tools = root.path().join("tools");
+            fs::create_dir(&tools).unwrap();
+            symlink(ffprobe.trim(), tools.join("ffprobe")).unwrap();
+            fs::write(
+                tools.join("ffmpeg"),
+                "#!/bin/sh\n: > ffmpeg-called\nexit 1\n",
+            )
+            .unwrap();
+            fs::set_permissions(tools.join("ffmpeg"), fs::Permissions::from_mode(0o755)).unwrap();
+            let rejected = invoke_with_path(root.path(), generated, false, Some(&tools));
+            assert_eq!(rejected.status.code(), Some(1));
+            let diagnostic = String::from_utf8_lossy(&rejected.stderr);
+            assert!(
+                diagnostic.contains("input frame geometry"),
+                "{generated}/{failure}: {diagnostic}"
+            );
+            assert_eq!((ai.calls(), brave.calls()), counts);
+            for marker in ["ffmpeg-called", "runtime-started", "runtime-stopped"] {
+                assert!(!root.path().join(marker).exists(), "{marker}");
+            }
+            if let Some(before) = previous_output {
+                assert_eq!(
+                    fs::read(root.path().join("output/report.json")).unwrap(),
+                    before
+                );
+            } else {
+                assert!(!root.path().join("output").exists());
+            }
         }
     }
 }
