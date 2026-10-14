@@ -1,6 +1,6 @@
 #!/bin/sh
 # Collect the locked target's normal/build dependency licenses, without a network
-# license lookup or Python. Missing license material is a packaging failure.
+# license lookup. Missing license material is a packaging failure.
 set -eu
 cd "$(dirname "$0")/.."
 metadata=$1

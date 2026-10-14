@@ -13,10 +13,6 @@
 - The Copier-managed release controller is shared release infrastructure. Keep
   its version source at `Cargo.toml` and its package lock entry at `Cargo.lock`.
   Version numbering remains automatic; do not hand-edit a new product version.
-  Retain its Python implementation and workflow callers as documented in
-  `docs/release.md`: release classification and publication control require
-  Python 3.11+, while the Rust quality gate and binary runtime do not. Any
-  controller migration must be designed upstream and applied through Copier.
 - Repository-specific template differences install video tools, use the single
   locked-dependency quality command, list Cargo and Copier release inputs, and
   build and smoke-test the two supported binary archives before publication.

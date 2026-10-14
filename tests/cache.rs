@@ -390,7 +390,7 @@ fn validated_reads_count_rejected_references_once_and_skip_bad_envelope_validato
 #[test]
 fn old_namespaces_and_unknown_files_are_preserved_and_never_imported() {
     let parent = temporary();
-    let legacy = parent.path().join("python-cache");
+    let legacy = parent.path().join("legacy-cache");
     fs::create_dir(&legacy).unwrap();
     fs::write(legacy.join("report.json"), b"old schema").unwrap();
     fs::write(parent.path().join("unknown"), b"keep").unwrap();

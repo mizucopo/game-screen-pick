@@ -9,7 +9,7 @@
 
 対象は Apple Silicon macOS の `aarch64-apple-darwin` と Linux x86_64 GNU の `x86_64-unknown-linux-gnu` です。
 FFmpeg／FFprobe と、画像・動画能力を確認した推論 endpoint を別途用意します。日本語 font は binary に含まれます。
-本体の利用に Rust toolchain、Python、uv、venv、OpenCV は不要です。
+本体の利用に開発用 toolchain や OpenCV は不要です。
 OS／dynamic library と FFmpeg の条件・検証範囲は [配布検証](docs/release.md#配布対象と検証) と archive 内の `DEPENDENCIES.txt` で確認してください。
 
 [GitHub Releases](https://github.com/mizucopo/game-screen-pick/releases) から、Rust archive が公開された version を選びます。
@@ -109,9 +109,6 @@ game-screen-pick extract --at 0.5 --context-seconds 0.25 \
 時刻は選んだ映像 stream の最初の有効 PTS を0とする秒数。要求時刻以降の最初の frame、最終端点は最後の frame を使い、既存出力は上書きしません。
 
 開発には Rust 1.88 以上（stable）、FFmpeg／FFprobe、jq が必要です。
-通常の build/test と Rust 品質・配布検証 CI に Python／uv は不要です。
-PR の release 分類チェックと採番・公開制御 CI は、共有 controller の実行に Python 3.11 以上を使います。
-保持範囲と上流での変更条件は [release 基盤の Python 依存](docs/release.md#release-基盤の-python-依存) を参照してください。
 
 ```sh
 cargo build --locked

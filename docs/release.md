@@ -12,7 +12,7 @@ Rust binary の配布対象は次の二つです。これ以外の target は対
 build の下限宣言とリンク検査は、その最小 OS 上での実行証拠と区別します。
 macOS CI の実行環境は 15 であり、14.0 上の実行を検証したことにはしません。
 `macos-14` runner は [GitHub の廃止予定](https://github.com/actions/runner-images/issues/13518) に従って使いません。
-FFmpeg／FFprobe と推論 endpoint は外部依存です。font は binary に内蔵し、本体の実行に Rust toolchain や Python 環境は要求しません。
+FFmpeg／FFprobe と推論 endpoint は外部依存です。font は binary に内蔵し、本体の実行に開発用 toolchain は要求しません。
 FFmpeg の PNG／FFV1、表示回転、`setts` と実 PTS の保持は製品抽出・動画 chunk の試験で確認します。
 検証した OS／FFmpeg version と dynamic library は配布物の `BUILD-INFO.json`／`DEPENDENCIES.txt` と PR の検証結果に記録します。
 未実測の FFmpeg 最小 version や、宣言値以外の OS の互換性を推測しません。
@@ -80,42 +80,6 @@ merge commit と複数 main commit の rebase merge は拒否します。一つ�
 
 SemVer の prerelease patch は末尾数値を増やし、channel／core／安定版への変更は明示 version の下限が必要です。
 core を増やす分類ではその core の prerelease も指定でき、巻き戻しは拒否します。初回の設定導入以前の PR は再分類しません。
-
-## release 基盤の Python 依存
-
-共有の `.github/scripts/release.py` は、現役の採番・公開 controller として保持します。
-PR の分類、番号の未使用確認、採番 commit と tag の一致、同じ run の再実行、公開状態と Latest の保護を担うため、代替なしには削除しません。
-Rust 本体の旧実装ではなく、Copier 管理の release 基盤です。
-
-| 用途 | Python／uv の扱い |
-| --- | --- |
-| 利用者の binary 実行・最終配布物 | Python／uv／venv は不要。runtime 用 Docker image でも Python 不在を検査する。 |
-| ローカル build/test、`tests/check.sh`、Rust 品質・配布検証 CI | Rust／shell／jq を使い、Python／uv は要求しない。 |
-| PR の release 分類チェック、採番・公開制御 CI | `python3 -I` で controller を実行する。標準 library の `tomllib` を使うため Python 3.11 以上が必要。uv／venv／pip package は不要。 |
-
-PR の分類チェックは公開ラベルがない場合にも起動するため、PR の全 CI が Python 不要という意味ではありません。
-通常 build/test と利用手順を Rust 専用とする範囲には、共有 release controller の実行を含めません。
-
-controller の呼び出し元は次の五箇所です。
-
-| workflow / job / step | command | 用途 |
-| --- | --- | --- |
-| `release-classification.yml` / `release-classification` / Validate optional classification and its reason | `classification` | PR の公開分類と理由を確認する。 |
-| `release.yml` / `prepare` / Number latest main and reserve its tag | `prepare` | 最新 main の採番、commit と tag の予約・再利用を行う。 |
-| `release.yml` / `release` / Verify numbering commit and read publication data | `plan` | 採番記録と公開対象を確認する。 |
-| `release.yml` / `promote-latest` / Verify numbering commit and read publication data | `plan` | Latest 判定前に同じ採番 source を再確認する。 |
-| `release.yml` / `promote-latest` / Check newest completed release | `latest` | 完成した最新の安定版を判定し、後続 step で Latest に昇格する。 |
-
-[残存整理 #398](https://github.com/mizucopo/game-screen-pick/issues/398) での棚卸しでは、追跡対象の `.py` はこの controller 一件だけです。
-旧 Python アプリ・テスト、`.pyi`、`pyproject.toml`、`uv.lock`、`.python-version`、requirements／pytest 設定はありません。
-`.copier-answers.yml` の `use_python: false` は製品・開発環境の選択であり、release controller の無効化指定ではありません。
-README・受入条件の Python 不要という契約、`scripts/Dockerfile.artifact-runtime` の不在検査、旧 cache を拒否する Rust テストの Python 文字列は保持します。
-いずれも Python の実行依存や削除待ちの旧資産ではありません。
-
-release 分類・公開 CI も Python 不要にする場合は、先に `mizucopo/repo-template` で共通 controller の代替言語・実行環境と互換性を決めます。
-採番・同一 commit/tag・再実行・公開/Latest の保護を上流テストで確認し、controller と全呼び出し元を一緒に Copier 更新で反映してから、Python の例外を外します。
-consumer 単独で controller を書き換えたり、品質・artifact smoke・Python 不在検査を削除して代替にはしません。
-[repo-template #204](https://github.com/mizucopo/repo-template/issues/204) の Docker 公開直後の確認再試行は別の上流作業として進め、この整理では移植・撤去しません。
 
 ## 失敗と復旧
 
