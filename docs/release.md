@@ -1,54 +1,120 @@
-# 採番・公開
+# 配布・採番・公開
 
-## 設定
+## 配布対象と検証
 
-- squash merge を使う。分類基準、公開の選択と投稿者・メンテナーの手順は [CONTRIBUTING.md](../CONTRIBUTING.md#リリース分類) に従う。通常のテスト・lint は公開の選択にかかわらず実行する。
-- 手動公開では main branch を指定する。main 以外の branch・tag を指定すると、checkout・認証設定・採番の前に失敗し、main を指定する案内を表示する。
-- 標準 GITHUB_TOKEN に contents:write と pull-requests:read を許す。main とタグへの直接 push を許す repository 設定を使う。force push は不要。PR 必須等の設定で拒否される場合は設定を確認し、workflow 側で保護を回避しない。
-- Docker Hub は DOCKERHUB_TOKEN、ECR は AWS_ROLE_ARN と OIDC の権限を設定する。採番時にも公開先を照会するため、image の照会権限が必要。
-- version source、lockfile、公開タグ・画像は .github/release.json の version と publication に宣言する。専用 App、署名鍵、CI 登録、初回移行 helper は不要。
+Rust binary の配布対象は次の二つです。これ以外の target は対応済みとしません。
 
-## 通常の流れ
+| target | build の下限・検査 |
+| --- | --- |
+| `aarch64-apple-darwin` | `macos-15` ARM64 runner で `MACOSX_DEPLOYMENT_TARGET=14.0` を指定して build し、Mach-O の deployment target と dynamic library を検査する。 |
+| `x86_64-unknown-linux-gnu` | Ubuntu 22.04 で build し、ELF が要求する GLIBC symbol version の最大値を2.35以下に制限する。 |
 
-PR 品質 CI → squash merge → 最新のマージ済み PR の分類で最新 main を採番 → 採番 commit とタグの atomic push → 同じ Actions run 内でビルド・検証・公開。
+build の下限宣言とリンク検査は、その最小 OS 上での実行証拠と区別します。
+macOS CI の実行環境は 15 であり、14.0 上の実行を検証したことにはしません。
+`macos-14` runner は [GitHub の廃止予定](https://github.com/actions/runner-images/issues/13518) に従って使いません。
+FFmpeg／FFprobe と推論 endpoint は外部依存です。font は binary に内蔵し、本体の実行に Rust toolchain や Python 環境は要求しません。
+FFmpeg の PNG／FFV1、表示回転、`setts` と実 PTS の保持は製品抽出・動画 chunk の試験で確認します。
+検証した OS／FFmpeg version と dynamic library は配布物の `BUILD-INFO.json`／`DEPENDENCIES.txt` と PR の検証結果に記録します。
+未実測の FFmpeg 最小 version や、宣言値以外の OS の互換性を推測しません。
 
-公開 workflow 全体は release-main の concurrency group に入り、queue:max、cancel-in-progress:false で直列化する。実行定義・script・設定が待機中に変わった場合は、その変更の新しい run に任せる。開始時点の最新 main の履歴を新しい順に確認し、前回採番以後で最後にマージされた PR 一つの分類だけを使う。main 上の commit と PR のマージイベントの対応で選び、作成日時・PR 番号・run の待機順をマージ順の代用にしない。未マージ PR、別 branch へのマージ、採番 commit は分類対象にしない。
+archive 名は `game-screen-pick-<Cargo version>-<target>.tar.gz`、checksum は同名の `.sha256` です。
+展開すると同じ名前の directory に `bin/game-screen-pick`、`config.example.toml`、README、利用文書、license と build・依存情報が入ります。
+依存 package の license 一覧、font の OFL と本体の MIT license を同梱します。設定・録画・生成画像・cache は含めません。
+利用者の取得・checksum・配置・設定・更新手順は [README](../README.md) を参照してください。
 
-公開の可否は [CONTRIBUTING.md](../CONTRIBUTING.md#リリース分類) の方針に従う。マージイベントの証拠が取得できない場合は、古い PR の分類へ戻らず停止する。公開対象は現在の main 全体とする。
+native の対象環境で、公開せず配布物を作れます。
+Rust toolchain は `rust-toolchain.toml` の **1.99.0** に固定します。Rust を使う品質・配布 CI job は checkout したこの file を rustup で有効にし、元 run の再実行も同じ採番 commit の pin を使います。
+`rust-docs`／`rust-src`（license収録用）、FFmpeg／FFprobe、jq、checksum tool、GNU tar が必要です。
+rustup を使う場合は `rustup component add rust-docs rust-src` で収録用資料を用意します。macOS は GNU tar を `gtar` として用意します。
 
-選んだ PR のマージイベント、記録された base SHA、main の first-parent 履歴、各 commit を取り込んだ PR の GitHub API 応答で、main に一つの commit として取り込まれたことを検証する。元 PR が複数 commit でも、通常の squash merge は受け入れる。merge commit と、base 以後の main に同じ PR の中間 commit がある複数 commit の rebase merge は、採番・公開の前に停止する。base の証拠や API 照会が不明な場合も停止する。
+```sh
+sh tests/check.sh
+sh scripts/package-release.sh aarch64-apple-darwin dist
+# Linux x86_64 GNU では次を使う:
+# sh scripts/package-release.sh x86_64-unknown-linux-gnu dist
+```
 
-履歴の関連 PR は GraphQL で 50 commit ずつまとめて取得し、PR 接続のページ送りも確認する。古い base から commit ごとに REST リクエストを発行しない。ECR の事前 intent と採番 prepare はそれぞれ最新 main の証拠を取り直し、事前照会後に履歴が更新されても古い判定を再利用しない。GraphQL のエラー・部分応答・取得不能も公開前に停止する。
+build は `cargo build --release --locked` を使います。`Cargo.toml` と `Cargo.lock` を一致させ、実行 file・dynamic library・license・archive を確認してから checksum を作ります。
+両 target の配布 CI では `scripts/install-ci-ffmpeg.sh` に記録した公式 FFmpeg **6.1.6** の source と SHA-256 から、CI の一時 prefix に FFmpeg／FFprobe を build します。
+macOS の Homebrew FFmpeg 更新によって archive 内の依存記録が変わることを防ぎます。これは CI tool の準備で、利用者の FFmpeg を自動 install・更新する処理や archive への同梱はありません。
+各 target の clean 環境で展開した binary の help/version、readonly validate、実 FFmpeg 抽出と合成 mock E2E を確認します。
+成功した固定応答 E2E を、実 backend/model の能力、Brave の適用契約と live 接続、実録画の Human Review の証拠にはしません。
+これらの未実施項目と実施条件は [検証状況](verification.md) に残します。
 
-記録された base は、別 PR や直接 push による main 更新より古いことがあるため、base 以後の総 commit 数だけでは判定しない。base 以前の関連 commit と過去 PR の取り込み方を再検証したり、過去 PR の分類を集計したりしない。一つの commit だけを取り込む rebase と squash はこの証拠では区別できず、一つの main commit として受け入れる。GitHub のマージ方法は squash を選ぶ。
+## 公開前の承認境界
 
-初回は新公開設定を導入した commit の親以後を対象とする。新規 repository の root commit だけでは公開しない。最初のラベル付き PR のマージ後、設定した初期 version とその分類を使って採番する。設定導入前の過去 PR を再分類しない。main への通常変更は squash-merged PR で行う。
+現在の作業 PR は `integration/rust-migration` 向けの通常 PR です。途中 PR は公開を希望せず `release:*` ラベルを付けません。
+integration branch で全品質 gate、独立レビュー、配布準備を揃え、最終の `main` 向け PR を別途作ります。
+設定・CLI・cache・運用の変更を含むメジャー切替として、最終 PR の希望 version は **2.0.0**、分類は `release:major` とします。
+手動で version を変更せず、最終 PR の差分・分類と公開対象を確認した後に既存 controller が採番します。
 
-番号規則は SemVer、Chrome manifest version、upstream-revision を使う。SemVer 0.x の major は 1.0.0。prerelease patch は末尾数値を増やし、channel・core・安定版への変更は明示 version を必要とする。明示 version は分類に必要な更新幅以上の下限指定。Chrome の各成分は 0～65535で、上限到達時は停止する。upstream-revision は上流 version を保持して revision を進め、新しい上流 version では r0 から始める。
+実公開の前に、対象 version、GitHub Releases の二つの archive と checksum、対象 head、検証結果・未実施項目を本人へ提示します。
+承認は、最終 PR の squash merge、controller による `main` の採番 commit と tag の atomic push、build・asset upload・Release 公開・Latest 更新を含む一連の操作に対して得ます。
+途中 PR の実装依頼や Issue の close だけから、この承認を推定しません。認証・権限設定、Homebrew 等の下流公開は個別の承認対象です。
+Issue の close とコード完了から、実録画・実 backend・契約・Human Review の完了を推定しません。
 
-SemVer の core を増やす場合、その core の prerelease も明示できる。例えば 0.2.3 から patch は 0.2.4-rc.1、minor は 0.3.0-rc.1、major は 1.0.0-rc.1 を開始できる。既存 prerelease の patch は次の番号以上を必要とし、同じ番号や前の番号への巻き戻しは拒否する。
+## 設定と公開の流れ
 
-Git tag、draft を含む Release、設定した image tag の未使用を確認する。衝突は次の番号へ進むが、認証・通信・照会の失敗を未作成と扱わない。latest は衝突対象にしない。version/manifest と既存 lockfile の version 項目だけを更新する。
+分類と公開の選択は [CONTRIBUTING.md](../CONTRIBUTING.md#リリース分類) に従います。
+正本は `Cargo.toml` の `package.version`、lockfile は `Cargo.lock` の `game-screen-pick` package です。
+`.github/release.json` は SemVer と GitHub Release を宣言しています。Docker image の公開設定はありません。
+共有の `.github/scripts/release.py` は採番インフラであり、製品の実行・開発品質 gate の依存とは区別します。
+`project_version` は Copier の初期値で、採番の正本ではありません。
 
-採番 commit は元の main を親とし、番号、タグ、分類対象の PR 一つ、元の SHA、run ID を trailer に記録する。main とタグを一度に push する。競合したら最新 main のマージ済み PR を選び直し、最大三回まで再計算する。保護設定や認証の拒否では停止する。
+公開 workflow は `main` push または `main` を指定した手動実行で動きます。別 branch／tag は checkout・認証設定・採番の前に停止します。
+標準 `GITHUB_TOKEN` に `contents:write` と `pull-requests:read` を許可し、`main` と tag への通常 push が許可された repository 設定を使います。
+保護設定や認証で拒否された場合は停止し、workflow で保護を回避しません。
 
-後続 job は採番 commit の SHA を checkout する。GITHUB_SHA は元イベントの SHA のままなので、公開対象には使わない。タグ作成による別 workflow の起動を待たず、同じ run の後続 job で完結させる。
+1. PR の品質 CI と配布検証を完了し、本人の承認後に最終 PR を squash merge する。
+2. controller が最新 `main` に一つの commit として取り込まれた最新のマージ済み PR と、その分類だけを検証する。ラベルなしなら採番・公開を成功扱いでスキップする。
+3. controller が SemVer を計算し、Git tag と draft を含む Release の未使用を確認する。認証・照会の失敗を未使用と扱わない。
+4. version source と lockfile の version 項目だけを更新し、元 SHA・PR・version・run ID の採番記録を付けた commit と tag を atomic push する。
+5. 同じ Actions run で採番 commit の SHA を checkout し、品質 gate と両 target の配布物を作る。draft Release へ不足 asset を upload し、再 download した全 archive・checksum・source SHA を検証してから公開する。
+6. 安定版の最新の完成済み Release だけを GitHub Latest にする。prerelease は Latest を変更しない。
 
-全検証・配布物が完成してから Release を公開する。GitHub Latest・Docker latest は最新の完成済み Release にだけ更新する。Tauri の prerelease は Latest と Tap 通知の対象外。
+workflow は `release-main`、`queue:max`、`cancel-in-progress:false` で直列化します。
+待機中に実行定義・script・設定が変わった場合は新しい run に任せます。履歴・PR base・マージイベントの照会失敗は採番前に停止します。
+merge commit と複数 main commit の rebase merge は拒否します。一つの commit として取り込む方法は履歴上区別できないため、GitHub では squash を選びます。
+複数の過去 PR の分類を集計せず、最新 PR の分類で現在の `main` 全体を公開します。
+採番と tag の競合時は最新 `main` の対象 PR を選び直し、最大三回再計算します。force push はしません。
+後続 job の対象は採番 SHA であり、元イベントの `GITHUB_SHA` を配布に使いません。tag の別 workflow 起動も待ちません。
+
+SemVer の prerelease patch は末尾数値を増やし、channel／core／安定版への変更は明示 version の下限が必要です。
+core を増やす分類ではその core の prerelease も指定でき、巻き戻しは拒否します。初回の設定導入以前の PR は再分類しません。
 
 ## 失敗と復旧
 
-| 状態                               | 操作                                                                                                                                                                     |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 指定した分類の不正・設定・権限不足 | 示された PR ラベル・設定を修正して元 run を再実行                                                                                                                        |
-| squash の検証失敗                  | 取り込み履歴・PR base・API を確認。複数 commit の rebase や merge commit の後は、新しい squash PR で必要な修正を取り込み、その最新 PR の分類で現在の main 全体を公開する |
-| main 更新による競合                | 自動で再計算。三回とも競合したら元 run を再実行                                                                                                                          |
-| push 応答が不明                    | remote の採番記録とタグを確認し、既に成功していれば同じ commit を再利用                                                                                                  |
-| build・検証失敗                    | 原因を確認。元 run の再実行は同じ番号・ソース。製品修正は新 PR・新番号                                                                                                   |
-| asset/image の部分公開             | 元 run を再実行し、同じ commit の不足分だけ継続                                                                                                                          |
-| 公開済み状態の不整合               | 上書きせず停止。原因と実際の公開状態を確認                                                                                                                               |
-| 古い run の再実行                  | 公開は復旧できるが、新しい完成済み Release の latest を巻き戻さない                                                                                                      |
+| 状態 | 操作 |
+| --- | --- |
+| 分類・設定・権限の拒否 | 示された PR ラベル・設定を確認し、必要な変更の承認後に元 run を再実行する。 |
+| squash／履歴証拠の不成立 | PR base・main 履歴・API を確認する。merge／複数 commit rebase 後は新しい squash PR で修正し、その最新 PR の分類を使う。 |
+| `main` 競合 | 自動再計算が三回失敗したら元 run を再実行する。 |
+| push 応答不明 | remote の採番記録と tag を確認し、成功済みなら同じ採番 commit を使う。 |
+| build・検証失敗 | 採番 commit と tag を残す。元 run は同じ番号・source を使う。製品修正は新 PR・新番号にする。 |
+| asset の部分 upload | 元 run を再実行し、同じ採番 commit の不足分を継続する。draft に残った期待名の空の `starter` は削除後に再 upload する。異なる内容で上書きしない。 |
+| 公開済み状態の不整合 | 上書きせず停止し、公開状態を確認する。 |
+| 古い run の再実行 | 既存公開は復旧できるが、新しい完成済み Release の Latest を巻き戻さない。 |
 
-採番 commit とタグは build 失敗時も残す。元 run の再実行は run ID に対応する commit を使い、新しい PR がマージされていても再採番しない。前回採番以後に新しいマージ済み PR がない通常 dispatch は新しい release を作らない。過去の公開を復旧するときは元 run を使う。
+元 run の再実行は run ID に対応する採番 commit を再利用し、後から別 PR がマージされても再採番しません。
+前回採番以後に新しいマージ済み PR がない通常の手動実行は、新しい Release を作りません。過去の公開復旧には元 run を使います。
 
-Copier update では最新構成へ一度に切り替え、旧採番・公開 workflow と旧 required check を整理する。二重公開を避け、既存 run の停止と実設定の変更は利用 repository の導入作業として行う。旧方式の run を新方式で復旧する互換処理は用意しない。
+GitHub の [upload API](https://docs.github.com/en/rest/releases/assets#upload-a-release-asset) は upstream 502 の後に空の `starter` を残すことがあります。
+復旧では既存の uploaded asset の bytes をすべて照合した後、draft・source・期待名・asset ID・`starter`・size 0 を再確認したものだけを削除し、不足分として再 upload します。
+公開済み Release、期待外の名前、非空の `starter`、uploaded asset の不一致は削除せず停止します。
+
+Rust version と FFmpeg source の固定は、同じ source を別の tool version で再 build する変化を抑えます。ただし hosted runner image、macOS SDK・system library、C compiler、GNU tar／gzip、FFmpeg の build 環境まで固定した完全な再現 build は保証しません。
+これらが更新されると binary や `DEPENDENCIES.txt`、license 資料、archive bytes が変わる場合があります。元 run の再実行で既存 asset と一致しない場合も上書きせず停止し、元の検証済み成果物と build 環境を確認します。製品・配布の修正は新 PR と新番号で扱います。
+
+## Copier 更新時に保持する配布要件
+
+共有 `.github/scripts/release.py` は最新 template の生成物をそのまま使います。
+`prepare`・`plan`・`latest` による採番と公開分類を採用し、汎用の `create`・`distribution` はこの配布 workflow から呼びません。
+汎用 Rust 配布の Linux 単体 archive では、上記の二つの target、checksum、同梱資料、実行検証を満たせないためです。
+共有 `create` は `target_commitish` を指定しないため、採番 SHA の明示を必要とする既存の作成処理を保持します。
+Release は `--target "$RELEASE_SHA"` を指定して draft として作り、既存の配布 script で採番 SHA・分類・全 asset の bytes を確認してから公開します。
+共通の配布案内処理による draft 公開も、この検証経路の代わりには使いません。
+
+Copier の既存回答 `rust_version: stable` は保持し、実際の build toolchain は上記の `rust-toolchain.toml` の固定値を維持します。
+品質 workflow の FFmpeg／FFprobe、`sh tests/check.sh`、二つの native 配布 builder、Cargo と Copier の release inputs、
+この文書の配布・承認・復旧手順は repository 固有の差分です。`.codex/project.md` の project 指示も保持します。
+CodeQL の新しい回答 `use_gh_actions_codeql` は template の既定値 `false` を採用し、workflow や GitHub の解析設定は追加・変更しません。

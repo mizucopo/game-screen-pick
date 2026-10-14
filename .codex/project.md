@@ -1,21 +1,19 @@
 # Project guidance
 
-- This application is installed as the `game-screen-pick` CLI. Preserve the
-  Hatchling build settings, `[project.scripts]` entry point, and
-  `[tool.uv] package = true` unless an intentional packaging migration replaces
-  them. The template's `application` output does not install this CLI.
-- Preserve `.gitignore` entries for `config/*` (except `config/.gitkeep`) and
-  `.game-screen-pick/`. They exclude local configuration that may contain API
-  keys and generated runtime cache.
-- Preserve the `src` package initializer and import contract test, and the
-  mypy `files`/`mypy_path` mapping. The CLI imports `src.main` and its modules
-  use package-relative imports; the template's flat application layout does
-  not match this project.
-- Keep direct pytest execution in the quality task: this project has an
-  established test suite, so empty collection must remain a failing gate.
-- Run Ruff over the whole repository in quality and fix tasks so the release
-  controller remains covered when CI delegates to `task check`.
-- The SemVer release workflow marks prereleases with `--prerelease`, using
-  the prepared version before build metadata, and skips their Latest lookup.
-  This is a temporary template exception until the generic release workflow
-  supplies the same behavior (tracked in mizucopo/repo-template#167).
+- This application is the `game-screen-pick` Rust CLI. Follow
+  `docs/acceptance.md` and ADR 0010 for product behavior and responsibility
+  boundaries. Unimplemented selection and publication paths must fail clearly.
+- Keep local configuration and generated runtime files out of Git. Configuration
+  may contain API keys; never print those values in logs or diagnostics.
+- Run the single quality gate with `sh tests/check.sh`. Cargo tests include the
+  real input fixture checks and product extraction tests; fixture verification
+  alone does not verify extraction, selection, cache, or live AI quality.
+- Install FFmpeg and ffprobe before both PR and release quality gates. Tests
+  that require these commands must fail when they are absent.
+- The Copier-managed release controller is shared release infrastructure. Keep
+  its version source at `Cargo.toml` and its package lock entry at `Cargo.lock`.
+  Version numbering remains automatic; do not hand-edit a new product version.
+- Repository-specific template differences install video tools, use the single
+  locked-dependency quality command, list Cargo and Copier release inputs, and
+  build and smoke-test the two supported binary archives before publication.
+  The release controller and prerelease numbering use the template directly.

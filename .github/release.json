@@ -3,20 +3,20 @@
     "scheme": "semver",
     "sources": [
       {
-        "path": "pyproject.toml",
+        "path": "Cargo.toml",
         "format": "toml",
-        "key": ["project", "version"]
+        "key": ["package", "version"]
       }
     ],
     "locks": [
-      { "path": "uv.lock", "format": "toml-lock", "package": "game-screen-pick", "optional": true }
+      { "path": "Cargo.lock", "format": "toml-lock", "package": "game-screen-pick", "optional": true }
     ]
   },
   "publication": {
     "release_tag": "{version}",
     "github_release": true,
 
-    "release_paths": ["pyproject.toml"],
+    "release_paths": ["Cargo.toml", "Cargo.lock", ".copier-answers.yml"],
     "latest_image": null,
     "images": []
   }

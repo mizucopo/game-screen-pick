@@ -47,10 +47,72 @@ jobs:
           GIT_COMMITTER_EMAIL: "mizu.copo@gmail.com"
         run: python3 -I .github/scripts/release.py prepare
 
-  release:
+  distribution-build:
     needs: prepare
     if: needs.prepare.outputs.publish == 'true'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout numbering commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          fetch-depth: 0
+      - name: Install Rust build and license components
+        run: |
+          rustup show
+          rustup target add "$TARGET"
+          rustup component add rust-docs rust-src
+        env:
+          TARGET: ${{ matrix.target }}
+      - name: Install Linux video and inspection tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl xz-utils pkg-config zlib1g-dev jq binutils
+          test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.35'
+          sh scripts/install-ci-ffmpeg.sh "$RUNNER_TEMP/ffmpeg"
+          echo "$RUNNER_TEMP/ffmpeg/bin" >> "$GITHUB_PATH"
+      - name: Install macOS video and archive tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install gnu-tar jq
+          sh scripts/install-ci-ffmpeg.sh "$RUNNER_TEMP/ffmpeg"
+          echo "$RUNNER_TEMP/ffmpeg/bin" >> "$GITHUB_PATH"
+      - name: Run native quality gate on the distribution builder
+        timeout-minutes: 15
+        run: sh tests/check.sh
+      - name: Build archive and run clean runtime smoke
+        timeout-minutes: 25
+        run: sh scripts/build-distribution.sh "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
+      - name: Upload verified target archive and checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rust-distribution-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          overwrite: true
+
+  release:
+    needs: [prepare, distribution-build]
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      is_prerelease: ${{ steps.metadata.outputs.is_prerelease }}
     env:
       RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
     steps:
@@ -67,20 +129,42 @@ jobs:
           export RELEASE_PLAN_OUTPUT="$RUNNER_TEMP/release-plan.json"
           printf 'RELEASE_PLAN_OUTPUT=%s\n' "$RELEASE_PLAN_OUTPUT" >> "$GITHUB_ENV"
           python3 -I .github/scripts/release.py plan
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version-file: .python-version
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      - name: Validate Python release
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Install video tools
         run: |
-          uv sync --locked
-          uv run task check
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
+      - name: Validate Rust release
+        timeout-minutes: 15
+        run: sh tests/check.sh
+      - name: Download both target assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: rust-distribution-*
+          merge-multiple: true
+          path: dist
+      - name: Verify complete asset set and provenance
+        id: assets
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          sh scripts/verify-release-assets.sh dist "$VERSION" "$RELEASE_SHA"
+          echo "names=game-screen-pick-$VERSION-aarch64-apple-darwin.tar.gz|game-screen-pick-$VERSION-aarch64-apple-darwin.tar.gz.sha256|game-screen-pick-$VERSION-x86_64-unknown-linux-gnu.tar.gz|game-screen-pick-$VERSION-x86_64-unknown-linux-gnu.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+      - name: Classify release version
+        id: metadata
+        run: |
+          is_prerelease="$(jq -er '.publication.is_prerelease | select(type == "boolean") | tostring' "$RELEASE_PLAN_OUTPUT")"
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
       - name: Inspect release state
         id: release-state
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.release_tag }}
+          INSPECT_DRAFT_RELEASES: 'true'
+          RELEASE_ASSET_NAMES: ${{ steps.assets.outputs.names }}
         run: |
           set -euo pipefail
 
@@ -149,6 +233,19 @@ jobs:
               echo "::error::Could not inspect draft GitHub Releases for $TAG."
               exit 1
             fi
+            if [ -n "${RELEASE_ID:-}" ]; then
+              if ! [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]] \
+                || ! jq -e --argjson id "$RELEASE_ID" \
+                  '. == null or .id == $id' "$RELEASE_RESPONSE" > /dev/null; then
+                echo "::error::Listed GitHub Release differs from retained ID."
+                exit 1
+              fi
+              gh api "/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RELEASE_RESPONSE"
+              if ! jq -e --argjson id "$RELEASE_ID" '.id == $id' "$RELEASE_RESPONSE" > /dev/null; then
+                echo "::error::GitHub Release ID differs from retained ID."
+                exit 1
+              fi
+            fi
             if [ "$(jq -r '. != null' "$RELEASE_RESPONSE")" = "true" ]; then
               release_exists=true
             fi
@@ -159,6 +256,15 @@ jobs:
                 || ! jq -e --arg tag "$TAG" '.tag_name == $tag and (.assets | type == "array")' "$RELEASE_RESPONSE" > /dev/null; then
                 echo "::error::GitHub Release $TAG returned invalid release metadata."
                 exit 1
+              fi
+              if [ "$release_is_draft" = "false" ]; then
+                if ! planned_prerelease="$(jq -er '.publication.is_prerelease | select(type == "boolean") | tostring' "${RELEASE_PLAN_OUTPUT:-}")" \
+                  || ! jq -e --argjson prerelease "$planned_prerelease" \
+                    '(.prerelease | type == "boolean") and .prerelease == $prerelease' \
+                    "$RELEASE_RESPONSE" > /dev/null; then
+                  echo "::error::Published GitHub Release classification differs from publication plan."
+                  exit 1
+                fi
               fi
             fi
           fi
@@ -221,16 +327,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.release_tag }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          IS_PRERELEASE: ${{ steps.metadata.outputs.is_prerelease }}
         run: |
-          release_args=(--verify-tag --latest=false --title "$TAG" --generate-notes)
-          if [[ "${VERSION%%+*}" == *-* ]]; then
+          release_args=(--verify-tag --target "$RELEASE_SHA" --draft --latest=false --title "$TAG" --generate-notes)
+          if [ "$IS_PRERELEASE" = "true" ]; then
             release_args+=(--prerelease)
           fi
           gh release create "$TAG" "${release_args[@]}"
+      - name: Complete immutable assets and publish verified draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.release_tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          IS_PRERELEASE: ${{ steps.metadata.outputs.is_prerelease }}
+        run: sh scripts/publish-release-assets.sh dist "$VERSION" "$RELEASE_SHA" "$TAG" "$IS_PRERELEASE"
 
   promote-latest:
     needs: [prepare, release]
+    if: needs.release.outputs.is_prerelease == 'false'
     runs-on: ubuntu-latest
     env:
       RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
@@ -251,17 +365,24 @@ jobs:
           printf 'RELEASE_PLAN_OUTPUT=%s\n' "$RELEASE_PLAN_OUTPUT" >> "$GITHUB_ENV"
           python3 -I .github/scripts/release.py plan
 
+      - name: Download both target assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: rust-distribution-*
+          merge-multiple: true
+          path: dist
+      - name: Revalidate completed Release before Latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: sh scripts/verify-published-release.sh dist "$VERSION" "$RELEASE_SHA" "$TAG" false
+
       - name: Check newest completed release
         id: latest-state
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          if [[ "${VERSION%%+*}" == *-* ]]; then
-            echo "promote_latest=false" >> "$GITHUB_OUTPUT"
-          else
-            python3 -I .github/scripts/release.py latest
-          fi
+        run: python3 -I .github/scripts/release.py latest
       - name: Mark GitHub Release as latest
         if: steps.latest-state.outputs.promote_latest == 'true'
         env:

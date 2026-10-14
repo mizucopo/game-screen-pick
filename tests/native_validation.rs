@@ -1,0 +1,263 @@
+#[cfg(unix)]
+use std::ffi::OsString;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(target_os = "macos")]
+use std::path::Path;
+use std::sync::atomic::AtomicBool;
+
+use game_screen_pick::output::Output;
+use tempfile::TempDir;
+
+fn temporary() -> TempDir {
+    TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap()
+}
+
+#[cfg(target_os = "macos")]
+fn native_aliases(parent: &Path, name: &str, alias: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let probe = TempDir::new_in(parent).unwrap();
+    let original = probe.path().join(name);
+    fs::create_dir(&original).unwrap();
+    fs::metadata(probe.path().join(alias))
+        .is_ok_and(|metadata| metadata.ino() == fs::metadata(&original).unwrap().ino())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn absent_native_alias_validation_agrees_with_filesystem_and_prepare_without_writes() {
+    let cancelled = AtomicBool::new(false);
+    let mut pairs = [
+        ("Result", "result"),
+        ("Résult", "Re\u{301}sult"),
+        ("straße", "STRASSE"),
+        ("ﬀ", "ff"),
+        ("İ", "i\u{307}"),
+        ("Σ", "ς"),
+        ("x\u{1c80}", "x\u{432}"),
+        ("x\u{1f80}", "x\u{1f00}\u{3b9}"),
+        ("x\u{10400}", "x\u{10428}"),
+        ("x\u{2f800}", "x\u{4e3d}"),
+        ("Ა", "ა"),
+        ("K", "K"),
+        ("Ω", "Ω"),
+        ("豈", "豈"),
+        ("가", "가"),
+        ("e\u{301}\u{323}", "e\u{323}\u{301}"),
+        ("Résult", "Result"),
+        ("I", "ı"),
+        ("Ａ", "A"),
+        ("result-1", "result1"),
+        ("a\u{ad}", "a"),
+        ("x\u{200d}", "x"),
+    ]
+    .map(|(name, alias)| (name.to_owned(), alias.to_owned()))
+    .to_vec();
+    for (historical, modern) in [
+        ('\u{1c80}', '\u{0432}'),
+        ('\u{1c81}', '\u{0434}'),
+        ('\u{1c82}', '\u{043e}'),
+        ('\u{1c83}', '\u{0441}'),
+        ('\u{1c84}', '\u{0442}'),
+        ('\u{1c85}', '\u{0442}'),
+        ('\u{1c86}', '\u{044a}'),
+        ('\u{1c87}', '\u{0463}'),
+        ('\u{1c88}', '\u{a64b}'),
+    ] {
+        pairs.push((format!("x{historical}"), format!("x{modern}")));
+        pairs.push((
+            format!("x{historical}"),
+            format!("x{}", modern.to_uppercase()),
+        ));
+    }
+    for (name, alias) in pairs {
+        let parent = temporary();
+        let expected_overlap = native_aliases(parent.path(), &name, &alias);
+        let output = parent.path().join(&name);
+        let protected = parent.path().join(&alias);
+        let validation = Output::validate(&output, &[&protected], &cancelled);
+        assert_eq!(
+            fs::read_dir(parent.path()).unwrap().count(),
+            0,
+            "readonly validation must not create output/cache/lock representatives"
+        );
+        let preparation = Output::prepare(&output, &[&protected], &cancelled);
+        assert_eq!(
+            validation.is_err(),
+            expected_overlap,
+            "absent {name:?}/{alias:?}: readonly validation must match native lookup: {:?}",
+            validation.err()
+        );
+        assert_eq!(
+            preparation.is_err(),
+            expected_overlap,
+            "absent {name:?}/{alias:?}: normal prepare must match native lookup"
+        );
+        assert!(!output.exists());
+        assert!(!protected.exists());
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn absent_reserved_directory_aliases_are_rejected_without_writes() {
+    let cancelled = AtomicBool::new(false);
+    for protected_alias in [false, true] {
+        let parent = temporary();
+        let alias = parent.path().join(".GSP-OUTPUT-LOCKS");
+        let output = if protected_alias {
+            parent.path().join("result")
+        } else {
+            alias.clone()
+        };
+        let expected_overlap =
+            native_aliases(parent.path(), ".gsp-output-locks", ".GSP-OUTPUT-LOCKS");
+        let protected = if protected_alias {
+            vec![alias.as_path()]
+        } else {
+            vec![]
+        };
+        let validation = Output::validate(&output, &protected, &cancelled);
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        assert_eq!(validation.is_err(), expected_overlap);
+        let preparation = Output::prepare(&output, &protected, &cancelled);
+        assert_eq!(preparation.is_err(), expected_overlap);
+        if protected_alias || !expected_overlap {
+            assert!(!output.exists());
+        }
+    }
+}
+
+#[test]
+fn validation_with_existing_lock_representative_agrees_with_prepare() {
+    let cancelled = AtomicBool::new(false);
+    for (name, alias) in [
+        ("Result", "result"),
+        ("Résult", "Re\u{301}sult"),
+        ("Result", "Cache"),
+    ] {
+        let parent = temporary();
+        let output = parent.path().join(name);
+        let protected = parent.path().join(alias);
+        drop(Output::prepare(&output, &[], &cancelled).unwrap());
+        let lock_path = parent.path().join(".gsp-output-locks").join(name);
+        let before = fs::read(&lock_path).unwrap();
+        let modified = fs::metadata(&lock_path).unwrap().modified().unwrap();
+        let validation = Output::validate(&output, &[&protected], &cancelled);
+        assert_eq!(fs::read(&lock_path).unwrap(), before);
+        assert_eq!(
+            fs::metadata(&lock_path).unwrap().modified().unwrap(),
+            modified
+        );
+        let preparation = Output::prepare(&output, &[&protected], &cancelled);
+        assert_eq!(validation.is_err(), preparation.is_err());
+        assert!(!output.exists());
+        assert!(!protected.exists());
+    }
+}
+
+#[test]
+fn distinct_absent_output_and_cache_names_remain_valid() {
+    let parent = temporary();
+    let output = parent.path().join("result");
+    let protected = parent.path().join("cache");
+    let cancelled = AtomicBool::new(false);
+    assert!(
+        Output::validate(&output, &[&protected], &cancelled)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+    assert!(Output::prepare(&output, &[&protected], &cancelled).is_ok());
+    assert!(!output.exists());
+    assert!(!protected.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_absent_protected_names_remain_valid_without_readonly_writes() {
+    for kind in ["input", "cache", "config"] {
+        let parent = temporary();
+        let output = parent.path().join("result");
+        let mut bytes = format!("{kind}-").into_bytes();
+        bytes.push(0xff);
+        let protected = parent.path().join(OsString::from_vec(bytes));
+        let cancelled = AtomicBool::new(false);
+        let validation = Output::validate(&output, &[&protected], &cancelled);
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        let preparation = Output::prepare(&output, &[&protected], &cancelled);
+        assert!(
+            preparation.is_ok(),
+            "normal prepare must accept absent {kind}"
+        );
+        assert!(
+            validation.unwrap().is_none(),
+            "readonly validation must agree for absent {kind}"
+        );
+        assert!(!output.exists());
+        assert!(!protected.exists());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn non_utf8_existing_protected_names_remain_valid_without_readonly_writes() {
+    for kind in ["input", "cache", "config"] {
+        let parent = temporary();
+        let output = parent.path().join("result");
+        let mut bytes = format!("{kind}-").into_bytes();
+        bytes.push(0xff);
+        let protected = parent.path().join(OsString::from_vec(bytes));
+        if kind == "config" {
+            fs::write(&protected, b"original config").unwrap();
+        } else {
+            fs::create_dir(&protected).unwrap();
+        }
+        let modified = fs::metadata(&protected).unwrap().modified().unwrap();
+        let cancelled = AtomicBool::new(false);
+        assert!(
+            Output::validate(&output, &[&protected], &cancelled)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 1);
+        assert_eq!(
+            fs::metadata(&protected).unwrap().modified().unwrap(),
+            modified
+        );
+        assert!(Output::prepare(&output, &[&protected], &cancelled).is_ok());
+        assert!(!output.exists());
+        assert_eq!(
+            fs::metadata(&protected).unwrap().modified().unwrap(),
+            modified
+        );
+        if kind == "config" {
+            assert_eq!(fs::read(&protected).unwrap(), b"original config");
+        } else {
+            assert_eq!(fs::read_dir(&protected).unwrap().count(), 0);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_output_name_is_rejected_without_writes() {
+    let parent = temporary();
+    let output = parent
+        .path()
+        .join(OsString::from_vec(b"result-\xff".to_vec()));
+    let cancelled = AtomicBool::new(false);
+    for rejection in [
+        Output::validate(&output, &[], &cancelled).unwrap_err(),
+        Output::prepare(&output, &[], &cancelled).err().unwrap(),
+    ] {
+        assert!(
+            rejection
+                .to_string()
+                .contains("output filename must be UTF-8")
+        );
+    }
+    assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+}

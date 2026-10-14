@@ -1,136 +1,120 @@
-# game-screen-pick
+# Game Screen Pick
 
-ゲーム録画全体から、ブログへ掲載しやすい画像を指定枚数選びます。
-vLLMによる動画理解、またはOllamaによる静止画評価を使い、画面遷移中のframeや近い重複を避けながら、
-通常進行画面を少し多めに含む多様な画像を出力します。
+ゲーム録画からブログ用の原寸 JPEG を選び、一覧画像と選定根拠の `report.json` を作る Rust CLI。
+等間隔の画像候補評価と semantic 動画理解に対応し、完了した評価の cache と安全な再開・出力保護を備えます。
+実 backend/model の能力、実録画の選定品質、Brave の適用契約と live 接続、Human Review は未検証です。
+合成素材と固定応答の成功でこれらを確認済みとは扱いません。[検証状況](docs/verification.md) を参照してください。
 
-## 必要なもの
+## 配布 binary の配置
 
-- Python 3.13以上
-- uv
-- `ffmpeg`と`ffprobe`
-- 動画・画像入力に対応するmodelを提供するvLLMサーバー、またはvision対応modelを用意したOllama
+対象は Apple Silicon macOS の `aarch64-apple-darwin` と Linux x86_64 GNU の `x86_64-unknown-linux-gnu` です。
+FFmpeg／FFprobe と、画像・動画能力を確認した推論 endpoint を別途用意します。日本語 font は binary に含まれます。
+本体の利用に Rust toolchain、Python、uv、venv、OpenCV は不要です。
+OS／dynamic library と FFmpeg の条件・検証範囲は [配布検証](docs/release.md#配布対象と検証) と archive 内の `DEPENDENCIES.txt` で確認してください。
 
-## はじめかた
+[GitHub Releases](https://github.com/mizucopo/game-screen-pick/releases) から、Rust archive が公開された version を選びます。
+Rust 版の実公開は、integration 向け PR の完了後に承認を受ける別工程です。公開前の確認には PR の Actions artifact を使います。
+空の download directory で `RELEASE_VERSION` を選んだ version に置き換え、対象 target を一つ指定します。
 
-依存packageを導入します。
-
-```bash
-uv sync
-cp config.example.toml config/config.toml
+```sh
+version=RELEASE_VERSION
+target=aarch64-apple-darwin # Linux: x86_64-unknown-linux-gnu
+archive="game-screen-pick-${version}-${target}.tar.gz"
+base="https://github.com/mizucopo/game-screen-pick/releases/download/${version}"
+curl --fail --location --remote-name "$base/$archive"
+curl --fail --location --remote-name "$base/$archive.sha256"
 ```
 
-`config/config.toml`へ利用するGame Context provider、model、API keyを設定します。
-`config/`配下の実設定はGit管理対象外です。用途別の設定は
-`config/openai.toml`など別名で保存し、`-c config/openai.toml`で切り替えられます。
+checksum を確認してから展開します。macOS は次を使います。
 
-選択枚数、Game Title、動画を置いたInput Video Directory、空のOutput Folderを
-指定して実行します。
-
-```bash
-uv run game-screen-pick \
-  -c config/config.toml \
-  -n 30 \
-  --game-title "ドラクエ11" \
-  ./recordings \
-  ./recordings-selected
+```sh
+shasum -a 256 -c "$archive.sha256"
 ```
 
-Web検索でGame Contextを生成する代わりに、直接指定することもできます。
+Linux は `sha256sum -c "$archive.sha256"` を使います。検証失敗時は展開・配置せず再取得してください。
+成功後、実行 file を利用者の PATH に配置します。
 
-```bash
-uv run game-screen-pick \
-  -n 30 \
-  --game-context "ジャンル: RPG。探索と会話を進める。代表的な画面はフィールド、会話、戦闘。景観と人物が明瞭な画像を重視する。" \
-  ./recordings \
-  ./recordings-selected
+```sh
+tar -xzf "$archive"
+bundle="${archive%.tar.gz}"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "$bundle/bin/game-screen-pick" "$HOME/.local/bin/game-screen-pick"
+export PATH="$HOME/.local/bin:$PATH"
+game-screen-pick --version
+game-screen-pick --help
+ffmpeg -version
+ffprobe -version
 ```
 
-modelやproviderなど、繰り返し使う値はcurrent directoryの
-`config/config.toml`で変更できます。API keyは設定ファイルの非空値を優先し、未指定・
-空文字列の場合だけproviderに対応する環境変数を使います。実設定はコミットしないで
-ください（`.gitignore`は`git add -f`による強制追加までは防ぎません）。
+新しい shell でも使う場合は `~/.local/bin` を shell の PATH 設定へ追加します。
+archive は設定例、利用文書、license、build・依存情報も含みます。
 
-## vLLMで動画を理解して選ぶ
+## 設定して実行
 
-起動済みのvLLMサーバーの接続先と、動画・画像入力に対応するmodel名を設定します。
-次を `config/semantic.toml` として保存し、model名を実際の提供名へ置き換えてください。
+新しい Rust 設定を作り、接続先・model・推論レベルと `ai.protocol` の能力・上限を明示します。
+古い設定は流用せず、手元の設定・録画・出力・cache を保持してください。
+以下の `cp -n` は既存 file を上書きしません。`config/rust.toml` がある場合は別の新規 file 名を選び、後の command にも指定します。
 
-```toml
-[run]
-selection_method = "semantic_video"
-vllm_base_url = "http://127.0.0.1:8000/v1"
-vllm_model = "YOUR_SERVED_VIDEO_MODEL"
-vllm_cache_revision = "1"
-# vllm_api_key = "your-key"  # 未指定時はVLLM_API_KEY
+```sh
+mkdir -p config recordings
+cp -n "$bundle/config.example.toml" config/rust.toml
 ```
 
-```bash
-uv run game-screen-pick -c config/semantic.toml -n 30 \
-  --game-context "探索とボス戦を中心とするRPG。景観、人物、戦況が伝わる画像を重視する。" \
-  ./recordings ./recordings-selected
+[設定例](config.example.toml) の vision は無効のため、接続する backend/model の画像能力を確認して `ai.protocol.media` を設定します。
+`recordings` へ利用許可のある手元の動画を置きます。
+動画理解を選ぶ場合は動画能力も実測してください。非対応の Strata 動画経路、未設定の vision、不適合な推論レベルは理由付きで停止します。
+認証は非空の `ai.api_key`、なければ `GAME_SCREEN_PICK_API_KEY` を使います。設定・秘密情報・runtime cache は Git に登録しません。
+起動済み endpoint には `[runtime]` が不要です。任意の起動／停止は自己が開始した foreground session だけを管理します。
+
+まず設定と入力を外部 command・通信・書込なしで確認し、同じ引数で実行します。
+
+```sh
+game-screen-pick validate --config config/rust.toml --count 2 \
+  --cache-directory .game-screen-pick-cache-rust \
+  --game-context "探索・戦闘・会話の見やすい場面を選ぶ" recordings output-rust
+game-screen-pick --config config/rust.toml --count 2 \
+  --cache-directory .game-screen-pick-cache-rust \
+  --game-context "探索・戦闘・会話の見やすい場面を選ぶ" recordings output-rust
 ```
 
-全編を短い重複区間に分け、vLLMへ動画として渡して重要場面と遷移区間を解析します。
-重要場面の周辺を元動画から抽出し、同じvLLM modelで二段階の画像評価を行います。
-動画から得た説明と重要度は候補の優先順位・評価に使い、選定根拠をreportへ保存します。
-Ollamaによる既存方式は `selection_method = "sampled_frames"`（既定値）で使えます。
+枚数は 1〜999。入力直下の通常動画を名前順に扱い、symlink は追跡しません。
+出力は入力・設定・cache と重ならない、新規・空・所有権を検証できる Rust 成果物 directory を指定します。
+未所有・編集済み file は保持して拒否します。その場合は既存出力を削除せず、別の空の出力先を指定してください。
+cache は新しい Rust namespace を使い、旧 cache を読み込みません。既定では出力の親の `.game-screen-pick-cache`、変更は上記の `--cache-directory` です。
 
-解析済み区間は中断後や選択枚数の変更時にも再利用します。サーバーの重み・量子化・
-processor・vLLM設定を変更した場合は `vllm_cache_revision` を変更してください。
-起動・停止も管理する場合は、同じ `[run]` に任意設定を追加します。
+`--game-context` と `--game-title` は一方だけ指定します。直接 context は検索しません。
+Game Title からの生成は [Brave の適用契約](docs/brave-search.md) と認証を確認後に設定してください。
+同じ条件の正常な warm run は検索・推論・runtime 操作を行いません。`--cache-only` は必要な cache がなければ外部操作せず停止します。
+完成済みの所有成果物は、cache 消失後も入力・実効条件が一致すれば再利用します。
+生成 context の保存を許可していない場合、再計算に必要な context がなければ再検索が必要です。
 
-```toml
-ollama_host = "http://127.0.0.1:11434"
-ollama_unload_before_vllm = true
-vllm_start_command = ["/opt/game-screen-pick/start-vllm", "{model}"]
-vllm_stop_command = ["/opt/game-screen-pick/stop-vllm"]
+## 更新
+
+新 version の archive と checksum を新しい空 directory へ取得し、上記と同じ検証・展開・配置を行います。
+設定例を既存設定へ上書きせず、必要な設定差分を別の新しい Rust 設定で確認してください。
+録画・既存出力・cache は保持し、新しい空出力先で `validate` と実行を確認します。
+model 重み・server 設定が変わった場合は `ai.cache_revision` を更新します。
+未検証の OS・target や下流 package manager への配布を、この archive の確認から対応済みとは扱いません。
+
+## 抽出と開発
+
+推論を使わず元 frame と前後 context だけ確認できます。既存の親 directory の下に新規出力先を指定します。
+
+```sh
+game-screen-pick extract --at 0.5 --context-seconds 0.25 \
+  "recordings/ゲーム 録画.mkv" frame-inspection
 ```
 
-アンロードは `true` の場合だけ、既存の `ollama_host` に対して実行します。
-未設定・`false` ならアンロード用の通信もしません。起動・停止コマンドも未設定なら
-実行せず、起動済みサーバーを使用します。コマンドは両方指定する必要があります。
+`before.png`／`frame.png`／`after.png` と `extraction.json` を作ります。context 省略時は中央だけです。
+時刻は選んだ映像 stream の最初の有効 PTS を0とする秒数。要求時刻以降の最初の frame、最終端点は最後の frame を使い、既存出力は上書きしません。
 
-上のscriptは利用環境に用意する起動・停止用の実行ファイルです。起動側はサーバーを
-バックグラウンドで起動して終了し、停止側はそのサーバーとworkerを終了させてください。
-`{model}` は `vllm_model` に置換します。Dockerやsystemctlの制御コマンドも設定でき、
-リモートの場合は `ssh` を明示します。
+開発には Rust 1.88 以上（stable）、FFmpeg／FFprobe、jq が必要です。
 
-```toml
-vllm_base_url = "http://gpu-host:8000/v1"
-ollama_host = "http://gpu-host:11434"
-vllm_start_command = ["ssh", "-o", "BatchMode=yes", "gpu-host", "/opt/game-screen-pick/start-vllm", "{model_shell}"]
-vllm_stop_command = ["ssh", "-o", "BatchMode=yes", "gpu-host", "/opt/game-screen-pick/stop-vllm"]
+```sh
+cargo build --locked
+sh tests/check.sh
+cargo run --locked -- --help
 ```
 
-SSHのremote shellへ渡すモデル引数には、引用付きの `{model_shell}` を使います。
-この例はリモート側がPOSIX shellの環境を対象にしています。
-
-推論が必要になった時だけ、Ollamaの全ロード済みモデルを解放・確認してからvLLMを
-起動し、処理後に停止します。cacheだけで完了する場合は操作しません。
-モデル導入とGPU配置は運用側で設定します。詳しい設定と制限は
-[技術リファレンス](docs/technical-reference.md#動画理解による選定)を参照してください。
-
-## 出力
-
-```text
-recordings-selected/
-├── selected-01.jpg
-├── selected-02.jpg
-├── ...
-├── selected-30.jpg
-├── selected-contact-sheet.jpg
-└── report.json
-```
-
-- `selected-XX.jpg`: ブログ掲載候補のfull resolution画像
-- `selected-contact-sheet.jpg`: 順位、入力動画、動画時刻をまとめた確認用画像
-- `report.json`: 入力元、選定時刻、score、scene、model評価を含むreport
-
-中断後は同じコマンドで再開できます。Input Video Directoryを移動した場合や動画を
-追加した場合も、利用可能な動画単位cacheを再利用できます。
-
-## 詳しい仕様
-
-CLI option、設定項目、対応動画、Game Context provider、cache、選定処理、
-release規約は[技術リファレンス](docs/technical-reference.md)を参照してください。
+詳細は [設定・抽出・選定](docs/technical-reference.md)、[AI 接続](docs/ai-client.md)、[受入基準](docs/acceptance.md)、
+[配布・公開手順](docs/release.md)、[開発方針](CONTRIBUTING.md) を参照してください。

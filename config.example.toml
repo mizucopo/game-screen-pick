@@ -1,40 +1,65 @@
-[run]
-selection_method = "sampled_frames"
-game_context_provider = "ollama"
-game_context_model = "qwen3.8:27b"
-# ollama_api_key = "your-ollama-api-key"
-# openai_api_key = "your-openai-api-key"
-# gemini_api_key = "your-gemini-api-key"
-# xai_api_key = "your-xai-api-key"
-primary_model = "qwen3.8:27b"
-secondary_model = "muse-glimmer:30b"
-ollama_timeout = 900.0
-allow_cpu = false
-ffmpeg_workers = 2
-debug = false
+[selection]
+method = "sampled_frames" # sampled_frames または semantic_video
+# samples_per_video = 12 # 1〜4096。両方式とも候補不足なら範囲内で追補
+# context_delta_seconds = 0.25 # 正の有限秒数
+# semantic_chunk_seconds = 30.0 # 0.1〜3600。実PTSで区切り、modelの動画秒数上限も守る
 
-# 動画理解を使う場合はselection_methodを"semantic_video"へ変更します。
-# 動画・画像対応modelを提供する起動済みvLLMサーバーを指定してください。
-# vllm_base_url = "http://127.0.0.1:8000/v1"
-# vllm_model = "YOUR_SERVED_VIDEO_MODEL"
-# vllm_api_key = "your-key" # 未指定時はVLLM_API_KEY
-# vllm_timeout = 900.0
-# vllm_cache_revision = "1" # 重みやサーバー設定を変更したら更新
-# semantic_chunk_seconds = 30.0
-# semantic_overlap_seconds = 2.0
+[ai]
+backend = "vllm" # strata または vllm
+base_url = "http://127.0.0.1:8000/v1"
+model = "YOUR_SERVED_MODEL" # 使用する model を明示
+inference_level = "none" # none / low / medium / high を明示
+timeout_seconds = 900 # 1〜3600 の整数
+cache_revision = "1" # model 重み・server 設定が変わったら更新
+# api_key = "YOUR_API_KEY"
+# 非空の api_key を優先し、なければ GAME_SCREEN_PICK_API_KEY を使用します。
+# 推論レベルと画像・動画への対応は backend / model ごとの確認が必要です。
 
-# 以下は任意です。未設定のアンロード・起動停止操作は実行しません。
-# trueの場合だけ、既存ollama_host（未指定時はOLLAMA_HOST）を使って全modelを解放。
-# ollama_unload_before_vllm = false
-# ollama_host = "http://127.0.0.1:11434"
-# 起動/停止は両方指定。scriptは利用環境に用意し、制御操作後に終了させてください。
-# {model} は上のvllm_modelに置換されます。
-# vllm_start_command = ["/opt/game-screen-pick/start-vllm", "{model}"]
-# vllm_stop_command = ["/opt/game-screen-pick/stop-vllm"]
-# リモート操作は明示的にsshを指定し、vllm_base_url/ollama_hostも実際の接続先へ設定。
-# remote POSIX shellへ渡すmodel引数は引用付きの{model_shell}を使います。
-# vllm_start_command = ["ssh", "-o", "BatchMode=yes", "gpu-host", "/opt/game-screen-pick/start-vllm", "{model_shell}"]
-# vllm_stop_command = ["ssh", "-o", "BatchMode=yes", "gpu-host", "/opt/game-screen-pick/stop-vllm"]
-# vllm_command_timeout = 60.0
-# vllm_startup_timeout = 900.0
-# vllm_shutdown_timeout = 60.0
+# 共通 client を呼ぶには server/model の契約を明示します。
+# これは実能力の証明ではありません。docs/ai-client.md の確認表に実測を記録します。
+[ai.protocol]
+# response_model = "FIRST_SERVED_MODEL_NAME" # 別名でrequestする場合のresponse.model。省略時はai.model
+reasoning_format = "reasoning_effort" # または chat_template。model/template の仕様に合わせる
+supported_inference_levels = ["none"] # 使用する model で確認した値だけ
+json_schema = false # true は response_format を送る。常にアプリ側でも検証
+max_output_tokens = 2048 # thinking を含む server 側の出力上限
+max_request_bytes = 16777216 # base64 と prompt/schema を含む JSON body
+max_response_bytes = 1048576
+max_attempts = 3 # JSON/schema/用途契約の修正試行。通信失敗は再試行しない
+
+# vision 未設定では画像・動画を通信前に拒否します。
+# 以下は画像を使う場合の設定形。実際の encoder/projector と上限を確認して有効化します。
+# [ai.protocol.media]
+# vision_revision = "YOUR_ENCODER_PROJECTOR_AND_PREPROCESSING_REVISION"
+# max_images = 37 # 最大12候補の二次評価: sheet 1枚 + before/center/after 36枚
+# max_image_pixels = 32000000
+# max_image_edge = 16384
+# max_video_bytes = 0 # Strata は必ず0。vLLMも実動画検証までは0
+# max_video_seconds = 0.0
+
+# --game-context では以下の検索設定・契約・認証は不要です。
+# --game-title は docs/brave-search.md を読み、適用アカウントの契約確認後だけ有効化します。
+# [brave]
+# api_key = "YOUR_BRAVE_API_KEY" # なければ GAME_SCREEN_PICK_BRAVE_API_KEY
+# timeout_seconds = 30
+# max_response_bytes = 1048576
+# result_count = 5 # 1〜20。固定2検索、agent loopなし
+# country = "US"
+# search_lang = "en"
+# quota_stop_confirmed = true # 適用契約の無料上限hard stop・有料overageなしを確認した場合だけ
+# quota_contract_reference = "YOUR_APPLICABLE_HARD_STOP_CONTRACT_REFERENCE"
+# context_generation_confirmed = true # 検索結果のこの推論用途を確認した場合だけ
+# context_contract_reference = "YOUR_APPLICABLE_INFERENCE_USE_CONTRACT_REFERENCE"
+# generated_context_persistence_allowed = false # 既定false。生成context本文をcheckpoint/reportへ保存しない
+# storage_contract_reference = "YOUR_APPLICABLE_GENERATED_CONTEXT_STORAGE_RIGHTS"
+
+# 管理しない起動済みendpointには[runtime]不要。未設定commandは実行も/models確認もしません。
+# 任意管理はbackend一致・foreground起動・自己sessionだけの停止を明示します。
+# [runtime]
+# backend = "vllm" # ai.backendと同じ値。StrataならStrata用argvだけ指定
+# start_command = ["/absolute/path/start-wrapper", "{session}"]
+# stop_command = ["/absolute/path/stop-wrapper", "{pid}", "{session}"]
+# command_timeout_seconds = 30 # 1〜300
+# startup_timeout_seconds = 300 # 1〜3600
+# wrapperは指定pid/sessionだけを管理し、秘密情報をstdout/stderrへ出さないこと。
+# shell変数や~は展開しません。daemon化・global stop・自動installはしません。

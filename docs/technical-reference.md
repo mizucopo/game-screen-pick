@@ -1,368 +1,175 @@
-# 技術リファレンス
-
-game-screen-pickのCLI、設定、入出力、cache、選定処理に関する詳細仕様です。
-最短の実行方法は[README](../README.md)を参照してください。
-
-## CLI
-
-```bash
-uv run game-screen-pick [オプション] <入力動画ディレクトリ> <出力フォルダ>
-```
-
-### オプション
-
-- `-c`, `--config`: TOML設定ファイル（既定: `config/config.toml`）
-- `-n`, `--num`: 選択枚数（必須、1から999）
-- `--game-title`: Web検索からGame Contextを生成するためのゲーム表記
-- `--game-context`: 画像評価に直接使用するGame Context
-
-新規実行では`--game-title`と`--game-context`のどちらか一方だけが必須です。
-選択枚数、Game TitleまたはGame Context、Input Video Directory、Output Folderは
-実行ごとにCLIへ指定します。
-
-```bash
-OLLAMA_HOST=192.168.1.31:11434 \
-  uv run game-screen-pick \
-  --game-context "ジャンル: RPG。探索と会話を進める。代表的な画面はフィールド、会話、戦闘。景観と人物が明瞭な画像を重視する。" \
-  -n 30 \
-  ./recordings \
-  ./recordings-selected
-```
+# 設定・抽出・選定
 
 ## 設定
 
-繰り返し使う値はTOML設定ファイルの`[run]`tableへ記述します。初回は秘密情報を含まない
-sampleをGit管理対象外の既定設定へコピーします。
+[設定例](../config.example.toml) が現在の全設定です。全 table で未知 key を拒否し、型・必須項目・値域を確認します。
+`selection.method` は `sampled_frames`／`semantic_video`、`ai.backend` は `strata`／`vllm`。
+`base_url` は HTTP(S) の接続先を指定し、URL 内の認証・query・fragment は拒否します。
+`model`、`inference_level`、`timeout_seconds`、`cache_revision` は明示必須です。
+推論レベルは `none`／`low`／`medium`／`high` を受け付け、timeout は1〜3600秒とします。
+これは要求設定の検証です。backend/model ごとの実対応は共通 client の能力検証で決定します。
+空白のみの認証値は設定なしとして扱います。config の非空値が環境変数より優先します。
+認証値を診断・Debug・report・cache へ出しません。共通 HTTP client は [AI 接続契約](ai-client.md) を参照してください。
+通常 CLI は `workflow` から共通 client と cache/publication を接続し、`validate` は通信しません。
 
-```bash
-cp config.example.toml config/config.toml
-```
+`validate` は設定・枚数・Game Title/Context の排他・入力探索・出力 path を確認します。
+通常実行も同じ事前確認とcache/outputの排他取得を行い、その後 cache miss callback 内だけで接続します。
+`selection.samples_per_video` は既定12（1〜4096）、`context_delta_seconds` は既定0.25（正の有限値）、
+`semantic_chunk_seconds` は既定30（0.1〜3600）です。semantic は実PTS境界で分割し、model の秒数上限も守ります。
+一次は表示ID付きcontact sheet、二次はsheetと各IDのbefore/center/after実画像を順番に送り、中央だけを評価します。
+二次requestの最大候補数は指定枚数の3倍、最大12で、sheet 1枚と候補ごとの3画像を使います（最大37画像）。
+model の画像上限がこの予定最大数を満たさなければ一次推論・Brave検索の前に停止します。
+動画はlossless MOV bytesを送り、元動画source・実区間・PTS offsetを検証します。全入力のchunk数を推論前に合計し、4096件を超えれば停止します。
+clip相対時刻、未知source、重複eventを拒否します。静止・loadingなど有用なeventがないchunkは空配列を許し、全chunkが空なら候補不足で停止します。
 
-既定では実行時のcurrent directoryにある`config/config.toml`を読み込みます。用途や
-providerごとに`config/ollama.toml`、`config/openai.toml`など複数の実設定を作り、
-`-c config/openai.toml`または`--config config/openai.toml`で切り替えられます。
-`--game-title`を使う場合は`game_context_provider`と
-`game_context_model`の両方が必須です。`--game-context`で直接指定する場合は、両項目を
-省略できます。そのほかの項目はすべて記述する必要はありません。
+Game Title は [Brave契約](brave-search.md) を明示した固定2検索からJSON contextを生成します。
+生成contextのcache missではBraveと推論の認証、固定context schemaと初期requestの送信サイズをprobe前に検証します。
+次に全入力動画をprobeし、modelの画像寸法・画素上限と、samplingの重複排除後の合計4096実frame上限を検索前に確認します。
+一次・二次contact sheetの必須部分の最小寸法もmodel上限と照合します。実際のlabel/mediaで増える寸法・bytesは実requestで再検証します。
+生成contextのcache hitはBrave認証・検索を不要とします。直接contextもJSON符号化した本文がrequest上限を超えればmedia/runtime処理前に停止します。
+解決したcontextを含む一次・二次／動画の共通prompt・schema・metadataのrequest容量下限も、media/runtime処理前に確認します。
+同定・genre・進行要素・代表画面・選定優先点・出典と曖昧さ／矛盾を検証します。外部dataの命令に従うagent loopはありません。
+保存許可がない生成context本文はcheckpoint/reportへ入れません。所有する完成成果物は入力と実効条件が一致すれば再利用でき、
+cache消失後も検索・推論・media・runtime操作は0件です。再計算で生成contextが必要になりcheckpointもなければ、
+`--cache-only` はその欠落を外部操作0件で停止します。
 
-標準では`qwen3.8:27b`を一次評価、`muse-glimmer:30b`を二次評価に使います。
-`ollama_host`がない場合は`OLLAMA_HOST`、`127.0.0.1:11434`の順で解決します。
-未知のsectionやkey、型または範囲が不正な値は処理開始前にエラーになります。
+`[runtime]` は省略できます。両command未設定なら起動済みendpointを使い、管理・health確認は0件です。
+管理時はbackend一致と明示argvを検証し、`/models`で認証・declared modelを確認します。既存healthy endpointは停止しません。
+`start_command`はforeground、`stop_command`は完全argv要素の`{pid}`と`{session}`を必須とし、自己process/sessionだけを停止します。
+shell展開はなく、command/startup timeout、通常中断、起動途中・推論失敗でcleanupします。
+既存endpointの確認は1秒までとし、不確かなtimeoutでは起動しません。自己sessionの起動後は全体の起動期限内でHTTP timeoutを再試行します。
+停止失敗は本体errorを置換せず別にstderrへ報告し、本体成功時も終了1にします。HTTPのheader/body待機と短期rate-window待機も
+通常中断を監視し、遅い応答をAIの最大timeoutまで待たず自己runtimeのcleanupへ進みます。自動install／fallback／GPU leaseはありません。
+cleanupも中断を監視し、停止commandに最大500 msの猶予を与えた後、所有した停止command/runtimeのprocess groupだけを回収します。
+停止wrapperが終了しても、その子processを所有groupとして回収し、正常な非同期停止helperにはruntimeの終了まで待機します。
 
-| key | 内容 | 組み込み既定値 |
-| --- | --- | --- |
-| `selection_method` | 候補発見方式（`sampled_frames` / `semantic_video`） | `sampled_frames` |
-| `game_context_provider` | Game Context検索provider | なし（`--game-title`指定時は必須） |
-| `game_context_model` | context生成model | なし（`--game-title`指定時は必須） |
-| `ollama_api_key` | Ollama Web Search API key | `OLLAMA_API_KEY`へfallback |
-| `openai_api_key` | OpenAI API key | `OPENAI_API_KEY`へfallback |
-| `gemini_api_key` | Gemini API key | `GEMINI_API_KEY`へfallback |
-| `xai_api_key` | xAI API key | `XAI_API_KEY`へfallback |
-| `primary_model` | 一次評価用Ollama vision model | `qwen3.8:27b` |
-| `secondary_model` | 二次評価用Ollama vision model | `muse-glimmer:30b` |
-| `ollama_host` | Ollama host | 環境変数またはlocalhost |
-| `ollama_timeout` | Ollama APIのbatch単位timeout秒数 | `900.0` |
-| `allow_cpu` | GPU利用を確認できなくても続行するか | `false` |
-| `ffmpeg_workers` | frame抽出の並列数（1から4） | `2` |
-| `sample_interval_seconds` | 候補抽出の最大間隔（0.25秒以上） | 自動決定 |
-| `debug` | debug logを有効にするか | `false` |
+## media
 
-`num`、`game_title`、`game_context`は設定ファイルでは受け付けません。
+入力の対応拡張子は `.mp4`／`.mkv`／`.mov`／`.webm`（大小文字を区別しない）。
+UTF-8 ファイル名順で、直下の通常 file だけを扱います。対象動画の symlink、特殊 file、空集合は拒否します。
+映像 stream は attached picture を除いた最小 index を使います。default flag は選択条件にしません。
+FFprobe の有効な frame PTS を使い、stream offset・VFR を算術的な fps 換算で推測しません。
+stream metadata は1 MiB、frame metadata は64 MiBを上限とし、超過を拒否します。
+表示回転は90度単位に対応し、途中の解像度変更・不正な PTS・最終 duration 不明は拒否します。
+現在の cold probe は全 frame metadata を読み、抽出は decode 順序で原画像を確定します。
+warm では保存済みの probe/選定結果と正常成果物を再利用し、全 frame の再走査を避けます。
+時刻は最初の有効 PTS からの動画内秒数です。
+PTS 差分、duration、前後 context の計算時刻は FFprobe の microsecond 精度へ丸め、小数の加減算誤差で端点を飛ばさないようにします。
+抽出は要求時刻以降の最初の frame、最終端点は最後の frame とし、範囲外・非有限値は拒否します。
+FFmpeg の表示回転を適用した full-resolution PNG を抽出し、要求／実時刻を区別します。
+前後 context は指定 delta から両端点へ clip し、中央の source/stream と一致させます。
+semantic 用の内部 chunk は lossless PNG/MOV、microsecond timebase と `setts` により
+元 frame の間隔と末尾の表示時間を保持します。PNG/FFV1 encode・`setts` 対応を含む
+外部 FFmpeg 条件と検証した環境は [配布検証](release.md#配布対象と検証) を参照してください。
 
-選択中providerのAPI keyは、対応する設定ファイルの非空値、環境変数の順で解決します。
-設定値が未指定または空文字列なら環境変数を使います。生成済みcheckpointを再利用する
-場合はAPI keyがなくても再開でき、生成が必要なcache missで両方になければ外部API接続前に
-エラーになります。利用しないproviderのAPI keyは不要です。API keyは起動log、
-Run Manifest、report、checkpoint、例外messageへ出力しません。
+FFmpeg/FFprobe は shell を経由せず argv で実行します。媒体は専用の排他的 temporary directory 内へ作り、
+失敗・通常中断では一時 file を削除し、所有した子 process を停止・回収します。
+`extract` の出力は新規 directory に限定し、失敗時はこの command が作った file だけを片付けます。
+完成済み選定のcache/output排他・staging/公開・再開は以下のRust libraryで扱います。
+SIGINT は130、SIGTERM/HUPも成功にせず停止します。強制 kill や filesystem transaction の保証は含めません。
 
-`config/`配下は`.gitkeep`を除いて`.gitignore`対象です。任意名の複数設定を通常の
-`git add`で誤って追加できませんが、`git add -f`などの強制追加までは防げません。
-実設定や本物のAPI keyはコミットしないでください。Git管理する設定例はrootの
-`config.example.toml`だけです。
+## 品質・選定・一覧
 
-`sampled_frames`ではmodel名を切り替えられます。一次・二次modelともOllamaの`/api/show`でvision対応が
-確認できる必要があります。標準では各modelのロード後に`/api/ps`を確認し、model
-memoryの50%以上がVRAMにある場合だけ処理を継続します。
+`pipeline::run` は probe 済み動画と同期評価 callback を受け取り、専用 temporary directory の
+`Artifacts` を返します。一次/二次 callback へは実際の候補 ID・画像・sheet・前後 context を渡します。
+候補は最大12枚ずつ抽出して一次評価し、評価後は ID・時刻・品質指標を保持して原画像を削除します。
+二次評価と最終 JPEG には必要な元 frame だけを再抽出します。評価用の原画像・sheet・前後 context は
+各 callback の実行中だけ存在し、完了後に削除します。成功後は完成した JPEG・一覧・report だけを保持します。
+HTTP・応答 retry は共通 client と用途検証、cache・再開・所有権・公開は `run::Session` の責務です。
+固定応答の用途接続はloopback HTTPで検証します。実 model の読解能力・実録画成果物品質の証明にはしません。
 
-## 動画理解による選定
+等間隔 sampling は両端を含み、1候補なら中央を使います。semantic event は有効区間・代表時刻・重要度・
+scene・根拠・source を検証し、代表とその両側の候補を抽出します。event のない入力元も許容します。
+両方式とも計画を実 frame へ解決し、重複を除いた後に全入力4096候補の上限を適用します。同じ実 PTS は一度だけ評価します。
+抽出した実 PTS に対応する event が複数ある場合は、共通の優先規則で根拠を選びます。
+二次評価で不足した場合は、抽出済みの未評価候補を先に試します。それでも不足すると、未抽出の最も広い時間の隙間を
+入力元の巡回位置を追補間で引き継ぎ、semantic 方式では event 区間内に限ります。event の並びを重要度・source・区間・代表時刻・scene・根拠で固定します。
+初期計画を含む実候補数は4096、評価 batch は12、抽出/decode/job は逐次です。
+有効な異なる画像が指定枚数に達しなければ、除外・不足理由を示して停止します。
 
-`selection_method = "semantic_video"`では、vLLMサーバーの動画・画像対応modelを
-使用します。動画理解と一次・二次画像評価は同じmodelへ送信します。
-`primary_model`、`secondary_model`、`allow_cpu`は画像選定に使いません。
-`ollama_timeout`はGame Context生成と、有効にしたOllamaモデル解放に適用します。
-`ollama_host`はOllamaでのGame Context生成と、明示的に有効にしたモデル解放に使用します。
-`sample_interval_seconds`の指定はエラーになります。
+候補の PNG/JPEG は decode 前に encoded file を64 MiB、各辺を16384、画素を3200万、縦横比を32までに制限します。
+16未満の寸法、壊れた画像、symlink/特殊 file も拒否します。JPEG の向き情報を反映します。
+最終選定の品質95・4:4:4 JPEGは別の128 MiB上限を生成・一覧への読込・公開で共有します。
+3200万画素の正常入力から64 MiBを超えるJPEGを生成できるためで、数学的な最大圧縮サイズの保証ではありません。
+生成超過はエラーとし、公開前のサイズ検査とcopy中の増大検査で上限超過を拒否します。切詰めを成功扱いしません。
+このencoded上限を200MPのcontact sheetには適用しません。
+512px以内の preview の RGB 輝度平均・標準偏差・隣接勾配を使い、近黒/近白が96%超、平均が2.5%未満/97.5%超、
+標準偏差2.5%未満、平均勾配0.2%未満を除外します。遷移と有用性20点未満は評価結果から除外します。
+この保守的な機械判定だけで実ゲーム品質を保証しません。[実録画確認](verification.md#未実施の実モデルと画像評価) は未実施です。
 
-| key | 内容 | 既定値 |
-| --- | --- | --- |
-| `vllm_base_url` | HTTP(S)のOpenAI互換API接続先 | `http://127.0.0.1:8000/v1` |
-| `vllm_model` | サーバーが提供する動画・画像対応model名 | 必須 |
-| `vllm_api_key` | API認証。logやcacheへ保存しない | `VLLM_API_KEY` |
-| `vllm_timeout` | API requestごとのtimeout秒数 | `900.0` |
-| `vllm_cache_revision` | 重み・量子化・processor・サーバー設定変更時に更新するcache識別子 | `"1"` |
-| `semantic_chunk_seconds` | 解析する区間の秒数（1から120） | `30.0` |
-| `semantic_overlap_seconds` | 隣接区間の重複秒数。区間の前進幅は1秒以上 | `2.0` |
-| `ollama_unload_before_vllm` | `true`のときだけ既存Ollama接続先の全ロード済みmodelを解放 | `false` |
-| `vllm_start_command` | 起動制御commandの文字列配列。`{model}`を`vllm_model`へ置換 | 未設定 |
-| `vllm_stop_command` | 停止制御commandの文字列配列。startと両方指定が必要 | 未設定 |
-| `vllm_command_timeout` | 起動・停止commandそれぞれの実行期限（秒） | `60.0` |
-| `vllm_startup_timeout` | サーバーの状態・起動準備の確認期限（秒） | `900.0` |
-| `vllm_shutdown_timeout` | 停止command成功後、接続終了の確認期限（秒） | `60.0` |
+32×18 RGB の平均距離3.5%未満を近似重複とします。日本語等の scene を空白・英字大小だけ正規化し、
+未知 source、重複/欠落/未知 ID、非有限/範囲外 score、空 scene/根拠を拒否します。
+通常進行を最初に選び、通常進行が残る間は特別画面を概ね3分の1（2枚時は1枚）に抑えます。
+許容候補から未採用 source、scene、source内の時間3分割を優先し、次に有用性80%＋機械品質20%＋event重要度15%と
+見た目の距離で選びます。同点は有用性、source の UTF-8 順、実時刻、要求時刻、ID 順です。
+不足時は代表画像の選び直しを試し、通常画面の枚数を減らさず、追加比較・探索訪問を各4096回までに制限します。
+探索内では枚数、source・scene・source内の時間帯の分散の順に集合を比較します。
+最大枚数を数学的に保証する探索ではありません。最終集合から順位・除外理由・source 分散の説明を再計算します。
 
-推論と状態確認・解放のHTTP通信は、scheme・host・portが変わるredirectを拒否します。
-API keyを別originへ転送しません。同じorigin内のredirectは許可します。
-`vllm_timeout`は起動準備後のAPI requestに適用し、header・bodyの受信中も期限を確認します。
-OSのDNS名前解決時間は別途OSの設定に依存します。
+候補 sheet は12枚ごとの JPEG。二次評価の before/center/after は候補の実 PTS を中心に抽出し、実時刻付きで表示します。
+最終一覧は全選定画像を一度ずつ rank 順で、ID・source・要求/実時刻・scene と表示します。
+縦横比を維持して余白を付け、日本語の Noto Sans JP（[OFL](../assets/OFL.txt)）を同梱します。
+sheet は200MPの RGB canvas を上限とし、一度に1画像だけ decode/resize します。上限の canvas 自体は600MBです。
+通常の枚数では小さい canvas を使います。999枚や長い入力名の一覧は拡大して確認してください。
+未収録の Unicode 文字は ASCII code point 表記へ置き換え、元の backslash は二重化して表示を区別します。
+元の source・scene は保持し、表示の計測・折り返しにも同じ置換を適用します。
+source は255 UTF-16 unitsまで表示し、通常の最終一覧は14pxです。小型の最終一覧が長い名前の展開で
+canvas 上限に収まらない場合だけ12・10・8pxの順で再計測します。
+不正な rank/context 順序・異常 metadata は読めない一覧のまま成功させません。
 
-起動停止の設定がなければ既存サーバーへそのまま接続します。アンロードが未設定・
-`false`ならOllamaの状態確認も行いません。有効な起動停止・解放設定は`semantic_video`
-だけで使用でき、`sampled_frames`との組合せは操作前に設定エラーになります。
+Selected JPEG は縮小せず品質95で encode し、番号は全枚数が100以上なら3桁、それ未満なら2桁に揃えます。
+report は rank・source・要求/実時刻・寸法・一次/二次評価・event根拠・
+除外理由・非秘密の model 条件を記録します。遷移・低有用性等の確定除外と、最終選定に基づく重複・順位理由を分けます。
+Game Context は保存可能と確認した caller だけ明示して渡します。
 
-最初の動画解析または画像評価のcache missで、設定された操作だけを順に実行します。
-Ollamaは既存`ollama_host`、`ollama_api_key`（未指定時は対応する環境変数）を使い、
-`/api/ps`で列挙した各modelへ`/api/generate`の`keep_alive: 0`を送り、一覧が空になるまで
-`ollama_timeout`以内で確認します。失敗時はvLLMを起動しません。
-[Ollama API](https://docs.ollama.com/api/ps)、[解放方法](https://docs.ollama.com/faq#how-do-i-keep-a-model-loaded-in-memory-or-make-it-unload-immediately)。
+## cache・再開・出力保護
 
-commandはshellを介さずargvとして実行します。ローカルのDocker、systemctl、管理script、
-または明示的な`ssh` commandを使用します。ローカルの引数にはそのままの`{model}`、
-SSHのremote POSIX shellへ渡す一つの引数には引用付きの`{model_shell}`を使います。
-`{model_shell}`にさらに引用符を重ねないでください。remote shellがPOSIX以外の場合は
-対応するlauncherを用意します。`~`・環境変数・pipeをアプリ側では暗黙に展開しません。
-制御commandの標準入出力は破棄するため、serviceの診断logは起動先で保存してください。
-起動commandはバックグラウンドのサーバーを開始して終了する形式とし、停止commandは
-対応するworkerも終了させます。フォアグラウンドで動き続ける`vllm serve`を直接指定せず、
-制御scriptなどから起動してください。
+`run::Session::prepare` は入力・設定・path・既存出力の所有権を確認し、cache/outputを排他にしてから
+処理callbackを受け付けます。`Session::run` は `pipeline::run` の実画像評価と公開を接続します。
+通常CLIはその前に入力identityと非秘密の依頼条件で所有済みreportを確認し、context生成やsemantic-planの欠落に左右されず完成成果物を返します。
+reportの`cache.workflow.conditions`には生成条件、方式、指定枚数、要求／model上限で制限したsemantic chunk秒数を記録します。
+Brave契約参照は生文字列を記録せず、検索条件全体のdigestで変更を検出します。country・search_lang・result_countだけを可読値で記録します。
+CLIのcache親は出力と同じ親の `.game-screen-pick-cache`、変更は `--cache-directory` で指定します。
+既存の親directoryが必要です。専用 `game-screen-pick-rust-v1` namespaceだけへ書込み、旧cacheを読み込みません。
 
-起動前に接続先が既に応答していれば、Ollama解放やcommand実行をせずエラーにします。
-OllamaでGame Contextを新規生成する場合も、生成前にこの確認を行います。起動後は
-`/health`と`/v1/models`のmodel名で準備を確認します。停止確認は接続拒否を条件とするため、
-停止中も応答を返すproxyではなく、管理するサーバーの直接endpointを指定してください。
-停止中の接続リセットは停止未確認として期限まで再確認します。状態確認・解放の期限は
-HTTP headerとbodyの受信中も適用します。
-各profileは実行中に排他的に使用してください。入力・出力のlockは別入力や別端末からの
-同一GPU使用を排他せず、ほかのアプリからのOllama再ロードも制御しません。
+入力は初回にSHA-256を計算し、以後はdevice/inode・サイズ・mtime/ctimeのnanosecondを確認します。
+親directoryの移動は再利用でき、通常の編集・置換は再hashします。全metadataの偽装復元や不整合なfilesystemの変更検出は保証しません。
+処理中の入力変更は前後のmetadata照合で拒否します。probe済みstream/PTSは内容identityでcheckpointし、絶対pathを保存しません。
+評価はphase・表示IDと順序・入力identity・要求/実時刻・実画像/context/sheet・実効条件が同じ完了batch単位です。
+枚数変更は評価入力が同じbatchを再利用します。動画追加でIDやbatch構成が変わった部分は再評価します。
+backend・認証を除く正規化service URL・model・推論レベル・prompt/schema/media revision・解決済みcontextをkeyに含めます。
+認証値や保存禁止のcontext本文はkey/checkpointへ保存しません。完了応答だけを検証してatomic書込みし、不正・途中結果はhitにしません。
+`semantic_chunk` はsource/区間/条件ごとに検証したeventだけを保存し、欠損chunkだけ再処理します。
+完成したsemantic planは入力identity・source・実効条件・chunk秒数で、durationと最大4096 eventだけをまとめて保存します。eventが0件でも完了結果として再利用します。
+正常なsemantic warmはこの小さいplanから直接選定結果のkeyを検証し、全frame probeや個別chunk checkpointを読みません。
+planが欠落／破損した場合だけ既存chunk checkpointから再構成します。
+生成contextの `generated_context` は生成前の入力条件をkeyにし、保存許可をcallerが確認した場合だけ再利用します。Brave生応答は扱いません。
+最初のcontext生成callbackより前に入力identityを固定し、保存許可の有無にかかわらず同名入力の書換え・置換を拒否します。
 
-一度でも起動を試みたrunは、正常終了・起動失敗・timeout・例外・通常の中断のいずれでも
-停止commandを試みます。停止失敗はエラーとして報告し、処理本体のエラーと生成済み成果物を
-保持します。Ollama server自体は停止せず、modelの自動再ロードもしません。
-強制killや端末切断時の保証は管理script/service側で用意してください。
+完成したrunは公開reportのkeyと画像集合/digestを検証して返します。正常なwarmはFFprobe/FFmpeg・画像decode・動画content hash・
+評価callbackが0件で、入力metadataとidentity checkpoint、公開済み画像・一覧・reportだけを読みます。
+`RunOutcome.metrics` は`Session::prepare`からの累積checkpoint/入力content読取bytes・評価key用の実画像/context/sheet hash読取bytes（`assessment_bytes_read`）・input hash/probe回数・評価/context生成/semantic callback回数・公開と検証の読取bytes・経過時間を返します。`warm`は今回の完成済み出力の再利用を示し、同じSessionの先行処理も計測値に含みます。
+部分再開や条件変更では必要な候補を再抽出しますが、同じ完了評価を再推論しません。
 
-映像streamの先頭から末尾までを重複付きで分割し、各区間を低解像度の短いMP4として
-`video_url`へ送ります。既定は1 fps・最大幅512 px、1区間の送信前サイズ上限は16 MiBです。
-音声は解析しません。動画理解から重要区間、概算時刻、説明、重要度、遷移の除外区間を
-求め、概算時刻の前後1秒以内を0.5秒刻みで候補にします。候補は重要区間内に限定し、
-重複をまとめ、除外区間を取り除きます。先頭は直前画像の抽出範囲と揃えて0.05秒の余白を取り、
-最終frame時刻が取得できない場合は、平均frame rateの
-1frame分と0.05秒のうち長い方を終端余白にします。短い場面の検出精度はmodelと動画のsamplingに依存します。
+公開するreportは `Artifacts::report()` の確定記録と照合し、source・時刻・評価・理由を含む選定記録の変更を拒否します。
+`Session::run` が追加するtop-level cache metadataだけを照合から除き、同じreport読取結果を公開します。
+reportにはschema・宣言された出力集合・画像/sheetのdigest・report本文digestを記録します。
+cache消失後も所有権を確認でき、同名の有効JPEGへの編集、欠損、未知file、旧report、symlinkや特殊fileを拒否して保持します。
+lockは出力の親側 `.gsp-output-locks` 内でfilesystemの同名判定を使い、取得後も名前を削除しません。
+APFSのreadonly `validate` はoutput・保護対象・lock代表が未作成でも、親volumeのcase設定とUnicode full case folding／canonical分解で同親leafの別名重複を拒否します。
+case-sensitive／insensitiveのAPFSで実filesystemの判定との一致を検証しています。その他のfilesystemで未作成Unicode別名まで同じ保証はせず、通常prepareと既存path／lock代表はnative lookupを使います。
+公開は同じ親の排他的stagingとbackupを使い、
+旧成果物を再確認してrenameします。完了検証前の失敗・通常中断は旧集合を復元し、journalから再開時にも回復します。
+完了後のcleanup失敗は未処理journalとして検出し、検証できない変更を推測で削除しません。
+macOS/Linuxのlock・rename・通常中断を検証します。hostileな同時filesystem書換え、強制kill/停電での完全atomicity、
+filesystemをまたぐtransactionは保証しません。実AI接続と実録画品質の [未実施項目](verification.md) と、
+binary の [配布検証](release.md#配布対象と検証) は区別して記録します。
 
-重要度と機械的品質を等しい重みで一次候補の優先順位へ反映し、動画から得た場面の説明を
-両段階の画像評価にも渡します。最終画像は元動画の同じ時刻からfull resolutionで抽出し、
-評価候補との見た目の一致を確認します。reportの各画像に`semantic_provenance`、動画ごとに
-解析結果を保存します。候補不足や解析失敗はエラーになり、別方式へ自動切替しません。
+## 検証
 
-動画解析はInput Videoと区間ごとに検証済み結果をatomicに保存します。選択枚数の変更は
-動画解析を無効にせず、途中の区間だけが欠損・破損していても後続の正常な解析を再利用します。
-cacheの条件には動画identity、probe結果、区間、処理条件、接続先、model、cache revision、
-Game Context、prompt/schema versionを含めます。結果の変更も後続の抽出・評価へ伝わります。
-全cache hit時はvLLMへ通信しません。
-
-`/v1/models`では提供model名を確認しますが、重みの実体やGPU配置までは検証しません。
-reportのvLLM `digest`は設定から作ったcache fingerprintです。同じmodel名のままサーバーを
-変更する場合は必ず`vllm_cache_revision`を更新してください。commandとtimeoutは推論結果の
-cache条件に含めず、全cache hit時は起動停止・解放も行いません。vLLMの導入、model対応と
-context長の設定、GPU管理、および起動停止script/serviceの用意は運用側で行います。
-API契約は[vLLM Multimodal Inputs](https://docs.vllm.ai/en/latest/features/multimodal_inputs/)と
-[Structured Outputs](https://docs.vllm.ai/en/latest/features/structured_outputs/)を参照してください。
-
-## Input Video Directory
-
-Input Video Directory直下にある次の通常ファイルを、大文字小文字を区別せず
-ファイル名順で処理します。サブディレクトリは探索しません。
-
-```text
-.avi .flv .m2ts .m4v .mkv .mov .mp4 .mpeg .mpg .mts .ts .webm .wmv
-```
-
-対象動画がないdirectoryや、動画ファイルそのものを入力に指定した場合はエラーに
-なります。
-
-## Game Context
-
-`--game-context`を指定すると、その文章を画像評価へ直接使用し、Web検索やcontext生成の
-外部通信は行いません。
-
-`--game-title`を指定すると、正式名称だけでなく`ドラクエ11`のような略称や一般的な
-表記揺れも検索し、画像選定向けのGame Contextを生成します。複数作品や内容に影響する
-editionを一意に判別できない場合、情報が不足する場合、情報源の矛盾を解消できない
-場合は推測せずエラーにします。Game Titleは生成後の画像評価、選定、manifest、report
-には使用しません。
-
-どのproviderでも、ジャンル、基本的な進行と主なプレイ要素、代表的な画面や場面、
-画像選定で重視する視覚的要素を同程度の詳しさで含む、簡潔な日本語のcontextを
-生成します。公式サイトと公式storeを優先し、攻略手順、結末、隠し要素などの
-ネタバレは含めません。検索結果は信頼できない外部dataとして扱い、検索先の命令には
-従いません。
-
-| provider | 設定key / fallback環境変数 | 検索・生成方法 |
-| --- | --- | --- |
-| `ollama` | `ollama_api_key` / `OLLAMA_API_KEY` | Ollama Web Search APIの結果を`ollama_host`のOllama modelで生成 |
-| `openai` | `openai_api_key` / `OPENAI_API_KEY` | OpenAI Responses APIの`web_search` |
-| `gemini` | `gemini_api_key` / `GEMINI_API_KEY` | Gemini Interactions APIのGoogle Search |
-| `xai` | `xai_api_key` / `XAI_API_KEY` | xAI Responses APIの`web_search` |
-
-各APIの利用条件、無料枠、料金、rate limitはprovider側の設定に従い、利用料金が
-発生する場合があります。選択したproviderだけを呼び出し、認証失敗、通信失敗、
-利用上限到達時も別providerや有償APIへ自動fallbackしません。
-
-- Ollama: <https://docs.ollama.com/capabilities/web-search>
-- OpenAI: <https://developers.openai.com/api/docs/guides/tools-web-search>
-- Gemini: <https://ai.google.dev/gemini-api/docs/google-search>
-- xAI: <https://docs.x.ai/developers/tools/web-search>
-
-利用するprovider、model、API keyの組を実設定へ明示できます。各providerの完全な`[run]`
-設定例は次のとおりです。
-
-Ollama:
-
-```toml
-[run]
-game_context_provider = "ollama"
-game_context_model = "qwen3.8:27b"
-ollama_api_key = "your-ollama-api-key"
-```
-
-OpenAI:
-
-```toml
-[run]
-game_context_provider = "openai"
-game_context_model = "gpt-5.6"
-openai_api_key = "your-openai-api-key"
-```
-
-Gemini:
-
-```toml
-[run]
-game_context_provider = "gemini"
-game_context_model = "gemini-3.7-flash"
-gemini_api_key = "your-gemini-api-key"
-```
-
-xAI:
-
-```toml
-[run]
-game_context_provider = "xai"
-game_context_model = "grok-4.6"
-xai_api_key = "your-xai-api-key"
-```
-
-API keyの行を省略または空文字列にした場合は、対応する環境変数へfallbackします。
-たとえばOpenAIの環境変数を使う場合は次のように実行します。
-
-```bash
-OPENAI_API_KEY=... uv run game-screen-pick \
-  -c config/openai.toml \
-  -n 30 \
-  --game-title "ドラクエ11" \
-  ./recordings \
-  ./recordings-selected
-```
-
-## Output Folderと再開
-
-Output Folderには次の成果物を作ります。
-
-```text
-recordings-selected/
-├── selected-01.jpg
-├── selected-02.jpg
-├── ...
-├── selected-30.jpg
-├── selected-contact-sheet.jpg
-└── report.json
-```
-
-- `selected-XX.jpg`: ブログ掲載候補のfull resolution画像
-- `selected-contact-sheet.jpg`: 選定画像を順位・入力動画・動画時刻付きで一覧できる画像
-- `report.json`: 入力元、選定時刻、score、scene、model評価を含むmachine-readable report
-
-新規実行時のOutput Folderは空である必要があります。途中で中断した場合は、同じ
-Input Videos、選択条件、model、Output Folderで同じコマンドを再実行してください。
-完了済み実行では全成果物のsizeとSHA-256を検証し、Ollamaへ接続せずに結果を返します。
-Input Video Directoryを移動した場合や動画を追加した場合は、新しい空のOutput Folderを
-指定すると、利用可能な動画単位cacheを使って成果物を再生成します。
-
-## Phase Cache
-
-再開用cacheはInput Video Directory直下の見えるfolderへ保存します。
-
-```text
-recordings/
-├── game-part1.mp4
-├── game-part2.mp4
-└── cache-game-screen-pick/
-    ├── CACHE_INFO.txt
-    ├── videos/
-    │   └── 動画単位のprobe、候補frame、一次・二次評価cache
-    └── runs/
-        └── 入力集合ごとのmanifest、Output Folder完了記録
-```
-
-Input VideoはInput Video Directoryからの相対ファイル名とfile sizeで識別します。
-SHA-256、mtime、絶対pathは同一性判定へ使いません。そのため、Input Video Directoryと
-`cache-game-screen-pick/`を一緒に移動またはコピーしてもcacheを再利用できます。
-一方、同じ相対ファイル名とsizeのまま動画内容だけを変更しても検出しません。
-
-cacheはprobe、候補抽出・機械評価、一次評価、二次評価などのphaseとInput Video単位で
-管理します。各phaseは独立したversionと条件keyを持ち、version、model digest、prompt、
-Game Context、選定設定などが変わると、そのphaseと依存する後続だけを再実行します。
-候補抽出phaseはframe ID、時刻、JPEG size、生成時SHA-256をpayload digest付きmanifestへ
-保存します。正常な再開ではmanifestの完全性と各JPEGのregular file・sizeだけを確認し、
-全候補JPEGの再読込や機械評価を繰り返しません。manifestの欠損・破損、JPEGの欠損・
-symlink・size不一致、機械評価payloadのdigest不一致はcache missとして再生成します。
-この軽量確認では同じsizeを保った候補JPEGの置換は検出しないため、確実に再生成したい
-場合はcache folderを削除してください。
-動的生成したGame Contextも生成条件とともに保存し、同じGame Title、provider、modelの
-再実行ではWeb検索やcontext生成を繰り返しません。Ollama providerでは正規化した
-Ollama hostも生成条件に含め、別endpointの同名modelを混同しません。
-
-動画を追加した場合は既存動画の利用可能なphaseを維持し、新規動画のphaseを追加した後、
-全動画を横断する候補選定、最終選定、Selected Image、Selected Contact Sheet、reportを
-再生成します。
-
-`cache-game-screen-pick/`はgame-screen-pickを実行していないときにfolderごと削除できます。
-次回実行時に必要なcacheを安全に再生成します。同じ相対ファイル名とsizeの内容変更を
-確実に再処理したい場合も、このfolderを削除してください。旧Output Folder内の
-`.game-screen-pick/`や不正・schema不一致のcacheは再利用しません。
-
-## sampled_framesの選定の流れ
-
-1. 各動画のほぼ先頭から末尾までを等間隔でsampleする
-2. 暗転、白飛び、単色frameを機械的に除外する
-3. 品質と時間分散から各Input Videoで選択枚数の最大12倍を一次候補にする
-4. 一次modelがブログ掲載価値、遷移、sceneを評価する
-5. 場面・見た目・動画時刻を分散させ、各Input Videoで最大3倍を二次候補にする
-6. 二次modelが各候補の直前・対象・直後を見て再評価する
-7. 全Input Videoの二次候補を統合し、遷移frame、近い重複、title、map、menuへの偏りを
-   抑えて選定する
-8. 個別画像、JSON report、一覧contact sheetを出力する
-
-特定タイトル専用の選定ruleは持ちません。最終Game Contextはmodel判断の補足で、
-固定カテゴリや手動quotaとしては扱いません。
-
-候補数には全Input Video合計・Input Video単位とも固定上限を設けません。自動modeは
-各動画の時間と選択枚数から決めた等間隔のSample Positionで、ほぼ先頭から末尾までを
-覆います。`sample_interval_seconds`を指定した場合も、候補数を理由に拒否したり、
-指定した最大間隔を暗黙に広げたりしません。
-
-候補抽出と機械評価は未処理jobを一定量に抑えて進め、開始前に全候補数と一次・二次評価の
-初期予定数・追補時上限を表示し、全追補完了後に実際の評価対象数を表示します。
-
-## バージョンとリリース
-
-Pull Requestでversionを採番せず、公開する場合はリリース分類と理由を記載します。
-分類と公開の選択は[CONTRIBUTING.md](../CONTRIBUTING.md#リリース分類)、
-採番・公開の設定と復旧は[docs/release.md](release.md)を参照してください。
+`sh tests/check.sh` が format・Clippy・unit/integration と入力素材の確認を行う単一の品質 gate です。
+実 FFmpeg の抽出を独立した入力 recipe の全画素・PTS・向きへ照合します。
+recipe、素材確認の単独実行と明示生成は、ソース checkout の `tests/fixtures/README.md` を参照してください。
+archive を検証する場合は `BUILD-INFO.json` の `commit` と同じソースを使います。
+固定応答の選定と一覧の pixel/source/PTS/向き検証は Rust integration test で行います。
+実 model の品質・AI 能力は未検証です。配布 target の build 下限と実行した環境は、実 model の試験と分けて確認します。
