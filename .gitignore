@@ -6,6 +6,9 @@ config/*
 
 # Runtime and build output
 .game-screen-pick/
+.game-screen-pick-cache/
+.game-screen-pick-cache-rust/
+.gsp-output-locks/
 target/
 dist/
 
