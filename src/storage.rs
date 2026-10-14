@@ -230,7 +230,60 @@ pub fn read_regular(path: &Path, max: u64) -> Result<Vec<u8>> {
 }
 
 pub fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    digest_hex(&Sha256::digest(bytes))
+}
+
+pub(crate) fn digest_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        text.push(char::from(HEX[usize::from(byte >> 4)]));
+        text.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::*;
+
+    #[test]
+    fn sha256_preserves_known_lowercase_hex_vectors() {
+        for (bytes, expected) in [
+            (
+                Vec::new(),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                b"abc".to_vec(),
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+            (
+                (0..=255).collect(),
+                "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+            ),
+        ] {
+            assert_eq!(sha256(&bytes), expected);
+        }
+    }
+
+    #[test]
+    fn streamed_file_digest_preserves_hex_across_read_chunks() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&vec![0; 65_537]).unwrap();
+        let mut bytes_read = 0;
+        let (length, digest) =
+            digest_file_cancelled(file.path(), &AtomicBool::new(false), |bytes| {
+                bytes_read += bytes;
+            })
+            .unwrap();
+        assert_eq!(length, 65_537);
+        assert_eq!(bytes_read, length);
+        assert_eq!(
+            digest,
+            "3266304f31be278d06c3bd3eb9aa3e00c59bedec0a890de466568b0b90b0e01f"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -282,7 +335,7 @@ pub fn digest_file_cancelled(
             }
         });
     }
-    Ok((length, format!("{:x}", digest.finalize())))
+    Ok((length, digest_hex(&digest.finalize())))
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
