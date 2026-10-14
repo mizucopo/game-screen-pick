@@ -43,14 +43,13 @@ macOS の Homebrew FFmpeg 更新によって archive 内の依存記録が変わ
 
 ## 公開前の承認境界
 
-現在の作業 PR は `integration/rust-migration` 向けの通常 PR です。途中 PR は公開を希望せず `release:*` ラベルを付けません。
-integration branch で全品質 gate、独立レビュー、配布準備を揃え、最終の `main` 向け PR を別途作ります。
-設定・CLI・cache・運用の変更を含むメジャー切替として、最終 PR の希望 version は **2.0.0**、分類は `release:major` とします。
-手動で version を変更せず、最終 PR の差分・分類と公開対象を確認した後に既存 controller が採番します。
+変更は非 main branch で実装し、`main` 向け PR で全品質 gate、独立レビュー、配布検証を揃えます。
+公開を希望しない PR は `release:*` ラベルを付けません。文書整理や CI 検証のために実公開は行いません。
+公開する場合は PR の実差分から分類を選び、公開対象を確認してから既存 controller に採番を任せます。手動で product version は変更しません。
 
 実公開の前に、対象 version、GitHub Releases の二つの archive と checksum、対象 head、検証結果・未実施項目を本人へ提示します。
-承認は、最終 PR の squash merge、controller による `main` の採番 commit と tag の atomic push、build・asset upload・Release 公開・Latest 更新を含む一連の操作に対して得ます。
-途中 PR の実装依頼や Issue の close だけから、この承認を推定しません。認証・権限設定、Homebrew 等の下流公開は個別の承認対象です。
+承認は、PR の squash merge、controller による `main` の採番 commit と tag の atomic push、build・asset upload・Release 公開・Latest 更新を含む一連の操作に対して得ます。
+PR の実装依頼や Issue の close だけから、この承認を推定しません。認証・権限設定、Homebrew 等の下流公開は個別の承認対象です。
 Issue の close とコード完了から、実録画・実 backend・契約・Human Review の完了を推定しません。
 
 ## 設定と公開の流れ
@@ -81,6 +80,42 @@ merge commit と複数 main commit の rebase merge は拒否します。一つ�
 
 SemVer の prerelease patch は末尾数値を増やし、channel／core／安定版への変更は明示 version の下限が必要です。
 core を増やす分類ではその core の prerelease も指定でき、巻き戻しは拒否します。初回の設定導入以前の PR は再分類しません。
+
+## release 基盤の Python 依存
+
+共有の `.github/scripts/release.py` は、現役の採番・公開 controller として保持します。
+PR の分類、番号の未使用確認、採番 commit と tag の一致、同じ run の再実行、公開状態と Latest の保護を担うため、代替なしには削除しません。
+Rust 本体の旧実装ではなく、Copier 管理の release 基盤です。
+
+| 用途 | Python／uv の扱い |
+| --- | --- |
+| 利用者の binary 実行・最終配布物 | Python／uv／venv は不要。runtime 用 Docker image でも Python 不在を検査する。 |
+| ローカル build/test、`tests/check.sh`、Rust 品質・配布検証 CI | Rust／shell／jq を使い、Python／uv は要求しない。 |
+| PR の release 分類チェック、採番・公開制御 CI | `python3 -I` で controller を実行する。標準 library の `tomllib` を使うため Python 3.11 以上が必要。uv／venv／pip package は不要。 |
+
+PR の分類チェックは公開ラベルがない場合にも起動するため、PR の全 CI が Python 不要という意味ではありません。
+通常 build/test と利用手順を Rust 専用とする範囲には、共有 release controller の実行を含めません。
+
+controller の呼び出し元は次の五箇所です。
+
+| workflow / job / step | command | 用途 |
+| --- | --- | --- |
+| `release-classification.yml` / `release-classification` / Validate optional classification and its reason | `classification` | PR の公開分類と理由を確認する。 |
+| `release.yml` / `prepare` / Number latest main and reserve its tag | `prepare` | 最新 main の採番、commit と tag の予約・再利用を行う。 |
+| `release.yml` / `release` / Verify numbering commit and read publication data | `plan` | 採番記録と公開対象を確認する。 |
+| `release.yml` / `promote-latest` / Verify numbering commit and read publication data | `plan` | Latest 判定前に同じ採番 source を再確認する。 |
+| `release.yml` / `promote-latest` / Check newest completed release | `latest` | 完成した最新の安定版を判定し、後続 step で Latest に昇格する。 |
+
+[残存整理 #398](https://github.com/mizucopo/game-screen-pick/issues/398) での棚卸しでは、追跡対象の `.py` はこの controller 一件だけです。
+旧 Python アプリ・テスト、`.pyi`、`pyproject.toml`、`uv.lock`、`.python-version`、requirements／pytest 設定はありません。
+`.copier-answers.yml` の `use_python: false` は製品・開発環境の選択であり、release controller の無効化指定ではありません。
+README・受入条件の Python 不要という契約、`scripts/Dockerfile.artifact-runtime` の不在検査、旧 cache を拒否する Rust テストの Python 文字列は保持します。
+いずれも Python の実行依存や削除待ちの旧資産ではありません。
+
+release 分類・公開 CI も Python 不要にする場合は、先に `mizucopo/repo-template` で共通 controller の代替言語・実行環境と互換性を決めます。
+採番・同一 commit/tag・再実行・公開/Latest の保護を上流テストで確認し、controller と全呼び出し元を一緒に Copier 更新で反映してから、Python の例外を外します。
+consumer 単独で controller を書き換えたり、品質・artifact smoke・Python 不在検査を削除して代替にはしません。
+[repo-template #204](https://github.com/mizucopo/repo-template/issues/204) の Docker 公開直後の確認再試行は別の上流作業として進め、この整理では移植・撤去しません。
 
 ## 失敗と復旧
 
