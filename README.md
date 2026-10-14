@@ -13,7 +13,7 @@ FFmpeg／FFprobe と、画像・動画能力を確認した推論 endpoint を�
 OS／dynamic library と FFmpeg の条件・検証範囲は [配布検証](docs/release.md#配布対象と検証) と archive 内の `DEPENDENCIES.txt` で確認してください。
 
 [GitHub Releases](https://github.com/mizucopo/game-screen-pick/releases) から、Rust archive が公開された version を選びます。
-Rust 版の実公開は、integration 向け PR の完了後に承認を受ける別工程です。公開前の確認には PR の Actions artifact を使います。
+実公開は、main 向け PR の検証と承認後に行う別工程です。公開前の確認には PR の Actions artifact を使います。
 空の download directory で `RELEASE_VERSION` を選んだ version に置き換え、対象 target を一つ指定します。
 
 ```sh
