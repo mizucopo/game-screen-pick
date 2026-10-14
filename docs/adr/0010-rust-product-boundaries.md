@@ -14,7 +14,5 @@ Brave 検索と任意 runtime 管理は用途側に置く。model・推論レベ
 Rust は新しい config と cache で開始する。所有権を証明できない出力は保持して別の空出力先を案内する。
 staging と完了検証で既存成果物を保護し、強制 kill や filesystem に関する保証は実測の範囲に限る。
 
-PR は `integration/rust-migration` へ向け、全検証・独立レビュー・配布確認後に main 向け最終 PR を別途作る。
+PR・採番・公開の現行手順と本人の承認境界は [配布・採番・公開](../release.md) に従い、手動採番しない。
 配布検証 target は `aarch64-apple-darwin` と `x86_64-unknown-linux-gnu`。OS/glibc の宣言と実依存の検査、実行環境の証拠を区別する。
-途中 PR は公開を希望せず、最終のメジャー切替は本人の承認後に [CONTRIBUTING.md](../../CONTRIBUTING.md) の既存 controller に任せる。
-希望 version は2.0.0で、手動採番しない。実公開と未実施の実モデル・実録画品質確認は、それぞれの証拠・承認で判断する。
