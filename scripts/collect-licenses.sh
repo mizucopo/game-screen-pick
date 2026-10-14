@@ -55,6 +55,15 @@ while IFS="$tab" read -r name version license manifest license_file repository; 
         printf 'License supplement source: https://github.com/Nugine/simd/blob/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE\n' \
           >> "$destination/THIRD-PARTY-LICENSES.txt"
         ;;
+      jsonschema-regex:0.58.6:MIT:https://github.com/Stranger6667/jsonschema|jsonschema-value:0.58.6:MIT:https://github.com/Stranger6667/jsonschema)
+        jq -e --arg name "$name" '
+          .git.sha1 == "55ac1664384793c5d3b20745d3f9c169dfe2c06f" and
+          .path_in_vcs == ("crates/" + $name)
+        ' "$crate_dir/.cargo_vcs_info.json" > /dev/null
+        printf '%s\n' scripts/licenses/jsonschema-0.58.6-MIT.txt > "$destination/license-files.txt"
+        printf 'License supplement source: https://github.com/Stranger6667/jsonschema/blob/55ac1664384793c5d3b20745d3f9c169dfe2c06f/LICENSE\n' \
+          >> "$destination/THIRD-PARTY-LICENSES.txt"
+        ;;
       *) printf 'Missing license text: %s %s\n' "$name" "$version" >&2; exit 1 ;;
     esac
   fi

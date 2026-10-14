@@ -543,8 +543,14 @@ fn forking_stop_scripts(exit_code: u8, stops_runtime: bool) -> (Scripts, PathBuf
 
 fn assert_forked_stop_gone(stop_pid: &Path, helper_pid: &Path) {
     assert_process_group_gone(recorded_pid(stop_pid));
+    let helper = recorded_pid(helper_pid);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    // macOS excludes zombies from group lookup before init reaps their PIDs.
+    while unsafe { libc::kill(helper, 0) } == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
     assert_eq!(
-        unsafe { libc::kill(recorded_pid(helper_pid), 0) },
+        unsafe { libc::kill(helper, 0) },
         -1,
         "owned stop descendant must be terminated"
     );
