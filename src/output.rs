@@ -1113,7 +1113,7 @@ fn copy_jpeg_stream(
     );
     Ok(Digest {
         bytes,
-        sha256: format!("{:x}", hash.finalize()),
+        sha256: storage::digest_hex(&hash.finalize()),
     })
 }
 
@@ -1184,6 +1184,19 @@ mod tests {
             serde_json::from_slice(&fs::read(source.join("report.json")).unwrap()).unwrap();
         record.as_object_mut().unwrap().remove("cache");
         record
+    }
+
+    #[test]
+    fn copied_jpeg_digest_preserves_known_lowercase_hex() {
+        let jpeg = [0xff, 0xd8, 0xff, 0xd9];
+        let mut copied = Vec::new();
+        let digest = copy_jpeg_stream(&jpeg[..], &mut copied, &cancelled(), 4).unwrap();
+        assert_eq!(copied, jpeg);
+        assert_eq!(digest.bytes, 4);
+        assert_eq!(
+            digest.sha256,
+            "32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af"
+        );
     }
 
     #[test]
