@@ -1,6 +1,6 @@
 [package]
 name = "game-screen-pick"
-version = "1.19.4"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.88"
 description = "ゲーム録画からブログ用画像を選ぶCLI"
