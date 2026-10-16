@@ -106,6 +106,8 @@ fn peer_disconnected(error: &io::Error) -> bool {
 }
 
 fn read_request(stream: &mut TcpStream) -> io::Result<bool> {
+    // Winsock accept inherits nonblocking mode from the polling listener.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     let mut bytes = Vec::new();
     while !bytes.ends_with(b"\r\n\r\n") {
@@ -211,6 +213,40 @@ fn mock_disconnected_and_incomplete_peers_do_not_count_as_requests() {
     complete.read_to_string(&mut response).unwrap();
     assert!(response.starts_with("HTTP/1.1 200 "));
     assert_eq!(mock.requests.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn mock_nonblocking_accepted_socket_waits_for_delayed_complete_headers() {
+    use std::sync::mpsc::{self, RecvTimeoutError};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut accepted, _) = listener.accept().unwrap();
+    // Winsock accept inherits the listener's nonblocking mode. Force that
+    // starting state explicitly so this regression also runs on Unix hosts.
+    accepted.set_nonblocking(true).unwrap();
+    peer.write_all(b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n")
+        .unwrap();
+    let (started, starting) = mpsc::channel();
+    let (finished, result) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        started.send(()).unwrap();
+        finished.send(read_request(&mut accepted)).unwrap();
+    });
+    starting.recv_timeout(Duration::from_secs(2)).unwrap();
+    let early = result.recv_timeout(Duration::from_millis(50));
+    assert!(
+        matches!(early, Err(RecvTimeoutError::Timeout)),
+        "incomplete headers must wait for the peer: {early:?}"
+    );
+    peer.write_all(b"\r\n").unwrap();
+    assert!(
+        result
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap()
+    );
+    reader.join().unwrap();
 }
 
 fn panicked_mock_worker() -> Mock {
