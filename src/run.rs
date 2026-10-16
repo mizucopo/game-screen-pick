@@ -100,8 +100,9 @@ impl CacheConditions {
 }
 
 /// Cumulative work since `Session::prepare`, including preceding methods/runs.
-/// Callback counts record caller invocations; both legacy elapsed fields share
-/// this session interval. Stage intervals measure actual operations instead.
+/// Callback counts record caller invocations; `elapsed_seconds` and
+/// `cache.elapsed_seconds` share this session interval. Stage intervals measure
+/// actual operations instead.
 /// `RunOutcome::warm` describes the current output shortcut.
 #[derive(Debug, Serialize)]
 pub struct RunMetrics {

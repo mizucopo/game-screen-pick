@@ -93,9 +93,9 @@ reviewer、実行条件、問題画像と理由、合否を記録し、秘密情
 
 ## 配布と実受入
 
-配布 binary は開発用 toolchain／OpenCV の利用者 setup を要求しない。
+配布 binary は開発用 toolchain の利用者 setup を要求しない。
 FFmpeg／FFprobe と推論 server は外部依存。対象は `aarch64-apple-darwin`／`x86_64-unknown-linux-gnu` とし、
 最小 OS の宣言・dynamic library 検査と、実行した OS／FFmpeg 条件の証拠を [配布検証](release.md#配布対象と検証) に分けて記録する。
 未検証 target を対応済みとしない。配布準備の完了だけで実録画・実 backend・Brave 契約や Human Review を合格扱いしない。
 [検証状況](verification.md) の未実施項目は、Issue の close やコード完了から実施済みと推定しない。
-最終 main PR と公開は承認後の別工程で、採番は [既存 release 規約](../CONTRIBUTING.md) に従う。
+公開は PR の検証と承認後に行い、採番は [release 規約](../CONTRIBUTING.md) に従う。

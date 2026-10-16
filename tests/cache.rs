@@ -388,19 +388,22 @@ fn validated_reads_count_rejected_references_once_and_skip_bad_envelope_validato
 }
 
 #[test]
-fn old_namespaces_and_unknown_files_are_preserved_and_never_imported() {
+fn unrelated_namespaces_and_unknown_files_are_preserved() {
     let parent = temporary();
-    let legacy = parent.path().join("legacy-cache");
-    fs::create_dir(&legacy).unwrap();
-    fs::write(legacy.join("report.json"), b"old schema").unwrap();
+    let unrelated = parent.path().join("unrelated-cache");
+    fs::create_dir(&unrelated).unwrap();
+    fs::write(unrelated.join("report.json"), b"unknown schema").unwrap();
     fs::write(parent.path().join("unknown"), b"keep").unwrap();
     let mut cache = Cache::open(parent.path()).unwrap();
-    let cache_key = key(&"legacy-looking-condition").unwrap();
+    let cache_key = key(&"unrelated-condition").unwrap();
     assert!(cache.read::<String>("batch", &cache_key).unwrap().is_none());
     cache
         .write("batch", &cache_key, &"Rust checkpoint")
         .unwrap();
-    assert_eq!(fs::read(legacy.join("report.json")).unwrap(), b"old schema");
+    assert_eq!(
+        fs::read(unrelated.join("report.json")).unwrap(),
+        b"unknown schema"
+    );
     assert_eq!(fs::read(parent.path().join("unknown")).unwrap(), b"keep");
 }
 

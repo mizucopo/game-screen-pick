@@ -383,7 +383,7 @@ fn existing_run_callers_keep_the_original_owned_output_shortcut_without_workflow
             &options,
             &conditions,
             &cancelled,
-            |_| panic!("legacy callers keep warm reuse"),
+            |_| panic!("completed output must keep warm reuse"),
         )
         .unwrap();
     assert!(warm.warm);

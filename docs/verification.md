@@ -39,7 +39,7 @@ GSP_QA_DIR=/absolute/path/to/empty-synthetic-qa sh tests/check.sh
 ## 計測の意味
 
 成功した CLI は stderr の `metrics: {JSON}` に非秘密の計測を出す。report には計測を混ぜず、cold／warm／再開の成果物同一性を維持する。
-`elapsed_seconds` と旧 `cache.elapsed_seconds` は `Session::prepare` 以降の累積時間。
+`elapsed_seconds` と `cache.elapsed_seconds` は `Session::prepare` 以降の累積時間。
 `stage_seconds` の範囲は次の通りで、工程合計は elapsed の完全な内訳ではない。
 
 | field | 範囲 |
@@ -57,7 +57,7 @@ bytes、input hash、probe、assessment／semantic／context callback数も記�
 開始前の処理・同processのthreadを含み、FFmpeg／FFprobe子processとremote backendは含まない。
 取得不能は `unavailable`、非対応OSは `unsupported`。利用者が実backendを測定するときはserver側の計測を別に残す。
 abortしたCLIは完成した `RunOutcome` がなくmetrics行を出さない。失敗までの外部呼出数はmock記録、実測ではbackend／検索側の非秘密集計を使用する。
-環境・build・素材・条件で時間は変わる。Rust化だけの速度向上率を推測したり、時間閾値を品質の合格条件にしたりしない。
+環境・build・素材・条件で時間は変わる。速度向上率を推測したり、時間閾値を品質の合格条件にしたりしない。
 
 ## 未実施の実モデルと画像評価
 

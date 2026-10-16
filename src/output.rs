@@ -1456,10 +1456,10 @@ mod tests {
         fs::write(unknown.join("holiday.txt"), b"keep me").unwrap();
         assert!(Output::prepare(&unknown, &[], &cancelled()).is_err());
         assert_eq!(fs::read(unknown.join("holiday.txt")).unwrap(), b"keep me");
-        let legacy = artifacts(&root, "legacy", 25);
-        let before = fs::read(legacy.join("report.json")).unwrap();
-        assert!(Output::prepare(&legacy, &[], &cancelled()).is_err());
-        assert_eq!(fs::read(legacy.join("report.json")).unwrap(), before);
+        let unowned = artifacts(&root, "unowned", 25);
+        let before = fs::read(unowned.join("report.json")).unwrap();
+        assert!(Output::prepare(&unowned, &[], &cancelled()).is_err());
+        assert_eq!(fs::read(unowned.join("report.json")).unwrap(), before);
 
         let source = artifacts(&root, "artifacts", 15);
         let path = root.join("result");

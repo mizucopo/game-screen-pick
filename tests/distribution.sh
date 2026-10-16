@@ -132,7 +132,7 @@ inspect_linux() {
     x86_64-unknown-linux-gnu "$scratch/dependencies.txt"
 }
 inspect_linux
-export GSP_FAKE_EXTRA_LIBRARY=libopencv_core.so
+export GSP_FAKE_EXTRA_LIBRARY=libunexpected.so
 reject inspect_linux
 unset GSP_FAKE_EXTRA_LIBRARY
 export GSP_FAKE_GLIBC=2.36

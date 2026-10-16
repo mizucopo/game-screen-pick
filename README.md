@@ -9,7 +9,7 @@
 
 対象は Apple Silicon macOS の `aarch64-apple-darwin` と Linux x86_64 GNU の `x86_64-unknown-linux-gnu` です。
 FFmpeg／FFprobe と、画像・動画能力を確認した推論 endpoint を別途用意します。日本語 font は binary に含まれます。
-本体の利用に開発用 toolchain や OpenCV は不要です。
+本体の利用に開発用 toolchain は不要です。
 OS／dynamic library と FFmpeg の条件・検証範囲は [配布検証](docs/release.md#配布対象と検証) と archive 内の `DEPENDENCIES.txt` で確認してください。
 
 [GitHub Releases](https://github.com/mizucopo/game-screen-pick/releases) から、Rust archive が公開された version を選びます。
@@ -51,13 +51,12 @@ archive は設定例、利用文書、license、build・依存情報も含みま
 
 ## 設定して実行
 
-新しい Rust 設定を作り、接続先・model・推論レベルと `ai.protocol` の能力・上限を明示します。
-古い設定は流用せず、手元の設定・録画・出力・cache を保持してください。
-以下の `cp -n` は既存 file を上書きしません。`config/rust.toml` がある場合は別の新規 file 名を選び、後の command にも指定します。
+設定例をコピーし、接続先・model・推論レベルと `ai.protocol` の能力・上限を明示します。
+以下の `cp -n` は既存 file を上書きしません。`config/config.toml` がある場合は別の新規 file 名を選び、後の command にも指定します。
 
 ```sh
 mkdir -p config recordings
-cp -n "$bundle/config.example.toml" config/rust.toml
+cp -n "$bundle/config.example.toml" config/config.toml
 ```
 
 [設定例](config.example.toml) の vision は無効のため、接続する backend/model の画像能力を確認して `ai.protocol.media` を設定します。
@@ -69,18 +68,18 @@ cp -n "$bundle/config.example.toml" config/rust.toml
 まず設定と入力を外部 command・通信・書込なしで確認し、同じ引数で実行します。
 
 ```sh
-game-screen-pick validate --config config/rust.toml --count 2 \
-  --cache-directory .game-screen-pick-cache-rust \
-  --game-context "探索・戦闘・会話の見やすい場面を選ぶ" recordings output-rust
-game-screen-pick --config config/rust.toml --count 2 \
-  --cache-directory .game-screen-pick-cache-rust \
-  --game-context "探索・戦闘・会話の見やすい場面を選ぶ" recordings output-rust
+game-screen-pick validate --config config/config.toml --count 2 \
+  --cache-directory .game-screen-pick-cache \
+  --game-context "探索・戦闘・会話の見やすい場面を選ぶ" recordings output
+game-screen-pick --config config/config.toml --count 2 \
+  --cache-directory .game-screen-pick-cache \
+  --game-context "探索・戦闘・会話の見やすい場面を選ぶ" recordings output
 ```
 
 枚数は 1〜999。入力直下の通常動画を名前順に扱い、symlink は追跡しません。
-出力は入力・設定・cache と重ならない、新規・空・所有権を検証できる Rust 成果物 directory を指定します。
+出力は入力・設定・cache と重ならない、新規・空・所有権を検証できる成果物 directory を指定します。
 未所有・編集済み file は保持して拒否します。その場合は既存出力を削除せず、別の空の出力先を指定してください。
-cache は新しい Rust namespace を使い、旧 cache を読み込みません。既定では出力の親の `.game-screen-pick-cache`、変更は上記の `--cache-directory` です。
+cache の既定は出力の親の `.game-screen-pick-cache` で、変更は上記の `--cache-directory` です。
 
 `--game-context` と `--game-title` は一方だけ指定します。直接 context は検索しません。
 Game Title からの生成は [Brave の適用契約](docs/brave-search.md) と認証を確認後に設定してください。
@@ -91,7 +90,7 @@ Game Title からの生成は [Brave の適用契約](docs/brave-search.md) と�
 ## 更新
 
 新 version の archive と checksum を新しい空 directory へ取得し、上記と同じ検証・展開・配置を行います。
-設定例を既存設定へ上書きせず、必要な設定差分を別の新しい Rust 設定で確認してください。
+設定例を既存設定へ上書きせず、必要な設定差分を別の新規 file で確認してください。
 録画・既存出力・cache は保持し、新しい空出力先で `validate` と実行を確認します。
 model 重み・server 設定が変わった場合は `ai.cache_revision` を更新します。
 未検証の OS・target や下流 package manager への配布を、この archive の確認から対応済みとは扱いません。

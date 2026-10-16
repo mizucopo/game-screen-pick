@@ -829,7 +829,7 @@ fn preflight_rejects_unowned_edited_overlapping_and_competing_outputs_without_ca
     fs::remove_file(paths.output_directory.join("notes.txt")).unwrap();
     fs::write(
         paths.output_directory.join("report.json"),
-        br#"{"selected_count":1,"legacy_format":true}"#,
+        br#"{"selected_count":1,"unowned_report":true}"#,
     )
     .unwrap();
     let old_report = fs::read(paths.output_directory.join("report.json")).unwrap();
