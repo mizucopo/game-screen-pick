@@ -1,4 +1,4 @@
-//! Locked Rust checkpoints; legacy caches are never read or modified.
+//! Locked checkpoints contained in a dedicated, versioned namespace.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;

@@ -12,7 +12,7 @@ Rust binary の配布対象は次の二つです。これ以外の target は対
 build の下限宣言とリンク検査は、その最小 OS 上での実行証拠と区別します。
 macOS CI の実行環境は 15 であり、14.0 上の実行を検証したことにはしません。
 `macos-14` runner は [GitHub の廃止予定](https://github.com/actions/runner-images/issues/13518) に従って使いません。
-FFmpeg／FFprobe と推論 endpoint は外部依存です。font は binary に内蔵し、本体の実行に Rust toolchain や Python 環境は要求しません。
+FFmpeg／FFprobe と推論 endpoint は外部依存です。font は binary に内蔵し、本体の実行に開発用 toolchain は要求しません。
 FFmpeg の PNG／FFV1、表示回転、`setts` と実 PTS の保持は製品抽出・動画 chunk の試験で確認します。
 検証した OS／FFmpeg version と dynamic library は配布物の `BUILD-INFO.json`／`DEPENDENCIES.txt` と PR の検証結果に記録します。
 未実測の FFmpeg 最小 version や、宣言値以外の OS の互換性を推測しません。
@@ -43,14 +43,13 @@ macOS の Homebrew FFmpeg 更新によって archive 内の依存記録が変わ
 
 ## 公開前の承認境界
 
-現在の作業 PR は `integration/rust-migration` 向けの通常 PR です。途中 PR は公開を希望せず `release:*` ラベルを付けません。
-integration branch で全品質 gate、独立レビュー、配布準備を揃え、最終の `main` 向け PR を別途作ります。
-設定・CLI・cache・運用の変更を含むメジャー切替として、最終 PR の希望 version は **2.0.0**、分類は `release:major` とします。
-手動で version を変更せず、最終 PR の差分・分類と公開対象を確認した後に既存 controller が採番します。
+変更は非 main branch で実装し、`main` 向け PR で全品質 gate、独立レビュー、配布検証を揃えます。
+公開を希望しない PR は `release:*` ラベルを付けません。文書整理や CI 検証のために実公開は行いません。
+公開する場合は PR の実差分から分類を選び、公開対象を確認してから既存 controller に採番を任せます。手動で product version は変更しません。
 
 実公開の前に、対象 version、GitHub Releases の二つの archive と checksum、対象 head、検証結果・未実施項目を本人へ提示します。
-承認は、最終 PR の squash merge、controller による `main` の採番 commit と tag の atomic push、build・asset upload・Release 公開・Latest 更新を含む一連の操作に対して得ます。
-途中 PR の実装依頼や Issue の close だけから、この承認を推定しません。認証・権限設定、Homebrew 等の下流公開は個別の承認対象です。
+承認は、PR の squash merge、controller による `main` の採番 commit と tag の atomic push、build・asset upload・Release 公開・Latest 更新を含む一連の操作に対して得ます。
+PR の実装依頼や Issue の close だけから、この承認を推定しません。認証・権限設定、Homebrew 等の下流公開は個別の承認対象です。
 Issue の close とコード完了から、実録画・実 backend・契約・Human Review の完了を推定しません。
 
 ## 設定と公開の流れ

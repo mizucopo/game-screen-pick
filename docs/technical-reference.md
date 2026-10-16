@@ -130,7 +130,7 @@ Game Context は保存可能と確認した caller だけ明示して渡しま�
 reportの`cache.workflow.conditions`には生成条件、方式、指定枚数、要求／model上限で制限したsemantic chunk秒数を記録します。
 Brave契約参照は生文字列を記録せず、検索条件全体のdigestで変更を検出します。country・search_lang・result_countだけを可読値で記録します。
 CLIのcache親は出力と同じ親の `.game-screen-pick-cache`、変更は `--cache-directory` で指定します。
-既存の親directoryが必要です。専用 `game-screen-pick-rust-v1` namespaceだけへ書込み、旧cacheを読み込みません。
+既存の親directoryが必要です。checkpoint の読書きは専用 `game-screen-pick-rust-v1` namespace 内に限定します。
 
 入力は初回にSHA-256を計算し、以後はdevice/inode・サイズ・mtime/ctimeのnanosecondを確認します。
 親directoryの移動は再利用でき、通常の編集・置換は再hashします。全metadataの偽装復元や不整合なfilesystemの変更検出は保証しません。
@@ -154,7 +154,7 @@ planが欠落／破損した場合だけ既存chunk checkpointから再構成し
 公開するreportは `Artifacts::report()` の確定記録と照合し、source・時刻・評価・理由を含む選定記録の変更を拒否します。
 `Session::run` が追加するtop-level cache metadataだけを照合から除き、同じreport読取結果を公開します。
 reportにはschema・宣言された出力集合・画像/sheetのdigest・report本文digestを記録します。
-cache消失後も所有権を確認でき、同名の有効JPEGへの編集、欠損、未知file、旧report、symlinkや特殊fileを拒否して保持します。
+cache消失後も所有権を確認でき、同名の有効JPEGへの編集、欠損、未知file、未知report、symlinkや特殊fileを拒否して保持します。
 lockは出力の親側 `.gsp-output-locks` 内でfilesystemの同名判定を使い、取得後も名前を削除しません。
 APFSのreadonly `validate` はoutput・保護対象・lock代表が未作成でも、親volumeのcase設定とUnicode full case folding／canonical分解で同親leafの別名重複を拒否します。
 case-sensitive／insensitiveのAPFSで実filesystemの判定との一致を検証しています。その他のfilesystemで未作成Unicode別名まで同じ保証はせず、通常prepareと既存path／lock代表はnative lookupを使います。
