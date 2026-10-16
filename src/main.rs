@@ -29,7 +29,16 @@ fn main() {
             error.code
         }
     };
+    #[cfg(unix)]
     let signal = received.load(Ordering::Relaxed);
+    // Windows has one interruption kind. Derive its exit status from the same
+    // flag the workers observe instead of publishing two independent atomics.
+    #[cfg(windows)]
+    let signal: usize = if cancelled.load(Ordering::Relaxed) {
+        2
+    } else {
+        0
+    };
     if signal != 0 {
         eprintln!("interrupted; temporary extraction files and child processes cleaned up");
         std::process::exit(128 + signal as i32);
@@ -52,22 +61,21 @@ fn install_interruption_handler(
 #[cfg(windows)]
 fn install_interruption_handler(
     cancelled: Arc<AtomicBool>,
-    received: Arc<AtomicUsize>,
+    _received: Arc<AtomicUsize>,
 ) -> std::io::Result<()> {
     use std::sync::OnceLock;
     use windows_sys::Win32::System::Console::{
         CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler,
     };
 
-    static FLAGS: OnceLock<(Arc<AtomicBool>, Arc<AtomicUsize>)> = OnceLock::new();
+    static CANCELLED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
     unsafe extern "system" fn handle(event: u32) -> i32 {
         if matches!(event, CTRL_C_EVENT | CTRL_BREAK_EVENT)
-            && let Some((cancelled, received)) = FLAGS.get()
+            && let Some(cancelled) = CANCELLED.get()
         {
             // Only set flags here. The normal execution path cancels HTTP and
             // media work, releases locks, and stops its private process jobs.
-            received.store(2, Ordering::Relaxed);
             cancelled.store(true, Ordering::Relaxed);
             return 1;
         }
@@ -76,8 +84,8 @@ fn install_interruption_handler(
         0
     }
 
-    FLAGS
-        .set((cancelled, received))
+    CANCELLED
+        .set(cancelled)
         .map_err(|_| std::io::Error::other("interruption handler already initialized"))?;
     // A launcher may have inherited CTRL_C_IGNORE into this process. Restore
     // normal delivery before installing the handler so it can perform cleanup.

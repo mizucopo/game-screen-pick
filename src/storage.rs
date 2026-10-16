@@ -190,6 +190,42 @@ pub fn sync_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Move an already-verified transaction directory on the same filesystem.
+/// Unix retains rename's empty-directory placeholder semantics. Windows must
+/// reject every existing destination: std::fs::rename enables replacement and
+/// can otherwise destroy a file created after our ownership checks.
+pub(crate) fn rename_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::rename(source, destination)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+
+        let wide_path = |path: &Path| -> std::io::Result<Vec<u16>> {
+            let mut units = path.as_os_str().encode_wide().collect::<Vec<_>>();
+            if units.contains(&0) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "directory move path must not contain NUL",
+                ));
+            }
+            units.push(0);
+            Ok(units)
+        };
+        let source = wide_path(source)?;
+        let destination = wide_path(destination)?;
+        // No REPLACE_EXISTING or COPY_ALLOWED: the kernel refuses an existing
+        // file/directory in this single move, without a separate exists check.
+        if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), 0) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod macos_names {
     use std::ffi::c_void;
@@ -379,6 +415,63 @@ mod digest_tests {
         assert_eq!(
             digest,
             "3266304f31be278d06c3bd3eb9aa3e00c59bedec0a890de466568b0b90b0e01f"
+        );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod directory_move_tests {
+    use super::*;
+
+    #[test]
+    fn transaction_directory_move_refuses_existing_files_and_directories() {
+        for kind in ["file", "empty-directory", "populated-directory"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let source = root.join("staged");
+            let destination = root.join("destination");
+            fs::create_dir(&source).unwrap();
+            fs::write(source.join("staged.txt"), b"new output").unwrap();
+            if kind == "file" {
+                fs::write(&destination, vec![0x5a; 65_537]).unwrap();
+            } else {
+                fs::create_dir(&destination).unwrap();
+                if kind == "populated-directory" {
+                    fs::write(destination.join("keep.txt"), b"user data").unwrap();
+                }
+            }
+            let original = file_identity(&destination).unwrap();
+            assert!(rename_directory(&source, &destination).is_err(), "{kind}");
+            assert_eq!(file_identity(&destination).unwrap(), original, "{kind}");
+            assert_eq!(fs::read(source.join("staged.txt")).unwrap(), b"new output");
+            if kind == "file" {
+                assert_eq!(fs::read(&destination).unwrap(), vec![0x5a; 65_537]);
+            } else if kind == "populated-directory" {
+                assert_eq!(
+                    fs::read(destination.join("keep.txt")).unwrap(),
+                    b"user data"
+                );
+            } else {
+                assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn transaction_directory_move_preserves_identity_at_an_absent_destination() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let source = root.join("staged");
+        let destination = root.join("published");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("output.txt"), b"complete output").unwrap();
+        let original = file_identity(&source).unwrap();
+        rename_directory(&source, &destination).unwrap();
+        assert!(!source.exists());
+        assert_eq!(file_identity(&destination).unwrap(), original);
+        assert_eq!(
+            fs::read(destination.join("output.txt")).unwrap(),
+            b"complete output"
         );
     }
 }
