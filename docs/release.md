@@ -108,12 +108,17 @@ Rust version と FFmpeg source の固定は、同じ source を別の tool versi
 
 共有 `.github/scripts/release.py` は最新 template の生成物をそのまま使います。
 `prepare`・`plan`・`latest` による採番と公開分類を採用し、汎用の `create`・`distribution` はこの配布 workflow から呼びません。
-汎用 Rust 配布の Linux 単体 archive では、上記の二つの target、checksum、同梱資料、実行検証を満たせないためです。
+汎用 Rust 配布は `rust_release_targets` で複数 OS／CPU と checksum を扱えるようになりましたが、
+この製品の archive layout、最低 OS・依存 library・license 検査、FFmpeg を使う実行検証と全 asset の bytes 照合は既存の配布契約です。
+接続方法を製品 Issue で検討するまでは、template が案内する製品固有処理の境界に従い、既存の配布・公開経路を保持します。
 共有 `create` は `target_commitish` を指定しないため、採番 SHA の明示を必要とする既存の作成処理を保持します。
 Release は `--target "$RELEASE_SHA"` を指定して draft として作り、既存の配布 script で採番 SHA・分類・全 asset の bytes を確認してから公開します。
 共通の配布案内処理による draft 公開も、この検証経路の代わりには使いません。
 
 Copier の既存回答 `rust_version: stable` は保持し、実際の build toolchain は上記の `rust-toolchain.toml` の固定値を維持します。
+新しい回答 `rust_release_targets` には既存の二つの target を記録します。
+`.github/release.json` の `publication.rust`、汎用 `rust-builds` job とその matrix 読み込みは追加せず、
+既存の `distribution-build` と配布検証を維持します。回答の target 選択だけで製品の配布方式を変更しません。
 品質 workflow の FFmpeg／FFprobe、`sh tests/check.sh`、二つの native 配布 builder、Cargo と Copier の release inputs、
 この文書の配布・承認・復旧手順は repository 固有の差分です。`.codex/project.md` の project 指示も保持します。
 CodeQL の新しい回答 `use_gh_actions_codeql` は template の既定値 `false` を採用し、workflow や GitHub の解析設定は追加・変更しません。
