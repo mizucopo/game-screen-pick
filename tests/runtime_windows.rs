@@ -4,8 +4,8 @@
 #[path = "support/process_helper.rs"]
 mod process_helper;
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{self, Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,7 @@ struct Mock {
     url: String,
     requests: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
+    worker: Option<JoinHandle<io::Result<()>>>,
 }
 
 impl Mock {
@@ -35,7 +35,7 @@ impl Mock {
         let recorded = requests.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
-        let worker = thread::spawn(move || {
+        let worker = thread::spawn(move || -> io::Result<()> {
             while !stopping.load(Ordering::Relaxed) {
                 let (mut stream, _) = match listener.accept() {
                     Ok(connection) => connection,
@@ -43,19 +43,25 @@ impl Mock {
                         thread::sleep(Duration::from_millis(5));
                         continue;
                     }
-                    Err(error) => panic!("mock accept failed: {error}"),
+                    Err(error) => return Err(error),
                 };
-                read_request(&mut stream);
+                if !read_request(&mut stream)? {
+                    continue;
+                }
                 recorded.fetch_add(1, Ordering::Relaxed);
                 let (status, delay) = reply();
                 thread::sleep(delay);
                 let body = r#"{"data":[{"id":"fixture-model"}]}"#;
-                let _ = write!(
+                if let Err(error) = write!(
                     stream,
                     "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
-                );
+                ) && !peer_disconnected(&error)
+                {
+                    return Err(error);
+                }
             }
+            Ok(())
         });
         Self {
             url,
@@ -69,23 +75,55 @@ impl Mock {
 impl Drop for Mock {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        self.worker.take().unwrap().join().unwrap();
+        let failure = match self.worker.take().unwrap().join() {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(format!("mock worker failed: {error}")),
+            Err(payload) => Some(format!(
+                "mock worker panicked: {}",
+                panic_text(payload.as_ref())
+            )),
+        };
+        if let Some(failure) = failure {
+            if thread::panicking() {
+                // Preserve the primary assertion and its captured diagnostics.
+                // A second panic from Drop would abort the entire test process.
+                let _ = writeln!(io::stderr(), "secondary mock cleanup failure: {failure}");
+            } else {
+                panic!("{failure}");
+            }
+        }
     }
 }
 
-fn read_request(stream: &mut TcpStream) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+fn peer_disconnected(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::UnexpectedEof
+    )
+}
+
+fn read_request(stream: &mut TcpStream) -> io::Result<bool> {
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     let mut bytes = Vec::new();
     while !bytes.ends_with(b"\r\n\r\n") {
         let mut byte = [0];
-        if stream.read(&mut byte).unwrap() == 0 {
-            break;
+        match stream.read(&mut byte) {
+            Ok(0) => return Ok(false),
+            Ok(_) => bytes.push(byte[0]),
+            Err(error) if peer_disconnected(&error) => return Ok(false),
+            Err(error) => return Err(error),
         }
-        bytes.push(byte[0]);
-        assert!(bytes.len() < 16384);
+        if bytes.len() >= 16384 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "mock request headers exceed fixture limit",
+            ));
+        }
     }
+    Ok(true)
 }
 
 fn ai_config(url: &str) -> AiConfig {
@@ -150,6 +188,90 @@ impl Drop for Unrelated {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+#[test]
+fn mock_disconnected_and_incomplete_peers_do_not_count_as_requests() {
+    let mock = Mock::new(|| (200, Duration::ZERO));
+    let address = mock.url.strip_prefix("http://").unwrap();
+    drop(TcpStream::connect(address).unwrap());
+    let mut partial = TcpStream::connect(address).unwrap();
+    partial.write_all(b"GET /unfinished").unwrap();
+    partial.shutdown(Shutdown::Both).unwrap();
+    drop(partial);
+
+    let mut complete = TcpStream::connect(address).unwrap();
+    complete
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    complete
+        .write_all(b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut response = String::new();
+    complete.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 "));
+    assert_eq!(mock.requests.load(Ordering::Relaxed), 1);
+}
+
+fn panicked_mock_worker() -> Mock {
+    let entered = Arc::new(AtomicBool::new(false));
+    let observed = entered.clone();
+    let mock = Mock::new(move || {
+        observed.store(true, Ordering::Relaxed);
+        panic!("deliberate mock worker failure");
+    });
+    let mut stream = TcpStream::connect(mock.url.strip_prefix("http://").unwrap()).unwrap();
+    stream
+        .write_all(b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !entered.load(Ordering::Relaxed) {
+        assert!(Instant::now() < deadline, "mock did not receive request");
+        thread::sleep(Duration::from_millis(1));
+    }
+    mock
+}
+
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-text panic")
+}
+
+#[test]
+fn mock_worker_failure_still_fails_an_otherwise_successful_test() {
+    let failure = std::panic::catch_unwind(|| drop(panicked_mock_worker())).unwrap_err();
+    assert!(panic_text(failure.as_ref()).contains("deliberate mock worker failure"));
+}
+
+#[test]
+fn mock_worker_failure_during_unwind_preserves_the_primary_failure() {
+    let mock = panicked_mock_worker();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _mock = mock;
+        panic!("primary runtime assertion");
+    }))
+    .unwrap_err();
+    assert_eq!(panic_text(failure.as_ref()), "primary runtime assertion");
+}
+
+#[test]
+fn mock_invalid_request_failure_is_not_ignored() {
+    let mock = Mock::new(|| unreachable!("oversized headers must be refused"));
+    let mut stream = TcpStream::connect(mock.url.strip_prefix("http://").unwrap()).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream.write_all(&vec![b'x'; 16384]).unwrap();
+    match stream.read(&mut [0]) {
+        Ok(count) => assert_eq!(count, 0, "invalid request received a response"),
+        Err(error) => assert!(peer_disconnected(&error), "{error}"),
+    }
+    let failure =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(mock))).unwrap_err();
+    assert!(panic_text(failure.as_ref()).contains("mock request headers exceed fixture limit"));
 }
 
 #[test]

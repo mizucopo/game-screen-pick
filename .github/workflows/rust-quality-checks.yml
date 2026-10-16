@@ -83,9 +83,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/install-ci-windows-tools.ps1 -Prefix '${{ runner.temp }}/ffmpeg'
+      - name: Check Windows process and distribution contracts first
+        if: runner.os == 'Windows'
+        run: |
+          sh tests/distribution.sh
+          cargo test --locked --test runtime_windows -- --nocapture
       - name: Run native quality gate on the distribution builder
         timeout-minutes: 30
-        run: sh tests/check.sh
+        run: |
+          # Preserve the primary assertion if a Windows test process aborts.
+          if [ "$RUNNER_OS" = Windows ]; then export RUST_TEST_NOCAPTURE=1; fi
+          sh tests/check.sh
       - name: Configure distribution runtime compatibility
         run: |
           case "$RUST_RELEASE_TARGET" in

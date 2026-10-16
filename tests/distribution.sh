@@ -263,66 +263,71 @@ cat > "$scratch/tools/git" <<'EOF'
 #!/bin/sh
 case "$1" in rev-parse|rev-list) printf '%s\n' "$GSP_FAKE_COMMIT" ;; *) exit 1 ;; esac
 EOF
+cat > "$scratch/fake-gh.py" <<'FAKE_GH'
+import json, os, shutil, sys
+from pathlib import Path
+
+args = sys.argv[1:]
+state_file = Path(os.environ['GSP_FAKE_STATE'])
+state = json.loads(state_file.read_text())
+remote = Path(os.environ['GSP_FAKE_REMOTE'])
+
+def save():
+    state_file.write_text(json.dumps(state))
+
+def effect(message):
+    with open(os.environ['GSP_FAKE_LOG'], 'a', newline='') as log:
+        log.write(message + '\n')
+
+def option(name):
+    assert name in args and args.index(name) + 1 < len(args), ('Missing fixture option', name, args)
+    return args[args.index(name) + 1]
+
+def asset(identifier):
+    matches = [entry for entry in state['assets'] if entry.get('id') == identifier]
+    assert len(matches) == 1, ('Unknown fixture asset', identifier)
+    return matches[0]
+
+def upload(source):
+    source = Path(source)
+    assert source.is_file(), ('Missing fixture upload', str(source), args)
+    effect('upload ' + source.name)
+    shutil.copyfile(source, remote / source.name)
+    state['assets'].append({
+        'id': 100 + len(state['assets']), 'name': source.name,
+        'state': 'uploaded', 'size': source.stat().st_size,
+        'browser_download_url': 'https://fixture.invalid/' + source.name})
+    save()
+
+if args[:2] == ['api', '--paginate']:
+    print(json.dumps([[state]]))
+elif args[:3] == ['api', '--method', 'POST']:
+    upload(option('--input'))
+elif args[:3] == ['api', '--method', 'DELETE']:
+    identifier = int(args[3].rsplit('/', 1)[1])
+    effect('delete ' + asset(identifier)['name'])
+    if os.environ.get('GSP_FAKE_KEEP_STARTER') != 'true':
+        state['assets'] = [entry for entry in state['assets'] if entry.get('id') != identifier]
+        save()
+elif args[:2] == ['release', 'download']:
+    name = option('--pattern')
+    shutil.copyfile(remote / name, Path(option('--dir')) / name)
+elif args[:2] == ['release', 'upload']:
+    upload(args[3])
+elif args[:2] == ['release', 'edit']:
+    effect('edit')
+    if os.environ.get('GSP_FAKE_KEEP_DRAFT') != 'true':
+        state['draft'] = False
+        save()
+elif args[0] == 'api':
+    identifier = int(args[1].rsplit('/', 1)[1])
+    sys.stdout.buffer.write((remote / asset(identifier)['name']).read_bytes())
+else:
+    raise AssertionError(('Unexpected fake gh invocation', args))
+FAKE_GH
 cat > "$scratch/tools/gh" <<'EOF'
 #!/bin/sh
-set -eu
-# Native jq.exe otherwise translates LF to CRLF inside shell values/files.
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) jq() { command jq --binary "$@"; } ;;
-esac
-upload() {
-    file=$1
-  if command -v cygpath > /dev/null 2>&1; then file=$(cygpath -u "$file"); fi
-    name=${file##*/}
-    printf 'upload %s\n' "$name" >> "$GSP_FAKE_LOG"
-    cp "$file" "$GSP_FAKE_REMOTE/$name"
-    jq --arg name "$name" --argjson size "$(wc -c < "$file")" \
-      '.assets += [{id:(100+(.assets|length)),name:$name,state:"uploaded",size:$size,
-        browser_download_url:("https://fixture.invalid/"+$name)}]' "$GSP_FAKE_STATE" > "$GSP_FAKE_STATE.new"
-    mv "$GSP_FAKE_STATE.new" "$GSP_FAKE_STATE"
-}
-case "$1:$2" in
-  api:--paginate) jq -s '[.]' "$GSP_FAKE_STATE" ;;
-  api:--method)
-    if [ "$3" = POST ]; then
-      test "$7" = --input
-      upload "$8"
-      exit 0
-    fi
-    test "$3" = DELETE
-    id=${4##*/}
-    name=$(jq -er --argjson id "$id" '.assets[] | select(.id == $id) | .name' "$GSP_FAKE_STATE")
-    printf 'delete %s\n' "$name" >> "$GSP_FAKE_LOG"
-    if [ "${GSP_FAKE_KEEP_STARTER:-false}" != true ]; then
-      jq --argjson id "$id" '.assets |= map(select(.id != $id))' "$GSP_FAKE_STATE" > "$GSP_FAKE_STATE.new"
-      mv "$GSP_FAKE_STATE.new" "$GSP_FAKE_STATE"
-    fi
-    ;;
-  release:download)
-    shift 3
-    while [ "$#" -gt 0 ]; do
-      case "$1" in --pattern) name=$2 ;; --dir) directory=$2 ;; esac
-      shift 2
-    done
-    cp "$GSP_FAKE_REMOTE/$name" "$directory/$name"
-    ;;
-  release:upload)
-    upload "$4"
-    ;;
-  release:edit)
-    printf 'edit\n' >> "$GSP_FAKE_LOG"
-    if [ "${GSP_FAKE_KEEP_DRAFT:-false}" != true ]; then
-      jq '.draft=false' "$GSP_FAKE_STATE" > "$GSP_FAKE_STATE.new"
-      mv "$GSP_FAKE_STATE.new" "$GSP_FAKE_STATE"
-    fi
-    ;;
-  api:*)
-    id=${2##*/}
-    name=$(jq -er --argjson id "$id" '.assets[] | select(.id == $id) | .name' "$GSP_FAKE_STATE")
-    cat "$GSP_FAKE_REMOTE/$name"
-    ;;
-  *) printf 'Unexpected fake gh invocation\n' >&2; exit 1 ;;
-esac
+exec "$GSP_REAL_PYTHON" -I "$GSP_FAKE_GH_PY" "$@"
 EOF
 chmod +x "$scratch/tools/gh" "$scratch/tools/git"
 native_path() {
@@ -335,7 +340,7 @@ export GITHUB_REF=refs/heads/main RELEASE_SHA="$commit"
 export GSP_REAL_PYTHON="$python" GSP_FAKE_REPOSITORY="$(native_path "$repository")" \
   GSP_FAKE_ARTIFACTS="$(native_path "$scratch/artifacts")" RUST_RELEASE_DIR="$(native_path "$scratch/artifacts")" \
   GSP_FAKE_VERSION="$version" GSP_FAKE_HANDOFF="$(native_path "$scratch/common-handoff.py")" \
-  GSP_FAKE_GH="$(native_path "$scratch/tools/gh")"
+  GSP_FAKE_GH_PY="$(native_path "$scratch/fake-gh.py")"
 # Exercise the unchanged common uploader/distribution functions with local API
 # fixtures. Only numbering/API access are substituted; no credential or network
 # is used. Product preflight still controls whether these functions may run.
@@ -350,7 +355,9 @@ common = product.controller
 real_run = common.run
 def local_run(*args, **kwargs):
     assert args[0] == 'gh', args
-    return real_run('bash', os.environ['GSP_FAKE_GH'], *args[1:], **kwargs)
+    # Both callers use one local backend. Native Python must not re-enter an
+    # ambiguous bash.exe or translate its argv through the MSYS shell boundary.
+    return real_run(sys.executable, '-I', os.environ['GSP_FAKE_GH_PY'], *args[1:], **kwargs)
 common.run = local_run
 state_file = Path(os.environ['GSP_FAKE_STATE'])
 plan = {'release_tag': os.environ['GSP_FAKE_VERSION'], 'is_prerelease': False,
