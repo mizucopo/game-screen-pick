@@ -15,4 +15,4 @@ config と cache は本製品の仕様に従う。所有権を証明できない
 staging と完了検証で既存成果物を保護し、強制 kill や filesystem に関する保証は実測の範囲に限る。
 
 PR・採番・公開の現行手順と本人の承認境界は [配布・採番・公開](../release.md) に従い、手動採番しない。
-配布検証 target は `aarch64-apple-darwin` と `x86_64-unknown-linux-gnu`。OS/glibc の宣言と実依存の検査、実行環境の証拠を区別する。
+配布検証 target は `aarch64-apple-darwin`、`x86_64-unknown-linux-gnu`、`x86_64-pc-windows-msvc`、`aarch64-pc-windows-msvc`。共通テンプレートの build・archive・checksum・Downloads を使い、製品の license・依存・provenance・再取得検証を hook と公開 guard へ接続する。OS/glibc の宣言と実依存の検査、native 実行とクロス build の証拠を区別する。

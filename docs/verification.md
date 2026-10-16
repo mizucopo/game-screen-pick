@@ -10,7 +10,7 @@
 sh tests/check.sh
 ```
 
-FFmpeg、FFprobe、jq が必要。CI の同じ quality gate が Rust の固定応答と合成動画 E2E を実行する。
+FFmpeg、FFprobe、jq と共有配布契約検証用の Python 3.11 以降が必要。CI の同じ quality gate が Rust の固定応答と合成動画 E2E を実行する。
 独立した入力 recipe と承認 tuple を使い、通常テストで再生成しない。
 
 | 要件 | 検証 |
@@ -23,6 +23,7 @@ FFmpeg、FFprobe、jq が必要。CI の同じ quality gate が Rust の固定�
 | 誤画像／時刻／label、不完全出力 | `evidence_rejects_wrong_pixels_times_labels_and_incomplete_artifacts` は前後画素交換、要求 metadata の誤時刻、report のsource／時刻／rank／scene改変、出力画像交換・欠損を拒否する。製品の所有権拒否は `tests/output.rs`、`tests/cached_run.rs` が別に確認する。 |
 | 不足、FFmpeg／HTTP／schema 失敗 | `cli_shortage_http_and_schema_failures_preserve_previous_complete_output`、`cli_ffmpeg_failure_preserves_previous_complete_output_without_inference`。不足理由、有限attempt、以前の正常出力の byte 保持、秘密非出力を確認。 |
 | disk／公開／cleanup／中断 | `src/output.rs` の staging・rename・journal recovery・部分 cleanup の負例、`tests/runtime.rs` の所有session・停止失敗、`tests/http_cancellation.rs`／`tests/workflow.rs` の実 SIGINT と終了130を使用する。強制 kill や任意filesystemの保証へ拡張しない。 |
+| Windows 固有の保護と中断 | `tests/cache.rs`／`tests/native_validation.rs`／`src/output.rs` の File ID・変更検出・cross-process lock・case別名・junction/reparse・既存出力保持、`tests/cli.rs` の隔離consoleからの実Ctrl+Cと終了130、`tests/media.rs`／`tests/runtime_windows.rs` のJob Object・子孫終了・HTTP中断・hung stop・無関係process保持を検証する。Windows x64／ARM64 runnerの実行結果を要し、Mac上の型検証だけで完了とはしない。 |
 | 台本の時間分散 guard | ソース checkout の `tests/fixtures/README.md` の固定 tuple を `fixture_contract.jq` が検査。candidate・eventの同時時刻縮小、source交換、context変更、ID取り違えの負例を拒否する。 |
 
 合成素材だけを手元へ保存するには、空の検証用 directory を指定する。

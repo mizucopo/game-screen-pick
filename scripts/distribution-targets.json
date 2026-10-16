@@ -1,0 +1,6 @@
+{
+  "aarch64-apple-darwin": {"minimum_os": "macOS 14.0"},
+  "x86_64-unknown-linux-gnu": {"minimum_os": "Linux x86_64, glibc 2.35"},
+  "x86_64-pc-windows-msvc": {"minimum_os": "Windows 10 x64"},
+  "aarch64-pc-windows-msvc": {"minimum_os": "Windows 11 ARM64"}
+}

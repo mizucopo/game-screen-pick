@@ -5,18 +5,44 @@
       {
         "path": "Cargo.toml",
         "format": "toml",
-        "key": ["package", "version"]
+        "key": [
+          "package",
+          "version"
+        ]
       }
     ],
     "locks": [
-      { "path": "Cargo.lock", "format": "toml-lock", "package": "game-screen-pick", "optional": true }
+      {
+        "path": "Cargo.lock",
+        "format": "toml-lock",
+        "package": "game-screen-pick",
+        "optional": true
+      }
     ]
   },
   "publication": {
     "release_tag": "{version}",
     "github_release": true,
-
-    "release_paths": ["Cargo.toml", "Cargo.lock", ".copier-answers.yml"],
+    "release_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      ".copier-answers.yml"
+    ],
+    "rust": {
+      "targets": [
+        "x86_64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+        "aarch64-apple-darwin"
+      ],
+      "smoke_args": [
+        "--help"
+      ],
+      "stage_command": [
+        "sh",
+        "scripts/stage-release.sh"
+      ]
+    },
     "latest_image": null,
     "images": []
   }

@@ -2,9 +2,16 @@
 # Collect the locked target's normal/build dependency licenses, without a network
 # license lookup. Missing license material is a packaging failure.
 set -eu
+# Native jq.exe otherwise translates LF to CRLF inside shell values/files.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) jq() { command jq --binary "$@"; } ;;
+esac
 cd "$(dirname "$0")/.."
 metadata=$1
 destination=$2
+shell_path() {
+  if command -v cygpath > /dev/null 2>&1; then cygpath -u "$1"; else printf '%s\n' "$1"; fi
+}
 mkdir -p "$destination"
 jq '
   def closure($nodes; $seen):
@@ -28,7 +35,7 @@ while IFS="$tab" read -r name version license manifest license_file repository; 
   package=$(jq -c --arg name "$name" --arg version "$version" \
     '.[] | select(.name == $name and .version == $version)' "$destination/packages.json")
   license=$(printf '%s' "$package" | jq -er '.license | select(length > 0)')
-  manifest=$(printf '%s' "$package" | jq -er '.manifest_path')
+  manifest=$(shell_path "$(printf '%s' "$package" | jq -er '.manifest_path')")
   license_file=$(printf '%s' "$package" | jq -r '.license_file // ""')
   repository=$(printf '%s' "$package" | jq -r '.repository // ""')
   crate_dir=${manifest%/*}
@@ -40,7 +47,7 @@ while IFS="$tab" read -r name version license manifest license_file repository; 
     -iname '*notice*' -o -iname '*copying*' -o -iname 'unlicense' \) \
     | LC_ALL=C sort > "$destination/license-files.txt"
   if [ -n "$license_file" ]; then
-    case "$license_file" in /*) declared=$license_file ;; *) declared=$crate_dir/$license_file ;; esac
+    case "$license_file" in /*|[A-Za-z]:[\\/]*) declared=$(shell_path "$license_file") ;; *) declared=$crate_dir/$license_file ;; esac
     test -s "$declared"
     printf '%s\n' "$declared" >> "$destination/license-files.txt"
     LC_ALL=C sort -u "$destination/license-files.txt" > "$destination/license-files.sorted"
@@ -81,7 +88,7 @@ rm "$destination/packages.json" "$destination/packages.tsv" "$destination/licens
 # The statically linked Rust standard library is outside Cargo's package graph.
 # Preserve the installed toolchain's copyright inventory and license texts,
 # including compiler-builtins/libunwind exceptions from its source component.
-sysroot=$(rustc --print sysroot)
+sysroot=$(shell_path "$(rustc --print sysroot)")
 documentation=
 for candidate in "$sysroot/share/doc/rust" "$sysroot/share/doc/rustc"; do
   if [ -s "$candidate/COPYRIGHT.html" ] && [ -d "$candidate/licenses" ]; then

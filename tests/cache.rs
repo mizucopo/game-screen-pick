@@ -1,5 +1,15 @@
 use std::fs::{self, File};
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
+
+#[cfg(windows)]
+fn symlink(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> std::io::Result<()> {
+    if source.as_ref().is_dir() {
+        std::os::windows::fs::symlink_dir(source, destination)
+    } else {
+        std::os::windows::fs::symlink_file(source, destination)
+    }
+}
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -21,6 +31,7 @@ fn checkpoint(parent: &Path, kind: &str, cache_key: &str) -> PathBuf {
         .join(format!("{cache_key}.json"))
 }
 
+#[cfg(unix)]
 #[test]
 fn dropping_lock_releases_it_while_a_forked_child_retains_its_descriptor() {
     use std::io::{Read, Write};
@@ -83,20 +94,17 @@ fn dropping_lock_releases_it_while_a_forked_child_retains_its_descriptor() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[test]
 fn existing_case_aliases_share_output_lock_and_reject_protected_overlap() {
-    use std::os::unix::fs::MetadataExt;
-
     let parent = temporary();
     let actual = parent.path().join("Result");
     let alias = parent.path().join("result");
     fs::create_dir(&actual).unwrap();
     assert_eq!(
-        fs::metadata(&actual).unwrap().ino(),
-        fs::metadata(&alias)
-            .expect("this native regression requires the default case-insensitive macOS volume")
-            .ino()
+        game_screen_pick::storage::file_identity(&actual).unwrap(),
+        game_screen_pick::storage::file_identity(&alias)
+            .expect("this native regression requires a case-insensitive native volume")
     );
     let first =
         game_screen_pick::output::Output::prepare(&actual, &[], &AtomicBool::new(false)).unwrap();
@@ -113,10 +121,15 @@ fn existing_case_aliases_share_output_lock_and_reject_protected_overlap() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[test]
 fn absent_case_and_unicode_aliases_share_output_lock_and_reject_protected_overlap() {
-    for (actual_name, alias_name) in [("Result", "result"), ("Résult", "Re\u{301}sult")] {
+    let aliases = [
+        ("Result", "result"),
+        #[cfg(target_os = "macos")]
+        ("Résult", "Re\u{301}sult"),
+    ];
+    for (actual_name, alias_name) in aliases {
         let parent = temporary();
         let actual = parent.path().join(actual_name);
         let alias = parent.path().join(alias_name);
@@ -228,6 +241,111 @@ fn metadata_changes_rehash_content_without_a_path_dependency() {
     assert_ne!(original[0].content_digest, changed[0].content_digest);
     assert_eq!(cache.stats().input_hashes, 2);
     assert!(verify_inputs(&[workspace.path().join("video.mkv")], &original).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_change_time_detects_same_size_edit_with_restored_modified_time() {
+    let workspace = temporary();
+    let source = workspace.path().join("recording.mkv");
+    fs::write(&source, b"before").unwrap();
+    let modified = fs::metadata(&source).unwrap().modified().unwrap();
+    let cancelled = AtomicBool::new(false);
+    let mut cache = Cache::open(workspace.path()).unwrap();
+    let original = cache
+        .identify(std::slice::from_ref(&source), &cancelled)
+        .unwrap();
+    assert!(original[0].metadata.windows_file_id.is_some());
+    // Ensure even coarse host timer resolution distinguishes the next write.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(&source, b"after!").unwrap();
+    File::options()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert!(verify_inputs(std::slice::from_ref(&source), &original).is_err());
+    let changed = cache
+        .identify(std::slice::from_ref(&source), &cancelled)
+        .unwrap();
+    assert_eq!(
+        original[0].metadata.windows_file_id,
+        changed[0].metadata.windows_file_id
+    );
+    assert_eq!(
+        original[0].metadata.modified_seconds,
+        changed[0].metadata.modified_seconds
+    );
+    assert_eq!(
+        original[0].metadata.modified_nanoseconds,
+        changed[0].metadata.modified_nanoseconds
+    );
+    assert_ne!(
+        (
+            original[0].metadata.changed_seconds,
+            original[0].metadata.changed_nanoseconds
+        ),
+        (
+            changed[0].metadata.changed_seconds,
+            changed[0].metadata.changed_nanoseconds
+        )
+    );
+    assert_ne!(original[0].content_digest, changed[0].content_digest);
+    assert_eq!(cache.stats().input_hashes, 2);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_lock_child() {
+    use std::io::{Read, Write};
+    let Some(path) = std::env::var_os("GSP_NATIVE_LOCK_CHILD") else {
+        return;
+    };
+    let _guard = game_screen_pick::storage::Lock::acquire(Path::new(&path)).unwrap();
+    std::io::stdout().write_all(b"locked\n").unwrap();
+    std::io::stdout().flush().unwrap();
+    std::io::stdin().read_exact(&mut [0]).unwrap();
+    // Bypass Drop: the OS must release locks when a process terminates.
+    std::process::exit(0);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_exclusive_lock_contends_across_processes_and_is_released_on_exit() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    let workspace = temporary();
+    let path = workspace.path().join("process.lock");
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "windows_lock_child", "--nocapture"])
+        .env("GSP_NATIVE_LOCK_CHILD", &path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    loop {
+        let line = lines
+            .next()
+            .expect("lock child must signal readiness")
+            .unwrap();
+        if line == "locked" {
+            break;
+        }
+    }
+    let blocked = game_screen_pick::storage::Lock::acquire(&path).is_err();
+    child.stdin.take().unwrap().write_all(&[1]).unwrap();
+    assert!(child.wait().unwrap().success());
+    assert!(
+        blocked,
+        "another process must not acquire the held native lock"
+    );
+    assert!(game_screen_pick::storage::Lock::acquire(&path).is_ok());
+    assert!(
+        path.is_file(),
+        "the lock representative must never be unlinked"
+    );
 }
 
 #[test]
@@ -431,10 +549,13 @@ fn locks_unsafe_paths_aliases_and_special_files_are_rejected() {
     assert!(cache.read::<String>("batch", &cache_key).is_err());
     assert!(cache.write("batch", &cache_key, &"unsafe").is_err());
     fs::remove_dir(&record).unwrap();
-    let fifo = std::ffi::CString::new(record.as_os_str().as_encoded_bytes()).unwrap();
-    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
-    assert!(cache.read::<String>("batch", &cache_key).is_err());
-    assert!(cache.write("batch", &cache_key, &"unsafe").is_err());
+    #[cfg(unix)]
+    {
+        let fifo = std::ffi::CString::new(record.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert!(cache.read::<String>("batch", &cache_key).is_err());
+        assert!(cache.write("batch", &cache_key, &"unsafe").is_err());
+    }
 
     let source = outside.path().join("video.mkv");
     let alias = outside.path().join("alias.mkv");

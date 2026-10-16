@@ -1,6 +1,10 @@
 #!/bin/sh
 # Read-only guard immediately before the shared controller may promote Latest.
 set -eu
+# Native jq.exe otherwise translates LF to CRLF inside shell values/files.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) jq() { command jq --binary "$@"; } ;;
+esac
 destination=$1
 version=$2
 commit=$3
@@ -13,10 +17,12 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 repository=${GITHUB_REPOSITORY:?}
 gh api --paginate --slurp "/repos/$repository/releases?per_page=100" \
-  | jq -e --arg tag "$tag" --arg commit "$commit" --argjson is_prerelease "$is_prerelease" '
+  | jq -e --arg tag "$tag" --arg commit "$commit" --argjson is_prerelease "$is_prerelease" \
+    --arg retained_id "${RELEASE_ID:-}" '
     [.[][] | select(.tag_name == $tag)] |
     if length != 1 then error("Expected one GitHub Release") else .[0] end |
     if .target_commitish != $commit or .draft != false or .prerelease != $is_prerelease or
+      ($retained_id != "" and (.id | tostring) != $retained_id) or
       (.assets | type) != "array" or
       ([.assets[].name] | length != (unique | length)) or
       (all(.assets[]; .state == "uploaded" and .size > 0) | not)

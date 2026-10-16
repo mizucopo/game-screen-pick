@@ -37,20 +37,34 @@ jobs:
             runner: macos-15
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUST_RELEASE_TARGET: ${{ matrix.target }}
+      PYTHON: python
     steps:
+      - name: Set Rust artifact directory
+        run: printf 'RUST_RELEASE_DIR=%s\n' "$RUNNER_TEMP/rust-release" >> "$GITHUB_ENV"
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Python for Rust packaging
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
       - name: Install Rust build and license components
         run: |
           rustup show
-          rustup target add "$TARGET"
+          rustup target add "$RUST_RELEASE_TARGET"
           rustup component add rust-docs rust-src
-        env:
-          TARGET: ${{ matrix.target }}
       - name: Install Linux video and inspection tools
         if: runner.os == 'Linux'
         run: |
@@ -65,19 +79,45 @@ jobs:
           brew install gnu-tar jq
           sh scripts/install-ci-ffmpeg.sh "$RUNNER_TEMP/ffmpeg"
           echo "$RUNNER_TEMP/ffmpeg/bin" >> "$GITHUB_PATH"
+      - name: Install Windows video and inspection tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/install-ci-windows-tools.ps1 -Prefix '${{ runner.temp }}/ffmpeg'
+      - name: Check Windows process and distribution contracts first
+        if: runner.os == 'Windows'
+        run: |
+          sh tests/distribution.sh
+          cargo test --locked --test runtime_windows -- --nocapture
       - name: Run native quality gate on the distribution builder
-        timeout-minutes: 15
-        run: sh tests/check.sh
-      - name: Build archive and run clean runtime smoke
+        timeout-minutes: 30
+        run: |
+          # Preserve the primary assertion if a Windows test process aborts.
+          if [ "$RUNNER_OS" = Windows ]; then export RUST_TEST_NOCAPTURE=1; fi
+          sh tests/check.sh
+      - name: Configure distribution runtime compatibility
+        run: |
+          case "$RUST_RELEASE_TARGET" in
+            aarch64-apple-darwin) echo 'MACOSX_DEPLOYMENT_TARGET=14.0' >> "$GITHUB_ENV" ;;
+            *-pc-windows-msvc) echo 'RUSTFLAGS=-C target-feature=+crt-static' >> "$GITHUB_ENV" ;;
+          esac
+      - name: Build archive with the common Rust distribution builder
+        timeout-minutes: 40
+        run: sh scripts/package-release.sh "$RUST_RELEASE_TARGET" "$RUST_RELEASE_DIR"
+      - name: Run clean runtime smoke on the final archive
         timeout-minutes: 25
-        run: sh scripts/build-distribution.sh "$TARGET"
-        env:
-          TARGET: ${{ matrix.target }}
-      - name: Upload verified target archive and checksum
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        run: |
+          artifact_root="$RUST_RELEASE_DIR"
+          if command -v cygpath > /dev/null 2>&1; then artifact_root=$(cygpath -u "$artifact_root"); fi
+          target_root="$artifact_root/$RUST_RELEASE_TARGET"
+          jq_options=(-er)
+          if [ "$RUNNER_OS" = Windows ]; then jq_options=(--binary "${jq_options[@]}"); fi
+          archive=$(jq "${jq_options[@]}" '.archive | select(type == "string" and length > 0)' "$target_root/manifest.json")
+          sh scripts/build-distribution.sh "$RUST_RELEASE_TARGET" "$target_root/$archive"
+      - name: Retain verified Rust distribution
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rust-distribution-${{ matrix.target }}
-          path: dist/*
+          name: ${{ format('rust-release-{0}', matrix.target) }}
+          path: ${{ runner.temp }}/rust-release/${{ matrix.target }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -87,19 +127,24 @@ jobs:
     needs: distribution-build
     runs-on: ubuntu-22.04
     steps:
+      - name: Set Rust artifact directory
+        run: printf 'RUST_RELEASE_DIR=%s\n' "$RUNNER_TEMP/rust-release" >> "$GITHUB_ENV"
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Python for Rust packaging
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
       - name: Install pinned Rust toolchain
         run: rustup show
-      - name: Download both target assets
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      - name: Download verified Rust distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: rust-distribution-*
-          merge-multiple: true
-          path: dist
+          pattern: rust-release-*
+          path: ${{ runner.temp }}/rust-release
       - name: Verify complete asset set and provenance
         run: |
           version="$(cargo metadata --locked --offline --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "game-screen-pick") | .version')"
-          sh scripts/verify-release-assets.sh dist "$version" "$(git rev-parse HEAD)"
+          python -I scripts/distribution.py flatten "$RUST_RELEASE_DIR" dist "$version" "$(git rev-parse HEAD)"

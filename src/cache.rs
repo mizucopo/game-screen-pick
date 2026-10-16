@@ -1,6 +1,7 @@
 //! Locked checkpoints contained in a dedicated, versioned namespace.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,7 +20,7 @@ const MAX_RECORD_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_INPUTS: usize = 4096;
 
 /// Paths are deliberately excluded, so moving an input directory preserves hits.
-/// Ordinary edits/replacements are detected by these Unix metadata fields. An
+/// Ordinary edits/replacements are detected by native identity/change metadata. An
 /// adversarial writer restoring all metadata, or a filesystem returning stale
 /// metadata, is outside this detection guarantee.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -27,11 +28,23 @@ const MAX_INPUTS: usize = 4096;
 pub struct InputStamp {
     pub device: u64,
     pub inode: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_file_id: Option<[u8; 16]>,
     pub length: u64,
     pub modified_seconds: i64,
     pub modified_nanoseconds: i64,
     pub changed_seconds: i64,
     pub changed_nanoseconds: i64,
+}
+
+impl InputStamp {
+    fn file_identity(&self) -> storage::FileIdentity {
+        storage::FileIdentity {
+            device: self.device,
+            inode: self.inode,
+            windows_file_id: self.windows_file_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,7 +103,7 @@ pub fn verify_inputs(paths: &[PathBuf], identities: &[InputIdentity]) -> Result<
         let path = storage::checked_path(path)?;
         let current = stamp(&path)?;
         ensure!(
-            files.insert((current.device, current.inode)),
+            files.insert(current.file_identity()),
             "input paths refer to the same file more than once"
         );
         ensure!(
@@ -261,7 +274,7 @@ impl Cache {
             let path = storage::checked_path(path)?;
             let stamp = stamp(&path)?;
             ensure!(
-                files.insert((stamp.device, stamp.inode)),
+                files.insert(stamp.file_identity()),
                 "input paths refer to the same file more than once"
             );
             current.insert(stamp.clone());
@@ -386,20 +399,51 @@ fn valid_index(records: &[InputIdentity]) -> bool {
 }
 
 fn stamp(path: &Path) -> Result<InputStamp> {
-    let metadata = fs::symlink_metadata(path).context("cannot inspect input identity")?;
-    ensure!(
-        metadata.is_file(),
-        "input identity requires an ordinary file"
-    );
-    Ok(InputStamp {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-        length: metadata.len(),
-        modified_seconds: metadata.mtime(),
-        modified_nanoseconds: metadata.mtime_nsec(),
-        changed_seconds: metadata.ctime(),
-        changed_nanoseconds: metadata.ctime_nsec(),
-    })
+    #[cfg(unix)]
+    {
+        let metadata = fs::symlink_metadata(path).context("cannot inspect input identity")?;
+        ensure!(
+            metadata.is_file(),
+            "input identity requires an ordinary file"
+        );
+        Ok(InputStamp {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            windows_file_id: None,
+            length: metadata.len(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+            changed_seconds: metadata.ctime(),
+            changed_nanoseconds: metadata.ctime_nsec(),
+        })
+    }
+    #[cfg(windows)]
+    {
+        let (identity, length, modified, changed) = storage::windows::input_metadata(path)?;
+        // FILETIME has 100 ns units since 1601; persist the same seconds/nanos
+        // representation used on Unix, retaining every native timestamp bit.
+        let timestamp = |ticks: i64| -> Result<(i64, i64)> {
+            let unix = ticks
+                .checked_sub(116_444_736_000_000_000)
+                .context("Windows input timestamp is outside the supported range")?;
+            Ok((
+                unix.div_euclid(10_000_000),
+                unix.rem_euclid(10_000_000) * 100,
+            ))
+        };
+        let (modified_seconds, modified_nanoseconds) = timestamp(modified)?;
+        let (changed_seconds, changed_nanoseconds) = timestamp(changed)?;
+        Ok(InputStamp {
+            device: identity.device,
+            inode: identity.inode,
+            windows_file_id: identity.windows_file_id,
+            length,
+            modified_seconds,
+            modified_nanoseconds,
+            changed_seconds,
+            changed_nanoseconds,
+        })
+    }
 }
 
 fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {

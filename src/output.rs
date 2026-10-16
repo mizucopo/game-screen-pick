@@ -46,12 +46,7 @@ struct Manifest {
     files: BTreeMap<String, Digest>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Identity {
-    device: u64,
-    inode: u64,
-}
+type Identity = storage::FileIdentity;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
@@ -112,7 +107,7 @@ impl Output {
         match fs::symlink_metadata(&lock_path) {
             Ok(metadata) => {
                 ensure!(
-                    metadata.is_file() && !metadata.file_type().is_symlink(),
+                    metadata.is_file() && !storage::is_link(&metadata),
                     "output lock must be an ordinary file"
                 );
                 let representative = storage::checked_path(&lock_path)?;
@@ -140,6 +135,7 @@ impl Output {
         check_cancelled(cancelled)?;
         let (path, parent, _) = checked_target(path, protected_paths)?;
         let directory = checked_lock_directory(&path, &parent, protected_paths)?;
+        validate_native_aliases(&path, &directory, protected_paths)?;
         match fs::create_dir(&directory) {
             Ok(()) => sync_directory(&parent)?,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -348,13 +344,29 @@ impl Output {
             );
             before_replace()?;
             if let Some(backup) = &backup {
-                fs::rename(&self.path, backup).context("cannot preserve previous output")?;
+                #[cfg(windows)]
+                self.remove_verified(
+                    backup,
+                    &State::Empty {
+                        identity: journal
+                            .placeholder
+                            .clone()
+                            .context("missing backup placeholder")?,
+                    },
+                    cancelled,
+                )?;
+                // Windows cannot rename onto an existing directory. Its
+                // verified empty placeholder is removed immediately above;
+                // rename then fails if another object appeared in its place.
+                storage::rename_directory(&self.path, backup)
+                    .context("cannot preserve previous output")?;
                 sync_directory(&self.parent)?;
             }
             step("backed_up")?;
             check_cancelled(cancelled)?;
             before_replace()?;
-            fs::rename(&stage, &self.path).context("cannot publish staged output")?;
+            storage::rename_directory(&stage, &self.path)
+                .context("cannot publish staged output")?;
             sync_directory(&self.parent)?;
             step("published")?;
             ensure!(
@@ -477,13 +489,13 @@ impl Output {
                             backup_state.as_ref() == Some(&journal.old),
                             "previous output backup is missing"
                         );
-                        fs::rename(&self.path, &stage).context(OperationalError(
+                        storage::rename_directory(&self.path, &stage).context(OperationalError(
                             "cannot move uncommitted output back to staging",
                         ))?;
-                        fs::rename(backup, &self.path)
+                        storage::rename_directory(backup, &self.path)
                             .context(OperationalError("cannot restore previous output"))?;
                     } else {
-                        fs::rename(&self.path, &stage).context(OperationalError(
+                        storage::rename_directory(&self.path, &stage).context(OperationalError(
                             "cannot move uncommitted output back to staging",
                         ))?;
                     }
@@ -493,7 +505,7 @@ impl Output {
                         backup_state.as_ref() == Some(&journal.old),
                         "previous output backup is missing"
                     );
-                    fs::rename(backup, &self.path)
+                    storage::rename_directory(backup, &self.path)
                         .context(OperationalError("cannot restore previous output"))?;
                 } else {
                     ensure!(
@@ -604,7 +616,7 @@ fn checked_lock_directory(
     }
     match fs::symlink_metadata(&directory) {
         Ok(metadata) => ensure!(
-            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            metadata.is_dir() && !storage::is_link(&metadata),
             "output lock container must be an ordinary directory"
         ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -691,43 +703,40 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
 }
 
 fn identity(path: &Path) -> Result<Identity> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = fs::symlink_metadata(path)?;
-        ensure!(
-            metadata.is_dir() && !metadata.file_type().is_symlink(),
-            "output must be an ordinary directory"
-        );
-        Ok(Identity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        })
-    }
-    #[cfg(not(unix))]
-    bail!("output ownership is currently supported on macOS and Linux")
+    let metadata = fs::symlink_metadata(path)?;
+    ensure!(
+        metadata.is_dir() && !storage::is_link(&metadata),
+        "output must be an ordinary directory"
+    );
+    storage::file_identity(path)
 }
 
 fn sync_directory(path: &Path) -> Result<()> {
-    File::open(path)
-        .context(OperationalError(
-            "cannot open output directory for synchronization",
-        ))?
-        .sync_all()
-        .context(OperationalError("cannot synchronize output directory"))
+    storage::sync_directory(path).context(OperationalError("cannot synchronize output directory"))
 }
 
 fn recovery_read<T>(result: Result<T>) -> Result<T> {
     result.map_err(|error| {
-        if error.downcast_ref::<std::io::Error>().is_some_and(|io| {
-            io.kind() != std::io::ErrorKind::NotFound
-                && !matches!(io.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR))
-        }) {
+        if error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() != std::io::ErrorKind::NotFound && !unsafe_path_error(io))
+        {
             error.context(OperationalError("cannot read output recovery data"))
         } else {
             error
         }
     })
+}
+
+fn unsafe_path_error(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(error.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR))
+    }
+    #[cfg(windows)]
+    {
+        error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_DIRECTORY as i32)
+    }
 }
 
 fn read_regular(path: &Path, max: u64, bytes_read: &Cell<u64>) -> Result<Vec<u8>> {
@@ -1552,6 +1561,7 @@ mod tests {
 
     #[test]
     fn actual_recovery_read_permission_failure_is_operational_but_invalid_data_is_not() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let (_directory, root) = workspace();
         let first = artifacts(&root, "first", 15);
@@ -1561,10 +1571,24 @@ mod tests {
         let original = publish(&mut output, &first);
         let journal = pending(&output, &second);
         let stage_report = root.join(journal.stage).join("report.json");
+        #[cfg(unix)]
         let permission = fs::metadata(&stage_report).unwrap().permissions();
+        #[cfg(unix)]
         fs::set_permissions(&stage_report, fs::Permissions::from_mode(0o0)).unwrap();
+        #[cfg(windows)]
+        let denied = {
+            use std::os::windows::fs::OpenOptionsExt;
+            OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&stage_report)
+                .unwrap()
+        };
         let result = output.recover(&cancelled());
+        #[cfg(unix)]
         fs::set_permissions(&stage_report, permission).unwrap();
+        #[cfg(windows)]
+        drop(denied);
         let error = result.unwrap_err();
         assert!(
             error.downcast_ref::<OperationalError>().is_some(),
@@ -1996,6 +2020,68 @@ mod tests {
         assert!(!backup.exists());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn directories_appearing_after_backup_are_preserved_until_explicitly_removed() {
+        let (_directory, root) = workspace();
+        let first = artifacts(&root, "first", 15);
+        let second = artifacts(&root, "second", 85);
+        for populated in [false, true] {
+            let path = root.join(if populated { "populated" } else { "empty" });
+            let mut output = Output::prepare(&path, &[], &cancelled()).unwrap();
+            let original = publish(&mut output, &first);
+            let conflict_identity = std::cell::RefCell::new(None);
+            assert!(
+                output
+                    .publish_directory(&second, &cancelled(), |step| {
+                        if step == "backed_up" {
+                            fs::create_dir(&path)?;
+                            if populated {
+                                fs::write(path.join("keep.txt"), b"user directory conflict")?;
+                            }
+                            *conflict_identity.borrow_mut() = Some(identity(&path)?);
+                        }
+                        Ok(())
+                    })
+                    .is_err()
+            );
+            assert_eq!(Some(identity(&path).unwrap()), *conflict_identity.borrow());
+            if populated {
+                assert_eq!(
+                    fs::read(path.join("keep.txt")).unwrap(),
+                    b"user directory conflict"
+                );
+            } else {
+                assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+            }
+            let journal: Journal =
+                serde_json::from_slice(&fs::read(&output.journal).unwrap()).unwrap();
+            let backup = root.join(journal.backup.unwrap());
+            assert_eq!(
+                state(&backup).unwrap().1.unwrap().fingerprint,
+                original.fingerprint
+            );
+            assert!(root.join(journal.stage).exists());
+            drop(output);
+            // Only the fixture-created conflict is removed; recovery must then
+            // restore the previous committed output and clean its own files.
+            if populated {
+                fs::remove_file(path.join("keep.txt")).unwrap();
+            }
+            fs::remove_dir(&path).unwrap();
+            let output = Output::prepare(&path, &[], &cancelled()).unwrap();
+            assert_eq!(
+                output
+                    .verify_existing(&cancelled())
+                    .unwrap()
+                    .unwrap()
+                    .fingerprint,
+                original.fingerprint
+            );
+            assert!(!backup.exists());
+        }
+    }
+
     #[test]
     fn edits_during_staging_are_kept_instead_of_being_overwritten() {
         let (_directory, root) = workspace();
@@ -2138,6 +2224,10 @@ mod tests {
         storage::atomic_write(&output.journal, &serde_json::to_vec(&journal).unwrap()).unwrap();
         let _ = stage.keep();
         let _ = backup.keep();
+        // Match the native pre-rename boundary: Windows requires an absent
+        // backup name, unlike POSIX replacement of an empty placeholder.
+        #[cfg(windows)]
+        fs::remove_dir(output.parent.join(journal.backup.as_ref().unwrap())).unwrap();
         journal
     }
 
@@ -2152,10 +2242,11 @@ mod tests {
             let original = publish(&mut output, &first);
             let journal = pending(&output, &second);
             if boundary >= 1 {
-                fs::rename(&path, root.join(journal.backup.as_ref().unwrap())).unwrap();
+                storage::rename_directory(&path, &root.join(journal.backup.as_ref().unwrap()))
+                    .unwrap();
             }
             if boundary >= 2 {
-                fs::rename(root.join(&journal.stage), &path).unwrap();
+                storage::rename_directory(&root.join(&journal.stage), &path).unwrap();
             }
             drop(output);
             let output = Output::prepare(&path, &[], &cancelled()).unwrap();
@@ -2183,8 +2274,8 @@ mod tests {
         publish(&mut output, &first);
         let mut journal = pending(&output, &second);
         let backup = root.join(journal.backup.as_ref().unwrap());
-        fs::rename(&path, &backup).unwrap();
-        fs::rename(root.join(&journal.stage), &path).unwrap();
+        storage::rename_directory(&path, &backup).unwrap();
+        storage::rename_directory(&root.join(&journal.stage), &path).unwrap();
         journal.phase = Phase::Committed;
         storage::atomic_write(&output.journal, &serde_json::to_vec(&journal).unwrap()).unwrap();
         fs::remove_file(backup.join("selected-01.jpg")).unwrap();

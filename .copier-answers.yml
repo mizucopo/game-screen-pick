@@ -7,6 +7,8 @@ project_name: game-screen-pick
 project_version: 1.19.4
 rust_release_targets:
 - x86_64-unknown-linux-gnu
+- x86_64-pc-windows-msvc
+- aarch64-pc-windows-msvc
 - aarch64-apple-darwin
 rust_version: stable
 use_chrome_extension: false

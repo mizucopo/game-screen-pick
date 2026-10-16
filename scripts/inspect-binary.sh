@@ -10,7 +10,7 @@ case "$target" in
     file "$binary" | grep -q 'Mach-O 64-bit executable arm64'
     otool -L "$binary" > "$report"
     otool -l "$binary" >> "$report"
-    sed 's|^.*\/bin\/game-screen-pick:$|bin/game-screen-pick:|' "$report" > "$report.normalized"
+    sed 's|^.*\/game-screen-pick:$|game-screen-pick:|' "$report" > "$report.normalized"
     mv "$report.normalized" "$report"
     # System dylibs/frameworks are supplied by macOS, never Homebrew or an rpath.
     otool -L "$binary" | awk 'NR > 1 {print $1}' | while IFS= read -r dependency; do
@@ -42,6 +42,12 @@ case "$target" in
     fi
     readelf --version-info "$binary" | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sort -u \
       | awk -F_ '{split($2,v,"."); if (v[1] > 2 || (v[1] == 2 && (v[2] > 35 || (v[2] == 35 && v[3] > 0)))) bad=1} END {exit bad}'
+    ;;
+  x86_64-pc-windows-msvc|aarch64-pc-windows-msvc)
+    binary=$(cygpath -w "$binary")
+    report=$(cygpath -w "$report")
+    pwsh -NoLogo -NoProfile -File "$(dirname "$0")/inspect-windows-binary.ps1" \
+      -Binary "$binary" -Target "$target" -Report "$report"
     ;;
   *) printf 'Unsupported target: %s\n' "$target" >&2; exit 1 ;;
 esac

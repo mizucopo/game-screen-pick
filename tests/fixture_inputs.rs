@@ -296,7 +296,7 @@ fn multiple_tracks_preserve_raw_content_and_selected_display_rotation() {
         &path,
         &[],
     );
-    let metadata = String::from_utf8(metadata).unwrap();
+    let metadata = String::from_utf8(metadata).unwrap().replace("\r\n", "\n");
     assert!(metadata.lines().any(|line| line == "duration=6.000000"));
     let streams: Vec<&str> = metadata
         .split("[STREAM]\n")
@@ -420,11 +420,20 @@ fn fixed_responses_match_the_fixture_contract() {
 }
 
 #[cfg(test)]
+fn jq() -> Command {
+    let mut command = Command::new("jq");
+    if cfg!(windows) {
+        command.arg("--binary");
+    }
+    command
+}
+
+#[cfg(test)]
 fn fixture_contract(responses: &[u8]) -> std::process::Output {
     use std::io::Write;
     use std::process::Stdio;
 
-    let mut child = Command::new("jq")
+    let mut child = jq()
         .args(["-se", "--slurpfile", "scenarios"])
         .arg(root().join("scenarios.json"))
         .args(["-f", "tests/fixture_contract.jq"])
@@ -439,7 +448,7 @@ fn fixture_contract(responses: &[u8]) -> std::process::Output {
 
 #[cfg(test)]
 fn assert_response_mutation_rejected(mutation: &str) {
-    let result = Command::new("jq")
+    let result = jq()
         .args(["-c", mutation])
         .arg(root().join("responses.json"))
         .output()

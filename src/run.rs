@@ -2,7 +2,6 @@
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -805,9 +804,8 @@ pub(crate) fn validate_inputs(inputs: &[PathBuf]) -> Result<()> {
             !source_name(path)?.chars().any(char::is_control),
             "video source names must not contain controls"
         );
-        let metadata = fs::symlink_metadata(path)?;
         ensure!(
-            aliases.insert((metadata.dev(), metadata.ino())),
+            aliases.insert(storage::file_identity(path)?),
             "input paths refer to the same file more than once"
         );
     }

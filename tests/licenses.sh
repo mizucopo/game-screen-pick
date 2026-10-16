@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+# Native jq.exe otherwise translates LF to CRLF inside shell values/files.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) jq() { command jq --binary "$@"; } ;;
+esac
 cd "$(dirname "$0")/.."
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
@@ -29,7 +33,7 @@ cp "$scratch/crate/.cargo_vcs_info.json" "$scratch/original-vcs.json"
 attempt=0
 collect() {
   attempt=$((attempt + 1))
-  GSP_LICENSE_TEST_SYSROOT="$scratch/sysroot" PATH="$scratch/tools:$PATH" \
+  GSP_LICENSE_TEST_SYSROOT="${test_sysroot:-$scratch/sysroot}" PATH="$scratch/tools:$PATH" \
     sh scripts/collect-licenses.sh "$scratch/metadata.json" "$scratch/result-$attempt"
 }
 reject() {
@@ -57,4 +61,25 @@ for edit in '.git.sha1="wrong"' '.path_in_vcs="crates/other"'; do
   jq "$edit" "$scratch/original-vcs.json" > "$scratch/crate/.cargo_vcs_info.json"
   reject
 done
+# Cargo and rustc return native Windows paths under Git Bash. Convert both the
+# manifest/license path and sysroot before collecting real files, preserving the
+# same license-text requirement as on macOS/Linux.
+cat > "$scratch/tools/cygpath" <<'EOF'
+#!/bin/sh
+test "$1" = -u
+case "$2" in
+  C:/*) printf '%s/%s\n' "$GSP_LICENSE_DRIVE_ROOT" "${2#C:/}" ;;
+  *) printf '%s\n' "$2" ;;
+esac
+EOF
+chmod +x "$scratch/tools/cygpath"
+export GSP_LICENSE_DRIVE_ROOT="$scratch"
+test_sysroot=C:/sysroot
+printf 'native Windows crate license\n' > "$scratch/crate/LICENSE"
+jq '.packages[1].manifest_path="C:/crate/Cargo.toml" |
+    .packages[1].license_file="C:/crate/LICENSE"' "$scratch/original.json" > "$scratch/metadata.json"
+collect
+grep -F 'native Windows crate license' "$scratch/result-$attempt/THIRD-PARTY-LICENSES.txt" > /dev/null
+rm "$scratch/crate/LICENSE"
+reject
 printf 'License supplement contracts passed\n'

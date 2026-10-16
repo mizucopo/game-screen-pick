@@ -7,19 +7,30 @@
 
 ## 配布 binary の配置
 
-対象は Apple Silicon macOS の `aarch64-apple-darwin` と Linux x86_64 GNU の `x86_64-unknown-linux-gnu` です。
+配布対象は Windows x64 / ARM64、Apple Silicon macOS、Linux x86_64 GNU です。
 FFmpeg／FFprobe と、画像・動画能力を確認した推論 endpoint を別途用意します。日本語 font は binary に含まれます。
 本体の利用に開発用 toolchain は不要です。
 OS／dynamic library と FFmpeg の条件・検証範囲は [配布検証](docs/release.md#配布対象と検証) と archive 内の `DEPENDENCIES.txt` で確認してください。
 
 [GitHub Releases](https://github.com/mizucopo/game-screen-pick/releases) から、Rust archive が公開された version を選びます。
 実公開は、main 向け PR の検証と承認後に行う別工程です。公開前の確認には PR の Actions artifact を使います。
+以下は本変更以降の共通配布形式です。既存 `2.0.0` の macOS / Linux archive は target 名の suffix と `bin/` を持つ旧形式で、Windows asset はありません。公開済み version の **Downloads** と実際の添付 file を確認してください。
+
+| OS / CPU | archive の suffix | 実行 file |
+| --- | --- | --- |
+| Windows x64 | `windows-x86_64.zip` | `game-screen-pick.exe` |
+| Windows ARM64 | `windows-arm64.zip` | `game-screen-pick.exe` |
+| Apple Silicon macOS | `macos-arm64.tar.gz` | `game-screen-pick` |
+| Linux x86_64 GNU | `linux-x86_64.tar.gz` | `game-screen-pick` |
+
+### macOS / Linux
+
 空の download directory で `RELEASE_VERSION` を選んだ version に置き換え、対象 target を一つ指定します。
 
 ```sh
 version=RELEASE_VERSION
-target=aarch64-apple-darwin # Linux: x86_64-unknown-linux-gnu
-archive="game-screen-pick-${version}-${target}.tar.gz"
+platform=macos-arm64 # Linux: linux-x86_64
+archive="game-screen-pick-${version}-${platform}.tar.gz"
 base="https://github.com/mizucopo/game-screen-pick/releases/download/${version}"
 curl --fail --location --remote-name "$base/$archive"
 curl --fail --location --remote-name "$base/$archive.sha256"
@@ -35,10 +46,11 @@ Linux は `sha256sum -c "$archive.sha256"` を使います。検証失敗時は�
 成功後、実行 file を利用者の PATH に配置します。
 
 ```sh
-tar -xzf "$archive"
 bundle="${archive%.tar.gz}"
+mkdir "$bundle"
+tar -xzf "$archive" -C "$bundle"
 mkdir -p "$HOME/.local/bin"
-install -m 755 "$bundle/bin/game-screen-pick" "$HOME/.local/bin/game-screen-pick"
+install -m 755 "$bundle/game-screen-pick" "$HOME/.local/bin/game-screen-pick"
 export PATH="$HOME/.local/bin:$PATH"
 game-screen-pick --version
 game-screen-pick --help
@@ -48,6 +60,41 @@ ffprobe -version
 
 新しい shell でも使う場合は `~/.local/bin` を shell の PATH 設定へ追加します。
 archive は設定例、利用文書、license、build・依存情報も含みます。
+
+### Windows
+
+Windows PowerShell で新しい空 directory を用意します。ARM64 は `$platform = 'windows-arm64'` を選びます。x64 の build 成功を ARM64 の実行確認とは扱いません。
+
+```powershell
+$version = 'RELEASE_VERSION'
+$platform = 'windows-x86_64'
+$archive = "game-screen-pick-$version-$platform.zip"
+$base = "https://github.com/mizucopo/game-screen-pick/releases/download/$version"
+Invoke-WebRequest "$base/$archive" -OutFile $archive
+Invoke-WebRequest "$base/$archive.sha256" -OutFile "$archive.sha256"
+$expected = (Get-Content "$archive.sha256" -Raw).Trim()
+$actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($expected -cne "$actual  $archive") { throw 'Checksum mismatch' }
+Expand-Archive $archive -DestinationPath bundle
+.\bundle\game-screen-pick.exe --version
+.\bundle\game-screen-pick.exe --help
+ffmpeg -version
+ffprobe -version
+```
+
+`bundle` を利用者の PATH に追加するか、`.\bundle\game-screen-pick.exe` で起動します。FFmpeg / FFprobe は同じ CPU の build を [FFmpeg の download 案内](https://ffmpeg.org/download.html)から別途用意し、両 `.exe` のある directory を PATH に追加してください。CLI に FFmpeg や開発用 toolchain は同梱しません。
+設定例は既存 file を上書きせずにコピーします。
+
+```powershell
+New-Item -ItemType Directory config, recordings
+if (Test-Path .\config\config.toml) { throw '既存設定を保持し、別の新規 file 名を選んでください' }
+Copy-Item .\bundle\config.example.toml .\config\config.toml -ErrorAction Stop
+.\bundle\game-screen-pick.exe validate --config config/config.toml --count 2 `
+  --game-context '探索・戦闘・会話の見やすい場面を選ぶ' recordings output
+```
+
+接続先・model・推論レベルを設定してから同じ command の `validate` を外して実行します。空白や日本語を含む path は引用符で囲みます。通常の Ctrl+C 中断では自己が開始した子プロセスを終了し、終了 code 130 を返します。
+ローカルの NTFS 上で通常 file / directory を使い、symlink・junction 等の reparse point、ADS、DOS device 名を入力・出力・cache に使わないでください。ネットワーク filesystem や停電・強制終了時の永続性は未検証です。
 
 ## 設定して実行
 
@@ -107,7 +154,7 @@ game-screen-pick extract --at 0.5 --context-seconds 0.25 \
 `before.png`／`frame.png`／`after.png` と `extraction.json` を作ります。context 省略時は中央だけです。
 時刻は選んだ映像 stream の最初の有効 PTS を0とする秒数。要求時刻以降の最初の frame、最終端点は最後の frame を使い、既存出力は上書きしません。
 
-開発には Rust 1.88 以上（stable）、FFmpeg／FFprobe、jq が必要です。
+開発には `rust-toolchain.toml` の Rust、FFmpeg／FFprobe、jq、共有配布契約の検証用 Python 3.11 以降が必要です。Windows の品質 gate は Git Bash で実行します。
 
 ```sh
 cargo build --locked
