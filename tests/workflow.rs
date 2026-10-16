@@ -17,6 +17,10 @@ use serde_json::{Value, json};
 #[path = "support/evidence.rs"]
 mod evidence;
 
+#[cfg(windows)]
+#[path = "support/process_helper.rs"]
+mod process_helper;
+
 const BINARY: &str = env!("CARGO_BIN_EXE_game-screen-pick");
 
 fn fixture(name: &str) -> std::path::PathBuf {
@@ -37,6 +41,18 @@ fn binary_command(root: &Path) -> Command {
             .env_clear()
             .env("PATH", std::env::var_os("GSP_ARTIFACT_TOOLS").unwrap());
         command.env("HOME", root).env("TMPDIR", root);
+        #[cfg(windows)]
+        {
+            for name in ["SYSTEMROOT", "WINDIR"] {
+                if let Some(value) = std::env::var_os(name) {
+                    command.env(name, value);
+                }
+            }
+            command
+                .env("USERPROFILE", root)
+                .env("TEMP", root)
+                .env("TMP", root);
+        }
         command
     } else {
         Command::new(BINARY)
@@ -552,8 +568,6 @@ fn cli_help_version_validation_extraction_and_unowned_output() {
             Path::new(&binary)
                 .parent()
                 .unwrap()
-                .parent()
-                .unwrap()
                 .join("config.example.toml"),
         )
         .unwrap()
@@ -700,10 +714,13 @@ fn cli_evidence_matrix_checks_pixels_labels_events_and_zero_call_warm() {
                         .unwrap()
                         > 0.0
                 );
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
                 assert!(
                     cold_metrics["peak_memory"]["status"] == "measured"
                         || cold_metrics["peak_memory"]["status"] == "unavailable"
                 );
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                assert_eq!(cold_metrics["peak_memory"]["status"], "unsupported");
                 if cold_metrics["peak_memory"]["status"] == "measured" {
                     assert!(cold_metrics["peak_memory"]["bytes"].as_u64().unwrap() > 0);
                 }
@@ -1150,14 +1167,15 @@ fn probed_frames_outside_model_limits_fail_before_title_calls() {
 
 #[test]
 fn semantic_plan_misses_validate_all_frames_before_extraction_inference_or_runtime() {
+    #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    let ffprobe = Command::new("/usr/bin/which")
-        .arg("ffprobe")
-        .output()
-        .unwrap();
-    assert!(ffprobe.status.success(), "FFprobe is required");
-    let ffprobe = String::from_utf8(ffprobe.stdout).unwrap();
+    let ffprobe = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|directory| directory.join(format!("ffprobe{}", std::env::consts::EXE_SUFFIX)))
+        .find(|path| path.is_file())
+        .expect("FFprobe is required");
+    #[cfg(windows)]
+    let helper = process_helper::Helper::new();
     for generated in [false, true] {
         for failure in ["edge", "pixels"] {
             let root = tempfile::tempdir().unwrap();
@@ -1191,19 +1209,47 @@ fn semantic_plan_misses_validate_all_frames_before_extraction_inference_or_runti
             let source = source
                 .replace("method = \"sampled_frames\"", "method = \"semantic_video\"")
                 .replace("api_key = \"search-secret\"\n", "");
-            fs::write(&config, format!("{source}\n[runtime]\nbackend = \"vllm\"\nstart_command = [\"/bin/sh\", \"-c\", \": > runtime-started; exit 1\", \"{{session}}\"]\nstop_command = [\"/bin/sh\", \"-c\", \": > runtime-stopped; exit 1\", \"{{pid}}\", \"{{session}}\"]\n")).unwrap();
+            #[cfg(unix)]
+            let runtime = "\n[runtime]\nbackend = \"vllm\"\nstart_command = [\"/bin/sh\", \"-c\", \": > runtime-started; exit 1\", \"{session}\"]\nstop_command = [\"/bin/sh\", \"-c\", \": > runtime-stopped; exit 1\", \"{pid}\", \"{session}\"]\n".to_owned();
+            #[cfg(windows)]
+            let runtime = {
+                let command = |mode, placeholders: &[&str]| {
+                    let executable = helper.executable(mode).to_str().unwrap().to_owned();
+                    toml::Value::Array(
+                        std::iter::once(executable)
+                            .chain(placeholders.iter().map(|value| (*value).to_owned()))
+                            .map(toml::Value::String)
+                            .collect(),
+                    )
+                };
+                format!(
+                    "\n[runtime]\nbackend = \"vllm\"\nstart_command = {}\nstop_command = {}\n",
+                    command("runtime-start-marker", &["{session}"]),
+                    command("runtime-stop-marker", &["{pid}", "{session}"])
+                )
+            };
+            fs::write(&config, format!("{source}{runtime}")).unwrap();
             // A valid first input must not cause extraction before the later
             // oversized input has been checked. The aggregate plan is absent.
             write_large_video(&root.path().join("input/z-large.mkv"), "2048x1024");
             let tools = root.path().join("tools");
             fs::create_dir(&tools).unwrap();
-            symlink(ffprobe.trim(), tools.join("ffprobe")).unwrap();
-            fs::write(
-                tools.join("ffmpeg"),
-                "#!/bin/sh\n: > ffmpeg-called\nexit 1\n",
-            )
-            .unwrap();
-            fs::set_permissions(tools.join("ffmpeg"), fs::Permissions::from_mode(0o755)).unwrap();
+            #[cfg(unix)]
+            {
+                symlink(&ffprobe, tools.join("ffprobe")).unwrap();
+                fs::write(
+                    tools.join("ffmpeg"),
+                    "#!/bin/sh\n: > ffmpeg-called\nexit 1\n",
+                )
+                .unwrap();
+                fs::set_permissions(tools.join("ffmpeg"), fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
+            #[cfg(windows)]
+            {
+                fs::copy(&ffprobe, tools.join("ffprobe.exe")).unwrap();
+                fs::copy(helper.executable("ffmpeg"), tools.join("ffmpeg.exe")).unwrap();
+            }
             let rejected = invoke_with_path(root.path(), generated, false, Some(&tools));
             assert_eq!(rejected.status.code(), Some(1));
             let diagnostic = String::from_utf8_lossy(&rejected.stderr);
@@ -1552,16 +1598,19 @@ fn invalid_brave_titles_are_input_errors_without_preparation_writes() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn sigint_during_live_http_promptly_cleans_the_owned_runtime() {
     sigint_during_live_http(false);
 }
 
+#[cfg(unix)]
 #[test]
 fn sigint_also_cancels_a_hung_runtime_stop_command() {
     sigint_during_live_http(true);
 }
 
+#[cfg(unix)]
 fn sigint_during_live_http(hung_stop: bool) {
     use std::os::unix::fs::PermissionsExt;
     use std::time::Instant;

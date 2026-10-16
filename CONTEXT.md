@@ -8,7 +8,7 @@
 | --- | --- |
 | Input Video Directory | 入力集合を指定する directory。直下の対応する通常動画 file を安定したファイル名順で探索し、再帰探索・symlink 追跡はしない。 |
 | Input Video / Input Videos | 入力録画1本／その集合。ほぼ先頭から末尾までを対象とし、元動画と実時刻を出力まで追跡する。 |
-| Input Video Identity | 内容SHA-256をmetadata（device/inode・サイズ・mtime/ctime）で再利用する条件。親directory移動を保ち、通常の変更は再hashする。metadata偽装復元は保証範囲外。 |
+| Input Video Identity | 内容SHA-256をmetadata（Unixのdevice/inode・mtime/ctime、Windowsのvolume/File ID・LastWriteTime/ChangeTime、サイズ）で再利用する条件。親directory移動を保ち、通常の変更は再hashする。metadata偽装復元は保証範囲外。 |
 | Game Title | Brave 検索から Game Context を作るためのゲーム表記。ファイル名から推測しない。 |
 | Game Context | ゲームの進行・代表画面・選定で重視する点を説明する文章。直接指定、または Brave 検索と明示 model による生成。固定カテゴリ/quotaや命令として扱わない。検索由来の保存・再利用は契約確認後だけ有効にする。 |
 | Sample Position | 各動画内の候補抽出時刻。等間隔方式は全編を覆い、動画理解方式は全編の重要場面周辺を使う。 |

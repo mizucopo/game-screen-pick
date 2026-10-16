@@ -1,12 +1,15 @@
 //! Filesystem primitives shared by cache and output ownership.
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::media::Interrupted;
@@ -25,6 +28,8 @@ impl std::fmt::Display for OperationalError {
 impl std::error::Error for OperationalError {}
 
 pub fn checked_path(path: &Path) -> Result<PathBuf> {
+    #[cfg(windows)]
+    windows::validate_path(path)?;
     let absolute = if path.is_absolute() {
         path.to_owned()
     } else {
@@ -38,11 +43,17 @@ pub fn checked_path(path: &Path) -> Result<PathBuf> {
             "parent traversal is not allowed in paths"
         );
         current.push(component.as_os_str());
+        // A Windows drive/UNC prefix is not itself a rooted path. Inspect it
+        // only after its following root separator has been added.
+        #[cfg(windows)]
+        if matches!(component, Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) => {
                 ensure!(
-                    !metadata.file_type().is_symlink(),
-                    "symlink path components are not allowed"
+                    !is_link(&metadata),
+                    "symlink or reparse path components are not allowed"
                 );
                 ensure!(
                     metadata.is_dir() || metadata.is_file(),
@@ -71,9 +82,9 @@ pub fn checked_path(path: &Path) -> Result<PathBuf> {
     Ok(parent.join(current.file_name().context("path needs a filename")?))
 }
 
-/// Read-only comparison of unresolved siblings on modern macOS APFS. Existing
-/// paths and lock representatives still use the filesystem's own lookup. Do
-/// not apply APFS's Unicode equivalence to other filesystem formats.
+/// Read-only comparison of unresolved siblings on APFS and Windows. Existing
+/// paths and lock representatives still use the filesystem's own lookup.
+/// APFS Unicode equivalence is never applied to other filesystem formats.
 pub(crate) fn native_sibling_names_equal(left: &Path, right: &Path) -> Result<bool> {
     if left == right {
         return Ok(true);
@@ -109,8 +120,74 @@ pub(crate) fn native_sibling_names_equal(left: &Path, right: &Path) -> Result<bo
         );
         macos_names::equal(left_name, right_name, case_sensitive != 0)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        windows::sibling_names_equal(left, right)
+    }
+    #[cfg(all(not(target_os = "macos"), not(windows)))]
     Ok(false)
+}
+
+/// Includes junctions and other Windows reparse points, not only symbolic links.
+pub fn is_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+    }
+    #[cfg(not(windows))]
+    metadata.file_type().is_symlink()
+}
+
+/// Native object identity, independent of the spelling or location of a path.
+/// Unix serialization stays compatible with existing ownership journals.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileIdentity {
+    pub device: u64,
+    pub inode: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_file_id: Option<[u8; 16]>,
+}
+
+pub fn file_identity(path: &Path) -> Result<FileIdentity> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = fs::symlink_metadata(path)?;
+        ensure!(!is_link(&metadata), "file identity must not follow links");
+        Ok(FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            windows_file_id: None,
+        })
+    }
+    #[cfg(windows)]
+    {
+        let path = checked_path(path)?;
+        windows::identity(&windows::open_attributes(&path)?)
+    }
+}
+
+/// POSIX allows fsync of a directory. Windows exposes no equivalent ordinary
+/// directory flush: regular files are synced before rename, and the journal
+/// recovers ordinary interruption; power-loss durability is not promised.
+pub fn sync_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(path)?.sync_all()?;
+    }
+    #[cfg(windows)]
+    {
+        let path = checked_path(path)?;
+        ensure!(
+            fs::symlink_metadata(path)?.is_dir(),
+            "expected an ordinary directory"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -209,12 +286,32 @@ mod macos_names {
 }
 
 pub fn open_regular(path: &Path) -> Result<File> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(windows)]
+    let native_path = checked_path(path)?;
+    #[cfg(windows)]
+    let path = native_path.as_path();
+    let file = options
         .open(path)
         .context("cannot open ordinary file without following links")?;
-    ensure!(file.metadata()?.is_file(), "expected an ordinary file");
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file() && !is_link(&metadata),
+        "expected an ordinary file"
+    );
+    #[cfg(windows)]
+    ensure!(
+        windows::identity(&file)? == file_identity(path)?,
+        "file changed while being opened"
+    );
     Ok(file)
 }
 
@@ -356,7 +453,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         .persist(&path)
         .map_err(|error| error.error)
         .context("cannot commit atomic file")?;
-    File::open(parent)?.sync_all()?;
+    sync_directory(parent)?;
     Ok(())
 }
 
@@ -369,9 +466,12 @@ impl Drop for Lock {
     fn drop(&mut self) {
         // A concurrently forked child can retain this open-file description
         // until exec/exit. End the parent's run lock before closing our handle.
+        #[cfg(unix)]
         unsafe {
             libc::flock(self._file.as_raw_fd(), libc::LOCK_UN);
         }
+        #[cfg(windows)]
+        windows::unlock(&self._file);
     }
 }
 
@@ -385,21 +485,42 @@ impl Lock {
                 return Err(error).context(OperationalError("cannot inspect cache/output lock"));
             }
         }
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            };
+            // Prevent replacing/unlinking the held representative. Other runs
+            // can open it to attempt the same exclusive byte-range lock.
+            options
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+        }
+        let file = options
+            .open(&path)
             .context(OperationalError("cannot open cache/output lock"))?;
+        let metadata = file
+            .metadata()
+            .context(OperationalError("cannot inspect cache/output lock"))?;
         ensure!(
-            file.metadata()
-                .context(OperationalError("cannot inspect cache/output lock"))?
-                .is_file(),
+            metadata.is_file() && !is_link(&metadata),
             "lock must be an ordinary file"
         );
+        #[cfg(windows)]
+        {
+            ensure!(
+                windows::identity(&file)? == file_identity(&path)?,
+                "lock changed while being opened"
+            );
+            windows::lock(&file)?;
+        }
         // The descriptor holds the advisory lock; unlinking it would admit a second owner.
+        #[cfg(unix)]
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             let error = std::io::Error::last_os_error();
             let message = if matches!(error.raw_os_error(), Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN)
@@ -411,5 +532,221 @@ impl Lock {
             return Err(error).context(OperationalError(message));
         }
         Ok(Self { _file: file })
+    }
+}
+
+#[cfg(windows)]
+pub(crate) mod windows {
+    use std::fs::{File, OpenOptions};
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use std::path::{Component, Path, Prefix};
+
+    use anyhow::{Context, Result, ensure};
+    use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_LOCK_VIOLATION};
+    use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_BASIC_INFO, FILE_CASE_SENSITIVE_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS,
+        FILE_READ_ATTRIBUTES, FileBasicInfo, FileCaseSensitiveInfo, FileIdInfo,
+        GetFileInformationByHandleEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+        LockFileEx, UnlockFileEx,
+    };
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+
+    use super::{FileIdentity, OperationalError, is_link};
+
+    pub(super) fn validate_path(path: &Path) -> Result<()> {
+        for component in path.components() {
+            match component {
+                Component::Prefix(prefix) => ensure!(
+                    matches!(
+                        prefix.kind(),
+                        Prefix::Disk(_)
+                            | Prefix::VerbatimDisk(_)
+                            | Prefix::UNC(_, _)
+                            | Prefix::VerbatimUNC(_, _)
+                    ) && path.has_root(),
+                    "device namespaces and drive-relative paths are not allowed"
+                ),
+                Component::Normal(name) => {
+                    let units = name.encode_wide().collect::<Vec<_>>();
+                    ensure!(
+                        !units.is_empty()
+                            && !units.iter().any(|unit| *unit < 32
+                                || matches!(
+                                    *unit,
+                                    0x22 | 0x2a | 0x2f | 0x3a | 0x3c | 0x3e | 0x3f | 0x5c | 0x7c
+                                ))
+                            && !matches!(units.last(), Some(0x20 | 0x2e)),
+                        "Windows path has an alternate stream, reserved character or trailing dot/space"
+                    );
+                    // Win32 reserves these even when followed by an extension;
+                    // the superscript digits are also DOS device aliases.
+                    let stem = name
+                        .to_string_lossy()
+                        .split('.')
+                        .next()
+                        .unwrap_or_default()
+                        .trim_end_matches(' ')
+                        .to_uppercase();
+                    let numbered_device = stem
+                        .strip_prefix("COM")
+                        .or_else(|| stem.strip_prefix("LPT"))
+                        .is_some_and(|suffix| {
+                            matches!(
+                                suffix,
+                                "1" | "2"
+                                    | "3"
+                                    | "4"
+                                    | "5"
+                                    | "6"
+                                    | "7"
+                                    | "8"
+                                    | "9"
+                                    | "¹"
+                                    | "²"
+                                    | "³"
+                            )
+                        });
+                    ensure!(
+                        !matches!(
+                            stem.as_str(),
+                            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+                        ) && !numbered_device,
+                        "Windows reserved device names are not allowed"
+                    );
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn open_attributes(path: &Path) -> Result<File> {
+        let file = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .context("cannot open native file identity")?;
+        let metadata = file.metadata()?;
+        ensure!(
+            (metadata.is_file() || metadata.is_dir()) && !is_link(&metadata),
+            "file identity requires an ordinary file or directory without reparse points"
+        );
+        Ok(file)
+    }
+
+    fn query<T: Default>(file: &File, class: FILE_INFO_BY_HANDLE_CLASS) -> std::io::Result<T> {
+        let mut value = T::default();
+        // All callers pair a documented information class with its matching
+        // repr(C) windows-sys structure and pass the structure's exact size.
+        if unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                class,
+                (&mut value as *mut T).cast(),
+                std::mem::size_of::<T>() as u32,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(value)
+    }
+
+    pub(super) fn identity(file: &File) -> Result<FileIdentity> {
+        let info: FILE_ID_INFO = query(file, FileIdInfo)
+            .context("filesystem must support stable Windows volume and 128-bit file identities")?;
+        Ok(FileIdentity {
+            device: info.VolumeSerialNumber,
+            inode: u64::from_le_bytes(info.FileId.Identifier[..8].try_into().expect("eight bytes")),
+            windows_file_id: Some(info.FileId.Identifier),
+        })
+    }
+
+    pub(crate) fn input_metadata(path: &Path) -> Result<(FileIdentity, u64, i64, i64)> {
+        let file = open_attributes(path)?;
+        let metadata = file.metadata()?;
+        ensure!(
+            metadata.is_file() && !is_link(&metadata),
+            "input identity requires an ordinary file"
+        );
+        let info: FILE_BASIC_INFO =
+            query(&file, FileBasicInfo).context("cannot inspect Windows input change time")?;
+        Ok((
+            identity(&file)?,
+            metadata.len(),
+            info.LastWriteTime,
+            info.ChangeTime,
+        ))
+    }
+
+    pub(super) fn sibling_names_equal(left: &Path, right: &Path) -> Result<bool> {
+        let parent = open_attributes(left.parent().context("path needs a parent")?)?;
+        let case_sensitive = match query::<FILE_CASE_SENSITIVE_INFO>(&parent, FileCaseSensitiveInfo)
+        {
+            // FILE_CS_FLAG_CASE_SENSITIVE_DIR from winnt.h.
+            Ok(info) => info.Flags & 1 != 0,
+            // Filesystems without per-directory case-sensitivity support use
+            // a conservative case-insensitive comparison for absent names.
+            Err(error) if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) => false,
+            Err(error) => {
+                return Err(error).context("cannot inspect Windows directory case sensitivity");
+            }
+        };
+        let left = left
+            .file_name()
+            .context("path needs a filename")?
+            .encode_wide()
+            .collect::<Vec<_>>();
+        let right = right
+            .file_name()
+            .context("path needs a filename")?
+            .encode_wide()
+            .collect::<Vec<_>>();
+        let compared = unsafe {
+            CompareStringOrdinal(
+                left.as_ptr(),
+                left.len().try_into()?,
+                right.as_ptr(),
+                right.len().try_into()?,
+                i32::from(!case_sensitive),
+            )
+        };
+        ensure!(compared != 0, "cannot compare native Windows filenames");
+        Ok(compared == CSTR_EQUAL)
+    }
+
+    pub(super) fn lock(file: &File) -> Result<()> {
+        let mut overlapped = OVERLAPPED::default();
+        // Offset zero, length one protects the persistent lock representative.
+        // FAIL_IMMEDIATELY makes this synchronous even with a conflicting run.
+        if unsafe {
+            LockFileEx(
+                file.as_raw_handle(),
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                0,
+                1,
+                0,
+                &mut overlapped,
+            )
+        } == 0
+        {
+            let error = std::io::Error::last_os_error();
+            let message = if error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
+                "cache/output is already locked by another run"
+            } else {
+                "cannot acquire cache/output lock"
+            };
+            return Err(error).context(OperationalError(message));
+        }
+        Ok(())
+    }
+
+    pub(super) fn unlock(file: &File) {
+        let mut overlapped = OVERLAPPED::default();
+        unsafe { UnlockFileEx(file.as_raw_handle(), 0, 1, 0, &mut overlapped) };
     }
 }

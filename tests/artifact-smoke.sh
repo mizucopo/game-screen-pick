@@ -7,15 +7,34 @@ archive=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 mkdir "$scratch/archive" "$scratch/tools"
-tar -xzf "$archive" -C "$scratch/archive"
-binary=$(find "$scratch/archive" -type f -path '*/bin/game-screen-pick')
+case "$archive" in
+  *.zip)
+    "${PYTHON:-python3}" -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+      "$(cygpath -w "$archive")" "$(cygpath -w "$scratch/archive")"
+    binary=$scratch/archive/game-screen-pick.exe
+    ;;
+  *.tar.gz)
+    tar -xzf "$archive" -C "$scratch/archive"
+    binary=$scratch/archive/game-screen-pick
+    ;;
+  *) echo 'Unsupported artifact archive' >&2; exit 1 ;;
+esac
 test -n "$binary" && test -x "$binary"
 for tool in ffmpeg ffprobe; do
     tool_path=$(command -v "$tool")
-    ln -s "$tool_path" "$scratch/tools/$tool"
+    case "$binary" in
+      *.exe) cp "$tool_path" "$scratch/tools/$tool.exe" ;;
+      *) ln -s "$tool_path" "$scratch/tools/$tool" ;;
+    esac
 done
+if command -v cygpath > /dev/null 2>&1; then
+    binary=$(cygpath -w "$binary")
+    artifact_tools=$(cygpath -w "$scratch/tools")
+else
+    artifact_tools=$scratch/tools
+fi
 export GSP_ARTIFACT_BINARY="$binary"
-export GSP_ARTIFACT_TOOLS="$scratch/tools"
+export GSP_ARTIFACT_TOOLS="$artifact_tools"
 # A precompiled runner allows the Linux runtime container to have no toolchain.
 run_test() {
     if [ -n "${GSP_ARTIFACT_TEST_RUNNER:-}" ]; then

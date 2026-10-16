@@ -6,7 +6,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
@@ -540,27 +540,6 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
-struct OwnedChild(Child);
-
-impl OwnedChild {
-    fn kill_group(&self) {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(-(self.0.id() as libc::pid_t), libc::SIGKILL);
-        }
-    }
-}
-
-impl Drop for OwnedChild {
-    fn drop(&mut self) {
-        // Each command has its own process group, so interruption also closes
-        // inherited pipes held by descendants. We never signal the caller's group.
-        self.kill_group();
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 fn bounded_reader(mut reader: impl Read, limit: usize) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     let mut buffer = [0; 8192];
@@ -590,15 +569,10 @@ fn run(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
     let program = command.get_program().to_os_string();
-    let mut child = OwnedChild(command.spawn().with_context(|| format!("cannot start {operation} command {program:?}; install FFmpeg/FFprobe or correct its command path"))?);
-    let stdout = child.0.stdout.take().context("missing command stdout")?;
-    let stderr = child.0.stderr.take().context("missing command stderr")?;
+    let mut child = crate::owned_process::OwnedChild::spawn(command).with_context(|| format!("cannot start {operation} command {program:?}; install FFmpeg/FFprobe or correct its command path"))?;
+    let stdout = child.stdout().context("missing command stdout")?;
+    let stderr = child.stderr().context("missing command stderr")?;
     let (sender, receiver) = mpsc::channel();
     let error_sender = sender.clone();
     let stdout_thread = thread::spawn(move || {
@@ -624,14 +598,11 @@ fn run(
                 }
             }
             if status.is_none() {
-                status = child
-                    .0
-                    .try_wait()
-                    .context("cannot wait for media command")?;
+                status = child.try_wait().context("cannot wait for media command")?;
                 if status.is_some() {
                     // A descendant may still hold a pipe after its leader exits.
                     // Stop the entire owned group before waiting for EOF.
-                    child.kill_group();
+                    child.terminate();
                 }
             }
             if let Some(status) = status

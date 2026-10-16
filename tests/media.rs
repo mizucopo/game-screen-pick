@@ -6,6 +6,10 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+#[path = "support/process_helper.rs"]
+mod process_helper;
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/videos")
@@ -455,7 +459,16 @@ fn metadata_script(directory: &Path, streams: &str, frames: &str) -> PathBuf {
     )
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+fn metadata_script(directory: &Path, streams: &str, frames: &str) -> PathBuf {
+    let helper = process_helper::Helper::new();
+    let executable = directory.join("probe-metadata.exe");
+    fs::write(directory.join("streams.json"), streams).unwrap();
+    fs::write(directory.join("frames.json"), frames).unwrap();
+    fs::copy(helper.executable("probe-metadata"), &executable).unwrap();
+    executable
+}
+
 #[test]
 fn parallel_metadata_scripts_preserve_each_probe_response() {
     std::thread::scope(|scope| {
@@ -488,7 +501,6 @@ fn parallel_metadata_scripts_preserve_each_probe_response() {
     });
 }
 
-#[cfg(unix)]
 #[test]
 fn attached_picture_is_excluded_and_invalid_metadata_is_rejected() {
     let directory = tempfile::tempdir().unwrap();
@@ -678,4 +690,79 @@ fn exited_command_cannot_leave_descendants_holding_capture_pipes() {
             .is_err()
     );
     assert!(start.elapsed() < Duration::from_secs(3));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_media_cancellation_removes_partial_files_and_owned_descendants() {
+    use process_helper::{Helper, assert_gone, wait_for};
+    let helper = Helper::new();
+    let cancelled = AtomicBool::new(false);
+    let mut tools = MediaTools::default();
+    let video = tools.probe(&fixture("01-blocks.mkv"), &cancelled).unwrap();
+    let original = fs::read(&video.source).unwrap();
+    tools.ffmpeg = helper.executable("media-hang");
+    let before = Instant::now();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            wait_for(&helper.marker("media-descendant"));
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        assert!(
+            tools
+                .extract(&video, 1.0, &cancelled)
+                .unwrap_err()
+                .downcast_ref::<Interrupted>()
+                .is_some()
+        );
+    });
+    assert!(before.elapsed() < Duration::from_secs(6));
+    let partial = PathBuf::from(wait_for(&helper.marker("partial-path")));
+    assert!(!partial.parent().unwrap().exists());
+    for marker in ["media-leader", "media-descendant"] {
+        assert_gone(wait_for(&helper.marker(marker)).parse().unwrap());
+    }
+    assert_eq!(fs::read(&video.source).unwrap(), original);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_exited_media_wrapper_cannot_keep_capture_pipes_open() {
+    use process_helper::{Helper, assert_gone, wait_for};
+    let helper = Helper::new();
+    let tools = MediaTools {
+        ffprobe: helper.executable("media-exit"),
+        ..MediaTools::default()
+    };
+    let before = Instant::now();
+    let error = tools
+        .probe(&fixture("01-blocks.mkv"), &AtomicBool::new(false))
+        .unwrap_err();
+    assert!(error.to_string().contains("failed"));
+    assert!(before.elapsed() < Duration::from_secs(6));
+    assert_gone(
+        wait_for(&helper.marker("media-descendant"))
+            .parse()
+            .unwrap(),
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_media_failures_keep_diagnostics_private_and_outputs_bounded() {
+    use process_helper::{Helper, wait_for};
+    let helper = Helper::new();
+    let cancelled = AtomicBool::new(false);
+    let mut tools = MediaTools::default();
+    let video = tools.probe(&fixture("01-blocks.mkv"), &cancelled).unwrap();
+    tools.ffmpeg = helper.executable("media-fail");
+    let error = format!("{:#}", tools.extract(&video, 1.0, &cancelled).unwrap_err());
+    assert!(error.contains("failed"));
+    assert!(!error.contains("fixture-secret-never-print"));
+    let partial = PathBuf::from(wait_for(&helper.marker("partial-path")));
+    assert!(!partial.parent().unwrap().exists());
+    tools.ffprobe = helper.executable("probe-large");
+    assert!(
+        format!("{:#}", tools.probe(&video.source, &cancelled).unwrap_err()).contains("byte limit")
+    );
 }

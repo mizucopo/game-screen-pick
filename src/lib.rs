@@ -10,6 +10,7 @@ pub mod inference;
 pub mod media;
 pub mod metrics;
 pub mod output;
+pub(crate) mod owned_process;
 pub mod pipeline;
 pub mod quality;
 pub mod run;

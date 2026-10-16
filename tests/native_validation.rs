@@ -261,3 +261,112 @@ fn non_utf8_output_name_is_rejected_without_writes() {
     }
     assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_absent_case_aliases_and_reserved_container_are_rejected_without_writes() {
+    let cancelled = AtomicBool::new(false);
+    for (name, protected) in [
+        ("Result", "result"),
+        (".GSP-OUTPUT-LOCKS", "cache"),
+        ("result", ".GSP-OUTPUT-LOCKS"),
+    ] {
+        let parent = temporary();
+        let output = parent.path().join(name);
+        let protected = parent.path().join(protected);
+        assert!(Output::validate(&output, &[&protected], &cancelled).is_err());
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        assert!(Output::prepare(&output, &[&protected], &cancelled).is_err());
+        assert!(!output.exists());
+        assert!(!protected.exists());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_device_stream_and_normalized_names_are_rejected_before_writes() {
+    let parent = temporary();
+    let cancelled = AtomicBool::new(false);
+    for name in [
+        "NUL",
+        "nul.txt",
+        "CON",
+        "CONIN$",
+        "COM1",
+        "LPT9.txt",
+        "COM¹.log",
+        "result.",
+        "result ",
+        "file:stream",
+        "bad?name",
+        "bad\"name",
+    ] {
+        let output = parent.path().join(name);
+        assert!(
+            Output::validate(&output, &[], &cancelled).is_err(),
+            "{name}"
+        );
+        assert!(Output::prepare(&output, &[], &cancelled).is_err(), "{name}");
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+    }
+    for path in [
+        r"C:relative",
+        r"\\.\NUL",
+        r"\\?\GLOBALROOT\Device\HarddiskVolume1\result",
+    ] {
+        assert!(
+            game_screen_pick::storage::checked_path(std::path::Path::new(path)).is_err(),
+            "{path}"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_junctions_are_rejected_as_output_protected_path_and_cache_namespace() {
+    use game_screen_pick::cache::Cache;
+    use game_screen_pick::storage;
+
+    let parent = temporary();
+    let target = parent.path().join("real");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("keep.txt"), b"keep user data").unwrap();
+    let junction = parent.path().join("junction");
+    let status = std::process::Command::new("cmd")
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&target)
+        .status()
+        .unwrap();
+    assert!(status.success(), "native junction creation must succeed");
+    assert!(storage::is_link(&fs::symlink_metadata(&junction).unwrap()));
+    let cancelled = AtomicBool::new(false);
+    for output in [&junction, &junction.join("result")] {
+        assert!(Output::validate(output, &[], &cancelled).is_err());
+        assert!(Output::prepare(output, &[], &cancelled).is_err());
+    }
+    assert!(Output::prepare(&parent.path().join("result"), &[&junction], &cancelled).is_err());
+    assert!(Cache::open(&junction).is_err());
+    assert!(storage::open_regular(&junction.join("keep.txt")).is_err());
+    assert_eq!(
+        fs::read(target.join("keep.txt")).unwrap(),
+        b"keep user data"
+    );
+    assert!(!target.join("result").exists());
+    fs::remove_dir(&junction).unwrap(); // Remove the junction, never its target.
+    assert!(target.join("keep.txt").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_non_unicode_output_name_is_rejected_without_writes() {
+    use std::os::windows::ffi::OsStringExt;
+    let parent = temporary();
+    let output = parent
+        .path()
+        .join(std::ffi::OsString::from_wide(&[0x72, 0xd800]));
+    let cancelled = AtomicBool::new(false);
+    assert!(Output::validate(&output, &[], &cancelled).is_err());
+    assert!(Output::prepare(&output, &[], &cancelled).is_err());
+    assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+}

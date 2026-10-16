@@ -132,7 +132,7 @@ Brave契約参照は生文字列を記録せず、検索条件全体のdigestで
 CLIのcache親は出力と同じ親の `.game-screen-pick-cache`、変更は `--cache-directory` で指定します。
 既存の親directoryが必要です。checkpoint の読書きは専用 `game-screen-pick-rust-v1` namespace 内に限定します。
 
-入力は初回にSHA-256を計算し、以後はdevice/inode・サイズ・mtime/ctimeのnanosecondを確認します。
+入力は初回にSHA-256を計算し、以後はOSのfile identity・サイズ・更新時刻と変更時刻を確認します。Unix はdevice/inode・mtime/ctimeのnanosecond、Windows はvolume serial・128-bit File ID・LastWriteTime / ChangeTimeの100ns単位を使います。安定したidentityを照会できないfilesystemは拒否します。
 親directoryの移動は再利用でき、通常の編集・置換は再hashします。全metadataの偽装復元や不整合なfilesystemの変更検出は保証しません。
 処理中の入力変更は前後のmetadata照合で拒否します。probe済みstream/PTSは内容identityでcheckpointし、絶対pathを保存しません。
 評価はphase・表示IDと順序・入力identity・要求/実時刻・実画像/context/sheet・実効条件が同じ完了batch単位です。
@@ -158,10 +158,11 @@ cache消失後も所有権を確認でき、同名の有効JPEGへの編集、�
 lockは出力の親側 `.gsp-output-locks` 内でfilesystemの同名判定を使い、取得後も名前を削除しません。
 APFSのreadonly `validate` はoutput・保護対象・lock代表が未作成でも、親volumeのcase設定とUnicode full case folding／canonical分解で同親leafの別名重複を拒否します。
 case-sensitive／insensitiveのAPFSで実filesystemの判定との一致を検証しています。その他のfilesystemで未作成Unicode別名まで同じ保証はせず、通常prepareと既存path／lock代表はnative lookupを使います。
+Windows はdirectoryのcase設定とnative Unicode比較を使い、未作成の大文字小文字別名も同じ出力lockへ束ねます。各path要素のreparse point、ADS、device名、末尾dot/spaceを拒否します。既存fileはno-follow相当のhandleを開いた後もFile IDを照合し、WindowsのlockはLockFileExで保持します。
 公開は同じ親の排他的stagingとbackupを使い、
 旧成果物を再確認してrenameします。完了検証前の失敗・通常中断は旧集合を復元し、journalから再開時にも回復します。
 完了後のcleanup失敗は未処理journalとして検出し、検証できない変更を推測で削除しません。
-macOS/Linuxのlock・rename・通常中断を検証します。hostileな同時filesystem書換え、強制kill/停電での完全atomicity、
+macOS/Linux/Windowsのlock・rename・通常中断を検証します。Windows はfile.sync_allとjournalによる通常中断の復旧を使い、directoryの永続化保証は主張しません。hostileな同時filesystem書換え、強制kill/停電での完全atomicity、
 filesystemをまたぐtransactionは保証しません。実AI接続と実録画品質の [未実施項目](verification.md) と、
 binary の [配布検証](release.md#配布対象と検証) は区別して記録します。
 

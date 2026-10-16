@@ -2,11 +2,19 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
+};
+
+#[cfg(unix)]
+use std::{
     thread,
     time::{Duration, Instant},
 };
 
 const BINARY: &str = env!("CARGO_BIN_EXE_game-screen-pick");
+
+#[cfg(windows)]
+#[path = "support/process_helper.rs"]
+mod process_helper;
 
 fn sandbox() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
@@ -294,7 +302,7 @@ fn normal_command_reports_cache_and_output_lock_contention_as_processing_failure
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("locked by another run"));
     assert!(!root.join("output").exists());
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     {
         let mut aliases = request();
         aliases[7] = "OUTPUT";
@@ -322,7 +330,14 @@ fn normal_command_reports_cache_and_output_lock_contention_as_processing_failure
 
 #[test]
 fn validate_and_normal_reject_control_names_and_hard_link_aliases_without_writes() {
-    for hard_link in [false, true] {
+    #[cfg(unix)]
+    let variants = [false, true];
+    // Win32 does not permit these control characters in file names. CLI
+    // argument controls are exercised above on both platforms; hard-link
+    // aliases still require the application's preflight on Windows.
+    #[cfg(windows)]
+    let variants = [true];
+    for hard_link in variants {
         let directory = sandbox();
         setup(directory.path());
         let inputs = directory.path().join("録画 空白");
@@ -357,9 +372,10 @@ fn validate_and_normal_reject_control_names_and_hard_link_aliases_without_writes
 fn parentless_output_is_an_input_error_in_normal_and_validate_commands() {
     let directory = sandbox();
     setup(directory.path());
+    let root = directory.path().ancestors().last().unwrap();
     for diagnostic in [false, true] {
         let mut args = request();
-        args[7] = "/";
+        args[7] = root.to_str().unwrap();
         if diagnostic {
             args.insert(0, "validate");
         }
@@ -407,6 +423,7 @@ fn validate_enforces_the_same_input_count_limit_as_normal_preflight() {
     assert!(!directory.path().join(".game-screen-pick-cache").exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn normal_command_reports_cache_directory_creation_failures_as_processing() {
     use std::os::unix::fs::PermissionsExt;
@@ -455,7 +472,10 @@ fn normal_command_reports_cache_directory_creation_failures_as_processing() {
         assert!(!root.join("output").exists());
         assert!(!cache.join(game_screen_pick::cache::NAMESPACE).exists());
     }
+}
 
+#[test]
+fn normal_command_preserves_unowned_cache_namespace_file() {
     let directory = sandbox();
     setup(directory.path());
     let root = directory.path().canonicalize().unwrap();
@@ -604,5 +624,53 @@ fn interruption_reaps_child_and_removes_partial_media() {
     assert!(!root.join("inspection").exists());
     unsafe {
         assert_eq!(libc::kill(media_pid, 0), -1, "owned child survived");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_ctrl_c_cleans_media_job_and_partial_output_and_returns_130() {
+    use process_helper::{Helper, assert_gone, wait_for};
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
+
+    let directory = sandbox();
+    setup(directory.path());
+    let helper = Helper::new();
+    helper.executable("ffmpeg");
+    fs::write(helper.marker("ffmpeg-behavior"), "media-hang").unwrap();
+    let mut paths = vec![helper.directory().to_owned()];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    let child = Command::new(helper.executable("console-driver"))
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .current_dir(directory.path())
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .args([
+            BINARY,
+            "extract",
+            "--at",
+            "0.5",
+            "録画 空白/動画.mkv",
+            "inspection",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for(&helper.marker("media-descendant"));
+    let partial = PathBuf::from(wait_for(&helper.marker("partial-path")));
+    assert!(partial.exists());
+    fs::write(helper.marker("interrupt-now"), b"interrupt").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!partial.parent().unwrap().exists());
+    assert!(!directory.path().join("inspection").exists());
+    for marker in ["media-leader", "media-descendant"] {
+        assert_gone(wait_for(&helper.marker(marker)).parse().unwrap());
     }
 }

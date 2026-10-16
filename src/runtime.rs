@@ -1,6 +1,6 @@
 //! Optional, lazy management of one explicitly configured foreground runtime.
 //! Commands are argv vectors; the caller owns all backend-specific launch details.
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,6 +11,7 @@ use tempfile::{Builder, TempDir};
 
 use crate::ai::OpenAiClient;
 use crate::config::{AiConfig, Backend};
+use crate::owned_process::OwnedChild;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -179,11 +180,10 @@ impl RuntimeManager {
             .to_str()
             .ok_or_else(|| anyhow!("runtime session path is not UTF-8"))?
             .to_owned();
-        let child = command(&config.start_command, &token, None)
-            .spawn()
+        let child = OwnedChild::spawn(command(&config.start_command, &token, None))
             .map_err(|_| anyhow!("cannot start runtime command (command diagnostics withheld)"))?;
         self.owned = Some(OwnedSession {
-            child: OwnedChild::new(child),
+            child,
             token,
             _directory: directory,
         });
@@ -261,16 +261,15 @@ impl RuntimeManager {
             .load(Ordering::Relaxed)
             .then(|| Instant::now() + CANCELLATION_GRACE);
         let result = (|| {
-            let child = command(
+            let child = OwnedChild::spawn(command(
                 &config.stop_command,
                 &session.token,
-                Some(session.child.child.id()),
-            )
-            .spawn()
+                Some(session.child.id()),
+            ))
             .map_err(|_| {
                 anyhow!("cannot start runtime cleanup command (command diagnostics withheld)")
             })?;
-            let mut stop = OwnedChild::new(child);
+            let mut stop = child;
             loop {
                 check_cleanup_deadline(
                     deadline,
@@ -320,77 +319,6 @@ struct OwnedSession {
     _directory: TempDir,
 }
 
-struct OwnedChild {
-    child: Child,
-    reaped: bool,
-}
-
-impl OwnedChild {
-    fn new(child: Child) -> Self {
-        Self {
-            child,
-            reaped: false,
-        }
-    }
-
-    fn exit_status(&mut self) -> Result<Option<std::process::ExitStatus>> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            // Keep both start and stop leaders unreaped until their whole owned
-            // group is terminated. A wrapper may exit before its descendants;
-            // WNOWAIT reserves the PID so cleanup cannot target a reused group.
-            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            let result = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    self.child.id() as libc::id_t,
-                    &mut info,
-                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-                )
-            };
-            ensure!(result == 0, "cannot inspect runtime command");
-            if unsafe { info.si_pid() } == 0 {
-                return Ok(None);
-            }
-            let status = unsafe { info.si_status() };
-            let raw = match info.si_code {
-                libc::CLD_EXITED => status << 8,
-                libc::CLD_KILLED => status,
-                libc::CLD_DUMPED => status | 0x80,
-                _ => return Err(anyhow!("invalid runtime command exit status")),
-            };
-            Ok(Some(std::process::ExitStatus::from_raw(raw)))
-        }
-        #[cfg(not(unix))]
-        {
-            let status = self
-                .child
-                .try_wait()
-                .map_err(|_| anyhow!("cannot wait for runtime command"))?;
-            self.reaped |= status.is_some();
-            Ok(status)
-        }
-    }
-
-    fn has_exited(&mut self) -> Result<bool> {
-        Ok(self.exit_status()?.is_some())
-    }
-}
-
-impl Drop for OwnedChild {
-    fn drop(&mut self) {
-        if !self.reaped {
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL);
-            }
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-    }
-}
-
 fn check_cleanup_deadline(
     deadline: Instant,
     cancelled: &AtomicBool,
@@ -426,11 +354,6 @@ fn command(argv: &[String], token: &str, pid: Option<u32>) -> Command {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
     command
 }
 

@@ -1,6 +1,10 @@
 #!/bin/sh
 # Called only by release.yml after all tests pass. No clobber or tag mutation.
 set -eu
+# Native jq.exe otherwise translates LF to CRLF inside shell values/files.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) jq() { command jq --binary "$@"; } ;;
+esac
 cd "$(dirname "$0")/.."
 destination=$1
 version=$2
@@ -11,16 +15,19 @@ case "$is_prerelease" in true|false) ;; *) exit 1 ;; esac
 test "$tag" = "$version"
 test "$(git rev-parse HEAD)" = "$commit"
 test "$(git rev-list -n 1 "refs/tags/$tag")" = "$commit"
+test "${RELEASE_SHA:?}" = "$commit"
 sh scripts/verify-release-assets.sh "$destination" "$version" "$commit"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 repository=${GITHUB_REPOSITORY:?}
 inspect() {
   gh api --paginate --slurp "/repos/$repository/releases?per_page=100" \
-    | jq -e --arg tag "$tag" --arg commit "$commit" --argjson is_prerelease "$is_prerelease" '
+    | jq -e --arg tag "$tag" --arg commit "$commit" --argjson is_prerelease "$is_prerelease" \
+      --arg retained_id "${RELEASE_ID:-}" '
       [.[][] | select(.tag_name == $tag)] |
       if length != 1 then error("Expected one GitHub Release") else .[0] end |
       if .target_commitish != $commit or .prerelease != $is_prerelease or (.id | type) != "number" or
+         ($retained_id != "" and (.id | tostring) != $retained_id) or
          (.draft | type) != "boolean" or (.assets | type) != "array" or
          ([.assets[].name] | length != (unique | length))
       then error("Release provenance or asset metadata differs") else . end
@@ -73,10 +80,10 @@ fi
 if [ "$draft" = false ] && ! cmp -s "$work/expected" "$work/remote"; then
   printf 'Published Release %s is incomplete; inspect its state before recovery\n' "$tag" >&2; exit 1
 fi
-comm -23 "$work/expected" "$work/remote" > "$work/missing"
-while IFS= read -r name; do
-  gh release upload "$tag" "$destination/$name" --repo "$repository"
-done < "$work/missing"
+# The common controller owns immutable upload. Product cleanup above confirms
+# that a failed starter deletion cannot be followed by a replacement upload.
+# Retain its manifests alongside the flattened, product-verified asset set.
+"${PYTHON:-python3}" -I scripts/distribution.py upload
 inspect
 jq -r '.assets[].name' "$work/release.json" | LC_ALL=C sort > "$work/remote"
 cmp "$work/expected" "$work/remote"
@@ -89,9 +96,10 @@ while IFS= read -r name; do
   cmp "$destination/$name" "$work/downloaded/$name"
 done < "$work/expected"
 sh scripts/verify-release-assets.sh "$work/downloaded" "$version" "$commit"
-if [ "$draft" = true ]; then
-  gh release edit "$tag" --repo "$repository" --draft=false --latest=false
-fi
+# Every uploaded archive has been downloaded and revalidated. The shared
+# distribution action now owns the Downloads block and draft publication;
+# disabling asset building prevents a second mutation after this byte check.
+BUILD_RUST_BINARY=false "${PYTHON:-python3}" -I .github/scripts/release.py distribution
 inspect
 jq -e '.draft == false and all(.assets[]; .state == "uploaded" and .size > 0)' \
   "$work/release.json" > /dev/null
