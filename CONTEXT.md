@@ -1,8 +1,20 @@
 # Game Screen Pick
 
 1本以上のゲーム録画から、ブログ用の画像を指定枚数選び、一覧と選定根拠を得る。
-設計の判断は [ADR 0010](docs/adr/0010-rust-product-boundaries.md)、合格条件と担当は
-[受入基準](docs/acceptance.md) に置く。
+合格条件は [受入基準](docs/acceptance.md) に置く。
+
+## 責務と安全条件
+
+CLI/config/media、選定、cache/output、AI 接続の責務を分ける。
+Game Context 生成・画像評価・動画理解は [共通 OpenAI 互換 client](docs/ai-client.md) を使い、
+Strata／vLLM、model・推論レベルを設定で明示する。非対応 media を成功扱いしない。
+[Brave 検索](docs/brave-search.md) と [任意 runtime 管理](docs/technical-reference.md) は用途側に置く。
+
+利用者の入力・設定・出力・cache は保持する。所有権を証明できない出力は保持して別の空出力先を案内する。
+staging と完了検証で既存成果物を保護し、強制 kill や filesystem の保証は実測の範囲に限る。
+配布対象・共通テンプレートと製品 hook／guard の境界・採番・承認条件は [配布・採番・公開](docs/release.md) に従う。
+
+## 用語
 
 | 用語 | 意味 |
 | --- | --- |

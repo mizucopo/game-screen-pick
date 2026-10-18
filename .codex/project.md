@@ -1,7 +1,7 @@
 # Project guidance
 
 - This application is the `game-screen-pick` Rust CLI. Follow
-  `docs/acceptance.md` and ADR 0010 for product behavior and responsibility
+  `docs/acceptance.md` and `CONTEXT.md` for product behavior and responsibility
   boundaries. Unimplemented selection and publication paths must fail clearly.
 - Keep local configuration and generated runtime files out of Git. Configuration
   may contain API keys; never print those values in logs or diagnostics.
