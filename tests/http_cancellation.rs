@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use game_screen_pick::ai::{JsonRequest, OpenAiClient};
+use game_screen_pick::brave::{BraveClient, BraveConfig};
 use game_screen_pick::config::{AiConfig, Config};
 use game_screen_pick::media::Interrupted;
 use serde_json::json;
@@ -201,6 +202,34 @@ fn inference_headers_and_body_cancel_promptly_and_close_the_socket() {
                 .downcast_ref::<Interrupted>()
                 .is_some()
         );
+    }
+}
+
+#[test]
+fn brave_headers_and_body_cancel_and_close_the_socket_without_another_query() {
+    let secret = "BRAVE_CANCELLATION_TEST_SECRET";
+    for stage in [Stage::Headers, Stage::Body] {
+        let mut server = StalledServer::new(stage);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancellation = server.cancel_when_stalled(cancelled.clone());
+        let settings: BraveConfig = serde_json::from_value(json!({
+            "endpoint": format!("{}/res/v1/web/search", server.url),
+            "api_key": secret,
+            "timeout_seconds": 300,
+            "quota_stop_confirmed": true,
+            "quota_contract_reference": "local-cancellation-test",
+            "context_generation_confirmed": true,
+            "context_contract_reference": "local-cancellation-test"
+        }))
+        .unwrap();
+        let client = BraveClient::new(&settings).unwrap();
+        let error = client
+            .search_cancellable("Example", &cancelled)
+            .unwrap_err();
+        assert!(error.downcast_ref::<Interrupted>().is_some(), "{error:#}");
+        assert!(!format!("{error:#}").contains(secret));
+        cancellation.join().unwrap();
+        server.verify_closed();
     }
 }
 
