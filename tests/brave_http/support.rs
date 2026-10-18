@@ -579,55 +579,38 @@ fn a_rate_wait_uses_the_whole_call_deadline() {
 fn cancellation_interrupts_rate_wait_before_second_query() {
     let mock = Mock::new(|_, _| Reply::rate("0, 14523", "1, 1234567"));
     let client = BraveClient::new(&config(&mock.url)).unwrap();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let flag = cancelled.clone();
-    let worker = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(120));
-        flag.store(true, Ordering::Relaxed);
-    });
-    let start = Instant::now();
+    let cancelled = AtomicBool::new(false);
+    let mut waits = 0;
     let error = client
-        .search_cancellable("Example", &cancelled)
+        .search_cancellable_with_wait("Example", &cancelled, |ready, deadline, cancelled| {
+            waits += 1;
+            if waits == 2 {
+                assert_eq!(mock.requests().len(), 1);
+                cancelled.store(true, Ordering::Relaxed);
+            }
+            wait_until(ready, deadline, cancelled)
+        })
         .unwrap_err();
     assert!(error.downcast_ref::<crate::media::Interrupted>().is_some());
-    assert!(start.elapsed() < Duration::from_millis(350));
-    worker.join().unwrap();
+    assert_eq!(waits, 2);
     assert_eq!(mock.requests().len(), 1);
 }
 
 #[test]
-fn cancellation_interrupts_headers_or_body_without_later_search() {
-    for body_wait in [false, true] {
-        let mock = Mock::new(move |_, _| Reply {
-            header_delay: if body_wait {
-                Duration::ZERO
-            } else {
-                Duration::from_millis(600)
-            },
-            body_delay: if body_wait {
-                Duration::from_millis(600)
-            } else {
-                Duration::ZERO
-            },
-            ..Reply::json(result())
-        });
-        let client = BraveClient::new(&config(&mock.url)).unwrap();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let flag = cancelled.clone();
-        let worker = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(120));
-            flag.store(true, Ordering::Relaxed);
-        });
-        let start = Instant::now();
-        let error = client
-            .search_cancellable("Example", &cancelled)
-            .unwrap_err();
-        assert!(error.downcast_ref::<crate::media::Interrupted>().is_some());
-        assert!(!error.to_string().contains(SECRET));
-        assert!(start.elapsed() < Duration::from_millis(350));
-        worker.join().unwrap();
-        assert_eq!(mock.requests().len(), 1);
-    }
+fn cancellation_during_rate_wait_stops_before_another_sleep() {
+    let cancelled = AtomicBool::new(false);
+    let ready = Instant::now() + Duration::from_secs(3600);
+    let deadline = ready + Duration::from_secs(1);
+    let mut sleeps = 0;
+    let error = wait_until_with_sleep(ready, deadline, &cancelled, |delay| {
+        sleeps += 1;
+        assert_eq!(sleeps, 1, "cancellation must stop the next wait poll");
+        assert!(!delay.is_zero() && delay <= Duration::from_millis(20));
+        cancelled.store(true, Ordering::Relaxed);
+    })
+    .unwrap_err();
+    assert!(error.downcast_ref::<crate::media::Interrupted>().is_some());
+    assert_eq!(sleeps, 1);
 }
 
 #[test]

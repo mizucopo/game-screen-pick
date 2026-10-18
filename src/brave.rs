@@ -274,6 +274,15 @@ impl BraveClient {
         title: &str,
         cancelled: &AtomicBool,
     ) -> Result<SearchEvidence> {
+        self.search_cancellable_with_wait(title, cancelled, wait_until)
+    }
+
+    fn search_cancellable_with_wait(
+        &self,
+        title: &str,
+        cancelled: &AtomicBool,
+        mut wait: impl FnMut(Instant, Instant, &AtomicBool) -> Result<()>,
+    ) -> Result<SearchEvidence> {
         http::check_cancelled(cancelled)?;
         validate_title(title)?;
         ensure!(
@@ -289,7 +298,7 @@ impl BraveClient {
         let mut results = Vec::new();
         let mut next_ready = Instant::now();
         for (query_index, query) in queries.iter().enumerate() {
-            wait_until(next_ready, deadline, cancelled)?;
+            wait(next_ready, deadline, cancelled)?;
             let (value, ready) = self.get(query, deadline, cancelled)?;
             next_ready = ready;
             ensure!(
@@ -551,13 +560,22 @@ fn header_number(text: &str) -> Result<u64> {
 }
 
 fn wait_until(ready: Instant, deadline: Instant, cancelled: &AtomicBool) -> Result<()> {
+    wait_until_with_sleep(ready, deadline, cancelled, std::thread::sleep)
+}
+
+fn wait_until_with_sleep(
+    ready: Instant,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+    mut sleep: impl FnMut(Duration),
+) -> Result<()> {
     loop {
         http::check_cancelled(cancelled)?;
         let left = remaining(deadline)?;
         let Some(delay) = ready.checked_duration_since(Instant::now()) else {
             return Ok(());
         };
-        std::thread::sleep(delay.min(left).min(Duration::from_millis(20)));
+        sleep(delay.min(left).min(Duration::from_millis(20)));
     }
 }
 
