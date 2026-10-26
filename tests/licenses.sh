@@ -30,6 +30,7 @@ jq -n --arg manifest "$scratch/crate/Cargo.toml" '
      repository:"https://github.com/Stranger6667/jsonschema"}]}
 ' > "$scratch/original.json"
 cp "$scratch/crate/.cargo_vcs_info.json" "$scratch/original-vcs.json"
+cp "$scratch/original.json" "$scratch/template.json"
 attempt=0
 collect() {
   attempt=$((attempt + 1))
@@ -42,25 +43,36 @@ reject() {
     exit 1
   fi
 }
-for name in jsonschema-regex jsonschema-value; do
-  jq --arg name "$name" '.packages[1].name=$name' "$scratch/original.json" > "$scratch/metadata.json"
-  jq --arg name "$name" '.path_in_vcs="crates/"+$name' "$scratch/original-vcs.json" \
-    > "$scratch/crate/.cargo_vcs_info.json"
-  collect
-  grep -F 'Copyright (c) 2020-2026 Dmitry Dygalo' "$scratch/result-$attempt/THIRD-PARTY-LICENSES.txt" > /dev/null
-  grep -F 'https://github.com/Stranger6667/jsonschema/blob/55ac1664384793c5d3b20745d3f9c169dfe2c06f/LICENSE' \
-    "$scratch/result-$attempt/THIRD-PARTY-LICENSES.txt" > /dev/null
+for version in 0.58.6 0.59.0; do
+  case "$version" in
+    0.58.6) commit=55ac1664384793c5d3b20745d3f9c169dfe2c06f; other_version=0.59.0 ;;
+    0.59.0) commit=d59ab79cb6eab73bb2d3caa6d1b4e538ca81567f; other_version=0.58.6 ;;
+  esac
+  jq --arg version "$version" '.packages[1].version=$version' "$scratch/template.json" > "$scratch/original.json"
+  jq --arg commit "$commit" '.git.sha1=$commit' "$scratch/original-vcs.json" > "$scratch/version-vcs.json"
+  cp "$scratch/version-vcs.json" "$scratch/original-vcs.json"
+  for name in jsonschema-regex jsonschema-value; do
+    jq --arg name "$name" '.packages[1].name=$name' "$scratch/original.json" > "$scratch/metadata.json"
+    jq --arg name "$name" '.path_in_vcs="crates/"+$name' "$scratch/original-vcs.json" \
+      > "$scratch/crate/.cargo_vcs_info.json"
+    collect
+    grep -F 'Copyright (c) 2020-2026 Dmitry Dygalo' "$scratch/result-$attempt/THIRD-PARTY-LICENSES.txt" > /dev/null
+    grep -F "https://github.com/Stranger6667/jsonschema/blob/$commit/LICENSE" \
+      "$scratch/result-$attempt/THIRD-PARTY-LICENSES.txt" > /dev/null
+  done
+  cp "$scratch/original-vcs.json" "$scratch/crate/.cargo_vcs_info.json"
+  for edit in '.name="unknown"' '.version="0.58.7"' '.version="0.59.1"' \
+    ".version=\"$other_version\"" '.license="Apache-2.0"' '.repository="https://example.invalid/other"'; do
+    jq ".packages[1] |= ($edit)" "$scratch/original.json" > "$scratch/metadata.json"
+    reject
+  done
+  cp "$scratch/original.json" "$scratch/metadata.json"
+  for edit in '.git.sha1="wrong"' '.path_in_vcs="crates/other"'; do
+    jq "$edit" "$scratch/original-vcs.json" > "$scratch/crate/.cargo_vcs_info.json"
+    reject
+  done
 done
 cp "$scratch/original-vcs.json" "$scratch/crate/.cargo_vcs_info.json"
-for edit in '.name="unknown"' '.version="0.58.7"' '.license="Apache-2.0"' '.repository="https://example.invalid/other"'; do
-  jq ".packages[1] |= ($edit)" "$scratch/original.json" > "$scratch/metadata.json"
-  reject
-done
-cp "$scratch/original.json" "$scratch/metadata.json"
-for edit in '.git.sha1="wrong"' '.path_in_vcs="crates/other"'; do
-  jq "$edit" "$scratch/original-vcs.json" > "$scratch/crate/.cargo_vcs_info.json"
-  reject
-done
 # Cargo and rustc return native Windows paths under Git Bash. Convert both the
 # manifest/license path and sysroot before collecting real files, preserving the
 # same license-text requirement as on macOS/Linux.

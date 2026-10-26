@@ -17,6 +17,17 @@ The published crate checksums match `Cargo.lock`; their source paths are
 `crates/jsonschema-regex` and `crates/jsonschema-value`, respectively. The
 packaging script checks those paths along with the source commit.
 
+The same two crates at `0.59.0` omit their license text as well.
+`jsonschema-0.59.0-MIT.txt` preserves the root LICENSE at their recorded commit:
+
+https://github.com/Stranger6667/jsonschema/blob/d59ab79cb6eab73bb2d3caa6d1b4e538ca81567f/LICENSE
+
+The license is byte-identical to the `0.58.6` supplement and has the same SHA-256
+above. The published crate SHA-256 values match `Cargo.lock`:
+
+- `jsonschema-regex`: `1472f7be79026f79e01a9b172263311e829d7c210d57b39cb57037abc0ce0500`
+- `jsonschema-value`: `e5a7550a7a84787e715ead0b47e01fa8c6bb7c3413630f91a8f2094c06c2078a`
+
 The packaging script checks the crate name, version, declared license, repository,
 and source commit before using this supplement. A dependency update with a missing
 license file fails packaging and requires a new, verified supplement.
