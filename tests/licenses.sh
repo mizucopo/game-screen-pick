@@ -43,11 +43,12 @@ reject() {
     exit 1
   fi
 }
-for version in 0.58.6 0.59.0 0.60.1; do
+for version in 0.58.6 0.59.0 0.60.1 0.60.2; do
   case "$version" in
     0.58.6) commit=55ac1664384793c5d3b20745d3f9c169dfe2c06f; other_version=0.59.0 ;;
     0.59.0) commit=d59ab79cb6eab73bb2d3caa6d1b4e538ca81567f; other_version=0.58.6 ;;
     0.60.1) commit=4eb7a64d9cf45bcbf38c7a69e544477294460751; other_version=0.59.0 ;;
+    0.60.2) commit=0b657fa991c9333908e8c51e8a582d602aac5391; other_version=0.60.1 ;;
   esac
   jq --arg version "$version" '.packages[1].version=$version' "$scratch/template.json" > "$scratch/original.json"
   jq --arg commit "$commit" '.git.sha1=$commit' "$scratch/original-vcs.json" > "$scratch/version-vcs.json"
@@ -63,7 +64,7 @@ for version in 0.58.6 0.59.0 0.60.1; do
     cp "$scratch/metadata.json" "$scratch/accepted.json"
     cp "$scratch/crate/.cargo_vcs_info.json" "$scratch/accepted-vcs.json"
     for edit in '.name="unknown"' '.version="0.58.7"' '.version="0.59.1"' \
-      '.version="0.60.0"' '.version="0.60.2"' ".version=\"$other_version\"" \
+      '.version="0.60.0"' '.version="0.60.3"' ".version=\"$other_version\"" \
       '.license="Apache-2.0"' '.repository="https://example.invalid/other"'; do
       jq ".packages[1] |= ($edit)" "$scratch/accepted.json" > "$scratch/metadata.json"
       reject

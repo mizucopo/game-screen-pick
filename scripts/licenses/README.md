@@ -43,6 +43,17 @@ The downloaded crate archives' SHA-256 values match both the crates.io index and
 - `jsonschema-regex`: `6f8a848331614144c03e815fb931f238c9e342bd7ab501b29e35d647e7cd5688`
 - `jsonschema-value`: `5a5a947ef798eeacacb43edf29b1d0ab64bdf5e2c9fbcaad10ee8663d922b544`
 
+Both crates at `0.60.2` still omit license text.
+`jsonschema-0.60.2-MIT.txt` preserves the root LICENSE at their recorded commit:
+
+https://github.com/Stranger6667/jsonschema/blob/0b657fa991c9333908e8c51e8a582d602aac5391/LICENSE
+
+The source paths and license SHA-256 are unchanged from `0.60.1`. The downloaded
+crate archives' SHA-256 values match `Cargo.lock`:
+
+- `jsonschema-regex`: `107aeb6ff14b8deb5610096a8ce5c554ec89806b521147eaeb3cae05b07edb7a`
+- `jsonschema-value`: `e281d6b177bb4834f2ffd6f92aa0443cffe29c996b251c8d94eb6f456186feba`
+
 The packaging script checks the crate name, version, declared license, repository,
 and source commit before using this supplement. A dependency update with a missing
 license file fails packaging and requires a new, verified supplement.

@@ -45,6 +45,7 @@ build・Cargo executable の選択・archive・checksum・native 起動 smoke �
 `stage_command` の `scripts/stage-release.sh` は製品固有の依存検査・license・`BUILD-INFO.json`・文書だけを追加します。Windows の配布 build は `-C target-feature=+crt-static` を指定し、MSVC の別途 runtime 導入を要求しない system DLL allowlist を検査します。
 macOS / Linux の配布 CI では `scripts/install-ci-ffmpeg.sh` に記録した公式 FFmpeg **6.1.6** の source と SHA-256 から、CI の一時 prefix に FFmpeg／FFprobe を build します。
 Windows は `scripts/install-ci-windows-tools.ps1` の固定 BtbN FFmpeg **9.0.2 系** archive と SHA-256 を使い、FFmpeg／FFprobe 自身も対象 CPU の PE であることを確認してから実行します。
+[BtbN の保持方針](https://github.com/BtbN/FFmpeg-Builds#release-retention-policy)に従い、直近 14 件だけ保持される daily build を避け、2 年間保持される月末 build（現在は 2026-10-31）を固定します。2028-10-31 より前に、取得先・両 CPU の SHA-256 と実行確認をまとめて更新してください。
 macOS の Homebrew FFmpeg 更新によって archive 内の依存記録が変わることを防ぎます。これは CI tool の準備で、利用者の FFmpeg を自動 install・更新する処理や archive への同梱はありません。
 各 target の clean 環境で展開した binary の help/version、readonly validate、実 FFmpeg 抽出と合成 mock E2E を確認します。
 成功した固定応答 E2E を、実 backend/model の能力、Brave の適用契約と live 接続、実録画の Human Review の証拠にはしません。
