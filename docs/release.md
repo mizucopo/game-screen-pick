@@ -64,9 +64,10 @@ Issue の close とコード完了から、実録画・実 backend・契約・Hu
 
 ## 設定と公開の流れ
 
-分類と公開の選択は [CONTRIBUTING.md](../CONTRIBUTING.md#リリース分類) に従います。
+方式別の公開方針、分類と公開の選択は [CONTRIBUTING.md](../CONTRIBUTING.md#リリース分類) に従います。
 正本は `Cargo.toml` の `package.version`、lockfile は `Cargo.lock` の `game-screen-pick` package です。
 `.github/release.json` は SemVer と GitHub Release を宣言しています。Docker image の公開設定はありません。
+共通 controller は upstream-revision では分類ラベルなしで新しい squash-merged PR を公開しますが、この repository は SemVer のため、引き続き最新 PR の分類ラベルで公開を判断します。テンプレート更新で方式や製品 version を変更しません。
 共有の `.github/scripts/release.py` は採番・配布インフラであり、製品の runtime 依存とは区別します。製品の品質 gate は配布契約も検証します。
 `project_version` は Copier の初期値で、採番の正本ではありません。
 
