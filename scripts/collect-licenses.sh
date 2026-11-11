@@ -54,52 +54,32 @@ while IFS="$tab" read -r name version license manifest license_file repository; 
     mv "$destination/license-files.sorted" "$destination/license-files.txt"
   fi
   if [ ! -s "$destination/license-files.txt" ]; then
-    case "$name:$version:$license:$repository" in
-      uuid-simd:0.8.0:MIT:https://github.com/Nugine/simd|vsimd:0.8.0:MIT:https://github.com/Nugine/simd)
-        jq -e '.git.sha1 == "d74c030d9dc4f3cae02146d1f497ff62726ef09a"' \
-          "$crate_dir/.cargo_vcs_info.json" > /dev/null
-        printf '%s\n' scripts/licenses/Nugine-simd-MIT.txt > "$destination/license-files.txt"
-        printf 'License supplement source: https://github.com/Nugine/simd/blob/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE\n' \
-          >> "$destination/THIRD-PARTY-LICENSES.txt"
-        ;;
-      jsonschema-regex:0.58.6:MIT:https://github.com/Stranger6667/jsonschema|jsonschema-value:0.58.6:MIT:https://github.com/Stranger6667/jsonschema)
-        jq -e --arg name "$name" '
-          .git.sha1 == "55ac1664384793c5d3b20745d3f9c169dfe2c06f" and
-          .path_in_vcs == ("crates/" + $name)
-        ' "$crate_dir/.cargo_vcs_info.json" > /dev/null
-        printf '%s\n' scripts/licenses/jsonschema-0.58.6-MIT.txt > "$destination/license-files.txt"
-        printf 'License supplement source: https://github.com/Stranger6667/jsonschema/blob/55ac1664384793c5d3b20745d3f9c169dfe2c06f/LICENSE\n' \
-          >> "$destination/THIRD-PARTY-LICENSES.txt"
-        ;;
-      jsonschema-regex:0.59.0:MIT:https://github.com/Stranger6667/jsonschema|jsonschema-value:0.59.0:MIT:https://github.com/Stranger6667/jsonschema)
-        jq -e --arg name "$name" '
-          .git.sha1 == "d59ab79cb6eab73bb2d3caa6d1b4e538ca81567f" and
-          .path_in_vcs == ("crates/" + $name)
-        ' "$crate_dir/.cargo_vcs_info.json" > /dev/null
-        printf '%s\n' scripts/licenses/jsonschema-0.59.0-MIT.txt > "$destination/license-files.txt"
-        printf 'License supplement source: https://github.com/Stranger6667/jsonschema/blob/d59ab79cb6eab73bb2d3caa6d1b4e538ca81567f/LICENSE\n' \
-          >> "$destination/THIRD-PARTY-LICENSES.txt"
-        ;;
-      jsonschema-regex:0.60.1:MIT:https://github.com/Stranger6667/jsonschema|jsonschema-value:0.60.1:MIT:https://github.com/Stranger6667/jsonschema)
-        jq -e --arg name "$name" '
-          .git.sha1 == "4eb7a64d9cf45bcbf38c7a69e544477294460751" and
-          .path_in_vcs == ("crates/" + $name)
-        ' "$crate_dir/.cargo_vcs_info.json" > /dev/null
-        printf '%s\n' scripts/licenses/jsonschema-0.60.1-MIT.txt > "$destination/license-files.txt"
-        printf 'License supplement source: https://github.com/Stranger6667/jsonschema/blob/4eb7a64d9cf45bcbf38c7a69e544477294460751/LICENSE\n' \
-          >> "$destination/THIRD-PARTY-LICENSES.txt"
-        ;;
-      jsonschema-regex:0.60.2:MIT:https://github.com/Stranger6667/jsonschema|jsonschema-value:0.60.2:MIT:https://github.com/Stranger6667/jsonschema)
-        jq -e --arg name "$name" '
-          .git.sha1 == "0b657fa991c9333908e8c51e8a582d602aac5391" and
-          .path_in_vcs == ("crates/" + $name)
-        ' "$crate_dir/.cargo_vcs_info.json" > /dev/null
-        printf '%s\n' scripts/licenses/jsonschema-0.60.2-MIT.txt > "$destination/license-files.txt"
-        printf 'License supplement source: https://github.com/Stranger6667/jsonschema/blob/0b657fa991c9333908e8c51e8a582d602aac5391/LICENSE\n' \
-          >> "$destination/THIRD-PARTY-LICENSES.txt"
-        ;;
-      *) printf 'Missing license text: %s %s\n' "$name" "$version" >&2; exit 1 ;;
-    esac
+    # Share identical license text, but authorize each exact release separately.
+    supplement=$(jq -ce --arg name "$name" --arg version "$version" \
+      --arg license "$license" --arg repository "$repository" '
+      [.[] | select(.license == $license and .repository == $repository) |
+        select(.packages | has($name)) | select(.versions[$version] != null) |
+        . + {commit: .versions[$version], path: .packages[$name]}] |
+      if length == 1 then .[0] else error("Missing or ambiguous license supplement") end
+    ' scripts/licenses/supplements.json) || {
+      printf 'Missing or ambiguous license supplement: %s %s\n' "$name" "$version" >&2
+      exit 1
+    }
+    printf '%s' "$supplement" | jq -e --slurpfile vcs "$crate_dir/.cargo_vcs_info.json" '
+      .commit == $vcs[0].git.sha1 and
+      (.path == null or .path == $vcs[0].path_in_vcs)
+    ' > /dev/null
+    file=scripts/licenses/$(printf '%s' "$supplement" | jq -er '.file')
+    checksum=$(printf '%s' "$supplement" | jq -er '.sha256')
+    if command -v sha256sum > /dev/null 2>&1; then
+      printf '%s  %s\n' "$checksum" "$file" | sha256sum -c - > /dev/null
+    else
+      printf '%s  %s\n' "$checksum" "$file" | shasum -a 256 -c - > /dev/null
+    fi
+    printf '%s\n' "$file" > "$destination/license-files.txt"
+    commit=$(printf '%s' "$supplement" | jq -er '.commit')
+    printf 'License supplement source: %s/blob/%s/LICENSE\n' "$repository" "$commit" \
+      >> "$destination/THIRD-PARTY-LICENSES.txt"
   fi
   while IFS= read -r file; do
     test -s "$file"
