@@ -89,14 +89,21 @@ done
 # A recognized release still requires one unambiguous, intact supplement.
 cp "$scratch/accepted.json" "$scratch/metadata.json"
 cp "$scratch/accepted-vcs.json" "$scratch/crate/.cargo_vcs_info.json"
-# macOS can provide shasum without GNU sha256sum.
-mkdir "$scratch/hash-tools"
-for tool in sh uname dirname mkdir jq find sort mv cp cat rm shasum; do
-  ln -s "$(command -v "$tool")" "$scratch/hash-tools/$tool"
-done
-checksum_test_path=$scratch/hash-tools
-collect
-unset checksum_test_path
+# Exercise the macOS fallback on Unix. Git Bash provides sha256sum; isolating
+# executables with symlinks there depends on Windows symlink/DLL behavior, and
+# command -v jq resolves the shell function rather than the native executable.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *)
+    mkdir "$scratch/hash-tools"
+    for tool in sh uname dirname mkdir jq find sort mv cp cat rm shasum; do
+      ln -s "$(command -v "$tool")" "$scratch/hash-tools/$tool"
+    done
+    checksum_test_path=$scratch/hash-tools
+    collect
+    unset checksum_test_path
+    ;;
+esac
 for edit in '. + [.[1]]' 'map(select(.repository != "https://github.com/Stranger6667/jsonschema"))' \
   '.[1].sha256="0000000000000000000000000000000000000000000000000000000000000000"'; do
   jq "$edit" "$scratch/supplements.json" > "$supplements/supplements.json"
