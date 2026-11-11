@@ -1,59 +1,26 @@
 # Crate license supplements
 
-`uuid-simd 0.8.0` and `vsimd 0.8.0` omit their MIT license file from the
-published crate. `Nugine-simd-MIT.txt` preserves the upstream file at the commit
-recorded in both crates' `.cargo_vcs_info.json`:
+Keep one complete text per byte-distinct upstream license, not per crate version
+or SPDX identifier. `supplements.json` maps verified crate releases to the shared
+text, SHA-256, repository and source commit. Package paths are checked when listed;
+`null` preserves the original simd supplement's commit-only check. Each source is
+`<repository>/blob/<commit>/LICENSE`. Git keeps these texts LF-only on every
+platform so their checksums remain stable.
 
-https://github.com/Nugine/simd/blob/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE
+`Nugine-simd-MIT.txt` covers uuid-simd/vsimd; `jsonschema-MIT.txt` covers
+jsonschema-regex/jsonschema-value. These published crates omit their license text.
+The collector prefers bundled license/notice files and fails closed for an unknown
+release, mismatched provenance or missing/changed supplement. Every dependency's
+attribution and full license text remain in the distribution.
 
-`jsonschema-regex 0.58.6` and `jsonschema-value 0.58.6` also omit their MIT
-license file. `jsonschema-0.58.6-MIT.txt` preserves the shared workspace's root
-LICENSE at the commit recorded in both published crates' `.cargo_vcs_info.json`:
+When updating a dependency:
 
-https://github.com/Stranger6667/jsonschema/blob/55ac1664384793c5d3b20745d3f9c169dfe2c06f/LICENSE
-
-Its SHA-256 is `117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038`.
-The published crate checksums match `Cargo.lock`; their source paths are
-`crates/jsonschema-regex` and `crates/jsonschema-value`, respectively. The
-packaging script checks those paths along with the source commit.
-
-The same two crates at `0.59.0` omit their license text as well.
-`jsonschema-0.59.0-MIT.txt` preserves the root LICENSE at their recorded commit:
-
-https://github.com/Stranger6667/jsonschema/blob/d59ab79cb6eab73bb2d3caa6d1b4e538ca81567f/LICENSE
-
-The license is byte-identical to the `0.58.6` supplement and has the same SHA-256
-above. The published crate SHA-256 values match `Cargo.lock`:
-
-- `jsonschema-regex`: `1472f7be79026f79e01a9b172263311e829d7c210d57b39cb57037abc0ce0500`
-- `jsonschema-value`: `e5a7550a7a84787e715ead0b47e01fa8c6bb7c3413630f91a8f2094c06c2078a`
-
-Both published crates at `0.60.1` also omit license text.
-`jsonschema-0.60.1-MIT.txt` preserves the root LICENSE at the commit recorded in
-both archives' `.cargo_vcs_info.json`:
-
-https://github.com/Stranger6667/jsonschema/blob/4eb7a64d9cf45bcbf38c7a69e544477294460751/LICENSE
-
-The source paths remain `crates/jsonschema-regex` and `crates/jsonschema-value`.
-The license is byte-identical to the earlier supplements, with SHA-256
-`117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038`.
-The downloaded crate archives' SHA-256 values match both the crates.io index and
-`Cargo.lock`:
-
-- `jsonschema-regex`: `6f8a848331614144c03e815fb931f238c9e342bd7ab501b29e35d647e7cd5688`
-- `jsonschema-value`: `5a5a947ef798eeacacb43edf29b1d0ab64bdf5e2c9fbcaad10ee8663d922b544`
-
-Both crates at `0.60.2` still omit license text.
-`jsonschema-0.60.2-MIT.txt` preserves the root LICENSE at their recorded commit:
-
-https://github.com/Stranger6667/jsonschema/blob/0b657fa991c9333908e8c51e8a582d602aac5391/LICENSE
-
-The source paths and license SHA-256 are unchanged from `0.60.1`. The downloaded
-crate archives' SHA-256 values match `Cargo.lock`:
-
-- `jsonschema-regex`: `107aeb6ff14b8deb5610096a8ce5c554ec89806b521147eaeb3cae05b07edb7a`
-- `jsonschema-value`: `e281d6b177bb4834f2ffd6f92aa0443cffe29c996b251c8d94eb6f456186feba`
-
-The packaging script checks the crate name, version, declared license, repository,
-and source commit before using this supplement. A dependency update with a missing
-license file fails packaging and requires a new, verified supplement.
+1. Verify the downloaded crate checksum against `Cargo.lock`, then inspect its
+   `.cargo_vcs_info.json`, declared license, repository and package path.
+2. Read the root LICENSE at that exact upstream commit. Reuse the existing text
+   only if its bytes match, including copyright notices. Otherwise add a distinct
+   complete text and record its SHA-256; never shorten or rewrite legal text.
+3. Add the verified version/commit mapping to `supplements.json`. For a new text,
+   use a separate record with only the releases that it covers. Keep existing
+   release mappings without copying text or adding per-version prose here.
+4. Add the version/commit fixture in `tests/licenses.sh` and run `sh tests/check.sh`.

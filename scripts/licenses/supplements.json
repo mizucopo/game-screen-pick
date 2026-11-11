@@ -1,0 +1,31 @@
+[
+  {
+    "file": "Nugine-simd-MIT.txt",
+    "sha256": "14e66de892a0e218a4d60b2cc41a17a28080c46621d812fa2471983d8c524748",
+    "license": "MIT",
+    "repository": "https://github.com/Nugine/simd",
+    "packages": {
+      "uuid-simd": null,
+      "vsimd": null
+    },
+    "versions": {
+      "0.8.0": "d74c030d9dc4f3cae02146d1f497ff62726ef09a"
+    }
+  },
+  {
+    "file": "jsonschema-MIT.txt",
+    "sha256": "117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038",
+    "license": "MIT",
+    "repository": "https://github.com/Stranger6667/jsonschema",
+    "packages": {
+      "jsonschema-regex": "crates/jsonschema-regex",
+      "jsonschema-value": "crates/jsonschema-value"
+    },
+    "versions": {
+      "0.58.6": "55ac1664384793c5d3b20745d3f9c169dfe2c06f",
+      "0.59.0": "d59ab79cb6eab73bb2d3caa6d1b4e538ca81567f",
+      "0.60.1": "4eb7a64d9cf45bcbf38c7a69e544477294460751",
+      "0.60.2": "0b657fa991c9333908e8c51e8a582d602aac5391"
+    }
+  }
+]

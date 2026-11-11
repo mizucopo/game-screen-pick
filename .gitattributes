@@ -1,0 +1,2 @@
+# Preserve the verified upstream license bytes on every platform.
+scripts/licenses/*.txt text eol=lf
