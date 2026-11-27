@@ -112,12 +112,14 @@ fn main() {
                 eprintln!("GAME_SCREEN_PICK_API_KEY=fixture-secret-never-print");
                 std::process::exit(9);
             }
-            descendant(directory, "media-descendant");
             fs::write(
                 directory.join("media-leader"),
                 std::process::id().to_string(),
             )
             .unwrap();
+            // The cancellation test treats the descendant PID as its ready
+            // signal. Publish it only after all other markers are complete.
+            descendant(directory, "media-descendant");
             sleep();
         }
         "media-exit" => {
