@@ -42,6 +42,8 @@ sh scripts/package-release.sh aarch64-apple-darwin dist
 ```
 
 build・Cargo executable の選択・archive・checksum・native 起動 smoke は変更していない共有 `.github/scripts/release.py` を使います。`.github/release.json` の `publication.rust.targets` と Copier の `rust_release_targets` が四対象を選びます。
+PR と公開 CI は、native build の前に `sh scripts/check-license-supplements.sh` で各配布 target のロック済み依存を確認します。
+補足が必要な crate は名前・version・target がログに出ます。依存更新で照合に失敗した場合は [補足ライセンスの更新手順](../scripts/licenses/README.md) に従います。
 `stage_command` の `scripts/stage-release.sh` は製品固有の依存検査・license・`BUILD-INFO.json`・文書だけを追加します。Windows の配布 build は `-C target-feature=+crt-static` を指定し、MSVC の別途 runtime 導入を要求しない system DLL allowlist を検査します。
 macOS / Linux の配布 CI では `scripts/install-ci-ffmpeg.sh` に記録した公式 FFmpeg **6.1.6** の source と SHA-256 から、CI の一時 prefix に FFmpeg／FFprobe を build します。
 Windows は `scripts/install-ci-windows-tools.ps1` の固定 BtbN FFmpeg **9.0.2 系** archive と SHA-256 を使い、FFmpeg／FFprobe 自身も対象 CPU の PE であることを確認してから実行します。

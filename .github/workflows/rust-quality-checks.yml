@@ -28,7 +28,18 @@ jobs:
         timeout-minutes: 15
         run: sh tests/check.sh
 
+  license-supplements:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Check locked licenses for every distribution target
+        run: sh scripts/check-license-supplements.sh
+
   distribution-build:
+    needs: license-supplements
     strategy:
       fail-fast: false
       matrix:
@@ -88,6 +99,15 @@ jobs:
         run: |
           sh tests/distribution.sh
           cargo test --locked --test runtime_windows -- --nocapture
+      - name: Repeat the media cancellation test on Windows ARM64
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: |
+          test_name=windows_media_cancellation_removes_partial_files_and_owned_descendants
+          cargo test --locked --test media "$test_name" -- --exact --list | grep -F "$test_name: test"
+          for attempt in 1 2 3; do
+            echo "Windows ARM64 media cancellation test $attempt/3"
+            cargo test --locked --test media "$test_name" -- --exact --nocapture
+          done
       - name: Run native quality gate on the distribution builder
         timeout-minutes: 30
         run: |
