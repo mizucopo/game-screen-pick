@@ -144,6 +144,10 @@ case "$(uname -s)" in
     done
     checksum_test_path=$scratch/hash-tools
     collect
+    jq '.[1].sha256="wrong"' "$scratch/supplements.json" > "$supplements/supplements.json"
+    reject
+    grep -F 'Invalid license supplement checksum:' "$scratch/rejected.log" > /dev/null
+    cp "$scratch/supplements.json" "$supplements/supplements.json"
     unset checksum_test_path
     ;;
 esac

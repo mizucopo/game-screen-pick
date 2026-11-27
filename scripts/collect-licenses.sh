@@ -85,12 +85,16 @@ while IFS="$tab" read -r name version license manifest license_file repository; 
       (.path == null or .path == $vcs[0].path_in_vcs)
     ' > /dev/null || { printf 'Invalid license supplement provenance: %s\n' "$dependency" >&2; exit 1; }
     file=scripts/licenses/$(printf '%s' "$supplement" | jq -er '.file')
-    checksum=$(printf '%s' "$supplement" | jq -er '.sha256')
+    checksum=$(printf '%s' "$supplement" | jq -er '.sha256 | ascii_downcase')
     if command -v sha256sum > /dev/null 2>&1; then
-      printf '%s  %s\n' "$checksum" "$file" | sha256sum -c - > /dev/null
+      actual=$(sha256sum < "$file")
     else
-      printf '%s  %s\n' "$checksum" "$file" | shasum -a 256 -c - > /dev/null
-    fi || { printf 'Invalid license supplement checksum: %s\n' "$dependency" >&2; exit 1; }
+      actual=$(shasum -a 256 < "$file")
+    fi
+    if [ "${actual%% *}" != "$checksum" ]; then
+      printf 'Invalid license supplement checksum: %s\n' "$dependency" >&2
+      exit 1
+    fi
     printf '%s\n' "$file" > "$destination/license-files.txt"
     commit=$(printf '%s' "$supplement" | jq -er '.commit')
     supplement_source=$repository/blob/$commit/LICENSE
