@@ -630,7 +630,7 @@ fn interruption_reaps_child_and_removes_partial_media() {
 #[cfg(windows)]
 #[test]
 fn windows_ctrl_c_cleans_media_job_and_partial_output_and_returns_130() {
-    use process_helper::{Helper, assert_gone, wait_for};
+    use process_helper::Helper;
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
 
@@ -656,21 +656,33 @@ fn windows_ctrl_c_cleans_media_job_and_partial_output_and_returns_130() {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .unwrap();
-    wait_for(&helper.marker("media-descendant"));
-    let partial = PathBuf::from(wait_for(&helper.marker("partial-path")));
-    assert!(partial.exists());
-    fs::write(helper.marker("interrupt-now"), b"interrupt").unwrap();
-    let output = child.wait_with_output().unwrap();
+        .expect("startup: cannot launch console driver");
+    let started = helper.wait_for_media_start();
+    eprintln!("cancellation: requesting Ctrl-C");
+    fs::write(helper.marker("interrupt-now"), b"interrupt")
+        .expect("cancellation: cannot request Ctrl-C");
+    let output = child
+        .wait_with_output()
+        .expect("cancellation: cannot wait for console driver");
+    let started = started.unwrap_or_else(|error| {
+        panic!(
+            "startup: {error:#}; console driver: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
     assert_eq!(
         output.status.code(),
         Some(130),
-        "{}",
+        "cancellation: unexpected CLI exit after Ctrl-C: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!partial.parent().unwrap().exists());
-    assert!(!directory.path().join("inspection").exists());
-    for marker in ["media-leader", "media-descendant"] {
-        assert_gone(wait_for(&helper.marker(marker)).parse().unwrap());
-    }
+    started.assert_cleaned();
+    assert!(
+        !directory
+            .path()
+            .join("inspection")
+            .try_exists()
+            .expect("cleanup: cannot inspect output directory"),
+        "cleanup: output directory remains"
+    );
 }

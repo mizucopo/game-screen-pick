@@ -695,34 +695,48 @@ fn exited_command_cannot_leave_descendants_holding_capture_pipes() {
 #[cfg(windows)]
 #[test]
 fn windows_media_cancellation_removes_partial_files_and_owned_descendants() {
-    use process_helper::{Helper, assert_gone, wait_for};
+    use process_helper::Helper;
     let helper = Helper::new();
     let cancelled = AtomicBool::new(false);
     let mut tools = MediaTools::default();
-    let video = tools.probe(&fixture("01-blocks.mkv"), &cancelled).unwrap();
+    let video = tools
+        .probe(&fixture("01-blocks.mkv"), &cancelled)
+        .expect("startup: cannot probe fixture video");
     let original = fs::read(&video.source).unwrap();
     tools.ffmpeg = helper.executable("media-hang");
     let before = Instant::now();
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            wait_for(&helper.marker("media-descendant"));
-            cancelled.store(true, Ordering::Relaxed);
-        });
-        assert!(
-            tools
-                .extract(&video, 1.0, &cancelled)
-                .unwrap_err()
-                .downcast_ref::<Interrupted>()
-                .is_some()
+    let (started, result) = std::thread::scope(|scope| {
+        let extract = scope.spawn(|| tools.extract(&video, 1.0, &cancelled));
+        let started = helper.wait_for_media_start();
+        // Also release a hung fixture when it failed to publish its markers.
+        eprintln!(
+            "cancellation: signalling extraction after {:?}",
+            before.elapsed()
         );
+        cancelled.store(true, Ordering::Relaxed);
+        (
+            started,
+            extract.join().expect("cancellation: extraction panicked"),
+        )
     });
-    assert!(before.elapsed() < Duration::from_secs(6));
-    let partial = PathBuf::from(wait_for(&helper.marker("partial-path")));
-    assert!(!partial.parent().unwrap().exists());
-    for marker in ["media-leader", "media-descendant"] {
-        assert_gone(wait_for(&helper.marker(marker)).parse().unwrap());
-    }
-    assert_eq!(fs::read(&video.source).unwrap(), original);
+    let started =
+        started.unwrap_or_else(|error| panic!("startup: {error:#}; extraction: {result:?}"));
+    let error = result.expect_err("cancellation: extraction unexpectedly succeeded");
+    assert!(
+        error.is::<Interrupted>(),
+        "cancellation: expected interruption, got {error:#}"
+    );
+    let elapsed = before.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(6),
+        "cancellation: startup and extraction took {elapsed:?}, limit is 6s"
+    );
+    started.assert_cleaned();
+    assert_eq!(
+        fs::read(&video.source).expect("cleanup: cannot read source video"),
+        original,
+        "cleanup: source video was modified"
+    );
 }
 
 #[cfg(windows)]

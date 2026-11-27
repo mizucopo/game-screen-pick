@@ -13,6 +13,10 @@ The collector prefers bundled license/notice files and fails closed for an unkno
 release, mismatched provenance or missing/changed supplement. Every dependency's
 attribution and full license text remain in the distribution.
 
+Run `sh scripts/check-license-supplements.sh` to check the locked normal and build
+dependencies of every configured distribution target. It prints the crate, version
+and target whenever a supplement is required and exits unsuccessfully on a mismatch.
+
 When updating a dependency:
 
 1. Verify the downloaded crate checksum against `Cargo.lock`, then inspect its

@@ -33,11 +33,53 @@ cp "$scratch/crate/.cargo_vcs_info.json" "$scratch/original-vcs.json"
 cp "$scratch/original.json" "$scratch/template.json"
 # Isolate supplement mutations so rejection tests cannot alter the checkout.
 mkdir -p "$scratch/project/scripts" "$scratch/project/assets"
-cp scripts/collect-licenses.sh "$scratch/project/scripts/"
+cp scripts/collect-licenses.sh scripts/check-license-supplements.sh "$scratch/project/scripts/"
 cp -R scripts/licenses "$scratch/project/scripts/"
 cp assets/OFL.txt "$scratch/project/assets/"
 supplements=$scratch/project/scripts/licenses
 cp "$supplements/supplements.json" "$scratch/supplements.json"
+
+# Exercise the pre-build entry point with different filtered graphs and without
+# rust-src/rust-docs. Only reachable normal and build dependencies need a text.
+mkdir -p "$scratch/project/.github"
+printf '{"publication":{"rust":{"targets":["x86_64-unknown-linux-gnu","aarch64-pc-windows-msvc"]}}}\n' \
+  > "$scratch/project/.github/release.json"
+cat > "$scratch/tools/cargo" <<'EOF'
+#!/bin/sh
+set -eu
+test "$#:$1:$2:$3:$4:$5" = '6:metadata:--locked:--format-version:1:--filter-platform'
+cat "$GSP_TEST_GRAPHS/$6.json"
+EOF
+chmod +x "$scratch/tools/cargo"
+preflight() {
+  GSP_TEST_GRAPHS="$scratch" PATH="$scratch/tools:$PATH" sh "$scratch/project/scripts/check-license-supplements.sh"
+}
+jq '.resolve.nodes[0].deps[0].dep_kinds[0].kind="build"' "$scratch/template.json" > "$scratch/x86_64-unknown-linux-gnu.json"
+jq '.resolve.nodes[0].deps[0].dep_kinds[0].kind="dev" | .packages[1].version="99.0.0"' \
+  "$scratch/template.json" > "$scratch/aarch64-pc-windows-msvc.json"
+preflight > "$scratch/preflight.log"
+grep -Fx 'License supplement required: jsonschema-regex 0.58.6 (x86_64-unknown-linux-gnu)' "$scratch/preflight.log" > /dev/null
+if grep -F '99.0.0' "$scratch/preflight.log"; then exit 1; fi
+for reason in provenance checksum; do
+  case "$reason" in
+    provenance) edit='.[1].versions["0.58.6"]="wrong"' ;;
+    checksum) edit='.[1].sha256="wrong"' ;;
+  esac
+  jq "$edit" "$scratch/supplements.json" > "$supplements/supplements.json"
+  if preflight > "$scratch/preflight.log" 2>&1; then exit 1; fi
+  grep -Fx "Invalid license supplement $reason: jsonschema-regex 0.58.6 (x86_64-unknown-linux-gnu)" \
+    "$scratch/preflight.log" > /dev/null
+done
+jq '.packages[1].version="99.0.0"' "$scratch/template.json" > "$scratch/aarch64-pc-windows-msvc.json"
+jq '. + [.[1]]' "$scratch/supplements.json" > "$supplements/supplements.json"
+if preflight > "$scratch/preflight.log" 2>&1; then
+  printf 'Preflight accepted ambiguous and missing license supplements\n' >&2
+  exit 1
+fi
+for package in '0.58.6 (x86_64-unknown-linux-gnu)' '99.0.0 (aarch64-pc-windows-msvc)'; do
+  grep -Fx "Missing or ambiguous license supplement: jsonschema-regex $package" "$scratch/preflight.log" > /dev/null
+done
+cp "$scratch/supplements.json" "$supplements/supplements.json"
 attempt=0
 collect() {
   attempt=$((attempt + 1))
@@ -102,6 +144,10 @@ case "$(uname -s)" in
     done
     checksum_test_path=$scratch/hash-tools
     collect
+    jq '.[1].sha256="wrong"' "$scratch/supplements.json" > "$supplements/supplements.json"
+    reject
+    grep -F 'Invalid license supplement checksum:' "$scratch/rejected.log" > /dev/null
+    cp "$scratch/supplements.json" "$supplements/supplements.json"
     unset checksum_test_path
     ;;
 esac
