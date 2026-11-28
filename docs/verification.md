@@ -37,6 +37,17 @@ GSP_QA_DIR=/absolute/path/to/empty-synthetic-qa sh tests/check.sh
 公開用にはこの合成証拠のみを使用する。利用者の config、録画、cache、実モデル request／response をコピーしない。
 既存の `cached-*` 証拠も合成素材だけである。GUIで sheet を開いても実録画の Human Review 完了とはしない。
 
+## repo-template の適用範囲
+
+共通のリリース制御スクリプトと Copier 管理項目の変更検査を repo-template から取り込みます。
+Rust のバージョンは既存の `rust-toolchain.toml` に合わせ、アプリ・依存のバージョンは変更しません。
+
+PR・リリースの配布ジョブは製品固有のまま維持します。共通のネイティブ PR プロファイルでは、
+Ubuntu 22.04 と macOS 15 の配布ビルド runner、FFmpeg／FFprobe を使う回帰テスト、
+Windows ARM64 の中断回帰の反復、固定ランタイムとの互換性と配布前ライセンス検査、
+全ターゲットのアーカイブを突き合わせる来歴検証を同じ手順で維持できません。
+共通化するときは、既存のチェック・成果物と配布／再実行時の検証を維持できるよう、先に repo-template 側を更新します。
+
 ## 計測の意味
 
 成功した CLI は stderr の `metrics: {JSON}` に非秘密の計測を出す。report には計測を混ぜず、cold／warm／再開の成果物同一性を維持する。
