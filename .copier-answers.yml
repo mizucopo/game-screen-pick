@@ -1,25 +1,28 @@
-_commit: 4208ae0
+_commit: 0356ad6
 _src_path: git@github.com:mizucopo/repo-template.git
 author_email: mizu.copo@gmail.com
 author_name: みず
 project_description: ゲーム録画からブログ用画像・一覧画像・選定根拠を作るRust CLI
 project_name: game-screen-pick
 project_version: 1.19.4
+rust_cli_release_profile: default
 rust_release_targets:
 - x86_64-unknown-linux-gnu
 - x86_64-pc-windows-msvc
 - aarch64-pc-windows-msvc
 - aarch64-apple-darwin
-rust_version: stable
+rust_version: 1.99.0
 use_chrome_extension: false
 use_dependabot_github_actions: true
 use_docker: false
 use_gh_actions_bandit: false
 use_gh_actions_cargo_audit: true
 use_gh_actions_codeql: false
+use_gh_actions_native_pr: false
 use_gh_actions_release: true
 use_mit_license: true
 use_python: false
+use_repo_template_policy: true
 use_rust: true
 use_tauri: false
 use_version_management: true
